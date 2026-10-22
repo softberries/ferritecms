@@ -167,3 +167,48 @@ pub async fn search_rejects_nul_and_bad_limits(db: &TestDb) {
     search.index(id, "t", "b").await.unwrap();
     assert_eq!(search.query("t", MAX_PAGE).await.unwrap(), [id]);
 }
+
+/// R16: both backends match exactly the same documents (only ranking may differ), so
+/// these compare sorted id sets.
+pub async fn search_semantics_identical(db: &TestDb) {
+    let store = db.store();
+    let ids = posts(store, 5).await;
+    let search = store.read().search();
+    let docs = [
+        ("Ünïcode handbook", "about ünïcode text"),
+        ("Unicode basics", "plain unicode"),
+        ("Dash notes", "x marks the spot"),
+        ("Logic", "a or b"),
+        ("Other", "nothing"),
+    ];
+    for (id, (title, body)) in ids.iter().zip(docs) {
+        search.index(*id, title, body).await.unwrap();
+    }
+    let found = |q: &'static str| async move {
+        let mut got = search.query(q, 50).await.unwrap();
+        got.sort();
+        got
+    };
+    let set = |idx: &[usize]| {
+        let mut v: Vec<ContentId> = idx.iter().map(|&i| ids[i]).collect();
+        v.sort();
+        v
+    };
+
+    // Prefix matching.
+    assert_eq!(found("uni").await, set(&[1]));
+    assert_eq!(found("hand").await, set(&[0]));
+    // Accent-sensitive, case-insensitive.
+    assert_eq!(found("unicode").await, set(&[1]));
+    assert_eq!(found("ünïcode").await, set(&[0]));
+    assert_eq!(found("ÜNÏ").await, set(&[0]));
+    // No operators: punctuation separates literal terms, all terms must match.
+    assert_eq!(found("-x").await, set(&[2]));
+    assert_eq!(found("\"x\"").await, set(&[2]));
+    assert_eq!(found("a OR b").await, set(&[3]));
+    assert_eq!(found("unicode OR nothing").await, set(&[]));
+    assert_eq!(found("x -marks").await, set(&[2]));
+    assert_eq!(found("(spot)*").await, set(&[2]));
+    assert_eq!(found("title:x").await, set(&[]));
+    assert_eq!(found("- * ( )").await, set(&[]));
+}

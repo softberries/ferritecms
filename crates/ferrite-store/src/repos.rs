@@ -310,6 +310,19 @@ pub trait EventRepo: Send + Sync {
     async fn prune(&self, older_than: Timestamp) -> Result<u64, StoreError>;
 }
 
+/// Full-text search over an item's title and body text (R16: both backends match the
+/// same documents; only the ranking may differ, 02 §4).
+///
+/// - The query is split by [`crate::search_terms`] into alphanumeric runs; every other
+///   character is a separator, so there is no query syntax (`-x`, quotes, `OR`, `*`,
+///   parentheses are not operators). No terms (empty, whitespace or punctuation only)
+///   returns `Ok(vec![])` without touching the database.
+/// - Every term is a prefix match and all terms must match (AND): `uni` finds `unicode`.
+/// - Matching is case-insensitive and accent-sensitive: `unicode` does not find
+///   `Ünïcode`, `ünïcode` does (SQLite FTS5 `unicode61 remove_diacritics 0`, Postgres
+///   `simple`).
+/// - Results are ordered best first with the title weighted above the body; ties break
+///   by item id. `limit` must be 1 through 200; NUL in any text is `Invalid`.
 #[async_trait]
 pub trait SearchRepo: Send + Sync {
     /// Indexes (or re-indexes) an item's title and body text.

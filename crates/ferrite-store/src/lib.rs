@@ -6,6 +6,7 @@ mod menu;
 mod migrate;
 mod paging;
 mod repos;
+mod search;
 mod text;
 
 pub use error::StoreError;
@@ -24,4 +25,5 @@ pub use repos::{
     OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,
     SearchRepo, Store, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
+pub use search::search_terms;
 pub use text::{email_key, validate_text};

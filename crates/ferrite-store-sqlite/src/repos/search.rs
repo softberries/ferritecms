@@ -1,24 +1,25 @@
 //! Full-text search on the FTS5 table `search_fts(item_id UNINDEXED, title, body_text)`.
 //!
-//! The user query is never FTS5 syntax: every whitespace-separated term becomes a quoted
-//! FTS5 string with a prefix `*` (see [`match_expression`]), and the expression is bound
-//! as a parameter. FTS5 has no foreign keys, so `index` checks the item exists (matching
+//! The user query is never FTS5 syntax: it is split by `ferrite_store::search_terms` (the
+//! same terms Postgres sees), each term becomes a quoted FTS5 string with a prefix `*`
+//! (see [`match_expression`]), and the expression is bound as a parameter. FTS5 has no foreign keys, so `index` checks the item exists (matching
 //! Postgres) and `ContentRepo::delete` removes the item's row.
 
 use async_trait::async_trait;
 use ferrite_domain::ContentId;
-use ferrite_store::{SearchRepo, StoreError, check_limit, validate_text};
+use ferrite_store::{SearchRepo, StoreError, check_limit, search_terms, validate_text};
 use uuid::Uuid;
 
 use super::SqliteRepos;
 use crate::exec::{atomic, map_db_err, run};
 
 /// Turns a user query into an FTS5 MATCH expression that cannot contain operators:
-/// `foo "bar` becomes `"foo"* """bar"*` (implicit AND of prefix strings). `None` when the
-/// query has no terms.
+/// `foo -"bar` becomes `"foo"* "bar"*` (implicit AND of prefix strings). Terms are
+/// alphanumeric, so the quoting is only a second line of defence. `None` when the query
+/// has no terms.
 fn match_expression(q: &str) -> Option<String> {
-    let terms: Vec<String> = q
-        .split_whitespace()
+    let terms: Vec<String> = search_terms(q)
+        .iter()
         .map(|t| format!("\"{}\"*", t.replace('"', "\"\"")))
         .collect();
     (!terms.is_empty()).then(|| terms.join(" "))
@@ -95,13 +96,13 @@ mod tests {
         assert_eq!(match_expression("foo"), Some(r#""foo"*"#.into()));
         assert_eq!(
             match_expression("  a OR  -x "),
-            Some(r#""a"* "OR"* "-x"*"#.into())
+            Some(r#""a"* "OR"* "x"*"#.into())
         );
         assert_eq!(
             match_expression(r#"say"hi""#),
-            Some(r#""say""hi"""*"#.into())
+            Some(r#""say"* "hi"*"#.into())
         );
-        // A lone quote becomes the FTS5 string `"` (doubled inside quotes).
-        assert_eq!(match_expression("\""), Some("\"\"\"\"*".into()));
+        // Punctuation only: no terms, no statement.
+        assert_eq!(match_expression("\" * ( -"), None);
     }
 }

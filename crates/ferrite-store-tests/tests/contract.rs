@@ -96,6 +96,7 @@ backend_tests!(
     search_remove_and_cascade,
     search_handles_operators_safely,
     search_rejects_nul_and_bad_limits,
+    search_semantics_identical,
 );
 
 backend_tests_spawning!(concurrent_writers, events_concurrent_appends_unique_seq);
