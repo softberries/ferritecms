@@ -198,9 +198,150 @@ pub fn verdict(db: i64, bin: i64, binary: &Version, min_binary: Option<&Version>
     }
 }
 
+impl MigrationStatus {
+    /// Builds the status from applied and embedded versions plus `schema_meta.min_binary_version`.
+    pub fn compute(
+        applied: &[i64],
+        embedded: &[i64],
+        binary: &Version,
+        min_binary: Option<Version>,
+    ) -> Self {
+        let db_version = applied.iter().copied().max().unwrap_or(0);
+        let binary_version = embedded.iter().copied().max().unwrap_or(0);
+        let pending: Vec<i64> = embedded
+            .iter()
+            .filter(|v| !applied.contains(v))
+            .copied()
+            .collect();
+        let unknown_applied = applied
+            .iter()
+            .filter(|v| !embedded.contains(v))
+            .copied()
+            .collect();
+        let mut verdict = verdict(db_version, binary_version, binary, min_binary.as_ref());
+        // A gap (an older embedded migration not applied) still needs `up`.
+        if verdict == Compat::UpToDate && !pending.is_empty() {
+            verdict = Compat::NeedsUp;
+        }
+        Self {
+            db_version,
+            binary_version,
+            min_binary,
+            pending,
+            unknown_applied,
+            verdict,
+        }
+    }
+}
+
+/// Versions to revert (newest first) to reach `to`. `embedded_up` pairs each embedded
+/// version with its `.up.sql`. Refuses versions this binary does not know and, unless
+/// `allow_lossy`, migrations marked `-- ferrite:lossy-down`.
+pub fn plan_down(
+    applied: &[i64],
+    embedded_up: &[(i64, &str)],
+    to: i64,
+    allow_lossy: bool,
+) -> Result<Vec<i64>, StoreError> {
+    let mut steps: Vec<i64> = applied.iter().copied().filter(|v| *v > to).collect();
+    steps.sort_unstable_by(|a, b| b.cmp(a));
+    for v in &steps {
+        let Some((_, sql)) = embedded_up.iter().find(|(e, _)| e == v) else {
+            return Err(StoreError::Migration(format!(
+                "migration {v} is not known to this binary; run `down` with the binary that applied it"
+            )));
+        };
+        if parse_directives(sql)?.lossy_down && !allow_lossy {
+            return Err(StoreError::Migration(format!(
+                "migration {v} has a lossy down (data removed by its up cannot be restored); pass allow_lossy to proceed"
+            )));
+        }
+    }
+    Ok(steps)
+}
+
+/// Highest `-- ferrite:min-binary` among the applied, embedded migrations.
+pub fn required_min_binary(
+    applied: &[i64],
+    embedded_up: &[(i64, &str)],
+) -> Result<Option<Version>, StoreError> {
+    let mut max: Option<Version> = None;
+    for (v, sql) in embedded_up {
+        if !applied.contains(v) {
+            continue;
+        }
+        if let Some(min) = parse_directives(sql)?.min_binary
+            && max.as_ref().is_none_or(|m| &min > m)
+        {
+            max = Some(min);
+        }
+    }
+    Ok(max)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_compute() {
+        let b = v("0.1.0");
+        let s = MigrationStatus::compute(&[1, 2], &[1, 2], &b, None);
+        assert_eq!((s.db_version, s.binary_version), (2, 2));
+        assert_eq!(s.verdict, Compat::UpToDate);
+        assert!(s.pending.is_empty() && s.unknown_applied.is_empty());
+
+        let s = MigrationStatus::compute(&[], &[1, 2], &b, None);
+        assert_eq!((s.db_version, s.pending.clone()), (0, vec![1, 2]));
+        assert_eq!(s.verdict, Compat::NeedsUp);
+
+        let s = MigrationStatus::compute(&[1, 2, 3], &[1, 2], &b, Some(v("0.2.0")));
+        assert_eq!(s.unknown_applied, vec![3]);
+        assert_eq!(
+            s.verdict,
+            Compat::Incompatible {
+                requires: v("0.2.0")
+            }
+        );
+
+        // Gap: db == bin but an older migration is missing.
+        let s = MigrationStatus::compute(&[1, 3], &[1, 2, 3], &b, None);
+        assert_eq!(s.pending, vec![2]);
+        assert_eq!(s.verdict, Compat::NeedsUp);
+    }
+
+    #[test]
+    fn plan_down_rules() {
+        let lossy = "-- ferrite:phase contract\n-- ferrite:lossy-down\nDROP TABLE x;";
+        let emb = [(1, "CREATE TABLE a (x INT);"), (2, lossy), (3, "SELECT 1;")];
+        assert_eq!(plan_down(&[1, 2, 3], &emb, 2, false).unwrap(), vec![3]);
+        assert_eq!(
+            plan_down(&[1, 2, 3], &emb, 3, false).unwrap(),
+            Vec::<i64>::new()
+        );
+        let err = plan_down(&[1, 2, 3], &emb, 0, false).unwrap_err();
+        assert!(matches!(&err, StoreError::Migration(m) if m.contains("migration 2")));
+        assert_eq!(plan_down(&[1, 2, 3], &emb, 0, true).unwrap(), vec![3, 2, 1]);
+        let err = plan_down(&[1, 4], &emb, 0, true).unwrap_err();
+        assert!(matches!(&err, StoreError::Migration(m) if m.contains("migration 4")));
+    }
+
+    #[test]
+    fn required_min_binary_takes_max_of_applied() {
+        let c =
+            |m: &str| format!("-- ferrite:phase contract\n-- ferrite:min-binary {m}\nSELECT 1;");
+        let (a, b) = (c("0.3.0"), c("0.2.0"));
+        let emb = [(1, "SELECT 1;"), (2, a.as_str()), (3, b.as_str())];
+        assert_eq!(required_min_binary(&[1], &emb).unwrap(), None);
+        assert_eq!(
+            required_min_binary(&[1, 2, 3], &emb).unwrap(),
+            Some(v("0.3.0"))
+        );
+        assert_eq!(
+            required_min_binary(&[1, 3], &emb).unwrap(),
+            Some(v("0.2.0"))
+        );
+    }
 
     fn v(s: &str) -> Version {
         Version::parse(s).unwrap()

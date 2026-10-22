@@ -1,0 +1,23 @@
+-- Reverse of 0001_init.up.sql, in reverse foreign-key order.
+DROP TABLE schema_meta;
+DROP TABLE events;
+DROP TABLE themes;
+DROP TABLE plugin_failures;
+DROP TABLE plugin_kv;
+DROP TABLE plugins;
+DROP TABLE options;
+DROP TABLE user_meta;
+DROP TABLE redirects;
+DROP TABLE comments;
+DROP TABLE media;
+DROP TABLE artifacts;
+DROP TABLE menu_items;
+DROP TABLE menus;
+DROP TABLE term_links;
+DROP TABLE terms;
+DROP TABLE taxonomies;
+DROP TABLE revisions;
+DROP TABLE content_meta;
+DROP TABLE content_items;
+DROP TABLE users;
+DROP TABLE content_types;

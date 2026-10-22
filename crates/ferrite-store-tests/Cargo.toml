@@ -1,0 +1,18 @@
+[package]
+name = "ferrite-store-tests"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ferrite-store = { path = "../ferrite-store" }
+ferrite-store-postgres = { path = "../ferrite-store-postgres" }
+ferrite-store-sqlite = { path = "../ferrite-store-sqlite" }
+semver.workspace = true
+sqlx.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+uuid.workspace = true
