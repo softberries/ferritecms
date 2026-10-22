@@ -7,7 +7,8 @@ use std::{
 };
 
 use ferrite_store::{
-    MigrationStatus, SCHEMA_META_MIN_BINARY, StoreError, plan_down, required_min_binary,
+    Directives, MigrationStatus, SCHEMA_META_MIN_BINARY, StoreError, next_min_binary,
+    parse_directives, plan_down,
 };
 use semver::Version;
 use sqlx::migrate::{MigrateError, Migrator};
@@ -19,17 +20,21 @@ static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 /// Pre-migration snapshots kept in the backups folder.
 const KEEP_SNAPSHOTS: usize = 5;
 
-/// `(version, up SQL)` of every embedded migration.
-fn embedded_up() -> Vec<(i64, &'static str)> {
+/// Every embedded migration's version with the directives parsed from its up SQL.
+fn embedded() -> Result<Vec<(i64, Directives)>, StoreError> {
     MIGRATOR
         .iter()
         .filter(|m| m.migration_type.is_up_migration())
-        .map(|m| (m.version, m.sql.as_str()))
+        .map(|m| Ok((m.version, parse_directives(m.sql.as_str())?)))
         .collect()
 }
 
 fn embedded_versions() -> Vec<i64> {
-    embedded_up().into_iter().map(|(v, _)| v).collect()
+    MIGRATOR
+        .iter()
+        .filter(|m| m.migration_type.is_up_migration())
+        .map(|m| m.version)
+        .collect()
 }
 
 fn mig_err(e: MigrateError) -> StoreError {
@@ -52,7 +57,7 @@ impl SqliteStore {
             "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?)",
         )
         .bind(name)
-        .fetch_one(&self.writer)
+        .fetch_one(&self.reader)
         .await
         .map_err(db_err)
     }
@@ -65,7 +70,7 @@ impl SqliteStore {
         let rows: Vec<(i64, Vec<u8>, bool)> = sqlx::query_as(
             "SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version",
         )
-        .fetch_all(&self.writer)
+        .fetch_all(&self.reader)
         .await
         .map_err(db_err)?;
         if let Some((v, _, _)) = rows.iter().find(|(_, _, ok)| !ok) {
@@ -83,24 +88,27 @@ impl SqliteStore {
         Ok(self.applied().await?.iter().map(|a| a.version).collect())
     }
 
+    /// `schema_meta.min_binary_version`, if the table and key exist.
+    async fn stored_min_binary(&self) -> Result<Option<Version>, StoreError> {
+        if !self.table_exists("schema_meta").await? {
+            return Ok(None);
+        }
+        let raw: Option<String> = sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = ?")
+            .bind(SCHEMA_META_MIN_BINARY)
+            .fetch_optional(&self.reader)
+            .await
+            .map_err(db_err)?;
+        raw.map(|s| {
+            Version::parse(&s).map_err(|e| {
+                StoreError::Migration(format!("invalid {SCHEMA_META_MIN_BINARY} `{s}`: {e}"))
+            })
+        })
+        .transpose()
+    }
+
     pub(crate) async fn status(&self, binary: &Version) -> Result<MigrationStatus, StoreError> {
         let applied = self.applied_versions().await?;
-        let min_binary = if self.table_exists("schema_meta").await? {
-            let raw: Option<String> =
-                sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = ?")
-                    .bind(SCHEMA_META_MIN_BINARY)
-                    .fetch_optional(&self.writer)
-                    .await
-                    .map_err(db_err)?;
-            raw.map(|s| {
-                Version::parse(&s).map_err(|e| {
-                    StoreError::Migration(format!("invalid {SCHEMA_META_MIN_BINARY} `{s}`: {e}"))
-                })
-            })
-            .transpose()?
-        } else {
-            None
-        };
+        let min_binary = self.stored_min_binary().await?;
         Ok(MigrationStatus::compute(
             &applied,
             &embedded_versions(),
@@ -125,19 +133,19 @@ impl SqliteStore {
             .map_err(mig_err)?;
             tracing::info!(from, to = target, "applied migrations {pending:?}");
         }
-        self.sync_schema_meta().await?;
+        self.sync_schema_meta(&[]).await?;
         Ok(pending)
     }
 
     pub(crate) async fn down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError> {
         let applied = self.applied_versions().await?;
-        let steps = plan_down(&applied, &embedded_up(), to, allow_lossy)?;
+        let steps = plan_down(&applied, &embedded()?, to, allow_lossy)?;
         if steps.is_empty() {
             return Ok(steps);
         }
         MIGRATOR.undo(&self.writer, to).await.map_err(mig_err)?;
         tracing::info!(to, "reverted migrations {steps:?}");
-        self.sync_schema_meta().await?;
+        self.sync_schema_meta(&steps).await?;
         Ok(steps)
     }
 
@@ -159,9 +167,9 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// Writes `site_id` and `created_by_version` when absent and sets
-    /// `min_binary_version` from the applied contract migrations.
-    async fn sync_schema_meta(&self) -> Result<(), StoreError> {
+    /// Writes `site_id` and `created_by_version` when absent and updates
+    /// `min_binary_version` per [`next_min_binary`]; `reverted` = versions just undone.
+    async fn sync_schema_meta(&self, reverted: &[i64]) -> Result<(), StoreError> {
         if !self.table_exists("schema_meta").await? {
             return Ok(());
         }
@@ -179,8 +187,13 @@ impl SqliteStore {
             .await
             .map_err(db_err)?;
         }
+        let current = self.stored_min_binary().await?;
         let applied = self.applied_versions().await?;
-        match required_min_binary(&applied, &embedded_up())? {
+        let next = next_min_binary(current.as_ref(), &applied, &embedded()?, reverted);
+        if next == current {
+            return Ok(());
+        }
+        match &next {
             Some(min) => sqlx::query(
                 "INSERT INTO schema_meta (key, value) VALUES (?, ?) \
                  ON CONFLICT (key) DO UPDATE SET value = excluded.value",
@@ -194,17 +207,19 @@ impl SqliteStore {
         .execute(&self.writer)
         .await
         .map_err(db_err)?;
+        tracing::info!(from = ?current, to = ?next, "updated {SCHEMA_META_MIN_BINARY}");
         Ok(())
     }
 
-    /// `VACUUM INTO dest` (dest must not exist).
+    /// `VACUUM INTO dest` (dest must not exist). Runs on the read-only reader pool
+    /// (`VACUUM INTO` only reads the source), so it never waits behind an open `Tx`.
     pub(crate) async fn vacuum_into(&self, dest: &Path) -> Result<(), StoreError> {
         let dest = dest
             .to_str()
             .ok_or_else(|| StoreError::Invalid(format!("non-UTF-8 path {}", dest.display())))?;
         sqlx::query("VACUUM INTO ?")
             .bind(dest)
-            .execute(&self.writer)
+            .execute(&self.reader)
             .await
             .map_err(db_err)?;
         Ok(())
@@ -267,6 +282,35 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    #[tokio::test]
+    async fn status_and_snapshot_do_not_wait_for_open_tx() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteStore::open(SqliteOptions::new(dir.path().join("ferrite.db")))
+            .await
+            .unwrap();
+        store.migrate_up(None).await.unwrap();
+        // Holds the only writer connection.
+        let tx = store.begin().await.unwrap();
+        let wait = std::time::Duration::from_secs(2);
+        let binary = semver::Version::new(0, 1, 0);
+        tokio::time::timeout(wait, store.migration_status(&binary))
+            .await
+            .expect("status must not wait for the writer")
+            .unwrap();
+        tokio::time::timeout(wait, store.verify_migrations())
+            .await
+            .expect("verify must not wait for the writer")
+            .unwrap();
+        // VACUUM INTO works on the read-only reader connection.
+        let dest = dir.path().join("snap.db");
+        tokio::time::timeout(wait, store.snapshot(&dest))
+            .await
+            .expect("snapshot must not wait for the writer")
+            .unwrap();
+        assert!(dest.exists());
+        tx.rollback().await.unwrap();
     }
 
     #[tokio::test]

@@ -6,6 +6,7 @@ backend_tests!(
     up_down_up_roundtrip,
     verdict_after_partial_down,
     verify_detects_tampered_checksum,
+    min_binary_survives_older_binary,
 );
 
 #[test]

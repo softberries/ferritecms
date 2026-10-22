@@ -1,5 +1,17 @@
 //! Repository implementations. Each later M1a task replaces one group of `&Unsupported`
 //! accessors with a real implementation on [`SqliteRepos`].
+//!
+//! **Executor rule (copy it in every repo):** run SELECTs on `self.reader` and every
+//! mutation (INSERT/UPDATE/DELETE, including upserts) on `self.writer`:
+//!
+//! ```text
+//! run!(&self.reader, |e| sqlx::query_scalar("SELECT ...").fetch_optional(e))
+//! run!(&self.writer, |e| sqlx::query("UPDATE ...").execute(e))
+//! ```
+//!
+//! For `Store::read()` the reader is the read-only reader pool (a write sent there fails
+//! loudly) and the writer is the single writer connection. Inside a `Tx` both point at
+//! the transaction, so reads see the transaction's own writes.
 
 mod site;
 mod stub;
@@ -18,15 +30,18 @@ use tokio::sync::Mutex;
 
 use crate::exec::{Exec, SharedTx, db_err, finished};
 
-/// Every repository, bound to one executor (the reader pool or a write transaction).
+/// Every repository, bound to a read and a write executor (see the module docs).
 pub(crate) struct SqliteRepos {
-    exec: Exec,
+    reader: Exec,
+    writer: Exec,
 }
 
 impl SqliteRepos {
-    pub(crate) fn new(pool: SqlitePool) -> Self {
+    /// Autocommit repositories: reads on `reader`, writes on `writer`.
+    pub(crate) fn new(reader: SqlitePool, writer: SqlitePool) -> Self {
         Self {
-            exec: Exec::Pool(pool),
+            reader: Exec::Pool(reader),
+            writer: Exec::Pool(writer),
         }
     }
 }
@@ -99,7 +114,8 @@ impl SqliteTx {
         let tx = Arc::new(Mutex::new(Some(tx)));
         Self {
             repos: SqliteRepos {
-                exec: Exec::Tx(tx.clone()),
+                reader: Exec::Tx(tx.clone()),
+                writer: Exec::Tx(tx.clone()),
             },
             tx,
         }

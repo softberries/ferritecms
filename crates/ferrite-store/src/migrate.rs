@@ -234,24 +234,24 @@ impl MigrationStatus {
     }
 }
 
-/// Versions to revert (newest first) to reach `to`. `embedded_up` pairs each embedded
-/// version with its `.up.sql`. Refuses versions this binary does not know and, unless
-/// `allow_lossy`, migrations marked `-- ferrite:lossy-down`.
+/// Versions to revert (newest first) to reach `to`. `embedded` pairs each embedded
+/// version with its parsed directives. Refuses versions this binary does not know and,
+/// unless `allow_lossy`, migrations marked `-- ferrite:lossy-down`.
 pub fn plan_down(
     applied: &[i64],
-    embedded_up: &[(i64, &str)],
+    embedded: &[(i64, Directives)],
     to: i64,
     allow_lossy: bool,
 ) -> Result<Vec<i64>, StoreError> {
     let mut steps: Vec<i64> = applied.iter().copied().filter(|v| *v > to).collect();
     steps.sort_unstable_by(|a, b| b.cmp(a));
     for v in &steps {
-        let Some((_, sql)) = embedded_up.iter().find(|(e, _)| e == v) else {
+        let Some((_, d)) = embedded.iter().find(|(e, _)| e == v) else {
             return Err(StoreError::Migration(format!(
                 "migration {v} is not known to this binary; run `down` with the binary that applied it"
             )));
         };
-        if parse_directives(sql)?.lossy_down && !allow_lossy {
+        if d.lossy_down && !allow_lossy {
             return Err(StoreError::Migration(format!(
                 "migration {v} has a lossy down (data removed by its up cannot be restored); pass allow_lossy to proceed"
             )));
@@ -260,23 +260,31 @@ pub fn plan_down(
     Ok(steps)
 }
 
-/// Highest `-- ferrite:min-binary` among the applied, embedded migrations.
-pub fn required_min_binary(
+/// The `schema_meta.min_binary_version` to store after this binary migrated.
+///
+/// - Raised to the highest `min-binary` among applied, embedded contract migrations.
+/// - Never lowered or erased while any applied version is unknown to this binary
+///   (a newer binary's contract migration may have set it).
+/// - Lowered or dropped only when this binary just reverted (`reverted`) the
+///   migration whose `min-binary` equals the stored value.
+pub fn next_min_binary(
+    current: Option<&Version>,
     applied: &[i64],
-    embedded_up: &[(i64, &str)],
-) -> Result<Option<Version>, StoreError> {
-    let mut max: Option<Version> = None;
-    for (v, sql) in embedded_up {
-        if !applied.contains(v) {
-            continue;
-        }
-        if let Some(min) = parse_directives(sql)?.min_binary
-            && max.as_ref().is_none_or(|m| &min > m)
-        {
-            max = Some(min);
-        }
-    }
-    Ok(max)
+    embedded: &[(i64, Directives)],
+    reverted: &[i64],
+) -> Option<Version> {
+    let known = |v: &i64| embedded.iter().any(|(e, _)| e == v);
+    let from_applied = embedded
+        .iter()
+        .filter(|(v, _)| applied.contains(v))
+        .filter_map(|(_, d)| d.min_binary.as_ref())
+        .max();
+    let reverted_setter = embedded.iter().any(|(v, d)| {
+        reverted.contains(v) && current.is_some() && d.min_binary.as_ref() == current
+    });
+    let keep_current = applied.iter().any(|v| !known(v)) || !reverted_setter;
+    let floor = if keep_current { current } else { None };
+    floor.max(from_applied).cloned()
 }
 
 #[cfg(test)]
@@ -310,10 +318,21 @@ mod tests {
         assert_eq!(s.verdict, Compat::NeedsUp);
     }
 
+    fn d(sql: &str) -> Directives {
+        parse_directives(sql).unwrap()
+    }
+
+    fn contract(min: &str) -> Directives {
+        d(&format!(
+            "-- ferrite:phase contract\n-- ferrite:min-binary {min}\nSELECT 1;"
+        ))
+    }
+
     #[test]
     fn plan_down_rules() {
-        let lossy = "-- ferrite:phase contract\n-- ferrite:lossy-down\nDROP TABLE x;";
-        let emb = [(1, "CREATE TABLE a (x INT);"), (2, lossy), (3, "SELECT 1;")];
+        let lossy = d("-- ferrite:phase contract\n-- ferrite:lossy-down\nDROP TABLE x;");
+        let plain = d("SELECT 1;");
+        let emb = [(1, plain.clone()), (2, lossy), (3, plain)];
         assert_eq!(plan_down(&[1, 2, 3], &emb, 2, false).unwrap(), vec![3]);
         assert_eq!(
             plan_down(&[1, 2, 3], &emb, 3, false).unwrap(),
@@ -327,20 +346,52 @@ mod tests {
     }
 
     #[test]
-    fn required_min_binary_takes_max_of_applied() {
-        let c =
-            |m: &str| format!("-- ferrite:phase contract\n-- ferrite:min-binary {m}\nSELECT 1;");
-        let (a, b) = (c("0.3.0"), c("0.2.0"));
-        let emb = [(1, "SELECT 1;"), (2, a.as_str()), (3, b.as_str())];
-        assert_eq!(required_min_binary(&[1], &emb).unwrap(), None);
+    fn next_min_binary_rules() {
+        let emb = [
+            (1, d("SELECT 1;")),
+            (2, contract("0.3.0")),
+            (3, contract("0.2.0")),
+        ];
+        let (v2, v3, v9) = (v("0.2.0"), v("0.3.0"), v("0.9.0"));
+        // Nothing contract applied, nothing stored.
+        assert_eq!(next_min_binary(None, &[1], &emb, &[]), None);
+        // Raised by applied contract migrations (max wins).
         assert_eq!(
-            required_min_binary(&[1, 2, 3], &emb).unwrap(),
-            Some(v("0.3.0"))
+            next_min_binary(None, &[1, 2, 3], &emb, &[]),
+            Some(v3.clone())
         );
         assert_eq!(
-            required_min_binary(&[1, 3], &emb).unwrap(),
-            Some(v("0.2.0"))
+            next_min_binary(Some(&v2), &[1, 2, 3], &emb, &[]),
+            Some(v3.clone())
         );
+        // Older binary (knows only 1) against a newer schema: never erased or lowered.
+        let old = &emb[..1];
+        assert_eq!(
+            next_min_binary(Some(&v9), &[1, 2, 7], old, &[]),
+            Some(v9.clone())
+        );
+        assert_eq!(
+            next_min_binary(Some(&v9), &[1, 7], &emb, &[]),
+            Some(v9.clone())
+        );
+        // A higher stored value is kept when nothing that set it was reverted.
+        assert_eq!(
+            next_min_binary(Some(&v9), &[1, 2], &emb, &[]),
+            Some(v9.clone())
+        );
+        // Reverting the setter lowers to what remains, or drops it.
+        assert_eq!(
+            next_min_binary(Some(&v3), &[1, 3], &emb, &[2]),
+            Some(v2.clone())
+        );
+        assert_eq!(next_min_binary(Some(&v3), &[1], &emb, &[3, 2]), None);
+        // Reverting a migration that did not set the stored value changes nothing.
+        assert_eq!(
+            next_min_binary(Some(&v3), &[1, 2], &emb, &[3]),
+            Some(v3.clone())
+        );
+        // Reverted setter but an unknown version is still applied: keep.
+        assert_eq!(next_min_binary(Some(&v3), &[1, 8], &emb, &[2]), Some(v3));
     }
 
     fn v(s: &str) -> Version {

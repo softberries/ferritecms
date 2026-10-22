@@ -1,6 +1,6 @@
 //! Migration contract tests (02 §7–§8).
 
-use ferrite_store::{Compat, StoreError};
+use ferrite_store::{Compat, SCHEMA_META_MIN_BINARY, StoreError};
 use semver::Version;
 
 use crate::TestDb;
@@ -70,7 +70,30 @@ pub async fn verify_detects_tampered_checksum(db: &TestDb) {
     db.tamper_checksum(1).await;
     let err = store.verify_migrations().await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains('1')),
+        matches!(&err, StoreError::Migration(m)
+            if m.contains("checksum mismatch for applied migration 1")),
         "unexpected error: {err:?}"
+    );
+}
+
+/// An older binary must not erase or lower the min-binary a newer one recorded.
+pub async fn min_binary_survives_older_binary(db: &TestDb) {
+    let store = db.store();
+    let meta = store.read().schema_meta();
+    meta.set(SCHEMA_META_MIN_BINARY, "9.9.9").await.unwrap();
+    db.insert_unknown_applied(9999).await;
+
+    assert_eq!(store.migrate_up(None).await.unwrap(), Vec::<i64>::new());
+    assert_eq!(
+        meta.get(SCHEMA_META_MIN_BINARY).await.unwrap().as_deref(),
+        Some("9.9.9")
+    );
+    let s = store.migration_status(&binary()).await.unwrap();
+    assert_eq!(s.unknown_applied, vec![9999]);
+    assert_eq!(
+        s.verdict,
+        Compat::Incompatible {
+            requires: Version::new(9, 9, 9)
+        }
     );
 }

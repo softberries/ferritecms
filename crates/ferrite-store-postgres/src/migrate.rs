@@ -2,7 +2,8 @@
 //! bookkeeping and checksum verification. No automatic snapshot on Postgres (02 §7).
 
 use ferrite_store::{
-    MigrationStatus, SCHEMA_META_MIN_BINARY, StoreError, plan_down, required_min_binary,
+    Directives, MigrationStatus, SCHEMA_META_MIN_BINARY, StoreError, next_min_binary,
+    parse_directives, plan_down,
 };
 use semver::Version;
 use sqlx::migrate::{MigrateError, Migrator};
@@ -11,17 +12,21 @@ use crate::{PgStore, exec::db_err};
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
-/// `(version, up SQL)` of every embedded migration.
-fn embedded_up() -> Vec<(i64, &'static str)> {
+/// Every embedded migration's version with the directives parsed from its up SQL.
+fn embedded() -> Result<Vec<(i64, Directives)>, StoreError> {
     MIGRATOR
         .iter()
         .filter(|m| m.migration_type.is_up_migration())
-        .map(|m| (m.version, m.sql.as_str()))
+        .map(|m| Ok((m.version, parse_directives(m.sql.as_str())?)))
         .collect()
 }
 
 fn embedded_versions() -> Vec<i64> {
-    embedded_up().into_iter().map(|(v, _)| v).collect()
+    MIGRATOR
+        .iter()
+        .filter(|m| m.migration_type.is_up_migration())
+        .map(|m| m.version)
+        .collect()
 }
 
 fn mig_err(e: MigrateError) -> StoreError {
@@ -70,24 +75,28 @@ impl PgStore {
         Ok(self.applied().await?.iter().map(|a| a.version).collect())
     }
 
+    /// `schema_meta.min_binary_version`, if the table and key exist.
+    async fn stored_min_binary(&self) -> Result<Option<Version>, StoreError> {
+        if !self.table_exists("schema_meta").await? {
+            return Ok(None);
+        }
+        let raw: Option<String> =
+            sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = $1")
+                .bind(SCHEMA_META_MIN_BINARY)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(db_err)?;
+        raw.map(|s| {
+            Version::parse(&s).map_err(|e| {
+                StoreError::Migration(format!("invalid {SCHEMA_META_MIN_BINARY} `{s}`: {e}"))
+            })
+        })
+        .transpose()
+    }
+
     pub(crate) async fn status(&self, binary: &Version) -> Result<MigrationStatus, StoreError> {
         let applied = self.applied_versions().await?;
-        let min_binary = if self.table_exists("schema_meta").await? {
-            let raw: Option<String> =
-                sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = $1")
-                    .bind(SCHEMA_META_MIN_BINARY)
-                    .fetch_optional(&self.pool)
-                    .await
-                    .map_err(db_err)?;
-            raw.map(|s| {
-                Version::parse(&s).map_err(|e| {
-                    StoreError::Migration(format!("invalid {SCHEMA_META_MIN_BINARY} `{s}`: {e}"))
-                })
-            })
-            .transpose()?
-        } else {
-            None
-        };
+        let min_binary = self.stored_min_binary().await?;
         Ok(MigrationStatus::compute(
             &applied,
             &embedded_versions(),
@@ -114,13 +123,13 @@ impl PgStore {
             res.map_err(mig_err)?;
             tracing::info!(from, to = target, "applied migrations {pending:?}");
         }
-        self.sync_schema_meta().await?;
+        self.sync_schema_meta(&[]).await?;
         Ok(pending)
     }
 
     pub(crate) async fn down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError> {
         let applied = self.applied_versions().await?;
-        let steps = plan_down(&applied, &embedded_up(), to, allow_lossy)?;
+        let steps = plan_down(&applied, &embedded()?, to, allow_lossy)?;
         if steps.is_empty() {
             return Ok(steps);
         }
@@ -129,7 +138,7 @@ impl PgStore {
         pool.close().await;
         res.map_err(mig_err)?;
         tracing::info!(to, "reverted migrations {steps:?}");
-        self.sync_schema_meta().await?;
+        self.sync_schema_meta(&steps).await?;
         Ok(steps)
     }
 
@@ -151,9 +160,9 @@ impl PgStore {
         Ok(())
     }
 
-    /// Writes `site_id` and `created_by_version` when absent and sets
-    /// `min_binary_version` from the applied contract migrations.
-    async fn sync_schema_meta(&self) -> Result<(), StoreError> {
+    /// Writes `site_id` and `created_by_version` when absent and updates
+    /// `min_binary_version` per [`next_min_binary`]; `reverted` = versions just undone.
+    async fn sync_schema_meta(&self, reverted: &[i64]) -> Result<(), StoreError> {
         if !self.table_exists("schema_meta").await? {
             return Ok(());
         }
@@ -171,8 +180,13 @@ impl PgStore {
             .await
             .map_err(db_err)?;
         }
+        let current = self.stored_min_binary().await?;
         let applied = self.applied_versions().await?;
-        match required_min_binary(&applied, &embedded_up())? {
+        let next = next_min_binary(current.as_ref(), &applied, &embedded()?, reverted);
+        if next == current {
+            return Ok(());
+        }
+        match &next {
             Some(min) => sqlx::query(
                 "INSERT INTO schema_meta (key, value) VALUES ($1, $2) \
                  ON CONFLICT (key) DO UPDATE SET value = excluded.value",
@@ -186,6 +200,7 @@ impl PgStore {
         .execute(&self.pool)
         .await
         .map_err(db_err)?;
+        tracing::info!(from = ?current, to = ?next, "updated {SCHEMA_META_MIN_BINARY}");
         Ok(())
     }
 }

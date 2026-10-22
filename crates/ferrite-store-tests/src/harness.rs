@@ -77,18 +77,28 @@ pub async fn pg_store() -> Option<PgFixture> {
     .execute(&mut admin)
     .await
     .expect("create test schema");
-    admin.close().await.expect("close admin connection");
-    let fixture = PgFixture {
-        store: PgStore::open(PgOptions {
-            url: url.clone(),
-            max_connections: 4,
-            schema: Some(schema.clone()),
-        })
-        .await
-        .expect("open postgres store"),
-        url,
-        schema,
+    let opened = PgStore::open(PgOptions {
+        url: url.clone(),
+        max_connections: 4,
+        schema: Some(schema.clone()),
+    })
+    .await;
+    let store = match opened {
+        Ok(store) => store,
+        Err(e) => {
+            // No fixture exists yet to drop the schema, so do it here.
+            let drop_sql = format!("DROP SCHEMA IF EXISTS {} CASCADE", quote_ident(&schema));
+            if let Err(de) = sqlx::raw_sql(AssertSqlSafe(drop_sql))
+                .execute(&mut admin)
+                .await
+            {
+                eprintln!("warning: could not drop test schema {schema}: {de}");
+            }
+            panic!("open postgres store: {e}");
+        }
     };
+    admin.close().await.expect("close admin connection");
+    let fixture = PgFixture { store, url, schema };
     fixture
         .store
         .migrate_up(None)
@@ -168,6 +178,39 @@ impl TestDb {
                 .fetch_all(&mut c)
                 .await
                 .expect("list postgres objects")
+            }
+        }
+    }
+
+    /// Records `version` in `_sqlx_migrations` as if a newer binary had applied it.
+    pub async fn insert_unknown_applied(&self, version: i64) {
+        let sql = "INSERT INTO {t}_sqlx_migrations \
+                   (version, description, success, checksum, execution_time) \
+                   VALUES ({p}, 'from a newer binary', TRUE, {c}, 0)";
+        match &self.backing {
+            Backing::Sqlite { path, .. } => {
+                let mut c = sqlite_conn(path).await;
+                let sql = sql
+                    .replace("{t}", "")
+                    .replace("{p}", "?")
+                    .replace("{c}", "x'00'");
+                sqlx::query(AssertSqlSafe(sql))
+                    .bind(version)
+                    .execute(&mut c)
+                    .await
+                    .expect("insert unknown migration");
+            }
+            Backing::Postgres(f) => {
+                let mut c = PgConnection::connect(&f.url).await.expect("connect");
+                let sql = sql
+                    .replace("{t}", &format!("{}.", quote_ident(&f.schema)))
+                    .replace("{p}", "$1")
+                    .replace("{c}", "'\\x00'::bytea");
+                sqlx::query(AssertSqlSafe(sql))
+                    .bind(version)
+                    .execute(&mut c)
+                    .await
+                    .expect("insert unknown migration");
             }
         }
     }

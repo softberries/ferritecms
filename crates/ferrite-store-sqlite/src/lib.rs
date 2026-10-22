@@ -20,7 +20,9 @@ use repos::{SqliteRepos, SqliteTx};
 pub struct SqliteStore {
     /// Max one connection; every write and every `Tx` goes through it.
     writer: SqlitePool,
-    /// Repositories over the reader pool.
+    /// Read-only pool; also used for migration bookkeeping reads and snapshots.
+    reader: SqlitePool,
+    /// Autocommit repositories: reads on `reader`, writes on `writer`.
     read: SqliteRepos,
     backups_dir: PathBuf,
     _lock: File,

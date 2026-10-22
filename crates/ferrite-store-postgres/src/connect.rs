@@ -50,13 +50,22 @@ impl PgStore {
             .map(|s| format!("SET search_path TO {}", quote_ident(s)));
         if let Some(schema) = &opts.schema {
             let mut conn = PgConnection::connect_with(&connect).await.map_err(db_err)?;
-            sqlx::raw_sql(AssertSqlSafe(format!(
-                "CREATE SCHEMA IF NOT EXISTS {}",
-                quote_ident(schema)
-            )))
-            .execute(&mut conn)
-            .await
-            .map_err(db_err)?;
+            // Only CREATE when missing, so an existing schema needs no CREATE privilege.
+            let exists: bool =
+                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)")
+                    .bind(schema)
+                    .fetch_one(&mut conn)
+                    .await
+                    .map_err(db_err)?;
+            if !exists {
+                sqlx::raw_sql(AssertSqlSafe(format!(
+                    "CREATE SCHEMA IF NOT EXISTS {}",
+                    quote_ident(schema)
+                )))
+                .execute(&mut conn)
+                .await
+                .map_err(db_err)?;
+            }
             conn.close().await.map_err(db_err)?;
         }
 

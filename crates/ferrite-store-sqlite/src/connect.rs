@@ -57,21 +57,25 @@ impl SqliteStore {
             .foreign_keys(true)
             .busy_timeout(Duration::from_millis(5000))
             .pragma("temp_store", "MEMORY");
-        // Writer first: it creates the file and switches it to WAL.
+        // Writer first: it creates the file and switches it to WAL. It keeps one
+        // connection open so the WAL index exists for the read-only readers.
         let writer = SqlitePoolOptions::new()
             .max_connections(1)
+            .min_connections(1)
             .connect_with(base.clone())
             .await
             .map_err(db_err)?;
+        // Read-only, so a write sent to the reader pool by mistake fails loudly.
         let reader = SqlitePoolOptions::new()
             .max_connections(opts.readers.max(1))
-            .connect_with(base)
+            .connect_with(base.read_only(true))
             .await
             .map_err(db_err)?;
 
         Ok(Self {
+            read: SqliteRepos::new(reader.clone(), writer.clone()),
             writer,
-            read: SqliteRepos::new(reader),
+            reader,
             backups_dir: opts.backups_dir.unwrap_or_else(|| db_dir.join("backups")),
             _lock: lock,
         })
@@ -118,5 +122,50 @@ mod tests {
         );
         drop(first);
         SqliteStore::open(opts).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_repos_write_on_writer_and_readers_are_read_only() {
+        use ferrite_store::Store;
+        use sqlx::Connection;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = SqliteOptions::new(dir.path().join("ferrite.db"));
+        opts.readers = 1;
+        let store = SqliteStore::open(opts).await.unwrap();
+        store.migrate_up(None).await.unwrap();
+
+        // Hold the only reader connection inside a read transaction.
+        let mut busy = store.reader.acquire().await.unwrap();
+        let mut read_tx = busy.begin().await.unwrap();
+        let _: i64 = sqlx::query_scalar("SELECT count(*) FROM schema_meta")
+            .fetch_one(&mut *read_tx)
+            .await
+            .unwrap();
+        let set = store.read().schema_meta().set("k", "v");
+        tokio::time::timeout(Duration::from_secs(2), set)
+            .await
+            .expect("write must not wait for a reader")
+            .unwrap();
+
+        // A write sent straight to the reader pool is refused.
+        let err = sqlx::query("INSERT INTO schema_meta (key, value) VALUES ('x', 'y')")
+            .execute(&mut *read_tx)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("readonly"), "{err}");
+        drop(read_tx);
+        drop(busy);
+
+        assert_eq!(
+            store
+                .read()
+                .schema_meta()
+                .get("k")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("v")
+        );
     }
 }
