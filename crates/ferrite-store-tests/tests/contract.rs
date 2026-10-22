@@ -17,6 +17,10 @@ backend_tests!(
     tx_rollback_invisible,
     tx_dropped_is_rolled_back,
     read_sees_committed_after_commit,
+    options_reject_nul,
+    options_number_roundtrip,
+    autoloaded_order_is_binary,
+    schema_meta_roundtrip,
 );
 
 backend_tests_spawning!(concurrent_writers);

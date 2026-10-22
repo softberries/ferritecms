@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ferrite_domain::{OptionEntry, Timestamp};
-use ferrite_store::{OptionRepo, SchemaMetaRepo, StoreError};
+use ferrite_store::{OptionRepo, SchemaMetaRepo, StoreError, validate_json};
 use sqlx::types::Json;
 
 use super::PgRepos;
@@ -48,6 +48,7 @@ impl OptionRepo for PgRepos {
         value: &serde_json::Value,
         autoload: bool,
     ) -> Result<(), StoreError> {
+        validate_json(value)?;
         run!(&self.exec, |e| sqlx::query(
             "INSERT INTO options (key, value, autoload, updated_at) VALUES ($1, $2, $3, $4) \
              ON CONFLICT (key) DO UPDATE SET value = excluded.value, \
@@ -71,10 +72,12 @@ impl OptionRepo for PgRepos {
     }
 
     async fn autoloaded(&self) -> Result<Vec<OptionEntry>, StoreError> {
-        let rows = run!(&self.exec, |e| sqlx::query(
-            "SELECT key, value, autoload, updated_at FROM options WHERE autoload ORDER BY key"
+        let rows = run!(&self.exec, |e| {
+            sqlx::query(
+            "SELECT key, value, autoload, updated_at FROM options WHERE autoload ORDER BY key COLLATE \"C\""
         )
-        .fetch_all(e))?;
+        .fetch_all(e)
+        })?;
         rows.iter().map(codec::option_entry).collect()
     }
 }

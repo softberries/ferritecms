@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use ferrite_domain::{OptionEntry, Timestamp};
-use ferrite_store::{OptionRepo, SchemaMetaRepo, StoreError};
+use ferrite_store::{OptionRepo, SchemaMetaRepo, StoreError, validate_json};
 
 use super::SqliteRepos;
 use crate::{codec, exec::run};
@@ -46,6 +46,7 @@ impl OptionRepo for SqliteRepos {
         value: &serde_json::Value,
         autoload: bool,
     ) -> Result<(), StoreError> {
+        validate_json(value)?;
         run!(&self.writer, |e| sqlx::query(
             "INSERT INTO options (key, value, autoload, updated_at) VALUES (?, ?, ?, ?) \
              ON CONFLICT (key) DO UPDATE SET value = excluded.value, \

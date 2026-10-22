@@ -2,6 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
+use ferrite_store::StoreError;
 use serde_json::json;
 
 use crate::TestDb;
@@ -47,7 +48,7 @@ pub async fn options_crud(db: &TestDb) {
         .unwrap();
     assert_eq!(got2.value, json!(42));
     assert!(!got2.autoload);
-    assert!(got2.updated_at >= got.updated_at);
+    assert!(got2.updated_at > got.updated_at);
     assert!(
         store
             .read()
@@ -96,6 +97,7 @@ pub async fn tx_rollback_invisible(db: &TestDb) {
     let store = db.store();
     let tx = store.begin().await.unwrap();
     tx.options().set("k", &json!(1), false).await.unwrap();
+    assert!(tx.options().get("k").await.unwrap().is_some());
     tx.rollback().await.unwrap();
     assert!(store.read().options().get("k").await.unwrap().is_none());
 }
@@ -184,4 +186,65 @@ pub async fn concurrent_writers(db: Arc<TestDb>) {
             );
         }
     }
+}
+
+pub async fn options_reject_nul(db: &TestDb) {
+    let store = db.store();
+    for bad in [
+        json!("a\u{0}b"),
+        json!({"k": ["x", {"deep": "\u{0}"}]}),
+        json!({"key\u{0}": 1}),
+    ] {
+        let tx = store.begin().await.unwrap();
+        let err = tx.options().set("nul", &bad, false).await.unwrap_err();
+        assert!(
+            matches!(err, StoreError::Invalid(ref m) if m == "json contains NUL"),
+            "{err:?}"
+        );
+        tx.rollback().await.unwrap();
+    }
+    assert!(store.read().options().get("nul").await.unwrap().is_none());
+}
+
+pub async fn options_number_roundtrip(db: &TestDb) {
+    let store = db.store();
+    let value = json!({"max": u64::MAX, "big": 1e300, "neg": i64::MIN, "f": 0.1});
+    let tx = store.begin().await.unwrap();
+    tx.options().set("nums", &value, false).await.unwrap();
+    tx.commit().await.unwrap();
+    let got = store.read().options().get("nums").await.unwrap().unwrap();
+    assert_eq!(got.value, value);
+}
+
+pub async fn autoloaded_order_is_binary(db: &TestDb) {
+    let store = db.store();
+    let tx = store.begin().await.unwrap();
+    for k in ["B", "a", "\u{e9}", "Z"] {
+        tx.options().set(k, &json!(1), true).await.unwrap();
+    }
+    tx.commit().await.unwrap();
+    let keys: Vec<_> = store
+        .read()
+        .options()
+        .autoloaded()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|o| o.key)
+        .collect();
+    assert_eq!(keys, ["B", "Z", "a", "\u{e9}"]);
+}
+
+pub async fn schema_meta_roundtrip(db: &TestDb) {
+    let store = db.store();
+    let tx = store.begin().await.unwrap();
+    let meta = tx.schema_meta();
+    assert_eq!(meta.get("test_key").await.unwrap(), None);
+    meta.set("test_key", "one").await.unwrap();
+    assert_eq!(meta.get("test_key").await.unwrap().as_deref(), Some("one"));
+    meta.set("test_key", "two").await.unwrap();
+    assert_eq!(meta.get("test_key").await.unwrap().as_deref(), Some("two"));
+    tx.commit().await.unwrap();
+    let read = store.read().schema_meta().get("test_key").await.unwrap();
+    assert_eq!(read.as_deref(), Some("two"));
 }
