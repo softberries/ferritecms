@@ -20,6 +20,17 @@ pub const RESERVED: &[&str] = &[
     "metrics",
 ];
 
+/// Router words a top-level item may not take (ruling R13): `/author/{login}/`,
+/// `/page/N/` and search. Taxonomy names (`/{taxonomy}/{slug}/`) and content type
+/// names are reserved the same way by the content service, which knows them.
+pub const ROUTE_WORDS: &[&str] = &["author", "page", "search"];
+
+/// Whether `slug` is four ASCII digits: the shape of a `/{yyyy}/` date archive, which
+/// a top-level item may not take (ruling R13).
+pub fn is_year(slug: &str) -> bool {
+    slug.len() == 4 && slug.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Whether `slug` is in [`RESERVED`].
 pub fn is_reserved(slug: &str) -> bool {
     RESERVED.contains(&slug)

@@ -97,9 +97,11 @@ impl ContentService {
     /// The slug is the validated caller slug or one generated from the title. If it is
     /// taken under the same type and parent, `-2`, `-3`, … is appended, for caller slugs
     /// too (as WordPress does); concurrent creates that race for the same slug retry up
-    /// to 5 times. A top-level item may not take a [`slug::RESERVED`] word or the name
-    /// of a registered content type (its archive prefix): a caller slug is
-    /// `Invalid("reserved slug")`, a generated one gets the `-N` suffix.
+    /// to 5 times. A top-level item may not take a [`slug::RESERVED`] word, the name
+    /// of a registered content type (its archive prefix) or taxonomy (its term
+    /// prefix), a [`slug::ROUTE_WORDS`] word or four digits (a year archive; ruling
+    /// R13): a caller slug is `Invalid("reserved slug")`, a generated one gets the `-N`
+    /// suffix.
     ///
     /// Top-level items of types that share the root path namespace
     /// ([`Permalinks::root_namespace_peers`], e.g. posts at `/%slug%/` and top-level
@@ -323,16 +325,19 @@ fn base_slug(
 /// Extra slugs a top-level item may not take, beyond [`slug::RESERVED`].
 #[derive(Debug, Default)]
 struct RootNamespace {
-    /// Registered content type names (their `/{type}/` prefixes).
-    type_names: Vec<String>,
+    /// Router prefixes: content type names (`/{type}/`), taxonomy names
+    /// (`/{taxonomy}/{slug}/`) and [`slug::ROUTE_WORDS`].
+    names: Vec<String>,
+    /// The base slug is four digits (a `/{yyyy}/` archive), so it is taken itself.
+    year: bool,
     /// Types whose top-level slugs share this item's root paths.
     peers: Vec<String>,
 }
 
 impl ContentService {
     /// The root-namespace rules for an item of `kind` under `parent` (none below the
-    /// top level). A caller slug (`explicit`) that is a type name is
-    /// `Invalid("reserved slug")`.
+    /// top level). A caller slug (`explicit`) that is a router prefix or four digits
+    /// is `Invalid("reserved slug")`.
     async fn root_namespace(
         &self,
         repos: &dyn Repos,
@@ -344,18 +349,22 @@ impl ContentService {
         if parent.is_some() {
             return Ok(RootNamespace::default());
         }
-        let type_names: Vec<String> = repos
+        let mut names: Vec<String> = repos
             .types()
             .list()
             .await?
             .into_iter()
             .map(|t| t.name)
             .collect();
-        if explicit && type_names.iter().any(|n| n == base) {
+        names.extend(repos.taxonomies().list().await?.into_iter().map(|t| t.name));
+        names.extend(slug::ROUTE_WORDS.iter().map(|w| (*w).to_owned()));
+        let year = slug::is_year(base);
+        if explicit && (year || names.iter().any(|n| n == base)) {
             return Err(CoreError::Invalid("reserved slug".into()));
         }
         Ok(RootNamespace {
-            type_names,
+            names,
+            year,
             peers: self.permalinks.root_namespace_peers(kind),
         })
     }
@@ -402,8 +411,8 @@ impl Row {
 /// attempt (R18); the next one looks the taken slugs up again. Slugs that failed are
 /// remembered, so attempts make progress even where the lookup cannot see the
 /// conflicting slug. `own` is the item's current slug, which does not count as taken;
-/// at the top level the [`slug::RESERVED`] words always do, as do `root`'s type names
-/// and its peer types' top-level slugs.
+/// at the top level the [`slug::RESERVED`] words always do, as do `root`'s router
+/// prefixes, a four-digit base and its peer types' top-level slugs.
 async fn save_with_free_slug(
     tx: &dyn Tx,
     mut row: Row,
@@ -424,7 +433,10 @@ async fn save_with_free_slug(
         }
         if row.parent().is_none() {
             taken.extend(slug::RESERVED.iter().map(|s| (*s).to_owned()));
-            taken.extend(root.type_names.iter().cloned());
+            taken.extend(root.names.iter().cloned());
+            if root.year {
+                taken.push(base.to_owned());
+            }
             for peer in &root.peers {
                 taken.extend(
                     attempt

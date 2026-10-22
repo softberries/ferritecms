@@ -103,9 +103,9 @@ pub struct Structure {
 
 impl Structure {
     /// Parses `s`: it must start and end with `/` and contain `%slug%`; each segment is
-    /// a single known token or a literal of unreserved characters, and a literal first
-    /// segment may not be a [`slug::RESERVED`] word (any case). Anything else is
-    /// `Invalid`.
+    /// a single known token or a literal of lowercase unreserved characters (the router
+    /// canonicalises paths to lowercase, ruling R13), and a literal first segment may
+    /// not be a [`slug::RESERVED`] word. Anything else is `Invalid`.
     pub fn parse(s: &str) -> Result<Self, CoreError> {
         let invalid = |why: &str| CoreError::Invalid(format!("permalink structure {s:?}: {why}"));
         let inner = s
@@ -130,8 +130,15 @@ impl Structure {
                     )));
                 }
                 lit if lit == "." || lit == ".." => return Err(invalid("dot segment")),
+                lit if lit.bytes().any(|b| b.is_ascii_uppercase()) => {
+                    return Err(invalid(&format!(
+                        "literal {lit:?} has uppercase letters (paths are lowercase)"
+                    )));
+                }
                 lit if lit.bytes().all(|b| {
-                    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
+                    b.is_ascii_lowercase()
+                        || b.is_ascii_digit()
+                        || matches!(b, b'-' | b'.' | b'_' | b'~')
                 }) =>
                 {
                     Segment::Literal(lit.to_owned())
@@ -460,11 +467,14 @@ mod tests {
             "/admin/%slug%/",
             "/API/%slug%/",
             "/_media/%slug%/",
+            "/Blog/%slug%/",
+            "/blog/X/%slug%/",
         ] {
             invalid(s);
         }
         assert!(invalid("/%postname%/").contains("unknown token"));
         assert!(invalid("/%year%/").contains("%slug%"));
+        assert!(invalid("/Blog/%slug%/").contains("uppercase"));
         for s in [
             "/%slug%/",
             "/%year%/%month%/%slug%/",
@@ -493,7 +503,7 @@ mod tests {
     fn type_names_as_first_segment() {
         let types = ["post", "page", "media", "book"];
         assert!(PermalinkRules::default().check_types(&types).is_ok());
-        let shadow = PermalinkRules::from_options(Some("/Media/%slug%/"), None).unwrap();
+        let shadow = PermalinkRules::from_options(Some("/media/%slug%/"), None).unwrap();
         assert!(matches!(
             shadow.check_types(&types),
             Err(CoreError::Invalid(_))

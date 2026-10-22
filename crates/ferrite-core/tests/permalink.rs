@@ -322,6 +322,57 @@ pub async fn type_names_are_reserved_top_level(db: &TestDb) {
     assert!(matches!(r, Err(ferrite_core::CoreError::Invalid(m)) if m == "reserved slug"));
 }
 
+/// Ruling R13: taxonomy names, router words and four-digit slugs are reserved at the
+/// top level (caller slug: Invalid; generated: `-N`); below it they are fine.
+pub async fn route_words_are_reserved_top_level(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let svc = service(db, PermalinkRules::default());
+    for kind in ["post", "page"] {
+        for name in [
+            "category", "tag", "author", "page", "search", "2024", "0000",
+        ] {
+            let r = svc.create(&admin, draft(kind, name)).await;
+            assert!(
+                matches!(&r, Err(ferrite_core::CoreError::Invalid(m)) if m == "reserved slug"),
+                "{kind}/{name}: {r:?}"
+            );
+        }
+    }
+    for (title, want) in [
+        ("Category", "category-2"),
+        ("Author", "author-2"),
+        ("Search", "search-2"),
+        ("2024", "2024-2"),
+    ] {
+        let mut d = draft("page", "x");
+        d.slug = None;
+        d.title = title.into();
+        assert_eq!(svc.create(&admin, d).await.unwrap().slug, want, "{title}");
+    }
+    // Not years: other digit counts, or digits with more.
+    for name in ["202", "20245", "2024a"] {
+        assert_eq!(
+            svc.create(&admin, draft("post", name)).await.unwrap().slug,
+            name
+        );
+    }
+    let top = svc.create(&admin, draft("page", "top")).await.unwrap();
+    for name in ["category", "author", "2024"] {
+        assert_eq!(
+            svc.create(&admin, child("page", name, top.id))
+                .await
+                .unwrap()
+                .slug,
+            name
+        );
+    }
+    let r = svc
+        .update(&admin, top.id, top.version, draft("page", "tag"))
+        .await;
+    assert!(matches!(r, Err(ferrite_core::CoreError::Invalid(m)) if m == "reserved slug"));
+}
+
 /// Ruling R3b: posts at `/%slug%/` and top-level pages share the root namespace.
 pub async fn shared_root_namespace(db: &TestDb) {
     let store = db.store();
@@ -470,6 +521,7 @@ backend_tests!(
     descendant_redirects,
     walk_passes_through_drafts,
     type_names_are_reserved_top_level,
+    route_words_are_reserved_top_level,
     shared_root_namespace,
     descendant_walk_is_capped,
     category_change_redirect,

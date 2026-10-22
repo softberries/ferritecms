@@ -11,12 +11,16 @@
 //! kept), so a request compares byte for byte with stored permalinks. Fixed words
 //! (`page`, `feed`, `author`, taxonomy and type names, structure literals, file names)
 //! match ASCII case-insensitively and are written as defined; slug positions (item,
-//! ancestor, term and `%category%` slugs) are ASCII-lowercased, since core stores
-//! slugs lowercase; author logins keep their case. Every route ends in `/` except the
-//! files `/robots.txt`, `/sitemap.xml` and `/sitemap-<kind>-<n>.xml`. When the request
-//! path is not its route's canonical path the result is [`Route::Canonical`] (a 301
-//! target, with the raw query appended unchanged). `/_media/…`, `/_theme/…`,
-//! `/healthz` and `/readyz` must be exact and are never redirected.
+//! ancestor, term and `%category%` slugs) are lowercased with Unicode `to_lowercase`,
+//! as `slug::validate` stores them; author logins keep their case. There is no Unicode
+//! normalisation: a request in NFD for a slug stored in NFC (or the reverse) is a
+//! different path and 404s. Every route ends in `/` except the files `/robots.txt`,
+//! `/sitemap.xml` and `/sitemap-<kind>-<n>.xml`. When the request path is not its
+//! route's canonical path the result is [`Route::Canonical`] (a 301 target). The raw
+//! query is appended with every byte outside visible ASCII (`0x21..=0x7E`) and `#`
+//! percent-encoded, so a target is always visible ASCII; a canonical path longer than
+//! [`MAX_PATH_BYTES`] is 404 instead. `/_media/…`, `/_theme/…`, `/healthz` and
+//! `/readyz` must be exact and are never redirected.
 //!
 //! # Rejected (404)
 //!
@@ -37,11 +41,12 @@
 //! without it, any other `N` is 404 (the 5000-row skip cap of ruling R6 is enforced by
 //! `SiteReader`). `?s=` on `/` or `/page/N/` is a search; an empty `s` is the front page.
 //!
-//! Static routes shadow content: a page `category` with a child `news` is unreachable
-//! behind the term route, a page `2024` behind the year archive, and a trailing
-//! `page/<x>` pair is always read as pagination. Date archives exist under every post
-//! structure; with `/%year%/%month%/%slug%/` the slug segment tells a post from the
-//! month archive.
+//! Static routes win over content. Core keeps them apart (ruling R13): top-level slugs
+//! may not be taxonomy or type names, `author`, `page`, `search` or four digits, so
+//! `/category/news/` or `/2024/` never hides an item. A trailing `page/<x>` pair is
+//! always read as pagination (a child page named `page` is still shadowed). Date
+//! archives exist under every post structure; with `/%year%/%month%/%slug%/` the slug
+//! segment tells a post from the month archive.
 //!
 //! # Content
 //!
@@ -223,9 +228,14 @@ pub fn resolve(raw_path: &str, raw_query: Option<&str>, table: &RouteTable) -> R
         return Route::NotFound;
     }
     let query = NormalQuery::parse(raw_query);
-    let redirect = |to: &str| match raw_query {
-        Some(q) if !q.is_empty() => Route::Canonical(format!("{to}?{q}")),
-        _ => Route::Canonical(to.to_owned()),
+    let redirect = |to: &str| {
+        if to.len() > MAX_PATH_BYTES {
+            return Route::NotFound;
+        }
+        match raw_query {
+            Some(q) if !q.is_empty() => Route::Canonical(format!("{to}?{}", visible_ascii(q))),
+            _ => Route::Canonical(to.to_owned()),
+        }
     };
     match matched(&segs, &query, table) {
         Matched::One(route, canonical) if canonical == raw_path => route,
@@ -329,7 +339,7 @@ fn feed(segs: &[String], table: &RouteTable) -> Option<Matched> {
         )),
         [tax, slug, word] if word.eq_ignore_ascii_case("feed") => {
             let taxonomy = table.taxonomy_named(tax)?.to_owned();
-            let slug = slug.to_ascii_lowercase();
+            let slug = slug.to_lowercase();
             let canonical = format!("{}feed/", term_path(&taxonomy, &slug));
             Some(Matched::One(
                 Route::Feed(FeedSource::Term { taxonomy, slug }),
@@ -369,7 +379,7 @@ fn listing(
         },
         [tax, slug] => Route::Term {
             taxonomy: table.taxonomy_named(tax)?.to_owned(),
-            slug: slug.to_ascii_lowercase(),
+            slug: slug.to_lowercase(),
             page,
         },
         [kind] => {
@@ -440,7 +450,7 @@ fn content(segs: &[String], table: &RouteTable) -> Vec<(Candidate, String)> {
         && ty.name != "page"
         && (ty.hierarchical || rest.len() == 1)
     {
-        let parts: Vec<String> = rest.iter().map(|s| s.to_ascii_lowercase()).collect();
+        let parts: Vec<String> = rest.iter().map(|s| s.to_lowercase()).collect();
         let mut canonical = format!("/{}/", encode_segment(&ty.name));
         for p in &parts {
             push(&mut canonical, p);
@@ -501,7 +511,7 @@ fn match_structure(
         if *token == Segment::ParentPath {
             let (chunk, tail) = rest.split_at(depth);
             rest = tail;
-            let chunk: Vec<String> = chunk.iter().map(|s| s.to_ascii_lowercase()).collect();
+            let chunk: Vec<String> = chunk.iter().map(|s| s.to_lowercase()).collect();
             if parents_seen && chunk != m.parents {
                 return None;
             }
@@ -522,11 +532,11 @@ fn match_structure(
                 push(&mut m.canonical, lit);
             }
             Segment::Slug => {
-                m.slug = seg.to_ascii_lowercase();
+                m.slug = seg.to_lowercase();
                 push(&mut m.canonical, &m.slug);
             }
             Segment::Category => {
-                let c = seg.to_ascii_lowercase();
+                let c = seg.to_lowercase();
                 push(&mut m.canonical, &c);
                 m.category = Some(c);
             }
@@ -576,6 +586,20 @@ fn theme(rest: &str) -> Option<Route> {
         hash: hash.to_owned(),
         path: parts.join("/"),
     })
+}
+
+/// `q` with every byte outside `0x21..=0x7E`, and `#`, percent-encoded (uppercase hex);
+/// existing escapes are kept as they are.
+fn visible_ascii(q: &str) -> String {
+    let mut out = String::with_capacity(q.len());
+    for b in q.bytes() {
+        if (0x21..=0x7E).contains(&b) && b != b'#' {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// Appends `s`, encoded, and a `/`.

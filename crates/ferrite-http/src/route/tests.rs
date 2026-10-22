@@ -133,7 +133,11 @@ fn singles_and_canonical_form() {
             ("/a&b/", canonical("/a%26b/")),
             ("/a%26b/", root("a&b")),
             ("/caf%C3%A9/", root("café")),
-            ("/caf%C3%89/", root("cafÉ")),
+            // Unicode capitals fold like `slug::validate` does.
+            ("/caf%C3%89/", canonical("/caf%C3%A9/")),
+            ("/ZAŻÓŁĆ/", canonical("/za%C5%BC%C3%B3%C5%82%C4%87/")),
+            // No Unicode normalisation: NFD `e` + U+0301 is another path than NFC `é`.
+            ("/cafe%CC%81/", root("cafe\u{301}")),
             // Type-prefixed items: hierarchical and not.
             (
                 "/book/vol/ch/",
@@ -537,18 +541,9 @@ fn category_and_literal_post_structures() {
             ("/BLOG/x", canonical("/blog/x/")),
         ],
     );
-    // A literal with capitals keeps them in permalinks; a candidate is offered only for
-    // the spelling that is its canonical path.
-    check(
-        &table_with(Some("/Blog/%slug%/")),
-        &[
-            ("/Blog/x/", Route::Content(vec![single("post", &["x"])])),
-            (
-                "/blog/x/",
-                Route::Content(vec![single("page", &["blog", "x"])]),
-            ),
-        ],
-    );
+    // Capitalised literals are rejected by core (ruling R13), so every candidate of a
+    // path shares one canonical spelling.
+    assert!(PermalinkRules::from_options(Some("/Blog/%slug%/"), None).is_err());
 }
 
 #[test]
@@ -580,4 +575,151 @@ fn normal_query() {
         NormalQuery::parse(Some("s=%26%3D")).cache_query(),
         "s=%26%3D"
     );
+}
+
+#[test]
+fn redirect_query_is_visible_ascii() {
+    let t = table();
+    check(
+        &t,
+        &[
+            ("/About?q=ż", canonical("/about/?q=%C5%BC")),
+            ("/About?a=%41&b=c#d", canonical("/about/?a=%41&b=c%23d")),
+            ("/About?a b", canonical("/about/?a%20b")),
+        ],
+    );
+    // Not reachable through hyper, but `resolve` is a pure function: CR/LF must never
+    // reach a `Location` header.
+    assert_eq!(
+        resolve("/About", Some("x=\r\nSet-Cookie: a=b"), &t),
+        canonical("/about/?x=%0D%0ASet-Cookie:%20a=b")
+    );
+    assert_eq!(
+        resolve("/About", Some("\u{7f}\u{0}"), &t),
+        canonical("/about/?%7F%00")
+    );
+}
+
+#[test]
+fn overlong_canonical_is_not_found() {
+    // 1000 raw `ż` are 2002 bytes; encoded they are 6001.
+    let raw = format!("/{}", "ż".repeat(1000));
+    assert!(raw.len() <= MAX_PATH_BYTES);
+    assert_eq!(resolve(&raw, None, &table()), Route::NotFound);
+}
+
+/// Seeded fuzzing: every redirect target is a safe, visible-ASCII, local path that
+/// resolves without a further redirect or a 404.
+#[test]
+fn canonical_targets_are_safe_and_stable() {
+    const TOKENS: &[&str] = &[
+        "%",
+        "a",
+        "f",
+        "0",
+        "9",
+        "e",
+        "%2e",
+        "%2E",
+        "%2F",
+        "%2f",
+        ".",
+        "..",
+        ";",
+        "+",
+        "ż",
+        "%C5%BC",
+        "%c5%bc",
+        "%c0%ae",
+        "page",
+        "PAGE",
+        "2",
+        "01",
+        "1",
+        "2024",
+        "05",
+        "13",
+        "Blog",
+        "blog",
+        "category",
+        "Tag",
+        "feed",
+        "author",
+        "book",
+        "event",
+        "sitemap.xml",
+        "sitemap-post-1.xml",
+        "robots.TXT",
+        "_media",
+        "healthz",
+        "\\",
+        "~",
+        "%7e",
+        "-",
+        "\u{212A}",
+        "%E2%84%AA",
+        "\u{130}",
+        "É",
+        "%41",
+        "%00",
+        " ",
+        "%20",
+        "?",
+        "#",
+    ];
+    const QUERIES: &[&str] = &["", "s=x", "s=ż", "a=\r\n", "b=#c", "page=2&s=+", "%zz"];
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = |n: usize| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state % n as u64) as usize
+    };
+    let tables = [
+        table(),
+        table_with(Some("/%year%/%month%/%slug%/")),
+        table_with(Some("/%category%/%slug%/")),
+        table_with(Some("/blog/%slug%/")),
+    ];
+    let mut redirects = 0;
+    for i in 0..20_000 {
+        let t = &tables[i % tables.len()];
+        let mut path = String::new();
+        for _ in 0..1 + next(6) {
+            path.push('/');
+            if next(20) == 0 {
+                continue; // an empty segment now and then
+            }
+            for _ in 0..1 + next(3) {
+                path.push_str(TOKENS[next(TOKENS.len())]);
+            }
+        }
+        if next(2) == 0 {
+            path.push('/');
+        }
+        let query = match QUERIES[next(QUERIES.len())] {
+            "" => None,
+            q => Some(q),
+        };
+        let Route::Canonical(target) = resolve(&path, query, t) else {
+            continue;
+        };
+        redirects += 1;
+        let ctx = format!("{path:?} {query:?} -> {target:?}");
+        assert!(target.starts_with('/'), "{ctx}");
+        assert!(
+            !target.starts_with("//") && !target.starts_with("/\\"),
+            "{ctx}"
+        );
+        assert!(target.bytes().all(|b| (0x21..=0x7E).contains(&b)), "{ctx}");
+        assert!(target.len() <= MAX_PATH_BYTES + 64, "{ctx}");
+        let (p, q) = split(&target);
+        assert!(p.len() <= MAX_PATH_BYTES, "{ctx}");
+        let again = resolve(p, q, t);
+        assert!(
+            !matches!(again, Route::Canonical(_) | Route::NotFound),
+            "{ctx} -> {again:?}"
+        );
+    }
+    assert!(redirects > 1000, "only {redirects} redirects generated");
 }
