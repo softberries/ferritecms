@@ -386,31 +386,36 @@ impl PluginHost {
 
 ## 10. Guest SDK (`ferrite-sdk`)
 
-- Wraps `wit-bindgen` generated bindings; exposes `Head`, `Post`, `Ctx` types and
-  macros:
+- Wraps `wit-bindgen` generated bindings; exposes `Head`, `Post`, `Ctx` types and one
+  declarative macro, `export_plugin!` (no proc-macro crate, no registration magic).
+  Hooks are plain functions; the macro maps hook names to them:
 
 ```rust
-use ferrite_sdk::{filter, action, Head, Ctx, Result};
+use ferrite_sdk::{ActionEvent, Ctx, Head, Result};
 
-#[filter("render.head")]
 fn head(mut h: Head, ctx: &Ctx) -> Result<Head> {
-    if let Some(post) = ctx.current_post()? {          // requires content.read
+    if let Some(post) = ctx.current_post() {            // requires content.read
         h.meta("description", &post.excerpt);
     }
     Ok(h)
 }
 
-#[action("post.published")]
-fn ping(post: PostId, ctx: &Ctx) -> Result<()> {
-    ctx.http().post("https://api.indexnow.org/…", body)?;   // requires http
+fn ping(event: ActionEvent, ctx: &Ctx) -> Result<()> {
+    // ctx.http().fetch(&request)?;                      // requires http
     Ok(())
 }
 
-ferrite_sdk::export!();   // generates the guest interface impl dispatching by hook name
+ferrite_sdk::export_plugin! {
+    filters: { "render.head" => head },
+    actions: { "post.published" => ping },
+    // routes: { "/endpoint" => handler },
+}
 ```
 
-- Priorities live in the manifest, not in code (single source of truth; the brief's
-  example with `priority = 10` in the attribute is dropped).
+- Filter functions take `Head` or `String` (html/text) and return the same type; the
+  macro dispatches on the incoming `filter-value` variant and a mismatch yields
+  `invalid-input`. Unknown hook names yield `invalid-input`; `handle_request` with no
+  matching route returns a 404.
 - Build: `cargo build --target wasm32-wasip2 --release` producing a component directly
   (verify tooling in M0; fallback: `cargo component`).
 - `ferrite plugin new <name>` scaffolds a plugin crate + manifest;

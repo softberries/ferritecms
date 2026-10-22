@@ -22,11 +22,8 @@ jobs:
             .
             plugins
       - run: cargo fmt --all --check
+      - run: cargo fmt --manifest-path plugins/Cargo.toml --all --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo build --manifest-path plugins/Cargo.toml --release --target wasm32-wasip2
-        # Guard removed in Task 4, once plugins/ has members.
-        if: hashFiles('plugins/examples/**/Cargo.toml') != ''
       - run: cargo clippy --manifest-path plugins/Cargo.toml --target wasm32-wasip2 -- -D warnings
-        # Guard removed in Task 4, once plugins/ has members.
-        if: hashFiles('plugins/examples/**/Cargo.toml') != ''
       - run: cargo test --workspace

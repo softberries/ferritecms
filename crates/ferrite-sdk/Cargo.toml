@@ -8,3 +8,4 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+wit-bindgen.workspace = true
