@@ -3,7 +3,11 @@
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
 };
 
 use ferrite_store::Store;
@@ -25,38 +29,81 @@ pub async fn sqlite_store() -> (SqliteStore, TempDir) {
     (store, dir)
 }
 
-/// A Postgres store in its own schema; the schema is dropped when this is dropped.
+/// A Postgres store in its own schema. Call [`teardown`](Self::teardown) at the end of
+/// the test (the `backend_tests!` macros do); `Drop` is only a quick fallback.
 pub struct PgFixture {
     pub store: Arc<PgStore>,
     url: String,
     schema: String,
+    torn_down: AtomicBool,
+}
+
+/// How long teardown waits for the pool to close (a `Tx` still alive somewhere keeps
+/// its connection checked out).
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+impl PgFixture {
+    /// Closes the store's pool, then drops the schema. Closing first matters: it waits
+    /// for every connection to come back, which on the still-running test runtime lets
+    /// sqlx finish the rollback of a dropped `Tx`, so `DROP SCHEMA` finds no locks held.
+    /// Idempotent.
+    pub async fn teardown(&self) {
+        if self.torn_down.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        if tokio::time::timeout(CLOSE_TIMEOUT, self.store.close())
+            .await
+            .is_err()
+        {
+            eprintln!(
+                "warning: pool for test schema {} not closed within {CLOSE_TIMEOUT:?} \
+                 (a Tx is still alive?)",
+                self.schema
+            );
+        }
+        if let Err(e) = drop_schema(&self.url, &self.schema, "5s").await {
+            eprintln!("warning: could not drop test schema {}: {e}", self.schema);
+        }
+    }
 }
 
 impl Drop for PgFixture {
+    /// Fallback when `teardown` did not run (the test panicked, or the fixture was used
+    /// without the macros). It cannot close the pool: that needs the test runtime, which
+    /// this blocking call would stall. So it tries one `DROP SCHEMA` with a short lock
+    /// timeout on its own connection and runtime, and if a lock is still held (a dropped
+    /// `Tx` whose rollback could not run yet) it reports the leaked schema instead of
+    /// waiting.
     fn drop(&mut self) {
-        // Best effort. The test's runtime is ending, so run the DROP on a fresh runtime in
-        // its own thread with its own connection; `lock_timeout` keeps a stuck lock from
-        // hanging the test.
-        let url = self.url.clone();
-        let sql = format!(
-            "SET lock_timeout = '5s'; DROP SCHEMA IF EXISTS {} CASCADE",
-            quote_ident(&self.schema)
-        );
+        if self.torn_down.load(Ordering::SeqCst) {
+            return;
+        }
+        let (url, schema) = (self.url.clone(), self.schema.clone());
         let handle = std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            rt.block_on(async move {
-                let mut conn = PgConnection::connect(&url).await?;
-                sqlx::raw_sql(AssertSqlSafe(sql)).execute(&mut conn).await?;
-                conn.close().await
-            })
-            .map_err(std::io::Error::other)
+            rt.block_on(drop_schema(&url, &schema, "200ms"))
+                .map_err(std::io::Error::other)
         });
         if let Ok(Err(e)) = handle.join() {
-            eprintln!("warning: could not drop test schema {}: {e}", self.schema);
+            eprintln!(
+                "warning: leaked test schema {} (teardown did not run): {e}",
+                self.schema
+            );
         }
     }
+}
+
+/// `DROP SCHEMA ... CASCADE` on a dedicated connection, giving up after `lock_timeout`.
+async fn drop_schema(url: &str, schema: &str, lock_timeout: &str) -> Result<(), sqlx::Error> {
+    let sql = format!(
+        "SET lock_timeout = '{lock_timeout}'; DROP SCHEMA IF EXISTS {} CASCADE",
+        quote_ident(schema)
+    );
+    let mut conn = PgConnection::connect(url).await?;
+    sqlx::raw_sql(AssertSqlSafe(sql)).execute(&mut conn).await?;
+    conn.close().await
 }
 
 /// A Postgres store in a fresh `t_<uuid>` schema, migrated up. Returns `None` (after a
@@ -103,6 +150,7 @@ pub async fn pg_store() -> Option<PgFixture> {
         store: Arc::new(store),
         url,
         schema,
+        torn_down: AtomicBool::new(false),
     };
     fixture
         .store
@@ -149,6 +197,14 @@ impl TestDb {
         pg_store().await.map(|f| Self {
             backing: Backing::Postgres(Box::new(f)),
         })
+    }
+
+    /// Ends the test's use of the database: on Postgres closes the pool and drops the
+    /// schema (see [`PgFixture::teardown`]); SQLite's temp dir goes on drop.
+    pub async fn teardown(&self) {
+        if let Backing::Postgres(f) = &self.backing {
+            f.teardown().await;
+        }
     }
 
     pub fn store(&self) -> &dyn Store {
@@ -294,6 +350,7 @@ macro_rules! backend_tests {
             async fn sqlite() {
                 let db = $crate::TestDb::sqlite().await;
                 super::$name(&db).await;
+                db.teardown().await;
             }
 
             #[tokio::test]
@@ -302,6 +359,7 @@ macro_rules! backend_tests {
                     return;
                 };
                 super::$name(&db).await;
+                db.teardown().await;
             }
         }
     )*};
@@ -316,7 +374,8 @@ macro_rules! backend_tests_spawning {
             #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
             async fn sqlite() {
                 let db = std::sync::Arc::new($crate::TestDb::sqlite().await);
-                super::$name(db).await;
+                super::$name(db.clone()).await;
+                db.teardown().await;
             }
 
             #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -324,8 +383,50 @@ macro_rules! backend_tests_spawning {
                 let Some(db) = $crate::TestDb::postgres().await else {
                     return;
                 };
-                super::$name(std::sync::Arc::new(db)).await;
+                let db = std::sync::Arc::new(db);
+                super::$name(db.clone()).await;
+                db.teardown().await;
             }
         }
     )*};
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use super::*;
+    use crate::fixtures::{fixture_user, new_post};
+
+    /// Task 6's stall: a test ending right after dropping an uncommitted `Tx` that holds
+    /// locks. Teardown must be quick and must remove the schema.
+    #[tokio::test]
+    async fn teardown_after_dropped_tx_is_quick_and_drops_schema() {
+        let Some(db) = TestDb::postgres().await else {
+            return;
+        };
+        let author = fixture_user(db.store()).await;
+        let tx = db.store().begin().await.unwrap();
+        tx.content()
+            .insert(&new_post(&author, "pending"))
+            .await
+            .unwrap();
+        drop(tx);
+        let Backing::Postgres(f) = &db.backing else {
+            unreachable!("postgres fixture");
+        };
+        let (url, schema) = (f.url.clone(), f.schema.clone());
+        let started = Instant::now();
+        db.teardown().await;
+        let took = started.elapsed();
+        assert!(took < Duration::from_secs(2), "teardown took {took:?}");
+        let mut c = PgConnection::connect(&url).await.unwrap();
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)")
+                .bind(&schema)
+                .fetch_one(&mut c)
+                .await
+                .unwrap();
+        assert!(!exists, "schema {schema} still exists");
+    }
 }

@@ -329,3 +329,16 @@ pub async fn outer_drop_with_parked_nested(db: &TestDb) {
     assert!(r.options().get("outer").await.unwrap().is_none());
     assert!(r.options().get("inner").await.unwrap().is_none());
 }
+
+/// Ends right after dropping an uncommitted Tx that wrote a row (locks held until the
+/// rollback runs). The harness teardown must still drop the schema without stalling.
+pub async fn tx_dropped_at_test_end(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    let tx = store.begin().await.unwrap();
+    tx.content()
+        .insert(&new_post(&author, "pending"))
+        .await
+        .unwrap();
+    drop(tx);
+}

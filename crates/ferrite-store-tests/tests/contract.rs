@@ -19,6 +19,7 @@ backend_tests!(
     tx_commit_visible,
     tx_rollback_invisible,
     tx_dropped_is_rolled_back,
+    tx_dropped_at_test_end,
     read_sees_committed_after_commit,
     options_reject_nul,
     options_number_roundtrip,
