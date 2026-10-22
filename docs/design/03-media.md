@@ -52,13 +52,13 @@ pub struct ArtifactRef { pub hash: ArtifactHash, pub bytes: u64, pub mime: Strin
   already existed when this call looked. With local storage and S3 conditional put it is exact,
   but the S3 streaming path (head + copy fallback, below) can report `true` to two racing writers
   of identical bytes. The `artifacts` DB row (`insert_if_absent`) is the source of truth for
-  "first writer", not `created` (ruling R2).
+  "first writer", not `created` (decision recorded in M1b).
 - `open` validates the prefix (empty, or ends with `/` and does not start with `/`); a local root
   directory is created if missing. S3 requires `access_key_id` and `secret_access_key` together;
   with neither set, credentials come from `AmazonS3Builder::from_env()`. S3 requests retry up to
   2 times with a 20 s retry timeout (`store.rs::build_s3`).
-- `check()` writes a probe to `<prefix>tmp/probe-<uuid>`, reads it back, and always attempts to
-  delete it (a failed delete only logs a warning).
+- `check()` writes a probe to `<prefix>tmp/probe-<uuid>`, reads it back, and attempts to delete
+  it after a successful put, even when the read-back fails (a failed delete only logs a warning).
 
 ### Key layout (content-addressed)
 
@@ -90,8 +90,9 @@ pub struct ArtifactRef { pub hash: ArtifactHash, pub bytes: u64, pub mime: Strin
   `created = false`), else `copy`. This head-then-copy window is the race behind the advisory
   `created`. The final bytes are identical either way because the key is the content hash.
   **Production S3 currently always uses the fallback**: no `copy_if_not_exists` mode is
-  configured on the S3 builder (M4 follow-up). Local storage and the s3s-fs test server also
-  exercise the conditional paths where supported.
+  configured on the S3 builder (M4 follow-up). The s3s-fs test server also takes the
+  fallback, because the test `S3Config` sets no `copy_if_not_exists`; only the local backend
+  exercises the conditional (hard-link) paths in tests.
 
 ### Staging cleanup
 
@@ -169,11 +170,11 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
 - **Metadata**: output is re-encoded, so EXIF, XMP and GPS are dropped (no keep option yet).
   The **ICC profile** is kept only if its colour-space signature (header bytes 16..20) matches
   the output pixels: `RGB ` for JPEG and colour PNG, `GRAY` for grayscale PNG. A mismatching
-  profile (for example CMYK) is dropped, as is one the encoder rejects (ruling R3).
-- **Output formats (ruling P1: no WebP output in v1)**: JPEG sources -> JPEG quality 82;
+  profile (for example CMYK) is dropped, as is one the encoder rejects (M1b decision: keep colour fidelity).
+- **Output formats (decision: no WebP output in v1)**: JPEG sources -> JPEG quality 82;
   PNG, GIF and WebP sources -> PNG. GIF input yields its first frame as PNG. WebP is decoded
-  but never written. Animated-WebP behaviour is not verified. WebP/AVIF output is deferred
-  until a pure-Rust encoder fits the single-binary constraint.
+  but never written. Animated-WebP behaviour is not verified. WebP/AVIF output is deferred. Reason given for the decision: the `image`
+  crate's WebP encoder is lossless-only, and lossy WebP would need a C dependency.
 - **Variant rules**: no upscaling.
   - Width-bounded spec (`height: None`, `crop: false`): keeps the aspect ratio; skipped
     entirely (no variant emitted) when the source is not wider than the target.
@@ -185,7 +186,7 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
 - **Memory**: peak is roughly 3 x w x h x 4 bytes (decoded buffer, oriented/converted copy,
   resized output); at the 100 MP cap that is on the order of 1.2 GB for one image. The function
   does not limit concurrency. The caller must, and the M1c job runner will do so with a semaphore
-  (ruling R4). The 100 MP cap is kept as designed.
+  (M1b decision). The 100 MP cap is kept as designed.
 
 ### Still to build (M1c)
 
