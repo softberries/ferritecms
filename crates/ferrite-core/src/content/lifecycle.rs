@@ -7,10 +7,11 @@
 //!
 //! Every transition runs in one transaction, checks permission before writing, checks
 //! the expected version (`Conflict`) and emits one `invalidate` event for `post:<id>`,
-//! `archive:<kind>` and the item's `term:<id>` keys (listings change). Transitions only
+//! `archive:<kind>`, the item's `term:<id>` keys and `post:<parent>` (see
+//! [`events`](crate::events)). Transitions only
 //! change status and publish times, so they write **no revision**.
 
-use ferrite_domain::{ContentId, ContentItem, ContentStatus, Role, Timestamp};
+use ferrite_domain::{ContentId, ContentItem, ContentStatus, Role, Term, Timestamp};
 use ferrite_store::{Repos, StoreError};
 
 use super::{ContentService, clear_redirects_from};
@@ -271,11 +272,7 @@ async fn delete_in(
         }
         other => other?,
     }
-    let keys = [events::post_key(id), events::archive_key(&current.kind)]
-        .into_iter()
-        .chain(terms.iter().map(|t| events::term_key(t.id)));
-    repos.events().append(&events::invalidate(keys)).await?;
-    Ok(())
+    emit_for(repos, &current, &terms).await
 }
 
 /// Publishes `id` if it is still scheduled and due; `false` if it was skipped.
@@ -385,12 +382,19 @@ fn authorize_ownership(actor: &Actor, item: &ContentItem) -> Result<(), CoreErro
     }
 }
 
-/// One `invalidate` event: the item, its archive and its terms' listings.
+/// One `invalidate` event for a transition of `item`.
 async fn emit(repos: &dyn Repos, item: &ContentItem) -> Result<(), CoreError> {
     let terms = repos.terms().for_item(item.id).await?;
+    emit_for(repos, item, &terms).await
+}
+
+/// `post:<id>`, `archive:<kind>`, `term:<t>` for every term in `terms` and
+/// `post:<parent>` if the item has a parent.
+async fn emit_for(repos: &dyn Repos, item: &ContentItem, terms: &[Term]) -> Result<(), CoreError> {
     let keys = [events::post_key(item.id), events::archive_key(&item.kind)]
         .into_iter()
-        .chain(terms.iter().map(|t| events::term_key(t.id)));
+        .chain(terms.iter().map(|t| events::term_key(t.id)))
+        .chain(item.parent_id.map(events::post_key));
     repos.events().append(&events::invalidate(keys)).await?;
     Ok(())
 }

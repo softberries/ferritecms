@@ -10,7 +10,7 @@ use std::sync::Arc;
 use common::CountingStore;
 use ferrite_core::{
     Actor, CoreError, FeedSource, FrontPage, PageItem, PermalinkRules, SiteReader,
-    events::{archive_key, option_key, post_key, term_key},
+    events::{archive_key, option_key, post_key, term_key, user_key},
 };
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ContentId, ContentStatus, Media, NewContent, NewUser,
@@ -735,7 +735,13 @@ pub async fn single_hydrates(db: &TestDb) {
         }),
         "references to non-public content are stripped"
     );
-    for key in [post_key(id), term_key(news), term_key(rust), post_key(pic)] {
+    for key in [
+        post_key(id),
+        term_key(news),
+        term_key(rust),
+        post_key(pic),
+        user_key(author.id),
+    ] {
         assert!(got.deps.contains(&key), "missing {key}");
     }
     assert!(!got.deps.contains(&post_key(hidden_pic)));

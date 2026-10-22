@@ -95,6 +95,15 @@ impl OptionRepo for SqliteRepos {
 
 #[async_trait]
 impl RedirectRepo for SqliteRepos {
+    async fn get(&self, id: RedirectId) -> Result<Option<Redirect>, StoreError> {
+        let row = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {REDIRECT_COLUMNS} FROM redirects WHERE id = ?"
+        )))
+        .bind(id.as_uuid())
+        .fetch_optional(e))?;
+        row.as_ref().map(codec::redirect).transpose()
+    }
+
     async fn get_by_source(&self, source: &str) -> Result<Option<Redirect>, StoreError> {
         validate_text("redirect source_path", source)?;
         // `source_path` has BINARY collation: the match is exact and case-sensitive.

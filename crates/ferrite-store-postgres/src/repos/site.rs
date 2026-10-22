@@ -97,6 +97,15 @@ impl OptionRepo for PgRepos {
 
 #[async_trait]
 impl RedirectRepo for PgRepos {
+    async fn get(&self, id: RedirectId) -> Result<Option<Redirect>, StoreError> {
+        let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {REDIRECT_COLUMNS} FROM redirects WHERE id = $1"
+        )))
+        .bind(id.as_uuid())
+        .fetch_optional(e))?;
+        row.as_ref().map(codec::redirect).transpose()
+    }
+
     async fn get_by_source(&self, source: &str) -> Result<Option<Redirect>, StoreError> {
         validate_text("redirect source_path", source)?;
         // The unique index is on the plain column: exact, case-sensitive.

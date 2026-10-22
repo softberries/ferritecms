@@ -56,7 +56,7 @@ Design: [02](design/02-storage.md), [03](design/03-media.md), [06](design/06-the
   - [ ] Media wiring into core (`media` rows, `media.variants`; see M1c items above).
 - [ ] Transactional outbox (`events`) written by every invalidating write:
   - [x] Written in the same transaction by content, lifecycle, term, menu and options writes in `ferrite-core` (`events.rs`).
-  - [ ] Redirect writes emit no event yet; no consumer exists until the cache (M1c-2) and event bus (M1.5).
+  - [x] Redirect writes emit informational `redirect:<source>` events (M1c-2 Task 3); the dependency-key contract is documented in `events.rs`.
 - [ ] `ferrite serve`: router, permalinks, redirects, 404, feeds, sitemap.
 - [ ] Theme engine: minijinja, hierarchy resolution, safe helpers, dependency recording; `blog` theme.
 - [ ] Page cache with dependency index (solo invalidation path).

@@ -18,7 +18,7 @@ use crate::{
     CoreError, MAX_PARENT_DEPTH,
     blocks::{self, RenderCtx},
     content::EXCERPT_CHARS,
-    events::{post_key, term_key},
+    events::{post_key, term_key, user_key},
     permalink::{PermalinkInput, Permalinks, primary_term, term_path},
 };
 
@@ -90,6 +90,9 @@ impl Hydrator<'_> {
                 if media.contains_key(&id) {
                     deps.insert(post_key(id));
                 }
+            }
+            if authors.contains_key(&item.author_id) {
+                deps.insert(user_key(item.author_id));
             }
             let item_terms = terms.remove(&item.id).unwrap_or_default();
             for t in &item_terms {

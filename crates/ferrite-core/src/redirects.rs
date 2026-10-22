@@ -8,6 +8,7 @@ use ferrite_store::{Repos, Store};
 use crate::{
     Actor, CoreError,
     actor::{Capability, require},
+    events,
     tx::finish,
 };
 
@@ -101,20 +102,26 @@ impl RedirectService {
         }
         .await;
         let done = match done {
-            Ok(()) => tx
-                .redirects()
-                .upsert(&Redirect {
-                    id: RedirectId::new(),
-                    source_path: source.to_owned(),
-                    target: target.to_owned(),
-                    code,
-                    hits: 0,
-                    origin: RedirectOrigin::Manual,
-                    created_at: Timestamp::now(),
-                    last_hit_at: None,
-                })
+            Ok(()) => {
+                async {
+                    let saved = tx
+                        .redirects()
+                        .upsert(&Redirect {
+                            id: RedirectId::new(),
+                            source_path: source.to_owned(),
+                            target: target.to_owned(),
+                            code,
+                            hits: 0,
+                            origin: RedirectOrigin::Manual,
+                            created_at: Timestamp::now(),
+                            last_hit_at: None,
+                        })
+                        .await?;
+                    emit_redirects_changed(tx.as_ref(), [source.to_owned()]).await?;
+                    Ok(saved)
+                }
                 .await
-                .map_err(CoreError::from),
+            }
             Err(e) => Err(e),
         };
         finish(tx, done).await
@@ -124,9 +131,36 @@ impl RedirectService {
     pub async fn delete(&self, actor: &Actor, id: RedirectId) -> Result<(), CoreError> {
         require(actor, Capability::ManageRedirects)?;
         let tx = self.store.begin().await?;
-        let done = tx.redirects().delete(id).await.map_err(CoreError::from);
+        let done = async {
+            if let Some(r) = tx.redirects().get(id).await? {
+                tx.redirects().delete(id).await?;
+                emit_redirects_changed(tx.as_ref(), [r.source_path]).await?;
+            }
+            Ok(())
+        }
+        .await;
         finish(tx, done).await
     }
+}
+
+/// Appends one `invalidate` event with `redirect:<source>` for each source and its
+/// toggled variant; nothing for an empty list. Informational (see [`events`]).
+pub(crate) async fn emit_redirects_changed(
+    repos: &dyn Repos,
+    sources: impl IntoIterator<Item = String>,
+) -> Result<(), CoreError> {
+    let keys: Vec<String> = sources
+        .into_iter()
+        .flat_map(|s| {
+            let variant = toggled(&s);
+            std::iter::once(s).chain(variant)
+        })
+        .map(|s| events::redirect_key(&s))
+        .collect();
+    if !keys.is_empty() {
+        repos.events().append(&events::invalidate(keys)).await?;
+    }
+    Ok(())
 }
 
 /// The redirect for `path`: exact match first, then the slash-toggled path.

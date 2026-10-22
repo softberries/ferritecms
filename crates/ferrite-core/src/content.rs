@@ -17,7 +17,7 @@ use crate::{
     actor::{Capability, can_edit, require},
     blocks, events,
     permalink::{PermalinkInput, Permalinks, ancestors, load_input, primary_term},
-    redirects::toggled,
+    redirects::{emit_redirects_changed, toggled},
     slug,
     tx::finish,
 };
@@ -154,7 +154,7 @@ impl ContentService {
             });
             let saved = save_with_free_slug(tx.as_ref(), row, &base, None, &root).await?;
             set_terms(tx.as_ref(), saved.id, &terms).await?;
-            let keys = invalidation_keys(&saved, &[], &terms, None);
+            let keys = invalidation_keys(&saved, &[], &terms, None, &[]);
             after_save(tx.as_ref(), actor, &saved, keys).await?;
             Ok(saved)
         }
@@ -255,6 +255,7 @@ impl ContentService {
         let saved = save_with_free_slug(tx, Row::Existing(next), &base, own, &root).await?;
 
         set_terms(tx, id, &terms).await?;
+        let mut moved_descendants = Vec::new();
         let published = current.status == ContentStatus::Published;
         let moved = current.slug != saved.slug || current.parent_id != saved.parent_id;
         if published || moved {
@@ -285,10 +286,17 @@ impl ContentService {
                 record_item_move(tx, self.permalinks.as_ref(), &old, &new).await?;
             }
             if moved {
-                move_descendants(tx, self.permalinks.as_ref(), &old, &new).await?;
+                moved_descendants =
+                    move_descendants(tx, self.permalinks.as_ref(), &old, &new).await?;
             }
         }
-        let keys = invalidation_keys(&saved, &old_terms, &terms, Some(current.parent_id));
+        let keys = invalidation_keys(
+            &saved,
+            &old_terms,
+            &terms,
+            current.parent_id,
+            &moved_descendants,
+        );
         after_save(tx, actor, &saved, keys).await?;
         Ok(saved)
     }
@@ -480,56 +488,61 @@ async fn after_save(
     Ok(())
 }
 
-/// `post:<id>`, `archive:<kind>`, `term:<id>` for every term added or removed, and
-/// `post:<parent>` for the old and new parent when the parent changed. `old_parent` is
-/// `None` on create (every parent counts as new).
+/// `post:<id>`, `archive:<kind>`, `term:<id>` for the union of the old and the new
+/// terms, `post:<parent>` for the old and the new parent (whichever are set), and
+/// `post:<id>` for each descendant whose URL moved. `old_parent` is `None` on create.
 fn invalidation_keys(
     item: &ContentItem,
     old_terms: &[TermId],
     new_terms: &[TermId],
-    old_parent: Option<Option<ContentId>>,
+    old_parent: Option<ContentId>,
+    moved_descendants: &[ContentId],
 ) -> Vec<String> {
-    let mut keys = vec![events::post_key(item.id), events::archive_key(&item.kind)];
-    let old: BTreeSet<TermId> = old_terms.iter().copied().collect();
-    let new: BTreeSet<TermId> = new_terms.iter().copied().collect();
-    keys.extend(old.symmetric_difference(&new).map(|t| events::term_key(*t)));
-    let old_parent = old_parent.flatten();
-    if old_parent != item.parent_id {
-        keys.extend(
-            old_parent
-                .into_iter()
-                .chain(item.parent_id)
-                .map(events::post_key),
-        );
-    }
-    keys
+    let terms: BTreeSet<TermId> = old_terms.iter().chain(new_terms).copied().collect();
+    [events::post_key(item.id), events::archive_key(&item.kind)]
+        .into_iter()
+        .chain(terms.into_iter().map(events::term_key))
+        .chain(old_parent.into_iter().map(events::post_key))
+        .chain(item.parent_id.map(events::post_key))
+        .chain(moved_descendants.iter().copied().map(events::post_key))
+        .collect()
 }
 
 /// Deletes the redirects that start at `path` or its slash-toggled variant: `path` is
 /// a live page now, and [`RedirectService::resolve`](crate::RedirectService::resolve)
-/// matches either variant.
+/// matches either variant. Emits `redirect:` keys for the sources deleted.
 pub(crate) async fn clear_redirects_from(repos: &dyn Repos, path: &str) -> Result<(), CoreError> {
+    let cleared = delete_redirects_from(repos, path).await?;
+    emit_redirects_changed(repos, cleared).await
+}
+
+/// Deletes the redirects from `path` and its toggled variant; returns their sources.
+async fn delete_redirects_from(repos: &dyn Repos, path: &str) -> Result<Vec<String>, CoreError> {
     let redirects = repos.redirects();
+    let mut cleared = Vec::new();
     for source in std::iter::once(path.to_owned()).chain(toggled(path)) {
         if let Some(r) = redirects.get_by_source(&source).await? {
             redirects.delete(r.id).await?;
+            cleared.push(source);
         }
     }
-    Ok(())
+    Ok(cleared)
 }
 
-/// Records a move when the paths of `old` and `new` (the same item) differ.
+/// Records a move when the paths of `old` and `new` (the same item) differ; returns
+/// whether they did.
 async fn record_item_move(
     repos: &dyn Repos,
     permalinks: &dyn Permalinks,
     old: &PermalinkInput,
     new: &PermalinkInput,
-) -> Result<(), CoreError> {
+) -> Result<bool, CoreError> {
     let (old_path, new_path) = (permalinks.path(old), permalinks.path(new));
-    if old_path != new_path {
-        record_move(repos, &old_path, &new_path).await?;
+    if old_path == new_path {
+        return Ok(false);
     }
-    Ok(())
+    record_move(repos, &old_path, &new_path).await?;
+    Ok(true)
 }
 
 /// Records moves for the published descendants of an item that went from `old` to
@@ -537,12 +550,13 @@ async fn record_item_move(
 /// Breadth-first through children in every non-trash status (a draft page can have
 /// published children whose URLs contain its slug); only published descendants get a
 /// move. At most [`MAX_DESCENDANTS`] nodes are walked, whatever their status.
+/// Returns the ids of the descendants whose path changed.
 async fn move_descendants(
     repos: &dyn Repos,
     permalinks: &dyn Permalinks,
     old: &PermalinkInput,
     new: &PermalinkInput,
-) -> Result<(), CoreError> {
+) -> Result<Vec<ContentId>, CoreError> {
     let chain = |input: &PermalinkInput| {
         let mut c = input.ancestors.clone();
         c.push((input.item.id, input.item.slug.clone()));
@@ -550,6 +564,7 @@ async fn move_descendants(
     };
     let mut queue = VecDeque::from([(old.item.id, chain(old), chain(new))]);
     let mut walked = 0;
+    let mut moved = Vec::new();
     while let Some((parent, old_chain, new_chain)) = queue.pop_front() {
         let mut cursor = None;
         loop {
@@ -576,7 +591,7 @@ async fn move_descendants(
                         limit = MAX_DESCENDANTS,
                         "descendant walk capped; remaining descendants get no redirects"
                     );
-                    return Ok(());
+                    return Ok(moved);
                 }
                 walked += 1;
                 let primary = primary_term(terms.remove(&child.id).unwrap_or_default());
@@ -589,8 +604,10 @@ async fn move_descendants(
                     ancestors: new_chain.clone(),
                     ..child_old.clone()
                 };
-                if child_old.item.status == ContentStatus::Published {
-                    record_item_move(repos, permalinks, &child_old, &child_new).await?;
+                if child_old.item.status == ContentStatus::Published
+                    && record_item_move(repos, permalinks, &child_old, &child_new).await?
+                {
+                    moved.push(child_old.item.id);
                 }
                 queue.push_back((child_old.item.id, chain(&child_old), chain(&child_new)));
             }
@@ -600,15 +617,17 @@ async fn move_descendants(
             }
         }
     }
-    Ok(())
+    Ok(moved)
 }
 
 /// Repoints redirects after a published item moved from `old` to `new`: no redirect may
 /// start at `new` or its slash variant (it is a live page again), redirects to `old` now
 /// go to `new` (no chains; one that would start at `new` is dropped rather than left as
 /// a self-loop), and `old` redirects to `new` with a `301`.
+/// Emits one `invalidate` event with the `redirect:` keys of every source touched.
 async fn record_move(repos: &dyn Repos, old: &str, new: &str) -> Result<(), CoreError> {
-    clear_redirects_from(repos, new).await?;
+    let mut changed = delete_redirects_from(repos, new).await?;
+    changed.push(old.to_owned());
     let ours: Vec<String> = std::iter::once(new.to_owned())
         .chain(toggled(new))
         .collect();
@@ -618,6 +637,7 @@ async fn record_move(repos: &dyn Repos, old: &str, new: &str) -> Result<(), Core
         let batch = redirects.list_by_target(old).await?;
         let full = batch.len() >= MAX_REDIRECTS_BY_TARGET as usize;
         for mut r in batch {
+            changed.push(r.source_path.clone());
             if ours.contains(&r.source_path) {
                 redirects.delete(r.id).await?;
             } else {
@@ -641,7 +661,7 @@ async fn record_move(repos: &dyn Repos, old: &str, new: &str) -> Result<(), Core
             last_hit_at: None,
         })
         .await?;
-    Ok(())
+    emit_redirects_changed(repos, changed).await
 }
 
 async fn content_type(repos: &dyn Repos, kind: &str) -> Result<ContentType, CoreError> {
@@ -754,33 +774,36 @@ mod tests {
     }
 
     #[test]
-    fn keys_cover_term_and_parent_changes() {
-        let (p1, p2) = (ContentId::new(), ContentId::new());
+    fn keys_cover_term_parent_and_descendant_changes() {
+        let (p1, p2, d) = (ContentId::new(), ContentId::new(), ContentId::new());
         let (a, b, c) = (TermId::new(), TermId::new(), TermId::new());
         let it = item(Some(p2));
-        let keys = invalidation_keys(&it, &[a, b], &[b, c], Some(Some(p1)));
-        let mut want = vec![
+        let got: BTreeSet<String> = invalidation_keys(&it, &[a, b], &[b, c], Some(p1), &[d])
+            .into_iter()
+            .collect();
+        let want: BTreeSet<String> = [
             events::post_key(it.id),
             events::archive_key("page"),
+            events::term_key(a),
+            events::term_key(b),
+            events::term_key(c),
             events::post_key(p1),
             events::post_key(p2),
-        ];
-        let mut terms = vec![events::term_key(a), events::term_key(c)];
-        terms.sort();
-        want.splice(2..2, terms);
-        let mut got = keys.clone();
-        got.sort();
-        want.sort();
+            events::post_key(d),
+        ]
+        .into_iter()
+        .collect();
         assert_eq!(got, want);
 
-        // Unchanged parent and terms: just the item and its archive.
+        // Unchanged terms and parent: still named, the parent lists its children.
         let it = item(Some(p1));
-        assert_eq!(
-            invalidation_keys(&it, &[a], &[a], Some(Some(p1))),
-            [events::post_key(it.id), events::archive_key("page")]
-        );
+        // (`events::invalidate` drops the duplicate parent key.)
+        let got: BTreeSet<String> = invalidation_keys(&it, &[a], &[a], Some(p1), &[])
+            .into_iter()
+            .collect();
+        assert_eq!(got.len(), 4, "{got:?}");
         // Create under a parent: the parent is invalidated.
-        assert!(invalidation_keys(&it, &[], &[], None).contains(&events::post_key(p1)));
+        assert!(invalidation_keys(&it, &[], &[], None, &[]).contains(&events::post_key(p1)));
     }
 
     #[test]

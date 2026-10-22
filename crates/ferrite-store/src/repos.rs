@@ -277,6 +277,8 @@ pub trait OptionRepo: Send + Sync {
 
 #[async_trait]
 pub trait RedirectRepo: Send + Sync {
+    /// Fetches a redirect by id.
+    async fn get(&self, id: RedirectId) -> Result<Option<Redirect>, StoreError>;
     /// Fetches a redirect by source path.
     async fn get_by_source(&self, source: &str) -> Result<Option<Redirect>, StoreError>;
     /// Inserts a redirect, or updates the one with the same `source_path` (target, code

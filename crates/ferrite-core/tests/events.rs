@@ -1,0 +1,504 @@
+//! The exact `invalidate` key set of each write path, on both backends (R9/I5). The
+//! renderer-side half of the contract is asserted in `site_reader.rs`.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use std::{collections::BTreeSet, sync::Arc};
+
+use ferrite_core::{
+    Actor, ContentDraft, ContentService, PermalinkRules, RedirectService, TaxonomyService,
+    events::{ALL_KEY, archive_key, post_key, redirect_key, term_key},
+};
+use ferrite_domain::{
+    ContentId, ContentStatus, NewContent, NewUser, Role, Term, TermId, Timestamp, UserId,
+    UserStatus,
+};
+use ferrite_store::Store;
+use ferrite_store_tests::{TestDb, backend_tests};
+use serde_json::json;
+
+type Keys = BTreeSet<String>;
+
+async fn admin(store: &dyn Store) -> Actor {
+    let id = UserId::new();
+    let tx = store.begin().await.unwrap();
+    tx.users()
+        .insert(&NewUser {
+            id,
+            login: format!("user-{id}"),
+            email: format!("{id}@example.com"),
+            display_name: "Test".into(),
+            password_hash: None,
+            role: Role::Admin,
+            status: UserStatus::Active,
+            must_reset: false,
+        })
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    Actor {
+        user: id,
+        role: Role::Admin,
+    }
+}
+
+fn service(db: &TestDb) -> ContentService {
+    ContentService::new(db.shared_store(), Arc::new(PermalinkRules::default()))
+}
+
+fn draft(kind: &str, title: &str, parent: Option<ContentId>, terms: &[TermId]) -> ContentDraft {
+    ContentDraft {
+        kind: kind.into(),
+        title: title.into(),
+        slug: None,
+        parent_id: parent,
+        excerpt: None,
+        body: json!({"type": "doc", "content": []}),
+        fields: json!({}),
+        menu_order: 0,
+        terms: terms.to_vec(),
+    }
+}
+
+async fn term(store: &dyn Store, taxonomy: &str, slug: &str) -> TermId {
+    let id = TermId::new();
+    store
+        .read()
+        .terms()
+        .insert(&Term {
+            id,
+            taxonomy: taxonomy.into(),
+            slug: slug.into(),
+            name: slug.into(),
+            description: String::new(),
+            parent_id: None,
+        })
+        .await
+        .unwrap();
+    id
+}
+
+async fn seq(store: &dyn Store) -> i64 {
+    store.read().events().max_seq().await.unwrap()
+}
+
+/// The union of the keys of every event after `after`; all of them must be `invalidate`.
+async fn keys_since(store: &dyn Store, after: i64) -> Keys {
+    let events = store.read().events().since(after, 1000).await.unwrap();
+    for e in &events {
+        assert_eq!(e.kind, "invalidate", "{e:?}");
+    }
+    events.into_iter().flat_map(|e| e.keys).collect()
+}
+
+fn set<const N: usize>(keys: [String; N]) -> Keys {
+    keys.into_iter().collect()
+}
+
+fn redirect_pair(path: &str) -> [String; 2] {
+    let other = match path.strip_suffix('/') {
+        Some(s) => s.to_owned(),
+        None => format!("{path}/"),
+    };
+    [redirect_key(path), redirect_key(&other)]
+}
+
+pub async fn update_emits_union_of_terms(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let a = admin(store).await;
+    let (t1, t2, t3) = (
+        term(store, "category", "one").await,
+        term(store, "category", "two").await,
+        term(store, "category", "three").await,
+    );
+    let before = seq(store).await;
+    let it = svc
+        .create(&a, draft("post", "P", None, &[t1, t2]))
+        .await
+        .unwrap();
+    assert_eq!(
+        keys_since(store, before).await,
+        set([
+            post_key(it.id),
+            archive_key("post"),
+            term_key(t1),
+            term_key(t2)
+        ])
+    );
+
+    // t1 removed, t2 kept, t3 added: old and new terms all appear.
+    let before = seq(store).await;
+    svc.update(&a, it.id, it.version, draft("post", "P2", None, &[t2, t3]))
+        .await
+        .unwrap();
+    assert_eq!(
+        keys_since(store, before).await,
+        set([
+            post_key(it.id),
+            archive_key("post"),
+            term_key(t1),
+            term_key(t2),
+            term_key(t3),
+        ])
+    );
+}
+
+pub async fn update_emits_both_parents(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let a = admin(store).await;
+    let p1 = svc
+        .create(&a, draft("page", "P1", None, &[]))
+        .await
+        .unwrap();
+    let p2 = svc
+        .create(&a, draft("page", "P2", None, &[]))
+        .await
+        .unwrap();
+
+    let before = seq(store).await;
+    let child = svc
+        .create(&a, draft("page", "C", Some(p1.id), &[]))
+        .await
+        .unwrap();
+    assert_eq!(
+        keys_since(store, before).await,
+        set([post_key(child.id), archive_key("page"), post_key(p1.id)])
+    );
+
+    // Same parent: still named (the parent page lists its children).
+    let before = seq(store).await;
+    let child = svc
+        .update(
+            &a,
+            child.id,
+            child.version,
+            draft("page", "C2", Some(p1.id), &[]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        keys_since(store, before).await,
+        set([post_key(child.id), archive_key("page"), post_key(p1.id)])
+    );
+
+    // Changed parent: old and new.
+    let before = seq(store).await;
+    let child = svc
+        .update(
+            &a,
+            child.id,
+            child.version,
+            draft("page", "C2", Some(p2.id), &[]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        keys_since(store, before).await,
+        set([
+            post_key(child.id),
+            archive_key("page"),
+            post_key(p1.id),
+            post_key(p2.id)
+        ])
+    );
+
+    // Parent removed: the old one is still named.
+    let before = seq(store).await;
+    svc.update(&a, child.id, child.version, draft("page", "C2", None, &[]))
+        .await
+        .unwrap();
+    assert_eq!(
+        keys_since(store, before).await,
+        set([post_key(child.id), archive_key("page"), post_key(p2.id)])
+    );
+}
+
+pub async fn update_emits_moved_descendants_and_redirects(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let a = admin(store).await;
+    let mk = |title: &str, parent| draft("page", title, parent, &[]);
+    let top = svc.create(&a, mk("Top", None)).await.unwrap();
+    let mid = svc.create(&a, mk("Mid", Some(top.id))).await.unwrap();
+    let leaf = svc.create(&a, mk("Leaf", Some(mid.id))).await.unwrap();
+    let draft_child = svc.create(&a, mk("Hidden", Some(top.id))).await.unwrap();
+    let top = svc.publish(&a, top.id, top.version).await.unwrap();
+    svc.publish(&a, mid.id, mid.version).await.unwrap();
+    svc.publish(&a, leaf.id, leaf.version).await.unwrap();
+
+    let before = seq(store).await;
+    let mut d = mk("Top", None);
+    d.slug = Some("renamed".into());
+    svc.update(&a, top.id, top.version, d).await.unwrap();
+    let mut want = set([
+        post_key(top.id),
+        post_key(mid.id),
+        post_key(leaf.id),
+        archive_key("page"),
+    ]);
+    // Redirects recorded for the moved published pages: top, mid, leaf (old paths).
+    for old in ["/top/", "/top/mid/", "/top/mid/leaf/"] {
+        want.extend(redirect_pair(old));
+    }
+    let got = keys_since(store, before).await;
+    assert_eq!(got, want);
+    // The unpublished descendant did not move a published URL: not named.
+    assert!(!got.contains(&post_key(draft_child.id)));
+}
+
+pub async fn lifecycle_emits_item_archive_terms_parent(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let a = admin(store).await;
+    let t = term(store, "category", "life").await;
+    let parent = svc
+        .create(&a, draft("page", "Parent", None, &[]))
+        .await
+        .unwrap();
+    let item = svc
+        .create(&a, draft("page", "Child", Some(parent.id), &[t]))
+        .await
+        .unwrap();
+    let want = set([
+        post_key(item.id),
+        archive_key("page"),
+        term_key(t),
+        post_key(parent.id),
+    ]);
+
+    let mut cur = item;
+    macro_rules! step {
+        ($call:expr) => {{
+            let before = seq(store).await;
+            cur = $call.await.unwrap();
+            assert_eq!(keys_since(store, before).await, want, "{:?}", cur.status);
+        }};
+    }
+    step!(svc.submit(&a, cur.id, cur.version));
+    step!(svc.publish(&a, cur.id, cur.version));
+    step!(svc.unpublish(&a, cur.id, cur.version));
+    let later = Timestamp::from_micros(Timestamp::now().as_micros() + 3_600_000_000).unwrap();
+    step!(svc.schedule(&a, cur.id, cur.version, later));
+    step!(svc.trash(&a, cur.id, cur.version));
+    step!(svc.restore(&a, cur.id, cur.version));
+
+    // publish_due: the schedule is in the future, so ask for a later "now".
+    let cur2 = svc.schedule(&a, cur.id, cur.version, later).await.unwrap();
+    let before = seq(store).await;
+    let far = Timestamp::from_micros(later.as_micros() + 1).unwrap();
+    assert_eq!(svc.publish_due(far).await.unwrap(), 1);
+    assert_eq!(keys_since(store, before).await, want);
+
+    // delete: terms are read before the links go with the row.
+    let cur3 = svc.get(cur2.id).await.unwrap();
+    assert_eq!(cur3.status, ContentStatus::Published);
+    let trashed = svc.trash(&a, cur3.id, cur3.version).await.unwrap();
+    let before = seq(store).await;
+    svc.delete(&a, trashed.id, trashed.version).await.unwrap();
+    assert_eq!(keys_since(store, before).await, want);
+}
+
+pub async fn publish_over_a_redirect_emits_its_keys(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let redirects = RedirectService::new(db.shared_store());
+    let a = admin(store).await;
+    redirects
+        .upsert(&a, "/foo/", "/elsewhere/", 301)
+        .await
+        .unwrap();
+    let mut d = draft("post", "Foo", None, &[]);
+    d.slug = Some("foo".into());
+    let it = svc.create(&a, d).await.unwrap();
+    let before = seq(store).await;
+    svc.publish(&a, it.id, it.version).await.unwrap();
+    let mut want = set([post_key(it.id), archive_key("post")]);
+    want.extend(redirect_pair("/foo/"));
+    assert_eq!(keys_since(store, before).await, want);
+}
+
+pub async fn redirect_service_emits_source_keys(db: &TestDb) {
+    let store = db.store();
+    let svc = RedirectService::new(db.shared_store());
+    let a = admin(store).await;
+
+    let before = seq(store).await;
+    let r = svc.upsert(&a, "/old", "/new", 301).await.unwrap();
+    assert_eq!(
+        keys_since(store, before).await,
+        redirect_pair("/old").into_iter().collect()
+    );
+
+    let before = seq(store).await;
+    svc.upsert(&a, "/dir/", "https://example.com/", 302)
+        .await
+        .unwrap();
+    assert_eq!(
+        keys_since(store, before).await,
+        redirect_pair("/dir/").into_iter().collect()
+    );
+
+    let before = seq(store).await;
+    svc.delete(&a, r.id).await.unwrap();
+    assert_eq!(
+        keys_since(store, before).await,
+        redirect_pair("/old").into_iter().collect()
+    );
+
+    // A missing redirect is a no-op: no event.
+    let before = seq(store).await;
+    svc.delete(&a, r.id).await.unwrap();
+    assert_eq!(seq(store).await, before);
+
+    // A rejected upsert emits nothing.
+    assert!(svc.upsert(&a, "/same", "/same", 301).await.is_err());
+    assert_eq!(seq(store).await, before);
+}
+
+async fn published_post_with_term(
+    store: &dyn Store,
+    author: UserId,
+    slug: &str,
+    status: ContentStatus,
+    term: TermId,
+) -> ContentId {
+    let id = ContentId::new();
+    let tx = store.begin().await.unwrap();
+    tx.content()
+        .insert(&NewContent {
+            id,
+            kind: "post".into(),
+            status,
+            slug: slug.into(),
+            parent_id: None,
+            author_id: author,
+            title: slug.into(),
+            excerpt: String::new(),
+            body: json!({"type": "doc", "content": []}),
+            body_html: None,
+            fields: json!({}),
+            menu_order: 0,
+            published_at: (status == ContentStatus::Published).then(Timestamp::now),
+            scheduled_at: None,
+        })
+        .await
+        .unwrap();
+    tx.terms().set_for_item(id, &[term]).await.unwrap();
+    tx.commit().await.unwrap();
+    id
+}
+
+pub async fn term_writes_name_linked_published_items(db: &TestDb) {
+    let store = db.store();
+    let svc = TaxonomyService::new(db.shared_store());
+    let a = admin(store).await;
+
+    let before = seq(store).await;
+    let t = svc
+        .create_term(&a, "category", "Tech", None, None, "")
+        .await
+        .unwrap();
+    assert_eq!(
+        keys_since(store, before).await,
+        set([term_key(t.id), archive_key("post")])
+    );
+
+    let p1 = published_post_with_term(store, a.user, "p1", ContentStatus::Published, t.id).await;
+    let p2 = published_post_with_term(store, a.user, "p2", ContentStatus::Published, t.id).await;
+    // Not public: its page is not cached, so it is not named.
+    published_post_with_term(store, a.user, "d1", ContentStatus::Draft, t.id).await;
+    let want = set([
+        term_key(t.id),
+        archive_key("post"),
+        post_key(p1),
+        post_key(p2),
+    ]);
+
+    let before = seq(store).await;
+    svc.update_term(&a, t.id, "Technology", None, None, "x")
+        .await
+        .unwrap();
+    assert_eq!(keys_since(store, before).await, want);
+
+    // Delete reads the items before the links go.
+    let before = seq(store).await;
+    svc.delete_term(&a, t.id).await.unwrap();
+    assert_eq!(keys_since(store, before).await, want);
+}
+
+pub async fn term_write_past_the_cap_flushes_everything(db: &TestDb) {
+    let store = db.store();
+    let svc = TaxonomyService::new(db.shared_store());
+    let a = admin(store).await;
+    let t = svc
+        .create_term(&a, "category", "Big", None, None, "")
+        .await
+        .unwrap();
+
+    let link = |n: usize| {
+        let id = ContentId::new();
+        (
+            id,
+            NewContent {
+                id,
+                kind: "post".into(),
+                status: ContentStatus::Published,
+                slug: format!("s{n}"),
+                parent_id: None,
+                author_id: a.user,
+                title: format!("s{n}"),
+                excerpt: String::new(),
+                body: json!({"type": "doc", "content": []}),
+                body_html: None,
+                fields: json!({}),
+                menu_order: 0,
+                published_at: Some(Timestamp::now()),
+                scheduled_at: None,
+            },
+        )
+    };
+    let tx = store.begin().await.unwrap();
+    for n in 0..1000 {
+        let (id, row) = link(n);
+        tx.content().insert(&row).await.unwrap();
+        tx.terms().set_for_item(id, &[t.id]).await.unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    // Exactly at the cap: every item is named.
+    let before = seq(store).await;
+    svc.update_term(&a, t.id, "Big", None, None, "1")
+        .await
+        .unwrap();
+    let got = keys_since(store, before).await;
+    assert_eq!(got.len(), 2 + 1000);
+    assert!(!got.contains(ALL_KEY));
+
+    // One more: the item keys give way to `all`.
+    let tx = store.begin().await.unwrap();
+    let (id, row) = link(1000);
+    tx.content().insert(&row).await.unwrap();
+    tx.terms().set_for_item(id, &[t.id]).await.unwrap();
+    tx.commit().await.unwrap();
+    let before = seq(store).await;
+    svc.update_term(&a, t.id, "Big", None, None, "2")
+        .await
+        .unwrap();
+    assert_eq!(
+        keys_since(store, before).await,
+        set([term_key(t.id), archive_key("post"), ALL_KEY.to_owned()])
+    );
+}
+
+backend_tests!(
+    update_emits_union_of_terms,
+    update_emits_both_parents,
+    update_emits_moved_descendants_and_redirects,
+    lifecycle_emits_item_archive_terms_parent,
+    publish_over_a_redirect_emits_its_keys,
+    redirect_service_emits_source_keys,
+    term_writes_name_linked_published_items,
+    term_write_past_the_cap_flushes_everything,
+);

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use ferrite_domain::{Taxonomy, Term, TermId};
+use ferrite_domain::{ContentQuery, ContentStatus, MAX_PAGE, Taxonomy, Term, TermId};
 use ferrite_store::{Repos, Store, StoreError, Tx};
 
 use crate::{
@@ -74,7 +74,7 @@ impl TaxonomyService {
                 parent_id: parent,
             };
             let saved = save_with_free_slug(tx.as_ref(), term, &base, false).await?;
-            emit(tx.as_ref(), &tax, &saved).await?;
+            emit(tx.as_ref(), &tax, &saved, false).await?;
             Ok(saved)
         }
         .await;
@@ -117,7 +117,7 @@ impl TaxonomyService {
                 ..current
             };
             let saved = save_with_free_slug(tx.as_ref(), next, &base, true).await?;
-            emit(tx.as_ref(), &tax, &saved).await?;
+            emit(tx.as_ref(), &tax, &saved, true).await?;
             Ok(saved)
         }
         .await;
@@ -136,8 +136,10 @@ impl TaxonomyService {
             if siblings.iter().any(|t| t.parent_id == Some(id)) {
                 return Err(CoreError::Invalid("has children".into()));
             }
+            // The links go with the term: name the items first.
+            let keys = item_keys(tx.as_ref(), id).await?;
             tx.terms().delete(id).await?;
-            emit(tx.as_ref(), &tax, &term).await?;
+            emit_with(tx.as_ref(), &tax, &term, keys).await?;
             Ok(())
         }
         .await;
@@ -258,10 +260,58 @@ async fn save_with_free_slug(
     }
 }
 
-/// `term:<id>` plus `archive:<type>` for every content type of the taxonomy.
-async fn emit(repos: &dyn Repos, tax: &Taxonomy, term: &Term) -> Result<(), CoreError> {
+/// `term:<id>` plus `archive:<type>` for every content type of the taxonomy, and, when
+/// `with_items`, the keys of the items linked to the term (see [`item_keys`]).
+async fn emit(
+    repos: &dyn Repos,
+    tax: &Taxonomy,
+    term: &Term,
+    with_items: bool,
+) -> Result<(), CoreError> {
+    let keys = if with_items {
+        item_keys(repos, term.id).await?
+    } else {
+        Vec::new()
+    };
+    emit_with(repos, tax, term, keys).await
+}
+
+async fn emit_with(
+    repos: &dyn Repos,
+    tax: &Taxonomy,
+    term: &Term,
+    item_keys: Vec<String>,
+) -> Result<(), CoreError> {
     let keys = std::iter::once(events::term_key(term.id))
-        .chain(tax.content_types.iter().map(|t| events::archive_key(t)));
+        .chain(tax.content_types.iter().map(|t| events::archive_key(t)))
+        .chain(item_keys);
     repos.events().append(&events::invalidate(keys)).await?;
     Ok(())
+}
+
+/// `post:<item>` for every published item linked to `term` (their pages show the term's
+/// name), or just `all` when there are more than [`events::MAX_TERM_ITEMS`].
+async fn item_keys(repos: &dyn Repos, term: TermId) -> Result<Vec<String>, CoreError> {
+    let mut keys = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = repos
+            .content()
+            .list(&ContentQuery {
+                statuses: vec![ContentStatus::Published],
+                term: Some(term),
+                limit: MAX_PAGE,
+                cursor,
+                ..ContentQuery::default()
+            })
+            .await?;
+        keys.extend(page.items.iter().map(|i| events::post_key(i.id)));
+        if keys.len() > events::MAX_TERM_ITEMS {
+            return Ok(vec![events::ALL_KEY.to_owned()]);
+        }
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => return Ok(keys),
+        }
+    }
 }

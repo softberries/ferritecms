@@ -201,6 +201,7 @@ pub async fn create_update_roundtrip(db: &TestDb) {
             post_key(created.id),
             archive_key("post"),
             term_key(t1),
+            term_key(t2),
             term_key(t3),
         ])
     );
