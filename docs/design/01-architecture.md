@@ -211,7 +211,7 @@ logged_in  = "bypass"                  # "bypass" | "per-user"
 [plugins]
 default_memory = "32MB"                # > 0
 default_fuel   = 50_000_000            # > 0
-render_deadline_ms = 50                # > 0
+render_deadline_ms = 200               # > 0
 action_deadline_ms = 5_000             # > 0
 disable_after_failures = 20            # > 0, within failure_window
 failure_window = "10m"

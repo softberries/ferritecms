@@ -1,0 +1,13 @@
+[plugin]
+name      = "meta-writer"
+version   = "0.1.0"
+publisher = "ferritecms.dev"
+world     = "ferrite:plugin/plugin@0.1.0"
+
+[capabilities]
+render.head        = true
+content.meta.write = ["seo.*"]
+
+[hooks]
+"render.head" = 10
+"post.saved"  = 10

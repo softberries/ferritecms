@@ -205,3 +205,37 @@ async fn text_output_is_not_html_sanitised() -> TestResult {
     assert_eq!(out, FilterValue::Text("a < b [filtered]".into()));
     Ok(())
 }
+
+/// Ruling R20: no storage writes on the render path; actions may write.
+#[tokio::test]
+async fn meta_writes_are_refused_in_render_filters() -> TestResult {
+    use ferrite_plugin_host::{ActionEvent, HostServices};
+    let services = Arc::new(InMemoryServices::new());
+    let host = host_with(services.clone(), &["meta-writer"])?;
+    let out = head_outcome(&host, Some("p1")).await;
+    // The guest got an error for each try and still returned its head.
+    for name in ["meta-set-1", "meta-set-2"] {
+        assert_eq!(
+            meta(&out.value, name),
+            Some("meta.set is not allowed during render filters"),
+            "{name}"
+        );
+    }
+    assert!(
+        host.failures().is_empty(),
+        "a refused write is not a plugin failure"
+    );
+    assert_eq!(services.meta_get("p1", "seo.seen").await, None);
+
+    let ev = ActionEvent {
+        subject: Some("p1".into()),
+        payload: serde_json::Value::Null,
+    };
+    host.dispatch_action("meta-writer", "post.saved", ev)
+        .await?;
+    assert_eq!(
+        services.meta_get("p1", "seo.seen").await.as_deref(),
+        Some("\"action\"")
+    );
+    Ok(())
+}

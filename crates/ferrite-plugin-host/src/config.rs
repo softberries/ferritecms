@@ -22,7 +22,9 @@ impl Default for HostConfig {
         Self {
             memory_bytes: 32 * 1024 * 1024,
             fuel: 50_000_000,
-            render_deadline: Duration::from_millis(50),
+            // Ruling R18: render filters may make store-backed imports (a few content
+            // reads are several round trips each), so 50 ms was too tight.
+            render_deadline: Duration::from_millis(200),
             action_deadline: Duration::from_millis(5_000),
             route_deadline: Duration::from_millis(2_000),
             epoch_tick: Duration::from_millis(5),

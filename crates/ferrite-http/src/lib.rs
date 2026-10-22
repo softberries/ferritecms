@@ -8,7 +8,7 @@ pub mod route;
 
 pub use head::{HeadPage, HeadSite, core_head, page_head, render_head};
 pub use plugins::{
-    LoadSummary, PluginRequest, Preview, RenderTrace, StoreHostServices, filter_item, load_plugins,
+    LoadSummary, PluginRequest, RenderTrace, StoreHostServices, filter_item, load_plugins,
     run_filter,
 };
 pub use route::{Candidate, NormalQuery, Route, RouteTable, SitemapPart, TypeInfo, resolve};

@@ -9,16 +9,48 @@ use crate::capability::FilterType;
 use crate::manifest::HtmlMode;
 use crate::types::{FilterValue, Head};
 
-/// Policy for `html` results of plugins without `render.html = "raw"`: ammonia's
-/// defaults (no `<script>`/`<style>`, no `on*` handlers, no `javascript:` or other
-/// non-allow-listed URL schemes), `rel="noopener noreferrer"` on links, plus `class` on
-/// `<code>` so core's `language-*` code-block classes survive a sanitising plugin.
+/// Policy for `html` results of plugins without `render.html = "raw"` (ruling R22):
+/// ammonia's defaults (no `<script>`/`<style>`/`<iframe>`/`<form>`/`<svg>`/`<math>`, no
+/// `on*` handlers, no `javascript:`/`data:` or other non-allow-listed URL schemes),
+/// `rel="noopener noreferrer"` on every link, plus two additions: `a[target]`, and
+/// `code[class]` restricted to `language-*` classes, so core's code-block classes
+/// survive a sanitising plugin.
+///
+/// **Chaining.** Each non-raw plugin's whole output is sanitised after it runs, and that
+/// output includes whatever it was given. So markup a `raw` plugin added earlier in the
+/// chain survives only until the next non-raw plugin runs; raw markup is kept only when
+/// no non-raw plugin runs after it.
 static SANITIZER: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
     let mut b = ammonia::Builder::default();
     b.link_rel(Some("noopener noreferrer"))
-        .add_tag_attributes("code", ["class"]);
+        .add_tag_attributes("a", ["target"])
+        .add_tag_attributes("code", ["class"])
+        .attribute_filter(|element, attribute, value| {
+            if element == "code" && attribute == "class" {
+                return language_classes(value);
+            }
+            Some(value.into())
+        });
     b
 });
+
+/// Only `language-<name>` tokens (core's `valid_language` charset), else none.
+fn language_classes(value: &str) -> Option<std::borrow::Cow<'_, str>> {
+    let kept: Vec<&str> = value
+        .split_ascii_whitespace()
+        .filter(|c| {
+            c.strip_prefix("language-").is_some_and(|l| {
+                (1..=32).contains(&l.len())
+                    && l.bytes().all(|b| {
+                        b.is_ascii_lowercase()
+                            || b.is_ascii_digit()
+                            || matches!(b, b'+' | b'#' | b'-')
+                    })
+            })
+        })
+        .collect();
+    (!kept.is_empty()).then(|| kept.join(" ").into())
+}
 
 /// Cap on the size of a returned `head`: all its strings plus [`HEAD_ELEMENT_COST`] per
 /// meta/link/script, so many empty tags cannot slip under it.
@@ -313,6 +345,48 @@ mod tests {
                     .into()
             ))
         );
+    }
+
+    #[test]
+    fn active_content_is_removed() {
+        let cases = [
+            (
+                r#"<a href="data:text/html,<script>x</script>">d</a>"#,
+                r#"<a rel="noopener noreferrer">d</a>"#,
+            ),
+            (
+                r#"<img src="data:image/svg+xml,x" alt="a">"#,
+                r#"<img alt="a">"#,
+            ),
+            (r#"<iframe src="https://evil.example/"></iframe>i"#, "i"),
+            (
+                r#"<form action="/x"><input name="q"><button>go</button></form>"#,
+                "go",
+            ),
+            ("<svg><script>x</script><circle/></svg>s", "s"),
+            ("<math><mi>x</mi></math>m", "m"),
+            (
+                r#"<img src="/x.png" onerror="alert(1)">"#,
+                r#"<img src="/x.png">"#,
+            ),
+            (
+                r#"<a href="/a" target="_blank">t</a>"#,
+                r#"<a href="/a" target="_blank" rel="noopener noreferrer">t</a>"#,
+            ),
+            (
+                r#"<code class="language-rust evil">c</code>"#,
+                r#"<code class="language-rust">c</code>"#,
+            ),
+            (r#"<code class="hl evil">c</code>"#, "<code>c</code>"),
+            (r#"<p class="x">p</p>"#, "<p>p</p>"),
+        ];
+        for (input, want) in cases {
+            assert_eq!(
+                sanitized(input),
+                Ok(FilterValue::Html(want.into())),
+                "{input}"
+            );
+        }
     }
 
     #[test]

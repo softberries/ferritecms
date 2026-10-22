@@ -476,7 +476,7 @@ fn parse_plugins(cx: &mut Cx, root: &mut Table) -> PluginsConfig {
         .size(&mut t, b, "default_memory", false)
         .unwrap_or(32 << 20);
     let default_fuel = cx.positive(&mut t, b, "default_fuel").unwrap_or(50_000_000);
-    let render_deadline_ms = cx.positive(&mut t, b, "render_deadline_ms").unwrap_or(50);
+    let render_deadline_ms = cx.positive(&mut t, b, "render_deadline_ms").unwrap_or(200);
     let action_deadline_ms = cx.positive(&mut t, b, "action_deadline_ms").unwrap_or(5000);
     let disable_after_failures = cx
         .positive_u32(&mut t, b, "disable_after_failures")
@@ -601,7 +601,7 @@ pub fn render_default_toml(
     out.push_str("[cluster]\nmode = \"auto\"\n\n");
     out.push_str("[cache]\nmax_bytes = \"256MB\"\nlogged_in = \"bypass\"\n\n");
     out.push_str(
-        "[plugins]\ndefault_memory = \"32MB\"\ndefault_fuel = 50000000\nrender_deadline_ms = 50\naction_deadline_ms = 5000\ndisable_after_failures = 20\nfailure_window = \"10m\"\n",
+        "[plugins]\ndefault_memory = \"32MB\"\ndefault_fuel = 50000000\nrender_deadline_ms = 200\naction_deadline_ms = 5000\ndisable_after_failures = 20\nfailure_window = \"10m\"\n",
     );
     out
 }

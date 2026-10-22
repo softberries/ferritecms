@@ -122,7 +122,7 @@ async fn failures_outside_the_window_do_not_disable() -> TestResult {
 
 #[tokio::test]
 async fn oom_classified_as_memory() -> TestResult {
-    // Filling 32 MiB can take longer than the 50 ms render deadline while the other
+    // Filling 32 MiB can take longer than the 200 ms render deadline while the other
     // hostile tests load the machine; this test checks classification, not timing.
     let cfg = HostConfig {
         render_deadline: Duration::from_secs(5),

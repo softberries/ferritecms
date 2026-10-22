@@ -308,6 +308,16 @@ pub async fn no_leak_by_id_and_latest(db: &TestDb) {
     assert_eq!(shown.item.slug, "visible");
     assert_eq!(shown.url, "/visible/");
     assert!(r.is_visible(set.visible).await.unwrap());
+    let refused = r.by_id_where(set.visible, &|k| k == "page").await.unwrap();
+    assert!(refused.value.is_none(), "type filter applies");
+    assert!(refused.deps.contains(&post_key(set.visible)));
+    assert!(
+        r.by_id_where(set.visible, &|k| k == "post")
+            .await
+            .unwrap()
+            .value
+            .is_some()
+    );
     assert!(!r.is_visible(ContentId::new()).await.unwrap());
 
     let latest = r.latest("post", 10, 0).await.unwrap();
@@ -1118,7 +1128,8 @@ pub async fn preview_is_gated(db: &TestDb) {
             continue;
         }
         let got = got.unwrap();
-        assert_eq!(got.value.item.id, id);
+        assert_eq!(got.value.item().item.id, id);
+        assert_eq!(got.value.status(), status, "real status carried");
         assert!(!got.cacheable, "previews are never cached");
         assert!(matches!(
             r.preview(&actor(&stranger), id).await,
@@ -1132,7 +1143,13 @@ pub async fn preview_is_gated(db: &TestDb) {
     )
     .await;
     assert_eq!(
-        r.preview(&actor(&writer), own).await.unwrap().value.item.id,
+        r.preview(&actor(&writer), own)
+            .await
+            .unwrap()
+            .value
+            .item()
+            .item
+            .id,
         own
     );
     assert!(matches!(

@@ -6,7 +6,9 @@
 //!
 //! * Every attribute value and the title are escaped (`& < > " '`).
 //! * A meta needs a `name` or a `property`; a link needs an `http(s)://` or
-//!   root-relative (`/…`, not `//…`) `href`. Others are dropped (logged at `debug`).
+//!   root-relative (`/…`, not `//…`) `href`, and `https://` or root-relative when its
+//!   `rel` loads a resource (stylesheet, preload, modulepreload, prefetch, icon,
+//!   apple-touch-icon, manifest). Others are dropped (logged at `debug`).
 //! * `script-tag.src` must be `https://…`, a URL on the site's own origin, or
 //!   root-relative (`/…`, not `//…`); no backslashes, whitespace or control characters.
 //!   Others are dropped and logged (`warn`).
@@ -212,9 +214,25 @@ fn render_meta(m: &MetaTag, out: &mut String) {
     out.push_str(">\n");
 }
 
+/// `rel` tokens that make the browser fetch (and, for stylesheets/preloads, apply)
+/// the target: plain `http://` would be mixed content.
+const LOADING_RELS: [&str; 7] = [
+    "stylesheet",
+    "preload",
+    "modulepreload",
+    "prefetch",
+    "icon",
+    "apple-touch-icon",
+    "manifest",
+];
+
 fn render_link(l: &LinkTag, out: &mut String) {
+    let loads = l
+        .rel
+        .split_ascii_whitespace()
+        .any(|t| LOADING_RELS.iter().any(|r| t.eq_ignore_ascii_case(r)));
     let href_ok = l.href.starts_with("https://")
-        || l.href.starts_with("http://")
+        || (!loads && l.href.starts_with("http://"))
         || is_root_relative(&l.href);
     if !href_ok || !clean_url(&l.href) || l.rel.trim().is_empty() {
         tracing::debug!(rel = %l.rel, "head link with a disallowed href or empty rel dropped");

@@ -9,6 +9,7 @@
 //!   of the post returned; `list-posts`: `archive:<kind>` plus `post:<id>` of each post
 //!   returned.
 //! * `meta.get`: `post:<id>` of the item read. `options.get`: `option:<key>`.
+//! * Post ids that parse as UUIDs are recorded canonically (lowercase, hyphenated).
 //! * Volatile: any `kv` or `http` call, a read of the wall clock
 //!   (`wasi:clocks/wall-clock.now`), and a failed call (its output was dropped, and the
 //!   failure may be transient). The monotonic clock is not volatile: it measures
@@ -78,10 +79,18 @@ impl CallTrace {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// A UUID id is recorded in canonical form (lowercase, hyphenated), the form core
+    /// emits, so `post:<ID>` in upper case or braces still matches invalidations.
+    /// Other ids (test services) are recorded as given.
     pub(crate) fn post(&self, id: &str) {
-        if id.len() <= MAX_KEY_PART {
-            self.lock().deps.insert(dep_keys::post(id));
+        if id.len() > MAX_KEY_PART {
+            return;
         }
+        let key = match uuid::Uuid::parse_str(id) {
+            Ok(u) => dep_keys::post(&u.hyphenated().to_string()),
+            Err(_) => dep_keys::post(id),
+        };
+        self.lock().deps.insert(key);
     }
 
     pub(crate) fn archive(&self, kind: &str) {
@@ -90,9 +99,11 @@ impl CallTrace {
         }
     }
 
-    /// `key` already matched the plugin's `options.read` grants.
+    /// `key` already matched the plugin's `options.read` grants (which may be `*`).
     pub(crate) fn option(&self, key: &str) {
-        self.lock().deps.insert(dep_keys::option(key));
+        if key.len() <= MAX_KEY_PART {
+            self.lock().deps.insert(dep_keys::option(key));
+        }
     }
 
     pub(crate) fn volatile(&self) {
@@ -142,11 +153,25 @@ mod tests {
         let t = CallTrace::default();
         t.post(&"x".repeat(MAX_KEY_PART + 1));
         t.archive(&"k".repeat(MAX_KEY_PART + 1));
+        t.option(&"o".repeat(MAX_KEY_PART + 1));
         t.post("p");
         let (mut deps, mut volatile) = (BTreeSet::new(), false);
         t.drain_into(&mut deps, &mut volatile);
         assert_eq!(deps.into_iter().collect::<Vec<_>>(), ["post:p"]);
         assert!(!volatile);
+    }
+
+    #[test]
+    fn uuid_post_ids_are_canonical() {
+        let t = CallTrace::default();
+        t.post("{0190A8B2-1C3D-7E4F-8A9B-0C1D2E3F4A5B}");
+        t.post("0190a8b21c3d7e4f8a9b0c1d2e3f4a5b");
+        let (mut deps, mut volatile) = (BTreeSet::new(), false);
+        t.drain_into(&mut deps, &mut volatile);
+        assert_eq!(
+            deps.into_iter().collect::<Vec<_>>(),
+            ["post:0190a8b2-1c3d-7e4f-8a9b-0c1d2e3f4a5b"]
+        );
     }
 
     #[test]

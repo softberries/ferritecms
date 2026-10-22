@@ -9,10 +9,17 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use crate::types::Post;
 
+/// Type filter passed to [`HostServices::get_post`]. The explicit `for<'k>` matters:
+/// `async_trait` would otherwise tie an elided `&str` to the method's lifetimes.
+pub type KindOk = dyn for<'k> Fn(&'k str) -> bool + Sync;
+
 /// Storage-facing services backing the plugin imports.
 #[async_trait::async_trait]
 pub trait HostServices: Send + Sync + 'static {
-    async fn get_post(&self, id: &str) -> Option<Post>;
+    /// Post `id` if its type passes `kind_ok` (the plugin's `content.read` grants).
+    /// Implementations should check the type before any expensive loading, so refused
+    /// reads cost little; the host re-checks the returned post's type.
+    async fn get_post(&self, id: &str, kind_ok: &KindOk) -> Option<Post>;
     async fn get_post_by_slug(&self, kind: &str, slug: &str) -> Option<Post>;
     async fn list_posts(&self, kind: &str, limit: u32, offset: u32) -> Vec<Post>;
     async fn meta_get(&self, post: &str, key: &str) -> Option<String>;
@@ -70,8 +77,9 @@ fn pair(a: &str, b: &str) -> (String, String) {
 
 #[async_trait::async_trait]
 impl HostServices for InMemoryServices {
-    async fn get_post(&self, id: &str) -> Option<Post> {
-        self.lock().posts.get(id).cloned()
+    async fn get_post(&self, id: &str, kind_ok: &KindOk) -> Option<Post> {
+        let post = self.lock().posts.get(id).cloned()?;
+        kind_ok(&post.kind).then_some(post)
     }
 
     async fn get_post_by_slug(&self, kind: &str, slug: &str) -> Option<Post> {

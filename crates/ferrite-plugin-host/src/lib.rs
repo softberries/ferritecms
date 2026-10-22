@@ -38,7 +38,7 @@ pub use manifest::{
     Capabilities, HtmlMode, LimitRequest, MailScope, Manifest, PluginMeta, RouteSpec, SettingKind,
     SettingSpec,
 };
-pub use services::{HostServices, InMemoryServices};
+pub use services::{HostServices, InMemoryServices, KindOk};
 pub use trace::{FilterOutcome, dep_keys};
 pub use types::{
     ActionEvent, FilterValue, Head, LinkTag, MetaTag, Post, RequestInfo, RouteRequest,
@@ -284,7 +284,9 @@ impl PluginHost {
             }
             let started = Instant::now();
             let trace = CallTrace::default();
-            let result = call_filter(&plugin, hook, &current, req, deadline, &trace).await;
+            let render_path = spec.deadline == DeadlineClass::Render;
+            let result =
+                call_filter(&plugin, hook, &current, req, deadline, &trace, render_path).await;
             let html_mode = plugin.manifest.capabilities.render_html;
             match result {
                 Ok(out) => match validate_output(ty, &current, out, html_mode) {

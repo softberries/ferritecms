@@ -2,7 +2,6 @@
 //! (Postgres + in-process S3), with a plugin host over [`StoreHostServices`].
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use bytes::Bytes;
 use ferrite_core::{Actor, PermalinkRules, SiteReader};
@@ -36,6 +35,8 @@ pub struct MediaBacking {
     _dir: tempfile::TempDir,
     server: Option<JoinHandle<()>>,
     config: MediaConfig,
+    /// Directory where object keys appear as plain files (including the prefix).
+    objects_root: std::path::PathBuf,
 }
 
 impl Drop for MediaBacking {
@@ -62,6 +63,7 @@ pub fn local_media() -> MediaBacking {
         public: public(),
     };
     MediaBacking {
+        objects_root: dir.path().join("media"),
         _dir: dir,
         server: None,
         config,
@@ -101,6 +103,7 @@ pub async fn s3_media() -> MediaBacking {
         public: public(),
     };
     MediaBacking {
+        objects_root: dir.path().join(BUCKET).join("site"),
         _dir: dir,
         server: Some(server),
         config,
@@ -132,14 +135,8 @@ impl Site {
             reader.clone(),
             SITE_URL,
         ));
-        // Store-backed imports are real round trips (debug build, tests in parallel,
-        // Postgres pool of 4): a reader plugin's dozen queries can exceed the 50 ms
-        // production render deadline here. These tests are about semantics, not timing.
-        let cfg = HostConfig {
-            render_deadline: Duration::from_secs(10),
-            ..HostConfig::default()
-        };
-        let host = PluginHost::new(cfg, services.clone()).expect("host");
+        // The production default (200 ms render deadline, R18): stable on both profiles.
+        let host = PluginHost::new(HostConfig::default(), services.clone()).expect("host");
         Self {
             db,
             _media_backing: backing,
@@ -173,8 +170,21 @@ impl Site {
         r.hash
     }
 
-    /// Write the `plugins` row for example plugin `name` with `manifest` (TOML text).
+    /// Write the `plugins` row for example plugin `name` with `manifest` (TOML text) and
+    /// a null `granted` (manifest honoured, R21).
     pub async fn row(&self, name: &str, manifest: &str, hash: ArtifactHash, enabled: bool) {
+        self.row_granted(name, manifest, hash, enabled, serde_json::Value::Null)
+            .await;
+    }
+
+    pub async fn row_granted(
+        &self,
+        name: &str,
+        manifest: &str,
+        hash: ArtifactHash,
+        enabled: bool,
+        granted: serde_json::Value,
+    ) {
         let table: toml::Table = toml::from_str(manifest).expect("manifest toml");
         let now = Timestamp::now();
         self.store
@@ -185,7 +195,7 @@ impl Site {
                 version: "0.1.0".into(),
                 artifact_hash: hash,
                 manifest: serde_json::to_value(table).expect("manifest json"),
-                granted: json!({}),
+                granted,
                 enabled,
                 disabled_reason: None,
                 installed_at: now,
@@ -199,6 +209,17 @@ impl Site {
     pub async fn install(&self, name: &str) {
         let hash = self.put_artifact(plugin_wasm(name)).await;
         self.row(name, &plugin_manifest(name), hash, true).await;
+    }
+
+    /// Overwrite the stored blob of `hash` (tampering), on either backend.
+    pub fn tamper(&self, hash: &ArtifactHash, bytes: &[u8]) {
+        let h = hash.as_str();
+        let path = self
+            ._media_backing
+            .objects_root
+            .join(format!("artifacts/{}/{h}", &h[..2]));
+        assert!(path.is_file(), "no blob at {}", path.display());
+        std::fs::write(path, bytes).expect("tamper");
     }
 
     pub async fn load(&self) -> LoadSummary {

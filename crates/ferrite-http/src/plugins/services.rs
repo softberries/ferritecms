@@ -7,7 +7,7 @@ use ferrite_core::{
     events::{invalidate, option_key, post_key},
 };
 use ferrite_domain::{ContentId, ContentStatus};
-use ferrite_plugin_host::{HostServices, Post, TermRef};
+use ferrite_plugin_host::{HostServices, KindOk, Post, TermRef};
 use ferrite_store::Store;
 
 use super::apply::{record, scoped_preview};
@@ -28,7 +28,7 @@ const PLUGIN_OPTION_PREFIX: &str = "plugin.";
 ///
 /// * `content`: public items only (published, `published_at <= now`, not media), via
 ///   [`SiteReader`]. During a preview the previewed item is also returned by `get_post`
-///   on its id (see [`super::Preview`]). `get_post_by_slug` takes a page path for
+///   on its id (see [`super::PluginRequest`]). `get_post_by_slug` takes a page path for
 ///   hierarchical types (`"parent/child"`).
 /// * `meta.get`: only on items `content` could return. `meta.set` writes any existing
 ///   item and emits `invalidate` with `post:<id>` in the same transaction.
@@ -121,12 +121,12 @@ fn json_text(v: &serde_json::Value) -> String {
 
 #[async_trait::async_trait]
 impl HostServices for StoreHostServices {
-    async fn get_post(&self, id: &str) -> Option<Post> {
+    async fn get_post(&self, id: &str, kind_ok: &KindOk) -> Option<Post> {
         let id: ContentId = id.parse().ok()?;
         if let Some(p) = scoped_preview(id) {
-            return Some(self.post(&p.item, p.status));
+            return Some(self.post(p.item(), p.status()));
         }
-        let item = take("get_post", self.reader.by_id(id).await)??;
+        let item = take("get_post", self.reader.by_id_where(id, kind_ok).await)??;
         Some(self.public_post(&item))
     }
 

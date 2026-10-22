@@ -61,8 +61,8 @@ use crate::{
 };
 use hydrate::{Hydrator, Nodes, chain, unique};
 pub use model::{
-    DepKeys, FeedSource, FrontPage, Listing, MediaPublic, MediaVariant, PageItem, PublicItem,
-    SiteRead, SitemapEntry, SitemapPage, TermPublic, UserPublic,
+    DepKeys, FeedSource, FrontPage, Listing, MediaPublic, MediaVariant, PageItem, Previewed,
+    PublicItem, SiteRead, SitemapEntry, SitemapPage, TermPublic, UserPublic,
 };
 
 /// Maps an artifact hash and a file name to a public URL (`MediaStore::public_url`).
@@ -537,6 +537,17 @@ impl SiteReader {
     /// `content.get-post`. Records `post:<id>` whether or not the item is public, so
     /// publishing it refreshes pages that asked for it.
     pub async fn by_id(&self, id: ContentId) -> Result<SiteRead<Option<PageItem>>, CoreError> {
+        self.by_id_where(id, &|_| true).await
+    }
+
+    /// [`by_id`](Self::by_id) restricted to items whose type passes `kind_ok`, checked
+    /// before hydration so a refused read costs one store call (plugin `content.read`
+    /// type grants).
+    pub async fn by_id_where(
+        &self,
+        id: ContentId,
+        kind_ok: &(dyn Fn(&str) -> bool + Sync),
+    ) -> Result<SiteRead<Option<PageItem>>, CoreError> {
         let now = (self.clock)();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
@@ -545,7 +556,7 @@ impl SiteReader {
             .content()
             .get(id)
             .await?
-            .filter(|i| i.kind != MEDIA_KIND && is_public(i, now))
+            .filter(|i| i.kind != MEDIA_KIND && kind_ok(&i.kind) && is_public(i, now))
         else {
             return Ok(public(None, deps));
         };
@@ -601,7 +612,7 @@ impl SiteReader {
         &self,
         actor: &Actor,
         id: ContentId,
-    ) -> Result<SiteRead<PageItem>, CoreError> {
+    ) -> Result<SiteRead<Previewed>, CoreError> {
         let now = (self.clock)();
         let repos = self.store.read();
         let item = repos.content().get(id).await?.ok_or(CoreError::NotFound)?;
@@ -610,6 +621,7 @@ impl SiteReader {
             return Err(CoreError::NotFound);
         }
         let mut deps = DepKeys::default();
+        let status = item.status;
         let item = self
             .hydrator(repos, now)
             .hydrate(vec![item], Nodes::new(), &mut deps)
@@ -617,7 +629,7 @@ impl SiteReader {
             .pop()
             .ok_or(CoreError::NotFound)?;
         Ok(SiteRead {
-            value: item,
+            value: Previewed::new(item, status),
             deps,
             cacheable: false,
         })

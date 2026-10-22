@@ -21,6 +21,6 @@ mod apply;
 mod load;
 mod services;
 
-pub use apply::{PluginRequest, Preview, RenderTrace, filter_item, run_filter};
+pub use apply::{PluginRequest, RenderTrace, filter_item, run_filter};
 pub use load::{LoadSummary, load_plugins};
 pub use services::{KV_MAX_BYTES, KV_MAX_KEYS, StoreHostServices};

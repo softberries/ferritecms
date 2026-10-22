@@ -55,7 +55,7 @@ fn defaults_minimal() {
     assert_eq!(c.cache.logged_in, LoggedInCache::Bypass);
     assert_eq!(c.plugins.default_memory, 32 << 20);
     assert_eq!(c.plugins.default_fuel, 50_000_000);
-    assert_eq!(c.plugins.render_deadline_ms, 50);
+    assert_eq!(c.plugins.render_deadline_ms, 200);
     assert_eq!(c.plugins.action_deadline_ms, 5000);
     assert_eq!(c.plugins.disable_after_failures, 20);
     assert_eq!(c.plugins.failure_window_secs, 600);

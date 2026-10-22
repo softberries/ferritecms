@@ -41,6 +41,56 @@ pub struct Capabilities {
     pub mail: MailScope,
 }
 
+impl Capabilities {
+    /// Whether every capability requested here is also in `granted` (ruling R21: an
+    /// admin-approved grant set). Key and type patterns are covered by `*`, by the same
+    /// pattern, or by a `<prefix>.*` glob that matches them; HTTP hosts must be listed
+    /// exactly; `render.html` levels order `off < sanitized < raw`.
+    pub fn is_subset_of(&self, granted: &Capabilities) -> bool {
+        let lists = [
+            (&self.content_read, &granted.content_read),
+            (&self.content_meta_read, &granted.content_meta_read),
+            (&self.content_meta_write, &granted.content_meta_write),
+            (&self.options_read, &granted.options_read),
+        ];
+        let flags = [
+            (self.kv, granted.kv),
+            (self.render_head, granted.render_head),
+            (self.render_text, granted.render_text),
+            (self.routes, granted.routes),
+            (
+                self.mail == MailScope::Admins,
+                granted.mail == MailScope::Admins,
+            ),
+        ];
+        lists
+            .iter()
+            .all(|(want, have)| want.iter().all(|p| pattern_covered(p, have)))
+            && self.http.iter().all(|h| granted.http.contains(h))
+            && flags.iter().all(|(want, have)| !want || *have)
+            && html_level(self.render_html) <= html_level(granted.render_html)
+    }
+}
+
+fn html_level(m: HtmlMode) -> u8 {
+    match m {
+        HtmlMode::Off => 0,
+        HtmlMode::Sanitized => 1,
+        HtmlMode::Raw => 2,
+    }
+}
+
+/// Whether pattern `p` (`*`, `<prefix>.*` or an exact key) is within `granted`.
+fn pattern_covered(p: &str, granted: &[String]) -> bool {
+    granted.iter().any(|g| {
+        g == "*"
+            || g == p
+            || (p != "*"
+                && g.strip_suffix('*')
+                    .is_some_and(|prefix| prefix.ends_with('.') && p.starts_with(prefix)))
+    })
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum HtmlMode {
     #[default]
@@ -1017,5 +1067,38 @@ world = "ferrite:plugin/plugin@0.1.0"
         }
         let src = with("[limits]\nfuel = -1\n");
         assert_eq!(paths(Manifest::parse(&src)), ["limits.fuel"]);
+    }
+
+    #[test]
+    fn capability_subsets() {
+        let caps = |src: &str| {
+            Manifest::parse(&with(&format!("[capabilities]\n{src}")))
+                .expect("ok")
+                .capabilities
+        };
+        let want = caps(
+            "content.read = [\"post\"]\ncontent.meta.read = [\"seo.title\", \"seo.x.*\"]\n\
+             kv = true\nhttp = [\"api.example.org\"]\nrender.html = \"sanitized\"\n",
+        );
+        assert!(want.is_subset_of(&want));
+        let wider = caps(
+            "content.read = [\"*\"]\ncontent.meta.read = [\"seo.*\"]\nkv = true\n\
+             http = [\"api.example.org\", \"b.example.org\"]\nrender.html = \"raw\"\n",
+        );
+        assert!(want.is_subset_of(&wider));
+        assert!(!wider.is_subset_of(&want));
+        for narrower in [
+            "content.read = [\"page\"]\ncontent.meta.read = [\"seo.*\"]\nkv = true\nhttp = [\"api.example.org\"]\nrender.html = \"raw\"\n",
+            "content.read = [\"*\"]\ncontent.meta.read = [\"seo.title\"]\nkv = true\nhttp = [\"api.example.org\"]\nrender.html = \"raw\"\n",
+            "content.read = [\"*\"]\ncontent.meta.read = [\"seo.*\"]\nhttp = [\"api.example.org\"]\nrender.html = \"raw\"\n",
+            "content.read = [\"*\"]\ncontent.meta.read = [\"seo.*\"]\nkv = true\nrender.html = \"raw\"\n",
+            "content.read = [\"*\"]\ncontent.meta.read = [\"seo.*\"]\nkv = true\nhttp = [\"api.example.org\"]\n",
+        ] {
+            assert!(!want.is_subset_of(&caps(narrower)), "{narrower}");
+        }
+        assert!(
+            !caps("options.read = [\"*\"]\n").is_subset_of(&caps("options.read = [\"site.*\"]\n"))
+        );
+        assert!(Capabilities::default().is_subset_of(&Capabilities::default()));
     }
 }

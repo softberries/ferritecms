@@ -44,6 +44,7 @@ const MAX_META_VALUE: usize = 64 * 1024;
 const MAX_LIST: u32 = 100;
 const BUDGET_EXCEEDED: &str = "budget exceeded";
 const UNAVAILABLE: &str = "unavailable in this build";
+const RENDER_WRITE: &str = "meta.set is not allowed during render filters";
 
 /// Host-import budget for one call (design 05 §6).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,6 +176,11 @@ pub(crate) struct HostState {
     table: ResourceTable,
     /// Dependency keys and volatility of this call (design 05 §7a, `trace.rs`).
     trace: CallTrace,
+    /// A render-class filter call (ruling R20): storage writes are refused, since a
+    /// page view must not change data (and cached pages would hide the effect).
+    render_path: bool,
+    /// Whether this call already logged a refused render-path write.
+    refusal_logged: bool,
 }
 
 impl HostState {
@@ -184,6 +190,7 @@ impl HostState {
         services: Arc<dyn HostServices>,
         memory_bytes: usize,
         trace: CallTrace,
+        render_path: bool,
     ) -> Self {
         let limits = StoreLimitsBuilder::new()
             .memory_size(memory_bytes)
@@ -217,6 +224,8 @@ impl HostState {
             output,
             table,
             trace,
+            render_path,
+            refusal_logged: false,
         }
     }
 
@@ -272,7 +281,10 @@ impl content::Host for HostState {
         }
         // Recorded found or not: publishing the item later must refresh the page.
         self.trace.post(&id);
-        let post = self.services.get_post(&id).await?;
+        let grants = Arc::clone(&self.grants);
+        let kind_ok = move |kind: &str| matches_any(&grants.content_read, kind);
+        let post = self.services.get_post(&id, &kind_ok).await?;
+        // Re-check: a services implementation must not widen the granted types.
         self.content_type_granted(&post.kind).then(|| {
             self.trace.post(&post.id);
             post.into()
@@ -326,6 +338,13 @@ impl meta::Host for HostState {
     }
 
     async fn set(&mut self, post: String, key: String, value: String) -> Result<(), String> {
+        if self.render_path {
+            if !self.refusal_logged {
+                self.refusal_logged = true;
+                tracing::warn!(plugin = %self.plugin, key, "meta.set refused during a render filter");
+            }
+            return Err(RENDER_WRITE.into());
+        }
         if !take(&mut self.budget.content) {
             return Err(BUDGET_EXCEEDED.into());
         }
@@ -438,6 +457,7 @@ mod tests {
             services,
             1024 * 1024,
             CallTrace::default(),
+            false,
         )
     }
 

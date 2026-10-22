@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use ferrite_domain::{ContentId, TermId, Timestamp, UserId};
+use ferrite_domain::{ContentId, ContentStatus, TermId, Timestamp, UserId};
 use serde::Serialize;
 
 /// A read result plus the dependency keys it touched (renderer side of the contract in
@@ -84,6 +84,35 @@ pub struct PageItem {
     /// From `fields.featured_image` (a media item id); `None` when unset, invalid or
     /// not a published media item.
     pub featured: Option<MediaPublic>,
+}
+
+/// An item loaded by [`SiteReader::preview`](super::SiteReader::preview): the only way
+/// to get one (private fields, no public constructor), so code that requires a
+/// `Previewed` (the plugin preview scope in `ferrite-http`) can only be handed an item
+/// whose `can_edit` check passed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Previewed {
+    item: PageItem,
+    status: ContentStatus,
+}
+
+impl Previewed {
+    pub(crate) fn new(item: PageItem, status: ContentStatus) -> Self {
+        Self { item, status }
+    }
+
+    pub fn item(&self) -> &PageItem {
+        &self.item
+    }
+
+    /// The item's real status (`PageItem` has none, ruling R8).
+    pub fn status(&self) -> ContentStatus {
+        self.status
+    }
+
+    pub fn into_item(self) -> PageItem {
+        self.item
+    }
 }
 
 /// The public face of a user: nothing beyond these three fields leaves core.

@@ -217,7 +217,7 @@ undeclared import fails instantiation even if the install-time check were bypass
 
 | Hook | Type | Value | Capability | Default deadline |
 |---|---|---|---|---|
-| `render.head` | filter | `head` | `render.head` | render (50 ms) |
+| `render.head` | filter | `head` | `render.head` | render (200 ms, ruling R18) |
 | `content.body` | filter | `html` | `render.html` ≠ off | render |
 | `render.footer` | filter | `html` | `render.html` ≠ off | render |
 | `content.excerpt` | filter | `text` | `render.text` | render |

@@ -7,6 +7,7 @@ members = [
     "examples/reader",
     "examples/clock",
     "examples/html-inject",
+    "examples/meta-writer",
     "examples/hostile/undeclared-import",
     "examples/hostile/sockets",
     "examples/hostile/loop",

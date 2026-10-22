@@ -26,7 +26,7 @@ pub use options::OptionService;
 pub use permalink::{PermalinkInput, PermalinkRules, Permalinks};
 pub use redirects::RedirectService;
 pub use site::{
-    DepKeys, FeedSource, FrontPage, Listing, MediaPublic, MediaVariant, PageItem, PublicItem,
-    SiteRead, SiteReader, SitemapEntry, SitemapPage, TermPublic, UserPublic,
+    DepKeys, FeedSource, FrontPage, Listing, MediaPublic, MediaVariant, PageItem, Previewed,
+    PublicItem, SiteRead, SiteReader, SitemapEntry, SitemapPage, TermPublic, UserPublic,
 };
 pub use taxonomy::TaxonomyService;

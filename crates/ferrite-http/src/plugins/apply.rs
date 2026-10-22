@@ -2,8 +2,8 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use ferrite_core::{DepKeys, PageItem};
-use ferrite_domain::{ContentId, ContentStatus};
+use ferrite_core::{DepKeys, PageItem, Previewed};
+use ferrite_domain::ContentId;
 use ferrite_plugin_host::{FilterValue, PluginHost, RequestInfo};
 
 /// What a page's plugin calls touched: merged into the page's dependency keys, and a
@@ -21,21 +21,16 @@ impl RenderTrace {
     }
 }
 
-/// The draft (or other non-public item) being previewed by an editor. Plugins see it
-/// through `content.get-post` on its id and `meta.get` on it; nothing else changes.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Preview {
-    pub item: PageItem,
-    pub status: ContentStatus,
-}
-
 /// One request as plugins see it.
 #[derive(Debug, Clone)]
 pub struct PluginRequest {
     pub info: RequestInfo,
-    /// Set only for an authenticated preview (`SiteReader::preview`), whose response
-    /// is never cached.
-    pub preview: Option<Arc<Preview>>,
+    /// The item being previewed by an editor, during an authenticated preview (whose
+    /// response is never cached). Plugins see it through `content.get-post` on its id
+    /// and `meta.get` on it; nothing else changes. A [`Previewed`] can only come from
+    /// `SiteReader::preview` (its `can_edit` check passed), so a public request cannot
+    /// smuggle a draft into the scope.
+    preview: Option<Arc<Previewed>>,
 }
 
 impl PluginRequest {
@@ -53,18 +48,22 @@ impl PluginRequest {
     }
 
     /// The preview of `preview` at `path`, by a logged-in editor.
-    pub fn preview(path: &str, locale: &str, preview: Preview) -> Self {
-        let mut req = Self::public(path, locale, Some(preview.item.item.id));
+    pub fn preview(path: &str, locale: &str, preview: Previewed) -> Self {
+        let mut req = Self::public(path, locale, Some(preview.item().item.id));
         req.info.is_logged_in = true;
         req.preview = Some(Arc::new(preview));
         req
+    }
+
+    pub fn previewed(&self) -> Option<&Previewed> {
+        self.preview.as_deref()
     }
 }
 
 /// Per-request state visible to [`StoreHostServices`](super::StoreHostServices) while
 /// plugins run (see the module docs of `plugins`).
 pub(crate) struct Scope {
-    pub(crate) preview: Option<Arc<Preview>>,
+    pub(crate) preview: Option<Arc<Previewed>>,
     deps: Arc<Mutex<DepKeys>>,
 }
 
@@ -78,12 +77,12 @@ fn lock(deps: &Mutex<DepKeys>) -> MutexGuard<'_, DepKeys> {
 }
 
 /// The preview item if a scope is set and it previews `id`.
-pub(crate) fn scoped_preview(id: ContentId) -> Option<Arc<Preview>> {
+pub(crate) fn scoped_preview(id: ContentId) -> Option<Arc<Previewed>> {
     SCOPE
         .try_with(|s| s.preview.clone())
         .ok()
         .flatten()
-        .filter(|p| p.item.item.id == id)
+        .filter(|p| p.item().item.id == id)
 }
 
 /// Record keys reported by a read into the current scope, if any.

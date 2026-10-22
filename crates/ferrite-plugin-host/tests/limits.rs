@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use common::{plugin_manifest, plugin_wasm};
 use ferrite_plugin_host::{
-    FailureKind, FilterValue, Head, HostConfig, HostServices, InMemoryServices, Manifest,
+    FailureKind, FilterValue, Head, HostConfig, HostServices, InMemoryServices, KindOk, Manifest,
     PluginHost, Post, RequestInfo,
 };
 
@@ -121,7 +121,7 @@ struct SlowServices {
 
 #[async_trait::async_trait]
 impl HostServices for SlowServices {
-    async fn get_post(&self, id: &str) -> Option<Post> {
+    async fn get_post(&self, id: &str, _kind_ok: &KindOk) -> Option<Post> {
         tokio::time::sleep(self.delay).await;
         Some(Post {
             id: id.into(),
@@ -194,10 +194,11 @@ async fn slow_host_import_is_cut_by_hard_deadline() -> TestResult {
     );
 
     // `get_post` sleeps 2 s; epochs don't interrupt host code, so only the hard deadline
-    // (50 ms × 1.5 = 75 ms) can end the call.
+    // (200 ms × 1.5 = 300 ms) can end the call.
     let (out, elapsed) = slow_import_call(Duration::from_secs(2)).await?;
     assert_eq!(out, input());
-    assert!(elapsed >= Duration::from_millis(70), "took {elapsed:?}");
+    assert!(elapsed >= Duration::from_millis(290), "took {elapsed:?}");
+    assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
     // Well under the 2 s the host import sleeps, so the hard deadline must have fired.
     assert!(elapsed < Duration::from_millis(1500), "took {elapsed:?}");
     Ok(())

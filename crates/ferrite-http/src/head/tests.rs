@@ -131,6 +131,36 @@ fn every_attribute_is_escaped() {
 }
 
 #[test]
+fn resource_links_need_https_or_root_relative() {
+    let link = |rel: &str, href: &str| LinkTag {
+        rel: rel.into(),
+        href: href.into(),
+        hreflang: None,
+        kind: None,
+    };
+    let h = Head {
+        links: vec![
+            link("stylesheet", "http://cdn.example.org/a.css"),
+            link("Shortcut ICON", "http://cdn.example.org/f.ico"),
+            link("preload", "http://cdn.example.org/f.woff2"),
+            link("modulepreload", "http://cdn.example.org/m.js"),
+            link("prefetch", "http://cdn.example.org/p"),
+            link("stylesheet", "https://cdn.example.org/a.css"),
+            link("icon", "/favicon.ico"),
+            link("alternate", "http://other.example.org/feed"),
+        ],
+        ..Head::default()
+    };
+    assert_eq!(
+        render(&h),
+        "<title>My &lt;Site&gt;</title>\n\
+         <link rel=\"stylesheet\" href=\"https://cdn.example.org/a.css\">\n\
+         <link rel=\"icon\" href=\"/favicon.ico\">\n\
+         <link rel=\"alternate\" href=\"http://other.example.org/feed\">\n"
+    );
+}
+
+#[test]
 fn missing_title_falls_back_and_bad_tags_drop() {
     let h = Head {
         title: None,

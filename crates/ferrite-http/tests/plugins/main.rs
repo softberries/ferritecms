@@ -12,9 +12,7 @@ use ferrite_core::{
     events::{archive_key, option_key, post_key, user_key},
 };
 use ferrite_domain::{ContentId, ContentStatus, Role};
-use ferrite_http::{
-    HeadPage, HeadSite, PluginRequest, Preview, RenderTrace, filter_item, page_head,
-};
+use ferrite_http::{HeadPage, HeadSite, PluginRequest, RenderTrace, filter_item, page_head};
 use ferrite_plugin_host::{HostServices, dep_keys};
 use serde_json::json;
 
@@ -161,6 +159,87 @@ async fn hostile_plugins_do_not_break_the_page(site: Site) -> Site {
     site
 }
 
+async fn loader_rejects_tampered_missing_and_ungranted(site: Site) -> Site {
+    // Tampered blob: the bytes no longer hash to the row's artifact hash.
+    site.install("hello").await;
+    let hello = site
+        .store
+        .read()
+        .plugins()
+        .get("hello")
+        .await
+        .unwrap()
+        .unwrap();
+    site.tamper(&hello.artifact_hash, b"\0asm tampered");
+    // Missing blob: the artifacts row exists, the object does not.
+    let missing = ferrite_domain::ArtifactHash::parse(&"ab".repeat(32)).unwrap();
+    site.store
+        .read()
+        .artifacts()
+        .insert_if_absent(&ferrite_domain::Artifact {
+            hash: missing.clone(),
+            kind: ferrite_domain::ArtifactKind::Plugin,
+            bytes: 10,
+            mime: "application/wasm".into(),
+            created_at: ferrite_domain::Timestamp::now(),
+        })
+        .await
+        .unwrap();
+    site.row(
+        "order-a",
+        &common::plugin_manifest("order-a"),
+        missing,
+        true,
+    )
+    .await;
+    // Grants (R21): reader within its grant loads, kv-budget asking for kv does not.
+    let reader = site.put_artifact(common::plugin_wasm("reader")).await;
+    site.row_granted(
+        "reader",
+        &common::plugin_manifest("reader"),
+        reader,
+        true,
+        json!({
+            "content": { "read": ["*"], "meta": { "read": ["seo.*"] } },
+            "options": { "read": ["site.*"] },
+            "render": { "head": true },
+        }),
+    )
+    .await;
+    let kv = site.put_artifact(common::plugin_wasm("kv-budget")).await;
+    site.row_granted(
+        "kv-budget",
+        &common::plugin_manifest("kv-budget"),
+        kv,
+        true,
+        json!({ "render": { "head": true } }),
+    )
+    .await;
+
+    let summary = site.load().await;
+    assert_eq!(summary.loaded, ["reader"]);
+    let reasons: Vec<(&str, &str)> = summary
+        .skipped
+        .iter()
+        .map(|(n, r)| (n.as_str(), r.as_str()))
+        .collect();
+    assert_eq!(reasons.len(), 3, "{reasons:?}");
+    assert!(
+        reasons[0].0 == "hello" && reasons[0].1.contains("does not match"),
+        "{reasons:?}"
+    );
+    assert!(
+        reasons[1].0 == "kv-budget" && reasons[1].1.contains("beyond the approved grant"),
+        "{reasons:?}"
+    );
+    assert!(
+        reasons[2].0 == "order-a" && reasons[2].1.contains("artifact"),
+        "{reasons:?}"
+    );
+    assert!(!site.host.is_enabled("hello"));
+    site
+}
+
 /// Hidden statuses, each with a publish time that would otherwise make it public.
 const HIDDEN: [(&str, ContentStatus, i64); 6] = [
     ("draft", ContentStatus::Draft, -HOUR),
@@ -217,7 +296,10 @@ async fn content_read_never_returns_drafts(site: Site) -> Site {
             "{slug}: {html}"
         );
         let s = site.services.as_ref();
-        assert!(s.get_post(&id.to_string()).await.is_none(), "{slug}");
+        assert!(
+            s.get_post(&id.to_string(), &|_| true).await.is_none(),
+            "{slug}"
+        );
         assert!(s.get_post_by_slug("post", slug).await.is_none(), "{slug}");
         assert!(
             s.meta_get(&id.to_string(), "seo.description")
@@ -238,6 +320,10 @@ async fn content_read_never_returns_drafts(site: Site) -> Site {
             .await
             .is_some()
     );
+    // The type grant is applied before loading (refused reads cost one lookup).
+    let v = visible.to_string();
+    assert!(site.services.get_post(&v, &|k| k == "page").await.is_none());
+    assert!(site.services.get_post(&v, &|k| k == "post").await.is_some());
     site
 }
 
@@ -266,20 +352,15 @@ async fn preview_shows_only_the_previewed_item(site: Site) -> Site {
     site.install("reader").await;
     site.load().await;
 
-    let item = site
+    let previewed = site
         .reader
         .preview(&Site::actor(&author), draft)
         .await
         .unwrap()
         .value;
-    let req = PluginRequest::preview(
-        "/wip/",
-        "en",
-        Preview {
-            item: item.clone(),
-            status: ContentStatus::Draft,
-        },
-    );
+    assert_eq!(previewed.status(), ContentStatus::Draft);
+    let item = previewed.item().clone();
+    let req = PluginRequest::preview("/wip/", "en", previewed);
     let (html, _) = head(&site, Some(&item), &req).await;
     assert_eq!(
         meta_value(&html, "reader-current"),
@@ -288,14 +369,11 @@ async fn preview_shows_only_the_previewed_item(site: Site) -> Site {
     );
     assert_eq!(meta_value(&html, "reader-list"), Some("visible"), "{html}");
     // Outside the preview scope the draft is hidden again, and so is any other draft.
-    assert!(site.services.get_post(&draft.to_string()).await.is_none());
-    let req = PluginRequest::preview(
-        "/wip/",
-        "en",
-        Preview {
-            item,
-            status: ContentStatus::Draft,
-        },
+    assert!(
+        site.services
+            .get_post(&draft.to_string(), &|_| true)
+            .await
+            .is_none()
     );
     let mut req_other = req.clone();
     req_other.info.post = Some(other.to_string());
@@ -478,6 +556,7 @@ async fn services_kv_settings_options_meta(site: Site) -> Site {
 profile_tests!(
     hello_head_from_rows_and_artifact,
     hostile_plugins_do_not_break_the_page,
+    loader_rejects_tampered_missing_and_ungranted,
     content_read_never_returns_drafts,
     preview_shows_only_the_previewed_item,
     plugin_reads_reach_the_trace,
