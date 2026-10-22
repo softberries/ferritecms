@@ -57,8 +57,11 @@ pub struct ReadStream { pub size: u64 /* total object size */, pub range: Range<
   but the S3 streaming path (head + copy fallback, below) can report `true` to two racing writers
   of identical bytes. The `artifacts` DB row (`insert_if_absent`) is the source of truth for
   "first writer", not `created` (decision recorded in M1b).
-- `open` validates the prefix (empty, or ends with `/` and does not start with `/`); a local root
-  directory is created if missing. S3 requires `access_key_id` and `secret_access_key` together;
+- `open` validates the prefix: empty, or `/`-separated segments each matching `[A-Za-z0-9._-]+`
+  (not `.` or `..`, no empty segment such as `//`), ending with `/` and not starting with `/`.
+  With `ServeViaApp`, `path_prefix` must start with `/` and not end with `/`. Violations, and
+  errors from `LocalFileSystem::new_with_prefix` / `AmazonS3Builder::build`, are
+  `MediaError::Config`. A local root directory is created if missing (failure there is `Io`). S3 requires `access_key_id` and `secret_access_key` together;
   with neither set, credentials come from `AmazonS3Builder::from_env()`. S3 requests retry up to
   2 times with a 20 s retry timeout (`store.rs::build_s3`).
 - `check()` writes a probe to `<prefix>tmp/probe-<uuid>`, reads it back, and attempts to delete
@@ -136,7 +139,7 @@ byte range actually served (`0..size` when no range was requested). Validation i
 `get_range` (same `NotFound` / `Range` errors and messages). Inverted and empty ranges are answered
 with a metadata-only request. Dropping the stream aborts the transfer.
 
-S3 client options (`build_s3`, object_store 0.14.2 `ClientOptions`): `with_timeout_disabled()`
+S3 client options (`build_s3`, object_store 0.14.2 `ClientOptions`; set before `with_allow_http`, which would otherwise be overwritten, and they replace any client options read by `from_env`): `with_timeout_disabled()`
 (no total-request timeout; the 30 s default would cut off large streams), `with_connect_timeout(5 s)`
 (same as the default, set explicitly), `with_read_timeout(30 s)` (per-read idle timeout; the
 default is none). Retries are unchanged (2 retries, 20 s retry timeout). These options were checked

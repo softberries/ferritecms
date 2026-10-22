@@ -91,12 +91,21 @@ pub struct MediaStore {
 impl MediaStore {
     pub fn open(cfg: MediaConfig) -> Result<Self, MediaError> {
         keys::validate_prefix(&cfg.prefix)?;
+        if let PublicUrlMode::ServeViaApp { path_prefix } = &cfg.public
+            && (!path_prefix.starts_with('/') || path_prefix.ends_with('/'))
+        {
+            return Err(MediaError::Config(format!(
+                "serve-via-app path_prefix {path_prefix:?} must start with '/' and not end with '/'"
+            )));
+        }
         let inner: Arc<dyn ObjectStore> = match &cfg.backend {
             Backend::Local { root } => {
                 std::fs::create_dir_all(root).map_err(|e| {
                     MediaError::Io(format!("create media root {}: {e}", root.display()))
                 })?;
-                Arc::new(LocalFileSystem::new_with_prefix(root)?)
+                Arc::new(LocalFileSystem::new_with_prefix(root).map_err(|e| {
+                    MediaError::Config(format!("local media root {}: {e}", root.display()))
+                })?)
             }
             Backend::S3(s3) => Arc::new(build_s3(s3)?),
         };
@@ -519,8 +528,7 @@ fn build_s3(cfg: &S3Config) -> Result<object_store::aws::AmazonS3, MediaError> {
     builder = builder
         .with_bucket_name(&cfg.bucket)
         .with_region(&cfg.region)
-        .with_allow_http(cfg.allow_http)
-        .with_virtual_hosted_style_request(cfg.virtual_hosted_style)
+        // Must come before `with_allow_http`: it replaces the whole `ClientOptions`.
         .with_client_options(
             // No total-request timeout: large artifacts stream for as long as they need.
             // Connects must succeed within 5 s; a body read that stalls for 30 s fails.
@@ -529,6 +537,8 @@ fn build_s3(cfg: &S3Config) -> Result<object_store::aws::AmazonS3, MediaError> {
                 .with_connect_timeout(Duration::from_secs(5))
                 .with_read_timeout(Duration::from_secs(30)),
         )
+        .with_allow_http(cfg.allow_http)
+        .with_virtual_hosted_style_request(cfg.virtual_hosted_style)
         .with_retry(RetryConfig {
             max_retries: 2,
             retry_timeout: Duration::from_secs(20),
@@ -537,5 +547,7 @@ fn build_s3(cfg: &S3Config) -> Result<object_store::aws::AmazonS3, MediaError> {
     if let Some(endpoint) = &cfg.endpoint {
         builder = builder.with_endpoint(endpoint);
     }
-    Ok(builder.build()?)
+    builder
+        .build()
+        .map_err(|e| MediaError::Config(format!("s3 backend: {e}")))
 }

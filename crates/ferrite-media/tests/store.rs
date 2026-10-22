@@ -471,13 +471,16 @@ backend_tests! {
     }
 
     prefix_rules(backing) {
-        for bad in ["/x/", "x"] {
+        for bad in [
+            "/x/", "x", "a//b/", "//", "./", "../", "a/./b/", "a/../b/", "a b/", "é/", "a\\b/",
+            "a?b/", "a%2e/", "a:b/", "a\u{0}b/",
+        ] {
             let err = MediaStore::open(with_prefix(backing.config.clone(), bad))
                 .err()
                 .expect("must fail");
             assert!(matches!(err, MediaError::Config(_)), "{bad}: {err:?}");
         }
-        for ok in ["", "site/a/"] {
+        for ok in ["", "site/a/", "Site_1.x-y/b.c/", "..a/", "a../"] {
             let store = MediaStore::open(with_prefix(backing.config.clone(), ok)).expect("open");
             store.check().await.expect("check with prefix");
         }
@@ -493,6 +496,42 @@ backend_tests! {
             assert_eq!(std::fs::read_dir(tmp).unwrap().count(), 0);
         }
     }
+}
+
+#[test]
+fn serve_via_app_path_prefix_rules() {
+    for bad in ["", "/", "_media", "/_media/", "/a/b/", "//"] {
+        let mut cfg = common::local_backend("").config.clone();
+        cfg.public = PublicUrlMode::ServeViaApp {
+            path_prefix: bad.into(),
+        };
+        let err = MediaStore::open(cfg).err().expect("must fail");
+        assert!(matches!(err, MediaError::Config(_)), "{bad:?}: {err:?}");
+    }
+    for ok in ["/_media", "/a/b", "/m"] {
+        let mut cfg = common::local_backend("").config.clone();
+        cfg.public = PublicUrlMode::ServeViaApp {
+            path_prefix: ok.into(),
+        };
+        MediaStore::open(cfg).unwrap_or_else(|e| panic!("{ok}: {e:?}"));
+    }
+}
+
+#[test]
+fn local_root_that_cannot_be_created_is_an_error() {
+    // The local root is an existing regular file: it cannot be a directory.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("not-a-dir");
+    std::fs::write(&file, b"x").unwrap();
+    let mut cfg = common::local_backend("").config.clone();
+    cfg.backend = Backend::Local {
+        root: file.join("sub"),
+    };
+    let err = MediaStore::open(cfg).err().expect("must fail");
+    assert!(
+        matches!(err, MediaError::Io(_) | MediaError::Config(_)),
+        "{err:?}"
+    );
 }
 
 #[tokio::test]

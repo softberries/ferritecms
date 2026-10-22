@@ -19,6 +19,20 @@ pub(crate) fn validate_prefix(prefix: &str) -> Result<(), MediaError> {
             "media prefix {prefix:?} must be empty or end with '/'"
         )));
     }
+    // Every segment is a plain name: no empty segments (`//`), no `.`/`..`, no exotic bytes.
+    for segment in prefix[..prefix.len() - 1].split('/') {
+        let plain = !segment.is_empty()
+            && segment != "."
+            && segment != ".."
+            && segment
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+        if !plain {
+            return Err(MediaError::Config(format!(
+                "media prefix {prefix:?}: segment {segment:?} must match [A-Za-z0-9._-]+ and not be '.' or '..'"
+            )));
+        }
+    }
     Ok(())
 }
 
