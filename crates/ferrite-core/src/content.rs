@@ -13,7 +13,7 @@ use ferrite_domain::{
 use ferrite_store::{MAX_REDIRECTS_BY_TARGET, Repos, Store, StoreError, Tx};
 
 use crate::{
-    Actor, CoreError,
+    Actor, CoreError, MAX_PARENT_DEPTH,
     actor::{Capability, can_edit, require},
     blocks, events,
     permalink::{PermalinkInput, Permalinks, ancestors, load_input, primary_term},
@@ -30,10 +30,16 @@ const SLUG_CONSTRAINT: &str = "content_items_slug_uq";
 const SLUG_ATTEMPTS: usize = 5;
 const KEEP_REVISIONS: u32 = 50;
 const EXCERPT_CHARS: usize = 160;
-/// Longest parent chain walked when checking a new parent for cycles.
-const MAX_PARENT_DEPTH: usize = 64;
-/// Most descendants re-pointed when a published item moves.
+/// Most descendants walked (any non-trash status) when an item moves.
 const MAX_DESCENDANTS: usize = 1000;
+/// Statuses walked by [`move_descendants`]: everything but trash.
+const WALKED: [ContentStatus; 5] = [
+    ContentStatus::Draft,
+    ContentStatus::Pending,
+    ContentStatus::Scheduled,
+    ContentStatus::Private,
+    ContentStatus::Published,
+];
 /// Children fetched per query while walking descendants.
 const DESCENDANT_BATCH: u32 = 200;
 
@@ -90,8 +96,16 @@ impl ContentService {
     /// The slug is the validated caller slug or one generated from the title. If it is
     /// taken under the same type and parent, `-2`, `-3`, … is appended, for caller slugs
     /// too (as WordPress does); concurrent creates that race for the same slug retry up
-    /// to 5 times. A top-level item may not take a [`slug::RESERVED`] word: a caller
-    /// slug is `Invalid("reserved slug")`, a generated one gets the `-N` suffix.
+    /// to 5 times. A top-level item may not take a [`slug::RESERVED`] word or the name
+    /// of a registered content type (its archive prefix): a caller slug is
+    /// `Invalid("reserved slug")`, a generated one gets the `-N` suffix.
+    ///
+    /// Top-level items of types that share the root path namespace
+    /// ([`Permalinks::root_namespace_peers`], e.g. posts at `/%slug%/` and top-level
+    /// pages) also count each other's top-level slugs as taken (`-N`, caller slugs
+    /// too). That check reads committed rows: two concurrent creates of *different*
+    /// types can still both take a slug (no unique index spans types); the router's
+    /// precedence (Task 4) decides which one is served.
     ///
     /// A parent is allowed only for hierarchical types; it must exist, have the same
     /// type and not be trashed.
@@ -111,6 +125,15 @@ impl ContentService {
             if let Some(parent) = draft.parent_id {
                 check_parent(tx.as_ref(), &ty, None, parent).await?;
             }
+            let root = self
+                .root_namespace(
+                    tx.as_ref(),
+                    &draft.kind,
+                    draft.parent_id,
+                    draft.slug.is_some(),
+                    &base,
+                )
+                .await?;
             let excerpt = excerpt_of(&draft);
             let row = Row::New(NewContent {
                 id: ContentId::new(),
@@ -128,7 +151,7 @@ impl ContentService {
                 published_at: None,
                 scheduled_at: None,
             });
-            let saved = save_with_free_slug(tx.as_ref(), row, &base, None).await?;
+            let saved = save_with_free_slug(tx.as_ref(), row, &base, None, &root).await?;
             set_terms(tx.as_ref(), saved.id, &terms).await?;
             let keys = invalidation_keys(&saved, &[], &terms, None);
             after_save(tx.as_ref(), actor, &saved, keys).await?;
@@ -144,14 +167,17 @@ impl ContentService {
     /// A trashed item is `Invalid("restore first")`.
     ///
     /// `draft.slug = None` keeps the current slug; a slug that is taken gets `-N` as on
-    /// create, and the [`slug::RESERVED`] rules of create apply. When the parent changes,
-    /// the new one is checked as on create. When a published item's permalink changes
+    /// create, and the reserved-slug and root-namespace rules of create apply (an item
+    /// keeping its slug under the same parent is never renamed by them). When the parent
+    /// changes, the new one is checked as on create. When a published item's permalink changes
     /// (slug, parent, or primary category under a `%category%` structure), a `301`
     /// redirect from the old path is stored, redirects to the old path are re-targeted
     /// (no chains), and redirects from the new path (either slash variant) are deleted.
-    /// When its slug or parent changes, the same is done for each published descendant
-    /// whose path changes (walked breadth-first through published children only, at most
-    /// 1000; the rest are logged and left without redirects).
+    /// When its slug or parent changes (whatever its own status), its descendants are
+    /// walked breadth-first through every non-trash status, and each *published*
+    /// descendant whose path changes gets the same redirect treatment. At most 1000
+    /// descendants are walked (any status counts); the rest are logged and left
+    /// without redirects.
     pub async fn update(
         &self,
         actor: &Actor,
@@ -200,16 +226,6 @@ impl ContentService {
         }
         let old_term_rows = tx.terms().for_item(id).await?;
         let old_terms: Vec<TermId> = old_term_rows.iter().map(|t| t.id).collect();
-        // Only a published item's old path matters (redirects); load it before writing.
-        let old_input = if current.status == ContentStatus::Published {
-            Some(PermalinkInput {
-                item: current.clone(),
-                ancestors: ancestors(tx, current.parent_id).await?,
-                primary_term: primary_term(old_term_rows),
-            })
-        } else {
-            None
-        };
 
         let excerpt = excerpt_of(&draft);
         let mut next = current.clone();
@@ -222,27 +238,52 @@ impl ContentService {
         next.menu_order = draft.menu_order;
         // Under the same parent the item's own slug is not a conflict.
         let own = (current.parent_id == next.parent_id).then_some(current.slug.as_str());
-        let saved = save_with_free_slug(tx, Row::Existing(next), &base, own).await?;
+        let root = if own == Some(base.as_str()) {
+            // Keeps its slug where it is: never renamed by the root rules.
+            RootNamespace::default()
+        } else {
+            self.root_namespace(
+                tx,
+                &current.kind,
+                next.parent_id,
+                draft.slug.is_some(),
+                &base,
+            )
+            .await?
+        };
+        let saved = save_with_free_slug(tx, Row::Existing(next), &base, own, &root).await?;
 
         set_terms(tx, id, &terms).await?;
-        if let Some(old) = old_input {
-            let ancestors = if saved.parent_id == current.parent_id {
-                old.ancestors.clone()
+        let published = current.status == ContentStatus::Published;
+        let moved = current.slug != saved.slug || current.parent_id != saved.parent_id;
+        if published || moved {
+            // The write touched only this item, so its ancestors read now are the old ones.
+            let old_ancestors = ancestors(tx, current.parent_id).await?;
+            let new_ancestors = if saved.parent_id == current.parent_id {
+                old_ancestors.clone()
             } else {
                 ancestors(tx, saved.parent_id).await?
             };
-            let primary_term = if terms == old_terms {
-                old.primary_term.clone()
+            let old_primary = primary_term(old_term_rows);
+            let new_primary = if terms == old_terms {
+                old_primary.clone()
             } else {
                 primary_term(tx.terms().for_item(id).await?)
             };
+            let old = PermalinkInput {
+                item: current.clone(),
+                ancestors: old_ancestors,
+                primary_term: old_primary,
+            };
             let new = PermalinkInput {
                 item: saved.clone(),
-                ancestors,
-                primary_term,
+                ancestors: new_ancestors,
+                primary_term: new_primary,
             };
-            record_item_move(tx, self.permalinks.as_ref(), &old, &new).await?;
-            if current.slug != saved.slug || current.parent_id != saved.parent_id {
+            if published {
+                record_item_move(tx, self.permalinks.as_ref(), &old, &new).await?;
+            }
+            if moved {
                 move_descendants(tx, self.permalinks.as_ref(), &old, &new).await?;
             }
         }
@@ -268,6 +309,47 @@ fn base_slug(
         return Err(CoreError::Invalid("reserved slug".into()));
     }
     Ok(s)
+}
+
+/// Extra slugs a top-level item may not take, beyond [`slug::RESERVED`].
+#[derive(Debug, Default)]
+struct RootNamespace {
+    /// Registered content type names (their `/{type}/` prefixes).
+    type_names: Vec<String>,
+    /// Types whose top-level slugs share this item's root paths.
+    peers: Vec<String>,
+}
+
+impl ContentService {
+    /// The root-namespace rules for an item of `kind` under `parent` (none below the
+    /// top level). A caller slug (`explicit`) that is a type name is
+    /// `Invalid("reserved slug")`.
+    async fn root_namespace(
+        &self,
+        repos: &dyn Repos,
+        kind: &str,
+        parent: Option<ContentId>,
+        explicit: bool,
+        base: &str,
+    ) -> Result<RootNamespace, CoreError> {
+        if parent.is_some() {
+            return Ok(RootNamespace::default());
+        }
+        let type_names: Vec<String> = repos
+            .types()
+            .list()
+            .await?
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        if explicit && type_names.iter().any(|n| n == base) {
+            return Err(CoreError::Invalid("reserved slug".into()));
+        }
+        Ok(RootNamespace {
+            type_names,
+            peers: self.permalinks.root_namespace_peers(kind),
+        })
+    }
 }
 
 /// The row being written: a new item or a new version of an existing one.
@@ -311,12 +393,14 @@ impl Row {
 /// attempt (R18); the next one looks the taken slugs up again. Slugs that failed are
 /// remembered, so attempts make progress even where the lookup cannot see the
 /// conflicting slug. `own` is the item's current slug, which does not count as taken;
-/// at the top level the [`slug::RESERVED`] words always do.
+/// at the top level the [`slug::RESERVED`] words always do, as do `root`'s type names
+/// and its peer types' top-level slugs.
 async fn save_with_free_slug(
     tx: &dyn Tx,
     mut row: Row,
     base: &str,
     own: Option<&str>,
+    root: &RootNamespace,
 ) -> Result<ContentItem, CoreError> {
     let mut failed: Vec<String> = Vec::new();
     // The loop only exits by returning: the last failed attempt returns its error.
@@ -331,6 +415,15 @@ async fn save_with_free_slug(
         }
         if row.parent().is_none() {
             taken.extend(slug::RESERVED.iter().map(|s| (*s).to_owned()));
+            taken.extend(root.type_names.iter().cloned());
+            for peer in &root.peers {
+                taken.extend(
+                    attempt
+                        .content()
+                        .slugs_with_prefix(peer, None, base)
+                        .await?,
+                );
+            }
         }
         taken.extend(failed.iter().cloned());
         let candidate = slug::next_free(base, &taken);
@@ -439,8 +532,10 @@ async fn record_item_move(
 }
 
 /// Records moves for the published descendants of an item that went from `old` to
-/// `new` (slug or parent changed). Breadth-first through published children, at most
-/// [`MAX_DESCENDANTS`]; a draft child and everything below it is skipped.
+/// `new` (slug or parent changed; the item's own status does not matter).
+/// Breadth-first through children in every non-trash status (a draft page can have
+/// published children whose URLs contain its slug); only published descendants get a
+/// move. At most [`MAX_DESCENDANTS`] nodes are walked, whatever their status.
 async fn move_descendants(
     repos: &dyn Repos,
     permalinks: &dyn Permalinks,
@@ -461,7 +556,7 @@ async fn move_descendants(
                 .content()
                 .list(&ContentQuery {
                     parent: ParentFilter::Of(parent),
-                    statuses: vec![ContentStatus::Published],
+                    statuses: WALKED.to_vec(),
                     limit: DESCENDANT_BATCH,
                     cursor,
                     ..ContentQuery::default()
@@ -493,7 +588,9 @@ async fn move_descendants(
                     ancestors: new_chain.clone(),
                     ..child_old.clone()
                 };
-                record_item_move(repos, permalinks, &child_old, &child_new).await?;
+                if child_old.item.status == ContentStatus::Published {
+                    record_item_move(repos, permalinks, &child_old, &child_new).await?;
+                }
                 queue.push_back((child_old.item.id, chain(&child_old), chain(&child_new)));
             }
             match page.next_cursor {

@@ -809,7 +809,8 @@ pub async fn reserved_and_dot_slugs(db: &TestDb) {
         .update(&admin, child.id, child.version, draft("page", "Admin"))
         .await
         .unwrap();
-    assert_eq!((moved.parent_id, moved.slug.as_str()), (None, "admin-2"));
+    // `admin-2` is the post above: posts and top-level pages share the root namespace.
+    assert_eq!((moved.parent_id, moved.slug.as_str()), (None, "admin-3"));
     let mut d = draft("page", "Admin");
     d.slug = Some("metrics".into());
     assert_eq!(

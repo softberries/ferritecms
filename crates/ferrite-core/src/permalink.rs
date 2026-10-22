@@ -19,15 +19,26 @@
 //! Every expanded segment is percent-encoded (UTF-8, uppercase hex); only RFC 3986
 //! unreserved characters (`A-Z a-z 0-9 - . _ ~`) are kept. Paths always end in `/`
 //! (the canonical form).
+//!
+//! Validation: a literal first segment may not be a [`slug::RESERVED`] word (checked by
+//! [`Structure::parse`]) or a content type name (checked by
+//! [`PermalinkRules::check_types`], since the parser does not know the registered
+//! types; whoever builds the rules from options calls it with `types().list()`). The
+//! page structure must contain `%parent_path%`, or child pages would collide.
+//!
+//! Root namespace: posts under `/%slug%/` and top-level pages under
+//! `/%parent_path%/%slug%/` both live at `/<slug>/`. Core keeps them apart when it
+//! allocates slugs ([`Permalinks::root_namespace_peers`]), and a top-level slug may
+//! never be a type name (the `/{type}/` prefixes). The router (Task 4) additionally
+//! resolves a single segment as a page before a post, as a safety net for collisions
+//! that predate these rules or raced past them.
 
 use ferrite_domain::{ContentId, ContentItem, Term};
 use ferrite_store::Repos;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
-use crate::CoreError;
+use crate::{CoreError, MAX_PARENT_DEPTH, slug};
 
-/// Longest parent chain walked when loading ancestors.
-const MAX_DEPTH: usize = 64;
 /// Taxonomy whose first term is the primary term.
 const PRIMARY_TAXONOMY: &str = "category";
 /// `%category%` of an item without a category.
@@ -53,6 +64,13 @@ pub struct PermalinkInput {
 /// transactions.
 pub trait Permalinks: Send + Sync {
     fn path(&self, input: &PermalinkInput) -> String;
+
+    /// The other content types whose top-level items get paths of the same shape as
+    /// top-level items of `kind` (so their slugs must not collide). Default: none.
+    fn root_namespace_peers(&self, kind: &str) -> Vec<String> {
+        let _ = kind;
+        Vec::new()
+    }
 }
 
 /// One segment of a [`Structure`].
@@ -67,6 +85,15 @@ pub enum Segment {
     ParentPath,
 }
 
+impl Segment {
+    fn literal(&self) -> Option<&str> {
+        match self {
+            Segment::Literal(l) => Some(l),
+            _ => None,
+        }
+    }
+}
+
 /// A parsed permalink structure such as `/%year%/%month%/%slug%/`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Structure {
@@ -76,7 +103,8 @@ pub struct Structure {
 
 impl Structure {
     /// Parses `s`: it must start and end with `/` and contain `%slug%`; each segment is
-    /// a single known token or a literal of unreserved characters. Anything else is
+    /// a single known token or a literal of unreserved characters, and a literal first
+    /// segment may not be a [`slug::RESERVED`] word (any case). Anything else is
     /// `Invalid`.
     pub fn parse(s: &str) -> Result<Self, CoreError> {
         let invalid = |why: &str| CoreError::Invalid(format!("permalink structure {s:?}: {why}"));
@@ -115,6 +143,11 @@ impl Structure {
         if !segments.contains(&Segment::Slug) {
             return Err(invalid("must contain %slug%"));
         }
+        if let Some(first) = segments.first().and_then(Segment::literal)
+            && slug::is_reserved(&first.to_ascii_lowercase())
+        {
+            return Err(invalid(&format!("first segment {first:?} is reserved")));
+        }
         Ok(Self {
             source: s.to_owned(),
             segments,
@@ -128,6 +161,14 @@ impl Structure {
 
     pub fn segments(&self) -> &[Segment] {
         &self.segments
+    }
+
+    /// Whether top-level items get `/<slug>/` (`%parent_path%` collapses).
+    fn is_root_slug(&self) -> bool {
+        self.segments
+            .iter()
+            .filter(|s| **s != Segment::ParentPath)
+            .eq([Segment::Slug].iter())
     }
 
     /// Whether the path depends on the primary term.
@@ -173,6 +214,10 @@ impl Structure {
 /// WordPress-style permalink rules: one structure for posts, one for pages; any other
 /// type `t` uses `/t/%parent_path%/%slug%/` (which is `/t/%slug%/` for non-hierarchical
 /// types).
+///
+/// `%year%` and `%month%` are taken in **UTC** by design (ruling R4): a permalink must
+/// not move when `site.timezone` changes. Near a month boundary the URL's month can
+/// therefore differ from the local publish date a theme shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermalinkRules {
     post: Structure,
@@ -189,13 +234,40 @@ const OTHER: &str = "/%parent_path%/%slug%/";
 
 impl PermalinkRules {
     /// Rules from the `permalink.post` and `permalink.page` option values (`None`: the
-    /// default). An invalid structure is `Invalid`.
+    /// default). An invalid structure is `Invalid`, as is a page structure without
+    /// `%parent_path%` (pages are hierarchical).
     pub fn from_options(post: Option<&str>, page: Option<&str>) -> Result<Self, CoreError> {
+        let page = Structure::parse(page.unwrap_or(DEFAULT_PAGE))?;
+        if !page.segments.contains(&Segment::ParentPath) {
+            return Err(CoreError::Invalid(format!(
+                "permalink structure {:?}: pages need %parent_path%",
+                page.source
+            )));
+        }
         Ok(Self {
             post: Structure::parse(post.unwrap_or(DEFAULT_POST))?,
-            page: Structure::parse(page.unwrap_or(DEFAULT_PAGE))?,
+            page,
             other: Self::default().other,
         })
+    }
+
+    /// `Invalid` when the post or page structure starts with a literal that is a
+    /// content type name in `type_names` (it would shadow that type's `/{type}/` paths).
+    /// Compared case-insensitively.
+    pub fn check_types<S: AsRef<str>>(&self, type_names: &[S]) -> Result<(), CoreError> {
+        for structure in [&self.post, &self.page] {
+            if let Some(first) = structure.segments.first().and_then(Segment::literal)
+                && type_names
+                    .iter()
+                    .any(|t| t.as_ref().eq_ignore_ascii_case(first))
+            {
+                return Err(CoreError::Invalid(format!(
+                    "permalink structure {:?}: first segment {first:?} is a content type",
+                    structure.source
+                )));
+            }
+        }
+        Ok(())
     }
 
     pub fn post(&self) -> &Structure {
@@ -230,6 +302,17 @@ impl Permalinks for PermalinkRules {
             kind => self.other.expand(Some(kind), input),
         }
     }
+
+    /// Posts and pages are peers when both put top-level items at `/<slug>/` (the
+    /// defaults do); other types live under their `/{type}/` prefix.
+    fn root_namespace_peers(&self, kind: &str) -> Vec<String> {
+        let shared = self.post.is_root_slug() && self.page.is_root_slug();
+        match kind {
+            "post" if shared => vec!["page".to_owned()],
+            "page" if shared => vec!["post".to_owned()],
+            _ => Vec::new(),
+        }
+    }
 }
 
 /// Loads the permalink input of `item` through `repos` (a transaction's repos inside a
@@ -255,9 +338,9 @@ pub(crate) async fn ancestors(
 ) -> Result<Vec<(ContentId, String)>, CoreError> {
     let mut chain = Vec::new();
     while let Some(id) = parent {
-        if chain.len() >= MAX_DEPTH {
+        if chain.len() >= MAX_PARENT_DEPTH {
             return Err(CoreError::Invalid(format!(
-                "parent chain deeper than {MAX_DEPTH}"
+                "parent chain deeper than {MAX_PARENT_DEPTH}"
             )));
         }
         let p = repos
@@ -357,6 +440,9 @@ mod tests {
             "/a b/%slug%/",
             "/../%slug%/",
             "/a?b/%slug%/",
+            "/admin/%slug%/",
+            "/API/%slug%/",
+            "/_media/%slug%/",
         ] {
             invalid(s);
         }
@@ -379,6 +465,45 @@ mod tests {
         assert!(!Structure::parse("/%slug%/").unwrap().uses_category());
         assert!(PermalinkRules::from_options(Some("/x/"), None).is_err());
         assert!(PermalinkRules::from_options(None, Some("/%nope%/%slug%/")).is_err());
+        // Reserved words only matter as the first segment.
+        assert!(Structure::parse("/x/admin/%slug%/").is_ok());
+        // Pages are hierarchical: their structure needs %parent_path%.
+        assert!(PermalinkRules::from_options(None, Some("/%slug%/")).is_err());
+        assert!(PermalinkRules::from_options(None, Some("/p/%parent_path%/%slug%/")).is_ok());
+    }
+
+    #[test]
+    fn type_names_as_first_segment() {
+        let types = ["post", "page", "media", "book"];
+        assert!(PermalinkRules::default().check_types(&types).is_ok());
+        let shadow = PermalinkRules::from_options(Some("/Media/%slug%/"), None).unwrap();
+        assert!(matches!(
+            shadow.check_types(&types),
+            Err(CoreError::Invalid(_))
+        ));
+        let page = PermalinkRules::from_options(None, Some("/book/%parent_path%/%slug%/")).unwrap();
+        assert!(page.check_types(&types).is_err());
+        let fine = PermalinkRules::from_options(Some("/blog/%slug%/"), None).unwrap();
+        assert!(fine.check_types(&types).is_ok());
+    }
+
+    #[test]
+    fn root_namespace_peers() {
+        let rules = PermalinkRules::default();
+        assert_eq!(rules.root_namespace_peers("post"), ["page"]);
+        assert_eq!(rules.root_namespace_peers("page"), ["post"]);
+        assert!(rules.root_namespace_peers("media").is_empty());
+        for post in [
+            "/%year%/%month%/%slug%/",
+            "/%category%/%slug%/",
+            "/blog/%slug%/",
+        ] {
+            let r = PermalinkRules::from_options(Some(post), None).unwrap();
+            assert!(r.root_namespace_peers("post").is_empty(), "{post}");
+            assert!(r.root_namespace_peers("page").is_empty(), "{post}");
+        }
+        let r = PermalinkRules::from_options(None, Some("/p/%parent_path%/%slug%/")).unwrap();
+        assert!(r.root_namespace_peers("post").is_empty());
     }
 
     #[test]
@@ -403,14 +528,16 @@ mod tests {
         unpublished.published_at = None;
         assert_eq!(dated.path(&input(unpublished)), "/2024/03/hi/");
 
-        let by_cat =
-            PermalinkRules::from_options(Some("/blog/%category%/%slug%/"), Some("/p/%slug%/"))
-                .unwrap();
+        let by_cat = PermalinkRules::from_options(
+            Some("/blog/%category%/%slug%/"),
+            Some("/p/%parent_path%/%slug%/"),
+        )
+        .unwrap();
         let mut post = input(item("post", "hi"));
         assert_eq!(by_cat.path(&post), "/blog/uncategorized/hi/");
         post.primary_term = Some(category("category", "news"));
         assert_eq!(by_cat.path(&post), "/blog/news/hi/");
-        assert_eq!(by_cat.path(&page), "/p/leaf/");
+        assert_eq!(by_cat.path(&page), "/p/a/b/leaf/");
     }
 
     #[test]

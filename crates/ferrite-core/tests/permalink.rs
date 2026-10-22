@@ -115,7 +115,7 @@ async fn edit(svc: &ContentService, admin: &Actor, id: ContentId, d: ContentDraf
 }
 
 /// Default rules: posts `/%slug%/`, pages `/%parent_path%/%slug%/`, other types
-/// `/{type}/%slug%/`; date and category structures for posts.
+/// `/{type}/%parent_path%/%slug%/`; date and category structures for posts.
 pub async fn structure_paths(db: &TestDb) {
     let store = db.store();
     let admin = actor(store, Role::Admin).await;
@@ -163,14 +163,18 @@ pub async fn structure_paths(db: &TestDb) {
 
     let by_cat = service(
         db,
-        PermalinkRules::from_options(Some("/%category%/%slug%/"), Some("/p/%slug%/")).unwrap(),
+        PermalinkRules::from_options(
+            Some("/%category%/%slug%/"),
+            Some("/p/%parent_path%/%slug%/"),
+        )
+        .unwrap(),
     );
     assert_eq!(by_cat.permalink(post).await.unwrap(), "/sport/hello/");
     assert_eq!(
         by_cat.permalink(bare.id).await.unwrap(),
         "/uncategorized/bare/"
     );
-    assert_eq!(by_cat.permalink(leaf).await.unwrap(), "/p/lead/");
+    assert_eq!(by_cat.permalink(leaf).await.unwrap(), "/p/about/team/lead/");
 }
 
 /// Unicode slugs are percent-encoded per segment (UTF-8, uppercase hex).
@@ -203,8 +207,8 @@ pub async fn unicode_slugs_are_percent_encoded(db: &TestDb) {
     );
 }
 
-/// Renaming or moving a published page records a redirect for every published
-/// descendant; drafts (and what is below them) get none, and unchanged paths none.
+/// Renaming or moving a page records a redirect for every published descendant whose
+/// path changes; draft descendants get none, and unchanged paths none.
 pub async fn descendant_redirects(db: &TestDb) {
     let store = db.store();
     let admin = actor(store, Role::Admin).await;
@@ -252,11 +256,124 @@ pub async fn descendant_redirects(db: &TestDb) {
     edit(&svc, &admin, b, same).await;
     assert_eq!(redirect_count(store).await, 5);
 
-    // A draft parent's rename records nothing, not even for its published children.
+    // A draft parent's rename still moves its published children (ruling R2).
     let draft_parent = svc.create(&admin, draft("page", "dp")).await.unwrap();
     let _kid = create_published(&svc, &admin, child("page", "kid", draft_parent.id)).await;
     edit(&svc, &admin, draft_parent.id, draft("page", "dp2")).await;
-    assert_eq!(redirect_count(store).await, 5);
+    assert_eq!(redirect_target(store, "/dp/").await, None);
+    assert_eq!(
+        redirect_target(store, "/dp/kid/").await.as_deref(),
+        Some("/dp2/kid/")
+    );
+    assert_eq!(redirect_count(store).await, 6);
+}
+
+/// Ruling R2: the walk passes through unpublished pages; only published descendants
+/// get redirects.
+pub async fn walk_passes_through_drafts(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let svc = service(db, PermalinkRules::default());
+    let a = create_published(&svc, &admin, draft("page", "a")).await;
+    let b = svc.create(&admin, child("page", "b", a)).await.unwrap();
+    let c = create_published(&svc, &admin, child("page", "c", b.id)).await;
+    edit(&svc, &admin, a, draft("page", "a2")).await;
+    assert_eq!(redirect_target(store, "/a/").await.as_deref(), Some("/a2/"));
+    assert_eq!(redirect_target(store, "/a/b/").await, None);
+    assert_eq!(
+        redirect_target(store, "/a/b/c/").await.as_deref(),
+        Some("/a2/b/c/")
+    );
+    assert_eq!(svc.permalink(c).await.unwrap(), "/a2/b/c/");
+    assert_eq!(redirect_count(store).await, 2);
+}
+
+/// Ruling R3a: a top-level slug may not be a content type name.
+pub async fn type_names_are_reserved_top_level(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let svc = service(db, PermalinkRules::default());
+    for kind in ["post", "page"] {
+        for name in ["media", "Post", "page"] {
+            let r = svc.create(&admin, draft(kind, name)).await;
+            assert!(
+                matches!(&r, Err(ferrite_core::CoreError::Invalid(m)) if m == "reserved slug"),
+                "{kind}/{name}: {r:?}"
+            );
+        }
+    }
+    let mut d = draft("post", "x");
+    d.slug = None;
+    d.title = "Media".into();
+    assert_eq!(svc.create(&admin, d).await.unwrap().slug, "media-2");
+    // Below the top level a type name is fine.
+    let top = svc.create(&admin, draft("page", "top")).await.unwrap();
+    assert_eq!(
+        svc.create(&admin, child("page", "media", top.id))
+            .await
+            .unwrap()
+            .slug,
+        "media"
+    );
+    // Updating to a type name is rejected the same way.
+    let r = svc
+        .update(&admin, top.id, top.version, draft("page", "post"))
+        .await;
+    assert!(matches!(r, Err(ferrite_core::CoreError::Invalid(m)) if m == "reserved slug"));
+}
+
+/// Ruling R3b: posts at `/%slug%/` and top-level pages share the root namespace.
+pub async fn shared_root_namespace(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let svc = service(db, PermalinkRules::default());
+    let post = svc.create(&admin, draft("post", "about")).await.unwrap();
+    assert_eq!(post.slug, "about");
+    // Caller slug taken by a peer: -N, like a same-type conflict.
+    let page = svc.create(&admin, draft("page", "about")).await.unwrap();
+    assert_eq!(page.slug, "about-2");
+    let mut generated = draft("post", "x");
+    generated.slug = None;
+    generated.title = "About".into();
+    assert_eq!(svc.create(&admin, generated).await.unwrap().slug, "about-3");
+    // A child page is not in the root namespace.
+    let kid = svc
+        .create(&admin, child("page", "about", page.id))
+        .await
+        .unwrap();
+    assert_eq!(kid.slug, "about");
+    // Moving the child to the top level steps around both types.
+    let moved = svc
+        .update(&admin, kid.id, kid.version, draft("page", "about"))
+        .await
+        .unwrap();
+    assert_eq!((moved.parent_id, moved.slug.as_str()), (None, "about-4"));
+    // Keeping one's own slug is never a conflict, even if a peer had it.
+    let mut retitled = draft("post", "about");
+    retitled.title = "Retitled".into();
+    let kept = svc
+        .update(&admin, post.id, post.version, retitled)
+        .await
+        .unwrap();
+    assert_eq!(kept.slug, "about");
+
+    // Under a dated post structure posts and pages do not share root paths.
+    let dated = service(
+        db,
+        PermalinkRules::from_options(Some("/%year%/%month%/%slug%/"), None).unwrap(),
+    );
+    dated
+        .create(&admin, draft("post", "contact"))
+        .await
+        .unwrap();
+    assert_eq!(
+        dated
+            .create(&admin, draft("page", "contact"))
+            .await
+            .unwrap()
+            .slug,
+        "contact"
+    );
 }
 
 /// At most 1000 descendants are walked per move.
@@ -351,6 +468,9 @@ backend_tests!(
     structure_paths,
     unicode_slugs_are_percent_encoded,
     descendant_redirects,
+    walk_passes_through_drafts,
+    type_names_are_reserved_top_level,
+    shared_root_namespace,
     descendant_walk_is_capped,
     category_change_redirect,
 );

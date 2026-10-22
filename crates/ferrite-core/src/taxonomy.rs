@@ -6,7 +6,7 @@ use ferrite_domain::{Taxonomy, Term, TermId};
 use ferrite_store::{Repos, Store, StoreError, Tx};
 
 use crate::{
-    Actor, CoreError,
+    Actor, CoreError, MAX_PARENT_DEPTH,
     actor::{Capability, require},
     events, slug,
     tx::finish,
@@ -16,9 +16,6 @@ use crate::{
 /// between our lookup and our write.
 const SLUG_CONSTRAINT: &str = "terms_taxonomy_slug_uq";
 const SLUG_ATTEMPTS: usize = 5;
-/// Longest parent chain walked when checking a new parent for cycles.
-const MAX_PARENT_DEPTH: usize = 64;
-
 /// Manages terms of the registered taxonomies (needs `manage_terms`).
 pub struct TaxonomyService {
     store: Arc<dyn Store>,

@@ -14,6 +14,9 @@ pub mod slug;
 mod taxonomy;
 mod tx;
 
+/// Longest parent chain (content items and terms) walked anywhere in core.
+pub(crate) const MAX_PARENT_DEPTH: usize = 64;
+
 pub use actor::{Actor, Capability, can};
 pub use content::{ContentDraft, ContentService};
 pub use error::CoreError;
