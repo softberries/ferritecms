@@ -19,9 +19,19 @@ pub enum Backend {
 pub trait Store: Send + Sync + 'static {
     /// The engine behind this store.
     fn backend(&self) -> Backend;
-    /// Repositories bound to the read pool (autocommit, no transaction).
+    /// Repositories bound to the read pool (autocommit, no transaction). Writes through
+    /// them run on their own (on SQLite: on the single writer connection).
+    ///
+    /// **Never write through `read()` or call [`Store::begin`] while the same task holds
+    /// a `Tx`.** On SQLite both wait for the writer connection the `Tx` holds and fail
+    /// with [`StoreError::Busy`] after 5 s. Pass the `Tx` on as `&dyn Repos` instead.
     fn read(&self) -> &dyn Repos;
-    /// Starts a write transaction; dropping it without commit rolls back.
+    /// Starts a write transaction; dropping it without commit rolls back. Fails with
+    /// [`StoreError::Busy`] when no connection frees up in time (SQLite: 5 s for the
+    /// single writer; see [`Store::read`] for the self-deadlock to avoid).
+    ///
+    /// Isolation differs by backend (decision pending, M1c): SQLite serializes all
+    /// writers; Postgres runs `READ COMMITTED`.
     async fn begin(&self) -> Result<Box<dyn Tx>, StoreError>;
     /// Compares applied migrations with those embedded in this binary.
     async fn migration_status(

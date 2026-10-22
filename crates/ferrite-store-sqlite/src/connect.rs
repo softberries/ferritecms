@@ -11,6 +11,11 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 
 use crate::{SqliteStore, exec::map_db_err, repos::SqliteRepos};
 
+/// How long a write or `begin()` waits for the single writer connection before failing
+/// with `StoreError::Busy`. Never write through `read()` or call `begin()` while this
+/// task holds a `Tx`: that waits for the writer the `Tx` itself holds (02 §3).
+const WRITER_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Name of the lock file held for the store's lifetime.
 pub(crate) const LOCK_FILE: &str = "ferrite.lock";
 
@@ -62,6 +67,7 @@ impl SqliteStore {
         let writer = SqlitePoolOptions::new()
             .max_connections(1)
             .min_connections(1)
+            .acquire_timeout(WRITER_ACQUIRE_TIMEOUT)
             .connect_with(base.clone())
             .await
             .map_err(map_db_err)?;

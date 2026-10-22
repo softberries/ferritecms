@@ -36,6 +36,7 @@ backend_tests!(
     tx_validation_error_does_not_poison,
     tx_nested_failure_keeps_outer,
     tx_nested_commit_rollback_drop,
+    sqlite_begin_while_tx_open_is_busy,
 );
 
 backend_tests!(

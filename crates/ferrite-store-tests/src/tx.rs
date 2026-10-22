@@ -1,8 +1,10 @@
 //! Transaction semantics shared by both backends: poisoning (R18), nested transactions
-//! (savepoints).
+//! (savepoints) and the SQLite single-writer timeout (I2).
+
+use std::time::{Duration, Instant};
 
 use ferrite_domain::ContentId;
-use ferrite_store::StoreError;
+use ferrite_store::{Backend, StoreError};
 use serde_json::json;
 
 use crate::{
@@ -181,4 +183,29 @@ pub async fn tx_nested_commit_rollback_drop(db: &TestDb) {
             "{key}"
         );
     }
+}
+
+/// SQLite has one writer: `begin()` while this task holds a `Tx` cannot succeed. It must
+/// fail with `Busy` after the writer acquire timeout (5 s) instead of hanging.
+pub async fn sqlite_begin_while_tx_open_is_busy(db: &TestDb) {
+    let store = db.store();
+    if store.backend() != Backend::Sqlite {
+        return;
+    }
+    let tx = store.begin().await.unwrap();
+    let started = Instant::now();
+    let second = tokio::time::timeout(Duration::from_secs(10), store.begin())
+        .await
+        .expect("begin() must give up on its own");
+    let waited = started.elapsed();
+    assert!(
+        matches!(second, Err(StoreError::Busy)),
+        "{:?}",
+        second.err()
+    );
+    assert!(
+        waited >= Duration::from_secs(4) && waited <= Duration::from_secs(6),
+        "{waited:?}"
+    );
+    tx.rollback().await.unwrap();
 }
