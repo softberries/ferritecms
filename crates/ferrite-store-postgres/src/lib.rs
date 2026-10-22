@@ -36,7 +36,7 @@ impl Store for PgStore {
 
     async fn begin(&self) -> Result<Box<dyn Tx>, StoreError> {
         let tx = self.pool.begin().await.map_err(map_db_err)?;
-        Ok(Box::new(PgTx::new(tx)))
+        Ok(Box::new(PgTx::new(exec::TxHandle::new(tx))))
     }
 
     async fn migration_status(

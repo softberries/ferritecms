@@ -9,18 +9,15 @@ mod site;
 mod taxonomy;
 mod user;
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use ferrite_store::{
     ArtifactRepo, ContentRepo, ContentTypeRepo, EventRepo, MediaRepo, MenuRepo, MetaRepo,
     OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,
     SearchRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
-use sqlx::{PgPool, Postgres, Transaction};
-use tokio::sync::Mutex;
+use sqlx::PgPool;
 
-use crate::exec::{Exec, SharedTx, finished, map_db_err};
+use crate::exec::{Exec, TxHandle};
 
 /// Every repository, bound to one executor (the pool or a write transaction).
 pub(crate) struct PgRepos {
@@ -92,36 +89,42 @@ impl Repos for PgRepos {
     }
 }
 
-/// A write transaction on a pool connection; dropping it rolls back.
+/// A write transaction (or a nested savepoint) on a pool connection; dropping it rolls
+/// back.
 pub(crate) struct PgTx {
-    tx: SharedTx,
+    handle: TxHandle,
     repos: PgRepos,
 }
 
 impl PgTx {
-    pub(crate) fn new(tx: Transaction<'static, Postgres>) -> Self {
-        let tx = Arc::new(Mutex::new(Some(tx)));
+    pub(crate) fn new(handle: TxHandle) -> Self {
         Self {
             repos: PgRepos {
-                exec: Exec::Tx(tx.clone()),
+                exec: Exec::Tx(handle.clone()),
             },
-            tx,
+            handle,
         }
     }
+}
 
-    async fn take(&self) -> Result<Transaction<'static, Postgres>, StoreError> {
-        self.tx.lock().await.take().ok_or_else(finished)
+impl Drop for PgTx {
+    fn drop(&mut self) {
+        self.handle.abandon();
     }
 }
 
 #[async_trait]
 impl Tx for PgTx {
     async fn commit(self: Box<Self>) -> Result<(), StoreError> {
-        self.take().await?.commit().await.map_err(map_db_err)
+        self.handle.finish(true).await
     }
 
     async fn rollback(self: Box<Self>) -> Result<(), StoreError> {
-        self.take().await?.rollback().await.map_err(map_db_err)
+        self.handle.finish(false).await
+    }
+
+    async fn begin_nested(&self) -> Result<Box<dyn Tx>, StoreError> {
+        Ok(Box::new(PgTx::new(self.handle.nested().await?)))
     }
 }
 

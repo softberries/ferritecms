@@ -19,6 +19,14 @@ pub enum StoreError {
     Migration(String),
     #[error("incompatible schema: {0}")]
     Incompatible(String),
+    /// An earlier database error inside this transaction (or nested transaction) aborted
+    /// it: every later call fails with this, and `commit` rolls back and returns it.
+    #[error("transaction aborted by an earlier error; roll it back")]
+    Aborted,
+    /// No connection became free in time (on SQLite: the single writer is held, e.g. by
+    /// an open `Tx` in the same task).
+    #[error("database busy: timed out waiting for a connection")]
+    Busy,
     #[error("database error: {0}")]
     Database(String),
 }

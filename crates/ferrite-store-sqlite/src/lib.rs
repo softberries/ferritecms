@@ -41,7 +41,7 @@ impl Store for SqliteStore {
 
     async fn begin(&self) -> Result<Box<dyn Tx>, StoreError> {
         let tx = self.writer.begin().await.map_err(map_db_err)?;
-        Ok(Box::new(SqliteTx::new(tx)))
+        Ok(Box::new(SqliteTx::new(exec::TxHandle::new(tx))))
     }
 
     async fn migration_status(

@@ -21,18 +21,15 @@ mod site;
 mod taxonomy;
 mod user;
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use ferrite_store::{
     ArtifactRepo, ContentRepo, ContentTypeRepo, EventRepo, MediaRepo, MenuRepo, MetaRepo,
     OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,
     SearchRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
-use sqlx::{Sqlite, SqlitePool, Transaction};
-use tokio::sync::Mutex;
+use sqlx::SqlitePool;
 
-use crate::exec::{Exec, SharedTx, finished, map_db_err};
+use crate::exec::{Exec, TxHandle};
 
 /// Every repository, bound to a read and a write executor (see the module docs).
 pub(crate) struct SqliteRepos {
@@ -107,37 +104,43 @@ impl Repos for SqliteRepos {
     }
 }
 
-/// A write transaction on the writer connection; dropping it rolls back.
+/// A write transaction (or a nested savepoint) on the writer connection; dropping it
+/// rolls back.
 pub(crate) struct SqliteTx {
-    tx: SharedTx,
+    handle: TxHandle,
     repos: SqliteRepos,
 }
 
 impl SqliteTx {
-    pub(crate) fn new(tx: Transaction<'static, Sqlite>) -> Self {
-        let tx = Arc::new(Mutex::new(Some(tx)));
+    pub(crate) fn new(handle: TxHandle) -> Self {
         Self {
             repos: SqliteRepos {
-                reader: Exec::Tx(tx.clone()),
-                writer: Exec::Tx(tx.clone()),
+                reader: Exec::Tx(handle.clone()),
+                writer: Exec::Tx(handle.clone()),
             },
-            tx,
+            handle,
         }
     }
+}
 
-    async fn take(&self) -> Result<Transaction<'static, Sqlite>, StoreError> {
-        self.tx.lock().await.take().ok_or_else(finished)
+impl Drop for SqliteTx {
+    fn drop(&mut self) {
+        self.handle.abandon();
     }
 }
 
 #[async_trait]
 impl Tx for SqliteTx {
     async fn commit(self: Box<Self>) -> Result<(), StoreError> {
-        self.take().await?.commit().await.map_err(map_db_err)
+        self.handle.finish(true).await
     }
 
     async fn rollback(self: Box<Self>) -> Result<(), StoreError> {
-        self.take().await?.rollback().await.map_err(map_db_err)
+        self.handle.finish(false).await
+    }
+
+    async fn begin_nested(&self) -> Result<Box<dyn Tx>, StoreError> {
+        Ok(Box::new(SqliteTx::new(self.handle.nested().await?)))
     }
 }
 

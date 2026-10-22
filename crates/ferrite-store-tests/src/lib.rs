@@ -16,6 +16,7 @@ pub mod plugin;
 pub mod search;
 pub mod site;
 pub mod taxonomy;
+pub mod tx;
 pub mod user;
 
 pub use harness::{PgFixture, TestDb, migration_dirs, migration_files, pg_store, sqlite_store};

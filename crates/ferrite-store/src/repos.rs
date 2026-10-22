@@ -39,12 +39,25 @@ pub trait Store: Send + Sync + 'static {
 }
 
 /// A write transaction exposing all repositories.
+///
+/// **Errors poison the transaction (R18), on every backend.** If a statement fails in the
+/// database (including `UniqueViolation` and `ForeignKey`), every later call through this
+/// `Tx` returns [`StoreError::Aborted`], and `commit` rolls back and returns
+/// `Err(Aborted)`. Errors raised before any SQL is sent (`Invalid` from input
+/// validation) do not poison. To try something and fall back, run it in a nested
+/// transaction from [`Tx::begin_nested`]: its failure poisons only the nested level.
 #[async_trait]
 pub trait Tx: Repos + Send {
-    /// Commits the transaction.
+    /// Commits the transaction (a nested one: releases its savepoint into the parent).
+    /// A poisoned transaction is rolled back and `Err(Aborted)` returned.
     async fn commit(self: Box<Self>) -> Result<(), StoreError>;
-    /// Rolls the transaction back.
+    /// Rolls the transaction back (a nested one: back to its savepoint).
     async fn rollback(self: Box<Self>) -> Result<(), StoreError>;
+    /// Opens a nested transaction (a savepoint) inside this one. Its writes become part
+    /// of this transaction on `commit` and are undone on `rollback` or drop; an error
+    /// inside it poisons only the nested transaction. While it is open, calls through
+    /// this (outer) `Tx` return `Invalid`. Nesting can go deeper.
+    async fn begin_nested(&self) -> Result<Box<dyn Tx>, StoreError>;
 }
 
 /// Accessors for every repository.
