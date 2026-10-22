@@ -3,6 +3,7 @@
 
 mod codec;
 mod connect;
+mod constraint;
 mod exec;
 mod migrate;
 mod repos;

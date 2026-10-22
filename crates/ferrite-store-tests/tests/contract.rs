@@ -1,7 +1,8 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
-    backend_tests, backend_tests_spawning, content::*, event::*, menu::*, migration_dirs,
-    migration_files, migrations::*, plugin::*, search::*, site::*, taxonomy::*, tx::*, user::*,
+    backend_tests, backend_tests_spawning, constraints::*, content::*, event::*, menu::*,
+    migration_dirs, migration_files, migrations::*, plugin::*, search::*, site::*, taxonomy::*,
+    tx::*, user::*,
 };
 
 backend_tests!(
@@ -22,6 +23,11 @@ backend_tests!(
     options_number_roundtrip,
     autoloaded_order_is_binary,
     schema_meta_roundtrip,
+);
+
+backend_tests!(
+    unique_violations_name_the_constraint,
+    foreign_key_violations_have_empty_constraint,
 );
 
 backend_tests!(

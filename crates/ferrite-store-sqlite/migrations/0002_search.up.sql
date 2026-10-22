@@ -6,7 +6,8 @@
 
 CREATE TABLE search_docs (
     id        INTEGER PRIMARY KEY,
-    item_id   BLOB NOT NULL UNIQUE REFERENCES content_items (id) ON DELETE CASCADE,
+    item_id   BLOB NOT NULL UNIQUE
+              CONSTRAINT search_docs_item_id_fk REFERENCES content_items (id) ON DELETE CASCADE,
     title     TEXT NOT NULL,
     body_text TEXT NOT NULL
 );

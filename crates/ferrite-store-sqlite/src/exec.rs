@@ -246,26 +246,24 @@ async fn rollback_to(tx: &mut Transaction<'static, Sqlite>, name: &str) -> Resul
     savepoint_sql(tx, &format!("RELEASE SAVEPOINT {name}")).await
 }
 
-/// Maps a driver error: unique and foreign-key violations become typed errors (SQLite
-/// extended codes 2067/1555 and 787) and a pool acquire timeout becomes `Busy`.
+/// Maps a driver error: unique violations (SQLite extended codes 2067/1555) carry the
+/// backend-neutral constraint name ([`crate::constraint`]), foreign-key violations (787)
+/// an empty one (SQLite does not name them), and a pool acquire timeout becomes `Busy`.
 pub(crate) fn map_db_err(e: sqlx::Error) -> StoreError {
     if let sqlx::Error::Database(db) = &e {
-        let message = db.message();
-        let constraint = || {
-            message
-                .split_once("constraint failed: ")
-                .map_or(message, |(_, rest)| rest)
-                .to_owned()
-        };
         match db.code().as_deref() {
             Some("2067" | "1555") => {
+                let message = db.message();
+                let detail = message
+                    .split_once("constraint failed: ")
+                    .map_or(message, |(_, rest)| rest);
                 return StoreError::UniqueViolation {
-                    constraint: constraint(),
+                    constraint: crate::constraint::unique_name(detail),
                 };
             }
             Some("787") => {
                 return StoreError::ForeignKey {
-                    constraint: constraint(),
+                    constraint: String::new(),
                 };
             }
             _ => {}

@@ -252,20 +252,22 @@ async fn rollback_to(
     savepoint_sql(tx, &format!("RELEASE SAVEPOINT {name}")).await
 }
 
-/// Maps a driver error: SQLSTATE 23505 and 23503 become typed errors carrying the
-/// violated constraint (or unique index) name, and a pool acquire timeout becomes `Busy`.
+/// Maps a driver error: SQLSTATE 23505 becomes `UniqueViolation` carrying the
+/// constraint name (named identically in both 0001 migrations), 23503 `ForeignKey` with
+/// an empty name (SQLite cannot name it, so neither backend does), and a pool acquire
+/// timeout becomes `Busy`.
 pub(crate) fn map_db_err(e: sqlx::Error) -> StoreError {
     if let sqlx::Error::Database(db) = &e {
-        let constraint = || db.constraint().unwrap_or_default().to_owned();
         match db.code().as_deref() {
             Some("23505") => {
                 return StoreError::UniqueViolation {
-                    constraint: constraint(),
+                    constraint: db.constraint().unwrap_or_default().to_owned(),
                 };
             }
             Some("23503") => {
+                tracing::debug!(constraint = db.constraint(), "foreign key violated");
                 return StoreError::ForeignKey {
-                    constraint: constraint(),
+                    constraint: String::new(),
                 };
             }
             _ => {}

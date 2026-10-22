@@ -6,6 +6,7 @@
 // Test-support crate: failing fast with a message is the desired behaviour.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+pub mod constraints;
 pub mod content;
 pub mod event;
 pub mod fixtures;

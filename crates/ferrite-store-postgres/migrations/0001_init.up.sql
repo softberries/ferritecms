@@ -3,7 +3,7 @@
 -- jsonb, boolean, bytea. Requires PostgreSQL >= 15 (UNIQUE NULLS NOT DISTINCT).
 
 CREATE TABLE content_types (
-    name         text PRIMARY KEY,
+    name         text CONSTRAINT content_types_pkey PRIMARY KEY,
     label        text NOT NULL,
     hierarchical boolean NOT NULL,
     has_archive  boolean NOT NULL,
@@ -13,7 +13,7 @@ CREATE TABLE content_types (
 );
 
 CREATE TABLE users (
-    id            uuid PRIMARY KEY,
+    id            uuid CONSTRAINT users_pkey PRIMARY KEY,
     login         text NOT NULL,
     email         text NOT NULL,
     -- ascii_lowercase(email), computed by the store: identical folding on every backend.
@@ -32,13 +32,13 @@ CREATE UNIQUE INDEX users_login_uq ON users (login);
 CREATE UNIQUE INDEX users_email_uq ON users (email_key);
 
 CREATE TABLE content_items (
-    id           uuid PRIMARY KEY,
-    type         text NOT NULL REFERENCES content_types (name),
+    id           uuid CONSTRAINT content_items_pkey PRIMARY KEY,
+    type         text NOT NULL CONSTRAINT content_items_type_fk REFERENCES content_types (name),
     status       text NOT NULL
                  CHECK (status IN ('draft', 'pending', 'scheduled', 'published', 'private', 'trash')),
     slug         text NOT NULL,
-    parent_id    uuid REFERENCES content_items (id),
-    author_id    uuid NOT NULL REFERENCES users (id),
+    parent_id    uuid CONSTRAINT content_items_parent_id_fk REFERENCES content_items (id),
+    author_id    uuid NOT NULL CONSTRAINT content_items_author_id_fk REFERENCES users (id),
     title        text NOT NULL,
     excerpt      text NOT NULL,
     body         jsonb NOT NULL,
@@ -59,16 +59,16 @@ CREATE INDEX content_items_author_idx ON content_items (author_id);
 CREATE INDEX content_items_status_scheduled_idx ON content_items (status, scheduled_at);
 
 CREATE TABLE content_meta (
-    item_id uuid NOT NULL REFERENCES content_items (id) ON DELETE CASCADE,
+    item_id uuid NOT NULL CONSTRAINT content_meta_item_id_fk REFERENCES content_items (id) ON DELETE CASCADE,
     key     text NOT NULL,
     value   jsonb NOT NULL,
-    PRIMARY KEY (item_id, key)
+    CONSTRAINT content_meta_pkey PRIMARY KEY (item_id, key)
 );
 
 CREATE TABLE revisions (
-    id         uuid PRIMARY KEY,
-    item_id    uuid NOT NULL REFERENCES content_items (id) ON DELETE CASCADE,
-    author_id  uuid NOT NULL REFERENCES users (id),
+    id         uuid CONSTRAINT revisions_pkey PRIMARY KEY,
+    item_id    uuid NOT NULL CONSTRAINT revisions_item_id_fk REFERENCES content_items (id) ON DELETE CASCADE,
+    author_id  uuid NOT NULL CONSTRAINT revisions_author_id_fk REFERENCES users (id),
     created_at timestamptz NOT NULL,
     title      text NOT NULL,
     excerpt    text NOT NULL,
@@ -80,7 +80,7 @@ CREATE TABLE revisions (
 CREATE INDEX revisions_item_created_idx ON revisions (item_id, created_at);
 
 CREATE TABLE taxonomies (
-    name          text PRIMARY KEY,
+    name          text CONSTRAINT taxonomies_pkey PRIMARY KEY,
     label         text NOT NULL,
     hierarchical  boolean NOT NULL,
     content_types jsonb NOT NULL,
@@ -88,33 +88,33 @@ CREATE TABLE taxonomies (
 );
 
 CREATE TABLE terms (
-    id          uuid PRIMARY KEY,
-    taxonomy    text NOT NULL REFERENCES taxonomies (name),
+    id          uuid CONSTRAINT terms_pkey PRIMARY KEY,
+    taxonomy    text NOT NULL CONSTRAINT terms_taxonomy_fk REFERENCES taxonomies (name),
     slug        text NOT NULL,
     name        text NOT NULL,
     description text NOT NULL,
-    parent_id   uuid REFERENCES terms (id)
+    parent_id   uuid CONSTRAINT terms_parent_id_fk REFERENCES terms (id)
 );
 CREATE UNIQUE INDEX terms_taxonomy_slug_uq ON terms (taxonomy, slug);
 CREATE INDEX terms_parent_idx ON terms (parent_id);
 
 CREATE TABLE term_links (
-    item_id  uuid NOT NULL REFERENCES content_items (id) ON DELETE CASCADE,
-    term_id  uuid NOT NULL REFERENCES terms (id) ON DELETE CASCADE,
+    item_id  uuid NOT NULL CONSTRAINT term_links_item_id_fk REFERENCES content_items (id) ON DELETE CASCADE,
+    term_id  uuid NOT NULL CONSTRAINT term_links_term_id_fk REFERENCES terms (id) ON DELETE CASCADE,
     position integer NOT NULL,
-    PRIMARY KEY (item_id, term_id)
+    CONSTRAINT term_links_pkey PRIMARY KEY (item_id, term_id)
 );
 CREATE INDEX term_links_term_idx ON term_links (term_id);
 
 CREATE TABLE menus (
-    name  text PRIMARY KEY,
+    name  text CONSTRAINT menus_pkey PRIMARY KEY,
     label text NOT NULL
 );
 
 CREATE TABLE menu_items (
-    id        uuid PRIMARY KEY,
-    menu      text NOT NULL REFERENCES menus (name) ON DELETE CASCADE,
-    parent_id uuid REFERENCES menu_items (id) ON DELETE CASCADE,
+    id        uuid CONSTRAINT menu_items_pkey PRIMARY KEY,
+    menu      text NOT NULL CONSTRAINT menu_items_menu_fk REFERENCES menus (name) ON DELETE CASCADE,
+    parent_id uuid CONSTRAINT menu_items_parent_id_fk REFERENCES menu_items (id) ON DELETE CASCADE,
     position  integer NOT NULL,
     kind      text NOT NULL CHECK (kind IN ('item', 'term', 'url')),
     target_id uuid,
@@ -124,7 +124,7 @@ CREATE TABLE menu_items (
 CREATE INDEX menu_items_menu_idx ON menu_items (menu, parent_id, position);
 
 CREATE TABLE artifacts (
-    hash       text PRIMARY KEY,
+    hash       text CONSTRAINT artifacts_pkey PRIMARY KEY,
     kind       text NOT NULL CHECK (kind IN ('media', 'variant', 'plugin', 'theme', 'export')),
     bytes      bigint NOT NULL,
     mime       text NOT NULL,
@@ -132,8 +132,8 @@ CREATE TABLE artifacts (
 );
 
 CREATE TABLE media (
-    item_id       uuid PRIMARY KEY REFERENCES content_items (id) ON DELETE CASCADE,
-    artifact_hash text NOT NULL REFERENCES artifacts (hash),
+    item_id       uuid CONSTRAINT media_pkey PRIMARY KEY CONSTRAINT media_item_id_fk REFERENCES content_items (id) ON DELETE CASCADE,
+    artifact_hash text NOT NULL CONSTRAINT media_artifact_hash_fk REFERENCES artifacts (hash),
     mime          text NOT NULL,
     bytes         bigint NOT NULL,
     width         integer,
@@ -145,10 +145,10 @@ CREATE TABLE media (
 CREATE INDEX media_artifact_idx ON media (artifact_hash);
 
 CREATE TABLE comments (
-    id           uuid PRIMARY KEY,
-    item_id      uuid NOT NULL REFERENCES content_items (id) ON DELETE CASCADE,
-    parent_id    uuid REFERENCES comments (id) ON DELETE CASCADE,
-    user_id      uuid REFERENCES users (id) ON DELETE SET NULL,
+    id           uuid CONSTRAINT comments_pkey PRIMARY KEY,
+    item_id      uuid NOT NULL CONSTRAINT comments_item_id_fk REFERENCES content_items (id) ON DELETE CASCADE,
+    parent_id    uuid CONSTRAINT comments_parent_id_fk REFERENCES comments (id) ON DELETE CASCADE,
+    user_id      uuid CONSTRAINT comments_user_id_fk REFERENCES users (id) ON DELETE SET NULL,
     author_name  text NOT NULL,
     author_email text NOT NULL,
     author_url   text NOT NULL,
@@ -160,7 +160,7 @@ CREATE TABLE comments (
 CREATE INDEX comments_item_created_idx ON comments (item_id, created_at);
 
 CREATE TABLE redirects (
-    id          uuid PRIMARY KEY,
+    id          uuid CONSTRAINT redirects_pkey PRIMARY KEY,
     source_path text NOT NULL,
     target      text NOT NULL,
     code        integer NOT NULL CHECK (code IN (301, 302, 307, 308, 410)),
@@ -172,23 +172,23 @@ CREATE TABLE redirects (
 CREATE UNIQUE INDEX redirects_source_path_uq ON redirects (source_path);
 
 CREATE TABLE user_meta (
-    user_id uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    user_id uuid NOT NULL CONSTRAINT user_meta_user_id_fk REFERENCES users (id) ON DELETE CASCADE,
     key     text NOT NULL,
     value   jsonb NOT NULL,
-    PRIMARY KEY (user_id, key)
+    CONSTRAINT user_meta_pkey PRIMARY KEY (user_id, key)
 );
 
 CREATE TABLE options (
-    key        text PRIMARY KEY,
+    key        text CONSTRAINT options_pkey PRIMARY KEY,
     value      jsonb NOT NULL,
     autoload   boolean NOT NULL DEFAULT false,
     updated_at timestamptz NOT NULL
 );
 
 CREATE TABLE plugins (
-    name            text PRIMARY KEY,
+    name            text CONSTRAINT plugins_pkey PRIMARY KEY,
     version         text NOT NULL,
-    artifact_hash   text NOT NULL REFERENCES artifacts (hash),
+    artifact_hash   text NOT NULL CONSTRAINT plugins_artifact_hash_fk REFERENCES artifacts (hash),
     manifest        jsonb NOT NULL,
     granted         jsonb NOT NULL,
     enabled         boolean NOT NULL DEFAULT false,
@@ -202,7 +202,7 @@ CREATE TABLE plugin_kv (
     key        text NOT NULL,
     value      bytea NOT NULL,
     updated_at timestamptz NOT NULL,
-    PRIMARY KEY (plugin, key)
+    CONSTRAINT plugin_kv_pkey PRIMARY KEY (plugin, key)
 );
 
 CREATE TABLE plugin_failures (
@@ -210,13 +210,13 @@ CREATE TABLE plugin_failures (
     hook         text NOT NULL,
     bucket_start timestamptz NOT NULL,
     count        bigint NOT NULL,
-    PRIMARY KEY (plugin, hook, bucket_start)
+    CONSTRAINT plugin_failures_pkey PRIMARY KEY (plugin, hook, bucket_start)
 );
 
 CREATE TABLE themes (
-    name          text PRIMARY KEY,
+    name          text CONSTRAINT themes_pkey PRIMARY KEY,
     version       text NOT NULL,
-    artifact_hash text NOT NULL REFERENCES artifacts (hash),
+    artifact_hash text NOT NULL CONSTRAINT themes_artifact_hash_fk REFERENCES artifacts (hash),
     manifest      jsonb NOT NULL,
     active        boolean NOT NULL DEFAULT false,
     installed_at  timestamptz NOT NULL
@@ -225,7 +225,7 @@ CREATE TABLE themes (
 CREATE UNIQUE INDEX themes_one_active_uq ON themes (active) WHERE active;
 
 CREATE TABLE events (
-    seq         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    seq         bigint GENERATED ALWAYS AS IDENTITY CONSTRAINT events_pkey PRIMARY KEY,
     kind        text NOT NULL,
     keys        jsonb NOT NULL,
     origin_node text,
@@ -235,7 +235,7 @@ CREATE INDEX events_created_idx ON events (created_at);
 
 -- site_id and created_by_version are written by the migration runner, not here.
 CREATE TABLE schema_meta (
-    key   text PRIMARY KEY,
+    key   text CONSTRAINT schema_meta_pkey PRIMARY KEY,
     value text NOT NULL
 );
 

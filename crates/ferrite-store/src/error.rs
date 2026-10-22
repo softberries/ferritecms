@@ -7,9 +7,13 @@ pub enum StoreError {
     NotFound,
     #[error("version conflict (current version {current_version})")]
     Conflict { current_version: i64 },
+    /// `constraint` is the same on every backend: `<table>_pkey` for a primary key,
+    /// `<table>_<what>_uq` for a unique index (names fixed in the 0001 migrations).
     #[error("unique constraint violated: {constraint}")]
     UniqueViolation { constraint: String },
-    #[error("foreign key violated: {constraint}")]
+    /// `constraint` is always empty: SQLite does not report which foreign key failed, so
+    /// no backend names it.
+    #[error("foreign key violated")]
     ForeignKey { constraint: String },
     #[error("invalid input: {0}")]
     Invalid(String),

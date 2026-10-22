@@ -4,7 +4,7 @@ use ferrite_domain::{
     ContentId, ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, ParentFilter,
     Revision, RevisionId, Timestamp, User,
 };
-use ferrite_store::{Backend, Store, StoreError};
+use ferrite_store::{Store, StoreError};
 use serde_json::json;
 
 use crate::{
@@ -161,9 +161,7 @@ pub async fn slug_unique_per_type_and_parent(db: &TestDb) {
         .unwrap_err();
     match err {
         StoreError::UniqueViolation { constraint } => {
-            if store.backend() == Backend::Postgres {
-                assert!(constraint.contains("content_items_slug_uq"), "{constraint}");
-            }
+            assert_eq!(constraint, "content_items_slug_uq");
         }
         other => panic!("expected UniqueViolation, got {other:?}"),
     }
