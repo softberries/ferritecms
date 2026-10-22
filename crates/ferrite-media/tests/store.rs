@@ -2,6 +2,7 @@
 
 mod common;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -18,6 +19,41 @@ fn sha_hex(data: &[u8]) -> String {
 
 fn key_for(prefix: &str, hex: &str) -> String {
     format!("{prefix}artifacts/{}/{hex}", &hex[..2])
+}
+
+/// Deterministic xorshift64 bytes.
+fn pseudo_random(len: usize, seed: u64) -> Vec<u8> {
+    let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    let mut out = Vec::with_capacity(len);
+    while out.len() < len {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        out.extend_from_slice(&x.to_le_bytes());
+    }
+    out.truncate(len);
+    out
+}
+
+fn chunked(
+    data: &[u8],
+    size: usize,
+) -> futures::stream::Iter<std::vec::IntoIter<Result<Bytes, std::io::Error>>> {
+    let items: Vec<_> = data
+        .chunks(size)
+        .map(|c| Ok(Bytes::copy_from_slice(c)))
+        .collect();
+    futures::stream::iter(items)
+}
+
+/// Number of regular files below `dir` (0 if it does not exist).
+fn count_files(dir: &std::path::Path) -> usize {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    rd.map(|e| e.unwrap().path())
+        .map(|p| if p.is_dir() { count_files(&p) } else { 1 })
+        .sum()
 }
 
 const DATA: &[u8] = b"hello ferrite media";
@@ -96,13 +132,111 @@ backend_tests! {
         store.delete(&r.hash).await.unwrap();
     }
 
-    oversized_put_artifact_is_rejected(backing) {
+    put_artifact_at_limit_delegates_to_stream(backing) {
         let store = backing.store();
-        let big = Bytes::from(vec![0u8; 8 * 1024 * 1024]);
-        let err = store.put_artifact(big).await.unwrap_err();
-        assert!(matches!(err, MediaError::Config(_)), "{err:?}");
+        let data = pseudo_random(8 * 1024 * 1024, 3);
+        let r = store.put_artifact(Bytes::from(data.clone())).await.unwrap();
+        assert_eq!(r.hash.as_str(), sha_hex(&data));
+        assert_eq!(r.bytes, data.len() as u64);
+        assert!(r.created);
+        assert_eq!(store.get(&r.hash).await.unwrap()[..], data[..]);
+        assert_eq!(count_files(&backing.object_path("tmp")), 0);
     }
 
+    stream_large_roundtrip(backing) {
+        let store = backing.store();
+        let data = pseudo_random(20 * 1024 * 1024, 1);
+        let r = store.put_stream(chunked(&data, 64 * 1024)).await.unwrap();
+        assert_eq!(r.hash.as_str(), sha_hex(&data));
+        assert_eq!(r.bytes, data.len() as u64);
+        assert_eq!(r.mime, "application/octet-stream");
+        assert!(r.created);
+        assert_eq!(store.get(&r.hash).await.unwrap()[..], data[..]);
+        assert_eq!(count_files(&backing.object_path("tmp")), 0);
+        let again = store.put_stream(chunked(&data, 100_000)).await.unwrap();
+        assert_eq!(again.hash, r.hash);
+        assert!(!again.created);
+        assert_eq!(count_files(&backing.object_path("tmp")), 0);
+    }
+
+    stream_sniffs_mime_from_first_chunk(backing) {
+        let store = backing.store();
+        let mut data = pseudo_random(9 * 1024 * 1024, 5);
+        data[..8].copy_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+        let r = store.put_stream(chunked(&data, 1000)).await.unwrap();
+        assert_eq!(r.mime, "image/png");
+    }
+
+    stream_small_uses_direct_path(backing) {
+        let store = backing.store();
+        let data = pseudo_random(100 * 1024, 2);
+        let r = store.put_stream(chunked(&data, 4096)).await.unwrap();
+        assert_eq!(r.hash.as_str(), sha_hex(&data));
+        assert!(r.created);
+        assert_eq!(store.get(&r.hash).await.unwrap()[..], data[..]);
+        // The direct path never touches tmp/ at all.
+        assert!(!backing.object_path("tmp").exists());
+        let again = store.put_stream(chunked(&data, 4096)).await.unwrap();
+        assert!(!again.created);
+    }
+
+    stream_empty(backing) {
+        let store = backing.store();
+        let r = store.put_stream(chunked(&[], 10)).await.unwrap();
+        assert_eq!(r.bytes, 0);
+        assert_eq!(r.hash.as_str(), sha_hex(b""));
+    }
+
+    interrupted_stream_leaves_nothing(backing) {
+        let store = backing.store();
+        let data = pseudo_random(10 * 1024 * 1024, 4);
+        let mut items: Vec<Result<Bytes, std::io::Error>> = data
+            .chunks(64 * 1024)
+            .map(|c| Ok(Bytes::copy_from_slice(c)))
+            .collect();
+        items.push(Err(std::io::Error::other("client went away")));
+        let err = store.put_stream(futures::stream::iter(items)).await.unwrap_err();
+        assert!(matches!(err, MediaError::Io(_)), "{err:?}");
+        assert_eq!(count_files(&backing.object_path("tmp")), 0);
+        assert_eq!(count_files(&backing.object_path("artifacts")), 0);
+        assert_eq!(store.head(&ArtifactHash::parse(&sha_hex(&data)).unwrap()).await.unwrap(), None);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_same_payload_local() {
+    concurrent_same_payload(common::local_backend("")).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_same_payload_s3() {
+    concurrent_same_payload(common::s3_backend("").await).await;
+}
+
+async fn concurrent_same_payload(backing: common::Backing) {
+    let store = Arc::new(backing.store());
+    let data = Arc::new(pseudo_random(10 * 1024 * 1024, 9));
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let store = store.clone();
+        let data = data.clone();
+        tasks.push(tokio::spawn(async move {
+            store.put_stream(chunked(&data, 64 * 1024)).await.unwrap()
+        }));
+    }
+    let mut refs = Vec::new();
+    for t in tasks {
+        refs.push(t.await.unwrap());
+    }
+    assert!(refs.iter().all(|r| r.hash.as_str() == sha_hex(&data)));
+    assert!(refs.iter().all(|r| r.bytes == data.len() as u64));
+    assert!(refs.iter().filter(|r| r.created).count() >= 1);
+    assert_eq!(count_files(&backing.object_path("artifacts")), 1);
+    assert_eq!(count_files(&backing.object_path("tmp")), 0);
+    assert_eq!(store.get(&refs[0].hash).await.unwrap()[..], data[..]);
+}
+
+backend_tests! {
     just_below_limit_is_accepted(backing) {
         let store = backing.store();
         let data = Bytes::from(vec![7u8; 8 * 1024 * 1024 - 1]);

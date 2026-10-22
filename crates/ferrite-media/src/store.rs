@@ -5,9 +5,11 @@ use std::ops::Range;
 
 use bytes::Bytes;
 use ferrite_domain::ArtifactHash;
+use futures::{Stream, StreamExt};
 use object_store::aws::AmazonS3Builder;
 use object_store::local::LocalFileSystem;
-use object_store::{ObjectStore, ObjectStoreExt, PutMode, PutOptions, RetryConfig};
+use object_store::path::Path;
+use object_store::{ObjectStore, ObjectStoreExt, PutMode, PutOptions, RetryConfig, WriteMultipart};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use sha2::{Digest, Sha256};
 
@@ -18,6 +20,10 @@ use crate::sniff::sniff_mime;
 
 /// Payloads at or above this size must go through the streaming path.
 const SMALL_LIMIT: usize = 8 * 1024 * 1024;
+/// Multipart part size.
+const PART_SIZE: usize = 8 * 1024 * 1024;
+/// Parts in flight at once (bounds memory to roughly this many parts).
+const PART_CONCURRENCY: usize = 2;
 /// How much of the payload is inspected for MIME sniffing.
 const SNIFF_LEN: usize = 8 * 1024;
 
@@ -111,22 +117,142 @@ impl MediaStore {
         result
     }
 
-    /// Stores a small payload (< 8 MiB) under its SHA-256. Existing artifacts are not rewritten.
+    /// Stores a payload under its SHA-256. Existing artifacts are not rewritten.
     ///
+    /// Payloads of 8 MiB or more are delegated to [`MediaStore::put_stream`].
+    pub async fn put_artifact(&self, data: Bytes) -> Result<ArtifactRef, MediaError> {
+        if data.len() >= SMALL_LIMIT {
+            let stream = futures::stream::once(async move { Ok::<_, std::io::Error>(data) });
+            return self.put_stream(Box::pin(stream)).await;
+        }
+        self.put_small(data).await
+    }
+
+    /// Stores a stream under its SHA-256 without holding it in memory.
+    ///
+    /// The first 8 MiB are buffered: a stream ending below that takes the direct small path.
+    /// Otherwise the payload is uploaded as a multipart upload to `<prefix>tmp/<uuid>` (8 MiB
+    /// parts), hashed on the way, then placed at the final key with `copy_if_not_exists`
+    /// (falling back to head + copy where unsupported) and the staging object is deleted.
+    /// On any error the multipart upload is aborted / the staging object deleted (best effort).
+    pub async fn put_stream<S>(&self, mut stream: S) -> Result<ArtifactRef, MediaError>
+    where
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Send + Unpin,
+    {
+        let mut hasher = Sha256::new();
+        let mut total: u64 = 0;
+        let mut buf: Vec<u8> = Vec::new();
+        let mut ended = false;
+        while buf.len() < SMALL_LIMIT {
+            match stream.next().await {
+                Some(chunk) => {
+                    let chunk = chunk.map_err(|e| MediaError::Io(e.to_string()))?;
+                    hasher.update(&chunk);
+                    buf.extend_from_slice(&chunk);
+                }
+                None => {
+                    ended = true;
+                    break;
+                }
+            }
+        }
+        total += buf.len() as u64;
+        let mime = sniff_mime(&buf[..buf.len().min(SNIFF_LEN)]);
+        if ended {
+            let hash = finish_hash(hasher)?;
+            return self.put_small_hashed(Bytes::from(buf), hash, mime).await;
+        }
+
+        let tmp = keys::tmp_key(&self.prefix);
+        let upload = self.inner.put_multipart(&tmp).await?;
+        let mut writer = WriteMultipart::new_with_chunk_size(upload, PART_SIZE);
+        let result = async {
+            writer.wait_for_capacity(PART_CONCURRENCY).await?;
+            writer.write(&buf);
+            drop(std::mem::take(&mut buf));
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| MediaError::Io(e.to_string()))?;
+                hasher.update(&chunk);
+                total += chunk.len() as u64;
+                writer.write(&chunk);
+                writer.wait_for_capacity(PART_CONCURRENCY).await?;
+            }
+            Ok::<(), MediaError>(())
+        }
+        .await;
+        if let Err(e) = result {
+            if let Err(abort_err) = writer.abort().await {
+                tracing::warn!(key = %tmp, error = %abort_err, "failed to abort multipart upload");
+            }
+            self.cleanup_tmp(&tmp).await;
+            return Err(e);
+        }
+        if let Err(e) = writer.finish().await {
+            self.cleanup_tmp(&tmp).await;
+            return Err(e.into());
+        }
+        let hash = finish_hash(hasher)?;
+        let placed = self.place_staged(&tmp, &hash).await;
+        self.cleanup_tmp(&tmp).await;
+        Ok(ArtifactRef {
+            hash,
+            bytes: total,
+            mime,
+            created: placed?,
+        })
+    }
+
+    /// Moves the staged object to its final key. Returns `true` if this call created it.
+    async fn place_staged(&self, tmp: &Path, hash: &ArtifactHash) -> Result<bool, MediaError> {
+        let key = keys::artifact_key(&self.prefix, hash);
+        match self.inner.copy_if_not_exists(tmp, &key).await {
+            Ok(()) => Ok(true),
+            Err(object_store::Error::AlreadyExists { .. }) => Ok(false),
+            Err(
+                object_store::Error::NotImplemented { .. }
+                | object_store::Error::NotSupported { .. },
+            ) => {
+                // Content-addressed: an existing object under this key has identical bytes.
+                if self.head(hash).await?.is_some() {
+                    return Ok(false);
+                }
+                match self.inner.copy(tmp, &key).await {
+                    Ok(()) => Ok(true),
+                    Err(object_store::Error::AlreadyExists { .. }) => Ok(false),
+                    Err(e) => Err(e.into()),
+                }
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn cleanup_tmp(&self, tmp: &Path) {
+        match self.inner.delete(tmp).await {
+            Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+            Err(e) => tracing::warn!(key = %tmp, error = %e, "failed to delete staging object"),
+        }
+    }
+
     /// `created` is decided by a head check followed by a conditional create
     /// (`PutMode::Create`, i.e. `If-None-Match: *` on S3, link-based on local disk), so two
     /// racing writers of the same bytes cannot both report `created == true`. Backends without
     /// conditional put fall back to a plain put after the head check; there the race window
     /// between head and put can yield `created == true` twice for identical content (harmless:
     /// the bytes are identical).
-    pub async fn put_artifact(&self, data: Bytes) -> Result<ArtifactRef, MediaError> {
-        if data.len() >= SMALL_LIMIT {
-            return Err(MediaError::Config(
-                "payload too large for put_artifact; use put_stream".into(),
-            ));
-        }
-        let hash = hash_bytes(&data)?;
+    async fn put_small(&self, data: Bytes) -> Result<ArtifactRef, MediaError> {
+        let mut hasher = Sha256::new();
+        hasher.update(&data);
+        let hash = finish_hash(hasher)?;
         let mime = sniff_mime(&data[..data.len().min(SNIFF_LEN)]);
+        self.put_small_hashed(data, hash, mime).await
+    }
+
+    async fn put_small_hashed(
+        &self,
+        data: Bytes,
+        hash: ArtifactHash,
+        mime: String,
+    ) -> Result<ArtifactRef, MediaError> {
         let bytes = data.len() as u64;
         let key = keys::artifact_key(&self.prefix, &hash);
         let created = if self.head(&hash).await?.is_some() {
@@ -219,9 +345,9 @@ impl MediaStore {
     }
 }
 
-fn hash_bytes(data: &[u8]) -> Result<ArtifactHash, MediaError> {
+fn finish_hash(hasher: Sha256) -> Result<ArtifactHash, MediaError> {
     use std::fmt::Write;
-    let digest = Sha256::digest(data);
+    let digest = hasher.finalize();
     let mut hex = String::with_capacity(64);
     for b in digest.iter() {
         // Writing to a String cannot fail.

@@ -26,6 +26,11 @@ pub(crate) fn probe_key(prefix: &str) -> Path {
     Path::from(format!("{prefix}tmp/probe-{}", Uuid::now_v7()))
 }
 
+/// Staging key for streaming uploads: `<prefix>tmp/<uuid v7>`.
+pub(crate) fn tmp_key(prefix: &str) -> Path {
+    Path::from(format!("{prefix}tmp/{}", Uuid::now_v7()))
+}
+
 /// `<prefix>artifacts/<first two hex chars>/<64-hex sha256>`
 pub(crate) fn artifact_key(prefix: &str, hash: &ArtifactHash) -> Path {
     let h = hash.as_str();
