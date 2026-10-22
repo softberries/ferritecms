@@ -13,19 +13,15 @@ use ferrite_theme::resolve_template;
 use ferrite_theme::{RenderContext, RenderOutput, RequestInfo, TemplateKey, ThemeError};
 use tokio::runtime::Handle;
 
-use super::{
-    AppState,
-    bridge::BlockingBridge,
-    error_page::{self, ErrorKind},
-    response::HTML,
-};
+use super::{AppState, bridge::BlockingBridge, error_page, response::HTML};
 use crate::{
     head::{HeadPage, HeadSite, page_head},
     plugins::{PluginRequest, RenderTrace, filter_item},
     route::{Candidate, NormalQuery, Route},
 };
 
-/// Why a page could not be rendered (answered with the 500 page).
+/// Why a page could not be rendered: [`Busy`](Self::Busy) is answered with 503, every
+/// other error with the 500 page.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RenderError {
     #[error("read failed: {0}")]
@@ -34,7 +30,14 @@ pub(crate) enum RenderError {
     Theme(#[from] ThemeError),
     #[error("render task failed: {0}")]
     Join(#[from] tokio::task::JoinError),
+    #[error("no render slot free")]
+    Busy,
 }
+
+/// The route shows nothing: the handler answers with the shared 404 page (never
+/// cached under the request path).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NotFound;
 
 /// What a route shows.
 enum Shown {
@@ -42,21 +45,23 @@ enum Shown {
     Listing(Listing, TemplateKey),
 }
 
-/// The response for a content route: the rendered page, the 404 page when the route
-/// shows nothing, the 500 page when rendering fails. Never fails, so it can run as the
-/// page cache's render future; error pages have a status >= 400 and are not cached.
+/// The response for a content route: the rendered page, a 503 when no render slot
+/// frees up in time, the 500 page when rendering fails, or [`NotFound`]. Runs as the
+/// page cache's render future under the request path; 503 and 500 have an error status
+/// and are not cached, and `NotFound` is an error result, which is never cached.
 pub(crate) async fn render(
     state: Arc<AppState>,
     route: Route,
     path: String,
     query: NormalQuery,
-) -> CachedPage {
+) -> Result<CachedPage, NotFound> {
     match render_route(&state, &route, &path, query).await {
-        Ok(Some(page)) => page,
-        Ok(None) => error_page::render(&state, &path, ErrorKind::NotFound).await,
+        Ok(Some(page)) => Ok(page),
+        Ok(None) => Err(NotFound),
+        Err(RenderError::Busy) => Ok(error_page::busy()),
         Err(e) => {
             tracing::error!(path = %path, error = %e, "page render failed");
-            error_page::render(&state, &path, ErrorKind::Server).await
+            Ok(error_page::server_error(&state).await)
         }
     }
 }
@@ -139,7 +144,9 @@ async fn render_route(
     Ok(Some(html_page(200, out.html, deps.into_vec(), ttl)))
 }
 
-/// Renders on a blocking thread (MiniJinja is synchronous and the bridge blocks).
+/// Renders on a blocking thread (MiniJinja is synchronous and the bridge blocks),
+/// holding one of [`HttpConfig::max_concurrent_renders`](super::HttpConfig) slots for
+/// the whole render; [`RenderError::Busy`] when none frees up within `render_wait`.
 pub(crate) async fn render_blocking(
     state: &AppState,
     theme: Arc<ferrite_theme::Theme>,
@@ -147,9 +154,23 @@ pub(crate) async fn render_blocking(
     ctx: RenderContext,
     bridge: Arc<dyn ferrite_theme::HelperBridge>,
 ) -> Result<RenderOutput, RenderError> {
+    // Bounded wait for a slot (R28): renders hold blocking threads.
+    let slot = tokio::time::timeout(
+        state.config.render_wait,
+        state.render_slots.clone().acquire_owned(),
+    )
+    .await;
+    let Ok(Ok(permit)) = slot else {
+        tracing::warn!("render slots saturated; answering 503");
+        return Err(RenderError::Busy);
+    };
+    state.count_render();
     let renderer = state.renderer.clone();
-    let out = tokio::task::spawn_blocking(move || renderer.render(&theme, &template, ctx, bridge))
-        .await??;
+    let out = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        renderer.render(&theme, &template, ctx, bridge)
+    })
+    .await??;
     Ok(out)
 }
 

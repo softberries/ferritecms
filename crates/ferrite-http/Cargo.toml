@@ -37,3 +37,4 @@ s3s-fs.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["net"] }
 tower = { workspace = true, features = ["util"] }
+uuid.workspace = true

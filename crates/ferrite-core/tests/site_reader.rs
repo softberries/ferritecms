@@ -1060,6 +1060,16 @@ pub async fn archives_by_term_author_date(db: &TestDb) {
     for bad in [Some(0), Some(13)] {
         assert!(r.date_archive(2026, bad, 1).await.unwrap().value.is_none());
     }
+    // R27: a date archive without public items is None, like an empty term (R7).
+    for (y, m) in [(1999, None), (2026, Some(7)), (2026, Some(1))] {
+        assert!(
+            r.date_archive(y, m, 1).await.unwrap().value.is_none(),
+            "{y} {m:?}"
+        );
+    }
+    // Past the last page of a non-empty date archive: an empty page.
+    let beyond = r.date_archive(2026, None, 9).await.unwrap().value.unwrap();
+    assert!(beyond.items.is_empty() && beyond.total == 2);
     assert!(
         r.date_archive(i32::MAX, None, 1)
             .await

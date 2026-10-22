@@ -1,6 +1,12 @@
 //! What every request handler shares.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use arc_swap::ArcSwap;
 use ferrite_cache::PageCache;
@@ -10,6 +16,7 @@ use ferrite_core::{
 use ferrite_plugin_host::PluginHost;
 use ferrite_store::{Store, StoreError};
 use ferrite_theme::{Renderer, SiteInfo, Theme};
+use tokio::sync::Semaphore;
 
 use crate::route::{RouteTable, TypeInfo};
 
@@ -17,6 +24,8 @@ use crate::route::{RouteTable, TypeInfo};
 const MEDIA_KIND: &str = "media";
 /// TTL of pages marked volatile by plugins (05 §7a) and of search results (06 §6).
 pub const SHORT_TTL: Duration = Duration::from_secs(60);
+/// How long a render waits for a free render slot before the request gets a 503.
+pub const RENDER_WAIT: Duration = Duration::from_secs(5);
 
 /// Option holding the site title; falls back to [`HttpConfig::site_title`].
 pub const TITLE_OPTION: &str = "site.title";
@@ -45,9 +54,14 @@ pub struct HttpConfig {
     pub volatile_ttl: Duration,
     /// Cache TTL of search results.
     pub search_ttl: Duration,
-    /// Host (and port) of `site_url`: the cache-key host when a request has no usable
-    /// `Host` header.
+    /// Host (and port) of `site_url`: the host of every cache key (ruling R25; the
+    /// `Host` header is not used, so clients cannot multiply cache entries).
     pub default_host: String,
+    /// Most template renders running at once (each holds a blocking thread); default
+    /// twice the available parallelism (ruling R28).
+    pub max_concurrent_renders: usize,
+    /// How long a render waits for a slot before answering 503 with `Retry-After`.
+    pub render_wait: Duration,
 }
 
 impl HttpConfig {
@@ -68,6 +82,10 @@ impl HttpConfig {
             volatile_ttl: SHORT_TTL,
             search_ttl: SHORT_TTL,
             default_host,
+            max_concurrent_renders: std::thread::available_parallelism()
+                .map_or(1, std::num::NonZeroUsize::get)
+                .saturating_mul(2),
+            render_wait: RENDER_WAIT,
         }
     }
 }
@@ -97,15 +115,25 @@ pub struct AppState {
     pub routes: ArcSwap<RouteTable>,
     pub config: HttpConfig,
     pub migrations_ok: bool,
-    pub(crate) redirects: RedirectService,
+    pub(crate) redirects: Arc<RedirectService>,
     pub(crate) renderer: Renderer,
+    /// Render slots ([`HttpConfig::max_concurrent_renders`]).
+    pub(crate) render_slots: Arc<Semaphore>,
+    renders: AtomicU64,
 }
 
 impl AppState {
     pub fn new(parts: AppParts) -> Self {
         Self {
-            redirects: RedirectService::new(parts.store.clone()),
+            redirects: Arc::new(RedirectService::new(parts.store.clone())),
             renderer: Renderer::new(),
+            render_slots: Arc::new(Semaphore::new(
+                parts
+                    .config
+                    .max_concurrent_renders
+                    .min(Semaphore::MAX_PERMITS),
+            )),
+            renders: AtomicU64::new(0),
             store: parts.store,
             reader: parts.reader,
             plugins: parts.plugins,
@@ -115,6 +143,16 @@ impl AppState {
             config: parts.config,
             migrations_ok: parts.migrations_ok,
         }
+    }
+
+    /// Template renders started since the app was built (pages and error pages): a
+    /// metric, and how tests tell a cache hit from a render.
+    pub fn renders(&self) -> u64 {
+        self.renders.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn count_render(&self) {
+        self.renders.fetch_add(1, Ordering::Relaxed);
     }
 
     /// `site` for templates: the `site.*` options (config defaults when unset or not

@@ -105,6 +105,16 @@ impl App {
 
     /// A fresh state over `site` (empty cache).
     pub async fn state(site: &Site, theme: Arc<Theme>, migrations_ok: bool) -> Arc<AppState> {
+        let config = HttpConfig::new(SITE_URL, SITE_TITLE, "en");
+        Self::state_with(site, theme, migrations_ok, config).await
+    }
+
+    pub async fn state_with(
+        site: &Site,
+        theme: Arc<Theme>,
+        migrations_ok: bool,
+        config: HttpConfig,
+    ) -> Arc<AppState> {
         let routes = load_route_table(site.store.as_ref(), &PermalinkRules::default())
             .await
             .expect("route table");
@@ -115,7 +125,7 @@ impl App {
             theme,
             cache: Arc::new(PageCache::new(64 * 1024 * 1024)),
             routes,
-            config: HttpConfig::new(SITE_URL, SITE_TITLE, "en"),
+            config,
             migrations_ok,
         }))
     }

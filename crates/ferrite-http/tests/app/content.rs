@@ -71,7 +71,12 @@ async fn serves_every_content_route(app: App) -> App {
         );
         assert!(r.body.contains("Hello World"), "{path}");
     }
-    assert_eq!(app.get("/1999/").await.status, StatusCode::OK, "empty year");
+    // R27: a date archive without public posts is 404, like an empty term.
+    assert_eq!(
+        app.get("/1999/").await.status,
+        StatusCode::NOT_FOUND,
+        "empty year"
+    );
 
     let r = app.get("/?s=Hello").await;
     assert_eq!((r.status, r.tpl()), (StatusCode::OK, "search"), "{r:?}");

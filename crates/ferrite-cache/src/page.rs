@@ -4,6 +4,9 @@ use std::time::Duration;
 
 use bytes::Bytes;
 
+/// First character of an internal key's path.
+const INTERNAL: char = '\0';
+
 /// Who a cached page was rendered for. M1c-2 caches anonymous responses only;
 /// logged-in requests bypass the cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -36,6 +39,18 @@ impl CacheKey {
         }
     }
 
+    /// The key of a shared internal page (the 404 body, the 410 body): empty host,
+    /// path `\0<name>`. Request paths never contain a NUL byte (the router rejects
+    /// control characters), so it cannot collide with a URL.
+    pub fn internal(name: &str) -> Self {
+        Self::anon("", format!("{INTERNAL}{name}"), "")
+    }
+
+    /// Whether this is an [internal](Self::internal) key.
+    pub fn is_internal(&self) -> bool {
+        self.host.is_empty() && self.path.starts_with(INTERNAL)
+    }
+
     fn weight(&self) -> usize {
         self.host.len() + self.path.len() + self.query.len()
     }
@@ -59,12 +74,21 @@ impl CachedPage {
     /// Whether the cache may store this page: not an error status (>= 400), no
     /// `Set-Cookie` header, and not a zero TTL.
     pub fn is_cacheable(&self) -> bool {
-        self.status < 400
+        self.status < 400 && self.ttl != Some(Duration::ZERO) && !self.has_set_cookie()
+    }
+
+    /// Whether a shared error page may be stored under an internal key: status 404 or
+    /// 410, and otherwise the rules of [`is_cacheable`](Self::is_cacheable).
+    pub(crate) fn is_cacheable_error_page(&self) -> bool {
+        matches!(self.status, 404 | 410)
             && self.ttl != Some(Duration::ZERO)
-            && !self
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case("set-cookie"))
+            && !self.has_set_cookie()
+    }
+
+    fn has_set_cookie(&self) -> bool {
+        self.headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("set-cookie"))
     }
 
     /// An uncacheable `503` with an empty body (a defensive fallback only).

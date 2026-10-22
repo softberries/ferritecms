@@ -6,7 +6,9 @@
 //!   was rendered (grammar and emitter/renderer contract: `ferrite_core::events`);
 //!   [`PageCache::invalidate`] drops every page indexed under any of the given keys,
 //!   and `all` drops everything. Not cached: status >= 400, `Set-Cookie`. Pages enter
-//!   the cache only through [`PageCache::get_or_render`] (the guarded path).
+//!   the cache only through [`PageCache::get_or_render`] (the guarded path). The one
+//!   exception to the status rule: [`PageCache::get_or_render_error`] stores a 404/410
+//!   page under an [internal key](CacheKey::internal) (the shared error-page body).
 //! * [`InvalidationLoop`]: polls the `events` outbox and applies each event to the
 //!   cache, following the sequence-gap rule of 04 §4 (skipping a gap flushes and
 //!   watches the skipped seqs for late commits). The boot cursor is `max_seq()`, or the

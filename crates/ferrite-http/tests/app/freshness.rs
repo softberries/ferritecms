@@ -12,16 +12,25 @@ use crate::app_tests;
 use crate::common::HOUR;
 use crate::harness::{App, draft};
 
-async fn menu(app: &App, targets: &[ferrite_domain::ContentId]) {
+pub async fn menu(app: &App, targets: &[ferrite_domain::ContentId]) {
+    let targets: Vec<_> = targets
+        .iter()
+        .map(|id| (MenuItemKind::Item, id.as_uuid()))
+        .collect();
+    menu_of(app, &targets).await;
+}
+
+/// The `primary` menu with one entry per `(kind, target)`, labels from the targets.
+pub async fn menu_of(app: &App, targets: &[(MenuItemKind, uuid::Uuid)]) {
     let items = targets
         .iter()
         .enumerate()
-        .map(|(i, id)| MenuItem {
+        .map(|(i, (kind, id))| MenuItem {
             id: MenuItemId::new(),
             parent_id: None,
             position: i32::try_from(i).unwrap(),
-            kind: MenuItemKind::Item,
-            target_id: Some(id.as_uuid()),
+            kind: *kind,
+            target_id: Some(*id),
             url: None,
             label: String::new(),
         })
@@ -315,7 +324,109 @@ async fn menu_changes_reach_cached_pages(app: App) -> App {
     app
 }
 
+/// A term in the menu shows only while its archive would (R7: ≥ 1 public post); the
+/// first public post brings the link back after one poll.
+async fn menu_terms_follow_the_public_check(app: App) -> App {
+    let empty = app.category("empty").await;
+    let full = app.category("full").await;
+    app.post("In Full", "in-full", &[full]).await;
+    let draft_in_empty = app
+        .draft_post("Draft In Empty", "draft-in-empty", &[empty])
+        .await;
+    app.page("About", "about", None).await;
+    menu_of(
+        &app,
+        &[
+            (MenuItemKind::Term, empty.as_uuid()),
+            (MenuItemKind::Term, full.as_uuid()),
+        ],
+    )
+    .await;
+    let mut poller = app.poller().await;
+    let r = app.get("/about/").await;
+    assert!(r.body.contains(">full<"), "{}", r.body);
+    assert!(!r.body.contains(">empty<"), "{}", r.body);
+
+    app.svc
+        .publish(&app.ada, draft_in_empty.id, draft_in_empty.version)
+        .await
+        .unwrap();
+    poller.poll_once().await.unwrap();
+    let r = app.get("/about/").await;
+    assert!(r.body.contains(">empty<"), "{}", r.body);
+    app
+}
+
+/// `site.title` is an option read per render: changing it refreshes cached pages
+/// after one poll (`options.changed`).
+async fn site_title_change_refreshes_pages(app: App) -> App {
+    app.post("Hello World", "hello-world", &[]).await;
+    let mut poller = app.poller().await;
+    let r = app.get("/hello-world/").await;
+    assert!(r.body.contains("<title>Hello World – Test Site</title>"));
+    ferrite_core::OptionService::load(app.site.store.clone())
+        .await
+        .unwrap()
+        .set(
+            &app.admin,
+            ferrite_http::app::TITLE_OPTION,
+            &serde_json::json!("Renamed Site"),
+            true,
+        )
+        .await
+        .unwrap();
+    assert!(
+        app.get("/hello-world/").await.body.contains("– Test Site"),
+        "cached until the poll"
+    );
+    poller.poll_once().await.unwrap();
+    let r = app.get("/hello-world/").await;
+    assert!(
+        r.body.contains("<title>Hello World – Renamed Site</title>"),
+        "{}",
+        r.body
+    );
+    app
+}
+
+/// Search pages and pages with volatile plugin calls are cached with the short TTL;
+/// a plain page has none.
+async fn short_ttls_for_search_and_volatile_pages(app: App) -> App {
+    use ferrite_cache::CacheKey;
+    use ferrite_http::app::SHORT_TTL;
+    let key = |path: &str, q: &str| CacheKey::anon("example.com", path, q);
+    app.post("Hello World", "hello-world", &[]).await;
+    app.get("/hello-world/").await;
+    app.get("/?s=Hello").await;
+    let plain = app
+        .state
+        .cache
+        .get(&key("/hello-world/", ""))
+        .await
+        .unwrap();
+    assert_eq!(plain.ttl, None);
+    let search = app.state.cache.get(&key("/", "s=Hello")).await.unwrap();
+    assert_eq!(search.ttl, Some(SHORT_TTL));
+
+    // kv use in `render.head` is volatile (05 §7a).
+    app.site.install("kv-budget").await;
+    assert_eq!(app.site.load().await.loaded, ["kv-budget"]);
+    app.state.cache.flush();
+    app.get("/hello-world/").await;
+    let volatile = app
+        .state
+        .cache
+        .get(&key("/hello-world/", ""))
+        .await
+        .unwrap();
+    assert_eq!(volatile.ttl, Some(SHORT_TTL));
+    app
+}
+
 app_tests!(
+    menu_terms_follow_the_public_check,
+    site_title_change_refreshes_pages,
+    short_ttls_for_search_and_volatile_pages,
     menu_changes_reach_cached_pages,
     unpublished_items_never_render,
     edits_and_trash_reach_every_page,

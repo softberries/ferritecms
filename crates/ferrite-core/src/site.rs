@@ -274,7 +274,8 @@ impl SiteReader {
     }
 
     /// Posts published in `year` (and `month`, 1..=12), in UTC like permalinks (R4);
-    /// `None` for an invalid or unrepresentable date, or past [`MAX_SKIP`].
+    /// `None` for an invalid or unrepresentable date, a range without public posts
+    /// (R27), or past [`MAX_SKIP`].
     pub async fn date_archive(
         &self,
         year: i32,
@@ -295,7 +296,8 @@ impl SiteReader {
             ..ContentQuery::default()
         };
         let listing = self.listing(repos, now, q, page, &mut deps).await?;
-        Ok(public(listing, deps))
+        // R27: no public items in the range is the same as no archive (like R7).
+        Ok(public(listing.filter(|l| l.total > 0), deps))
     }
 
     /// Full-text search over every type but media, best match first; `None` past

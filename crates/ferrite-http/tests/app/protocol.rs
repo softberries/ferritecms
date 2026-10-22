@@ -50,11 +50,14 @@ async fn head_is_get_without_body(app: App) -> App {
 async fn etag_and_304(app: App) -> App {
     app.post("Hello World", "hello-world", &[]).await;
     let first = app.get("/hello-world/").await;
+    // Weak on every HTML page; Vary on the 200 and the 304.
     let etag = first.header("etag").expect("etag").to_owned();
-    assert!(etag.starts_with('"') && etag.ends_with('"'), "{etag}");
+    assert!(etag.starts_with("W/\"") && etag.ends_with('"'), "{etag}");
+    assert_eq!(first.header("vary"), Some("accept-encoding"));
+    let strong = etag.trim_start_matches("W/").to_owned();
     for value in [
         etag.clone(),
-        format!("W/{etag}"),
+        strong.clone(),
         format!("\"x\", {etag}"),
         "*".into(),
     ] {
@@ -68,7 +71,8 @@ async fn etag_and_304(app: App) -> App {
             .await;
         assert_eq!(r.status, StatusCode::NOT_MODIFIED, "{value}");
         assert!(r.body.is_empty());
-        assert_eq!(r.header("etag"), Some(etag.as_str()));
+        assert_eq!(r.header("etag"), Some(etag.as_str()), "{value}");
+        assert_eq!(r.header("vary"), Some("accept-encoding"), "{value}");
     }
     let r = app
         .send(with_header(
@@ -150,15 +154,23 @@ async fn compresses_html(app: App) -> App {
         assert_eq!(r.status, StatusCode::OK);
         assert_eq!(r.header("content-encoding"), Some(enc), "{enc}");
         assert_ne!(r.body, plain.body, "{enc}: compressed body");
-        let weak = format!("W/{}", plain.header("etag").unwrap());
-        assert_eq!(r.header("etag"), Some(weak.as_str()), "{enc}");
-        // Revalidating the compressed variant with its weak tag: 304.
+        // Same weak tag as the identity body; one `Vary` value (not duplicated by
+        // the compression layer).
+        let etag = plain.header("etag").unwrap();
+        assert!(etag.starts_with("W/"), "{etag}");
+        assert_eq!(r.header("etag"), Some(etag), "{enc}");
+        let vary: Vec<_> = r.headers.get_all("vary").iter().collect();
+        assert_eq!(vary, ["accept-encoding"], "{enc}");
+        // Revalidating the compressed variant: 304 with ETag and Vary.
         let mut req = with_header(Method::GET, "/hello-world/", header::ACCEPT_ENCODING, enc);
         req.headers_mut()
-            .insert(header::IF_NONE_MATCH, weak.parse().unwrap());
+            .insert(header::IF_NONE_MATCH, etag.parse().unwrap());
+        let not_modified = app.send(req).await;
+        assert_eq!(not_modified.status, StatusCode::NOT_MODIFIED, "{enc}");
+        assert_eq!(not_modified.header("etag"), Some(etag), "{enc}");
         assert_eq!(
-            app.send(req).await.status,
-            StatusCode::NOT_MODIFIED,
+            not_modified.header("vary"),
+            Some("accept-encoding"),
             "{enc}"
         );
         r.assert_security_headers();
@@ -207,7 +219,44 @@ async fn real_server(app: App) -> App {
     app
 }
 
+/// With no render slot free, a render waits `render_wait` and answers 503 with
+/// `Retry-After` (R28), never cached; health checks need no slot.
+async fn saturated_renders_are_503(app: App) -> App {
+    app.post("Hello World", "hello-world", &[]).await;
+    let mut config = ferrite_http::HttpConfig::new(crate::common::SITE_URL, "Test Site", "en");
+    config.max_concurrent_renders = 0;
+    config.render_wait = std::time::Duration::from_millis(50);
+    let state = App::state_with(&app.site, load_theme(fixture("app-theme")), true, config).await;
+    let router = ferrite_http::build_app(state.clone());
+    for path in ["/hello-world/", "/missing/"] {
+        let r = send(&router, request(Method::GET, path)).await;
+        assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        assert_eq!(r.header("retry-after"), Some("5"), "{path}");
+        r.assert_html();
+    }
+    assert_eq!(state.cache.len().await, 0, "503s are never cached");
+    assert_eq!(state.renders(), 0);
+    let r = send(&router, request(Method::GET, "/healthz")).await;
+    assert_eq!(r.status, StatusCode::OK);
+    app
+}
+
+/// The cache key's host is the site's host (R25): `Host` values share one entry.
+async fn host_header_does_not_split_the_cache(app: App) -> App {
+    app.post("Hello World", "hello-world", &[]).await;
+    for host in ["example.com", "EVIL.example", "a.b.c", "localhost:1"] {
+        let mut req = request(Method::GET, "/hello-world/");
+        req.headers_mut()
+            .insert(header::HOST, host.parse().unwrap());
+        assert_eq!(app.send(req).await.status, StatusCode::OK, "{host}");
+    }
+    assert_eq!(app.cached().await, 1);
+    app
+}
+
 app_tests!(
+    saturated_renders_are_503,
+    host_header_does_not_split_the_cache,
     head_is_get_without_body,
     etag_and_304,
     other_methods_are_405,

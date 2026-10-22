@@ -97,12 +97,20 @@ impl BlockingBridge {
                 };
                 let id = TermId::from_uuid(id);
                 deps.insert(term_key(id));
-                self.store
-                    .read()
-                    .terms()
-                    .get(id)
-                    .await?
-                    .map(|t| (label(&t.name), term_path(&t.taxonomy, &t.slug)))
+                let Some(term) = self.store.read().terms().get(id).await? else {
+                    return Ok(None);
+                };
+                // Shown only if its archive would be (R7: at least one public post);
+                // the archive read records `term:<id>` and `archive:post`, so the
+                // first public post in it brings the link back.
+                let archive = self
+                    .reader
+                    .term_archive(&term.taxonomy, &term.slug, 1)
+                    .await?;
+                deps.extend(archive.deps);
+                archive
+                    .value
+                    .map(|_| (label(&term.name), term_path(&term.taxonomy, &term.slug)))
             }
         })
     }

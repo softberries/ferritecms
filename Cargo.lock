@@ -1405,6 +1405,7 @@ dependencies = [
  "tower",
  "tower-http 0.7.1",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -4505,8 +4506,10 @@ dependencies = [
  "bitflags 2.13.2",
  "bytes",
  "futures-core",
+ "futures-util",
  "http",
  "http-body",
+ "http-body-util",
  "percent-encoding",
  "pin-project-lite",
  "tokio",

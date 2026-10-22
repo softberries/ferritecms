@@ -143,6 +143,38 @@ impl PageCache {
         F: Future<Output = Result<CachedPage, E>> + Send,
         E: Send + Sync + 'static,
     {
+        self.render_guarded(key, render, false).await
+    }
+
+    /// [`get_or_render`](Self::get_or_render) for a shared error page: the single
+    /// exception to the `>= 400` refusal. A `404` or `410` page is cached when `key` is
+    /// [internal](CacheKey::internal) (one body shared by every missing URL, so random
+    /// 404s render once); every other rule (no `Set-Cookie`, no zero TTL, the staleness
+    /// guard, dependency invalidation) still applies. Under a request-path key this
+    /// behaves exactly like `get_or_render`.
+    pub async fn get_or_render_error<F, E>(
+        &self,
+        key: CacheKey,
+        render: F,
+    ) -> Result<Arc<CachedPage>, Arc<E>>
+    where
+        F: Future<Output = Result<CachedPage, E>> + Send,
+        E: Send + Sync + 'static,
+    {
+        let error_page = key.is_internal();
+        self.render_guarded(key, render, error_page).await
+    }
+
+    async fn render_guarded<F, E>(
+        &self,
+        key: CacheKey,
+        render: F,
+        error_page: bool,
+    ) -> Result<Arc<CachedPage>, Arc<E>>
+    where
+        F: Future<Output = Result<CachedPage, E>> + Send,
+        E: Send + Sync + 'static,
+    {
         if let Some(page) = self.get(&key).await {
             return Ok(page);
         }
@@ -151,7 +183,7 @@ impl PageCache {
         let mut render = Some(render);
         let mut stale = None;
         for _ in 0..2 {
-            match self.flight(&key, &mut render).await? {
+            match self.flight(&key, &mut render, error_page).await? {
                 Flown::Page(page) => return Ok(page),
                 Flown::Invalid(page) => stale = Some(page),
                 Flown::Lost => break,
@@ -169,7 +201,14 @@ impl PageCache {
     }
 
     /// One single-flight attempt; `render` is taken if this caller's flight runs.
-    async fn flight<F, E>(&self, key: &CacheKey, render: &mut Option<F>) -> Result<Flown, Arc<E>>
+    /// `error_page`: a 404/410 may be stored (internal keys only, see
+    /// [`get_or_render_error`](Self::get_or_render_error)).
+    async fn flight<F, E>(
+        &self,
+        key: &CacheKey,
+        render: &mut Option<F>,
+        error_page: bool,
+    ) -> Result<Flown, Arc<E>>
     where
         F: Future<Output = Result<CachedPage, E>> + Send,
         E: Send + Sync + 'static,
@@ -181,7 +220,12 @@ impl PageCache {
             };
             let guard = state.begin_render();
             let page = Arc::new(render.await.map_err(|e| Flight::Failed(Arc::new(e)))?);
-            if !page.is_cacheable() {
+            let storable = if error_page && key.is_internal() {
+                page.is_cacheable_error_page()
+            } else {
+                page.is_cacheable()
+            };
+            if !storable {
                 return Err(Flight::Uncached(page));
             }
             match state.register(key, page.clone(), &guard) {
@@ -316,6 +360,72 @@ mod tests {
             .unwrap();
         assert_eq!(got.status, 500);
         assert!(c.get(&key("/e/")).await.is_none());
+        assert!(c.is_empty().await);
+        assert_index_consistent(&c).await;
+    }
+
+    /// The one exception to the >= 400 refusal: a 404/410 under an internal key,
+    /// through `get_or_render_error`. Path keys, other statuses and plain
+    /// `get_or_render` still refuse.
+    #[tokio::test]
+    async fn internal_error_pages_only_through_get_or_render_error() {
+        let c = PageCache::new(1 << 20);
+        let status = |s: u16| {
+            let mut p = page("err", &["menu:primary"]);
+            p.status = s;
+            p
+        };
+        assert!(CacheKey::internal("404").is_internal());
+        assert!(!key("/404/").is_internal());
+        assert_ne!(CacheKey::internal("404"), CacheKey::internal("410"));
+
+        for s in [404, 410] {
+            let k = CacheKey::internal(&s.to_string());
+            let got = c
+                .get_or_render_error(k.clone(), async { Ok::<_, ()>(status(s)) })
+                .await
+                .unwrap();
+            assert_eq!(got.status, s);
+            assert!(c.get(&k).await.is_some(), "{s} cached");
+        }
+        // Invalidated like any page.
+        c.invalidate(&["menu:primary".to_owned()]).await;
+        assert!(c.is_empty().await);
+
+        // Not cached: a path key, a 500, plain get_or_render, a set-cookie, zero TTL.
+        let cases: Vec<(CacheKey, CachedPage, bool)> = vec![
+            (key("/missing/"), status(404), true),
+            (CacheKey::internal("500"), status(500), true),
+            (CacheKey::internal("404"), status(404), false),
+            (
+                CacheKey::internal("404"),
+                {
+                    let mut p = status(404);
+                    p.headers.push(("set-cookie".into(), "a=b".into()));
+                    p
+                },
+                true,
+            ),
+            (
+                CacheKey::internal("404"),
+                {
+                    let mut p = status(404);
+                    p.ttl = Some(Duration::ZERO);
+                    p
+                },
+                true,
+            ),
+        ];
+        for (k, p, error_api) in cases {
+            let fut = async { Ok::<_, ()>(p) };
+            let got = if error_api {
+                c.get_or_render_error(k.clone(), fut).await
+            } else {
+                c.get_or_render(k.clone(), fut).await
+            };
+            assert!(got.is_ok());
+            assert!(c.get(&k).await.is_none(), "{k:?}");
+        }
         assert!(c.is_empty().await);
         assert_index_consistent(&c).await;
     }
@@ -538,13 +648,13 @@ mod tests {
         let mut render = Some(async { Ok::<_, ()>(page("fresh", &["post:1"])) });
         // Another caller's (invalid) entry: not served, removed, our render kept.
         assert!(matches!(
-            c.flight(&key("/a/"), &mut render).await,
+            c.flight(&key("/a/"), &mut render, false).await,
             Ok(Flown::Invalid(_))
         ));
         assert!(render.is_some());
         assert!(!c.moka().contains_key(&key("/a/")));
         // The retry renders and caches.
-        match c.flight(&key("/a/"), &mut render).await {
+        match c.flight(&key("/a/"), &mut render, false).await {
             Ok(Flown::Page(p)) => assert_eq!(&p.body[..], b"fresh"),
             _ => panic!("expected a page"),
         }

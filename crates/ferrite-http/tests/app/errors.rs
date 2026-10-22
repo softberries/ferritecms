@@ -52,12 +52,12 @@ async fn canonical_and_redirects(app: App) -> App {
     let r = app.get("/removed/").await;
     assert_eq!(r.status, StatusCode::GONE);
     r.assert_html();
-    // MiniJinja escapes `/` in HTML.
-    assert!(
-        r.body.contains("Nothing at &#x2f;removed&#x2f; (410)"),
-        "{}",
-        r.body
-    );
+    assert!(r.body.contains("Nothing here (410)"), "{}", r.body);
+    assert!(r.body.contains("<title>Page gone – Test Site</title>"));
+    // The shared 410 body, cached under its own internal key.
+    let before = app.state.renders();
+    assert_eq!(app.get("/removed").await.status, StatusCode::GONE);
+    assert_eq!(app.state.renders(), before, "410 body rendered once");
 
     // Redirects are checked before the cache: a cached page is redirected at once.
     assert_eq!(app.get("/second/").await.status, StatusCode::OK);
@@ -77,19 +77,59 @@ async fn not_found_page(app: App) -> App {
     assert_eq!(r.status, StatusCode::NOT_FOUND);
     r.assert_html();
     assert_eq!(r.tpl(), "404");
+    assert!(r.body.contains("Nothing here (404)"), "{}", r.body);
+    // The template gets no request path; the head has no canonical URL.
+    assert!(r.body.contains("<p class=\"path\">[]</p>"), "{}", r.body);
+    assert!(!r.body.contains("no-such-thing"), "{}", r.body);
+    assert!(!r.body.contains("rel=\"canonical\""));
     assert!(
         r.body
-            .contains("Nothing at &#x2f;no-such-thing&#x2f; (404)"),
-        "{}",
-        r.body
+            .contains("<meta name=\"robots\" content=\"noindex\">")
     );
     assert!(r.body.contains("<title>Page not found – Test Site</title>"));
     assert!(r.header("etag").is_none(), "error pages carry no ETag");
-    // Path tricks are 404 too, never a 500.
+    assert_eq!(r.header("vary"), Some("accept-encoding"));
+    // Path tricks are 404 too, never a 500, and share the same body.
     for path in ["/%2e%2e/", "//x", "/a/../b/", "/%FF/"] {
-        assert_eq!(app.get(path).await.status, StatusCode::NOT_FOUND, "{path}");
+        let t = app.get(path).await;
+        assert_eq!(t.status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(t.body, r.body, "{path}");
     }
-    assert_eq!(app.cached().await, 0, "404s are never cached");
+    assert_eq!(
+        app.cached().await,
+        1,
+        "one shared 404 entry, no per-path entry"
+    );
+    // Content published at a missing path shows at once (no poll): nothing was
+    // cached under its path.
+    app.post("No Such Thing", "no-such-thing", &[]).await;
+    assert_eq!(app.get("/no-such-thing/").await.status, StatusCode::OK);
+    app
+}
+
+/// 100 random missing URLs render the 404 body once (R26).
+async fn random_404s_render_once(app: App) -> App {
+    let before = app.state.renders();
+    for i in 0..100u32 {
+        let path = format!("/missing-{}-{i}/", ferrite_domain::ContentId::new());
+        let r = app.get(&path).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{path}");
+    }
+    assert_eq!(app.state.renders() - before, 1, "rendered once");
+    assert_eq!(app.cached().await, 1);
+    app
+}
+
+/// The shared 404 body records its deps: a menu change refreshes it after a poll.
+async fn shared_404_follows_its_deps(app: App) -> App {
+    let one = app.post("Menu Target", "menu-target", &[]).await;
+    let mut poller = app.poller().await;
+    assert!(!app.get("/nope/").await.body.contains("Menu Target"));
+    crate::freshness::menu(&app, &[one.id]).await;
+    poller.poll_once().await.unwrap();
+    let r = app.get("/nope/").await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert!(r.body.contains(">Menu Target<"), "{}", r.body);
     app
 }
 
@@ -170,13 +210,16 @@ async fn builtin_error_pages(app: App) -> App {
     .await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
     assert!(r.body.contains("<h1>Page not found</h1>"), "{}", r.body);
-    assert_eq!(state.cache.len().await, 0);
+    // The built-in 404 is the shared body too (short TTL); no 500 is cached.
+    assert_eq!(state.cache.len().await, 1);
     app
 }
 
 app_tests!(
     canonical_and_redirects,
     not_found_page,
+    random_404s_render_once,
+    shared_404_follows_its_deps,
     task_8b_routes_are_404,
     broken_template_is_500_and_server_keeps_serving,
     builtin_error_pages,

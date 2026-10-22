@@ -44,7 +44,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-util = "0.7"
 tower = "0.5.3"
-tower-http = { version = "0.7.1", features = ["compression-br", "compression-gzip", "set-header", "trace"] }
+tower-http = { version = "0.7.1", features = ["catch-panic", "compression-br", "compression-gzip", "set-header", "trace"] }
 toml = "1.1"
 tracing = "0.1"
 unicode-normalization = "0.1.25"
