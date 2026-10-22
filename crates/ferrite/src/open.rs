@@ -6,10 +6,25 @@ use ferrite_store::{Backend, Compat, MigrationStatus, Phase, Store};
 use ferrite_store_postgres::{PgOptions, PgStore};
 use ferrite_store_sqlite::{SqliteOptions, SqliteStore};
 
+/// Whether opening may create a missing database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenMode {
+    CreateIfMissing,
+    /// Fail instead of creating anything (SQLite: the database file must exist).
+    MustExist,
+}
+
 /// Opens the configured database (SQLite takes the data-folder lock). Does not migrate.
-pub async fn open_store(config: &Config) -> anyhow::Result<Arc<dyn Store>> {
+/// With `MustExist` and SQLite, nothing (dir, lock, db) is created when the file is missing.
+pub async fn open_store(config: &Config, mode: OpenMode) -> anyhow::Result<Arc<dyn Store>> {
     match config.database_kind() {
         DbKind::Sqlite { path } => {
+            if mode == OpenMode::MustExist && !path.is_file() {
+                bail!(
+                    "database not found at {}; run `ferrite init` first",
+                    path.display()
+                );
+            }
             let mut opts = SqliteOptions::new(path);
             opts.lock_dir = Some(config.data_dir.clone());
             opts.backups_dir = Some(config.data_dir.join("backups"));
@@ -95,7 +110,7 @@ pub async fn startup_check(
     match decide(&status, store.backend(), db, binary)? {
         Decision::Proceed => {}
         Decision::ProceedNewerSchema { db, bin } => {
-            tracing::warn!(db, bin, "running against newer schema (db={db}, bin={bin})");
+            tracing::warn!(db, bin, "running against newer schema");
         }
         Decision::MigrateUp => {
             let applied = store.migrate_up(None).await?;

@@ -1,12 +1,22 @@
+use std::process::ExitCode;
+
 use clap::Parser;
 use ferrite::Cli;
 use tracing_subscriber::EnvFilter;
 
-fn main() -> anyhow::Result<()> {
-    // sqlx uses rustls with ring; install it as the process default. An already installed
-    // provider is fine.
+fn main() -> anyhow::Result<ExitCode> {
+    // Default provider for other rustls consumers (sqlx brings its own). An already
+    // installed provider is fine.
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let filter = EnvFilter::try_from_env("FERRITE_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = match EnvFilter::try_from_env("FERRITE_LOG") {
+        Ok(f) => f,
+        Err(e) => {
+            if std::env::var_os("FERRITE_LOG").is_some() {
+                eprintln!("warning: invalid FERRITE_LOG ({e}); using \"info\"");
+            }
+            EnvFilter::new("info")
+        }
+    };
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)

@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 
@@ -30,6 +31,10 @@ pub struct DataArg {
 #[derive(Debug, Subcommand)]
 pub enum MigrateCommand {
     /// Show database and binary versions, pending migrations and the verdict.
+    ///
+    /// Exit code: 0 when up to date or the schema is newer but compatible, 2 when
+    /// migrations are pending, 3 when the schema is incompatible with this binary,
+    /// 1 on any error.
     Status(DataArg),
     /// Apply pending migrations.
     Up {
@@ -57,9 +62,9 @@ pub enum MigrateCommand {
     Verify(DataArg),
 }
 
-pub async fn run(cli: Cli) -> anyhow::Result<()> {
+pub async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
-        Command::Init(args) => init::run(args).await,
+        Command::Init(args) => init::run(args).await.map(|()| ExitCode::SUCCESS),
         Command::Migrate(cmd) => migrate::run(cmd).await,
     }
 }

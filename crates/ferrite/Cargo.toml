@@ -17,13 +17,13 @@ ferrite-store-postgres = { path = "../ferrite-store-postgres" }
 ferrite-store-sqlite = { path = "../ferrite-store-sqlite" }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 semver.workspace = true
+sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
 assert_cmd = "2.2.2"
-sqlx.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
 uuid.workspace = true

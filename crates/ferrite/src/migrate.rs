@@ -1,24 +1,31 @@
 use std::io::{IsTerminal, Write};
+use std::process::ExitCode;
 
 use anyhow::bail;
 use ferrite_store::{Compat, MigrationStatus, Phase};
 
 use crate::cli::{DataArg, MigrateCommand};
-use crate::open::open_store;
+use crate::open::{OpenMode, open_store};
 use crate::{binary_version, load_config};
 
-pub async fn run(cmd: MigrateCommand) -> anyhow::Result<()> {
+pub async fn run(cmd: MigrateCommand) -> anyhow::Result<ExitCode> {
     match cmd {
         MigrateCommand::Status(DataArg { data }) => {
-            let store = open_store(&load_config(&data)?).await?;
-            let status = store.migration_status(&binary_version()?).await?;
-            print!("{}", render_status(&status, &binary_version()?));
+            let store = open_store(&load_config(&data)?, OpenMode::MustExist).await?;
+            let binary = binary_version()?;
+            let status = store.migration_status(&binary).await?;
+            print!("{}", render_status(&status, &binary));
+            return Ok(match status.verdict {
+                Compat::UpToDate | Compat::NewerSchemaOk => ExitCode::SUCCESS,
+                Compat::NeedsUp => ExitCode::from(2),
+                Compat::Incompatible { .. } => ExitCode::from(3),
+            });
         }
         MigrateCommand::Up {
             data: DataArg { data },
             to,
         } => {
-            let store = open_store(&load_config(&data)?).await?;
+            let store = open_store(&load_config(&data)?, OpenMode::CreateIfMissing).await?;
             let applied = store.migrate_up(to).await?;
             if applied.is_empty() {
                 println!("Nothing to apply.");
@@ -35,7 +42,7 @@ pub async fn run(cmd: MigrateCommand) -> anyhow::Result<()> {
             if !yes && !confirm(to)? {
                 bail!("aborted");
             }
-            let store = open_store(&load_config(&data)?).await?;
+            let store = open_store(&load_config(&data)?, OpenMode::MustExist).await?;
             let reverted = store.migrate_down(to, allow_lossy).await?;
             if reverted.is_empty() {
                 println!("Nothing to revert.");
@@ -44,12 +51,12 @@ pub async fn run(cmd: MigrateCommand) -> anyhow::Result<()> {
             }
         }
         MigrateCommand::Verify(DataArg { data }) => {
-            let store = open_store(&load_config(&data)?).await?;
+            let store = open_store(&load_config(&data)?, OpenMode::MustExist).await?;
             store.verify_migrations().await?;
             println!("Migration checksums OK.");
         }
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 fn join(versions: &[i64]) -> String {

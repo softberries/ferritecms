@@ -4,7 +4,7 @@ use std::path::Path;
 
 use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin_cmd;
-use sqlx::{AssertSqlSafe, Connection, PgConnection};
+use sqlx::{AssertSqlSafe, Connection, PgConnection, SqliteConnection};
 
 const PG_URL_ENV: &str = "FERRITE_TEST_PG_URL";
 
@@ -28,6 +28,12 @@ fn init_sqlite(dir: &Path) {
 
 fn stdout(mut cmd: Command) -> String {
     let out = cmd.assert().success().get_output().stdout.clone();
+    String::from_utf8(out).expect("utf-8 stdout")
+}
+
+/// Runs `cmd`, asserts its exit code and returns stdout.
+fn stdout_code(mut cmd: Command, code: i32) -> String {
+    let out = cmd.assert().code(code).get_output().stdout.clone();
     String::from_utf8(out).expect("utf-8 stdout")
 }
 
@@ -165,11 +171,14 @@ fn migrate_status_output() {
     c.args(["migrate", "down", "--to", "1", "--yes", "--data"])
         .arg(tmp.path());
     assert!(stdout(c).contains("Reverted migrations: 2"));
-    let out = stdout({
-        let mut c = ferrite();
-        c.args(["migrate", "status", "--data"]).arg(tmp.path());
-        c
-    });
+    let out = stdout_code(
+        {
+            let mut c = ferrite();
+            c.args(["migrate", "status", "--data"]).arg(tmp.path());
+            c
+        },
+        2,
+    );
     assert!(out.contains("database version: 1"), "{out}");
     assert!(
         out.contains("0002 search (phase=expand, min-binary=-, lossy-down=no)"),
@@ -215,6 +224,156 @@ fn missing_config_is_an_error() {
         .code(1);
 }
 
+#[test]
+fn status_on_missing_database_creates_nothing() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("site");
+    let assert = ferrite()
+        .env("FERRITE_SITE__URL", "https://example.com")
+        .args(["migrate", "status", "--data"])
+        .arg(&data)
+        .assert()
+        .code(1);
+    let err = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(err.contains("database not found"), "{err}");
+    assert!(err.contains("ferrite.db"), "{err}");
+    assert!(!data.exists(), "no data dir may be created");
+    // Also for down/verify with an existing, empty data dir.
+    std::fs::create_dir(&data).expect("mkdir");
+    for args in [
+        vec!["migrate", "verify"],
+        vec!["migrate", "down", "--to", "0", "--yes"],
+    ] {
+        ferrite()
+            .env("FERRITE_SITE__URL", "https://example.com")
+            .args(args)
+            .arg("--data")
+            .arg(&data)
+            .assert()
+            .code(1);
+    }
+    assert_eq!(std::fs::read_dir(&data).expect("readdir").count(), 0);
+}
+
+#[test]
+fn init_refuses_existing_database_untouched() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let db = tmp.path().join("ferrite.db");
+    std::fs::write(&db, b"precious bytes").expect("write");
+    let assert = ferrite()
+        .args(["init", "--url", "https://example.com", "--data"])
+        .arg(tmp.path())
+        .assert()
+        .code(1);
+    let err = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(err.contains("existing database found"), "{err}");
+    assert!(err.contains("ferrite migrate"), "{err}");
+    assert_eq!(std::fs::read(&db).expect("read"), b"precious bytes");
+    assert!(!tmp.path().join("ferrite.toml").exists());
+    assert!(!tmp.path().join("media").exists());
+    assert!(!tmp.path().join("backups").exists());
+}
+
+#[test]
+fn failed_init_removes_what_it_created() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    // Postgres URL nobody listens on: config is valid, opening the store fails.
+    ferrite()
+        .args(["init", "--url", "https://example.com"])
+        .args(["--db", "postgres://u:secret@127.0.0.1:1/d", "--data"])
+        .arg(tmp.path())
+        .assert()
+        .code(1);
+    assert_eq!(std::fs::read_dir(tmp.path()).expect("readdir").count(), 0);
+}
+
+#[test]
+fn non_utf8_ferrite_env_names_the_key_not_the_value() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bad = std::ffi::OsStr::from_bytes(b"sekrit\xff");
+        let assert = ferrite()
+            .env("FERRITE_SITE__URL", bad)
+            .env("OTHER_VAR", bad)
+            .args(["migrate", "status", "--data"])
+            .arg(tmp.path())
+            .assert()
+            .code(1);
+        let err = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+        assert!(err.contains("FERRITE_SITE__URL"), "{err}");
+        assert!(!err.contains("sekrit"), "{err}");
+        // A non-FERRITE variable alone is ignored (the failure is then the missing db).
+        let assert = ferrite()
+            .env("FERRITE_SITE__URL", "https://example.com")
+            .env("OTHER_VAR", bad)
+            .args(["migrate", "status", "--data"])
+            .arg(tmp.path())
+            .assert()
+            .code(1);
+        let err = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+        assert!(err.contains("database not found"), "{err}");
+    }
+}
+
+#[test]
+fn status_exit_codes() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let status = |tmp: &Path| {
+        let mut c = ferrite();
+        c.args(["migrate", "status", "--data"]).arg(tmp);
+        c
+    };
+    status(tmp.path()).assert().code(0);
+    ferrite()
+        .args(["migrate", "down", "--to", "1", "--yes", "--data"])
+        .arg(tmp.path())
+        .assert()
+        .success();
+    status(tmp.path()).assert().code(2);
+    ferrite()
+        .args(["migrate", "up", "--data"])
+        .arg(tmp.path())
+        .assert()
+        .success();
+    // A newer schema that requires a newer binary.
+    let db = tmp.path().join("ferrite.db");
+    let rt = tokio_rt().expect("runtime");
+    rt.block_on(async {
+        let mut conn = SqliteConnection::connect(&format!("sqlite://{}", db.display()))
+            .await
+            .expect("connect");
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
+             VALUES (99, 'future', 1, x'00', 0)",
+        )
+        .execute(&mut conn)
+        .await
+        .expect("insert migration");
+        sqlx::query("INSERT INTO schema_meta (key, value) VALUES ('min_binary_version', '99.0.0')")
+            .execute(&mut conn)
+            .await
+            .expect("insert min");
+        conn.close().await.expect("close");
+    });
+    status(tmp.path()).assert().code(3);
+}
+
+#[test]
+fn status_help_documents_exit_codes() {
+    let out = stdout({
+        let mut c = ferrite();
+        c.args(["migrate", "status", "--help"]);
+        c
+    });
+    assert!(
+        out.contains("Exit code") && out.contains('2') && out.contains('3'),
+        "{out}"
+    );
+}
+
 // ---- Postgres ----
 
 struct PgSchema {
@@ -256,6 +415,35 @@ impl Drop for PgSchema {
     }
 }
 
+/// Names of the tables in `schema`, plus any ferrite table found in `public`.
+fn pg_tables(url: &str, schema: &str) -> Vec<String> {
+    let (url, schema) = (url.to_owned(), schema.to_owned());
+    std::thread::spawn(move || {
+        tokio_rt().expect("runtime").block_on(async move {
+            let mut conn = PgConnection::connect(&url).await.expect("connect");
+            let in_schema: Vec<String> = sqlx::query_scalar(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = $1",
+            )
+            .bind(&schema)
+            .fetch_all(&mut conn)
+            .await
+            .expect("tables");
+            let in_public: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM information_schema.tables \
+                 WHERE table_schema = 'public' AND table_name = 'content_items'",
+            )
+            .fetch_one(&mut conn)
+            .await
+            .expect("public");
+            conn.close().await.expect("close");
+            assert_eq!(in_public, 0, "tables must not land in public");
+            in_schema
+        })
+    })
+    .join()
+    .expect("thread")
+}
+
 fn tokio_rt() -> std::io::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -277,6 +465,20 @@ fn postgres_init_and_migrate() {
         "{toml}"
     );
 
+    let tables = pg_tables(&pg.url, &pg.schema);
+    assert!(tables.iter().any(|t| t == "content_items"), "{tables:?}");
+    assert!(tables.iter().any(|t| t == "_sqlx_migrations"), "{tables:?}");
+    // init refuses to adopt the now-migrated schema.
+    let tmp2 = tempfile::tempdir().expect("tempdir");
+    let assert = ferrite()
+        .args(["init", "--url", "https://example.com", "--db", &pg.url])
+        .args(["--schema", &pg.schema, "--data", &data_arg(tmp2.path())])
+        .assert()
+        .code(1);
+    let err = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(err.contains("existing database found"), "{err}");
+    assert!(!tmp2.path().join("ferrite.toml").exists());
+
     let status = |tmp: &Path| {
         let mut c = ferrite();
         c.args(["migrate", "status", "--data"]).arg(tmp);
@@ -290,7 +492,9 @@ fn postgres_init_and_migrate() {
     c.args(["migrate", "down", "--to", "1", "--yes", "--data"])
         .arg(tmp.path());
     assert!(stdout(c).contains("Reverted migrations: 2"));
-    assert!(status(tmp.path()).contains("verdict: needs migrate up"));
+    let mut c = ferrite();
+    c.args(["migrate", "status", "--data"]).arg(tmp.path());
+    assert!(stdout_code(c, 2).contains("verdict: needs migrate up"));
     let mut c = ferrite();
     c.args(["migrate", "up", "--data"]).arg(tmp.path());
     assert!(stdout(c).contains("Applied migrations: 2"));
