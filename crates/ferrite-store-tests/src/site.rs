@@ -495,5 +495,117 @@ pub async fn text_writes_reject_nul(db: &TestDb) {
     let mut renamed = author.clone();
     renamed.display_name = "d\0".into();
     invalid(repos.users().update(&renamed).await);
+    let mut hashed = author.clone();
+    hashed.password_hash = Some(ferrite_domain::Secret::new("$argon2\0"));
+    invalid(repos.users().update(&hashed).await);
+    let mut totp = author.clone();
+    totp.totp_secret = Some(ferrite_domain::Secret::new("JBSW\0"));
+    invalid(repos.users().update(&totp).await);
+    let mut new_user = NewUser {
+        id: UserId::new(),
+        login: "hash-nul".into(),
+        email: "hash-nul@example.com".into(),
+        display_name: "D".into(),
+        password_hash: Some(ferrite_domain::Secret::new("h\0")),
+        role: Role::Editor,
+        status: UserStatus::Active,
+        must_reset: false,
+    };
+    invalid(repos.users().insert(&new_user).await);
+    new_user.password_hash = None;
+    repos.users().insert(&new_user).await.unwrap();
     assert!(repos.menus().get("m").await.unwrap().is_none());
+}
+
+/// R15: lookups, deletes and cursors that bind caller text reject NUL with `Invalid` on
+/// both backends (Postgres would otherwise fail in the driver, SQLite would match nothing).
+pub async fn text_lookups_reject_nul(db: &TestDb) {
+    use ferrite_domain::{ContentOrder, ContentQuery};
+    use ferrite_store::encode_text_cursor;
+
+    use crate::fixtures::{fixture_user, new_post};
+
+    fn invalid<T: std::fmt::Debug>(r: Result<T, StoreError>) {
+        assert!(
+            matches!(r, Err(StoreError::Invalid(ref m)) if m.contains("NUL")),
+            "{r:?}"
+        );
+    }
+    let store = db.store();
+    let repos = store.read();
+    let author = fixture_user(store).await;
+    let item = repos
+        .content()
+        .insert(&new_post(&author, "nul-lookups"))
+        .await
+        .unwrap();
+    const BAD: &str = "a\0b";
+
+    // Content family.
+    invalid(repos.types().get(BAD).await);
+    invalid(repos.types().delete(BAD).await);
+    invalid(repos.content().get_by_slug(BAD, None, "x").await);
+    invalid(repos.content().get_by_slug("post", None, BAD).await);
+    invalid(
+        repos
+            .content()
+            .list(&ContentQuery {
+                kind: Some(BAD.into()),
+                ..ContentQuery::default()
+            })
+            .await,
+    );
+    invalid(
+        repos
+            .content()
+            .list(&ContentQuery {
+                order: ContentOrder::TitleAsc,
+                cursor: Some(encode_text_cursor(BAD, uuid::Uuid::now_v7())),
+                ..ContentQuery::default()
+            })
+            .await,
+    );
+    invalid(repos.meta().get(item.id, BAD).await);
+    invalid(repos.meta().delete(item.id, BAD).await);
+    // Taxonomies and terms.
+    invalid(repos.taxonomies().get(BAD).await);
+    invalid(repos.terms().get_by_slug(BAD, "x").await);
+    invalid(repos.terms().get_by_slug("tag", BAD).await);
+    invalid(repos.terms().list(BAD).await);
+    // Menus.
+    invalid(repos.menus().get(BAD).await);
+    invalid(repos.menus().delete(BAD).await);
+    // Site.
+    invalid(repos.options().get(BAD).await);
+    invalid(repos.options().delete(BAD).await);
+    invalid(repos.schema_meta().get(BAD).await);
+    invalid(repos.schema_meta().set(BAD, "v").await);
+    invalid(repos.redirects().get_by_source(BAD).await);
+    invalid(
+        repos
+            .redirects()
+            .list(10, Some(&encode_text_cursor(BAD, uuid::Uuid::now_v7())))
+            .await,
+    );
+    // Users.
+    invalid(repos.users().get_by_login(BAD).await);
+    invalid(repos.users().get_by_email(BAD).await);
+    invalid(
+        repos
+            .users()
+            .list(10, Some(&encode_text_cursor(BAD, uuid::Uuid::now_v7())))
+            .await,
+    );
+    // Plugins, plugin KV and themes.
+    invalid(repos.plugins().get(BAD).await);
+    invalid(repos.plugins().delete(BAD).await);
+    invalid(repos.plugin_kv().get(BAD, "k").await);
+    invalid(repos.plugin_kv().get("p", BAD).await);
+    invalid(repos.plugin_kv().list_keys(BAD, "", 10).await);
+    invalid(repos.plugin_kv().list_keys("p", BAD, 10).await);
+    invalid(repos.plugin_kv().usage(BAD).await);
+    invalid(repos.themes().get(BAD).await);
+    invalid(repos.themes().activate(BAD).await);
+    // Search.
+    invalid(repos.search().query(BAD, 10).await);
 }

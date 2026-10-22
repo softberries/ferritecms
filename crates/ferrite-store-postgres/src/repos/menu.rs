@@ -59,6 +59,7 @@ async fn replace_menu(
 #[async_trait]
 impl MenuRepo for PgRepos {
     async fn get(&self, name: &str) -> Result<Option<Menu>, StoreError> {
+        validate_text("menu name", name)?;
         // One statement, so the label and items come from the same snapshot.
         let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT m.label AS menu_label, {MENU_ITEM_COLUMNS} FROM menus m \
@@ -106,6 +107,7 @@ impl MenuRepo for PgRepos {
     }
 
     async fn delete(&self, name: &str) -> Result<(), StoreError> {
+        validate_text("menu name", name)?;
         // Items cascade.
         run!(&self.exec, |e| sqlx::query(
             "DELETE FROM menus WHERE name = $1"

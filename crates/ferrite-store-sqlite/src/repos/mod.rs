@@ -1,5 +1,4 @@
-//! Repository implementations. Each later M1a task replaces one group of `&Unsupported`
-//! accessors with a real implementation on [`SqliteRepos`].
+//! Repository implementations, all on [`SqliteRepos`].
 //!
 //! **Executor rule (copy it in every repo):** run SELECTs on `self.reader` and every
 //! mutation (INSERT/UPDATE/DELETE, including upserts) on `self.writer`:
@@ -17,8 +16,8 @@ mod content;
 mod event;
 mod menu;
 mod plugin;
+mod search;
 mod site;
-mod stub;
 mod taxonomy;
 mod user;
 
@@ -31,7 +30,6 @@ use ferrite_store::{
     SearchRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use sqlx::{Sqlite, SqlitePool, Transaction};
-use stub::Unsupported;
 use tokio::sync::Mutex;
 
 use crate::exec::{Exec, SharedTx, finished, map_db_err};
@@ -102,7 +100,7 @@ impl Repos for SqliteRepos {
         self
     }
     fn search(&self) -> &dyn SearchRepo {
-        &Unsupported
+        self
     }
     fn schema_meta(&self) -> &dyn SchemaMetaRepo {
         self

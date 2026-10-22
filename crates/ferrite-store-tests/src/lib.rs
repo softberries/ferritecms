@@ -13,6 +13,7 @@ pub mod harness;
 pub mod menu;
 pub mod migrations;
 pub mod plugin;
+pub mod search;
 pub mod site;
 pub mod taxonomy;
 pub mod user;

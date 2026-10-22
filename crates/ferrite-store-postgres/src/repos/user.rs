@@ -15,17 +15,36 @@ use crate::{
     exec::run,
 };
 
-/// NUL checks shared by insert and update (R13).
-fn validate_user_text(login: &str, email: &str, display_name: &str) -> Result<(), StoreError> {
+/// NUL checks shared by insert and update (R13), secrets included.
+fn validate_user_text(
+    login: &str,
+    email: &str,
+    display_name: &str,
+    password_hash: Option<&Secret>,
+    totp_secret: Option<&Secret>,
+) -> Result<(), StoreError> {
     validate_text("user login", login)?;
     validate_text("user email", email)?;
-    validate_text("user display_name", display_name)
+    validate_text("user display_name", display_name)?;
+    if let Some(hash) = password_hash {
+        validate_text("user password_hash", hash.expose())?;
+    }
+    if let Some(totp) = totp_secret {
+        validate_text("user totp_secret", totp.expose())?;
+    }
+    Ok(())
 }
 
 #[async_trait]
 impl UserRepo for PgRepos {
     async fn insert(&self, user: &NewUser) -> Result<User, StoreError> {
-        validate_user_text(&user.login, &user.email, &user.display_name)?;
+        validate_user_text(
+            &user.login,
+            &user.email,
+            &user.display_name,
+            user.password_hash.as_ref(),
+            None,
+        )?;
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO users (id, login, email, email_key, display_name, password_hash, \
              role, status, must_reset, totp_secret, created_at, last_login_at) \
@@ -56,6 +75,7 @@ impl UserRepo for PgRepos {
     }
 
     async fn get_by_login(&self, login: &str) -> Result<Option<User>, StoreError> {
+        validate_text("user login", login)?;
         // Exact, case-sensitive.
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {USER_COLUMNS} FROM users WHERE login = $1"
@@ -66,6 +86,7 @@ impl UserRepo for PgRepos {
     }
 
     async fn get_by_email(&self, email: &str) -> Result<Option<User>, StoreError> {
+        validate_text("user email", email)?;
         // Looked up by the Rust-folded key, never by a database collation.
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {USER_COLUMNS} FROM users WHERE email_key = $1"
@@ -77,7 +98,13 @@ impl UserRepo for PgRepos {
 
     // `id` and `created_at` are immutable; everything else is replaced.
     async fn update(&self, user: &User) -> Result<(), StoreError> {
-        validate_user_text(&user.login, &user.email, &user.display_name)?;
+        validate_user_text(
+            &user.login,
+            &user.email,
+            &user.display_name,
+            user.password_hash.as_ref(),
+            user.totp_secret.as_ref(),
+        )?;
         let done = run!(&self.exec, |e| sqlx::query(
             "UPDATE users SET login = $1, email = $2, email_key = $3, display_name = $4, \
              password_hash = $5, role = $6, status = $7, must_reset = $8, \

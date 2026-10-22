@@ -4,7 +4,7 @@ use ferrite_domain::{ContentItem, ContentOrder, Cursor, MAX_PAGE};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::StoreError;
+use crate::{StoreError, validate_text};
 
 /// The sort-key part of a content cursor, typed by [`ContentOrder`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,7 +72,10 @@ pub fn content_cursor(order: ContentOrder, cursor: &str) -> Result<(SortKey, Uui
                 .and_then(|v| i32::try_from(v).ok())
                 .ok_or_else(bad)?,
         ),
-        (ContentOrder::TitleAsc, Value::String(s)) => SortKey::Text(s),
+        (ContentOrder::TitleAsc, Value::String(s)) => {
+            validate_text("cursor", &s)?;
+            SortKey::Text(s)
+        }
         _ => return Err(bad()),
     };
     Ok((key, id))
@@ -86,7 +89,10 @@ pub fn encode_text_cursor(key: &str, id: Uuid) -> String {
 /// Decodes a cursor made by [`encode_text_cursor`].
 pub fn text_cursor(cursor: &str) -> Result<(String, Uuid), StoreError> {
     match Cursor::decode(cursor)? {
-        (Value::String(key), id) => Ok((key, id)),
+        (Value::String(key), id) => {
+            validate_text("cursor", &key)?;
+            Ok((key, id))
+        }
         _ => Err(StoreError::Invalid(
             "cursor does not match the query order".into(),
         )),

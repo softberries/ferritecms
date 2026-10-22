@@ -42,6 +42,7 @@ impl TaxonomyRepo for PgRepos {
     }
 
     async fn get(&self, name: &str) -> Result<Option<Taxonomy>, StoreError> {
+        validate_text("taxonomy name", name)?;
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {TAXONOMY_COLUMNS} FROM taxonomies WHERE name = $1"
         )))
@@ -135,6 +136,8 @@ impl TermRepo for PgRepos {
     }
 
     async fn get_by_slug(&self, tax: &str, slug: &str) -> Result<Option<Term>, StoreError> {
+        validate_text("term taxonomy", tax)?;
+        validate_text("term slug", slug)?;
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {TERM_COLUMNS} FROM terms t WHERE t.taxonomy = $1 AND t.slug = $2"
         )))
@@ -145,6 +148,7 @@ impl TermRepo for PgRepos {
     }
 
     async fn list(&self, tax: &str) -> Result<Vec<Term>, StoreError> {
+        validate_text("term taxonomy", tax)?;
         let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {TERM_COLUMNS} FROM terms t WHERE t.taxonomy = $1 \
              ORDER BY t.name COLLATE \"C\", t.id"

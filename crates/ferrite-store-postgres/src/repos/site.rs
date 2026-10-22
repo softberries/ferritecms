@@ -18,6 +18,7 @@ use crate::{
 #[async_trait]
 impl SchemaMetaRepo for PgRepos {
     async fn get(&self, key: &str) -> Result<Option<String>, StoreError> {
+        validate_text("schema_meta key", key)?;
         run!(&self.exec, |e| sqlx::query_scalar(
             "SELECT value FROM schema_meta WHERE key = $1"
         )
@@ -42,6 +43,7 @@ impl SchemaMetaRepo for PgRepos {
 #[async_trait]
 impl OptionRepo for PgRepos {
     async fn get(&self, name: &str) -> Result<Option<OptionEntry>, StoreError> {
+        validate_text("option key", name)?;
         let row = run!(&self.exec, |e| sqlx::query(
             "SELECT key, value, autoload, updated_at FROM options WHERE key = $1"
         )
@@ -72,6 +74,7 @@ impl OptionRepo for PgRepos {
     }
 
     async fn delete(&self, name: &str) -> Result<(), StoreError> {
+        validate_text("option key", name)?;
         run!(&self.exec, |e| sqlx::query(
             "DELETE FROM options WHERE key = $1"
         )
@@ -94,6 +97,7 @@ impl OptionRepo for PgRepos {
 #[async_trait]
 impl RedirectRepo for PgRepos {
     async fn get_by_source(&self, source: &str) -> Result<Option<Redirect>, StoreError> {
+        validate_text("redirect source_path", source)?;
         // The unique index is on the plain column: exact, case-sensitive.
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {REDIRECT_COLUMNS} FROM redirects WHERE source_path = $1"

@@ -16,6 +16,7 @@ use crate::{
 #[async_trait]
 impl SchemaMetaRepo for SqliteRepos {
     async fn get(&self, key: &str) -> Result<Option<String>, StoreError> {
+        validate_text("schema_meta key", key)?;
         run!(&self.reader, |e| sqlx::query_scalar(
             "SELECT value FROM schema_meta WHERE key = ?"
         )
@@ -40,6 +41,7 @@ impl SchemaMetaRepo for SqliteRepos {
 #[async_trait]
 impl OptionRepo for SqliteRepos {
     async fn get(&self, name: &str) -> Result<Option<OptionEntry>, StoreError> {
+        validate_text("option key", name)?;
         let row = run!(&self.reader, |e| sqlx::query(
             "SELECT key, value, autoload, updated_at FROM options WHERE key = ?"
         )
@@ -70,6 +72,7 @@ impl OptionRepo for SqliteRepos {
     }
 
     async fn delete(&self, name: &str) -> Result<(), StoreError> {
+        validate_text("option key", name)?;
         run!(&self.writer, |e| sqlx::query(
             "DELETE FROM options WHERE key = ?"
         )
@@ -92,6 +95,7 @@ impl OptionRepo for SqliteRepos {
 #[async_trait]
 impl RedirectRepo for SqliteRepos {
     async fn get_by_source(&self, source: &str) -> Result<Option<Redirect>, StoreError> {
+        validate_text("redirect source_path", source)?;
         // `source_path` has BINARY collation: the match is exact and case-sensitive.
         let row = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {REDIRECT_COLUMNS} FROM redirects WHERE source_path = ?"

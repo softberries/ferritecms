@@ -3,7 +3,8 @@
 use crate::StoreError;
 
 /// Rejects `\0` in caller text (PostgreSQL `text` cannot store it, SQLite can), so both
-/// backends accept exactly the same strings. Call it for every text bound in a write.
+/// backends accept exactly the same strings. Call it for every caller text bound in a
+/// statement: writes, lookups, deletes and decoded cursors alike (R13, R15).
 pub fn validate_text(field: &str, value: &str) -> Result<(), StoreError> {
     if value.contains('\0') {
         Err(StoreError::Invalid(format!("{field} contains NUL")))

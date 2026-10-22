@@ -1,7 +1,7 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
     backend_tests, backend_tests_spawning, content::*, event::*, menu::*, migration_dirs,
-    migration_files, migrations::*, plugin::*, site::*, taxonomy::*, user::*,
+    migration_files, migrations::*, plugin::*, search::*, site::*, taxonomy::*, user::*,
 };
 
 backend_tests!(
@@ -63,7 +63,8 @@ backend_tests!(
 backend_tests!(
     redirects_upsert_get_hit,
     redirects_list_paginates_in_binary_order,
-    text_writes_reject_nul
+    text_writes_reject_nul,
+    text_lookups_reject_nul,
 );
 
 backend_tests!(
@@ -87,6 +88,14 @@ backend_tests!(
     events_reject_nul,
     events_in_tx_only_visible_after_commit,
     events_prune,
+);
+
+backend_tests!(
+    search_finds_title_and_body,
+    search_reindex_replaces,
+    search_remove_and_cascade,
+    search_handles_operators_safely,
+    search_rejects_nul_and_bad_limits,
 );
 
 backend_tests_spawning!(concurrent_writers, events_concurrent_appends_unique_seq);
@@ -134,4 +143,34 @@ fn expand_lint_passes() {
             }
         }
     }
+}
+
+/// Every repository is implemented: the only `Unsupported(` left in the backends' sources
+/// is Postgres `snapshot` (it would need pg_dump on the host).
+#[test]
+fn no_unsupported_left() {
+    fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, hits);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                for (n, line) in text.lines().enumerate() {
+                    if line.contains("Unsupported(") {
+                        hits.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+                    }
+                }
+            }
+        }
+    }
+    let mut hits = Vec::new();
+    for dir in migration_dirs() {
+        walk(&dir.parent().unwrap().join("src"), &mut hits);
+    }
+    assert_eq!(hits.len(), 1, "{hits:#?}");
+    assert!(
+        hits[0].contains("ferrite-store-postgres") && hits[0].contains("Unsupported(\"snapshot\")"),
+        "{hits:#?}"
+    );
 }

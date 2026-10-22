@@ -54,6 +54,7 @@ impl ContentTypeRepo for PgRepos {
     }
 
     async fn get(&self, name: &str) -> Result<Option<ContentType>, StoreError> {
+        validate_text("content type name", name)?;
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {TYPE_COLUMNS} FROM content_types WHERE name = $1"
         )))
@@ -71,6 +72,7 @@ impl ContentTypeRepo for PgRepos {
     }
 
     async fn delete(&self, name: &str) -> Result<(), StoreError> {
+        validate_text("content type name", name)?;
         let built_in: Option<bool> = run!(&self.exec, |e| sqlx::query_scalar(
             "SELECT built_in FROM content_types WHERE name = $1"
         )
@@ -144,6 +146,8 @@ impl ContentRepo for PgRepos {
         parent: Option<ContentId>,
         slug: &str,
     ) -> Result<Option<ContentItem>, StoreError> {
+        validate_text("content kind", kind)?;
+        validate_text("content slug", slug)?;
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {CONTENT_COLUMNS} FROM content_items \
              WHERE type = $1 AND parent_id IS NOT DISTINCT FROM $2 AND slug = $3"
@@ -204,6 +208,9 @@ impl ContentRepo for PgRepos {
     }
 
     async fn list(&self, query: &ContentQuery) -> Result<Page<ContentItem>, StoreError> {
+        if let Some(kind) = &query.kind {
+            validate_text("content kind", kind)?;
+        }
         let limit = check_limit(query.limit)?;
         let after = query
             .cursor
@@ -354,6 +361,7 @@ fn push_keyset(
 #[async_trait]
 impl MetaRepo for PgRepos {
     async fn get(&self, id: ContentId, key: &str) -> Result<Option<Value>, StoreError> {
+        validate_text("meta key", key)?;
         let value: Option<Json<Value>> = run!(&self.exec, |e| sqlx::query_scalar(
             "SELECT value FROM content_meta WHERE item_id = $1 AND key = $2"
         )
@@ -378,6 +386,7 @@ impl MetaRepo for PgRepos {
     }
 
     async fn delete(&self, id: ContentId, key: &str) -> Result<(), StoreError> {
+        validate_text("meta key", key)?;
         run!(&self.exec, |e| sqlx::query(
             "DELETE FROM content_meta WHERE item_id = $1 AND key = $2"
         )

@@ -144,6 +144,7 @@ impl PluginRepo for SqliteRepos {
     }
 
     async fn get(&self, id: &str) -> Result<Option<InstalledPlugin>, StoreError> {
+        validate_text("plugin name", id)?;
         let row = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {PLUGIN_COLUMNS} FROM plugins WHERE name = ?"
         )))
@@ -198,6 +199,8 @@ impl PluginRepo for SqliteRepos {
 #[async_trait]
 impl PluginKvRepo for SqliteRepos {
     async fn get(&self, plugin: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
+        validate_text("plugin kv plugin", plugin)?;
+        validate_text("plugin kv key", key)?;
         run!(&self.reader, |e| sqlx::query_scalar(
             "SELECT value FROM plugin_kv WHERE plugin = ? AND key = ?"
         )
@@ -240,6 +243,8 @@ impl PluginKvRepo for SqliteRepos {
         prefix: &str,
         limit: u32,
     ) -> Result<Vec<String>, StoreError> {
+        validate_text("plugin kv plugin", plugin)?;
+        validate_text("plugin kv prefix", prefix)?;
         let limit = check_limit(limit)?;
         // substr/length compare by characters, so the prefix match needs no LIKE escaping.
         run!(&self.reader, |e| sqlx::query_scalar(
@@ -253,6 +258,7 @@ impl PluginKvRepo for SqliteRepos {
     }
 
     async fn usage(&self, plugin: &str) -> Result<(u64, u64), StoreError> {
+        validate_text("plugin kv plugin", plugin)?;
         let (bytes, keys): (i64, i64) = run!(&self.reader, |e| sqlx::query_as(
             "SELECT COALESCE(SUM(length(value)), 0), COUNT(*) FROM plugin_kv WHERE plugin = ?"
         )
@@ -290,6 +296,7 @@ impl ThemeRepo for SqliteRepos {
     }
 
     async fn get(&self, id: &str) -> Result<Option<InstalledTheme>, StoreError> {
+        validate_text("theme name", id)?;
         let row = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {THEME_COLUMNS} FROM themes WHERE name = ?"
         )))

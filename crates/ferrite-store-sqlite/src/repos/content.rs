@@ -15,7 +15,7 @@ use sqlx::{QueryBuilder, Sqlite};
 use super::SqliteRepos;
 use crate::{
     codec::{self, CONTENT_COLUMNS, REVISION_COLUMNS, TYPE_COLUMNS},
-    exec::run,
+    exec::{atomic, map_db_err, run},
 };
 
 #[async_trait]
@@ -45,6 +45,7 @@ impl ContentTypeRepo for SqliteRepos {
     }
 
     async fn get(&self, name: &str) -> Result<Option<ContentType>, StoreError> {
+        validate_text("content type name", name)?;
         let row = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {TYPE_COLUMNS} FROM content_types WHERE name = ?"
         )))
@@ -62,6 +63,7 @@ impl ContentTypeRepo for SqliteRepos {
     }
 
     async fn delete(&self, name: &str) -> Result<(), StoreError> {
+        validate_text("content type name", name)?;
         let built_in: Option<bool> = run!(&self.writer, |e| sqlx::query_scalar(
             "SELECT built_in FROM content_types WHERE name = ?"
         )
@@ -136,6 +138,8 @@ impl ContentRepo for SqliteRepos {
         parent: Option<ContentId>,
         slug: &str,
     ) -> Result<Option<ContentItem>, StoreError> {
+        validate_text("content kind", kind)?;
+        validate_text("content slug", slug)?;
         let row = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {CONTENT_COLUMNS} FROM content_items \
              WHERE type = ? AND parent_id IS ? AND slug = ?"
@@ -196,6 +200,9 @@ impl ContentRepo for SqliteRepos {
     }
 
     async fn list(&self, query: &ContentQuery) -> Result<Page<ContentItem>, StoreError> {
+        if let Some(kind) = &query.kind {
+            validate_text("content kind", kind)?;
+        }
         let limit = check_limit(query.limit)?;
         let after = query
             .cursor
@@ -261,12 +268,21 @@ impl ContentRepo for SqliteRepos {
     }
 
     async fn delete(&self, id: ContentId) -> Result<(), StoreError> {
-        run!(&self.writer, |e| sqlx::query(
-            "DELETE FROM content_items WHERE id = ?"
-        )
-        .bind(id.as_uuid())
-        .execute(e))
-        .map(|_| ())
+        // FTS5 rows have no foreign key, so drop the search row in the same batch; if
+        // the item cannot be deleted (children RESTRICT) the search row is kept too.
+        atomic!(&self.writer, |conn| async {
+            sqlx::query("DELETE FROM search_fts WHERE item_id = ?")
+                .bind(id.as_uuid())
+                .execute(&mut *conn)
+                .await
+                .map_err(map_db_err)?;
+            sqlx::query("DELETE FROM content_items WHERE id = ?")
+                .bind(id.as_uuid())
+                .execute(&mut *conn)
+                .await
+                .map_err(map_db_err)?;
+            Ok(())
+        })
     }
 
     async fn due_scheduled(
@@ -343,6 +359,7 @@ fn push_keyset(
 #[async_trait]
 impl MetaRepo for SqliteRepos {
     async fn get(&self, id: ContentId, key: &str) -> Result<Option<Value>, StoreError> {
+        validate_text("meta key", key)?;
         let text: Option<String> = run!(&self.reader, |e| sqlx::query_scalar(
             "SELECT value FROM content_meta WHERE item_id = ? AND key = ?"
         )
@@ -367,6 +384,7 @@ impl MetaRepo for SqliteRepos {
     }
 
     async fn delete(&self, id: ContentId, key: &str) -> Result<(), StoreError> {
+        validate_text("meta key", key)?;
         run!(&self.writer, |e| sqlx::query(
             "DELETE FROM content_meta WHERE item_id = ? AND key = ?"
         )

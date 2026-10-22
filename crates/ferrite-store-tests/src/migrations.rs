@@ -13,7 +13,7 @@ pub async fn fresh_db_is_up_to_date(db: &TestDb) {
     let store = db.store();
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::UpToDate);
-    assert_eq!((s.db_version, s.binary_version), (1, 1));
+    assert_eq!((s.db_version, s.binary_version), (2, 2));
     assert!(s.pending.is_empty() && s.unknown_applied.is_empty());
     assert_eq!(s.min_binary, None);
 
@@ -34,12 +34,19 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
             .any(|o| o.ends_with(":content_items"))
     );
 
-    assert_eq!(store.migrate_down(0, false).await.unwrap(), vec![1]);
+    assert!(
+        db.user_objects()
+            .await
+            .iter()
+            .any(|o| o.ends_with(":search_fts") || o.ends_with(":search_docs"))
+    );
+
+    assert_eq!(store.migrate_down(0, false).await.unwrap(), vec![2, 1]);
     assert_eq!(db.user_objects().await, Vec::<String>::new());
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!((s.db_version, s.verdict), (0, Compat::NeedsUp));
 
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![1]);
+    assert_eq!(store.migrate_up(None).await.unwrap(), vec![1, 2]);
     assert_eq!(store.migrate_up(None).await.unwrap(), Vec::<i64>::new());
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::UpToDate);
@@ -55,13 +62,21 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
 }
 
 pub async fn verdict_after_partial_down(db: &TestDb) {
-    // Only 0001 exists until Task 10 adds 0002; then this goes down to 1 instead.
     let store = db.store();
-    store.migrate_down(0, false).await.unwrap();
+    assert_eq!(store.migrate_down(1, false).await.unwrap(), vec![2]);
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::NeedsUp);
-    assert_eq!(s.pending, vec![1]);
-    assert_eq!(s.db_version, 0);
+    assert_eq!(s.pending, vec![2]);
+    assert_eq!((s.db_version, s.binary_version), (1, 2));
+    let objects = db.user_objects().await;
+    assert!(objects.iter().any(|o| o.ends_with(":content_items")));
+    assert!(!objects.iter().any(|o| o.contains("search")), "{objects:?}");
+
+    assert_eq!(store.migrate_up(Some(2)).await.unwrap(), vec![2]);
+    assert_eq!(
+        store.migration_status(&binary()).await.unwrap().verdict,
+        Compat::UpToDate
+    );
 }
 
 pub async fn verify_detects_tampered_checksum(db: &TestDb) {

@@ -1,6 +1,6 @@
 //! Contract tests for the event outbox.
 
-use std::{collections::BTreeSet, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, sync::Arc};
 
 use ferrite_domain::{NewEvent, Timestamp};
 use ferrite_store::StoreError;
@@ -118,13 +118,17 @@ pub async fn events_prune(db: &TestDb) {
     assert_eq!(events.prune(first).await.unwrap(), 0);
     assert_eq!(events.since(0, 10).await.unwrap().len(), 3);
 
-    let future = Timestamp::from_micros(
-        Timestamp::now().as_micros() + Duration::from_secs(1).as_micros() as i64,
-    )
-    .unwrap();
+    let last = events.max_seq().await.unwrap();
+    // One second ahead, in microseconds.
+    let future = Timestamp::from_micros(Timestamp::now().as_micros() + 1_000_000).unwrap();
     assert_eq!(events.prune(future).await.unwrap(), 3);
     assert!(events.since(0, 10).await.unwrap().is_empty());
     assert_eq!(events.prune(future).await.unwrap(), 0);
+
+    // Sequence numbers are never reused, even after the outbox is emptied.
+    let next = events.append(&event("a", &["after"])).await.unwrap();
+    assert!(next > last, "seq {next} reused (previous max {last})");
+    assert_eq!(events.since(last, 10).await.unwrap()[0].seq, next);
 }
 
 pub async fn events_concurrent_appends_unique_seq(db: Arc<TestDb>) {

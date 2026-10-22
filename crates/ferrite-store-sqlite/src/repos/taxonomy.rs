@@ -42,6 +42,7 @@ impl TaxonomyRepo for SqliteRepos {
     }
 
     async fn get(&self, name: &str) -> Result<Option<Taxonomy>, StoreError> {
+        validate_text("taxonomy name", name)?;
         let row = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {TAXONOMY_COLUMNS} FROM taxonomies WHERE name = ?"
         )))
@@ -135,6 +136,8 @@ impl TermRepo for SqliteRepos {
     }
 
     async fn get_by_slug(&self, tax: &str, slug: &str) -> Result<Option<Term>, StoreError> {
+        validate_text("term taxonomy", tax)?;
+        validate_text("term slug", slug)?;
         let row = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {TERM_COLUMNS} FROM terms t WHERE t.taxonomy = ? AND t.slug = ?"
         )))
@@ -145,6 +148,7 @@ impl TermRepo for SqliteRepos {
     }
 
     async fn list(&self, tax: &str) -> Result<Vec<Term>, StoreError> {
+        validate_text("term taxonomy", tax)?;
         let rows = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {TERM_COLUMNS} FROM terms t WHERE t.taxonomy = ? ORDER BY t.name, t.id"
         )))

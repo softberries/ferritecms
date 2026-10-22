@@ -147,6 +147,7 @@ impl PluginRepo for PgRepos {
     }
 
     async fn get(&self, id: &str) -> Result<Option<InstalledPlugin>, StoreError> {
+        validate_text("plugin name", id)?;
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {PLUGIN_COLUMNS} FROM plugins WHERE name = $1"
         )))
@@ -203,6 +204,8 @@ impl PluginRepo for PgRepos {
 #[async_trait]
 impl PluginKvRepo for PgRepos {
     async fn get(&self, plugin: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
+        validate_text("plugin kv plugin", plugin)?;
+        validate_text("plugin kv key", key)?;
         run!(&self.exec, |e| sqlx::query_scalar(
             "SELECT value FROM plugin_kv WHERE plugin = $1 AND key = $2"
         )
@@ -245,6 +248,8 @@ impl PluginKvRepo for PgRepos {
         prefix: &str,
         limit: u32,
     ) -> Result<Vec<String>, StoreError> {
+        validate_text("plugin kv plugin", plugin)?;
+        validate_text("plugin kv prefix", prefix)?;
         let limit = check_limit(limit)?;
         // starts_with needs no LIKE escaping.
         run!(&self.exec, |e| sqlx::query_scalar(
@@ -258,6 +263,7 @@ impl PluginKvRepo for PgRepos {
     }
 
     async fn usage(&self, plugin: &str) -> Result<(u64, u64), StoreError> {
+        validate_text("plugin kv plugin", plugin)?;
         let (bytes, keys): (i64, i64) = run!(&self.exec, |e| {
             sqlx::query_as(
             "SELECT COALESCE(SUM(octet_length(value)), 0)::bigint, COUNT(*) FROM plugin_kv WHERE plugin = $1"
@@ -297,6 +303,7 @@ impl ThemeRepo for PgRepos {
     }
 
     async fn get(&self, id: &str) -> Result<Option<InstalledTheme>, StoreError> {
+        validate_text("theme name", id)?;
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {THEME_COLUMNS} FROM themes WHERE name = $1"
         )))
