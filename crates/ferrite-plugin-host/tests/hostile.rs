@@ -160,3 +160,162 @@ async fn loop_classified() -> TestResult {
     assert_eq!(last_kind(&host), Some(FailureKind::Deadline));
     Ok(())
 }
+
+/// What `tracing` events from the host carried, for the fields we assert on.
+#[derive(Debug, Default, Clone)]
+struct Captured {
+    plugin: String,
+    stream: String,
+    truncated_bytes: u64,
+    message: String,
+}
+
+#[derive(Default)]
+struct FieldVisitor(Captured);
+
+impl tracing::field::Visit for FieldVisitor {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        match field.name() {
+            "plugin" => self.0.plugin = value.into(),
+            "stream" => self.0.stream = value.into(),
+            _ => {}
+        }
+    }
+
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        if field.name() == "truncated_bytes" {
+            self.0.truncated_bytes = value;
+        }
+    }
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.0.message = format!("{value:?}");
+        }
+    }
+}
+
+/// Minimal subscriber that records every event.
+#[derive(Clone, Default)]
+struct Recorder(Arc<std::sync::Mutex<Vec<Captured>>>);
+
+impl tracing::Subscriber for Recorder {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut v = FieldVisitor::default();
+        event.record(&mut v);
+        if let Ok(mut events) = self.0.lock() {
+            events.push(v.0);
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// Install the recorder as the global subscriber (once). A scoped `set_default` is
+/// unreliable here: other tests in this binary emit the same callsites concurrently, and
+/// tracing caches a callsite as disabled if it is first hit while no subscriber is set.
+fn recorder() -> Recorder {
+    static RECORDER: std::sync::OnceLock<Recorder> = std::sync::OnceLock::new();
+    RECORDER
+        .get_or_init(|| {
+            let recorder = Recorder::default();
+            // Fails only if another subscriber is already installed; none is in this binary.
+            let _ = tracing::subscriber::set_global_default(recorder.clone());
+            recorder
+        })
+        .clone()
+}
+
+fn meta_content(head: &FilterValue, name: &str) -> Option<String> {
+    let FilterValue::Head(h) = head else {
+        return None;
+    };
+    h.metas
+        .iter()
+        .find(|m| m.name.as_deref() == Some(name))
+        .map(|m| m.content.clone())
+}
+
+#[tokio::test]
+async fn fs_escape_sees_no_files() -> TestResult {
+    let host = host_with(HostConfig::default(), &["fs-escape"])?;
+    let out = host.apply_filter("render.head", head(), &req()).await;
+    let seen = meta_content(&out, "fs-escape").ok_or("fs-escape meta missing")?;
+    assert!(seen.starts_with("error:"), "{seen}");
+    assert!(!seen.contains("root:"), "{seen}");
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
+    Ok(())
+}
+
+#[tokio::test]
+async fn noisy_output_is_capped() -> TestResult {
+    // Pushing 11 MiB through std's line-buffered stdout costs the guest far more than the
+    // default 50 M fuel; the point here is the host's output handling, not the budget.
+    let cfg = HostConfig {
+        fuel: 20_000_000_000,
+        render_deadline: Duration::from_secs(30),
+        ..HostConfig::default()
+    };
+    let host = host_with(cfg, &["noisy"])?;
+    let recorder = recorder();
+    let out = host.apply_filter("render.head", head(), &req()).await;
+
+    assert_eq!(out, head(), "call succeeds and returns its input");
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
+    let events = recorder.0.lock().map_err(|e| e.to_string())?.clone();
+    for (stream, total) in [("stdout", 10usize << 20), ("stderr", 1 << 20)] {
+        let e = events
+            .iter()
+            .find(|e| e.plugin == "noisy" && e.stream == stream)
+            .ok_or(format!("no {stream} event"))?;
+        assert_eq!(e.plugin, "noisy");
+        assert!(!e.message.is_empty());
+        assert!(
+            e.message.len() <= 64 * 1024,
+            "{stream}: {}",
+            e.message.len()
+        );
+        assert_eq!(
+            e.message.len() as u64 + e.truncated_bytes,
+            total as u64,
+            "{stream}: captured + truncated == written"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn fat_init_fails_cleanly() -> TestResult {
+    let host = host_with(HostConfig::default(), &["fat-init"])?;
+    let out = host.apply_filter("render.head", head(), &req()).await;
+    assert_eq!(out, head(), "input returned unchanged");
+    let kind = last_kind(&host);
+    assert!(
+        matches!(kind, Some(FailureKind::Memory | FailureKind::Instantiate)),
+        "{kind:?}"
+    );
+    // The host carries on: another plugin still works.
+    host.install(
+        Manifest::parse(&plugin_manifest("hello"))?,
+        &plugin_wasm("hello"),
+    )?;
+    let out = host.apply_filter("render.head", head(), &req()).await;
+    assert!(meta_content(&out, "generator").is_some(), "{out:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn kv_budget_enforced() -> TestResult {
+    let host = host_with(HostConfig::default(), &["kv-budget"])?;
+    let out = host.apply_filter("render.head", head(), &req()).await;
+    assert_eq!(meta_content(&out, "kv-ok").as_deref(), Some("100"));
+    Ok(())
+}

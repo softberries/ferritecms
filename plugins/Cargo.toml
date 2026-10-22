@@ -12,4 +12,8 @@ members = [
     "examples/hostile/big-output",
     "examples/hostile/wrong-variant",
     "examples/hostile/flapper",
+    "examples/hostile/fs-escape",
+    "examples/hostile/noisy",
+    "examples/hostile/fat-init",
+    "examples/hostile/kv-budget",
 ]

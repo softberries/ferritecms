@@ -458,6 +458,7 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "async-trait",
+ "bytes",
  "semver",
  "serde_json",
  "thiserror 2.0.21",

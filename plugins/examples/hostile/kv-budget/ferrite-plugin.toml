@@ -1,0 +1,12 @@
+[plugin]
+name      = "kv-budget"
+version   = "0.1.0"
+publisher = "ferritecms.dev"
+world     = "ferrite:plugin/plugin@0.1.0"
+
+[capabilities]
+render.head = true
+kv          = true
+
+[hooks]
+"render.head" = 10

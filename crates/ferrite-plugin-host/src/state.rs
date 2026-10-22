@@ -11,6 +11,7 @@ use crate::bindings::v0_1::ferrite::plugin::{
     content, http, kv, log, mail, meta, options, settings, types as wit,
 };
 use crate::manifest::Capabilities;
+use crate::output::{GuestOutput, sanitize_log_message};
 use crate::services::HostServices;
 
 /// Per-store instance/table/memory caps: the measured minimum for components built with
@@ -150,6 +151,8 @@ pub(crate) struct HostState {
     pub(crate) limits: CallLimits,
     budget: Budget,
     pub(crate) wasi: WasiCtx,
+    /// Declared after `wasi` so it drops last; its `Drop` logs captured output.
+    output: GuestOutput,
     table: ResourceTable,
 }
 
@@ -171,15 +174,20 @@ impl HostState {
             inner: limits,
             grow_denied: false,
         };
+        let output = GuestOutput::new(plugin.clone());
+        let mut wasi = WasiCtx::builder();
+        // No preopens, no env, no args; stdin closed. stdout/stderr are captured with a
+        // cap and logged when the call ends.
+        wasi.stdout(output.stdout.clone())
+            .stderr(output.stderr.clone());
         Self {
             plugin,
             grants,
             services,
             limits,
             budget: Budget::per_call(),
-            // No preopens, no env, no args; stdin closed, stdout/stderr discarded
-            // (wasmtime-wasi's builder defaults).
-            wasi: WasiCtx::builder().build(),
+            wasi: wasi.build(),
+            output,
             table: ResourceTable::new(),
         }
     }
@@ -214,6 +222,10 @@ impl wit::Host for HostState {}
 
 impl log::Host for HostState {
     async fn log(&mut self, level: log::Level, message: String) {
+        if !self.output.admit_log() {
+            return;
+        }
+        let message = sanitize_log_message(&message);
         let plugin = &*self.plugin;
         match level {
             log::Level::Trace => tracing::trace!(plugin, "{message}"),

@@ -10,6 +10,7 @@ mod failure;
 mod inspect;
 mod linker;
 mod manifest;
+mod output;
 mod registry;
 mod services;
 mod state;
