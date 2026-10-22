@@ -188,3 +188,24 @@ async fn mismatched_or_unknown_hooks_return_input() -> TestResult {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn hello_works_with_pooling_allocator() -> TestResult {
+    let cfg = HostConfig {
+        pooling: true,
+        ..HostConfig::default()
+    };
+    let host = PluginHost::new(cfg, Arc::new(InMemoryServices::new()))?;
+    host.install(
+        Manifest::parse(&plugin_manifest("hello"))?,
+        &plugin_wasm("hello"),
+    )?;
+    let out = host
+        .apply_filter("render.head", FilterValue::Head(Head::default()), &req())
+        .await;
+    let FilterValue::Head(head) = out else {
+        panic!("expected head, got {out:?}");
+    };
+    assert_eq!(head.metas, vec![generator()]);
+    Ok(())
+}

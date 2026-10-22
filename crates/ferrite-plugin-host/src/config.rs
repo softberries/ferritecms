@@ -13,6 +13,8 @@ pub struct HostConfig {
     pub epoch_tick: Duration,
     pub disable_after_failures: u32,
     pub failure_window: Duration,
+    /// Use wasmtime's pooling instance allocator (design 05 §6).
+    pub pooling: bool,
 }
 
 impl Default for HostConfig {
@@ -26,6 +28,7 @@ impl Default for HostConfig {
             epoch_tick: Duration::from_millis(5),
             disable_after_failures: 20,
             failure_window: Duration::from_secs(10 * 60),
+            pooling: false,
         }
     }
 }

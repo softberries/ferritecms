@@ -20,3 +20,11 @@ serde_json.workspace = true
 semver.workspace = true
 thiserror.workspace = true
 toml.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+criterion = { workspace = true, features = ["async_tokio"] }
+
+[[bench]]
+name = "filter_call"
+harness = false

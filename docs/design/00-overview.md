@@ -114,7 +114,7 @@ Per project rules, claims about third-party libraries were checked on 2026-10-22
 | MiniJinja 3.x has a `fuel` feature to bound template execution | memory | **Not verified** — confirm in M1 |
 | Motion (formerly Framer Motion) is published as the `motion` npm package | memory | **Not verified** — confirm at admin scaffold |
 | Yoast / Rank Math / ACF meta key names in 08 §3 | memory | **Not verified** — confirm against real exports in M3 |
-| `wasm32-wasip2` target builds components directly; unused WIT imports are dropped | memory | **Not verified** — M0 task |
+| `wasm32-wasip2` target builds components directly; unused WIT imports are dropped | M0 spike + tests (`hello` imports exactly `log`; hostile `undeclared-import`) | Yes |
 
 Exact API shapes (e.g. wasmtime component async entry points in v50) must be confirmed
 against the pinned version when implementing; the M0 spike exists to do exactly that.

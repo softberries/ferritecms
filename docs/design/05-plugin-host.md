@@ -132,7 +132,7 @@ interface types {
 
 /// Exported by every plugin.
 interface guest {
-  use types.{filter-value, action-event, request-info, plugin-error};
+  use types.{filter-value, action-event, request-info, route-request, route-response, plugin-error};
   apply-filter: func(hook: string, value: filter-value, req: request-info) -> result<filter-value, plugin-error>;
   on-action: func(hook: string, event: action-event) -> result<_, plugin-error>;
   /// Only called if the manifest declares `routes = true` and a matching [routes] entry.
@@ -161,7 +161,7 @@ interface meta {
 }
 
 /// capability: options.read
-interface options { get: func(key: string) -> option<string>; }
+interface options { get: func(key: string) -> option<string>; }   // JSON text
 
 /// capability: kv
 interface kv {
@@ -204,8 +204,8 @@ returned `filter-value` variant matches the hook's declared type (e.g. `render.h
 `head`), otherwise it's a failure.
 
 **Imports are optional at link time.** The world lists every import; a component only
-imports what it uses (wit-bindgen/`cargo component` drop unused imports — **verify in
-M0**). The host's `Linker` for a plugin is built with only the granted interfaces, so an
+imports what it uses (**verified in M0**: `cargo build --target wasm32-wasip2` with
+wit-bindgen drops unused imports; the `hello` plugin imports exactly `log`). The host's `Linker` for a plugin is built with only the granted interfaces, so an
 undeclared import fails instantiation even if the install-time check were bypassed
 (defence in depth).
 
@@ -277,16 +277,28 @@ Rust's `wasm32-wasip2` std imports some WASI interfaces even for simple code. Po
 | `wasi:sockets/*` | **not linked**; component importing it is rejected |
 | `wasi:http/*` | **not linked**; outbound HTTP only via `ferrite:plugin/http` |
 
-Exact interface list and whether wasmtime-wasi lets us link the subset cleanly (vs.
-linking all with a deny-all `WasiCtx`) is an M0 task.
+**Settled in M0.** wasmtime-wasi 50 lets the host link the subset per interface (no
+fallback to a deny-all `WasiCtx` was needed). `wasmtime_wasi::p2::add_to_linker_async` is
+*not* used because it also links `wasi:sockets`. Linked interfaces:
+`wasi:io` (via `wasmtime_wasi_io::add_to_linker_async`), `wasi:clocks/{wall-clock,monotonic-clock}`,
+`wasi:random/{random,insecure,insecure-seed}`,
+`wasi:cli/{exit,environment,stdin,stdout,stderr,terminal-input,terminal-output,terminal-stdin,terminal-stdout,terminal-stderr}`,
+`wasi:filesystem/{types,preopens}` (no preopens configured). `wasi:sockets/*` and
+`wasi:http/*` are not linked, so such a component also fails to instantiate even if
+inspection were bypassed.
+
+stdout/stderr are captured into a buffer capped at **64 KiB per stream per call** (the
+rest is discarded and counted), then logged through `tracing` with control and bidi
+characters escaped (no log injection). Guest `log` calls are capped at **4 KiB per message
+and 100 calls per call**, also escaped.
 
 ## 6. Execution model & limits
 
 ### Engine (one per process)
 
-- `Config`: component model on, `async_support(true)`, `consume_fuel(true)`,
-  `epoch_interruption(true)`, pooling instance allocator (sized from config: max
-  concurrent instances, memory per instance), Cranelift `opt_level = speed`.
+- `Config`: component model on, `consume_fuel(true)`, `epoch_interruption(true)`,
+  optional pooling instance allocator (`HostConfig.pooling`, default **off**, see
+  Measured below). `Config::async_support` is not needed in wasmtime 50.
 - An epoch ticker thread calls `engine.increment_epoch()` every **5 ms**.
 - Compiled components cached on disk keyed by
   `(artifact hash, wasmtime version, engine config hash)` via
@@ -297,23 +309,53 @@ linking all with a deny-all `WasiCtx`) is an M0 task.
 
 ```
 store = Store::new(&engine, HostState { plugin, grants, limits, budget, req })
-store.limiter(|s| &mut s.limits)                 // StoreLimits: memory_size, instances=1, tables
+store.limiter(|s| &mut s.limits)                 // StoreLimits: memory_size, instances=3, tables=2, memories=1, table_elements=10_000
 store.set_fuel(fuel_per_call)                    // instruction budget
-store.fuel_async_yield_interval(Some(10_000))    // cooperative yield to tokio
+store.fuel_async_yield_interval(Some(100_000))   // cooperative yield to tokio (was 10_000, see below)
 store.epoch_deadline_trap(); store.set_epoch_deadline(deadline_ticks)
-instance = instance_pre.instantiate_async(&mut store)      // pooling allocator → fast
+instance = instance_pre.instantiate_async(&mut store)      // ~20 µs measured
 result = tokio::time::timeout(hard_deadline, guest.call_apply_filter(&mut store, …))
 ```
 
-- **Fresh instance per call** (default). Guarantees no state leaks between requests and
-  matches P4. M0 benchmarks this against reusing an instance per (plugin, worker); if
-  fresh instantiation misses P8, reuse with a reset is the fallback — documented as a
-  weaker isolation mode.
+- **Fresh instance per call** (the only mode). Guarantees no state leaks between requests
+  and matches P4. M0 measured it (below): P8 is met by a wide margin, so the
+  reuse-per-worker fallback is **not built**.
+
+**Measured (M0, `cargo bench -p ferrite-plugin-host --bench filter_call`, release,
+Apple M3 Max dev laptop, wasmtime 50.0.0, criterion medians, hello `render.head` filter
+including `apply_filter` registry lookup, instantiate, call, output validation; machine
+was busy, load average 27-60, so treat as upper-ish bounds):**
+
+| Benchmark | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| `hello_render_head_fresh` (default allocator) | 32.5 µs | 26.8 µs | 26.9 µs |
+| `hello_render_head_fresh_pooling` | 25.6 µs | 23.7 µs | 24.2 µs |
+| `instantiate_only` (no WASI, unused imports trapped) | 24.2 µs | 20.0 µs | 20.3 µs |
+
+P8 (< 1 ms) is met by ~35x. Pooling saves only ~3 µs (~10%) and reserves virtual address
+space for a fixed slot count (calls beyond `POOL_SLOTS = 256` concurrent instances fail
+to instantiate), so **pooling defaults to off**; `HostConfig.pooling = true` enables it
+(slots sized to the StoreLimits above, `max_memory_size` = the memory cap). Revisit
+under real concurrent load in M1.
 - `hard_deadline` (tokio timeout, = deadline + 50%) is the backstop for time spent in
   host imports (DB, HTTP), which epochs don't interrupt.
 - Host-import budgets per call: `content` ≤ 100 calls, `kv` ≤ 100 ops / 1 MB, `http` ≤ 3
   requests, each ≤ 5 s / 2 MB response; exceeding → the import returns an error, the
-  guest decides.
+  guest decides. In M0, `meta`, `options` and `settings` calls also count against the
+  `content` budget (conservative; spec named only content/kv/http). Guest-supplied list
+  limits (`list-posts`, `kv.list-keys`) are clamped to 100.
+- **StoreLimits (measured in M0)**: `instances = 3`, `tables = 2`, `memories = 1`,
+  `table_elements = 10_000`. A `wasm32-wasip2` component built by Rust instantiates
+  several core instances (main module plus WASI adapter shims), so `instances = 1`
+  fails; **3 is the minimum that worked** for the example plugins. `table_elements`
+  bounds a guest `table.grow` (otherwise host OOM).
+- **Fuel yield interval**: `100_000`, not the 10 000 first drafted here. At 10 000 the
+  yield bookkeeping slowed a busy-loop guest by about 3.5x, which broke the
+  fuel-exhaustion test (< 200 ms). Wall-clock stays bounded by the epoch deadline
+  regardless; the cost is coarser cooperative yielding under many CPU-bound plugins.
+- **Manifest limits (ruling R3)**: effective limit = min(manifest `[limits]`, host
+  default). A manifest requesting more than the default fails `install`; the admin
+  approval flow for higher values is post-M0 (M1 checklist).
 - Data crossing the boundary is copied (Component Model canonical ABI). Strings/lists
   from the guest have size caps (e.g. `head` ≤ 64 KB total, `html` ≤ 4× input or 2 MB).
 
@@ -327,6 +369,10 @@ result = tokio::time::timeout(hard_deadline, guest.call_apply_filter(&mut store,
 
 ## 7. Output validation
 
+- **M0 status (ruling R4)**: the host validates the output *variant* and *size* only
+  (head ≤ 64 KiB of serialised strings; html/text ≤ max(4 × input, 64 KiB), never above
+  2 MiB). `ammonia` sanitising of `html` and head→HTML rendering (escaping, `script-tag`
+  checks) are deferred to the M1 render pipeline (ROADMAP M1).
 - `head` is structured: the host renders tags itself with proper escaping. Plugins can't
   inject arbitrary HTML into `<head>`. `script-tag.src` must be https or same-origin;
   `json-ld` is checked to be valid JSON and embedded with `</` escaped.
@@ -337,6 +383,9 @@ result = tokio::time::timeout(hard_deadline, guest.call_apply_filter(&mut store,
 
 ## 7a. Data visibility and caching
 
+- **M0 status (ruling R6)**: `content.read` is scoped by *type* (types not in the
+  manifest list return nothing). Published-only and preview visibility need post status
+  in `HostServices` and land in M1.
 - **What `content.read` sees**: published, publicly visible items of the granted types —
   never drafts, pending, private, scheduled or trashed items, and never user e-mails or
   auth data. Exception: during an authenticated **preview** of a draft, `request-info.post`
@@ -416,8 +465,9 @@ ferrite_sdk::export_plugin! {
   macro dispatches on the incoming `filter-value` variant and a mismatch yields
   `invalid-input`. Unknown hook names yield `invalid-input`; `handle_request` with no
   matching route returns a 404.
-- Build: `cargo build --target wasm32-wasip2 --release` producing a component directly
-  (verify tooling in M0; fallback: `cargo component`).
+- Build (**settled in M0**, ruling R1): `cargo build --release --target wasm32-wasip2`
+  with an explicit `--target` produces a component directly; `cargo component` is not
+  needed. (`plugins/.cargo/config.toml` sets the target only for CWD inside `plugins/`.)
 - `ferrite plugin new <name>` scaffolds a plugin crate + manifest;
   `ferrite plugin check <dir>` runs the install-time validation locally.
 

@@ -11,17 +11,17 @@ moves the credible MVP from the original ~3 months to roughly **5 months**.
 
 The riskiest part. Prove it before building a CMS around it. Design: [05](design/05-plugin-host.md).
 
-- [ ] Cargo workspace skeleton (`ferrite-plugin-host`, `ferrite-sdk`, `ferrite-domain`, `wit/`), CI with fmt + clippy.
-- [ ] WIT `ferrite:plugin@0.1.0` draft: `guest` (apply-filter, on-action, handle-request), `log`, `content` (stub), `kv` (stub).
-- [ ] Verify toolchain: `wasm32-wasip2` component output, unused imports dropped, WASI subset linking.
-- [ ] Install-time inspection: reject undeclared `ferrite:*` imports and `wasi:sockets`/`wasi:http`.
-- [ ] Per-plugin `Linker` with only granted interfaces.
-- [ ] Limits: `StoreLimits` memory, fuel, epoch deadline + tokio hard timeout.
-- [ ] Hostile plugins: loop, oom, panic, undeclared-import, sockets, big-output, wrong-variant, fs-escape.
-- [ ] Hello-world `render.head` plugin via `ferrite-sdk` macros.
-- [ ] Benchmark: fresh instance per call (pooling allocator) vs. reused instance.
+- [x] Cargo workspace skeleton (`ferrite-plugin-host`, `ferrite-sdk`, `ferrite-domain`, `wit/`), CI with fmt + clippy.
+- [x] WIT `ferrite:plugin@0.1.0` draft: `guest` (apply-filter, on-action, handle-request), `log`, `content` (stub), `kv` (stub).
+- [x] Verify toolchain: `wasm32-wasip2` component output, unused imports dropped, WASI subset linking.
+- [x] Install-time inspection: reject undeclared `ferrite:*` imports and `wasi:sockets`/`wasi:http`.
+- [x] Per-plugin `Linker` with only granted interfaces.
+- [x] Limits: `StoreLimits` memory, fuel, epoch deadline + tokio hard timeout.
+- [x] Hostile plugins: loop, oom, panic, undeclared-import, sockets, big-output, wrong-variant, fs-escape.
+- [x] Hello-world `render.head` plugin via `ferrite-sdk` macros.
+- [x] Benchmark: fresh instance per call (pooling allocator) vs. reused instance. Result: ~27 µs fresh, ~24 µs pooling; reuse not needed (05 §6).
 
-**Exit:** filter warm call < 1 ms; all hostile plugins contained; findings written back into design 05.
+**Exit (met):** filter warm call ~27 µs (< 1 ms); all hostile plugins contained; findings written back into design 05.
 
 ## M1 — Storage, media, core & serving on both backends (~4 weeks)
 
@@ -38,6 +38,7 @@ Design: [02](design/02-storage.md), [03](design/03-media.md), [06](design/06-the
 - [ ] Theme engine: minijinja, hierarchy resolution, safe helpers, dependency recording; `blog` theme.
 - [ ] Page cache with dependency index (solo invalidation path).
 - [ ] Plugin host wired into rendering (`render.head`, `content.body`, `content.excerpt`), plugins loaded from artifacts.
+- [ ] Plugin host follow-ups from M0: `ammonia` sanitising of `html` output and head→HTML rendering (05 §7); `content.read` published-only and preview visibility (05 §7a); reject bare IPs in the http allowlist (SSRF) and implement real `http`/`mail` services; type-scope `meta` and stop `"*"` exposing other plugins' `plugin.<other>.*` meta; admin approval flow for limits above host defaults; revisit pooling allocator under concurrent load.
 
 **Exit:** a seeded site renders identically on SQLite+local and Postgres+MinIO; editing via CLI/seed invalidates the right pages.
 
