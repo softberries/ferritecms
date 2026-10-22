@@ -463,6 +463,11 @@ mod tests {
     #[tokio::test]
     async fn lazy_release_after_outer_drop() {
         let Ok(url) = std::env::var("FERRITE_TEST_PG_URL") else {
+            // Same rule as the contract-test harness: skipping is not allowed in CI.
+            if std::env::var("CI").as_deref() == Ok("true") {
+                panic!("FERRITE_TEST_PG_URL must be set in CI");
+            }
+            eprintln!("SKIP: Postgres test skipped (FERRITE_TEST_PG_URL is not set)");
             return;
         };
         let pool = sqlx::postgres::PgPoolOptions::new()
