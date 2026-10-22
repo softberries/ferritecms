@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use ferrite_domain::{ContentId, ContentItem, TermId, Timestamp, UserId};
+use ferrite_domain::{ContentId, TermId, Timestamp, UserId};
 
 /// A read result plus the dependency keys it touched (renderer side of the contract in
 /// [`crate::events`]).
@@ -42,17 +42,35 @@ impl DepKeys {
     }
 }
 
+/// The public view of a content item: everything a template may see of the row.
+/// No body (the rendered HTML is [`PageItem::html`]), status, version, scheduling or
+/// author id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PublicItem {
+    pub id: ContentId,
+    pub kind: String,
+    pub slug: String,
+    pub title: String,
+    /// The stored excerpt, or one derived from the body when it is empty.
+    pub excerpt: String,
+    pub published_at: Option<Timestamp>,
+    pub updated_at: Timestamp,
+    pub menu_order: i32,
+    pub parent_id: Option<ContentId>,
+    /// Custom fields, filtered: `featured_image` is kept only if it resolved to public
+    /// media, and UUID strings naming non-public content items are removed.
+    pub fields: serde_json::Value,
+}
+
 /// A content item ready for a template.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageItem {
-    pub item: ContentItem,
+    pub item: PublicItem,
     /// Public path (canonical, trailing slash).
     pub url: String,
     /// The rendered block body; `ferrite:media/<id>` images point at published media,
     /// other media references are dropped.
     pub html: String,
-    /// The stored excerpt, or one derived from the body when it is empty.
-    pub excerpt: String,
     /// `None` only if the author row is gone.
     pub author: Option<UserPublic>,
     /// In stored position order.
@@ -60,7 +78,6 @@ pub struct PageItem {
     /// From `fields.featured_image` (a media item id); `None` when unset, invalid or
     /// not a published media item.
     pub featured: Option<MediaPublic>,
-    pub fields: serde_json::Value,
 }
 
 /// The public face of a user: nothing beyond these three fields leaves core.

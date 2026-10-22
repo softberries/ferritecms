@@ -293,13 +293,13 @@ pub async fn no_leak_listings(db: &TestDb) {
     let set = leak_set(store).await;
     let r = reader(db.shared_store());
 
-    let archive = r.archive("post", 1).await.unwrap().value;
+    let archive = r.archive("post", 1).await.unwrap().value.unwrap();
     assert_eq!(slugs(&archive.items), SHOWN);
     assert_eq!(archive.total, 2);
-    let pages = r.archive("page", 1).await.unwrap().value;
+    let pages = r.archive("page", 1).await.unwrap().value.unwrap();
     assert!(pages.items.is_empty() && pages.total == 0);
 
-    let FrontPage::Posts(front) = r.front_page(1).await.unwrap().value else {
+    let FrontPage::Posts(front) = r.front_page(1).await.unwrap().value.unwrap() else {
         panic!("expected the post listing");
     };
     assert_eq!(slugs(&front.items), SHOWN);
@@ -319,7 +319,7 @@ pub async fn no_leak_listings(db: &TestDb) {
     }
 
     // Search orders by rank, not date.
-    let found = r.search("needle", 1).await.unwrap().value;
+    let found = r.search("needle", 1).await.unwrap().value.unwrap();
     let mut found = slugs(&found.items);
     found.sort_unstable();
     assert_eq!(found, ["other", "visible"]);
@@ -407,10 +407,19 @@ pub async fn search_never_trusts_index(db: &TestDb) {
     )
     .await;
     let r = reader(db.shared_store());
-    let found = r.search("needle", 1).await.unwrap().value;
+    let found = r.search("needle", 1).await.unwrap().value.unwrap();
     let ids: Vec<ContentId> = found.items.iter().map(|p| p.item.id).collect();
     assert_eq!(ids, [shown]);
-    assert!(r.search("   ", 1).await.unwrap().value.items.is_empty());
+    assert_eq!(found.total, 1, "total counts public matches only");
+    assert!(
+        r.search("   ", 1)
+            .await
+            .unwrap()
+            .value
+            .unwrap()
+            .items
+            .is_empty()
+    );
 }
 
 pub async fn related_never_unpublished(db: &TestDb) {
@@ -512,6 +521,12 @@ pub async fn single_walks_page_path(db: &TestDb) {
             .url,
         "/about/team/kid/"
     );
+    // Accepted consequence of the WP-style rule: the sitemap lists the published
+    // child with its draft ancestor's slug, but not the ancestor.
+    let sitemap = r.sitemap("page", None).await.unwrap().value;
+    let mut urls: Vec<&str> = sitemap.entries.iter().map(|e| e.url.as_str()).collect();
+    urls.sort_unstable();
+    assert_eq!(urls, ["/about/team/", "/about/team/kid/", "/team/"]);
     // The draft ancestor itself is not public.
     assert!(
         r.single("page", &parts(&["about"]))
@@ -591,9 +606,20 @@ pub async fn single_hydrates(db: &TestDb) {
     let pic = media(store, &author, ContentStatus::Published).await;
     let hidden_pic = media(store, &author, ContentStatus::Draft).await;
     let gone = ContentId::new();
+    let draft_post = insert(
+        store,
+        &author,
+        item("post", "wip", ContentStatus::Draft, None),
+    )
+    .await;
     let mut it = item("post", "full", ContentStatus::Published, Some(-HOUR));
     it.terms = vec![rust, news];
-    it.fields = json!({"featured_image": pic.to_string(), "color": "red"});
+    it.fields = json!({
+        "featured_image": pic.to_string(),
+        "color": "red",
+        "refs": [hidden_pic.to_string(), draft_post.to_string(), gone.to_string()],
+        "nested": {"x": hidden_pic.to_string(), "n": 3}
+    });
     it.body = json!({"type": "doc", "content": [
         {"type": "paragraph", "content": [{"type": "text", "text": "Hello world"}]},
         {"type": "image", "attrs": {"src": format!("ferrite:media/{pic}"), "alt": "inline"}},
@@ -649,10 +675,16 @@ pub async fn single_hydrates(db: &TestDb) {
     assert_eq!(p.html.matches("<img").count(), 1, "{}", p.html);
     assert!(p.html.contains(&format!("src=\"{}\"", f.url)));
     assert!(p.html.contains("alt=\"inline\""));
-    assert_eq!(p.excerpt, "Hello world");
+    assert_eq!(p.item.excerpt, "Hello world");
     assert_eq!(
-        p.fields,
-        json!({"featured_image": pic.to_string(), "color": "red"})
+        p.item.fields,
+        json!({
+            "featured_image": pic.to_string(),
+            "color": "red",
+            "refs": [gone.to_string()],
+            "nested": {"n": 3}
+        }),
+        "references to non-public content are stripped"
     );
     for key in [post_key(id), term_key(news), term_key(rust), post_key(pic)] {
         assert!(got.deps.contains(&key), "missing {key}");
@@ -669,7 +701,12 @@ pub async fn single_hydrates(db: &TestDb) {
         other.featured.is_none(),
         "an unpublished media item is not shown"
     );
-    assert_eq!(other.excerpt, "Stored excerpt");
+    assert_eq!(other.item.excerpt, "Stored excerpt");
+    assert_eq!(
+        other.item.fields,
+        json!({}),
+        "unresolved featured_image removed"
+    );
 }
 
 // ------------------------------------------------------------ listings
@@ -693,43 +730,121 @@ pub async fn listing_pages_and_deps(db: &TestDb) {
     let r = reader(db.shared_store());
     let first = r.archive("post", 1).await.unwrap();
     assert_eq!(
-        (first.value.page, first.value.per_page, first.value.total),
+        (
+            first.value.as_ref().unwrap().page,
+            first.value.as_ref().unwrap().per_page,
+            first.value.as_ref().unwrap().total
+        ),
         (1, 10, 25)
     );
-    assert_eq!(first.value.items.len(), 10);
-    assert_eq!(first.value.items[0].item.slug, "p00");
+    assert_eq!(first.value.as_ref().unwrap().items.len(), 10);
+    assert_eq!(first.value.as_ref().unwrap().items[0].item.slug, "p00");
     for key in [archive_key("post"), option_key("reading.per_page")] {
         assert!(first.deps.contains(&key), "missing {key}");
     }
-    for p in &first.value.items {
+    for p in &first.value.as_ref().unwrap().items {
         assert!(first.deps.contains(&post_key(p.item.id)));
     }
-    let third = r.archive("post", 3).await.unwrap().value;
+    let third = r.archive("post", 3).await.unwrap().value.unwrap();
     assert_eq!(slugs(&third.items), ["p20", "p21", "p22", "p23", "p24"]);
-    assert!(r.archive("post", 4).await.unwrap().value.items.is_empty());
     assert!(
-        r.archive("post", 1001)
+        r.archive("post", 4)
             .await
             .unwrap()
             .value
+            .unwrap()
             .items
             .is_empty()
     );
+    // Deep paging is capped at 5 000 skipped rows (R6): page 501 skips exactly 5 000.
+    assert!(
+        r.archive("post", 501)
+            .await
+            .unwrap()
+            .value
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    assert!(r.archive("post", 502).await.unwrap().value.is_none());
+    assert!(r.front_page(502).await.unwrap().value.is_none());
+    assert!(r.search("needle", 502).await.unwrap().value.is_none());
+    assert!(
+        r.date_archive(2026, None, 502)
+            .await
+            .unwrap()
+            .value
+            .is_none()
+    );
     // Page 0 is page 1.
-    assert_eq!(r.archive("post", 0).await.unwrap().value.page, 1);
+    assert_eq!(r.archive("post", 0).await.unwrap().value.unwrap().page, 1);
 
     set_option(store, "reading.per_page", json!(4)).await;
-    let small = r.archive("post", 2).await.unwrap().value;
+    let small = r.archive("post", 2).await.unwrap().value.unwrap();
     assert_eq!(
         (small.per_page, slugs(&small.items)),
         (4, vec!["p04", "p05", "p06", "p07"])
     );
     set_option(store, "reading.per_page", json!(500)).await;
-    assert_eq!(r.archive("post", 1).await.unwrap().value.per_page, 100);
+    assert_eq!(
+        r.archive("post", 1).await.unwrap().value.unwrap().per_page,
+        100
+    );
     set_option(store, "reading.per_page", json!(0)).await;
-    assert_eq!(r.archive("post", 1).await.unwrap().value.per_page, 1);
+    assert_eq!(
+        r.archive("post", 1).await.unwrap().value.unwrap().per_page,
+        1
+    );
     set_option(store, "reading.per_page", json!("lots")).await;
-    assert_eq!(r.archive("post", 1).await.unwrap().value.per_page, 10);
+    assert_eq!(
+        r.archive("post", 1).await.unwrap().value.unwrap().per_page,
+        10
+    );
+}
+
+/// Hidden items between public ones never count or shift pages.
+pub async fn listing_with_interleaved_hidden(db: &TestDb) {
+    let store = db.store();
+    let author = user(store, "writer", Role::Author).await;
+    let news = term(store, "category", "news").await;
+    for i in 0..12i64 {
+        let mut shown = item(
+            "post",
+            &format!("s{i:02}"),
+            ContentStatus::Published,
+            Some(-(2 * i + 1) * HOUR),
+        );
+        shown.terms = vec![news];
+        insert(store, &author, shown).await;
+        let (_, status, _) = HIDDEN[(i as usize) % HIDDEN.len()];
+        let published = if status == ContentStatus::Published {
+            HOUR
+        } else {
+            -(2 * i + 2) * HOUR
+        };
+        let mut hidden = item("post", &format!("h{i:02}"), status, Some(published));
+        hidden.terms = vec![news];
+        insert(store, &author, hidden).await;
+    }
+    set_option(store, "reading.per_page", json!(5)).await;
+    let r = reader(db.shared_store());
+    let expect: Vec<String> = (0..12).map(|i| format!("s{i:02}")).collect();
+    let mut seen = Vec::new();
+    for page in 1..=3 {
+        // Page 1 and 2 have a next page, so their total comes from `count`.
+        let l = r.archive("post", page).await.unwrap().value.unwrap();
+        assert_eq!(l.total, 12, "page {page}");
+        let t = r
+            .term_archive("category", "news", page)
+            .await
+            .unwrap()
+            .value
+            .unwrap();
+        assert_eq!(t.total, 12, "term page {page}");
+        assert_eq!(slugs(&t.items), slugs(&l.items));
+        seen.extend(l.items.iter().map(|p| p.item.slug.clone()));
+    }
+    assert_eq!(seen, expect);
 }
 
 pub async fn archives_by_term_author_date(db: &TestDb) {
@@ -757,7 +872,7 @@ pub async fn archives_by_term_author_date(db: &TestDb) {
 
     let r = reader(db.shared_store());
     let t = r.term_archive("category", "news", 1).await.unwrap();
-    assert_eq!(slugs(&t.value.unwrap().items), ["june", "may"]);
+    assert_eq!(slugs(&t.value.as_ref().unwrap().items), ["june", "may"]);
     assert!(t.deps.contains(&term_key(news)));
     assert!(t.deps.contains(&archive_key("post")));
     assert!(
@@ -774,6 +889,40 @@ pub async fn archives_by_term_author_date(db: &TestDb) {
             .value
             .is_none()
     );
+
+    let t = t.value.unwrap();
+    assert_eq!(t.total, 2);
+
+    // R7: a user or tag with only non-public posts looks unknown.
+    let drafter = user(store, "drafter", Role::Author).await;
+    let secret = term(store, "tag", "secret").await;
+    for (slug, status, published) in HIDDEN {
+        let mut it = item("post", &format!("d-{slug}"), status, published);
+        it.terms = vec![secret];
+        insert(store, &drafter, it).await;
+    }
+    assert!(
+        r.author_archive("drafter", 1)
+            .await
+            .unwrap()
+            .value
+            .is_none()
+    );
+    assert!(
+        r.term_archive("tag", "secret", 1)
+            .await
+            .unwrap()
+            .value
+            .is_none()
+    );
+    let secret_feed = FeedSource::Term {
+        taxonomy: "tag".into(),
+        slug: "secret".into(),
+    };
+    assert!(r.feed(&secret_feed).await.unwrap().value.is_none());
+    // Past the last page of a non-empty archive is an empty page, not None.
+    let beyond = r.author_archive("writer", 9).await.unwrap().value.unwrap();
+    assert!(beyond.items.is_empty() && beyond.total == 2);
 
     let w = r.author_archive("writer", 1).await.unwrap().value.unwrap();
     assert_eq!(slugs(&w.items), ["may", "last-year"]);
@@ -834,7 +983,7 @@ pub async fn front_page_option(db: &TestDb) {
 
     set_option(store, "reading.front_page", json!(home.to_string())).await;
     let got = r.front_page(1).await.unwrap();
-    let FrontPage::Page(p) = got.value else {
+    let FrontPage::Page(p) = got.value.unwrap() else {
         panic!("expected the static front page")
     };
     assert_eq!(p.item.id, home);
@@ -844,7 +993,7 @@ pub async fn front_page_option(db: &TestDb) {
     for unusable in [json!(draft.to_string()), json!("not-an-id"), json!(7)] {
         set_option(store, "reading.front_page", unusable).await;
         let got = r.front_page(1).await.unwrap();
-        let FrontPage::Posts(l) = got.value else {
+        let FrontPage::Posts(l) = got.value.unwrap() else {
             panic!("expected the post listing")
         };
         assert_eq!(slugs(&l.items), ["a-post"]);
@@ -924,13 +1073,12 @@ pub async fn listing_call_count_is_constant(db: &TestDb) {
         }
         set_option(store, "reading.per_page", json!(batch)).await;
         counting.reset();
-        let listing = r.archive("post", 1).await.unwrap().value;
+        let listing = r.archive("post", 1).await.unwrap().value.unwrap();
         assert_eq!(listing.items.len(), batch as usize);
         assert!(listing.total > u64::from(batch));
         assert!(listing.items.iter().all(|p| p.featured.is_some()));
         calls.push(counting.calls());
     }
-    eprintln!("store calls per listing: {calls:?}");
     assert_eq!(calls[0], calls[1], "calls grow with item count");
     assert!(calls[0] <= 7, "{calls:?}");
 
@@ -941,6 +1089,7 @@ pub async fn listing_call_count_is_constant(db: &TestDb) {
             .await
             .unwrap()
             .value
+            .unwrap()
             .items
             .is_empty()
     );
@@ -955,6 +1104,7 @@ backend_tests!(
     single_walks_page_path,
     single_hydrates,
     listing_pages_and_deps,
+    listing_with_interleaved_hidden,
     archives_by_term_author_date,
     front_page_option,
     preview_is_gated,

@@ -25,8 +25,21 @@
 //!
 //! **Offset paging.** The store pages by cursor; `/page/N/` skips `N - 1` pages by
 //! walking cursors in steps of up to 200 rows (`ceil(skip / 200)` extra round trips that
-//! load full rows). Pages beyond [`MAX_PAGE_NUMBER`] are empty. Fine for v1 archive
+//! load full rows). Requests that would skip more than [`MAX_SKIP`] rows return `None`
+//! (the router answers 404), which caps that cost (ruling R6). Fine for v1 archive
 //! sizes; a store-side offset or keyset-by-page index is the upgrade path.
+//!
+//! **No existence oracle** (ruling R7): author and term archives and term feeds with
+//! no public items return `None`, the same as an unknown user or term, so drafts do
+//! not reveal that a login or tag exists.
+//!
+//! **Public view only** (ruling R8): templates get a [`PublicItem`], never the row:
+//! no body source, status, version or scheduling, and `fields` stripped of references
+//! to non-public content.
+//!
+//! **Hidden ancestors** (accepted consequence of the WordPress-style rule in
+//! [`SiteReader::single`]): a published child under a draft page keeps its full path,
+//! so its URL (in pages, listings and the sitemap) contains the draft ancestor's slug.
 
 mod hydrate;
 mod model;
@@ -38,7 +51,7 @@ use ferrite_domain::{
     ArtifactHash, ContentId, ContentItem, ContentQuery, ContentStatus, MAX_PAGE, SearchQuery,
     Timestamp,
 };
-use ferrite_store::{MAX_SEARCH_KINDS, Repos, Store};
+use ferrite_store::{MAX_ID_FILTER, MAX_SEARCH_KINDS, Repos, Store};
 
 use crate::{
     Actor, CoreError, MAX_PARENT_DEPTH,
@@ -48,8 +61,8 @@ use crate::{
 };
 use hydrate::{Hydrator, Nodes, chain, unique};
 pub use model::{
-    DepKeys, FeedSource, FrontPage, Listing, MediaPublic, MediaVariant, PageItem, SiteRead,
-    SitemapEntry, SitemapPage, TermPublic, UserPublic,
+    DepKeys, FeedSource, FrontPage, Listing, MediaPublic, MediaVariant, PageItem, PublicItem,
+    SiteRead, SitemapEntry, SitemapPage, TermPublic, UserPublic,
 };
 
 /// Maps an artifact hash and a file name to a public URL (`MediaStore::public_url`).
@@ -67,8 +80,9 @@ pub const PER_PAGE_OPTION: &str = "reading.per_page";
 pub const FRONT_PAGE_OPTION: &str = "reading.front_page";
 const DEFAULT_PER_PAGE: u32 = 10;
 const MAX_PER_PAGE: i64 = 100;
-/// Highest listing page number served; later pages are empty.
-pub const MAX_PAGE_NUMBER: u32 = 1000;
+/// Most rows a listing may skip to reach its page (`(page - 1) * per_page`); deeper
+/// pages are `None`.
+pub const MAX_SKIP: u64 = 5000;
 /// Items per feed.
 pub const FEED_LEN: u32 = 20;
 /// URLs per sitemap file.
@@ -153,8 +167,8 @@ impl SiteReader {
     }
 
     /// The site root: the item named by `reading.front_page` if it is public, else
-    /// page `page` of the post listing.
-    pub async fn front_page(&self, page: u32) -> Result<SiteRead<FrontPage>, CoreError> {
+    /// page `page` of the post listing (`None` past [`MAX_SKIP`]).
+    pub async fn front_page(&self, page: u32) -> Result<SiteRead<Option<FrontPage>>, CoreError> {
         let now = (self.clock)();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
@@ -176,24 +190,29 @@ impl SiteReader {
                     .hydrate(vec![item], Nodes::new(), &mut deps)
                     .await?;
                 if let Some(p) = items.pop() {
-                    return Ok(public(FrontPage::Page(Box::new(p)), deps));
+                    return Ok(public(Some(FrontPage::Page(Box::new(p))), deps));
                 }
             }
         }
         let listing = self.posts(repos, now, page, &mut deps).await?;
-        Ok(public(FrontPage::Posts(listing), deps))
+        Ok(public(listing.map(FrontPage::Posts), deps))
     }
 
     /// Page `page` of all public items of `kind`, newest first. Media is never listed.
-    /// Whether a type has a public archive at all is the router's decision.
-    pub async fn archive(&self, kind: &str, page: u32) -> Result<SiteRead<Listing>, CoreError> {
+    /// Whether a type has a public archive at all is the router's decision. `None`
+    /// past [`MAX_SKIP`].
+    pub async fn archive(
+        &self,
+        kind: &str,
+        page: u32,
+    ) -> Result<SiteRead<Option<Listing>>, CoreError> {
         let now = (self.clock)();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         deps.insert(archive_key(kind));
         if kind == MEDIA_KIND {
             let per_page = per_page(repos, &mut deps).await?;
-            return Ok(public(empty(page, per_page, 0), deps));
+            return Ok(public(Some(empty(page, per_page, 0)), deps));
         }
         let q = ContentQuery {
             kind: Some(kind.to_owned()),
@@ -203,7 +222,8 @@ impl SiteReader {
         Ok(public(listing, deps))
     }
 
-    /// Posts with the term `taxonomy`/`slug`; `None` for an unknown term.
+    /// Posts with the term `taxonomy`/`slug`; `None` for an unknown term, a term
+    /// without public posts (R7), or past [`MAX_SKIP`].
     pub async fn term_archive(
         &self,
         taxonomy: &str,
@@ -224,10 +244,11 @@ impl SiteReader {
             ..ContentQuery::default()
         };
         let listing = self.listing(repos, now, q, page, &mut deps).await?;
-        Ok(public(Some(listing), deps))
+        Ok(public(listing.filter(|l| l.total > 0), deps))
     }
 
-    /// Posts by the user with `login`; `None` if there is no such user.
+    /// Posts by the user with `login`; `None` if there is no such user, the user has
+    /// no public posts (R7), or past [`MAX_SKIP`].
     pub async fn author_archive(
         &self,
         login: &str,
@@ -246,11 +267,11 @@ impl SiteReader {
             ..ContentQuery::default()
         };
         let listing = self.listing(repos, now, q, page, &mut deps).await?;
-        Ok(public(Some(listing), deps))
+        Ok(public(listing.filter(|l| l.total > 0), deps))
     }
 
     /// Posts published in `year` (and `month`, 1..=12), in UTC like permalinks (R4);
-    /// `None` for an invalid or unrepresentable date.
+    /// `None` for an invalid or unrepresentable date, or past [`MAX_SKIP`].
     pub async fn date_archive(
         &self,
         year: i32,
@@ -271,17 +292,17 @@ impl SiteReader {
             ..ContentQuery::default()
         };
         let listing = self.listing(repos, now, q, page, &mut deps).await?;
-        Ok(public(Some(listing), deps))
+        Ok(public(listing, deps))
     }
 
-    /// Full-text search over every type but media, best match first.
+    /// Full-text search over every type but media, best match first; `None` past
+    /// [`MAX_SKIP`].
     ///
     /// The index is never trusted for visibility: the query asks for published items
-    /// only, and the page's rows are re-checked (published, `published_at <= now`,
-    /// public type) after loading. Up to [`SEARCH_CAP`] matching ids are walked to
-    /// page and count; `total` is that number, so it can include matches the re-check
-    /// later drops (future-dated items), and a page can then hold fewer items.
-    pub async fn search(&self, q: &str, page: u32) -> Result<SiteRead<Listing>, CoreError> {
+    /// only, and up to [`SEARCH_CAP`] matching ids are then loaded (`get_many`, 200 per
+    /// call) and re-checked (published, `published_at <= now`, public type) before
+    /// paging, so `total` counts public matches only.
+    pub async fn search(&self, q: &str, page: u32) -> Result<SiteRead<Option<Listing>>, CoreError> {
         let now = (self.clock)();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
@@ -298,9 +319,14 @@ impl SiteReader {
             deps.insert(archive_key(k));
         }
         let per_page = per_page(repos, &mut deps).await?;
+        let page = page.max(1);
+        let skip = u64::from(page - 1) * u64::from(per_page);
+        if skip > MAX_SKIP {
+            return Ok(public(None, deps));
+        }
         // Empty kinds would mean "all types", media included.
         if kinds.is_empty() {
-            return Ok(public(empty(page, per_page, 0), deps));
+            return Ok(public(Some(empty(page, per_page, 0)), deps));
         }
         let mut ids = Vec::new();
         let mut query = SearchQuery {
@@ -320,45 +346,40 @@ impl SiteReader {
                 None => break,
             }
         }
-        let ids = unique(ids);
-        let page = page.max(1);
-        let start = usize::try_from(page - 1)
-            .unwrap_or(usize::MAX)
-            .saturating_mul(per_page as usize);
-        let slice: Vec<ContentId> = ids
-            .iter()
-            .skip(start)
-            .take(per_page as usize)
-            .copied()
-            .collect();
-        let total = ids.len() as u64;
-        if slice.is_empty() {
-            return Ok(public(empty(page, per_page, total), deps));
+        let mut rows: Vec<ContentItem> = Vec::new();
+        for chunk in unique(ids).chunks(MAX_ID_FILTER) {
+            rows.extend(
+                repos
+                    .content()
+                    .get_many(chunk)
+                    .await?
+                    .into_iter()
+                    .filter(|i| is_public(i, now) && kinds.contains(&i.kind)),
+            );
         }
-        let rows: Vec<ContentItem> = repos
-            .content()
-            .get_many(&slice)
-            .await?
+        let total = rows.len() as u64;
+        let rows: Vec<ContentItem> = rows
             .into_iter()
-            .filter(|i| is_public(i, now) && kinds.contains(&i.kind))
+            .skip(usize::try_from(skip).unwrap_or(usize::MAX))
+            .take(per_page as usize)
             .collect();
         let items = self
             .hydrator(repos, now)
             .hydrate(rows, Nodes::new(), &mut deps)
             .await?;
         Ok(public(
-            Listing {
+            Some(Listing {
                 items,
                 page,
                 per_page,
                 total,
-            },
+            }),
             deps,
         ))
     }
 
     /// The latest [`FEED_LEN`] public items of a type, or posts with a term (`None` for
-    /// an unknown term). A media feed is empty.
+    /// an unknown term or one without public posts, R7). A media feed is empty.
     pub async fn feed(
         &self,
         source: &FeedSource,
@@ -387,6 +408,9 @@ impl SiteReader {
         }
         q.limit = FEED_LEN;
         let rows = repos.content().list(&q).await?.items;
+        if rows.is_empty() && matches!(source, FeedSource::Term { .. }) {
+            return Ok(public(None, deps));
+        }
         let items = self
             .hydrator(repos, now)
             .hydrate(rows, Nodes::new(), &mut deps)
@@ -533,7 +557,7 @@ impl SiteReader {
         now: Timestamp,
         page: u32,
         deps: &mut DepKeys,
-    ) -> Result<Listing, CoreError> {
+    ) -> Result<Option<Listing>, CoreError> {
         deps.insert(archive_key(POST_KIND));
         let q = ContentQuery {
             kind: Some(POST_KIND.to_owned()),
@@ -542,8 +566,9 @@ impl SiteReader {
         self.listing(repos, now, q, page, deps).await
     }
 
-    /// Page `page` (1-based) of `filter` with the public restriction forced on (see the
-    /// module docs for paging and the call budget).
+    /// Page `page` (1-based) of `filter` with the public restriction forced on, or
+    /// `None` when reaching it would skip more than [`MAX_SKIP`] rows (see the module
+    /// docs for paging and the call budget).
     async fn listing(
         &self,
         repos: &dyn Repos,
@@ -551,7 +576,7 @@ impl SiteReader {
         filter: ContentQuery,
         page: u32,
         deps: &mut DepKeys,
-    ) -> Result<Listing, CoreError> {
+    ) -> Result<Option<Listing>, CoreError> {
         let per_page = per_page(repos, deps).await?;
         let page = page.max(1);
         let mut q = published(now);
@@ -562,12 +587,11 @@ impl SiteReader {
         if let (Some(before), Some(limit)) = (filter.published_before, q.published_before) {
             q.published_before = Some(before.min(limit));
         }
-        if page > MAX_PAGE_NUMBER {
-            let total = repos.content().count(&q).await?;
-            return Ok(empty(page, per_page, total));
-        }
         // Skip the earlier pages by walking cursors.
         let skipped = u64::from(page - 1) * u64::from(per_page);
+        if skipped > MAX_SKIP {
+            return Ok(None);
+        }
         let mut walked = 0;
         while walked < skipped {
             let mut s = q.clone();
@@ -578,7 +602,7 @@ impl SiteReader {
             match p.next_cursor {
                 Some(c) if !p.items.is_empty() => q.cursor = Some(c),
                 // Ran out before reaching the page: everything there is was walked.
-                _ => return Ok(empty(page, per_page, walked)),
+                _ => return Ok(Some(empty(page, per_page, walked))),
             }
         }
         q.limit = per_page;
@@ -592,12 +616,12 @@ impl SiteReader {
             .hydrator(repos, now)
             .hydrate(rows.items, Nodes::new(), deps)
             .await?;
-        Ok(Listing {
+        Ok(Some(Listing {
             items,
             page,
             per_page,
             total,
-        })
+        }))
     }
 }
 
