@@ -89,8 +89,9 @@ pub const FEED_LEN: u32 = 20;
 pub const SITEMAP_FILE_LEN: usize = 50_000;
 /// Most items [`SiteReader::related`] returns.
 pub const MAX_RELATED: usize = 10;
-/// Most search matches paged through (and counted in `total`).
-pub const SEARCH_CAP: usize = 1000;
+/// Most search matches paged through; a search `total` never exceeds it (ruling R9:
+/// bounds what one anonymous request can make the store load).
+pub const SEARCH_CAP: usize = 200;
 
 /// Whether `item` is publicly visible at `now`: published, with a publish time not in
 /// the future.
@@ -299,9 +300,11 @@ impl SiteReader {
     /// [`MAX_SKIP`].
     ///
     /// The index is never trusted for visibility: the query asks for published items
-    /// only, and up to [`SEARCH_CAP`] matching ids are then loaded (`get_many`, 200 per
-    /// call) and re-checked (published, `published_at <= now`, public type) before
-    /// paging, so `total` counts public matches only.
+    /// only, and the first [`SEARCH_CAP`] (200) matching ids are re-checked against
+    /// their rows (published, `published_at <= now`, public type) before paging, so
+    /// `total` counts public matches only and is **capped at 200**. Cost per request:
+    /// one search call, one `get_many` for the status check (only ids are kept), one
+    /// `get_many` for the page, then hydration.
     pub async fn search(&self, q: &str, page: u32) -> Result<SiteRead<Option<Listing>>, CoreError> {
         let now = (self.clock)();
         let repos = self.store.read();
@@ -346,23 +349,37 @@ impl SiteReader {
                 None => break,
             }
         }
-        let mut rows: Vec<ContentItem> = Vec::new();
+        // Status pass: keep the ids of public rows, in rank order; drop the rows.
+        let mut public_ids: Vec<ContentId> = Vec::new();
         for chunk in unique(ids).chunks(MAX_ID_FILTER) {
-            rows.extend(
+            public_ids.extend(
                 repos
                     .content()
                     .get_many(chunk)
                     .await?
                     .into_iter()
-                    .filter(|i| is_public(i, now) && kinds.contains(&i.kind)),
+                    .filter(|i| is_public(i, now) && kinds.contains(&i.kind))
+                    .map(|i| i.id),
             );
         }
-        let total = rows.len() as u64;
-        let rows: Vec<ContentItem> = rows
+        let total = public_ids.len() as u64;
+        let slice: Vec<ContentId> = public_ids
             .into_iter()
             .skip(usize::try_from(skip).unwrap_or(usize::MAX))
             .take(per_page as usize)
             .collect();
+        let rows: Vec<ContentItem> = if slice.is_empty() {
+            Vec::new()
+        } else {
+            // Re-checked: a row may have changed since the status pass.
+            repos
+                .content()
+                .get_many(&slice)
+                .await?
+                .into_iter()
+                .filter(|i| is_public(i, now) && kinds.contains(&i.kind))
+                .collect()
+        };
         let items = self
             .hydrator(repos, now)
             .hydrate(rows, Nodes::new(), &mut deps)

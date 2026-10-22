@@ -422,6 +422,55 @@ pub async fn search_never_trusts_index(db: &TestDb) {
     );
 }
 
+/// R9: one search walks at most 200 matches, so `total` is capped.
+pub async fn search_total_is_capped(db: &TestDb) {
+    let store = db.store();
+    let author = user(store, "writer", Role::Author).await;
+    // One transaction, no terms: cheap enough for 205 rows.
+    let tx = store.begin().await.unwrap();
+    for i in 0..205 {
+        let id = ContentId::new();
+        tx.content()
+            .insert(&NewContent {
+                id,
+                kind: "post".into(),
+                status: ContentStatus::Published,
+                slug: format!("bulk-{i}"),
+                parent_id: None,
+                author_id: author.id,
+                title: format!("Bulk {i}"),
+                excerpt: String::new(),
+                body: json!({"type": "doc", "content": []}),
+                body_html: None,
+                fields: json!({}),
+                menu_order: 0,
+                published_at: Some(at(-HOUR)),
+                scheduled_at: None,
+            })
+            .await
+            .unwrap();
+        tx.search().index(id, "haystack", "").await.unwrap();
+    }
+    tx.commit().await.unwrap();
+    let r = reader(db.shared_store());
+    let first = r.search("haystack", 1).await.unwrap().value.unwrap();
+    assert_eq!(first.total, ferrite_core::site::SEARCH_CAP as u64);
+    assert_eq!(first.total, 200);
+    assert_eq!(first.items.len(), 10);
+    // Page 20 is the last page within the cap; page 21 lies beyond it.
+    let last = r.search("haystack", 20).await.unwrap().value.unwrap();
+    assert_eq!(last.items.len(), 10);
+    assert!(
+        r.search("haystack", 21)
+            .await
+            .unwrap()
+            .value
+            .unwrap()
+            .items
+            .is_empty()
+    );
+}
+
 pub async fn related_never_unpublished(db: &TestDb) {
     let store = db.store();
     let author = user(store, "writer", Role::Author).await;
@@ -1100,6 +1149,7 @@ backend_tests!(
     no_leak_single,
     no_leak_listings,
     search_never_trusts_index,
+    search_total_is_capped,
     related_never_unpublished,
     single_walks_page_path,
     single_hydrates,
