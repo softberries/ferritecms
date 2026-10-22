@@ -2,7 +2,6 @@
 
 Decisions made during subagent-driven execution of docs/superpowers/plans/2026-10-22-m1b-media.md.
 
-- Rulings
 - Ruling R1: T2 put_artifact returns MediaError::Config("payload too large for put_artifact; use put_stream") for ≥ 8 MiB until T3 adds delegation; T3 switches it to delegate — avoids forward dependency — cost: none
 - Ruling R2: ArtifactRef.created is advisory under concurrent writers (S3 copy fallback may report true twice); the artifacts DB row via insert_if_absent is the source of truth — cost: none
 - Ruling R3: preserve ICC profile via encoder set_icc_profile; strip EXIF/XMP — colour fidelity — cost: few KB per variant
