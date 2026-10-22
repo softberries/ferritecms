@@ -27,12 +27,16 @@ upload .wasm + manifest ──► validate manifest ──► inspect component 
      ──► every node: fetch artifact → compile (cached) → InstancePre per world → registry swap
 ```
 
+- **M0 status**: only the in-process part exists: `inspect` + manifest validation +
+  `PluginHost::install(manifest, wasm)` (compile, capability check, registry swap). Upload,
+  admin approval/permission display, artifact storage, plugins row/events, per-node
+  fetch, the update-needs-approval flow and uninstall/KV retention are M1/M2.
 - **Install-time check (P2)**: walk the component type's imports. Allowed:
   - `ferrite:plugin/*` interfaces that the manifest's capabilities map to (§4),
   - the WASI subset in §5.
   Anything else → reject with the exact import name. Exports must include the
   `ferrite:plugin/guest` interface of a supported world version.
-- **Update**: if the new version declares capabilities beyond what was granted, it is
+- **Update** (not in M0): if the new version declares capabilities beyond what was granted, it is
   stored but **not activated** until an admin approves the diff. The old version keeps
   running.
 - **Disable/enable/uninstall** via admin/CLI; uninstall keeps KV data for 30 days unless
@@ -224,6 +228,8 @@ undeclared import fails instantiation even if the install-time check were bypass
 
 ### 4a. `request.served` (analytics)
 
+*M0 status: not implemented (M2). M0 only has the `request.served` entry in the hook catalogue.*
+
 Fired for every public page response **including cache hits**. Events are buffered in
 memory per node and flushed every 10 s (or 1 000 events) as **one** `plugin.action` job
 per subscribed plugin — never one job per request. Payload contains no IP, cookie or
@@ -232,6 +238,8 @@ full user agent: only path, status, timestamp, referrer host, a coarse UA class
 analytics; documented).
 
 ### 4b. Plugin routes
+
+*M0 status: the host can call a plugin's `handle-request` (`PluginHost::handle_route`, 2 s route deadline) but mounting under `/_p/`, rate limits, CSRF/origin checks, CSP and header stripping, and the theme helper are M2; no example plugin exports a route.*
 
 - Mounted at `/_p/<plugin>/<path>`; only paths and methods listed in `[routes]`.
 - Limits: route deadline 2 s, body ≤ 1 MB, per-route rate limit (DB-backed, so it holds
@@ -248,6 +256,8 @@ analytics; documented).
 - Themes post forms to routes with a helper: `{{ plugin_route("contact-form", "/submit") }}`.
 
 ### 4c. Plugin settings
+
+*M0 status: the manifest `[settings]` schema is parsed and the `settings` import reads values through `HostServices`; storage under `options`, secret encryption, the admin form and `options.changed` cache flush are M2.*
 
 - `[settings]` uses the same field schema as theme settings (`text`, `textarea`, `bool`,
   `number`, `select`, `color`, `media`, `secret`) — one renderer in the admin.
@@ -279,7 +289,7 @@ Rust's `wasm32-wasip2` std imports some WASI interfaces even for simple code. Po
 
 **Settled in M0.** wasmtime-wasi 50 lets the host link the subset per interface (no
 fallback to a deny-all `WasiCtx` was needed). `wasmtime_wasi::p2::add_to_linker_async` is
-*not* used because it also links `wasi:sockets`. Linked interfaces:
+*not* used because it also links `wasi:sockets` (wasmtime-wasi-50.0.0 `src/p2/mod.rs:314-365`). Linked interfaces:
 `wasi:io` (via `wasmtime_wasi_io::add_to_linker_async`), `wasi:clocks/{wall-clock,monotonic-clock}`,
 `wasi:random/{random,insecure,insecure-seed}`,
 `wasi:cli/{exit,environment,stdin,stdout,stderr,terminal-input,terminal-output,terminal-stdin,terminal-stdout,terminal-stderr}`,
@@ -290,7 +300,7 @@ inspection were bypassed.
 stdout/stderr are captured into a buffer capped at **64 KiB per stream per call** (the
 rest is discarded and counted), then logged through `tracing` with control and bidi
 characters escaped (no log injection). Guest `log` calls are capped at **4 KiB per message
-and 100 calls per call**, also escaped.
+(`LOG_MESSAGE_CAP`) and 100 calls per hook call (`LOG_CALLS_MAX`)** in `src/output.rs`, also escaped.
 
 ## 6. Execution model & limits
 
@@ -300,7 +310,7 @@ and 100 calls per call**, also escaped.
   optional pooling instance allocator (`HostConfig.pooling`, default **off**, see
   Measured below). `Config::async_support` is not needed in wasmtime 50.
 - An epoch ticker thread calls `engine.increment_epoch()` every **5 ms**.
-- Compiled components cached on disk keyed by
+- **M0 status: not implemented (M1)** — compiled components are compiled in `install` each time. Planned: cached on disk keyed by
   `(artifact hash, wasmtime version, engine config hash)` via
   `Component::serialize` / `deserialize` (deserialize is `unsafe` — only for files we
   wrote; cache dir is ours).
@@ -330,7 +340,7 @@ was busy, load average 27-60, so treat as upper-ish bounds):**
 |---|---|---|---|
 | `hello_render_head_fresh` (default allocator) | 32.5 µs | 26.8 µs | 26.9 µs |
 | `hello_render_head_fresh_pooling` | 25.6 µs | 23.7 µs | 24.2 µs |
-| `instantiate_only` (no WASI, unused imports trapped) | 24.2 µs | 20.0 µs | 20.3 µs |
+| `instantiate_only` (excludes WASI setup: unused imports defined as traps, no `HostState`) | 24.2 µs | 20.0 µs | 20.3 µs |
 
 P8 (< 1 ms) is met by ~35x. Pooling saves only ~3 µs (~10%) and reserves virtual address
 space for a fixed slot count (calls beyond `POOL_SLOTS = 256` concurrent instances fail
@@ -349,8 +359,8 @@ under real concurrent load in M1.
   several core instances (main module plus WASI adapter shims), so `instances = 1`
   fails; **3 is the minimum that worked** for the example plugins. `table_elements`
   bounds a guest `table.grow` (otherwise host OOM).
-- **Fuel yield interval**: `100_000`, not the 10 000 first drafted here. At 10 000 the
-  yield bookkeeping slowed a busy-loop guest by about 3.5x, which broke the
+- **Fuel yield interval**: `100_000`, not the 10 000 first drafted here. At 10 000 a
+  one-off measurement during Task 6 (no bench covers it) showed the yield bookkeeping slowing a busy-loop guest by about 3.5x, which broke the
   fuel-exhaustion test (< 200 ms). Wall-clock stays bounded by the epoch deadline
   regardless; the cost is coarser cooperative yielding under many CPU-bound plugins.
 - **Manifest limits (ruling R3)**: effective limit = min(manifest `[limits]`, host
@@ -360,6 +370,8 @@ under real concurrent load in M1.
   from the guest have size caps (e.g. `head` ≤ 64 KB total, `html` ≤ 4× input or 2 MB).
 
 ### HTTP capability details
+
+*M0 status: the `http` and `mail` host imports are stubs returning `unavailable`; the rules below are the M1 design. Only the per-call request budget (3) is enforced.*
 
 - HTTPS only; host must exactly match the manifest list; redirects followed only to
   allow-listed hosts (max 3).
@@ -391,6 +403,7 @@ under real concurrent load in M1.
   auth data. Exception: during an authenticated **preview** of a draft, `request-info.post`
   and `get-post` on *that one item* return it, so plugins render previews faithfully.
   Preview responses are never cached.
+- **M0 status: dependency recording and volatile marking below are not implemented (M1, with the page cache).**
 - **Dependency recording**: every `content`, `meta` and `options` import call made during
   a render filter records the matching dependency key (`post:<id>`, `option:<key>`,
   `archive:<type>` for listings) into the request's `DependencySet`, so cached pages that
@@ -410,7 +423,14 @@ under real concurrent load in M1.
 | Wrong variant / oversize output | host validation | same |
 | Instantiation failure (missing import) | `Err` at instantiate | plugin marked broken on this node |
 
-Every failure: `tracing::warn!(plugin, hook, kind, duration, fuel_used)`, metric
+**M0 status**: failures are classified and counted in memory per host
+(`PluginHost::failures`, `is_enabled`, `disabled_reason`; threshold and window from
+`HostConfig`). The `plugin_failures` table, metrics, the `plugins.enabled` update,
+`plugin.disabled` event and cluster-wide counting are M1/M1.5. "Plugin marked broken on
+this node" for instantiation failures is likewise not separate in M0: it counts as a
+failure like any other.
+
+Every failure (target design): `tracing::warn!(plugin, hook, kind, duration, fuel_used)`, metric
 increment, and an upsert into `plugin_failures` (1-minute buckets; written
 asynchronously, batched per node every few seconds so failures don't add DB writes to
 the request path). When the sum over `failure_window` ≥ `disable_after_failures`, the
@@ -420,6 +440,13 @@ re-enable.
 
 ## 9. Host-side API (Rust)
 
+**M0 API** (`crates/ferrite-plugin-host`): `PluginHost::new(HostConfig, Arc<dyn HostServices>)`,
+`install(Manifest, &[u8])`, `apply_filter(&str, FilterValue, &RequestInfo) -> FilterValue`
+(never fails), `dispatch_action`, `handle_route`, `is_enabled`, `disabled_reason`,
+`failures`; `inspect` is a free function. Hooks are `&str`, not a `HookName` type.
+
+Target shape (the `reload`, DB-backed `InstalledPlugin` and http client parts are M1):
+
 ```rust
 pub struct PluginHost { /* engine, registry: ArcSwap<Registry>, store access, http client */ }
 
@@ -428,7 +455,6 @@ impl PluginHost {
         -> FilterValue;                                   // never fails; failures logged
     pub async fn dispatch_action(&self, plugin: &str, hook: HookName, ev: ActionEvent)
         -> Result<(), PluginError>;                       // used by job worker (retry on Err)
-    pub fn inspect(&self, wasm: &[u8]) -> Result<ComponentReport, PluginError>; // install-time
     pub async fn reload(&self, plugins: Vec<InstalledPlugin>) -> Result<(), PluginError>;
 }
 ```
@@ -468,7 +494,7 @@ ferrite_sdk::export_plugin! {
 - Build (**settled in M0**, ruling R1): `cargo build --release --target wasm32-wasip2`
   with an explicit `--target` produces a component directly; `cargo component` is not
   needed. (`plugins/.cargo/config.toml` sets the target only for CWD inside `plugins/`.)
-- `ferrite plugin new <name>` scaffolds a plugin crate + manifest;
+- *(Not in M0: the `ferrite` CLI does not exist yet.)* `ferrite plugin new <name>` scaffolds a plugin crate + manifest;
   `ferrite plugin check <dir>` runs the install-time validation locally.
 
 ## 11. Versioning (P9)
@@ -482,19 +508,23 @@ ferrite_sdk::export_plugin! {
 ## 12. Hostile test plugins (required by CLAUDE.md)
 
 In `plugins/examples/hostile/`, each with an integration test asserting the page still
-renders and the failure is recorded:
+renders and the failure is recorded (state as of M0):
 
 | Plugin | Behaviour | Expected |
 |---|---|---|
-| `loop` | `loop {}` in filter | killed by epoch/fuel within deadline; page renders |
-| `oom` | allocates until failure | trap; page renders; host memory stable |
-| `panic` | `panic!()` | trap; page renders |
-| `undeclared-import` | imports `http` without declaring it | install rejected; forced load fails to instantiate |
-| `sockets` | uses `std::net` (imports `wasi:sockets`) | install rejected |
-| `big-output` | returns 100 MB string | rejected by size cap |
-| `slow-host` | calls `http.fetch` to a slow server | hard timeout; page renders |
+| `loop` | never returns | fuel exhaustion under default limits; page renders |
+| `spin-host-fuel` | never returns; test raises fuel | only the epoch deadline stops it |
+| `oom` | allocates 1 MiB blocks until the limit | trap; page renders |
+| `panic` | `panic!()` on every call | trap; page renders |
+| `undeclared-import` | calls `http` without declaring it | install rejected; forced link fails to instantiate |
+| `sockets` | opens a TCP socket (`wasi:sockets`) | install rejected |
+| `big-output` | returns 100 MiB of HTML | rejected by size cap |
+| `slow-import` | spends its call in a slow host import | hard timeout; page renders |
 | `wrong-variant` | returns `text` for `render.head` | ignored, recorded |
-| `fs-escape` | tries to open `/etc/passwd` | no preopens → error inside guest; nothing leaks |
+| `fs-escape` | reads `/etc/passwd` | no preopens → error inside guest; nothing leaks |
 | `flapper` | fails every call | auto-disabled after threshold |
-| `route-xss` | route returns HTML with `<script>` reading `document.cookie` | served under sandbox CSP; E2E asserts no cookie access |
-| `route-flood` | many POSTs to its route | rate-limited across 2 nodes |
+| `noisy` | floods stdout (10 MiB) / stderr (1 MiB) | capture capped at 64 KiB per stream; call succeeds |
+| `fat-init` | initial linear memory 40 MiB (above the 32 MiB cap) | instantiation fails; treated as a call failure |
+| `kv-budget` | `kv.set` 150 times | 101st+ operation refused (budget 100) |
+| `route-xss` | route returns HTML with `<script>` reading `document.cookie` | **M2 — not yet implemented** (needs mounted routes) |
+| `route-flood` | many POSTs to its route | **M2 — not yet implemented** (needs rate limiting across 2 nodes) |
