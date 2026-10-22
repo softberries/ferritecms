@@ -28,8 +28,21 @@ pub fn check_limit(limit: u32) -> Result<u32, StoreError> {
 /// Most ids a content query's `ids`/`exclude` filter (or `get_many`) accepts.
 pub const MAX_ID_FILTER: usize = 200;
 
+/// Most keys `MetaRepo::get_many` accepts.
+pub const MAX_META_KEYS: usize = 50;
+
 /// Most slugs `slugs_with_prefix` returns.
 pub const MAX_SLUG_PREFIX_RESULTS: u32 = 1000;
+
+/// Validates a batch-loader input length: at most `max` entries.
+pub fn check_len(what: &str, len: usize, max: usize) -> Result<(), StoreError> {
+    if len > max {
+        return Err(StoreError::Invalid(format!(
+            "{what} holds more than {max} entries"
+        )));
+    }
+    Ok(())
+}
 
 /// Validates an id list: at most [`MAX_ID_FILTER`] entries.
 pub fn check_id_list(what: &str, ids: &[ContentId]) -> Result<(), StoreError> {

@@ -1,6 +1,6 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
-    backend_tests, backend_tests_spawning, constraints::*, content::*, event::*, menu::*,
+    backend_tests, backend_tests_spawning, batch::*, constraints::*, content::*, event::*, menu::*,
     migration_dirs, migration_files, migrations::*, plugin::*, search::*, semantics::*, site::*,
     taxonomy::*, tx::*, user::*,
 };
@@ -107,6 +107,7 @@ backend_tests!(
     plugins_upsert_list_enable,
     plugin_kv_crud_and_usage,
     themes_single_active,
+    kv_quota_semantics,
 );
 
 backend_tests!(
@@ -123,9 +124,17 @@ backend_tests!(
     search_handles_operators_safely,
     search_rejects_nul_and_bad_limits,
     search_semantics_identical,
+    search_filters_status_kind_and_pages,
+    search_ties_break_by_id_descending,
 );
 
-backend_tests_spawning!(concurrent_writers, events_concurrent_appends_unique_seq);
+backend_tests!(batch_loaders_match_single_gets);
+
+backend_tests_spawning!(
+    concurrent_writers,
+    events_concurrent_appends_unique_seq,
+    kv_quota_never_exceeded,
+);
 
 #[test]
 fn migration_sets_match() {

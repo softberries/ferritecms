@@ -132,7 +132,7 @@ macro_rules! delegate_repos {
     ($($method:ident: $repo:ident),* $(,)?) => {
         impl Repos for PgTx {
             $(fn $method(&self) -> &dyn $repo {
-                self.repos.$method()
+                Repos::$method(&self.repos)
             })*
         }
     };

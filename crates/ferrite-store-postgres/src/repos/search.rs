@@ -6,10 +6,12 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
-use ferrite_domain::ContentId;
+use ferrite_domain::{ContentId, Page, SearchQuery};
 use ferrite_store::{
-    IndexedTerm, SearchRepo, StoreError, check_limit, index_terms, search_terms, validate_text,
+    IndexedTerm, SearchRepo, StoreError, encode_rank_cursor, index_terms, plan_search,
+    validate_text,
 };
+use sqlx::{Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use super::PgRepos;
@@ -82,22 +84,62 @@ impl SearchRepo for PgRepos {
         .map(|_| ())
     }
 
-    async fn query(&self, q: &str, limit: u32) -> Result<Vec<ContentId>, StoreError> {
-        validate_text("search query", q)?;
-        let limit = check_limit(limit)?;
-        // Same short-circuit as SQLite: no terms, no statement.
-        let terms = search_terms(q);
-        if terms.is_empty() {
-            return Ok(Vec::new());
+    async fn search(&self, query: &SearchQuery) -> Result<Page<ContentId>, StoreError> {
+        let Some(plan) = plan_search(query)? else {
+            return Ok(Page {
+                items: Vec::new(),
+                next_cursor: None,
+            });
+        };
+        // The rank is a function of the item's own tsvector and the query only, so it is
+        // reproducible for a fixed index. It is cast to float8 (ts_rank returns float4,
+        // an exact widening) and compared with the bound cursor rank as float8.
+        let mut qb = QueryBuilder::<Postgres>::new(
+            "SELECT h.id, h.rank FROM (SELECT s.item_id AS id, ts_rank(s.tsv, q)::float8 AS rank \
+             FROM search_docs s, CAST(",
+        );
+        qb.push_bind(tsquery(&plan.terms));
+        qb.push(
+            " AS tsquery) q WHERE s.tsv @@ q) h \
+             JOIN content_items c ON c.id = h.id WHERE TRUE",
+        );
+        if !query.kinds.is_empty() {
+            qb.push(" AND c.type IN (");
+            let mut list = qb.separated(", ");
+            for kind in &query.kinds {
+                list.push_bind(kind.as_str());
+            }
+            list.push_unseparated(")");
         }
-        let ids: Vec<Uuid> = run!(&self.exec, |e| sqlx::query_scalar(
-            "SELECT item_id FROM search_docs, CAST($1 AS tsquery) q \
-             WHERE tsv @@ q ORDER BY ts_rank(tsv, q) DESC, item_id LIMIT $2"
-        )
-        .bind(tsquery(&terms))
-        .bind(i64::from(limit))
-        .fetch_all(e))?;
-        Ok(ids.into_iter().map(ContentId::from_uuid).collect())
+        if !query.statuses.is_empty() {
+            qb.push(" AND c.status IN (");
+            let mut list = qb.separated(", ");
+            for status in &query.statuses {
+                list.push_bind(status.as_str());
+            }
+            list.push_unseparated(")");
+        }
+        if let Some((rank, id)) = plan.after {
+            qb.push(" AND (h.rank < ").push_bind(rank);
+            qb.push(" OR (h.rank = ").push_bind(rank);
+            qb.push(" AND h.id < ").push_bind(id).push("))");
+        }
+        qb.push(" ORDER BY h.rank DESC, h.id DESC LIMIT ")
+            .push_bind(i64::from(plan.limit) + 1);
+        let mut hits: Vec<(Uuid, f64)> = run!(&self.exec, |e| qb.build_query_as().fetch_all(e))?;
+        let next_cursor = if hits.len() > plan.limit as usize {
+            hits.truncate(plan.limit as usize);
+            hits.last().map(|(id, rank)| encode_rank_cursor(*rank, *id))
+        } else {
+            None
+        };
+        Ok(Page {
+            items: hits
+                .into_iter()
+                .map(|(id, _)| ContentId::from_uuid(id))
+                .collect(),
+            next_cursor,
+        })
     }
 }
 

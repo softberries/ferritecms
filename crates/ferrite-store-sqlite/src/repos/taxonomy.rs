@@ -6,10 +6,15 @@
 //! its own transaction with `pool.begin()` on the single writer connection and commits
 //! it; any failure drops the transaction and rolls back.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use ferrite_domain::{ContentId, Taxonomy, Term, TermId};
-use ferrite_store::{StoreError, TaxonomyRepo, TermRepo, validate_json, validate_text};
-use sqlx::SqliteConnection;
+use ferrite_store::{
+    StoreError, TaxonomyRepo, TermRepo, check_id_list, validate_json, validate_text,
+};
+use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
+use uuid::Uuid;
 
 use super::SqliteRepos;
 use crate::{
@@ -180,5 +185,33 @@ impl TermRepo for SqliteRepos {
         .bind(item.as_uuid())
         .fetch_all(e))?;
         rows.iter().map(codec::term).collect()
+    }
+
+    async fn for_items(
+        &self,
+        items: &[ContentId],
+    ) -> Result<HashMap<ContentId, Vec<Term>>, StoreError> {
+        check_id_list("items", items)?;
+        let mut out: HashMap<ContentId, Vec<Term>> = HashMap::new();
+        if items.is_empty() {
+            return Ok(out);
+        }
+        let mut qb = QueryBuilder::<Sqlite>::new(format!(
+            "SELECT l.item_id AS item_id, {TERM_COLUMNS} FROM terms t \
+             JOIN term_links l ON l.term_id = t.id WHERE l.item_id IN ("
+        ));
+        let mut list = qb.separated(", ");
+        for id in items {
+            list.push_bind(id.as_uuid());
+        }
+        list.push_unseparated(") ORDER BY l.item_id, l.position");
+        let rows = run!(&self.reader, |e| qb.build().fetch_all(e))?;
+        for row in &rows {
+            let item: Uuid = row.try_get("item_id").map_err(map_db_err)?;
+            out.entry(ContentId::from_uuid(item))
+                .or_default()
+                .push(codec::term(row)?);
+        }
+        Ok(out)
     }
 }

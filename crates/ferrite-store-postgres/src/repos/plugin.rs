@@ -1,21 +1,23 @@
 //! Artifacts, media, installed plugins, plugin key-value storage and themes.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ferrite_domain::{
     Artifact, ArtifactHash, ContentId, InstalledPlugin, InstalledTheme, Media, Timestamp,
 };
 use ferrite_store::{
-    ArtifactRepo, MediaRepo, PluginKvRepo, PluginRepo, StoreError, ThemeRepo, check_limit,
-    validate_json, validate_text,
+    ArtifactRepo, MAX_ID_FILTER, MediaRepo, PluginKvRepo, PluginRepo, StoreError, ThemeRepo,
+    check_len, check_limit, validate_json, validate_text,
 };
 
-use sqlx::types::Json;
+use sqlx::{Postgres, QueryBuilder, types::Json};
 
 use super::PgRepos;
 use crate::{
     codec::{self, ARTIFACT_COLUMNS, MEDIA_COLUMNS, PLUGIN_COLUMNS, THEME_COLUMNS},
-    exec::{atomic, run},
+    exec::{atomic, map_db_err, run},
 };
 
 #[async_trait]
@@ -111,6 +113,28 @@ impl MediaRepo for PgRepos {
             return Err(StoreError::NotFound);
         }
         Ok(())
+    }
+
+    async fn get_many(&self, ids: &[ContentId]) -> Result<Vec<Media>, StoreError> {
+        check_len("ids", ids.len(), MAX_ID_FILTER)?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut qb = QueryBuilder::<Postgres>::new(format!(
+            "SELECT {MEDIA_COLUMNS} FROM media WHERE item_id IN ("
+        ));
+        let mut list = qb.separated(", ");
+        for id in ids {
+            list.push_bind(id.as_uuid());
+        }
+        list.push_unseparated(")");
+        let rows = run!(&self.exec, |e| qb.build().fetch_all(e))?;
+        let mut found = rows
+            .iter()
+            .map(codec::media)
+            .map(|r| r.map(|m| (m.item_id, m)))
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        Ok(ids.iter().filter_map(|id| found.remove(id)).collect())
     }
 }
 
@@ -275,6 +299,49 @@ impl PluginKvRepo for PgRepos {
             u64::try_from(n).map_err(|_| StoreError::Database(format!("corrupt usage {n}")))
         };
         Ok((conv(bytes)?, conv(keys)?))
+    }
+
+    async fn set_with_quota(
+        &self,
+        plugin: &str,
+        key: &str,
+        value: &[u8],
+        max_bytes: u64,
+        max_keys: u64,
+    ) -> Result<bool, StoreError> {
+        validate_text("plugin kv plugin", plugin)?;
+        validate_text("plugin kv key", key)?;
+        // READ COMMITTED does not serialize read-modify-write, so each plugin's quota
+        // writes queue on a transaction-scoped advisory lock (held until the enclosing
+        // transaction ends, so the next holder's statement sees this commit). Then one
+        // conditional statement (P2) writes only if the totals, with this key's old value
+        // replaced by the new one, stay within quota.
+        atomic!(&self.exec, |conn| async move {
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtext('ferrite_kv:' || $1::text))")
+                .bind(plugin)
+                .execute(&mut *conn)
+                .await
+                .map_err(map_db_err)?;
+            let done = sqlx::query(
+                "INSERT INTO plugin_kv (plugin, key, value, updated_at) \
+                 SELECT $1::text, $2::text, $3::bytea, $4::timestamptz \
+                 WHERE (SELECT COALESCE(SUM(octet_length(value)), 0) FROM plugin_kv \
+                        WHERE plugin = $1 AND key <> $2) + octet_length($3::bytea) <= $5::bigint \
+                   AND (SELECT COUNT(*) FROM plugin_kv WHERE plugin = $1 AND key <> $2) + 1 <= $6::bigint \
+                 ON CONFLICT (plugin, key) DO UPDATE SET value = excluded.value, \
+                 updated_at = excluded.updated_at",
+            )
+            .bind(plugin)
+            .bind(key)
+            .bind(value)
+            .bind(DateTime::<Utc>::from(Timestamp::now()))
+            .bind(i64::try_from(max_bytes).unwrap_or(i64::MAX))
+            .bind(i64::try_from(max_keys).unwrap_or(i64::MAX))
+            .execute(&mut *conn)
+            .await
+            .map_err(map_db_err)?;
+            Ok(done.rows_affected() == 1)
+        })
     }
 }
 

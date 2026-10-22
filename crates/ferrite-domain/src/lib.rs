@@ -6,6 +6,7 @@ mod ids;
 mod menu;
 mod page;
 mod plugin;
+mod search;
 mod secret;
 mod site;
 mod taxonomy;
@@ -21,6 +22,7 @@ pub use ids::{ArtifactHash, ContentId, MenuItemId, RedirectId, RevisionId, TermI
 pub use menu::{Menu, MenuItem, MenuItemKind};
 pub use page::{Cursor, Page};
 pub use plugin::{Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, Media};
+pub use search::SearchQuery;
 pub use secret::Secret;
 pub use site::{OptionEntry, REDIRECT_CODES, Redirect, RedirectOrigin};
 pub use taxonomy::{Taxonomy, Term};

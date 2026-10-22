@@ -1,13 +1,17 @@
 //! Artifacts, media, installed plugins, plugin key-value storage and themes.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use ferrite_domain::{
     Artifact, ArtifactHash, ContentId, InstalledPlugin, InstalledTheme, Media, Timestamp,
 };
 use ferrite_store::{
-    ArtifactRepo, MediaRepo, PluginKvRepo, PluginRepo, StoreError, ThemeRepo, check_limit,
-    validate_json, validate_text,
+    ArtifactRepo, MAX_ID_FILTER, MediaRepo, PluginKvRepo, PluginRepo, StoreError, ThemeRepo,
+    check_len, check_limit, validate_json, validate_text,
 };
+
+use sqlx::{QueryBuilder, Sqlite};
 
 use super::SqliteRepos;
 use crate::{
@@ -108,6 +112,28 @@ impl MediaRepo for SqliteRepos {
             return Err(StoreError::NotFound);
         }
         Ok(())
+    }
+
+    async fn get_many(&self, ids: &[ContentId]) -> Result<Vec<Media>, StoreError> {
+        check_len("ids", ids.len(), MAX_ID_FILTER)?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut qb = QueryBuilder::<Sqlite>::new(format!(
+            "SELECT {MEDIA_COLUMNS} FROM media WHERE item_id IN ("
+        ));
+        let mut list = qb.separated(", ");
+        for id in ids {
+            list.push_bind(id.as_uuid());
+        }
+        list.push_unseparated(")");
+        let rows = run!(&self.reader, |e| qb.build().fetch_all(e))?;
+        let mut found = rows
+            .iter()
+            .map(codec::media)
+            .map(|r| r.map(|m| (m.item_id, m)))
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        Ok(ids.iter().filter_map(|id| found.remove(id)).collect())
     }
 }
 
@@ -268,6 +294,38 @@ impl PluginKvRepo for SqliteRepos {
             u64::try_from(n).map_err(|_| StoreError::Database(format!("corrupt usage {n}")))
         };
         Ok((conv(bytes)?, conv(keys)?))
+    }
+
+    async fn set_with_quota(
+        &self,
+        plugin: &str,
+        key: &str,
+        value: &[u8],
+        max_bytes: u64,
+        max_keys: u64,
+    ) -> Result<bool, StoreError> {
+        validate_text("plugin kv plugin", plugin)?;
+        validate_text("plugin kv key", key)?;
+        // One statement (P2): the INSERT happens only if the totals, with this key's old
+        // value replaced by the new one, stay within quota; the single writer serializes
+        // concurrent callers. Bytes are the blob length, as in `usage`.
+        let done = run!(&self.writer, |e| sqlx::query(
+            "INSERT INTO plugin_kv (plugin, key, value, updated_at) \
+             SELECT ?1, ?2, ?3, ?4 \
+             WHERE (SELECT COALESCE(SUM(length(value)), 0) FROM plugin_kv \
+                    WHERE plugin = ?1 AND key <> ?2) + length(?3) <= ?5 \
+               AND (SELECT COUNT(*) FROM plugin_kv WHERE plugin = ?1 AND key <> ?2) + 1 <= ?6 \
+             ON CONFLICT (plugin, key) DO UPDATE SET value = excluded.value, \
+             updated_at = excluded.updated_at"
+        )
+        .bind(plugin)
+        .bind(key)
+        .bind(value)
+        .bind(Timestamp::now().as_micros())
+        .bind(i64::try_from(max_bytes).unwrap_or(i64::MAX))
+        .bind(i64::try_from(max_keys).unwrap_or(i64::MAX))
+        .execute(e))?;
+        Ok(done.rows_affected() == 1)
     }
 }
 

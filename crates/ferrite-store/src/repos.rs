@@ -1,8 +1,11 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use ferrite_domain::{
     Artifact, ArtifactHash, ContentId, ContentItem, ContentQuery, ContentType, Event,
     InstalledPlugin, InstalledTheme, Media, Menu, NewContent, NewEvent, NewUser, OptionEntry, Page,
-    Redirect, RedirectId, Revision, RevisionId, Taxonomy, Term, TermId, Timestamp, User, UserId,
+    Redirect, RedirectId, Revision, RevisionId, SearchQuery, Taxonomy, Term, TermId, Timestamp,
+    User, UserId,
 };
 
 use crate::{StoreError, migrate::MigrationStatus};
@@ -128,6 +131,10 @@ pub trait ContentRepo: Send + Sync {
     /// Updates WHERE id AND version = item.version, bumping version and updated_at; no row gives `Conflict{current_version}` or `NotFound`.
     async fn update(&self, item: &ContentItem) -> Result<ContentItem, StoreError>;
     /// Lists items matching the query with cursor pagination.
+    ///
+    /// **`query.ids` empty means no filter, not "match nothing"** (likewise `exclude`):
+    /// callers that computed an empty id set must short-circuit instead of calling this,
+    /// or they get every item.
     async fn list(&self, query: &ContentQuery) -> Result<Page<ContentItem>, StoreError>;
     /// Counts the items matching the query's filters (`limit`, `cursor` and `order` are
     /// ignored). Uses the same WHERE clause as `list`.
@@ -171,6 +178,16 @@ pub trait MetaRepo: Send + Sync {
     async fn delete(&self, id: ContentId, key: &str) -> Result<(), StoreError>;
     /// Lists all meta entries of an item.
     async fn list(&self, id: ContentId) -> Result<Vec<(String, serde_json::Value)>, StoreError>;
+    /// Reads the given keys of up to [`MAX_ID_FILTER`](crate::MAX_ID_FILTER) items in one
+    /// query (more ids, or more than [`MAX_META_KEYS`](crate::MAX_META_KEYS) keys, is
+    /// `Invalid`). Missing entries are skipped; the result is ordered by the position of
+    /// the item in `ids` (a repeated id counts at its first position), then by key in
+    /// binary order.
+    async fn get_many(
+        &self,
+        ids: &[ContentId],
+        keys: &[&str],
+    ) -> Result<Vec<(ContentId, String, serde_json::Value)>, StoreError>;
 }
 
 #[async_trait]
@@ -213,6 +230,14 @@ pub trait TermRepo: Send + Sync {
     async fn set_for_item(&self, item: ContentId, terms: &[TermId]) -> Result<(), StoreError>;
     /// Lists an item's terms ordered by position.
     async fn for_item(&self, item: ContentId) -> Result<Vec<Term>, StoreError>;
+    /// Lists the terms of up to [`MAX_ID_FILTER`](crate::MAX_ID_FILTER) items in one
+    /// query (more is `Invalid`), each item's terms ordered by position. **Items without
+    /// terms are absent from the map**, as are unknown items; use
+    /// `map.get(&id).map_or(&[][..], Vec::as_slice)` to read them as empty.
+    async fn for_items(
+        &self,
+        items: &[ContentId],
+    ) -> Result<HashMap<ContentId, Vec<Term>>, StoreError>;
 }
 
 #[async_trait]
@@ -274,6 +299,10 @@ pub trait UserRepo: Send + Sync {
     async fn update(&self, user: &User) -> Result<(), StoreError>;
     /// Lists users with cursor pagination.
     async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<User>, StoreError>;
+    /// Fetches up to [`MAX_ID_FILTER`](crate::MAX_ID_FILTER) users in one query, returned
+    /// in the order of `ids`; missing ids are skipped and a repeated id yields its user
+    /// once (at its first position). More ids is `Invalid`.
+    async fn get_many(&self, ids: &[UserId]) -> Result<Vec<User>, StoreError>;
 }
 
 #[async_trait]
@@ -294,6 +323,10 @@ pub trait MediaRepo: Send + Sync {
     async fn get(&self, id: ContentId) -> Result<Option<Media>, StoreError>;
     /// Updates media metadata; missing metadata is `NotFound`.
     async fn update(&self, media: &Media) -> Result<(), StoreError>;
+    /// Fetches up to [`MAX_ID_FILTER`](crate::MAX_ID_FILTER) media rows by content id in
+    /// one query, returned in the order of `ids`; missing ids are skipped and a repeated
+    /// id yields its row once (at its first position). More ids is `Invalid`.
+    async fn get_many(&self, ids: &[ContentId]) -> Result<Vec<Media>, StoreError>;
 }
 
 #[async_trait]
@@ -321,6 +354,23 @@ pub trait PluginKvRepo: Send + Sync {
     async fn get(&self, plugin: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError>;
     /// Writes a plugin's value.
     async fn set(&self, plugin: &str, key: &str, value: &[u8]) -> Result<(), StoreError>;
+    /// Writes a value only if the plugin's totals stay within quota, atomically (P2):
+    /// returns `true` iff after the write the plugin's value bytes are at most
+    /// `max_bytes` and its key count at most `max_keys`; otherwise nothing is written and
+    /// the result is `false`. Overwriting an existing key counts the new size, not old
+    /// plus new. Concurrent callers (any number of tasks or transactions) never push a
+    /// plugin past its quota.
+    ///
+    /// Inside a `Tx` on Postgres the per-plugin lock it takes is held until that `Tx`
+    /// ends, so keep such transactions short.
+    async fn set_with_quota(
+        &self,
+        plugin: &str,
+        key: &str,
+        value: &[u8],
+        max_bytes: u64,
+        max_keys: u64,
+    ) -> Result<bool, StoreError>;
     /// Deletes a plugin's key (missing: no-op).
     async fn delete(&self, plugin: &str, key: &str) -> Result<(), StoreError>;
     /// Lists up to `limit` keys of a plugin starting with `prefix`.
@@ -371,19 +421,25 @@ pub trait EventRepo: Send + Sync {
 ///   locale.
 /// - The query has no syntax: `-x`, quotes, `OR`, `*` and parentheses are separators or
 ///   ordinary words. Its first 32 distinct terms are prefix matches, and all must match.
-///   No terms gives `Ok(vec![])` without touching the database.
+///   No terms gives an empty page without touching the database.
 /// - Each item indexes at most 4096 distinct terms and 16383 token positions; later
 ///   tokens are not searchable.
-/// - Results come best first, with the title weighted above the body, and ties break by
-///   item id. `limit` must be 1 through 200. NUL in any text is `Invalid`.
+/// - Results come best first (title weighted above body), ties broken by item id
+///   descending. The cursor is a keyset over `(rank, id)`, with the rank carried as exact
+///   float bits. **Pages are stable only while the index is unchanged**: SQLite's BM25
+///   depends on corpus statistics, so re-indexing between pages can reorder results and
+///   a cursor may then skip or repeat items. Postgres' rank depends only on the item's
+///   own document.
+/// - `limit` must be 1 through 200. NUL in any text is `Invalid`.
 #[async_trait]
 pub trait SearchRepo: Send + Sync {
     /// Indexes (or re-indexes) an item's title and body text.
     async fn index(&self, id: ContentId, title: &str, body_text: &str) -> Result<(), StoreError>;
     /// Removes an item from the index.
     async fn remove(&self, id: ContentId) -> Result<(), StoreError>;
-    /// Returns up to `limit` matching item ids, best first.
-    async fn query(&self, q: &str, limit: u32) -> Result<Vec<ContentId>, StoreError>;
+    /// Returns one page of matching item ids, best first, restricted to the query's
+    /// kinds (empty: all) and statuses (empty: all) via `content_items`.
+    async fn search(&self, query: &SearchQuery) -> Result<Page<ContentId>, StoreError>;
 }
 
 #[async_trait]

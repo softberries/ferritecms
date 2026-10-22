@@ -1,5 +1,7 @@
 //! Contract tests for artifacts, media, plugins, plugin key-value storage and themes.
 
+use std::sync::Arc;
+
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ContentId, InstalledPlugin, InstalledTheme, Media,
     Timestamp,
@@ -407,4 +409,173 @@ pub async fn themes_single_active(db: &TestDb) {
     let got = themes.get("alpha").await.unwrap().unwrap();
     assert_eq!(got.version, "2.0.0");
     assert!(got.active);
+}
+
+pub async fn kv_quota_semantics(db: &TestDb) {
+    let kv = db.store().read().plugin_kv();
+    // 10 bytes, 3 keys.
+    assert!(kv.set_with_quota("p", "a", &[1; 4], 10, 3).await.unwrap());
+    assert!(kv.set_with_quota("p", "b", &[2; 4], 10, 3).await.unwrap());
+    // 4 + 4 + 4 = 12 > 10: refused, nothing written.
+    assert!(!kv.set_with_quota("p", "c", &[3; 4], 10, 3).await.unwrap());
+    assert!(kv.get("p", "c").await.unwrap().is_none());
+    assert_eq!(kv.usage("p").await.unwrap(), (8, 2));
+    // Exactly at the limit is fine.
+    assert!(kv.set_with_quota("p", "c", &[3; 2], 10, 3).await.unwrap());
+    assert_eq!(kv.usage("p").await.unwrap(), (10, 3));
+    // Overwriting counts the new size, not old + new: 4 -> 4 and 4 -> 2 stay in quota.
+    assert!(kv.set_with_quota("p", "a", &[9; 4], 10, 3).await.unwrap());
+    assert_eq!(kv.get("p", "a").await.unwrap().unwrap(), [9; 4]);
+    assert!(kv.set_with_quota("p", "a", &[8; 2], 10, 3).await.unwrap());
+    assert_eq!(kv.usage("p").await.unwrap(), (8, 3));
+    // Growing an overwrite past the quota is refused and keeps the old value.
+    assert!(!kv.set_with_quota("p", "a", &[7; 5], 10, 3).await.unwrap());
+    assert_eq!(kv.get("p", "a").await.unwrap().unwrap(), [8; 2]);
+    // A new key beyond max_keys is refused, an overwrite of an existing one is not.
+    assert!(!kv.set_with_quota("p", "d", &[], 100, 3).await.unwrap());
+    assert!(kv.set_with_quota("p", "a", &[], 100, 3).await.unwrap());
+    assert_eq!(kv.usage("p").await.unwrap(), (6, 3));
+    // Other plugins have their own totals; a zero quota admits nothing.
+    assert!(kv.set_with_quota("q", "a", &[0; 10], 10, 1).await.unwrap());
+    assert!(!kv.set_with_quota("q", "z", &[], 10, 0).await.unwrap());
+    assert!(!kv.set_with_quota("q", "z", &[0], 0, 5).await.unwrap());
+    // u64 limits beyond i64 behave as unlimited.
+    assert!(
+        kv.set_with_quota("q", "big", &[0; 5], u64::MAX, u64::MAX)
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        kv.set_with_quota("a\0b", "k", &[], 10, 10).await,
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(matches!(
+        kv.set_with_quota("p", "a\0b", &[], 10, 10).await,
+        Err(StoreError::Invalid(_))
+    ));
+
+    // Inside a transaction: visible to it, undone by rollback (also the quota use).
+    let store = db.store();
+    let tx = store.begin().await.unwrap();
+    assert!(
+        tx.plugin_kv()
+            .set_with_quota("t", "k", &[0; 10], 10, 1)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !tx.plugin_kv()
+            .set_with_quota("t", "k2", &[0], 10, 5)
+            .await
+            .unwrap()
+    );
+    tx.rollback().await.unwrap();
+    assert_eq!(kv.usage("t").await.unwrap(), (0, 0));
+    // A refusal does not poison the transaction.
+    let tx = store.begin().await.unwrap();
+    assert!(
+        !tx.plugin_kv()
+            .set_with_quota("t", "k", &[0; 11], 10, 1)
+            .await
+            .unwrap()
+    );
+    assert!(
+        tx.plugin_kv()
+            .set_with_quota("t", "k", &[0; 10], 10, 1)
+            .await
+            .unwrap()
+    );
+    tx.commit().await.unwrap();
+    assert_eq!(kv.usage("t").await.unwrap(), (10, 1));
+}
+
+/// P2: 8 tasks race to write distinct 100-byte keys into a 1000-byte quota. Exactly ten
+/// writes succeed, on every backend, and the stored total never exceeds the quota.
+pub async fn kv_quota_never_exceeded(db: Arc<TestDb>) {
+    const TASKS: usize = 8;
+    const KEYS_PER_TASK: usize = 5;
+    let handles: Vec<_> = (0..TASKS)
+        .map(|t| {
+            let db = db.clone();
+            tokio::spawn(async move {
+                let mut accepted = Vec::new();
+                for i in 0..KEYS_PER_TASK {
+                    let key = format!("t{t}-k{i}");
+                    let ok = db
+                        .store()
+                        .read()
+                        .plugin_kv()
+                        .set_with_quota("race", &key, &[t as u8; 100], 1000, 1000)
+                        .await
+                        .unwrap();
+                    if ok {
+                        accepted.push(key);
+                    }
+                }
+                accepted
+            })
+        })
+        .collect();
+    let mut accepted = Vec::new();
+    for h in handles {
+        accepted.extend(h.await.unwrap());
+    }
+    let kv = db.store().read().plugin_kv();
+    assert_eq!(accepted.len(), 10, "{accepted:?}");
+    assert_eq!(kv.usage("race").await.unwrap(), (1000, 10));
+    let mut stored = kv.list_keys("race", "", 200).await.unwrap();
+    stored.sort();
+    accepted.sort();
+    assert_eq!(stored, accepted);
+
+    // The same through transactions (the lock is held until commit).
+    let handles: Vec<_> = (0..TASKS)
+        .map(|t| {
+            let db = db.clone();
+            tokio::spawn(async move {
+                let mut n = 0;
+                for i in 0..KEYS_PER_TASK {
+                    let tx = db.store().begin().await.unwrap();
+                    let key = format!("t{t}-k{i}");
+                    let ok = tx
+                        .plugin_kv()
+                        .set_with_quota("race-tx", &key, &[0; 100], 1000, 1000)
+                        .await
+                        .unwrap();
+                    tx.commit().await.unwrap();
+                    n += usize::from(ok);
+                }
+                n
+            })
+        })
+        .collect();
+    let mut total = 0;
+    for h in handles {
+        total += h.await.unwrap();
+    }
+    assert_eq!(total, 10);
+    assert_eq!(kv.usage("race-tx").await.unwrap(), (1000, 10));
+
+    // Overwrites of one key race too: the total is always one 100-byte value.
+    let handles: Vec<_> = (0..TASKS)
+        .map(|_| {
+            let db = db.clone();
+            tokio::spawn(async move {
+                for _ in 0..10 {
+                    let ok = db
+                        .store()
+                        .read()
+                        .plugin_kv()
+                        .set_with_quota("race-one", "k", &[1; 100], 150, 1)
+                        .await
+                        .unwrap();
+                    assert!(ok);
+                }
+            })
+        })
+        .collect();
+    for h in handles {
+        h.await.unwrap();
+    }
+    assert_eq!(kv.usage("race-one").await.unwrap(), (100, 1));
 }

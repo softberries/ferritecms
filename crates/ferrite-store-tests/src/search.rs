@@ -1,7 +1,7 @@
 //! Contract tests for full-text search (FTS5 on SQLite, tsvector on Postgres).
 
-use ferrite_domain::{ContentId, MAX_PAGE};
-use ferrite_store::{Store, StoreError};
+use ferrite_domain::{ContentId, ContentStatus, MAX_PAGE, SearchQuery};
+use ferrite_store::{SearchRepo, Store, StoreError};
 
 use crate::{
     TestDb,
@@ -24,6 +24,18 @@ async fn posts(store: &dyn Store, n: usize) -> Vec<ContentId> {
     ids
 }
 
+/// One page of `q` over every kind and status, as ids.
+async fn find(search: &dyn SearchRepo, q: &str, limit: u32) -> Result<Vec<ContentId>, StoreError> {
+    let query = SearchQuery {
+        q: q.into(),
+        kinds: Vec::new(),
+        statuses: Vec::new(),
+        limit,
+        cursor: None,
+    };
+    Ok(search.search(&query).await?.items)
+}
+
 pub async fn search_finds_title_and_body(db: &TestDb) {
     let store = db.store();
     let ids = posts(store, 3).await;
@@ -43,13 +55,13 @@ pub async fn search_finds_title_and_body(db: &TestDb) {
         .await
         .unwrap();
 
-    assert_eq!(search.query("rustacean", 10).await.unwrap(), [a, b]);
+    assert_eq!(find(search, "rustacean", 10).await.unwrap(), [a, b]);
     // Case-insensitive, and every term must match.
-    assert_eq!(search.query("RUSTACEAN", 10).await.unwrap(), [a, b]);
-    assert_eq!(search.query("rustacean weekly", 10).await.unwrap(), [b]);
-    assert_eq!(search.query("nothing", 10).await.unwrap().len(), 2);
-    assert_eq!(search.query("rustacean", 1).await.unwrap(), [a]);
-    assert!(search.query("absent", 10).await.unwrap().is_empty());
+    assert_eq!(find(search, "RUSTACEAN", 10).await.unwrap(), [a, b]);
+    assert_eq!(find(search, "rustacean weekly", 10).await.unwrap(), [b]);
+    assert_eq!(find(search, "nothing", 10).await.unwrap().len(), 2);
+    assert_eq!(find(search, "rustacean", 1).await.unwrap(), [a]);
+    assert!(find(search, "absent", 10).await.unwrap().is_empty());
 }
 
 pub async fn search_reindex_replaces(db: &TestDb) {
@@ -58,17 +70,17 @@ pub async fn search_reindex_replaces(db: &TestDb) {
     let search = store.read().search();
     search.index(id, "old title", "old body").await.unwrap();
     search.index(id, "new title", "fresh body").await.unwrap();
-    assert_eq!(search.query("title", 10).await.unwrap(), [id]);
-    assert_eq!(search.query("fresh", 10).await.unwrap(), [id]);
-    assert!(search.query("old", 10).await.unwrap().is_empty());
+    assert_eq!(find(search, "title", 10).await.unwrap(), [id]);
+    assert_eq!(find(search, "fresh", 10).await.unwrap(), [id]);
+    assert!(find(search, "old", 10).await.unwrap().is_empty());
 
     // Inside a transaction: visible to the transaction, gone after rollback.
     let tx = store.begin().await.unwrap();
     tx.search().index(id, "draft", "draft").await.unwrap();
-    assert_eq!(tx.search().query("draft", 10).await.unwrap(), [id]);
+    assert_eq!(find(tx.search(), "draft", 10).await.unwrap(), [id]);
     tx.rollback().await.unwrap();
-    assert!(search.query("draft", 10).await.unwrap().is_empty());
-    assert_eq!(search.query("fresh", 10).await.unwrap(), [id]);
+    assert!(find(search, "draft", 10).await.unwrap().is_empty());
+    assert_eq!(find(search, "fresh", 10).await.unwrap(), [id]);
 }
 
 pub async fn search_remove_and_cascade(db: &TestDb) {
@@ -79,14 +91,14 @@ pub async fn search_remove_and_cascade(db: &TestDb) {
     search.index(ids[1], "beta", "shared").await.unwrap();
 
     search.remove(ids[0]).await.unwrap();
-    assert!(search.query("alpha", 10).await.unwrap().is_empty());
-    assert_eq!(search.query("shared", 10).await.unwrap(), [ids[1]]);
+    assert!(find(search, "alpha", 10).await.unwrap().is_empty());
+    assert_eq!(find(search, "shared", 10).await.unwrap(), [ids[1]]);
     // Removing an unindexed item is a no-op.
     search.remove(ids[0]).await.unwrap();
 
     store.read().content().delete(ids[1]).await.unwrap();
-    assert!(search.query("shared", 10).await.unwrap().is_empty());
-    assert!(search.query("beta", 10).await.unwrap().is_empty());
+    assert!(find(search, "shared", 10).await.unwrap().is_empty());
+    assert!(find(search, "beta", 10).await.unwrap().is_empty());
 
     // A delete that fails (children RESTRICT) keeps the search row as well.
     let author = fixture_user(store).await;
@@ -102,7 +114,7 @@ pub async fn search_remove_and_cascade(db: &TestDb) {
         store.read().content().delete(parent.id).await,
         Err(StoreError::ForeignKey { .. })
     ));
-    assert_eq!(search.query("keeper", 10).await.unwrap(), [parent.id]);
+    assert_eq!(find(search, "keeper", 10).await.unwrap(), [parent.id]);
 
     // Like every other item reference, an unknown item is a foreign-key error.
     assert!(matches!(
@@ -136,12 +148,12 @@ pub async fn search_handles_operators_safely(db: &TestDb) {
         "a & b | !c",
         "');DROP TABLE search_fts;--",
     ] {
-        let got = search.query(q, 10);
+        let got = find(search, q, 10);
         assert!(got.await.is_ok(), "query {q:?} failed");
     }
-    assert!(search.query("", 10).await.unwrap().is_empty());
+    assert!(find(search, "", 10).await.unwrap().is_empty());
     // The index is intact afterwards.
-    assert_eq!(search.query("spot", 10).await.unwrap(), [id]);
+    assert_eq!(find(search, "spot", 10).await.unwrap(), [id]);
 }
 
 pub async fn search_rejects_nul_and_bad_limits(db: &TestDb) {
@@ -156,16 +168,16 @@ pub async fn search_rejects_nul_and_bad_limits(db: &TestDb) {
     }
     for limit in [0, MAX_PAGE + 1] {
         assert!(matches!(
-            search.query("x", limit).await,
+            find(search, "x", limit).await,
             Err(StoreError::Invalid(_))
         ));
         assert!(matches!(
-            search.query("", limit).await,
+            find(search, "", limit).await,
             Err(StoreError::Invalid(_))
         ));
     }
     search.index(id, "t", "b").await.unwrap();
-    assert_eq!(search.query("t", MAX_PAGE).await.unwrap(), [id]);
+    assert_eq!(find(search, "t", MAX_PAGE).await.unwrap(), [id]);
 }
 
 /// R16/R17: both backends match exactly the same documents (only ranking may differ), so
@@ -194,7 +206,7 @@ pub async fn search_semantics_identical(db: &TestDb) {
         search.index(*id, title, body).await.unwrap();
     }
     let found = |q: String| async move {
-        let mut got = search.query(&q, 50).await.unwrap();
+        let mut got = find(search, &q, 50).await.unwrap();
         got.sort();
         got
     };
@@ -260,4 +272,190 @@ pub async fn search_semantics_identical(db: &TestDb) {
         let label: String = q.chars().take(40).collect();
         assert_eq!(found(q).await, set(&want), "query {label:?}");
     }
+}
+
+/// Inserts a post-like item of `kind` in `status` and returns its id.
+async fn item(
+    store: &dyn Store,
+    author: &ferrite_domain::User,
+    slug: &str,
+    kind: &str,
+    status: ContentStatus,
+) -> ContentId {
+    let mut new = new_post(author, slug);
+    new.kind = kind.into();
+    new.status = status;
+    store.read().content().insert(&new).await.unwrap().id
+}
+
+fn query(q: &str, kinds: &[&str], statuses: &[ContentStatus], limit: u32) -> SearchQuery {
+    SearchQuery {
+        q: q.into(),
+        kinds: kinds.iter().map(|k| (*k).into()).collect(),
+        statuses: statuses.to_vec(),
+        limit,
+        cursor: None,
+    }
+}
+
+/// Walks every page of `q` and returns the pages' ids.
+async fn pages(search: &dyn SearchRepo, mut q: SearchQuery) -> Vec<Vec<ContentId>> {
+    let mut out = Vec::new();
+    loop {
+        let page = search.search(&q).await.unwrap();
+        assert!(!page.items.is_empty() || page.next_cursor.is_none());
+        out.push(page.items);
+        match page.next_cursor {
+            Some(cursor) => q.cursor = Some(cursor),
+            None => return out,
+        }
+        assert!(out.len() < 50, "cursor does not advance");
+    }
+}
+
+pub async fn search_filters_status_kind_and_pages(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    let search = store.read().search();
+    let mut published = Vec::new();
+    // Seven published posts with different document lengths, so ranks differ and tie.
+    for i in 0..7 {
+        let id = item(
+            store,
+            &author,
+            &format!("pub-{i}"),
+            "post",
+            ContentStatus::Published,
+        )
+        .await;
+        let body = "filler ".repeat(i % 4 * 5);
+        search.index(id, "needle", &body).await.unwrap();
+        published.push(id);
+    }
+    let draft = item(store, &author, "draft", "post", ContentStatus::Draft).await;
+    let trash = item(store, &author, "trash", "post", ContentStatus::Trash).await;
+    let page_item = item(store, &author, "a-page", "page", ContentStatus::Published).await;
+    let private_page = item(store, &author, "p-page", "page", ContentStatus::Private).await;
+    for id in [draft, trash, page_item, private_page] {
+        search.index(id, "needle", "").await.unwrap();
+    }
+    // Not matching at all.
+    let other = item(store, &author, "other", "post", ContentStatus::Published).await;
+    search.index(other, "unrelated", "").await.unwrap();
+
+    let sorted = |mut v: Vec<ContentId>| {
+        v.sort();
+        v
+    };
+    let flat = |pages: Vec<Vec<ContentId>>| pages.into_iter().flatten().collect::<Vec<_>>();
+
+    // Published posts, 3 per page: 3 + 3 + 1, no duplicate, none omitted, and the page
+    // walk equals the one-page result.
+    let q = query("needle", &["post"], &[ContentStatus::Published], 3);
+    let walked = pages(search, q.clone()).await;
+    assert_eq!(
+        walked.iter().map(Vec::len).collect::<Vec<_>>(),
+        [3, 3, 1],
+        "{walked:?}"
+    );
+    let all = flat(walked);
+    assert_eq!(sorted(all.clone()), sorted(published.clone()));
+    let whole = search
+        .search(&SearchQuery { limit: 200, ..q })
+        .await
+        .unwrap();
+    assert_eq!(whole.items, all);
+    assert!(whole.next_cursor.is_none());
+
+    // A page of exactly `limit` hits has no next cursor.
+    let q7 = query("needle", &["post"], &[ContentStatus::Published], 7);
+    let page = search.search(&q7).await.unwrap();
+    assert_eq!((page.items.len(), page.next_cursor), (7, None));
+
+    // Kind and status filters combine; empty means all.
+    let set = |kinds: &[&str], statuses: &[ContentStatus]| {
+        let q = query("needle", kinds, statuses, 200);
+        async move { sorted(search.search(&q).await.unwrap().items) }
+    };
+    let mut expect = published.clone();
+    expect.push(page_item);
+    assert_eq!(
+        set(&[], &[ContentStatus::Published]).await,
+        sorted(expect.clone())
+    );
+    assert_eq!(
+        set(&["page"], &[]).await,
+        sorted(vec![page_item, private_page])
+    );
+    assert_eq!(
+        set(
+            &["page"],
+            &[ContentStatus::Published, ContentStatus::Private]
+        )
+        .await,
+        sorted(vec![page_item, private_page])
+    );
+    assert_eq!(
+        set(
+            &["post", "page"],
+            &[ContentStatus::Draft, ContentStatus::Trash]
+        )
+        .await,
+        sorted(vec![draft, trash])
+    );
+    assert_eq!(set(&["nope"], &[]).await, Vec::<ContentId>::new());
+    let mut everything = expect;
+    everything.extend([draft, trash, private_page]);
+    assert_eq!(set(&[], &[]).await, sorted(everything));
+
+    // No terms: an empty page without a statement.
+    let empty = search.search(&query("  -- ", &[], &[], 10)).await.unwrap();
+    assert!(empty.items.is_empty() && empty.next_cursor.is_none());
+
+    // A cursor in any other shape is Invalid.
+    for bad in ["garbage!", "aGVsbG8"] {
+        let mut q = query("needle", &[], &[], 10);
+        q.cursor = Some(bad.into());
+        assert!(matches!(
+            search.search(&q).await,
+            Err(StoreError::Invalid(_))
+        ));
+    }
+    let mut q = query("needle", &[], &[], 10);
+    q.cursor = Some(ferrite_store::encode_text_cursor("x", uuid::Uuid::now_v7()));
+    assert!(matches!(
+        search.search(&q).await,
+        Err(StoreError::Invalid(_))
+    ));
+    // Limits.
+    for limit in [0, MAX_PAGE + 1] {
+        assert!(matches!(
+            search.search(&query("needle", &[], &[], limit)).await,
+            Err(StoreError::Invalid(_))
+        ));
+    }
+}
+
+/// Equal documents have equal ranks, so they come out by id descending, one per page too.
+pub async fn search_ties_break_by_id_descending(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    let search = store.read().search();
+    let mut ids = Vec::new();
+    for i in 0..5 {
+        let id = item(
+            store,
+            &author,
+            &format!("tie-{i}"),
+            "post",
+            ContentStatus::Published,
+        )
+        .await;
+        search.index(id, "same title", "same body").await.unwrap();
+        ids.push(id);
+    }
+    ids.sort_by(|a, b| b.cmp(a));
+    let walked = pages(search, query("same", &[], &[], 1)).await;
+    assert_eq!(walked.concat(), ids);
+    assert_eq!(walked.len(), 5);
 }

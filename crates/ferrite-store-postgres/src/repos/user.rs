@@ -1,13 +1,18 @@
 //! Users. Logins are exact (case-sensitive); e-mails are unique and looked up by `email_key`
 //! (ASCII-lowercased in Rust, identically on every backend).
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ferrite_domain::Timestamp;
 use ferrite_domain::{NewUser, Page, Secret, User, UserId};
 use ferrite_store::{
-    StoreError, UserRepo, check_limit, email_key, encode_text_cursor, text_cursor, validate_text,
+    MAX_ID_FILTER, StoreError, UserRepo, check_len, check_limit, email_key, encode_text_cursor,
+    text_cursor, validate_text,
 };
+
+use sqlx::{Postgres, QueryBuilder};
 
 use super::PgRepos;
 use crate::{
@@ -153,5 +158,27 @@ impl UserRepo for PgRepos {
             None
         };
         Ok(Page { items, next_cursor })
+    }
+
+    async fn get_many(&self, ids: &[UserId]) -> Result<Vec<User>, StoreError> {
+        check_len("ids", ids.len(), MAX_ID_FILTER)?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut qb = QueryBuilder::<Postgres>::new(format!(
+            "SELECT {USER_COLUMNS} FROM users WHERE id IN ("
+        ));
+        let mut list = qb.separated(", ");
+        for id in ids {
+            list.push_bind(id.as_uuid());
+        }
+        list.push_unseparated(")");
+        let rows = run!(&self.exec, |e| qb.build().fetch_all(e))?;
+        let mut found = rows
+            .iter()
+            .map(codec::user)
+            .map(|r| r.map(|u| (u.id, u)))
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        Ok(ids.iter().filter_map(|id| found.remove(id)).collect())
     }
 }

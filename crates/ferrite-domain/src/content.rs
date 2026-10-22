@@ -112,7 +112,9 @@ pub struct ContentQuery {
     pub parent: ParentFilter,
     pub term: Option<TermId>,
     pub author: Option<UserId>,
-    /// Only these items; empty means no filter. At most 200 (`Invalid` beyond).
+    /// Only these items. **Empty means no filter, not "match nothing"**: a caller that
+    /// computed an empty id set must short-circuit instead of querying. At most 200
+    /// (`Invalid` beyond).
     pub ids: Vec<ContentId>,
     /// Never these items; empty means no filter. At most 200 (`Invalid` beyond).
     pub exclude: Vec<ContentId>,

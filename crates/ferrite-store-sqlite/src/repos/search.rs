@@ -5,10 +5,11 @@
 //! opaque tokens. Rows cascade with the content item through the foreign key.
 
 use async_trait::async_trait;
-use ferrite_domain::ContentId;
+use ferrite_domain::{ContentId, Page, SearchQuery};
 use ferrite_store::{
-    IndexTerms, SearchRepo, StoreError, check_limit, index_terms, search_terms, validate_text,
+    IndexTerms, SearchRepo, StoreError, encode_rank_cursor, index_terms, plan_search, validate_text,
 };
+use sqlx::{QueryBuilder, Sqlite};
 use uuid::Uuid;
 
 use super::SqliteRepos;
@@ -54,23 +55,65 @@ impl SearchRepo for SqliteRepos {
         .map(|_| ())
     }
 
-    async fn query(&self, q: &str, limit: u32) -> Result<Vec<ContentId>, StoreError> {
-        validate_text("search query", q)?;
-        let limit = check_limit(limit)?;
-        let terms = search_terms(q);
-        if terms.is_empty() {
-            return Ok(Vec::new());
+    async fn search(&self, query: &SearchQuery) -> Result<Page<ContentId>, StoreError> {
+        let Some(plan) = plan_search(query)? else {
+            return Ok(Page {
+                items: Vec::new(),
+                next_cursor: None,
+            });
+        };
+        // bm25 only works directly under the MATCH query, so the rank is materialized in
+        // a CTE (flattening would move bm25() into the outer WHERE, where it is
+        // rejected) and the keyset predicate compares that stored value. Weights are per
+        // column (title, body_text); lower bm25 is better, so the rank is its negation
+        // (exact). The bound cursor rank carries the same 8 bytes, so `=` is exact.
+        let mut qb = QueryBuilder::<Sqlite>::new(
+            "WITH hits AS MATERIALIZED (SELECT d.item_id AS id, \
+             -bm25(search_fts, 10.0, 1.0) AS rank \
+             FROM search_fts JOIN search_docs d ON d.id = search_fts.rowid \
+             WHERE search_fts MATCH ",
+        );
+        qb.push_bind(match_expression(&plan.terms));
+        qb.push(
+            ") SELECT h.id, h.rank FROM hits h JOIN content_items c ON c.id = h.id WHERE 1 = 1",
+        );
+        if !query.kinds.is_empty() {
+            qb.push(" AND c.type IN (");
+            let mut list = qb.separated(", ");
+            for kind in &query.kinds {
+                list.push_bind(kind.as_str());
+            }
+            list.push_unseparated(")");
         }
-        // bm25 weights are per column (title, body_text); lower scores rank higher.
-        let ids: Vec<Uuid> = run!(&self.reader, |e| sqlx::query_scalar(
-            "SELECT d.item_id FROM search_fts JOIN search_docs d ON d.id = search_fts.rowid \
-             WHERE search_fts MATCH ? \
-             ORDER BY bm25(search_fts, 10.0, 1.0), d.item_id LIMIT ?"
-        )
-        .bind(match_expression(&terms))
-        .bind(i64::from(limit))
-        .fetch_all(e))?;
-        Ok(ids.into_iter().map(ContentId::from_uuid).collect())
+        if !query.statuses.is_empty() {
+            qb.push(" AND c.status IN (");
+            let mut list = qb.separated(", ");
+            for status in &query.statuses {
+                list.push_bind(status.as_str());
+            }
+            list.push_unseparated(")");
+        }
+        if let Some((rank, id)) = plan.after {
+            qb.push(" AND (h.rank < ").push_bind(rank);
+            qb.push(" OR (h.rank = ").push_bind(rank);
+            qb.push(" AND h.id < ").push_bind(id).push("))");
+        }
+        qb.push(" ORDER BY h.rank DESC, h.id DESC LIMIT ")
+            .push_bind(i64::from(plan.limit) + 1);
+        let mut hits: Vec<(Uuid, f64)> = run!(&self.reader, |e| qb.build_query_as().fetch_all(e))?;
+        let next_cursor = if hits.len() > plan.limit as usize {
+            hits.truncate(plan.limit as usize);
+            hits.last().map(|(id, rank)| encode_rank_cursor(*rank, *id))
+        } else {
+            None
+        };
+        Ok(Page {
+            items: hits
+                .into_iter()
+                .map(|(id, _)| ContentId::from_uuid(id))
+                .collect(),
+            next_cursor,
+        })
     }
 }
 

@@ -7,7 +7,12 @@
 
 use std::collections::{HashMap, HashSet};
 
+use ferrite_domain::{Cursor, SearchQuery};
+use serde_json::{Value, json};
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
+use uuid::Uuid;
+
+use crate::{StoreError, check_limit, validate_text};
 
 /// Longest term kept, in characters (at most 256 bytes, far below Postgres' 2046-byte
 /// lexeme limit); longer terms are truncated, on both the index and the query side.
@@ -48,6 +53,66 @@ pub fn search_terms(q: &str) -> Vec<String> {
         .filter(|t| seen.insert(t.clone()))
         .take(MAX_QUERY_TERMS)
         .collect()
+}
+
+/// Most content types a search may filter by.
+pub const MAX_SEARCH_KINDS: usize = 50;
+
+/// A validated search, ready for a backend to run.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchPlan {
+    /// Normalized query terms (never empty).
+    pub terms: Vec<String>,
+    pub limit: u32,
+    /// Decoded cursor: the `(rank, id)` of the last item of the previous page.
+    pub after: Option<(f64, Uuid)>,
+}
+
+/// Validates a [`SearchQuery`] (R13 text checks, limit, kind count, cursor). Returns
+/// `None` when the query has no terms: the result is an empty page and no SQL is sent.
+pub fn plan_search(query: &SearchQuery) -> Result<Option<SearchPlan>, StoreError> {
+    validate_text("search query", &query.q)?;
+    for kind in &query.kinds {
+        validate_text("search kind", kind)?;
+    }
+    if query.kinds.len() > MAX_SEARCH_KINDS {
+        return Err(StoreError::Invalid(format!(
+            "search kinds holds more than {MAX_SEARCH_KINDS} entries"
+        )));
+    }
+    let limit = check_limit(query.limit)?;
+    let after = query.cursor.as_deref().map(rank_cursor).transpose()?;
+    let terms = search_terms(&query.q);
+    if terms.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(SearchPlan {
+        terms,
+        limit,
+        after,
+    }))
+}
+
+/// Encodes the cursor pointing just after the hit `(rank, id)`. The rank travels as its
+/// IEEE-754 bits (an `i64`), so it round-trips exactly with no float text drift.
+pub fn encode_rank_cursor(rank: f64, id: Uuid) -> String {
+    Cursor::encode(&json!(i64::from_ne_bytes(rank.to_bits().to_ne_bytes())), id)
+}
+
+/// Decodes a cursor made by [`encode_rank_cursor`]; anything else (including a NaN rank)
+/// is `Invalid`.
+pub fn rank_cursor(cursor: &str) -> Result<(f64, Uuid), StoreError> {
+    let (key, id) = Cursor::decode(cursor)?;
+    let bad = || StoreError::Invalid("cursor does not match the query order".into());
+    let Value::Number(n) = key else {
+        return Err(bad());
+    };
+    let bits = n.as_i64().ok_or_else(bad)?;
+    let rank = f64::from_bits(u64::from_ne_bytes(bits.to_ne_bytes()));
+    if rank.is_nan() {
+        return Err(bad());
+    }
+    Ok((rank, id))
 }
 
 /// One distinct indexed term of a field with its 1-based positions (shared numbering:
@@ -152,6 +217,26 @@ mod tests {
         assert_eq!(search_terms(&long), ["a".repeat(MAX_TERM_CHARS)]);
         let many: Vec<String> = (0..40).map(|i| format!("t{i}")).collect();
         assert_eq!(search_terms(&many.join(" ")), many[..MAX_QUERY_TERMS]);
+    }
+
+    #[test]
+    fn rank_cursor_roundtrips_exact_bits() {
+        let id = Uuid::now_v7();
+        for rank in [
+            0.0,
+            -0.0,
+            -1.234_567_890_123_456_7,
+            1e-300,
+            f64::MAX,
+            f64::MIN_POSITIVE,
+        ] {
+            let (back, back_id) = rank_cursor(&encode_rank_cursor(rank, id)).unwrap();
+            assert_eq!(back.to_bits(), rank.to_bits());
+            assert_eq!(back_id, id);
+        }
+        assert!(rank_cursor(&Cursor::encode(&json!("x"), id)).is_err());
+        let nan = i64::from_ne_bytes(f64::NAN.to_bits().to_ne_bytes());
+        assert!(rank_cursor(&Cursor::encode(&json!(nan), id)).is_err());
     }
 
     #[test]

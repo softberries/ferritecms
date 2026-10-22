@@ -17,9 +17,9 @@ pub use migrate::{
     next_min_binary, parse_directives, plan_down, verdict,
 };
 pub use paging::{
-    ListPart, MAX_EVENT_BATCH, MAX_ID_FILTER, MAX_SLUG_PREFIX_RESULTS, SortKey,
-    check_content_filters, check_event_limit, check_id_list, check_limit, content_cursor,
-    content_list_plan, content_sort_key, encode_content_cursor, encode_text_cursor,
+    ListPart, MAX_EVENT_BATCH, MAX_ID_FILTER, MAX_META_KEYS, MAX_SLUG_PREFIX_RESULTS, SortKey,
+    check_content_filters, check_event_limit, check_id_list, check_len, check_limit,
+    content_cursor, content_list_plan, content_sort_key, encode_content_cursor, encode_text_cursor,
     slug_has_prefix, slug_prefix_bounds, text_cursor,
 };
 pub use repos::{
@@ -28,7 +28,7 @@ pub use repos::{
     SearchRepo, Store, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 pub use search::{
-    IndexTerms, IndexedTerm, MAX_INDEX_TERMS, MAX_QUERY_TERMS, MAX_TERM_CHARS, index_terms,
-    search_terms,
+    IndexTerms, IndexedTerm, MAX_INDEX_TERMS, MAX_QUERY_TERMS, MAX_SEARCH_KINDS, MAX_TERM_CHARS,
+    SearchPlan, encode_rank_cursor, index_terms, plan_search, rank_cursor, search_terms,
 };
 pub use text::{email_key, validate_text};

@@ -521,7 +521,7 @@ pub async fn text_writes_reject_nul(db: &TestDb) {
 /// R15: lookups, deletes and cursors that bind caller text reject NUL with `Invalid` on
 /// both backends (Postgres would otherwise fail in the driver, SQLite would match nothing).
 pub async fn text_lookups_reject_nul(db: &TestDb) {
-    use ferrite_domain::{ContentOrder, ContentQuery};
+    use ferrite_domain::{ContentId, ContentOrder, ContentQuery, SearchQuery};
     use ferrite_store::encode_text_cursor;
 
     use crate::fixtures::{fixture_user, new_post};
@@ -608,5 +608,15 @@ pub async fn text_lookups_reject_nul(db: &TestDb) {
     invalid(repos.themes().get(BAD).await);
     invalid(repos.themes().activate(BAD).await);
     // Search.
-    invalid(repos.search().query(BAD, 10).await);
+    let search = |q: &str, kind: &str, cursor: Option<String>| SearchQuery {
+        q: q.into(),
+        kinds: vec![kind.into()],
+        statuses: Vec::new(),
+        limit: 10,
+        cursor,
+    };
+    invalid(repos.search().search(&search(BAD, "post", None)).await);
+    invalid(repos.search().search(&search("x", BAD, None)).await);
+    // Batch loaders.
+    invalid(repos.meta().get_many(&[ContentId::new()], &[BAD]).await);
 }

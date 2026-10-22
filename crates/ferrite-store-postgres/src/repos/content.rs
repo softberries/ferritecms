@@ -1,5 +1,7 @@
 //! Content types, content items and meta.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ferrite_domain::{
@@ -7,13 +9,15 @@ use ferrite_domain::{
     RevisionId, Timestamp,
 };
 use ferrite_store::{
-    ContentRepo, ContentTypeRepo, ListPart, MAX_SLUG_PREFIX_RESULTS, MetaRepo, RevisionRepo,
-    StoreError, check_content_filters, check_id_list, check_limit, content_cursor,
-    content_list_plan, encode_content_cursor, slug_has_prefix, slug_prefix_bounds, validate_json,
-    validate_text,
+    ContentRepo, ContentTypeRepo, ListPart, MAX_ID_FILTER, MAX_META_KEYS, MAX_SLUG_PREFIX_RESULTS,
+    MetaRepo, RevisionRepo, StoreError, check_content_filters, check_id_list, check_len,
+    check_limit, content_cursor, content_list_plan, encode_content_cursor, slug_has_prefix,
+    slug_prefix_bounds, validate_json, validate_text,
 };
 use serde_json::Value;
 use sqlx::{Postgres, QueryBuilder, types::Json};
+
+use uuid::Uuid;
 
 use super::PgRepos;
 use crate::{
@@ -497,6 +501,48 @@ impl MetaRepo for PgRepos {
         .bind(id.as_uuid())
         .fetch_all(e))?;
         Ok(rows.into_iter().map(|(k, v)| (k, v.0)).collect())
+    }
+
+    async fn get_many(
+        &self,
+        ids: &[ContentId],
+        keys: &[&str],
+    ) -> Result<Vec<(ContentId, String, Value)>, StoreError> {
+        check_len("ids", ids.len(), MAX_ID_FILTER)?;
+        check_len("keys", keys.len(), MAX_META_KEYS)?;
+        for key in keys {
+            validate_text("meta key", key)?;
+        }
+        if ids.is_empty() || keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut qb = QueryBuilder::<Postgres>::new(
+            "SELECT item_id, key, value FROM content_meta WHERE item_id IN (",
+        );
+        let mut list = qb.separated(", ");
+        for id in ids {
+            list.push_bind(id.as_uuid());
+        }
+        list.push_unseparated(") AND key IN (");
+        let mut list = qb.separated(", ");
+        for key in keys {
+            list.push_bind(*key);
+        }
+        list.push_unseparated(")");
+        let rows: Vec<(Uuid, String, Json<Value>)> =
+            run!(&self.exec, |e| qb.build_query_as().fetch_all(e))?;
+        // Ordered in Rust, identically on both backends: input id order, then key bytes.
+        let mut position = HashMap::new();
+        for (i, id) in ids.iter().enumerate() {
+            position.entry(id.as_uuid()).or_insert(i);
+        }
+        let mut out = Vec::with_capacity(rows.len());
+        for (item, key, v) in rows {
+            let at = position.get(&item).copied().unwrap_or(usize::MAX);
+            out.push((at, ContentId::from_uuid(item), key, v.0));
+        }
+        out.sort_by(|a, b| (a.0, a.2.as_bytes()).cmp(&(b.0, b.2.as_bytes())));
+        Ok(out.into_iter().map(|(_, id, k, v)| (id, k, v)).collect())
     }
 }
 

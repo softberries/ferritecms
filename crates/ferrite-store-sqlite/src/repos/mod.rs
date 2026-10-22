@@ -148,7 +148,7 @@ macro_rules! delegate_repos {
     ($($method:ident: $repo:ident),* $(,)?) => {
         impl Repos for SqliteTx {
             $(fn $method(&self) -> &dyn $repo {
-                self.repos.$method()
+                Repos::$method(&self.repos)
             })*
         }
     };
