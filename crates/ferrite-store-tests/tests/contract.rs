@@ -1,8 +1,8 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
     backend_tests, backend_tests_spawning, constraints::*, content::*, event::*, menu::*,
-    migration_dirs, migration_files, migrations::*, plugin::*, search::*, site::*, taxonomy::*,
-    tx::*, user::*,
+    migration_dirs, migration_files, migrations::*, plugin::*, search::*, semantics::*, site::*,
+    taxonomy::*, tx::*, user::*,
 };
 
 backend_tests!(
@@ -28,6 +28,12 @@ backend_tests!(
 backend_tests!(
     unique_violations_name_the_constraint,
     foreign_key_violations_have_empty_constraint,
+);
+
+backend_tests!(
+    missing_rows_update_not_found_delete_ok,
+    revisions_list_checks_limit,
+    redirects_upsert_returns_stored_and_hit_time,
 );
 
 backend_tests!(
@@ -162,7 +168,8 @@ fn expand_lint_passes() {
 }
 
 /// Every repository is implemented: the only `Unsupported(` left in the backends' sources
-/// is Postgres `snapshot` (it would need pg_dump on the host).
+/// is Postgres `snapshot` (it would need pg_dump on the host) and the Postgres server
+/// version check.
 #[test]
 fn no_unsupported_left() {
     fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
@@ -184,9 +191,14 @@ fn no_unsupported_left() {
     for dir in migration_dirs() {
         walk(&dir.parent().unwrap().join("src"), &mut hits);
     }
-    assert_eq!(hits.len(), 1, "{hits:#?}");
+    let expected = [
+        "Unsupported(\"snapshot\")",
+        "Unsupported(\"postgres >= 15 required\")",
+    ];
     assert!(
-        hits[0].contains("ferrite-store-postgres") && hits[0].contains("Unsupported(\"snapshot\")"),
+        hits.iter().all(|h| h.contains("ferrite-store-postgres")
+            && expected.iter().any(|e| h.contains(e))),
         "{hits:#?}"
     );
+    assert!(hits.iter().any(|h| h.contains(expected[0])), "{hits:#?}");
 }

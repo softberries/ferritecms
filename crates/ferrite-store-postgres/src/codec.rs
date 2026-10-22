@@ -184,7 +184,8 @@ pub(crate) fn menu_item(row: &PgRow) -> Result<MenuItem, StoreError> {
     })
 }
 
-pub(crate) const REDIRECT_COLUMNS: &str = "id, source_path, target, code, hits, origin, created_at";
+pub(crate) const REDIRECT_COLUMNS: &str =
+    "id, source_path, target, code, hits, origin, created_at, last_hit_at";
 
 /// Maps a row selected with [`REDIRECT_COLUMNS`].
 pub(crate) fn redirect(row: &PgRow) -> Result<Redirect, StoreError> {
@@ -192,6 +193,7 @@ pub(crate) fn redirect(row: &PgRow) -> Result<Redirect, StoreError> {
     let code: i32 = row.try_get("code").map_err(map_db_err)?;
     let origin: String = row.try_get("origin").map_err(map_db_err)?;
     let created_at: DateTime<Utc> = row.try_get("created_at").map_err(map_db_err)?;
+    let last_hit_at: Option<DateTime<Utc>> = row.try_get("last_hit_at").map_err(map_db_err)?;
     Ok(Redirect {
         id: RedirectId::from_uuid(id),
         source_path: row.try_get("source_path").map_err(map_db_err)?,
@@ -201,6 +203,7 @@ pub(crate) fn redirect(row: &PgRow) -> Result<Redirect, StoreError> {
         hits: row.try_get("hits").map_err(map_db_err)?,
         origin: origin.parse()?,
         created_at: created_at.into(),
+        last_hit_at: last_hit_at.map(Into::into),
     })
 }
 

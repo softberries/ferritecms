@@ -13,6 +13,17 @@ use crate::{PgStore, exec::map_db_err, repos::PgRepos};
 /// `statement_timeout` on application connections.
 const STATEMENT_TIMEOUT: &str = "30s";
 
+/// Oldest supported server (`server_version_num`): 0001 uses `UNIQUE NULLS NOT DISTINCT`.
+const MIN_SERVER_VERSION: i32 = 150_000;
+
+/// Rejects servers older than PostgreSQL 15.
+fn check_server_version(num: i32) -> Result<(), StoreError> {
+    if num < MIN_SERVER_VERSION {
+        return Err(StoreError::Unsupported("postgres >= 15 required"));
+    }
+    Ok(())
+}
+
 /// How to open a [`PgStore`].
 #[derive(Debug, Clone)]
 pub struct PgOptions {
@@ -42,6 +53,7 @@ pub(crate) fn quote_ident(s: &str) -> String {
 
 impl PgStore {
     /// Creates the schema if set and missing, then opens the pool. Does not migrate.
+    /// A server older than PostgreSQL 15 gives `Unsupported("postgres >= 15 required")`.
     pub async fn open(opts: PgOptions) -> Result<Self, StoreError> {
         let connect = PgConnectOptions::from_str(&opts.url).map_err(map_db_err)?;
         let search_path_sql = opts
@@ -88,6 +100,11 @@ impl PgStore {
             .connect_with(connect.clone())
             .await
             .map_err(map_db_err)?;
+        let version: i32 = sqlx::query_scalar("SELECT current_setting('server_version_num')::int")
+            .fetch_one(&pool)
+            .await
+            .map_err(map_db_err)?;
+        check_server_version(version)?;
 
         Ok(Self {
             read: PgRepos::new(pool.clone()),
@@ -121,7 +138,17 @@ impl PgStore {
 
 #[cfg(test)]
 mod tests {
-    use super::quote_ident;
+    use super::*;
+
+    #[test]
+    fn server_version_must_be_15_or_newer() {
+        assert!(matches!(
+            check_server_version(140_011),
+            Err(StoreError::Unsupported("postgres >= 15 required"))
+        ));
+        check_server_version(150_000).unwrap();
+        check_server_version(170_011).unwrap();
+    }
 
     #[test]
     fn quote_ident_escapes_quotes() {

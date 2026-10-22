@@ -15,6 +15,7 @@ pub mod menu;
 pub mod migrations;
 pub mod plugin;
 pub mod search;
+pub mod semantics;
 pub mod site;
 pub mod taxonomy;
 pub mod tx;

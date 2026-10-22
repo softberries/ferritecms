@@ -260,6 +260,7 @@ fn redirect(source: &str, target: &str, code: u16) -> Redirect {
         hits: 0,
         origin: RedirectOrigin::Manual,
         created_at: Timestamp::now(),
+        last_hit_at: None,
     }
 }
 

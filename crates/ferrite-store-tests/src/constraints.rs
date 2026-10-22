@@ -139,6 +139,7 @@ pub async fn unique_violations_name_the_constraint(db: &TestDb) {
         hits: 0,
         origin: RedirectOrigin::Manual,
         created_at: Timestamp::now(),
+        last_hit_at: None,
     };
     r.redirects().upsert(&redirect).await.unwrap();
     let moved = Redirect {

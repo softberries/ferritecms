@@ -193,7 +193,8 @@ pub(crate) fn menu_item(row: &SqliteRow) -> Result<MenuItem, StoreError> {
     })
 }
 
-pub(crate) const REDIRECT_COLUMNS: &str = "id, source_path, target, code, hits, origin, created_at";
+pub(crate) const REDIRECT_COLUMNS: &str =
+    "id, source_path, target, code, hits, origin, created_at, last_hit_at";
 
 /// Maps a row selected with [`REDIRECT_COLUMNS`].
 pub(crate) fn redirect(row: &SqliteRow) -> Result<Redirect, StoreError> {
@@ -209,6 +210,7 @@ pub(crate) fn redirect(row: &SqliteRow) -> Result<Redirect, StoreError> {
         hits: row.try_get("hits").map_err(map_db_err)?,
         origin: origin.parse()?,
         created_at: ts(row.try_get("created_at").map_err(map_db_err)?)?,
+        last_hit_at: ts_opt(row.try_get("last_hit_at").map_err(map_db_err)?)?,
     })
 }
 

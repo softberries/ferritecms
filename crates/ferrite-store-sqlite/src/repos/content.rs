@@ -438,6 +438,7 @@ impl RevisionRepo for SqliteRepos {
     }
 
     async fn list(&self, id: ContentId, limit: u32) -> Result<Vec<Revision>, StoreError> {
+        let limit = check_limit(limit)?;
         let rows = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {REVISION_COLUMNS} FROM revisions WHERE item_id = ? \
              ORDER BY created_at DESC, id DESC LIMIT ?"

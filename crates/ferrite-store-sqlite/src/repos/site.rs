@@ -105,17 +105,19 @@ impl RedirectRepo for SqliteRepos {
         row.as_ref().map(codec::redirect).transpose()
     }
 
-    async fn upsert(&self, redirect: &Redirect) -> Result<(), StoreError> {
+    async fn upsert(&self, redirect: &Redirect) -> Result<Redirect, StoreError> {
         check_redirect_code(redirect.code)?;
         validate_text("redirect source_path", &redirect.source_path)?;
         validate_text("redirect target", &redirect.target)?;
-        // An existing row keeps its id, hits and creation time.
-        run!(&self.writer, |e| sqlx::query(
-            "INSERT INTO redirects (id, source_path, target, code, hits, origin, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?) \
+        // An existing row keeps its id, hits, creation and last-hit time.
+        let row = run!(&self.writer, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "INSERT INTO redirects \
+             (id, source_path, target, code, hits, origin, created_at, last_hit_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT (source_path) DO UPDATE SET target = excluded.target, \
-             code = excluded.code, origin = excluded.origin"
-        )
+             code = excluded.code, origin = excluded.origin \
+             RETURNING {REDIRECT_COLUMNS}"
+        )))
         .bind(redirect.id.as_uuid())
         .bind(&redirect.source_path)
         .bind(&redirect.target)
@@ -123,8 +125,9 @@ impl RedirectRepo for SqliteRepos {
         .bind(redirect.hits)
         .bind(redirect.origin.as_str())
         .bind(redirect.created_at.as_micros())
-        .execute(e))
-        .map(|_| ())
+        .bind(redirect.last_hit_at.map(|t| t.as_micros()))
+        .fetch_one(e))?;
+        codec::redirect(&row)
     }
 
     async fn delete(&self, id: RedirectId) -> Result<(), StoreError> {

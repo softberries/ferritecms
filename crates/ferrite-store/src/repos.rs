@@ -71,6 +71,14 @@ pub trait Tx: Repos + Send {
 }
 
 /// Accessors for every repository.
+///
+/// Missing-row semantics, the same in every repository and on every backend:
+/// - lookups (`get`, `get_by_*`) return `Ok(None)`;
+/// - `update`, `RedirectRepo::hit`, `PluginRepo::set_enabled` and
+///   `ThemeRepo::activate` return [`StoreError::NotFound`] (`ContentRepo::update` returns
+///   `Conflict` instead when the row exists with another version);
+/// - `delete` is idempotent: deleting a missing row is `Ok(())`. A delete blocked by
+///   dependent rows (`RESTRICT`) is [`StoreError::ForeignKey`].
 pub trait Repos: Send + Sync {
     fn content(&self) -> &dyn ContentRepo;
     fn meta(&self) -> &dyn MetaRepo;
@@ -100,7 +108,7 @@ pub trait ContentTypeRepo: Send + Sync {
     async fn get(&self, name: &str) -> Result<Option<ContentType>, StoreError>;
     /// Lists all content types.
     async fn list(&self) -> Result<Vec<ContentType>, StoreError>;
-    /// Deletes a content type; built-in types yield `Invalid`.
+    /// Deletes a content type; built-in types yield `Invalid`; a missing one is a no-op.
     async fn delete(&self, name: &str) -> Result<(), StoreError>;
 }
 
@@ -121,7 +129,7 @@ pub trait ContentRepo: Send + Sync {
     async fn update(&self, item: &ContentItem) -> Result<ContentItem, StoreError>;
     /// Lists items matching the query with cursor pagination.
     async fn list(&self, query: &ContentQuery) -> Result<Page<ContentItem>, StoreError>;
-    /// Deletes an item by id.
+    /// Deletes an item by id (missing: no-op). An item with children is `ForeignKey`.
     async fn delete(&self, id: ContentId) -> Result<(), StoreError>;
     /// Returns up to `limit` scheduled items whose publish time is at or before `now`.
     async fn due_scheduled(
@@ -142,7 +150,7 @@ pub trait MetaRepo: Send + Sync {
         key: &str,
         value: &serde_json::Value,
     ) -> Result<(), StoreError>;
-    /// Deletes one meta key.
+    /// Deletes one meta key (missing: no-op).
     async fn delete(&self, id: ContentId, key: &str) -> Result<(), StoreError>;
     /// Lists all meta entries of an item.
     async fn list(&self, id: ContentId) -> Result<Vec<(String, serde_json::Value)>, StoreError>;
@@ -174,7 +182,7 @@ pub trait TaxonomyRepo: Send + Sync {
 pub trait TermRepo: Send + Sync {
     /// Inserts a term.
     async fn insert(&self, term: &Term) -> Result<(), StoreError>;
-    /// Updates a term.
+    /// Updates a term; a missing term is `NotFound`.
     async fn update(&self, term: &Term) -> Result<(), StoreError>;
     /// Fetches a term by id.
     async fn get(&self, id: TermId) -> Result<Option<Term>, StoreError>;
@@ -182,7 +190,7 @@ pub trait TermRepo: Send + Sync {
     async fn get_by_slug(&self, tax: &str, slug: &str) -> Result<Option<Term>, StoreError>;
     /// Lists all terms of a taxonomy.
     async fn list(&self, tax: &str) -> Result<Vec<Term>, StoreError>;
-    /// Deletes a term.
+    /// Deletes a term (missing: no-op). A term with child terms is `ForeignKey`.
     async fn delete(&self, id: TermId) -> Result<(), StoreError>;
     /// Replaces an item's terms, storing the given order as `position`.
     async fn set_for_item(&self, item: ContentId, terms: &[TermId]) -> Result<(), StoreError>;
@@ -198,7 +206,7 @@ pub trait MenuRepo: Send + Sync {
     async fn put(&self, menu: &Menu) -> Result<(), StoreError>;
     /// Lists menus as (name, label) pairs.
     async fn list(&self) -> Result<Vec<(String, String)>, StoreError>;
-    /// Deletes a menu and its items.
+    /// Deletes a menu and its items (missing: no-op).
     async fn delete(&self, name: &str) -> Result<(), StoreError>;
 }
 
@@ -213,7 +221,7 @@ pub trait OptionRepo: Send + Sync {
         value: &serde_json::Value,
         autoload: bool,
     ) -> Result<(), StoreError>;
-    /// Deletes an option.
+    /// Deletes an option (missing: no-op).
     async fn delete(&self, name: &str) -> Result<(), StoreError>;
     /// Lists all options flagged autoload.
     async fn autoloaded(&self) -> Result<Vec<OptionEntry>, StoreError>;
@@ -223,13 +231,15 @@ pub trait OptionRepo: Send + Sync {
 pub trait RedirectRepo: Send + Sync {
     /// Fetches a redirect by source path.
     async fn get_by_source(&self, source: &str) -> Result<Option<Redirect>, StoreError>;
-    /// Inserts or replaces a redirect keyed by `source_path`.
-    async fn upsert(&self, redirect: &Redirect) -> Result<(), StoreError>;
-    /// Deletes a redirect.
+    /// Inserts a redirect, or updates the one with the same `source_path` (target, code
+    /// and origin change; id, hits, created_at and last_hit_at stay). Returns the stored
+    /// row.
+    async fn upsert(&self, redirect: &Redirect) -> Result<Redirect, StoreError>;
+    /// Deletes a redirect (missing: no-op).
     async fn delete(&self, id: RedirectId) -> Result<(), StoreError>;
     /// Lists redirects with cursor pagination.
     async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<Redirect>, StoreError>;
-    /// Records a hit (increments the counter, updates last-hit time).
+    /// Records a hit (increments the counter, sets `last_hit_at`); missing: `NotFound`.
     async fn hit(&self, id: RedirectId) -> Result<(), StoreError>;
 }
 
@@ -243,7 +253,7 @@ pub trait UserRepo: Send + Sync {
     async fn get_by_login(&self, login: &str) -> Result<Option<User>, StoreError>;
     /// Fetches a user by e-mail, case-insensitively.
     async fn get_by_email(&self, email: &str) -> Result<Option<User>, StoreError>;
-    /// Updates a user.
+    /// Updates a user; a missing user is `NotFound`.
     async fn update(&self, user: &User) -> Result<(), StoreError>;
     /// Lists users with cursor pagination.
     async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<User>, StoreError>;
@@ -255,7 +265,7 @@ pub trait ArtifactRepo: Send + Sync {
     async fn insert_if_absent(&self, artifact: &Artifact) -> Result<bool, StoreError>;
     /// Fetches an artifact by hash.
     async fn get(&self, hash: &ArtifactHash) -> Result<Option<Artifact>, StoreError>;
-    /// Deletes an artifact by hash.
+    /// Deletes an artifact by hash (missing: no-op).
     async fn delete(&self, hash: &ArtifactHash) -> Result<(), StoreError>;
 }
 
@@ -265,7 +275,7 @@ pub trait MediaRepo: Send + Sync {
     async fn insert(&self, media: &Media) -> Result<(), StoreError>;
     /// Fetches media metadata by content id.
     async fn get(&self, id: ContentId) -> Result<Option<Media>, StoreError>;
-    /// Updates media metadata.
+    /// Updates media metadata; missing metadata is `NotFound`.
     async fn update(&self, media: &Media) -> Result<(), StoreError>;
 }
 
@@ -277,14 +287,14 @@ pub trait PluginRepo: Send + Sync {
     async fn get(&self, id: &str) -> Result<Option<InstalledPlugin>, StoreError>;
     /// Lists installed plugins.
     async fn list(&self) -> Result<Vec<InstalledPlugin>, StoreError>;
-    /// Enables or disables a plugin, recording an optional reason.
+    /// Enables or disables a plugin, recording an optional reason; missing: `NotFound`.
     async fn set_enabled(
         &self,
         id: &str,
         enabled: bool,
         reason: Option<&str>,
     ) -> Result<(), StoreError>;
-    /// Removes an installed plugin.
+    /// Removes an installed plugin (missing: no-op).
     async fn delete(&self, id: &str) -> Result<(), StoreError>;
 }
 
@@ -294,7 +304,7 @@ pub trait PluginKvRepo: Send + Sync {
     async fn get(&self, plugin: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError>;
     /// Writes a plugin's value.
     async fn set(&self, plugin: &str, key: &str, value: &[u8]) -> Result<(), StoreError>;
-    /// Deletes a plugin's key.
+    /// Deletes a plugin's key (missing: no-op).
     async fn delete(&self, plugin: &str, key: &str) -> Result<(), StoreError>;
     /// Lists up to `limit` keys of a plugin starting with `prefix`.
     async fn list_keys(
@@ -317,7 +327,8 @@ pub trait ThemeRepo: Send + Sync {
     async fn list(&self) -> Result<Vec<InstalledTheme>, StoreError>;
     /// Returns the active theme, if any.
     async fn active(&self) -> Result<Option<InstalledTheme>, StoreError>;
-    /// Makes the given theme the only active one.
+    /// Makes the given theme the only active one; a missing theme is `NotFound` (and the
+    /// active theme stays active).
     async fn activate(&self, id: &str) -> Result<(), StoreError>;
 }
 
