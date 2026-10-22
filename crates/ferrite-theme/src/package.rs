@@ -339,10 +339,19 @@ fn read_dir(root: &Path) -> Result<BTreeMap<String, Cow<'static, [u8]>>, ThemeEr
                         "files exceed {MAX_TOTAL_BYTES} bytes in total"
                     )]));
                 }
+                // The path was checked with symlink_metadata above; opening with
+                // O_NOFOLLOW (unix) and re-checking the opened handle closes the window
+                // in which it could be swapped for a link or a FIFO.
+                let file = open_nofollow(&path).map_err(io(&path))?;
+                if !file.metadata().map_err(io(&path))?.is_file() {
+                    return Err(ThemeError::Invalid(vec![format!(
+                        "{rel_path}: not a regular file"
+                    )]));
+                }
                 let mut data = Vec::new();
                 // `take` guards against a file growing between stat and read.
-                fs::File::open(&path)
-                    .and_then(|f| f.take(remaining + 1).read_to_end(&mut data))
+                file.take(remaining + 1)
+                    .read_to_end(&mut data)
                     .map_err(io(&path))?;
                 total += data.len() as u64;
                 if total > MAX_TOTAL_BYTES {
@@ -359,6 +368,20 @@ fn read_dir(root: &Path) -> Result<BTreeMap<String, Cow<'static, [u8]>>, ThemeEr
         }
     }
     Ok(files)
+}
+
+/// Opens `path` for reading without following a final symlink (unix: `O_NOFOLLOW`,
+/// so a link fails with `ELOOP`). Elsewhere a plain open; the caller's
+/// `symlink_metadata` check and the handle's `is_file` check still apply.
+fn open_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    let mut opts = fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    opts.open(path)
 }
 
 /// MIME type by extension; unknown types are `application/octet-stream`.
@@ -413,6 +436,18 @@ mod tests {
             asset_url("h", "/img/a b?#.png"),
             "/_theme/h/img/a%20b%3F%23.png"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_refuses_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        fs::write(&real, b"x").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(open_nofollow(&real).is_ok());
+        assert!(open_nofollow(&link).is_err());
     }
 
     #[test]

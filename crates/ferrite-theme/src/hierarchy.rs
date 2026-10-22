@@ -17,15 +17,22 @@ pub enum TemplateKey {
     Date,
     /// Search results.
     Search,
-    /// The site root: `is_page` when a static page is shown there, `posts_page` when it
-    /// lists posts.
-    Front { is_page: bool, posts_page: bool },
+    /// The site root showing a static page (`reading.front_page`).
+    FrontPage { slug: String, id: String },
+    /// The site root listing posts.
+    FrontPosts,
     /// 404.
     NotFound,
-    /// 500: falls back to `index.html` like every route; callers that want the
-    /// built-in error page instead check for `500.html` themselves (06 §7).
-    Error,
 }
+
+/// The theme's 500 template, if it has one; `None` means the caller renders the
+/// built-in error page (06 §7). Unlike every route, there is no `index.html`
+/// fallback: the index is a normal page and may need data an error page lacks.
+pub fn error_template(has: impl Fn(&str) -> bool) -> Option<&'static str> {
+    has(ERROR).then_some(ERROR)
+}
+
+const ERROR: &str = "500.html";
 
 /// The first existing candidate for `key` (06 §2 table), `index.html` when none does.
 ///
@@ -49,12 +56,7 @@ fn candidates(key: &TemplateKey) -> Vec<String> {
             format!("single-{kind}.html"),
             "single.html".into(),
         ],
-        TemplateKey::Page { slug, id } => vec![
-            format!("page-{slug}.html"),
-            format!("page-{id}.html"),
-            "page.html".into(),
-            "single.html".into(),
-        ],
+        TemplateKey::Page { slug, id } => page_row(slug, id),
         TemplateKey::Archive { kind } => {
             vec![format!("archive-{kind}.html"), "archive.html".into()]
         }
@@ -84,24 +86,26 @@ fn candidates(key: &TemplateKey) -> Vec<String> {
         ],
         TemplateKey::Date => vec!["date.html".into(), "archive.html".into()],
         TemplateKey::Search => vec!["search.html".into()],
-        TemplateKey::Front {
-            is_page,
-            posts_page,
-        } => {
+        TemplateKey::FrontPage { slug, id } => {
             let mut v = vec!["front-page.html".to_owned()];
-            if *posts_page {
-                v.push("home.html".into());
-            }
-            if *is_page {
-                v.push("page.html".into());
-            }
+            v.extend(page_row(slug, id));
             v
         }
+        TemplateKey::FrontPosts => vec!["front-page.html".into(), "home.html".into()],
         TemplateKey::NotFound => vec!["404.html".into()],
-        TemplateKey::Error => vec!["500.html".into()],
     };
     c.push(INDEX.into());
     c
+}
+
+/// The Page row of the 06 §2 table, without the final `index.html`.
+fn page_row(slug: &str, id: &str) -> Vec<String> {
+    vec![
+        format!("page-{slug}.html"),
+        format!("page-{id}.html"),
+        "page.html".into(),
+        "single.html".into(),
+    ]
 }
 
 #[cfg(test)]
@@ -255,40 +259,45 @@ mod tests {
     #[test]
     fn front_posts() {
         assert_chain(
-            TemplateKey::Front {
-                is_page: false,
-                posts_page: true,
-            },
+            TemplateKey::FrontPosts,
             &["front-page.html", "home.html", "index.html"],
         );
-        // home.html is for the posts listing only.
-        let key = TemplateKey::Front {
-            is_page: false,
-            posts_page: true,
-        };
-        assert_eq!(pick(&key, &["page.html"]), "index.html");
+        // Page templates are not for the posts listing.
+        assert_eq!(
+            pick(&TemplateKey::FrontPosts, &["page.html", "single.html"]),
+            "index.html"
+        );
     }
 
     #[test]
     fn front_static_page() {
-        assert_chain(
-            TemplateKey::Front {
-                is_page: true,
-                posts_page: false,
-            },
-            &["front-page.html", "page.html", "index.html"],
-        );
-        let key = TemplateKey::Front {
-            is_page: true,
-            posts_page: false,
+        let key = TemplateKey::FrontPage {
+            slug: s("welcome"),
+            id: s("0190"),
         };
+        assert_chain(
+            key.clone(),
+            &[
+                "front-page.html",
+                "page-welcome.html",
+                "page-0190.html",
+                "page.html",
+                "single.html",
+                "index.html",
+            ],
+        );
         assert_eq!(pick(&key, &["home.html"]), "index.html");
     }
 
     #[test]
-    fn not_found_and_error() {
+    fn not_found() {
         assert_chain(TemplateKey::NotFound, &["404.html", "index.html"]);
-        assert_chain(TemplateKey::Error, &["500.html", "index.html"]);
+    }
+
+    #[test]
+    fn error_has_no_index_fallback() {
+        assert_eq!(error_template(|n| n == "500.html"), Some("500.html"));
+        assert_eq!(error_template(|n| n == "index.html"), None);
     }
 
     #[test]

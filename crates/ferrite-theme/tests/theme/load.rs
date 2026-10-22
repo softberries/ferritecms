@@ -1,12 +1,13 @@
 use ferrite_theme::{MAX_FILES, Theme, ThemeError, ThemeSource};
 
-use crate::common::{MANIFEST, ctx, load, render, theme, write, write_theme};
+use crate::common::{MANIFEST, ctx, fixture, load, render, theme, write, write_theme};
 
 #[test]
-fn embedded_fixture_loads_and_renders() {
-    let t = Theme::load(&ThemeSource::Embedded("test-minimal")).unwrap();
+fn fixture_loads_and_renders() {
+    let t = fixture();
     assert_eq!(t.name(), "test-minimal");
-    assert!(Theme::embedded_names().contains(&"test-minimal".to_owned()));
+    // Embedded = starter themes only (R16); the fixture is not one of them.
+    assert!(!Theme::embedded_names().contains(&"test-minimal".to_owned()));
     assert_eq!(t.hash().len(), 16);
     assert!(t.hash().bytes().all(|b| b.is_ascii_hexdigit()));
     assert!(t.has_template("index.html"));
@@ -32,7 +33,14 @@ fn embedded_fixture_loads_and_renders() {
 
 #[test]
 fn unknown_embedded_theme_is_not_found() {
-    for name in ["nope", "", "../themes", "test-minimal/templates"] {
+    for name in [
+        "nope",
+        "",
+        "../themes",
+        "test-minimal",
+        ".gitkeep",
+        "blog/templates",
+    ] {
         assert!(
             matches!(
                 Theme::load(&ThemeSource::Embedded(name)),

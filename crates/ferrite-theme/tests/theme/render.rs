@@ -15,16 +15,25 @@ fn title_is_escaped_body_is_not() {
 }
 
 #[test]
-fn xml_is_escaped_txt_is_not() {
+fn escape_everything_but_txt_css_js() {
     let t = theme(&[
-        ("templates/feed.xml", "<t>{{ site.title }}</t>"),
+        ("templates/feed.xml", "{{ site.title }}"),
+        ("templates/data.json", "{{ site.title }}"),
+        ("templates/noext", "{{ site.title }}"),
         ("templates/robots.txt", "{{ site.title }}"),
+        ("templates/a.css", "{{ site.title }}"),
+        ("templates/a.js", "{{ site.title }}"),
     ]);
-    assert_eq!(
-        render(&t, "feed.xml", ctx()).unwrap().html,
-        "<t>My &lt;Site&gt;</t>"
-    );
-    assert_eq!(render(&t, "robots.txt", ctx()).unwrap().html, "My <Site>");
+    for name in ["feed.xml", "data.json", "noext"] {
+        assert_eq!(
+            render(&t, name, ctx()).unwrap().html,
+            "My &lt;Site&gt;",
+            "{name}"
+        );
+    }
+    for name in ["robots.txt", "a.css", "a.js"] {
+        assert_eq!(render(&t, name, ctx()).unwrap().html, "My <Site>", "{name}");
+    }
 }
 
 #[test]

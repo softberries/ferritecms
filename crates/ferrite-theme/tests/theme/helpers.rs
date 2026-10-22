@@ -4,7 +4,7 @@ use ferrite_core::events::{archive_key, menu_key, post_key};
 use ferrite_domain::ContentId;
 use ferrite_theme::{ImageRef, MAX_BRIDGE_CALLS, RenderOutput, Renderer};
 
-use crate::common::{FakeBridge, ctx, item, menu_tree, render_str, theme};
+use crate::common::{FakeBridge, ctx, item, keys, menu_tree, render_str, theme};
 
 fn render_with(
     src: &str,
@@ -65,8 +65,11 @@ fn date_rejects_bad_format_without_panicking() {
 #[test]
 fn menu_renders_tree_records_deps_and_is_memoised() {
     let target = ContentId::new();
+    // A draft target the bridge removed from the tree but still reports.
+    let hidden = ContentId::new();
     let bridge = Arc::new(FakeBridge {
-        menu: Some(menu_tree(target)),
+        menu: Some(menu_tree()),
+        deps: keys(&[post_key(target), post_key(hidden)]),
         ..FakeBridge::default()
     });
     let out = render_with(
@@ -83,6 +86,38 @@ fn menu_renders_tree_records_deps_and_is_memoised() {
     assert_eq!(bridge.calls.load(Ordering::SeqCst), 1);
     assert!(out.deps.contains(&menu_key("primary")));
     assert!(out.deps.contains(&post_key(target)));
+    assert!(out.deps.contains(&post_key(hidden)));
+}
+
+#[test]
+fn bridge_reported_deps_reach_the_output() {
+    // related(<uuid>) with an empty result: the bridge's archive and the referenced
+    // (non-public) source item are still recorded.
+    let draft = ContentId::new();
+    let bridge = Arc::new(FakeBridge {
+        deps: keys(&[archive_key("event"), post_key(draft)]),
+        ..FakeBridge::default()
+    });
+    let out = render_with(
+        &format!("{{{{ related('{draft}') | length }}}}"),
+        ctx(),
+        bridge,
+    );
+    assert_eq!(out.html, "0");
+    assert!(out.deps.contains(&archive_key("event")));
+    assert!(out.deps.contains(&post_key(draft)));
+    // query() merges the bridge's keys too (e.g. the term it filtered on).
+    let term = ferrite_domain::TermId::new();
+    let bridge = Arc::new(FakeBridge {
+        deps: keys(&[ferrite_core::events::term_key(term)]),
+        ..FakeBridge::default()
+    });
+    let out = render_with(
+        "{{ query(type='post', term='category/x') | length }}",
+        ctx(),
+        bridge,
+    );
+    assert!(out.deps.contains(&ferrite_core::events::term_key(term)));
 }
 
 #[test]

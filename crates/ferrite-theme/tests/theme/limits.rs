@@ -35,6 +35,7 @@ fn hostile() -> Theme {
             "{% for i in range(11) %}{{ 'x' * 1000000 }}{% endfor %}",
         ),
         ("templates/repeat.html", "{{ 'x' * 1000000000 }}"),
+        ("templates/repeat-seq.html", "{{ ([1] * 10**9) | length }}"),
         ("templates/ok.html", "fine {{ site.title }}"),
     ])
 }
@@ -83,4 +84,5 @@ fn ten_megabytes_of_output_is_a_limit() {
         "{err}"
     );
     assert_limit(&t, "repeat.html");
+    assert_limit(&t, "repeat-seq.html");
 }

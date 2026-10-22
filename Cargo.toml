@@ -21,10 +21,11 @@ futures = "0.3"
 html-escape = "0.3.0"
 hyper-util = { version = "0.1", features = ["server-auto", "tokio", "server"] }
 ipnet = "2"
+libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 infer = "0.22"
 # No `debug` feature: no debug() global, no source snippets in errors (name + line stay).
-minijinja = { version = "3.0.2", default-features = false, features = ["builtins", "macros", "multi_template", "adjacent_loop_items", "std_collections", "serde", "json", "fuel"] }
+minijinja = { version = "=3.0.2", default-features = false, features = ["builtins", "macros", "multi_template", "adjacent_loop_items", "std_collections", "serde", "json", "fuel"] }
 percent-encoding = "2"
 rust-embed = { version = "8.13", features = ["debug-embed"] }
 object_store = { version = "0.14", features = ["aws"] }

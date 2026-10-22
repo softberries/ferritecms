@@ -2,6 +2,8 @@
 //!
 //! # Sandbox
 //!
+//! * Auto-escape (ruling R15): HTML escaping for every template except names ending
+//!   in `.txt`, `.css` or `.js`, so a new kind of markup template is safe by default.
 //! * Undefined values are chainable (`post.author.login` with no `post` is undefined
 //!   and prints as nothing), so templates need fewer guards.
 //! * Templates come only from the theme's `templates/` folder, compiled into the
@@ -22,10 +24,17 @@
 //!   return nothing and one warning is logged. Same-name `menu()` calls are memoised,
 //!   and `image()` of media already in the context (featured images) needs no call.
 //!
-//! **Known gap:** fuel counts instructions, not bytes. A few instructions can build
-//! large intermediate strings (`~` concatenation doubling in a loop) before anything
-//! reaches the output cap; MiniJinja has no allocation hook. Themes are installed by
-//! administrators, so this is a robustness rather than a privilege issue.
+//! **Known gaps (ruling R14).** Fuel counts instructions, not bytes or CPU time:
+//!
+//! * *Memory:* a few instructions can build large intermediate strings (`~`
+//!   concatenation doubling in a loop) before anything reaches the output cap;
+//!   MiniJinja has no allocation hook.
+//! * *CPU per instruction:* one instruction can do a lot of native work (`sort`,
+//!   `join`, `replace` or `unique` over a 100 000-item sequence, or one repetition
+//!   just under the 100 M guard), so wall time is bounded only loosely by fuel.
+//!
+//! Themes are installed by administrators, so these are robustness rather than
+//! privilege issues.
 //!
 //! # Globals
 //!
@@ -47,8 +56,9 @@
 //! A render records `theme`, `option:site.title`, `option:site.url`,
 //! `option:site.description`, `option:site.locale`; for every item in the context or
 //! returned by a helper `post:<id>`, `user:<author>`, `term:<id>` per term and
-//! `post:<featured media>`; `archive:<kind>` for `related`/`query`; `menu:<name>` and
-//! `post:<target>`/`term:<target>` for menus; `post:<media>` for `image()`. The keys
+//! `post:<featured media>`; `archive:<kind>` for `related`/`query`; `menu:<name>` for
+//! menus; `post:<media>` for `image()`; plus every key the [`HelperBridge`] reports
+//! for `related`, `query` and `menu` (menu targets, hidden ones included). The keys
 //! of the `SiteRead` that produced the context (ancestors, listings, options) are the
 //! caller's to merge, as are `plugins` and the theme-settings option.
 
@@ -70,7 +80,7 @@ use minijinja::{
 use serde::Serialize;
 
 use crate::{
-    HelperBridge, ImageRef, MenuNode, MenuTarget, Theme, ThemeError,
+    HelperBridge, ImageRef, Theme, ThemeError,
     bridge::{MAX_QUERY_LIMIT, MAX_RELATED},
     filters,
     package::asset_url,
@@ -217,10 +227,13 @@ pub(crate) fn build_env(
     env.set_undefined_behavior(UndefinedBehavior::Chainable);
     env.set_fuel(Some(FUEL));
     env.set_auto_escape_callback(|name| {
-        if name.ends_with(".html") || name.ends_with(".xml") {
-            AutoEscape::Html
-        } else {
+        if [".txt", ".css", ".js"]
+            .iter()
+            .any(|ext| name.ends_with(ext))
+        {
             AutoEscape::None
+        } else {
+            AutoEscape::Html
         }
     });
     env.add_filter("date", filters::date);
@@ -378,15 +391,9 @@ impl Scope {
         Value::from(items.into_iter().map(|i| self.item(i)).collect::<Vec<_>>())
     }
 
-    fn record_menu(&self, nodes: &[MenuNode]) {
-        for n in nodes {
-            match n.target {
-                Some(MenuTarget::Item(id)) => self.record(post_key(id)),
-                Some(MenuTarget::Term(id)) => self.record(term_key(id)),
-                None => {}
-            }
-            self.record_menu(&n.children);
-        }
+    /// Merges keys a bridge call reported.
+    fn merge(&self, deps: DepKeys) {
+        self.lock().deps.extend(deps);
     }
 }
 
@@ -482,13 +489,9 @@ fn menu(scope: &Scope, name: &str) -> Value {
     if !scope.take_call("menu") {
         return Value::from(());
     }
-    let v = match scope.bridge.menu(name) {
-        Some(tree) => {
-            scope.record_menu(&tree.items);
-            Value::from(Serde(&tree))
-        }
-        None => Value::from(()),
-    };
+    let (tree, deps) = scope.bridge.menu(name);
+    scope.merge(deps);
+    let v = tree.map_or(Value::from(()), |t| Value::from(Serde(&t)));
     scope.lock().menus.insert(name.to_owned(), v.clone());
     v
 }
@@ -504,7 +507,8 @@ fn related(scope: &Scope, item: &Value, n: Option<u32>) -> Value {
         return Value::from(Vec::<Value>::new());
     }
     let n = n.unwrap_or(DEFAULT_RELATED).clamp(1, MAX_RELATED);
-    let items = scope.bridge.related(id, n);
+    let (items, deps) = scope.bridge.related(id, n);
+    scope.merge(deps);
     for i in &items {
         scope.record(archive_key(&i.item.kind));
     }
@@ -523,7 +527,8 @@ fn query(scope: &Scope, kwargs: Kwargs) -> Result<Value, Error> {
     let limit = limit
         .unwrap_or(DEFAULT_QUERY_LIMIT)
         .clamp(1, MAX_QUERY_LIMIT);
-    let items = scope.bridge.query(&kind, term.as_deref(), limit);
+    let (items, deps) = scope.bridge.query(&kind, term.as_deref(), limit);
+    scope.merge(deps);
     Ok(scope.items(items))
 }
 

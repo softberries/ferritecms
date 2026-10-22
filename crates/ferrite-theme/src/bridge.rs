@@ -1,7 +1,7 @@
 //! The data-backed template helpers (plan ruling P2).
 
-use ferrite_core::PageItem;
-use ferrite_domain::{ContentId, TermId};
+use ferrite_core::{DepKeys, PageItem};
+use ferrite_domain::ContentId;
 use serde::Serialize;
 
 /// Most items `query()` may ask for.
@@ -9,20 +9,37 @@ pub const MAX_QUERY_LIMIT: u32 = 50;
 /// Most items `related()` may ask for (`SiteReader::related` caps at the same).
 pub const MAX_RELATED: u32 = ferrite_core::site::MAX_RELATED as u32;
 
+/// A helper result plus the dependency keys the bridge's reads touched.
+pub type Bridged<T> = (T, DepKeys);
+
 /// Source of the helpers that need the store. Synchronous: MiniJinja renders on a
 /// blocking thread, and implementations may block on the async store
-/// (`Handle::block_on` inside `spawn_blocking`). Every method must return public
-/// (published-only) data. The renderer caps calls per render (see
-/// [`Renderer`](crate::Renderer)) and records dependency keys for what is returned.
+/// (`Handle::block_on` inside `spawn_blocking`). The renderer caps calls per render
+/// (see [`Renderer`](crate::Renderer)) and merges the returned keys into the page's.
+///
+/// **Published-only.** Implementations must read through `SiteReader` (or apply the
+/// same published-and-`published_at <= now` rule) for every item they return or
+/// reference.
+///
+/// **Dependency keys** follow the contract in `ferrite_core::events`: everything the
+/// read touched, including what it filtered out, so that publishing a hidden item
+/// refreshes the page. The renderer additionally records the keys of every returned
+/// item (`post:`, `user:`, `term:`, featured media), so the bridge may leave those out.
 pub trait HelperBridge: Send + Sync {
-    /// Up to `n` (1..=[`MAX_RELATED`]) public items related to `item`.
-    fn related(&self, item: ContentId, n: u32) -> Vec<PageItem>;
+    /// Up to `n` (1..=[`MAX_RELATED`]) public items related to `item`. Empty unless
+    /// `item` itself is public (loaded through `SiteReader`, published-only). Keys:
+    /// at least `archive:<kind>` and `post:<item>`, even when the result is empty.
+    fn related(&self, item: ContentId, n: u32) -> Bridged<Vec<PageItem>>;
     /// Up to `limit` (1..=[`MAX_QUERY_LIMIT`]) public items of `kind`, newest first;
-    /// `term` narrows to one term, written `"<taxonomy>/<slug>"`.
-    fn query(&self, kind: &str, term: Option<&str>, limit: u32) -> Vec<PageItem>;
-    /// The menu at location `name`, with links to non-public items removed.
-    fn menu(&self, name: &str) -> Option<MenuTree>;
+    /// `term` narrows to one term, written `"<taxonomy>/<slug>"`. Keys: at least
+    /// `archive:<kind>`, plus `term:<id>` for the term when it exists.
+    fn query(&self, kind: &str, term: Option<&str>, limit: u32) -> Bridged<Vec<PageItem>>;
+    /// The menu at location `name`, with links to non-public items removed. Keys:
+    /// `menu:<name>`, plus `post:<id>`/`term:<id>` for **every** target, including
+    /// removed (draft, trashed, missing) ones.
+    fn menu(&self, name: &str) -> Bridged<Option<MenuTree>>;
     /// The `size` variant of a public media item (the original for an unknown size).
+    /// The renderer records `post:<media>`.
     fn image(&self, media: ContentId, size: &str) -> Option<ImageRef>;
 }
 
@@ -31,14 +48,14 @@ pub trait HelperBridge: Send + Sync {
 pub struct NoBridge;
 
 impl HelperBridge for NoBridge {
-    fn related(&self, _: ContentId, _: u32) -> Vec<PageItem> {
-        Vec::new()
+    fn related(&self, _: ContentId, _: u32) -> Bridged<Vec<PageItem>> {
+        (Vec::new(), DepKeys::default())
     }
-    fn query(&self, _: &str, _: Option<&str>, _: u32) -> Vec<PageItem> {
-        Vec::new()
+    fn query(&self, _: &str, _: Option<&str>, _: u32) -> Bridged<Vec<PageItem>> {
+        (Vec::new(), DepKeys::default())
     }
-    fn menu(&self, _: &str) -> Option<MenuTree> {
-        None
+    fn menu(&self, _: &str) -> Bridged<Option<MenuTree>> {
+        (None, DepKeys::default())
     }
     fn image(&self, _: ContentId, _: &str) -> Option<ImageRef> {
         None
@@ -56,15 +73,6 @@ pub struct MenuNode {
     pub label: String,
     pub url: String,
     pub children: Vec<MenuNode>,
-    /// What the entry links to, for dependency keys; not shown to templates.
-    #[serde(skip)]
-    pub target: Option<MenuTarget>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MenuTarget {
-    Item(ContentId),
-    Term(TermId),
 }
 
 /// An image variant for `<img>`.

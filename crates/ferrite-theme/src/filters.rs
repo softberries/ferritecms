@@ -57,8 +57,10 @@ pub(crate) fn slugify(value: &Value) -> String {
 }
 
 /// `{{ data | json }}`: compact JSON with `<`, `>`, `&`, `'`, U+2028 and U+2029
-/// escaped as `\uXXXX`, so it is safe inside `<script>` and single-quoted attributes.
-/// Marked safe. (The builtin `tojson` escapes the first four but not U+2028/U+2029.)
+/// escaped as `\uXXXX`, so it is safe inside `<script>` and in **single-quoted**
+/// attributes (`data-x='{{ v | json }}'`). `"` is not escaped (it delimits JSON
+/// strings), so the output must never go into a double-quoted attribute. Marked safe.
+/// (The builtin `tojson` escapes the first four but not U+2028/U+2029.)
 pub(crate) fn json(value: &Value) -> Result<Value, Error> {
     let s = serde_json::to_string(value)
         .map_err(|e| invalid("json: cannot serialize").with_source(e))?;

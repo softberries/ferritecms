@@ -7,11 +7,11 @@ use std::{
 };
 
 use ferrite_core::{
-    Listing, MediaPublic, MediaVariant, PageItem, PublicItem, TermPublic, UserPublic,
+    DepKeys, Listing, MediaPublic, MediaVariant, PageItem, PublicItem, TermPublic, UserPublic,
 };
 use ferrite_domain::{ContentId, TermId, Timestamp, UserId};
 use ferrite_theme::{
-    HelperBridge, ImageRef, MenuNode, MenuTarget, MenuTree, RenderContext, RenderOutput, Renderer,
+    Bridged, HelperBridge, ImageRef, MenuNode, MenuTree, RenderContext, RenderOutput, Renderer,
     SiteInfo, Theme, ThemeError, ThemeSource,
 };
 
@@ -130,25 +130,27 @@ pub struct FakeBridge {
     pub queries: Mutex<Vec<(String, Option<String>, u32)>>,
     pub related_args: Mutex<Vec<(ContentId, u32)>>,
     pub image: Option<ImageRef>,
+    /// Keys reported with every related/query/menu result.
+    pub deps: DepKeys,
 }
 
 impl HelperBridge for FakeBridge {
-    fn related(&self, item: ContentId, n: u32) -> Vec<PageItem> {
+    fn related(&self, item: ContentId, n: u32) -> Bridged<Vec<PageItem>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.related_args.lock().unwrap().push((item, n));
-        self.related.clone()
+        (self.related.clone(), self.deps.clone())
     }
-    fn query(&self, kind: &str, term: Option<&str>, limit: u32) -> Vec<PageItem> {
+    fn query(&self, kind: &str, term: Option<&str>, limit: u32) -> Bridged<Vec<PageItem>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.queries
             .lock()
             .unwrap()
             .push((kind.into(), term.map(Into::into), limit));
-        vec![item(kind, "Queried")]
+        (vec![item(kind, "Queried")], self.deps.clone())
     }
-    fn menu(&self, _: &str) -> Option<MenuTree> {
+    fn menu(&self, _: &str) -> Bridged<Option<MenuTree>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        self.menu.clone()
+        (self.menu.clone(), self.deps.clone())
     }
     fn image(&self, _: ContentId, _: &str) -> Option<ImageRef> {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -156,16 +158,14 @@ impl HelperBridge for FakeBridge {
     }
 }
 
-pub fn menu_tree(target: ContentId) -> MenuTree {
+pub fn menu_tree() -> MenuTree {
     MenuTree {
         items: vec![MenuNode {
             label: "Home & more".into(),
             url: "/".into(),
-            target: None,
             children: vec![MenuNode {
                 label: "About".into(),
                 url: "/about/".into(),
-                target: Some(MenuTarget::Item(target)),
                 children: vec![],
             }],
         }],
@@ -183,4 +183,18 @@ pub fn render(
 pub fn render_str(src: &str, ctx: RenderContext) -> Result<RenderOutput, ThemeError> {
     let t = theme(&[("templates/t.html", src)]);
     render(&t, "t.html", ctx)
+}
+
+/// The fixture theme in `tests/fixtures/test-minimal`.
+pub fn fixture() -> Theme {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-minimal");
+    Theme::load(&ThemeSource::Dir(dir)).unwrap()
+}
+
+pub fn keys(keys: &[String]) -> DepKeys {
+    let mut d = DepKeys::default();
+    for k in keys {
+        d.insert(k.clone());
+    }
+    d
 }

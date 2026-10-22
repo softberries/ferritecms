@@ -1342,6 +1342,7 @@ dependencies = [
  "ferrite-core",
  "ferrite-domain",
  "html-escape",
+ "libc",
  "minijinja",
  "percent-encoding",
  "rust-embed",

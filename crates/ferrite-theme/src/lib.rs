@@ -16,10 +16,10 @@ pub mod render;
 mod view;
 
 pub use bridge::{
-    HelperBridge, ImageRef, MAX_QUERY_LIMIT, MAX_RELATED, MenuNode, MenuTarget, MenuTree, NoBridge,
+    Bridged, HelperBridge, ImageRef, MAX_QUERY_LIMIT, MAX_RELATED, MenuNode, MenuTree, NoBridge,
 };
 pub use error::ThemeError;
-pub use hierarchy::{TemplateKey, resolve_template};
+pub use hierarchy::{TemplateKey, error_template, resolve_template};
 pub use manifest::{ImageSize, SettingKind, SettingSpec, ThemeManifest};
 pub use package::{MAX_FILES, MAX_TOTAL_BYTES, Theme, ThemeSource};
 pub use render::{

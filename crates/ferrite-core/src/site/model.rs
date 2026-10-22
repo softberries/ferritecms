@@ -71,6 +71,11 @@ pub struct PageItem {
     pub url: String,
     /// The rendered block body; `ferrite:media/<id>` images point at published media,
     /// other media references are dropped.
+    ///
+    /// **Invariant:** sanitised HTML (the block renderer escapes text and imported
+    /// `html` blocks are sanitised). Themes print it unescaped (`post.body` is marked
+    /// safe), so any later transformation (plugin `content.body` filters included)
+    /// must re-sanitise before the result is stored here.
     pub html: String,
     /// `None` only if the author row is gone.
     pub author: Option<UserPublic>,
