@@ -15,6 +15,8 @@ use crate::{
     blocks, events, slug,
 };
 
+mod lifecycle;
+
 /// Maps an item to its public URL path (e.g. `/post/hello-world`). Supplied by the caller
 /// so core stays independent of routing; it must be pure and cheap (it runs inside the
 /// write transaction).
@@ -146,7 +148,10 @@ impl ContentService {
             None => current.slug.clone(),
         };
         let terms = dedup(&draft.terms);
-        if let Some(parent) = draft.parent_id {
+        // The cycle walk is only needed when the parent actually changes.
+        if let Some(parent) = draft.parent_id
+            && draft.parent_id != current.parent_id
+        {
             check_parent(tx.as_ref(), Some(id), parent).await?;
         }
         let old_terms: Vec<TermId> = tx
@@ -232,8 +237,8 @@ async fn save_with_free_slug(
     own: Option<&str>,
 ) -> Result<ContentItem, CoreError> {
     let mut failed: Vec<String> = Vec::new();
-    let mut last = None;
-    for _ in 0..SLUG_ATTEMPTS {
+    // The loop only exits by returning: the last failed attempt returns its error.
+    loop {
         let attempt = tx.begin_nested().await?;
         let mut taken = attempt
             .content()
@@ -254,15 +259,13 @@ async fn save_with_free_slug(
                 tracing::debug!(slug = %candidate, "slug taken concurrently; retrying");
                 attempt.rollback().await?;
                 failed.push(candidate);
-                last = Some(StoreError::UniqueViolation { constraint });
+                if failed.len() >= SLUG_ATTEMPTS {
+                    return Err(StoreError::UniqueViolation { constraint }.into());
+                }
             }
             Err(e) => return Err(e.into()),
         }
     }
-    Err(last.map_or_else(
-        || CoreError::Invalid("no slug attempt was made".into()),
-        CoreError::from,
-    ))
 }
 
 /// Revision snapshot, prune, search index and the outbox event for a saved item.

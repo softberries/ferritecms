@@ -232,6 +232,29 @@ pub async fn create_update_roundtrip(db: &TestDb) {
     ));
 }
 
+pub async fn explicit_empty_excerpt_is_kept(db: &TestDb) {
+    let svc = service(db);
+    let admin = actor(db.store(), Role::Admin).await;
+    let mut d = draft("post", "Quiet");
+    d.excerpt = Some(String::new());
+    let created = svc.create(&admin, d.clone()).await.unwrap();
+    assert_eq!(created.excerpt, "");
+    // `None` still derives one from the body.
+    d.excerpt = None;
+    let updated = svc
+        .update(&admin, created.id, created.version, d)
+        .await
+        .unwrap();
+    assert_eq!(updated.excerpt, "Body of Quiet with zebra words");
+    let mut d = draft("post", "Quiet");
+    d.excerpt = Some(String::new());
+    let again = svc
+        .update(&admin, created.id, updated.version, d)
+        .await
+        .unwrap();
+    assert_eq!(again.excerpt, "");
+}
+
 pub async fn revisions_pruned_to_50(db: &TestDb) {
     let store = db.store();
     let svc = service(db);
@@ -620,6 +643,7 @@ pub async fn non_slug_store_errors_surface(db: &TestDb) {
 
 backend_tests!(
     create_update_roundtrip,
+    explicit_empty_excerpt_is_kept,
     revisions_pruned_to_50,
     parent_change_and_validation,
     unknown_type_is_invalid,
