@@ -11,6 +11,7 @@ workspace = true
 bytes.workspace = true
 ferrite-domain = { path = "../ferrite-domain" }
 futures.workspace = true
+image.workspace = true
 infer.workspace = true
 object_store.workspace = true
 percent-encoding.workspace = true
