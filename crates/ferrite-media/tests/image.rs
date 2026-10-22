@@ -163,3 +163,59 @@ fn gif_first_frame_to_png() {
     assert_eq!(px.get_pixel(10, 10).0[0], 255);
     assert_eq!(px.get_pixel(10, 10).0[2], 0);
 }
+
+fn png_header(w: u32, h: u32) -> Vec<u8> {
+    let mut ihdr = b"IHDR".to_vec();
+    ihdr.extend_from_slice(&w.to_be_bytes());
+    ihdr.extend_from_slice(&h.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    let mut data = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    data.extend_from_slice(&13u32.to_be_bytes());
+    data.extend_from_slice(&ihdr);
+    data.extend_from_slice(&crc32(&ihdr).to_be_bytes());
+    let idat = [b'I', b'D', b'A', b'T', 0x78, 0x9c, 0, 0];
+    data.extend_from_slice(&4u32.to_be_bytes());
+    data.extend_from_slice(&idat);
+    data.extend_from_slice(&crc32(&idat).to_be_bytes());
+    data
+}
+
+#[test]
+fn side_limit_maps_to_image_too_large() {
+    let err = process_image(&png_header(60_000, 2_000), &default_variants()).unwrap_err();
+    assert!(matches!(err, MediaError::ImageTooLarge { .. }), "{err:?}");
+}
+
+#[test]
+fn gif_bomb_rejected() {
+    let mut gif = b"GIF89a".to_vec();
+    gif.extend_from_slice(&65_535u16.to_le_bytes());
+    gif.extend_from_slice(&65_535u16.to_le_bytes());
+    gif.extend_from_slice(&[0, 0, 0]);
+    gif.extend_from_slice(&[0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0, 0x3B]);
+    let start = Instant::now();
+    let err = process_image(&gif, &default_variants()).unwrap_err();
+    assert!(start.elapsed().as_secs_f32() < 1.0);
+    assert!(matches!(err, MediaError::ImageTooLarge { .. }), "{err:?}");
+}
+
+#[test]
+fn icc_profile_kept() {
+    use image::codecs::png::PngEncoder;
+    use image::{ExtendedColorType, ImageDecoder, ImageEncoder};
+    let profile = b"fake-icc-profile-bytes".to_vec();
+    let img = gradient(300, 300);
+    let mut data = Vec::new();
+    let mut enc = PngEncoder::new(&mut data);
+    enc.set_icc_profile(profile.clone()).unwrap();
+    enc.write_image(img.as_raw(), 300, 300, ExtendedColorType::Rgb8)
+        .unwrap();
+    let p = process_image(&data, &default_variants()).unwrap();
+    let t = variant(&p, "thumbnail");
+    let mut dec = image::ImageReader::new(Cursor::new(&t.data[..]))
+        .with_guessed_format()
+        .unwrap()
+        .into_decoder()
+        .unwrap();
+    assert_eq!(dec.icc_profile().unwrap(), Some(profile));
+}

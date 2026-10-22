@@ -6,8 +6,12 @@ use std::io::Cursor;
 
 use bytes::Bytes;
 use image::codecs::jpeg::JpegEncoder;
+use image::codecs::png::PngEncoder;
 use image::imageops::FilterType;
-use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
+use image::{
+    DynamicImage, ExtendedColorType, ImageDecoder, ImageEncoder, ImageError, ImageFormat,
+    ImageReader, Limits,
+};
 
 use crate::error::MediaError;
 use crate::sniff::{is_raster_image, sniff_mime};
@@ -74,8 +78,25 @@ fn limits() -> Limits {
     limits
 }
 
-fn unsupported(err: impl std::fmt::Display) -> MediaError {
-    MediaError::UnsupportedImage(err.to_string())
+fn map_image_error(err: ImageError, dims: Option<(u32, u32)>) -> MediaError {
+    match err {
+        ImageError::Limits(_) => MediaError::ImageTooLarge {
+            pixels: dims.map_or(0, |(w, h)| u64::from(w) * u64::from(h)),
+        },
+        other => MediaError::UnsupportedImage(other.to_string()),
+    }
+}
+
+fn validate(specs: &[VariantSpec]) -> Result<(), MediaError> {
+    for spec in specs {
+        if spec.width == 0 || spec.height == Some(0) {
+            return Err(MediaError::Config(format!(
+                "variant '{}' has a zero dimension",
+                spec.name
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Decodes `data` (sniffed, never trusting names), applies EXIF orientation and
@@ -84,12 +105,19 @@ fn unsupported(err: impl std::fmt::Display) -> MediaError {
 /// Variants are encoded in the source format: JPEG (quality 82) or PNG; GIF
 /// (first frame) and WebP sources become PNG.
 ///
+/// The ICC profile of the source is kept (colour fidelity); EXIF/XMP are not.
+///
+/// Memory: peak usage is roughly 3 x w x h x 4 bytes (decoded buffer, oriented
+/// or converted copy, resized output). Callers must bound concurrency (the M1c
+/// job runner uses a semaphore).
+///
 /// A width-bounded spec keeps the aspect ratio and is skipped when the source
 /// is not wider than the target. A `crop` spec is cover-resized and center-cropped
 /// to `width` x `height` (height defaults to width); if the source is smaller than
 /// the target in a dimension, nothing is upscaled and the result is the
 /// center-cropped square of `min(w, h)` (capped at the target size).
 pub fn process_image(data: &[u8], specs: &[VariantSpec]) -> Result<Processed, MediaError> {
+    validate(specs)?;
     let mime = sniff_mime(data);
     if !is_raster_image(&mime) {
         return Err(MediaError::UnsupportedImage(format!(
@@ -101,16 +129,29 @@ pub fn process_image(data: &[u8], specs: &[VariantSpec]) -> Result<Processed, Me
         .with_guessed_format()
         .map_err(|e| MediaError::Io(e.to_string()))?;
     reader.limits(limits());
-    let mut decoder = reader.into_decoder().map_err(unsupported)?;
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|e| map_image_error(e, None))?;
 
     let (w, h) = decoder.dimensions();
     let pixels = u64::from(w) * u64::from(h);
     if pixels > MAX_PIXELS {
         return Err(MediaError::ImageTooLarge { pixels });
     }
-    let orientation = decoder.orientation().map_err(unsupported)?;
-    let mut img = DynamicImage::from_decoder(decoder).map_err(unsupported)?;
+    let dims = Some((w, h));
+    let orientation = decoder
+        .orientation()
+        .map_err(|e| map_image_error(e, dims))?;
+    let icc = decoder.icc_profile().unwrap_or_else(|e| {
+        tracing::debug!(error = %e, "could not read ICC profile");
+        None
+    });
+    let mut img = DynamicImage::from_decoder(decoder).map_err(|e| map_image_error(e, dims))?;
     img.apply_orientation(orientation);
+    if mime == "image/jpeg" {
+        // Convert once; every variant then resizes and encodes straight from RGB8.
+        img = DynamicImage::ImageRgb8(img.into_rgb8());
+    }
 
     let (width, height) = (img.width(), img.height());
     let (format, out_mime) = if mime == "image/jpeg" {
@@ -128,7 +169,7 @@ pub fn process_image(data: &[u8], specs: &[VariantSpec]) -> Result<Processed, Me
             name: spec.name.clone(),
             width: resized.width(),
             height: resized.height(),
-            data: encode(&resized, format)?,
+            data: encode(&resized, format, icc.as_deref())?,
             mime: out_mime.to_owned(),
         });
     }
@@ -159,25 +200,74 @@ fn make_variant(img: &DynamicImage, spec: &VariantSpec) -> Option<DynamicImage> 
     Some(img.resize_exact(spec.width, nh, FilterType::Lanczos3))
 }
 
+fn unsupported(err: impl std::fmt::Display) -> MediaError {
+    MediaError::UnsupportedImage(err.to_string())
+}
+
 fn center_crop(img: &DynamicImage, cw: u32, ch: u32) -> DynamicImage {
     let x = (img.width() - cw) / 2;
     let y = (img.height() - ch) / 2;
     img.crop_imm(x, y, cw, ch)
 }
 
-fn encode(img: &DynamicImage, format: ImageFormat) -> Result<Bytes, MediaError> {
+fn attach_icc(encoder: &mut impl ImageEncoder, icc: Option<&[u8]>) {
+    if let Some(profile) = icc
+        && let Err(e) = encoder.set_icc_profile(profile.to_vec())
+    {
+        tracing::debug!(error = %e, "encoder rejected ICC profile; continuing without it");
+    }
+}
+
+fn encode(
+    img: &DynamicImage,
+    format: ImageFormat,
+    icc: Option<&[u8]>,
+) -> Result<Bytes, MediaError> {
     let mut out = Vec::new();
+    let (w, h) = (img.width(), img.height());
     match format {
         ImageFormat::Jpeg => {
-            let rgb = img.to_rgb8();
-            JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY)
-                .encode_image(&rgb)
-                .map_err(unsupported)?;
+            let mut enc = JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY);
+            attach_icc(&mut enc, icc);
+            match img.as_rgb8() {
+                Some(rgb) => enc.write_image(rgb, w, h, ExtendedColorType::Rgb8),
+                None => enc.write_image(&img.to_rgb8(), w, h, ExtendedColorType::Rgb8),
+            }
+            .map_err(unsupported)?;
         }
-        other => {
-            img.write_to(&mut Cursor::new(&mut out), other)
+        _ => {
+            let mut enc = PngEncoder::new(&mut out);
+            attach_icc(&mut enc, icc);
+            enc.write_image(img.as_bytes(), w, h, img.color().into())
                 .map_err(unsupported)?;
         }
     }
     Ok(Bytes::from(out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(width: u32, height: Option<u32>) -> VariantSpec {
+        VariantSpec {
+            name: "x".to_owned(),
+            width,
+            height,
+            crop: false,
+        }
+    }
+
+    #[test]
+    fn zero_dimension_specs_rejected() {
+        assert!(matches!(
+            validate(&[spec(0, None)]),
+            Err(MediaError::Config(_))
+        ));
+        assert!(matches!(
+            validate(&[spec(10, Some(0))]),
+            Err(MediaError::Config(_))
+        ));
+        assert!(validate(&default_variants()).is_ok());
+    }
 }
