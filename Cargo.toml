@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ferrite-domain", "crates/ferrite-store", "crates/ferrite-store-postgres", "crates/ferrite-store-sqlite", "crates/ferrite-store-tests", "crates/ferrite-plugin-host", "crates/ferrite-sdk", "crates/ferrite-media", "crates/ferrite-config"]
+members = ["crates/ferrite-domain", "crates/ferrite-store", "crates/ferrite-store-postgres", "crates/ferrite-store-sqlite", "crates/ferrite-store-tests", "crates/ferrite-plugin-host", "crates/ferrite-sdk", "crates/ferrite-media", "crates/ferrite-config", "crates/ferrite-core"]
 
 [workspace.package]
 version = "0.1.0"
@@ -8,6 +8,7 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
+ammonia = "4.2.4"
 anyhow = "1"
 arc-swap = "1"
 async-trait = "0.1.92"
@@ -15,7 +16,9 @@ base64 = "0.23"
 bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 criterion = "0.8"
+deunicode = "1.6.2"
 futures = "0.3"
+html-escape = "0.3.0"
 hyper-util = { version = "0.1", features = ["server-auto", "tokio", "server"] }
 ipnet = "2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
