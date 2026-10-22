@@ -32,7 +32,7 @@ pub struct Media {
     pub height: Option<i32>,
     pub alt: String,
     pub original_name: String,
-    /// name -> {hash, w, h}
+    /// name -> {hash, w, h, mime} (mime is needed for serving)
     pub variants: Value,
 }
 

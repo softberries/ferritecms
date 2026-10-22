@@ -43,7 +43,8 @@ Design: [02](design/02-storage.md), [03](design/03-media.md), [06](design/06-the
 - [x] `ferrite-media`: `MediaStore` over `object_store` (local + S3), content sniffing, `process_image` (M1b). Tests run against local and an in-process `s3s-fs` S3 server (no MinIO). The `artifacts` table itself is in the store crates; wiring is M1c.
   - [ ] M1c: `media.variants` job calling `process_image` + writing `artifacts` rows (via `insert_if_absent`; `ArtifactRef.created` is advisory) and the `media.variants` mapping.
   - [ ] M1c: image-processing concurrency semaphore in the job runner (peak ~3 x w x h x 4 bytes per image; ruling R4).
-  - [ ] M1c: `/_media/<hash>/<name>` serving (headers, ranges, 416 mapping, buffered `get_range` limits; design 03 §5).
+  - [ ] M1c: `/_media/<hash>/<name>` serving via `MediaStore::open_read` (streaming; headers, ranges, 416 mapping; design 03 §5). Use `inline_safe(mime)`: everything else is `application/octet-stream` + `Content-Disposition: attachment` + `nosniff`. Always pass an upload limit to `put_stream` (below the 5 GB single-CopyObject ceiling).
+  - [ ] M1c: install a process-default rustls `CryptoProvider` in `main` (both `ring` and `aws-lc-rs` are linked, so rustls panics building a client config without a default).
 - [ ] Core services: content + revisions, types, terms, options, redirects, menus, search (FTS5 / tsvector).
 - [ ] Transactional outbox (`events`) written by every invalidating write.
 - [ ] `ferrite serve`: router, permalinks, redirects, 404, feeds, sitemap.
@@ -110,7 +111,9 @@ Design: [09](design/09-operations.md).
 - [ ] Media follow-ups (from M1b):
   - [ ] Document the S3 lifecycle rules: abort incomplete multipart uploads, expire `tmp/` (backstop for cancelled or failed staging cleanup).
   - [ ] S3 `copy_if_not_exists` config option (production S3 currently uses the racy head + copy fallback; `ArtifactRef.created` is advisory meanwhile).
-  - [ ] Decide `aws-lc-sys` vs `ring` for the static build (object_store's `aws` feature pulls `aws-lc-sys` via reqwest/rustls, a C build dependency).
+  - [ ] Decide `aws-lc-sys` vs `ring` for the static build. object_store's `aws` feature enables `aws-lc-rs` directly (which builds the C library `aws-lc-sys`); object_store also has a `ring` feature. `cargo tree` shows both `ring` and `aws-lc-rs` linked today (rustls pulls both).
+  - [ ] Expose `copy_if_not_exists` and `conditional_put` in `S3Config` (today neither is set on the builder, so production S3 uses the head + copy fallback). Note the explicit-keys vs `from_env` difference: with explicit `access_key_id`/`secret_access_key` the builder reads no `AWS_*` environment (so `AWS_COPY_IF_NOT_EXISTS`, `AWS_CONDITIONAL_PUT`, session tokens and instance/web-identity credentials do not apply); only the no-keys path uses `from_env`. Also: `build_s3` replaces any client options read from the environment with its own timeouts.
+  - [ ] Before `PublicUrlMode::Direct` ships: set `Content-Type` / `Cache-Control` attributes on the S3 path only (object_store's local backend rejects attributes, and the `Multipart` `copy_if_not_exists` mode does not copy attributes from the source object, so they must be set on the final object explicitly).
   - [ ] Artifacts GC (`artifacts.gc` job, `ferrite media gc`; design 03 §6).
 - [ ] `self-update` (signed), `rollback`, `rollback --schema`, `--restore-snapshot`.
 - [ ] ACME TLS (solo).
