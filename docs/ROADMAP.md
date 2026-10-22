@@ -40,7 +40,10 @@ Design: [02](design/02-storage.md), [03](design/03-media.md), [06](design/06-the
   - [ ] Core/HTTP input validation (M1c) should reject NUL in text before it reaches the store (reads with NUL keys return `Invalid`).
   - [ ] Revisit locale-aware ordering for admin lists (byte-wise `COLLATE "C"` today).
   - [ ] Non-ASCII e-mail case variants are distinct accounts (ASCII-only `email_key`); decide before auth ships (M2).
-- [ ] `ferrite-media`: `MediaStore` over `object_store` (local + S3), artifacts table, tests against MinIO.
+- [x] `ferrite-media`: `MediaStore` over `object_store` (local + S3), content sniffing, `process_image` (M1b). Tests run against local and an in-process `s3s-fs` S3 server (no MinIO). The `artifacts` table itself is in the store crates; wiring is M1c.
+  - [ ] M1c: `media.variants` job calling `process_image` + writing `artifacts` rows (via `insert_if_absent`; `ArtifactRef.created` is advisory) and the `media.variants` mapping.
+  - [ ] M1c: image-processing concurrency semaphore in the job runner (peak ~3 x w x h x 4 bytes per image; ruling R4).
+  - [ ] M1c: `/_media/<hash>/<name>` serving (headers, ranges, 416 mapping, buffered `get_range` limits; design 03 §5).
 - [ ] Core services: content + revisions, types, terms, options, redirects, menus, search (FTS5 / tsvector).
 - [ ] Transactional outbox (`events`) written by every invalidating write.
 - [ ] `ferrite serve`: router, permalinks, redirects, 404, feeds, sitemap.
@@ -85,6 +88,7 @@ Design: [07](design/07-admin-api.md).
 - [ ] Themes + plugins screens incl. permission report and per-plugin metrics.
 - [ ] Plugin routes (`/_p/…`), plugin settings, `mail`, batched `request.served` (D21).
 - [ ] Playwright E2E against a real binary on both backends.
+- [ ] SVG sanitising on upload (SVG is not processed by `ferrite-media`; design 03 §5 requires sanitisation before inline serving).
 
 ## M3 — WordPress import (~2 weeks)
 
@@ -103,6 +107,11 @@ Design: [08](design/08-wp-import.md).
 Design: [09](design/09-operations.md).
 
 - [ ] `ferrite backup` / `restore`, `export` / `import-site` / `db copy`, `media sync` / `gc`.
+- [ ] Media follow-ups (from M1b):
+  - [ ] Document the S3 lifecycle rules: abort incomplete multipart uploads, expire `tmp/` (backstop for cancelled or failed staging cleanup).
+  - [ ] S3 `copy_if_not_exists` config option (production S3 currently uses the racy head + copy fallback; `ArtifactRef.created` is advisory meanwhile).
+  - [ ] Decide `aws-lc-sys` vs `ring` for the static build (object_store's `aws` feature pulls `aws-lc-sys` via reqwest/rustls, a C build dependency).
+  - [ ] Artifacts GC (`artifacts.gc` job, `ferrite media gc`; design 03 §6).
 - [ ] `self-update` (signed), `rollback`, `rollback --schema`, `--restore-snapshot`.
 - [ ] ACME TLS (solo).
 - [ ] `/metrics`, `node_metrics`, dashboard charts wired.
