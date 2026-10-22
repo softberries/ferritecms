@@ -1215,6 +1215,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrite-http"
+version = "0.1.0"
+dependencies = [
+ "ferrite-core",
+]
+
+[[package]]
 name = "ferrite-media"
 version = "0.1.0"
 dependencies = [

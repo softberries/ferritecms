@@ -315,6 +315,13 @@ impl Permalinks for PermalinkRules {
     }
 }
 
+/// Percent-encodes one path segment the way permalinks do (UTF-8, uppercase hex; only
+/// RFC 3986 unreserved characters are kept). The router uses it to build canonical
+/// paths, so request paths and stored permalinks compare byte for byte.
+pub fn encode_segment(raw: &str) -> String {
+    utf8_percent_encode(raw, SEGMENT).to_string()
+}
+
 /// Public path of a term archive: `/{taxonomy}/{slug}/`, both segments percent-encoded
 /// like item paths (so `category` and `tag` terms live under `/category/` and `/tag/`).
 pub fn term_path(taxonomy: &str, slug: &str) -> String {
@@ -564,6 +571,8 @@ mod tests {
         let mut page = input(item("page", "x"));
         page.ancestors = vec![(ContentId::new(), "日本".into())];
         assert_eq!(rules.path(&page), "/%E6%97%A5%E6%9C%AC/x/");
+        assert_eq!(encode_segment("zażółć"), "za%C5%BC%C3%B3%C5%82%C4%87");
+        assert_eq!(encode_segment("a b/c~"), "a%20b%2Fc~");
     }
 
     #[test]
