@@ -15,6 +15,9 @@ card = { width = 640, height = 360, crop = true }
 hero = { width = 1280, height = 640, crop = true }
 
 [settings]
-accent_color  = { type = "color", default = "#c2410c", label = "Accent colour" }
+# Link and button text use the accent mixed with black (light scheme) or white (dark
+# scheme); a mid-tone accent keeps that text above 4.5:1 in both, a very pale or very
+# dark one may not.
+accent_color  = { type = "color", default = "#c2410c", label = "Accent colour (mid-tones keep links readable in light and dark mode)" }
 show_author   = { type = "bool", default = true, label = "Show post authors" }
 show_excerpts = { type = "bool", default = true, label = "Show excerpts in listings" }

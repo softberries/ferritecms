@@ -56,7 +56,7 @@ use ferrite_store::{MAX_ID_FILTER, MAX_SEARCH_KINDS, Repos, Store};
 use crate::{
     Actor, CoreError, MAX_PARENT_DEPTH,
     actor::can_edit,
-    events::{archive_key, option_key, post_key, term_key},
+    events::{archive_key, option_key, post_key, term_key, user_key},
     permalink::{PermalinkInput, Permalinks, primary_term},
 };
 use hydrate::{Hydrator, Nodes, chain, unique};
@@ -263,6 +263,19 @@ impl SiteReader {
         slug: &str,
         page: u32,
     ) -> Result<SiteRead<Option<Listing>>, CoreError> {
+        let read = self.term_archive_page(taxonomy, slug, page).await?;
+        Ok(read.map(|v| v.map(|(_, l)| l)))
+    }
+
+    /// [`term_archive`](Self::term_archive) plus the term itself, for the archive's
+    /// heading. The term is returned only together with a public listing, so this is
+    /// no existence oracle either (R7). Records `term:<id>`.
+    pub async fn term_archive_page(
+        &self,
+        taxonomy: &str,
+        slug: &str,
+        page: u32,
+    ) -> Result<SiteRead<Option<(TermPublic, Listing)>>, CoreError> {
         let now = (self.clock)();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
@@ -277,7 +290,10 @@ impl SiteReader {
             ..ContentQuery::default()
         };
         let listing = self.listing(repos, now, q, page, &mut deps).await?;
-        Ok(public(listing.filter(|l| l.total > 0), deps))
+        let found = listing
+            .filter(|l| l.total > 0)
+            .map(|l| (hydrate::term_public(term), l));
+        Ok(public(found, deps))
     }
 
     /// Posts by the user with `login`; `None` if there is no such user, the user has
@@ -287,12 +303,25 @@ impl SiteReader {
         login: &str,
         page: u32,
     ) -> Result<SiteRead<Option<Listing>>, CoreError> {
+        let read = self.author_archive_page(login, page).await?;
+        Ok(read.map(|v| v.map(|(_, l)| l)))
+    }
+
+    /// [`author_archive`](Self::author_archive) plus the author's public view, for the
+    /// archive's heading; only together with a public listing (R7). Records
+    /// `user:<id>`.
+    pub async fn author_archive_page(
+        &self,
+        login: &str,
+        page: u32,
+    ) -> Result<SiteRead<Option<(UserPublic, Listing)>>, CoreError> {
         let now = (self.clock)();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         let Some(user) = repos.users().get_by_login(login).await? else {
             return Ok(public(None, deps));
         };
+        deps.insert(user_key(user.id));
         deps.insert(archive_key(POST_KIND));
         let q = ContentQuery {
             kind: Some(POST_KIND.to_owned()),
@@ -300,7 +329,15 @@ impl SiteReader {
             ..ContentQuery::default()
         };
         let listing = self.listing(repos, now, q, page, &mut deps).await?;
-        Ok(public(listing.filter(|l| l.total > 0), deps))
+        let found = listing.filter(|l| l.total > 0).map(|l| {
+            let author = UserPublic {
+                id: user.id,
+                login: user.login,
+                display_name: user.display_name,
+            };
+            (author, l)
+        });
+        Ok(public(found, deps))
     }
 
     /// Posts published in `year` (and `month`, 1..=12), in UTC like permalinks (R4);

@@ -39,7 +39,9 @@
 //! # Globals
 //!
 //! Templates see `site`, `post`, `page` (set for items of kind `page`), `posts`,
-//! `request` (`path`, `s` = the search query, `page`, `status`, `preview`) and the
+//! `archive` (listing routes: `kind`, `term`, `author`, `year`, `month`; ruling R30),
+//! `pagination` (`page`, `pages`, `prev_url`, `next_url`), `request` (`path`,
+//! `s` = the search query, `page`, `status`, `preview`) and the
 //! helpers `menu(name)`, `related(post, n=3)`, `query(type=…, term=…, limit=10)`,
 //! `asset(path)`, `image(media, size)`, `head()`. Custom filters: `date(fmt)`,
 //! `excerpt(n)`, `slugify`, `json`.
@@ -49,14 +51,17 @@
 //! `sort`, `map`, `tojson`, …) and tests. None of them reach the filesystem, network,
 //! environment or clock. `debug()` is removed (it dumps the whole render state), and
 //! the crate is built without the `debug` feature, so errors carry name and line but
-//! not source snippets. `urlencode` is not compiled in.
+//! not source snippets. `urlencode` (MiniJinja's) percent-encodes everything except
+//! ASCII alphanumerics, `/`, `.`, `-` and `_`; its output is a plain string, so
+//! auto-escaping still applies, and since `:` is encoded it cannot form a URL scheme.
 //!
 //! # Dependency keys
 //!
 //! A render records `theme`, `option:site.title`, `option:site.url`,
 //! `option:site.description`, `option:site.locale`; for every item in the context or
 //! returned by a helper `post:<id>`, `user:<author>`, `term:<id>` per term and
-//! `post:<featured media>`; `archive:<kind>` for `related`/`query`; `menu:<name>` for
+//! `post:<featured media>`; `term:<id>`/`user:<id>` for `archive.term`/`archive.author`;
+//! `archive:<kind>` for `related`/`query`; `menu:<name>` for
 //! menus; `post:<media>` for `image()`; plus every key the [`HelperBridge`] reports
 //! for `related`, `query` and `menu` (menu targets, hidden ones included). The keys
 //! of the `SiteRead` that produced the context (ancestors, listings, options) are the
@@ -69,7 +74,7 @@ use std::{
 };
 
 use ferrite_core::{
-    DepKeys, Listing, MediaPublic, PageItem,
+    DepKeys, Listing, MediaPublic, PageItem, TermPublic, UserPublic,
     events::{THEME_KEY, archive_key, menu_key, option_key, post_key, term_key, user_key},
 };
 use ferrite_domain::ContentId;
@@ -128,6 +133,33 @@ pub struct RequestInfo {
     pub page: u32,
 }
 
+/// `archive` in templates: what a listing route lists (ruling R30). Set by the caller
+/// for every listing route (front posts, type, term, author, date, search); `None` for
+/// singles and error pages.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ArchiveInfo {
+    /// `front`, `type`, `term`, `author`, `date` or `search`.
+    pub kind: String,
+    /// Content type of a type archive (`post`, `event`, ...).
+    pub content_type: Option<String>,
+    pub term: Option<TermPublic>,
+    pub author: Option<UserPublic>,
+    pub year: Option<i32>,
+    /// 1..=12.
+    pub month: Option<u32>,
+}
+
+/// `pagination` in templates: the listing's position and ready-made, already encoded
+/// links to the neighbouring pages (`None` at either end). Set by the caller, which
+/// knows the route's URL scheme.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Pagination {
+    pub page: u32,
+    pub pages: u32,
+    pub prev_url: Option<String>,
+    pub next_url: Option<String>,
+}
+
 /// Everything a template may see; built from preloaded data (plan ruling P2).
 #[derive(Debug, Clone, Default)]
 pub struct RenderContext {
@@ -136,6 +168,10 @@ pub struct RenderContext {
     pub item: Option<PageItem>,
     /// The listing, if any (`posts`).
     pub listing: Option<Listing>,
+    /// What the listing lists (`archive`).
+    pub archive: Option<ArchiveInfo>,
+    /// Links to neighbouring listing pages (`pagination`).
+    pub pagination: Option<Pagination>,
     pub request: RequestInfo,
     /// Pre-rendered `<head>` HTML (core SEO + plugin filters); `head()` returns it
     /// unescaped, so it must already be safe.
@@ -410,6 +446,18 @@ fn root_value(ctx: RenderContext, scope: &Arc<Scope>) -> Value {
     }
     if let Some(l) = ctx.listing {
         root.insert("posts", listing_value(l, scope));
+    }
+    if let Some(a) = ctx.archive {
+        if let Some(t) = &a.term {
+            scope.record(term_key(t.id));
+        }
+        if let Some(u) = &a.author {
+            scope.record(user_key(u.id));
+        }
+        root.insert("archive", Value::from(Serde(&a)));
+    }
+    if let Some(p) = ctx.pagination {
+        root.insert("pagination", Value::from(Serde(&p)));
     }
     root.insert(
         "request",

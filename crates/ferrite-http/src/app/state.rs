@@ -189,7 +189,7 @@ impl AppState {
             title: texts.title,
             url: self.config.site_url.clone(),
             description: texts.description,
-            locale: texts.locale,
+            locale: bcp47(&texts.locale),
             settings: theme.manifest().settings_values(&stored),
         })
     }
@@ -219,11 +219,29 @@ impl AppState {
             title: self.config.site_title.clone(),
             url: self.config.site_url.clone(),
             description: self.config.site_description.clone(),
-            locale: self.config.locale.clone(),
+            locale: bcp47(&self.config.locale),
             settings: theme
                 .manifest()
                 .settings_values(&serde_json::Map::default()),
         }
+    }
+}
+
+/// `locale` as a BCP 47 tag for `<html lang>`: a POSIX-style `en_GB.UTF-8@euro`
+/// becomes `en-GB`; any character outside `[A-Za-z0-9-]` is dropped, and an empty
+/// result is `en`.
+pub(crate) fn bcp47(locale: &str) -> String {
+    let base = locale.split(['.', '@']).next().unwrap_or_default();
+    let tag: String = base
+        .chars()
+        .map(|c| if c == '_' { '-' } else { c })
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    let tag = tag.trim_matches('-');
+    if tag.is_empty() {
+        "en".to_owned()
+    } else {
+        tag.to_owned()
     }
 }
 
@@ -254,4 +272,25 @@ pub async fn load_route_table(
         .map(|t| t.name)
         .collect();
     Ok(RouteTable::new(rules, &types, &taxonomies))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bcp47;
+
+    #[test]
+    fn locales_become_bcp47() {
+        for (raw, tag) in [
+            ("en", "en"),
+            ("en_GB", "en-GB"),
+            ("pl_PL.UTF-8", "pl-PL"),
+            ("de_DE@euro", "de-DE"),
+            ("pt-BR", "pt-BR"),
+            ("\"><x", "x"),
+            ("", "en"),
+            ("_", "en"),
+        ] {
+            assert_eq!(bcp47(raw), tag, "{raw:?}");
+        }
+    }
 }

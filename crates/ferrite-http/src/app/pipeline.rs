@@ -10,14 +10,16 @@ use ferrite_core::{
     events::{PLUGINS_KEY, THEME_KEY, archive_key},
 };
 use ferrite_theme::resolve_template;
-use ferrite_theme::{RenderContext, RenderOutput, RequestInfo, TemplateKey, ThemeError};
+use ferrite_theme::{
+    ArchiveInfo, Pagination, RenderContext, RenderOutput, RequestInfo, TemplateKey, ThemeError,
+};
 use tokio::runtime::Handle;
 
 use super::{AppState, bridge::BlockingBridge, error_page, feeds, response::HTML};
 use crate::{
     head::{HeadPage, HeadSite, page_head},
     plugins::{PluginRequest, RenderTrace, filter_item},
-    route::{Candidate, NormalQuery, Route},
+    route::{Candidate, NormalQuery, Route, listing_page_url},
 };
 
 /// Why a page could not be rendered: [`Busy`](Self::Busy) is answered with 503, every
@@ -42,7 +44,7 @@ pub(crate) struct NotFound;
 /// What a route shows.
 enum Shown {
     Item(Box<PageItem>, TemplateKey),
-    Listing(Listing, TemplateKey),
+    Listing(Listing, TemplateKey, Box<ArchiveInfo>),
 }
 
 /// The response for a content route: the rendered page, a 503 when no render slot
@@ -84,10 +86,11 @@ async fn render_route(
     };
     let theme = state.theme.load_full();
     let site = state.site_info(&theme, &mut deps).await?;
-    let (mut item, mut listing, key) = match shown {
-        Shown::Item(item, key) => (Some(*item), None, key),
-        Shown::Listing(listing, key) => (None, Some(listing), key),
+    let (mut item, mut listing, key, archive) = match shown {
+        Shown::Item(item, key) => (Some(*item), None, key, None),
+        Shown::Listing(listing, key, archive) => (None, Some(listing), key, Some(*archive)),
     };
+    let pagination = listing.as_ref().map(|l| pagination(route, l));
     let req = PluginRequest::public(path, &site.locale, item.as_ref().map(|i| i.item.id));
     let mut trace = RenderTrace::default();
     if let Some(item) = item.as_mut() {
@@ -121,6 +124,8 @@ async fn render_route(
         site,
         item,
         listing,
+        archive,
+        pagination,
         request: RequestInfo {
             path: path.to_owned(),
             query_s: query.s,
@@ -217,6 +222,9 @@ fn page_number(route: &Route) -> u32 {
     }
 }
 
+/// Content type of front, term, author and date listings (`SiteReader` lists posts).
+const POST_KIND: &str = "post";
+
 /// Merges a read's keys into `deps` and returns its value.
 fn take<T>(read: SiteRead<T>, deps: &mut DepKeys) -> T {
     deps.extend(read.deps);
@@ -224,9 +232,34 @@ fn take<T>(read: SiteRead<T>, deps: &mut DepKeys) -> T {
 }
 
 /// A listing to show: `None` past the last page (an empty page 1 is still shown).
-fn listing(l: Option<Listing>, key: TemplateKey) -> Option<Shown> {
+fn listing(l: Option<Listing>, key: TemplateKey, archive: ArchiveInfo) -> Option<Shown> {
     l.filter(|l| l.page <= 1 || !l.items.is_empty())
-        .map(|l| Shown::Listing(l, key))
+        .map(|l| Shown::Listing(l, key, Box::new(archive)))
+}
+
+/// `archive` of kind `kind` with nothing else set.
+fn archive(kind: &str) -> ArchiveInfo {
+    ArchiveInfo {
+        kind: kind.to_owned(),
+        ..ArchiveInfo::default()
+    }
+}
+
+/// Position of `l` and the canonical URLs of its neighbours (ruling R30).
+fn pagination(route: &Route, l: &Listing) -> Pagination {
+    let per_page = u64::from(l.per_page.max(1));
+    let pages = u32::try_from(l.total.div_ceil(per_page).max(1)).unwrap_or(u32::MAX);
+    let page = l.page.max(1);
+    Pagination {
+        page,
+        pages,
+        prev_url: (page > 1)
+            .then(|| listing_page_url(route, page - 1))
+            .flatten(),
+        next_url: (page < pages)
+            .then(|| listing_page_url(route, page + 1))
+            .flatten(),
+    }
 }
 
 /// Loads what `route` shows through [`SiteReader`], merging every read's keys into
@@ -250,37 +283,74 @@ async fn load(
                 };
                 Some(Shown::Item(item, key))
             }
-            Some(FrontPage::Posts(l)) => listing(Some(l), TemplateKey::FrontPosts),
+            Some(FrontPage::Posts(l)) => listing(
+                Some(l),
+                TemplateKey::FrontPosts,
+                ArchiveInfo {
+                    content_type: Some(POST_KIND.to_owned()),
+                    ..archive("front")
+                },
+            ),
             None => None,
         },
         Route::Archive { kind, page } => listing(
             take(r.archive(kind, *page).await?, deps),
             TemplateKey::Archive { kind: kind.clone() },
+            ArchiveInfo {
+                content_type: Some(kind.clone()),
+                ..archive("type")
+            },
         ),
         Route::Term {
             taxonomy,
             slug,
             page,
-        } => listing(
-            take(r.term_archive(taxonomy, slug, *page).await?, deps),
-            TemplateKey::Term {
-                tax: taxonomy.clone(),
-                slug: slug.clone(),
-            },
-        ),
-        Route::Author { login, page } => listing(
-            take(r.author_archive(login, *page).await?, deps),
-            TemplateKey::Author {
-                login: login.clone(),
-            },
-        ),
+        } => match take(r.term_archive_page(taxonomy, slug, *page).await?, deps) {
+            Some((term, l)) => listing(
+                Some(l),
+                TemplateKey::Term {
+                    tax: taxonomy.clone(),
+                    slug: slug.clone(),
+                },
+                ArchiveInfo {
+                    content_type: Some(POST_KIND.to_owned()),
+                    term: Some(term),
+                    ..archive("term")
+                },
+            ),
+            None => None,
+        },
+        Route::Author { login, page } => {
+            match take(r.author_archive_page(login, *page).await?, deps) {
+                Some((author, l)) => listing(
+                    Some(l),
+                    TemplateKey::Author {
+                        login: login.clone(),
+                    },
+                    ArchiveInfo {
+                        content_type: Some(POST_KIND.to_owned()),
+                        author: Some(author),
+                        ..archive("author")
+                    },
+                ),
+                None => None,
+            }
+        }
         Route::Date { year, month, page } => listing(
             take(r.date_archive(*year, *month, *page).await?, deps),
             TemplateKey::Date,
+            ArchiveInfo {
+                content_type: Some(POST_KIND.to_owned()),
+                year: Some(*year),
+                month: *month,
+                ..archive("date")
+            },
         ),
-        Route::Search { q, page } => {
-            listing(take(r.search(q, *page).await?, deps), TemplateKey::Search)
-        }
+        Route::Search { q, page } => listing(
+            take(r.search(q, *page).await?, deps),
+            TemplateKey::Search,
+            archive("search"),
+        ),
         // Rendered by `feeds` (above), or answered before the cache by the handler.
         Route::Feed(_) | Route::Sitemap(_) | Route::Robots => None,
         Route::Media { .. } | Route::Theme { .. } => None,

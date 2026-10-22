@@ -15,6 +15,17 @@ pub struct SiteRead<T> {
     pub cacheable: bool,
 }
 
+impl<T> SiteRead<T> {
+    /// The same read with its value mapped; keys and cacheability are kept.
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> SiteRead<U> {
+        SiteRead {
+            value: f(self.value),
+            deps: self.deps,
+            cacheable: self.cacheable,
+        }
+    }
+}
+
 /// A set of dependency keys (`post:<id>`, `term:<id>`, `archive:<kind>`,
 /// `option:<key>`), kept sorted and deduplicated.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -1039,6 +1039,37 @@ pub async fn archives_by_term_author_date(db: &TestDb) {
     assert_eq!(slugs(&w.items), ["may", "last-year"]);
     assert!(r.author_archive("nobody", 1).await.unwrap().value.is_none());
 
+    // R30: the `_page` variants return the term/author with the same listing, only
+    // when the plain archive exists (no oracle), recording their keys.
+    let tp = r.term_archive_page("category", "news", 1).await.unwrap();
+    let (news_term, l) = tp.value.unwrap();
+    assert_eq!((news_term.id, news_term.slug.as_str()), (news, "news"));
+    assert_eq!(news_term.url, "/category/news/");
+    assert_eq!(slugs(&l.items), ["june", "may"]);
+    assert!(tp.deps.contains(&term_key(news)));
+    assert!(
+        r.term_archive_page("tag", "secret", 1)
+            .await
+            .unwrap()
+            .value
+            .is_none()
+    );
+    let ap = r.author_archive_page("writer", 1).await.unwrap();
+    let (author, l) = ap.value.unwrap();
+    assert_eq!((author.id, author.login.as_str()), (writer.id, "writer"));
+    assert_eq!(slugs(&l.items), ["may", "last-year"]);
+    assert!(ap.deps.contains(&user_key(writer.id)));
+    for login in ["drafter", "nobody"] {
+        assert!(
+            r.author_archive_page(login, 1)
+                .await
+                .unwrap()
+                .value
+                .is_none(),
+            "{login}"
+        );
+    }
+
     let june = r
         .date_archive(2026, Some(6), 1)
         .await

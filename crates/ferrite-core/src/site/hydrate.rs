@@ -376,7 +376,7 @@ fn excerpt(item: &ContentItem) -> String {
     }
 }
 
-fn term_public(t: Term) -> TermPublic {
+pub(super) fn term_public(t: Term) -> TermPublic {
     TermPublic {
         url: term_path(&t.taxonomy, &t.slug),
         id: t.id,

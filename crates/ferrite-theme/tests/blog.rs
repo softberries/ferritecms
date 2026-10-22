@@ -10,8 +10,9 @@ use ferrite_core::{
 };
 use ferrite_domain::{ContentId, TermId, Timestamp, UserId};
 use ferrite_theme::{
-    Bridged, HelperBridge, ImageRef, MenuNode, MenuTree, NoBridge, RenderContext, Renderer,
-    RequestInfo, SiteInfo, TemplateKey, Theme, ThemeSource, error_template, resolve_template,
+    ArchiveInfo, Bridged, HelperBridge, ImageRef, MenuNode, MenuTree, NoBridge, Pagination,
+    RenderContext, Renderer, RequestInfo, SiteInfo, TemplateKey, Theme, ThemeSource,
+    error_template, resolve_template,
 };
 use serde_json::json;
 
@@ -112,6 +113,35 @@ fn listing(items: Vec<PageItem>, page: u32, total: u64) -> Listing {
         per_page: 2,
         total,
     }
+}
+
+/// An item with nothing optional: no author, featured image, terms or date.
+fn bare_item(kind: &str) -> PageItem {
+    let mut it = item(kind, "bare", "Bare item");
+    it.author = None;
+    it.featured = None;
+    it.terms = Vec::new();
+    it.item.published_at = None;
+    it.item.excerpt = String::new();
+    it.html = String::new();
+    it
+}
+
+fn archive(kind: &str) -> ArchiveInfo {
+    ArchiveInfo {
+        kind: kind.into(),
+        content_type: Some("post".into()),
+        ..ArchiveInfo::default()
+    }
+}
+
+fn pagination(page: u32, pages: u32, prev: Option<&str>, next: Option<&str>) -> Option<Pagination> {
+    Some(Pagination {
+        page,
+        pages,
+        prev_url: prev.map(Into::into),
+        next_url: next.map(Into::into),
+    })
 }
 
 /// Canned menus (primary and footer) and related posts.
@@ -346,17 +376,34 @@ fn single_post() {
     for needle in [
         "<h1 class=\"entry-title\">Hello &lt;script&gt;alert(1)&lt;&#x2f;script&gt;</h1>",
         "<time datetime=\"2024-03-05T10:20:30+00:00\">5 March 2024</time>",
-        "<span class=\"author\">Ana Author</span>",
+        "by <a class=\"author\" href=\"/author/ana/\" rel=\"author\">Ana Author</a>",
         "src=\"&#x2f;_media&#x2f;h2&#x2f;photo-hero.jpg\" alt=\"A ferrite magnet on a desk\" width=\"1280\" height=\"640\"",
         "<p>Body <em>html</em></p>",
         "<a href=\"&#x2f;category&#x2f;news&#x2f;\" rel=\"tag\">News</a>",
         "<a href=\"&#x2f;tag&#x2f;rust&#x2f;\" rel=\"tag\">Rust</a>",
         "aria-labelledby=\"related-title\"",
+        "<ul class=\"card-grid\" role=\"list\">",
         "<h3 class=\"card__title\"><a href=\"&#x2f;other&#x2f;\">Other post</a></h3>",
     ] {
         assert!(html.contains(needle), "missing {needle:?} in:\n{html}");
     }
     assert!(!html.contains("<script>alert"), "{html}");
+}
+
+#[test]
+fn author_links_are_url_encoded() {
+    let t = blog();
+    let mut c = ctx(&t, "/hello/");
+    let mut it = item("post", "hello", "Hello");
+    if let Some(a) = it.author.as_mut() {
+        a.login = "a b\"<&?#:".into();
+    }
+    c.item = Some(it);
+    let html = render(&t, "single.html", c);
+    assert!(
+        html.contains("href=\"/author/a%20b%22%3C%26%3F%23%3A/\" rel=\"author\""),
+        "{html}"
+    );
 }
 
 #[test]
@@ -367,6 +414,7 @@ fn show_author_false_hides_the_author() {
     c.item = Some(item("post", "hello", "Hello"));
     let html = render(&t, "single.html", c);
     assert!(!html.contains("Ana Author"), "{html}");
+    assert!(!html.contains("rel=\"author\""), "{html}");
     assert!(html.contains("5 March 2024"), "{html}");
 }
 
@@ -383,32 +431,42 @@ fn show_excerpts_false_hides_card_excerpts() {
 #[test]
 fn accent_colour_setting_is_applied() {
     let t = blog();
+    let style = |accent: serde_json::Value| {
+        let mut c = ctx(&t, "/");
+        c.site.settings.insert("accent_color".into(), accent);
+        render(&t, "index.html", c)
+    };
+    for ok in ["#0f766e", "#ABC", "#c2410C"] {
+        let html = style(json!(ok));
+        assert!(
+            html.contains(&format!("<style>:root{{--accent:{ok}}}</style>")),
+            "{ok}: {html}"
+        );
+    }
+    // Even if a bad value got past core, the template does not emit it: `#` plus 3
+    // or 6 hex digits only.
+    for bad in [
+        json!("#};a{b:"),
+        json!("#12345g"),
+        json!("#abcd"),
+        json!("red;}x"),
+        json!("red}</style><script>x()</script>"),
+        json!(""),
+        json!(7),
+        json!(null),
+    ] {
+        let html = style(bad.clone());
+        assert!(!html.contains("--accent:"), "{bad}: {html}");
+        assert!(!html.contains("<script>x()"), "{html}");
+    }
+    // An invalid stored value falls back to the default through core's validation.
     let mut c = ctx(&t, "/");
-    c.site = site(&t, json!({ "accent_color": "#0f766e" }));
-    let html = render(&t, "index.html", c);
-    assert!(
-        html.contains("<style>:root{--accent:#0f766e}</style>"),
-        "{html}"
-    );
-    // An invalid stored value falls back to the default, never reaching CSS.
-    let mut c = ctx(&t, "/");
-    c.site = site(
-        &t,
-        json!({ "accent_color": "red}</style><script>x()</script>" }),
-    );
+    c.site = site(&t, json!({ "accent_color": "#};a{b:" }));
     let html = render(&t, "index.html", c);
     assert!(
         html.contains("<style>:root{--accent:#c2410c}</style>"),
         "{html}"
     );
-    assert!(!html.contains("<script>x()"), "{html}");
-    // Even if a bad value got past core, the template does not emit it.
-    let mut c = ctx(&t, "/");
-    c.site
-        .settings
-        .insert("accent_color".into(), json!("red;}x"));
-    let html = render(&t, "index.html", c);
-    assert!(!html.contains("--accent:"), "{html}");
 }
 
 #[test]
@@ -451,14 +509,23 @@ fn menus_nest_and_mark_the_current_page() {
 }
 
 #[test]
-fn listings_paginate_with_rel_links() {
+fn pagination_comes_from_the_context() {
     let t = blog();
     let items = || vec![item("post", "a", "Post A"), item("post", "b", "Post B")];
 
     // Middle page of a term archive.
     let mut c = ctx(&t, "/category/news/page/2/");
-    c.request.page = 2;
     c.listing = Some(listing(items(), 2, 6));
+    c.archive = Some(ArchiveInfo {
+        term: Some(term("category", "news", "News")),
+        ..archive("term")
+    });
+    c.pagination = pagination(
+        2,
+        3,
+        Some("/category/news/"),
+        Some("/category/news/page/3/"),
+    );
     let html = render(&t, "taxonomy.html", c);
     assert_frame(&t, &html);
     for needle in [
@@ -468,69 +535,115 @@ fn listings_paginate_with_rel_links() {
         "rel=\"prev\" href=\"&#x2f;category&#x2f;news&#x2f;\"",
         "rel=\"next\" href=\"&#x2f;category&#x2f;news&#x2f;page&#x2f;3&#x2f;\"",
         "Page 2 of 3",
+        "<ul class=\"card-grid\" role=\"list\">",
+        "<li><article class=\"card\">",
         "<h2 class=\"card__title\"><a href=\"&#x2f;a&#x2f;\">Post A</a></h2>",
         "src=\"&#x2f;_media&#x2f;h1&#x2f;photo-card.jpg\" alt=\"\"",
     ] {
         assert!(html.contains(needle), "missing {needle:?} in:\n{html}");
     }
 
-    // First page of the front listing: next only.
+    // The template prints what it is given; it does not derive URLs from the path.
     let mut c = ctx(&t, "/");
     c.listing = Some(listing(items(), 1, 6));
+    c.pagination = pagination(1, 3, None, Some("/elsewhere/2/"));
     let html = render(&t, "index.html", c);
-    assert_frame(&t, &html);
     assert!(
-        html.contains("rel=\"next\" href=\"&#x2f;page&#x2f;2&#x2f;\""),
+        html.contains("rel=\"next\" href=\"&#x2f;elsewhere&#x2f;2&#x2f;\""),
         "{html}"
     );
     assert!(!html.contains("rel=\"prev\""), "{html}");
 
-    // Last page: prev to page 2.
-    let mut c = ctx(&t, "/page/3/");
-    c.request.page = 3;
-    c.listing = Some(listing(items(), 3, 6));
-    let html = render(&t, "index.html", c);
-    assert!(
-        html.contains("rel=\"prev\" href=\"&#x2f;page&#x2f;2&#x2f;\""),
-        "{html}"
-    );
-    assert!(!html.contains("rel=\"next\""), "{html}");
+    // Search uses plain rel links too, with the server-encoded query.
+    let mut c = ctx(&t, "/page/2/");
+    c.request.query_s = Some("a&b c".into());
+    c.listing = Some(listing(items(), 2, 6));
+    c.archive = Some(archive("search"));
+    c.pagination = pagination(2, 3, Some("/?s=a%26b%20c"), Some("/page/3/?s=a%26b%20c"));
+    let html = render(&t, "search.html", c);
+    for needle in [
+        "rel=\"prev\" href=\"&#x2f;?s=a%26b%20c\"",
+        "rel=\"next\" href=\"&#x2f;page&#x2f;3&#x2f;?s=a%26b%20c\"",
+    ] {
+        assert!(html.contains(needle), "missing {needle:?} in:\n{html}");
+    }
+    assert!(!html.contains("<form class=\"pagination"), "{html}");
 
-    // A single page has no pagination.
+    // One page, or no pagination in the context: no nav.
     let mut c = ctx(&t, "/");
     c.listing = Some(listing(items(), 1, 2));
+    c.pagination = pagination(1, 1, None, None);
+    assert!(!render(&t, "index.html", c.clone()).contains("class=\"pagination\""));
+    c.pagination = None;
     assert!(!render(&t, "index.html", c).contains("class=\"pagination\""));
 }
 
 #[test]
-fn archive_author_and_date_headings() {
+fn archive_author_and_date_headings_come_from_the_context() {
     let t = blog();
     let one = || Some(listing(vec![item("post", "a", "Post A")], 1, 1));
+    let heading = |template: &str, a: Option<ArchiveInfo>, items: bool| {
+        let mut c = ctx(&t, "/whatever/");
+        c.listing = if items {
+            one()
+        } else {
+            Some(listing(vec![], 1, 0))
+        };
+        c.archive = a;
+        let html = render(&t, template, c);
+        assert_frame(&t, &html);
+        let start = html.find("<h1 class=\"page-title\">").unwrap() + 23;
+        let end = html[start..].find("</h1>").unwrap() + start;
+        html[start..end].trim().to_owned()
+    };
 
-    let mut c = ctx(&t, "/post/");
-    c.listing = one();
-    let html = render(&t, "archive.html", c);
-    assert_frame(&t, &html);
-    assert!(html.contains("Post archive</h1>"), "{html}");
+    let event = ArchiveInfo {
+        content_type: Some("event".into()),
+        ..archive("type")
+    };
+    assert_eq!(heading("archive.html", Some(event), true), "Event archive");
+    assert_eq!(heading("archive.html", None, true), "Archive");
 
-    let mut c = ctx(&t, "/author/ana/");
-    c.listing = one();
-    let html = render(&t, "author.html", c);
-    assert_frame(&t, &html);
-    assert!(html.contains("Posts by Ana Author</h1>"), "{html}");
+    let ana = UserPublic {
+        id: UserId::new(),
+        login: "ana".into(),
+        display_name: "Ana <A>".into(),
+    };
+    let by_ana = ArchiveInfo {
+        author: Some(ana),
+        ..archive("author")
+    };
+    // From the context, not from the listed items (an empty archive still knows).
+    assert_eq!(
+        heading("author.html", Some(by_ana), false),
+        "Posts by Ana &lt;A&gt;"
+    );
+    assert_eq!(heading("author.html", None, true), "Posts by this author");
 
-    for (path, heading) in [
-        ("/2024/03/", "March 2024"),
-        ("/2024/03/page/2/", "March 2024"),
-        ("/2024/", "2024"),
-        ("/2024/13/", "2024"),
+    let genre = ArchiveInfo {
+        term: Some(term("genre", "jazz", "Jazz")),
+        ..archive("term")
+    };
+    assert_eq!(heading("taxonomy.html", Some(genre), false), "Jazz");
+    assert_eq!(heading("taxonomy.html", None, true), "Topic archive");
+
+    for (year, month, expected) in [
+        (Some(2024), Some(3), "March 2024"),
+        (Some(2024), Some(12), "December 2024"),
+        (Some(2024), None, "2024"),
+        (Some(2024), Some(13), "2024"),
+        (Some(99), Some(3), "Posts by date"),
+        (None, None, "Posts by date"),
     ] {
-        let mut c = ctx(&t, path);
-        c.listing = one();
-        let html = render(&t, "date.html", c);
-        assert!(
-            html.contains(&format!("<h1 class=\"page-title\">{heading}</h1>")),
-            "{path}: {html}"
+        let a = ArchiveInfo {
+            year,
+            month,
+            ..archive("date")
+        };
+        assert_eq!(
+            heading("date.html", Some(a), true),
+            expected,
+            "{year:?} {month:?}"
         );
     }
 
@@ -551,6 +664,7 @@ fn search_results_form_and_empty_state() {
         1,
         3,
     ));
+    c.archive = Some(archive("search"));
     let html = render(&t, "search.html", c.clone());
     assert_frame(&t, &html);
     let q = "ferrite &quot;magnets&quot; &amp; &lt;b&gt;";
@@ -561,9 +675,6 @@ fn search_results_form_and_empty_state() {
         &format!("name=\"s\" value=\"{q}\""),
         "3 results",
         "Post A",
-        // Search pages through forms, so the query is encoded by the browser.
-        "<form class=\"pagination__next\" method=\"get\" action=\"&#x2f;page&#x2f;2&#x2f;\">",
-        &format!("<input type=\"hidden\" name=\"s\" value=\"{q}\">"),
     ] {
         assert!(html.contains(needle), "missing {needle:?} in:\n{html}");
     }
@@ -576,7 +687,83 @@ fn search_results_form_and_empty_state() {
 }
 
 #[test]
-fn not_found_needs_no_path_and_knows_gone() {
+fn bare_items_and_empty_listings_render_without_data_helpers() {
+    let t = blog();
+    let none = || -> Arc<dyn HelperBridge> { Arc::new(NoBridge) };
+    for (template, kind) in [
+        ("single.html", "post"),
+        ("page.html", "page"),
+        ("index.html", "post"),
+    ] {
+        let mut c = ctx(&t, "/bare/");
+        c.item = Some(bare_item(kind));
+        let html = render_with(&t, template, c, none());
+        assert!(html.contains("Bare item</h1>"), "{template}: {html}");
+        for absent in [
+            "<time",
+            "rel=\"author\"",
+            "<img",
+            "class=\"terms\"",
+            "Related posts",
+            "<nav",
+        ] {
+            assert!(!html.contains(absent), "{template} has {absent:?}: {html}");
+        }
+        assert!(html.contains("<main id=\"content\""), "{template}");
+    }
+    // A listing of bare items: cards without image, date or excerpt.
+    let mut c = ctx(&t, "/");
+    c.listing = Some(listing(vec![bare_item("post")], 1, 1));
+    let html = render_with(&t, "index.html", c, none());
+    assert!(
+        html.contains("<a href=\"&#x2f;bare&#x2f;\">Bare item</a>"),
+        "{html}"
+    );
+    assert!(
+        !html.contains("card__excerpt") && !html.contains("<img"),
+        "{html}"
+    );
+    // Empty listings, with and without archive info.
+    for template in [
+        "index.html",
+        "archive.html",
+        "taxonomy.html",
+        "author.html",
+        "date.html",
+        "search.html",
+    ] {
+        for a in [None, Some(archive("term"))] {
+            let mut c = ctx(&t, "/");
+            c.listing = Some(listing(vec![], 1, 0));
+            c.archive = a;
+            let html = render_with(&t, template, c, none());
+            assert!(html.contains("<h1"), "{template}: {html}");
+            assert!(!html.contains("class=\"pagination\""), "{template}");
+        }
+    }
+}
+
+#[test]
+fn no_menus_means_no_navs() {
+    let t = blog();
+    let mut c = ctx(&t, "/hello/");
+    c.item = Some(item("post", "hello", "Hello"));
+    let html = render_with(&t, "single.html", c, Arc::new(FakeBridge::default()));
+    assert!(
+        !html.contains("site-nav") && !html.contains("footer-nav"),
+        "{html}"
+    );
+    for needle in [
+        "<header class=\"site-header\">",
+        "<footer class=\"site-footer\">",
+        "Powered by FerriteCMS",
+    ] {
+        assert!(html.contains(needle), "{needle}");
+    }
+}
+
+#[test]
+fn not_found_body_does_not_depend_on_the_path() {
     let t = blog();
     let mut c = ctx(&t, "");
     c.status = 404;
@@ -584,13 +771,16 @@ fn not_found_needs_no_path_and_knows_gone() {
     assert_frame(&t, &html);
     assert!(html.contains("Page not found</h1>"), "{html}");
     assert!(html.contains("role=\"search\""), "{html}");
-    // Shared body (R26): the template never reads the path, so even a context that
-    // carried one would render the same page.
+    assert!(!html.contains("aria-current"), "{html}");
+    // Shared body (R26): the server passes an empty path, and even a path that equals
+    // a menu URL (which marks `aria-current` on a 200 page) renders the same body.
     let src = include_str!("../../../themes/blog/templates/404.html");
     assert!(!src.contains("request.path"), "404.html reads request.path");
-    let mut other = c.clone();
-    other.request.path = "/some/missing/url/".into();
-    assert_eq!(render(&t, "404.html", other), html);
+    for path in ["/about/", "/about/team/", "/some/missing/url/"] {
+        let mut other = c.clone();
+        other.request.path = path.into();
+        assert_eq!(render(&t, "404.html", other), html, "{path}");
+    }
 
     c.status = 410;
     let html = render(&t, "404.html", c);
@@ -619,4 +809,27 @@ fn server_error_renders_with_an_empty_context() {
     assert!(html.contains("Ferrite &lt;Notes&gt;"), "{html}");
     assert!(html.contains("<title>Head title</title>"), "{html}");
     assert!(html.contains("--accent:#c2410c"), "{html}");
+}
+
+#[test]
+fn archive_term_and_author_are_recorded() {
+    let t = blog();
+    let news = term("category", "news", "News");
+    let ana = UserPublic {
+        id: UserId::new(),
+        login: "ana".into(),
+        display_name: "Ana".into(),
+    };
+    let mut c = ctx(&t, "/category/news/");
+    c.listing = Some(listing(vec![], 1, 0));
+    c.archive = Some(ArchiveInfo {
+        term: Some(news.clone()),
+        author: Some(ana.clone()),
+        ..archive("term")
+    });
+    let out = Renderer::new()
+        .render(&t, "taxonomy.html", c, Arc::new(NoBridge))
+        .unwrap();
+    assert!(out.deps.contains(&ferrite_core::events::term_key(news.id)));
+    assert!(out.deps.contains(&ferrite_core::events::user_key(ana.id)));
 }

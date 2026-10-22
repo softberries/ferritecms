@@ -1,7 +1,7 @@
 //! Every content route type, end to end, plus a plugin's head tag in a served page.
 
 use axum::http::StatusCode;
-use ferrite_core::site::FRONT_PAGE_OPTION;
+use ferrite_core::site::{FRONT_PAGE_OPTION, PER_PAGE_OPTION};
 use serde_json::json;
 
 use crate::app_tests;
@@ -165,7 +165,127 @@ async fn tampered_plugin_does_not_break_the_page(app: App) -> App {
     app
 }
 
+/// The text of `<p class="{class}">` in `body`.
+fn para<'a>(body: &'a str, class: &str) -> &'a str {
+    let open = format!("<p class=\"{class}\">");
+    let start = body
+        .find(&open)
+        .map(|i| i + open.len())
+        .unwrap_or_else(|| panic!("no {class}: {body}"));
+    let end = body[start..].find("</p>").unwrap() + start;
+    &body[start..end]
+}
+
+/// Ruling R30: listing routes get `archive` (what they list) and `pagination`
+/// (canonical neighbour URLs, the search query encoded) from the server; 404 gets
+/// neither.
+async fn listings_carry_archive_and_pagination(app: App) -> App {
+    let news = app.category("news").await;
+    app.post("Fish Chips One", "fish-one", &[news]).await;
+    let second = app.post("Fish Chips Two", "fish-two", &[news]).await;
+    app.site
+        .store
+        .read()
+        .options()
+        .set(PER_PAGE_OPTION, &json!(1), false)
+        .await
+        .unwrap();
+
+    let r = app.get("/category/news/").await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert_eq!(para(&r.body, "archive"), "term|post|news|||");
+    assert_eq!(
+        para(&r.body, "nav"),
+        "1/2 prev= next=&#x2f;category&#x2f;news&#x2f;page&#x2f;2&#x2f;"
+    );
+    let r = app.get("/category/news/page/2/").await;
+    assert_eq!(
+        para(&r.body, "nav"),
+        "2/2 prev=&#x2f;category&#x2f;news&#x2f; next="
+    );
+
+    let r = app.get("/author/ada/").await;
+    assert_eq!(para(&r.body, "archive"), "author|post||ada display||");
+    assert!(para(&r.body, "nav").ends_with("next=&#x2f;author&#x2f;ada&#x2f;page&#x2f;2&#x2f;"));
+
+    let published = second.published_at.expect("published").to_rfc3339();
+    let (year, month) = date_paths(&published);
+    let r = app.get(&month).await;
+    let (y, m) = (&published[..4], published[5..7].trim_start_matches('0'));
+    assert_eq!(para(&r.body, "archive"), format!("date|post|||{y}|{m}"));
+    let r = app.get(&year).await;
+    assert_eq!(para(&r.body, "archive"), format!("date|post|||{y}|"));
+
+    let r = app.get("/post/").await;
+    assert_eq!(para(&r.body, "archive"), "type|post||||");
+    let r = app.get("/").await;
+    assert_eq!(para(&r.body, "archive"), "front|post||||");
+    assert!(para(&r.body, "nav").ends_with("next=&#x2f;page&#x2f;2&#x2f;"));
+
+    // Search: the query is percent-encoded into the links, and they round-trip.
+    let r = app.get("/?s=fish%20chips").await;
+    assert_eq!(r.tpl(), "search", "{r:?}");
+    assert_eq!(para(&r.body, "archive"), "search|||||");
+    assert_eq!(
+        para(&r.body, "nav"),
+        "1/2 prev= next=&#x2f;page&#x2f;2&#x2f;?s=fish%20chips"
+    );
+    let r = app.get("/page/2/?s=fish%20chips").await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert_eq!(para(&r.body, "query"), "fish chips");
+    assert_eq!(para(&r.body, "nav"), "2/2 prev=&#x2f;?s=fish%20chips next=");
+
+    // Error pages get neither.
+    let r = app.get("/no-such-page/").await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert_eq!(para(&r.body, "ctx"), "[False|False]");
+    app
+}
+
+/// A custom menu URL that bypassed `MenuService` validation (written straight to the
+/// store) with a script scheme is dropped by the bridge; safe ones stay.
+async fn unsafe_menu_urls_are_dropped(app: App) -> App {
+    use ferrite_domain::{Menu, MenuItem, MenuItemId, MenuItemKind};
+    app.post("Hello World", "hello-world", &[]).await;
+    let entry = |i: i32, url: &str, label: &str| MenuItem {
+        id: MenuItemId::new(),
+        parent_id: None,
+        position: i,
+        kind: MenuItemKind::Url,
+        target_id: None,
+        url: Some(url.into()),
+        label: label.into(),
+    };
+    let menu = Menu {
+        name: "primary".into(),
+        label: "Primary".into(),
+        items: vec![
+            entry(0, "javascript:alert(1)", "Evil"),
+            entry(1, "data:text/html,x", "Data"),
+            entry(2, "/about/", "About"),
+            entry(3, "mailto:hi@example.com", "Mail"),
+        ],
+    };
+    app.site.store.read().menus().put(&menu).await.unwrap();
+    let r = app.get("/hello-world/").await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert!(!r.body.contains("javascript"), "{}", r.body);
+    assert!(
+        !r.body.contains(">Evil<") && !r.body.contains(">Data<"),
+        "{}",
+        r.body
+    );
+    assert!(
+        r.body.contains(">About<") && r.body.contains(">Mail<"),
+        "{}",
+        r.body
+    );
+    app
+}
+
 app_tests!(
+    unsafe_menu_urls_are_dropped,
+    listings_carry_archive_and_pagination,
     tampered_plugin_does_not_break_the_page,
     serves_every_content_route,
     static_front_page,

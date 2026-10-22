@@ -8,7 +8,7 @@
     {%- if post.date or (show_author and post.author) %}
     <p class="entry-meta">
       {%- if post.date %}<time datetime="{{ post.date }}">{{ post.date | date("%-d %B %Y") }}</time>{% endif %}
-      {%- if show_author and post.author %}<span class="entry-meta__author">by <span class="author">{{ post.author.display_name }}</span></span>{% endif %}
+      {%- if show_author and post.author %}<span class="entry-meta__author">by <a class="author" href="/author/{{ post.author.login | urlencode }}/" rel="author">{{ post.author.display_name }}</a></span>{% endif %}
     </p>
     {%- endif %}
   </header>
@@ -31,11 +31,11 @@
 {%- if rel %}
 <section class="related wrap" aria-labelledby="related-title">
   <h2 id="related-title" class="section-title">Related posts</h2>
-  <div class="card-grid">
+  <ul class="card-grid" role="list">
     {%- for p in rel %}
-    {% with level = 3 %}{% include "partials/card.html" %}{% endwith %}
+    <li>{% with level = 3 %}{% include "partials/card.html" %}{% endwith %}</li>
     {%- endfor %}
-  </div>
+  </ul>
 </section>
 {%- endif %}
 {% endblock %}

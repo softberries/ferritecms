@@ -1,6 +1,13 @@
 {#- The accent colour setting as a CSS custom property. Core validates `color` settings
-    (`#rgb` / `#rrggbb`); the shape is checked again here so nothing else reaches CSS. -#}
+    (`#rgb` / `#rrggbb`); the template checks again that it is `#` plus 3 or 6 hex
+    digits, so nothing else can reach CSS. -#}
 {%- set accent = site.settings.accent_color -%}
-{%- if accent is string and accent|length in [4, 7] and accent[0] == "#" %}
+{%- set ns = namespace(ok=accent is string and accent | length in [4, 7] and accent[0] == "#") -%}
+{%- if ns.ok -%}
+{%- for c in accent[1:] -%}
+{%- if c not in "0123456789abcdefABCDEF" %}{% set ns.ok = false %}{% endif -%}
+{%- endfor -%}
+{%- endif -%}
+{%- if ns.ok %}
 <style>:root{--accent:{{ accent }}}</style>
 {%- endif %}

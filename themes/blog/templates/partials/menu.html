@@ -1,8 +1,9 @@
-{#- A menu tree as nested lists. Expects `items` (MenuNode list: label, url, children). -#}
+{#- A menu tree as nested lists. Expects `items` (MenuNode list: label, url, children).
+    `aria-current` only on 200 pages, so error bodies never depend on the path. -#}
 <ul class="menu">
 {%- for node in items recursive %}
   <li class="menu__item{% if node.children %} menu__item--parent{% endif %}">
-    <a href="{{ node.url }}"{% if request.path and node.url == request.path %} aria-current="page"{% endif %}>{{ node.label }}</a>
+    <a href="{{ node.url }}"{% if request.status == 200 and request.path and node.url == request.path %} aria-current="page"{% endif %}>{{ node.label }}</a>
     {%- if node.children %}
     <ul class="menu__sub">{{ loop(node.children) }}</ul>
     {%- endif %}

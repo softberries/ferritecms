@@ -242,8 +242,9 @@ fn builtins_left_and_removed() {
     );
     let err = render_str("{{ debug() }}", ctx()).unwrap_err();
     assert!(err.to_string().contains("unknown function"), "{err}");
-    let err = render_str("{{ 'a' | urlencode }}", ctx()).unwrap_err();
-    assert!(err.to_string().contains("unknown filter"), "{err}");
+    // `urlencode` is enabled (ruling R30): a plain (escaped) string with `:` encoded.
+    let out = render_str("{{ 'a b/c:\"<&' | urlencode }}", ctx()).unwrap();
+    assert_eq!(out.html, "a%20b&#x2f;c%3A%22%3C%26");
 }
 
 #[test]

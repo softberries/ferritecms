@@ -391,7 +391,14 @@ fn listing(
         }
         _ => return None,
     };
-    let canonical = match &route {
+    let canonical = listing_base(&route)?;
+    Some((route, canonical))
+}
+
+/// Canonical path of page 1 of a listing route (front, search, archive, term, author,
+/// date); `None` for other routes.
+pub fn listing_base(route: &Route) -> Option<String> {
+    Some(match route {
         Route::Date { year, month, .. } => match month {
             Some(m) => format!("/{year:04}/{m:02}/"),
             None => format!("/{year:04}/"),
@@ -399,9 +406,25 @@ fn listing(
         Route::Author { login, .. } => format!("/author/{}/", encode_segment(login)),
         Route::Term { taxonomy, slug, .. } => term_path(taxonomy, slug),
         Route::Archive { kind, .. } => format!("/{}/", encode_segment(kind)),
-        _ => "/".to_owned(),
+        Route::Front { .. } | Route::Search { .. } => "/".to_owned(),
+        _ => return None,
+    })
+}
+
+/// Canonical URL of page `n` of the listing `route`: its base for page 1, else
+/// `<base>page/<n>/`; searches append `?s=` with the query percent-encoded.
+pub fn listing_page_url(route: &Route, n: u32) -> Option<String> {
+    let base = listing_base(route)?;
+    let mut url = if n <= 1 {
+        base
+    } else {
+        format!("{base}page/{n}/")
     };
-    Some((route, canonical))
+    if let Route::Search { q, .. } = route {
+        url.push_str("?s=");
+        url.push_str(&encode_segment(q));
+    }
+    Some(url)
 }
 
 /// A two-digit month `01..=12`.

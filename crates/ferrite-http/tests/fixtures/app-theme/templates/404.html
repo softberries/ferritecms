@@ -1,4 +1,4 @@
 <!doctype html>
 <html><head>{{ head() }}</head>
-<body data-tpl="404">{% include "partials/header.html" %}<h1>Nothing here ({{ request.status }})</h1><p class="path">[{{ request.path }}]</p></body>
+<body data-tpl="404">{% include "partials/header.html" %}<h1>Nothing here ({{ request.status }})</h1><p class="path">[{{ request.path }}]</p><p class="ctx">[{{ archive is defined }}|{{ pagination is defined }}]</p></body>
 </html>

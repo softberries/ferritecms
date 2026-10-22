@@ -1,9 +1,14 @@
 /* FerriteCMS "blog" starter theme. Plain CSS, no build step.
  *
- * Colours: every text/background pair below meets WCAG 2.2 AA (4.5:1 for text, 3:1 for
- * UI boundaries) in both schemes with the default accent. The accent (theme setting
- * `accent_color`, injected as --accent) is darkened for text on light backgrounds and
- * lightened on dark ones, so most chosen accents stay legible too.
+ * Colours (WCAG 2.2 AA: 4.5:1 text, 3:1 UI boundaries), computed for the default
+ * accent #c2410c with the WCAG relative-luminance formula:
+ *   light: text 17.2:1, muted 7.5:1 (6.8 on surface), links 6.9:1 (6.3 on surface),
+ *          control borders 4.7:1, button text on link colour 7.0:1;
+ *   dark:  text 15.2:1, muted 8.1:1 (7.3 on surface), links 7.8:1 (7.1 on surface),
+ *          control borders 5.0:1, button text on link colour 7.8:1.
+ * The raw accent (theme setting `accent_color`, injected as --accent) only colours
+ * decorative rules; text uses it mixed with black (light) or white (dark), so most
+ * mid-tone accents stay legible. Very pale or very dark accents can still fail.
  */
 
 /* ---------- Tokens ---------- */
@@ -328,6 +333,8 @@ a:hover {
 /* ---------- Cards ---------- */
 
 .card-grid {
+  list-style: none;
+  padding: 0;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
   gap: var(--space-l) var(--space-m);
@@ -722,6 +729,18 @@ button:hover {
 }
 
 @media print {
+  :root {
+    --bg: #fff;
+    --surface: #fff;
+    --text: #000;
+    --muted: #333;
+    --border: #999;
+    --control-border: #666;
+    --link: #000;
+    --link-hover: #000;
+    --on-link: #fff;
+  }
+
   .site-header nav,
   .site-footer,
   .skip-link,
@@ -729,10 +748,5 @@ button:hover {
   .search-form,
   .related {
     display: none;
-  }
-
-  body {
-    background: #fff;
-    color: #000;
   }
 }

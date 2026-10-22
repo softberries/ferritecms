@@ -82,7 +82,14 @@ impl BlockingBridge {
             }
         };
         Ok(match item.kind {
-            MenuItemKind::Url => item.url.as_ref().map(|u| (label(u), u.clone())),
+            MenuItemKind::Url => match item.url.as_deref() {
+                Some(u) if safe_menu_url(u) => Some((label(u), u.to_owned())),
+                Some(u) => {
+                    tracing::warn!(url = u, "menu entry with a disallowed URL scheme dropped");
+                    None
+                }
+                None => None,
+            },
             MenuItemKind::Item => {
                 let Some(id) = item.target_id else {
                     return Ok(None);
@@ -135,6 +142,26 @@ impl BlockingBridge {
             items: tree(&menu.items, None, &shown, 0),
         }))
     }
+}
+
+/// Defence in depth for custom menu URLs: `MenuService` validates on write, but rows
+/// can reach the store other ways (imports, older data). Allowed: `http(s)://…`,
+/// `mailto:…`, root-relative paths (not `//…`) and `#fragments`; never whitespace,
+/// control characters or backslashes. Everything else (`javascript:`, `data:`, …) is
+/// dropped.
+fn safe_menu_url(url: &str) -> bool {
+    if url.is_empty()
+        || url.chars().any(|c| c.is_control() || c.is_whitespace())
+        || url.contains('\\')
+    {
+        return false;
+    }
+    let lower = url.to_ascii_lowercase();
+    ["http://", "https://", "mailto:"]
+        .iter()
+        .any(|p| lower.starts_with(p) && lower.len() > p.len())
+        || url.starts_with('#')
+        || (url.starts_with('/') && !url.starts_with("//"))
 }
 
 /// The children of `parent` in position order. An entry whose target is hidden is
@@ -220,5 +247,40 @@ impl HelperBridge for BlockingBridge {
     fn image(&self, media: ContentId, size: &str) -> Option<ImageRef> {
         let read = self.run("image", self.reader.media(media))?;
         read.value.map(|m| ImageRef::from_media(&m, size))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_menu_url;
+
+    #[test]
+    fn menu_urls_are_filtered() {
+        for ok in [
+            "/",
+            "/about/",
+            "#top",
+            "https://example.com/x",
+            "HTTP://a.b",
+            "mailto:a@b.c",
+        ] {
+            assert!(safe_menu_url(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "javascript:alert(1)",
+            "JavaScript:alert(1)",
+            " javascript:alert(1)",
+            "java\tscript:x",
+            "data:text/html,x",
+            "vbscript:x",
+            "//evil.com",
+            "/\\evil.com",
+            "https://",
+            "mailto:",
+            "x",
+        ] {
+            assert!(!safe_menu_url(bad), "{bad:?}");
+        }
     }
 }

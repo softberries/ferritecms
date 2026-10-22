@@ -28,7 +28,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 infer = "0.22"
 # No `debug` feature: no debug() global, no source snippets in errors (name + line stay).
 moka = { version = "0.12", features = ["future"] }
-minijinja = { version = "=3.0.2", default-features = false, features = ["builtins", "macros", "multi_template", "adjacent_loop_items", "std_collections", "serde", "json", "fuel"] }
+minijinja = { version = "=3.0.2", default-features = false, features = ["builtins", "macros", "multi_template", "adjacent_loop_items", "std_collections", "serde", "json", "fuel", "urlencode"] }
 percent-encoding = "2"
 quick-xml = "0.38"
 rust-embed = { version = "8.13", features = ["debug-embed"] }

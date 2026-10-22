@@ -4,8 +4,7 @@
 <div class="wrap">
   <header class="page-header">
     {% block archive_header %}
-    {%- set first = (posts.items or []) | first %}
-    <h1 class="page-title">{% if first.kind %}{{ first.kind | capitalize }} archive{% else %}Archive{% endif %}</h1>
+    <h1 class="page-title">{% if archive.content_type %}{{ archive.content_type | capitalize }} archive{% else %}Archive{% endif %}</h1>
     {% endblock %}
   </header>
   {% include "partials/listing.html" %}

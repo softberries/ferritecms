@@ -23,6 +23,6 @@ pub use hierarchy::{TemplateKey, error_template, resolve_template};
 pub use manifest::{ImageSize, SettingKind, SettingSpec, ThemeManifest};
 pub use package::{MAX_FILES, MAX_TOTAL_BYTES, Theme, ThemeSource};
 pub use render::{
-    FUEL, MAX_BRIDGE_CALLS, MAX_OUTPUT, RenderContext, RenderOutput, Renderer, RequestInfo,
-    SiteInfo,
+    ArchiveInfo, FUEL, MAX_BRIDGE_CALLS, MAX_OUTPUT, Pagination, RenderContext, RenderOutput,
+    Renderer, RequestInfo, SiteInfo,
 };

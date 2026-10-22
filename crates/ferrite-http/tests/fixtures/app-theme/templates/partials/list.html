@@ -1,1 +1,3 @@
 <ul class="items">{% for p in posts.items %}<li><a href="{{ p.url }}">{{ p.title }}</a></li>{% endfor %}</ul><p class="pages">page {{ posts.page }} of {{ posts.pages }}</p>
+<p class="archive">{{ archive.kind }}|{{ archive.content_type or '' }}|{{ archive.term.name }}|{{ archive.author.display_name }}|{{ archive.year or '' }}|{{ archive.month or '' }}</p>
+<p class="nav">{{ pagination.page }}/{{ pagination.pages }} prev={{ pagination.prev_url or '' }} next={{ pagination.next_url or '' }}</p>
