@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 ammonia.workspace = true
+chrono.workspace = true
 deunicode.workspace = true
 ferrite-domain = { path = "../ferrite-domain" }
 ferrite-store = { path = "../ferrite-store" }
@@ -20,5 +21,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
+semver.workspace = true
 ferrite-store-tests = { path = "../ferrite-store-tests" }
 tokio.workspace = true

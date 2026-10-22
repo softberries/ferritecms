@@ -1186,12 +1186,15 @@ name = "ferrite-core"
 version = "0.1.0"
 dependencies = [
  "ammonia",
+ "async-trait",
+ "chrono",
  "deunicode",
  "ferrite-domain",
  "ferrite-store",
  "ferrite-store-tests",
  "html-escape",
  "percent-encoding",
+ "semver",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",

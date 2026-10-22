@@ -10,6 +10,7 @@ mod menu;
 mod options;
 pub mod permalink;
 mod redirects;
+pub mod site;
 pub mod slug;
 mod taxonomy;
 mod tx;
@@ -24,4 +25,8 @@ pub use menu::MenuService;
 pub use options::OptionService;
 pub use permalink::{PermalinkInput, PermalinkRules, Permalinks};
 pub use redirects::RedirectService;
+pub use site::{
+    DepKeys, FeedSource, FrontPage, Listing, MediaPublic, MediaVariant, PageItem, SiteRead,
+    SiteReader, SitemapEntry, SitemapPage, TermPublic, UserPublic,
+};
 pub use taxonomy::TaxonomyService;

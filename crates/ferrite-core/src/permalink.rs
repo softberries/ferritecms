@@ -315,6 +315,16 @@ impl Permalinks for PermalinkRules {
     }
 }
 
+/// Public path of a term archive: `/{taxonomy}/{slug}/`, both segments percent-encoded
+/// like item paths (so `category` and `tag` terms live under `/category/` and `/tag/`).
+pub fn term_path(taxonomy: &str, slug: &str) -> String {
+    format!(
+        "/{}/{}/",
+        utf8_percent_encode(taxonomy, SEGMENT),
+        utf8_percent_encode(slug, SEGMENT)
+    )
+}
+
 /// Loads the permalink input of `item` through `repos` (a transaction's repos inside a
 /// write): the parent chain (at most 64 levels, `Invalid` beyond or on a missing
 /// parent) and the item's terms.

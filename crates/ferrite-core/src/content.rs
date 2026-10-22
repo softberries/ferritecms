@@ -29,7 +29,8 @@ mod lifecycle;
 const SLUG_CONSTRAINT: &str = "content_items_slug_uq";
 const SLUG_ATTEMPTS: usize = 5;
 const KEEP_REVISIONS: u32 = 50;
-const EXCERPT_CHARS: usize = 160;
+/// Length of a derived excerpt.
+pub(crate) const EXCERPT_CHARS: usize = 160;
 /// Most descendants walked (any non-trash status) when an item moves.
 const MAX_DESCENDANTS: usize = 1000;
 /// Statuses walked by [`move_descendants`]: everything but trash.
