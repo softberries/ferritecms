@@ -6,6 +6,7 @@ mod menu;
 mod migrate;
 mod paging;
 mod repos;
+mod text;
 
 pub use error::StoreError;
 pub use json::validate_json;
@@ -23,3 +24,4 @@ pub use repos::{
     OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,
     SearchRepo, Store, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
+pub use text::{email_key, validate_text};

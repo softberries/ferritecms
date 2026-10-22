@@ -70,6 +70,7 @@ backend_tests!(
     email_case_insensitive_unique,
     unicode_login_and_slug_exact,
     users_update_and_list,
+    email_folding_is_ascii_only,
 );
 
 backend_tests_spawning!(concurrent_writers);

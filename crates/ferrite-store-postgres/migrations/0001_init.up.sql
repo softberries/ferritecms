@@ -16,6 +16,8 @@ CREATE TABLE users (
     id            uuid PRIMARY KEY,
     login         text NOT NULL,
     email         text NOT NULL,
+    -- ascii_lowercase(email), computed by the store: identical folding on every backend.
+    email_key     text NOT NULL,
     display_name  text NOT NULL,
     password_hash text,
     role          text NOT NULL,
@@ -27,7 +29,7 @@ CREATE TABLE users (
 );
 CREATE UNIQUE INDEX users_login_uq ON users (login);
 -- Case-insensitive e-mail uniqueness.
-CREATE UNIQUE INDEX users_email_uq ON users (lower(email));
+CREATE UNIQUE INDEX users_email_uq ON users (email_key);
 
 CREATE TABLE content_items (
     id           uuid PRIMARY KEY,

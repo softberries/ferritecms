@@ -7,8 +7,9 @@
 
 use async_trait::async_trait;
 use ferrite_domain::{Menu, MenuItem};
-use ferrite_store::{MenuRepo, StoreError, insertion_order, tree_order};
-use sqlx::PgConnection;
+use ferrite_store::{MenuRepo, StoreError, insertion_order, tree_order, validate_text};
+use sqlx::{PgConnection, Row};
+use uuid::Uuid;
 
 use super::PgRepos;
 use crate::{
@@ -58,23 +59,25 @@ async fn replace_menu(
 #[async_trait]
 impl MenuRepo for PgRepos {
     async fn get(&self, name: &str) -> Result<Option<Menu>, StoreError> {
-        let label: Option<String> = run!(&self.exec, |e| sqlx::query_scalar(
-            "SELECT label FROM menus WHERE name = $1"
-        )
-        .bind(name)
-        .fetch_optional(e))?;
-        let Some(label) = label else {
-            return Ok(None);
-        };
+        // One statement, so the label and items come from the same snapshot.
         let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT {MENU_ITEM_COLUMNS} FROM menu_items WHERE menu = $1"
+            "SELECT m.label AS menu_label, {MENU_ITEM_COLUMNS} FROM menus m \
+             LEFT JOIN menu_items i ON i.menu = m.name WHERE m.name = $1"
         )))
         .bind(name)
         .fetch_all(e))?;
-        let items = rows
-            .iter()
-            .map(codec::menu_item)
-            .collect::<Result<Vec<_>, _>>()?;
+        let Some(first) = rows.first() else {
+            return Ok(None);
+        };
+        let label: String = first.try_get("menu_label").map_err(map_db_err)?;
+        let mut items = Vec::with_capacity(rows.len());
+        for row in &rows {
+            // A menu without items yields one row whose item columns are NULL.
+            let id: Option<Uuid> = row.try_get("id").map_err(map_db_err)?;
+            if id.is_some() {
+                items.push(codec::menu_item(row)?);
+            }
+        }
         Ok(Some(Menu {
             name: name.to_owned(),
             label,
@@ -83,6 +86,14 @@ impl MenuRepo for PgRepos {
     }
 
     async fn put(&self, menu: &Menu) -> Result<(), StoreError> {
+        validate_text("menu name", &menu.name)?;
+        validate_text("menu label", &menu.label)?;
+        for item in &menu.items {
+            validate_text("menu item label", &item.label)?;
+            if let Some(url) = &item.url {
+                validate_text("menu item url", url)?;
+            }
+        }
         let items = insertion_order(menu)?;
         atomic!(&self.exec, |conn| replace_menu(conn, menu, &items))
     }

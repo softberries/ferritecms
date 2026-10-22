@@ -375,3 +375,125 @@ pub async fn redirects_list_paginates_in_binary_order(db: &TestDb) {
         Err(StoreError::Invalid(_))
     ));
 }
+
+/// R13: caller text containing NUL is rejected identically on both backends (one
+/// representative write per repo family).
+pub async fn text_writes_reject_nul(db: &TestDb) {
+    use ferrite_domain::{
+        ContentType, Menu, MenuItem, MenuItemId, MenuItemKind, NewUser, Role, Taxonomy, Term,
+        TermId, UserId, UserStatus,
+    };
+    use serde_json::json;
+
+    use crate::fixtures::{fixture_user, new_post};
+
+    fn invalid<T: std::fmt::Debug>(r: Result<T, StoreError>) {
+        assert!(
+            matches!(r, Err(StoreError::Invalid(ref m)) if m.contains("NUL")),
+            "{r:?}"
+        );
+    }
+    let store = db.store();
+    let repos = store.read();
+    let author = fixture_user(store).await;
+
+    invalid(repos.options().set("k\0", &json!(1), false).await);
+    invalid(repos.schema_meta().set("k", "v\0").await);
+    invalid(repos.redirects().upsert(&redirect("/a\0", "/b", 301)).await);
+    invalid(repos.redirects().upsert(&redirect("/a", "/b\0", 301)).await);
+
+    let mut post = new_post(&author, "ok");
+    post.title = "t\0".into();
+    invalid(repos.content().insert(&post).await);
+    let mut post = new_post(&author, "ok");
+    post.body_html = Some("<p>\0</p>".into());
+    invalid(repos.content().insert(&post).await);
+    let mut post = new_post(&author, "sl\0ug");
+    post.title = "ok".into();
+    invalid(repos.content().insert(&post).await);
+    let stored = repos
+        .content()
+        .insert(&new_post(&author, "fine"))
+        .await
+        .unwrap();
+    invalid(repos.meta().set(stored.id, "k\0", &json!(1)).await);
+    let mut changed = stored.clone();
+    changed.excerpt = "e\0".into();
+    invalid(repos.content().update(&changed).await);
+
+    let ty = ContentType {
+        name: "n\0".into(),
+        label: "L".into(),
+        hierarchical: false,
+        has_archive: false,
+        fields: json!([]),
+        built_in: false,
+        created_at: Timestamp::now(),
+    };
+    invalid(repos.types().upsert(&ty).await);
+
+    invalid(
+        repos
+            .taxonomies()
+            .upsert(&Taxonomy {
+                name: "x".into(),
+                label: "L\0".into(),
+                hierarchical: false,
+                content_types: vec![],
+                built_in: false,
+            })
+            .await,
+    );
+    invalid(
+        repos
+            .terms()
+            .insert(&Term {
+                id: TermId::new(),
+                taxonomy: "tag".into(),
+                slug: "s\0".into(),
+                name: "n".into(),
+                description: String::new(),
+                parent_id: None,
+            })
+            .await,
+    );
+
+    invalid(
+        repos
+            .menus()
+            .put(&Menu {
+                name: "m".into(),
+                label: "L".into(),
+                items: vec![MenuItem {
+                    id: MenuItemId::new(),
+                    parent_id: None,
+                    position: 0,
+                    kind: MenuItemKind::Url,
+                    target_id: None,
+                    url: Some("/u\0".into()),
+                    label: "l".into(),
+                }],
+            })
+            .await,
+    );
+
+    invalid(
+        repos
+            .users()
+            .insert(&NewUser {
+                id: UserId::new(),
+                login: "lo\0gin".into(),
+                email: "nul@example.com".into(),
+                display_name: "D".into(),
+                password_hash: None,
+                role: Role::Editor,
+                status: UserStatus::Active,
+                must_reset: false,
+            })
+            .await,
+    );
+    let mut renamed = author.clone();
+    renamed.display_name = "d\0".into();
+    invalid(repos.users().update(&renamed).await);
+    assert!(repos.menus().get("m").await.unwrap().is_none());
+}

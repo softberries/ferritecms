@@ -8,7 +8,7 @@ use ferrite_domain::{
 };
 use ferrite_store::{
     ContentRepo, ContentTypeRepo, MetaRepo, RevisionRepo, SortKey, StoreError, check_limit,
-    content_cursor, encode_content_cursor, validate_json,
+    content_cursor, encode_content_cursor, validate_json, validate_text,
 };
 use serde_json::Value;
 use sqlx::{Postgres, QueryBuilder, types::Json};
@@ -30,6 +30,8 @@ fn micros_dt(micros: i64) -> Result<DateTime<Utc>, StoreError> {
 #[async_trait]
 impl ContentTypeRepo for PgRepos {
     async fn upsert(&self, ty: &ContentType) -> Result<(), StoreError> {
+        validate_text("content type name", &ty.name)?;
+        validate_text("content type label", &ty.label)?;
         validate_json(&ty.fields)?;
         // `built_in` and `created_at` are fixed when the type is first inserted.
         run!(&self.exec, |e| sqlx::query(
@@ -91,6 +93,13 @@ impl ContentTypeRepo for PgRepos {
 #[async_trait]
 impl ContentRepo for PgRepos {
     async fn insert(&self, item: &NewContent) -> Result<ContentItem, StoreError> {
+        validate_text("content kind", &item.kind)?;
+        validate_text("content slug", &item.slug)?;
+        validate_text("content title", &item.title)?;
+        validate_text("content excerpt", &item.excerpt)?;
+        if let Some(html) = &item.body_html {
+            validate_text("content body_html", html)?;
+        }
         validate_json(&item.body)?;
         validate_json(&item.fields)?;
         let now = dt(Timestamp::now());
@@ -147,6 +156,13 @@ impl ContentRepo for PgRepos {
     }
 
     async fn update(&self, item: &ContentItem) -> Result<ContentItem, StoreError> {
+        validate_text("content kind", &item.kind)?;
+        validate_text("content slug", &item.slug)?;
+        validate_text("content title", &item.title)?;
+        validate_text("content excerpt", &item.excerpt)?;
+        if let Some(html) = &item.body_html {
+            validate_text("content body_html", html)?;
+        }
         validate_json(&item.body)?;
         validate_json(&item.fields)?;
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -348,6 +364,7 @@ impl MetaRepo for PgRepos {
     }
 
     async fn set(&self, id: ContentId, key: &str, value: &Value) -> Result<(), StoreError> {
+        validate_text("meta key", key)?;
         validate_json(value)?;
         run!(&self.exec, |e| sqlx::query(
             "INSERT INTO content_meta (item_id, key, value) VALUES ($1, $2, $3) \
@@ -383,6 +400,11 @@ impl MetaRepo for PgRepos {
 #[async_trait]
 impl RevisionRepo for PgRepos {
     async fn insert(&self, revision: &Revision) -> Result<(), StoreError> {
+        validate_text("revision title", &revision.title)?;
+        validate_text("revision excerpt", &revision.excerpt)?;
+        if let Some(note) = &revision.note {
+            validate_text("revision note", note)?;
+        }
         validate_json(&revision.body)?;
         validate_json(&revision.fields)?;
         validate_json(&revision.meta)?;

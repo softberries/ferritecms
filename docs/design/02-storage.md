@@ -169,7 +169,7 @@ deterministic fixtures, not exact order beyond "title match ranks first".
 | json | `TEXT` (validated JSON; `json_*` functions available) | `jsonb` | `serde_json::Value` or typed via `sqlx::types::Json<T>` |
 | bool | `INTEGER` 0/1 | `boolean` | `bool` |
 | bytes | `BLOB` | `bytea` | `Vec<u8>` |
-| text, case-insensitive unique | `TEXT COLLATE NOCASE` | `text` + unique index on `lower(col)` | `String` |
+| text, case-insensitive unique | `TEXT` + `<col>_key` column (ASCII-lowercased in Rust) with a plain unique index | same | `String` |
 | autoincrement | `INTEGER PRIMARY KEY AUTOINCREMENT` | `bigint GENERATED ALWAYS AS IDENTITY` | `i64` |
 
 UUIDv7 keeps index locality on both backends and lets ids be created in Rust before

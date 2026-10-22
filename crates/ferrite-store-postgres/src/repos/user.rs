@@ -1,9 +1,13 @@
-//! Users. Logins are exact (case-sensitive); e-mails compare case-insensitively.
+//! Users. Logins are exact (case-sensitive); e-mails are unique and looked up by `email_key`
+//! (ASCII-lowercased in Rust, identically on every backend).
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use ferrite_domain::{NewUser, Page, Timestamp, User, UserId};
-use ferrite_store::{StoreError, UserRepo, check_limit, encode_text_cursor, text_cursor};
+use ferrite_domain::Timestamp;
+use ferrite_domain::{NewUser, Page, Secret, User, UserId};
+use ferrite_store::{
+    StoreError, UserRepo, check_limit, email_key, encode_text_cursor, text_cursor, validate_text,
+};
 
 use super::PgRepos;
 use crate::{
@@ -11,19 +15,29 @@ use crate::{
     exec::run,
 };
 
+/// NUL checks shared by insert and update (R13).
+fn validate_user_text(login: &str, email: &str, display_name: &str) -> Result<(), StoreError> {
+    validate_text("user login", login)?;
+    validate_text("user email", email)?;
+    validate_text("user display_name", display_name)
+}
+
 #[async_trait]
 impl UserRepo for PgRepos {
     async fn insert(&self, user: &NewUser) -> Result<User, StoreError> {
+        validate_user_text(&user.login, &user.email, &user.display_name)?;
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
-            "INSERT INTO users (id, login, email, display_name, password_hash, role, status, \
-             must_reset, totp_secret, created_at, last_login_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, NULL) RETURNING {USER_COLUMNS}"
+            "INSERT INTO users (id, login, email, email_key, display_name, password_hash, \
+             role, status, must_reset, totp_secret, created_at, last_login_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, NULL) \
+             RETURNING {USER_COLUMNS}"
         )))
         .bind(user.id.as_uuid())
         .bind(&user.login)
         .bind(&user.email)
+        .bind(email_key(&user.email))
         .bind(&user.display_name)
-        .bind(user.password_hash.as_ref().map(|s| s.expose().to_owned()))
+        .bind(user.password_hash.as_ref().map(Secret::expose))
         .bind(user.role.as_str())
         .bind(user.status.as_str())
         .bind(user.must_reset)
@@ -52,30 +66,32 @@ impl UserRepo for PgRepos {
     }
 
     async fn get_by_email(&self, email: &str) -> Result<Option<User>, StoreError> {
-        // Matches the unique index on `lower(email)`.
+        // Looked up by the Rust-folded key, never by a database collation.
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT {USER_COLUMNS} FROM users WHERE lower(email) = lower($1)"
+            "SELECT {USER_COLUMNS} FROM users WHERE email_key = $1"
         )))
-        .bind(email)
+        .bind(email_key(email))
         .fetch_optional(e))?;
         row.as_ref().map(codec::user).transpose()
     }
 
     // `id` and `created_at` are immutable; everything else is replaced.
     async fn update(&self, user: &User) -> Result<(), StoreError> {
+        validate_user_text(&user.login, &user.email, &user.display_name)?;
         let done = run!(&self.exec, |e| sqlx::query(
-            "UPDATE users SET login = $1, email = $2, display_name = $3, password_hash = $4, \
-             role = $5, status = $6, must_reset = $7, totp_secret = $8, \
-             last_login_at = $9 WHERE id = $10"
+            "UPDATE users SET login = $1, email = $2, email_key = $3, display_name = $4, \
+             password_hash = $5, role = $6, status = $7, must_reset = $8, \
+             totp_secret = $9, last_login_at = $10 WHERE id = $11"
         )
         .bind(&user.login)
         .bind(&user.email)
+        .bind(email_key(&user.email))
         .bind(&user.display_name)
-        .bind(user.password_hash.as_ref().map(|s| s.expose().to_owned()))
+        .bind(user.password_hash.as_ref().map(Secret::expose))
         .bind(user.role.as_str())
         .bind(user.status.as_str())
         .bind(user.must_reset)
-        .bind(user.totp_secret.as_ref().map(|s| s.expose().to_owned()))
+        .bind(user.totp_secret.as_ref().map(Secret::expose))
         .bind(user.last_login_at.map(DateTime::<Utc>::from))
         .bind(user.id.as_uuid())
         .execute(e))?;

@@ -15,7 +15,9 @@ CREATE TABLE content_types (
 CREATE TABLE users (
     id            BLOB PRIMARY KEY NOT NULL,
     login         TEXT NOT NULL,
-    email         TEXT NOT NULL COLLATE NOCASE,
+    email         TEXT NOT NULL,
+    -- ascii_lowercase(email), computed by the store: identical folding on every backend.
+    email_key     TEXT NOT NULL,
     display_name  TEXT NOT NULL,
     password_hash TEXT,
     role          TEXT NOT NULL,
@@ -26,8 +28,7 @@ CREATE TABLE users (
     last_login_at INTEGER
 );
 CREATE UNIQUE INDEX users_login_uq ON users (login);
--- Uses the column's NOCASE collation: e-mail uniqueness is case-insensitive.
-CREATE UNIQUE INDEX users_email_uq ON users (email);
+CREATE UNIQUE INDEX users_email_uq ON users (email_key);
 
 CREATE TABLE content_items (
     id           BLOB PRIMARY KEY NOT NULL,

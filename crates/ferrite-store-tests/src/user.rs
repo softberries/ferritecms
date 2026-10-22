@@ -248,3 +248,44 @@ pub async fn users_update_and_list(db: &TestDb) {
         Err(StoreError::NotFound)
     ));
 }
+
+/// R12: e-mail folding is ASCII-only and done in Rust, so it is identical on both backends.
+pub async fn email_folding_is_ascii_only(db: &TestDb) {
+    let store = db.store();
+    let upper = insert(store, &new_user("upper", "É@x.com")).await.unwrap();
+    let lower = insert(store, &new_user("lower", "é@x.com")).await.unwrap();
+    assert_ne!(upper.id, lower.id);
+    let users = store.read().users();
+    assert_eq!(
+        users.get_by_email("É@x.com").await.unwrap().unwrap().id,
+        upper.id
+    );
+    assert_eq!(
+        users.get_by_email("é@x.com").await.unwrap().unwrap().id,
+        lower.id
+    );
+    // Only the ASCII part folds.
+    assert_eq!(
+        users.get_by_email("É@X.COM").await.unwrap().unwrap().id,
+        upper.id
+    );
+    assert_eq!(
+        users.get_by_email("é@X.com").await.unwrap().unwrap().id,
+        lower.id
+    );
+
+    insert(store, &new_user("a", "USER@x.com")).await.unwrap();
+    assert!(matches!(
+        insert(store, &new_user("b", "user@x.com")).await,
+        Err(StoreError::UniqueViolation { .. })
+    ));
+    assert_eq!(
+        users
+            .get_by_email("User@X.com")
+            .await
+            .unwrap()
+            .unwrap()
+            .email,
+        "USER@x.com"
+    );
+}

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use ferrite_domain::{OptionEntry, Page, Redirect, RedirectId, Timestamp};
 use ferrite_store::{
     OptionRepo, RedirectRepo, SchemaMetaRepo, StoreError, check_limit, check_redirect_code,
-    encode_text_cursor, text_cursor, validate_json,
+    encode_text_cursor, text_cursor, validate_json, validate_text,
 };
 
 use super::SqliteRepos;
@@ -24,6 +24,8 @@ impl SchemaMetaRepo for SqliteRepos {
     }
 
     async fn set(&self, key: &str, value: &str) -> Result<(), StoreError> {
+        validate_text("schema_meta key", key)?;
+        validate_text("schema_meta value", value)?;
         run!(&self.writer, |e| sqlx::query(
             "INSERT INTO schema_meta (key, value) VALUES (?, ?) \
              ON CONFLICT (key) DO UPDATE SET value = excluded.value"
@@ -52,6 +54,7 @@ impl OptionRepo for SqliteRepos {
         value: &serde_json::Value,
         autoload: bool,
     ) -> Result<(), StoreError> {
+        validate_text("option key", name)?;
         validate_json(value)?;
         run!(&self.writer, |e| sqlx::query(
             "INSERT INTO options (key, value, autoload, updated_at) VALUES (?, ?, ?, ?) \
@@ -100,6 +103,8 @@ impl RedirectRepo for SqliteRepos {
 
     async fn upsert(&self, redirect: &Redirect) -> Result<(), StoreError> {
         check_redirect_code(redirect.code)?;
+        validate_text("redirect source_path", &redirect.source_path)?;
+        validate_text("redirect target", &redirect.target)?;
         // An existing row keeps its id, hits and creation time.
         run!(&self.writer, |e| sqlx::query(
             "INSERT INTO redirects (id, source_path, target, code, hits, origin, created_at) \

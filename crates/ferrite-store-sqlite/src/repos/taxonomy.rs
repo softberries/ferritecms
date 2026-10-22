@@ -8,7 +8,7 @@
 
 use async_trait::async_trait;
 use ferrite_domain::{ContentId, Taxonomy, Term, TermId};
-use ferrite_store::{StoreError, TaxonomyRepo, TermRepo, validate_json};
+use ferrite_store::{StoreError, TaxonomyRepo, TermRepo, validate_json, validate_text};
 use sqlx::SqliteConnection;
 
 use super::SqliteRepos;
@@ -20,6 +20,8 @@ use crate::{
 #[async_trait]
 impl TaxonomyRepo for SqliteRepos {
     async fn upsert(&self, taxonomy: &Taxonomy) -> Result<(), StoreError> {
+        validate_text("taxonomy name", &taxonomy.name)?;
+        validate_text("taxonomy label", &taxonomy.label)?;
         let types = serde_json::to_value(&taxonomy.content_types)
             .map_err(|e| StoreError::Invalid(e.to_string()))?;
         validate_json(&types)?;
@@ -83,6 +85,10 @@ async fn replace_links(
 #[async_trait]
 impl TermRepo for SqliteRepos {
     async fn insert(&self, term: &Term) -> Result<(), StoreError> {
+        validate_text("term taxonomy", &term.taxonomy)?;
+        validate_text("term slug", &term.slug)?;
+        validate_text("term name", &term.name)?;
+        validate_text("term description", &term.description)?;
         run!(&self.writer, |e| sqlx::query(
             "INSERT INTO terms (id, taxonomy, slug, name, description, parent_id) \
              VALUES (?, ?, ?, ?, ?, ?)"
@@ -98,6 +104,10 @@ impl TermRepo for SqliteRepos {
     }
 
     async fn update(&self, term: &Term) -> Result<(), StoreError> {
+        validate_text("term taxonomy", &term.taxonomy)?;
+        validate_text("term slug", &term.slug)?;
+        validate_text("term name", &term.name)?;
+        validate_text("term description", &term.description)?;
         let done = run!(&self.writer, |e| sqlx::query(
             "UPDATE terms SET taxonomy = ?, slug = ?, name = ?, description = ?, \
              parent_id = ? WHERE id = ?"

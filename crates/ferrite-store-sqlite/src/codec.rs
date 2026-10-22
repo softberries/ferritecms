@@ -172,7 +172,9 @@ pub(crate) fn term(row: &SqliteRow) -> Result<Term, StoreError> {
     })
 }
 
-pub(crate) const MENU_ITEM_COLUMNS: &str = "id, parent_id, position, kind, target_id, url, label";
+/// Qualified with the `i` alias so it can be joined against `menus`.
+pub(crate) const MENU_ITEM_COLUMNS: &str =
+    "i.id, i.parent_id, i.position, i.kind, i.target_id, i.url, i.label";
 
 /// Maps a row selected with [`MENU_ITEM_COLUMNS`].
 pub(crate) fn menu_item(row: &SqliteRow) -> Result<MenuItem, StoreError> {
