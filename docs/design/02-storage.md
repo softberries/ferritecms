@@ -45,15 +45,16 @@ against both backends in CI. Revisit if the duplication or bug rate hurts.
 `ferrite-store` defines backend-neutral traits. Core services depend only on these.
 
 ```rust
-// ferrite-store/src/lib.rs (shape, not final code)
+// ferrite-store/src/repos.rs (as implemented in M1a)
 #[async_trait]
 pub trait Store: Send + Sync + 'static {
     fn backend(&self) -> Backend;                       // Sqlite | Postgres
-    async fn begin(&self) -> Result<Box<dyn Tx>, StoreError>;
     fn read(&self) -> &dyn Repos;                       // autocommit, read pool
-    async fn migrations(&self) -> Result<MigrationStatus, StoreError>;
-    async fn migrate_up(&self, to: Option<i64>) -> Result<(), StoreError>;
-    async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<(), StoreError>;
+    async fn begin(&self) -> Result<Box<dyn Tx>, StoreError>;
+    async fn migration_status(&self, binary: &semver::Version) -> Result<MigrationStatus, StoreError>;
+    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError>;
+    async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError>;
+    async fn verify_migrations(&self) -> Result<(), StoreError>;
     async fn snapshot(&self, dest: &Path) -> Result<(), StoreError>; // SQLite only; Postgres => Unsupported
 }
 
@@ -61,33 +62,57 @@ pub trait Store: Send + Sync + 'static {
 pub trait Tx: Repos + Send {
     async fn commit(self: Box<Self>) -> Result<(), StoreError>;
     async fn rollback(self: Box<Self>) -> Result<(), StoreError>;
+    async fn begin_nested(&self) -> Result<Box<dyn Tx>, StoreError>; // savepoint
 }
 
 pub trait Repos: Send + Sync {
     fn content(&self) -> &dyn ContentRepo;
+    fn meta(&self) -> &dyn MetaRepo;
     fn revisions(&self) -> &dyn RevisionRepo;
     fn types(&self) -> &dyn ContentTypeRepo;
+    fn taxonomies(&self) -> &dyn TaxonomyRepo;
     fn terms(&self) -> &dyn TermRepo;
-    fn users(&self) -> &dyn UserRepo;
-    fn sessions(&self) -> &dyn SessionRepo;
-    fn tokens(&self) -> &dyn ApiTokenRepo;
+    fn menus(&self) -> &dyn MenuRepo;
     fn options(&self) -> &dyn OptionRepo;
     fn redirects(&self) -> &dyn RedirectRepo;
-    fn menus(&self) -> &dyn MenuRepo;
-    fn media(&self) -> &dyn MediaRepo;
-    fn comments(&self) -> &dyn CommentRepo;
+    fn users(&self) -> &dyn UserRepo;
     fn artifacts(&self) -> &dyn ArtifactRepo;
+    fn media(&self) -> &dyn MediaRepo;
     fn plugins(&self) -> &dyn PluginRepo;
     fn plugin_kv(&self) -> &dyn PluginKvRepo;
     fn themes(&self) -> &dyn ThemeRepo;
-    fn jobs(&self) -> &dyn JobRepo;
     fn events(&self) -> &dyn EventRepo;
-    fn nodes(&self) -> &dyn NodeRepo;
     fn search(&self) -> &dyn SearchRepo;
-    fn audit(&self) -> &dyn AuditRepo;
-    fn rate_limits(&self) -> &dyn RateLimitRepo;
+    fn schema_meta(&self) -> &dyn SchemaMetaRepo;
 }
 ```
+
+Repositories still to come, with the milestone that adds them: `sessions`, `tokens`
+(API tokens), `rate_limits`, `audit` and `comments` (M2); `jobs` and `nodes` (M1.5).
+The `comments`, `user_meta` and `plugin_failures` tables already exist in `0001_init`
+but have no repository yet.
+
+**Transaction rules** (both backends, contract-tested):
+
+- **Poisoning (R18).** Any database error inside a `Tx`, including `UniqueViolation`
+  and `ForeignKey`, poisons it: every later call returns `StoreError::Aborted` and
+  `commit` rolls back and returns `Err(Aborted)`. Postgres aborts the transaction on any
+  statement error and SQLite can roll one back on its own (`SQLITE_FULL`, I/O errors),
+  so this is the rule both engines can keep. Validation errors (`Invalid`, raised before
+  any SQL is sent) do not poison. To try something and fall back, run it in
+  `tx.begin_nested()`: a nested transaction is a savepoint, and its failure poisons only
+  the nested level. While a nested transaction is open the outer `Tx` refuses calls
+  (`Invalid`); a dropped nested transaction is rolled back before the next statement.
+- **No self-deadlock (I2).** Never write through `Store::read()` or call
+  `Store::begin()` while the same task holds a `Tx`; pass the `Tx` on as `&dyn Repos`.
+  On SQLite both wait for the single writer connection the `Tx` holds; the writer pool
+  gives up after 5 s with `StoreError::Busy` (any pool acquire timeout is `Busy` on both
+  backends). Fail-fast detection is deferred to M1c.
+- **Isolation differs (known, ruling pending, M1c).** SQLite serializes all writers
+  (one writer connection), so a `Tx` never sees another writer's concurrent changes.
+  Postgres runs `READ COMMITTED`: two concurrent `Tx` can interleave, and read-then-write
+  logic must rely on constraints, optimistic `version` checks or row locks. Core
+  services must not depend on SQLite's stronger behaviour until M1c settles the policy.
 
 Implementation notes (M1a, `ferrite-store-sqlite` and `ferrite-store-postgres`):
 
@@ -119,9 +144,26 @@ Notes:
     `StoreError::Invalid` on both backends (Postgres `jsonb`/`text` cannot store NUL).
     The check runs on every caller-supplied text bind: writes, lookups, deletes and
     decoded cursors (R7, R13, R15).
-  - Text key and slug orderings are byte-wise: Postgres queries use `ORDER BY ...
-    COLLATE "C"` to match SQLite's `BINARY` collation (R8). Admin lists are therefore not
-    locale-aware.
+  - Text key and slug orderings are byte-wise: Postgres declares key, slug, name, login
+    and title columns `COLLATE "C"` (M3) to match SQLite's `BINARY` collation, so their
+    indexes serve the ORDER BY (some queries also keep an explicit `COLLATE "C"`, R8).
+    Admin lists are therefore not locale-aware.
+  - Constraint errors are backend-neutral (I1): `UniqueViolation { constraint }` carries
+    the same name everywhere. Both `0001_init` files name every primary key
+    `<table>_pkey`, every unique index `<table>_<what>_uq` and every foreign key
+    `<table>_<col>_fk`; the SQLite backend maps its `UNIQUE constraint failed: t.a, t.b`
+    message to that name with a static table (`ferrite-store-sqlite/src/constraint.rs`,
+    unit-tested for completeness). `ForeignKey { constraint }` is always `""`, because
+    SQLite does not report which foreign key failed.
+  - Missing rows: lookups return `None`; `update`, `hit`, `set_enabled` and `activate`
+    return `NotFound`; deletes are idempotent (`Ok`).
+  - Content listings (I3) use one index per `ContentOrder`, with columns and directions
+    exactly as its ORDER BY: `(type, status, published_at DESC [NULLS LAST], id DESC)`,
+    `(type, updated_at DESC, id DESC)`, `(type, menu_order, id)`, `(type, title, id)`.
+    Keyset predicates are row comparisons (`(published_at, id) < ($k, $id)`), and the
+    `published_at IS NULL` group of `PublishedDesc` is a separate query that runs only
+    when the non-NULL part does not fill the page (`ferrite_store::content_list_plan`),
+    so every page is an index range scan on both engines.
   - E-mail uniqueness uses `users.email_key`, the address ASCII-lowercased in Rust
     (`email_key`) under a plain unique index on both backends (R12). Non-ASCII case
     variants (`É` vs `é`) are distinct accounts.
@@ -137,6 +179,8 @@ Notes:
 ## 4. Logical schema
 
 Same logical schema on both backends. Physical type mapping is in §5.
+Tables marked *not yet created* are planned; the milestone in the mark adds them in a
+new migration. Everything else exists in `0001_init` / `0002_search` on both backends.
 
 ### Content
 
@@ -152,7 +196,7 @@ Same logical schema on both backends. Physical type mapping is in §5.
 | `menus` / `menu_items` | menu: `name` PK, `label`; item: `id`, `menu`, `parent_id`, `position`, `kind` (`item`/`term`/`url`), `target_id`, `url`, `label` | |
 | `media` | `item_id` PK/FK → `content_items` (type `media`), `artifact_hash` FK, `mime`, `bytes`, `width`, `height`, `alt`, `original_name`, `variants` (json: name → hash, w, h) | |
 | `comments` | `id`, `item_id`, `parent_id`, `user_id` null, `author_name`, `author_email`, `author_url`, `body`, `status`, `ip_hash`, `created_at` | |
-| `redirects` | `id`, `source_path` UNIQUE, `target`, `code` (301/302/307/308/410), `hits`, `origin` (`manual`/`import`/`slug-change`), `created_at` | Auto-created on slug change of a published item |
+| `redirects` | `id`, `source_path` UNIQUE, `target`, `code` (301/302/307/308/410), `hits`, `origin` (`manual`/`import`/`slug-change`), `created_at`, `last_hit_at` | Auto-created on slug change of a published item |
 
 ### Users & auth
 
@@ -160,11 +204,11 @@ Same logical schema on both backends. Physical type mapping is in §5.
 |---|---|---|
 | `users` | `id`, `login` UNIQUE, `email` UNIQUE (case-insensitive), `display_name`, `password_hash` (argon2id, nullable), `role`, `status`, `must_reset`, `totp_secret` (encrypted, nullable), `created_at`, `last_login_at` | |
 | `user_meta` | `user_id`, `key`, `value` json | |
-| `sessions` | `id_hash` PK (SHA-256 of token), `user_id`, `csrf_secret`, `created_at`, `last_seen_at`, `expires_at`, `ip_hash`, `user_agent` | DB-backed so any node can serve any request |
-| `api_tokens` | `id`, `user_id`, `name`, `token_hash`, `scopes` json, `created_at`, `last_used_at`, `expires_at` | |
-| `passkeys` | `id`, `user_id`, `credential` json, `created_at`, `last_used_at` | M2 stretch |
-| `rate_limits` | `bucket` PK, `window_start`, `count` | Fixed-window counters; works across nodes |
-| `audit_log` | `id`, `at`, `actor_id`, `action`, `target_kind`, `target_id`, `details` json, `node` | Admin actions, plugin installs, capability grants |
+| `sessions` *(not yet created: M2)* | `id_hash` PK (SHA-256 of token), `user_id`, `csrf_secret`, `created_at`, `last_seen_at`, `expires_at`, `ip_hash`, `user_agent` | DB-backed so any node can serve any request |
+| `api_tokens` *(not yet created: M2)* | `id`, `user_id`, `name`, `token_hash`, `scopes` json, `created_at`, `last_used_at`, `expires_at` | |
+| `passkeys` *(not yet created: M2 stretch)* | `id`, `user_id`, `credential` json, `created_at`, `last_used_at` | M2 stretch |
+| `rate_limits` *(not yet created: M2)* | `bucket` PK, `window_start`, `count` | Fixed-window counters; works across nodes |
+| `audit_log` *(not yet created: M2)* | `id`, `at`, `actor_id`, `action`, `target_kind`, `target_id`, `details` json, `node` | Admin actions, plugin installs, capability grants |
 
 ### Site, plugins, themes, artifacts
 
@@ -181,9 +225,9 @@ Same logical schema on both backends. Physical type mapping is in §5.
 
 | Table | Columns | Notes |
 |---|---|---|
-| `nodes` | `id` PK, `name`, `version`, `schema_version`, `started_at`, `heartbeat_at`, `meta` json | Stale after 3× heartbeat interval |
+| `nodes` *(not yet created: M1.5)* | `id` PK, `name`, `version`, `schema_version`, `started_at`, `heartbeat_at`, `meta` json | Stale after 3× heartbeat interval |
 | `events` | `seq` PK (autoincrement / bigserial), `kind`, `keys` json, `origin_node`, `created_at` | Transactional outbox for invalidation; pruned after 24h |
-| `jobs` | `id`, `kind`, `payload` json, `unique_key` UNIQUE null, `run_at`, `priority`, `status` (`queued`/`running`/`done`/`failed`/`dead`), `attempts`, `max_attempts`, `locked_by`, `locked_until`, `last_error`, `created_at`, `finished_at` | See [04](04-cluster.md#job-queue) |
+| `jobs` *(not yet created: M1.5)* | `id`, `kind`, `payload` json, `unique_key` UNIQUE null, `run_at`, `priority`, `status` (`queued`/`running`/`done`/`failed`/`dead`), `attempts`, `max_attempts`, `locked_by`, `locked_until`, `last_error`, `created_at`, `finished_at` | See [04](04-cluster.md#job-queue) |
 | `schema_meta` | `key` PK, `value` | `min_binary_version`, `created_by_version`, `site_id` |
 
 ### Search
@@ -254,10 +298,16 @@ insert (useful for imports and the outbox).
   connections (migrations use their own connection without it).
 - Optional `schema` setting (`search_path`) so several sites can share one server.
 - TLS via rustls; `sslmode` honoured from the URL.
-- PgBouncer in transaction mode: supported for app traffic **only if** the event
-  listener ([04](04-cluster.md)) uses a direct (non-pooled) connection — config key
-  `database.listen_url` (defaults to `database.url`). Prepared-statement caching is
-  disabled when `database.pgbouncer = true`.
+- Requires PostgreSQL 15 or newer (`UNIQUE NULLS NOT DISTINCT`); `PgStore::open`
+  checks `server_version_num` and returns `Unsupported("postgres >= 15 required")`.
+- **PgBouncer in transaction mode: not supported yet.** Each pooled connection runs
+  session-level `SET search_path` and `SET statement_timeout` once, when it connects.
+  With transaction pooling, consecutive transactions run on whichever server connection
+  is free, so those settings leak to other clients and are missing on ours. Supporting it
+  needs per-transaction `SET LOCAL` (or settings in the connection string / role), a
+  direct connection for the event listener ([04](04-cluster.md), e.g. a
+  `database.listen_url`) and prepared-statement caching turned off. Session pooling
+  works.
 
 ## 7. Migrations
 
