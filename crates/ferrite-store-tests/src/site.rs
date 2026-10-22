@@ -33,6 +33,7 @@ pub async fn options_crud(db: &TestDb) {
     assert_eq!(auto.len(), 1);
     assert_eq!(auto[0].key, "blogname");
 
+    tokio::time::sleep(Duration::from_millis(5)).await;
     let tx = store.begin().await.unwrap();
     tx.options()
         .set("blogname", &json!(42), false)
