@@ -203,7 +203,8 @@ fn gif_bomb_rejected() {
 fn icc_profile_kept() {
     use image::codecs::png::PngEncoder;
     use image::{ExtendedColorType, ImageDecoder, ImageEncoder};
-    let profile = b"fake-icc-profile-bytes".to_vec();
+    let mut profile = vec![0u8; 128];
+    profile[16..20].copy_from_slice(b"RGB ");
     let img = gradient(300, 300);
     let mut data = Vec::new();
     let mut enc = PngEncoder::new(&mut data);

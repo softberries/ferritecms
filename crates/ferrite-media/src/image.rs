@@ -210,10 +210,20 @@ fn center_crop(img: &DynamicImage, cw: u32, ch: u32) -> DynamicImage {
     img.crop_imm(x, y, cw, ch)
 }
 
-fn attach_icc(encoder: &mut impl ImageEncoder, icc: Option<&[u8]>) {
-    if let Some(profile) = icc
-        && let Err(e) = encoder.set_icc_profile(profile.to_vec())
-    {
+/// True when the ICC header colour-space signature (bytes 16..20) matches the
+/// output pixels: `GRAY` for luma outputs, `RGB ` otherwise.
+fn icc_matches(profile: &[u8], gray: bool) -> bool {
+    let want: &[u8; 4] = if gray { b"GRAY" } else { b"RGB " };
+    profile.get(16..20) == Some(want.as_slice())
+}
+
+fn attach_icc(encoder: &mut impl ImageEncoder, icc: Option<&[u8]>, gray: bool) {
+    let Some(profile) = icc else { return };
+    if !icc_matches(profile, gray) {
+        tracing::debug!("dropping ICC profile whose colour space does not match the output");
+        return;
+    }
+    if let Err(e) = encoder.set_icc_profile(profile.to_vec()) {
         tracing::debug!(error = %e, "encoder rejected ICC profile; continuing without it");
     }
 }
@@ -228,7 +238,7 @@ fn encode(
     match format {
         ImageFormat::Jpeg => {
             let mut enc = JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY);
-            attach_icc(&mut enc, icc);
+            attach_icc(&mut enc, icc, false);
             match img.as_rgb8() {
                 Some(rgb) => enc.write_image(rgb, w, h, ExtendedColorType::Rgb8),
                 None => enc.write_image(&img.to_rgb8(), w, h, ExtendedColorType::Rgb8),
@@ -237,7 +247,14 @@ fn encode(
         }
         _ => {
             let mut enc = PngEncoder::new(&mut out);
-            attach_icc(&mut enc, icc);
+            let gray = matches!(
+                img.color(),
+                image::ColorType::L8
+                    | image::ColorType::La8
+                    | image::ColorType::L16
+                    | image::ColorType::La16
+            );
+            attach_icc(&mut enc, icc, gray);
             enc.write_image(img.as_bytes(), w, h, img.color().into())
                 .map_err(unsupported)?;
         }
@@ -256,6 +273,22 @@ mod tests {
             height,
             crop: false,
         }
+    }
+
+    #[test]
+    fn icc_guard_matches_colour_space() {
+        let header = |sig: &[u8; 4]| {
+            let mut h = vec![0u8; 128];
+            h[16..20].copy_from_slice(sig);
+            h
+        };
+        assert!(icc_matches(&header(b"RGB "), false));
+        assert!(!icc_matches(&header(b"RGB "), true));
+        assert!(icc_matches(&header(b"GRAY"), true));
+        assert!(!icc_matches(&header(b"GRAY"), false));
+        assert!(!icc_matches(&header(b"CMYK"), false));
+        assert!(!icc_matches(&header(b"CMYK"), true));
+        assert!(!icc_matches(b"short", false));
     }
 
     #[test]
