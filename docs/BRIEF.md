@@ -38,7 +38,7 @@ Cloudflare Workers, sandboxed plugins via Dynamic Workers, MIT). Differentiation
 | Runtime | Cloudflare Workers (serverless) | Self-hosted single binary, any VPS / bare metal |
 | Lock-in | Tied to CF platform primitives | Copy one folder, run anywhere |
 | Plugin sandbox | V8 isolates | WASM components (wasmtime), any source language |
-| Data | CF D1/R2 | Local SQLite (Postgres later) |
+| Data | CF D1/R2 | Local SQLite, or Postgres + S3-compatible storage for multi-node setups |
 
 Similar spirit: Ghost (single-purpose, opinionated), PocketBase (single binary).
 
@@ -66,10 +66,13 @@ Everything a site owns lives in the data folder:
 site/
 ├── ferrite.db          # SQLite: content, users, settings, plugin KV
 ├── ferrite.toml        # site config
-├── media/              # uploads (content-addressed or dated paths)
-├── themes/<name>/      # active + installed themes
-└── plugins/<name>/     # plugin.wasm + ferrite-plugin.toml
+├── media/artifacts/    # content-addressed blobs: uploads, image variants, plugin .wasm, theme bundles
+├── backups/            # pre-migration snapshots, scheduled backups
+└── cache/              # compiled plugins etc. (safe to delete)
 ```
+
+Bigger setups can instead use **PostgreSQL + S3-compatible storage** and run several
+nodes behind a load balancer (see `docs/design/04-cluster.md`).
 
 Backup = copy this folder (or `ferrite backup`). Move hosts = copy folder, run binary.
 
@@ -211,7 +214,7 @@ $ ferrite import wordpress export.xml --uploads ./wp-content/uploads --data ./si
 
 ### 5.8 Operations
 
-- `ferrite backup --to <path|s3://...>` — SQLite online backup API + media sync; safe live.
+- `ferrite backup --to <path|s3://...>` — SQLite `VACUUM INTO` snapshot + media sync; safe live. Postgres: provider backups/PITR + `ferrite export`.
 - `ferrite self-update` — replace binary, keep previous as `ferrite.prev`; migrations run
   on start; `ferrite rollback`.
 - TLS: built-in ACME (Let's Encrypt) via rustls, or run behind a reverse proxy.
@@ -225,12 +228,12 @@ $ ferrite import wordpress export.xml --uploads ./wp-content/uploads --data ./si
 |---|---|---|
 | HTTP | `axum` + `tokio` + `tower` | |
 | TLS/ACME | `rustls`, `rustls-acme` or `instant-acme` | |
-| DB | SQLite via `sqlx` (or `rusqlite`) | WAL mode; Postgres behind a trait later |
-| Migrations | `sqlx migrate` / `refinery` | |
+| DB | `sqlx` 0.9: SQLite (default) and PostgreSQL | Repository traits, one impl per backend, shared contract tests |
+| Migrations | `sqlx migrate`, reversible (up/down) | Expand/contract policy, see design 02 |
 | Templates | `minijinja` | |
 | WASM host | `wasmtime` with Component Model + `wasmtime-wasi` (minimal) | fuel + epoch interruption |
 | WIT bindings | `wit-bindgen` (guest), `wasmtime::component::bindgen!` (host) | |
-| Admin UI | SvelteKit (static build) or Leptos | Kris has SvelteKit+Axum experience |
+| Admin UI | Vite + React + TS, shadcn/ui, Recharts, Motion, TipTap | Decided (design 07) |
 | Embedding assets | `rust-embed` | |
 | Search | SQLite FTS5 | |
 | Images | `image` crate, resize on upload | |

@@ -1,0 +1,187 @@
+# 04 — Multi-Instance (Cluster) Design
+
+## 1. Requirements
+
+| # | Requirement | Source |
+|---|---|---|
+| C1 | N identical stateless nodes behind any HTTP load balancer, no sticky sessions | User (D5) |
+| C2 | No coordination service besides the database (no Redis, no gossip) | D7 |
+| C3 | A content save is visible on all nodes within ~1 s (cache invalidation) | Design target |
+| C4 | Background work runs exactly-once-effectively, survives node crashes | Design |
+| C5 | All nodes run the same theme and plugin set | D11 |
+| C6 | Rolling deploys: nodes of version N and N+1 coexist during a deploy | D8 |
+| C7 | Solo mode pays (almost) nothing for this design | Anti-goal |
+
+## 2. Modes
+
+`ferrite-cluster` exposes one API with two implementations chosen at startup:
+
+| Concern | Solo (SQLite or single node) | Cluster (Postgres) |
+|---|---|---|
+| Event bus | in-process `tokio::broadcast` + outbox rows (for uniformity) | outbox rows + `NOTIFY ferrite_events` + catch-up polling |
+| Job queue | `jobs` table, claimed by in-process workers | `jobs` table, `FOR UPDATE SKIP LOCKED` |
+| Locks | in-process `Mutex` keyed by name | `pg_try_advisory_lock(hash(name))` via sqlx `PgAdvisoryLock` |
+| Node registry | single row, informational | heartbeat rows, used for metrics and admin "Nodes" page |
+
+`cluster.mode = "auto"`: cluster when the DB is Postgres, else solo. Postgres + solo is
+allowed (explicit `mode = "solo"`), e.g. a single VPS with a managed DB.
+
+## 3. Startup validation
+
+Refuse to start (with a clear message) on:
+
+- `mode = cluster` with SQLite.
+- `mode = cluster` with `media.backend = local` — **unless** `media.local_shared = true`
+  (operator asserts the folder is a shared volume, e.g. NFS/EFS).
+- Another node registered with a **different `site_id`** in the same DB/schema (wrong
+  `search_path`).
+- Data folder lock already held (solo + SQLite).
+
+Warn on: node clock skew > 2 s vs. DB `now()` (leases and scheduled publish depend on
+time; the DB clock is the source of truth for all lease and schedule comparisons).
+
+## 4. Event bus & cache invalidation
+
+### Write path (transactional outbox)
+
+Every core write that affects rendered output inserts an `events` row **in the same
+transaction**:
+
+```
+events(seq, kind = "invalidate", keys = ["post:0192…", "term:0192…", "archive:post"], origin_node, created_at)
+```
+
+After commit (cluster mode) the writer sends `NOTIFY ferrite_events, '<seq>'`. Notify is
+an optimisation only; correctness comes from the table.
+
+### Read path (every node)
+
+- A dedicated listener connection runs `LISTEN ferrite_events`.
+- Each node keeps `last_seq` in memory. On notification **or** every
+  `cluster.poll_interval` (default 1 s) it runs
+  `SELECT seq, kind, keys FROM events WHERE seq > $last_seq ORDER BY seq LIMIT 1000`
+  and applies them.
+- On (re)connect of the listener: catch up from `last_seq`. If the gap is larger than
+  retained history (events pruned), the node **flushes its whole page cache**.
+- On startup a node sets `last_seq = max(seq)` and starts with an empty cache.
+
+> **Sequence gaps:** `bigserial` values are allocated at insert time but committed
+> out of order, so a reader can see seq 11 before 10 commits. Mitigation: the reader
+> only advances `last_seq` up to the first gap, and re-reads gaps for up to 5 s
+> before skipping them (a rolled-back transaction leaves a permanent gap). This is a
+> known pattern; implement and test with concurrent writers in the contract suite.
+
+### Event kinds
+
+| Kind | Keys | Effect |
+|---|---|---|
+| `invalidate` | dependency keys | page cache drops matching entries |
+| `options.changed` | option keys | reload autoloaded options |
+| `theme.changed` | theme name | reload theme from artifact, flush cache |
+| `plugins.changed` | plugin names | reload plugin registry (install/enable/disable/update) |
+| `plugin.disabled` | plugin name, reason | stop calling it immediately |
+| `node.drain` | node id | admin-requested drain (optional) |
+
+Events older than 24 h are pruned by a periodic job.
+
+## 5. Sessions
+
+DB-backed (`sessions` table, [02](02-storage.md)). Session token = 32 random bytes,
+cookie holds the token, DB stores SHA-256. `last_seen_at` is updated at most once per
+5 minutes per session to avoid a write per request. Logout/role change/password change
+delete sessions → effective on all nodes immediately (no session cache), or with a
+≤ 30 s per-node cache if profiling demands it (then invalidated via event).
+
+## 6. Job queue
+
+One table, `jobs` ([02](02-storage.md#cluster)). Used for:
+
+| Kind | Trigger | Notes |
+|---|---|---|
+| `content.publish_scheduled` | `scheduled_at` set | `unique_key = "publish:<id>"`, `run_at = scheduled_at` |
+| `plugin.action` | action hooks (`post.saved`, …) | one job per (plugin, event); off request path |
+| `media.variants` | image upload | |
+| `import.wordpress` | admin-triggered import | long-running, heartbeats its lease |
+| `artifacts.gc`, `events.prune`, `revisions.prune`, `sessions.prune` | periodic | scheduler inserts with `unique_key = "<kind>:<period>"` so only one per period exists cluster-wide |
+
+### Claim (Postgres)
+
+```sql
+UPDATE jobs SET status='running', locked_by=$node, locked_until=now()+$lease,
+                attempts=attempts+1
+WHERE id IN (
+  SELECT id FROM jobs
+  WHERE status='queued' AND run_at <= now()
+     OR (status='running' AND locked_until < now())        -- expired lease: crashed node
+  ORDER BY priority DESC, run_at
+  LIMIT $n
+  FOR UPDATE SKIP LOCKED)
+RETURNING *;
+```
+
+### Claim (SQLite)
+
+Same statement without `FOR UPDATE SKIP LOCKED` — a single writer connection makes it
+atomic; there is only one node.
+
+### Semantics
+
+- At-least-once execution. Handlers must be idempotent (publish: "set published if still
+  scheduled for that time"; variants: content-addressed, naturally idempotent).
+- Lease default 60 s; long jobs extend (`locked_until`) every 20 s.
+- Retry with exponential backoff (`run_at = now() + 2^attempts * 10s`, capped at 1 h);
+  after `max_attempts` (default 5) → `dead`, visible in admin with error.
+- Wake-up: workers poll every 1 s when idle; cluster mode also `NOTIFY ferrite_jobs` on
+  insert for low latency.
+- Worker concurrency per node configurable (`cluster.workers`, default = CPU count,
+  min 2).
+
+### Periodic scheduler
+
+Each node runs a lightweight ticker; for each periodic task it attempts
+`INSERT … ON CONFLICT (unique_key) DO NOTHING` with `unique_key = "<kind>:<period-start>"`.
+Whichever node inserts first wins; no leader election needed.
+
+## 7. Distributed locks
+
+`cluster.lock(name)` for rare, coarse operations:
+
+- theme/plugin install & activation (validate + write artifact + rows),
+- WordPress import (one at a time per site),
+- `ferrite migrate` (sqlx already locks; our wrapper also takes ours so `serve` nodes
+  don't start mid-migration).
+
+Postgres: session-level advisory lock on a dedicated connection (released on drop /
+disconnect — so a crashed holder releases automatically). Solo: in-process mutex.
+
+## 8. Plugins & themes across nodes (D11)
+
+- Installing uploads the `.wasm` / theme bundle as an **artifact** (content-addressed)
+  and writes `plugins`/`themes` rows + a `plugins.changed`/`theme.changed` event, all in
+  one transaction (artifact upload happens before; orphan artifacts are GC'd).
+- Every node keeps a local cache directory (`data/cache/artifacts/<hash>`, or a temp dir
+  when no data folder) and loads components from there; on event it fetches missing
+  hashes from the MediaStore, compiles (wasmtime `Component::new`; precompiled cache
+  keyed by hash + wasmtime version + CPU features), then atomically swaps its registry.
+- Nodes that fail to load a plugin version report it in the `nodes.meta` and log; they
+  keep the previous version until resolved. Admin shows per-node plugin state.
+- Solo mode uses exactly the same path (artifacts in `data/media/artifacts/`), so there
+  is one code path.
+
+## 9. Rolling deploys
+
+With expand-only migrations ([02 §8](02-storage.md#8-upgrade-compatibility-expandcontract--d8)):
+
+1. First node of version N+1 starts → takes migration lock → applies expand migrations.
+2. Old nodes (N) keep serving: they tolerate new columns/tables.
+3. Remaining nodes replaced one by one.
+4. Event and job payloads are versioned (`{"v":1,…}`); a node ignores (re-queues with
+   backoff) job kinds/versions it doesn't know, so N nodes don't fail N+1 jobs.
+
+## 10. What's deliberately out of scope
+
+- Cross-node page cache sharing (each node warms its own cache; a CDN in front is the
+  recommended way to scale reads further).
+- Read replicas for the app. (Possible later: `database.read_url` for the reader pool;
+  the outbox and sessions must stay on the primary.)
+- Multi-region active/active.

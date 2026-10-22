@@ -1,67 +1,104 @@
 # FerriteCMS — Roadmap
 
-Rough target: credible MVP in ~3 months of focused work. Each milestone ends with
-something runnable and demoable.
+Detailed design: [`docs/design/`](design/00-overview.md). Each milestone ends with
+something runnable and demoable. Work top-down.
 
-## M0 — Plugin host spike (de-risk first, ~1–2 weeks)
+Durations are rough estimates (not measurements) for one focused developer. Adding
+Postgres, S3 and working cluster mode to the first release (decisions D1, D4, D5, D20)
+moves the credible MVP from the original ~3 months to roughly **5 months**.
 
-The riskiest part. Prove it before building a CMS around it.
+## M0 — Plugin host spike (de-risk first, ~2 weeks)
 
-- [ ] Cargo workspace with `ferrite-plugin-host`, `ferrite-sdk`, `wit/`.
-- [ ] Minimal WIT world: one filter hook `render-head(head) -> head`, one import
-      `content.get-post(id)`.
-- [ ] wasmtime host loading a component, linking imports **only** if declared in manifest.
-- [ ] Limits: memory cap, fuel, epoch deadline. Test: infinite loop plugin is killed,
-      page still renders.
-- [ ] Test: plugin without `http` capability cannot even link an HTTP import.
-- [ ] Hello-world plugin in Rust via `ferrite-sdk`.
-- [ ] Benchmark: per-call overhead of a filter hook (instantiate vs. pooled instances).
+The riskiest part. Prove it before building a CMS around it. Design: [05](design/05-plugin-host.md).
 
-**Exit criterion:** a filter plugin runs in < 1 ms per call warm, and hostile plugins
-(loop, OOM, panic, undeclared import) are contained.
+- [ ] Cargo workspace skeleton (`ferrite-plugin-host`, `ferrite-sdk`, `ferrite-domain`, `wit/`), CI with fmt + clippy.
+- [ ] WIT `ferrite:plugin@0.1.0` draft: `guest` (apply-filter, on-action, handle-request), `log`, `content` (stub), `kv` (stub).
+- [ ] Verify toolchain: `wasm32-wasip2` component output, unused imports dropped, WASI subset linking.
+- [ ] Install-time inspection: reject undeclared `ferrite:*` imports and `wasi:sockets`/`wasi:http`.
+- [ ] Per-plugin `Linker` with only granted interfaces.
+- [ ] Limits: `StoreLimits` memory, fuel, epoch deadline + tokio hard timeout.
+- [ ] Hostile plugins: loop, oom, panic, undeclared-import, sockets, big-output, wrong-variant, fs-escape.
+- [ ] Hello-world `render.head` plugin via `ferrite-sdk` macros.
+- [ ] Benchmark: fresh instance per call (pooling allocator) vs. reused instance.
 
-## M1 — Core content + serving (~3 weeks)
+**Exit:** filter warm call < 1 ms; all hostile plugins contained; findings written back into design 05.
 
-- [ ] SQLite schema + migrations: content items, revisions, taxonomies, users, options,
-      redirects, plugin KV.
-- [ ] `ferrite serve --data ./site` with axum.
-- [ ] Router: permalinks, redirects table, 404.
-- [ ] Theme engine: minijinja + template hierarchy resolution + safe helpers.
-- [ ] One starter theme (blog).
-- [ ] In-memory page cache with dependency-based invalidation.
-- [ ] Wire `render.head` + `content.body` filters into render pipeline.
+## M1 — Storage, media, core & serving on both backends (~4 weeks)
 
-## M2 — Admin + API (~4 weeks)
+Design: [02](design/02-storage.md), [03](design/03-media.md), [06](design/06-themes-rendering.md).
 
-- [ ] REST API v1 (content CRUD, media upload, taxonomies, users, settings).
-- [ ] Auth: argon2 passwords, sessions, roles; passkeys stretch.
-- [ ] Admin SPA embedded in binary: posts/pages list + editor (adopt TipTap/ProseMirror),
-      media library, settings, plugins page showing declared permissions.
-- [ ] Custom content types defined in admin.
+- [ ] `ferrite-config` (toml + env, validation, profiles).
+- [ ] `ferrite-store` traits, `ferrite-store-sqlite`, `ferrite-store-postgres`; migration `0001_init` on both.
+- [ ] Migration wrapper: directives (phase / min-binary / lossy-down), startup compatibility check, `ferrite migrate status|up|down|verify`, SQLite pre-migration snapshot.
+- [ ] Contract test suite (`ferrite-store-tests`) + migration roundtrip tests on both backends; CI with Postgres service.
+- [ ] `ferrite-media`: `MediaStore` over `object_store` (local + S3), artifacts table, tests against MinIO.
+- [ ] Core services: content + revisions, types, terms, options, redirects, menus, search (FTS5 / tsvector).
+- [ ] Transactional outbox (`events`) written by every invalidating write.
+- [ ] `ferrite serve`: router, permalinks, redirects, 404, feeds, sitemap.
+- [ ] Theme engine: minijinja, hierarchy resolution, safe helpers, dependency recording; `blog` theme.
+- [ ] Page cache with dependency index (solo invalidation path).
+- [ ] Plugin host wired into rendering (`render.head`, `content.body`, `content.excerpt`), plugins loaded from artifacts.
+
+**Exit:** a seeded site renders identically on SQLite+local and Postgres+MinIO; editing via CLI/seed invalidates the right pages.
+
+## M1.5 — Cluster mode (~3 weeks)
+
+Design: [04](design/04-cluster.md).
+
+- [ ] Node registry + heartbeat, startup validation (mode/backends/site_id/clock skew).
+- [ ] Event bus: `LISTEN/NOTIFY` + catch-up polling + gap handling; cache flush on lost history.
+- [ ] Job queue: claim with `SKIP LOCKED`, leases, retries, dead jobs, periodic scheduler via unique keys.
+- [ ] Distributed locks (advisory), used by migrate / install / import.
+- [ ] Artifact sync for plugins and themes across nodes; per-node plugin state.
+- [ ] Shared plugin failure counters + cluster-wide auto-disable.
+- [ ] Cluster integration tests (2–3 in-process nodes): invalidation latency, job exclusivity, lease expiry, rolling version coexistence.
+- [ ] `docker-compose` example: 2× ferrite + postgres + minio + caddy.
+
+**Exit:** two nodes behind a proxy; a save on node A is reflected on node B within ~1 s; killing a node mid-job doesn't lose the job.
+
+## M2 — API, auth & admin (~6 weeks)
+
+Design: [07](design/07-admin-api.md).
+
+- [ ] REST API v1 with OpenAPI (`utoipa`), problem+json errors, cursors, `If-Match`.
+- [ ] Auth: argon2id, DB sessions, CSRF, API tokens, rate limiting, TOTP; passkeys stretch.
+- [ ] Roles & capabilities enforced in core.
+- [ ] Admin SPA scaffold: Vite + React + TS, shadcn/ui, TanStack Router/Query, Motion, generated API client, embedded via `rust-embed`.
+- [ ] Screens: dashboard (Recharts), content list + TipTap editor + revisions, media library, content types/field builder, taxonomies, menus, users, comments, redirects, settings, system/nodes/jobs.
+- [ ] Themes + plugins screens incl. permission report and per-plugin metrics.
+- [ ] Plugin routes (`/_p/…`), plugin settings, `mail`, batched `request.served` (D21).
+- [ ] Playwright E2E against a real binary on both backends.
 
 ## M3 — WordPress import (~2 weeks)
 
-- [ ] WXR parser (`quick-xml`) → posts, pages, media, terms, authors, comments, meta.
-- [ ] Media copy + URL rewrite.
-- [ ] 301 redirects for all old permalinks.
-- [ ] Yoast/Rank Math meta → SEO fields.
-- [ ] `import-report.html` listing unknown shortcodes/blocks.
-- [ ] Test against 2–3 real WP exports of different sizes.
+Design: [08](design/08-wp-import.md).
 
-## M4 — Ops + release (~1–2 weeks)
+- [ ] Streaming WXR parser → IR (temp SQLite), resumable, idempotent.
+- [ ] Media import via `MediaStore`, URL rewrite.
+- [ ] Gutenberg + classic → TipTap JSON; shortcode handling.
+- [ ] 301 redirects for old permalinks.
+- [ ] Yoast / Rank Math → SEO fields; ACF → custom fields (verify key names on real exports).
+- [ ] `import-report.html`; CLI + admin job.
+- [ ] Tests against 2–3 real WP exports.
 
-- [ ] `ferrite backup` (SQLite online backup + media), `self-update`, `rollback`.
-- [ ] ACME TLS.
-- [ ] `/metrics`, per-plugin hook timings in admin.
-- [ ] Static release builds, Docker image, systemd unit.
+## M4 — Ops & release (~2–3 weeks)
+
+Design: [09](design/09-operations.md).
+
+- [ ] `ferrite backup` / `restore`, `export` / `import-site` / `db copy`, `media sync` / `gc`.
+- [ ] `self-update` (signed), `rollback`, `rollback --schema`, `--restore-snapshot`.
+- [ ] ACME TLS (solo).
+- [ ] `/metrics`, `node_metrics`, dashboard charts wired.
+- [ ] Release builds for all targets, Docker image, systemd unit, cluster runbook.
+- [ ] Backward-compat CI job (from first tag).
+- [ ] Example plugins: SEO, privacy-friendly analytics, contact form; starter themes `docs`, `business`.
 - [ ] Docs site (built with FerriteCMS itself).
-- [ ] 3 example plugins: SEO, privacy-friendly analytics, contact form.
 
 ## Later
 
-- Postgres backend, multi-site.
-- Plugin routes + declarative admin settings UI.
+- Multi-site; read replicas; multi-region.
 - Signed plugin registry with verified publishers.
 - JS/Go/Python plugin SDKs (after checking Component Model toolchain maturity).
 - Built-in forms, i18n/multilingual content, full-text search UI.
+- WP database user import with legacy password-hash verification.
 - Managed hosting offering.

@@ -9,7 +9,7 @@ $ ferrite import wordpress export.xml --uploads ./wp-content/uploads --data ./si
 ```
 
 - **Single binary, single folder** — web server, admin, themes, plugin runtime and SQLite
-  compiled in. Back up or move a site by copying one folder.
+  compiled in (Postgres + S3 optional for multi-node). Back up or move a site by copying one folder.
 - **Sandboxed plugins** — WASM components with a permission manifest, memory/CPU/time
   limits per call. A broken plugin can't take the site down or read your users table.
 - **Familiar to WordPress developers** — hooks with priorities, template hierarchy,
