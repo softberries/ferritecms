@@ -1,6 +1,7 @@
 //! SQLite storage backend: one writer connection, a reader pool, WAL, and a data-folder
 //! lock (02-storage §6).
 
+mod codec;
 mod connect;
 mod exec;
 mod migrate;

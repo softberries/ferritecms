@@ -1,5 +1,6 @@
 //! PostgreSQL storage backend: one pool, optional per-site schema (02-storage §6).
 
+mod codec;
 mod connect;
 mod exec;
 mod migrate;

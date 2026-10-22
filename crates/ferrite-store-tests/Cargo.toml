@@ -12,6 +12,7 @@ ferrite-store = { path = "../ferrite-store" }
 ferrite-store-postgres = { path = "../ferrite-store-postgres" }
 ferrite-store-sqlite = { path = "../ferrite-store-sqlite" }
 semver.workspace = true
+serde_json.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true
 tokio.workspace = true

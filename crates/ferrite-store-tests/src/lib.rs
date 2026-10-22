@@ -8,5 +8,6 @@
 
 pub mod harness;
 pub mod migrations;
+pub mod site;
 
 pub use harness::{PgFixture, TestDb, migration_dirs, migration_files, pg_store, sqlite_store};

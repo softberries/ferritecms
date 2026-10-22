@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+chrono.workspace = true
 ferrite-domain = { path = "../ferrite-domain" }
 ferrite-store = { path = "../ferrite-store" }
 semver.workspace = true

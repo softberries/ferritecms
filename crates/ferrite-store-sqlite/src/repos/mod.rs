@@ -69,7 +69,7 @@ impl Repos for SqliteRepos {
         &Unsupported
     }
     fn options(&self) -> &dyn OptionRepo {
-        &Unsupported
+        self
     }
     fn redirects(&self) -> &dyn RedirectRepo {
         &Unsupported

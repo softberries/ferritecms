@@ -292,3 +292,26 @@ macro_rules! backend_tests {
         }
     )*};
 }
+
+/// Like [`backend_tests!`] for tests that spawn tasks: they run on a 4-thread runtime and
+/// take an `Arc<TestDb>` so the database can move into `tokio::spawn`.
+#[macro_export]
+macro_rules! backend_tests_spawning {
+    ($($name:ident),* $(,)?) => {$(
+        mod $name {
+            #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+            async fn sqlite() {
+                let db = std::sync::Arc::new($crate::TestDb::sqlite().await);
+                super::$name(db).await;
+            }
+
+            #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+            async fn postgres() {
+                let Some(db) = $crate::TestDb::postgres().await else {
+                    return;
+                };
+                super::$name(std::sync::Arc::new(db)).await;
+            }
+        }
+    )*};
+}

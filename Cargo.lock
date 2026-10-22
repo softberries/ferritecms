@@ -791,6 +791,7 @@ name = "ferrite-store-postgres"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "ferrite-domain",
  "ferrite-store",
  "semver",
@@ -826,6 +827,7 @@ dependencies = [
  "ferrite-store-postgres",
  "ferrite-store-sqlite",
  "semver",
+ "serde_json",
  "sqlx",
  "tempfile",
  "tokio",

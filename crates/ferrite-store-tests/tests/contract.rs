@@ -1,5 +1,7 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
-use ferrite_store_tests::{backend_tests, migration_dirs, migration_files, migrations::*};
+use ferrite_store_tests::{
+    backend_tests, backend_tests_spawning, migration_dirs, migration_files, migrations::*, site::*,
+};
 
 backend_tests!(
     fresh_db_is_up_to_date,
@@ -8,6 +10,16 @@ backend_tests!(
     verify_detects_tampered_checksum,
     min_binary_survives_older_binary,
 );
+
+backend_tests!(
+    options_crud,
+    tx_commit_visible,
+    tx_rollback_invisible,
+    tx_dropped_is_rolled_back,
+    read_sees_committed_after_commit,
+);
+
+backend_tests_spawning!(concurrent_writers);
 
 #[test]
 fn migration_sets_match() {

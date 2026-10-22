@@ -5,13 +5,13 @@
 use async_trait::async_trait;
 use ferrite_domain::{
     Artifact, ArtifactHash, ContentId, ContentItem, ContentQuery, ContentType, Event,
-    InstalledPlugin, InstalledTheme, Media, Menu, NewContent, NewEvent, NewUser, OptionEntry, Page,
-    Redirect, RedirectId, Revision, RevisionId, Taxonomy, Term, TermId, Timestamp, User, UserId,
+    InstalledPlugin, InstalledTheme, Media, Menu, NewContent, NewEvent, NewUser, Page, Redirect,
+    RedirectId, Revision, RevisionId, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 use ferrite_store::{
     ArtifactRepo, ContentRepo, ContentTypeRepo, EventRepo, MediaRepo, MenuRepo, MetaRepo,
-    OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, RevisionRepo, SearchRepo, StoreError,
-    TaxonomyRepo, TermRepo, ThemeRepo, UserRepo,
+    PluginKvRepo, PluginRepo, RedirectRepo, RevisionRepo, SearchRepo, StoreError, TaxonomyRepo,
+    TermRepo, ThemeRepo, UserRepo,
 };
 use serde_json::Value;
 
@@ -83,13 +83,6 @@ stub!(MenuRepo {
     fn put(&Menu) -> ();
     fn list() -> Vec<(String, String)>;
     fn delete(&str) -> ();
-});
-
-stub!(OptionRepo {
-    fn get(&str) -> Option<OptionEntry>;
-    fn set(&str, &Value, bool) -> ();
-    fn delete(&str) -> ();
-    fn autoloaded() -> Vec<OptionEntry>;
 });
 
 stub!(RedirectRepo {
