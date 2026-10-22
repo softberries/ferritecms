@@ -11,13 +11,13 @@ moves the credible MVP from the original ~3 months to roughly **5 months**.
 
 The riskiest part. Prove it before building a CMS around it. Design: [05](design/05-plugin-host.md).
 
-- [x] Cargo workspace skeleton (`ferrite-plugin-host`, `ferrite-sdk`, `ferrite-domain`, `wit/`), CI with fmt + clippy.
+- [x] Cargo workspace skeleton (`ferrite-plugin-host`, `ferrite-sdk`, `wit/`), CI with fmt + clippy. (`ferrite-domain` was not needed by the spike; it moves to M1.)
 - [x] WIT `ferrite:plugin@0.1.0` draft: `guest` (apply-filter, on-action, handle-request), `log`, `content` (stub), `kv` (stub).
 - [x] Verify toolchain: `wasm32-wasip2` component output, unused imports dropped, WASI subset linking.
 - [x] Install-time inspection: reject undeclared `ferrite:*` imports and `wasi:sockets`/`wasi:http`.
 - [x] Per-plugin `Linker` with only granted interfaces.
 - [x] Limits: `StoreLimits` memory, fuel, epoch deadline + tokio hard timeout.
-- [x] Hostile plugins: loop, oom, panic, undeclared-import, sockets, big-output, wrong-variant, fs-escape.
+- [x] Hostile plugins: loop, oom, panic, undeclared-import, sockets, big-output, wrong-variant, fs-escape (plus spin-host-fuel, slow-import, flapper, noisy, fat-init, kv-budget, long-error, resource-flood; 05 §12).
 - [x] Hello-world `render.head` plugin via `ferrite-sdk` macros.
 - [x] Benchmark: fresh instance per call (pooling allocator) vs. reused instance. Result: ~27 µs fresh, ~24 µs pooling; reuse not needed (05 §6).
 
@@ -27,6 +27,7 @@ The riskiest part. Prove it before building a CMS around it. Design: [05](design
 
 Design: [02](design/02-storage.md), [03](design/03-media.md), [06](design/06-themes-rendering.md).
 
+- [ ] `ferrite-domain` crate (pure types: ids, Post, Term, User, Role, Block, errors; 01 §1), deferred from M0.
 - [ ] `ferrite-config` (toml + env, validation, profiles).
 - [ ] `ferrite-store` traits, `ferrite-store-sqlite`, `ferrite-store-postgres`; migration `0001_init` on both.
 - [ ] Migration wrapper: directives (phase / min-binary / lossy-down), startup compatibility check, `ferrite migrate status|up|down|verify`, SQLite pre-migration snapshot.
@@ -39,6 +40,13 @@ Design: [02](design/02-storage.md), [03](design/03-media.md), [06](design/06-the
 - [ ] Page cache with dependency index (solo invalidation path).
 - [ ] Plugin host wired into rendering (`render.head`, `content.body`, `content.excerpt`), plugins loaded from artifacts.
 - [ ] Plugin host follow-ups from M0: `ammonia` sanitising of `html` output and head→HTML rendering (05 §7); `content.read` published-only and preview visibility (05 §7a); reject bare IPs in the http allowlist (SSRF) and implement real `http`/`mail` services; type-scope `meta` and stop `"*"` exposing other plugins' `plugin.<other>.*` meta; admin approval flow for limits above host defaults; revisit pooling allocator under concurrent load.
+- [ ] More plugin host follow-ups from the M0 review:
+  - [ ] `HostConfig` max-concurrent-calls semaphore (worst-case plugin memory = concurrency × per-call memory cap).
+  - [ ] Per-render total plugin time budget (today each hook call has its own deadline; a page with many plugins can add them up).
+  - [ ] Size caps on route responses (body and headers).
+  - [ ] Success-path tests for `dispatch_action` / `handle_route` (M0 tests only cover rejection paths: unknown plugin, not subscribed, no matching route).
+  - [ ] Document `HostServices` cancel-safety: futures are dropped at the hard timeout.
+  - [ ] `install` compiles synchronously: run it under `spawn_blocking` when called from tokio.
 
 **Exit:** a seeded site renders identically on SQLite+local and Postgres+MinIO; editing via CLI/seed invalidates the right pages.
 
