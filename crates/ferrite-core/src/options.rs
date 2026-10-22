@@ -6,7 +6,7 @@ use std::{
 };
 
 use ferrite_domain::OptionEntry;
-use ferrite_store::Store;
+use ferrite_store::{Repos, Store};
 
 use crate::{
     Actor, CoreError,
@@ -78,6 +78,7 @@ impl OptionService {
         let done = async {
             tx.options().set(key, value, autoload).await?;
             tx.events().append(&events::options_changed(key)).await?;
+            emit_all_for_permalinks(tx.as_ref(), key).await?;
             Ok(())
         }
         .await;
@@ -107,6 +108,7 @@ impl OptionService {
         let done = async {
             tx.options().delete(key).await?;
             tx.events().append(&events::options_changed(key)).await?;
+            emit_all_for_permalinks(tx.as_ref(), key).await?;
             Ok(())
         }
         .await;
@@ -163,6 +165,17 @@ fn check_key(key: &str) -> Result<(), CoreError> {
         return Err(CoreError::Invalid(format!(
             "option key must be 1-{MAX_KEY_LEN} bytes without control characters"
         )));
+    }
+    Ok(())
+}
+
+/// Every URL changes with a `permalink.*` option: flush everything.
+async fn emit_all_for_permalinks(repos: &dyn Repos, key: &str) -> Result<(), CoreError> {
+    if key.starts_with("permalink.") {
+        repos
+            .events()
+            .append(&events::invalidate([events::ALL_KEY.to_owned()]))
+            .await?;
     }
     Ok(())
 }

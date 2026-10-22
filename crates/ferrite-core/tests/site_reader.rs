@@ -744,7 +744,8 @@ pub async fn single_hydrates(db: &TestDb) {
     ] {
         assert!(got.deps.contains(&key), "missing {key}");
     }
-    assert!(!got.deps.contains(&post_key(hidden_pic)));
+    // Hidden references are dependencies too: publishing one must refresh the page.
+    assert!(got.deps.contains(&post_key(hidden_pic)));
 
     let other = r
         .single("post", &parts(&["draft-featured"]))

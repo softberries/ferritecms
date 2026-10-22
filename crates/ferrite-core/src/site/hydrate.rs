@@ -87,7 +87,8 @@ impl Hydrator<'_> {
         for (item, refs) in items.into_iter().zip(refs) {
             deps.insert(post_key(item.id));
             for id in refs.all() {
-                if media.contains_key(&id) {
+                // Hidden references count too: publishing one must refresh this page.
+                if refd.existing.contains(&id) {
                     deps.insert(post_key(id));
                 }
             }
@@ -178,6 +179,7 @@ impl Hydrator<'_> {
     async fn load_refs(&self, ids: Vec<ContentId>) -> Result<Refs, CoreError> {
         let mut out = Refs {
             checked: ids.iter().copied().collect(),
+            existing: HashSet::new(),
             hidden: HashSet::new(),
             media: HashMap::new(),
         };
@@ -187,6 +189,7 @@ impl Hydrator<'_> {
         let mut public_media = Vec::new();
         for chunk in ids.chunks(MAX_ID_FILTER) {
             for item in self.repos.content().get_many(chunk).await? {
+                out.existing.insert(item.id);
                 if !is_public(&item, self.now) {
                     out.hidden.insert(item.id);
                 } else if item.kind == MEDIA_KIND {
@@ -252,6 +255,8 @@ struct MediaRefs {
 struct Refs {
     /// Every id looked up.
     checked: HashSet<ContentId>,
+    /// Ids of existing content items, public or not.
+    existing: HashSet<ContentId>,
     /// Ids of existing content items that are not public.
     hidden: HashSet<ContentId>,
     /// Public media items with their rows.

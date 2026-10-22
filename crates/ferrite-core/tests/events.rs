@@ -6,12 +6,13 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use ferrite_core::{
-    Actor, ContentDraft, ContentService, PermalinkRules, RedirectService, TaxonomyService,
-    events::{ALL_KEY, archive_key, post_key, redirect_key, term_key},
+    Actor, ContentDraft, ContentService, OptionService, PermalinkRules, RedirectService,
+    SiteReader, TaxonomyService,
+    events::{ALL_KEY, archive_key, option_key, post_key, redirect_key, term_key},
 };
 use ferrite_domain::{
-    ContentId, ContentStatus, NewContent, NewUser, Role, Term, TermId, Timestamp, UserId,
-    UserStatus,
+    Artifact, ArtifactHash, ArtifactKind, ContentId, ContentStatus, Media, NewUser, Role, Term,
+    TermId, Timestamp, UserId, UserStatus,
 };
 use ferrite_store::Store;
 use ferrite_store_tests::{TestDb, backend_tests};
@@ -357,40 +358,7 @@ pub async fn redirect_service_emits_source_keys(db: &TestDb) {
     assert_eq!(seq(store).await, before);
 }
 
-async fn published_post_with_term(
-    store: &dyn Store,
-    author: UserId,
-    slug: &str,
-    status: ContentStatus,
-    term: TermId,
-) -> ContentId {
-    let id = ContentId::new();
-    let tx = store.begin().await.unwrap();
-    tx.content()
-        .insert(&NewContent {
-            id,
-            kind: "post".into(),
-            status,
-            slug: slug.into(),
-            parent_id: None,
-            author_id: author,
-            title: slug.into(),
-            excerpt: String::new(),
-            body: json!({"type": "doc", "content": []}),
-            body_html: None,
-            fields: json!({}),
-            menu_order: 0,
-            published_at: (status == ContentStatus::Published).then(Timestamp::now),
-            scheduled_at: None,
-        })
-        .await
-        .unwrap();
-    tx.terms().set_for_item(id, &[term]).await.unwrap();
-    tx.commit().await.unwrap();
-    id
-}
-
-pub async fn term_writes_name_linked_published_items(db: &TestDb) {
+pub async fn term_writes_emit_term_and_archive_keys(db: &TestDb) {
     let store = db.store();
     let svc = TaxonomyService::new(db.shared_store());
     let a = admin(store).await;
@@ -400,96 +368,142 @@ pub async fn term_writes_name_linked_published_items(db: &TestDb) {
         .create_term(&a, "category", "Tech", None, None, "")
         .await
         .unwrap();
-    assert_eq!(
-        keys_since(store, before).await,
-        set([term_key(t.id), archive_key("post")])
-    );
+    let want = set([term_key(t.id), archive_key("post")]);
+    assert_eq!(keys_since(store, before).await, want);
 
-    let p1 = published_post_with_term(store, a.user, "p1", ContentStatus::Published, t.id).await;
-    let p2 = published_post_with_term(store, a.user, "p2", ContentStatus::Published, t.id).await;
-    // Not public: its page is not cached, so it is not named.
-    published_post_with_term(store, a.user, "d1", ContentStatus::Draft, t.id).await;
-    let want = set([
-        term_key(t.id),
-        archive_key("post"),
-        post_key(p1),
-        post_key(p2),
-    ]);
-
+    // Linked items need no keys of their own: their pages depend on `term:<id>`.
+    let it = service(db)
+        .create(&a, draft("post", "Linked", None, &[t.id]))
+        .await
+        .unwrap();
     let before = seq(store).await;
     svc.update_term(&a, t.id, "Technology", None, None, "x")
         .await
         .unwrap();
     assert_eq!(keys_since(store, before).await, want);
+    assert!(!keys_since(store, before).await.contains(&post_key(it.id)));
 
-    // Delete reads the items before the links go.
     let before = seq(store).await;
     svc.delete_term(&a, t.id).await.unwrap();
     assert_eq!(keys_since(store, before).await, want);
 }
 
-pub async fn term_write_past_the_cap_flushes_everything(db: &TestDb) {
+pub async fn permalink_options_flush_everything(db: &TestDb) {
     let store = db.store();
-    let svc = TaxonomyService::new(db.shared_store());
     let a = admin(store).await;
-    let t = svc
-        .create_term(&a, "category", "Big", None, None, "")
-        .await
-        .unwrap();
+    let svc = OptionService::load(db.shared_store()).await.unwrap();
 
-    let link = |n: usize| {
-        let id = ContentId::new();
-        (
-            id,
-            NewContent {
-                id,
-                kind: "post".into(),
-                status: ContentStatus::Published,
-                slug: format!("s{n}"),
-                parent_id: None,
-                author_id: a.user,
-                title: format!("s{n}"),
-                excerpt: String::new(),
-                body: json!({"type": "doc", "content": []}),
-                body_html: None,
-                fields: json!({}),
-                menu_order: 0,
-                published_at: Some(Timestamp::now()),
-                scheduled_at: None,
-            },
-        )
+    let kinds = |after: i64| async move {
+        let ev = store.read().events().since(after, 100).await.unwrap();
+        ev.into_iter()
+            .map(|e| (e.kind, e.keys.into_iter().collect::<Keys>()))
+            .collect::<Vec<_>>()
     };
-    let tx = store.begin().await.unwrap();
-    for n in 0..1000 {
-        let (id, row) = link(n);
-        tx.content().insert(&row).await.unwrap();
-        tx.terms().set_for_item(id, &[t.id]).await.unwrap();
-    }
-    tx.commit().await.unwrap();
-
-    // Exactly at the cap: every item is named.
     let before = seq(store).await;
-    svc.update_term(&a, t.id, "Big", None, None, "1")
-        .await
-        .unwrap();
-    let got = keys_since(store, before).await;
-    assert_eq!(got.len(), 2 + 1000);
-    assert!(!got.contains(ALL_KEY));
-
-    // One more: the item keys give way to `all`.
-    let tx = store.begin().await.unwrap();
-    let (id, row) = link(1000);
-    tx.content().insert(&row).await.unwrap();
-    tx.terms().set_for_item(id, &[t.id]).await.unwrap();
-    tx.commit().await.unwrap();
-    let before = seq(store).await;
-    svc.update_term(&a, t.id, "Big", None, None, "2")
+    svc.set(&a, "permalink.post", &json!("/%year%/%slug%/"), true)
         .await
         .unwrap();
     assert_eq!(
-        keys_since(store, before).await,
-        set([term_key(t.id), archive_key("post"), ALL_KEY.to_owned()])
+        kinds(before).await,
+        [
+            (
+                "options.changed".to_owned(),
+                set([option_key("permalink.post")])
+            ),
+            ("invalidate".to_owned(), set([ALL_KEY.to_owned()])),
+        ]
     );
+    let before = seq(store).await;
+    svc.delete(&a, "permalink.post").await.unwrap();
+    assert_eq!(
+        kinds(before).await,
+        [
+            (
+                "options.changed".to_owned(),
+                set([option_key("permalink.post")])
+            ),
+            ("invalidate".to_owned(), set([ALL_KEY.to_owned()])),
+        ]
+    );
+    // Other options do not.
+    let before = seq(store).await;
+    svc.set(&a, "reading.per_page", &json!(5), true)
+        .await
+        .unwrap();
+    assert_eq!(
+        kinds(before).await,
+        [(
+            "options.changed".to_owned(),
+            set([option_key("reading.per_page")])
+        )]
+    );
+}
+
+pub async fn publishing_a_referenced_draft_is_a_dependency(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let a = admin(store).await;
+    let reader = SiteReader::new(
+        db.shared_store(),
+        Arc::new(PermalinkRules::default()),
+        Arc::new(|h: &ArtifactHash, n: &str| format!("/_media/{h}/{n}")),
+        Arc::new(Timestamp::now),
+    );
+    // A draft media item with a media row, referenced as the featured image.
+    let pic = svc
+        .create(&a, draft("media", "pic", None, &[]))
+        .await
+        .unwrap();
+    let hash = ArtifactHash::parse(&format!("{:0>64}", "abc")).unwrap();
+    let tx = store.begin().await.unwrap();
+    tx.artifacts()
+        .insert_if_absent(&Artifact {
+            hash: hash.clone(),
+            kind: ArtifactKind::Media,
+            bytes: 10,
+            mime: "image/png".into(),
+            created_at: Timestamp::now(),
+        })
+        .await
+        .unwrap();
+    tx.media()
+        .insert(&Media {
+            item_id: pic.id,
+            artifact_hash: hash,
+            mime: "image/png".into(),
+            bytes: 10,
+            width: None,
+            height: None,
+            alt: String::new(),
+            original_name: "pic.png".into(),
+            variants: json!({}),
+        })
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut d = draft("post", "Has pic", None, &[]);
+    d.slug = Some("has-pic".into());
+    d.fields = json!({"featured_image": pic.id.to_string()});
+    let post = svc.create(&a, d).await.unwrap();
+    svc.publish(&a, post.id, post.version).await.unwrap();
+
+    let got = reader
+        .single("post", &["has-pic".to_owned()])
+        .await
+        .unwrap();
+    let page = got.value.unwrap();
+    assert!(page.featured.is_none(), "draft media is not shown");
+    assert!(got.deps.contains(&post_key(pic.id)), "hidden ref recorded");
+
+    // Publishing the draft emits the key the page recorded.
+    let before = seq(store).await;
+    svc.publish(&a, pic.id, pic.version).await.unwrap();
+    assert!(keys_since(store, before).await.contains(&post_key(pic.id)));
+    let got = reader
+        .single("post", &["has-pic".to_owned()])
+        .await
+        .unwrap();
+    assert!(got.value.unwrap().featured.is_some());
 }
 
 backend_tests!(
@@ -499,6 +513,7 @@ backend_tests!(
     lifecycle_emits_item_archive_terms_parent,
     publish_over_a_redirect_emits_its_keys,
     redirect_service_emits_source_keys,
-    term_writes_name_linked_published_items,
-    term_write_past_the_cap_flushes_everything,
+    term_writes_emit_term_and_archive_keys,
+    permalink_options_flush_everything,
+    publishing_a_referenced_draft_is_a_dependency,
 );

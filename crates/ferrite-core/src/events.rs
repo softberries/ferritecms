@@ -30,12 +30,19 @@
 //! * Every lifecycle transition (publish, unpublish, schedule, submit, publish_due,
 //!   trash, restore, delete): `post:<id>`, `archive:<kind>`, `term:<t>` for all current
 //!   terms (read before the links are removed on delete) and `post:<parent>` if any.
-//! * Term create: `term:<id>` and `archive:<type>` for each content type of the taxonomy.
-//!   Term update/delete: the same, plus `post:<item>` for every published item linked to
-//!   the term (its pages show the term name), because the cached pages of those items
-//!   embed the term. Past [`MAX_TERM_ITEMS`] items the item keys are replaced by `all`.
+//! * Term create/update/delete: `term:<id>` and `archive:<type>` for each content type of
+//!   the taxonomy. Pages showing the term depend on `term:<id>`, so linked items need no
+//!   keys of their own.
 //! * Menu writes: `menu:<name>`. Option writes: kind `options.changed`, key
-//!   `option:<key>`.
+//!   `option:<key>`; a key starting with `permalink.` additionally emits an `invalidate`
+//!   event with [`ALL_KEY`], because every URL changes.
+//! * Content type registration changes should emit [`ALL_KEY`]. Types are only
+//!   registered at startup today, so a change takes effect on restart.
+//! * Media rows: a media item is a content item, so lifecycle transitions already emit
+//!   `post:<id>`. Writes to the `media` row itself (alt text, variants, replacing the
+//!   file) must emit `post:<media id>` in the same transaction. No code path writes
+//!   media rows yet (`ferrite-media` only stores blobs; the ingest/admin path arrives
+//!   with M2), so that is an obligation of the media service.
 //! * Redirect writes (manual upsert/delete, and the 301s recorded when a published item
 //!   moves): kind `invalidate`, keys `redirect:<source>` for each source touched and its
 //!   trailing-slash variant. **Informational**: the router checks redirects before the
@@ -49,10 +56,13 @@
 //! # Renderer side ([`SiteReader`](crate::SiteReader))
 //!
 //! A read records `post:<id>` for every item it shows (the single item, each listed
-//! item, each ancestor whose slug is part of a URL, each published media item shown as
-//! featured or inline image, and each content item referenced from fields), `term:<id>`
+//! item, each ancestor whose slug is part of a URL, and each existing content item
+//! referenced as featured image, inline image or in fields, **whether it is public or
+//! not**, so that publishing a referenced draft refreshes the page), `term:<id>`
 //! for every term shown, `user:<id>` for every author shown, `archive:<kind>` for
-//! listings, and `option:<key>` for each option read (front page, per-page). Menus must
+//! listings, and `option:<key>` for each option read (front page, per-page). Templates and feeds that read site options
+//! (`site.title` and the like) must record `option:<key>` too (theme rendering, Task 5/7).
+//! The sitemap index records `archive:<kind>` for every public kind. Menus must
 //! record `menu:<name>` and `post:<target>` for every target they link to. The HTTP
 //! layer adds `theme` and `plugins` to every page.
 //!
@@ -103,9 +113,6 @@ pub const PLUGINS_KEY: &str = "plugins";
 
 /// Flush-everything key: the cache drops every entry.
 pub const ALL_KEY: &str = "all";
-
-/// Most items a term write names individually; past it the event carries [`ALL_KEY`].
-pub const MAX_TERM_ITEMS: usize = 1000;
 
 /// Dependency key of an option.
 pub fn option_key(key: &str) -> String {
