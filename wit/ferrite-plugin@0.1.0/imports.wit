@@ -1,0 +1,67 @@
+package ferrite:plugin@0.1.0;
+
+/// Always linked.
+interface log {
+  enum level { trace, debug, info, warn, error }
+  log: func(level: level, message: string);
+}
+
+/// Capability: `content.read`.
+interface content {
+  use types.{post, post-id};
+
+  get-post: func(id: post-id) -> option<post>;
+  get-post-by-slug: func(kind: string, slug: string) -> option<post>;
+  list-posts: func(kind: string, limit: u32, offset: u32) -> list<post>;
+}
+
+/// Capability: `content.meta.read` (get) / `content.meta.write` (set).
+interface meta {
+  use types.{post-id};
+
+  /// Returns JSON text.
+  get: func(post: post-id, key: string) -> option<string>;
+  /// `value` is JSON text.
+  set: func(post: post-id, key: string, value: string) -> result<_, string>;
+}
+
+/// Capability: `options.read`.
+interface options {
+  /// Returns JSON text.
+  get: func(key: string) -> option<string>;
+}
+
+/// Capability: `kv`.
+interface kv {
+  get: func(key: string) -> option<list<u8>>;
+  set: func(key: string, value: list<u8>) -> result<_, string>;
+  delete: func(key: string);
+  list-keys: func(prefix: string, limit: u32) -> list<string>;
+}
+
+/// Capability: `http` (HTTPS to manifest-declared hostnames only).
+interface http {
+  record request {
+    method: string,
+    url: string,
+    headers: list<tuple<string, string>>,
+    body: option<list<u8>>,
+  }
+  record response {
+    status: u16,
+    headers: list<tuple<string, string>>,
+    body: list<u8>,
+  }
+  fetch: func(req: request) -> result<response, string>;
+}
+
+/// Always linked: the plugin's own settings only (from its `[settings]` schema).
+interface settings {
+  /// Returns JSON text.
+  get: func(key: string) -> option<string>;
+}
+
+/// Capability: `mail = "admins"` (site admins only, no arbitrary recipients).
+interface mail {
+  notify-admins: func(subject: string, text-body: string) -> result<_, string>;
+}

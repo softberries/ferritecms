@@ -1,0 +1,13 @@
+package ferrite:plugin@0.1.0;
+
+world plugin {
+  import log;
+  import content;
+  import meta;
+  import options;
+  import kv;
+  import http;
+  import settings;
+  import mail;
+  export guest;
+}

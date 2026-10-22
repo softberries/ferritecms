@@ -1,0 +1,12 @@
+package ferrite:plugin@0.1.0;
+
+/// Exported by every plugin. The host passes the hook name (generic dispatch);
+/// the manifest's `[hooks]` table decides which hooks are called.
+interface guest {
+  use types.{filter-value, action-event, request-info, route-request, route-response, plugin-error};
+
+  apply-filter: func(hook: string, value: filter-value, req: request-info) -> result<filter-value, plugin-error>;
+  on-action: func(hook: string, event: action-event) -> result<_, plugin-error>;
+  /// Only called if the manifest declares `routes = true` and a matching [routes] entry.
+  handle-request: func(req: route-request) -> result<route-response, plugin-error>;
+}

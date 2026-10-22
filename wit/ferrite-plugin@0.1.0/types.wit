@@ -1,0 +1,103 @@
+package ferrite:plugin@0.1.0;
+
+/// Shared data types. No capability: these are plain values.
+interface types {
+  /// Post id as UUID text.
+  type post-id = string;
+
+  record post {
+    id: post-id,
+    kind: string,
+    slug: string,
+    title: string,
+    excerpt: string,
+    status: string,
+    /// RFC 3339 timestamp.
+    published: option<string>,
+    url: string,
+    author: string,
+    terms: list<term-ref>,
+  }
+
+  record term-ref {
+    taxonomy: string,
+    slug: string,
+    name: string,
+  }
+
+  record meta-tag {
+    name: option<string>,
+    property: option<string>,
+    content: string,
+  }
+
+  record link-tag {
+    rel: string,
+    href: string,
+    hreflang: option<string>,
+    kind: option<string>,
+  }
+
+  /// Inline JavaScript is not allowed: only `src` or JSON-LD.
+  record script-tag {
+    src: option<string>,
+    json-ld: option<string>,
+  }
+
+  record head {
+    title: option<string>,
+    metas: list<meta-tag>,
+    links: list<link-tag>,
+    scripts: list<script-tag>,
+  }
+
+  record request-info {
+    path: string,
+    locale: string,
+    is-logged-in: bool,
+    post: option<post-id>,
+  }
+
+  /// The host checks the returned variant matches the hook's declared type.
+  variant filter-value {
+    head(head),
+    html(string),
+    text(string),
+  }
+
+  /// Action payloads are JSON documented per hook, so new action hooks and payload
+  /// fields are additive (minor version) instead of breaking the world.
+  record action-event {
+    subject: option<string>,
+    /// JSON text.
+    payload: string,
+  }
+
+  record route-request {
+    method: string,
+    /// Path relative to /_p/<name>.
+    path: string,
+    query: list<tuple<string, string>>,
+    /// Allowlisted: content-type, accept, accept-language, user-agent, referer.
+    headers: list<tuple<string, string>>,
+    /// At most 1 MB.
+    body: list<u8>,
+    /// Salted hash, never the raw IP.
+    client-ip-hash: string,
+    /// User id if logged in (no cookies or tokens are passed).
+    user: option<string>,
+  }
+
+  record route-response {
+    status: u16,
+    /// Set-Cookie, CSP and auth headers are stripped/overridden by the host.
+    headers: list<tuple<string, string>>,
+    body: list<u8>,
+  }
+
+  variant plugin-error {
+    invalid-input(string),
+    unavailable(string),
+    other(string),
+  }
+}
