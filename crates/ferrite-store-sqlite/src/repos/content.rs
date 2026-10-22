@@ -2,12 +2,12 @@
 
 use async_trait::async_trait;
 use ferrite_domain::{
-    ContentId, ContentItem, ContentOrder, ContentQuery, ContentType, NewContent, Page,
-    ParentFilter, Revision, RevisionId, Timestamp,
+    ContentId, ContentItem, ContentQuery, ContentType, NewContent, Page, ParentFilter, Revision,
+    RevisionId, Timestamp,
 };
 use ferrite_store::{
-    ContentRepo, ContentTypeRepo, MetaRepo, RevisionRepo, SortKey, StoreError, check_limit,
-    content_cursor, encode_content_cursor, validate_json, validate_text,
+    ContentRepo, ContentTypeRepo, ListPart, MetaRepo, RevisionRepo, StoreError, check_limit,
+    content_cursor, content_list_plan, encode_content_cursor, validate_json, validate_text,
 };
 use serde_json::Value;
 use sqlx::{QueryBuilder, Sqlite};
@@ -210,50 +210,21 @@ impl ContentRepo for SqliteRepos {
             .map(|c| content_cursor(query.order, c))
             .transpose()?;
 
-        let mut qb = QueryBuilder::<Sqlite>::new(format!(
-            "SELECT {CONTENT_COLUMNS} FROM content_items WHERE 1 = 1"
-        ));
-        if let Some(kind) = &query.kind {
-            qb.push(" AND type = ").push_bind(kind.clone());
-        }
-        if !query.statuses.is_empty() {
-            qb.push(" AND status IN (");
-            let mut list = qb.separated(", ");
-            for status in &query.statuses {
-                list.push_bind(status.as_str());
-            }
-            list.push_unseparated(")");
-        }
-        match query.parent {
-            ParentFilter::Any => {}
-            ParentFilter::Root => {
-                qb.push(" AND parent_id IS NULL");
-            }
-            ParentFilter::Of(id) => {
-                qb.push(" AND parent_id = ").push_bind(id.as_uuid());
-            }
-        }
-        if let Some(author) = query.author {
-            qb.push(" AND author_id = ").push_bind(author.as_uuid());
-        }
-        if let Some(term) = query.term {
-            qb.push(" AND id IN (SELECT item_id FROM term_links WHERE term_id = ")
-                .push_bind(term.as_uuid())
-                .push(")");
-        }
-        if let Some((key, id)) = after {
-            push_keyset(&mut qb, query.order, key, id)?;
-        }
-        qb.push(match query.order {
-            ContentOrder::PublishedDesc => " ORDER BY published_at DESC NULLS LAST, id DESC",
-            ContentOrder::UpdatedDesc => " ORDER BY updated_at DESC, id DESC",
-            ContentOrder::MenuOrderAsc => " ORDER BY menu_order ASC, id ASC",
-            ContentOrder::TitleAsc => " ORDER BY title ASC, id ASC",
-        });
+        let plan = content_list_plan(query.order, after)?;
         // One extra row tells whether another page follows.
-        qb.push(" LIMIT ").push_bind(i64::from(limit) + 1);
-
-        let rows = run!(&self.reader, |e| qb.build().fetch_all(e))?;
+        let mut left = limit + 1;
+        let mut rows = Vec::new();
+        for part in plan {
+            if left == 0 {
+                break;
+            }
+            let mut qb = listing_base(query);
+            push_part(&mut qb, part);
+            qb.push(" LIMIT ").push_bind(i64::from(left));
+            let batch = run!(&self.reader, |e| qb.build().fetch_all(e))?;
+            left = left.saturating_sub(u32::try_from(batch.len()).unwrap_or(u32::MAX));
+            rows.extend(batch);
+        }
         let mut items = rows
             .iter()
             .map(codec::content_item)
@@ -295,57 +266,95 @@ impl ContentRepo for SqliteRepos {
     }
 }
 
-/// Appends the "strictly after the cursor" predicate for `order` (keyset pagination).
-/// `published_at` sorts NULLs last, so a NULL cursor key only admits other NULL rows.
-fn push_keyset(
-    qb: &mut QueryBuilder<Sqlite>,
-    order: ContentOrder,
-    key: SortKey,
-    id: uuid::Uuid,
-) -> Result<(), StoreError> {
-    match (order, key) {
-        (ContentOrder::PublishedDesc, SortKey::Micros(Some(k))) => {
-            qb.push(" AND (published_at < ")
-                .push_bind(k)
-                .push(" OR (published_at = ")
-                .push_bind(k)
-                .push(" AND id < ")
-                .push_bind(id)
-                .push(") OR published_at IS NULL)");
-        }
-        (ContentOrder::PublishedDesc, SortKey::Micros(None)) => {
-            qb.push(" AND published_at IS NULL AND id < ").push_bind(id);
-        }
-        (ContentOrder::UpdatedDesc, SortKey::Micros(Some(k))) => {
-            qb.push(" AND (updated_at < ")
-                .push_bind(k)
-                .push(" OR (updated_at = ")
-                .push_bind(k)
-                .push(" AND id < ")
-                .push_bind(id)
-                .push("))");
-        }
-        (ContentOrder::MenuOrderAsc, SortKey::Int(k)) => {
-            qb.push(" AND (menu_order > ")
-                .push_bind(k)
-                .push(" OR (menu_order = ")
-                .push_bind(k)
-                .push(" AND id > ")
-                .push_bind(id)
-                .push("))");
-        }
-        (ContentOrder::TitleAsc, SortKey::Text(k)) => {
-            qb.push(" AND (title > ")
-                .push_bind(k.clone())
-                .push(" OR (title = ")
-                .push_bind(k)
-                .push(" AND id > ")
-                .push_bind(id)
-                .push("))");
-        }
-        _ => return Err(StoreError::Invalid("cursor does not match order".into())),
+/// `SELECT ... WHERE <the query's filters>`, shared by every part of a listing.
+fn listing_base(query: &ContentQuery) -> QueryBuilder<Sqlite> {
+    let mut qb = QueryBuilder::<Sqlite>::new(format!(
+        "SELECT {CONTENT_COLUMNS} FROM content_items WHERE 1 = 1"
+    ));
+    if let Some(kind) = &query.kind {
+        qb.push(" AND type = ").push_bind(kind.clone());
     }
-    Ok(())
+    if !query.statuses.is_empty() {
+        qb.push(" AND status IN (");
+        let mut list = qb.separated(", ");
+        for status in &query.statuses {
+            list.push_bind(status.as_str());
+        }
+        list.push_unseparated(")");
+    }
+    match query.parent {
+        ParentFilter::Any => {}
+        ParentFilter::Root => {
+            qb.push(" AND parent_id IS NULL");
+        }
+        ParentFilter::Of(id) => {
+            qb.push(" AND parent_id = ").push_bind(id.as_uuid());
+        }
+    }
+    if let Some(author) = query.author {
+        qb.push(" AND author_id = ").push_bind(author.as_uuid());
+    }
+    if let Some(term) = query.term {
+        qb.push(" AND id IN (SELECT item_id FROM term_links WHERE term_id = ")
+            .push_bind(term.as_uuid())
+            .push(")");
+    }
+    qb
+}
+
+/// Appends a listing part's keyset predicate (a row comparison, so the index range
+/// starts at the cursor) and its ORDER BY, which matches a `content_items_*_list_idx`.
+fn push_part(qb: &mut QueryBuilder<Sqlite>, part: ListPart) {
+    match part {
+        ListPart::Published(after) => {
+            qb.push(" AND published_at IS NOT NULL");
+            if let Some((k, id)) = after {
+                qb.push(" AND (published_at, id) < (")
+                    .push_bind(k)
+                    .push(", ")
+                    .push_bind(id)
+                    .push(")");
+            }
+            qb.push(" ORDER BY published_at DESC, id DESC");
+        }
+        ListPart::Unpublished(after) => {
+            qb.push(" AND published_at IS NULL");
+            if let Some(id) = after {
+                qb.push(" AND id < ").push_bind(id);
+            }
+            qb.push(" ORDER BY id DESC");
+        }
+        ListPart::Updated(after) => {
+            if let Some((k, id)) = after {
+                qb.push(" AND (updated_at, id) < (")
+                    .push_bind(k)
+                    .push(", ")
+                    .push_bind(id)
+                    .push(")");
+            }
+            qb.push(" ORDER BY updated_at DESC, id DESC");
+        }
+        ListPart::MenuOrder(after) => {
+            if let Some((k, id)) = after {
+                qb.push(" AND (menu_order, id) > (")
+                    .push_bind(k)
+                    .push(", ")
+                    .push_bind(id)
+                    .push(")");
+            }
+            qb.push(" ORDER BY menu_order ASC, id ASC");
+        }
+        ListPart::Title(after) => {
+            if let Some((k, id)) = after {
+                qb.push(" AND (title, id) > (")
+                    .push_bind(k)
+                    .push(", ")
+                    .push_bind(id)
+                    .push(")");
+            }
+            qb.push(" ORDER BY title ASC, id ASC");
+        }
+    }
 }
 
 #[async_trait]

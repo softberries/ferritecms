@@ -52,7 +52,13 @@ CREATE TABLE content_items (
 );
 -- NULL parent counts as one value, so two top-level items cannot share a slug.
 CREATE UNIQUE INDEX content_items_slug_uq ON content_items (type, coalesce(parent_id, x''), slug);
-CREATE INDEX content_items_type_status_published_idx ON content_items (type, status, published_at);
+-- Listing indexes: one per ContentOrder, columns and directions exactly as its ORDER BY
+-- (content repo `push_part`), so a page is an index range scan with no sort.
+CREATE INDEX content_items_published_list_idx
+    ON content_items (type, status, published_at DESC, id DESC);
+CREATE INDEX content_items_updated_list_idx ON content_items (type, updated_at DESC, id DESC);
+CREATE INDEX content_items_menu_order_list_idx ON content_items (type, menu_order, id);
+CREATE INDEX content_items_title_list_idx ON content_items (type, title, id);
 CREATE INDEX content_items_parent_idx ON content_items (parent_id);
 CREATE INDEX content_items_author_idx ON content_items (author_id);
 CREATE INDEX content_items_status_scheduled_idx ON content_items (status, scheduled_at);

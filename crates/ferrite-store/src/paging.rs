@@ -81,6 +81,61 @@ pub fn content_cursor(order: ContentOrder, cursor: &str) -> Result<(SortKey, Uui
     Ok((key, id))
 }
 
+/// One index-friendly part of a content listing (I3). A listing runs its parts in order,
+/// each as its own query with `LIMIT` = rows still wanted, until the page is full. Every
+/// part's predicate is a row comparison with the same column order as its ORDER BY and
+/// its index, so both engines walk the index from the cursor instead of sorting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListPart {
+    /// `published_at IS NOT NULL [AND (published_at, id) < (k, id)]`, newest first.
+    Published(Option<(i64, Uuid)>),
+    /// `published_at IS NULL [AND id < id]`, by id descending: the NULLS LAST group.
+    Unpublished(Option<Uuid>),
+    /// `[(updated_at, id) < (k, id)]`, newest first.
+    Updated(Option<(i64, Uuid)>),
+    /// `[(menu_order, id) > (k, id)]`, ascending.
+    MenuOrder(Option<(i32, Uuid)>),
+    /// `[(title, id) > (k, id)]`, ascending, byte-wise.
+    Title(Option<(String, Uuid)>),
+}
+
+/// The parts of a listing in `order` that starts after `after` (a decoded cursor).
+/// `PublishedDesc` sorts NULL `published_at` last, so it is split into the non-NULL part
+/// and the NULL group; a cursor inside the NULL group skips the first part.
+pub fn content_list_plan(
+    order: ContentOrder,
+    after: Option<(SortKey, Uuid)>,
+) -> Result<Vec<ListPart>, StoreError> {
+    let bad = || StoreError::Invalid("cursor does not match order".into());
+    Ok(match (order, after) {
+        (ContentOrder::PublishedDesc, None) => {
+            vec![ListPart::Published(None), ListPart::Unpublished(None)]
+        }
+        (ContentOrder::PublishedDesc, Some((SortKey::Micros(Some(k)), id))) => {
+            vec![
+                ListPart::Published(Some((k, id))),
+                ListPart::Unpublished(None),
+            ]
+        }
+        (ContentOrder::PublishedDesc, Some((SortKey::Micros(None), id))) => {
+            vec![ListPart::Unpublished(Some(id))]
+        }
+        (ContentOrder::UpdatedDesc, None) => vec![ListPart::Updated(None)],
+        (ContentOrder::UpdatedDesc, Some((SortKey::Micros(Some(k)), id))) => {
+            vec![ListPart::Updated(Some((k, id)))]
+        }
+        (ContentOrder::MenuOrderAsc, None) => vec![ListPart::MenuOrder(None)],
+        (ContentOrder::MenuOrderAsc, Some((SortKey::Int(k), id))) => {
+            vec![ListPart::MenuOrder(Some((k, id)))]
+        }
+        (ContentOrder::TitleAsc, None) => vec![ListPart::Title(None)],
+        (ContentOrder::TitleAsc, Some((SortKey::Text(k), id))) => {
+            vec![ListPart::Title(Some((k, id)))]
+        }
+        _ => return Err(bad()),
+    })
+}
+
 /// Encodes a cursor whose sort key is text (redirect source path, user login).
 pub fn encode_text_cursor(key: &str, id: Uuid) -> String {
     Cursor::encode(&json!(key), id)
@@ -129,5 +184,38 @@ mod tests {
         );
         assert!(content_cursor(ContentOrder::UpdatedDesc, &null).is_err());
         assert!(content_cursor(ContentOrder::MenuOrderAsc, "garbage!").is_err());
+    }
+
+    #[test]
+    fn published_plan_splits_off_the_null_group() {
+        let id = Uuid::now_v7();
+        assert_eq!(
+            content_list_plan(ContentOrder::PublishedDesc, None).unwrap(),
+            [ListPart::Published(None), ListPart::Unpublished(None)]
+        );
+        assert_eq!(
+            content_list_plan(
+                ContentOrder::PublishedDesc,
+                Some((SortKey::Micros(Some(5)), id))
+            )
+            .unwrap(),
+            [
+                ListPart::Published(Some((5, id))),
+                ListPart::Unpublished(None)
+            ]
+        );
+        assert_eq!(
+            content_list_plan(
+                ContentOrder::PublishedDesc,
+                Some((SortKey::Micros(None), id))
+            )
+            .unwrap(),
+            [ListPart::Unpublished(Some(id))]
+        );
+        assert!(
+            content_list_plan(ContentOrder::UpdatedDesc, Some((SortKey::Micros(None), id)))
+                .is_err()
+        );
+        assert!(content_list_plan(ContentOrder::TitleAsc, Some((SortKey::Int(1), id))).is_err());
     }
 }
