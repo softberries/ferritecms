@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use moka::{Expiry, future::Cache, notification::RemovalCause};
+use moka::{Expiry, future::Cache, notification::RemovalCause, ops::compute::Op};
 
 use crate::{
     index::{Entry, Invalidated, State},
@@ -45,6 +45,16 @@ enum Flight<E> {
     /// The page is served but not cached (error status, `Set-Cookie`, zero TTL, or
     /// an invalidation of its deps arrived while it rendered).
     Uncached(Arc<CachedPage>),
+    /// The flight ran without a render future (cannot happen; see `get_or_render`).
+    Lost,
+}
+
+/// Outcome of one single-flight attempt.
+enum Flown {
+    Page(Arc<CachedPage>),
+    /// Another caller's entry, invalidated since; removed from moka.
+    Invalid(Arc<CachedPage>),
+    Lost,
 }
 
 /// A size-bounded, per-node cache of rendered pages with a dependency index.
@@ -82,15 +92,27 @@ impl PageCache {
         if entry.is_valid() {
             return Some(entry.page.clone());
         }
-        self.cache.invalidate(key).await;
+        self.remove_if_id(key, entry.id).await;
         None
     }
 
-    /// Stores `page` unless it is not cacheable ([`CachedPage::is_cacheable`]); returns
-    /// whether it was stored. The caller vouches that the page is current: it gets no
-    /// protection against an invalidation that arrived while the caller rendered it;
-    /// [`PageCache::get_or_render`] has that protection.
-    pub async fn insert(&self, key: CacheKey, page: CachedPage) -> bool {
+    /// Removes the entry under `key` only if it is still entry `id`, so a newer valid
+    /// entry stored meanwhile survives.
+    async fn remove_if_id(&self, key: &CacheKey, id: u64) {
+        self.cache
+            .entry_by_ref(key)
+            .and_compute_with(|current| {
+                let same = current.is_some_and(|e| e.value().id == id);
+                async move { if same { Op::Remove } else { Op::Nop } }
+            })
+            .await;
+    }
+
+    /// Stores `page` unless it is not cacheable; returns whether it was stored.
+    /// Test-only: it has no protection against an invalidation that arrived while the
+    /// caller rendered the page. Production code uses [`PageCache::get_or_render`].
+    #[cfg(test)]
+    pub(crate) async fn insert(&self, key: CacheKey, page: CachedPage) -> bool {
         if !page.is_cacheable() {
             return false;
         }
@@ -108,6 +130,10 @@ impl PageCache {
     /// it is cacheable and none of its deps (nor `all`) were invalidated while it
     /// rendered; either way every waiter gets it. A render error is not cached and is
     /// returned to every waiter.
+    ///
+    /// If the flight hands back an entry invalidated since another caller rendered it,
+    /// the entry is removed and the render is retried once through the guarded path;
+    /// if that again yields an invalidated entry, `render` runs uncached.
     pub async fn get_or_render<F, E>(
         &self,
         key: CacheKey,
@@ -120,24 +146,63 @@ impl PageCache {
         if let Some(page) = self.get(&key).await {
             return Ok(page);
         }
+        // Kept outside the flight: when another caller's flight wins, ours is dropped
+        // unpolled and the render is still here for the retry.
+        let mut render = Some(render);
+        let mut stale = None;
+        for _ in 0..2 {
+            match self.flight(&key, &mut render).await? {
+                Flown::Page(page) => return Ok(page),
+                Flown::Invalid(page) => stale = Some(page),
+                Flown::Lost => break,
+            }
+        }
+        match (render.take(), stale) {
+            (Some(render), _) => render.await.map(Arc::new).map_err(Arc::new),
+            // Unreachable: once our own render ran, its result was returned above.
+            (None, Some(page)) => Ok(page),
+            (None, None) => {
+                tracing::error!(path = %key.path, "page render lost by the cache");
+                Ok(Arc::new(CachedPage::unavailable()))
+            }
+        }
+    }
+
+    /// One single-flight attempt; `render` is taken if this caller's flight runs.
+    async fn flight<F, E>(&self, key: &CacheKey, render: &mut Option<F>) -> Result<Flown, Arc<E>>
+    where
+        F: Future<Output = Result<CachedPage, E>> + Send,
+        E: Send + Sync + 'static,
+    {
         let state = self.state.clone();
-        let init_key = key.clone();
-        let init = async move {
+        let init = async {
+            let Some(render) = render.take() else {
+                return Err(Flight::Lost);
+            };
             let guard = state.begin_render();
             let page = Arc::new(render.await.map_err(|e| Flight::Failed(Arc::new(e)))?);
             if !page.is_cacheable() {
                 return Err(Flight::Uncached(page));
             }
-            match state.register(&init_key, page.clone(), &guard) {
+            match state.register(key, page.clone(), &guard) {
                 Some(entry) => Ok(Arc::new(entry)),
                 None => Err(Flight::Uncached(page)),
             }
         };
-        match self.cache.try_get_with(key, init).await {
-            Ok(entry) => Ok(entry.page.clone()),
+        let result = self.cache.try_get_with(key.clone(), init).await;
+        let ran = render.is_none();
+        match result {
+            // Our own render is served even if invalidated after it registered: it
+            // finished before that invalidation.
+            Ok(entry) if entry.is_valid() || ran => Ok(Flown::Page(entry.page.clone())),
+            Ok(entry) => {
+                self.remove_if_id(key, entry.id).await;
+                Ok(Flown::Invalid(entry.page.clone()))
+            }
             Err(flight) => match &*flight {
                 Flight::Failed(e) => Err(e.clone()),
-                Flight::Uncached(page) => Ok(page.clone()),
+                Flight::Uncached(page) => Ok(Flown::Page(page.clone())),
+                Flight::Lost => Ok(Flown::Lost),
             },
         }
     }
@@ -450,6 +515,52 @@ mod tests {
         assert!(!render_with_concurrent(&["post:9", "theme"]).await);
         // Unrelated keys do not block caching.
         assert!(render_with_concurrent(&["post:2"]).await);
+    }
+
+    /// Stores an entry for `/a/` that is already invalidated, bypassing `get`.
+    async fn plant_invalid(c: &PageCache) -> u64 {
+        let guard = c.state().begin_render();
+        let entry = c
+            .state()
+            .register(&key("/a/"), Arc::new(page("stale", &["post:1"])), &guard)
+            .unwrap();
+        drop(guard);
+        let id = entry.id;
+        c.invalidate(&["post:1".into()]).await;
+        c.moka().insert(key("/a/"), Arc::new(entry)).await;
+        id
+    }
+
+    #[tokio::test]
+    async fn flight_returning_an_invalid_entry_is_retried() {
+        let c = PageCache::new(1 << 20);
+        plant_invalid(&c).await;
+        let mut render = Some(async { Ok::<_, ()>(page("fresh", &["post:1"])) });
+        // Another caller's (invalid) entry: not served, removed, our render kept.
+        assert!(matches!(
+            c.flight(&key("/a/"), &mut render).await,
+            Ok(Flown::Invalid(_))
+        ));
+        assert!(render.is_some());
+        assert!(!c.moka().contains_key(&key("/a/")));
+        // The retry renders and caches.
+        match c.flight(&key("/a/"), &mut render).await {
+            Ok(Flown::Page(p)) => assert_eq!(&p.body[..], b"fresh"),
+            _ => panic!("expected a page"),
+        }
+        assert!(render.is_none());
+        assert_eq!(&c.get(&key("/a/")).await.unwrap().body[..], b"fresh");
+        assert_index_consistent(&c).await;
+    }
+
+    #[tokio::test]
+    async fn id_checked_removal_spares_a_newer_entry() {
+        let c = PageCache::new(1 << 20);
+        let old = plant_invalid(&c).await;
+        assert!(c.insert(key("/a/"), page("new", &["post:2"])).await);
+        c.remove_if_id(&key("/a/"), old).await;
+        assert_eq!(&c.get(&key("/a/")).await.unwrap().body[..], b"new");
+        assert_index_consistent(&c).await;
     }
 
     #[tokio::test]

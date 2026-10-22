@@ -165,10 +165,10 @@ async fn render(r: &SiteReader, view: View) -> Option<CachedPage> {
 
 async fn fill(cache: &PageCache, r: &SiteReader, views: &[View]) {
     for &v in views {
-        let page = render(r, v)
+        serve(cache, r, v)
             .await
             .unwrap_or_else(|| panic!("{v:?} renders"));
-        assert!(cache.insert(cache_key(v), page).await);
+        assert!(cached_body(cache, v).await.is_some(), "{v:?} cached");
     }
 }
 
@@ -179,16 +179,16 @@ async fn cached_body(cache: &PageCache, view: View) -> Option<String> {
         .map(|p| String::from_utf8(p.body.to_vec()).unwrap())
 }
 
-/// The cached body if present, else a fresh render that is then cached (what the
-/// HTTP layer does on a miss).
+/// What the HTTP layer does: the cached page, or a single-flight render that is then
+/// cached. `None` = 404 (the render "fails" and nothing is cached).
 async fn serve(cache: &PageCache, r: &SiteReader, view: View) -> Option<String> {
-    if let Some(body) = cached_body(cache, view).await {
-        return Some(body);
-    }
-    let page = render(r, view).await?;
-    let body = String::from_utf8(page.body.to_vec()).unwrap();
-    cache.insert(cache_key(view), page).await;
-    Some(body)
+    let page = cache
+        .get_or_render(cache_key(view), async {
+            render(r, view).await.ok_or("not found")
+        })
+        .await
+        .ok()?;
+    Some(String::from_utf8(page.body.to_vec()).unwrap())
 }
 
 struct Site {

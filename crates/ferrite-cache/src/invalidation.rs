@@ -17,6 +17,15 @@
 //! open for [`GAP_TIMEOUT`] is skipped (a rolled-back transaction leaves a permanent
 //! hole). Events already applied past a gap are remembered and not re-applied.
 //!
+//! **Skipping a gap** (ruling R24) flushes the whole cache, and every skipped seq goes
+//! into a *late set* watched for [`LATE_HORIZON`] (10 minutes): a writer that held its
+//! seq uncommitted for longer than the gap timeout must still invalidate when it
+//! commits. Each tick probes once with `since(min_late - 1, POLL_BATCH)`, paging
+//! forward (resuming where the last tick stopped) within the per-tick batch budget,
+//! applies any late seq that has appeared and drops it from the set. A seq not seen
+//! within the horizon is dropped with a warning. At most [`MAX_LATE`] seqs are watched;
+//! beyond that a skip only flushes (warned).
+//!
 //! **Boot**: `last_seq` starts at `max_seq()`, except that the last [`POLL_BATCH`]
 //! events are inspected first: a hole below `max_seq` may be a transaction that
 //! allocated its seq before boot and commits after it, so the cursor starts at the
@@ -47,7 +56,12 @@ use crate::cache::PageCache;
 pub const POLL_BATCH: u32 = 1000;
 /// How long a sequence gap is re-read before it is skipped.
 pub const GAP_TIMEOUT: Duration = Duration::from_secs(5);
-/// Most batches read in one poll (bounds one tick's work while catching up).
+/// How long a skipped seq is watched for a late commit (ruling R24).
+pub const LATE_HORIZON: Duration = Duration::from_secs(10 * 60);
+/// Most skipped seqs watched at once.
+pub const MAX_LATE: usize = 10_000;
+/// Most batches read in one poll, shared by the main read and the late probe (the
+/// probe always gets at least one); bounds one tick's work while catching up.
 const MAX_BATCHES: usize = 10;
 
 /// Where the loop reads events from ([`InvalidationLoop::for_store`] wraps a [`Store`]).
@@ -73,6 +87,10 @@ pub struct InvalidationLoop {
     gaps: BTreeMap<i64, Instant>,
     /// Seqs above `last_seq` already applied (read past a gap).
     applied: BTreeSet<i64>,
+    /// Skipped seqs still watched, with the time they were skipped.
+    late: BTreeMap<i64, Instant>,
+    /// Where the late probe resumes (`None` = from the smallest late seq).
+    probe_from: Option<i64>,
 }
 
 impl InvalidationLoop {
@@ -92,6 +110,8 @@ impl InvalidationLoop {
             last_seq: max,
             gaps: BTreeMap::new(),
             applied: BTreeSet::new(),
+            late: BTreeMap::new(),
+            probe_from: None,
         };
         if let Some(first) = recent.first() {
             this.last_seq = first.seq - 1;
@@ -106,13 +126,15 @@ impl InvalidationLoop {
         self.last_seq
     }
 
-    /// One poll: reads the events after `last_seq` and applies the new ones; returns
-    /// how many were applied. On a store error nothing is applied and the cursor does
-    /// not move.
+    /// One poll: reads the events after `last_seq` and applies the new ones, then
+    /// probes the late set; returns how many events were applied. On a store error in
+    /// the main read nothing is applied and the cursor does not move.
     pub async fn poll_once(&mut self) -> Result<usize, StoreError> {
         let mut events: Vec<Event> = Vec::new();
         let mut from = self.last_seq;
+        let mut batches = 0;
         for _ in 0..MAX_BATCHES {
+            batches += 1;
             let batch = self.source.events().since(from, POLL_BATCH).await?;
             let full = batch.len() >= POLL_BATCH as usize;
             match batch.last() {
@@ -124,7 +146,59 @@ impl InvalidationLoop {
                 break;
             }
         }
-        Ok(self.process(events).await)
+        let applied = self.process(events).await;
+        let late = self
+            .probe_late(MAX_BATCHES.saturating_sub(batches).max(1))
+            .await?;
+        Ok(applied + late)
+    }
+
+    /// Applies late arrivals of skipped seqs (see the module docs).
+    async fn probe_late(&mut self, budget: usize) -> Result<usize, StoreError> {
+        let now = Instant::now();
+        let before = self.late.len();
+        self.late
+            .retain(|_, skipped_at| now.duration_since(*skipped_at) < LATE_HORIZON);
+        if self.late.len() < before {
+            tracing::warn!(
+                dropped = before - self.late.len(),
+                "skipped event seqs never committed within 10 min; no longer watched"
+            );
+        }
+        let (Some(&min), Some(&max)) = (self.late.keys().next(), self.late.keys().next_back())
+        else {
+            self.probe_from = None;
+            return Ok(0);
+        };
+        let mut from = self
+            .probe_from
+            .filter(|f| *f < max)
+            .map_or(min - 1, |f| f.max(min - 1));
+        let mut applied = 0;
+        let mut covered = false;
+        for _ in 0..budget {
+            let batch = self.source.events().since(from, POLL_BATCH).await?;
+            let full = batch.len() >= POLL_BATCH as usize;
+            for event in &batch {
+                if self.late.remove(&event.seq).is_some() {
+                    tracing::info!(
+                        seq = event.seq,
+                        "late event committed after its gap was skipped"
+                    );
+                    self.apply(event).await;
+                    applied += 1;
+                }
+            }
+            if let Some(last) = batch.last() {
+                from = last.seq;
+            }
+            if !full || from >= max {
+                covered = true;
+                break;
+            }
+        }
+        self.probe_from = (!covered).then_some(from);
+        Ok(applied)
     }
 
     /// Applies `events` (ascending, all above `last_seq`) that were not applied yet,
@@ -142,6 +216,8 @@ impl InvalidationLoop {
         let mut prev = self.last_seq;
         let mut cursor = self.last_seq;
         let mut blocked = false;
+        let mut skipped = false;
+        let mut untracked = 0usize;
         for event in events.iter().filter(|e| e.seq > self.last_seq) {
             if event.seq > prev + 1 {
                 let first_seen = *self.gaps.entry(event.seq).or_insert(now);
@@ -149,8 +225,15 @@ impl InvalidationLoop {
                     tracing::warn!(
                         from = prev + 1,
                         to = event.seq - 1,
-                        "event sequence gap open for 5 s; skipping it"
+                        "event sequence gap open for 5 s; skipping it, flushing the cache"
                     );
+                    skipped = true;
+                    let room = MAX_LATE.saturating_sub(self.late.len());
+                    let hole = usize::try_from(event.seq - prev - 1).unwrap_or(usize::MAX);
+                    for seq in (prev + 1..event.seq).take(room) {
+                        self.late.insert(seq, now);
+                    }
+                    untracked += hole.saturating_sub(room);
                 } else {
                     blocked = true;
                 }
@@ -163,6 +246,15 @@ impl InvalidationLoop {
         self.last_seq = cursor;
         self.gaps = self.gaps.split_off(&(cursor + 1));
         self.applied = self.applied.split_off(&(cursor + 1));
+        if skipped {
+            self.cache.flush();
+        }
+        if untracked > 0 {
+            tracing::warn!(
+                untracked,
+                "late set full; skipped seqs not watched for late commits"
+            );
+        }
         applied
     }
 
@@ -349,6 +441,83 @@ mod tests {
         lp.poll_once().await.unwrap();
         assert_eq!(lp.last_seq(), 4, "skipped after 5 s");
         assert!(lp.gaps.is_empty() && lp.applied.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn skip_flushes_and_late_arrival_is_applied() {
+        let (fake, cache, mut lp) = setup().await;
+        fake.commit(1, "invalidate", &["a"]);
+        fake.commit(2, "invalidate", &["b"]);
+        fake.commit(4, "invalidate", &["c"]);
+        lp.poll_once().await.unwrap();
+        cache.insert(key("/any/"), page(&["post:1"])).await;
+        tokio::time::advance(GAP_TIMEOUT).await;
+        lp.poll_once().await.unwrap();
+        assert_eq!(lp.last_seq(), 4);
+        assert!(cache.is_empty().await, "the skip flushed the cache");
+        assert_eq!(lp.late.keys().copied().collect::<Vec<_>>(), [3]);
+
+        // Cached between the skip and the late commit, under seq 3's keys.
+        tokio::time::advance(Duration::from_secs(10)).await;
+        lp.poll_once().await.unwrap();
+        cache.insert(key("/three/"), page(&["post:3"])).await;
+        cache.insert(key("/other/"), page(&["post:9"])).await;
+        tokio::time::advance(Duration::from_secs(15)).await;
+        fake.commit(3, "invalidate", &["post:3"]);
+        assert_eq!(
+            lp.poll_once().await.unwrap(),
+            1,
+            "the late event is applied"
+        );
+        assert!(cache.get(&key("/three/")).await.is_none());
+        assert!(
+            cache.get(&key("/other/")).await.is_some(),
+            "no second flush"
+        );
+        assert!(lp.late.is_empty());
+        assert_eq!(lp.last_seq(), 4);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn late_seq_is_dropped_after_the_horizon() {
+        let (fake, _cache, mut lp) = setup().await;
+        fake.commit(1, "invalidate", &["a"]);
+        fake.commit(3, "invalidate", &["b"]);
+        lp.poll_once().await.unwrap();
+        tokio::time::advance(GAP_TIMEOUT).await;
+        lp.poll_once().await.unwrap();
+        assert_eq!(lp.late.len(), 1);
+        tokio::time::advance(LATE_HORIZON - Duration::from_secs(1)).await;
+        lp.poll_once().await.unwrap();
+        assert_eq!(lp.late.len(), 1, "still watched just inside the horizon");
+        tokio::time::advance(Duration::from_secs(1)).await;
+        lp.poll_once().await.unwrap();
+        assert!(lp.late.is_empty(), "dropped at the horizon");
+        assert_eq!(lp.probe_from, None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn late_probe_pages_across_batches() {
+        let (fake, cache, mut lp) = setup().await;
+        // Holes at 3 and 1503 with 1499 events between them.
+        let n = 1600;
+        for seq in (1..=n).filter(|s| *s != 3 && *s != 1503) {
+            fake.commit(seq, "invalidate", &["k"]);
+        }
+        lp.poll_once().await.unwrap();
+        tokio::time::advance(GAP_TIMEOUT).await;
+        lp.poll_once().await.unwrap();
+        assert_eq!(lp.last_seq(), n);
+        assert_eq!(lp.late.keys().copied().collect::<Vec<_>>(), [3, 1503]);
+
+        cache.insert(key("/a/"), page(&["post:3"])).await;
+        cache.insert(key("/b/"), page(&["post:1503"])).await;
+        fake.commit(3, "invalidate", &["post:3"]);
+        fake.commit(1503, "invalidate", &["post:1503"]);
+        // One tick has budget for both probe batches (1000 rows each).
+        assert_eq!(lp.poll_once().await.unwrap(), 2);
+        assert!(cache.is_empty().await);
+        assert!(lp.late.is_empty());
     }
 
     #[tokio::test(start_paused = true)]

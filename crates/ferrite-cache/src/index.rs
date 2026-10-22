@@ -11,7 +11,9 @@
 //!    every invalidation bumps the epoch and, while renders are in flight, is appended
 //!    to a log. [`State::register`] refuses a page if any logged invalidation newer than
 //!    its start epoch names one of its deps (or `all`). The log is pruned to the oldest
-//!    in-flight start, so it is empty whenever nothing renders.
+//!    in-flight start, so it is empty whenever nothing renders, and capped at
+//!    10 000 entries (overflow collapses it to one `all` entry: in-flight renders are
+//!    refused, never wrongly accepted).
 //! 2. An invalidation arrives after registration but before moka stores the value.
 //!    Each entry carries a `valid` flag that invalidation clears through the index;
 //!    lookups treat a cleared entry as a miss, so a late insert is never served.
@@ -25,6 +27,10 @@ use std::{
 };
 
 use crate::page::{CacheKey, CachedPage};
+
+/// Most invalidations kept for in-flight renders; on overflow the log collapses to a
+/// single `all` entry (every in-flight render is then refused).
+const MAX_LOG: usize = 10_000;
 
 /// The flush-everything dependency key.
 pub const ALL_KEY: &str = "all";
@@ -86,9 +92,17 @@ impl Inner {
 
     fn log(&mut self, what: Logged) {
         self.epoch += 1;
-        if !self.in_flight.is_empty() {
-            self.log.push_back((self.epoch, what));
+        if self.in_flight.is_empty() {
+            return;
         }
+        if self.log.len() >= MAX_LOG {
+            // Collapse: one `All` at the newest epoch refuses every in-flight render,
+            // which is what the dropped entries could have done at most.
+            self.log.clear();
+            self.log.push_back((self.epoch, Logged::All));
+            return;
+        }
+        self.log.push_back((self.epoch, what));
     }
 
     fn prune_log(&mut self) {
@@ -307,6 +321,24 @@ mod tests {
         assert_eq!(s.log_len(), 1);
         drop(g);
         assert_eq!(s.log_len(), 0);
+    }
+
+    #[test]
+    fn log_overflow_collapses_to_all() {
+        let s = State::default();
+        let g = s.begin_render();
+        for i in 0..MAX_LOG {
+            s.invalidate(&[format!("post:{i}")]);
+        }
+        assert_eq!(s.log_len(), MAX_LOG);
+        // Before the overflow an untouched dep is still accepted.
+        assert!(s.register(&key("/ok/"), page(&["post:x"]), &g).is_some());
+        s.invalidate(&["post:overflow".into()]);
+        assert_eq!(s.log_len(), 1);
+        assert!(s.register(&key("/a/"), page(&["post:x"]), &g).is_none());
+        // A render that starts after the collapse is unaffected.
+        let g2 = s.begin_render();
+        assert!(s.register(&key("/b/"), page(&["post:x"]), &g2).is_some());
     }
 
     #[test]

@@ -67,6 +67,18 @@ impl CachedPage {
                 .any(|(name, _)| name.eq_ignore_ascii_case("set-cookie"))
     }
 
+    /// An uncacheable `503` with an empty body (a defensive fallback only).
+    pub(crate) fn unavailable() -> Self {
+        Self {
+            status: 503,
+            headers: Vec::new(),
+            body: Bytes::new(),
+            etag: crate::etag_for(b""),
+            deps: Vec::new(),
+            ttl: None,
+        }
+    }
+
     /// The bytes an entry occupies, as counted against `cache.max_bytes`: body, key,
     /// headers, ETag and dependency keys.
     pub(crate) fn weight(&self, key: &CacheKey) -> u32 {

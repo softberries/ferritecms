@@ -5,14 +5,18 @@
 //!   [`CacheKey`]. Each [`CachedPage`] carries the dependency keys recorded while it
 //!   was rendered (grammar and emitter/renderer contract: `ferrite_core::events`);
 //!   [`PageCache::invalidate`] drops every page indexed under any of the given keys,
-//!   and `all` drops everything. Not cached: status >= 400, `Set-Cookie`.
-//! * [`InvalidationLoop`]: polls the `events` outbox from `max_seq()` at boot and
-//!   applies each event to the cache, following the sequence-gap rule of 04 §4.
+//!   and `all` drops everything. Not cached: status >= 400, `Set-Cookie`. Pages enter
+//!   the cache only through [`PageCache::get_or_render`] (the guarded path).
+//! * [`InvalidationLoop`]: polls the `events` outbox and applies each event to the
+//!   cache, following the sequence-gap rule of 04 §4 (skipping a gap flushes and
+//!   watches the skipped seqs for late commits). The boot cursor is `max_seq()`, or the
+//!   first hole among the last 1000 events if there is one; create the loop (which
+//!   reads it, and fails on a store error) before serving traffic.
 //! * [`etag_for`] / [`if_none_match_matches`]: ETag and `304` helpers.
 //!
 //! Correctness over hit rate: a stale page after an edit is the bug this crate exists
 //! to prevent, so every ambiguous case (unknown event kind, a render overlapping an
-//! invalidation, a failed boot read) errs towards dropping pages.
+//! invalidation, a skipped sequence gap) errs towards dropping pages.
 
 mod cache;
 mod http;
@@ -23,5 +27,7 @@ mod page;
 pub use cache::PageCache;
 pub use http::{etag_for, if_none_match_matches};
 pub use index::ALL_KEY;
-pub use invalidation::{EventSource, GAP_TIMEOUT, InvalidationLoop, POLL_BATCH};
+pub use invalidation::{
+    EventSource, GAP_TIMEOUT, InvalidationLoop, LATE_HORIZON, MAX_LATE, POLL_BATCH,
+};
 pub use page::{CacheKey, CachedPage, Variant};
