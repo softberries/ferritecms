@@ -5,11 +5,15 @@ use std::ops::Range;
 
 use bytes::Bytes;
 use ferrite_domain::ArtifactHash;
-use futures::{Stream, StreamExt};
+use futures::stream::BoxStream;
+use futures::{Stream, StreamExt, TryStreamExt};
 use object_store::aws::AmazonS3Builder;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path;
-use object_store::{ObjectStore, ObjectStoreExt, PutMode, PutOptions, RetryConfig, WriteMultipart};
+use object_store::{
+    ClientOptions, GetOptions, GetRange, ObjectStore, ObjectStoreExt, PutMode, PutOptions,
+    RetryConfig, WriteMultipart,
+};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use sha2::{Digest, Sha256};
 
@@ -67,6 +71,15 @@ pub struct ArtifactRef {
     pub mime: String,
     /// `false` if the artifact already existed.
     pub created: bool,
+}
+
+/// A streaming read opened by [`MediaStore::open_read`].
+pub struct ReadStream {
+    /// Total size of the object.
+    pub size: u64,
+    /// The byte range this stream serves (the whole object when none was requested).
+    pub range: Range<u64>,
+    pub stream: BoxStream<'static, Result<Bytes, MediaError>>,
 }
 
 pub struct MediaStore {
@@ -298,29 +311,73 @@ impl MediaStore {
     }
 
     /// Reads `range` (end exclusive). Inverted ranges and ranges past the end are `Range` errors.
+    /// Buffered: for small reads. Use [`MediaStore::open_read`] to serve large objects.
     pub async fn get_range(
         &self,
         hash: &ArtifactHash,
         range: Range<u64>,
     ) -> Result<Bytes, MediaError> {
         let size = self.head(hash).await?.ok_or(MediaError::NotFound)?;
-        if range.start > range.end {
-            return Err(MediaError::Range(format!(
-                "inverted range {}..{}",
-                range.start, range.end
-            )));
-        }
-        if range.end > size {
-            return Err(MediaError::Range(format!(
-                "range {}..{} exceeds object size {size}",
-                range.start, range.end
-            )));
-        }
+        check_range(&range, size)?;
         if range.is_empty() {
             return Ok(Bytes::new());
         }
         let key = keys::artifact_key(&self.prefix, hash);
         Ok(self.inner.get_range(&key, range).await?)
+    }
+
+    /// Opens a streaming read of the whole object (`None`) or of `range` (end exclusive).
+    ///
+    /// One `get_opts` request (with a bounded `GetRange` when a range is given); the total size
+    /// comes from the response metadata, not from a separate `head`. Validation matches
+    /// [`MediaStore::get_range`]: a missing artifact is `NotFound`, an inverted range or one
+    /// past the end is `Range`. Inverted and empty ranges are answered with a metadata-only
+    /// request (no body is transferred). The body is not buffered; dropping the stream aborts
+    /// the transfer.
+    pub async fn open_read(
+        &self,
+        hash: &ArtifactHash,
+        range: Option<Range<u64>>,
+    ) -> Result<ReadStream, MediaError> {
+        let key = keys::artifact_key(&self.prefix, hash);
+        let metadata_only = range.as_ref().is_some_and(|r| r.start >= r.end);
+        let mut opts = GetOptions::default();
+        if metadata_only {
+            opts.head = true;
+        } else if let Some(r) = &range {
+            opts.range = Some(GetRange::Bounded(r.clone()));
+        }
+        let res = match self.inner.get_opts(&key, opts).await {
+            Ok(res) => res,
+            Err(object_store::Error::NotFound { .. }) => return Err(MediaError::NotFound),
+            Err(e) => {
+                // A backend may reject an unsatisfiable range with its own error; report
+                // that as `Range`, like `get_range`, when the object exists and is smaller.
+                if let Some(r) = &range
+                    && let Ok(Some(size)) = self.head(hash).await
+                {
+                    check_range(r, size)?;
+                }
+                return Err(e.into());
+            }
+        };
+        let size = res.meta.size;
+        if let Some(r) = &range {
+            check_range(r, size)?;
+        }
+        let served = range.unwrap_or(0..size);
+        if metadata_only {
+            return Ok(ReadStream {
+                size,
+                range: served,
+                stream: futures::stream::empty().boxed(),
+            });
+        }
+        Ok(ReadStream {
+            size,
+            range: served,
+            stream: res.into_stream().map_err(MediaError::from).boxed(),
+        })
     }
 
     pub async fn head(&self, hash: &ArtifactHash) -> Result<Option<u64>, MediaError> {
@@ -419,6 +476,22 @@ impl Drop for StagingGuard {
     }
 }
 
+fn check_range(range: &Range<u64>, size: u64) -> Result<(), MediaError> {
+    if range.start > range.end {
+        return Err(MediaError::Range(format!(
+            "inverted range {}..{}",
+            range.start, range.end
+        )));
+    }
+    if range.end > size {
+        return Err(MediaError::Range(format!(
+            "range {}..{} exceeds object size {size}",
+            range.start, range.end
+        )));
+    }
+    Ok(())
+}
+
 fn finish_hash(hasher: Sha256) -> Result<ArtifactHash, MediaError> {
     use std::fmt::Write;
     let digest = hasher.finalize();
@@ -448,6 +521,14 @@ fn build_s3(cfg: &S3Config) -> Result<object_store::aws::AmazonS3, MediaError> {
         .with_region(&cfg.region)
         .with_allow_http(cfg.allow_http)
         .with_virtual_hosted_style_request(cfg.virtual_hosted_style)
+        .with_client_options(
+            // No total-request timeout: large artifacts stream for as long as they need.
+            // Connects must succeed within 5 s; a body read that stalls for 30 s fails.
+            ClientOptions::new()
+                .with_timeout_disabled()
+                .with_connect_timeout(Duration::from_secs(5))
+                .with_read_timeout(Duration::from_secs(30)),
+        )
         .with_retry(RetryConfig {
             max_retries: 2,
             retry_timeout: Duration::from_secs(20),

@@ -56,6 +56,18 @@ fn count_files(dir: &std::path::Path) -> usize {
         .sum()
 }
 
+async fn collect(
+    stream: futures::stream::BoxStream<'static, Result<Bytes, MediaError>>,
+) -> Vec<u8> {
+    use futures::StreamExt;
+    let mut stream = stream;
+    let mut out = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        out.extend_from_slice(&chunk.unwrap());
+    }
+    out
+}
+
 const DATA: &[u8] = b"hello ferrite media";
 
 fn with_prefix(mut cfg: MediaConfig, prefix: &str) -> MediaConfig {
@@ -122,6 +134,69 @@ backend_tests! {
         assert!(matches!(store.get_range(&r.hash, len..len + 1).await, Err(MediaError::Range(_))));
         let inverted = std::ops::Range { start: 5, end: 3 };
         assert!(matches!(store.get_range(&r.hash, inverted).await, Err(MediaError::Range(_))));
+    }
+
+    open_read_streams_large_artifact_fully_and_by_range(backing) {
+        let store = backing.store();
+        const MIB: usize = 1024 * 1024;
+        let data = pseudo_random(20 * MIB, 31);
+        let r = store.put_stream(chunked(&data, 64 * 1024), u64::MAX).await.unwrap();
+        let total = data.len() as u64;
+
+        let full = store.open_read(&r.hash, None).await.unwrap();
+        assert_eq!(full.size, total);
+        assert_eq!(full.range, 0..total);
+        assert_eq!(collect(full.stream).await[..], data[..]);
+
+        for range in [0..5u64, 3 * MIB as u64..7 * MIB as u64 + 11, total - 10..total] {
+            let part = store.open_read(&r.hash, Some(range.clone())).await.unwrap();
+            assert_eq!(part.size, total);
+            assert_eq!(part.range, range);
+            let got = collect(part.stream).await;
+            assert_eq!(got[..], data[range.start as usize..range.end as usize]);
+        }
+
+        let empty = store.open_read(&r.hash, Some(total..total)).await.unwrap();
+        assert_eq!(empty.size, total);
+        assert_eq!(empty.range, total..total);
+        assert!(collect(empty.stream).await.is_empty());
+        let empty = store.open_read(&r.hash, Some(4..4)).await.unwrap();
+        assert!(collect(empty.stream).await.is_empty());
+    }
+
+    open_read_error_parity_with_get_range(backing) {
+        let store = backing.store();
+        let r = store.put_artifact(Bytes::from_static(DATA)).await.unwrap();
+        let len = DATA.len() as u64;
+        let missing = ArtifactHash::parse(&"0".repeat(64)).unwrap();
+        let ranges = [
+            None,
+            Some(0..1),
+            Some(3..3),
+            Some(len..len),
+            Some(len..len + 1),
+            Some(len + 5..len + 9),
+            Some(0..len + 100),
+            Some(std::ops::Range { start: 5, end: 3 }),
+            Some(std::ops::Range { start: len + 5, end: 3 }),
+        ];
+        for range in ranges {
+            for hash in [&r.hash, &missing] {
+                let opened = store.open_read(hash, range.clone()).await.map(|_| ());
+                let buffered = match &range {
+                    Some(rg) => store.get_range(hash, rg.clone()).await.map(|_| ()),
+                    None => store.get(hash).await.map(|_| ()),
+                };
+                match (opened, buffered) {
+                    (Ok(()), Ok(())) => {}
+                    (Err(MediaError::NotFound), Err(MediaError::NotFound)) => {}
+                    (Err(MediaError::Range(a)), Err(MediaError::Range(b))) => {
+                        assert_eq!(a, b, "{range:?}");
+                    }
+                    (a, b) => panic!("mismatch for {range:?}: open_read {a:?} vs get_range {b:?}"),
+                }
+            }
+        }
     }
 
     delete_idempotent(backing) {

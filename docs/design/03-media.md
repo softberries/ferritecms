@@ -33,17 +33,21 @@ impl MediaStore {
         where S: Stream<Item = Result<Bytes, io::Error>> + Send + Unpin;
     pub async fn get(&self, hash: &ArtifactHash) -> Result<Bytes, MediaError>;
     pub async fn get_range(&self, hash: &ArtifactHash, range: Range<u64>) -> Result<Bytes, MediaError>;
+    pub async fn open_read(&self, hash: &ArtifactHash, range: Option<Range<u64>>) -> Result<ReadStream, MediaError>;
     pub async fn head(&self, hash: &ArtifactHash) -> Result<Option<u64>, MediaError>;   // size
     pub async fn delete(&self, hash: &ArtifactHash) -> Result<(), MediaError>;           // idempotent
     pub fn public_url(&self, hash: &ArtifactHash, filename: &str) -> String;
 }
 
 pub struct ArtifactRef { pub hash: ArtifactHash, pub bytes: u64, pub mime: String, pub created: bool }
+pub struct ReadStream { pub size: u64 /* total object size */, pub range: Range<u64> /* served */,
+                        pub stream: BoxStream<'static, Result<Bytes, MediaError>> }
 ```
 
-- `get` and `get_range` return buffered `Bytes`, not a stream. Streaming reads are not
-  implemented; the `/_media` handler (M1c) is responsible for range slicing/limits of what
-  it buffers.
+- **Reads.** `get` and `get_range` return buffered `Bytes` and are for small reads only
+  (metadata, manifests, variants being processed). **Serving uses `open_read`**, which streams the
+  body without buffering it (see Range semantics below). The `/_media` handler (M1c) must serve
+  through `open_read`.
 - `head` returns the object size (`Option<u64>`), `None` when missing.
 - `delete` succeeds when the artifact is already missing.
 - `ArtifactRef.mime` is sniffed from the first 8 KiB of content (see Sniffing below), never
@@ -125,6 +129,19 @@ until a multipart-copy path exists. Other S3-compatible providers have their own
 (`start > end`) or `end` past the object size is `MediaError::Range`; an empty range
 (`start == end <= size`) returns empty `Bytes` without a backend read. Mapping to HTTP 416 or
 suffix/open-ended ranges is the caller's job.
+
+`open_read(hash, range)` returns a `ReadStream { size, range, stream }`: `size` is the total object
+size (from the response metadata of one `get_opts` request, not a separate `head`), `range` is the
+byte range actually served (`0..size` when no range was requested). Validation is identical to
+`get_range` (same `NotFound` / `Range` errors and messages). Inverted and empty ranges are answered
+with a metadata-only request. Dropping the stream aborts the transfer.
+
+S3 client options (`build_s3`, object_store 0.14.2 `ClientOptions`): `with_timeout_disabled()`
+(no total-request timeout; the 30 s default would cut off large streams), `with_connect_timeout(5 s)`
+(same as the default, set explicitly), `with_read_timeout(30 s)` (per-read idle timeout; the
+default is none). Retries are unchanged (2 retries, 20 s retry timeout). These options were checked
+against `src/client/mod.rs`; they are not exercised by a test (the in-process test server cannot
+stall).
 
 ### Public URLs
 
@@ -219,7 +236,7 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
 
 ## 5. Serving
 
-- **App-served** (`/_media/<hash>/<name>`): streams from MediaStore with
+- **App-served** (`/_media/<hash>/<name>`): streams from MediaStore (`open_read`, never the buffered `get`) with
   `Cache-Control: public, max-age=31536000, immutable`, `ETag: "<hash>"`, range
   requests, `X-Content-Type-Options: nosniff`. Small in-memory LRU for hot small files
   (configurable, default 64 MB).
