@@ -9,6 +9,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "big-output"
+version = "0.1.0"
+dependencies = [
+ "ferrite-sdk",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -25,6 +32,13 @@ name = "ferrite-sdk"
 version = "0.1.0"
 dependencies = [
  "wit-bindgen",
+]
+
+[[package]]
+name = "flapper"
+version = "0.1.0"
+dependencies = [
+ "ferrite-sdk",
 ]
 
 [[package]]
@@ -373,6 +387,13 @@ dependencies = [
  "serde_json",
  "unicode-ident",
  "wasmparser",
+]
+
+[[package]]
+name = "wrong-variant"
+version = "0.1.0"
+dependencies = [
+ "ferrite-sdk",
 ]
 
 [[package]]

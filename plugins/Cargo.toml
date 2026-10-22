@@ -9,4 +9,7 @@ members = [
     "examples/hostile/oom",
     "examples/hostile/panic",
     "examples/hostile/slow-import",
+    "examples/hostile/big-output",
+    "examples/hostile/wrong-variant",
+    "examples/hostile/flapper",
 ]

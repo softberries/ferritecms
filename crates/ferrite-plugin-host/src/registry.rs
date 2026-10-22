@@ -2,7 +2,7 @@
 //! new one and swaps it in (`ArcSwap`), so calls in flight keep their snapshot.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crate::bindings::v0_1::PluginPre;
@@ -21,6 +21,9 @@ pub(crate) struct LoadedPlugin {
     pub(crate) memory_bytes: usize,
     pub(crate) fuel: u64,
     pub(crate) epoch_tick: Duration,
+    /// Set once when the plugin is auto-disabled; holds the reason. A reinstall builds a
+    /// new `LoadedPlugin`, so it starts enabled again.
+    pub(crate) disabled: OnceLock<String>,
 }
 
 #[derive(Clone, Default)]

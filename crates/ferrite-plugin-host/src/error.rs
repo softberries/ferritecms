@@ -65,6 +65,9 @@ pub enum PluginError {
     /// The plugin call was stopped or failed (trap, timeout, guest error, …).
     #[error("plugin `{plugin}` call failed: {reason}")]
     CallFailed { plugin: String, reason: String },
+    /// The plugin was disabled (automatically after repeated failures).
+    #[error("plugin `{plugin}` is disabled: {reason}")]
+    Disabled { plugin: String, reason: String },
 }
 
 /// Why a component was rejected at install time.

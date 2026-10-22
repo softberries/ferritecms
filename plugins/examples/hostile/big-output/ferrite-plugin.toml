@@ -1,0 +1,11 @@
+[plugin]
+name      = "big-output"
+version   = "0.1.0"
+publisher = "ferritecms.dev"
+world     = "ferrite:plugin/plugin@0.1.0"
+
+[capabilities]
+render.html = "sanitized"
+
+[hooks]
+"content.body" = 10

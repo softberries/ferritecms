@@ -8,6 +8,7 @@ use wasmtime::{Store, Trap};
 
 use crate::bindings::v0_1::Plugin;
 use crate::bindings::v0_1::ferrite::plugin::types::PluginError as WitPluginError;
+use crate::failure::FailureKind;
 use crate::registry::LoadedPlugin;
 use crate::state::HostState;
 use crate::types::{ActionEvent, FilterValue, RequestInfo, RouteRequest, RouteResponse};
@@ -22,6 +23,8 @@ const FUEL_YIELD_INTERVAL: u64 = 100_000;
 pub(crate) enum CallFailure {
     /// Guest trapped: panic/unreachable, out of fuel, epoch deadline, memory fault.
     Trap(Trap),
+    /// The guest trapped after the host refused a memory or table grow.
+    Memory,
     /// Hard deadline (`deadline × 1.5`) elapsed, e.g. inside a slow host import.
     Timeout,
     /// The instance could not be created.
@@ -36,10 +39,24 @@ impl fmt::Display for CallFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Trap(t) => write!(f, "trap: {t}"),
+            Self::Memory => f.write_str("memory limit exceeded"),
             Self::Timeout => f.write_str("hard deadline exceeded"),
             Self::Instantiate(e) => write!(f, "instantiation failed: {e}"),
             Self::GuestError(e) => write!(f, "plugin error: {e}"),
             Self::Invalid(e) => write!(f, "call failed: {e}"),
+        }
+    }
+}
+
+impl CallFailure {
+    pub(crate) fn kind(&self) -> FailureKind {
+        match self {
+            Self::Trap(Trap::OutOfFuel) => FailureKind::OutOfFuel,
+            Self::Trap(Trap::Interrupt) | Self::Timeout => FailureKind::Deadline,
+            Self::Trap(_) | Self::Invalid(_) => FailureKind::Trap,
+            Self::Memory => FailureKind::Memory,
+            Self::Instantiate(_) => FailureKind::Instantiate,
+            Self::GuestError(_) => FailureKind::GuestError,
         }
     }
 }
@@ -52,8 +69,10 @@ fn guest_error(e: WitPluginError) -> CallFailure {
     })
 }
 
-fn call_error(e: wasmtime::Error) -> CallFailure {
+/// Classify an error from the guest call; `store` tells whether a grow was refused.
+fn call_error(store: &Store<HostState>, e: wasmtime::Error) -> CallFailure {
     match e.downcast_ref::<Trap>() {
+        Some(_) if store.data().limits.grow_denied() => CallFailure::Memory,
         Some(t) => CallFailure::Trap(*t),
         None => CallFailure::Invalid(format!("{e:#}")),
     }
@@ -126,7 +145,7 @@ pub(crate) async fn call_filter(
             .ferrite_plugin_guest()
             .call_apply_filter(&mut store, hook, &value, &req)
             .await
-            .map_err(call_error)?
+            .map_err(|e| call_error(&store, e))?
             .map(Into::into)
             .map_err(guest_error)
     })
@@ -146,7 +165,7 @@ pub(crate) async fn call_action(
             .ferrite_plugin_guest()
             .call_on_action(&mut store, hook, &event)
             .await
-            .map_err(call_error)?
+            .map_err(|e| call_error(&store, e))?
             .map_err(guest_error)
     })
     .await
@@ -164,7 +183,7 @@ pub(crate) async fn call_route(
             .ferrite_plugin_guest()
             .call_handle_request(&mut store, &req)
             .await
-            .map_err(call_error)?
+            .map_err(|e| call_error(&store, e))?
             .map(Into::into)
             .map_err(guest_error)
     })
@@ -174,6 +193,24 @@ pub(crate) async fn call_route(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failures_are_classified() {
+        assert_eq!(
+            CallFailure::Trap(Trap::OutOfFuel).kind(),
+            FailureKind::OutOfFuel
+        );
+        assert_eq!(
+            CallFailure::Trap(Trap::Interrupt).kind(),
+            FailureKind::Deadline
+        );
+        assert_eq!(CallFailure::Timeout.kind(), FailureKind::Deadline);
+        assert_eq!(
+            CallFailure::Trap(Trap::UnreachableCodeReached).kind(),
+            FailureKind::Trap
+        );
+        assert_eq!(CallFailure::Memory.kind(), FailureKind::Memory);
+    }
 
     #[test]
     fn ticks_round_up() {

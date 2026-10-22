@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use wasmtime::component::ResourceTable;
-use wasmtime::{StoreLimits, StoreLimitsBuilder};
+use wasmtime::{ResourceLimiter, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use crate::bindings::v0_1::ferrite::plugin::{
@@ -79,12 +79,75 @@ fn matches_any(patterns: &[String], key: &str) -> bool {
     })
 }
 
+/// `StoreLimits` plus a record of whether a memory or table grow was refused. A guest
+/// that cannot allocate aborts with a plain trap, so this flag is the only way to tell
+/// a memory-limit failure from other traps.
+pub(crate) struct CallLimits {
+    inner: StoreLimits,
+    grow_denied: bool,
+}
+
+impl CallLimits {
+    pub(crate) fn grow_denied(&self) -> bool {
+        self.grow_denied
+    }
+
+    fn note(&mut self, allowed: wasmtime::Result<bool>) -> wasmtime::Result<bool> {
+        if !matches!(allowed, Ok(true)) {
+            self.grow_denied = true;
+        }
+        allowed
+    }
+}
+
+impl ResourceLimiter for CallLimits {
+    fn memory_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        let allowed = self.inner.memory_growing(current, desired, maximum);
+        self.note(allowed)
+    }
+
+    fn memory_grow_failed(&mut self, error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.inner.memory_grow_failed(error)
+    }
+
+    fn table_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        let allowed = self.inner.table_growing(current, desired, maximum);
+        self.note(allowed)
+    }
+
+    fn table_grow_failed(&mut self, error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.inner.table_grow_failed(error)
+    }
+
+    fn instances(&self) -> usize {
+        self.inner.instances()
+    }
+
+    fn tables(&self) -> usize {
+        self.inner.tables()
+    }
+
+    fn memories(&self) -> usize {
+        self.inner.memories()
+    }
+}
+
 /// State of one store, i.e. one plugin call.
 pub(crate) struct HostState {
     plugin: Arc<str>,
     grants: Arc<Capabilities>,
     services: Arc<dyn HostServices>,
-    pub(crate) limits: StoreLimits,
+    pub(crate) limits: CallLimits,
     budget: Budget,
     pub(crate) wasi: WasiCtx,
     table: ResourceTable,
@@ -104,6 +167,10 @@ impl HostState {
             .memories(MAX_MEMORIES)
             .table_elements(MAX_TABLE_ELEMENTS)
             .build();
+        let limits = CallLimits {
+            inner: limits,
+            grow_denied: false,
+        };
         Self {
             plugin,
             grants,

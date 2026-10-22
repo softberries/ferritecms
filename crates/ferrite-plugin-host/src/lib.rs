@@ -16,8 +16,9 @@ mod state;
 #[cfg(test)]
 mod test_support;
 mod types;
+mod validate;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
@@ -43,7 +44,9 @@ pub use types::{
 use bindings::v0_1::PluginPre;
 use call::{CallFailure, call_action, call_filter, call_route};
 use engine::{EpochTicker, build_engine};
+use failure::FailureTracker;
 use registry::{LoadedPlugin, Registry};
+use validate::{matches_type, validate_output};
 
 /// Runs installed plugins with capability-scoped imports and per-call limits.
 pub struct PluginHost {
@@ -51,6 +54,7 @@ pub struct PluginHost {
     engine: Engine,
     services: Arc<dyn HostServices>,
     registry: ArcSwap<Registry>,
+    failures: FailureTracker,
     /// Advances the engine epoch; joined when the host is dropped.
     _ticker: EpochTicker,
 }
@@ -72,25 +76,6 @@ fn effective_limit(
     }
 }
 
-fn matches_type(ty: FilterType, value: &FilterValue) -> bool {
-    matches!(
-        (ty, value),
-        (FilterType::Head, FilterValue::Head(_))
-            | (FilterType::Html, FilterValue::Html(_))
-            | (FilterType::Text, FilterValue::Text(_))
-    )
-}
-
-fn warn_failure(plugin: &str, hook: &str, failure: &CallFailure, started: Instant) {
-    tracing::warn!(
-        plugin,
-        hook,
-        error = %failure,
-        duration_ms = started.elapsed().as_secs_f64() * 1000.0,
-        "plugin hook failed"
-    );
-}
-
 impl PluginHost {
     /// Build the engine and start the epoch ticker (stopped when the host is dropped).
     pub fn new(cfg: HostConfig, services: Arc<dyn HostServices>) -> Result<Self, PluginError> {
@@ -99,11 +84,13 @@ impl PluginHost {
         }
         let engine = build_engine(&cfg)?;
         let ticker = EpochTicker::start(engine.clone(), cfg.epoch_tick)?;
+        let failures = FailureTracker::new(cfg.disable_after_failures, cfg.failure_window);
         Ok(Self {
             cfg,
             engine,
             services,
             registry: ArcSwap::from_pointee(Registry::default()),
+            failures,
             _ticker: ticker,
         })
     }
@@ -137,7 +124,9 @@ impl PluginHost {
             memory_bytes,
             fuel,
             epoch_tick: self.cfg.epoch_tick,
+            disabled: OnceLock::new(),
         });
+        self.failures.reset(&name);
         self.registry.rcu(|r| r.with(Arc::clone(&loaded)));
         tracing::info!(
             plugin = %name,
@@ -154,6 +143,70 @@ impl PluginHost {
             DeadlineClass::Render => self.cfg.render_deadline,
             DeadlineClass::Action => self.cfg.action_deadline,
             DeadlineClass::Route => self.cfg.route_deadline,
+        }
+    }
+
+    /// Log, store and count one failed call; disables the plugin when this failure
+    /// pushes it over `disable_after_failures` within `failure_window`.
+    fn record_failure(
+        &self,
+        plugin: &LoadedPlugin,
+        hook: &str,
+        kind: FailureKind,
+        detail: &str,
+        started: Instant,
+    ) {
+        let duration = started.elapsed();
+        tracing::warn!(
+            plugin = %plugin.name,
+            hook,
+            kind = ?kind,
+            error = detail,
+            duration_ms = duration.as_secs_f64() * 1000.0,
+            "plugin hook failed"
+        );
+        let crossed = self.failures.record(FailureRecord {
+            plugin: plugin.name.to_string(),
+            hook: hook.to_string(),
+            kind,
+            at: Instant::now(),
+            duration,
+        });
+        if crossed {
+            let reason = format!(
+                "auto: {} failures in window",
+                self.cfg.disable_after_failures
+            );
+            if plugin.disabled.set(reason).is_ok() {
+                tracing::error!(
+                    plugin = %plugin.name,
+                    failures = self.cfg.disable_after_failures,
+                    window_s = self.cfg.failure_window.as_secs(),
+                    "plugin disabled after repeated failures"
+                );
+            }
+        }
+    }
+
+    fn record_call_failure(
+        &self,
+        plugin: &LoadedPlugin,
+        hook: &str,
+        failure: &CallFailure,
+        started: Instant,
+    ) {
+        self.record_failure(plugin, hook, failure.kind(), &failure.to_string(), started);
+    }
+
+    /// Enabled plugin `name`, or the error a caller should see.
+    fn enabled_plugin(&self, name: &str) -> Result<Arc<LoadedPlugin>, PluginError> {
+        let loaded = self.plugin(name)?;
+        match loaded.disabled.get() {
+            Some(reason) => Err(PluginError::Disabled {
+                plugin: name.to_string(),
+                reason: reason.clone(),
+            }),
+            None => Ok(loaded),
         }
     }
 
@@ -185,14 +238,28 @@ impl PluginHost {
         let registry = self.registry.load_full();
         let mut current = value;
         for plugin in registry.subscribers(hook) {
+            if plugin.disabled.get().is_some() {
+                continue;
+            }
             if !matches_type(ty, &current) {
                 tracing::debug!(plugin = %plugin.name, hook, "filter value of wrong type; skipped");
                 continue;
             }
             let started = Instant::now();
             match call_filter(&plugin, hook, &current, req, deadline).await {
-                Ok(out) => current = out,
-                Err(failure) => warn_failure(&plugin.name, hook, &failure, started),
+                Ok(out) => match validate_output(ty, &current, out) {
+                    Ok(valid) => current = valid,
+                    Err(reason) => {
+                        self.record_failure(
+                            &plugin,
+                            hook,
+                            FailureKind::InvalidOutput,
+                            &reason,
+                            started,
+                        );
+                    }
+                },
+                Err(failure) => self.record_call_failure(&plugin, hook, &failure, started),
             }
         }
         current
@@ -205,7 +272,7 @@ impl PluginHost {
         hook: &str,
         ev: ActionEvent,
     ) -> Result<(), PluginError> {
-        let loaded = self.plugin(plugin)?;
+        let loaded = self.enabled_plugin(plugin)?;
         let spec = hook_catalogue()
             .iter()
             .find(|h| h.name == hook && h.kind == HookKind::Action)
@@ -218,7 +285,7 @@ impl PluginHost {
         call_action(&loaded, hook, ev, self.deadline(spec.deadline))
             .await
             .map_err(|failure| {
-                warn_failure(plugin, hook, &failure, started);
+                self.record_call_failure(&loaded, hook, &failure, started);
                 PluginError::CallFailed {
                     plugin: plugin.to_string(),
                     reason: failure.to_string(),
@@ -233,7 +300,7 @@ impl PluginHost {
         plugin: &str,
         req: RouteRequest,
     ) -> Result<RouteResponse, PluginError> {
-        let loaded = self.plugin(plugin)?;
+        let loaded = self.enabled_plugin(plugin)?;
         let routed = loaded.manifest.capabilities.routes
             && loaded
                 .manifest
@@ -252,7 +319,7 @@ impl PluginHost {
         call_route(&loaded, req, self.deadline(DeadlineClass::Route))
             .await
             .map_err(|failure| {
-                warn_failure(plugin, &hook, &failure, started);
+                self.record_call_failure(&loaded, &hook, &failure, started);
                 PluginError::CallFailed {
                     plugin: plugin.to_string(),
                     reason: failure.to_string(),
@@ -262,11 +329,24 @@ impl PluginHost {
 
     /// Whether `plugin` is installed and enabled.
     pub fn is_enabled(&self, plugin: &str) -> bool {
-        self.registry.load().get(plugin).is_some()
+        self.registry
+            .load()
+            .get(plugin)
+            .is_some_and(|p| p.disabled.get().is_none())
     }
 
-    /// Recorded call failures. Failure tracking lands in Task 7; until then, empty.
+    /// Why `plugin` was disabled, if it was. In M0 this lives in memory only: a restart
+    /// or a reinstall of the plugin enables it again.
+    pub fn disabled_reason(&self, plugin: &str) -> Option<String> {
+        self.registry
+            .load()
+            .get(plugin)
+            .and_then(|p| p.disabled.get().cloned())
+    }
+
+    /// Recorded call failures, oldest first. Keeps the most recent 1_000 across all
+    /// plugins; older records are dropped.
     pub fn failures(&self) -> Vec<FailureRecord> {
-        Vec::new()
+        self.failures.history()
     }
 }
