@@ -2,8 +2,6 @@
 
 Decisions made during subagent-driven execution of docs/superpowers/plans/2026-10-22-m1a-storage.md. Format: ruling — reason — cost if wrong.
 
-- Ruling R1 |
-- Rulings
 - Ruling R1: Task 5 needs an author user before UserRepo exists (Task 7) → Task 5 implements `UserRepo::insert` + `get` early (minimal), Task 7 completes the rest of UserRepo — cost if wrong: trivial re
 - Ruling R2: Postgres tests locally use FERRITE_TEST_PG_URL=postgres://ferrite@localhost:54329/ferrite_test (controller-run PG17 in scratchpad); implementers must run with it set so both backends are ex
 - Ruling R3: Secret newtype (redacting Debug, no serde); User/NewUser drop serde derives — API/export use DTOs — cost if wrong: M4 export writes a DTO (planned anyway)
