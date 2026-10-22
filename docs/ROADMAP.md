@@ -27,11 +27,19 @@ The riskiest part. Prove it before building a CMS around it. Design: [05](design
 
 Design: [02](design/02-storage.md), [03](design/03-media.md), [06](design/06-themes-rendering.md).
 
-- [ ] `ferrite-domain` crate (pure types: ids, Post, Term, User, Role, Block, errors; 01 §1), deferred from M0.
+- [x] `ferrite-domain` crate (pure types: ids, Post, Term, User, Role, Block, errors; 01 §1), deferred from M0.
 - [ ] `ferrite-config` (toml + env, validation, profiles).
-- [ ] `ferrite-store` traits, `ferrite-store-sqlite`, `ferrite-store-postgres`; migration `0001_init` on both.
-- [ ] Migration wrapper: directives (phase / min-binary / lossy-down), startup compatibility check, `ferrite migrate status|up|down|verify`, SQLite pre-migration snapshot.
-- [ ] Contract test suite (`ferrite-store-tests`) + migration roundtrip tests on both backends; CI with Postgres service.
+- [x] `ferrite-store` traits, `ferrite-store-sqlite`, `ferrite-store-postgres`; migrations `0001_init` and `0002_search` on both (M1a).
+- [ ] Migration wrapper (M1a done, CLI is M1c):
+  - [x] Directives (phase / min-binary / lossy-down), compatibility verdict, `min_binary_version` preservation, SQLite pre-migration snapshot.
+  - [ ] `ferrite migrate status|up|down|verify` CLI.
+- [x] Contract test suite (`ferrite-store-tests`) + migration roundtrip tests on both backends; CI with Postgres service.
+- [ ] Store follow-ups from the M1a review (deferred minors):
+  - [ ] Full Unicode case folding for search (`İstanbul` currently indexes as `i̇stanbul`, so `istanbul` misses it; same on both backends).
+  - [ ] Importer (M3) needs a fallback author: `content_items.author_id` is non-optional.
+  - [ ] Core/HTTP input validation (M1c) should reject NUL in text before it reaches the store (reads with NUL keys return `Invalid`).
+  - [ ] Revisit locale-aware ordering for admin lists (byte-wise `COLLATE "C"` today).
+  - [ ] Non-ASCII e-mail case variants are distinct accounts (ASCII-only `email_key`); decide before auth ships (M2).
 - [ ] `ferrite-media`: `MediaStore` over `object_store` (local + S3), artifacts table, tests against MinIO.
 - [ ] Core services: content + revisions, types, terms, options, redirects, menus, search (FTS5 / tsvector).
 - [ ] Transactional outbox (`events`) written by every invalidating write.

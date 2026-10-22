@@ -46,6 +46,11 @@ Two deployment profiles must both work: **solo** (SQLite + local media, one node
 - Storage changes need contract tests on **both** backends.
 - Tests: unit tests next to code; integration tests in `tests/`. Plugin-host tests must
   include hostile plugins (infinite loop, OOM, panic, undeclared import).
+- Postgres-backed store tests: set `FERRITE_TEST_PG_URL` to any Postgres >= 15, e.g.
+  `FERRITE_TEST_PG_URL=postgres://ferrite@localhost:5432/ferrite_test cargo test --workspace`.
+  Each test creates and drops its own schema, so a shared database is fine. Without the
+  variable the Postgres cases print `SKIP` and pass; CI (which sets `CI=true`) panics if
+  it is missing and runs a `postgres:18` service.
 - Prefer small, reviewable commits per checklist item.
 
 ## Naming

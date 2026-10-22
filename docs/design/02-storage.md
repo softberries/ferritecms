@@ -16,6 +16,13 @@
 
 **sqlx 0.9** with the `sqlite` and `postgres` features, `runtime-tokio`, `tls-rustls`.
 
+**Minimum supported Postgres: 15.** `content_items` uniqueness over a nullable
+`parent_id` uses `UNIQUE NULLS NOT DISTINCT` (`ferrite-store-postgres/migrations/0001_init.up.sql`),
+which needs PG 15. CI runs Postgres 18; local development used 17.
+
+**Timestamps use `chrono`** (`DateTime<Utc>` inside the `Timestamp` newtype in
+`ferrite-domain`), not `jiff`: sqlx 0.9 has no `jiff` feature, only `chrono` and `time`.
+
 Rejected alternatives:
 
 - **sqlx `Any` driver** — lowest-common-denominator types, loses `jsonb`, `uuid`,
@@ -82,6 +89,22 @@ pub trait Repos: Send + Sync {
 }
 ```
 
+Implementation notes (M1a, `ferrite-store-sqlite` and `ferrite-store-postgres`):
+
+- Each backend's `exec.rs` defines `Exec` (`Pool` or `Tx`) and two macros every repo
+  method goes through. `run!(&self.exec, |e| query...)` runs one statement on the pool
+  or on the open transaction's connection and maps the driver error to `StoreError`
+  (unique and foreign-key violations become typed errors). `atomic!(&self.exec, |conn|
+  async body)` runs a multi-statement operation atomically: on a pool it opens and commits
+  its own transaction; inside a caller's `Tx` it opens a **savepoint**, so a failure rolls
+  back only that operation and leaves the outer transaction usable (R11). Replace-style
+  operations (term links per item, menu trees) use it.
+- SQLite `SqliteRepos` holds a reader and a writer `Exec`: SELECTs on the autocommit path
+  go to the **reader** pool, which is opened `read_only(true)`; every mutation goes to
+  the single-connection **writer** pool; a `Tx` uses its own writer transaction (R6).
+- Callers of `Store::read()` get autocommit repos; mutations through them still work and
+  run on the writer.
+
 Notes:
 
 - `async_trait` is used because the traits are used as trait objects. The per-call box
@@ -90,6 +113,23 @@ Notes:
   connection. Core services take `&dyn Repos`, so the same service code runs inside or
   outside a transaction.
 - Repos return `ferrite-domain` types, never sqlx rows.
+- Parity rules enforced in the store layer so both backends accept and return the same
+  things (`ferrite-store/src/{text,json}.rs`):
+  - JSON values containing a NUL character and text containing `\0` are rejected with
+    `StoreError::Invalid` on both backends (Postgres `jsonb`/`text` cannot store NUL).
+    The check runs on every caller-supplied text bind: writes, lookups, deletes and
+    decoded cursors (R7, R13, R15).
+  - Text key and slug orderings are byte-wise: Postgres queries use `ORDER BY ...
+    COLLATE "C"` to match SQLite's `BINARY` collation (R8). Admin lists are therefore not
+    locale-aware.
+  - E-mail uniqueness uses `users.email_key`, the address ASCII-lowercased in Rust
+    (`email_key`) under a plain unique index on both backends (R12). Non-ASCII case
+    variants (`É` vs `é`) are distinct accounts.
+  - Foreign keys on `content_items.parent_id` and `terms.parent_id` are `RESTRICT`
+    (no `ON DELETE` clause): deleting a parent that still has children fails with
+    `StoreError::ForeignKey`; reparenting or deleting children is the core's decision (R9).
+  - `content_items.author_id` is non-optional, so an importer must supply a fallback
+    author (M3).
 - Event emission (cache invalidation, [04](04-cluster.md)) happens **inside the same
   transaction** as the write (transactional outbox), so a committed write always has
   its event.
@@ -148,24 +188,44 @@ Same logical schema on both backends. Physical type mapping is in §5.
 
 ### Search
 
-Behind `SearchRepo` so the SQL difference is contained:
+Behind `SearchRepo` so the SQL difference is contained. **Rust owns all text
+normalization** (`ferrite-store/src/search.rs`, R16, R17): indexed text and queries both
+go through the same tokenizer, and the engines only ever see opaque tokens, so both
+backends match exactly the same documents. No database text-search parser, configuration
+or locale is involved (the earlier idea of deriving the FTS config from `site.locale` is
+dropped).
 
-- **SQLite**: FTS5 virtual table `search_fts(item_id UNINDEXED, title, body_text)`
-  maintained by the repo on writes (not triggers, so the text extraction from blocks
-  stays in Rust).
-- **Postgres**: `search_docs(item_id PK, title, body_text, tsv tsvector GENERATED ALWAYS
-  AS (setweight(to_tsvector(cfg, title),'A') || setweight(to_tsvector(cfg, body_text),'B')) STORED)`
-  with a GIN index; text search config from `site.locale` (fallback `simple`).
+- **Tokenization**: Unicode NFKC, lowercase, split on everything that is neither
+  alphanumeric nor a combining mark (marks stay with their base, so Hindi and similar
+  scripts survive); pieces with no letter or digit are dropped. Search is
+  accent-sensitive and has no stemming or stopwords ("simple" semantics).
+- **Query**: whitespace/punctuation-separated terms, each matched as a **prefix**, all
+  required (AND). No query operators; user input is never interpreted as syntax. An empty
+  term list matches nothing without touching the database.
+- **Caps**: 64 chars per term, 32 distinct query terms, 4096 distinct indexed terms per
+  item, 512 KiB of distinct term bytes, 256 positions per term, token positions up to
+  16383 (Postgres tsvector limits).
+- **SQLite** (`0002_search.up.sql`): `search_docs(id, item_id UNIQUE → content_items ON
+  DELETE CASCADE, title, body_text)` holds the space-joined tokens; `search_fts` is an
+  **external-content FTS5** table over it with `tokenize='ascii'` (FTS5 only splits on the
+  spaces), kept in sync by triggers. Ranking: `bm25(search_fts, 10.0, 1.0)`.
+- **Postgres** (`0002_search.up.sql`): `search_docs(item_id PK → content_items ON DELETE
+  CASCADE, tsv tsvector)` with a GIN index. The repo writes `tsv` as an explicit
+  `::tsvector` literal (title positions weighted `A`, body `B`) and queries with an
+  explicit `::tsquery`; ranking is `ts_rank`.
+- Known gap (deferred): case folding is Rust's `to_lowercase`, not full Unicode case
+  folding, so `İstanbul` indexes as `i̇stanbul` and a search for `istanbul` misses it
+  (identical on both backends).
 
-Ranking will differ slightly between backends; contract tests assert result *sets* for
-deterministic fixtures, not exact order beyond "title match ranks first".
+Ranking order differs between engines; contract tests assert result *sets*, not exact
+order beyond "title match ranks first".
 
 ## 5. Physical type mapping
 
 | Logical | SQLite | Postgres | Rust |
 |---|---|---|---|
 | id | `BLOB` (16 bytes) | `uuid` | `Uuid` (v7, D15) wrapped in typed ids (`PostId`, …) |
-| timestamp | `INTEGER` unix **microseconds** UTC | `timestamptz` | `Timestamp` newtype over `jiff::Timestamp` or `chrono::DateTime<Utc>` (pick in M1 by sqlx support) |
+| timestamp | `INTEGER` unix **microseconds** UTC | `timestamptz` | `Timestamp` newtype over `chrono::DateTime<Utc>` |
 | json | `TEXT` (validated JSON; `json_*` functions available) | `jsonb` | `serde_json::Value` or typed via `sqlx::types::Json<T>` |
 | bool | `INTEGER` 0/1 | `boolean` | `bool` |
 | bytes | `BLOB` | `bytea` | `Vec<u8>` |
@@ -181,8 +241,10 @@ insert (useful for imports and the outbox).
 
 - `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`, `busy_timeout=5000`,
   `temp_store=MEMORY`; `mmap_size` tuned in M1 benchmarks.
-- Two pools: **writer** (max 1 connection) and **reader** (N connections). All `Tx` use
-  the writer. This makes write contention explicit and avoids busy-retry loops.
+- Two pools: **writer** (max 1 connection) and **reader** (N connections, opened
+  `read_only(true)`, so a write routed there fails instead of silently racing). All `Tx`
+  and all mutations use the writer. This makes write contention explicit and avoids
+  busy-retry loops.
 - Data folder lock: `ferrite.lock` with an OS advisory lock (`fs4`/`fd-lock`) held for
   the process lifetime — a second `ferrite serve` on the same folder fails fast.
 
@@ -221,11 +283,16 @@ crates/ferrite-store-postgres/migrations/
 - Sequential 4-digit versions (not timestamps) — ordering conflicts between branches
   are resolved at merge time, which is fine for a single-repo project.
 - Every migration has a `.down.sql`. No exceptions; a lossy down is marked (below).
+- **Editable until the first release tag (R10).** Nothing is deployed yet, so
+  `0001_init` (and `0002_search`) may be edited in place and dev databases re-created.
+  From the first tag on, applied migrations are immutable and changes need a new version.
 
 ### Header directives (ours, in SQL comments)
 
-The first lines of an `.up.sql` may contain ferrite directives, parsed by our migration
-wrapper (sqlx ignores comments):
+The first lines of an `.up.sql` may contain ferrite directives, parsed by
+`ferrite_store::parse_directives` (sqlx ignores comments). The compatibility verdict
+(§8), the SQLite pre-migration snapshot and the expand lint exist in M1a; the
+`ferrite migrate` CLI is M1c:
 
 ```sql
 -- ferrite:phase expand            -- expand | contract (default: expand)
@@ -306,6 +373,14 @@ if db >  bin and version <  min  → refuse: "schema requires ferrite >= {min}; 
 Unknown applied migrations (db > bin) are expected in that case and do not fail
 checksum verification.
 
+**`min_binary_version` preservation.** `schema_meta.min_binary_version` is computed by
+the pure `ferrite_store::next_min_binary`: it is raised to the highest `min-binary` among
+applied embedded contract migrations, and it is never lowered or erased while the
+database holds an applied migration this binary does not know (a newer binary may have
+set it). It is lowered only when this binary just reverted the migration whose
+`min-binary` equals the stored value. So an older binary running `migrate` cannot
+silently remove the guard.
+
 **CI enforcement**
 
 - *Expand check*: a migration without `phase contract` must not contain `DROP`,
@@ -316,33 +391,34 @@ checksum verification.
 
 ## 9. Contract tests
 
-`ferrite-store-tests` is a library of `async fn test_xxx(store: &dyn Store)` functions
-plus a macro that instantiates each test for each backend:
+`ferrite-store-tests` is a library of `async fn test_xxx(db: &TestDb)` functions plus
+macros (`backend_tests!`, `backend_tests_spawning!`) that instantiate each test once per
+backend. They take a `&TestDb` rather than `&dyn Store` (`db.store()` gives the store)
+because migration tests need schema dumps and tamper helpers. Tests are registered in
+`crates/ferrite-store-tests/tests/contract.rs`:
 
 ```rust
-backend_tests! {
-    content_create_and_get,
-    content_slug_unique_per_parent,
-    revisions_written_on_update,
-    optimistic_lock_conflict,
-    terms_hierarchy,
-    jobs_claim_is_exclusive,
-    events_seq_monotonic,
+backend_tests!(
+    types_seeded_and_upsert,
+    slug_unique_per_type_and_parent,
+    optimistic_lock_race,
     search_finds_title_and_body,
-    plugin_kv_quota,
-    migrate_up_down_up_roundtrip,
+    up_down_up_roundtrip,
     // …
-}
+);
 ```
 
 - SQLite: fresh temp file per test (not `:memory:`, so WAL + two-pool setup is real).
-- Postgres: one server per CI job (`docker run postgres:18` or a GitHub service
-  container); one **schema per test** (`CREATE SCHEMA t_<uuid>`) for isolation and
-  parallelism. Locally: `FERRITE_TEST_PG_URL` env var; Postgres tests are skipped with a
-  loud message if unset, and required in CI.
-- Migration tests: for every migration *k*: migrate to *k-1*, seed fixture data,
-  `up` *k*, assert, `down` *k*, assert schema equals the *k-1* snapshot
-  (via `sqlite_schema` / `information_schema` dumps).
+- Postgres: one server per run (CI uses a `postgres:18` service container); each test
+  gets its own schema (`t_<uuid>`, dropped afterwards) for isolation and parallelism, any
+  Postgres >= 15 works. Locally set `FERRITE_TEST_PG_URL`; if unset, Postgres cases print
+  a `SKIP` line and pass, and when `CI=true` the missing variable is a panic, so CI cannot
+  silently skip them.
+- Migration tests: migrate up/down/up and compare schema dumps (`sqlite_schema` /
+  `information_schema`), check the verdict after a partial down, checksum tampering is
+  detected, and `min_binary_version` survives an older binary. Per-migration "seed
+  fixture data at k-1, then up k" tests are not written yet (only `0001` and `0002`
+  exist).
 
 ## 10. Portable export (D14)
 
@@ -365,7 +441,6 @@ ferrite import-site site-2026-10-22.ferrite.tar.zst --data ./site   # into an em
 
 ## 11. Open points (for the builder)
 
-- Pick `jiff` vs `chrono` for timestamps based on sqlx 0.9 support for both backends.
 - Revision retention policy default (50) and whether to diff-compress revisions — v1
   stores full snapshots.
 - Whether `body_html` caching on the row is worth it vs. the page cache — measure in M1.
