@@ -342,8 +342,13 @@ pub trait MediaRepo: Send + Sync {
     /// Up to `limit` (1..=[`MAX_PAGE`](crate::MAX_PAGE)) media rows whose original
     /// (`artifact_hash`) or any variant (`variants.<name>.hash`, a string) is `hash`,
     /// ordered by item id. Variant values that are not objects with a string `hash`
-    /// are ignored. Used to decide whether `/_media/<hash>/…` may be served. The
-    /// original is indexed; the variant match scans the `variants` column.
+    /// are ignored. Used to decide whether `/_media/<hash>/…` may be served.
+    ///
+    /// Indexed throughout (ruling R29): empty without reading `media` unless the
+    /// `artifacts` row of `hash` (primary key) exists with kind `media` or `variant`;
+    /// then the original by `media.artifact_hash` (indexed) and variants through the
+    /// derived `media_variants` table (indexed by hash), which `insert` and `update`
+    /// keep in sync with `variants` in the same transaction.
     async fn find_by_artifact(
         &self,
         hash: &ArtifactHash,

@@ -13,7 +13,7 @@ pub async fn fresh_db_is_up_to_date(db: &TestDb) {
     let store = db.store();
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::UpToDate);
-    assert_eq!((s.db_version, s.binary_version), (2, 2));
+    assert_eq!((s.db_version, s.binary_version), (3, 3));
     assert!(s.pending.is_empty() && s.unknown_applied.is_empty());
     assert_eq!(s.min_binary, None);
 
@@ -41,12 +41,12 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
             .any(|o| o.ends_with(":search_fts") || o.ends_with(":search_docs"))
     );
 
-    assert_eq!(store.migrate_down(0, false).await.unwrap(), vec![2, 1]);
+    assert_eq!(store.migrate_down(0, false).await.unwrap(), vec![3, 2, 1]);
     assert_eq!(db.user_objects().await, Vec::<String>::new());
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!((s.db_version, s.verdict), (0, Compat::NeedsUp));
 
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![1, 2]);
+    assert_eq!(store.migrate_up(None).await.unwrap(), vec![1, 2, 3]);
     assert_eq!(store.migrate_up(None).await.unwrap(), Vec::<i64>::new());
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::UpToDate);
@@ -63,19 +63,29 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
 
 pub async fn verdict_after_partial_down(db: &TestDb) {
     let store = db.store();
-    assert_eq!(store.migrate_down(1, false).await.unwrap(), vec![2]);
+    assert_eq!(store.migrate_down(1, false).await.unwrap(), vec![3, 2]);
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::NeedsUp);
     assert_eq!(
         s.pending.iter().map(|p| p.version).collect::<Vec<_>>(),
-        vec![2]
+        vec![2, 3]
     );
-    assert_eq!((s.db_version, s.binary_version), (1, 2));
+    assert_eq!((s.db_version, s.binary_version), (1, 3));
     let objects = db.user_objects().await;
     assert!(objects.iter().any(|o| o.ends_with(":content_items")));
     assert!(!objects.iter().any(|o| o.contains("search")), "{objects:?}");
+    assert!(
+        !objects.iter().any(|o| o.contains("media_variants")),
+        "{objects:?}"
+    );
 
+    // Up to a target version stops there.
     assert_eq!(store.migrate_up(Some(2)).await.unwrap(), vec![2]);
+    assert_eq!(
+        store.migration_status(&binary()).await.unwrap().verdict,
+        Compat::NeedsUp
+    );
+    assert_eq!(store.migrate_up(None).await.unwrap(), vec![3]);
     assert_eq!(
         store.migration_status(&binary()).await.unwrap().verdict,
         Compat::UpToDate
@@ -119,11 +129,11 @@ pub async fn min_binary_survives_older_binary(db: &TestDb) {
 /// Pending migrations carry their description and parsed directives.
 pub async fn status_reports_pending_directives(db: &TestDb) {
     let store = db.store();
-    assert_eq!(store.migrate_down(1, false).await.unwrap(), vec![2]);
+    assert_eq!(store.migrate_down(2, false).await.unwrap(), vec![3]);
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.pending.len(), 1);
     let pending = &s.pending[0];
-    assert_eq!(pending.version, 2);
+    assert_eq!(pending.version, 3);
     assert!(!pending.description.is_empty());
     assert_eq!(pending.directives.phase, Phase::Expand);
     assert_eq!(pending.directives.min_binary, None);

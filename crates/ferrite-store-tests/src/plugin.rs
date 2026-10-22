@@ -244,6 +244,125 @@ pub async fn media_find_by_artifact(db: &TestDb) {
         repo.find_by_artifact(&hash('a'), 0).await,
         Err(StoreError::Invalid(_))
     ));
+
+    // Updates rebuild the variant rows: the old variant hash no longer matches.
+    let mut m0 = repo.get(ids[0]).await.unwrap().unwrap();
+    m0.variants = json!({"small": {"hash": hash('d').as_str()}});
+    repo.update(&m0).await.unwrap();
+    assert!(
+        repo.find_by_artifact(&hash('b'), 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let mut want = vec![ids[0], ids[3]];
+    want.sort();
+    assert_eq!(
+        found(repo.find_by_artifact(&hash('d'), 10).await.unwrap()),
+        want
+    );
+    // Inside a transaction the rows move with it: a rollback restores them.
+    let tx = store.begin().await.unwrap();
+    let mut m0b = m0.clone();
+    m0b.variants = json!({});
+    tx.media().update(&m0b).await.unwrap();
+    assert!(!found(tx.media().find_by_artifact(&hash('d'), 10).await.unwrap()).contains(&ids[0]));
+    tx.rollback().await.unwrap();
+    assert!(found(repo.find_by_artifact(&hash('d'), 10).await.unwrap()).contains(&ids[0]));
+
+    // Only media and variant files count: a media row naming a plugin artifact is
+    // never found.
+    put_artifact(store, &artifact('f', ArtifactKind::Plugin)).await;
+    let mut item = new_post(&author, "plugin-file");
+    item.kind = "media".into();
+    let tx = store.begin().await.unwrap();
+    tx.content().insert(&item).await.unwrap();
+    tx.media()
+        .insert(&Media {
+            item_id: item.id,
+            artifact_hash: hash('f'),
+            variants: json!({}),
+            ..m0.clone()
+        })
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert!(
+        repo.find_by_artifact(&hash('f'), 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Deleting the item cascades to its media and variant rows.
+    store.read().content().delete(ids[0]).await.unwrap();
+    assert_eq!(
+        found(repo.find_by_artifact(&hash('d'), 10).await.unwrap()),
+        [ids[3]]
+    );
+}
+
+/// Migration 0003 backfills `media_variants` from the existing `variants` JSON: after
+/// down to 2 (table dropped) and up again, variant lookups work for rows written
+/// before.
+pub async fn media_variants_backfill(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    put_artifact(store, &artifact('a', ArtifactKind::Media)).await;
+    put_artifact(store, &artifact('b', ArtifactKind::Variant)).await;
+    let mut item = new_post(&author, "backfilled");
+    item.kind = "media".into();
+    let tx = store.begin().await.unwrap();
+    tx.content().insert(&item).await.unwrap();
+    tx.commit().await.unwrap();
+    store
+        .read()
+        .media()
+        .insert(&Media {
+            item_id: item.id,
+            artifact_hash: hash('a'),
+            mime: "image/png".into(),
+            bytes: 1,
+            width: None,
+            height: None,
+            alt: String::new(),
+            original_name: "x.png".into(),
+            variants: json!({"thumb": {"hash": hash('b').as_str()}, "junk": [1], "n": {"hash": 1}}),
+        })
+        .await
+        .unwrap();
+    assert_eq!(store.migrate_down(2, false).await.unwrap(), vec![3]);
+    assert!(
+        !db.user_objects()
+            .await
+            .iter()
+            .any(|o| o.contains("media_variants"))
+    );
+    assert_eq!(store.migrate_up(None).await.unwrap(), vec![3]);
+    let repo = store.read().media();
+    let got = repo.find_by_artifact(&hash('b'), 10).await.unwrap();
+    assert_eq!(got.iter().map(|m| m.item_id).collect::<Vec<_>>(), [item.id]);
+    assert_eq!(
+        repo.find_by_artifact(&hash('a'), 10).await.unwrap().len(),
+        1
+    );
+}
+
+/// The lookup's plan uses the artifacts key and both hash indexes, and never scans
+/// `media` (ruling R29).
+pub async fn media_lookup_uses_indexes(db: &TestDb) {
+    let plan = db.explain_media_lookup(hash('a').as_str()).await;
+    println!("{plan}");
+    for index in ["media_artifact_idx", "media_variants_hash_idx"] {
+        assert!(plan.contains(index), "no {index} in plan:\n{plan}");
+    }
+    if db.is_sqlite() {
+        assert!(plan.contains("SEARCH artifacts"), "{plan}");
+        assert!(!plan.contains("SCAN media"), "{plan}");
+    } else {
+        assert!(plan.contains("artifacts_pkey"), "{plan}");
+        assert!(!plan.contains("Seq Scan"), "{plan}");
+    }
 }
 
 pub async fn plugins_upsert_list_enable(db: &TestDb) {

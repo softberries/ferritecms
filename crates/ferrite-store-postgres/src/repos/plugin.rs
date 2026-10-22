@@ -70,21 +70,27 @@ impl MediaRepo for PgRepos {
         validate_text("media alt", &media.alt)?;
         validate_text("media original_name", &media.original_name)?;
         validate_json(&media.variants)?;
-        run!(&self.exec, |e| sqlx::query(
-            "INSERT INTO media (item_id, artifact_hash, mime, bytes, width, height, alt, \
-             original_name, variants) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
-        )
-        .bind(media.item_id.as_uuid())
-        .bind(media.artifact_hash.as_str())
-        .bind(&media.mime)
-        .bind(media.bytes)
-        .bind(media.width)
-        .bind(media.height)
-        .bind(&media.alt)
-        .bind(&media.original_name)
-        .bind(Json(&media.variants))
-        .execute(e))
-        .map(|_| ())
+        let variants = Json(&media.variants);
+        // The row and its `media_variants` rows commit together.
+        atomic!(&self.exec, |conn| async {
+            sqlx::query(
+                "INSERT INTO media (item_id, artifact_hash, mime, bytes, width, height, alt, \
+                 original_name, variants) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            )
+            .bind(media.item_id.as_uuid())
+            .bind(media.artifact_hash.as_str())
+            .bind(&media.mime)
+            .bind(media.bytes)
+            .bind(media.width)
+            .bind(media.height)
+            .bind(&media.alt)
+            .bind(&media.original_name)
+            .bind(variants)
+            .execute(&mut *conn)
+            .await
+            .map_err(crate::exec::map_db_err)?;
+            sync_variants(&mut *conn, media.item_id).await
+        })
     }
 
     async fn get(&self, id: ContentId) -> Result<Option<Media>, StoreError> {
@@ -100,24 +106,32 @@ impl MediaRepo for PgRepos {
         validate_text("media mime", &media.mime)?;
         validate_text("media alt", &media.alt)?;
         validate_json(&media.variants)?;
-        let done = run!(&self.exec, |e| {
-            sqlx::query(
-            "UPDATE media SET mime = $1, bytes = $2, width = $3, height = $4, alt = $5, variants = $6 \
-             WHERE item_id = $7"
-        )
-        .bind(&media.mime)
-        .bind(media.bytes)
-        .bind(media.width)
-        .bind(media.height)
-        .bind(&media.alt)
-        .bind(Json(&media.variants))
-        .bind(media.item_id.as_uuid())
-        .execute(e)
-        })?;
-        if done.rows_affected() == 0 {
-            return Err(StoreError::NotFound);
-        }
-        Ok(())
+        let variants = Json(&media.variants);
+        atomic!(&self.exec, |conn| async {
+            let done = sqlx::query(
+                "UPDATE media SET mime = $1, bytes = $2, width = $3, height = $4, \
+                 alt = $5, variants = $6 WHERE item_id = $7",
+            )
+            .bind(&media.mime)
+            .bind(media.bytes)
+            .bind(media.width)
+            .bind(media.height)
+            .bind(&media.alt)
+            .bind(variants)
+            .bind(media.item_id.as_uuid())
+            .execute(&mut *conn)
+            .await
+            .map_err(crate::exec::map_db_err)?;
+            if done.rows_affected() == 0 {
+                return Err(StoreError::NotFound);
+            }
+            sqlx::query("DELETE FROM media_variants WHERE item_id = $1")
+                .bind(media.item_id.as_uuid())
+                .execute(&mut *conn)
+                .await
+                .map_err(crate::exec::map_db_err)?;
+            sync_variants(&mut *conn, media.item_id).await
+        })
     }
 
     async fn get_many(&self, ids: &[ContentId]) -> Result<Vec<Media>, StoreError> {
@@ -148,19 +162,41 @@ impl MediaRepo for PgRepos {
         limit: u32,
     ) -> Result<Vec<Media>, StoreError> {
         let limit = check_limit(limit)?;
-        let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT {MEDIA_COLUMNS} FROM media WHERE artifact_hash = $1 OR EXISTS (\
-             SELECT 1 FROM jsonb_each(CASE WHEN jsonb_typeof(variants) = 'object' \
-             THEN variants ELSE '{{}}'::jsonb END) AS v \
-             WHERE jsonb_typeof(v.value) = 'object' \
-             AND jsonb_typeof(v.value -> 'hash') = 'string' AND v.value ->> 'hash' = $1) \
-             ORDER BY item_id LIMIT $2"
-        )))
-        .bind(hash.as_str())
-        .bind(i64::from(limit))
-        .fetch_all(e))?;
+        let rows = run!(&self.exec, |e| sqlx::query(FIND_MEDIA_BY_ARTIFACT_SQL)
+            .bind(hash.as_str())
+            .bind(i64::from(limit))
+            .fetch_all(e))?;
         rows.iter().map(codec::media).collect()
     }
+}
+
+/// `MediaRepo::find_by_artifact` (ruling R29): nothing unless `artifacts` has the hash
+/// as a media or variant file (primary key), then the indexed original match
+/// (`media_artifact_idx`) and the indexed variant match (`media_variants_hash_idx`).
+/// Bind 1: the hash; bind 2: the limit. Public so the plan test can `EXPLAIN` it.
+pub const FIND_MEDIA_BY_ARTIFACT_SQL: &str = "SELECT item_id, artifact_hash, mime, bytes, width, height, alt, original_name, \
+variants FROM media \
+WHERE EXISTS (SELECT 1 FROM artifacts WHERE hash = $1 AND kind IN ('media', 'variant')) \
+AND item_id IN (SELECT item_id FROM media WHERE artifact_hash = $1 \
+UNION SELECT item_id FROM media_variants WHERE hash = $1) \
+ORDER BY item_id LIMIT $2";
+
+/// Rebuilds the `media_variants` rows of `item` from its `variants` JSON (the rule of
+/// migration 0003's backfill): one row per object value with a string `hash`.
+const SYNC_VARIANTS_SQL: &str = "INSERT INTO media_variants (hash, item_id, name) \
+SELECT v.value ->> 'hash', m.item_id, v.key FROM media AS m \
+CROSS JOIN LATERAL jsonb_each(CASE WHEN jsonb_typeof(m.variants) = 'object' \
+THEN m.variants ELSE '{}'::jsonb END) AS v \
+WHERE m.item_id = $1 AND jsonb_typeof(v.value) = 'object' \
+AND jsonb_typeof(v.value -> 'hash') = 'string'";
+
+async fn sync_variants(conn: &mut sqlx::PgConnection, item: ContentId) -> Result<(), StoreError> {
+    sqlx::query(SYNC_VARIANTS_SQL)
+        .bind(item.as_uuid())
+        .execute(conn)
+        .await
+        .map_err(crate::exec::map_db_err)?;
+    Ok(())
 }
 
 #[async_trait]

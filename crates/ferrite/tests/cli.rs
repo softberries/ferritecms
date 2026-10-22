@@ -158,7 +158,7 @@ fn migrate_status_output() {
         c.args(["migrate", "status", "--data"]).arg(tmp.path());
         c
     });
-    assert!(out.contains("database version: 2"), "{out}");
+    assert!(out.contains("database version: 3"), "{out}");
     assert!(
         out.contains(&format!("(ferrite {})", env!("CARGO_PKG_VERSION"))),
         "{out}"
@@ -168,9 +168,9 @@ fn migrate_status_output() {
 
     // Revert the newest migration: it becomes pending with its directives.
     let mut c = ferrite();
-    c.args(["migrate", "down", "--to", "1", "--yes", "--data"])
+    c.args(["migrate", "down", "--to", "2", "--yes", "--data"])
         .arg(tmp.path());
-    assert!(stdout(c).contains("Reverted migrations: 2"));
+    assert!(stdout(c).contains("Reverted migrations: 3"));
     let out = stdout_code(
         {
             let mut c = ferrite();
@@ -179,16 +179,16 @@ fn migrate_status_output() {
         },
         2,
     );
-    assert!(out.contains("database version: 1"), "{out}");
+    assert!(out.contains("database version: 2"), "{out}");
     assert!(
-        out.contains("0002 search (phase=expand, min-binary=-, lossy-down=no)"),
+        out.contains("0003 media variants (phase=expand, min-binary=-, lossy-down=no)"),
         "{out}"
     );
     assert!(out.contains("verdict: needs migrate up"), "{out}");
 
     let mut c = ferrite();
     c.args(["migrate", "up", "--data"]).arg(tmp.path());
-    assert!(stdout(c).contains("Applied migrations: 2"));
+    assert!(stdout(c).contains("Applied migrations: 3"));
     let mut c = ferrite();
     c.args(["migrate", "verify", "--data"]).arg(tmp.path());
     assert!(stdout(c).contains("checksums OK"));
@@ -211,7 +211,7 @@ fn migrate_down_requires_yes() {
         c.args(["migrate", "status", "--data"]).arg(tmp.path());
         c
     });
-    assert!(out.contains("database version: 2"), "{out}");
+    assert!(out.contains("database version: 3"), "{out}");
 }
 
 #[test]
@@ -485,19 +485,19 @@ fn postgres_init_and_migrate() {
         stdout(c)
     };
     let out = status(tmp.path());
-    assert!(out.contains("database version: 2"), "{out}");
+    assert!(out.contains("database version: 3"), "{out}");
     assert!(out.contains("verdict: up to date"), "{out}");
 
     let mut c = ferrite();
-    c.args(["migrate", "down", "--to", "1", "--yes", "--data"])
+    c.args(["migrate", "down", "--to", "2", "--yes", "--data"])
         .arg(tmp.path());
-    assert!(stdout(c).contains("Reverted migrations: 2"));
+    assert!(stdout(c).contains("Reverted migrations: 3"));
     let mut c = ferrite();
     c.args(["migrate", "status", "--data"]).arg(tmp.path());
     assert!(stdout_code(c, 2).contains("verdict: needs migrate up"));
     let mut c = ferrite();
     c.args(["migrate", "up", "--data"]).arg(tmp.path());
-    assert!(stdout(c).contains("Applied migrations: 2"));
+    assert!(stdout(c).contains("Applied migrations: 3"));
     let mut c = ferrite();
     c.args(["migrate", "verify", "--data"]).arg(tmp.path());
     assert!(stdout(c).contains("checksums OK"));

@@ -16,6 +16,8 @@ mod content;
 mod event;
 mod menu;
 mod plugin;
+
+pub use plugin::FIND_MEDIA_BY_ARTIFACT_SQL;
 mod search;
 mod site;
 mod taxonomy;

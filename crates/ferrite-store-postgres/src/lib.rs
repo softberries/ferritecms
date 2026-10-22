@@ -12,6 +12,7 @@ use sqlx::{PgPool, postgres::PgConnectOptions};
 
 pub use connect::PgOptions;
 use exec::map_db_err;
+pub use repos::FIND_MEDIA_BY_ARTIFACT_SQL;
 use repos::{PgRepos, PgTx};
 
 /// A PostgreSQL-backed [`Store`].

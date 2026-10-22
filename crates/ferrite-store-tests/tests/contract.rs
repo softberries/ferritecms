@@ -113,6 +113,8 @@ backend_tests!(
     artifact_insert_if_absent,
     media_insert_get_update_variants,
     media_find_by_artifact,
+    media_variants_backfill,
+    media_lookup_uses_indexes,
     plugins_upsert_list_enable,
     plugin_kv_crud_and_usage,
     themes_single_active,

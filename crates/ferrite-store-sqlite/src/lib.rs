@@ -16,6 +16,7 @@ use sqlx::SqlitePool;
 
 pub use connect::SqliteOptions;
 use exec::map_db_err;
+pub use repos::FIND_MEDIA_BY_ARTIFACT_SQL;
 use repos::{SqliteRepos, SqliteTx};
 
 /// A SQLite-backed [`Store`]. Holds the data-folder lock until dropped.

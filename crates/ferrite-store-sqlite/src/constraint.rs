@@ -2,7 +2,7 @@
 //!
 //! SQLite reports a unique violation as `UNIQUE constraint failed: t.a, t.b` (or
 //! `index 'name'` for an expression index), never with the constraint's name. Postgres
-//! reports the name. Both 0001 migrations name every primary key `<table>_pkey` and every
+//! reports the name. The migrations name every primary key `<table>_pkey` and every
 //! unique index `<table>_<what>_uq`, and this table maps SQLite's column list to that
 //! name, so `StoreError::UniqueViolation { constraint }` is identical on both backends.
 //! A unit test checks the table covers every unique index in the migrated schema.
@@ -18,6 +18,10 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ),
     ("content_types.name", "content_types_pkey"),
     ("media.item_id", "media_pkey"),
+    (
+        "media_variants.item_id, media_variants.name",
+        "media_variants_pkey",
+    ),
     ("menu_items.id", "menu_items_pkey"),
     ("menus.name", "menus_pkey"),
     ("options.key", "options_pkey"),

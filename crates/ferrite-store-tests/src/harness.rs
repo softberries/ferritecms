@@ -285,6 +285,57 @@ impl TestDb {
         }
     }
 
+    /// The query plan of `MediaRepo::find_by_artifact` for `hash`, one line per plan
+    /// node. Postgres plans with `enable_seqscan = off`, which shows whether indexes
+    /// can serve the query (on the tiny test tables the planner would otherwise pick
+    /// sequential scans on cost alone).
+    pub async fn explain_media_lookup(&self, hash: &str) -> String {
+        match &self.backing {
+            Backing::Sqlite { path, .. } => {
+                let mut c = sqlite_conn(path).await;
+                let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(AssertSqlSafe(format!(
+                    "EXPLAIN QUERY PLAN {}",
+                    ferrite_store_sqlite::FIND_MEDIA_BY_ARTIFACT_SQL
+                )))
+                .bind(hash)
+                .bind(10_i64)
+                .fetch_all(&mut c)
+                .await
+                .expect("explain sqlite");
+                rows.into_iter().map(|r| r.3).collect::<Vec<_>>().join("\n")
+            }
+            Backing::Postgres(f) => {
+                let mut c = PgConnection::connect(&f.url).await.expect("connect");
+                sqlx::query(AssertSqlSafe(format!(
+                    "SET search_path TO {}",
+                    quote_ident(&f.schema)
+                )))
+                .execute(&mut c)
+                .await
+                .expect("search_path");
+                sqlx::query("SET enable_seqscan = off")
+                    .execute(&mut c)
+                    .await
+                    .expect("enable_seqscan");
+                let rows: Vec<String> = sqlx::query_scalar(AssertSqlSafe(format!(
+                    "EXPLAIN {}",
+                    ferrite_store_postgres::FIND_MEDIA_BY_ARTIFACT_SQL
+                )))
+                .bind(hash)
+                .bind(10_i64)
+                .fetch_all(&mut c)
+                .await
+                .expect("explain postgres");
+                rows.join("\n")
+            }
+        }
+    }
+
+    /// Whether this is the SQLite backing.
+    pub fn is_sqlite(&self) -> bool {
+        matches!(self.backing, Backing::Sqlite { .. })
+    }
+
     /// Overwrites the recorded checksum of an applied migration.
     pub async fn tamper_checksum(&self, version: i64) {
         let done = match &self.backing {
