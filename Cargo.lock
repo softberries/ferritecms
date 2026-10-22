@@ -784,6 +784,7 @@ dependencies = [
  "semver",
  "serde_json",
  "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]
@@ -823,6 +824,7 @@ dependencies = [
 name = "ferrite-store-tests"
 version = "0.1.0"
 dependencies = [
+ "ferrite-domain",
  "ferrite-store",
  "ferrite-store-postgres",
  "ferrite-store-sqlite",

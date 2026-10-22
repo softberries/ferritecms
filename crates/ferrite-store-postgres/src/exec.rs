@@ -14,7 +14,25 @@ pub(crate) enum Exec {
     Tx(SharedTx),
 }
 
-pub(crate) fn db_err(e: sqlx::Error) -> StoreError {
+/// Maps a driver error: SQLSTATE 23505 and 23503 become typed errors carrying the
+/// violated constraint (or unique index) name.
+pub(crate) fn map_db_err(e: sqlx::Error) -> StoreError {
+    if let sqlx::Error::Database(db) = &e {
+        let constraint = || db.constraint().unwrap_or_default().to_owned();
+        match db.code().as_deref() {
+            Some("23505") => {
+                return StoreError::UniqueViolation {
+                    constraint: constraint(),
+                };
+            }
+            Some("23503") => {
+                return StoreError::ForeignKey {
+                    constraint: constraint(),
+                };
+            }
+            _ => {}
+        }
+    }
     StoreError::Database(e.to_string())
 }
 
@@ -30,12 +48,12 @@ macro_rules! run {
         match $exec {
             $crate::exec::Exec::Pool(pool) => {
                 let $e = pool;
-                $body.await.map_err($crate::exec::db_err)
+                $body.await.map_err($crate::exec::map_db_err)
             }
             $crate::exec::Exec::Tx(tx) => match tx.lock().await.as_mut() {
                 Some(t) => {
                     let $e = &mut **t;
-                    $body.await.map_err($crate::exec::db_err)
+                    $body.await.map_err($crate::exec::map_db_err)
                 }
                 None => Err($crate::exec::finished()),
             },

@@ -8,7 +8,7 @@ use ferrite_store::{
 use semver::Version;
 use sqlx::migrate::{MigrateError, Migrator};
 
-use crate::{PgStore, exec::db_err};
+use crate::{PgStore, exec::map_db_err};
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
@@ -46,7 +46,7 @@ impl PgStore {
             .bind(name)
             .fetch_one(&self.pool)
             .await
-            .map_err(db_err)
+            .map_err(map_db_err)
     }
 
     /// Applied migrations, oldest first; errors if one is recorded as failed (dirty).
@@ -59,7 +59,7 @@ impl PgStore {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(db_err)?;
+        .map_err(map_db_err)?;
         if let Some((v, _, _)) = rows.iter().find(|(_, _, ok)| !ok) {
             return Err(StoreError::Migration(format!(
                 "migration {v} failed partway (dirty); repair the database manually"
@@ -85,7 +85,7 @@ impl PgStore {
                 .bind(SCHEMA_META_MIN_BINARY)
                 .fetch_optional(&self.pool)
                 .await
-                .map_err(db_err)?;
+                .map_err(map_db_err)?;
         raw.map(|s| {
             Version::parse(&s).map_err(|e| {
                 StoreError::Migration(format!("invalid {SCHEMA_META_MIN_BINARY} `{s}`: {e}"))
@@ -178,7 +178,7 @@ impl PgStore {
             .bind(value)
             .execute(&self.pool)
             .await
-            .map_err(db_err)?;
+            .map_err(map_db_err)?;
         }
         let current = self.stored_min_binary().await?;
         let applied = self.applied_versions().await?;
@@ -199,7 +199,7 @@ impl PgStore {
         }
         .execute(&self.pool)
         .await
-        .map_err(db_err)?;
+        .map_err(map_db_err)?;
         tracing::info!(from = ?current, to = ?next, "updated {SCHEMA_META_MIN_BINARY}");
         Ok(())
     }

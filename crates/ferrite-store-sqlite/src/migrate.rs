@@ -13,7 +13,7 @@ use ferrite_store::{
 use semver::Version;
 use sqlx::migrate::{MigrateError, Migrator};
 
-use crate::{SqliteStore, exec::db_err};
+use crate::{SqliteStore, exec::map_db_err};
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
@@ -59,7 +59,7 @@ impl SqliteStore {
         .bind(name)
         .fetch_one(&self.reader)
         .await
-        .map_err(db_err)
+        .map_err(map_db_err)
     }
 
     /// Applied migrations, oldest first; errors if one is recorded as failed (dirty).
@@ -72,7 +72,7 @@ impl SqliteStore {
         )
         .fetch_all(&self.reader)
         .await
-        .map_err(db_err)?;
+        .map_err(map_db_err)?;
         if let Some((v, _, _)) = rows.iter().find(|(_, _, ok)| !ok) {
             return Err(StoreError::Migration(format!(
                 "migration {v} failed partway (dirty); repair the database manually"
@@ -97,7 +97,7 @@ impl SqliteStore {
             .bind(SCHEMA_META_MIN_BINARY)
             .fetch_optional(&self.reader)
             .await
-            .map_err(db_err)?;
+            .map_err(map_db_err)?;
         raw.map(|s| {
             Version::parse(&s).map_err(|e| {
                 StoreError::Migration(format!("invalid {SCHEMA_META_MIN_BINARY} `{s}`: {e}"))
@@ -185,7 +185,7 @@ impl SqliteStore {
             .bind(value)
             .execute(&self.writer)
             .await
-            .map_err(db_err)?;
+            .map_err(map_db_err)?;
         }
         let current = self.stored_min_binary().await?;
         let applied = self.applied_versions().await?;
@@ -206,7 +206,7 @@ impl SqliteStore {
         }
         .execute(&self.writer)
         .await
-        .map_err(db_err)?;
+        .map_err(map_db_err)?;
         tracing::info!(from = ?current, to = ?next, "updated {SCHEMA_META_MIN_BINARY}");
         Ok(())
     }
@@ -221,7 +221,7 @@ impl SqliteStore {
             .bind(dest)
             .execute(&self.reader)
             .await
-            .map_err(db_err)?;
+            .map_err(map_db_err)?;
         Ok(())
     }
 

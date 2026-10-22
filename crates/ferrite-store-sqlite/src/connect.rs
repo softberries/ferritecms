@@ -9,7 +9,7 @@ use std::{
 use ferrite_store::StoreError;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
-use crate::{SqliteStore, exec::db_err, repos::SqliteRepos};
+use crate::{SqliteStore, exec::map_db_err, repos::SqliteRepos};
 
 /// Name of the lock file held for the store's lifetime.
 pub(crate) const LOCK_FILE: &str = "ferrite.lock";
@@ -64,13 +64,13 @@ impl SqliteStore {
             .min_connections(1)
             .connect_with(base.clone())
             .await
-            .map_err(db_err)?;
+            .map_err(map_db_err)?;
         // Read-only, so a write sent to the reader pool by mistake fails loudly.
         let reader = SqlitePoolOptions::new()
             .max_connections(opts.readers.max(1))
             .connect_with(base.read_only(true))
             .await
-            .map_err(db_err)?;
+            .map_err(map_db_err)?;
 
         Ok(Self {
             read: SqliteRepos::new(reader.clone(), writer.clone()),

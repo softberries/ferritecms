@@ -1,6 +1,7 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
-    backend_tests, backend_tests_spawning, migration_dirs, migration_files, migrations::*, site::*,
+    backend_tests, backend_tests_spawning, content::*, migration_dirs, migration_files,
+    migrations::*, site::*,
 };
 
 backend_tests!(
@@ -21,6 +22,24 @@ backend_tests!(
     options_number_roundtrip,
     autoloaded_order_is_binary,
     schema_meta_roundtrip,
+);
+
+backend_tests!(
+    types_seeded_and_upsert,
+    content_insert_get_roundtrip,
+    slug_unique_per_type_and_parent,
+    unknown_references_are_foreign_keys,
+    get_by_slug_root_and_child,
+    optimistic_lock_race,
+    update_missing_is_not_found,
+    list_filters_and_orders,
+    list_pagination_covers_every_order,
+    list_pagination_with_null_published,
+    due_scheduled_returns_only_due,
+    meta_crud,
+    delete_cascades_meta,
+    delete_with_children_is_foreign_key,
+    content_rejects_nul_json,
 );
 
 backend_tests_spawning!(concurrent_writers);

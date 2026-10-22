@@ -14,7 +14,32 @@ pub(crate) enum Exec {
     Tx(SharedTx),
 }
 
-pub(crate) fn db_err(e: sqlx::Error) -> StoreError {
+/// Maps a driver error: unique and foreign-key violations become typed errors (SQLite
+/// extended codes 2067/1555 and 787); the constraint is the text after
+/// "constraint failed: " (the column list for a unique violation).
+pub(crate) fn map_db_err(e: sqlx::Error) -> StoreError {
+    if let sqlx::Error::Database(db) = &e {
+        let message = db.message();
+        let constraint = || {
+            message
+                .split_once("constraint failed: ")
+                .map_or(message, |(_, rest)| rest)
+                .to_owned()
+        };
+        match db.code().as_deref() {
+            Some("2067" | "1555") => {
+                return StoreError::UniqueViolation {
+                    constraint: constraint(),
+                };
+            }
+            Some("787") => {
+                return StoreError::ForeignKey {
+                    constraint: constraint(),
+                };
+            }
+            _ => {}
+        }
+    }
     StoreError::Database(e.to_string())
 }
 
@@ -30,12 +55,12 @@ macro_rules! run {
         match $exec {
             $crate::exec::Exec::Pool(pool) => {
                 let $e = pool;
-                $body.await.map_err($crate::exec::db_err)
+                $body.await.map_err($crate::exec::map_db_err)
             }
             $crate::exec::Exec::Tx(tx) => match tx.lock().await.as_mut() {
                 Some(t) => {
                     let $e = &mut **t;
-                    $body.await.map_err($crate::exec::db_err)
+                    $body.await.map_err($crate::exec::map_db_err)
                 }
                 None => Err($crate::exec::finished()),
             },

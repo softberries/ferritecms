@@ -11,7 +11,7 @@ use ferrite_store::{Backend, MigrationStatus, Repos, Store, StoreError, Tx};
 use sqlx::{PgPool, postgres::PgConnectOptions};
 
 pub use connect::PgOptions;
-use exec::db_err;
+use exec::map_db_err;
 use repos::{PgRepos, PgTx};
 
 /// A PostgreSQL-backed [`Store`].
@@ -35,7 +35,7 @@ impl Store for PgStore {
     }
 
     async fn begin(&self) -> Result<Box<dyn Tx>, StoreError> {
-        let tx = self.pool.begin().await.map_err(db_err)?;
+        let tx = self.pool.begin().await.map_err(map_db_err)?;
         Ok(Box::new(PgTx::new(tx)))
     }
 

@@ -3,6 +3,7 @@
 mod error;
 mod json;
 mod migrate;
+mod paging;
 mod repos;
 
 pub use error::StoreError;
@@ -11,6 +12,7 @@ pub use migrate::{
     Compat, Directives, MigrationStatus, Phase, SCHEMA_META_MIN_BINARY, expand_lint,
     next_min_binary, parse_directives, plan_down, verdict,
 };
+pub use paging::{SortKey, check_limit, content_cursor, content_sort_key, encode_content_cursor};
 pub use repos::{
     ArtifactRepo, Backend, ContentRepo, ContentTypeRepo, EventRepo, MediaRepo, MenuRepo, MetaRepo,
     OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,

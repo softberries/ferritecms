@@ -4,16 +4,13 @@
 
 use async_trait::async_trait;
 use ferrite_domain::{
-    Artifact, ArtifactHash, ContentId, ContentItem, ContentQuery, ContentType, Event,
-    InstalledPlugin, InstalledTheme, Media, Menu, NewContent, NewEvent, NewUser, Page, Redirect,
-    RedirectId, Revision, RevisionId, Taxonomy, Term, TermId, Timestamp, User, UserId,
+    Artifact, ArtifactHash, ContentId, Event, InstalledPlugin, InstalledTheme, Media, Menu,
+    NewEvent, Page, Redirect, RedirectId, Revision, RevisionId, Taxonomy, Term, TermId, Timestamp,
 };
 use ferrite_store::{
-    ArtifactRepo, ContentRepo, ContentTypeRepo, EventRepo, MediaRepo, MenuRepo, MetaRepo,
-    PluginKvRepo, PluginRepo, RedirectRepo, RevisionRepo, SearchRepo, StoreError, TaxonomyRepo,
-    TermRepo, ThemeRepo, UserRepo,
+    ArtifactRepo, EventRepo, MediaRepo, MenuRepo, PluginKvRepo, PluginRepo, RedirectRepo,
+    RevisionRepo, SearchRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo,
 };
-use serde_json::Value;
 
 pub(crate) struct Unsupported;
 
@@ -29,30 +26,6 @@ macro_rules! stub {
         }
     };
 }
-
-stub!(ContentTypeRepo {
-    fn upsert(&ContentType) -> ();
-    fn get(&str) -> Option<ContentType>;
-    fn list() -> Vec<ContentType>;
-    fn delete(&str) -> ();
-});
-
-stub!(ContentRepo {
-    fn insert(&NewContent) -> ContentItem;
-    fn get(ContentId) -> Option<ContentItem>;
-    fn get_by_slug(&str, Option<ContentId>, &str) -> Option<ContentItem>;
-    fn update(&ContentItem) -> ContentItem;
-    fn list(&ContentQuery) -> Page<ContentItem>;
-    fn delete(ContentId) -> ();
-    fn due_scheduled(Timestamp, u32) -> Vec<ContentItem>;
-});
-
-stub!(MetaRepo {
-    fn get(ContentId, &str) -> Option<Value>;
-    fn set(ContentId, &str, &Value) -> ();
-    fn delete(ContentId, &str) -> ();
-    fn list(ContentId) -> Vec<(String, Value)>;
-});
 
 stub!(RevisionRepo {
     fn insert(&Revision) -> ();
@@ -91,15 +64,6 @@ stub!(RedirectRepo {
     fn delete(RedirectId) -> ();
     fn list(u32, Option<&str>) -> Page<Redirect>;
     fn hit(RedirectId) -> ();
-});
-
-stub!(UserRepo {
-    fn insert(&NewUser) -> User;
-    fn get(UserId) -> Option<User>;
-    fn get_by_login(&str) -> Option<User>;
-    fn get_by_email(&str) -> Option<User>;
-    fn update(&User) -> ();
-    fn list(u32, Option<&str>) -> Page<User>;
 });
 
 stub!(ArtifactRepo {

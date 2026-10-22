@@ -14,7 +14,7 @@ use ferrite_store::{Backend, MigrationStatus, Repos, Store, StoreError, Tx};
 use sqlx::SqlitePool;
 
 pub use connect::SqliteOptions;
-use exec::db_err;
+use exec::map_db_err;
 use repos::{SqliteRepos, SqliteTx};
 
 /// A SQLite-backed [`Store`]. Holds the data-folder lock until dropped.
@@ -40,7 +40,7 @@ impl Store for SqliteStore {
     }
 
     async fn begin(&self) -> Result<Box<dyn Tx>, StoreError> {
-        let tx = self.writer.begin().await.map_err(db_err)?;
+        let tx = self.writer.begin().await.map_err(map_db_err)?;
         Ok(Box::new(SqliteTx::new(tx)))
     }
 

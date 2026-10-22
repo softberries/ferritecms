@@ -1,8 +1,10 @@
 //! Repository implementations. Each later M1a task replaces one group of `&Unsupported`
 //! accessors with a real implementation on [`PgRepos`].
 
+mod content;
 mod site;
 mod stub;
+mod user;
 
 use std::sync::Arc;
 
@@ -16,7 +18,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use stub::Unsupported;
 use tokio::sync::Mutex;
 
-use crate::exec::{Exec, SharedTx, db_err, finished};
+use crate::exec::{Exec, SharedTx, finished, map_db_err};
 
 /// Every repository, bound to one executor (the pool or a write transaction).
 pub(crate) struct PgRepos {
@@ -33,16 +35,16 @@ impl PgRepos {
 
 impl Repos for PgRepos {
     fn content(&self) -> &dyn ContentRepo {
-        &Unsupported
+        self
     }
     fn meta(&self) -> &dyn MetaRepo {
-        &Unsupported
+        self
     }
     fn revisions(&self) -> &dyn RevisionRepo {
         &Unsupported
     }
     fn types(&self) -> &dyn ContentTypeRepo {
-        &Unsupported
+        self
     }
     fn taxonomies(&self) -> &dyn TaxonomyRepo {
         &Unsupported
@@ -60,7 +62,7 @@ impl Repos for PgRepos {
         &Unsupported
     }
     fn users(&self) -> &dyn UserRepo {
-        &Unsupported
+        self
     }
     fn artifacts(&self) -> &dyn ArtifactRepo {
         &Unsupported
@@ -113,11 +115,11 @@ impl PgTx {
 #[async_trait]
 impl Tx for PgTx {
     async fn commit(self: Box<Self>) -> Result<(), StoreError> {
-        self.take().await?.commit().await.map_err(db_err)
+        self.take().await?.commit().await.map_err(map_db_err)
     }
 
     async fn rollback(self: Box<Self>) -> Result<(), StoreError> {
-        self.take().await?.rollback().await.map_err(db_err)
+        self.take().await?.rollback().await.map_err(map_db_err)
     }
 }
 

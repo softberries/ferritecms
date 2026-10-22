@@ -13,8 +13,10 @@
 //! loudly) and the writer is the single writer connection. Inside a `Tx` both point at
 //! the transaction, so reads see the transaction's own writes.
 
+mod content;
 mod site;
 mod stub;
+mod user;
 
 use std::sync::Arc;
 
@@ -28,7 +30,7 @@ use sqlx::{Sqlite, SqlitePool, Transaction};
 use stub::Unsupported;
 use tokio::sync::Mutex;
 
-use crate::exec::{Exec, SharedTx, db_err, finished};
+use crate::exec::{Exec, SharedTx, finished, map_db_err};
 
 /// Every repository, bound to a read and a write executor (see the module docs).
 pub(crate) struct SqliteRepos {
@@ -48,16 +50,16 @@ impl SqliteRepos {
 
 impl Repos for SqliteRepos {
     fn content(&self) -> &dyn ContentRepo {
-        &Unsupported
+        self
     }
     fn meta(&self) -> &dyn MetaRepo {
-        &Unsupported
+        self
     }
     fn revisions(&self) -> &dyn RevisionRepo {
         &Unsupported
     }
     fn types(&self) -> &dyn ContentTypeRepo {
-        &Unsupported
+        self
     }
     fn taxonomies(&self) -> &dyn TaxonomyRepo {
         &Unsupported
@@ -75,7 +77,7 @@ impl Repos for SqliteRepos {
         &Unsupported
     }
     fn users(&self) -> &dyn UserRepo {
-        &Unsupported
+        self
     }
     fn artifacts(&self) -> &dyn ArtifactRepo {
         &Unsupported
@@ -129,11 +131,11 @@ impl SqliteTx {
 #[async_trait]
 impl Tx for SqliteTx {
     async fn commit(self: Box<Self>) -> Result<(), StoreError> {
-        self.take().await?.commit().await.map_err(db_err)
+        self.take().await?.commit().await.map_err(map_db_err)
     }
 
     async fn rollback(self: Box<Self>) -> Result<(), StoreError> {
-        self.take().await?.rollback().await.map_err(db_err)
+        self.take().await?.rollback().await.map_err(map_db_err)
     }
 }
 

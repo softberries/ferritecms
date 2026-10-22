@@ -8,7 +8,7 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 
-use crate::{PgStore, exec::db_err, repos::PgRepos};
+use crate::{PgStore, exec::map_db_err, repos::PgRepos};
 
 /// `statement_timeout` on application connections.
 const STATEMENT_TIMEOUT: &str = "30s";
@@ -43,20 +43,22 @@ pub(crate) fn quote_ident(s: &str) -> String {
 impl PgStore {
     /// Creates the schema if set and missing, then opens the pool. Does not migrate.
     pub async fn open(opts: PgOptions) -> Result<Self, StoreError> {
-        let connect = PgConnectOptions::from_str(&opts.url).map_err(db_err)?;
+        let connect = PgConnectOptions::from_str(&opts.url).map_err(map_db_err)?;
         let search_path_sql = opts
             .schema
             .as_deref()
             .map(|s| format!("SET search_path TO {}", quote_ident(s)));
         if let Some(schema) = &opts.schema {
-            let mut conn = PgConnection::connect_with(&connect).await.map_err(db_err)?;
+            let mut conn = PgConnection::connect_with(&connect)
+                .await
+                .map_err(map_db_err)?;
             // Only CREATE when missing, so an existing schema needs no CREATE privilege.
             let exists: bool =
                 sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)")
                     .bind(schema)
                     .fetch_one(&mut conn)
                     .await
-                    .map_err(db_err)?;
+                    .map_err(map_db_err)?;
             if !exists {
                 sqlx::raw_sql(AssertSqlSafe(format!(
                     "CREATE SCHEMA IF NOT EXISTS {}",
@@ -64,9 +66,9 @@ impl PgStore {
                 )))
                 .execute(&mut conn)
                 .await
-                .map_err(db_err)?;
+                .map_err(map_db_err)?;
             }
-            conn.close().await.map_err(db_err)?;
+            conn.close().await.map_err(map_db_err)?;
         }
 
         let session: Arc<str> = match &search_path_sql {
@@ -85,7 +87,7 @@ impl PgStore {
             })
             .connect_with(connect.clone())
             .await
-            .map_err(db_err)?;
+            .map_err(map_db_err)?;
 
         Ok(Self {
             read: PgRepos::new(pool.clone()),
@@ -113,7 +115,7 @@ impl PgStore {
             })
             .connect_with(self.connect.clone())
             .await
-            .map_err(db_err)
+            .map_err(map_db_err)
     }
 }
 
