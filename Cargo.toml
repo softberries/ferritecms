@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ferrite-domain", "crates/ferrite-store", "crates/ferrite-store-postgres", "crates/ferrite-store-sqlite", "crates/ferrite-store-tests", "crates/ferrite-plugin-host", "crates/ferrite-sdk", "crates/ferrite-media", "crates/ferrite-config", "crates/ferrite-core", "crates/ferrite-http", "crates/ferrite-theme", "crates/ferrite"]
+members = ["crates/ferrite-domain", "crates/ferrite-store", "crates/ferrite-store-postgres", "crates/ferrite-store-sqlite", "crates/ferrite-store-tests", "crates/ferrite-plugin-host", "crates/ferrite-sdk", "crates/ferrite-media", "crates/ferrite-config", "crates/ferrite-core", "crates/ferrite-http", "crates/ferrite-theme", "crates/ferrite-cache", "crates/ferrite"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,6 +25,7 @@ libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 infer = "0.22"
 # No `debug` feature: no debug() global, no source snippets in errors (name + line stay).
+moka = { version = "0.12", features = ["future"] }
 minijinja = { version = "=3.0.2", default-features = false, features = ["builtins", "macros", "multi_template", "adjacent_loop_items", "std_collections", "serde", "json", "fuel"] }
 percent-encoding = "2"
 rust-embed = { version = "8.13", features = ["debug-embed"] }
@@ -39,6 +40,7 @@ serde_json = "1"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-util = "0.7"
 toml = "1.1"
 tracing = "0.1"
 unicode-normalization = "0.1.25"
