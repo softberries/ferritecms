@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use common::{plugin_manifest, plugin_wasm};
 use ferrite_plugin_host::{
-    FilterValue, Head, HostConfig, HostServices, InMemoryServices, Manifest, PluginHost, Post,
-    RequestInfo,
+    FailureKind, FilterValue, Head, HostConfig, HostServices, InMemoryServices, Manifest,
+    PluginHost, Post, RequestInfo,
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -37,6 +37,11 @@ fn input() -> FilterValue {
     })
 }
 
+/// Kind of the most recent recorded failure.
+fn last_kind(host: &PluginHost) -> Option<FailureKind> {
+    host.failures().last().map(|f| f.kind)
+}
+
 /// Run `render.head` once and return the output with the elapsed wall time.
 async fn timed(host: &PluginHost) -> (FilterValue, Duration) {
     let start = Instant::now();
@@ -55,7 +60,10 @@ async fn infinite_loop_is_killed_by_fuel() -> TestResult {
     let host = host_with(cfg, &["loop"])?;
     let (out, elapsed) = timed(&host).await;
     assert_eq!(out, input());
-    assert!(elapsed < Duration::from_millis(200), "took {elapsed:?}");
+    // The kind proves fuel ended the call; the bound only shows it ended long before the
+    // 5 s deadline (kept loose for slow CI runners).
+    assert_eq!(last_kind(&host), Some(FailureKind::OutOfFuel));
+    assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
     Ok(())
 }
 
@@ -69,8 +77,9 @@ async fn infinite_loop_is_killed_by_epoch() -> TestResult {
     let host = host_with(cfg, &["spin-host-fuel"])?;
     let (out, elapsed) = timed(&host).await;
     assert_eq!(out, input());
+    assert_eq!(last_kind(&host), Some(FailureKind::Deadline));
     assert!(elapsed >= Duration::from_millis(40), "took {elapsed:?}");
-    assert!(elapsed < Duration::from_millis(150), "took {elapsed:?}");
+    assert!(elapsed < Duration::from_secs(1), "took {elapsed:?}");
     Ok(())
 }
 
@@ -189,6 +198,7 @@ async fn slow_host_import_is_cut_by_hard_deadline() -> TestResult {
     let (out, elapsed) = slow_import_call(Duration::from_secs(2)).await?;
     assert_eq!(out, input());
     assert!(elapsed >= Duration::from_millis(70), "took {elapsed:?}");
-    assert!(elapsed < Duration::from_millis(500), "took {elapsed:?}");
+    // Well under the 2 s the host import sleeps, so the hard deadline must have fired.
+    assert!(elapsed < Duration::from_millis(1500), "took {elapsed:?}");
     Ok(())
 }
