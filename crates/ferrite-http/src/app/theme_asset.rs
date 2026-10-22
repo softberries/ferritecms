@@ -4,9 +4,11 @@
 //! theme's included, is `404`) and `path` names an asset exactly. The path arrives
 //! decoded once by the router and is never decoded again; templates and `theme.toml`
 //! are not assets and cannot be reached. The URL changes with the content, so caching
-//! is immutable; the strong ETag is `"<theme hash>-<16 hex of SHA-256(path)>"`. Text
-//! formats (CSS, JS, SVG, JSON, source maps, plain text) may be compressed; images,
-//! fonts and other binaries are not.
+//! is immutable. The ETag is `"<theme hash>-<16 hex of SHA-256(path)>"`: **weak**
+//! (`W/…`) for the text formats (CSS, JS, SVG, JSON, source maps, plain text), which
+//! the compression layer may encode per request (a strong tag must differ per
+//! content-coding, RFC 9110 §8.8.1; `If-None-Match` compares weakly), and strong for
+//! images, fonts and other binaries, which are never compressed.
 
 use std::sync::Arc;
 
@@ -44,7 +46,10 @@ pub(crate) fn serve(
     };
     let digest = Sha256::digest(path.as_bytes());
     let path_hash: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
-    let etag = format!("\"{}-{path_hash}\"", theme.hash());
+    let essence = mime.split(';').next().unwrap_or_default().trim();
+    let compressible = COMPRESSIBLE.contains(&essence);
+    let weak = if compressible { "W/" } else { "" };
+    let etag = format!("{weak}\"{}-{path_hash}\"", theme.hash());
     let fresh = headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
@@ -66,8 +71,7 @@ pub(crate) fn serve(
     if !fresh {
         set(&mut res, header::CONTENT_TYPE, mime);
     }
-    let essence = mime.split(';').next().unwrap_or_default().trim();
-    if !COMPRESSIBLE.contains(&essence) {
+    if !compressible {
         res.extensions_mut().insert(NoCompress);
     }
     res

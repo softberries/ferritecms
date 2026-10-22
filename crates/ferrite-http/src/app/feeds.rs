@@ -3,16 +3,21 @@
 //!
 //! * **Feeds** (`/feed/`, `/{taxonomy}/{slug}/feed/`): the latest
 //!   [`FEED_LEN`](ferrite_core::site::FEED_LEN) public items from `SiteReader::feed`;
-//!   per item title, absolute link, `guid isPermaLink="true"` (the link), `pubDate`
-//!   (RFC 2822, UTC) and the excerpt as `description`. Plugin content filters do not
-//!   run on feeds. An unknown term, or one without public posts, is 404 (R7). Atom is
-//!   not offered yet.
+//!   channel title (`<term> – <site>` for a term feed), link, an
+//!   `atom:link rel="self"` to the feed itself, and `lastBuildDate` = the newest
+//!   `updated_at` of the items; per item title, absolute link, `guid
+//!   isPermaLink="true"` (the link), `pubDate` (RFC 2822, UTC) and the excerpt as
+//!   `description`. Plugin content filters do not run on feeds. An unknown term, or
+//!   one without public posts, is 404 (R7). Atom feeds are not offered yet.
 //! * **Sitemaps**: `/sitemap.xml` indexes `/sitemap-<kind>-<n>.xml` for every public
 //!   content type with public items; each file lists up to
 //!   [`SITEMAP_FILE_LEN`](ferrite_core::site::SITEMAP_FILE_LEN) URLs with `lastmod`
 //!   (published only, via `SiteReader::sitemap`). A file number past the last one is
-//!   404. Building the index walks every type's files once (the cost of one full
-//!   sitemap read per type, on a cache miss).
+//!   404 from one count query (`SiteReader::sitemap_files`), without walking. Building
+//!   the index walks every type's files once (the cost of one full sitemap read per
+//!   type, on a cache miss). The set of content types is read per index render but
+//!   types are only registered at startup (see `ferrite_core::events`), so a new type
+//!   appears after the restart that registers it; no dependency key covers types.
 //! * **robots.txt**: `User-agent: *`, `Disallow: /` when option
 //!   `reading.discourage_indexing` is `true` (else an empty `Disallow:`), and the
 //!   sitemap index URL.
@@ -59,17 +64,40 @@ pub(crate) async fn feed(
     };
     let site = state.site_texts(&mut deps).await?;
     let base = &state.config.site_url;
-    let channel_link = match source {
-        FeedSource::Kind(_) => format!("{base}/"),
-        FeedSource::Term { taxonomy, slug } => format!("{base}{}", term_path(taxonomy, slug)),
+    let (channel_title, channel_link, self_link) = match source {
+        FeedSource::Kind(_) => (
+            site.title.clone(),
+            format!("{base}/"),
+            format!("{base}/feed/"),
+        ),
+        FeedSource::Term { taxonomy, slug } => {
+            let path = term_path(taxonomy, slug);
+            let name = items
+                .iter()
+                .flat_map(|i| &i.terms)
+                .find(|t| t.taxonomy == *taxonomy && t.slug == *slug)
+                .map_or(slug.as_str(), |t| t.name.as_str());
+            (
+                format!("{name} – {}", site.title),
+                format!("{base}{path}"),
+                format!("{base}{path}feed/"),
+            )
+        }
     };
-    let mut out =
-        String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rss version=\"2.0\"><channel>");
-    tag(&mut out, "title", &site.title);
+    let mut out = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <rss version=\"2.0\" xmlns:atom=\"http://www.w3.org/2005/Atom\"><channel>",
+    );
+    tag(&mut out, "title", &channel_title);
     tag(&mut out, "link", &channel_link);
+    let _ = write!(
+        out,
+        "<atom:link href=\"{}\" rel=\"self\" type=\"application/rss+xml\"/>",
+        escape(&self_link)
+    );
     tag(&mut out, "description", &site.description);
     tag(&mut out, "language", &site.locale);
-    if let Some(latest) = items.iter().filter_map(|i| i.item.published_at).max() {
+    if let Some(latest) = items.iter().map(|i| i.item.updated_at).max() {
         tag(&mut out, "lastBuildDate", &rfc2822(latest));
     }
     for item in &items {
@@ -146,6 +174,12 @@ pub(crate) async fn sitemap(
             Ok(Some(cached_page(XML, out, deps)))
         }
         SitemapPart::Kind { kind, n } => {
+            // Past the last file: 404 from one count, before walking any rows.
+            let files = state.reader.sitemap_files(kind).await?;
+            deps.extend(files.deps);
+            if *n > files.value {
+                return Ok(None);
+            }
             let mut cursor: Option<String> = None;
             for _ in 1..*n {
                 let read = state.reader.sitemap(kind, cursor.as_deref()).await?;

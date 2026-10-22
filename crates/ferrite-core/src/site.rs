@@ -87,7 +87,9 @@ pub const MAX_SKIP: u64 = 5000;
 pub const FEED_LEN: u32 = 20;
 /// URLs per sitemap file.
 pub const SITEMAP_FILE_LEN: usize = 50_000;
-/// Most media rows [`SiteReader::media_file`] considers for one file.
+/// Most media rows [`SiteReader::media_file`] considers for one file: more media
+/// items sharing one stored file than this is not a real library (the same upload
+/// would have to be added 100 times), and the first public one answers anyway.
 pub const MAX_MEDIA_ROWS: u32 = 100;
 /// Most items [`SiteReader::related`] returns.
 pub const MAX_RELATED: usize = 10;
@@ -107,6 +109,8 @@ pub(crate) fn is_public(item: &ContentItem, now: Timestamp) -> bool {
 pub struct SiteReader {
     store: Arc<dyn Store>,
     permalinks: Arc<dyn Permalinks>,
+    /// URLs per sitemap file ([`SITEMAP_FILE_LEN`] unless overridden).
+    sitemap_file_len: usize,
     media_url: MediaUrlFn,
     clock: Clock,
 }
@@ -121,9 +125,33 @@ impl SiteReader {
         Self {
             store,
             permalinks,
+            sitemap_file_len: SITEMAP_FILE_LEN,
             media_url,
             clock,
         }
+    }
+
+    /// Splits sitemaps every `len` URLs (at least 1) instead of [`SITEMAP_FILE_LEN`];
+    /// for tests of the split (a real site would need 50 001 items).
+    pub fn with_sitemap_file_len(mut self, len: usize) -> Self {
+        self.sitemap_file_len = len.max(1);
+        self
+    }
+
+    /// How many sitemap files `kind` has: `ceil(public items / file length)`, from one
+    /// count query (no rows loaded); 0 for media. Records `archive:<kind>`.
+    pub async fn sitemap_files(&self, kind: &str) -> Result<SiteRead<u32>, CoreError> {
+        let now = (self.clock)();
+        let mut deps = DepKeys::default();
+        deps.insert(archive_key(kind));
+        if kind == MEDIA_KIND {
+            return Ok(public(0, deps));
+        }
+        let mut q = published(now);
+        q.kind = Some(kind.to_owned());
+        let count = self.store.read().content().count(&q).await?;
+        let files = count.div_ceil(self.sitemap_file_len as u64);
+        Ok(public(u32::try_from(files).unwrap_or(u32::MAX), deps))
     }
 
     /// The published item of `kind` at `path_parts`: the decoded slug segments after
@@ -441,7 +469,8 @@ impl SiteReader {
         Ok(public(Some(items), deps))
     }
 
-    /// One sitemap file of `kind`: up to [`SITEMAP_FILE_LEN`] public items, newest
+    /// One sitemap file of `kind`: up to [`SITEMAP_FILE_LEN`] (or the
+    /// [overridden](Self::with_sitemap_file_len) length) public items, newest
     /// first, as URL and `updated_at`. Pass the returned cursor back for the next file.
     ///
     /// Deps are `archive:<kind>` only: every content write (and every term write)
@@ -468,8 +497,9 @@ impl SiteReader {
         q.cursor = cursor.map(str::to_owned);
         let hydrator = self.hydrator(repos, now);
         let mut nodes = Nodes::new();
-        while out.entries.len() < SITEMAP_FILE_LEN {
-            q.limit = u32::try_from((SITEMAP_FILE_LEN - out.entries.len()).min(MAX_PAGE as usize))
+        let file_len = self.sitemap_file_len;
+        while out.entries.len() < file_len {
+            q.limit = u32::try_from((file_len - out.entries.len()).min(MAX_PAGE as usize))
                 .unwrap_or(MAX_PAGE);
             let page = repos.content().list(&q).await?;
             hydrator.load_ancestors(&page.items, &mut nodes).await?;

@@ -117,12 +117,22 @@ impl App {
         migrations_ok: bool,
         config: HttpConfig,
     ) -> Arc<AppState> {
+        Self::state_with_reader(site, site.reader.clone(), theme, migrations_ok, config).await
+    }
+
+    pub async fn state_with_reader(
+        site: &Site,
+        reader: Arc<ferrite_core::SiteReader>,
+        theme: Arc<Theme>,
+        migrations_ok: bool,
+        config: HttpConfig,
+    ) -> Arc<AppState> {
         let routes = load_route_table(site.store.as_ref(), &PermalinkRules::default())
             .await
             .expect("route table");
         Arc::new(AppState::new(AppParts {
             store: site.store.clone(),
-            reader: site.reader.clone(),
+            reader,
             plugins: site.host.clone(),
             media: site.media.clone(),
             theme,

@@ -213,7 +213,8 @@ async fn media_ranges_and_headers(app: App) -> App {
     assert_eq!(r.status, StatusCode::NOT_MODIFIED);
     assert!(r.body.is_empty());
     assert_eq!(r.header("etag"), Some(etag.as_str()));
-    // HEAD: the GET headers, no body; with a range, the 206 headers.
+    // HEAD: the GET headers, no body. HEAD ignores Range (RFC 9110 §14.2): still the
+    // full-size 200 headers.
     let r = app.send(request(Method::HEAD, &url)).await;
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(r.header("content-length"), Some("1000"));
@@ -222,9 +223,19 @@ async fn media_ranges_and_headers(app: App) -> App {
     head.headers_mut()
         .insert(header::RANGE, "bytes=-10".parse().unwrap());
     let r = app.send(head).await;
-    assert_eq!(r.status, StatusCode::PARTIAL_CONTENT);
-    assert_eq!(r.header("content-range"), Some("bytes 990-999/1000"));
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.header("content-length"), Some("1000"));
+    assert_eq!(r.header("content-range"), None);
     assert!(r.body.is_empty());
+    // Range units are case-insensitive; a huge start is unsatisfiable, a huge end the
+    // whole file.
+    let r = app.send(part("Bytes=0-0")).await;
+    assert_eq!(r.status, StatusCode::PARTIAL_CONTENT);
+    let r = app.send(part("bytes=99999999999999999999999-")).await;
+    assert_eq!(r.status, StatusCode::RANGE_NOT_SATISFIABLE);
+    let r = app.send(part("bytes=0-99999999999999999999999")).await;
+    assert_eq!(r.status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(r.header("content-range"), Some("bytes 0-999/1000"));
     // Another name: 301 to the canonical one.
     let r = app.get(&format!("/_media/{}/dog.png", up.hash)).await;
     assert_eq!(r.status, StatusCode::MOVED_PERMANENTLY);
@@ -333,7 +344,9 @@ async fn media_dispositions(app: App) -> App {
     assert_eq!(r.header("content-type"), Some("application/octet-stream"));
     assert_eq!(
         r.header("content-disposition"),
-        Some("attachment; filename*=UTF-8''%C3%9Cn%C3%AF%20page%2Ehtml")
+        Some(
+            "attachment; filename=\"_n_ page.html\"; filename*=UTF-8''%C3%9Cn%C3%AF%20page%2Ehtml"
+        )
     );
     assert_eq!(r.header("x-content-type-options"), Some("nosniff"));
     // Not compressed, even for a compressible-looking type.
@@ -382,10 +395,8 @@ async fn theme_assets(app: App) -> App {
     );
     assert!(r.body.contains("color: #222"));
     let etag = r.header("etag").unwrap().to_owned();
-    assert!(
-        etag.starts_with(&format!("\"{hash}-")) && !etag.starts_with("W/"),
-        "{etag}"
-    );
+    // Weak for compressible text, strong for binaries.
+    assert!(etag.starts_with(&format!("W/\"{hash}-")), "{etag}");
     let r = app
         .send(get_with(&url, &[(header::IF_NONE_MATCH, &etag)]))
         .await;
@@ -402,6 +413,17 @@ async fn theme_assets(app: App) -> App {
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(r.header("content-type"), Some("font/woff2"));
     assert_eq!(r.header("content-encoding"), None);
+    let font_etag = r.header("etag").unwrap();
+    assert!(font_etag.starts_with(&format!("\"{hash}-")), "{font_etag}");
+    let r = app
+        .send(get_with(&format!("/_theme/{hash}/css/big.css"), &gz))
+        .await;
+    let big_etag = r.header("etag").unwrap().to_owned();
+    assert!(big_etag.starts_with("W/"), "compressed: {big_etag}");
+    let mut req = get_with(&format!("/_theme/{hash}/css/big.css"), &gz);
+    req.headers_mut()
+        .insert(header::IF_NONE_MATCH, big_etag.parse().unwrap());
+    assert_eq!(app.send(req).await.status, StatusCode::NOT_MODIFIED);
 
     // Wrong hash, templates, the manifest, traversal: 404.
     for path in [
@@ -424,7 +446,37 @@ async fn theme_assets(app: App) -> App {
     app
 }
 
+/// Stored names are routed through the shared sanitiser (`/`, `\`, controls, empty
+/// and dot names), the same one `MediaStore::public_url` uses.
+async fn media_names_are_sanitised(app: App) -> App {
+    let mut a = png();
+    a[50] ^= 1;
+    let up = upload(
+        &app,
+        &a,
+        "dir/sub\\x\u{1}.png",
+        ContentStatus::Published,
+        false,
+        &[],
+    )
+    .await;
+    let canonical = app.site.media.public_url(&up.hash, "dir/sub\\x\u{1}.png");
+    assert_eq!(canonical, format!("/_media/{}/dir_sub_x_.png", up.hash));
+    assert_eq!(app.get(&canonical).await.status, StatusCode::OK);
+    let mut b = png();
+    b[60] ^= 1;
+    let up = upload(&app, &b, "..", ContentStatus::Published, false, &[]).await;
+    let canonical = app.site.media.public_url(&up.hash, "..");
+    assert_eq!(canonical, format!("/_media/{}/file", up.hash));
+    assert_eq!(app.get(&canonical).await.status, StatusCode::OK);
+    let r = app.get(&format!("/_media/{}/other", up.hash)).await;
+    assert_eq!(r.status, StatusCode::MOVED_PERMANENTLY);
+    assert_eq!(r.header("location"), Some(canonical.as_str()));
+    app
+}
+
 app_tests!(
+    media_names_are_sanitised,
     media_ranges_and_headers,
     media_rule_published_only,
     media_dispositions,

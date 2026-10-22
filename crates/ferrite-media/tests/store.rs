@@ -450,7 +450,9 @@ backend_tests! {
         assert_eq!(url, format!("/_media/{hash}/my%20photo%20%C3%A9%231%3F.png"));
 
         for (name, want) in [
-            ("a/../b", "a%2F..%2Fb"),
+            ("a/../b", "a_.._b"),
+            ("a\\b", "a_b"),
+            ("x\u{1}y", "x_y"),
             ("..", "file"),
             (".", "file"),
             ("", "file"),

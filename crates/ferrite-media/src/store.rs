@@ -410,12 +410,9 @@ impl MediaStore {
     pub fn public_url(&self, hash: &ArtifactHash, filename: &str) -> String {
         match &self.public {
             PublicUrlMode::ServeViaApp { path_prefix } => {
-                // "", "." and ".." would be normalised away by clients and drop the hash segment.
-                let filename = match filename {
-                    "" | "." | ".." => "file",
-                    other => other,
-                };
-                let name = utf8_percent_encode(filename, SEGMENT);
+                // Routable: see `sanitize_filename` (shared with the HTTP layer).
+                let filename = crate::sanitize_filename(filename);
+                let name = utf8_percent_encode(&filename, SEGMENT);
                 format!("{}/{hash}/{name}", path_prefix.trim_end_matches('/'))
             }
             PublicUrlMode::Direct { base_url } => {

@@ -31,7 +31,7 @@ use axum::{
 };
 use ferrite_core::{MediaFile, permalink::encode_segment};
 use ferrite_domain::ArtifactHash;
-use ferrite_media::{MediaError, inline_safe};
+use ferrite_media::{MediaError, inline_safe, sanitize_filename};
 use futures::TryStreamExt;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 
@@ -54,7 +54,13 @@ pub(crate) enum Ranged {
 
 /// Parses `value` (one `Range` header) for a file of `size` bytes; see the module docs.
 pub(crate) fn parse_range(value: &str, size: u64) -> Ranged {
-    let Some(spec) = value.trim().strip_prefix("bytes=") else {
+    let value = value.trim();
+    // The unit is case-insensitive (RFC 9110 §14.1).
+    let Some(spec) = value
+        .get(..6)
+        .filter(|unit| unit.eq_ignore_ascii_case("bytes="))
+        .map(|_| &value[6..])
+    else {
         return Ranged::Full;
     };
     if spec.contains(',') {
@@ -63,13 +69,8 @@ pub(crate) fn parse_range(value: &str, size: u64) -> Ranged {
     let Some((first, last)) = spec.trim().split_once('-') else {
         return Ranged::Full;
     };
-    let number = |s: &str| -> Option<u64> {
-        let s = s.trim();
-        (!s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
-            .then(|| s.parse().ok())
-            .flatten()
-    };
-    match (first.trim().is_empty(), number(first), number(last)) {
+    let (first, last) = (first.trim(), last.trim());
+    match (first.is_empty(), number(first), number(last)) {
         // Suffix: the last `n` bytes.
         (true, _, Some(n)) => {
             if n == 0 || size == 0 {
@@ -79,7 +80,7 @@ pub(crate) fn parse_range(value: &str, size: u64) -> Ranged {
             }
         }
         (false, Some(start), end) => {
-            if !last.trim().is_empty() && end.is_none() {
+            if !last.is_empty() && end.is_none() {
                 return Ranged::Full;
             }
             if end.is_some_and(|e| e < start) {
@@ -95,12 +96,21 @@ pub(crate) fn parse_range(value: &str, size: u64) -> Ranged {
     }
 }
 
-/// The name in the canonical URL of `file` (see the module docs).
-fn canonical_name(file: &MediaFile) -> &str {
-    match file.name.as_str() {
-        "" | "." | ".." => "file",
-        other => other,
+/// ASCII digits as a number, saturating at `u64::MAX` (a position past any file);
+/// `None` for anything that is not one or more digits.
+fn number(s: &str) -> Option<u64> {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
     }
+    Some(s.bytes().fold(0u64, |n, b| {
+        n.saturating_mul(10).saturating_add(u64::from(b - b'0'))
+    }))
+}
+
+/// The name in the canonical URL of `file`: the stored name made routable by the
+/// sanitiser `MediaStore::public_url` uses too.
+fn canonical_name(file: &MediaFile) -> String {
+    sanitize_filename(&file.name)
 }
 
 /// Serves `/_media/{hash}/{name}` (`name` decoded once by the router).
@@ -124,7 +134,7 @@ pub(crate) async fn serve(
     };
     let canonical = canonical_name(&file);
     if name != canonical {
-        let location = format!("/_media/{hash}/{}", encode_segment(canonical));
+        let location = format!("/_media/{hash}/{}", encode_segment(&canonical));
         let mut res = status_only(StatusCode::MOVED_PERMANENTLY);
         if let Ok(v) = HeaderValue::from_str(&location) {
             res.headers_mut().insert(header::LOCATION, v);
@@ -220,7 +230,18 @@ async fn open(
     hash: &ArtifactHash,
     range_header: Option<&str>,
 ) -> Result<Opened, MediaError> {
-    if range_header.is_none() && method != Method::HEAD {
+    // HEAD ignores `Range` (RFC 9110 §14.2: only GET serves ranges): the full-size
+    // headers, from one metadata request, and no stream.
+    if method == Method::HEAD {
+        let size = state.media.head(hash).await?.ok_or(MediaError::NotFound)?;
+        return Ok(Opened::Body {
+            size,
+            range: 0..size,
+            partial: false,
+            body: Body::empty(),
+        });
+    }
+    let Some(range_header) = range_header else {
         let read = state.media.open_read(hash, None).await?;
         return Ok(Opened::Body {
             size: read.size,
@@ -228,21 +249,13 @@ async fn open(
             partial: false,
             body: Body::from_stream(read.stream.map_err(std::io::Error::other)),
         });
-    }
+    };
     let size = state.media.head(hash).await?.ok_or(MediaError::NotFound)?;
-    let (range, partial) = match range_header.map_or(Ranged::Full, |v| parse_range(v, size)) {
+    let (range, partial) = match parse_range(range_header, size) {
         Ranged::Full => (0..size, false),
         Ranged::Part(r) => (r, true),
         Ranged::Unsatisfiable => return Ok(Opened::Unsatisfiable { size }),
     };
-    if method == Method::HEAD {
-        return Ok(Opened::Body {
-            size,
-            range,
-            partial,
-            body: Body::empty(),
-        });
-    }
     let read = state.media.open_read(hash, Some(range)).await?;
     Ok(Opened::Body {
         size: read.size,
@@ -269,13 +282,29 @@ fn content_headers(res: &mut Response<Body>, file: &MediaFile) {
         }
     } else {
         set(res, header::CONTENT_TYPE, "application/octet-stream");
-        let encoded = utf8_percent_encode(canonical_name(file), NON_ALPHANUMERIC);
+        let name = canonical_name(file);
+        let encoded = utf8_percent_encode(&name, NON_ALPHANUMERIC);
         set(
             res,
             header::CONTENT_DISPOSITION,
-            &format!("attachment; filename*=UTF-8''{encoded}"),
+            &format!(
+                "attachment; filename=\"{}\"; filename*=UTF-8''{encoded}",
+                ascii_fallback(&name)
+            ),
         );
     }
+}
+
+/// `filename="…"` for clients without RFC 6266 `filename*`: printable ASCII only, with
+/// `"` and backslash replaced, every other character as `_`.
+fn ascii_fallback(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '"' | '\\' => '_',
+            c if c.is_ascii_graphic() || c == ' ' => c,
+            _ => '_',
+        })
+        .collect()
 }
 
 fn set(res: &mut Response<Body>, name: header::HeaderName, value: &str) {
@@ -330,10 +359,31 @@ mod tests {
         assert_eq!(p("bytes=1-x"), Ranged::Full);
         assert_eq!(p("bytes=-"), Ranged::Full);
         assert_eq!(p("bytes=+1-2"), Ranged::Full);
-        assert_eq!(
-            p("bytes=99999999999999999999999-"),
-            Ranged::Full,
-            "overflow"
-        );
+        // Saturating numbers: a huge start is past the end, a huge end is the end.
+        assert_eq!(p("bytes=99999999999999999999999-"), Ranged::Unsatisfiable);
+        assert_eq!(p("bytes=0-99999999999999999999999"), Ranged::Part(0..1000));
+        assert_eq!(p("bytes=-99999999999999999999999"), Ranged::Part(0..1000));
+        // The unit is case-insensitive; whitespace around numbers is tolerated.
+        assert_eq!(p("Bytes=0-0"), Ranged::Part(0..1));
+        assert_eq!(p("BYTES=-1"), Ranged::Part(999..1000));
+        assert_eq!(p(" bytes= 1 - 2 "), Ranged::Part(1..3));
+        assert_eq!(p("byte=0-1"), Ranged::Full);
+        assert_eq!(p("bytes"), Ranged::Full);
+        assert_eq!(p(""), Ranged::Full);
+        assert_eq!(p("bytes=0-0, 2-3"), Ranged::Full);
+        assert_eq!(p("bytes=--1"), Ranged::Full);
+        assert_eq!(p("bytes=1--2"), Ranged::Full);
+        assert_eq!(p("bytes=1"), Ranged::Full);
+        assert_eq!(p("bytes=0x1-2"), Ranged::Full);
+        assert_eq!(p("bytes=\u{661}-\u{662}"), Ranged::Full, "non-ASCII digits");
+        assert_eq!(p("b\u{e9}tes=0-1"), Ranged::Full, "non-ASCII unit");
+        assert_eq!(parse_range("bytes=0-", 1), Ranged::Part(0..1));
+    }
+
+    #[test]
+    fn ascii_fallbacks() {
+        assert_eq!(ascii_fallback("\u{dc}n\u{ef} page.html"), "_n_ page.html");
+        assert_eq!(ascii_fallback("a\"b\\c.txt"), "a_b_c.txt");
+        assert_eq!(ascii_fallback("x\ty"), "x_y");
     }
 }

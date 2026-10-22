@@ -43,14 +43,13 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
         }
         _ => {}
     }
-    {
-        match state.redirects.resolve(&path).await {
-            Ok(Some(r)) => return follow(&state, r).await,
-            Ok(None) => {}
-            Err(e) => {
-                tracing::error!(error = %e, "redirect lookup failed");
-                return page_response(&error_page::server_error(&state).await, None);
-            }
+    // Redirect rows, before the cache.
+    match state.redirects.resolve(&path).await {
+        Ok(Some(r)) => return follow(&state, r).await,
+        Ok(None) => {}
+        Err(e) => {
+            tracing::error!(error = %e, "redirect lookup failed");
+            return page_response(&error_page::server_error(&state).await, None);
         }
     }
     if let Route::Canonical(to) = &route {

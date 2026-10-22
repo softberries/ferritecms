@@ -1305,8 +1305,60 @@ pub async fn media_file_is_published_only(db: &TestDb) {
     assert_eq!(f.item, public);
 }
 
+/// `sitemap_files`: `ceil(public items / file length)` from one count; with a short
+/// file length the files split at that size (`with_sitemap_file_len`).
+pub async fn sitemap_files_count_and_split(db: &TestDb) {
+    let store = db.shared_store();
+    let r = reader(store.clone()).with_sitemap_file_len(2);
+    let author = user(store.as_ref(), "smw", Role::Author).await;
+    for slug in ["s1", "s2", "s3"] {
+        insert(
+            store.as_ref(),
+            &author,
+            item("post", slug, ContentStatus::Published, Some(-HOUR)),
+        )
+        .await;
+    }
+    insert(
+        store.as_ref(),
+        &author,
+        item("post", "s-draft", ContentStatus::Draft, Some(-HOUR)),
+    )
+    .await;
+    insert(
+        store.as_ref(),
+        &author,
+        item("post", "s-later", ContentStatus::Published, Some(HOUR)),
+    )
+    .await;
+    let files = r.sitemap_files("post").await.unwrap();
+    assert_eq!(files.value, 2);
+    assert!(files.deps.contains(&archive_key("post")));
+    assert_eq!(r.sitemap_files("page").await.unwrap().value, 0);
+    assert_eq!(r.sitemap_files("media").await.unwrap().value, 0);
+    let first = r.sitemap("post", None).await.unwrap().value;
+    assert_eq!(first.entries.len(), 2);
+    let second = r
+        .sitemap("post", first.next_cursor.as_deref())
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(second.entries.len(), 1);
+    assert!(second.next_cursor.is_none());
+    // The default length: one file.
+    assert_eq!(
+        reader(store.clone())
+            .sitemap_files("post")
+            .await
+            .unwrap()
+            .value,
+        1
+    );
+}
+
 backend_tests!(
     media_is_published_only,
+    sitemap_files_count_and_split,
     media_file_is_published_only,
     no_leak_single,
     no_leak_by_id_and_latest,

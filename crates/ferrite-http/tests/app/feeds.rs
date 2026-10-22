@@ -9,7 +9,11 @@ use quick_xml::{Reader, events::Event};
 use serde_json::json;
 
 use crate::app_tests;
-use crate::harness::App;
+use std::sync::Arc;
+
+use axum::http::Method;
+
+use crate::harness::{App, request, send};
 
 /// Parses `xml` to the end (end tags must match); returns the root element's name.
 fn well_formed(xml: &str) -> String {
@@ -49,7 +53,7 @@ async fn rss_feeds(app: App) -> App {
     assert_eq!(well_formed(&r.body), "rss");
     assert!(
         r.body
-            .starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rss version=\"2.0\">")
+            .starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rss version=\"2.0\" xmlns:atom=\"http://www.w3.org/2005/Atom\">")
     );
     assert!(
         r.body.contains("<title>Tom &amp; Jerry &lt;3</title>"),
@@ -77,9 +81,24 @@ async fn rss_feeds(app: App) -> App {
     );
     assert!(!r.body.contains("Secret"));
 
+    assert!(r.body.contains("<title>Test Site</title>"), "{}", r.body);
+    assert!(r.body.contains(
+        "<atom:link href=\"https://example.com/feed/\" rel=\"self\" type=\"application/rss+xml\"/>"
+    ));
+    assert!(r.body.contains("<lastBuildDate>"));
+
     let r = app.get("/category/news/feed/").await;
     assert_eq!(r.status, StatusCode::OK);
     well_formed(&r.body);
+    assert!(
+        r.body.contains("<title>news – Test Site</title>"),
+        "{}",
+        r.body
+    );
+    assert!(
+        r.body
+            .contains("<atom:link href=\"https://example.com/category/news/feed/\" rel=\"self\"")
+    );
     assert!(r.body.contains("Tom &amp; Jerry"));
     assert!(
         !r.body.contains("Odd"),
@@ -243,4 +262,111 @@ async fn robots_txt(app: App) -> App {
     app
 }
 
-app_tests!(rss_feeds, feed_follows_edits, sitemaps, robots_txt);
+/// lastBuildDate follows the newest `updated_at`: an edit moves it.
+async fn feed_last_build_date_follows_updates(app: App) -> App {
+    let a = app.post("First", "first", &[]).await;
+    app.post("Second", "second", &[]).await;
+    let build = |body: &str| {
+        body.split_once("<lastBuildDate>")
+            .and_then(|(_, r)| r.split_once("</lastBuildDate>"))
+            .map(|(d, _)| chrono::DateTime::parse_from_rfc2822(d).unwrap())
+            .unwrap()
+    };
+    let mut poller = app.poller().await;
+    let before = build(&app.get("/feed/").await.body);
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    app.svc
+        .update(
+            &app.ada,
+            a.id,
+            a.version,
+            crate::harness::draft("post", "First Edited", "first", None, &[]),
+        )
+        .await
+        .unwrap();
+    poller.poll_once().await.unwrap();
+    let after = build(&app.get("/feed/").await.body);
+    assert!(after > before, "{before} -> {after}");
+    app
+}
+
+/// Sitemaps split at the file length (overridden to 2 here); a file number past the
+/// last is 404; `&` in the site URL is escaped in `<loc>` and `<link>`.
+async fn sitemap_split_and_escaping(app: App) -> App {
+    for slug in ["p1", "p2", "p3", "p4", "p5"] {
+        app.post(slug, slug, &[]).await;
+    }
+    let reader = Arc::new(
+        ferrite_core::SiteReader::new(
+            app.site.store.clone(),
+            Arc::new(ferrite_core::PermalinkRules::default()),
+            Arc::new(|hash: &ferrite_domain::ArtifactHash, name: &str| {
+                format!("/_media/{hash}/{name}")
+            }),
+            Arc::new(ferrite_domain::Timestamp::now),
+        )
+        .with_sitemap_file_len(2),
+    );
+    let config = ferrite_http::HttpConfig::new("https://example.com/a&b", "A & B", "en");
+    let theme = crate::harness::load_theme(crate::harness::fixture("app-theme"));
+    let state = App::state_with_reader(&app.site, reader, theme, true, config).await;
+    let router = ferrite_http::build_app(state);
+    let get = |path: &str| send(&router, request(Method::GET, path));
+
+    let r = get("/sitemap.xml").await;
+    assert_eq!(well_formed(&r.body), "sitemapindex");
+    for n in 1..=3 {
+        assert!(
+            r.body.contains(&format!(
+                "<loc>https://example.com/a&amp;b/sitemap-post-{n}.xml</loc>"
+            )),
+            "{n}: {}",
+            r.body
+        );
+    }
+    assert!(!r.body.contains("sitemap-post-4.xml"));
+    let mut total = 0;
+    for n in 1..=3 {
+        let r = get(&format!("/sitemap-post-{n}.xml")).await;
+        assert_eq!(r.status, StatusCode::OK, "{n}");
+        assert_eq!(well_formed(&r.body), "urlset");
+        let count = r.body.matches("<url>").count();
+        assert_eq!(count, if n == 3 { 1 } else { 2 }, "{n}");
+        assert!(
+            r.body.contains("<loc>https://example.com/a&amp;b/"),
+            "{}",
+            r.body
+        );
+        total += count;
+    }
+    assert_eq!(total, 5);
+    assert_eq!(
+        get("/sitemap-post-4.xml").await.status,
+        StatusCode::NOT_FOUND
+    );
+
+    let r = get("/feed/").await;
+    assert_eq!(well_formed(&r.body), "rss");
+    assert!(r.body.contains("<title>A &amp; B</title>"));
+    assert!(r.body.contains("<link>https://example.com/a&amp;b/</link>"));
+    assert!(
+        r.body
+            .contains("href=\"https://example.com/a&amp;b/feed/\"")
+    );
+    assert!(
+        r.body
+            .contains("<link>https://example.com/a&amp;b/p1/</link>"),
+        "{}",
+        r.body
+    );
+    app
+}
+
+app_tests!(
+    feed_last_build_date_follows_updates,
+    sitemap_split_and_escaping,
+    rss_feeds,
+    feed_follows_edits,
+    sitemaps,
+    robots_txt
+);
