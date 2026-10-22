@@ -2,7 +2,7 @@
 
 use ferrite_domain::{
     ContentId, ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, ParentFilter,
-    Timestamp, User,
+    Revision, RevisionId, Timestamp, User,
 };
 use ferrite_store::{Backend, Store, StoreError};
 use serde_json::json;
@@ -293,7 +293,13 @@ pub async fn optimistic_lock_race(db: &TestDb) {
         "{losers:?}"
     );
 
-    // Stale writer retrying with its old version still conflicts; the winner's copy advances.
+    // The stale writer retrying with its old copy still conflicts at version 2.
+    let losing_copy = if results[0].is_err() { &a } else { &b };
+    assert!(matches!(
+        content.update(losing_copy).await,
+        Err(StoreError::Conflict { current_version: 2 })
+    ));
+    // The winner's copy advances.
     let stored = content.get(item.id).await.unwrap().unwrap();
     assert_eq!(stored.version, 2);
     assert_eq!(stored.title, oks[0].title);
@@ -753,6 +759,113 @@ pub async fn content_rejects_nul_json(db: &TestDb) {
     ok.body = json!("a\u{0}");
     assert!(matches!(
         store.read().content().update(&ok).await,
+        Err(StoreError::Invalid(_))
+    ));
+}
+
+/// TitleAsc is byte order (`COLLATE "C"` on Postgres): uppercase before lowercase, then
+/// non-ASCII. Pages of 2 must reproduce the full unpaginated order on both backends.
+pub async fn list_pagination_title_asc_mixed_case_unicode(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    let titles = ["Banana", "apple", "Äpfel", "Cherry", "banana"];
+    for (i, title) in titles.iter().enumerate() {
+        let mut n = new_post(&author, &format!("t{i}"));
+        n.title = (*title).into();
+        insert(store, &n).await;
+    }
+    let mut query = ContentQuery {
+        limit: 2,
+        order: ContentOrder::TitleAsc,
+        ..Default::default()
+    };
+    let mut got = Vec::new();
+    let mut page_sizes = Vec::new();
+    loop {
+        let page = store.read().content().list(&query).await.unwrap();
+        page_sizes.push(page.items.len());
+        got.extend(page.items.into_iter().map(|i| i.title));
+        match page.next_cursor {
+            Some(c) => query.cursor = Some(c),
+            None => break,
+        }
+        assert!(page_sizes.len() < 10, "pagination does not terminate");
+    }
+    assert_eq!(page_sizes, [2, 2, 1]);
+    assert_eq!(got, ["Banana", "Cherry", "apple", "banana", "Äpfel"]);
+}
+
+fn revision(item: &ContentItem, created_micros: i64, title: &str) -> Revision {
+    Revision {
+        id: RevisionId::new(),
+        item_id: item.id,
+        author_id: item.author_id,
+        created_at: micros(created_micros),
+        title: title.into(),
+        excerpt: "ex".into(),
+        body: json!([{"type": "paragraph", "text": title}]),
+        fields: json!({"n": 1}),
+        meta: json!({"k": ["v", 2.5, null]}),
+        note: None,
+    }
+}
+
+pub async fn revisions_newest_first_and_prune(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    let item = insert(store, &new_post(&author, "revisioned")).await;
+    let other = insert(store, &new_post(&author, "other")).await;
+    let revs = store.read().revisions();
+
+    let mut all = Vec::new();
+    for i in 0..60_i64 {
+        let mut r = revision(&item, 1_000 + i, &format!("rev {i}"));
+        r.note = (i == 59).then(|| "last".to_owned());
+        revs.insert(&r).await.unwrap();
+        all.push(r);
+    }
+    revs.insert(&revision(&other, 5_000, "unrelated"))
+        .await
+        .unwrap();
+
+    let top = revs.list(item.id, 10).await.unwrap();
+    assert_eq!(top.len(), 10);
+    assert_eq!(top, all.iter().rev().take(10).cloned().collect::<Vec<_>>());
+    assert_eq!(revs.get(all[59].id).await.unwrap().unwrap(), all[59]);
+    assert!(revs.get(RevisionId::new()).await.unwrap().is_none());
+
+    // Equal created_at: id DESC breaks the tie (UUIDv7 ids are increasing).
+    let tie_a = revision(&other, 6_000, "tie a");
+    let tie_b = revision(&other, 6_000, "tie b");
+    revs.insert(&tie_a).await.unwrap();
+    revs.insert(&tie_b).await.unwrap();
+    let listed = revs.list(other.id, 2).await.unwrap();
+    assert_eq!(listed[0].id, tie_b.id);
+    assert_eq!(listed[1].id, tie_a.id);
+
+    assert_eq!(revs.prune(item.id, 50).await.unwrap(), 10);
+    let left = revs.list(item.id, 200).await.unwrap();
+    assert_eq!(left.len(), 50);
+    assert_eq!(left[0], all[59]);
+    assert_eq!(left[49], all[10]);
+    assert!(revs.get(all[9].id).await.unwrap().is_none());
+    assert_eq!(revs.prune(item.id, 50).await.unwrap(), 0);
+    assert_eq!(revs.list(other.id, 200).await.unwrap().len(), 3);
+
+    // Revisions go with their item.
+    store.read().content().delete(item.id).await.unwrap();
+    assert!(revs.list(item.id, 10).await.unwrap().is_empty());
+
+    let mut bad = revision(&other, 7_000, "nul");
+    bad.meta = json!({"k": "a\u{0}"});
+    assert!(matches!(
+        revs.insert(&bad).await,
+        Err(StoreError::Invalid(_))
+    ));
+    let mut bad = revision(&other, 7_000, "nul");
+    bad.body = json!("a\u{0}");
+    assert!(matches!(
+        revs.insert(&bad).await,
         Err(StoreError::Invalid(_))
     ));
 }

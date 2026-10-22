@@ -91,7 +91,7 @@ CREATE TABLE terms (
     slug        TEXT NOT NULL,
     name        TEXT NOT NULL,
     description TEXT NOT NULL,
-    parent_id   BLOB REFERENCES terms (id) ON DELETE SET NULL
+    parent_id   BLOB REFERENCES terms (id)
 );
 CREATE UNIQUE INDEX terms_taxonomy_slug_uq ON terms (taxonomy, slug);
 CREATE INDEX terms_parent_idx ON terms (parent_id);

@@ -1,7 +1,10 @@
 //! Row decoding. PostgreSQL types (`timestamptz`, `jsonb`, `boolean`) map natively.
 
 use chrono::{DateTime, Utc};
-use ferrite_domain::{ContentId, ContentItem, ContentType, OptionEntry, Secret, User, UserId};
+use ferrite_domain::{
+    ContentId, ContentItem, ContentType, OptionEntry, Revision, RevisionId, Secret, Taxonomy, Term,
+    TermId, User, UserId,
+};
 use ferrite_store::StoreError;
 use sqlx::{Row, postgres::PgRow, types::Json};
 use uuid::Uuid;
@@ -99,5 +102,63 @@ pub(crate) fn user(row: &PgRow) -> Result<User, StoreError> {
         totp_secret: totp_secret.map(Secret::new),
         created_at: created_at.into(),
         last_login_at: last_login_at.map(Into::into),
+    })
+}
+
+pub(crate) const REVISION_COLUMNS: &str =
+    "id, item_id, author_id, created_at, title, excerpt, body, fields, meta, note";
+
+/// Maps a row selected with [`REVISION_COLUMNS`].
+pub(crate) fn revision(row: &PgRow) -> Result<Revision, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let item: Uuid = row.try_get("item_id").map_err(map_db_err)?;
+    let author: Uuid = row.try_get("author_id").map_err(map_db_err)?;
+    let created_at: DateTime<Utc> = row.try_get("created_at").map_err(map_db_err)?;
+    let body: Json<serde_json::Value> = row.try_get("body").map_err(map_db_err)?;
+    let fields: Json<serde_json::Value> = row.try_get("fields").map_err(map_db_err)?;
+    let meta: Json<serde_json::Value> = row.try_get("meta").map_err(map_db_err)?;
+    Ok(Revision {
+        id: RevisionId::from_uuid(id),
+        item_id: ContentId::from_uuid(item),
+        author_id: UserId::from_uuid(author),
+        created_at: created_at.into(),
+        title: row.try_get("title").map_err(map_db_err)?,
+        excerpt: row.try_get("excerpt").map_err(map_db_err)?,
+        body: body.0,
+        fields: fields.0,
+        meta: meta.0,
+        note: row.try_get("note").map_err(map_db_err)?,
+    })
+}
+
+pub(crate) const TAXONOMY_COLUMNS: &str = "name, label, hierarchical, content_types, built_in";
+
+/// Maps a row selected with [`TAXONOMY_COLUMNS`].
+pub(crate) fn taxonomy(row: &PgRow) -> Result<Taxonomy, StoreError> {
+    let types: Json<Vec<String>> = row.try_get("content_types").map_err(map_db_err)?;
+    Ok(Taxonomy {
+        name: row.try_get("name").map_err(map_db_err)?,
+        label: row.try_get("label").map_err(map_db_err)?,
+        hierarchical: row.try_get("hierarchical").map_err(map_db_err)?,
+        content_types: types.0,
+        built_in: row.try_get("built_in").map_err(map_db_err)?,
+    })
+}
+
+/// Term columns qualified with the `t` alias so joins stay unambiguous.
+pub(crate) const TERM_COLUMNS: &str =
+    "t.id, t.taxonomy, t.slug, t.name, t.description, t.parent_id";
+
+/// Maps a row selected with [`TERM_COLUMNS`].
+pub(crate) fn term(row: &PgRow) -> Result<Term, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let parent: Option<Uuid> = row.try_get("parent_id").map_err(map_db_err)?;
+    Ok(Term {
+        id: TermId::from_uuid(id),
+        taxonomy: row.try_get("taxonomy").map_err(map_db_err)?,
+        slug: row.try_get("slug").map_err(map_db_err)?,
+        name: row.try_get("name").map_err(map_db_err)?,
+        description: row.try_get("description").map_err(map_db_err)?,
+        parent_id: parent.map(TermId::from_uuid),
     })
 }

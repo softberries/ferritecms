@@ -3,18 +3,18 @@
 use async_trait::async_trait;
 use ferrite_domain::{
     ContentId, ContentItem, ContentOrder, ContentQuery, ContentType, NewContent, Page,
-    ParentFilter, Timestamp,
+    ParentFilter, Revision, RevisionId, Timestamp,
 };
 use ferrite_store::{
-    ContentRepo, ContentTypeRepo, MetaRepo, SortKey, StoreError, check_limit, content_cursor,
-    encode_content_cursor, validate_json,
+    ContentRepo, ContentTypeRepo, MetaRepo, RevisionRepo, SortKey, StoreError, check_limit,
+    content_cursor, encode_content_cursor, validate_json,
 };
 use serde_json::Value;
 use sqlx::{QueryBuilder, Sqlite};
 
 use super::SqliteRepos;
 use crate::{
-    codec::{self, CONTENT_COLUMNS, TYPE_COLUMNS},
+    codec::{self, CONTENT_COLUMNS, REVISION_COLUMNS, TYPE_COLUMNS},
     exec::run,
 };
 
@@ -219,7 +219,7 @@ impl ContentRepo for SqliteRepos {
                 .push(")");
         }
         if let Some((key, id)) = after {
-            push_keyset(&mut qb, query.order, key, id);
+            push_keyset(&mut qb, query.order, key, id)?;
         }
         qb.push(match query.order {
             ContentOrder::PublishedDesc => " ORDER BY published_at DESC NULLS LAST, id DESC",
@@ -273,7 +273,12 @@ impl ContentRepo for SqliteRepos {
 
 /// Appends the "strictly after the cursor" predicate for `order` (keyset pagination).
 /// `published_at` sorts NULLs last, so a NULL cursor key only admits other NULL rows.
-fn push_keyset(qb: &mut QueryBuilder<Sqlite>, order: ContentOrder, key: SortKey, id: uuid::Uuid) {
+fn push_keyset(
+    qb: &mut QueryBuilder<Sqlite>,
+    order: ContentOrder,
+    key: SortKey,
+    id: uuid::Uuid,
+) -> Result<(), StoreError> {
     match (order, key) {
         (ContentOrder::PublishedDesc, SortKey::Micros(Some(k))) => {
             qb.push(" AND (published_at < ")
@@ -287,7 +292,7 @@ fn push_keyset(qb: &mut QueryBuilder<Sqlite>, order: ContentOrder, key: SortKey,
         (ContentOrder::PublishedDesc, SortKey::Micros(None)) => {
             qb.push(" AND published_at IS NULL AND id < ").push_bind(id);
         }
-        (ContentOrder::UpdatedDesc, SortKey::Micros(k)) => {
+        (ContentOrder::UpdatedDesc, SortKey::Micros(Some(k))) => {
             qb.push(" AND (updated_at < ")
                 .push_bind(k)
                 .push(" OR (updated_at = ")
@@ -314,9 +319,9 @@ fn push_keyset(qb: &mut QueryBuilder<Sqlite>, order: ContentOrder, key: SortKey,
                 .push_bind(id)
                 .push("))");
         }
-        // `content_cursor` only yields the key type matching the order.
-        _ => {}
+        _ => return Err(StoreError::Invalid("cursor does not match order".into())),
     }
+    Ok(())
 }
 
 #[async_trait]
@@ -363,5 +368,64 @@ impl MetaRepo for SqliteRepos {
         rows.into_iter()
             .map(|(k, v)| Ok((k, codec::json_from_db(&v)?)))
             .collect()
+    }
+}
+
+#[async_trait]
+impl RevisionRepo for SqliteRepos {
+    async fn insert(&self, revision: &Revision) -> Result<(), StoreError> {
+        validate_json(&revision.body)?;
+        validate_json(&revision.fields)?;
+        validate_json(&revision.meta)?;
+        run!(&self.writer, |e| sqlx::query(
+            "INSERT INTO revisions \
+             (id, item_id, author_id, created_at, title, excerpt, body, fields, meta, note) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(revision.id.as_uuid())
+        .bind(revision.item_id.as_uuid())
+        .bind(revision.author_id.as_uuid())
+        .bind(revision.created_at.as_micros())
+        .bind(&revision.title)
+        .bind(&revision.excerpt)
+        .bind(codec::json_to_db(&revision.body)?)
+        .bind(codec::json_to_db(&revision.fields)?)
+        .bind(codec::json_to_db(&revision.meta)?)
+        .bind(&revision.note)
+        .execute(e))
+        .map(|_| ())
+    }
+
+    async fn list(&self, id: ContentId, limit: u32) -> Result<Vec<Revision>, StoreError> {
+        let rows = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {REVISION_COLUMNS} FROM revisions WHERE item_id = ? \
+             ORDER BY created_at DESC, id DESC LIMIT ?"
+        )))
+        .bind(id.as_uuid())
+        .bind(i64::from(limit))
+        .fetch_all(e))?;
+        rows.iter().map(codec::revision).collect()
+    }
+
+    async fn get(&self, id: RevisionId) -> Result<Option<Revision>, StoreError> {
+        let row = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {REVISION_COLUMNS} FROM revisions WHERE id = ?"
+        )))
+        .bind(id.as_uuid())
+        .fetch_optional(e))?;
+        row.as_ref().map(codec::revision).transpose()
+    }
+
+    async fn prune(&self, id: ContentId, keep: u32) -> Result<u64, StoreError> {
+        let done = run!(&self.writer, |e| sqlx::query(
+            "DELETE FROM revisions WHERE item_id = ? AND id NOT IN \
+             (SELECT id FROM revisions WHERE item_id = ? \
+              ORDER BY created_at DESC, id DESC LIMIT ?)"
+        )
+        .bind(id.as_uuid())
+        .bind(id.as_uuid())
+        .bind(i64::from(keep))
+        .execute(e))?;
+        Ok(done.rows_affected())
     }
 }

@@ -1,7 +1,7 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
     backend_tests, backend_tests_spawning, content::*, migration_dirs, migration_files,
-    migrations::*, site::*,
+    migrations::*, site::*, taxonomy::*,
 };
 
 backend_tests!(
@@ -40,6 +40,17 @@ backend_tests!(
     delete_cascades_meta,
     delete_with_children_is_foreign_key,
     content_rejects_nul_json,
+    list_pagination_title_asc_mixed_case_unicode,
+    revisions_newest_first_and_prune,
+);
+
+backend_tests!(
+    taxonomies_seeded_and_upsert,
+    terms_crud_and_hierarchy,
+    deleting_term_with_children_is_foreign_key,
+    term_links_replace_and_order,
+    deleting_term_removes_links,
+    content_list_by_term,
 );
 
 backend_tests_spawning!(concurrent_writers);

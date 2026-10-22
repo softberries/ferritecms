@@ -5,11 +5,11 @@
 use async_trait::async_trait;
 use ferrite_domain::{
     Artifact, ArtifactHash, ContentId, Event, InstalledPlugin, InstalledTheme, Media, Menu,
-    NewEvent, Page, Redirect, RedirectId, Revision, RevisionId, Taxonomy, Term, TermId, Timestamp,
+    NewEvent, Page, Redirect, RedirectId, Timestamp,
 };
 use ferrite_store::{
     ArtifactRepo, EventRepo, MediaRepo, MenuRepo, PluginKvRepo, PluginRepo, RedirectRepo,
-    RevisionRepo, SearchRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo,
+    SearchRepo, StoreError, ThemeRepo,
 };
 
 pub(crate) struct Unsupported;
@@ -26,30 +26,6 @@ macro_rules! stub {
         }
     };
 }
-
-stub!(RevisionRepo {
-    fn insert(&Revision) -> ();
-    fn list(ContentId, u32) -> Vec<Revision>;
-    fn get(RevisionId) -> Option<Revision>;
-    fn prune(ContentId, u32) -> u64;
-});
-
-stub!(TaxonomyRepo {
-    fn upsert(&Taxonomy) -> ();
-    fn get(&str) -> Option<Taxonomy>;
-    fn list() -> Vec<Taxonomy>;
-});
-
-stub!(TermRepo {
-    fn insert(&Term) -> ();
-    fn update(&Term) -> ();
-    fn get(TermId) -> Option<Term>;
-    fn get_by_slug(&str, &str) -> Option<Term>;
-    fn list(&str) -> Vec<Term>;
-    fn delete(TermId) -> ();
-    fn set_for_item(ContentId, &[TermId]) -> ();
-    fn for_item(ContentId) -> Vec<Term>;
-});
 
 stub!(MenuRepo {
     fn get(&str) -> Option<Menu>;

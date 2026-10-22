@@ -1,0 +1,309 @@
+//! Taxonomy, term and term-link contract tests.
+
+use ferrite_domain::{ContentQuery, Taxonomy, Term, TermId};
+use ferrite_store::{Store, StoreError};
+
+use crate::{
+    TestDb,
+    fixtures::{fixture_user, new_post},
+};
+
+fn term(tax: &str, slug: &str, name: &str, parent: Option<TermId>) -> Term {
+    Term {
+        id: TermId::new(),
+        taxonomy: tax.into(),
+        slug: slug.into(),
+        name: name.into(),
+        description: format!("about {slug}"),
+        parent_id: parent,
+    }
+}
+
+async fn insert_terms(store: &dyn Store, terms: &[&Term]) {
+    for t in terms {
+        store.read().terms().insert(t).await.unwrap();
+    }
+}
+
+pub async fn taxonomies_seeded_and_upsert(db: &TestDb) {
+    let taxes = db.store().read().taxonomies();
+    let all = taxes.list().await.unwrap();
+    let names: Vec<_> = all.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["category", "tag"]);
+    let category = taxes.get("category").await.unwrap().unwrap();
+    assert!(category.hierarchical && category.built_in);
+    assert_eq!(category.content_types, ["post"]);
+    assert!(!taxes.get("tag").await.unwrap().unwrap().hierarchical);
+    assert!(taxes.get("nope").await.unwrap().is_none());
+
+    let mut genre = Taxonomy {
+        name: "genre".into(),
+        label: "Genres".into(),
+        hierarchical: true,
+        content_types: vec!["post".into(), "page".into()],
+        built_in: false,
+    };
+    taxes.upsert(&genre).await.unwrap();
+    assert_eq!(taxes.get("genre").await.unwrap().unwrap(), genre);
+
+    genre.label = "Kinds".into();
+    genre.hierarchical = false;
+    genre.content_types = vec!["event".into()];
+    taxes.upsert(&genre).await.unwrap();
+    assert_eq!(taxes.get("genre").await.unwrap().unwrap(), genre);
+    assert_eq!(taxes.list().await.unwrap().len(), 3);
+
+    // built_in is fixed at first insert.
+    let mut cat = category.clone();
+    cat.label = "Topics".into();
+    cat.built_in = false;
+    taxes.upsert(&cat).await.unwrap();
+    let after = taxes.get("category").await.unwrap().unwrap();
+    assert_eq!(after.label, "Topics");
+    assert!(after.built_in);
+
+    genre.content_types = vec!["a\u{0}".into()];
+    assert!(matches!(
+        taxes.upsert(&genre).await,
+        Err(StoreError::Invalid(_))
+    ));
+}
+
+pub async fn terms_crud_and_hierarchy(db: &TestDb) {
+    let store = db.store();
+    let terms = store.read().terms();
+    let parent = term("category", "news", "News", None);
+    let child = term("category", "local", "Local", Some(parent.id));
+    let other = term("category", "art", "art", None);
+    insert_terms(store, &[&parent, &child, &other]).await;
+
+    assert_eq!(terms.get(parent.id).await.unwrap().unwrap(), parent);
+    assert_eq!(terms.get(child.id).await.unwrap().unwrap(), child);
+    assert!(terms.get(TermId::new()).await.unwrap().is_none());
+    assert_eq!(
+        terms
+            .get_by_slug("category", "local")
+            .await
+            .unwrap()
+            .unwrap(),
+        child
+    );
+    assert!(terms.get_by_slug("tag", "local").await.unwrap().is_none());
+
+    // Ordered by name, byte order: "Local" < "News" < "art".
+    let listed = terms.list("category").await.unwrap();
+    assert_eq!(listed, [child.clone(), parent.clone(), other.clone()]);
+    assert!(terms.list("tag").await.unwrap().is_empty());
+
+    // Slug is unique per taxonomy, but may repeat across taxonomies.
+    let dup = term("category", "news", "Dup", None);
+    assert!(matches!(
+        terms.insert(&dup).await,
+        Err(StoreError::UniqueViolation { .. })
+    ));
+    let same_slug_tag = term("tag", "news", "News", None);
+    terms.insert(&same_slug_tag).await.unwrap();
+    assert!(matches!(
+        terms
+            .update(&Term {
+                slug: "art".into(),
+                ..child.clone()
+            })
+            .await,
+        Err(StoreError::UniqueViolation { .. })
+    ));
+
+    // Unknown taxonomy or parent is a foreign-key error.
+    assert!(matches!(
+        terms.insert(&term("nope", "x", "X", None)).await,
+        Err(StoreError::ForeignKey { .. })
+    ));
+    assert!(matches!(
+        terms
+            .insert(&term("category", "orphan", "Orphan", Some(TermId::new())))
+            .await,
+        Err(StoreError::ForeignKey { .. })
+    ));
+
+    let mut renamed = child.clone();
+    renamed.name = "Zeta".into();
+    renamed.description = "changed".into();
+    renamed.parent_id = None;
+    terms.update(&renamed).await.unwrap();
+    assert_eq!(terms.get(child.id).await.unwrap().unwrap(), renamed);
+    assert!(matches!(
+        terms
+            .update(&term("category", "ghost", "Ghost", None))
+            .await,
+        Err(StoreError::NotFound)
+    ));
+}
+
+/// R9: a term that still has child terms cannot be deleted (RESTRICT).
+pub async fn deleting_term_with_children_is_foreign_key(db: &TestDb) {
+    let store = db.store();
+    let terms = store.read().terms();
+    let parent = term("category", "p", "P", None);
+    let child = term("category", "c", "C", Some(parent.id));
+    insert_terms(store, &[&parent, &child]).await;
+
+    assert!(matches!(
+        terms.delete(parent.id).await,
+        Err(StoreError::ForeignKey { .. })
+    ));
+    assert!(terms.get(parent.id).await.unwrap().is_some());
+    assert_eq!(
+        terms.get(child.id).await.unwrap().unwrap().parent_id,
+        Some(parent.id)
+    );
+
+    terms.delete(child.id).await.unwrap();
+    terms.delete(parent.id).await.unwrap();
+    assert!(terms.get(parent.id).await.unwrap().is_none());
+    terms.delete(parent.id).await.unwrap();
+}
+
+pub async fn term_links_replace_and_order(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    let item = store
+        .read()
+        .content()
+        .insert(&new_post(&author, "tagged"))
+        .await
+        .unwrap();
+    let a = term("tag", "a", "Alpha", None);
+    let b = term("tag", "b", "Beta", None);
+    let c = term("tag", "c", "Gamma", None);
+    insert_terms(store, &[&a, &b, &c]).await;
+    let terms = store.read().terms();
+
+    assert!(terms.for_item(item.id).await.unwrap().is_empty());
+    terms.set_for_item(item.id, &[b.id, a.id]).await.unwrap();
+    assert_eq!(
+        terms.for_item(item.id).await.unwrap(),
+        [b.clone(), a.clone()]
+    );
+    terms.set_for_item(item.id, &[c.id]).await.unwrap();
+    assert_eq!(
+        terms.for_item(item.id).await.unwrap(),
+        std::slice::from_ref(&c)
+    );
+
+    // A failed replacement (unknown term) leaves the previous links untouched.
+    assert!(matches!(
+        terms.set_for_item(item.id, &[a.id, TermId::new()]).await,
+        Err(StoreError::ForeignKey { .. })
+    ));
+    assert_eq!(
+        terms.for_item(item.id).await.unwrap(),
+        std::slice::from_ref(&c)
+    );
+
+    // Inside a transaction the replacement is part of it.
+    let tx = store.begin().await.unwrap();
+    tx.terms()
+        .set_for_item(item.id, &[a.id, c.id])
+        .await
+        .unwrap();
+    assert_eq!(
+        tx.terms().for_item(item.id).await.unwrap(),
+        [a.clone(), c.clone()]
+    );
+    tx.rollback().await.unwrap();
+    assert_eq!(
+        terms.for_item(item.id).await.unwrap(),
+        std::slice::from_ref(&c)
+    );
+    let tx = store.begin().await.unwrap();
+    tx.terms()
+        .set_for_item(item.id, &[c.id, b.id])
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        terms.for_item(item.id).await.unwrap(),
+        [c.clone(), b.clone()]
+    );
+
+    terms.set_for_item(item.id, &[]).await.unwrap();
+    assert!(terms.for_item(item.id).await.unwrap().is_empty());
+}
+
+pub async fn deleting_term_removes_links(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    let item = store
+        .read()
+        .content()
+        .insert(&new_post(&author, "linked"))
+        .await
+        .unwrap();
+    let a = term("tag", "a", "A", None);
+    let b = term("tag", "b", "B", None);
+    insert_terms(store, &[&a, &b]).await;
+    let terms = store.read().terms();
+    terms.set_for_item(item.id, &[a.id, b.id]).await.unwrap();
+
+    terms.delete(a.id).await.unwrap();
+    assert_eq!(
+        terms.for_item(item.id).await.unwrap(),
+        std::slice::from_ref(&b)
+    );
+
+    // Deleting the item removes its links, not the terms.
+    store.read().content().delete(item.id).await.unwrap();
+    assert!(terms.get(b.id).await.unwrap().is_some());
+    assert!(terms.for_item(item.id).await.unwrap().is_empty());
+}
+
+pub async fn content_list_by_term(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    let a = term("tag", "a", "A", None);
+    let b = term("tag", "b", "B", None);
+    insert_terms(store, &[&a, &b]).await;
+    let mut ids = Vec::new();
+    for slug in ["p1", "p2", "p3"] {
+        let item = store
+            .read()
+            .content()
+            .insert(&new_post(&author, slug))
+            .await
+            .unwrap();
+        ids.push(item.id);
+    }
+    store
+        .read()
+        .terms()
+        .set_for_item(ids[0], &[a.id])
+        .await
+        .unwrap();
+    store
+        .read()
+        .terms()
+        .set_for_item(ids[1], &[a.id, b.id])
+        .await
+        .unwrap();
+
+    let slugs = |term: TermId| {
+        let store = db.store();
+        async move {
+            let page = store
+                .read()
+                .content()
+                .list(&ContentQuery {
+                    term: Some(term),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let mut slugs: Vec<_> = page.items.into_iter().map(|i| i.slug).collect();
+            slugs.sort();
+            slugs
+        }
+    };
+    assert_eq!(slugs(a.id).await, ["p1", "p2"]);
+    assert_eq!(slugs(b.id).await, ["p2"]);
+    assert!(slugs(TermId::new()).await.is_empty());
+}

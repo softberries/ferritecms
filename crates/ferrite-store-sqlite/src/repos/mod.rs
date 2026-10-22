@@ -16,6 +16,7 @@
 mod content;
 mod site;
 mod stub;
+mod taxonomy;
 mod user;
 
 use std::sync::Arc;
@@ -56,16 +57,16 @@ impl Repos for SqliteRepos {
         self
     }
     fn revisions(&self) -> &dyn RevisionRepo {
-        &Unsupported
+        self
     }
     fn types(&self) -> &dyn ContentTypeRepo {
         self
     }
     fn taxonomies(&self) -> &dyn TaxonomyRepo {
-        &Unsupported
+        self
     }
     fn terms(&self) -> &dyn TermRepo {
-        &Unsupported
+        self
     }
     fn menus(&self) -> &dyn MenuRepo {
         &Unsupported

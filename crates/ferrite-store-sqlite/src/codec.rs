@@ -2,7 +2,8 @@
 //! JSON = `TEXT`. Booleans bind and decode natively as 0/1.
 
 use ferrite_domain::{
-    ContentId, ContentItem, ContentType, OptionEntry, Secret, Timestamp, User, UserId,
+    ContentId, ContentItem, ContentType, OptionEntry, Revision, RevisionId, Secret, Taxonomy, Term,
+    TermId, Timestamp, User, UserId,
 };
 use ferrite_store::StoreError;
 use sqlx::{Row, sqlite::SqliteRow};
@@ -110,5 +111,63 @@ pub(crate) fn user(row: &SqliteRow) -> Result<User, StoreError> {
         totp_secret: totp_secret.map(Secret::new),
         created_at: ts(row.try_get("created_at").map_err(map_db_err)?)?,
         last_login_at: ts_opt(row.try_get("last_login_at").map_err(map_db_err)?)?,
+    })
+}
+
+pub(crate) const REVISION_COLUMNS: &str =
+    "id, item_id, author_id, created_at, title, excerpt, body, fields, meta, note";
+
+/// Maps a row selected with [`REVISION_COLUMNS`].
+pub(crate) fn revision(row: &SqliteRow) -> Result<Revision, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let item: Uuid = row.try_get("item_id").map_err(map_db_err)?;
+    let author: Uuid = row.try_get("author_id").map_err(map_db_err)?;
+    let body: String = row.try_get("body").map_err(map_db_err)?;
+    let fields: String = row.try_get("fields").map_err(map_db_err)?;
+    let meta: String = row.try_get("meta").map_err(map_db_err)?;
+    Ok(Revision {
+        id: RevisionId::from_uuid(id),
+        item_id: ContentId::from_uuid(item),
+        author_id: UserId::from_uuid(author),
+        created_at: ts(row.try_get("created_at").map_err(map_db_err)?)?,
+        title: row.try_get("title").map_err(map_db_err)?,
+        excerpt: row.try_get("excerpt").map_err(map_db_err)?,
+        body: json_from_db(&body)?,
+        fields: json_from_db(&fields)?,
+        meta: json_from_db(&meta)?,
+        note: row.try_get("note").map_err(map_db_err)?,
+    })
+}
+
+pub(crate) const TAXONOMY_COLUMNS: &str = "name, label, hierarchical, content_types, built_in";
+
+/// Maps a row selected with [`TAXONOMY_COLUMNS`].
+pub(crate) fn taxonomy(row: &SqliteRow) -> Result<Taxonomy, StoreError> {
+    let types: String = row.try_get("content_types").map_err(map_db_err)?;
+    Ok(Taxonomy {
+        name: row.try_get("name").map_err(map_db_err)?,
+        label: row.try_get("label").map_err(map_db_err)?,
+        hierarchical: row.try_get("hierarchical").map_err(map_db_err)?,
+        content_types: serde_json::from_str(&types)
+            .map_err(|e| StoreError::Database(format!("corrupt JSON: {e}")))?,
+        built_in: row.try_get("built_in").map_err(map_db_err)?,
+    })
+}
+
+/// Term columns qualified with the `t` alias so joins stay unambiguous.
+pub(crate) const TERM_COLUMNS: &str =
+    "t.id, t.taxonomy, t.slug, t.name, t.description, t.parent_id";
+
+/// Maps a row selected with [`TERM_COLUMNS`].
+pub(crate) fn term(row: &SqliteRow) -> Result<Term, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let parent: Option<Uuid> = row.try_get("parent_id").map_err(map_db_err)?;
+    Ok(Term {
+        id: TermId::from_uuid(id),
+        taxonomy: row.try_get("taxonomy").map_err(map_db_err)?,
+        slug: row.try_get("slug").map_err(map_db_err)?,
+        name: row.try_get("name").map_err(map_db_err)?,
+        description: row.try_get("description").map_err(map_db_err)?,
+        parent_id: parent.map(TermId::from_uuid),
     })
 }

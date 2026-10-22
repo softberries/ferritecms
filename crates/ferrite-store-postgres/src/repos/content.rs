@@ -4,18 +4,18 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ferrite_domain::{
     ContentId, ContentItem, ContentOrder, ContentQuery, ContentType, NewContent, Page,
-    ParentFilter, Timestamp,
+    ParentFilter, Revision, RevisionId, Timestamp,
 };
 use ferrite_store::{
-    ContentRepo, ContentTypeRepo, MetaRepo, SortKey, StoreError, check_limit, content_cursor,
-    encode_content_cursor, validate_json,
+    ContentRepo, ContentTypeRepo, MetaRepo, RevisionRepo, SortKey, StoreError, check_limit,
+    content_cursor, encode_content_cursor, validate_json,
 };
 use serde_json::Value;
 use sqlx::{Postgres, QueryBuilder, types::Json};
 
 use super::PgRepos;
 use crate::{
-    codec::{self, CONTENT_COLUMNS, TYPE_COLUMNS},
+    codec::{self, CONTENT_COLUMNS, REVISION_COLUMNS, TYPE_COLUMNS},
     exec::run,
 };
 
@@ -330,8 +330,7 @@ fn push_keyset(
                 .push_bind(id)
                 .push("))");
         }
-        // `content_cursor` only yields the key type matching the order.
-        _ => {}
+        _ => return Err(StoreError::Invalid("cursor does not match order".into())),
     }
     Ok(())
 }
@@ -378,5 +377,63 @@ impl MetaRepo for PgRepos {
         .bind(id.as_uuid())
         .fetch_all(e))?;
         Ok(rows.into_iter().map(|(k, v)| (k, v.0)).collect())
+    }
+}
+
+#[async_trait]
+impl RevisionRepo for PgRepos {
+    async fn insert(&self, revision: &Revision) -> Result<(), StoreError> {
+        validate_json(&revision.body)?;
+        validate_json(&revision.fields)?;
+        validate_json(&revision.meta)?;
+        run!(&self.exec, |e| sqlx::query(
+            "INSERT INTO revisions \
+             (id, item_id, author_id, created_at, title, excerpt, body, fields, meta, note) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
+        )
+        .bind(revision.id.as_uuid())
+        .bind(revision.item_id.as_uuid())
+        .bind(revision.author_id.as_uuid())
+        .bind(dt(revision.created_at))
+        .bind(&revision.title)
+        .bind(&revision.excerpt)
+        .bind(Json(&revision.body))
+        .bind(Json(&revision.fields))
+        .bind(Json(&revision.meta))
+        .bind(&revision.note)
+        .execute(e))
+        .map(|_| ())
+    }
+
+    async fn list(&self, id: ContentId, limit: u32) -> Result<Vec<Revision>, StoreError> {
+        let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {REVISION_COLUMNS} FROM revisions WHERE item_id = $1 \
+             ORDER BY created_at DESC, id DESC LIMIT $2"
+        )))
+        .bind(id.as_uuid())
+        .bind(i64::from(limit))
+        .fetch_all(e))?;
+        rows.iter().map(codec::revision).collect()
+    }
+
+    async fn get(&self, id: RevisionId) -> Result<Option<Revision>, StoreError> {
+        let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {REVISION_COLUMNS} FROM revisions WHERE id = $1"
+        )))
+        .bind(id.as_uuid())
+        .fetch_optional(e))?;
+        row.as_ref().map(codec::revision).transpose()
+    }
+
+    async fn prune(&self, id: ContentId, keep: u32) -> Result<u64, StoreError> {
+        let done = run!(&self.exec, |e| sqlx::query(
+            "DELETE FROM revisions WHERE item_id = $1 AND id NOT IN \
+             (SELECT id FROM revisions WHERE item_id = $1 \
+              ORDER BY created_at DESC, id DESC LIMIT $2)"
+        )
+        .bind(id.as_uuid())
+        .bind(i64::from(keep))
+        .execute(e))?;
+        Ok(done.rows_affected())
     }
 }

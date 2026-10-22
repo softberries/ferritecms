@@ -11,5 +11,6 @@ pub mod fixtures;
 pub mod harness;
 pub mod migrations;
 pub mod site;
+pub mod taxonomy;
 
 pub use harness::{PgFixture, TestDb, migration_dirs, migration_files, pg_store, sqlite_store};
