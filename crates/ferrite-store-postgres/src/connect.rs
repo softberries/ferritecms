@@ -60,10 +60,17 @@ impl PgStore {
             .schema
             .as_deref()
             .map(|s| format!("SET search_path TO {}", quote_ident(s)));
+        // Version check first, on its own connection, so an unsupported server is
+        // rejected before anything (the schema) is created on it.
+        let mut conn = PgConnection::connect_with(&connect)
+            .await
+            .map_err(map_db_err)?;
+        let version: i32 = sqlx::query_scalar("SELECT current_setting('server_version_num')::int")
+            .fetch_one(&mut conn)
+            .await
+            .map_err(map_db_err)?;
+        check_server_version(version)?;
         if let Some(schema) = &opts.schema {
-            let mut conn = PgConnection::connect_with(&connect)
-                .await
-                .map_err(map_db_err)?;
             // Only CREATE when missing, so an existing schema needs no CREATE privilege.
             let exists: bool =
                 sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)")
@@ -80,8 +87,8 @@ impl PgStore {
                 .await
                 .map_err(map_db_err)?;
             }
-            conn.close().await.map_err(map_db_err)?;
         }
+        conn.close().await.map_err(map_db_err)?;
 
         let session: Arc<str> = match &search_path_sql {
             Some(sp) => format!("{sp}; SET statement_timeout = '{STATEMENT_TIMEOUT}'"),
@@ -100,12 +107,6 @@ impl PgStore {
             .connect_with(connect.clone())
             .await
             .map_err(map_db_err)?;
-        let version: i32 = sqlx::query_scalar("SELECT current_setting('server_version_num')::int")
-            .fetch_one(&pool)
-            .await
-            .map_err(map_db_err)?;
-        check_server_version(version)?;
-
         Ok(Self {
             read: PgRepos::new(pool.clone()),
             pool,

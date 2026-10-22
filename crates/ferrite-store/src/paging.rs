@@ -99,6 +99,22 @@ pub fn content_sort_key(order: ContentOrder, item: &ContentItem) -> SortKey {
     }
 }
 
+/// The cursor kind tag of a content listing in `order`.
+fn content_tag(order: ContentOrder) -> &'static str {
+    match order {
+        ContentOrder::PublishedDesc => "c:published",
+        ContentOrder::UpdatedDesc => "c:updated",
+        ContentOrder::MenuOrderAsc => "c:menu",
+        ContentOrder::TitleAsc => "c:title",
+    }
+}
+
+/// Cursor tag of the redirect listing (see [`encode_text_cursor`]).
+pub const REDIRECT_CURSOR_TAG: &str = "r:source";
+
+/// Cursor tag of the user listing (see [`encode_text_cursor`]).
+pub const USER_CURSOR_TAG: &str = "u:login";
+
 /// Encodes the cursor pointing just after `item`.
 pub fn encode_content_cursor(order: ContentOrder, item: &ContentItem) -> String {
     let key = match content_sort_key(order, item) {
@@ -106,12 +122,12 @@ pub fn encode_content_cursor(order: ContentOrder, item: &ContentItem) -> String 
         SortKey::Int(i) => json!(i),
         SortKey::Text(t) => json!(t),
     };
-    Cursor::encode(&key, item.id.as_uuid())
+    Cursor::encode(content_tag(order), &key, item.id.as_uuid())
 }
 
 /// Decodes a cursor for `order`; a malformed cursor or one of another order is `Invalid`.
 pub fn content_cursor(order: ContentOrder, cursor: &str) -> Result<(SortKey, Uuid), StoreError> {
-    let (key, id) = Cursor::decode(cursor)?;
+    let (key, id) = Cursor::decode(cursor, content_tag(order))?;
     let bad = || StoreError::Invalid("cursor does not match the query order".into());
     let key = match (order, key) {
         (ContentOrder::PublishedDesc, Value::Null) => SortKey::Micros(None),
@@ -187,14 +203,15 @@ pub fn content_list_plan(
     })
 }
 
-/// Encodes a cursor whose sort key is text (redirect source path, user login).
-pub fn encode_text_cursor(key: &str, id: Uuid) -> String {
-    Cursor::encode(&json!(key), id)
+/// Encodes a cursor whose sort key is text (redirect source path, user login, content
+/// title) under the listing's `tag`.
+pub fn encode_text_cursor(tag: &str, key: &str, id: Uuid) -> String {
+    Cursor::encode(tag, &json!(key), id)
 }
 
-/// Decodes a cursor made by [`encode_text_cursor`].
-pub fn text_cursor(cursor: &str) -> Result<(String, Uuid), StoreError> {
-    match Cursor::decode(cursor)? {
+/// Decodes a cursor made by [`encode_text_cursor`] with the same `tag`.
+pub fn text_cursor(tag: &str, cursor: &str) -> Result<(String, Uuid), StoreError> {
+    match Cursor::decode(cursor, tag)? {
         (Value::String(key), id) => {
             validate_text("cursor", &key)?;
             Ok((key, id))
@@ -220,13 +237,13 @@ mod tests {
     #[test]
     fn cursor_key_must_match_order() {
         let id = Uuid::now_v7();
-        let c = Cursor::encode(&json!("title"), id);
+        let c = Cursor::encode("c:title", &json!("title"), id);
         assert_eq!(
             content_cursor(ContentOrder::TitleAsc, &c).unwrap(),
             (SortKey::Text("title".into()), id)
         );
         assert!(content_cursor(ContentOrder::UpdatedDesc, &c).is_err());
-        let null = Cursor::encode(&Value::Null, id);
+        let null = Cursor::encode("c:published", &Value::Null, id);
         assert_eq!(
             content_cursor(ContentOrder::PublishedDesc, &null)
                 .unwrap()
@@ -234,6 +251,14 @@ mod tests {
             SortKey::Micros(None)
         );
         assert!(content_cursor(ContentOrder::UpdatedDesc, &null).is_err());
+        // Same JSON key, other kind of listing.
+        let text = encode_text_cursor(REDIRECT_CURSOR_TAG, "title", id);
+        assert!(content_cursor(ContentOrder::TitleAsc, &text).is_err());
+        assert!(text_cursor(USER_CURSOR_TAG, &text).is_err());
+        assert_eq!(
+            text_cursor(REDIRECT_CURSOR_TAG, &text).unwrap(),
+            ("title".to_owned(), id)
+        );
         assert!(content_cursor(ContentOrder::MenuOrderAsc, "garbage!").is_err());
     }
 

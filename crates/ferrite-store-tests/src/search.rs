@@ -422,7 +422,11 @@ pub async fn search_filters_status_kind_and_pages(db: &TestDb) {
         ));
     }
     let mut q = query("needle", &[], &[], 10);
-    q.cursor = Some(ferrite_store::encode_text_cursor("x", uuid::Uuid::now_v7()));
+    q.cursor = Some(ferrite_store::encode_text_cursor(
+        "c:title",
+        "x",
+        uuid::Uuid::now_v7(),
+    ));
     assert!(matches!(
         search.search(&q).await,
         Err(StoreError::Invalid(_))
@@ -458,4 +462,39 @@ pub async fn search_ties_break_by_id_descending(db: &TestDb) {
     let walked = pages(search, query("same", &[], &[], 1)).await;
     assert_eq!(walked.concat(), ids);
     assert_eq!(walked.len(), 5);
+}
+
+/// Cursors carry the kind of listing: a content cursor is `Invalid` for search and a
+/// search cursor is `Invalid` for every content order.
+pub async fn cursor_kinds_are_not_interchangeable(db: &TestDb) {
+    use ferrite_domain::{ContentOrder, ContentQuery};
+
+    let store = db.store();
+    let repos = store.read();
+    let id = uuid::Uuid::now_v7();
+
+    let mut q = query("needle", &[], &[], 10);
+    q.cursor = Some(ferrite_store::encode_text_cursor("c:title", "x", id));
+    assert!(matches!(
+        repos.search().search(&q).await,
+        Err(StoreError::Invalid(_))
+    ));
+
+    let search_cursor = ferrite_store::encode_rank_cursor(1.5, id);
+    for order in [
+        ContentOrder::PublishedDesc,
+        ContentOrder::UpdatedDesc,
+        ContentOrder::MenuOrderAsc,
+        ContentOrder::TitleAsc,
+    ] {
+        let r = repos
+            .content()
+            .list(&ContentQuery {
+                order,
+                cursor: Some(search_cursor.clone()),
+                ..ContentQuery::default()
+            })
+            .await;
+        assert!(matches!(r, Err(StoreError::Invalid(_))), "{order:?}: {r:?}");
+    }
 }

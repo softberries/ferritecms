@@ -27,6 +27,10 @@ pub enum StoreError {
     /// it: every later call fails with this, and `commit` rolls back and returns it.
     #[error("transaction aborted by an earlier error; roll it back")]
     Aborted,
+    /// This `Tx` was used while a nested transaction opened from it is still open. Commit
+    /// or roll back (or drop) the nested one first.
+    #[error("a nested transaction is open; finish it before using the outer one")]
+    NestedOpen,
     /// No connection became free in time (on SQLite: the single writer is held, e.g. by
     /// an open `Tx` in the same task).
     #[error("database busy: timed out waiting for a connection")]

@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use ferrite_domain::{Cursor, SearchQuery};
+use ferrite_domain::{ContentStatus, Cursor, SearchQuery};
 use serde_json::{Value, json};
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 use uuid::Uuid;
@@ -64,6 +64,8 @@ pub struct SearchPlan {
     /// Normalized query terms (never empty).
     pub terms: Vec<String>,
     pub limit: u32,
+    /// The query's statuses without duplicates, in first-seen order (empty: all).
+    pub statuses: Vec<ContentStatus>,
     /// Decoded cursor: the `(rank, id)` of the last item of the previous page.
     pub after: Option<(f64, Uuid)>,
 }
@@ -86,23 +88,34 @@ pub fn plan_search(query: &SearchQuery) -> Result<Option<SearchPlan>, StoreError
     if terms.is_empty() {
         return Ok(None);
     }
+    let mut statuses = Vec::with_capacity(query.statuses.len());
+    for status in &query.statuses {
+        if !statuses.contains(status) {
+            statuses.push(*status);
+        }
+    }
     Ok(Some(SearchPlan {
         terms,
         limit,
+        statuses,
         after,
     }))
 }
 
+/// Cursor tag of a search listing.
+const RANK_CURSOR_TAG: &str = "s:rank";
+
 /// Encodes the cursor pointing just after the hit `(rank, id)`. The rank travels as its
 /// IEEE-754 bits (an `i64`), so it round-trips exactly with no float text drift.
 pub fn encode_rank_cursor(rank: f64, id: Uuid) -> String {
-    Cursor::encode(&json!(i64::from_ne_bytes(rank.to_bits().to_ne_bytes())), id)
+    let bits = i64::from_ne_bytes(rank.to_bits().to_ne_bytes());
+    Cursor::encode(RANK_CURSOR_TAG, &json!(bits), id)
 }
 
 /// Decodes a cursor made by [`encode_rank_cursor`]; anything else (including a NaN rank)
 /// is `Invalid`.
 pub fn rank_cursor(cursor: &str) -> Result<(f64, Uuid), StoreError> {
-    let (key, id) = Cursor::decode(cursor)?;
+    let (key, id) = Cursor::decode(cursor, RANK_CURSOR_TAG)?;
     let bad = || StoreError::Invalid("cursor does not match the query order".into());
     let Value::Number(n) = key else {
         return Err(bad());
@@ -220,6 +233,20 @@ mod tests {
     }
 
     #[test]
+    fn plan_dedupes_statuses() {
+        use ferrite_domain::ContentStatus::{Draft, Published};
+        let query = SearchQuery {
+            q: "x".into(),
+            kinds: Vec::new(),
+            statuses: vec![Published, Draft, Published, Draft],
+            limit: 10,
+            cursor: None,
+        };
+        let plan = plan_search(&query).unwrap().unwrap();
+        assert_eq!(plan.statuses, [Published, Draft]);
+    }
+
+    #[test]
     fn rank_cursor_roundtrips_exact_bits() {
         let id = Uuid::now_v7();
         for rank in [
@@ -234,9 +261,9 @@ mod tests {
             assert_eq!(back.to_bits(), rank.to_bits());
             assert_eq!(back_id, id);
         }
-        assert!(rank_cursor(&Cursor::encode(&json!("x"), id)).is_err());
+        assert!(rank_cursor(&Cursor::encode(RANK_CURSOR_TAG, &json!("x"), id)).is_err());
         let nan = i64::from_ne_bytes(f64::NAN.to_bits().to_ne_bytes());
-        assert!(rank_cursor(&Cursor::encode(&json!(nan), id)).is_err());
+        assert!(rank_cursor(&Cursor::encode(RANK_CURSOR_TAG, &json!(nan), id)).is_err());
     }
 
     #[test]

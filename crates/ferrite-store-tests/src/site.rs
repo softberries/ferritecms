@@ -522,7 +522,7 @@ pub async fn text_writes_reject_nul(db: &TestDb) {
 /// both backends (Postgres would otherwise fail in the driver, SQLite would match nothing).
 pub async fn text_lookups_reject_nul(db: &TestDb) {
     use ferrite_domain::{ContentId, ContentOrder, ContentQuery, SearchQuery};
-    use ferrite_store::encode_text_cursor;
+    use ferrite_store::{REDIRECT_CURSOR_TAG, USER_CURSOR_TAG, encode_text_cursor};
 
     use crate::fixtures::{fixture_user, new_post};
 
@@ -561,7 +561,7 @@ pub async fn text_lookups_reject_nul(db: &TestDb) {
             .content()
             .list(&ContentQuery {
                 order: ContentOrder::TitleAsc,
-                cursor: Some(encode_text_cursor(BAD, uuid::Uuid::now_v7())),
+                cursor: Some(encode_text_cursor("c:title", BAD, uuid::Uuid::now_v7())),
                 ..ContentQuery::default()
             })
             .await,
@@ -585,7 +585,14 @@ pub async fn text_lookups_reject_nul(db: &TestDb) {
     invalid(
         repos
             .redirects()
-            .list(10, Some(&encode_text_cursor(BAD, uuid::Uuid::now_v7())))
+            .list(
+                10,
+                Some(&encode_text_cursor(
+                    REDIRECT_CURSOR_TAG,
+                    BAD,
+                    uuid::Uuid::now_v7(),
+                )),
+            )
             .await,
     );
     // Users.
@@ -594,7 +601,14 @@ pub async fn text_lookups_reject_nul(db: &TestDb) {
     invalid(
         repos
             .users()
-            .list(10, Some(&encode_text_cursor(BAD, uuid::Uuid::now_v7())))
+            .list(
+                10,
+                Some(&encode_text_cursor(
+                    USER_CURSOR_TAG,
+                    BAD,
+                    uuid::Uuid::now_v7(),
+                )),
+            )
             .await,
     );
     // Plugins, plugin KV and themes.

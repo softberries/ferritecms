@@ -1,6 +1,6 @@
 //! Migration contract tests (02 §7–§8).
 
-use ferrite_store::{Compat, SCHEMA_META_MIN_BINARY, StoreError};
+use ferrite_store::{Compat, Phase, SCHEMA_META_MIN_BINARY, StoreError};
 use semver::Version;
 
 use crate::TestDb;
@@ -66,7 +66,10 @@ pub async fn verdict_after_partial_down(db: &TestDb) {
     assert_eq!(store.migrate_down(1, false).await.unwrap(), vec![2]);
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::NeedsUp);
-    assert_eq!(s.pending, vec![2]);
+    assert_eq!(
+        s.pending.iter().map(|p| p.version).collect::<Vec<_>>(),
+        vec![2]
+    );
     assert_eq!((s.db_version, s.binary_version), (1, 2));
     let objects = db.user_objects().await;
     assert!(objects.iter().any(|o| o.ends_with(":content_items")));
@@ -111,4 +114,18 @@ pub async fn min_binary_survives_older_binary(db: &TestDb) {
             requires: Version::new(9, 9, 9)
         }
     );
+}
+
+/// Pending migrations carry their description and parsed directives.
+pub async fn status_reports_pending_directives(db: &TestDb) {
+    let store = db.store();
+    assert_eq!(store.migrate_down(1, false).await.unwrap(), vec![2]);
+    let s = store.migration_status(&binary()).await.unwrap();
+    assert_eq!(s.pending.len(), 1);
+    let pending = &s.pending[0];
+    assert_eq!(pending.version, 2);
+    assert!(!pending.description.is_empty());
+    assert_eq!(pending.directives.phase, Phase::Expand);
+    assert_eq!(pending.directives.min_binary, None);
+    assert!(!pending.directives.lossy_down);
 }

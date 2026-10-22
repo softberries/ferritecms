@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use ferrite_domain::Timestamp;
 use ferrite_domain::{NewUser, Page, Secret, User, UserId};
 use ferrite_store::{
-    MAX_ID_FILTER, StoreError, UserRepo, check_len, check_limit, email_key, encode_text_cursor,
-    text_cursor, validate_text,
+    MAX_ID_FILTER, StoreError, USER_CURSOR_TAG, UserRepo, check_len, check_limit, email_key,
+    encode_text_cursor, text_cursor, validate_text,
 };
 
 use sqlx::{QueryBuilder, Sqlite};
@@ -134,7 +134,9 @@ impl UserRepo for SqliteRepos {
 
     async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<User>, StoreError> {
         let limit = check_limit(limit)?;
-        let after = cursor.map(text_cursor).transpose()?;
+        let after = cursor
+            .map(|c| text_cursor(USER_CURSOR_TAG, c))
+            .transpose()?;
         let rows = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {USER_COLUMNS} FROM users \
              WHERE ?1 IS NULL OR (login, id) > (?1, ?2) \
@@ -152,7 +154,7 @@ impl UserRepo for SqliteRepos {
             items.truncate(limit as usize);
             items
                 .last()
-                .map(|u| encode_text_cursor(&u.login, u.id.as_uuid()))
+                .map(|u| encode_text_cursor(USER_CURSOR_TAG, &u.login, u.id.as_uuid()))
         } else {
             None
         };

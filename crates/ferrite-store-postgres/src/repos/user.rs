@@ -8,8 +8,8 @@ use chrono::{DateTime, Utc};
 use ferrite_domain::Timestamp;
 use ferrite_domain::{NewUser, Page, Secret, User, UserId};
 use ferrite_store::{
-    MAX_ID_FILTER, StoreError, UserRepo, check_len, check_limit, email_key, encode_text_cursor,
-    text_cursor, validate_text,
+    MAX_ID_FILTER, StoreError, USER_CURSOR_TAG, UserRepo, check_len, check_limit, email_key,
+    encode_text_cursor, text_cursor, validate_text,
 };
 
 use sqlx::{Postgres, QueryBuilder};
@@ -135,7 +135,9 @@ impl UserRepo for PgRepos {
 
     async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<User>, StoreError> {
         let limit = check_limit(limit)?;
-        let after = cursor.map(text_cursor).transpose()?;
+        let after = cursor
+            .map(|c| text_cursor(USER_CURSOR_TAG, c))
+            .transpose()?;
         let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {USER_COLUMNS} FROM users \
              WHERE $1::text IS NULL OR (login COLLATE \"C\", id) > ($1::text, $2::uuid) \
@@ -153,7 +155,7 @@ impl UserRepo for PgRepos {
             items.truncate(limit as usize);
             items
                 .last()
-                .map(|u| encode_text_cursor(&u.login, u.id.as_uuid()))
+                .map(|u| encode_text_cursor(USER_CURSOR_TAG, &u.login, u.id.as_uuid()))
         } else {
             None
         };

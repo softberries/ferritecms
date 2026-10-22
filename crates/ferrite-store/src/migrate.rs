@@ -171,13 +171,22 @@ pub enum Compat {
     Incompatible { requires: Version },
 }
 
+/// An embedded migration not yet applied, with its parsed header directives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingMigration {
+    pub version: i64,
+    pub description: String,
+    pub directives: Directives,
+}
+
 /// Migration state of a database relative to this binary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrationStatus {
     pub db_version: i64,
     pub binary_version: i64,
     pub min_binary: Option<Version>,
-    pub pending: Vec<i64>,
+    /// Embedded migrations not applied, oldest first.
+    pub pending: Vec<PendingMigration>,
     pub unknown_applied: Vec<i64>,
     pub verdict: Compat,
 }
@@ -199,23 +208,24 @@ pub fn verdict(db: i64, bin: i64, binary: &Version, min_binary: Option<&Version>
 }
 
 impl MigrationStatus {
-    /// Builds the status from applied and embedded versions plus `schema_meta.min_binary_version`.
+    /// Builds the status from applied versions and every embedded migration plus
+    /// `schema_meta.min_binary_version`.
     pub fn compute(
         applied: &[i64],
-        embedded: &[i64],
+        embedded: &[PendingMigration],
         binary: &Version,
         min_binary: Option<Version>,
     ) -> Self {
         let db_version = applied.iter().copied().max().unwrap_or(0);
-        let binary_version = embedded.iter().copied().max().unwrap_or(0);
-        let pending: Vec<i64> = embedded
+        let binary_version = embedded.iter().map(|m| m.version).max().unwrap_or(0);
+        let pending: Vec<PendingMigration> = embedded
             .iter()
-            .filter(|v| !applied.contains(v))
-            .copied()
+            .filter(|m| !applied.contains(&m.version))
+            .cloned()
             .collect();
         let unknown_applied = applied
             .iter()
-            .filter(|v| !embedded.contains(v))
+            .filter(|v| !embedded.iter().any(|m| m.version == **v))
             .copied()
             .collect();
         let mut verdict = verdict(db_version, binary_version, binary, min_binary.as_ref());
@@ -291,19 +301,34 @@ pub fn next_min_binary(
 mod tests {
     use super::*;
 
+    fn embedded(versions: &[i64]) -> Vec<PendingMigration> {
+        versions
+            .iter()
+            .map(|&version| PendingMigration {
+                version,
+                description: format!("m{version}"),
+                directives: d("SELECT 1;"),
+            })
+            .collect()
+    }
+
+    fn pending_versions(s: &MigrationStatus) -> Vec<i64> {
+        s.pending.iter().map(|p| p.version).collect()
+    }
+
     #[test]
     fn status_compute() {
         let b = v("0.1.0");
-        let s = MigrationStatus::compute(&[1, 2], &[1, 2], &b, None);
+        let s = MigrationStatus::compute(&[1, 2], &embedded(&[1, 2]), &b, None);
         assert_eq!((s.db_version, s.binary_version), (2, 2));
         assert_eq!(s.verdict, Compat::UpToDate);
         assert!(s.pending.is_empty() && s.unknown_applied.is_empty());
 
-        let s = MigrationStatus::compute(&[], &[1, 2], &b, None);
-        assert_eq!((s.db_version, s.pending.clone()), (0, vec![1, 2]));
+        let s = MigrationStatus::compute(&[], &embedded(&[1, 2]), &b, None);
+        assert_eq!((s.db_version, pending_versions(&s)), (0, vec![1, 2]));
         assert_eq!(s.verdict, Compat::NeedsUp);
 
-        let s = MigrationStatus::compute(&[1, 2, 3], &[1, 2], &b, Some(v("0.2.0")));
+        let s = MigrationStatus::compute(&[1, 2, 3], &embedded(&[1, 2]), &b, Some(v("0.2.0")));
         assert_eq!(s.unknown_applied, vec![3]);
         assert_eq!(
             s.verdict,
@@ -313,8 +338,8 @@ mod tests {
         );
 
         // Gap: db == bin but an older migration is missing.
-        let s = MigrationStatus::compute(&[1, 3], &[1, 2, 3], &b, None);
-        assert_eq!(s.pending, vec![2]);
+        let s = MigrationStatus::compute(&[1, 3], &embedded(&[1, 2, 3]), &b, None);
+        assert_eq!(pending_versions(&s), vec![2]);
         assert_eq!(s.verdict, Compat::NeedsUp);
     }
 

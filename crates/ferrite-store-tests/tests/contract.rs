@@ -11,6 +11,7 @@ backend_tests!(
     verdict_after_partial_down,
     verify_detects_tampered_checksum,
     min_binary_survives_older_binary,
+    status_reports_pending_directives,
 );
 
 backend_tests!(
@@ -43,6 +44,10 @@ backend_tests!(
     tx_nested_failure_keeps_outer,
     tx_nested_commit_rollback_drop,
     sqlite_begin_while_tx_open_is_busy,
+    nested_open_error_variant,
+    outer_drop_finishes_nested,
+    outer_rollback_finishes_nested,
+    outer_commit_with_nested_open_rolls_back,
 );
 
 backend_tests!(
@@ -126,6 +131,7 @@ backend_tests!(
     search_semantics_identical,
     search_filters_status_kind_and_pages,
     search_ties_break_by_id_descending,
+    cursor_kinds_are_not_interchangeable,
 );
 
 backend_tests!(batch_loaders_match_single_gets);

@@ -136,22 +136,25 @@ mod tests {
     fn cursor_roundtrip() {
         let id = Uuid::now_v7();
         let key = serde_json::json!(["2026-01-01", 5]);
-        let encoded = Cursor::encode(&key, id);
+        let encoded = Cursor::encode("t:x", &key, id);
         assert!(!encoded.contains('=') && !encoded.contains('+') && !encoded.contains('/'));
-        assert_eq!(Cursor::decode(&encoded).unwrap(), (key, id));
+        assert_eq!(Cursor::decode(&encoded, "t:x").unwrap(), (key, id));
+        assert!(Cursor::decode(&encoded, "t:y").is_err());
     }
 
     #[test]
     fn cursor_rejects_garbage() {
-        assert!(Cursor::decode("!!!").is_err());
-        assert!(Cursor::decode("").is_err());
-        // valid base64, not valid JSON pair
-        assert!(Cursor::decode("aGVsbG8").is_err());
+        assert!(Cursor::decode("!!!", "t").is_err());
+        assert!(Cursor::decode("", "t").is_err());
+        // valid base64, not valid JSON triple
+        assert!(Cursor::decode("aGVsbG8", "t").is_err());
         let enc = |v: serde_json::Value| URL_SAFE_NO_PAD.encode(v.to_string());
         let id = Uuid::now_v7();
-        assert!(Cursor::decode(&enc(serde_json::json!([1, id, 3]))).is_err());
-        assert!(Cursor::decode(&enc(serde_json::json!([1, "nope"]))).is_err());
-        assert!(Cursor::decode(&enc(serde_json::json!({"k": 1, "id": id}))).is_err());
+        assert!(Cursor::decode(&enc(serde_json::json!(["t", 1, id, 3])), "t").is_err());
+        assert!(Cursor::decode(&enc(serde_json::json!(["t", 1, "nope"])), "t").is_err());
+        // The untagged two-element form is rejected.
+        assert!(Cursor::decode(&enc(serde_json::json!([1, id])), "t").is_err());
+        assert!(Cursor::decode(&enc(serde_json::json!({"k": 1, "id": id})), "t").is_err());
     }
 
     #[test]

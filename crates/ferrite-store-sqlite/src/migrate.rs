@@ -7,8 +7,8 @@ use std::{
 };
 
 use ferrite_store::{
-    Directives, MigrationStatus, SCHEMA_META_MIN_BINARY, StoreError, next_min_binary,
-    parse_directives, plan_down,
+    Directives, MigrationStatus, PendingMigration, SCHEMA_META_MIN_BINARY, StoreError,
+    next_min_binary, parse_directives, plan_down,
 };
 use semver::Version;
 use sqlx::migrate::{MigrateError, Migrator};
@@ -26,6 +26,21 @@ fn embedded() -> Result<Vec<(i64, Directives)>, StoreError> {
         .iter()
         .filter(|m| m.migration_type.is_up_migration())
         .map(|m| Ok((m.version, parse_directives(m.sql.as_str())?)))
+        .collect()
+}
+
+/// Every embedded migration as a status entry.
+fn embedded_status() -> Result<Vec<PendingMigration>, StoreError> {
+    MIGRATOR
+        .iter()
+        .filter(|m| m.migration_type.is_up_migration())
+        .map(|m| {
+            Ok(PendingMigration {
+                version: m.version,
+                description: m.description.to_string(),
+                directives: parse_directives(m.sql.as_str())?,
+            })
+        })
         .collect()
 }
 
@@ -111,7 +126,7 @@ impl SqliteStore {
         let min_binary = self.stored_min_binary().await?;
         Ok(MigrationStatus::compute(
             &applied,
-            &embedded_versions(),
+            &embedded_status()?,
             binary,
             min_binary,
         ))

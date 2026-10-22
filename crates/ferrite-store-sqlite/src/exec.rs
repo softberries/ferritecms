@@ -29,6 +29,9 @@ pub(crate) struct Shared {
 struct Levels {
     open: Vec<Level>,
     next_id: u64,
+    /// Level 0 was abandoned, committed or rolled back: the whole transaction is over and
+    /// every nested handle still alive reports `Aborted`.
+    dead: bool,
 }
 
 struct Level {
@@ -72,6 +75,7 @@ impl TxHandle {
                     abandoned: false,
                 }],
                 next_id: 1,
+                dead: false,
             }),
         });
         Self {
@@ -86,6 +90,7 @@ impl TxHandle {
     pub(crate) async fn enter(&self) -> Result<ConnGuard<'_>, StoreError> {
         let mut guard = self.shared.conn.lock().await;
         self.settle(&mut guard).await;
+        self.release_if_dead(&mut guard);
         self.check()?;
         if guard.is_none() {
             return Err(finished());
@@ -134,15 +139,30 @@ impl TxHandle {
     pub(crate) async fn finish(&self, commit: bool) -> Result<(), StoreError> {
         let mut guard = self.shared.conn.lock().await;
         self.settle(&mut guard).await;
-        let poisoned = match self.check() {
-            Ok(()) => false,
-            Err(StoreError::Aborted) => true,
+        self.release_if_dead(&mut guard);
+        let (poisoned, nested_open) = match self.check() {
+            Ok(()) => (false, false),
+            Err(StoreError::Aborted) => (true, false),
+            // Level 0 ends the whole transaction even with a nested level alive.
+            Err(StoreError::NestedOpen) if self.level == 0 => (false, true),
             Err(e) => return Err(e),
         };
+        if poisoned && guard.is_none() {
+            // The transaction already ended (level 0 is gone): nothing left to undo.
+            return if commit {
+                Err(StoreError::Aborted)
+            } else {
+                Ok(())
+            };
+        }
         let result = if self.level == 0 {
             let tx = guard.take().ok_or_else(finished)?;
-            self.shared.levels().open.clear();
-            if commit && !poisoned {
+            {
+                let mut levels = self.shared.levels();
+                levels.open.clear();
+                levels.dead = true;
+            }
+            if commit && !poisoned && !nested_open {
                 tx.commit().await.map_err(map_db_err)
             } else {
                 tx.rollback().await.map_err(map_db_err)
@@ -169,14 +189,23 @@ impl TxHandle {
         match (poisoned, commit) {
             (true, true) => Err(StoreError::Aborted),
             (true, false) => Ok(()),
+            // Committing level 0 with a nested level alive rolls everything back.
+            (false, true) if nested_open => result.and(Err(StoreError::NestedOpen)),
             (false, _) => result,
         }
     }
 
-    /// Called when the owning `Tx` is dropped unfinished: a nested level is rolled back
-    /// lazily, before the next statement; level 0 rolls back when the transaction drops.
+    /// Called when the owning `Tx` is dropped. A nested level is rolled back lazily,
+    /// before the next statement. Level 0 ends the whole transaction: nested handles
+    /// still alive get `Aborted`, and the transaction (hence the connection) is released
+    /// now unless a statement holds it, in which case the next call on any handle, or the
+    /// last handle dropping, releases it.
     pub(crate) fn abandon(&self) {
         if self.level == 0 {
+            self.shared.levels().dead = true;
+            if let Ok(mut guard) = self.shared.conn.try_lock() {
+                drop(guard.take());
+            }
             return;
         }
         let mut levels = self.shared.levels();
@@ -189,12 +218,13 @@ impl TxHandle {
 
     fn check(&self) -> Result<(), StoreError> {
         let levels = self.shared.levels();
+        if levels.dead {
+            return Err(StoreError::Aborted);
+        }
         match levels.open.get(self.level) {
             Some(level) if level.id == self.id => {
                 if levels.open.len() > self.level + 1 {
-                    Err(StoreError::Invalid(
-                        "a nested transaction is open; commit or roll it back first".into(),
-                    ))
+                    Err(StoreError::NestedOpen)
                 } else if level.poisoned {
                     Err(StoreError::Aborted)
                 } else {
@@ -202,6 +232,13 @@ impl TxHandle {
                 }
             }
             _ => Err(finished()),
+        }
+    }
+
+    /// Drops (hence rolls back) the transaction once level 0 is over.
+    fn release_if_dead(&self, guard: &mut ConnGuard<'_>) {
+        if self.shared.levels().dead {
+            drop(guard.take());
         }
     }
 

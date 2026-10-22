@@ -69,7 +69,13 @@ pub trait Tx: Repos + Send {
     /// Opens a nested transaction (a savepoint) inside this one. Its writes become part
     /// of this transaction on `commit` and are undone on `rollback` or drop; an error
     /// inside it poisons only the nested transaction. While it is open, calls through
-    /// this (outer) `Tx` return `Invalid`. Nesting can go deeper.
+    /// this (outer) `Tx` return [`StoreError::NestedOpen`]. Nesting can go deeper.
+    ///
+    /// Ending the outer `Tx` (drop, `commit` or `rollback`) while a nested one is still
+    /// alive ends the whole transaction: `commit` rolls back and returns `NestedOpen`, and
+    /// the nested handle then fails every call and its `commit` with
+    /// [`StoreError::Aborted`]. The database connection is released no later than when
+    /// the last handle drops.
     async fn begin_nested(&self) -> Result<Box<dyn Tx>, StoreError>;
 }
 
@@ -352,7 +358,9 @@ pub trait PluginRepo: Send + Sync {
 pub trait PluginKvRepo: Send + Sync {
     /// Reads a plugin's value.
     async fn get(&self, plugin: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError>;
-    /// Writes a plugin's value.
+    /// Writes a plugin's value. **Bypasses quotas**: mixing it with
+    /// [`set_with_quota`](Self::set_with_quota) for the same plugin voids the quota
+    /// guarantee, since `set` neither takes the lock nor checks the totals.
     async fn set(&self, plugin: &str, key: &str, value: &[u8]) -> Result<(), StoreError>;
     /// Writes a value only if the plugin's totals stay within quota, atomically (P2):
     /// returns `true` iff after the write the plugin's value bytes are at most
@@ -362,7 +370,10 @@ pub trait PluginKvRepo: Send + Sync {
     /// plugin past its quota.
     ///
     /// Inside a `Tx` on Postgres the per-plugin lock it takes is held until that `Tx`
-    /// ends, so keep such transactions short.
+    /// ends, so keep such transactions short. A `Tx` that calls this for several plugins
+    /// in different orders can deadlock against another one on Postgres; the database
+    /// detects it, fails one statement and that `Tx` is poisoned (`Aborted`). Touch
+    /// plugins in a consistent order (for example sorted by id).
     async fn set_with_quota(
         &self,
         plugin: &str,

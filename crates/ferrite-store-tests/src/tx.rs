@@ -151,7 +151,7 @@ pub async fn tx_nested_commit_rollback_drop(db: &TestDb) {
         .await
         .unwrap();
     let busy = tx.options().get("kept").await;
-    assert!(matches!(busy, Err(StoreError::Invalid(_))), "{busy:?}");
+    assert!(matches!(busy, Err(StoreError::NestedOpen)), "{busy:?}");
     undone.rollback().await.unwrap();
 
     let dropped = tx.begin_nested().await.unwrap();
@@ -207,5 +207,101 @@ pub async fn sqlite_begin_while_tx_open_is_busy(db: &TestDb) {
         waited >= Duration::from_secs(4) && waited <= Duration::from_secs(6),
         "{waited:?}"
     );
+    tx.rollback().await.unwrap();
+}
+
+/// Using the outer level while a nested one is open gives `NestedOpen` (not `Invalid`),
+/// for calls and for commit; the nested level is unaffected.
+pub async fn nested_open_error_variant(db: &TestDb) {
+    let store = db.store();
+    let tx = store.begin().await.unwrap();
+    let nested = tx.begin_nested().await.unwrap();
+    let r = tx.options().get("k").await;
+    assert!(matches!(r, Err(StoreError::NestedOpen)), "{r:?}");
+    let r = tx.begin_nested().await.err();
+    assert!(matches!(r, Some(StoreError::NestedOpen)), "{r:?}");
+    assert!(
+        StoreError::NestedOpen.to_string().contains("nested"),
+        "{}",
+        StoreError::NestedOpen
+    );
+    nested.options().set("n", &json!(1), false).await.unwrap();
+    nested.commit().await.unwrap();
+    tx.commit().await.unwrap();
+    assert!(store.read().options().get("n").await.unwrap().is_some());
+}
+
+/// Dropping the outer `Tx` while a nested one is alive finishes the whole transaction:
+/// the nested handle gets `Aborted`, its commit fails, nothing persists, and the writer
+/// is free again (SQLite) once the last handle is gone.
+pub async fn outer_drop_finishes_nested(db: &TestDb) {
+    let store = db.store();
+    let tx = store.begin().await.unwrap();
+    tx.options().set("outer", &json!(1), false).await.unwrap();
+    let nested = tx.begin_nested().await.unwrap();
+    nested
+        .options()
+        .set("inner", &json!(1), false)
+        .await
+        .unwrap();
+    drop(tx);
+
+    let r = nested.options().get("inner").await;
+    assert!(matches!(r, Err(StoreError::Aborted)), "{r:?}");
+    let r = nested.begin_nested().await.err();
+    assert!(matches!(r, Some(StoreError::Aborted)), "{r:?}");
+    let r = nested.commit().await;
+    assert!(matches!(r, Err(StoreError::Aborted)), "{r:?}");
+
+    let tx = tokio::time::timeout(Duration::from_secs(6), store.begin())
+        .await
+        .expect("begin() must not hang")
+        .expect("writer is free after the nested handle is gone");
+    tx.commit().await.unwrap();
+    let r = store.read();
+    assert!(r.options().get("outer").await.unwrap().is_none());
+    assert!(r.options().get("inner").await.unwrap().is_none());
+}
+
+/// Rolling back the outer `Tx` while a nested one is alive also finishes the nested
+/// handle (`Aborted`), and committing the outer one then rolls everything back with
+/// `NestedOpen`.
+pub async fn outer_rollback_finishes_nested(db: &TestDb) {
+    let store = db.store();
+    let tx = store.begin().await.unwrap();
+    let nested = tx.begin_nested().await.unwrap();
+    nested
+        .options()
+        .set("inner", &json!(1), false)
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+    let r = nested.options().get("inner").await;
+    assert!(matches!(r, Err(StoreError::Aborted)), "{r:?}");
+    let r = nested.commit().await;
+    assert!(matches!(r, Err(StoreError::Aborted)), "{r:?}");
+    let tx = tokio::time::timeout(Duration::from_secs(6), store.begin())
+        .await
+        .expect("begin() must not hang")
+        .unwrap();
+    tx.rollback().await.unwrap();
+    assert!(store.read().options().get("inner").await.unwrap().is_none());
+}
+
+pub async fn outer_commit_with_nested_open_rolls_back(db: &TestDb) {
+    let store = db.store();
+    let tx = store.begin().await.unwrap();
+    tx.options().set("outer", &json!(1), false).await.unwrap();
+    let nested = tx.begin_nested().await.unwrap();
+    let r = tx.commit().await;
+    assert!(matches!(r, Err(StoreError::NestedOpen)), "{r:?}");
+    let r = nested.options().get("outer").await;
+    assert!(matches!(r, Err(StoreError::Aborted)), "{r:?}");
+    drop(nested);
+    assert!(store.read().options().get("outer").await.unwrap().is_none());
+    let tx = tokio::time::timeout(Duration::from_secs(6), store.begin())
+        .await
+        .expect("begin() must not hang")
+        .unwrap();
     tx.rollback().await.unwrap();
 }

@@ -85,10 +85,10 @@ impl SearchRepo for SqliteRepos {
             }
             list.push_unseparated(")");
         }
-        if !query.statuses.is_empty() {
+        if !plan.statuses.is_empty() {
             qb.push(" AND c.status IN (");
             let mut list = qb.separated(", ");
-            for status in &query.statuses {
+            for status in &plan.statuses {
                 list.push_bind(status.as_str());
             }
             list.push_unseparated(")");

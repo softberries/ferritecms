@@ -20,6 +20,11 @@ use crate::{
     exec::{atomic, map_db_err, run},
 };
 
+/// First key of the two-argument advisory lock taken per plugin by `set_with_quota`
+/// (second key: `hashtext(plugin)`). The class keeps these locks apart from any other
+/// advisory lock in the database.
+const KV_LOCK_CLASS: i32 = 0x4652_4b56; // "FRKV"
+
 #[async_trait]
 impl ArtifactRepo for PgRepos {
     async fn insert_if_absent(&self, artifact: &Artifact) -> Result<bool, StoreError> {
@@ -312,12 +317,13 @@ impl PluginKvRepo for PgRepos {
         validate_text("plugin kv plugin", plugin)?;
         validate_text("plugin kv key", key)?;
         // READ COMMITTED does not serialize read-modify-write, so each plugin's quota
-        // writes queue on a transaction-scoped advisory lock (held until the enclosing
+        // writes queue on a transaction-scoped advisory lock (class `KV_LOCK_CLASS`, held until the enclosing
         // transaction ends, so the next holder's statement sees this commit). Then one
         // conditional statement (P2) writes only if the totals, with this key's old value
         // replaced by the new one, stay within quota.
         atomic!(&self.exec, |conn| async move {
-            sqlx::query("SELECT pg_advisory_xact_lock(hashtext('ferrite_kv:' || $1::text))")
+            sqlx::query("SELECT pg_advisory_xact_lock($1::int4, hashtext($2::text))")
+                .bind(KV_LOCK_CLASS)
                 .bind(plugin)
                 .execute(&mut *conn)
                 .await
