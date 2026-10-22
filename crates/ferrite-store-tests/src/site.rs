@@ -377,6 +377,54 @@ pub async fn redirects_list_paginates_in_binary_order(db: &TestDb) {
     ));
 }
 
+pub async fn redirects_list_by_target(db: &TestDb) {
+    let store = db.store();
+    let redirects = store.read().redirects();
+    // Binary source order; the target match is exact and case-sensitive.
+    for (source, target) in [
+        ("/z", "/t"),
+        ("/é", "/t"),
+        ("/B", "/t"),
+        ("/a", "/t"),
+        ("/other", "/T"),
+        ("/third", "/t/"),
+    ] {
+        redirects
+            .upsert(&redirect(source, target, 301))
+            .await
+            .unwrap();
+    }
+    let got: Vec<String> = redirects
+        .list_by_target("/t")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.source_path)
+        .collect();
+    assert_eq!(got, ["/B", "/a", "/z", "/é"]);
+    assert!(redirects.list_by_target("/none").await.unwrap().is_empty());
+    assert!(matches!(
+        redirects.list_by_target("/t\0").await,
+        Err(StoreError::Invalid(ref m)) if m.contains("NUL")
+    ));
+
+    // Capped at 1000 rows, still in binary source order; works inside a Tx too.
+    let tx = store.begin().await.unwrap();
+    for i in 0..1_001 {
+        tx.redirects()
+            .upsert(&redirect(&format!("/many/{i:04}"), "/many-target", 301))
+            .await
+            .unwrap();
+    }
+    let in_tx = tx.redirects().list_by_target("/many-target").await.unwrap();
+    assert_eq!(in_tx.len(), 1_000);
+    tx.commit().await.unwrap();
+    let got = redirects.list_by_target("/many-target").await.unwrap();
+    assert_eq!(got.len(), 1_000);
+    assert_eq!(got[0].source_path, "/many/0000");
+    assert_eq!(got[999].source_path, "/many/0999");
+}
+
 /// R13: caller text containing NUL is rejected identically on both backends (one
 /// representative write per repo family).
 pub async fn text_writes_reject_nul(db: &TestDb) {

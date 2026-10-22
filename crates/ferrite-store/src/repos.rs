@@ -287,6 +287,10 @@ pub trait RedirectRepo: Send + Sync {
     async fn delete(&self, id: RedirectId) -> Result<(), StoreError>;
     /// Lists redirects with cursor pagination.
     async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<Redirect>, StoreError>;
+    /// Redirects whose `target` equals `target` exactly (case-sensitive), ordered by
+    /// `source_path` in binary order, at most
+    /// [`MAX_REDIRECTS_BY_TARGET`](crate::MAX_REDIRECTS_BY_TARGET).
+    async fn list_by_target(&self, target: &str) -> Result<Vec<Redirect>, StoreError>;
     /// Records a hit (increments the counter, sets `last_hit_at`); missing: `NotFound`.
     async fn hit(&self, id: RedirectId) -> Result<(), StoreError>;
 }

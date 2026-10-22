@@ -3,8 +3,9 @@
 use async_trait::async_trait;
 use ferrite_domain::{OptionEntry, Page, Redirect, RedirectId, Timestamp};
 use ferrite_store::{
-    OptionRepo, REDIRECT_CURSOR_TAG, RedirectRepo, SchemaMetaRepo, StoreError, check_limit,
-    check_redirect_code, encode_text_cursor, text_cursor, validate_json, validate_text,
+    MAX_REDIRECTS_BY_TARGET, OptionRepo, REDIRECT_CURSOR_TAG, RedirectRepo, SchemaMetaRepo,
+    StoreError, check_limit, check_redirect_code, encode_text_cursor, text_cursor, validate_json,
+    validate_text,
 };
 
 use super::SqliteRepos;
@@ -137,6 +138,17 @@ impl RedirectRepo for SqliteRepos {
         .bind(id.as_uuid())
         .execute(e))
         .map(|_| ())
+    }
+
+    async fn list_by_target(&self, target: &str) -> Result<Vec<Redirect>, StoreError> {
+        validate_text("redirect target", target)?;
+        let rows = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {REDIRECT_COLUMNS} FROM redirects WHERE target = ? \
+             ORDER BY source_path LIMIT {MAX_REDIRECTS_BY_TARGET}"
+        )))
+        .bind(target)
+        .fetch_all(e))?;
+        rows.iter().map(codec::redirect).collect()
     }
 
     async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<Redirect>, StoreError> {

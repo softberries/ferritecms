@@ -178,6 +178,7 @@ CREATE TABLE redirects (
     last_hit_at timestamptz
 );
 CREATE UNIQUE INDEX redirects_source_path_uq ON redirects (source_path);
+CREATE INDEX redirects_target_idx ON redirects (target);
 
 CREATE TABLE user_meta (
     user_id uuid NOT NULL CONSTRAINT user_meta_user_id_fk REFERENCES users (id) ON DELETE CASCADE,

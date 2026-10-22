@@ -34,6 +34,9 @@ pub const MAX_META_KEYS: usize = 50;
 /// Most slugs `slugs_with_prefix` returns.
 pub const MAX_SLUG_PREFIX_RESULTS: u32 = 1000;
 
+/// Most redirects `RedirectRepo::list_by_target` returns.
+pub const MAX_REDIRECTS_BY_TARGET: u32 = 1000;
+
 /// Validates a batch-loader input length: at most `max` entries.
 pub fn check_len(what: &str, len: usize, max: usize) -> Result<(), StoreError> {
     if len > max {
