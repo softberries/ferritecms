@@ -339,6 +339,16 @@ pub trait MediaRepo: Send + Sync {
     /// one query, returned in the order of `ids`; missing ids are skipped and a repeated
     /// id yields its row once (at its first position). More ids is `Invalid`.
     async fn get_many(&self, ids: &[ContentId]) -> Result<Vec<Media>, StoreError>;
+    /// Up to `limit` (1..=[`MAX_PAGE`](crate::MAX_PAGE)) media rows whose original
+    /// (`artifact_hash`) or any variant (`variants.<name>.hash`, a string) is `hash`,
+    /// ordered by item id. Variant values that are not objects with a string `hash`
+    /// are ignored. Used to decide whether `/_media/<hash>/…` may be served. The
+    /// original is indexed; the variant match scans the `variants` column.
+    async fn find_by_artifact(
+        &self,
+        hash: &ArtifactHash,
+        limit: u32,
+    ) -> Result<Vec<Media>, StoreError>;
 }
 
 #[async_trait]

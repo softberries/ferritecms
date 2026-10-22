@@ -61,8 +61,8 @@ use crate::{
 };
 use hydrate::{Hydrator, Nodes, chain, unique};
 pub use model::{
-    DepKeys, FeedSource, FrontPage, Listing, MediaPublic, MediaVariant, PageItem, Previewed,
-    PublicItem, SiteRead, SitemapEntry, SitemapPage, TermPublic, UserPublic,
+    DepKeys, FeedSource, FrontPage, Listing, MediaFile, MediaPublic, MediaVariant, PageItem,
+    Previewed, PublicItem, SiteRead, SitemapEntry, SitemapPage, TermPublic, UserPublic,
 };
 
 /// Maps an artifact hash and a file name to a public URL (`MediaStore::public_url`).
@@ -87,6 +87,8 @@ pub const MAX_SKIP: u64 = 5000;
 pub const FEED_LEN: u32 = 20;
 /// URLs per sitemap file.
 pub const SITEMAP_FILE_LEN: usize = 50_000;
+/// Most media rows [`SiteReader::media_file`] considers for one file.
+pub const MAX_MEDIA_ROWS: u32 = 100;
 /// Most items [`SiteReader::related`] returns.
 pub const MAX_RELATED: usize = 10;
 /// Most items [`SiteReader::latest`] returns.
@@ -589,6 +591,54 @@ impl SiteReader {
         let row = repos.media().get(id).await?;
         let hydrator = self.hydrator(repos, now);
         Ok(public(row.map(|m| hydrator.media_public(&m)), deps))
+    }
+
+    /// The file `hash` names, if it is the original or a variant of a **public** media
+    /// item (published, `published_at <= now`); `None` otherwise. Several media items
+    /// may share a file (the same upload twice): the first public one, by item id,
+    /// answers. Store calls: one lookup by artifact (at most [`MAX_MEDIA_ROWS`] rows)
+    /// and one `get_many` for their status.
+    pub async fn media_file(&self, hash: &ArtifactHash) -> Result<Option<MediaFile>, CoreError> {
+        let now = (self.clock)();
+        let repos = self.store.read();
+        let rows = repos.media().find_by_artifact(hash, MAX_MEDIA_ROWS).await?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let ids: Vec<ContentId> = rows.iter().map(|m| m.item_id).collect();
+        let public_ids: std::collections::HashSet<ContentId> = repos
+            .content()
+            .get_many(&ids)
+            .await?
+            .into_iter()
+            .filter(|i| i.kind == MEDIA_KIND && is_public(i, now))
+            .map(|i| i.id)
+            .collect();
+        let Some(row) = rows.into_iter().find(|m| public_ids.contains(&m.item_id)) else {
+            return Ok(None);
+        };
+        if row.artifact_hash == *hash {
+            return Ok(Some(MediaFile {
+                item: row.item_id,
+                variant: None,
+                mime: row.mime,
+                name: row.original_name,
+            }));
+        }
+        let variant = row.variants.as_object().and_then(|vs| {
+            vs.iter()
+                .find(|(_, v)| v.get("hash").and_then(|h| h.as_str()) == Some(hash.as_str()))
+                .map(|(name, v)| {
+                    let mime = v.get("mime").and_then(|m| m.as_str()).map(str::to_owned);
+                    (name.clone(), mime)
+                })
+        });
+        Ok(variant.map(|(name, mime)| MediaFile {
+            item: row.item_id,
+            variant: Some(name),
+            mime: mime.unwrap_or_else(|| row.mime.clone()),
+            name: row.original_name.clone(),
+        }))
     }
 
     /// Whether item `id` is public (and not media): one store call, no hydration. For

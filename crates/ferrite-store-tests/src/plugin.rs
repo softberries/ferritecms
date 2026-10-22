@@ -156,6 +156,96 @@ fn plugin(name: &str, c: char) -> InstalledPlugin {
     }
 }
 
+/// `find_by_artifact`: media rows whose original or any variant (`variants.<name>.hash`)
+/// is the hash; malformed variant values are ignored; `limit` caps the result.
+pub async fn media_find_by_artifact(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    for (c, kind) in [
+        ('a', ArtifactKind::Media),
+        ('b', ArtifactKind::Variant),
+        ('c', ArtifactKind::Media),
+        ('d', ArtifactKind::Media),
+    ] {
+        put_artifact(store, &artifact(c, kind)).await;
+    }
+    let mut ids = Vec::new();
+    let rows = [
+        (
+            'a',
+            json!({"thumb": {"hash": hash('b').as_str(), "w": 150}}),
+        ),
+        ('a', json!({})),
+        (
+            'c',
+            json!({"x": {"hash": hash('a').as_str()}, "bad": 5, "nohash": {"w": 1}}),
+        ),
+        ('d', json!({"n": {"hash": 7}})),
+    ];
+    for (i, (orig, variants)) in rows.into_iter().enumerate() {
+        let mut item = new_post(&author, &format!("m{i}"));
+        item.kind = "media".into();
+        let tx = store.begin().await.unwrap();
+        tx.content().insert(&item).await.unwrap();
+        tx.commit().await.unwrap();
+        store
+            .read()
+            .media()
+            .insert(&Media {
+                item_id: item.id,
+                artifact_hash: hash(orig),
+                mime: "image/png".into(),
+                bytes: 1,
+                width: None,
+                height: None,
+                alt: String::new(),
+                original_name: format!("m{i}.png"),
+                variants,
+            })
+            .await
+            .unwrap();
+        ids.push(item.id);
+    }
+    let repo = store.read().media();
+    let found = |v: Vec<Media>| {
+        let mut got: Vec<ContentId> = v.into_iter().map(|m| m.item_id).collect();
+        got.sort();
+        got
+    };
+    let mut want = vec![ids[0], ids[1], ids[2]];
+    want.sort();
+    assert_eq!(
+        found(repo.find_by_artifact(&hash('a'), 10).await.unwrap()),
+        want
+    );
+    assert_eq!(
+        found(repo.find_by_artifact(&hash('b'), 10).await.unwrap()),
+        [ids[0]]
+    );
+    assert_eq!(
+        found(repo.find_by_artifact(&hash('c'), 10).await.unwrap()),
+        [ids[2]]
+    );
+    assert_eq!(
+        found(repo.find_by_artifact(&hash('d'), 10).await.unwrap()),
+        [ids[3]]
+    );
+    assert!(
+        repo.find_by_artifact(&hash('e'), 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // The rows come back whole.
+    let one = repo.find_by_artifact(&hash('b'), 10).await.unwrap();
+    assert_eq!(Some(&one[0]), repo.get(ids[0]).await.unwrap().as_ref());
+    assert_eq!(repo.find_by_artifact(&hash('a'), 2).await.unwrap().len(), 2);
+    assert!(matches!(
+        repo.find_by_artifact(&hash('a'), 0).await,
+        Err(StoreError::Invalid(_))
+    ));
+}
+
 pub async fn plugins_upsert_list_enable(db: &TestDb) {
     let store = db.store();
     put_artifact(store, &artifact('a', ArtifactKind::Plugin)).await;

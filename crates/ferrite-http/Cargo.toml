@@ -12,6 +12,7 @@ arc-swap.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 bytes.workspace = true
+chrono.workspace = true
 ferrite-cache = { path = "../ferrite-cache" }
 ferrite-core = { path = "../ferrite-core" }
 ferrite-domain = { path = "../ferrite-domain" }
@@ -19,7 +20,9 @@ ferrite-media = { path = "../ferrite-media" }
 ferrite-plugin-host = { path = "../ferrite-plugin-host" }
 ferrite-store = { path = "../ferrite-store" }
 ferrite-theme = { path = "../ferrite-theme" }
+futures.workspace = true
 html-escape.workspace = true
+percent-encoding.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
@@ -32,6 +35,7 @@ tracing.workspace = true
 ferrite-store-tests = { path = "../ferrite-store-tests" }
 http-body-util.workspace = true
 hyper-util.workspace = true
+quick-xml.workspace = true
 s3s.workspace = true
 s3s-fs.workspace = true
 tempfile.workspace = true

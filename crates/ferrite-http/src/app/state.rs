@@ -13,6 +13,7 @@ use ferrite_cache::PageCache;
 use ferrite_core::{
     CoreError, DepKeys, PermalinkRules, RedirectService, SiteReader, events::option_key,
 };
+use ferrite_media::MediaStore;
 use ferrite_plugin_host::PluginHost;
 use ferrite_store::{Store, StoreError};
 use ferrite_theme::{Renderer, SiteInfo, Theme};
@@ -90,12 +91,21 @@ impl HttpConfig {
     }
 }
 
+/// The editable site texts ([`AppState::site_texts`]).
+pub(crate) struct SiteTexts {
+    pub title: String,
+    pub description: String,
+    pub locale: String,
+}
+
 /// The parts an [`AppState`] is built from.
 pub struct AppParts {
     pub store: Arc<dyn Store>,
     /// Must use the same permalink rules as `routes`.
     pub reader: Arc<SiteReader>,
     pub plugins: Arc<PluginHost>,
+    /// Where `/_media` reads files from.
+    pub media: Arc<MediaStore>,
     pub theme: Arc<Theme>,
     pub cache: Arc<PageCache>,
     pub routes: RouteTable,
@@ -110,6 +120,7 @@ pub struct AppState {
     pub store: Arc<dyn Store>,
     pub reader: Arc<SiteReader>,
     pub plugins: Arc<PluginHost>,
+    pub media: Arc<MediaStore>,
     pub theme: ArcSwap<Theme>,
     pub cache: Arc<PageCache>,
     pub routes: ArcSwap<RouteTable>,
@@ -137,6 +148,7 @@ impl AppState {
             store: parts.store,
             reader: parts.reader,
             plugins: parts.plugins,
+            media: parts.media,
             theme: ArcSwap::new(parts.theme),
             cache: parts.cache,
             routes: ArcSwap::from_pointee(parts.routes),
@@ -164,17 +176,8 @@ impl AppState {
         theme: &Theme,
         deps: &mut DepKeys,
     ) -> Result<SiteInfo, CoreError> {
+        let texts = self.site_texts(deps).await?;
         let options = self.store.read().options();
-        let text = |v: Option<ferrite_domain::OptionEntry>, default: &str| {
-            v.and_then(|e| e.value.as_str().map(str::to_owned))
-                .unwrap_or_else(|| default.to_owned())
-        };
-        let title = text(options.get(TITLE_OPTION).await?, &self.config.site_title);
-        let description = text(
-            options.get(DESCRIPTION_OPTION).await?,
-            &self.config.site_description,
-        );
-        let locale = text(options.get(LOCALE_OPTION).await?, &self.config.locale);
         let key = theme_settings_option(theme.name());
         deps.insert(option_key(&key));
         let stored = options
@@ -183,11 +186,30 @@ impl AppState {
             .and_then(|e| e.value.as_object().cloned())
             .unwrap_or_default();
         Ok(SiteInfo {
-            title,
+            title: texts.title,
             url: self.config.site_url.clone(),
-            description,
-            locale,
+            description: texts.description,
+            locale: texts.locale,
             settings: theme.manifest().settings_values(&stored),
+        })
+    }
+
+    /// The `site.title`, `site.description` and `site.locale` options (config
+    /// defaults when unset or not a string), recording `option:<key>` for each.
+    pub(crate) async fn site_texts(&self, deps: &mut DepKeys) -> Result<SiteTexts, CoreError> {
+        let options = self.store.read().options();
+        let mut text = async |key: &str, default: &str| -> Result<String, CoreError> {
+            deps.insert(option_key(key));
+            Ok(options
+                .get(key)
+                .await?
+                .and_then(|e| e.value.as_str().map(str::to_owned))
+                .unwrap_or_else(|| default.to_owned()))
+        };
+        Ok(SiteTexts {
+            title: text(TITLE_OPTION, &self.config.site_title).await?,
+            description: text(DESCRIPTION_OPTION, &self.config.site_description).await?,
+            locale: text(LOCALE_OPTION, &self.config.locale).await?,
         })
     }
 

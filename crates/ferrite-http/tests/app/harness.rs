@@ -50,6 +50,8 @@ pub struct Resp {
     pub status: StatusCode,
     pub headers: HeaderMap,
     pub body: String,
+    /// The body bytes (binary responses).
+    pub raw: Vec<u8>,
 }
 
 impl Resp {
@@ -122,6 +124,7 @@ impl App {
             store: site.store.clone(),
             reader: site.reader.clone(),
             plugins: site.host.clone(),
+            media: site.media.clone(),
             theme,
             cache: Arc::new(PageCache::new(64 * 1024 * 1024)),
             routes,
@@ -243,6 +246,7 @@ pub async fn send(router: &Router, req: Request<Body>) -> Resp {
         status,
         headers,
         body: String::from_utf8_lossy(&bytes).into_owned(),
+        raw: bytes.to_vec(),
     }
 }
 

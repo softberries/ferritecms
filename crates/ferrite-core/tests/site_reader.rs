@@ -1256,8 +1256,58 @@ pub async fn media_is_published_only(db: &TestDb) {
     assert!(r.media(ContentId::new()).await.unwrap().value.is_none());
 }
 
+/// `media_file(hash)`: the original or a variant of a public media item resolves; a
+/// draft's or an unknown hash does not; a hash shared with a draft still resolves
+/// through the published row.
+pub async fn media_file_is_published_only(db: &TestDb) {
+    let store = db.shared_store();
+    let r = reader(store.clone());
+    let author = user(store.as_ref(), "mfa", Role::Author).await;
+    let public = media(store.as_ref(), &author, ContentStatus::Published).await;
+    let draft = media(store.as_ref(), &author, ContentStatus::Draft).await;
+    let row = store.read().media().get(public).await.unwrap().unwrap();
+    let thumb = ArtifactHash::parse(row.variants["thumbnail"]["hash"].as_str().unwrap()).unwrap();
+
+    let f = r
+        .media_file(&row.artifact_hash)
+        .await
+        .unwrap()
+        .expect("original");
+    assert_eq!(
+        (f.item, f.mime.as_str(), f.name.as_str()),
+        (public, "image/png", "cat.png")
+    );
+    assert_eq!(f.variant, None);
+    let f = r.media_file(&thumb).await.unwrap().expect("variant");
+    assert_eq!((f.item, f.variant.as_deref()), (public, Some("thumbnail")));
+    assert_eq!(f.mime, "image/png");
+
+    let hidden = store.read().media().get(draft).await.unwrap().unwrap();
+    assert!(r.media_file(&hidden.artifact_hash).await.unwrap().is_none());
+    let unknown = ArtifactHash::parse(&"9".repeat(64)).unwrap();
+    assert!(r.media_file(&unknown).await.unwrap().is_none());
+
+    // A draft media item with the same original file: still served (by the public one).
+    let twin = insert(
+        store.as_ref(),
+        &author,
+        item("media", "twin", ContentStatus::Draft, Some(-HOUR)),
+    )
+    .await;
+    let mut shared = row.clone();
+    shared.item_id = twin;
+    store.read().media().insert(&shared).await.unwrap();
+    let f = r
+        .media_file(&row.artifact_hash)
+        .await
+        .unwrap()
+        .expect("shared");
+    assert_eq!(f.item, public);
+}
+
 backend_tests!(
     media_is_published_only,
+    media_file_is_published_only,
     no_leak_single,
     no_leak_by_id_and_latest,
     no_leak_listings,

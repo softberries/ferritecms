@@ -133,22 +133,6 @@ async fn shared_404_follows_its_deps(app: App) -> App {
     app
 }
 
-/// Task 8b routes answer 404 until they exist.
-async fn task_8b_routes_are_404(app: App) -> App {
-    for path in [
-        "/feed/",
-        "/robots.txt",
-        "/sitemap.xml",
-        "/_theme/abc/css/site.css",
-        &format!("/_media/{}/a.png", "a".repeat(64)),
-    ] {
-        let r = app.get(path).await;
-        assert_eq!(r.status, StatusCode::NOT_FOUND, "{path}");
-        assert_eq!(r.tpl(), "404", "{path}");
-    }
-    app
-}
-
 async fn broken_template_is_500_and_server_keeps_serving(app: App) -> App {
     app.post("Hello World", "hello-world", &[]).await;
     // single-post-broken.html includes a template that does not exist.
@@ -220,7 +204,6 @@ app_tests!(
     not_found_page,
     random_404s_render_once,
     shared_404_follows_its_deps,
-    task_8b_routes_are_404,
     broken_template_is_500_and_server_keeps_serving,
     builtin_error_pages,
 );

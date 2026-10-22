@@ -13,7 +13,7 @@ use ferrite_theme::resolve_template;
 use ferrite_theme::{RenderContext, RenderOutput, RequestInfo, TemplateKey, ThemeError};
 use tokio::runtime::Handle;
 
-use super::{AppState, bridge::BlockingBridge, error_page, response::HTML};
+use super::{AppState, bridge::BlockingBridge, error_page, feeds, response::HTML};
 use crate::{
     head::{HeadPage, HeadSite, page_head},
     plugins::{PluginRequest, RenderTrace, filter_item},
@@ -72,6 +72,12 @@ async fn render_route(
     path: &str,
     query: NormalQuery,
 ) -> Result<Option<CachedPage>, RenderError> {
+    match route {
+        Route::Feed(source) => return feeds::feed(state, source).await,
+        Route::Sitemap(part) => return feeds::sitemap(state, part).await,
+        Route::Robots => return feeds::robots(state).await.map(Some),
+        _ => {}
+    }
     let mut deps = DepKeys::default();
     let Some(shown) = load(state, route, path, &mut deps).await? else {
         return Ok(None);
@@ -174,6 +180,13 @@ pub(crate) async fn render_blocking(
     Ok(out)
 }
 
+/// A non-HTML response (feeds, sitemaps, robots.txt) as the cache stores it.
+pub(crate) fn cached_page(content_type: &str, body: String, deps: DepKeys) -> CachedPage {
+    let mut page = html_page(200, body, deps.into_vec(), None);
+    page.headers = vec![("content-type".to_owned(), content_type.to_owned())];
+    page
+}
+
 /// An HTML response as the cache stores it.
 pub(crate) fn html_page(
     status: u16,
@@ -268,10 +281,9 @@ async fn load(
         Route::Search { q, page } => {
             listing(take(r.search(q, *page).await?, deps), TemplateKey::Search)
         }
-        // todo(Task 8b): feeds, sitemaps, robots.txt, /_media and /_theme; 404 until then.
+        // Rendered by `feeds` (above), or answered before the cache by the handler.
         Route::Feed(_) | Route::Sitemap(_) | Route::Robots => None,
         Route::Media { .. } | Route::Theme { .. } => None,
-        // Answered before the cache by the handler.
         Route::Canonical(_) | Route::Health | Route::Ready | Route::NotFound => None,
     })
 }

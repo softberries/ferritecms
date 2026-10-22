@@ -135,6 +135,25 @@ impl MediaRepo for SqliteRepos {
             .collect::<Result<HashMap<_, _>, _>>()?;
         Ok(ids.iter().filter_map(|id| found.remove(id)).collect())
     }
+
+    async fn find_by_artifact(
+        &self,
+        hash: &ArtifactHash,
+        limit: u32,
+    ) -> Result<Vec<Media>, StoreError> {
+        let limit = check_limit(limit)?;
+        let rows = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {MEDIA_COLUMNS} FROM media WHERE artifact_hash = ?1 OR (\
+             json_type(media.variants) = 'object' AND EXISTS (SELECT 1 FROM \
+             json_each(media.variants) AS v WHERE v.type = 'object' AND \
+             json_type(v.value, '$.hash') = 'text' AND json_extract(v.value, '$.hash') = ?1)) \
+             ORDER BY item_id LIMIT ?2"
+        )))
+        .bind(hash.as_str())
+        .bind(i64::from(limit))
+        .fetch_all(e))?;
+        rows.iter().map(codec::media).collect()
+    }
 }
 
 #[async_trait]

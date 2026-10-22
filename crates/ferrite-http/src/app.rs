@@ -56,22 +56,29 @@
 //! its status replaced by `406 Not Acceptable` (body and headers kept, `Vary` added),
 //! per RFC 9110 §12.5.3. We keep that behaviour; no override.
 //!
-//! **Not yet (Task 8b):** `/_media`, `/_theme`, feeds, sitemaps and `robots.txt` answer
-//! with the 404 page.
+//! Assets: `/_media/{hash}/{name}` (see [`media`]) and `/_theme/{hash}/{path}` (see
+//! [`theme_asset`]) are answered before redirects and the page cache, with a plain 404
+//! when unknown; media and binary theme assets are not compressed. Feeds, sitemaps and
+//! `robots.txt` (see [`feeds`]) go through the page cache like pages.
 
 mod bridge;
 mod error_page;
+pub mod feeds;
 mod handler;
+pub mod media;
 mod pipeline;
 mod response;
 mod state;
+pub mod theme_asset;
 
 use std::sync::Arc;
 
 use axum::{Router, http::HeaderValue};
 use tower_http::{
-    catch_panic::CatchPanicLayer, compression::CompressionLayer,
-    set_header::SetResponseHeaderLayer, trace::TraceLayer,
+    catch_panic::CatchPanicLayer,
+    compression::{CompressionLayer, DefaultPredicate, Predicate},
+    set_header::SetResponseHeaderLayer,
+    trace::TraceLayer,
 };
 
 pub use state::{
@@ -85,7 +92,12 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .fallback(handler::handle)
         .with_state(state)
         .layer(CatchPanicLayer::custom(response::panic_response))
-        .layer(CompressionLayer::new().br(true).gzip(true));
+        .layer(
+            CompressionLayer::new()
+                .br(true)
+                .gzip(true)
+                .compress_when(DefaultPredicate::new().and(response::compressible)),
+        );
     for (name, value) in response::SECURITY_HEADERS {
         app = app.layer(SetResponseHeaderLayer::if_not_present(
             name,

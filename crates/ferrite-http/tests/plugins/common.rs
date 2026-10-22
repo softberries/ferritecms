@@ -114,7 +114,7 @@ pub struct Site {
     pub db: TestDb,
     _media_backing: MediaBacking,
     pub store: Arc<dyn Store>,
-    pub media: MediaStore,
+    pub media: Arc<MediaStore>,
     pub reader: Arc<SiteReader>,
     pub services: Arc<StoreHostServices>,
     pub host: Arc<PluginHost>,
@@ -123,7 +123,7 @@ pub struct Site {
 impl Site {
     pub async fn new(db: TestDb, backing: MediaBacking) -> Self {
         let store = db.shared_store();
-        let media = MediaStore::open(backing.config.clone()).expect("open media");
+        let media = Arc::new(MediaStore::open(backing.config.clone()).expect("open media"));
         let reader = Arc::new(SiteReader::new(
             store.clone(),
             Arc::new(PermalinkRules::default()),

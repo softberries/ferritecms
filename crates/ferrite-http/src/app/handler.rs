@@ -13,8 +13,9 @@ use ferrite_domain::Redirect;
 use super::{
     AppState,
     error_page::{self, Missing},
-    pipeline,
+    media, pipeline,
     response::{method_not_allowed, page_response, redirect, text},
+    theme_asset,
 };
 use crate::route::{NormalQuery, Route, resolve};
 
@@ -30,13 +31,19 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
     let path = req.uri().path().to_owned();
     let raw_query = req.uri().query().map(str::to_owned);
     let route = resolve(&path, raw_query.as_deref(), &state.routes.load());
-    match route {
+    match &route {
         Route::Health => return text(StatusCode::OK, "ok\n"),
         Route::Ready => return ready(&state).await,
+        // Exact asset URLs: never redirected, not in the page cache.
+        Route::Media { hash, name } => {
+            return media::serve(&state, req.method(), req.headers(), hash, name).await;
+        }
+        Route::Theme { hash, path } => {
+            return theme_asset::serve(&state, req.headers(), hash, path);
+        }
         _ => {}
     }
-    // `/_media` and `/_theme` URLs are exact and never redirected.
-    if !matches!(route, Route::Media { .. } | Route::Theme { .. }) {
+    {
         match state.redirects.resolve(&path).await {
             Ok(Some(r)) => return follow(&state, r).await,
             Ok(None) => {}

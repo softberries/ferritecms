@@ -10,6 +10,21 @@ use axum::{
 use ferrite_cache::{CachedPage, if_none_match_matches};
 use tracing::Span;
 
+/// Response extension: the compression layer leaves this response alone (media files,
+/// binary theme assets, ranged responses).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NoCompress;
+
+/// The compression predicate's extra rule: no [`NoCompress`] marker.
+pub(crate) fn compressible(
+    _: StatusCode,
+    _: axum::http::Version,
+    _: &axum::http::HeaderMap,
+    extensions: &axum::http::Extensions,
+) -> bool {
+    extensions.get::<NoCompress>().is_none()
+}
+
 /// `Content-Type` of every HTML page.
 pub(crate) const HTML: &str = "text/html; charset=utf-8";
 const TEXT: &str = "text/plain; charset=utf-8";

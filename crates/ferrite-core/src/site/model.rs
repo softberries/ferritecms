@@ -145,6 +145,21 @@ pub struct MediaPublic {
     pub variants: Vec<MediaVariant>,
 }
 
+/// A stored file that `/_media/<hash>/<name>` may serve: the original or a variant of
+/// a public media item ([`SiteReader::media_file`](super::SiteReader::media_file)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaFile {
+    /// The media item.
+    pub item: ContentId,
+    /// The variant's name, `None` for the original.
+    pub variant: Option<String>,
+    /// MIME type sniffed at upload (the variant's own when it records one).
+    pub mime: String,
+    /// The item's `original_name`: the file name in every URL of the item, variants
+    /// included.
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MediaVariant {
     pub name: String,

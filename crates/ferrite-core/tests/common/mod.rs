@@ -360,6 +360,13 @@ impl MediaRepo for Counted {
     async fn get_many(&self, ids: &[ContentId]) -> Result<Vec<Media>, StoreError> {
         self.0.read().media().get_many(ids).await
     }
+    async fn find_by_artifact(
+        &self,
+        hash: &ferrite_domain::ArtifactHash,
+        limit: u32,
+    ) -> Result<Vec<Media>, StoreError> {
+        self.0.read().media().find_by_artifact(hash, limit).await
+    }
 }
 
 #[async_trait]

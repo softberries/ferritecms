@@ -8,7 +8,9 @@
 mod common;
 mod harness;
 
+mod assets;
 mod content;
 mod errors;
+mod feeds;
 mod freshness;
 mod protocol;

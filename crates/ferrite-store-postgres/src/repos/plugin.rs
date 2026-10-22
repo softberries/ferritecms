@@ -141,6 +141,26 @@ impl MediaRepo for PgRepos {
             .collect::<Result<HashMap<_, _>, _>>()?;
         Ok(ids.iter().filter_map(|id| found.remove(id)).collect())
     }
+
+    async fn find_by_artifact(
+        &self,
+        hash: &ArtifactHash,
+        limit: u32,
+    ) -> Result<Vec<Media>, StoreError> {
+        let limit = check_limit(limit)?;
+        let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {MEDIA_COLUMNS} FROM media WHERE artifact_hash = $1 OR EXISTS (\
+             SELECT 1 FROM jsonb_each(CASE WHEN jsonb_typeof(variants) = 'object' \
+             THEN variants ELSE '{{}}'::jsonb END) AS v \
+             WHERE jsonb_typeof(v.value) = 'object' \
+             AND jsonb_typeof(v.value -> 'hash') = 'string' AND v.value ->> 'hash' = $1) \
+             ORDER BY item_id LIMIT $2"
+        )))
+        .bind(hash.as_str())
+        .bind(i64::from(limit))
+        .fetch_all(e))?;
+        rows.iter().map(codec::media).collect()
+    }
 }
 
 #[async_trait]
