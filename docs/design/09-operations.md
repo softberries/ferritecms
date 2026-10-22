@@ -150,8 +150,15 @@ also installs the `ring` rustls default crypto provider at start.
   `ferrite migrate` for those.
 - Creates the data folder, `media/` (local media only) and `backups/`, validates the written
   config, then creates the database and applies all migrations. If any step fails, it removes
-  what this run created (the config file, new folders, new database and lock files) so a retry
-  starts clean.
+  what this run created (the config file, new folders, and with SQLite the new database and
+  lock files) so a retry starts clean.
+- **Postgres is not cleaned up.** Each migration commits on its own, so an init that fails
+  partway through migrating leaves the schema (created by `--schema` if it was missing) with
+  the migrations applied so far recorded in `_sqlx_migrations`. A retry then refuses it as an
+  existing database. To recover, drop the schema (`DROP SCHEMA <name> CASCADE`) and run
+  `ferrite init` again; without `--schema` the tables are in the connection's current schema
+  (normally `public`), so drop that database instead or remove its ferrite tables and
+  `_sqlx_migrations` by hand.
 - The validation step applies `FERRITE_*` environment overrides, so it checks the effective config, which can differ from the file that was written.
 - It does **not** create an admin user yet (`ferrite user create` is a later milestone).
 
