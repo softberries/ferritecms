@@ -85,6 +85,15 @@ pub fn inspect(
     wasm: &[u8],
     manifest: &Manifest,
 ) -> Result<ComponentReport, InspectError> {
+    inspect_component(engine, wasm, manifest).map(|(_, report)| report)
+}
+
+/// [`inspect`], also returning the compiled component so install compiles only once.
+pub(crate) fn inspect_component(
+    engine: &Engine,
+    wasm: &[u8],
+    manifest: &Manifest,
+) -> Result<(Component, ComponentReport), InspectError> {
     if wasm.starts_with(b"\0asm\x01\0\0\0") {
         return Err(InspectError::NotAComponent);
     }
@@ -103,12 +112,13 @@ pub fn inspect(
     }
     let world_version = select_world(&exports)?;
 
-    Ok(ComponentReport {
+    let report = ComponentReport {
         imports,
         exports,
         ferrite_imports,
         world_version,
-    })
+    };
+    Ok((component, report))
 }
 
 /// Decide one import: `Ok(Some(iface))` for a granted ferrite interface, `Ok(None)` for

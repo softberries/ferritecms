@@ -1,0 +1,186 @@
+//! One bounded plugin call: fresh store, limits, instantiate, invoke, classify.
+
+use std::fmt;
+use std::future::Future;
+use std::time::Duration;
+
+use wasmtime::{Store, Trap};
+
+use crate::bindings::v0_1::Plugin;
+use crate::bindings::v0_1::ferrite::plugin::types::PluginError as WitPluginError;
+use crate::registry::LoadedPlugin;
+use crate::state::HostState;
+use crate::types::{ActionEvent, FilterValue, RequestInfo, RouteRequest, RouteResponse};
+
+/// Fuel consumed between cooperative yields to the async runtime. Design 05 §6 says
+/// 10_000; measured, that makes a CPU-bound call ~3.5x slower (50 M fuel: ~110 ms vs
+/// ~38 ms at 100_000, debug build), so the spike uses 100_000 (≈ tens of µs of guest work).
+const FUEL_YIELD_INTERVAL: u64 = 100_000;
+
+/// Why a plugin call produced no usable result.
+#[derive(Debug)]
+pub(crate) enum CallFailure {
+    /// Guest trapped: panic/unreachable, out of fuel, epoch deadline, memory fault.
+    Trap(Trap),
+    /// Hard deadline (`deadline × 1.5`) elapsed, e.g. inside a slow host import.
+    Timeout,
+    /// The instance could not be created.
+    Instantiate(String),
+    /// The guest returned `plugin-error`.
+    GuestError(String),
+    /// The call failed without a trap (host-side error during the call).
+    Invalid(String),
+}
+
+impl fmt::Display for CallFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Trap(t) => write!(f, "trap: {t}"),
+            Self::Timeout => f.write_str("hard deadline exceeded"),
+            Self::Instantiate(e) => write!(f, "instantiation failed: {e}"),
+            Self::GuestError(e) => write!(f, "plugin error: {e}"),
+            Self::Invalid(e) => write!(f, "call failed: {e}"),
+        }
+    }
+}
+
+fn guest_error(e: WitPluginError) -> CallFailure {
+    CallFailure::GuestError(match e {
+        WitPluginError::InvalidInput(m) => format!("invalid input: {m}"),
+        WitPluginError::Unavailable(m) => format!("unavailable: {m}"),
+        WitPluginError::Other(m) => m,
+    })
+}
+
+fn call_error(e: wasmtime::Error) -> CallFailure {
+    match e.downcast_ref::<Trap>() {
+        Some(t) => CallFailure::Trap(*t),
+        None => CallFailure::Invalid(format!("{e:#}")),
+    }
+}
+
+fn instantiate_error(e: wasmtime::Error) -> CallFailure {
+    match e.downcast_ref::<Trap>() {
+        Some(t) => CallFailure::Trap(*t),
+        None => CallFailure::Instantiate(format!("{e:#}")),
+    }
+}
+
+/// `ceil(deadline / tick)`, at least 1.
+fn deadline_ticks(deadline: Duration, tick: Duration) -> u64 {
+    let ticks = deadline.as_nanos().div_ceil(tick.as_nanos().max(1)).max(1);
+    u64::try_from(ticks).unwrap_or(u64::MAX)
+}
+
+/// Fresh store with memory/instance limits, fuel and an epoch deadline; then instantiate.
+async fn instantiate(
+    loaded: &LoadedPlugin,
+    deadline: Duration,
+) -> Result<(Store<HostState>, Plugin), CallFailure> {
+    let state = HostState::new(
+        loaded.name.clone(),
+        loaded.grants.clone(),
+        loaded.services.clone(),
+        loaded.memory_bytes,
+    );
+    let mut store = Store::new(loaded.pre.engine(), state);
+    store.limiter(|s| &mut s.limits);
+    store.set_fuel(loaded.fuel).map_err(instantiate_error)?;
+    store
+        .fuel_async_yield_interval(Some(FUEL_YIELD_INTERVAL))
+        .map_err(instantiate_error)?;
+    store.epoch_deadline_trap();
+    store.set_epoch_deadline(deadline_ticks(deadline, loaded.epoch_tick));
+    let plugin = loaded
+        .pre
+        .instantiate_async(&mut store)
+        .await
+        .map_err(instantiate_error)?;
+    Ok((store, plugin))
+}
+
+/// Run `call` under the hard deadline (`deadline × 1.5`), the backstop for time spent
+/// in host imports, which epochs do not interrupt.
+async fn bounded<T>(
+    deadline: Duration,
+    call: impl Future<Output = Result<T, CallFailure>>,
+) -> Result<T, CallFailure> {
+    let hard = deadline.saturating_mul(3) / 2;
+    tokio::time::timeout(hard, call)
+        .await
+        .unwrap_or(Err(CallFailure::Timeout))
+}
+
+pub(crate) async fn call_filter(
+    loaded: &LoadedPlugin,
+    hook: &str,
+    value: &FilterValue,
+    req: &RequestInfo,
+    deadline: Duration,
+) -> Result<FilterValue, CallFailure> {
+    let value = value.clone().into();
+    let req = req.clone().into();
+    bounded(deadline, async {
+        let (mut store, plugin) = instantiate(loaded, deadline).await?;
+        plugin
+            .ferrite_plugin_guest()
+            .call_apply_filter(&mut store, hook, &value, &req)
+            .await
+            .map_err(call_error)?
+            .map(Into::into)
+            .map_err(guest_error)
+    })
+    .await
+}
+
+pub(crate) async fn call_action(
+    loaded: &LoadedPlugin,
+    hook: &str,
+    event: ActionEvent,
+    deadline: Duration,
+) -> Result<(), CallFailure> {
+    let event = event.into();
+    bounded(deadline, async {
+        let (mut store, plugin) = instantiate(loaded, deadline).await?;
+        plugin
+            .ferrite_plugin_guest()
+            .call_on_action(&mut store, hook, &event)
+            .await
+            .map_err(call_error)?
+            .map_err(guest_error)
+    })
+    .await
+}
+
+pub(crate) async fn call_route(
+    loaded: &LoadedPlugin,
+    req: RouteRequest,
+    deadline: Duration,
+) -> Result<RouteResponse, CallFailure> {
+    let req = req.into();
+    bounded(deadline, async {
+        let (mut store, plugin) = instantiate(loaded, deadline).await?;
+        plugin
+            .ferrite_plugin_guest()
+            .call_handle_request(&mut store, &req)
+            .await
+            .map_err(call_error)?
+            .map(Into::into)
+            .map_err(guest_error)
+    })
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ticks_round_up() {
+        let ms = Duration::from_millis;
+        assert_eq!(deadline_ticks(ms(50), ms(5)), 10);
+        assert_eq!(deadline_ticks(ms(51), ms(5)), 11);
+        assert_eq!(deadline_ticks(ms(1), ms(5)), 1);
+        assert_eq!(deadline_ticks(Duration::ZERO, ms(5)), 1);
+    }
+}

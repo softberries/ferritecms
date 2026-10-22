@@ -36,6 +36,35 @@ pub enum PluginError {
     /// The wasmtime engine could not be configured.
     #[error("engine configuration failed: {0}")]
     Engine(String),
+    /// The component failed install-time inspection.
+    #[error("component rejected: {0}")]
+    Inspect(#[from] InspectError),
+    /// `[limits]` asks for more than the host default (admin approval is post-M0).
+    #[error("plugin requests {limit} = {requested}, above the host default {default}")]
+    LimitAboveDefault {
+        limit: &'static str,
+        requested: u64,
+        default: u64,
+    },
+    /// The component cannot be linked against its granted interfaces.
+    #[error("linking plugin `{plugin}` failed: {reason}")]
+    Link { plugin: String, reason: String },
+    /// No installed (enabled) plugin with this name.
+    #[error("unknown plugin `{0}`")]
+    UnknownPlugin(String),
+    /// The plugin does not subscribe to this action hook, or it is not an action.
+    #[error("plugin `{plugin}` does not handle action `{hook}`")]
+    NotSubscribed { plugin: String, hook: String },
+    /// No `[routes]` entry of the plugin matches the request.
+    #[error("plugin `{plugin}` has no route {method} {path}")]
+    RouteNotFound {
+        plugin: String,
+        method: String,
+        path: String,
+    },
+    /// The plugin call was stopped or failed (trap, timeout, guest error, …).
+    #[error("plugin `{plugin}` call failed: {reason}")]
+    CallFailed { plugin: String, reason: String },
 }
 
 /// Why a component was rejected at install time.

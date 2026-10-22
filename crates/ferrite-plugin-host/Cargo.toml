@@ -8,7 +8,12 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+arc-swap.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 wasmtime.workspace = true
+wasmtime-wasi.workspace = true
 serde_json.workspace = true
 semver.workspace = true
 thiserror.workspace = true
