@@ -122,7 +122,13 @@ async fn failures_outside_the_window_do_not_disable() -> TestResult {
 
 #[tokio::test]
 async fn oom_classified_as_memory() -> TestResult {
-    let host = host_with(HostConfig::default(), &["oom"])?;
+    // Filling 32 MiB can take longer than the 50 ms render deadline while the other
+    // hostile tests load the machine; this test checks classification, not timing.
+    let cfg = HostConfig {
+        render_deadline: Duration::from_secs(5),
+        ..HostConfig::default()
+    };
+    let host = host_with(cfg, &["oom"])?;
     let out = host.apply_filter("render.head", head(), &req()).await;
     assert_eq!(out, head());
     assert_eq!(last_kind(&host), Some(FailureKind::Memory));
