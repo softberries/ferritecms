@@ -19,6 +19,7 @@ pub struct ComponentReport {
 }
 
 const GUEST_PREFIX: &str = "ferrite:plugin/guest@";
+const SUPPORTED_WORLD: &str = "0.1.0";
 const FERRITE_PREFIX: &str = "ferrite:plugin/";
 const TYPES_IMPORT: &str = "ferrite:plugin/types@0.1.0";
 
@@ -55,12 +56,13 @@ fn capability_name(iface: Iface) -> &'static str {
     }
 }
 
-fn strip_version(name: &str) -> &str {
-    name.split_once('@').map_or(name, |(n, _)| n)
-}
-
 fn wasi_allowed(name: &str) -> bool {
-    let bare = strip_version(name);
+    let Some((bare, version)) = name.split_once('@') else {
+        return false;
+    };
+    if !version.starts_with("0.2.") {
+        return false;
+    }
     ALLOWED_WASI.contains(&bare) || ALLOWED_WASI_PACKAGES.iter().any(|p| bare.starts_with(p))
 }
 
@@ -95,34 +97,11 @@ pub fn inspect(
     let granted = granted_interfaces(&manifest.capabilities);
     let mut ferrite_imports = BTreeSet::new();
     for import in &imports {
-        if import.starts_with(FERRITE_PREFIX) {
-            if import == TYPES_IMPORT {
-                continue;
-            }
-            let iface = all_ifaces()
-                .into_iter()
-                .find(|i| i.wit_name() == import)
-                .ok_or_else(|| InspectError::ForbiddenImport(import.clone()))?;
-            if !granted.contains(&iface) {
-                return Err(InspectError::UndeclaredImport {
-                    import: import.clone(),
-                    capability: capability_name(iface),
-                });
-            }
+        if let Some(iface) = classify_import(import, &granted)? {
             ferrite_imports.insert(iface);
-        } else if !wasi_allowed(import) {
-            return Err(InspectError::ForbiddenImport(import.clone()));
         }
     }
-
-    let guest = exports
-        .iter()
-        .find_map(|e| e.strip_prefix(GUEST_PREFIX))
-        .ok_or(InspectError::MissingGuestExport)?;
-    if guest != "0.1.0" {
-        return Err(InspectError::UnsupportedWorld(guest.to_string()));
-    }
-    let world_version = guest.to_string();
+    let world_version = select_world(&exports)?;
 
     Ok(ComponentReport {
         imports,
@@ -130,4 +109,138 @@ pub fn inspect(
         ferrite_imports,
         world_version,
     })
+}
+
+/// Decide one import: `Ok(Some(iface))` for a granted ferrite interface, `Ok(None)` for
+/// allowed WASI or the shared types interface, `Err` otherwise.
+fn classify_import(import: &str, granted: &BTreeSet<Iface>) -> Result<Option<Iface>, InspectError> {
+    if import == TYPES_IMPORT {
+        return Ok(None);
+    }
+    if import.starts_with(FERRITE_PREFIX) {
+        let iface = all_ifaces()
+            .into_iter()
+            .find(|i| i.wit_name() == import)
+            .ok_or_else(|| InspectError::ForbiddenImport(import.to_string()))?;
+        if !granted.contains(&iface) {
+            return Err(InspectError::UndeclaredImport {
+                import: import.to_string(),
+                capability: capability_name(iface),
+            });
+        }
+        return Ok(Some(iface));
+    }
+    if wasi_allowed(import) {
+        Ok(None)
+    } else {
+        Err(InspectError::ForbiddenImport(import.to_string()))
+    }
+}
+
+/// Pick the guest world version from the export names, preferring the supported one.
+fn select_world(exports: &[String]) -> Result<String, InspectError> {
+    let mut other = None;
+    for version in exports.iter().filter_map(|e| e.strip_prefix(GUEST_PREFIX)) {
+        if version == SUPPORTED_WORLD {
+            return Ok(version.to_string());
+        }
+        other.get_or_insert(version);
+    }
+    match other {
+        Some(v) => Err(InspectError::UnsupportedWorld(v.to_string())),
+        None => Err(InspectError::MissingGuestExport),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn granted() -> BTreeSet<Iface> {
+        BTreeSet::from([Iface::Log, Iface::Settings])
+    }
+
+    #[test]
+    fn rejects_adversarial_names() {
+        for name in [
+            "wasi:cli/stdout-evil@0.2.0",
+            "wasi:clocksX/foo@0.2.0",
+            "ferrite:plugin/kv@0.1.0x",
+            "ferrite:plugin/log",
+            "ferrite:plugin/log@0.2.0",
+            "ferrite:pluginx/log@0.1.0",
+            "wasi:sockets/tcp@0.2.0",
+            "wasi:http/types@0.2.0",
+            "wasi:cli/run@0.2.0",
+            "wasi:cli/stdout",
+            "wasi:cli/stdout@0.3.0",
+            "wasi:io/streams",
+            "wasi:io/streams@0.3.0",
+        ] {
+            assert_eq!(
+                classify_import(name, &granted()),
+                Err(InspectError::ForbiddenImport(name.to_string())),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_allowed_names() {
+        for name in [
+            "wasi:cli/stdout@0.2.9",
+            "wasi:io/streams@0.2.0",
+            "ferrite:plugin/types@0.1.0",
+        ] {
+            assert_eq!(classify_import(name, &granted()), Ok(None), "{name}");
+        }
+        assert_eq!(
+            classify_import("ferrite:plugin/log@0.1.0", &granted()),
+            Ok(Some(Iface::Log))
+        );
+        let with_kv = BTreeSet::from([Iface::Log, Iface::Kv]);
+        assert_eq!(
+            classify_import("ferrite:plugin/kv@0.1.0", &with_kv),
+            Ok(Some(Iface::Kv))
+        );
+    }
+
+    #[test]
+    fn ungranted_kv_is_undeclared() {
+        assert_eq!(
+            classify_import("ferrite:plugin/kv@0.1.0", &granted()),
+            Err(InspectError::UndeclaredImport {
+                import: "ferrite:plugin/kv@0.1.0".into(),
+                capability: "kv"
+            })
+        );
+    }
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn world_selection() {
+        assert_eq!(
+            select_world(&names(&["ferrite:plugin/guest@0.1.0"])),
+            Ok("0.1.0".into())
+        );
+        assert_eq!(
+            select_world(&names(&[
+                "ferrite:plugin/guest@0.2.0",
+                "ferrite:plugin/guest@0.1.0"
+            ])),
+            Ok("0.1.0".into())
+        );
+        assert_eq!(
+            select_world(&names(&["ferrite:plugin/guest@0.2.0"])),
+            Err(InspectError::UnsupportedWorld("0.2.0".into()))
+        );
+        assert_eq!(
+            select_world(&names(&["other:thing/guest@0.1.0"])),
+            Err(InspectError::MissingGuestExport)
+        );
+        assert_eq!(select_world(&[]), Err(InspectError::MissingGuestExport));
+    }
 }
