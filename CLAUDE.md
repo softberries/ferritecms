@@ -14,8 +14,20 @@ Read before doing anything substantial:
 
 ## Current status
 
-Design written (`docs/design/`). **Start with M0 (plugin host spike)** in `docs/ROADMAP.md` —
-it is the riskiest part and must be proven before building CMS features around it.
+M0 (plugin host spike), M1a (storage), M1b (media) and M1c-1 (config, CLI `init`/`migrate`,
+core services) are done; next is M1c-2 (`serve`, themes, cache, plugin wiring). Work top-down
+in `docs/ROADMAP.md`.
+
+Crate map (`crates/`): `ferrite` (bin: CLI) -> `ferrite-config`, `ferrite-core` (services) ->
+`ferrite-store` (traits) <- `ferrite-store-sqlite` / `ferrite-store-postgres` (+
+`ferrite-store-tests` contract suite), `ferrite-domain` (types), `ferrite-media`,
+`ferrite-plugin-host`, `ferrite-sdk`. Not built yet: cluster, cache, theme, http, import-wp
+(`docs/design/01-architecture.md` §1).
+
+Run the CLI locally (no `serve` yet):
+`cargo run -p ferrite -- init --data /tmp/site --url http://localhost:8080` then
+`cargo run -p ferrite -- migrate status --data /tmp/site` (exit 0 ok, 2 pending, 3 incompatible,
+1 error). `FERRITE_LOG=debug` sets log verbosity; `FERRITE_<SECTION>__<KEY>` overrides config.
 
 Two deployment profiles must both work: **solo** (SQLite + local media, one node) and
 **cluster** (Postgres + S3-compatible media, N nodes). See `docs/design/00-overview.md`.

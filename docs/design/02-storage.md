@@ -92,6 +92,61 @@ Repositories still to come, with the milestone that adds them: `sessions`, `toke
 The `comments`, `user_meta` and `plugin_failures` tables already exist in `0001_init`
 but have no repository yet.
 
+**Query and batch API (M1c-1)**, on both backends and contract-tested
+(`ferrite-store-tests`). Limits are constants exported by `ferrite-store`
+(`src/paging.rs`):
+
+- **`ContentQuery` filters** (`ferrite-domain/src/content.rs`): `kind`, `statuses` (empty:
+  any), `parent` (`Any` | `Root` | `Of(id)`), `term`, `author`, `ids`, `exclude`,
+  `published_after` (`>=`) and `published_before` (`<`), where items without a publish
+  time never match either bound, plus `order`, `limit` and `cursor`. `ids` and `exclude` hold
+  at most `MAX_ID_FILTER` (200) entries (`Invalid` beyond).
+- **R3: an empty `ids` (or `exclude`) means no filter, not "match nothing".** A caller that
+  computed an empty id set must short-circuit instead of calling `list`/`count`, or it lists
+  everything. No core service builds an `ids` query yet; the rule is stated in the
+  `ContentRepo::list` and `ContentQuery::ids` doc comments for the callers that will (M1c-2).
+- **`ContentRepo::count(&query)`** uses the same WHERE clause as `list` and ignores `limit`,
+  `cursor` and `order`.
+- **`get_many(ids)`** on content, users and media: at most 200 ids, one query, result in
+  the order of `ids`, missing ids skipped, a repeated id returned once at its first
+  position, more than 200 is `Invalid`. `MetaRepo::get_many(ids, keys)` takes at most 200
+  ids and `MAX_META_KEYS` (50) keys and returns `(id, key, value)` ordered by the id's
+  position, then key in binary order. `TermRepo::for_items(items)` returns a map in which
+  **items without terms are absent**.
+- **`ContentRepo::slugs_with_prefix(kind, parent, prefix)`** returns slugs equal to
+  `prefix` or starting with `prefix-`, case-sensitive, in binary order, at most
+  `MAX_SLUG_PREFIX_RESULTS` (1000). It uses the binary range `slug >= 'prefix-' AND slug <
+  'prefix.'` (`.` is the byte after `-`) rather than `LIKE`, because SQLite's `LIKE` folds
+  ASCII case. It also returns slugs such as `hello-world` for `hello`, so numeric-suffix
+  allocation (`hello-2`) must filter the result (`ferrite-core/src/slug.rs`,
+  `next_free`, which also keeps the result within 200 characters, ruling R7).
+- **`SearchRepo::search(&SearchQuery)`** returns a `Page<ContentId>` filtered by `kinds`
+  (at most `MAX_SEARCH_KINDS` = 50; empty: all) and `statuses` (empty: all; duplicates
+  ignored); `limit` is 1 through 200. Best first, ties by item id descending. The old
+  unfiltered `SearchRepo::query` is gone.
+- **Tagged keyset cursors.** Every cursor is `ferrite_domain::Cursor::encode(tag, key, id)`
+  and decoding checks the tag, so a cursor from another listing or another sort order is
+  `Invalid` instead of being misread. Tags: `c:published`, `c:updated`, `c:menu`,
+  `c:title` (content, one per `ContentOrder`), `s:rank` (search; the float rank travels
+  as its IEEE-754 bits), `r:source` (redirects), `u:login` (users).
+- **`PluginKvRepo::set_with_quota(plugin, key, value, max_bytes, max_keys) -> bool`**
+  writes only if, after the write, the plugin's value bytes are at most `max_bytes` and
+  its key count at most `max_keys` (an overwrite counts the new size only); otherwise
+  nothing is written and it returns `false`. It is one statement on SQLite and takes a
+  per-plugin advisory lock on Postgres (held until the `Tx` ends, so keep such `Tx`
+  short and touch several plugins in a consistent order to avoid a deadlock that would
+  poison the `Tx`). Plain `set` bypasses quotas; mixing the two for one plugin voids the
+  guarantee.
+- **`RedirectRepo::list_by_target(target)`**: redirects whose `target` equals `target`
+  exactly (case-sensitive), ordered by `source_path` in binary order, at most
+  `MAX_REDIRECTS_BY_TARGET` (1000). Core uses it to re-target redirects when a
+  permalink changes (ruling R1).
+- **`MigrationStatus.pending: Vec<PendingMigration>`** (was a list of versions):
+  `PendingMigration { version, description, directives }` with the parsed header
+  `Directives { phase, min_binary, lossy_down }`, oldest first. `ferrite migrate status`
+  and the startup check (`ferrite/src/open.rs`, `decide`) read the phase from it to refuse
+  contract migrations on Postgres unless `database.allow_contract` is set.
+
 **Transaction rules** (both backends, contract-tested):
 
 - **Poisoning (R18).** Any database error inside a `Tx`, including `UniqueViolation`
@@ -101,18 +156,39 @@ but have no repository yet.
   so this is the rule both engines can keep. Validation errors (`Invalid`, raised before
   any SQL is sent) do not poison. To try something and fall back, run it in
   `tx.begin_nested()`: a nested transaction is a savepoint, and its failure poisons only
-  the nested level. While a nested transaction is open the outer `Tx` refuses calls
-  (`Invalid`); a dropped nested transaction is rolled back before the next statement.
-- **No self-deadlock (I2).** Never write through `Store::read()` or call
+  the nested level.
+- **Nested transactions and the outer handle (`NestedOpen`).** While a nested `Tx` is
+  open, every call through the outer `Tx` returns `StoreError::NestedOpen` (it does not
+  poison either level). A nested `Tx` that is dropped without `commit`/`rollback` is rolled
+  back to its savepoint before the next statement. **Ending the outer `Tx` (drop, `commit`
+  or `rollback`) while a nested handle is still alive ends the whole transaction**: the
+  outer `commit` rolls back and returns `Err(NestedOpen)`, and the surviving nested handle
+  then fails every call, and its own `commit`, with `Aborted`. The connection is released
+  no later than when the last handle drops (`exec.rs` in each store crate; the SQLite
+  unit test `lazy_release_after_outer_drop` covers an outer handle dropped while a nested
+  statement is still running).
+- **No self-deadlock (I2, ruling P1).** Never write through `Store::read()` or call
   `Store::begin()` while the same task holds a `Tx`; pass the `Tx` on as `&dyn Repos`.
   On SQLite both wait for the single writer connection the `Tx` holds; the writer pool
   gives up after 5 s with `StoreError::Busy` (any pool acquire timeout is `Busy` on both
-  backends). Fail-fast detection is deferred to M1c.
-- **Isolation differs (known, ruling pending, M1c).** SQLite serializes all writers
-  (one writer connection), so a `Tx` never sees another writer's concurrent changes.
-  Postgres runs `READ COMMITTED`: two concurrent `Tx` can interleave, and read-then-write
-  logic must rely on constraints, optimistic `version` checks or row locks. Core
-  services must not depend on SQLite's stronger behaviour until M1c settles the policy.
+  backends). **Fail-fast detection is deliberately not implemented**: the 5 s `Busy` plus
+  this rule stands. Core services follow it: they never call plugins or other slow I/O
+  while holding a `Tx`, and pass `&dyn Repos` down instead of calling `read()`/`begin()`
+  inside one.
+- **Isolation policy (ruling P2).** Isolation stays at each backend's default: SQLite
+  serializes all writers (one writer connection, so a `Tx` never sees another writer's
+  concurrent changes); Postgres runs `READ COMMITTED`, so two concurrent `Tx` can
+  interleave. Code must therefore not rely on SQLite's stronger behaviour. Correctness
+  under concurrency comes from three things only:
+  1. optimistic `version` on content (`ContentRepo::update` returns `Conflict`);
+  2. unique constraints plus retry (slug allocation retries on `content_items_slug_uq`,
+     `ferrite-core/src/content.rs`);
+  3. single-statement atomic store operations for read-modify-write, today
+     `PluginKvRepo::set_with_quota`.
+
+  Checks that read and then write in separate statements (the parent-cycle walk for
+  content and terms, the redirect-loop check) are not serialized on Postgres; the core docs
+  say so (`taxonomy.rs`, `redirects.rs`).
 
 Implementation notes (M1a, `ferrite-store-sqlite` and `ferrite-store-postgres`):
 
@@ -373,6 +449,12 @@ ferrite migrate up [--to N]       # apply pending (snapshot first on SQLite)
 ferrite migrate down --to N [--allow-lossy] [--yes]
 ferrite migrate verify            # checksums of applied migrations match embedded ones
 ```
+
+Implemented in M1c-1 (`crates/ferrite/src/migrate.rs`; flags, exit codes and the "never
+creates a database" rules are in [09 §8](09-operations.md#8-cli-summary)). The startup
+check described above exists as `ferrite::startup_check` / `decide`
+(`crates/ferrite/src/open.rs`, unit- and integration-tested in `tests/startup.rs`), but
+nothing calls it until `ferrite serve` exists (M1c-2).
 
 `down` runs inside one transaction per migration (both backends support transactional
 DDL for what we use). It refuses lossy steps without `--allow-lossy` and prints which

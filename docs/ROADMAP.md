@@ -28,11 +28,11 @@ The riskiest part. Prove it before building a CMS around it. Design: [05](design
 Design: [02](design/02-storage.md), [03](design/03-media.md), [06](design/06-themes-rendering.md).
 
 - [x] `ferrite-domain` crate (pure types: ids, Post, Term, User, Role, Block, errors; 01 §1), deferred from M0.
-- [ ] `ferrite-config` (toml + env, validation, profiles).
+- [x] `ferrite-config` (toml + env, validation; M1c-1). Profiles are not implemented as a separate concept: `cluster.mode = auto|solo|cluster` derives solo vs cluster (design 01 §4).
 - [x] `ferrite-store` traits, `ferrite-store-sqlite`, `ferrite-store-postgres`; migrations `0001_init` and `0002_search` on both (M1a).
-- [ ] Migration wrapper (M1a done, CLI is M1c):
+- [x] Migration wrapper (M1a store side, M1c-1 CLI):
   - [x] Directives (phase / min-binary / lossy-down), compatibility verdict, `min_binary_version` preservation, SQLite pre-migration snapshot.
-  - [ ] `ferrite migrate status|up|down|verify` CLI.
+  - [x] `ferrite migrate status|up|down|verify` CLI (plus `ferrite init`; design 09 §8). The startup check (`startup_check`) exists but is only called once `serve` does (M1c-2).
 - [x] Contract test suite (`ferrite-store-tests`) + migration roundtrip tests on both backends; CI with Postgres service.
 - [ ] Store follow-ups from the M1a review (deferred minors):
   - [ ] Full Unicode case folding for search (`İstanbul` currently indexes as `i̇stanbul`, so `istanbul` misses it; same on both backends).
@@ -44,9 +44,19 @@ Design: [02](design/02-storage.md), [03](design/03-media.md), [06](design/06-the
   - [ ] M1c: `media.variants` job calling `process_image` + writing `artifacts` rows (via `insert_if_absent`; `ArtifactRef.created` is advisory) and the `media.variants` mapping.
   - [ ] M1c: image-processing concurrency semaphore in the job runner (peak ~3 x w x h x 4 bytes per image; ruling R4).
   - [ ] M1c: `/_media/<hash>/<name>` serving via `MediaStore::open_read` (streaming; headers, ranges, 416 mapping; design 03 §5). Use `inline_safe(mime)`: everything else is `application/octet-stream` + `Content-Disposition: attachment` + `nosniff`. Always pass an upload limit to `put_stream` (below the 5 GB single-CopyObject ceiling).
-  - [ ] M1c: install a process-default rustls `CryptoProvider` in `main` (both `ring` and `aws-lc-rs` are linked, so rustls panics building a client config without a default).
-- [ ] Core services: content + revisions, types, terms, options, redirects, menus, search (FTS5 / tsvector).
-- [ ] Transactional outbox (`events`) written by every invalidating write.
+  - [x] M1c: install a process-default rustls `CryptoProvider` in `main` (both `ring` and `aws-lc-rs` are linked, so rustls panics building a client config without a default). Done in `crates/ferrite/src/main.rs` (`ring`).
+- [ ] Core services (`ferrite-core`):
+  - [x] Content: create/update with slug allocation and retry, revisions (keep 50), search indexing, status lifecycle (publish, unpublish, schedule, submit, trash, restore, delete, `publish_due`), permalink-change redirects, optimistic `version`.
+  - [x] Roles and capabilities (`Actor`, `can`; design 07 §1), including the contributor rules (R8).
+  - [x] Terms (`TaxonomyService`), options (`OptionService`), redirects (`RedirectService`, loop check), menus (`MenuService`).
+  - [x] Blocks to HTML rendering with sanitising (`blocks`), slug generation (`slug`).
+  - [ ] Content types service (the `ContentTypeRepo` exists in the store; no core service validates or manages types yet).
+  - [ ] Search query service (core only indexes; `SearchRepo::search` is not wrapped yet).
+  - [ ] Users service (M2 with auth).
+  - [ ] Media wiring into core (`media` rows, `media.variants`; see M1c items above).
+- [ ] Transactional outbox (`events`) written by every invalidating write:
+  - [x] Written in the same transaction by content, lifecycle, term, menu and options writes in `ferrite-core` (`events.rs`).
+  - [ ] Redirect writes emit no event yet; no consumer exists until the cache (M1c-2) and event bus (M1.5).
 - [ ] `ferrite serve`: router, permalinks, redirects, 404, feeds, sitemap.
 - [ ] Theme engine: minijinja, hierarchy resolution, safe helpers, dependency recording; `blog` theme.
 - [ ] Page cache with dependency index (solo invalidation path).
@@ -59,6 +69,14 @@ Design: [02](design/02-storage.md), [03](design/03-media.md), [06](design/06-the
   - [ ] Success-path tests for `dispatch_action` / `handle_route` (M0 tests only cover rejection paths: unknown plugin, not subscribed, no matching route).
   - [ ] Document `HostServices` cancel-safety: futures are dropped at the hard timeout.
   - [ ] `install` compiles synchronously: run it under `spawn_blocking` when called from tokio.
+
+- [ ] M1c-2 notes carried over from the M1c-1 reviews (deferred minors):
+  - [ ] When a published parent's slug changes, its children's permalinks change too: add 301 redirects from the old child paths and invalidate the children's cache keys (`ContentService::update` only handles the item itself).
+  - [ ] Serve PDFs inline with a CSP `sandbox` header (`application/pdf` is on the `inline_safe` allowlist in `ferrite-media/src/sniff.rs`; the `/_media` handler must add the header).
+  - [ ] Add an SVG sniff assertion test (an SVG upload must sniff to a type for which `inline_safe` is false).
+  - [ ] `ferrite migrate status` opens SQLite with the exclusive data-folder lock, so it fails while a server holds it. Either document this in the serve docs or add a read-only open for `status`.
+  - [ ] "Publish now" on a scheduled item currently requires unpublishing first (`publish` accepts draft and pending only); allow scheduled -> published directly (a one-line change in `content/lifecycle.rs`).
+  - [ ] Postgres `status`, `down` and `verify` may create an empty configured schema (`PgStore::open`); add a `PgOptions` flag so read-only commands do not create it.
 
 **Exit:** a seeded site renders identically on SQLite+local and Postgres+MinIO; editing via CLI/seed invalidates the right pages.
 

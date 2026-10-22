@@ -120,17 +120,74 @@ monitoring.)
 
 ## 8. CLI summary
 
+### Implemented (M1c-1: `crates/ferrite`)
+
 ```
-ferrite serve --data DIR
-ferrite init --data DIR [--db postgres://…] [--media s3://…]   # creates ferrite.toml, admin user
-ferrite migrate status|up|down|verify
-ferrite backup / restore
-ferrite export / import-site / db copy
-ferrite media sync / media gc
-ferrite import wordpress …
-ferrite plugin new|check|install|list|enable|disable|remove
-ferrite theme install|activate|list
-ferrite user create|reset-password|list
-ferrite self-update / rollback [--schema] [--restore-snapshot]
+ferrite init --data DIR --url URL [--title T] [--db URL] [--schema NAME] [--media s3://bucket/prefix]
+ferrite migrate status --data DIR
+ferrite migrate up     --data DIR [--to VERSION]
+ferrite migrate down   --data DIR --to VERSION [--allow-lossy] [--yes]
+ferrite migrate verify --data DIR
+```
+
+**Logging.** Logs go to stderr. `FERRITE_LOG` is an `EnvFilter` expression (for example
+`FERRITE_LOG=debug`); unset, the filter is `info`; an invalid value prints a warning and falls
+back to `info` (`crates/ferrite/src/main.rs`). `FERRITE_LOG` is not a config key. The binary
+also installs the `ring` rustls default crypto provider at start.
+
+**`ferrite init`** (`crates/ferrite/src/init.rs`):
+
+- Flags: `--data` and `--url` are required. `--title` defaults to `My Site`. `--db` is a
+  database URL (default: SQLite `ferrite.db` in the data folder). `--schema` is a Postgres
+  schema, created if missing. `--media s3://bucket[/prefix]` selects S3 media (default: local
+  `media/` in the data folder). A bad `--media` URL is an error.
+- Writes `<data>/ferrite.toml` from the template in `ferrite-config`, created exclusively
+  with mode `0600` on Unix because it can hold the database URL. For S3 it writes the
+  bucket and prefix with region `us-east-1` and tells you to set the real region, endpoint
+  and credentials before serving.
+- **Refuses to overwrite** an existing `ferrite.toml`, and **refuses an existing database**:
+  an existing SQLite file, or a Postgres schema that already has applied migrations. Use
+  `ferrite migrate` for those.
+- Creates the data folder, `media/` (local media only) and `backups/`, validates the written
+  config, then creates the database and applies all migrations. If any step fails, it removes
+  what this run created (the config file, new folders, new database and lock files) so a retry
+  starts clean.
+- It does **not** create an admin user yet (`ferrite user create` is a later milestone).
+
+**`ferrite migrate`** (`crates/ferrite/src/migrate.rs`, `open.rs`):
+
+- `status` prints database and binary schema versions, the minimum binary version the
+  schema requires (if any), pending migrations with their directives (`phase`,
+  `min-binary`, `lossy-down`), unknown applied migrations and a verdict. **Exit codes: 0**
+  up to date or newer-but-compatible schema, **2** migrations pending, **3** schema
+  incompatible with this binary, **1** any error (bad config, missing database, connection
+  failure, and so on).
+- `up [--to N]` applies pending migrations (all, or up to version `N`).
+- `down --to N` reverts everything above version `N`. Migrations whose down loses data need
+  `--allow-lossy`. It asks for typed confirmation (`yes`) on a terminal and refuses to run
+  without `--yes` when stdin is not a terminal.
+- `verify` checks the checksums of applied migrations against this binary.
+- **`status`, `down` and `verify` never create a database**: with SQLite they fail with
+  "database not found at <path>; run `ferrite init` first" when the file is missing, without
+  creating the folder, lock file or database. Only `init` and `up` may create one.
+- SQLite caveat: opening the database takes the exclusive data-folder lock
+  (`ferrite.lock`), so **every `migrate` subcommand, `status` included, fails while another
+  process holds the lock** (there is no server yet; once `serve` exists, that includes it, so
+  stop it first). There is no read-only open yet; the roadmap lists it under M1c-2.
+- Postgres caveat: `status`, `down` and `verify` do not create tables, but connecting with
+  a configured `database.schema` that does not exist creates that empty schema.
+
+### Planned (later milestones)
+
+```
+ferrite serve --data DIR                                        # M1c-2
+ferrite backup / restore                                        # M4
+ferrite export / import-site / db copy                          # M4
+ferrite media sync / media gc                                   # M4
+ferrite import wordpress …                                      # M3
+ferrite plugin new|check|install|list|enable|disable|remove     # M2
+ferrite theme install|activate|list                             # M2
+ferrite user create|reset-password|list                         # M2 (init will then create the admin user)
+ferrite self-update / rollback [--schema] [--restore-snapshot]  # M4
 ferrite doctor        # validates config, connectivity, permissions, clock skew, versions
 ```

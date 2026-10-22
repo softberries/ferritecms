@@ -48,12 +48,30 @@ services (not in HTTP handlers), so CLI and API enforce the same rules.
 | Capability | admin | editor | author | contributor |
 |---|---|---|---|---|
 | read admin | ✓ | ✓ | ✓ | ✓ |
-| create/edit own content | ✓ | ✓ | ✓ | ✓ (draft only) |
+| create/edit own content | ✓ | ✓ | ✓ | ✓ (only while draft or pending) |
 | publish own content | ✓ | ✓ | ✓ | — |
 | edit/publish others' content | ✓ | ✓ | — | — |
 | upload media | ✓ | ✓ | ✓ | — |
 | manage terms, menus, comments | ✓ | ✓ | — | — |
 | manage users, settings, themes, plugins, import, redirects | ✓ | — | — | — |
+
+As implemented in `ferrite-core` (`src/actor.rs`, `src/content/lifecycle.rs`; M1c-1; the
+HTTP layer arrives with M2):
+
+- **Status changes go through lifecycle methods only.** `ContentDraft` has no status,
+  author or publish-time fields, so `ContentService::create`/`update` cannot change them.
+  `publish`, `unpublish`, `schedule`, `submit`, `trash`, `restore` and `delete` each check
+  permission and the expected `version` in one transaction, so the `POST
+  /content/{type}/{id}/publish|unpublish|schedule|restore` endpoints above map onto them.
+  A transition that is not allowed from the current status is `Invalid("illegal
+  transition ...")`.
+- **Publish, unpublish and schedule** need `publish_own`, or `publish_others` for another
+  author's item. Contributors therefore cannot do any of them.
+- **Submit and trash** need the same rights as editing the item, which for a contributor
+  means only their own item and only while it is draft or pending.
+- **R8: contributors cannot restore or permanently delete**, even their own items: a trashed
+  item gives them nothing. For everyone else `restore` and `delete` need `edit_own` on
+  own items and `edit_others` otherwise, whatever the status the item had before.
 
 ## 2. Auth
 
