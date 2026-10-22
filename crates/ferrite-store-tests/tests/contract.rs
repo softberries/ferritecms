@@ -1,7 +1,7 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
     backend_tests, backend_tests_spawning, content::*, menu::*, migration_dirs, migration_files,
-    migrations::*, site::*, taxonomy::*, user::*,
+    migrations::*, plugin::*, site::*, taxonomy::*, user::*,
 };
 
 backend_tests!(
@@ -72,6 +72,14 @@ backend_tests!(
     unicode_login_and_slug_exact,
     users_update_and_list,
     email_folding_is_ascii_only,
+);
+
+backend_tests!(
+    artifact_insert_if_absent,
+    media_insert_get_update_variants,
+    plugins_upsert_list_enable,
+    plugin_kv_crud_and_usage,
+    themes_single_active,
 );
 
 backend_tests_spawning!(concurrent_writers);

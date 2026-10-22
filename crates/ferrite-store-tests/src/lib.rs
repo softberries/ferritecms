@@ -11,6 +11,7 @@ pub mod fixtures;
 pub mod harness;
 pub mod menu;
 pub mod migrations;
+pub mod plugin;
 pub mod site;
 pub mod taxonomy;
 pub mod user;

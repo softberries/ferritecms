@@ -2,8 +2,9 @@
 //! JSON = `TEXT`. Booleans bind and decode natively as 0/1.
 
 use ferrite_domain::{
-    ContentId, ContentItem, ContentType, MenuItem, MenuItemId, OptionEntry, Redirect, RedirectId,
-    Revision, RevisionId, Secret, Taxonomy, Term, TermId, Timestamp, User, UserId,
+    Artifact, ArtifactHash, ContentId, ContentItem, ContentType, InstalledPlugin, InstalledTheme,
+    Media, MenuItem, MenuItemId, OptionEntry, Redirect, RedirectId, Revision, RevisionId, Secret,
+    Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 use ferrite_store::StoreError;
 use sqlx::{Row, sqlite::SqliteRow};
@@ -208,5 +209,79 @@ pub(crate) fn redirect(row: &SqliteRow) -> Result<Redirect, StoreError> {
         hits: row.try_get("hits").map_err(map_db_err)?,
         origin: origin.parse()?,
         created_at: ts(row.try_get("created_at").map_err(map_db_err)?)?,
+    })
+}
+
+pub(crate) const ARTIFACT_COLUMNS: &str = "hash, kind, bytes, mime, created_at";
+
+/// Maps a row selected with [`ARTIFACT_COLUMNS`].
+pub(crate) fn artifact(row: &SqliteRow) -> Result<Artifact, StoreError> {
+    let hash: String = row.try_get("hash").map_err(map_db_err)?;
+    let kind: String = row.try_get("kind").map_err(map_db_err)?;
+    Ok(Artifact {
+        hash: ArtifactHash::parse(&hash)?,
+        kind: kind.parse()?,
+        bytes: row.try_get("bytes").map_err(map_db_err)?,
+        mime: row.try_get("mime").map_err(map_db_err)?,
+        created_at: ts(row.try_get("created_at").map_err(map_db_err)?)?,
+    })
+}
+
+pub(crate) const MEDIA_COLUMNS: &str =
+    "item_id, artifact_hash, mime, bytes, width, height, alt, original_name, variants";
+
+/// Maps a row selected with [`MEDIA_COLUMNS`].
+pub(crate) fn media(row: &SqliteRow) -> Result<Media, StoreError> {
+    let id: Uuid = row.try_get("item_id").map_err(map_db_err)?;
+    let hash: String = row.try_get("artifact_hash").map_err(map_db_err)?;
+    let variants: String = row.try_get("variants").map_err(map_db_err)?;
+    Ok(Media {
+        item_id: ContentId::from_uuid(id),
+        artifact_hash: ArtifactHash::parse(&hash)?,
+        mime: row.try_get("mime").map_err(map_db_err)?,
+        bytes: row.try_get("bytes").map_err(map_db_err)?,
+        width: row.try_get("width").map_err(map_db_err)?,
+        height: row.try_get("height").map_err(map_db_err)?,
+        alt: row.try_get("alt").map_err(map_db_err)?,
+        original_name: row.try_get("original_name").map_err(map_db_err)?,
+        variants: json_from_db(&variants)?,
+    })
+}
+
+pub(crate) const PLUGIN_COLUMNS: &str = "name, version, artifact_hash, manifest, granted, \
+     enabled, disabled_reason, installed_at, updated_at";
+
+/// Maps a row selected with [`PLUGIN_COLUMNS`].
+pub(crate) fn plugin(row: &SqliteRow) -> Result<InstalledPlugin, StoreError> {
+    let hash: String = row.try_get("artifact_hash").map_err(map_db_err)?;
+    let manifest: String = row.try_get("manifest").map_err(map_db_err)?;
+    let granted: String = row.try_get("granted").map_err(map_db_err)?;
+    Ok(InstalledPlugin {
+        name: row.try_get("name").map_err(map_db_err)?,
+        version: row.try_get("version").map_err(map_db_err)?,
+        artifact_hash: ArtifactHash::parse(&hash)?,
+        manifest: json_from_db(&manifest)?,
+        granted: json_from_db(&granted)?,
+        enabled: row.try_get("enabled").map_err(map_db_err)?,
+        disabled_reason: row.try_get("disabled_reason").map_err(map_db_err)?,
+        installed_at: ts(row.try_get("installed_at").map_err(map_db_err)?)?,
+        updated_at: ts(row.try_get("updated_at").map_err(map_db_err)?)?,
+    })
+}
+
+pub(crate) const THEME_COLUMNS: &str =
+    "name, version, artifact_hash, manifest, active, installed_at";
+
+/// Maps a row selected with [`THEME_COLUMNS`].
+pub(crate) fn theme(row: &SqliteRow) -> Result<InstalledTheme, StoreError> {
+    let hash: String = row.try_get("artifact_hash").map_err(map_db_err)?;
+    let manifest: String = row.try_get("manifest").map_err(map_db_err)?;
+    Ok(InstalledTheme {
+        name: row.try_get("name").map_err(map_db_err)?,
+        version: row.try_get("version").map_err(map_db_err)?,
+        artifact_hash: ArtifactHash::parse(&hash)?,
+        manifest: json_from_db(&manifest)?,
+        active: row.try_get("active").map_err(map_db_err)?,
+        installed_at: ts(row.try_get("installed_at").map_err(map_db_err)?)?,
     })
 }

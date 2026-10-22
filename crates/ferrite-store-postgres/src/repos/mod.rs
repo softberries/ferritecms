@@ -3,6 +3,7 @@
 
 mod content;
 mod menu;
+mod plugin;
 mod site;
 mod stub;
 mod taxonomy;
@@ -67,19 +68,19 @@ impl Repos for PgRepos {
         self
     }
     fn artifacts(&self) -> &dyn ArtifactRepo {
-        &Unsupported
+        self
     }
     fn media(&self) -> &dyn MediaRepo {
-        &Unsupported
+        self
     }
     fn plugins(&self) -> &dyn PluginRepo {
-        &Unsupported
+        self
     }
     fn plugin_kv(&self) -> &dyn PluginKvRepo {
-        &Unsupported
+        self
     }
     fn themes(&self) -> &dyn ThemeRepo {
-        &Unsupported
+        self
     }
     fn events(&self) -> &dyn EventRepo {
         &Unsupported
