@@ -118,7 +118,7 @@ fn file_secret() {
     let c = load(dir.path(), env(&[])).unwrap();
     assert_eq!(c.database.url.expose(), "postgres://u:hunter2@db/ferrite");
     assert!(matches!(c.database_kind(), DbKind::Postgres { .. }));
-    assert_eq!(c.effective_cluster_mode(), ClusterMode::Cluster);
+    assert_eq!(c.effective_cluster_mode(), ClusterMode::Solo);
 }
 
 #[test]
@@ -372,4 +372,94 @@ fn render_default_toml_roundtrips() {
     assert_eq!(c2.server, c3.server);
     assert_eq!(c2.cluster, c3.cluster);
     assert!(matches!(c2.media, MediaSection::Local { .. }));
+}
+
+fn auto_mode(db: &str, media: &str) -> ClusterMode {
+    let t = format!(
+        "{MIN}[database]\nurl = \"{db}\"\n[media]\n{media}\n[media.s3]\nbucket = \"b\"\nregion = \"r\"\n"
+    );
+    // Drop the [media.s3] table for local variants.
+    let t = if media.contains("local") {
+        t.split("[media.s3]").next().unwrap().to_owned()
+    } else {
+        t
+    };
+    run(Some(&t), &[]).1.unwrap().effective_cluster_mode()
+}
+
+#[test]
+fn auto_cluster_mode_rule() {
+    assert_eq!(
+        auto_mode("postgres://h/d", "backend = \"s3\""),
+        ClusterMode::Cluster
+    );
+    assert_eq!(
+        auto_mode("postgres://h/d", "backend = \"local\"\nlocal_shared = true"),
+        ClusterMode::Cluster
+    );
+    assert_eq!(
+        auto_mode("postgres://h/d", "backend = \"local\""),
+        ClusterMode::Solo
+    );
+    assert_eq!(
+        auto_mode("sqlite://a.db", "backend = \"s3\""),
+        ClusterMode::Solo
+    );
+}
+
+#[test]
+fn env_string_values_are_raw() {
+    let (_d, r) = run(
+        Some(MIN),
+        &[
+            ("FERRITE_DATABASE__URL", "postgres://u:p@h/d"),
+            ("FERRITE_SITE__TITLE", "\"abc\""),
+        ],
+    );
+    let c = r.unwrap();
+    assert_eq!(c.database.url.expose(), "postgres://u:p@h/d");
+    assert_eq!(c.site.title, "\"abc\"");
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ferrite.toml"), MIN).unwrap();
+    let c = load(
+        dir.path(),
+        env(&[
+            ("FERRITE_DATABASE__URL", "'abc'\nsecond"),
+            ("FERRITE_MEDIA__BACKEND", "local"),
+        ]),
+    );
+    // Unsupported scheme is a problem, but the multi-line value must not truncate parsing.
+    assert_eq!(paths(&c.unwrap_err()), ["env:FERRITE_DATABASE__URL"]);
+
+    let (_d, r) = run(
+        Some(MIN),
+        &[("FERRITE_DATABASE__URL", "postgres://u:'q\"x'@h/d")],
+    );
+    assert_eq!(r.unwrap().database.url.expose(), "postgres://u:'q\"x'@h/d");
+}
+
+#[test]
+fn cluster_problems_collected_with_others() {
+    let (_d, r) = run(Some("[cluster]\nmode = \"cluster\"\n"), &[]);
+    let p = paths(&r.unwrap_err()).join(",");
+    assert!(
+        p.contains("site.url") && p.contains("cluster.mode") && p.contains("media.backend"),
+        "{p}"
+    );
+}
+
+#[test]
+fn extra_validation() {
+    let (_d, r) = run(
+        Some(&format!(
+            "{MIN}[database]\nurl = \"sqlite://a.db?mode=ro\"\nschema = \"s\"\n[media]\nbackend = \"s3\"\n[media.s3]\nbucket = \"b\"\nregion = \"r\"\nendpoint = \"not a url\"\n"
+        )),
+        &[],
+    );
+    let e = r.unwrap_err();
+    assert_eq!(
+        paths(&e),
+        ["database.url", "database.schema", "media.s3.endpoint"]
+    );
 }

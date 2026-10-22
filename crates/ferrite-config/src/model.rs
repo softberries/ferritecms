@@ -115,13 +115,24 @@ impl Config {
         db_kind(self.database.url.expose(), &self.data_dir)
     }
 
-    /// `Auto` resolves to `Cluster` iff the database is Postgres.
+    /// `Auto` resolves to `Cluster` only when the database is Postgres and media is
+    /// shareable between nodes (S3, or local with `local_shared = true`); otherwise `Solo`.
     pub fn effective_cluster_mode(&self) -> ClusterMode {
         match self.cluster.mode {
-            ClusterMode::Auto => match self.database_kind() {
-                DbKind::Postgres { .. } => ClusterMode::Cluster,
-                DbKind::Sqlite { .. } => ClusterMode::Solo,
-            },
+            ClusterMode::Auto => {
+                let shared_media = matches!(
+                    self.media,
+                    MediaSection::S3 { .. }
+                        | MediaSection::Local {
+                            local_shared: true,
+                            ..
+                        }
+                );
+                match self.database_kind() {
+                    DbKind::Postgres { .. } if shared_media => ClusterMode::Cluster,
+                    _ => ClusterMode::Solo,
+                }
+            }
             mode => mode,
         }
     }
@@ -131,8 +142,12 @@ fn is_postgres(url: &str) -> bool {
     url.starts_with("postgres://") || url.starts_with("postgresql://")
 }
 
+pub(crate) fn is_sqlite(url: &str) -> bool {
+    url.starts_with("sqlite:")
+}
+
 pub(crate) fn is_supported_db_url(url: &str) -> bool {
-    is_postgres(url) || url.starts_with("sqlite:")
+    is_postgres(url) || is_sqlite(url)
 }
 
 fn db_kind(url: &str, data_dir: &Path) -> DbKind {

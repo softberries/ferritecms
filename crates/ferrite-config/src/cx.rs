@@ -56,15 +56,17 @@ impl Cx {
 
     pub fn string(&mut self, t: &mut Table, base: &str, key: &str) -> Option<String> {
         let path = join(base, key);
-        match t.remove(key)? {
+        let value = t.remove(key)?;
+        // String keys set from the environment take the raw text, unparsed.
+        if let Some(raw) = self.env_raw.get(&path) {
+            return Some(raw.clone());
+        }
+        match value {
             Value::String(s) => Some(s),
-            _ => match self.env_raw.get(&path) {
-                Some(raw) => Some(raw.clone()),
-                None => {
-                    self.push(&path, "expected a string");
-                    None
-                }
-            },
+            _ => {
+                self.push(&path, "expected a string");
+                None
+            }
         }
     }
 

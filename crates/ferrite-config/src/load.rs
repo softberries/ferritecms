@@ -7,8 +7,8 @@ use toml::{Table, Value};
 
 use crate::cx::{Cx, join, resolve};
 use crate::error::{ConfigError, ConfigProblem};
-use crate::model::is_supported_db_url;
 use crate::model::*;
+use crate::model::{is_sqlite, is_supported_db_url};
 
 const FILE_NAME: &str = "ferrite.toml";
 const ENV_PREFIX: &str = "FERRITE_";
@@ -59,29 +59,19 @@ pub fn load(
     let plugins = parse_plugins(&mut cx, &mut table);
     cx.unknown(table, "");
 
-    match (site, server, database, media, cluster, cache, plugins) {
-        (Some(site), server, database, media, cluster, cache, plugins)
-            if cx.problems.is_empty() =>
-        {
-            let config = Config {
-                data_dir: data_dir.to_path_buf(),
-                site,
-                server,
-                database,
-                media,
-                cluster,
-                cache,
-                plugins,
-            };
-            validate_cluster(&mut cx, &config);
-            if cx.problems.is_empty() {
-                Ok(config)
-            } else {
-                Err(ConfigError {
-                    problems: cx.problems,
-                })
-            }
-        }
+    validate_cluster(&mut cx, &cluster, &database, &media);
+
+    match site {
+        Some(site) if cx.problems.is_empty() => Ok(Config {
+            data_dir: data_dir.to_path_buf(),
+            site,
+            server,
+            database,
+            media,
+            cluster,
+            cache,
+            plugins,
+        }),
         _ => Err(ConfigError {
             problems: cx.problems,
         }),
@@ -295,6 +285,12 @@ fn parse_database(cx: &mut Cx, root: &mut Table) -> DatabaseConfig {
                     "unsupported URL: expected sqlite:… or postgres://…",
                 );
             }
+            if is_sqlite(s.expose()) && s.expose().contains('?') {
+                cx.push(
+                    "database.url",
+                    "query options are not supported on sqlite URLs",
+                );
+            }
             s
         }
         None => ferrite_domain::Secret::new("sqlite://ferrite.db"),
@@ -316,6 +312,9 @@ fn parse_database(cx: &mut Cx, root: &mut Table) -> DatabaseConfig {
             "database.schema",
             "must be a non-empty identifier of letters, digits and underscores",
         );
+    }
+    if schema.is_some() && is_sqlite(url.expose()) {
+        cx.push("database.schema", "only valid with a Postgres database");
     }
     cx.unknown(t, "database");
     DatabaseConfig {
@@ -385,6 +384,14 @@ fn parse_s3(cx: &mut Cx, mut t: Table) -> MediaSection {
         }
     }
     let endpoint = cx.string(&mut t, b, "endpoint");
+    if let Some(e) = &endpoint
+        && !matches!(url::Url::parse(e), Ok(u) if matches!(u.scheme(), "http" | "https") && u.has_host())
+    {
+        cx.push(
+            "media.s3.endpoint",
+            "must be an absolute http:// or https:// URL",
+        );
+    }
     let access_key_id = cx.secret_string(&mut t, b, "access_key_id");
     let secret_access_key = cx.secret(&mut t, b, "secret_access_key");
     if access_key_id.is_some() != secret_access_key.is_some() {
@@ -487,18 +494,23 @@ fn parse_plugins(cx: &mut Cx, root: &mut Table) -> PluginsConfig {
 }
 
 /// Startup validation per design 04 §3 (the checks that need only configuration).
-fn validate_cluster(cx: &mut Cx, config: &Config) {
-    if config.cluster.mode != ClusterMode::Cluster {
+fn validate_cluster(
+    cx: &mut Cx,
+    cluster: &ClusterConfig,
+    database: &DatabaseConfig,
+    media: &MediaSection,
+) {
+    if cluster.mode != ClusterMode::Cluster {
         return;
     }
-    if matches!(config.database_kind(), DbKind::Sqlite { .. }) {
+    if is_sqlite(database.url.expose()) {
         cx.push(
             "cluster.mode",
             "mode = \"cluster\" requires a Postgres database, not SQLite",
         );
     }
     if matches!(
-        config.media,
+        media,
         MediaSection::Local {
             local_shared: false,
             ..
