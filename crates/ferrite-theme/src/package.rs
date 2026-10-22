@@ -340,8 +340,9 @@ fn read_dir(root: &Path) -> Result<BTreeMap<String, Cow<'static, [u8]>>, ThemeEr
                     )]));
                 }
                 // The path was checked with symlink_metadata above; opening with
-                // O_NOFOLLOW (unix) and re-checking the opened handle closes the window
-                // in which it could be swapped for a link or a FIFO.
+                // O_NOFOLLOW | O_NONBLOCK (unix) and re-checking the opened handle close the window
+                // in which the file could be swapped for a link or a FIFO. Directories are only
+                // checked with symlink_metadata (admin-trust gap, ruling R14).
                 let file = open_nofollow(&path).map_err(io(&path))?;
                 if !file.metadata().map_err(io(&path))?.is_file() {
                     return Err(ThemeError::Invalid(vec![format!(
@@ -379,7 +380,7 @@ fn open_nofollow(path: &Path) -> std::io::Result<fs::File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        opts.custom_flags(libc::O_NOFOLLOW);
+        opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     opts.open(path)
 }
