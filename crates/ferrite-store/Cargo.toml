@@ -13,4 +13,5 @@ ferrite-domain = { path = "../ferrite-domain" }
 semver.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+unicode-normalization.workspace = true
 uuid.workspace = true

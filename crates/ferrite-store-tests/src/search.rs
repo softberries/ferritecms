@@ -168,24 +168,33 @@ pub async fn search_rejects_nul_and_bad_limits(db: &TestDb) {
     assert_eq!(search.query("t", MAX_PAGE).await.unwrap(), [id]);
 }
 
-/// R16: both backends match exactly the same documents (only ranking may differ), so
-/// these compare sorted id sets.
+/// R16/R17: both backends match exactly the same documents (only ranking may differ), so
+/// these compare sorted id sets against fixed expectations.
 pub async fn search_semantics_identical(db: &TestDb) {
     let store = db.store();
-    let ids = posts(store, 5).await;
+    let ids = posts(store, 11).await;
     let search = store.read().search();
-    let docs = [
+    let long_body = format!("{} contact user@example.com", "a".repeat(3000));
+    let big_body: String = (0..5000).map(|i| format!("w{i} ")).collect();
+    let docs: [(&str, &str); 11] = [
         ("Ünïcode handbook", "about ünïcode text"),
         ("Unicode basics", "plain unicode"),
         ("Dash notes", "x marks the spot"),
         ("Logic", "a or b"),
         ("Other", "nothing"),
+        ("हिन्दी भाषा", "Hindi text"),
+        ("İstanbul", "city"),
+        ("Cafe\u{301} menu", "nfd input"),
+        ("Fullwidth ｆｏｏ", "squared x²"),
+        ("Long", &long_body),
+        // 1 + 5000 distinct words: only the first 4096 distinct terms are indexed.
+        ("big", &big_body),
     ];
     for (id, (title, body)) in ids.iter().zip(docs) {
         search.index(*id, title, body).await.unwrap();
     }
-    let found = |q: &'static str| async move {
-        let mut got = search.query(q, 50).await.unwrap();
+    let found = |q: String| async move {
+        let mut got = search.query(&q, 50).await.unwrap();
         got.sort();
         got
     };
@@ -194,21 +203,61 @@ pub async fn search_semantics_identical(db: &TestDb) {
         v.sort();
         v
     };
-
-    // Prefix matching.
-    assert_eq!(found("uni").await, set(&[1]));
-    assert_eq!(found("hand").await, set(&[0]));
-    // Accent-sensitive, case-insensitive.
-    assert_eq!(found("unicode").await, set(&[1]));
-    assert_eq!(found("ünïcode").await, set(&[0]));
-    assert_eq!(found("ÜNÏ").await, set(&[0]));
-    // No operators: punctuation separates literal terms, all terms must match.
-    assert_eq!(found("-x").await, set(&[2]));
-    assert_eq!(found("\"x\"").await, set(&[2]));
-    assert_eq!(found("a OR b").await, set(&[3]));
-    assert_eq!(found("unicode OR nothing").await, set(&[]));
-    assert_eq!(found("x -marks").await, set(&[2]));
-    assert_eq!(found("(spot)*").await, set(&[2]));
-    assert_eq!(found("title:x").await, set(&[]));
-    assert_eq!(found("- * ( )").await, set(&[]));
+    let cases: Vec<(String, Vec<usize>)> = vec![
+        // Prefix matching.
+        ("uni".into(), vec![1]),
+        ("hand".into(), vec![0]),
+        // Accent-sensitive, case-insensitive.
+        ("unicode".into(), vec![1]),
+        ("ünïcode".into(), vec![0]),
+        ("ÜNÏ".into(), vec![0]),
+        // Combining-mark scripts and dotted capital I stay whole on both backends.
+        ("हिन्दी".into(), vec![5]),
+        ("हिन".into(), vec![5]),
+        ("भाषा".into(), vec![5]),
+        ("İstanbul".into(), vec![6]),
+        ("i\u{307}stanbul".into(), vec![6]),
+        ("istanbul".into(), vec![]),
+        // NFC and NFD input are the same term.
+        ("café".into(), vec![7]),
+        ("cafe\u{301}".into(), vec![7]),
+        // NFKC: fullwidth and superscript fold.
+        ("foo".into(), vec![8]),
+        ("ｆｏｏ".into(), vec![8]),
+        ("x²".into(), vec![8]),
+        ("x2".into(), vec![8]),
+        // No operators: punctuation separates literal terms, all terms must match.
+        ("-x".into(), vec![2, 8]),
+        ("\"x\"".into(), vec![2, 8]),
+        ("a OR b".into(), vec![3]),
+        ("unicode OR nothing".into(), vec![]),
+        ("x -marks".into(), vec![2]),
+        ("(spot)*".into(), vec![2]),
+        ("title:x".into(), vec![]),
+        ("- * ( )".into(), vec![]),
+        // A lone combining mark is no term: empty without a statement.
+        ("\u{301}".into(), vec![]),
+        // Over-long terms are truncated the same way on both sides.
+        ("a".repeat(3000), vec![9]),
+        ("aaaa".into(), vec![9]),
+        // An e-mail address is split like any other text.
+        ("example".into(), vec![9]),
+        ("user example com".into(), vec![9]),
+        // The 4096-term cap: w4094 is the last indexed term.
+        ("w4094".into(), vec![10]),
+        ("w4095".into(), vec![]),
+        // 40 terms: only the first 32 (all in doc 10) count.
+        (
+            (0..32)
+                .map(|i| format!("w{i}"))
+                .chain((0..8).map(|i| format!("zz{i}")))
+                .collect::<Vec<_>>()
+                .join(" "),
+            vec![10],
+        ),
+    ];
+    for (q, want) in cases {
+        let label: String = q.chars().take(40).collect();
+        assert_eq!(found(q).await, set(&want), "query {label:?}");
+    }
 }

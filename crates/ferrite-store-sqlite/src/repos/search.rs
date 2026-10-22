@@ -1,28 +1,28 @@
-//! Full-text search on the FTS5 table `search_fts(item_id UNINDEXED, title, body_text)`.
-//!
-//! The user query is never FTS5 syntax: it is split by `ferrite_store::search_terms` (the
-//! same terms Postgres sees), each term becomes a quoted FTS5 string with a prefix `*`
-//! (see [`match_expression`]), and the expression is bound as a parameter. FTS5 has no foreign keys, so `index` checks the item exists (matching
-//! Postgres) and `ContentRepo::delete` removes the item's row.
+//! Full-text search (R17): `search_docs` holds each item's normalized tokens and the
+//! external-content FTS5 table `search_fts(title, body_text)` indexes them with the
+//! `ascii` tokenizer (sync triggers in 0002). All normalization happens in
+//! `ferrite_store::{index_terms, search_terms}`, identically to Postgres; FTS5 only sees
+//! opaque tokens. Rows cascade with the content item through the foreign key.
 
 use async_trait::async_trait;
 use ferrite_domain::ContentId;
-use ferrite_store::{SearchRepo, StoreError, check_limit, search_terms, validate_text};
+use ferrite_store::{
+    IndexTerms, SearchRepo, StoreError, check_limit, index_terms, search_terms, validate_text,
+};
 use uuid::Uuid;
 
 use super::SqliteRepos;
-use crate::exec::{atomic, map_db_err, run};
+use crate::exec::run;
 
-/// Turns a user query into an FTS5 MATCH expression that cannot contain operators:
-/// `foo -"bar` becomes `"foo"* "bar"*` (implicit AND of prefix strings). Terms are
-/// alphanumeric, so the quoting is only a second line of defence. `None` when the query
-/// has no terms.
-fn match_expression(q: &str) -> Option<String> {
-    let terms: Vec<String> = search_terms(q)
+/// The FTS5 MATCH expression for normalized query terms: each a quoted prefix string,
+/// implicitly AND-ed (`"foo"* "bar"*`). Terms never contain `"` (they are alphanumeric
+/// runs); the doubling is a second line of defence.
+fn match_expression(terms: &[String]) -> String {
+    terms
         .iter()
         .map(|t| format!("\"{}\"*", t.replace('"', "\"\"")))
-        .collect();
-    (!terms.is_empty()).then(|| terms.join(" "))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[async_trait]
@@ -30,37 +30,24 @@ impl SearchRepo for SqliteRepos {
     async fn index(&self, id: ContentId, title: &str, body_text: &str) -> Result<(), StoreError> {
         validate_text("search title", title)?;
         validate_text("search body_text", body_text)?;
-        atomic!(&self.writer, |conn| async {
-            let exists: Option<i64> =
-                sqlx::query_scalar("SELECT 1 FROM content_items WHERE id = ?")
-                    .bind(id.as_uuid())
-                    .fetch_optional(&mut *conn)
-                    .await
-                    .map_err(map_db_err)?;
-            if exists.is_none() {
-                return Err(StoreError::ForeignKey {
-                    constraint: "search_fts.item_id".into(),
-                });
-            }
-            sqlx::query("DELETE FROM search_fts WHERE item_id = ?")
-                .bind(id.as_uuid())
-                .execute(&mut *conn)
-                .await
-                .map_err(map_db_err)?;
-            sqlx::query("INSERT INTO search_fts (item_id, title, body_text) VALUES (?, ?, ?)")
-                .bind(id.as_uuid())
-                .bind(title)
-                .bind(body_text)
-                .execute(&mut *conn)
-                .await
-                .map_err(map_db_err)?;
-            Ok(())
-        })
+        let terms = index_terms(title, body_text);
+        // One statement; the update trigger re-indexes an existing row. An unknown item
+        // fails the foreign key.
+        run!(&self.writer, |e| sqlx::query(
+            "INSERT INTO search_docs (item_id, title, body_text) VALUES (?, ?, ?) \
+             ON CONFLICT (item_id) DO UPDATE SET title = excluded.title, \
+             body_text = excluded.body_text"
+        )
+        .bind(id.as_uuid())
+        .bind(IndexTerms::joined(&terms.title))
+        .bind(IndexTerms::joined(&terms.body))
+        .execute(e))
+        .map(|_| ())
     }
 
     async fn remove(&self, id: ContentId) -> Result<(), StoreError> {
         run!(&self.writer, |e| sqlx::query(
-            "DELETE FROM search_fts WHERE item_id = ?"
+            "DELETE FROM search_docs WHERE item_id = ?"
         )
         .bind(id.as_uuid())
         .execute(e))
@@ -70,15 +57,17 @@ impl SearchRepo for SqliteRepos {
     async fn query(&self, q: &str, limit: u32) -> Result<Vec<ContentId>, StoreError> {
         validate_text("search query", q)?;
         let limit = check_limit(limit)?;
-        let Some(expr) = match_expression(q) else {
+        let terms = search_terms(q);
+        if terms.is_empty() {
             return Ok(Vec::new());
-        };
-        // bm25 takes one weight per column, item_id included; lower scores rank higher.
+        }
+        // bm25 weights are per column (title, body_text); lower scores rank higher.
         let ids: Vec<Uuid> = run!(&self.reader, |e| sqlx::query_scalar(
-            "SELECT item_id FROM search_fts WHERE search_fts MATCH ? \
-             ORDER BY bm25(search_fts, 0.0, 10.0, 1.0), item_id LIMIT ?"
+            "SELECT d.item_id FROM search_fts JOIN search_docs d ON d.id = search_fts.rowid \
+             WHERE search_fts MATCH ? \
+             ORDER BY bm25(search_fts, 10.0, 1.0), d.item_id LIMIT ?"
         )
-        .bind(expr)
+        .bind(match_expression(&terms))
         .bind(i64::from(limit))
         .fetch_all(e))?;
         Ok(ids.into_iter().map(ContentId::from_uuid).collect())
@@ -91,18 +80,12 @@ mod tests {
 
     #[test]
     fn match_expression_quotes_every_term() {
-        assert_eq!(match_expression(""), None);
-        assert_eq!(match_expression(" \t\n"), None);
-        assert_eq!(match_expression("foo"), Some(r#""foo"*"#.into()));
+        let terms = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(match_expression(&terms(&["foo"])), r#""foo"*"#);
         assert_eq!(
-            match_expression("  a OR  -x "),
-            Some(r#""a"* "OR"* "x"*"#.into())
+            match_expression(&terms(&["a", "or", "x"])),
+            r#""a"* "or"* "x"*"#
         );
-        assert_eq!(
-            match_expression(r#"say"hi""#),
-            Some(r#""say"* "hi"*"#.into())
-        );
-        // Punctuation only: no terms, no statement.
-        assert_eq!(match_expression("\" * ( -"), None);
+        assert_eq!(match_expression(&terms(&["a\"b"])), r#""a""b"*"#);
     }
 }

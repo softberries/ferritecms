@@ -25,5 +25,8 @@ pub use repos::{
     OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,
     SearchRepo, Store, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
-pub use search::search_terms;
+pub use search::{
+    IndexTerms, IndexedTerm, MAX_INDEX_TERMS, MAX_QUERY_TERMS, MAX_TERM_CHARS, index_terms,
+    search_terms,
+};
 pub use text::{email_key, validate_text};

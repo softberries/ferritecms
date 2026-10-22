@@ -15,7 +15,7 @@ use sqlx::{QueryBuilder, Sqlite};
 use super::SqliteRepos;
 use crate::{
     codec::{self, CONTENT_COLUMNS, REVISION_COLUMNS, TYPE_COLUMNS},
-    exec::{atomic, map_db_err, run},
+    exec::run,
 };
 
 #[async_trait]
@@ -268,21 +268,13 @@ impl ContentRepo for SqliteRepos {
     }
 
     async fn delete(&self, id: ContentId) -> Result<(), StoreError> {
-        // FTS5 rows have no foreign key, so drop the search row in the same batch; if
-        // the item cannot be deleted (children RESTRICT) the search row is kept too.
-        atomic!(&self.writer, |conn| async {
-            sqlx::query("DELETE FROM search_fts WHERE item_id = ?")
-                .bind(id.as_uuid())
-                .execute(&mut *conn)
-                .await
-                .map_err(map_db_err)?;
-            sqlx::query("DELETE FROM content_items WHERE id = ?")
-                .bind(id.as_uuid())
-                .execute(&mut *conn)
-                .await
-                .map_err(map_db_err)?;
-            Ok(())
-        })
+        // Dependent rows cascade, the search row included (its triggers update FTS5).
+        run!(&self.writer, |e| sqlx::query(
+            "DELETE FROM content_items WHERE id = ?"
+        )
+        .bind(id.as_uuid())
+        .execute(e))
+        .map(|_| ())
     }
 
     async fn due_scheduled(
