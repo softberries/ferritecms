@@ -7,8 +7,10 @@ use ferrite_domain::{
     RevisionId, Timestamp,
 };
 use ferrite_store::{
-    ContentRepo, ContentTypeRepo, ListPart, MetaRepo, RevisionRepo, StoreError, check_limit,
-    content_cursor, content_list_plan, encode_content_cursor, validate_json, validate_text,
+    ContentRepo, ContentTypeRepo, ListPart, MAX_SLUG_PREFIX_RESULTS, MetaRepo, RevisionRepo,
+    StoreError, check_content_filters, check_id_list, check_limit, content_cursor,
+    content_list_plan, encode_content_cursor, slug_has_prefix, slug_prefix_bounds, validate_json,
+    validate_text,
 };
 use serde_json::Value;
 use sqlx::{Postgres, QueryBuilder, types::Json};
@@ -208,9 +210,7 @@ impl ContentRepo for PgRepos {
     }
 
     async fn list(&self, query: &ContentQuery) -> Result<Page<ContentItem>, StoreError> {
-        if let Some(kind) = &query.kind {
-            validate_text("content kind", kind)?;
-        }
+        check_content_filters(query)?;
         let limit = check_limit(query.limit)?;
         let after = query
             .cursor
@@ -246,6 +246,64 @@ impl ContentRepo for PgRepos {
         Ok(Page { items, next_cursor })
     }
 
+    async fn count(&self, query: &ContentQuery) -> Result<u64, StoreError> {
+        check_content_filters(query)?;
+        let mut qb = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM content_items WHERE TRUE");
+        push_filters(&mut qb, query);
+        let n: i64 = run!(&self.exec, |e| qb.build_query_scalar().fetch_one(e))?;
+        Ok(u64::try_from(n).unwrap_or(0))
+    }
+
+    async fn get_many(&self, ids: &[ContentId]) -> Result<Vec<ContentItem>, StoreError> {
+        check_id_list("ids", ids)?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut qb = QueryBuilder::<Postgres>::new(format!(
+            "SELECT {CONTENT_COLUMNS} FROM content_items WHERE id IN ("
+        ));
+        let mut list = qb.separated(", ");
+        for id in ids {
+            list.push_bind(id.as_uuid());
+        }
+        list.push_unseparated(")");
+        let rows = run!(&self.exec, |e| qb.build().fetch_all(e))?;
+        let mut found = rows
+            .iter()
+            .map(codec::content_item)
+            .map(|r| r.map(|i| (i.id, i)))
+            .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
+        Ok(ids.iter().filter_map(|id| found.remove(id)).collect())
+    }
+
+    async fn slugs_with_prefix(
+        &self,
+        kind: &str,
+        parent: Option<ContentId>,
+        prefix: &str,
+    ) -> Result<Vec<String>, StoreError> {
+        validate_text("content kind", kind)?;
+        validate_text("slug prefix", prefix)?;
+        let (from, to) = slug_prefix_bounds(prefix);
+        let slugs: Vec<String> = run!(&self.exec, |e| {
+            sqlx::query_scalar(
+            "SELECT slug FROM content_items WHERE type = $1 AND parent_id IS NOT DISTINCT FROM $2 AND (slug = $3 OR (slug >= $4 AND slug < $5)) \
+             ORDER BY slug COLLATE \"C\" LIMIT $6"
+        )
+        .bind(kind)
+        .bind(parent.map(|p| p.as_uuid()))
+        .bind(prefix)
+        .bind(&from)
+        .bind(&to)
+        .bind(i64::from(MAX_SLUG_PREFIX_RESULTS))
+        .fetch_all(e)
+        })?;
+        Ok(slugs
+            .into_iter()
+            .filter(|s| slug_has_prefix(s, prefix))
+            .collect())
+    }
+
     async fn delete(&self, id: ContentId) -> Result<(), StoreError> {
         run!(&self.exec, |e| sqlx::query(
             "DELETE FROM content_items WHERE id = $1"
@@ -278,6 +336,13 @@ fn listing_base(query: &ContentQuery) -> QueryBuilder<Postgres> {
     let mut qb = QueryBuilder::<Postgres>::new(format!(
         "SELECT {CONTENT_COLUMNS} FROM content_items WHERE TRUE"
     ));
+    push_filters(&mut qb, query);
+    qb
+}
+
+/// Appends the query's filters (everything but paging) to a `WHERE` clause; `list` and
+/// `count` both use it so they cannot drift.
+fn push_filters(qb: &mut QueryBuilder<Postgres>, query: &ContentQuery) {
     if let Some(kind) = &query.kind {
         qb.push(" AND type = ").push_bind(kind.clone());
     }
@@ -306,7 +371,28 @@ fn listing_base(query: &ContentQuery) -> QueryBuilder<Postgres> {
             .push_bind(term.as_uuid())
             .push(")");
     }
-    qb
+    if !query.ids.is_empty() {
+        qb.push(" AND id IN (");
+        let mut list = qb.separated(", ");
+        for id in &query.ids {
+            list.push_bind(id.as_uuid());
+        }
+        list.push_unseparated(")");
+    }
+    if !query.exclude.is_empty() {
+        qb.push(" AND id NOT IN (");
+        let mut list = qb.separated(", ");
+        for id in &query.exclude {
+            list.push_bind(id.as_uuid());
+        }
+        list.push_unseparated(")");
+    }
+    if let Some(t) = query.published_after {
+        qb.push(" AND published_at >= ").push_bind(dt(t));
+    }
+    if let Some(t) = query.published_before {
+        qb.push(" AND published_at < ").push_bind(dt(t));
+    }
 }
 
 /// Appends a listing part's keyset predicate (a row comparison, so the index range

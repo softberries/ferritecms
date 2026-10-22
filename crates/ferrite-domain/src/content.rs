@@ -112,6 +112,14 @@ pub struct ContentQuery {
     pub parent: ParentFilter,
     pub term: Option<TermId>,
     pub author: Option<UserId>,
+    /// Only these items; empty means no filter. At most 200 (`Invalid` beyond).
+    pub ids: Vec<ContentId>,
+    /// Never these items; empty means no filter. At most 200 (`Invalid` beyond).
+    pub exclude: Vec<ContentId>,
+    /// `published_at >= t` (inclusive); items without a publish time never match.
+    pub published_after: Option<Timestamp>,
+    /// `published_at < t` (exclusive); items without a publish time never match.
+    pub published_before: Option<Timestamp>,
     pub order: ContentOrder,
     /// Capped at [`crate::MAX_PAGE`] by the stores.
     pub limit: u32,
@@ -126,6 +134,10 @@ impl Default for ContentQuery {
             parent: ParentFilter::Any,
             term: None,
             author: None,
+            ids: Vec::new(),
+            exclude: Vec::new(),
+            published_after: None,
+            published_before: None,
             order: ContentOrder::default(),
             limit: 20,
             cursor: None,

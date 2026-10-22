@@ -867,3 +867,296 @@ pub async fn revisions_newest_first_and_prune(db: &TestDb) {
         Err(StoreError::Invalid(_))
     ));
 }
+
+/// Inserts a published post with `published_at` = `at` micros.
+async fn published(store: &dyn Store, author: &User, slug: &str, at: i64) -> ContentItem {
+    let mut n = new_post(author, slug);
+    n.status = ContentStatus::Published;
+    n.published_at = Some(micros(at));
+    insert(store, &n).await
+}
+
+pub async fn list_filters_ids_exclude_dates(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    let a = published(store, &author, "a", 1_000).await;
+    let b = published(store, &author, "b", 2_000).await;
+    let c = published(store, &author, "c", 3_000).await;
+    let d = published(store, &author, "d", 4_000).await;
+    let draft = insert(store, &new_post(&author, "draft")).await;
+
+    let list = |q: ContentQuery| async move {
+        store
+            .read()
+            .content()
+            .list(&q)
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|i| i.slug)
+            .collect::<Vec<_>>()
+    };
+    let base = ContentQuery {
+        limit: 50,
+        ..Default::default()
+    };
+
+    // ids alone; the result follows the query order (PublishedDesc), not the input order.
+    let q = ContentQuery {
+        ids: vec![a.id, c.id, b.id],
+        ..base.clone()
+    };
+    assert_eq!(list(q).await, ["c", "b", "a"]);
+    // exclude alone.
+    let q = ContentQuery {
+        exclude: vec![c.id, draft.id],
+        ..base.clone()
+    };
+    assert_eq!(list(q).await, ["d", "b", "a"]);
+    // published_after is inclusive, published_before exclusive; NULL never matches.
+    let q = ContentQuery {
+        published_after: Some(micros(2_000)),
+        ..base.clone()
+    };
+    assert_eq!(list(q).await, ["d", "c", "b"]);
+    let q = ContentQuery {
+        published_before: Some(micros(3_000)),
+        ..base.clone()
+    };
+    assert_eq!(list(q).await, ["b", "a"]);
+    let q = ContentQuery {
+        published_after: Some(micros(2_000)),
+        published_before: Some(micros(4_000)),
+        ..base.clone()
+    };
+    assert_eq!(list(q).await, ["c", "b"]);
+    // Combined: ids within a range, minus an excluded one.
+    let q = ContentQuery {
+        ids: vec![a.id, b.id, c.id, d.id, draft.id],
+        exclude: vec![b.id],
+        published_after: Some(micros(1_000)),
+        published_before: Some(micros(4_000)),
+        ..base.clone()
+    };
+    assert_eq!(list(q).await, ["c", "a"]);
+    // Unknown ids simply match nothing.
+    let q = ContentQuery {
+        ids: vec![ContentId::new()],
+        ..base.clone()
+    };
+    assert!(list(q).await.is_empty());
+
+    // 200 ids are fine, 201 are Invalid (ids and exclude, list and count).
+    let many = |n: usize| (0..n).map(|_| ContentId::new()).collect::<Vec<_>>();
+    for (ids, exclude) in [(many(200), vec![]), (vec![], many(200))] {
+        let q = ContentQuery {
+            ids,
+            exclude,
+            ..base.clone()
+        };
+        store.read().content().list(&q).await.unwrap();
+        store.read().content().count(&q).await.unwrap();
+    }
+    for (ids, exclude) in [(many(201), vec![]), (vec![], many(201))] {
+        let q = ContentQuery {
+            ids,
+            exclude,
+            ..base.clone()
+        };
+        assert!(matches!(
+            store.read().content().list(&q).await,
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            store.read().content().count(&q).await,
+            Err(StoreError::Invalid(_))
+        ));
+    }
+}
+
+pub async fn count_matches_list(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    for i in 0..7_i64 {
+        published(store, &author, &format!("p{i}"), 1_000 + i).await;
+    }
+    for i in 0..3 {
+        insert(store, &new_post(&author, &format!("d{i}"))).await;
+    }
+    let mut page = new_post(&author, "pg");
+    page.kind = "page".into();
+    insert(store, &page).await;
+
+    let queries = [
+        ContentQuery {
+            limit: 3,
+            ..Default::default()
+        },
+        ContentQuery {
+            limit: 2,
+            kind: Some("post".into()),
+            statuses: vec![ContentStatus::Published],
+            published_after: Some(micros(1_002)),
+            published_before: Some(micros(1_006)),
+            ..Default::default()
+        },
+        ContentQuery {
+            limit: 4,
+            kind: Some("post".into()),
+            statuses: vec![ContentStatus::Draft],
+            order: ContentOrder::TitleAsc,
+            ..Default::default()
+        },
+    ];
+    let expected = [11_u64, 4, 3];
+    for (query, want) in queries.into_iter().zip(expected) {
+        let listed: usize = pages(store, query.clone()).await.iter().map(Vec::len).sum();
+        let n = store.read().content().count(&query).await.unwrap();
+        assert_eq!(n, listed as u64);
+        assert_eq!(n, want);
+    }
+    // limit/cursor/order are ignored by count, even invalid ones.
+    let q = ContentQuery {
+        limit: 0,
+        cursor: Some("garbage".into()),
+        ..Default::default()
+    };
+    assert_eq!(store.read().content().count(&q).await.unwrap(), 11);
+    // Text validation applies to lookups too.
+    let q = ContentQuery {
+        kind: Some("a\u{0}".into()),
+        ..Default::default()
+    };
+    assert!(matches!(
+        store.read().content().count(&q).await,
+        Err(StoreError::Invalid(_))
+    ));
+}
+
+pub async fn get_many_order_and_missing(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    let a = insert(store, &new_post(&author, "a")).await;
+    let b = insert(store, &new_post(&author, "b")).await;
+    let c = insert(store, &new_post(&author, "c")).await;
+    let repo = store.read().content();
+
+    assert!(repo.get_many(&[]).await.unwrap().is_empty());
+    let got = repo
+        .get_many(&[c.id, ContentId::new(), a.id, b.id])
+        .await
+        .unwrap();
+    assert_eq!(got, [c.clone(), a.clone(), b.clone()]);
+    // A repeated id yields its item once.
+    assert_eq!(repo.get_many(&[b.id, b.id]).await.unwrap(), [b]);
+
+    let ids = |n: usize| (0..n).map(|_| ContentId::new()).collect::<Vec<_>>();
+    assert!(repo.get_many(&ids(200)).await.unwrap().is_empty());
+    assert!(matches!(
+        repo.get_many(&ids(201)).await,
+        Err(StoreError::Invalid(_))
+    ));
+}
+
+pub async fn slugs_with_prefix_matches(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    for slug in [
+        "hello",
+        "hello-2",
+        "hello-world",
+        "helloworld",
+        "hell",
+        "Hello-3",
+        "a%b",
+        "a%b-2",
+        "axb",
+        "a_c",
+        "a_c-2",
+        "abc",
+        "b\\c",
+        "b\\c-2",
+        "bxc-2",
+    ] {
+        insert(store, &new_post(&author, slug)).await;
+    }
+    let parent = insert(store, &new_post(&author, "parent")).await;
+    let mut child = new_post(&author, "hello-child");
+    child.parent_id = Some(parent.id);
+    insert(store, &child).await;
+    let mut other_kind = new_post(&author, "hello-page");
+    other_kind.kind = "page".into();
+    insert(store, &other_kind).await;
+
+    let repo = store.read().content();
+    // Callers must filter numeric suffixes themselves: `hello-world` matches too.
+    assert_eq!(
+        repo.slugs_with_prefix("post", None, "hello").await.unwrap(),
+        ["hello", "hello-2", "hello-world"]
+    );
+    assert_eq!(
+        repo.slugs_with_prefix("post", Some(parent.id), "hello")
+            .await
+            .unwrap(),
+        ["hello-child"]
+    );
+    assert_eq!(
+        repo.slugs_with_prefix("page", None, "hello").await.unwrap(),
+        ["hello-page"]
+    );
+    // LIKE metacharacters in the prefix are literal.
+    assert_eq!(
+        repo.slugs_with_prefix("post", None, "a%b").await.unwrap(),
+        ["a%b", "a%b-2"]
+    );
+    assert_eq!(
+        repo.slugs_with_prefix("post", None, "a_c").await.unwrap(),
+        ["a_c", "a_c-2"]
+    );
+    assert_eq!(
+        repo.slugs_with_prefix("post", None, "b\\c").await.unwrap(),
+        ["b\\c", "b\\c-2"]
+    );
+    // Case-sensitive on both backends.
+    assert_eq!(
+        repo.slugs_with_prefix("post", None, "Hello").await.unwrap(),
+        ["Hello-3"]
+    );
+    assert!(
+        repo.slugs_with_prefix("post", None, "zzz")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        repo.slugs_with_prefix("post", None, "a\u{0}").await,
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(matches!(
+        repo.slugs_with_prefix("po\u{0}st", None, "a").await,
+        Err(StoreError::Invalid(_))
+    ));
+}
+
+pub async fn slugs_with_prefix_limit_1000(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    let tx = store.begin().await.unwrap();
+    for i in 0..1_001 {
+        tx.content()
+            .insert(&new_post(&author, &format!("many-{i:04}")))
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let got = store
+        .read()
+        .content()
+        .slugs_with_prefix("post", None, "many")
+        .await
+        .unwrap();
+    assert_eq!(got.len(), 1_000);
+    assert_eq!(got[0], "many-0000");
+    assert_eq!(got[999], "many-0999");
+}

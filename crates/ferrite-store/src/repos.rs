@@ -129,6 +129,23 @@ pub trait ContentRepo: Send + Sync {
     async fn update(&self, item: &ContentItem) -> Result<ContentItem, StoreError>;
     /// Lists items matching the query with cursor pagination.
     async fn list(&self, query: &ContentQuery) -> Result<Page<ContentItem>, StoreError>;
+    /// Counts the items matching the query's filters (`limit`, `cursor` and `order` are
+    /// ignored). Uses the same WHERE clause as `list`.
+    async fn count(&self, query: &ContentQuery) -> Result<u64, StoreError>;
+    /// Fetches up to [`MAX_ID_FILTER`](crate::MAX_ID_FILTER) items by id in one query,
+    /// returned in the order of `ids`; missing ids are skipped and a repeated id yields
+    /// its item once (at its first position). More ids is `Invalid`.
+    async fn get_many(&self, ids: &[ContentId]) -> Result<Vec<ContentItem>, StoreError>;
+    /// Slugs of `kind` under `parent` that equal `prefix` or start with `prefix-`
+    /// (case-sensitive, binary order, at most [`MAX_SLUG_PREFIX_RESULTS`](crate::MAX_SLUG_PREFIX_RESULTS)).
+    /// Matches like `hello-world` are included too, so callers that allocate numeric
+    /// suffixes (`hello-2`) must filter the result themselves.
+    async fn slugs_with_prefix(
+        &self,
+        kind: &str,
+        parent: Option<ContentId>,
+        prefix: &str,
+    ) -> Result<Vec<String>, StoreError>;
     /// Deletes an item by id (missing: no-op). An item with children is `ForeignKey`.
     async fn delete(&self, id: ContentId) -> Result<(), StoreError>;
     /// Returns up to `limit` scheduled items whose publish time is at or before `now`.

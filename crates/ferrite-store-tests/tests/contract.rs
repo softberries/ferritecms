@@ -63,6 +63,11 @@ backend_tests!(
     content_rejects_nul_json,
     list_pagination_title_asc_mixed_case_unicode,
     revisions_newest_first_and_prune,
+    list_filters_ids_exclude_dates,
+    count_matches_list,
+    get_many_order_and_missing,
+    slugs_with_prefix_matches,
+    slugs_with_prefix_limit_1000,
 );
 
 backend_tests!(

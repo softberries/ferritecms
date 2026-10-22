@@ -17,8 +17,10 @@ pub use migrate::{
     next_min_binary, parse_directives, plan_down, verdict,
 };
 pub use paging::{
-    ListPart, MAX_EVENT_BATCH, SortKey, check_event_limit, check_limit, content_cursor,
-    content_list_plan, content_sort_key, encode_content_cursor, encode_text_cursor, text_cursor,
+    ListPart, MAX_EVENT_BATCH, MAX_ID_FILTER, MAX_SLUG_PREFIX_RESULTS, SortKey,
+    check_content_filters, check_event_limit, check_id_list, check_limit, content_cursor,
+    content_list_plan, content_sort_key, encode_content_cursor, encode_text_cursor,
+    slug_has_prefix, slug_prefix_bounds, text_cursor,
 };
 pub use repos::{
     ArtifactRepo, Backend, ContentRepo, ContentTypeRepo, EventRepo, MediaRepo, MenuRepo, MetaRepo,

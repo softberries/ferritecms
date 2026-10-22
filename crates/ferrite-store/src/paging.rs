@@ -1,6 +1,6 @@
 //! Keyset-pagination helpers shared by the backends so cursors mean the same thing everywhere.
 
-use ferrite_domain::{ContentItem, ContentOrder, Cursor, MAX_PAGE};
+use ferrite_domain::{ContentId, ContentItem, ContentOrder, ContentQuery, Cursor, MAX_PAGE};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -23,6 +23,44 @@ pub fn check_limit(limit: u32) -> Result<u32, StoreError> {
         )));
     }
     Ok(limit)
+}
+
+/// Most ids a content query's `ids`/`exclude` filter (or `get_many`) accepts.
+pub const MAX_ID_FILTER: usize = 200;
+
+/// Most slugs `slugs_with_prefix` returns.
+pub const MAX_SLUG_PREFIX_RESULTS: u32 = 1000;
+
+/// Validates an id list: at most [`MAX_ID_FILTER`] entries.
+pub fn check_id_list(what: &str, ids: &[ContentId]) -> Result<(), StoreError> {
+    if ids.len() > MAX_ID_FILTER {
+        return Err(StoreError::Invalid(format!(
+            "{what} holds more than {MAX_ID_FILTER} ids"
+        )));
+    }
+    Ok(())
+}
+
+/// Validates the filter part of a content query (shared by `list` and `count`).
+pub fn check_content_filters(query: &ContentQuery) -> Result<(), StoreError> {
+    if let Some(kind) = &query.kind {
+        validate_text("content kind", kind)?;
+    }
+    check_id_list("ids", &query.ids)?;
+    check_id_list("exclude", &query.exclude)
+}
+
+/// The exclusive upper bound of the slugs starting with `prefix-`: `prefix.` (`.` is the
+/// byte after `-`). Together with `>= prefix-` it is an exact, case-sensitive,
+/// index-friendly range under binary collation, with no LIKE escaping or ASCII case folding.
+pub fn slug_prefix_bounds(prefix: &str) -> (String, String) {
+    (format!("{prefix}-"), format!("{prefix}."))
+}
+
+/// Defence in depth for `slugs_with_prefix`: is `slug` exactly `prefix` or `prefix-…`?
+pub fn slug_has_prefix(slug: &str, prefix: &str) -> bool {
+    slug.strip_prefix(prefix)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
 }
 
 /// Largest batch an event reader may request (design 04 §4 polls `LIMIT 1000`).
