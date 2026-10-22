@@ -4,12 +4,11 @@
 
 use async_trait::async_trait;
 use ferrite_domain::{
-    Artifact, ArtifactHash, ContentId, Event, InstalledPlugin, InstalledTheme, Media, Menu,
-    NewEvent, Page, Redirect, RedirectId, Timestamp,
+    Artifact, ArtifactHash, ContentId, Event, InstalledPlugin, InstalledTheme, Media, NewEvent,
+    Timestamp,
 };
 use ferrite_store::{
-    ArtifactRepo, EventRepo, MediaRepo, MenuRepo, PluginKvRepo, PluginRepo, RedirectRepo,
-    SearchRepo, StoreError, ThemeRepo,
+    ArtifactRepo, EventRepo, MediaRepo, PluginKvRepo, PluginRepo, SearchRepo, StoreError, ThemeRepo,
 };
 
 pub(crate) struct Unsupported;
@@ -26,21 +25,6 @@ macro_rules! stub {
         }
     };
 }
-
-stub!(MenuRepo {
-    fn get(&str) -> Option<Menu>;
-    fn put(&Menu) -> ();
-    fn list() -> Vec<(String, String)>;
-    fn delete(&str) -> ();
-});
-
-stub!(RedirectRepo {
-    fn get_by_source(&str) -> Option<Redirect>;
-    fn upsert(&Redirect) -> ();
-    fn delete(RedirectId) -> ();
-    fn list(u32, Option<&str>) -> Page<Redirect>;
-    fn hit(RedirectId) -> ();
-});
 
 stub!(ArtifactRepo {
     fn insert_if_absent(&Artifact) -> bool;

@@ -2,6 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
+use ferrite_domain::{Redirect, RedirectId, RedirectOrigin, Timestamp};
 use ferrite_store::StoreError;
 use serde_json::json;
 
@@ -248,4 +249,129 @@ pub async fn schema_meta_roundtrip(db: &TestDb) {
     tx.commit().await.unwrap();
     let read = store.read().schema_meta().get("test_key").await.unwrap();
     assert_eq!(read.as_deref(), Some("two"));
+}
+
+fn redirect(source: &str, target: &str, code: u16) -> Redirect {
+    Redirect {
+        id: RedirectId::new(),
+        source_path: source.into(),
+        target: target.into(),
+        code,
+        hits: 0,
+        origin: RedirectOrigin::Manual,
+        created_at: Timestamp::now(),
+    }
+}
+
+pub async fn redirects_upsert_get_hit(db: &TestDb) {
+    let redirects = db.store().read().redirects();
+    let first = redirect("/old", "/new", 301);
+    redirects.upsert(&first).await.unwrap();
+    assert_eq!(
+        redirects.get_by_source("/old").await.unwrap().unwrap(),
+        first
+    );
+    assert!(redirects.get_by_source("/missing").await.unwrap().is_none());
+    // Source matching is exact and case-sensitive.
+    assert!(redirects.get_by_source("/OLD").await.unwrap().is_none());
+    let upper = redirect("/OLD", "/upper", 302);
+    redirects.upsert(&upper).await.unwrap();
+    assert_eq!(
+        redirects.get_by_source("/OLD").await.unwrap().unwrap(),
+        upper
+    );
+
+    redirects.hit(first.id).await.unwrap();
+    redirects.hit(first.id).await.unwrap();
+    assert_eq!(
+        redirects.get_by_source("/old").await.unwrap().unwrap().hits,
+        2
+    );
+
+    // Upsert by source updates target, code and origin; id, hits and created_at stay.
+    let mut again = redirect("/old", "/newer", 410);
+    again.origin = RedirectOrigin::Import;
+    redirects.upsert(&again).await.unwrap();
+    let got = redirects.get_by_source("/old").await.unwrap().unwrap();
+    assert_eq!(got.id, first.id);
+    assert_eq!(got.hits, 2);
+    assert_eq!(got.created_at, first.created_at);
+    assert_eq!((got.target.as_str(), got.code), ("/newer", 410));
+    assert_eq!(got.origin, RedirectOrigin::Import);
+
+    // Every allowed code is accepted; anything else is Invalid and changes nothing.
+    for code in [301, 302, 307, 308, 410] {
+        redirects
+            .upsert(&redirect("/old", "/x", code))
+            .await
+            .unwrap();
+    }
+    for bad in [0, 200, 299, 303, 404] {
+        assert!(matches!(
+            redirects.upsert(&redirect("/old", "/y", bad)).await,
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            redirects.upsert(&redirect("/fresh", "/y", bad)).await,
+            Err(StoreError::Invalid(_))
+        ));
+    }
+    assert_eq!(
+        redirects
+            .get_by_source("/old")
+            .await
+            .unwrap()
+            .unwrap()
+            .target,
+        "/x"
+    );
+    assert!(redirects.get_by_source("/fresh").await.unwrap().is_none());
+
+    assert!(matches!(
+        redirects.hit(RedirectId::new()).await,
+        Err(StoreError::NotFound)
+    ));
+    redirects.delete(first.id).await.unwrap();
+    assert!(redirects.get_by_source("/old").await.unwrap().is_none());
+    redirects.delete(first.id).await.unwrap();
+}
+
+pub async fn redirects_list_paginates_in_binary_order(db: &TestDb) {
+    let redirects = db.store().read().redirects();
+    // Binary order: "/B" < "/a" < "/a/b" < "/é".
+    for source in ["/a/b", "/é", "/B", "/a"] {
+        redirects
+            .upsert(&redirect(source, "/t", 301))
+            .await
+            .unwrap();
+    }
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut pages = 0;
+    loop {
+        let page = redirects.list(3, cursor.as_deref()).await.unwrap();
+        pages += 1;
+        seen.extend(page.items.iter().map(|r| r.source_path.clone()));
+        match page.next_cursor {
+            Some(c) => cursor = Some(c),
+            None => break,
+        }
+    }
+    assert_eq!(seen, ["/B", "/a", "/a/b", "/é"]);
+    assert_eq!(pages, 2);
+    let all = redirects.list(4, None).await.unwrap();
+    assert_eq!(all.items.len(), 4);
+    assert!(all.next_cursor.is_none());
+    assert!(matches!(
+        redirects.list(0, None).await,
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(matches!(
+        redirects.list(201, None).await,
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(matches!(
+        redirects.list(2, Some("???")).await,
+        Err(StoreError::Invalid(_))
+    ));
 }

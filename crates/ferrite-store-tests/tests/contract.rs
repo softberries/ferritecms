@@ -1,7 +1,7 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
-    backend_tests, backend_tests_spawning, content::*, migration_dirs, migration_files,
-    migrations::*, site::*, taxonomy::*,
+    backend_tests, backend_tests_spawning, content::*, menu::*, migration_dirs, migration_files,
+    migrations::*, site::*, taxonomy::*, user::*,
 };
 
 backend_tests!(
@@ -51,6 +51,25 @@ backend_tests!(
     term_links_replace_and_order,
     deleting_term_removes_links,
     content_list_by_term,
+    set_for_item_failure_inside_tx_keeps_links_and_tx,
+);
+
+backend_tests!(
+    menu_put_replaces_tree,
+    menu_rejects_bad_parents,
+    menu_put_failure_inside_tx_keeps_tree_and_tx,
+);
+
+backend_tests!(
+    redirects_upsert_get_hit,
+    redirects_list_paginates_in_binary_order
+);
+
+backend_tests!(
+    users_insert_get,
+    email_case_insensitive_unique,
+    unicode_login_and_slug_exact,
+    users_update_and_list,
 );
 
 backend_tests_spawning!(concurrent_writers);

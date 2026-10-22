@@ -2,12 +2,18 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use ferrite_domain::{OptionEntry, Timestamp};
-use ferrite_store::{OptionRepo, SchemaMetaRepo, StoreError, validate_json};
+use ferrite_domain::{OptionEntry, Page, Redirect, RedirectId, Timestamp};
+use ferrite_store::{
+    OptionRepo, RedirectRepo, SchemaMetaRepo, StoreError, check_limit, check_redirect_code,
+    encode_text_cursor, text_cursor, validate_json,
+};
 use sqlx::types::Json;
 
 use super::PgRepos;
-use crate::{codec, exec::run};
+use crate::{
+    codec::{self, REDIRECT_COLUMNS},
+    exec::run,
+};
 
 #[async_trait]
 impl SchemaMetaRepo for PgRepos {
@@ -79,5 +85,87 @@ impl OptionRepo for PgRepos {
         .fetch_all(e)
         })?;
         rows.iter().map(codec::option_entry).collect()
+    }
+}
+
+#[async_trait]
+impl RedirectRepo for PgRepos {
+    async fn get_by_source(&self, source: &str) -> Result<Option<Redirect>, StoreError> {
+        // The unique index is on the plain column: exact, case-sensitive.
+        let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {REDIRECT_COLUMNS} FROM redirects WHERE source_path = $1"
+        )))
+        .bind(source)
+        .fetch_optional(e))?;
+        row.as_ref().map(codec::redirect).transpose()
+    }
+
+    async fn upsert(&self, redirect: &Redirect) -> Result<(), StoreError> {
+        check_redirect_code(redirect.code)?;
+        // An existing row keeps its id, hits and creation time.
+        run!(&self.exec, |e| sqlx::query(
+            "INSERT INTO redirects (id, source_path, target, code, hits, origin, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (source_path) DO UPDATE SET target = excluded.target, \
+             code = excluded.code, origin = excluded.origin"
+        )
+        .bind(redirect.id.as_uuid())
+        .bind(&redirect.source_path)
+        .bind(&redirect.target)
+        .bind(i32::from(redirect.code))
+        .bind(redirect.hits)
+        .bind(redirect.origin.as_str())
+        .bind(DateTime::<Utc>::from(redirect.created_at))
+        .execute(e))
+        .map(|_| ())
+    }
+
+    async fn delete(&self, id: RedirectId) -> Result<(), StoreError> {
+        run!(&self.exec, |e| sqlx::query(
+            "DELETE FROM redirects WHERE id = $1"
+        )
+        .bind(id.as_uuid())
+        .execute(e))
+        .map(|_| ())
+    }
+
+    async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<Redirect>, StoreError> {
+        let limit = check_limit(limit)?;
+        let after = cursor.map(text_cursor).transpose()?;
+        let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {REDIRECT_COLUMNS} FROM redirects \
+             WHERE $1::text IS NULL OR (source_path COLLATE \"C\", id) > ($1::text, $2::uuid) \
+             ORDER BY source_path COLLATE \"C\", id LIMIT $3"
+        )))
+        .bind(after.as_ref().map(|(k, _)| k.as_str()))
+        .bind(after.as_ref().map(|(_, id)| *id))
+        .bind(i64::from(limit) + 1)
+        .fetch_all(e))?;
+        let mut items = rows
+            .iter()
+            .map(codec::redirect)
+            .collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = if items.len() > limit as usize {
+            items.truncate(limit as usize);
+            items
+                .last()
+                .map(|r| encode_text_cursor(&r.source_path, r.id.as_uuid()))
+        } else {
+            None
+        };
+        Ok(Page { items, next_cursor })
+    }
+
+    async fn hit(&self, id: RedirectId) -> Result<(), StoreError> {
+        let done = run!(&self.exec, |e| sqlx::query(
+            "UPDATE redirects SET hits = hits + 1, last_hit_at = $1 WHERE id = $2"
+        )
+        .bind(DateTime::<Utc>::from(Timestamp::now()))
+        .bind(id.as_uuid())
+        .execute(e))?;
+        if done.rows_affected() == 0 {
+            return Err(StoreError::NotFound);
+        }
+        Ok(())
     }
 }

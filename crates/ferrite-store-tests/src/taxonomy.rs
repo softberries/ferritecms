@@ -230,6 +230,57 @@ pub async fn term_links_replace_and_order(db: &TestDb) {
     assert!(terms.for_item(item.id).await.unwrap().is_empty());
 }
 
+/// R11: a failing `set_for_item` inside a caller's `Tx` keeps the previous links and
+/// leaves the outer transaction usable.
+pub async fn set_for_item_failure_inside_tx_keeps_links_and_tx(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    let item = store
+        .read()
+        .content()
+        .insert(&new_post(&author, "tx-links"))
+        .await
+        .unwrap();
+    let a = term("tag", "a", "A", None);
+    let b = term("tag", "b", "B", None);
+    insert_terms(store, &[&a, &b]).await;
+    store
+        .read()
+        .terms()
+        .set_for_item(item.id, &[a.id])
+        .await
+        .unwrap();
+
+    let tx = store.begin().await.unwrap();
+    tx.options()
+        .set("before", &serde_json::json!(1), false)
+        .await
+        .unwrap();
+    assert!(matches!(
+        tx.terms()
+            .set_for_item(item.id, &[b.id, TermId::new()])
+            .await,
+        Err(StoreError::ForeignKey { .. })
+    ));
+    assert_eq!(
+        tx.terms().for_item(item.id).await.unwrap(),
+        std::slice::from_ref(&a)
+    );
+    tx.options()
+        .set("after", &serde_json::json!(2), false)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(
+        store.read().terms().for_item(item.id).await.unwrap(),
+        std::slice::from_ref(&a)
+    );
+    let options = store.read().options();
+    assert!(options.get("before").await.unwrap().is_some());
+    assert!(options.get("after").await.unwrap().is_some());
+}
+
 pub async fn deleting_term_removes_links(db: &TestDb) {
     let store = db.store();
     let author = fixture_user(store).await;

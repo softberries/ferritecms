@@ -2,8 +2,8 @@
 
 use chrono::{DateTime, Utc};
 use ferrite_domain::{
-    ContentId, ContentItem, ContentType, OptionEntry, Revision, RevisionId, Secret, Taxonomy, Term,
-    TermId, User, UserId,
+    ContentId, ContentItem, ContentType, MenuItem, MenuItemId, OptionEntry, Redirect, RedirectId,
+    Revision, RevisionId, Secret, Taxonomy, Term, TermId, User, UserId,
 };
 use ferrite_store::StoreError;
 use sqlx::{Row, postgres::PgRow, types::Json};
@@ -160,5 +160,43 @@ pub(crate) fn term(row: &PgRow) -> Result<Term, StoreError> {
         name: row.try_get("name").map_err(map_db_err)?,
         description: row.try_get("description").map_err(map_db_err)?,
         parent_id: parent.map(TermId::from_uuid),
+    })
+}
+
+pub(crate) const MENU_ITEM_COLUMNS: &str = "id, parent_id, position, kind, target_id, url, label";
+
+/// Maps a row selected with [`MENU_ITEM_COLUMNS`].
+pub(crate) fn menu_item(row: &PgRow) -> Result<MenuItem, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let parent: Option<Uuid> = row.try_get("parent_id").map_err(map_db_err)?;
+    let kind: String = row.try_get("kind").map_err(map_db_err)?;
+    Ok(MenuItem {
+        id: MenuItemId::from_uuid(id),
+        parent_id: parent.map(MenuItemId::from_uuid),
+        position: row.try_get("position").map_err(map_db_err)?,
+        kind: kind.parse()?,
+        target_id: row.try_get("target_id").map_err(map_db_err)?,
+        url: row.try_get("url").map_err(map_db_err)?,
+        label: row.try_get("label").map_err(map_db_err)?,
+    })
+}
+
+pub(crate) const REDIRECT_COLUMNS: &str = "id, source_path, target, code, hits, origin, created_at";
+
+/// Maps a row selected with [`REDIRECT_COLUMNS`].
+pub(crate) fn redirect(row: &PgRow) -> Result<Redirect, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let code: i32 = row.try_get("code").map_err(map_db_err)?;
+    let origin: String = row.try_get("origin").map_err(map_db_err)?;
+    let created_at: DateTime<Utc> = row.try_get("created_at").map_err(map_db_err)?;
+    Ok(Redirect {
+        id: RedirectId::from_uuid(id),
+        source_path: row.try_get("source_path").map_err(map_db_err)?,
+        target: row.try_get("target").map_err(map_db_err)?,
+        code: u16::try_from(code)
+            .map_err(|_| StoreError::Database(format!("corrupt redirect code {code}")))?,
+        hits: row.try_get("hits").map_err(map_db_err)?,
+        origin: origin.parse()?,
+        created_at: created_at.into(),
     })
 }

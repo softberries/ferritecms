@@ -2,6 +2,7 @@
 //! accessors with a real implementation on [`PgRepos`].
 
 mod content;
+mod menu;
 mod site;
 mod stub;
 mod taxonomy;
@@ -54,13 +55,13 @@ impl Repos for PgRepos {
         self
     }
     fn menus(&self) -> &dyn MenuRepo {
-        &Unsupported
+        self
     }
     fn options(&self) -> &dyn OptionRepo {
         self
     }
     fn redirects(&self) -> &dyn RedirectRepo {
-        &Unsupported
+        self
     }
     fn users(&self) -> &dyn UserRepo {
         self

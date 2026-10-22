@@ -65,6 +65,21 @@ pub fn content_cursor(order: ContentOrder, cursor: &str) -> Result<(SortKey, Uui
     Ok((key, id))
 }
 
+/// Encodes a cursor whose sort key is text (redirect source path, user login).
+pub fn encode_text_cursor(key: &str, id: Uuid) -> String {
+    Cursor::encode(&json!(key), id)
+}
+
+/// Decodes a cursor made by [`encode_text_cursor`].
+pub fn text_cursor(cursor: &str) -> Result<(String, Uuid), StoreError> {
+    match Cursor::decode(cursor)? {
+        (Value::String(key), id) => Ok((key, id)),
+        _ => Err(StoreError::Invalid(
+            "cursor does not match the query order".into(),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

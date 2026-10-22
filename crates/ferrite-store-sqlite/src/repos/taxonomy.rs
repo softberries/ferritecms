@@ -1,7 +1,8 @@
 //! Taxonomies, terms and term links.
 //!
 //! `TermRepo::set_for_item` is a delete plus inserts and must be atomic. Inside a `Tx`
-//! it runs on the transaction. Through `Store::read()` the writer is a pool, so it opens
+//! it runs in a savepoint on the transaction (R11), so a failure undoes only the
+//! replacement. Through `Store::read()` the writer is a pool, so it opens
 //! its own transaction with `pool.begin()` on the single writer connection and commits
 //! it; any failure drops the transaction and rolls back.
 
@@ -13,7 +14,7 @@ use sqlx::SqliteConnection;
 use super::SqliteRepos;
 use crate::{
     codec::{self, TAXONOMY_COLUMNS, TERM_COLUMNS},
-    exec::{Exec, finished, map_db_err, run},
+    exec::{atomic, map_db_err, run},
 };
 
 #[async_trait]
@@ -153,17 +154,7 @@ impl TermRepo for SqliteRepos {
     }
 
     async fn set_for_item(&self, item: ContentId, terms: &[TermId]) -> Result<(), StoreError> {
-        match &self.writer {
-            Exec::Pool(pool) => {
-                let mut tx = pool.begin().await.map_err(map_db_err)?;
-                replace_links(&mut tx, item, terms).await?;
-                tx.commit().await.map_err(map_db_err)
-            }
-            Exec::Tx(shared) => match shared.lock().await.as_mut() {
-                Some(tx) => replace_links(tx, item, terms).await,
-                None => Err(finished()),
-            },
-        }
+        atomic!(&self.writer, |conn| replace_links(conn, item, terms))
     }
 
     async fn for_item(&self, item: ContentId) -> Result<Vec<Term>, StoreError> {

@@ -61,3 +61,55 @@ macro_rules! run {
     };
 }
 pub(crate) use run;
+
+/// `atomic!(&self.exec, |conn| async_body)`: runs a multi-statement body atomically.
+/// On a pool it opens its own transaction and commits it; inside a caller's `Tx` it opens
+/// a savepoint (nested transaction) and releases it, so a failure rolls back only the body
+/// and leaves the outer transaction usable (R11). `conn` is `&mut` the connection; the
+/// body is an async block returning `Result<_, StoreError>`.
+macro_rules! atomic {
+    ($exec:expr, |$c:ident| $body:expr) => {
+        match $exec {
+            $crate::exec::Exec::Pool(pool) => {
+                let mut tx = pool.begin().await.map_err($crate::exec::map_db_err)?;
+                let out = {
+                    let $c = &mut *tx;
+                    $body.await
+                };
+                match out {
+                    Ok(v) => {
+                        tx.commit().await.map_err($crate::exec::map_db_err)?;
+                        Ok(v)
+                    }
+                    Err(e) => {
+                        let _ = tx.rollback().await;
+                        Err(e)
+                    }
+                }
+            }
+            $crate::exec::Exec::Tx(shared) => match shared.lock().await.as_mut() {
+                Some(t) => {
+                    let mut sp = sqlx::Connection::begin(&mut **t)
+                        .await
+                        .map_err($crate::exec::map_db_err)?;
+                    let out = {
+                        let $c = &mut *sp;
+                        $body.await
+                    };
+                    match out {
+                        Ok(v) => {
+                            sp.commit().await.map_err($crate::exec::map_db_err)?;
+                            Ok(v)
+                        }
+                        Err(e) => {
+                            let _ = sp.rollback().await;
+                            Err(e)
+                        }
+                    }
+                }
+                None => Err($crate::exec::finished()),
+            },
+        }
+    };
+}
+pub(crate) use atomic;
