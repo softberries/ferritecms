@@ -36,6 +36,9 @@ pub enum PluginError {
     /// The wasmtime engine could not be configured.
     #[error("engine configuration failed: {0}")]
     Engine(String),
+    /// A `HostConfig` value makes the host unusable (zero deadline, tick or threshold).
+    #[error("invalid host configuration: {0}")]
+    InvalidConfig(String),
     /// The component failed install-time inspection.
     #[error("component rejected: {0}")]
     Inspect(#[from] InspectError),

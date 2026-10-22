@@ -17,13 +17,14 @@ use crate::services::HostServices;
 /// Per-store instance/table/memory caps: the measured minimum for components built with
 /// `cargo build --target wasm32-wasip2` (wit-component output). One less instance or
 /// table fails instantiation with "instance count too high" / "table count too high".
-const MAX_INSTANCES: usize = 3;
-const MAX_TABLES: usize = 2;
-const MAX_MEMORIES: usize = 1;
+/// Also used to size the pooling allocator (`engine.rs`), hence `u32`.
+pub(crate) const MAX_INSTANCES: u32 = 3;
+pub(crate) const MAX_TABLES: u32 = 2;
+pub(crate) const MAX_MEMORIES: u32 = 1;
 /// Largest size any one table may reach. Without it, `table.grow` on an unbounded table
 /// allocates host memory outside the linear-memory cap. hello needs between 81 and 90
 /// elements (measured), so 10_000 leaves >100x headroom.
-const MAX_TABLE_ELEMENTS: usize = 10_000;
+pub(crate) const MAX_TABLE_ELEMENTS: usize = 10_000;
 
 /// Most live host resources (WASI streams, pollables, …) one call may hold: caps both the
 /// `ResourceTable` and wasmtime's store-wide component handle count. Each entry is host
@@ -182,9 +183,10 @@ impl HostState {
     ) -> Self {
         let limits = StoreLimitsBuilder::new()
             .memory_size(memory_bytes)
-            .instances(MAX_INSTANCES)
-            .tables(MAX_TABLES)
-            .memories(MAX_MEMORIES)
+            // u32 -> usize is lossless on every target wasmtime supports.
+            .instances(MAX_INSTANCES as usize)
+            .tables(MAX_TABLES as usize)
+            .memories(MAX_MEMORIES as usize)
             .table_elements(MAX_TABLE_ELEMENTS)
             .build();
         let limits = CallLimits {

@@ -9,6 +9,7 @@ use wasmtime::{Config, Engine, InstanceAllocationStrategy, PoolingAllocationConf
 
 use crate::config::HostConfig;
 use crate::error::PluginError;
+use crate::state::{MAX_INSTANCES, MAX_MEMORIES, MAX_TABLE_ELEMENTS, MAX_TABLES};
 
 /// Concurrent component instances the pooling allocator reserves slots for. Calls beyond
 /// this fail to instantiate (counted as a plugin failure), so it is sized well above
@@ -23,14 +24,14 @@ pub fn build_engine(cfg: &HostConfig) -> Result<Engine, PluginError> {
     if cfg.pooling {
         let mut pool = PoolingAllocationConfig::new();
         pool.total_component_instances(POOL_SLOTS)
-            .total_core_instances(POOL_SLOTS * 3)
-            .total_memories(POOL_SLOTS)
-            .total_tables(POOL_SLOTS * 2)
-            .max_core_instances_per_component(3)
-            .max_memories_per_component(1)
-            .max_tables_per_component(2)
+            .total_core_instances(POOL_SLOTS * MAX_INSTANCES)
+            .total_memories(POOL_SLOTS * MAX_MEMORIES)
+            .total_tables(POOL_SLOTS * MAX_TABLES)
+            .max_core_instances_per_component(MAX_INSTANCES)
+            .max_memories_per_component(MAX_MEMORIES)
+            .max_tables_per_component(MAX_TABLES)
             .max_memory_size(cfg.memory_bytes)
-            .table_elements(10_000);
+            .table_elements(MAX_TABLE_ELEMENTS);
         config.allocation_strategy(InstanceAllocationStrategy::Pooling(pool));
     }
     Engine::new(&config).map_err(|e| PluginError::Engine(format!("{e:#}")))

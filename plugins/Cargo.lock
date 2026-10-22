@@ -172,6 +172,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "order-a"
+version = "0.1.0"
+dependencies = [
+ "ferrite-sdk",
+]
+
+[[package]]
+name = "order-b"
+version = "0.1.0"
+dependencies = [
+ "ferrite-sdk",
+]
+
+[[package]]
 name = "panic"
 version = "0.1.0"
 dependencies = [

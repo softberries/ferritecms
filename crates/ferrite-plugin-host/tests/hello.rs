@@ -209,3 +209,41 @@ async fn hello_works_with_pooling_allocator() -> TestResult {
     assert_eq!(head.metas, vec![generator()]);
     Ok(())
 }
+
+/// Install `name` with its `render.head` priority set to `priority`.
+fn install_at(host: &PluginHost, name: &str, priority: i32) -> TestResult {
+    let manifest = plugin_manifest(name).replace(
+        "\"render.head\" = 10",
+        &format!("\"render.head\" = {priority}"),
+    );
+    host.install(Manifest::parse(&manifest)?, &plugin_wasm(name))?;
+    Ok(())
+}
+
+/// `content` of every meta tag, in output order (hello adds `ferrite-hello`; the order
+/// fixtures add their own name).
+async fn chain(host: &PluginHost) -> Vec<String> {
+    match host
+        .apply_filter("render.head", FilterValue::Head(Head::default()), &req())
+        .await
+    {
+        FilterValue::Head(h) => h.metas.into_iter().map(|m| m.content).collect(),
+        other => vec![format!("unexpected {other:?}")],
+    }
+}
+
+#[tokio::test]
+async fn filters_run_by_priority_then_name() -> TestResult {
+    let host = PluginHost::new(HostConfig::default(), Arc::new(InMemoryServices::new()))?;
+    // Installed in an order that matches neither priority nor name order.
+    install_at(&host, "order-a", 10)?;
+    install_at(&host, "hello", 10)?;
+    install_at(&host, "order-b", 5)?;
+    // order-b (5) first; hello and order-a tie at 10, broken by name.
+    assert_eq!(chain(&host).await, ["order-b", "ferrite-hello", "order-a"]);
+
+    // Reinstalling order-b at 20 moves it to the end of the chain.
+    install_at(&host, "order-b", 20)?;
+    assert_eq!(chain(&host).await, ["ferrite-hello", "order-a", "order-b"]);
+    Ok(())
+}

@@ -77,12 +77,27 @@ fn effective_limit(
     }
 }
 
+/// Reject settings that would make the host unusable: a zero epoch tick never advances
+/// deadlines, a zero deadline fails every call, and a zero failure threshold disables a
+/// plugin on its first failure.
+fn validate_config(cfg: &HostConfig) -> Result<(), PluginError> {
+    let zero = [
+        ("epoch_tick", cfg.epoch_tick.is_zero()),
+        ("render_deadline", cfg.render_deadline.is_zero()),
+        ("action_deadline", cfg.action_deadline.is_zero()),
+        ("route_deadline", cfg.route_deadline.is_zero()),
+        ("disable_after_failures", cfg.disable_after_failures == 0),
+    ];
+    match zero.iter().find(|(_, is_zero)| *is_zero) {
+        Some((name, _)) => Err(PluginError::InvalidConfig(format!("{name} must be > 0"))),
+        None => Ok(()),
+    }
+}
+
 impl PluginHost {
     /// Build the engine and start the epoch ticker (stopped when the host is dropped).
     pub fn new(cfg: HostConfig, services: Arc<dyn HostServices>) -> Result<Self, PluginError> {
-        if cfg.epoch_tick.is_zero() {
-            return Err(PluginError::Engine("epoch_tick must be > 0".into()));
-        }
+        validate_config(&cfg)?;
         let engine = build_engine(&cfg)?;
         let ticker = EpochTicker::start(engine.clone(), cfg.epoch_tick)?;
         let failures = FailureTracker::new(cfg.disable_after_failures, cfg.failure_window);
@@ -349,5 +364,49 @@ impl PluginHost {
     /// plugins; older records are dropped.
     pub fn failures(&self) -> Vec<FailureRecord> {
         self.failures.history()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn new_host(cfg: HostConfig) -> Result<PluginHost, PluginError> {
+        PluginHost::new(cfg, Arc::new(InMemoryServices::new()))
+    }
+
+    #[test]
+    fn degenerate_configs_are_rejected() {
+        let base = HostConfig::default;
+        let bad = [
+            HostConfig {
+                disable_after_failures: 0,
+                ..base()
+            },
+            HostConfig {
+                render_deadline: Duration::ZERO,
+                ..base()
+            },
+            HostConfig {
+                action_deadline: Duration::ZERO,
+                ..base()
+            },
+            HostConfig {
+                route_deadline: Duration::ZERO,
+                ..base()
+            },
+            HostConfig {
+                epoch_tick: Duration::ZERO,
+                ..base()
+            },
+        ];
+        for cfg in bad {
+            let shown = format!("{cfg:?}");
+            assert!(
+                matches!(new_host(cfg), Err(PluginError::InvalidConfig(_))),
+                "{shown}"
+            );
+        }
+        assert!(new_host(base()).is_ok());
     }
 }

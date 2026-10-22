@@ -2,6 +2,8 @@
 resolver = "3"
 members = [
     "examples/hello",
+    "examples/order-a",
+    "examples/order-b",
     "examples/hostile/undeclared-import",
     "examples/hostile/sockets",
     "examples/hostile/loop",
