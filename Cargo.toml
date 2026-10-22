@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ferrite-domain", "crates/ferrite-plugin-host", "crates/ferrite-sdk"]
+members = ["crates/ferrite-domain", "crates/ferrite-store", "crates/ferrite-plugin-host", "crates/ferrite-sdk"]
 
 [workspace.package]
 version = "0.1.0"
