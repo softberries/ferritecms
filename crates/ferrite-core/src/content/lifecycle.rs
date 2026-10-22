@@ -10,7 +10,7 @@
 //! `archive:<kind>` and the item's `term:<id>` keys (listings change). Transitions only
 //! change status and publish times, so they write **no revision**.
 
-use ferrite_domain::{ContentId, ContentItem, ContentStatus, Timestamp};
+use ferrite_domain::{ContentId, ContentItem, ContentStatus, Role, Timestamp};
 use ferrite_store::{Repos, StoreError};
 
 use super::ContentService;
@@ -115,8 +115,7 @@ impl ContentService {
     }
 
     /// Restores a trashed item as a draft and indexes it for search again. Needs
-    /// `edit_own` for own items, `edit_others` otherwise (the trashed status does not
-    /// limit contributors here). Writes no revision.
+    /// `edit_own` for own items, `edit_others` otherwise; contributors are forbidden. Writes no revision.
     pub async fn restore(
         &self,
         actor: &Actor,
@@ -127,14 +126,22 @@ impl ContentService {
             .await
     }
 
-    /// Permanently deletes a trashed item (anything else is `Invalid`); same rights as
-    /// restore. Meta, revisions, term links and the search entry go with it (cascading
-    /// foreign keys). An item that still has children is `Invalid("has children")`.
-    /// No version is taken: only trashed items qualify and nothing is lost by a
-    /// concurrent edit of one.
-    pub async fn delete(&self, actor: &Actor, id: ContentId) -> Result<(), CoreError> {
+    /// Permanently deletes a trashed item at `expected_version` (a stale version is
+    /// `Conflict`, a non-trashed item `Invalid`); same rights as restore. Meta,
+    /// revisions, term links and the search entry go with it (cascading foreign keys).
+    /// An item that still has children is `Invalid("has children")`.
+    ///
+    /// The row is first written with its own version check (a touch that bumps the
+    /// version), which locks it: a concurrent restore either committed before (our
+    /// check fails with `Conflict`) or fails its own version check afterwards.
+    pub async fn delete(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+        expected_version: i64,
+    ) -> Result<(), CoreError> {
         let tx = self.store.begin().await?;
-        let done = delete_in(tx.as_ref(), actor, id).await;
+        let done = delete_in(tx.as_ref(), actor, id, expected_version).await;
         finish(tx, done).await
     }
 
@@ -146,8 +153,8 @@ impl ContentService {
     /// still scheduled and due (`published_at` is set to `now` if it was never set,
     /// `scheduled_at` is cleared). Concurrent calls publish each item exactly once: the
     /// loser of a race fails the optimistic version check (or sees the new status) and
-    /// counts nothing. Items that are skipped stay scheduled and are not retried within
-    /// the call.
+    /// counts nothing. Items that are skipped (including after a store error, which is logged
+    /// at warn) stay scheduled and are not retried within the call.
     pub async fn publish_due(&self, now: Timestamp) -> Result<u32, CoreError> {
         let mut seen = std::collections::HashSet::new();
         let mut published = 0;
@@ -172,7 +179,9 @@ impl ContentService {
                 match finish(tx, done).await {
                     Ok(true) => published += 1,
                     Ok(false) | Err(CoreError::Conflict { .. }) => {}
-                    Err(e) => return Err(e),
+                    Err(e) => {
+                        tracing::warn!(item = %id, error = %e, "publish_due: skipping item");
+                    }
                 }
             }
         }
@@ -241,12 +250,24 @@ async fn transition_in(
     Ok(saved)
 }
 
-async fn delete_in(repos: &dyn Repos, actor: &Actor, id: ContentId) -> Result<(), CoreError> {
+async fn delete_in(
+    repos: &dyn Repos,
+    actor: &Actor,
+    id: ContentId,
+    expected_version: i64,
+) -> Result<(), CoreError> {
     let current = repos.content().get(id).await?.ok_or(CoreError::NotFound)?;
     authorize_ownership(actor, &current)?;
+    if current.version != expected_version {
+        return Err(CoreError::Conflict {
+            current_version: current.version,
+        });
+    }
     if current.status != ContentStatus::Trash {
         return Err(illegal(current.status, "deleted"));
     }
+    // Version-checked touch: see `delete`.
+    repos.content().update(&current).await?;
     // Read the terms first: the links go with the item.
     let terms = repos.terms().for_item(id).await?;
     match repos.content().delete(id).await {
@@ -341,7 +362,15 @@ fn authorize(actor: &Actor, item: &ContentItem, action: Action) -> Result<(), Co
 }
 
 /// `edit_own` for the author, `edit_others` for anyone else, whatever the status.
+/// Contributors have no rights on trashed items at all.
 fn authorize_ownership(actor: &Actor, item: &ContentItem) -> Result<(), CoreError> {
+    if actor.role == Role::Contributor {
+        return Err(CoreError::Forbidden(if item.author_id == actor.user {
+            Capability::EditOwn.as_str()
+        } else {
+            Capability::EditOthers.as_str()
+        }));
+    }
     if item.author_id == actor.user {
         require(actor, Capability::EditOwn)
     } else {

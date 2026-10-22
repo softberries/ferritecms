@@ -215,9 +215,24 @@ pub async fn transitions_and_events(db: &TestDb) {
     assert_eq!(revision_count(store, item.id).await, revs);
 
     // delete: trash first, then the row and its dependents are gone.
-    svc.trash(&admin, item.id, restored.version).await.unwrap();
+    let trashed = svc.trash(&admin, item.id, restored.version).await.unwrap();
+    store
+        .read()
+        .meta()
+        .set(item.id, "color", &json!("red"))
+        .await
+        .unwrap();
+    store
+        .read()
+        .search()
+        .index(item.id, "Life", "zebra")
+        .await
+        .unwrap();
+    assert_eq!(search(store, "zebra").await, [item.id]);
     let before = max_seq(store).await;
-    svc.delete(&admin, item.id).await.unwrap();
+    svc.delete(&admin, item.id, trashed.version).await.unwrap();
+    assert!(store.read().meta().list(item.id).await.unwrap().is_empty());
+    assert!(search(store, "zebra").await.is_empty());
     assert!(matches!(svc.get(item.id).await, Err(CoreError::NotFound)));
     assert_eq!(revision_count(store, item.id).await, 0);
     assert!(
@@ -237,7 +252,7 @@ pub async fn transitions_and_events(db: &TestDb) {
         Err(CoreError::NotFound)
     ));
     assert!(matches!(
-        svc.delete(&admin, ContentId::new()).await,
+        svc.delete(&admin, ContentId::new(), 1).await,
         Err(CoreError::NotFound)
     ));
     // End on a committed operation.
@@ -258,7 +273,7 @@ pub async fn illegal_transitions_and_conflicts(db: &TestDb) {
     ] {
         assert!(invalid(r).starts_with("illegal transition draft -> "));
     }
-    assert!(invalid(svc.delete(&admin, item.id).await).starts_with("illegal transition"));
+    assert!(invalid(svc.delete(&admin, item.id, 1).await).starts_with("illegal transition"));
     // Past or present schedule times.
     assert!(invalid(svc.schedule(&admin, item.id, 1, in_micros(-HOUR)).await).contains("future"));
 
@@ -342,8 +357,22 @@ pub async fn permissions(db: &TestDb) {
         .trash(&contributor, mine.id, pending.version)
         .await
         .unwrap();
+    // ... but neither restore nor delete it.
+    for who in [&contributor, &actor(store, Role::Contributor).await] {
+        assert!(matches!(
+            svc.restore(who, mine.id, trashed.version).await,
+            Err(CoreError::Forbidden(_))
+        ));
+        assert!(matches!(
+            svc.delete(who, mine.id, trashed.version).await,
+            Err(CoreError::Forbidden(_))
+        ));
+    }
+    assert_eq!(svc.get(mine.id).await.unwrap(), trashed);
+    let restored = svc.restore(&author, mine.id, trashed.version).await;
+    assert!(matches!(restored, Err(CoreError::Forbidden("edit_others"))));
     let restored = svc
-        .restore(&contributor, mine.id, trashed.version)
+        .restore(&editor, mine.id, trashed.version)
         .await
         .unwrap();
     assert_eq!(restored.status, ContentStatus::Draft);
@@ -379,11 +408,21 @@ pub async fn permissions(db: &TestDb) {
     // Delete of someone else's trashed item needs edit_others.
     let trashed = svc.trash(&editor, theirs.id, live.version).await.unwrap();
     assert!(matches!(
-        svc.delete(&other_author, theirs.id).await,
+        svc.delete(&other_author, theirs.id, trashed.version).await,
+        Err(CoreError::Forbidden("edit_others"))
+    ));
+    assert!(matches!(
+        svc.restore(&other_author, theirs.id, trashed.version).await,
         Err(CoreError::Forbidden("edit_others"))
     ));
     assert_eq!(svc.get(theirs.id).await.unwrap(), trashed);
-    svc.delete(&editor, theirs.id).await.unwrap();
+    // The author may restore and delete their own trashed item.
+    let back = svc
+        .restore(&author, theirs.id, trashed.version)
+        .await
+        .unwrap();
+    let again = svc.trash(&author, theirs.id, back.version).await.unwrap();
+    svc.delete(&author, theirs.id, again.version).await.unwrap();
 }
 
 pub async fn delete_with_children_is_invalid(db: &TestDb) {
@@ -396,14 +435,19 @@ pub async fn delete_with_children_is_invalid(db: &TestDb) {
     let child = svc.create(&admin, d).await.unwrap();
     let trashed = svc.trash(&admin, parent.id, parent.version).await.unwrap();
     let seq = max_seq(store).await;
-    assert_eq!(invalid(svc.delete(&admin, parent.id).await), "has children");
+    assert_eq!(
+        invalid(svc.delete(&admin, parent.id, trashed.version).await),
+        "has children"
+    );
     assert_eq!(svc.get(parent.id).await.unwrap(), trashed);
     assert_eq!(max_seq(store).await, seq);
     // Once the child is gone, the parent can go.
     let c = svc.trash(&admin, child.id, child.version).await.unwrap();
     assert_eq!(c.status, ContentStatus::Trash);
-    svc.delete(&admin, child.id).await.unwrap();
-    svc.delete(&admin, parent.id).await.unwrap();
+    svc.delete(&admin, child.id, c.version).await.unwrap();
+    svc.delete(&admin, parent.id, trashed.version)
+        .await
+        .unwrap();
     assert!(matches!(svc.get(parent.id).await, Err(CoreError::NotFound)));
 }
 
@@ -542,6 +586,22 @@ pub async fn concurrent_publish_due_publishes_each_once(db: Arc<TestDb>) {
     svc.create(&admin, draft("post", "Done")).await.unwrap();
 }
 
+pub async fn delete_is_guarded_by_version(db: &TestDb) {
+    // A restore between the caller's read and its delete must save the item.
+    let store = db.store();
+    let svc = service(db);
+    let admin = actor(store, Role::Admin).await;
+    let it = svc.create(&admin, draft("post", "Guard")).await.unwrap();
+    let trashed = svc.trash(&admin, it.id, it.version).await.unwrap();
+    let restored = svc.restore(&admin, it.id, trashed.version).await.unwrap();
+    assert!(matches!(
+        svc.delete(&admin, it.id, trashed.version).await,
+        Err(CoreError::Conflict { current_version }) if current_version == restored.version
+    ));
+    assert_eq!(svc.get(it.id).await.unwrap(), restored);
+    svc.create(&admin, draft("post", "Done")).await.unwrap();
+}
+
 pub async fn stale_version_conflicts(db: &TestDb) {
     // An edit between the caller's read and its transition makes the version stale.
     let store = db.store();
@@ -569,6 +629,7 @@ backend_tests!(
     publish_due_handles_more_than_one_batch,
     publish_due_skips_items_changed_since_listing,
     stale_version_conflicts,
+    delete_is_guarded_by_version,
 );
 
 backend_tests_spawning!(concurrent_publish_due_publishes_each_once);
