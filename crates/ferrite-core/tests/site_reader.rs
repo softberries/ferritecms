@@ -1214,7 +1214,40 @@ pub async fn listing_call_count_is_constant(db: &TestDb) {
     assert!(counting.calls() <= 3, "{}", counting.calls());
 }
 
+/// `media(id)`: only published media items (R9/I4, the media rule); `post:<id>` is
+/// recorded either way; non-media items are `None`.
+pub async fn media_is_published_only(db: &TestDb) {
+    let store = db.shared_store();
+    let r = reader(store.clone());
+    let author = user(store.as_ref(), "mia", Role::Author).await;
+    let public = media(store.as_ref(), &author, ContentStatus::Published).await;
+    let draft = media(store.as_ref(), &author, ContentStatus::Draft).await;
+    let post = insert(
+        store.as_ref(),
+        &author,
+        item("post", "not-media", ContentStatus::Published, Some(-HOUR)),
+    )
+    .await;
+
+    let read = r.media(public).await.unwrap();
+    assert!(read.deps.contains(&post_key(public)));
+    let m = read.value.expect("published media");
+    assert_eq!(m.id, public);
+    assert_eq!(m.alt, "a cat");
+    assert_eq!(m.width, Some(800));
+    assert!(m.url.ends_with("/cat.png"), "{}", m.url);
+    assert_eq!(m.variants.len(), 1);
+    assert_eq!(m.variants[0].name, "thumbnail");
+
+    let read = r.media(draft).await.unwrap();
+    assert!(read.value.is_none(), "draft media must not resolve");
+    assert!(read.deps.contains(&post_key(draft)));
+    assert!(r.media(post).await.unwrap().value.is_none(), "not media");
+    assert!(r.media(ContentId::new()).await.unwrap().value.is_none());
+}
+
 backend_tests!(
+    media_is_published_only,
     no_leak_single,
     no_leak_by_id_and_latest,
     no_leak_listings,

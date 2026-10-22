@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="{{ site.locale }}">
+<head>{{ head() }}<link rel="stylesheet" href="{{ asset('css/site.css') }}"></head>
+<body data-tpl="index">
+{% include "partials/header.html" %}
+{% if post %}<article><h1>{{ post.title }}</h1>{{ post.body }}</article>{% endif %}
+{% if posts %}{% include "partials/list.html" %}{% endif %}
+</body>
+</html>

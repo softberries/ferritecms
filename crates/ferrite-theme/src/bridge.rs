@@ -1,6 +1,6 @@
 //! The data-backed template helpers (plan ruling P2).
 
-use ferrite_core::{DepKeys, PageItem};
+use ferrite_core::{DepKeys, MediaPublic, PageItem};
 use ferrite_domain::ContentId;
 use serde::Serialize;
 
@@ -83,4 +83,30 @@ pub struct ImageRef {
     pub height: Option<i32>,
     /// `url 640w, url 1280w`, from the variants with a known width; may be empty.
     pub srcset: String,
+}
+
+impl ImageRef {
+    /// The `size` variant of `m`, or the original for an unknown size; `srcset` lists
+    /// every variant with a known width plus the original.
+    pub fn from_media(m: &MediaPublic, size: &str) -> Self {
+        let mut srcset: Vec<String> = m
+            .variants
+            .iter()
+            .filter_map(|v| v.width.map(|w| format!("{} {w}w", v.url)))
+            .collect();
+        if let Some(w) = m.width {
+            srcset.push(format!("{} {w}w", m.url));
+        }
+        let (url, width, height) = m
+            .variants
+            .iter()
+            .find(|v| v.name == size)
+            .map_or((&m.url, m.width, m.height), |v| (&v.url, v.width, v.height));
+        ImageRef {
+            url: url.clone(),
+            width,
+            height,
+            srcset: srcset.join(", "),
+        }
+    }
 }

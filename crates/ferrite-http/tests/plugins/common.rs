@@ -117,7 +117,7 @@ pub struct Site {
     pub media: MediaStore,
     pub reader: Arc<SiteReader>,
     pub services: Arc<StoreHostServices>,
-    pub host: PluginHost,
+    pub host: Arc<PluginHost>,
 }
 
 impl Site {
@@ -136,7 +136,8 @@ impl Site {
             SITE_URL,
         ));
         // The production default (200 ms render deadline, R18): stable on both profiles.
-        let host = PluginHost::new(HostConfig::default(), services.clone()).expect("host");
+        let host =
+            Arc::new(PluginHost::new(HostConfig::default(), services.clone()).expect("host"));
         Self {
             db,
             _media_backing: backing,

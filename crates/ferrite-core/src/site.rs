@@ -567,6 +567,28 @@ impl SiteReader {
         Ok(public(items.pop(), deps))
     }
 
+    /// The published media item `id` with its variants, for the `image()` template
+    /// helper: `None` unless `id` is a media item that is public (published,
+    /// `published_at <= now`) and has a media row. Records `post:<id>` either way, so
+    /// publishing it refreshes the page.
+    pub async fn media(&self, id: ContentId) -> Result<SiteRead<Option<MediaPublic>>, CoreError> {
+        let now = (self.clock)();
+        let repos = self.store.read();
+        let mut deps = DepKeys::default();
+        deps.insert(post_key(id));
+        let public_media = repos
+            .content()
+            .get(id)
+            .await?
+            .is_some_and(|i| i.kind == MEDIA_KIND && is_public(&i, now));
+        if !public_media {
+            return Ok(public(None, deps));
+        }
+        let row = repos.media().get(id).await?;
+        let hydrator = self.hydrator(repos, now);
+        Ok(public(row.map(|m| hydrator.media_public(&m)), deps))
+    }
+
     /// Whether item `id` is public (and not media): one store call, no hydration. For
     /// gating reads of per-item data such as meta.
     pub async fn is_visible(&self, id: ContentId) -> Result<bool, CoreError> {

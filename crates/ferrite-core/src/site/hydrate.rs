@@ -215,7 +215,7 @@ impl Hydrator<'_> {
         blocks::render_html(body, &RenderCtx { media_url: &url })
     }
 
-    fn media_public(&self, m: &Media) -> MediaPublic {
+    pub(super) fn media_public(&self, m: &Media) -> MediaPublic {
         let mut variants: Vec<MediaVariant> = m
             .variants
             .as_object()

@@ -1,0 +1,11 @@
+# Fixture theme for the ferrite-http app tests (based on ferrite-theme's test-minimal).
+[theme]
+name = "app-test"
+version = "0.1.0"
+license = "MIT"
+
+[menus]
+primary = "Primary navigation"
+
+[settings]
+accent_color = { type = "color", default = "#c2410c", label = "Accent colour" }

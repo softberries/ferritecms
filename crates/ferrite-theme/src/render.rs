@@ -540,34 +540,11 @@ fn image(scope: &Scope, media: &Value, size: Option<&str>) -> Value {
     let size = size.unwrap_or("full");
     let local = scope.lock().media.get(&id).cloned();
     let found = match local {
-        Some(m) => Some(local_image(&m, size)),
+        Some(m) => Some(ImageRef::from_media(&m, size)),
         None if scope.take_call("image") => scope.bridge.image(id, size),
         None => None,
     };
     found.map_or(Value::from(()), |r| Value::from(Serde(&r)))
-}
-
-/// The `size` variant of preloaded media, or the original for an unknown size.
-fn local_image(m: &MediaPublic, size: &str) -> ImageRef {
-    let mut srcset: Vec<String> = m
-        .variants
-        .iter()
-        .filter_map(|v| v.width.map(|w| format!("{} {w}w", v.url)))
-        .collect();
-    if let Some(w) = m.width {
-        srcset.push(format!("{} {w}w", m.url));
-    }
-    let (url, width, height) = m
-        .variants
-        .iter()
-        .find(|v| v.name == size)
-        .map_or((&m.url, m.width, m.height), |v| (&v.url, v.width, v.height));
-    ImageRef {
-        url: url.clone(),
-        width,
-        height,
-        srcset: srcset.join(", "),
-    }
 }
 
 #[cfg(test)]
