@@ -410,7 +410,10 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 name = "ferrite-plugin-host"
 version = "0.1.0"
 dependencies = [
+ "semver",
  "serde_json",
+ "thiserror 2.0.21",
+ "toml",
  "wasmtime",
 ]
 

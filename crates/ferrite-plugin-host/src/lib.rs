@@ -1,7 +1,19 @@
 //! Wasmtime-based host for FerriteCMS plugins.
 
 mod bindings;
+mod capability;
+mod error;
+mod manifest;
 mod types;
+
+pub use capability::{
+    DeadlineClass, FilterType, HookKind, HookSpec, Iface, granted_interfaces, hook_catalogue,
+};
+pub use error::{ManifestError, ManifestProblem};
+pub use manifest::{
+    Capabilities, HtmlMode, LimitRequest, MailScope, Manifest, PluginMeta, RouteSpec, SettingKind,
+    SettingSpec,
+};
 
 pub use types::{
     ActionEvent, FilterValue, Head, LinkTag, MetaTag, Post, RequestInfo, RouteRequest,
