@@ -353,14 +353,16 @@ fn render_default_toml_roundtrips() {
         "https://example.com",
         "My \"quoted\" site",
         Some("postgres://u:p@h/d"),
-        None,
+        Some("my_schema"),
+        &InitMedia::Local,
     );
     std::fs::write(dir.path().join("ferrite.toml"), &rendered).unwrap();
     let c = load(dir.path(), env(&[])).unwrap();
     assert_eq!(c.site.title, "My \"quoted\" site");
     assert_eq!(c.database.url.expose(), "postgres://u:p@h/d");
+    assert_eq!(c.database.schema.as_deref(), Some("my_schema"));
 
-    let minimal = render_default_toml("https://example.com", "", None, None);
+    let minimal = render_default_toml("https://example.com", "", None, None, &InitMedia::Local);
     std::fs::write(dir.path().join("ferrite.toml"), minimal).unwrap();
     let c2 = load(dir.path(), env(&[])).unwrap();
     let (_d, c3) = run(Some(MIN), &[]);
@@ -462,4 +464,35 @@ fn extra_validation() {
         paths(&e),
         ["database.url", "database.schema", "media.s3.endpoint"]
     );
+}
+
+#[test]
+fn render_default_toml_s3_roundtrips() {
+    let dir = tempfile::tempdir().unwrap();
+    for (url, bucket, prefix) in [
+        ("s3://my-bucket/a/b", "my-bucket", "a/b/"),
+        ("s3://my-bucket/a/b/", "my-bucket", "a/b/"),
+        ("s3://my-bucket", "my-bucket", ""),
+        ("s3://my-bucket/", "my-bucket", ""),
+    ] {
+        let media = InitMedia::parse_s3_url(url).unwrap();
+        let rendered = render_default_toml("https://example.com", "t", None, None, &media);
+        std::fs::write(dir.path().join("ferrite.toml"), rendered).unwrap();
+        let c = load(dir.path(), env(&[])).unwrap();
+        let MediaSection::S3 {
+            bucket: b,
+            prefix: p,
+            region,
+            ..
+        } = c.media
+        else {
+            panic!("expected s3")
+        };
+        assert_eq!(
+            (b.as_str(), p.as_str(), region.as_str()),
+            (bucket, prefix, "us-east-1")
+        );
+    }
+    assert!(InitMedia::parse_s3_url("s3:///x").is_err());
+    assert!(InitMedia::parse_s3_url("http://x").is_err());
 }

@@ -523,13 +523,46 @@ fn validate_cluster(
     }
 }
 
-/// Template for `ferrite init`. `media` is the backend name (`"local"` default or `"s3"`);
-/// for `"s3"` the required bucket/region lines are left commented for the operator.
+/// Media backend written by `ferrite init`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InitMedia {
+    /// Files under `<data>/media`.
+    Local,
+    /// S3-compatible bucket; `prefix` is empty or ends with `/`.
+    S3 { bucket: String, prefix: String },
+}
+
+impl InitMedia {
+    /// Parses `s3://bucket[/prefix]`; the prefix is normalised to end with `/` (or be empty).
+    pub fn parse_s3_url(s: &str) -> Result<Self, String> {
+        let rest = s
+            .strip_prefix("s3://")
+            .ok_or_else(|| "expected s3://bucket/prefix".to_owned())?;
+        let (bucket, prefix) = rest.split_once('/').unwrap_or((rest, ""));
+        if bucket.is_empty() {
+            return Err("missing bucket name in s3:// URL".to_owned());
+        }
+        let prefix = prefix.trim_matches('/');
+        let prefix = if prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{prefix}/")
+        };
+        Ok(Self::S3 {
+            bucket: bucket.to_owned(),
+            prefix,
+        })
+    }
+}
+
+/// Template for `ferrite init`. For S3 the bucket and prefix are concrete and region
+/// defaults to `us-east-1`; the operator must still set credentials/endpoint.
 pub fn render_default_toml(
     site_url: &str,
     title: &str,
     db_url: Option<&str>,
-    media: Option<&str>,
+    schema: Option<&str>,
+    media: &InitMedia,
 ) -> String {
     let q = |s: &str| Value::String(s.to_owned()).to_string();
     let mut out = String::new();
@@ -543,21 +576,26 @@ pub fn render_default_toml(
         "url = {}\n",
         q(db_url.unwrap_or("sqlite://ferrite.db"))
     ));
+    if let Some(schema) = schema {
+        out.push_str(&format!("schema = {}\n", q(schema)));
+    }
     out.push_str("max_connections = 16\n# url_file = \"/run/secrets/db_url\"\n\n");
-    match media.unwrap_or("local") {
-        "s3" => {
+    match media {
+        InitMedia::S3 { bucket, prefix } => {
             out.push_str("[media]\nbackend = \"s3\"\n\n[media.s3]\n");
-            out.push_str("# bucket = \"my-site\"\n# region = \"eu-central-1\"\n");
+            out.push_str(&format!("bucket = {}\n", q(bucket)));
+            if !prefix.is_empty() {
+                out.push_str(&format!("prefix = {}\n", q(prefix)));
+            }
+            out.push_str("region = \"us-east-1\"\n");
+            out.push_str("# Set your region, endpoint and credentials:\n");
             out.push_str("# endpoint = \"https://s3.eu-central-1.amazonaws.com\"\n");
             out.push_str("# access_key_id_file = \"/run/secrets/s3_key\"\n");
             out.push_str("# secret_access_key_file = \"/run/secrets/s3_secret\"\n");
             out.push_str("# public_base_url = \"https://cdn.example.com\"\n\n");
         }
-        other => {
-            out.push_str(&format!(
-                "[media]\nbackend = {}\nroot = \"media\"\n\n",
-                q(other)
-            ));
+        InitMedia::Local => {
+            out.push_str("[media]\nbackend = \"local\"\nroot = \"media\"\n\n");
         }
     }
     out.push_str("[cluster]\nmode = \"auto\"\n\n");
