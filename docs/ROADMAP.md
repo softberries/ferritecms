@@ -71,6 +71,9 @@ Design: [02](design/02-storage.md), [03](design/03-media.md), [06](design/06-the
   - [ ] `install` compiles synchronously: run it under `spawn_blocking` when called from tokio.
 
 - [ ] M1c-2 notes carried over from the M1c-1 reviews (deferred minors):
+  - [ ] The router must check the redirect table before the page cache (01 §3), or redirect writes must emit invalidation events (they emit none today).
+  - [ ] Test harness: a Postgres test that ends right after dropping an uncommitted `Tx` stalls about 5 s at teardown (10-testing).
+  - [ ] `ferrite init` validates the written config with `FERRITE_*` env overrides applied, so the validated config can differ from the file (09 §8).
   - [ ] When a published parent's slug changes, its children's permalinks change too: add 301 redirects from the old child paths and invalidate the children's cache keys (`ContentService::update` only handles the item itself).
   - [ ] Serve PDFs inline with a CSP `sandbox` header (`application/pdf` is on the `inline_safe` allowlist in `ferrite-media/src/sniff.rs`; the `/_media` handler must add the header).
   - [ ] Add an SVG sniff assertion test (an SVG upload must sniff to a type for which `inline_safe` is false).
@@ -107,6 +110,7 @@ Design: [07](design/07-admin-api.md).
 - [ ] Themes + plugins screens incl. permission report and per-plugin metrics.
 - [ ] Plugin routes (`/_p/…`), plugin settings, `mail`, batched `request.served` (D21).
 - [ ] Playwright E2E against a real binary on both backends.
+- [ ] Hardening: sanitised `html` block nodes keep ammonia's default URL schemes, so `//evil` (scheme-relative), `ftp:` and `tel:` links pass (`ferrite-core/src/blocks`); decide an allowlist.
 - [ ] SVG sanitising on upload (SVG is not processed by `ferrite-media`; design 03 §5 requires sanitisation before inline serving).
 
 ## M3 — WordPress import (~2 weeks)

@@ -18,8 +18,8 @@ M0 (plugin host spike), M1a (storage), M1b (media) and M1c-1 (config, CLI `init`
 core services) are done; next is M1c-2 (`serve`, themes, cache, plugin wiring). Work top-down
 in `docs/ROADMAP.md`.
 
-Crate map (`crates/`): `ferrite` (bin: CLI) -> `ferrite-config`, `ferrite-core` (services) ->
-`ferrite-store` (traits) <- `ferrite-store-sqlite` / `ferrite-store-postgres` (+
+Crate map (`crates/`): `ferrite` (bin: CLI) -> `ferrite-config`, `ferrite-store` and both store crates
+(it does not use `ferrite-core` yet); `ferrite-core` (services) -> `ferrite-store` (traits) <- `ferrite-store-sqlite` / `ferrite-store-postgres` (+
 `ferrite-store-tests` contract suite), `ferrite-domain` (types), `ferrite-media`,
 `ferrite-plugin-host`, `ferrite-sdk`. Not built yet: cluster, cache, theme, http, import-wp
 (`docs/design/01-architecture.md` §1).

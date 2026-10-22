@@ -57,3 +57,5 @@ Planned:
 - fmt + clippy clean.
 - Docs updated if behaviour or config changed.
 - One reviewable commit (or a small series) per checklist item.
+
+**Known harness quirk.** A Postgres-backed test that ends right after dropping an uncommitted `Tx` stalls about 5 s at schema teardown (the dropped transaction's connection is released late). Commit or roll back explicitly to avoid it.

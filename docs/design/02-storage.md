@@ -164,8 +164,8 @@ but have no repository yet.
   or `rollback`) while a nested handle is still alive ends the whole transaction**: the
   outer `commit` rolls back and returns `Err(NestedOpen)`, and the surviving nested handle
   then fails every call, and its own `commit`, with `Aborted`. The connection is released
-  no later than when the last handle drops (`exec.rs` in each store crate; the SQLite
-  unit test `lazy_release_after_outer_drop` covers an outer handle dropped while a nested
+  no later than when the last handle drops (`exec.rs` in each store crate; the unit
+  tests `lazy_release_after_outer_drop` (SQLite and Postgres `exec.rs`) cover an outer handle dropped while a nested
   statement is still running).
 - **No self-deadlock (I2, ruling P1).** Never write through `Store::read()` or call
   `Store::begin()` while the same task holds a `Tx`; pass the `Tx` on as `&dyn Repos`.
