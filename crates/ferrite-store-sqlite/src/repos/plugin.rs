@@ -166,6 +166,7 @@ impl PluginRepo for SqliteRepos {
         enabled: bool,
         reason: Option<&str>,
     ) -> Result<(), StoreError> {
+        validate_text("plugin name", id)?;
         if let Some(reason) = reason {
             validate_text("plugin disabled_reason", reason)?;
         }
@@ -184,6 +185,7 @@ impl PluginRepo for SqliteRepos {
     }
 
     async fn delete(&self, id: &str) -> Result<(), StoreError> {
+        validate_text("plugin name", id)?;
         run!(&self.writer, |e| sqlx::query(
             "DELETE FROM plugins WHERE name = ?"
         )
@@ -221,6 +223,8 @@ impl PluginKvRepo for SqliteRepos {
     }
 
     async fn delete(&self, plugin: &str, key: &str) -> Result<(), StoreError> {
+        validate_text("plugin kv plugin", plugin)?;
+        validate_text("plugin kv key", key)?;
         run!(&self.writer, |e| sqlx::query(
             "DELETE FROM plugin_kv WHERE plugin = ? AND key = ?"
         )
@@ -311,6 +315,7 @@ impl ThemeRepo for SqliteRepos {
     }
 
     async fn activate(&self, id: &str) -> Result<(), StoreError> {
+        validate_text("theme name", id)?;
         atomic!(&self.writer, |conn| async {
             sqlx::query("UPDATE themes SET active = 0 WHERE active = 1")
                 .execute(&mut *conn)

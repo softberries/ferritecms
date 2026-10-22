@@ -169,6 +169,7 @@ impl PluginRepo for PgRepos {
         enabled: bool,
         reason: Option<&str>,
     ) -> Result<(), StoreError> {
+        validate_text("plugin name", id)?;
         if let Some(reason) = reason {
             validate_text("plugin disabled_reason", reason)?;
         }
@@ -189,6 +190,7 @@ impl PluginRepo for PgRepos {
     }
 
     async fn delete(&self, id: &str) -> Result<(), StoreError> {
+        validate_text("plugin name", id)?;
         run!(&self.exec, |e| sqlx::query(
             "DELETE FROM plugins WHERE name = $1"
         )
@@ -226,6 +228,8 @@ impl PluginKvRepo for PgRepos {
     }
 
     async fn delete(&self, plugin: &str, key: &str) -> Result<(), StoreError> {
+        validate_text("plugin kv plugin", plugin)?;
+        validate_text("plugin kv key", key)?;
         run!(&self.exec, |e| sqlx::query(
             "DELETE FROM plugin_kv WHERE plugin = $1 AND key = $2"
         )
@@ -318,6 +322,7 @@ impl ThemeRepo for PgRepos {
     }
 
     async fn activate(&self, id: &str) -> Result<(), StoreError> {
+        validate_text("theme name", id)?;
         atomic!(&self.exec, |conn| async {
             sqlx::query("UPDATE themes SET active = false WHERE active")
                 .execute(&mut *conn)

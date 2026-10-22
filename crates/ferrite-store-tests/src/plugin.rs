@@ -160,13 +160,13 @@ pub async fn plugins_upsert_list_enable(db: &TestDb) {
     put_artifact(store, &artifact('b', ArtifactKind::Plugin)).await;
     let plugins = store.read().plugins();
 
-    let zed = plugin("zed", 'a');
-    let alpha = plugin("Alpha", 'a');
+    let zed = plugin("Zed", 'a');
+    let alpha = plugin("alpha", 'a');
     let beta = plugin("beta", 'a');
     for p in [&zed, &alpha, &beta] {
         plugins.upsert(p).await.unwrap();
     }
-    assert_eq!(plugins.get("zed").await.unwrap().unwrap(), zed);
+    assert_eq!(plugins.get("Zed").await.unwrap().unwrap(), zed);
     assert!(plugins.get("nope").await.unwrap().is_none());
     // Binary order: uppercase sorts before lowercase.
     let names: Vec<_> = plugins
@@ -176,7 +176,7 @@ pub async fn plugins_upsert_list_enable(db: &TestDb) {
         .into_iter()
         .map(|p| p.name)
         .collect();
-    assert_eq!(names, ["Alpha", "beta", "zed"]);
+    assert_eq!(names, ["Zed", "alpha", "beta"]);
 
     let mut newer = zed.clone();
     newer.version = "2.0.0".into();
@@ -185,7 +185,7 @@ pub async fn plugins_upsert_list_enable(db: &TestDb) {
     newer.enabled = false;
     newer.installed_at = Timestamp::now();
     plugins.upsert(&newer).await.unwrap();
-    let got = plugins.get("zed").await.unwrap().unwrap();
+    let got = plugins.get("Zed").await.unwrap().unwrap();
     assert_eq!(got.version, "2.0.0");
     assert_eq!(got.artifact_hash, hash('b'));
     assert_eq!(got.granted, newer.granted);
@@ -194,6 +194,7 @@ pub async fn plugins_upsert_list_enable(db: &TestDb) {
     assert_eq!(got.installed_at, zed.installed_at);
     assert_eq!(plugins.list().await.unwrap().len(), 3);
 
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     plugins
         .set_enabled("beta", false, Some("auto: 20 failures"))
         .await
@@ -201,7 +202,7 @@ pub async fn plugins_upsert_list_enable(db: &TestDb) {
     let got = plugins.get("beta").await.unwrap().unwrap();
     assert!(!got.enabled);
     assert_eq!(got.disabled_reason.as_deref(), Some("auto: 20 failures"));
-    assert!(got.updated_at >= beta.updated_at);
+    assert!(got.updated_at > beta.updated_at);
     plugins.set_enabled("beta", true, None).await.unwrap();
     let got = plugins.get("beta").await.unwrap().unwrap();
     assert!(got.enabled);
@@ -223,6 +224,14 @@ pub async fn plugins_upsert_list_enable(db: &TestDb) {
         plugins.upsert(&missing_artifact).await,
         Err(StoreError::ForeignKey { .. })
     ));
+
+    for r in [
+        plugins.set_enabled("a\0b", true, None).await,
+        plugins.set_enabled("beta", true, Some("a\0b")).await,
+        plugins.delete("a\0b").await,
+    ] {
+        assert!(matches!(r, Err(StoreError::Invalid(_))));
+    }
 
     plugins.delete("beta").await.unwrap();
     plugins.delete("beta").await.unwrap();
@@ -293,6 +302,14 @@ pub async fn plugin_kv_crud_and_usage(db: &TestDb) {
         kv.set("p", "a\0b", b"x").await,
         Err(StoreError::Invalid(_))
     ));
+    assert!(matches!(
+        kv.delete("p", "a\0b").await,
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(matches!(
+        kv.delete("p\0", "a").await,
+        Err(StoreError::Invalid(_))
+    ));
 }
 
 fn theme(name: &str) -> InstalledTheme {
@@ -311,18 +328,26 @@ pub async fn themes_single_active(db: &TestDb) {
     put_artifact(store, &artifact('c', ArtifactKind::Theme)).await;
     let themes = store.read().themes();
     assert!(themes.active().await.unwrap().is_none());
-    let (a, b) = (theme("a"), theme("b"));
+    let (a, b) = (theme("alpha"), theme("Beta"));
     themes.upsert(&a).await.unwrap();
     themes.upsert(&b).await.unwrap();
-    assert_eq!(themes.get("a").await.unwrap().unwrap(), a);
+    assert_eq!(themes.get("alpha").await.unwrap().unwrap(), a);
     assert!(themes.get("zz").await.unwrap().is_none());
-    assert_eq!(themes.list().await.unwrap().len(), 2);
+    // Binary order: uppercase sorts before lowercase.
+    let names: Vec<_> = themes
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(names, ["Beta", "alpha"]);
 
-    themes.activate("a").await.unwrap();
-    assert_eq!(themes.active().await.unwrap().unwrap().name, "a");
-    themes.activate("b").await.unwrap();
-    themes.activate("b").await.unwrap();
-    assert_eq!(themes.active().await.unwrap().unwrap().name, "b");
+    themes.activate("alpha").await.unwrap();
+    assert_eq!(themes.active().await.unwrap().unwrap().name, "alpha");
+    themes.activate("Beta").await.unwrap();
+    themes.activate("Beta").await.unwrap();
+    assert_eq!(themes.active().await.unwrap().unwrap().name, "Beta");
     let active: Vec<_> = themes
         .list()
         .await
@@ -331,14 +356,14 @@ pub async fn themes_single_active(db: &TestDb) {
         .filter(|t| t.active)
         .map(|t| t.name)
         .collect();
-    assert_eq!(active, ["b"]);
+    assert_eq!(active, ["Beta"]);
 
     // Unknown theme: NotFound and the previous activation survives.
     assert!(matches!(
         themes.activate("nope").await,
         Err(StoreError::NotFound)
     ));
-    assert_eq!(themes.active().await.unwrap().unwrap().name, "b");
+    assert_eq!(themes.active().await.unwrap().unwrap().name, "Beta");
 
     // Same inside a caller's transaction: the failure leaves the transaction usable.
     let tx = store.begin().await.unwrap();
@@ -346,16 +371,40 @@ pub async fn themes_single_active(db: &TestDb) {
         tx.themes().activate("nope").await,
         Err(StoreError::NotFound)
     ));
-    assert_eq!(tx.themes().active().await.unwrap().unwrap().name, "b");
-    tx.themes().activate("a").await.unwrap();
+    assert_eq!(tx.themes().active().await.unwrap().unwrap().name, "Beta");
+    tx.themes().activate("alpha").await.unwrap();
     tx.commit().await.unwrap();
-    assert_eq!(themes.active().await.unwrap().unwrap().name, "a");
+    assert_eq!(themes.active().await.unwrap().unwrap().name, "alpha");
 
-    // Replacing a theme keeps its active state.
-    let mut a2 = theme("a");
+    // Inserting an active theme while another is active violates the single-active index.
+    let mut rival = theme("rival");
+    rival.active = true;
+    assert!(matches!(
+        themes.upsert(&rival).await,
+        Err(StoreError::UniqueViolation { .. })
+    ));
+    assert!(themes.get("rival").await.unwrap().is_none());
+    assert!(matches!(
+        themes.activate("a\0b").await,
+        Err(StoreError::Invalid(_))
+    ));
+
+    // Replacing a theme keeps its active state, whatever `active` says.
+    let mut flipped = theme("Beta");
+    flipped.active = true;
+    themes.upsert(&flipped).await.unwrap();
+    assert!(!themes.get("Beta").await.unwrap().unwrap().active);
+    assert_eq!(themes.active().await.unwrap().unwrap().name, "alpha");
+    let mut a3 = theme("alpha");
+    a3.active = false;
+    themes.upsert(&a3).await.unwrap();
+    assert!(themes.get("alpha").await.unwrap().unwrap().active);
+
+    let mut a2 = theme("alpha");
+    a2.active = false;
     a2.version = "2.0.0".into();
     themes.upsert(&a2).await.unwrap();
-    let got = themes.get("a").await.unwrap().unwrap();
+    let got = themes.get("alpha").await.unwrap().unwrap();
     assert_eq!(got.version, "2.0.0");
     assert!(got.active);
 }
