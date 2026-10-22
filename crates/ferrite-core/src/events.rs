@@ -20,6 +20,28 @@ pub fn term_key(id: TermId) -> String {
     format!("term:{id}")
 }
 
+/// Dependency key of a menu.
+pub fn menu_key(name: &str) -> String {
+    format!("menu:{name}")
+}
+
+/// Dependency key of an option.
+pub fn option_key(key: &str) -> String {
+    format!("option:{key}")
+}
+
+/// Event kind for option changes.
+pub const OPTIONS_CHANGED: &str = "options.changed";
+
+/// An `options.changed` event for the given option key (not the dependency key).
+pub fn options_changed(key: &str) -> NewEvent {
+    NewEvent {
+        kind: OPTIONS_CHANGED.to_owned(),
+        keys: vec![option_key(key)],
+        origin_node: None,
+    }
+}
+
 /// An `invalidate` event with `keys` deduplicated (first occurrence wins the position).
 pub fn invalidate(keys: impl IntoIterator<Item = String>) -> NewEvent {
     let mut out: Vec<String> = Vec::new();

@@ -18,6 +18,7 @@ use crate::{
     Actor, CoreError,
     actor::{Capability, can_edit, require},
     blocks, events,
+    tx::finish,
 };
 
 /// Items fetched per round by [`ContentService::publish_due`].
@@ -197,26 +198,6 @@ impl ContentService {
         let tx = self.store.begin().await?;
         let done = transition_in(tx.as_ref(), actor, id, expected_version, action).await;
         finish(tx, done).await
-    }
-}
-
-/// Commits on success; on error rolls back explicitly, so no connection is left with an
-/// open transaction.
-async fn finish<T>(
-    tx: Box<dyn ferrite_store::Tx>,
-    result: Result<T, CoreError>,
-) -> Result<T, CoreError> {
-    match result {
-        Ok(v) => {
-            tx.commit().await?;
-            Ok(v)
-        }
-        Err(e) => {
-            if let Err(rollback) = tx.rollback().await {
-                tracing::warn!(error = %rollback, "rollback after failed transition failed");
-            }
-            Err(e)
-        }
     }
 }
 
