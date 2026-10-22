@@ -12,6 +12,9 @@ use crate::{
     tx::finish,
 };
 
+const MAX_URL_LEN: usize = 2048;
+const MAX_LABEL_LEN: usize = 200;
+
 /// Reads and edits menus (writes need `manage_menus`).
 pub struct MenuService {
     store: Arc<dyn Store>,
@@ -85,12 +88,27 @@ impl MenuService {
 }
 
 async fn check_item(repos: &dyn Repos, item: &MenuItem) -> Result<(), CoreError> {
+    if item.label.chars().count() > MAX_LABEL_LEN {
+        return Err(CoreError::Invalid(format!(
+            "menu label longer than {MAX_LABEL_LEN} characters"
+        )));
+    }
     match item.kind {
         MenuItemKind::Url => {
+            if item.target_id.is_some() {
+                return Err(CoreError::Invalid(
+                    "url menu item must not have a target_id".into(),
+                ));
+            }
             let url = item
                 .url
                 .as_deref()
                 .ok_or_else(|| CoreError::Invalid("url menu item needs a url".into()))?;
+            if url.chars().count() > MAX_URL_LEN {
+                return Err(CoreError::Invalid(format!(
+                    "menu url longer than {MAX_URL_LEN} characters"
+                )));
+            }
             if !is_allowed_url(url) {
                 return Err(CoreError::Invalid(format!(
                     "menu url must be http(s) or a local path: {url:?}"
@@ -98,6 +116,11 @@ async fn check_item(repos: &dyn Repos, item: &MenuItem) -> Result<(), CoreError>
             }
         }
         MenuItemKind::Item => {
+            if item.url.is_some() {
+                return Err(CoreError::Invalid(
+                    "item menu entry must not have a url".into(),
+                ));
+            }
             let id = item
                 .target_id
                 .ok_or_else(|| CoreError::Invalid("item menu entry needs a target_id".into()))?;
@@ -107,6 +130,11 @@ async fn check_item(repos: &dyn Repos, item: &MenuItem) -> Result<(), CoreError>
             }
         }
         MenuItemKind::Term => {
+            if item.url.is_some() {
+                return Err(CoreError::Invalid(
+                    "term menu entry must not have a url".into(),
+                ));
+            }
             let id = item
                 .target_id
                 .ok_or_else(|| CoreError::Invalid("term menu entry needs a target_id".into()))?;

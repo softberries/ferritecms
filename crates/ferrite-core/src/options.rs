@@ -23,8 +23,9 @@ type Cache = Arc<RwLock<HashMap<String, OptionEntry>>>;
 ///
 /// Options flagged `autoload` are cached in memory; reading them never touches the
 /// store. Other options are read from the store each time. The cache is updated after a
-/// write commits, so a failed write never shows up in it. Two concurrent writes of the
-/// same key may leave the cache with the older one; `reload_from_event` repairs it.
+/// write commits, so a failed write never shows up in it. A value is only replaced by
+/// one with the same or a newer `updated_at`, so a slow re-read of an older write cannot
+/// overwrite a newer cached value. Removals (delete, `autoload = false`) always apply.
 pub struct OptionService {
     store: Arc<dyn Store>,
     cache: Cache,
@@ -81,8 +82,8 @@ impl OptionService {
         }
         .await;
         finish(tx, done).await?;
-        // Re-read what was stored (it carries `updated_at`); a failure here only leaves
-        // the cache stale, which is repaired by dropping the key.
+        // Re-read what was stored (it carries `updated_at`). If that fails the key is
+        // dropped from the cache, so reads fall back to the store.
         let stored = if autoload {
             match self.store.read().options().get(key).await {
                 Ok(entry) => entry,
@@ -135,13 +136,24 @@ impl OptionService {
 
     fn apply(&self, key: &str, entry: Option<OptionEntry>) {
         let mut cache = self.cache.write().unwrap_or_else(PoisonError::into_inner);
-        match entry {
-            Some(e) => {
-                cache.insert(key.to_owned(), e);
+        merge(&mut cache, key, entry);
+    }
+}
+
+/// Stores `entry` unless the cache holds a strictly newer one; `None` removes the key.
+fn merge(cache: &mut HashMap<String, OptionEntry>, key: &str, entry: Option<OptionEntry>) {
+    match entry {
+        Some(e) => {
+            if cache
+                .get(key)
+                .is_some_and(|old| old.updated_at > e.updated_at)
+            {
+                return;
             }
-            None => {
-                cache.remove(key);
-            }
+            cache.insert(key.to_owned(), e);
+        }
+        None => {
+            cache.remove(key);
         }
     }
 }
@@ -153,4 +165,39 @@ fn check_key(key: &str) -> Result<(), CoreError> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use ferrite_domain::Timestamp;
+    use serde_json::json;
+
+    use super::*;
+
+    fn entry(value: i64, micros: i64) -> OptionEntry {
+        OptionEntry {
+            key: "k".into(),
+            value: json!(value),
+            autoload: true,
+            updated_at: Timestamp::from_micros(micros).expect("valid micros"),
+        }
+    }
+
+    #[test]
+    fn merge_keeps_the_newer_value() {
+        let mut cache = HashMap::new();
+        merge(&mut cache, "k", Some(entry(2, 2_000_000)));
+        // An older re-read does not overwrite.
+        merge(&mut cache, "k", Some(entry(1, 1_000_000)));
+        assert_eq!(cache["k"].value, json!(2));
+        // Same or newer does.
+        merge(&mut cache, "k", Some(entry(3, 2_000_000)));
+        assert_eq!(cache["k"].value, json!(3));
+        merge(&mut cache, "k", Some(entry(4, 3_000_000)));
+        assert_eq!(cache["k"].value, json!(4));
+        // Removal always applies.
+        merge(&mut cache, "k", None);
+        assert!(cache.is_empty());
+    }
 }

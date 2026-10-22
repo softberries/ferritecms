@@ -305,6 +305,41 @@ pub async fn term_parent_rules(db: &TestDb) {
     ));
 }
 
+pub async fn flat_taxonomy_rejects_parents(db: &TestDb) {
+    let store = db.store();
+    let svc = TaxonomyService::new(db.shared_store());
+    let admin = actor(store, Role::Admin).await;
+    let a = svc
+        .create_term(&admin, "tag", "A", None, None, "")
+        .await
+        .unwrap();
+    let seq = max_seq(store).await;
+    assert!(is_invalid(
+        svc.create_term(&admin, "tag", "B", None, Some(a.id), "")
+            .await
+    ));
+    let b = svc
+        .create_term(&admin, "tag", "B", None, None, "")
+        .await
+        .unwrap();
+    assert!(is_invalid(
+        svc.update_term(&admin, b.id, "B", None, Some(a.id), "")
+            .await
+    ));
+    assert_eq!(
+        store
+            .read()
+            .terms()
+            .get(b.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .parent_id,
+        None
+    );
+    assert_eq!(max_seq(store).await, seq + 1); // only B's creation
+}
+
 pub async fn term_in_use_deletes_links(db: &TestDb) {
     // Deleting a term that content items use succeeds and unlinks them (cascade).
     let store = db.store();
@@ -527,6 +562,43 @@ pub async fn menu_validation(db: &TestDb) {
     assert!(matches!(svc.get("main").await, Err(CoreError::NotFound)));
 }
 
+pub async fn menu_field_rules_and_caps(db: &TestDb) {
+    let store = db.store();
+    let svc = MenuService::new(db.shared_store());
+    let admin = actor(store, Role::Admin).await;
+    let user = store.read().users().get(admin.user).await.unwrap().unwrap();
+    let post = store
+        .read()
+        .content()
+        .insert(&new_post(&user, "m"))
+        .await
+        .unwrap();
+    let mut bad = Vec::new();
+    let mut with_target = url_item("/x");
+    with_target.target_id = Some(post.id.as_uuid());
+    bad.push(with_target);
+    let mut item_with_url = target_item(MenuItemKind::Item, Some(post.id.as_uuid()));
+    item_with_url.url = Some("/x".into());
+    bad.push(item_with_url);
+    let mut term_with_url = target_item(MenuItemKind::Term, Some(Uuid::now_v7()));
+    term_with_url.url = Some("/x".into());
+    bad.push(term_with_url);
+    bad.push(url_item(&format!("/{}", "a".repeat(2048))));
+    let mut long_label = url_item("/x");
+    long_label.label = "l".repeat(201);
+    bad.push(long_label);
+    for item in bad {
+        let desc = format!("{item:?}");
+        assert!(
+            is_invalid(svc.put(&admin, &menu("main", vec![item])).await),
+            "{desc}"
+        );
+    }
+    let mut edge = url_item(&format!("/{}", "a".repeat(2047)));
+    edge.label = "l".repeat(200);
+    svc.put(&admin, &menu("main", vec![edge])).await.unwrap();
+}
+
 pub async fn menu_permissions(db: &TestDb) {
     let store = db.store();
     let svc = MenuService::new(db.shared_store());
@@ -683,7 +755,7 @@ pub async fn option_permissions_and_failures(db: &TestDb) {
     assert!(is_invalid(svc.set(&admin, "a\nb", &json!(1), true).await));
     let nul = json!({"a": ["x\u{0}y"]});
     assert!(
-        svc.set(&admin, "k", &nul, true).await.is_err(),
+        is_invalid(svc.set(&admin, "k", &nul, true).await),
         "store rejects NUL in json"
     );
     assert_eq!(max_seq(store).await, seq);
@@ -807,6 +879,40 @@ pub async fn redirect_loops_and_chains(db: &TestDb) {
     assert!(svc.resolve("/g").await.unwrap().is_none());
 }
 
+pub async fn redirect_slash_variants_and_caps(db: &TestDb) {
+    let store = db.store();
+    let svc = RedirectService::new(db.shared_store());
+    let admin = actor(store, Role::Admin).await;
+    // /x -> /y/ exists; resolve("/y") would hit "/y/"'s toggled form, so /y -> /x loops.
+    svc.upsert(&admin, "/x", "/y/", 301).await.unwrap();
+    assert!(is_invalid(svc.upsert(&admin, "/y", "/x", 301).await));
+    assert!(is_invalid(svc.upsert(&admin, "/y/", "/x", 301).await));
+    assert!(is_invalid(svc.upsert(&admin, "/y", "/x/", 301).await));
+    // A redirect to its own slash variant is a loop too.
+    assert!(is_invalid(svc.upsert(&admin, "/z", "/z/", 301).await));
+    assert!(is_invalid(svc.upsert(&admin, "/z/", "/z", 301).await));
+    assert!(svc.resolve("/y").await.unwrap().is_none());
+
+    // Chain length through variants: /h{i} -> /h{i+1}/ (found by slash toggle).
+    for i in (1..=10).rev() {
+        svc.upsert(&admin, &format!("/h{i}"), &format!("/h{}/", i + 1), 301)
+            .await
+            .unwrap();
+    }
+    svc.upsert(&admin, "/h0", "/h1/", 301).await.unwrap();
+    assert!(matches!(
+        svc.upsert(&admin, "/g", "/h0/", 301).await,
+        Err(CoreError::Invalid(m)) if m.contains("chain")
+    ));
+
+    // Length caps.
+    let long = format!("/{}", "a".repeat(2048));
+    assert!(is_invalid(svc.upsert(&admin, &long, "/t", 301).await));
+    assert!(is_invalid(svc.upsert(&admin, "/t", &long, 301).await));
+    let ok = format!("/{}", "a".repeat(2047));
+    svc.upsert(&admin, &ok, "/t", 301).await.unwrap();
+}
+
 pub async fn redirect_permissions(db: &TestDb) {
     let store = db.store();
     let svc = RedirectService::new(db.shared_store());
@@ -845,6 +951,9 @@ backend_tests!(
     redirect_validation,
     redirect_loops_and_chains,
     redirect_permissions,
+    redirect_slash_variants_and_caps,
+    flat_taxonomy_rejects_parents,
+    menu_field_rules_and_caps,
 );
 
 backend_tests_spawning!(term_slug_retry, term_parallel_same_name);

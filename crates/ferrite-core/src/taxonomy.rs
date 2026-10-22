@@ -32,9 +32,9 @@ impl TaxonomyService {
     /// Lists all terms of `taxonomy` (unknown taxonomy: `NotFound`).
     pub async fn list_terms(&self, taxonomy: &str) -> Result<Vec<Term>, CoreError> {
         let repos = self.store.read();
-        get_taxonomy(repos, taxonomy)
-            .await
-            .map_err(|_| CoreError::NotFound)?;
+        if repos.taxonomies().get(taxonomy).await?.is_none() {
+            return Err(CoreError::NotFound);
+        }
         Ok(repos.terms().list(taxonomy).await?)
     }
 
@@ -44,7 +44,8 @@ impl TaxonomyService {
     ///
     /// Finding a free slug lists the whole taxonomy, so it is O(n) in the number of its
     /// terms (the store has no prefix lookup for terms). A concurrent create that takes
-    /// the same slug is retried, up to 5 attempts.
+    /// the same slug is retried, up to 5 attempts. Only hierarchical taxonomies accept a
+    /// parent.
     pub async fn create_term(
         &self,
         actor: &Actor,
@@ -63,6 +64,7 @@ impl TaxonomyService {
         let tx = self.store.begin().await?;
         let done = async {
             let tax = get_taxonomy(tx.as_ref(), taxonomy).await?;
+            check_flat(&tax, parent)?;
             if let Some(parent) = parent {
                 check_parent_taxonomy(tx.as_ref(), taxonomy, parent).await?;
             }
@@ -85,7 +87,8 @@ impl TaxonomyService {
     /// Replaces name, description and parent of term `id`; `slug = None` keeps the
     /// current slug. The taxonomy cannot change. A new parent must be in the same
     /// taxonomy and must not be the term itself or one of its descendants (the chain is
-    /// walked up to 64 levels, only when the parent changes).
+    /// walked up to 64 levels, only when the parent changes). Under READ COMMITTED two
+    /// concurrent updates can still form a cycle together (plan ruling P2).
     pub async fn update_term(
         &self,
         actor: &Actor,
@@ -102,6 +105,7 @@ impl TaxonomyService {
         let done = async {
             let current = tx.terms().get(id).await?.ok_or(CoreError::NotFound)?;
             let tax = get_taxonomy(tx.as_ref(), &current.taxonomy).await?;
+            check_flat(&tax, parent)?;
             if let Some(new_parent) = parent
                 && parent != current.parent_id
             {
@@ -142,6 +146,17 @@ impl TaxonomyService {
         .await;
         finish(tx, done).await
     }
+}
+
+/// Only hierarchical taxonomies have parents.
+fn check_flat(tax: &Taxonomy, parent: Option<TermId>) -> Result<(), CoreError> {
+    if parent.is_some() && !tax.hierarchical {
+        return Err(CoreError::Invalid(format!(
+            "taxonomy {:?} is not hierarchical; terms cannot have a parent",
+            tax.name
+        )));
+    }
+    Ok(())
 }
 
 fn check_name(name: &str) -> Result<String, CoreError> {

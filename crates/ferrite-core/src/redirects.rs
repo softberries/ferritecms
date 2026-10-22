@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use ferrite_domain::{Page, Redirect, RedirectId, RedirectOrigin, Timestamp};
-use ferrite_store::Store;
+use ferrite_store::{Repos, Store};
 
 use crate::{
     Actor, CoreError,
@@ -13,6 +13,8 @@ use crate::{
 
 /// Redirects followed when checking a new one for loops and long chains.
 const MAX_HOPS: usize = 10;
+/// Longest source or target accepted.
+const MAX_URL_LEN: usize = 2048;
 
 /// Resolves and manages redirects (writes need `manage_redirects`).
 pub struct RedirectService {
@@ -27,14 +29,7 @@ impl RedirectService {
     /// The redirect for `path`: the exact path first, then the path with its trailing
     /// slash toggled (`/a` and `/a/`; `/` has no variant). Matching is case-sensitive.
     pub async fn resolve(&self, path: &str) -> Result<Option<Redirect>, CoreError> {
-        let repo = self.store.read().redirects();
-        if let Some(r) = repo.get_by_source(path).await? {
-            return Ok(Some(r));
-        }
-        let Some(other) = toggled(path) else {
-            return Ok(None);
-        };
-        Ok(repo.get_by_source(&other).await?)
+        lookup(self.store.read(), path).await
     }
 
     /// Records a hit. Best effort: failures are logged and swallowed.
@@ -57,10 +52,19 @@ impl RedirectService {
 
     /// Creates a manual redirect from `source` (a path starting with `/`) to `target`
     /// (a path or an absolute http(s) URL), or changes the existing one for `source`.
+    /// Both are at most 2048 characters.
     ///
     /// Rejected as `Invalid`: `source == target`; a target that leads back to `source`
     /// through existing redirects (loop); a target that starts a chain of more than 10
-    /// existing redirects. Chains are followed by exact source match.
+    /// existing redirects. Hops are followed the way [`resolve`](Self::resolve) matches
+    /// them (exact path, then trailing slash toggled), and `source` counts together with
+    /// its toggled variant. The chain limit counts downstream hops only; redirects
+    /// that already lead into `source` are not counted.
+    ///
+    /// Absolute targets let a redirect send visitors to any site (an open redirect), which
+    /// is why this is admin-only (`manage_redirects`). Under the default isolation
+    /// (READ COMMITTED on Postgres) the check is not serialized: two concurrent upserts
+    /// can still close a loop together (plan ruling P2).
     pub async fn upsert(
         &self,
         actor: &Actor,
@@ -71,22 +75,24 @@ impl RedirectService {
         require(actor, Capability::ManageRedirects)?;
         check_source(source)?;
         check_target(target)?;
-        if source == target {
+        let mut ours = vec![source.to_owned()];
+        ours.extend(toggled(source));
+        if ours.iter().any(|v| v == target) {
             return Err(CoreError::Invalid("redirect to itself".into()));
         }
         let tx = self.store.begin().await?;
         let done = async {
             let mut at = target.to_owned();
             for _ in 0..MAX_HOPS {
-                let Some(next) = tx.redirects().get_by_source(&at).await? else {
+                let Some(next) = lookup(tx.as_ref(), &at).await? else {
                     return Ok(());
                 };
-                if next.target == source {
+                if ours.contains(&next.target) {
                     return Err(CoreError::Invalid("redirect loop".into()));
                 }
                 at = next.target;
             }
-            if tx.redirects().get_by_source(&at).await?.is_some() {
+            if lookup(tx.as_ref(), &at).await?.is_some() {
                 return Err(CoreError::Invalid(format!(
                     "redirect chain longer than {MAX_HOPS}"
                 )));
@@ -123,6 +129,17 @@ impl RedirectService {
     }
 }
 
+/// The redirect for `path`: exact match first, then the slash-toggled path.
+async fn lookup(repos: &dyn Repos, path: &str) -> Result<Option<Redirect>, CoreError> {
+    if let Some(r) = repos.redirects().get_by_source(path).await? {
+        return Ok(Some(r));
+    }
+    match toggled(path) {
+        Some(other) => Ok(repos.redirects().get_by_source(&other).await?),
+        None => Ok(None),
+    }
+}
+
 /// `/a` <-> `/a/`; `None` for `/` and for paths without a leading `/`.
 fn toggled(path: &str) -> Option<String> {
     if path == "/" || !path.starts_with('/') {
@@ -135,6 +152,11 @@ fn toggled(path: &str) -> Option<String> {
 }
 
 fn check_source(source: &str) -> Result<(), CoreError> {
+    if source.chars().count() > MAX_URL_LEN {
+        return Err(CoreError::Invalid(format!(
+            "redirect source longer than {MAX_URL_LEN} characters"
+        )));
+    }
     if !source.starts_with('/') || source.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return Err(CoreError::Invalid(
             "redirect source must be a path starting with '/'".into(),
@@ -144,6 +166,11 @@ fn check_source(source: &str) -> Result<(), CoreError> {
 }
 
 fn check_target(target: &str) -> Result<(), CoreError> {
+    if target.chars().count() > MAX_URL_LEN {
+        return Err(CoreError::Invalid(format!(
+            "redirect target longer than {MAX_URL_LEN} characters"
+        )));
+    }
     let lower = target.to_ascii_lowercase();
     let ok_scheme = ["http://", "https://"]
         .iter()
