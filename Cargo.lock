@@ -1072,6 +1072,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrite-config"
+version = "0.1.0"
+dependencies = [
+ "ferrite-domain",
+ "ipnet",
+ "tempfile",
+ "thiserror 2.0.21",
+ "toml",
+ "url",
+]
+
+[[package]]
 name = "ferrite-domain"
 version = "0.1.0"
 dependencies = [
