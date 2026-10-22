@@ -1,0 +1,12 @@
+# Minimal fixture theme for ferrite-theme tests. The real starter theme is `blog`.
+[theme]
+name = "test-minimal"
+version = "0.1.0"
+license = "MIT"
+
+[menus]
+primary = "Primary navigation"
+
+[settings]
+accent_color = { type = "color", default = "#c2410c", label = "Accent colour" }
+show_author = { type = "bool", default = true }

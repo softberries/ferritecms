@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 
 use ferrite_domain::{ContentId, TermId, Timestamp, UserId};
+use serde::Serialize;
 
 /// A read result plus the dependency keys it touched (renderer side of the contract in
 /// [`crate::events`]).
@@ -45,7 +46,7 @@ impl DepKeys {
 /// The public view of a content item: everything a template may see of the row.
 /// No body (the rendered HTML is [`PageItem::html`]), status, version, scheduling or
 /// author id.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PublicItem {
     pub id: ContentId,
     pub kind: String,
@@ -63,7 +64,7 @@ pub struct PublicItem {
 }
 
 /// A content item ready for a template.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PageItem {
     pub item: PublicItem,
     /// Public path (canonical, trailing slash).
@@ -81,14 +82,14 @@ pub struct PageItem {
 }
 
 /// The public face of a user: nothing beyond these three fields leaves core.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UserPublic {
     pub id: UserId,
     pub login: String,
     pub display_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TermPublic {
     pub id: TermId,
     pub taxonomy: String,
@@ -98,7 +99,7 @@ pub struct TermPublic {
     pub url: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MediaPublic {
     /// The media item's id.
     pub id: ContentId,
@@ -110,7 +111,7 @@ pub struct MediaPublic {
     pub variants: Vec<MediaVariant>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MediaVariant {
     pub name: String,
     pub url: String,
@@ -119,7 +120,7 @@ pub struct MediaVariant {
 }
 
 /// One page of a public listing.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Listing {
     pub items: Vec<PageItem>,
     /// 1-based.

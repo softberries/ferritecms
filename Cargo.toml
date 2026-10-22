@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ferrite-domain", "crates/ferrite-store", "crates/ferrite-store-postgres", "crates/ferrite-store-sqlite", "crates/ferrite-store-tests", "crates/ferrite-plugin-host", "crates/ferrite-sdk", "crates/ferrite-media", "crates/ferrite-config", "crates/ferrite-core", "crates/ferrite-http", "crates/ferrite"]
+members = ["crates/ferrite-domain", "crates/ferrite-store", "crates/ferrite-store-postgres", "crates/ferrite-store-sqlite", "crates/ferrite-store-tests", "crates/ferrite-plugin-host", "crates/ferrite-sdk", "crates/ferrite-media", "crates/ferrite-config", "crates/ferrite-core", "crates/ferrite-http", "crates/ferrite-theme", "crates/ferrite"]
 
 [workspace.package]
 version = "0.1.0"
@@ -23,7 +23,10 @@ hyper-util = { version = "0.1", features = ["server-auto", "tokio", "server"] }
 ipnet = "2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 infer = "0.22"
+# No `debug` feature: no debug() global, no source snippets in errors (name + line stay).
+minijinja = { version = "3.0.2", default-features = false, features = ["builtins", "macros", "multi_template", "adjacent_loop_items", "std_collections", "serde", "json", "fuel"] }
 percent-encoding = "2"
+rust-embed = { version = "8.13", features = ["debug-embed"] }
 object_store = { version = "0.14", features = ["aws"] }
 s3s = "0.17"
 s3s-fs = "0.17"

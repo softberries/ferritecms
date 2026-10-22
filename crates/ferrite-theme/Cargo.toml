@@ -1,0 +1,27 @@
+[package]
+name = "ferrite-theme"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+ferrite-core = { path = "../ferrite-core" }
+ferrite-domain = { path = "../ferrite-domain" }
+html-escape.workspace = true
+minijinja.workspace = true
+percent-encoding.workspace = true
+rust-embed.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
