@@ -3,8 +3,10 @@
 mod config;
 mod error;
 mod keys;
+mod sniff;
 mod store;
 
 pub use config::{Backend, MediaConfig, PublicUrlMode, S3Config};
 pub use error::MediaError;
-pub use store::MediaStore;
+pub use sniff::{is_raster_image, sniff_mime};
+pub use store::{ArtifactRef, MediaStore};

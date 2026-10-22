@@ -19,6 +19,7 @@ futures = "0.3"
 hyper-util = { version = "0.1", features = ["server-auto", "tokio", "server"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 infer = "0.22"
+percent-encoding = "2"
 object_store = { version = "0.14", features = ["aws"] }
 s3s = "0.17"
 s3s-fs = "0.17"

@@ -16,6 +16,8 @@ pub struct Backing {
     _dir: tempfile::TempDir,
     server: Option<JoinHandle<()>>,
     pub config: MediaConfig,
+    /// Directory under which object keys appear as plain files.
+    objects_root: std::path::PathBuf,
 }
 
 impl Drop for Backing {
@@ -27,6 +29,11 @@ impl Drop for Backing {
 }
 
 impl Backing {
+    /// Filesystem path of an object key (local root, or the s3s-fs bucket directory).
+    pub fn object_path(&self, key: &str) -> std::path::PathBuf {
+        self.objects_root.join(key)
+    }
+
     pub fn store(&self) -> MediaStore {
         MediaStore::open(self.config.clone()).expect("open store")
     }
@@ -56,9 +63,10 @@ pub fn s3_config(endpoint: String, prefix: &str) -> MediaConfig {
 
 pub fn local_backend(prefix: &str) -> Backing {
     let dir = tempfile::tempdir().expect("tempdir");
+    let objects_root = dir.path().join("media");
     let config = MediaConfig {
         backend: Backend::Local {
-            root: dir.path().join("media"),
+            root: objects_root.clone(),
         },
         prefix: prefix.into(),
         public: public_mode(),
@@ -67,6 +75,7 @@ pub fn local_backend(prefix: &str) -> Backing {
         _dir: dir,
         server: None,
         config,
+        objects_root,
     }
 }
 
@@ -93,8 +102,10 @@ pub async fn s3_backend(prefix: &str) -> Backing {
             });
         }
     });
+    let objects_root = dir.path().join(BUCKET);
     Backing {
         _dir: dir,
+        objects_root,
         server: Some(server),
         config: s3_config(format!("http://{addr}"), prefix),
     }
