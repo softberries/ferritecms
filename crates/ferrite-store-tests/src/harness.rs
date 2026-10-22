@@ -3,6 +3,7 @@
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use ferrite_store::Store;
@@ -26,7 +27,7 @@ pub async fn sqlite_store() -> (SqliteStore, TempDir) {
 
 /// A Postgres store in its own schema; the schema is dropped when this is dropped.
 pub struct PgFixture {
-    pub store: PgStore,
+    pub store: Arc<PgStore>,
     url: String,
     schema: String,
 }
@@ -98,7 +99,11 @@ pub async fn pg_store() -> Option<PgFixture> {
         }
     };
     admin.close().await.expect("close admin connection");
-    let fixture = PgFixture { store, url, schema };
+    let fixture = PgFixture {
+        store: Arc::new(store),
+        url,
+        schema,
+    };
     fixture
         .store
         .migrate_up(None)
@@ -119,7 +124,7 @@ pub struct TestDb {
 
 enum Backing {
     Sqlite {
-        store: SqliteStore,
+        store: Arc<SqliteStore>,
         path: PathBuf,
         _dir: TempDir,
     },
@@ -132,7 +137,7 @@ impl TestDb {
         let path = dir.path().join("ferrite.db");
         Self {
             backing: Backing::Sqlite {
-                store,
+                store: Arc::new(store),
                 path,
                 _dir: dir,
             },
@@ -148,8 +153,17 @@ impl TestDb {
 
     pub fn store(&self) -> &dyn Store {
         match &self.backing {
-            Backing::Sqlite { store, .. } => store,
-            Backing::Postgres(f) => &f.store,
+            Backing::Sqlite { store, .. } => store.as_ref(),
+            Backing::Postgres(f) => f.store.as_ref(),
+        }
+    }
+
+    /// An owned handle to the same store, for code under test that keeps an
+    /// `Arc<dyn Store>` (core services).
+    pub fn shared_store(&self) -> Arc<dyn Store> {
+        match &self.backing {
+            Backing::Sqlite { store, .. } => store.clone(),
+            Backing::Postgres(f) => f.store.clone(),
         }
     }
 
