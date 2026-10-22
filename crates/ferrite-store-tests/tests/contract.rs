@@ -62,7 +62,8 @@ backend_tests!(
 
 backend_tests!(
     redirects_upsert_get_hit,
-    redirects_list_paginates_in_binary_order
+    redirects_list_paginates_in_binary_order,
+    text_writes_reject_nul
 );
 
 backend_tests!(
