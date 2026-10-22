@@ -5,7 +5,7 @@
 use std::{sync::Arc, time::Duration};
 
 use ferrite_core::{
-    Actor, ContentDraft, ContentService, CoreError, PermalinkFn,
+    Actor, ContentDraft, ContentService, CoreError, PermalinkFn, RedirectService,
     events::{archive_key, post_key, term_key},
 };
 use ferrite_domain::{
@@ -641,6 +641,217 @@ pub async fn non_slug_store_errors_surface(db: &TestDb) {
     assert!(search(store, "ghost").await.is_empty());
 }
 
+fn invalid(r: Result<impl std::fmt::Debug, CoreError>) -> String {
+    match r {
+        Err(CoreError::Invalid(m)) => m,
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+async fn manual_redirect(store: &dyn Store, source: &str, target: &str) {
+    store
+        .read()
+        .redirects()
+        .upsert(&Redirect {
+            id: RedirectId::new(),
+            source_path: source.into(),
+            target: target.into(),
+            code: 301,
+            hits: 0,
+            origin: RedirectOrigin::Manual,
+            created_at: Timestamp::now(),
+            last_hit_at: None,
+        })
+        .await
+        .unwrap();
+}
+
+/// I1: parents only for hierarchical types, of the same type, not trashed; checked on
+/// create and when an update changes the parent.
+pub async fn parent_rules(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let admin = actor(store, Role::Admin).await;
+    let post = svc.create(&admin, draft("post", "Post")).await.unwrap();
+    let other_post = svc.create(&admin, draft("post", "Other")).await.unwrap();
+    let page = svc.create(&admin, draft("page", "Page")).await.unwrap();
+    let trashed = svc.create(&admin, draft("page", "Gone")).await.unwrap();
+    force_status(store, trashed.id, ContentStatus::Trash).await;
+    let seq = max_seq(store).await;
+
+    // Non-hierarchical type: no parent at all.
+    let mut d = draft("post", "Child");
+    d.parent_id = Some(post.id);
+    invalid(svc.create(&admin, d.clone()).await);
+    d.title = "Other".into();
+    invalid(svc.update(&admin, other_post.id, 1, d).await);
+    // Hierarchical type: the parent must have the same type ...
+    let mut d = draft("page", "Child");
+    d.parent_id = Some(post.id);
+    invalid(svc.create(&admin, d.clone()).await);
+    invalid(svc.update(&admin, page.id, 1, d).await);
+    // ... and must not be trashed.
+    let mut d = draft("page", "Child");
+    d.parent_id = Some(trashed.id);
+    invalid(svc.create(&admin, d.clone()).await);
+    invalid(svc.update(&admin, page.id, 1, d).await);
+    assert_eq!(max_seq(store).await, seq);
+
+    let mut d = draft("page", "Child");
+    d.parent_id = Some(page.id);
+    let child = svc.create(&admin, d.clone()).await.unwrap();
+    assert_eq!(child.parent_id, Some(page.id));
+    // Checked on parent change only: a parent trashed later does not block edits.
+    force_status(store, page.id, ContentStatus::Trash).await;
+    d.title = "Child 2".into();
+    svc.update(&admin, child.id, child.version, d)
+        .await
+        .unwrap();
+}
+
+/// I2: publishing an item removes redirects that still claim its URL (both slash
+/// variants), on `publish` and on `publish_due`.
+pub async fn publish_reclaims_redirected_path(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let redirects = RedirectService::new(db.shared_store());
+    let admin = actor(store, Role::Admin).await;
+    let old = svc.create(&admin, draft("post", "Hello")).await.unwrap();
+    let old = svc.publish(&admin, old.id, old.version).await.unwrap();
+    let mut d = draft("post", "Hello");
+    d.slug = Some("hello-world".into());
+    svc.update(&admin, old.id, old.version, d).await.unwrap();
+    assert_eq!(
+        redirect_target(store, "/post/hello").await.as_deref(),
+        Some("/post/hello-world")
+    );
+    manual_redirect(store, "/post/hello/", "/elsewhere").await;
+
+    let new = svc.create(&admin, draft("post", "Hello")).await.unwrap();
+    assert_eq!(new.slug, "hello");
+    // Still a draft: the redirects stay.
+    assert!(redirects.resolve("/post/hello").await.unwrap().is_some());
+    svc.publish(&admin, new.id, new.version).await.unwrap();
+    assert_eq!(redirects.resolve("/post/hello").await.unwrap(), None);
+    assert_eq!(redirects.resolve("/post/hello/").await.unwrap(), None);
+
+    // publish_due does the same.
+    let later = svc.create(&admin, draft("post", "Later")).await.unwrap();
+    manual_redirect(store, "/post/later", "/x").await;
+    manual_redirect(store, "/post/later/", "/y").await;
+    let mut it = store.read().content().get(later.id).await.unwrap().unwrap();
+    it.status = ContentStatus::Scheduled;
+    it.scheduled_at =
+        Some(Timestamp::from_micros(Timestamp::now().as_micros() - 1_000_000).unwrap());
+    store.read().content().update(&it).await.unwrap();
+    assert_eq!(svc.publish_due(Timestamp::now()).await.unwrap(), 1);
+    assert_eq!(redirects.resolve("/post/later").await.unwrap(), None);
+    assert_eq!(redirects.resolve("/post/later/").await.unwrap(), None);
+}
+
+/// M1: a manual `/b -> /a/` plus a move of `/a/` to `/b/` must leave no redirect from
+/// `/b` or `/b/` (it would loop through the slash toggle).
+pub async fn move_onto_slash_variant_leaves_no_loop(db: &TestDb) {
+    let store = db.store();
+    let permalink: Arc<PermalinkFn> = Arc::new(|item: &ContentItem| format!("/{}/", item.slug));
+    let svc = ContentService::new(db.shared_store(), permalink);
+    let redirects = RedirectService::new(db.shared_store());
+    let admin = actor(store, Role::Admin).await;
+    let mut d = draft("post", "A");
+    d.slug = Some("a".into());
+    let item = svc.create(&admin, d).await.unwrap();
+    let item = svc.publish(&admin, item.id, item.version).await.unwrap();
+    redirects.upsert(&admin, "/b", "/a/", 301).await.unwrap();
+
+    let mut d = draft("post", "A");
+    d.slug = Some("b".into());
+    svc.update(&admin, item.id, item.version, d).await.unwrap();
+    assert_eq!(redirect_target(store, "/b").await, None);
+    assert_eq!(redirect_target(store, "/b/").await, None);
+    assert_eq!(redirects.resolve("/b/").await.unwrap(), None);
+    assert_eq!(redirect_target(store, "/a/").await.as_deref(), Some("/b/"));
+}
+
+/// M4: `.`/`..` are never slugs; reserved words are rejected for top-level items and
+/// generated slugs step around them.
+pub async fn reserved_and_dot_slugs(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let admin = actor(store, Role::Admin).await;
+    for s in ["admin", "API", "sitemap.xml", "_p", "healthz"] {
+        let mut d = draft("post", "X");
+        d.slug = Some(s.into());
+        assert_eq!(invalid(svc.create(&admin, d).await), "reserved slug", "{s}");
+    }
+    for s in [".", ".."] {
+        let mut d = draft("post", "X");
+        d.slug = Some(s.into());
+        invalid(svc.create(&admin, d).await);
+    }
+    assert_eq!(
+        svc.create(&admin, draft("post", "Admin"))
+            .await
+            .unwrap()
+            .slug,
+        "admin-2"
+    );
+    assert_eq!(
+        svc.create(&admin, draft("post", "Feed"))
+            .await
+            .unwrap()
+            .slug,
+        "feed-2"
+    );
+
+    // Under a parent the words are fine.
+    let parent = svc.create(&admin, draft("page", "Parent")).await.unwrap();
+    let mut d = draft("page", "Admin");
+    d.parent_id = Some(parent.id);
+    let child = svc.create(&admin, d).await.unwrap();
+    assert_eq!(child.slug, "admin");
+    // Moving it to the top level: an explicit reserved slug is Invalid, a kept one
+    // steps around it.
+    let mut d = draft("page", "Admin");
+    d.slug = Some("admin".into());
+    assert_eq!(
+        invalid(svc.update(&admin, child.id, child.version, d).await),
+        "reserved slug"
+    );
+    let moved = svc
+        .update(&admin, child.id, child.version, draft("page", "Admin"))
+        .await
+        .unwrap();
+    assert_eq!((moved.parent_id, moved.slug.as_str()), (None, "admin-2"));
+    let mut d = draft("page", "Admin");
+    d.slug = Some("metrics".into());
+    assert_eq!(
+        invalid(svc.update(&admin, moved.id, moved.version, d).await),
+        "reserved slug"
+    );
+}
+
+/// I4: a trashed item must be restored before it is edited (no re-indexing of trash).
+pub async fn trashed_item_cannot_be_updated(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let admin = actor(store, Role::Admin).await;
+    let item = svc.create(&admin, draft("post", "Bin")).await.unwrap();
+    let item = svc.trash(&admin, item.id, item.version).await.unwrap();
+    assert!(search(store, "zebra").await.is_empty());
+    let (seq, revs) = (max_seq(store).await, revision_count(store, item.id).await);
+    assert_eq!(
+        invalid(
+            svc.update(&admin, item.id, item.version, draft("post", "Bin 2"))
+                .await
+        ),
+        "restore first"
+    );
+    assert_eq!(svc.get(item.id).await.unwrap(), item);
+    assert!(search(store, "zebra").await.is_empty());
+    assert_eq!(max_seq(store).await, seq);
+    assert_eq!(revision_count(store, item.id).await, revs);
+}
+
 backend_tests!(
     create_update_roundtrip,
     explicit_empty_excerpt_is_kept,
@@ -651,6 +862,11 @@ backend_tests!(
     contributor_cannot_escalate,
     slug_change_chain,
     non_slug_store_errors_surface,
+    parent_rules,
+    publish_reclaims_redirected_path,
+    move_onto_slash_variant_leaves_no_loop,
+    reserved_and_dot_slugs,
+    trashed_item_cannot_be_updated,
 );
 
 backend_tests_spawning!(parallel_same_title, slug_retry_after_unique_violation);

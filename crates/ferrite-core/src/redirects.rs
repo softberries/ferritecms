@@ -141,7 +141,7 @@ async fn lookup(repos: &dyn Repos, path: &str) -> Result<Option<Redirect>, CoreE
 }
 
 /// `/a` <-> `/a/`; `None` for `/` and for paths without a leading `/`.
-fn toggled(path: &str) -> Option<String> {
+pub(crate) fn toggled(path: &str) -> Option<String> {
     if path == "/" || !path.starts_with('/') {
         return None;
     }

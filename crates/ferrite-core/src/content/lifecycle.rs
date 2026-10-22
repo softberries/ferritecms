@@ -13,7 +13,7 @@
 use ferrite_domain::{ContentId, ContentItem, ContentStatus, Role, Timestamp};
 use ferrite_store::{Repos, StoreError};
 
-use super::ContentService;
+use super::{ContentService, PermalinkFn, clear_redirects_from};
 use crate::{
     Actor, CoreError,
     actor::{Capability, can_edit, require},
@@ -51,7 +51,9 @@ impl Action {
 impl ContentService {
     /// Publishes a draft or pending item (needs `publish_own`, or `publish_others` for
     /// someone else's item). `published_at` is set to now only if it was never set, so
-    /// it survives unpublish and republish. Writes no revision.
+    /// it survives unpublish and republish. Redirects that start at the item's permalink
+    /// (either slash variant) are deleted, so the item is reachable at its URL. Writes
+    /// no revision.
     pub async fn publish(
         &self,
         actor: &Actor,
@@ -152,7 +154,8 @@ impl ContentService {
     ///
     /// Each item gets its own transaction: it is re-read and published only if it is
     /// still scheduled and due (`published_at` is set to `now` if it was never set,
-    /// `scheduled_at` is cleared). Concurrent calls publish each item exactly once: the
+    /// `scheduled_at` is cleared, redirects from its permalink are deleted as in
+    /// [`publish`](Self::publish)). Concurrent calls publish each item exactly once: the
     /// loser of a race fails the optimistic version check (or sees the new status) and
     /// counts nothing. Items that are skipped (including after a store error, which is logged
     /// at warn) stay scheduled and are not retried within the call.
@@ -176,7 +179,7 @@ impl ContentService {
             }
             for id in fresh {
                 let tx = self.store.begin().await?;
-                let done = publish_one_due(tx.as_ref(), id, now).await;
+                let done = publish_one_due(tx.as_ref(), self.permalink.as_ref(), id, now).await;
                 match finish(tx, done).await {
                     Ok(true) => published += 1,
                     Ok(false) | Err(CoreError::Conflict { .. }) => {}
@@ -196,13 +199,22 @@ impl ContentService {
         action: Action,
     ) -> Result<ContentItem, CoreError> {
         let tx = self.store.begin().await?;
-        let done = transition_in(tx.as_ref(), actor, id, expected_version, action).await;
+        let done = transition_in(
+            tx.as_ref(),
+            self.permalink.as_ref(),
+            actor,
+            id,
+            expected_version,
+            action,
+        )
+        .await;
         finish(tx, done).await
     }
 }
 
 async fn transition_in(
     repos: &dyn Repos,
+    permalink: &PermalinkFn,
     actor: &Actor,
     id: ContentId,
     expected_version: i64,
@@ -218,6 +230,7 @@ async fn transition_in(
     let next = apply(&current, action, Timestamp::now())?;
     let saved = repos.content().update(&next).await?;
     match action {
+        Action::Publish => clear_redirects_from(repos, &permalink(&saved)).await?,
         Action::Trash => repos.search().remove(id).await?,
         Action::Restore => {
             repos
@@ -267,6 +280,7 @@ async fn delete_in(
 /// Publishes `id` if it is still scheduled and due; `false` if it was skipped.
 async fn publish_one_due(
     repos: &dyn Repos,
+    permalink: &PermalinkFn,
     id: ContentId,
     now: Timestamp,
 ) -> Result<bool, CoreError> {
@@ -281,6 +295,7 @@ async fn publish_one_due(
     let next = apply(&current, Action::PublishDue, now)?;
     // Conflicts with a concurrent publisher surface as `Conflict` from the version check.
     let saved = repos.content().update(&next).await?;
+    clear_redirects_from(repos, &permalink(&saved)).await?;
     emit(repos, &saved).await?;
     Ok(true)
 }

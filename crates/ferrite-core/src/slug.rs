@@ -5,6 +5,26 @@ use std::collections::HashSet;
 
 const MAX_LEN: usize = 200;
 
+/// Slugs a top-level item may not take: they would shadow core routes and files.
+pub const RESERVED: &[&str] = &[
+    "admin",
+    "api",
+    "feed",
+    "_media",
+    "_theme",
+    "_p",
+    "sitemap.xml",
+    "robots.txt",
+    "healthz",
+    "readyz",
+    "metrics",
+];
+
+/// Whether `slug` is in [`RESERVED`].
+pub fn is_reserved(slug: &str) -> bool {
+    RESERVED.contains(&slug)
+}
+
 /// Core-generated slug: transliterate, lowercase, runs of non-`[a-z0-9]` become `-`,
 /// trim `-`, at most 200 chars (cut at a `-` boundary when possible), never empty.
 pub fn slugify(input: &str) -> String {
@@ -36,6 +56,8 @@ pub fn slugify(input: &str) -> String {
 }
 
 /// Validates a caller-supplied slug and returns it normalized (trimmed, lowercased).
+/// [`RESERVED`] words are checked by the caller, which knows whether the item is
+/// top-level.
 pub fn validate(input: &str) -> Result<String, CoreError> {
     let s = input.trim().to_lowercase();
     if s.is_empty() {
@@ -45,6 +67,11 @@ pub fn validate(input: &str) -> Result<String, CoreError> {
         return Err(CoreError::Invalid(format!(
             "slug longer than {MAX_LEN} characters"
         )));
+    }
+    if s == "." || s == ".." {
+        return Err(CoreError::Invalid(
+            "slug must not be \".\" or \"..\"".into(),
+        ));
     }
     if s.chars().any(is_forbidden_char) {
         return Err(CoreError::Invalid(
@@ -138,13 +165,26 @@ mod tests {
     fn validate_rules() {
         assert_eq!(validate("  Hello-World ").unwrap(), "hello-world");
         assert_eq!(validate("Żółw").unwrap(), "żółw");
-        for bad in ["a/b", "", "   ", "a b", "a\tb", "a\u{0}b", &"x".repeat(201)] {
+        for bad in [
+            "a/b",
+            "",
+            "   ",
+            "a b",
+            "a\tb",
+            "a\u{0}b",
+            &"x".repeat(201),
+            ".",
+            "..",
+            " .. ",
+        ] {
             assert!(
                 matches!(validate(bad), Err(CoreError::Invalid(_))),
                 "{bad:?}"
             );
         }
         assert!(validate(&"x".repeat(200)).is_ok());
+        assert_eq!(validate("...").unwrap(), "...");
+        assert_eq!(validate("a.b").unwrap(), "a.b");
     }
 
     #[test]

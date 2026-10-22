@@ -4,15 +4,18 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use ferrite_domain::{
-    ContentId, ContentItem, ContentStatus, NewContent, Redirect, RedirectId, RedirectOrigin,
-    Revision, RevisionId, TermId, Timestamp,
+    ContentId, ContentItem, ContentStatus, ContentType, NewContent, Redirect, RedirectId,
+    RedirectOrigin, Revision, RevisionId, TermId, Timestamp,
 };
 use ferrite_store::{MAX_REDIRECTS_BY_TARGET, Repos, Store, StoreError, Tx};
 
 use crate::{
     Actor, CoreError,
     actor::{Capability, can_edit, require},
-    blocks, events, slug,
+    blocks, events,
+    redirects::toggled,
+    slug,
+    tx::finish,
 };
 
 mod lifecycle;
@@ -75,56 +78,65 @@ impl ContentService {
     /// The slug is the validated caller slug or one generated from the title. If it is
     /// taken under the same type and parent, `-2`, `-3`, … is appended, for caller slugs
     /// too (as WordPress does); concurrent creates that race for the same slug retry up
-    /// to 5 times.
+    /// to 5 times. A top-level item may not take a [`slug::RESERVED`] word: a caller
+    /// slug is `Invalid("reserved slug")`, a generated one gets the `-N` suffix.
+    ///
+    /// A parent is allowed only for hierarchical types; it must exist, have the same
+    /// type and not be trashed.
     pub async fn create(
         &self,
         actor: &Actor,
         draft: ContentDraft,
     ) -> Result<ContentItem, CoreError> {
         require(actor, Capability::EditOwn)?;
-        let base = match &draft.slug {
-            Some(s) => slug::validate(s)?,
-            None => slug::slugify(&draft.title),
-        };
+        let base = base_slug(draft.slug.as_deref(), draft.parent_id, || {
+            slug::slugify(&draft.title)
+        })?;
         let terms = dedup(&draft.terms);
         let tx = self.store.begin().await?;
-        check_type(tx.as_ref(), &draft.kind).await?;
-        if let Some(parent) = draft.parent_id {
-            check_parent(tx.as_ref(), None, parent).await?;
+        let done = async {
+            let ty = content_type(tx.as_ref(), &draft.kind).await?;
+            if let Some(parent) = draft.parent_id {
+                check_parent(tx.as_ref(), &ty, None, parent).await?;
+            }
+            let excerpt = excerpt_of(&draft);
+            let row = Row::New(NewContent {
+                id: ContentId::new(),
+                kind: draft.kind,
+                status: ContentStatus::Draft,
+                slug: String::new(),
+                parent_id: draft.parent_id,
+                author_id: actor.user,
+                title: draft.title,
+                excerpt,
+                body: draft.body,
+                body_html: None,
+                fields: draft.fields,
+                menu_order: draft.menu_order,
+                published_at: None,
+                scheduled_at: None,
+            });
+            let saved = save_with_free_slug(tx.as_ref(), row, &base, None).await?;
+            set_terms(tx.as_ref(), saved.id, &terms).await?;
+            let keys = invalidation_keys(&saved, &[], &terms, None);
+            after_save(tx.as_ref(), actor, &saved, keys).await?;
+            Ok(saved)
         }
-        let excerpt = excerpt_of(&draft);
-        let row = Row::New(NewContent {
-            id: ContentId::new(),
-            kind: draft.kind,
-            status: ContentStatus::Draft,
-            slug: String::new(),
-            parent_id: draft.parent_id,
-            author_id: actor.user,
-            title: draft.title,
-            excerpt,
-            body: draft.body,
-            body_html: None,
-            fields: draft.fields,
-            menu_order: draft.menu_order,
-            published_at: None,
-            scheduled_at: None,
-        });
-        let saved = save_with_free_slug(tx.as_ref(), row, &base, None).await?;
-        set_terms(tx.as_ref(), saved.id, &terms).await?;
-        let keys = invalidation_keys(&saved, &[], &terms, None);
-        after_save(tx.as_ref(), actor, &saved, keys).await?;
-        tx.commit().await?;
-        Ok(saved)
+        .await;
+        finish(tx, done).await
     }
 
     /// Replaces the editable fields of item `id`, which must still be at
     /// `expected_version` (else `Conflict`). The status is kept. Own items need
     /// `edit_own` (contributors: only while draft or pending), others' `edit_others`.
+    /// A trashed item is `Invalid("restore first")`.
     ///
     /// `draft.slug = None` keeps the current slug; a slug that is taken gets `-N` as on
-    /// create. When a published item's permalink changes, a `301` redirect from the old
-    /// path is stored, redirects to the old path are re-targeted (no chains), and a
-    /// redirect from the new path is deleted.
+    /// create, and the [`slug::RESERVED`] rules of create apply. When the parent changes,
+    /// the new one is checked as on create. When a published item's permalink changes, a
+    /// `301` redirect from the old path is stored, redirects to the old path are
+    /// re-targeted (no chains), and redirects from the new path (either slash variant)
+    /// are deleted.
     pub async fn update(
         &self,
         actor: &Actor,
@@ -133,6 +145,20 @@ impl ContentService {
         draft: ContentDraft,
     ) -> Result<ContentItem, CoreError> {
         let tx = self.store.begin().await?;
+        let done = self
+            .update_in(tx.as_ref(), actor, id, expected_version, draft)
+            .await;
+        finish(tx, done).await
+    }
+
+    async fn update_in(
+        &self,
+        tx: &dyn Tx,
+        actor: &Actor,
+        id: ContentId,
+        expected_version: i64,
+        draft: ContentDraft,
+    ) -> Result<ContentItem, CoreError> {
         let current = tx.content().get(id).await?.ok_or(CoreError::NotFound)?;
         can_edit(actor, &current)?;
         if current.version != expected_version {
@@ -140,19 +166,22 @@ impl ContentService {
                 current_version: current.version,
             });
         }
+        if current.status == ContentStatus::Trash {
+            return Err(CoreError::Invalid("restore first".into()));
+        }
         if draft.kind != current.kind {
             return Err(CoreError::Invalid("the content type cannot change".into()));
         }
-        let base = match &draft.slug {
-            Some(s) => slug::validate(s)?,
-            None => current.slug.clone(),
-        };
+        let base = base_slug(draft.slug.as_deref(), draft.parent_id, || {
+            current.slug.clone()
+        })?;
         let terms = dedup(&draft.terms);
-        // The cycle walk is only needed when the parent actually changes.
+        // Parent rules and the cycle walk only apply when the parent actually changes.
         if let Some(parent) = draft.parent_id
             && draft.parent_id != current.parent_id
         {
-            check_parent(tx.as_ref(), Some(id), parent).await?;
+            let ty = content_type(tx, &current.kind).await?;
+            check_parent(tx, &ty, Some(id), parent).await?;
         }
         let old_terms: Vec<TermId> = tx
             .terms()
@@ -173,20 +202,37 @@ impl ContentService {
         next.menu_order = draft.menu_order;
         // Under the same parent the item's own slug is not a conflict.
         let own = (current.parent_id == next.parent_id).then_some(current.slug.as_str());
-        let saved = save_with_free_slug(tx.as_ref(), Row::Existing(next), &base, own).await?;
+        let saved = save_with_free_slug(tx, Row::Existing(next), &base, own).await?;
 
-        set_terms(tx.as_ref(), id, &terms).await?;
+        set_terms(tx, id, &terms).await?;
         if current.status == ContentStatus::Published {
             let (old_path, new_path) = ((self.permalink)(&current), (self.permalink)(&saved));
             if old_path != new_path {
-                record_move(tx.as_ref(), &old_path, &new_path).await?;
+                record_move(tx, &old_path, &new_path).await?;
             }
         }
         let keys = invalidation_keys(&saved, &old_terms, &terms, Some(current.parent_id));
-        after_save(tx.as_ref(), actor, &saved, keys).await?;
-        tx.commit().await?;
+        after_save(tx, actor, &saved, keys).await?;
         Ok(saved)
     }
+}
+
+/// The validated caller slug, or `fallback()` when there is none. A caller slug that is
+/// a reserved word is `Invalid` for a top-level item; a fallback one is not (the save
+/// steps around it).
+fn base_slug(
+    explicit: Option<&str>,
+    parent: Option<ContentId>,
+    fallback: impl FnOnce() -> String,
+) -> Result<String, CoreError> {
+    let Some(s) = explicit else {
+        return Ok(fallback());
+    };
+    let s = slug::validate(s)?;
+    if parent.is_none() && slug::is_reserved(&s) {
+        return Err(CoreError::Invalid("reserved slug".into()));
+    }
+    Ok(s)
 }
 
 /// The row being written: a new item or a new version of an existing one.
@@ -229,7 +275,8 @@ impl Row {
 /// savepoint, so a slug race (`UniqueViolation` on the slug index) poisons only that
 /// attempt (R18); the next one looks the taken slugs up again. Slugs that failed are
 /// remembered, so attempts make progress even where the lookup cannot see the
-/// conflicting slug. `own` is the item's current slug, which does not count as taken.
+/// conflicting slug. `own` is the item's current slug, which does not count as taken;
+/// at the top level the [`slug::RESERVED`] words always do.
 async fn save_with_free_slug(
     tx: &dyn Tx,
     mut row: Row,
@@ -246,6 +293,9 @@ async fn save_with_free_slug(
             .await?;
         if let Some(own) = own {
             taken.retain(|s| s != own);
+        }
+        if row.parent().is_none() {
+            taken.extend(slug::RESERVED.iter().map(|s| (*s).to_owned()));
         }
         taken.extend(failed.iter().cloned());
         let candidate = slug::next_free(base, &taken);
@@ -326,21 +376,40 @@ fn invalidation_keys(
     keys
 }
 
-/// Repoints redirects after a published item moved from `old` to `new`: no redirect may
-/// start at `new` (it is a live page again), redirects to `old` now go to `new` (no
-/// chains), and `old` redirects to `new` with a `301`.
-async fn record_move(repos: &dyn Repos, old: &str, new: &str) -> Result<(), CoreError> {
+/// Deletes the redirects that start at `path` or its slash-toggled variant: `path` is
+/// a live page now, and [`RedirectService::resolve`](crate::RedirectService::resolve)
+/// matches either variant.
+pub(crate) async fn clear_redirects_from(repos: &dyn Repos, path: &str) -> Result<(), CoreError> {
     let redirects = repos.redirects();
-    if let Some(r) = redirects.get_by_source(new).await? {
-        redirects.delete(r.id).await?;
+    for source in std::iter::once(path.to_owned()).chain(toggled(path)) {
+        if let Some(r) = redirects.get_by_source(&source).await? {
+            redirects.delete(r.id).await?;
+        }
     }
-    // Each pass re-targets what it read, so the next pass sees the rest.
+    Ok(())
+}
+
+/// Repoints redirects after a published item moved from `old` to `new`: no redirect may
+/// start at `new` or its slash variant (it is a live page again), redirects to `old` now
+/// go to `new` (no chains; one that would start at `new` is dropped rather than left as
+/// a self-loop), and `old` redirects to `new` with a `301`.
+async fn record_move(repos: &dyn Repos, old: &str, new: &str) -> Result<(), CoreError> {
+    clear_redirects_from(repos, new).await?;
+    let ours: Vec<String> = std::iter::once(new.to_owned())
+        .chain(toggled(new))
+        .collect();
+    let redirects = repos.redirects();
+    // Each pass re-targets (or drops) what it read, so the next pass sees the rest.
     loop {
         let batch = redirects.list_by_target(old).await?;
         let full = batch.len() >= MAX_REDIRECTS_BY_TARGET as usize;
         for mut r in batch {
-            r.target = new.to_owned();
-            redirects.upsert(&r).await?;
+            if ours.contains(&r.source_path) {
+                redirects.delete(r.id).await?;
+            } else {
+                r.target = new.to_owned();
+                redirects.upsert(&r).await?;
+            }
         }
         if !full {
             break;
@@ -361,23 +430,41 @@ async fn record_move(repos: &dyn Repos, old: &str, new: &str) -> Result<(), Core
     Ok(())
 }
 
-async fn check_type(repos: &dyn Repos, kind: &str) -> Result<(), CoreError> {
-    match repos.types().get(kind).await? {
-        Some(_) => Ok(()),
-        None => Err(CoreError::Invalid(format!("unknown content type {kind:?}"))),
-    }
+async fn content_type(repos: &dyn Repos, kind: &str) -> Result<ContentType, CoreError> {
+    repos
+        .types()
+        .get(kind)
+        .await?
+        .ok_or_else(|| CoreError::Invalid(format!("unknown content type {kind:?}")))
 }
 
-/// The parent must exist; for an existing item (`child`), it must not be the item itself
-/// or one of its descendants.
+/// A parent is allowed only for a hierarchical type `ty`; it must exist, be of the same
+/// type and not be trashed. For an existing item (`child`), it must not be the item
+/// itself or one of its descendants.
 async fn check_parent(
     repos: &dyn Repos,
+    ty: &ContentType,
     child: Option<ContentId>,
     parent: ContentId,
 ) -> Result<(), CoreError> {
+    if !ty.hierarchical {
+        return Err(CoreError::Invalid(format!(
+            "content type {:?} is not hierarchical; items cannot have a parent",
+            ty.name
+        )));
+    }
     let Some(mut item) = repos.content().get(parent).await? else {
         return Err(CoreError::Invalid("unknown parent".into()));
     };
+    if item.kind != ty.name {
+        return Err(CoreError::Invalid(format!(
+            "parent must be of type {:?}",
+            ty.name
+        )));
+    }
+    if item.status == ContentStatus::Trash {
+        return Err(CoreError::Invalid("parent is trashed".into()));
+    }
     let Some(child) = child else {
         return Ok(());
     };
