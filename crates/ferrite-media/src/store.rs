@@ -123,7 +123,7 @@ impl MediaStore {
     pub async fn put_artifact(&self, data: Bytes) -> Result<ArtifactRef, MediaError> {
         if data.len() >= SMALL_LIMIT {
             let stream = futures::stream::once(async move { Ok::<_, std::io::Error>(data) });
-            return self.put_stream(Box::pin(stream)).await;
+            return self.put_stream(Box::pin(stream), u64::MAX).await;
         }
         self.put_small(data).await
     }
@@ -134,8 +134,15 @@ impl MediaStore {
     /// Otherwise the payload is uploaded as a multipart upload to `<prefix>tmp/<uuid>` (8 MiB
     /// parts), hashed on the way, then placed at the final key with `copy_if_not_exists`
     /// (falling back to head + copy where unsupported) and the staging object is deleted.
+    ///
+    /// `max_bytes` caps the payload: as soon as the running total exceeds it the call fails
+    /// with [`MediaError::TooLarge`] (exactly `max_bytes` is accepted) and nothing is kept.
     /// On any error the multipart upload is aborted / the staging object deleted (best effort).
-    pub async fn put_stream<S>(&self, mut stream: S) -> Result<ArtifactRef, MediaError>
+    pub async fn put_stream<S>(
+        &self,
+        mut stream: S,
+        max_bytes: u64,
+    ) -> Result<ArtifactRef, MediaError>
     where
         S: Stream<Item = Result<Bytes, std::io::Error>> + Send + Unpin,
     {
@@ -147,6 +154,9 @@ impl MediaStore {
             match stream.next().await {
                 Some(chunk) => {
                     let chunk = chunk.map_err(|e| MediaError::Io(e.to_string()))?;
+                    if buf.len() as u64 + chunk.len() as u64 > max_bytes {
+                        return Err(MediaError::TooLarge { limit: max_bytes });
+                    }
                     hasher.update(&chunk);
                     buf.extend_from_slice(&chunk);
                 }
@@ -178,6 +188,9 @@ impl MediaStore {
             drop(std::mem::take(&mut buf));
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|e| MediaError::Io(e.to_string()))?;
+                if total.saturating_add(chunk.len() as u64) > max_bytes {
+                    return Err(MediaError::TooLarge { limit: max_bytes });
+                }
                 hasher.update(&chunk);
                 total += chunk.len() as u64;
                 let writer = guard.writer_mut()?;

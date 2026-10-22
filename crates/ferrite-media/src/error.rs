@@ -12,6 +12,8 @@ pub enum MediaError {
     ImageTooLarge { pixels: u64 },
     #[error("unsupported image: {0}")]
     UnsupportedImage(String),
+    #[error("payload exceeds the {limit} byte limit")]
+    TooLarge { limit: u64 },
     #[error("io error: {0}")]
     Io(String),
 }

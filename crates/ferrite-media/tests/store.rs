@@ -146,14 +146,14 @@ backend_tests! {
     stream_large_roundtrip(backing) {
         let store = backing.store();
         let data = pseudo_random(20 * 1024 * 1024, 1);
-        let r = store.put_stream(chunked(&data, 64 * 1024)).await.unwrap();
+        let r = store.put_stream(chunked(&data, 64 * 1024), u64::MAX).await.unwrap();
         assert_eq!(r.hash.as_str(), sha_hex(&data));
         assert_eq!(r.bytes, data.len() as u64);
         assert_eq!(r.mime, "application/octet-stream");
         assert!(r.created);
         assert_eq!(store.get(&r.hash).await.unwrap()[..], data[..]);
         assert_eq!(count_files(&backing.object_path("tmp")), 0);
-        let again = store.put_stream(chunked(&data, 100_000)).await.unwrap();
+        let again = store.put_stream(chunked(&data, 100_000), u64::MAX).await.unwrap();
         assert_eq!(again.hash, r.hash);
         assert!(!again.created);
         assert_eq!(count_files(&backing.object_path("tmp")), 0);
@@ -163,26 +163,26 @@ backend_tests! {
         let store = backing.store();
         let mut data = pseudo_random(9 * 1024 * 1024, 5);
         data[..8].copy_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
-        let r = store.put_stream(chunked(&data, 1000)).await.unwrap();
+        let r = store.put_stream(chunked(&data, 1000), u64::MAX).await.unwrap();
         assert_eq!(r.mime, "image/png");
     }
 
     stream_small_uses_direct_path(backing) {
         let store = backing.store();
         let data = pseudo_random(100 * 1024, 2);
-        let r = store.put_stream(chunked(&data, 4096)).await.unwrap();
+        let r = store.put_stream(chunked(&data, 4096), u64::MAX).await.unwrap();
         assert_eq!(r.hash.as_str(), sha_hex(&data));
         assert!(r.created);
         assert_eq!(store.get(&r.hash).await.unwrap()[..], data[..]);
         // The direct path never touches tmp/ at all.
         assert!(!backing.object_path("tmp").exists());
-        let again = store.put_stream(chunked(&data, 4096)).await.unwrap();
+        let again = store.put_stream(chunked(&data, 4096), u64::MAX).await.unwrap();
         assert!(!again.created);
     }
 
     stream_empty(backing) {
         let store = backing.store();
-        let r = store.put_stream(chunked(&[], 10)).await.unwrap();
+        let r = store.put_stream(chunked(&[], 10), u64::MAX).await.unwrap();
         assert_eq!(r.bytes, 0);
         assert_eq!(r.hash.as_str(), sha_hex(b""));
     }
@@ -197,7 +197,7 @@ backend_tests! {
             (8 * MIB - 1, 64 * 1024, 14),
         ] {
             let data = pseudo_random(len, seed);
-            let r = store.put_stream(chunked(&data, chunk)).await.unwrap();
+            let r = store.put_stream(chunked(&data, chunk), u64::MAX).await.unwrap();
             assert_eq!(r.hash.as_str(), sha_hex(&data), "len {len}");
             assert_eq!(r.bytes, len as u64);
             assert_eq!(store.get(&r.hash).await.unwrap()[..], data[..], "len {len}");
@@ -213,7 +213,7 @@ backend_tests! {
             .map(|c| Ok(Bytes::copy_from_slice(c)))
             .collect();
         items.push(Err(std::io::Error::other("boom")));
-        let err = store.put_stream(futures::stream::iter(items)).await.unwrap_err();
+        let err = store.put_stream(futures::stream::iter(items), u64::MAX).await.unwrap_err();
         assert!(matches!(err, MediaError::Io(_)), "{err:?}");
         assert_eq!(count_files(&backing.object_path("tmp")), 0);
         assert_eq!(count_files(&backing.object_path("artifacts")), 0);
@@ -236,7 +236,7 @@ backend_tests! {
         );
         let res = tokio::time::timeout(
             Duration::from_millis(1500),
-            store.put_stream(Box::pin(stream)),
+            store.put_stream(Box::pin(stream), u64::MAX),
         )
         .await;
         assert!(res.is_err(), "upload should have been cancelled by the timeout");
@@ -252,6 +252,39 @@ backend_tests! {
         assert_eq!(count_files(&backing.object_path("artifacts")), 0);
     }
 
+    stream_cap_exceeded_is_too_large(backing) {
+        let store = backing.store();
+        const MIB: usize = 1024 * 1024;
+        let data = pseudo_random(10 * MIB, 21);
+        let err = store
+            .put_stream(chunked(&data, 64 * 1024), (9 * MIB) as u64)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MediaError::TooLarge { limit } if limit == (9 * MIB) as u64), "{err:?}");
+        assert_eq!(count_files(backing.storage_root()), 0);
+        assert_eq!(store.head(&ArtifactHash::parse(&sha_hex(&data)).unwrap()).await.unwrap(), None);
+        // Exceeded while still buffering (below the 8 MiB switch).
+        let small = pseudo_random(100 * 1024, 22);
+        let err = store.put_stream(chunked(&small, 4096), 50 * 1024).await.unwrap_err();
+        assert!(matches!(err, MediaError::TooLarge { limit: 51200 }), "{err:?}");
+        assert_eq!(count_files(&backing.object_path("artifacts")), 0);
+    }
+
+    stream_cap_boundary_exact_succeeds(backing) {
+        let store = backing.store();
+        const MIB: usize = 1024 * 1024;
+        let data = pseudo_random(9 * MIB, 23);
+        let r = store.put_stream(chunked(&data, 64 * 1024), (9 * MIB) as u64).await.unwrap();
+        assert_eq!(r.bytes, (9 * MIB) as u64);
+        assert_eq!(r.hash.as_str(), sha_hex(&data));
+        assert_eq!(count_files(&backing.object_path("tmp")), 0);
+        let small = pseudo_random(1000, 24);
+        let r = store.put_stream(chunked(&small, 100), 1000).await.unwrap();
+        assert_eq!(r.bytes, 1000);
+        let err = store.put_stream(chunked(&small, 100), 999).await.unwrap_err();
+        assert!(matches!(err, MediaError::TooLarge { limit: 999 }), "{err:?}");
+    }
+
     interrupted_stream_leaves_nothing(backing) {
         let store = backing.store();
         let data = pseudo_random(10 * 1024 * 1024, 4);
@@ -260,7 +293,7 @@ backend_tests! {
             .map(|c| Ok(Bytes::copy_from_slice(c)))
             .collect();
         items.push(Err(std::io::Error::other("client went away")));
-        let err = store.put_stream(futures::stream::iter(items)).await.unwrap_err();
+        let err = store.put_stream(futures::stream::iter(items), u64::MAX).await.unwrap_err();
         assert!(matches!(err, MediaError::Io(_)), "{err:?}");
         assert_eq!(count_files(&backing.object_path("tmp")), 0);
         assert_eq!(count_files(&backing.object_path("artifacts")), 0);
@@ -286,7 +319,10 @@ async fn concurrent_same_payload(backing: common::Backing, local: bool) {
         let store = store.clone();
         let data = data.clone();
         tasks.push(tokio::spawn(async move {
-            store.put_stream(chunked(&data, 64 * 1024)).await.unwrap()
+            store
+                .put_stream(chunked(&data, 64 * 1024), u64::MAX)
+                .await
+                .unwrap()
         }));
     }
     let mut refs = Vec::new();

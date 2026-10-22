@@ -29,7 +29,7 @@ impl MediaStore {
     pub fn open(cfg: MediaConfig) -> Result<Self, MediaError>;
     pub async fn check(&self) -> Result<(), MediaError>;           // write + read back + delete a probe
     pub async fn put_artifact(&self, data: Bytes) -> Result<ArtifactRef, MediaError>;
-    pub async fn put_stream<S>(&self, s: S) -> Result<ArtifactRef, MediaError>
+    pub async fn put_stream<S>(&self, s: S, max_bytes: u64) -> Result<ArtifactRef, MediaError>
         where S: Stream<Item = Result<Bytes, io::Error>> + Send + Unpin;
     pub async fn get(&self, hash: &ArtifactHash) -> Result<Bytes, MediaError>;
     pub async fn get_range(&self, hash: &ArtifactHash, range: Range<u64>) -> Result<Bytes, MediaError>;
@@ -93,6 +93,18 @@ pub struct ArtifactRef { pub hash: ArtifactHash, pub bytes: u64, pub mime: Strin
   configured on the S3 builder (M4 follow-up). The s3s-fs test server also takes the
   fallback, because the test `S3Config` sets no `copy_if_not_exists`; only the local backend
   exercises the conditional (hard-link) paths in tests.
+
+### Upload size cap and the 5 GB copy ceiling
+
+`put_stream(stream, max_bytes)` fails with `MediaError::TooLarge { limit }` as soon as the running
+total exceeds `max_bytes` (exactly `max_bytes` is accepted); the staging upload is aborted like on
+any other error. `put_artifact` has no cap parameter (the payload is already in memory; it
+delegates with `u64::MAX`). The HTTP layer must always pass a limit.
+
+Placement of a streamed upload uses a single server-side `CopyObject`. AWS S3 caps one
+`CopyObject` at 5 GB; object_store's `copy` does not switch to multipart copy on its own. Upload
+limits must therefore stay **below 5 GB** (recommended: far below, for example 1 GB or less)
+until a multipart-copy path exists. Other S3-compatible providers have their own limits.
 
 ### Staging cleanup
 
