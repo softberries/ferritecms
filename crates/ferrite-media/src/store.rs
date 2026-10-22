@@ -165,8 +165,14 @@ impl MediaStore {
 
         let tmp = keys::tmp_key(&self.prefix);
         let upload = self.inner.put_multipart(&tmp).await?;
-        let mut writer = WriteMultipart::new_with_chunk_size(upload, PART_SIZE);
+        let mut guard = StagingGuard {
+            store: self.inner.clone(),
+            tmp,
+            writer: Some(WriteMultipart::new_with_chunk_size(upload, PART_SIZE)),
+            armed: true,
+        };
         let result = async {
+            let writer = guard.writer_mut()?;
             writer.wait_for_capacity(PART_CONCURRENCY).await?;
             writer.write(&buf);
             drop(std::mem::take(&mut buf));
@@ -174,26 +180,29 @@ impl MediaStore {
                 let chunk = chunk.map_err(|e| MediaError::Io(e.to_string()))?;
                 hasher.update(&chunk);
                 total += chunk.len() as u64;
+                let writer = guard.writer_mut()?;
                 writer.write(&chunk);
                 writer.wait_for_capacity(PART_CONCURRENCY).await?;
             }
-            Ok::<(), MediaError>(())
+            // Hash before finishing so a failure here still aborts the upload.
+            finish_hash(hasher)
         }
         .await;
-        if let Err(e) = result {
-            if let Err(abort_err) = writer.abort().await {
-                tracing::warn!(key = %tmp, error = %abort_err, "failed to abort multipart upload");
+        let hash = match result {
+            Ok(hash) => hash,
+            Err(e) => {
+                guard.abort_and_cleanup().await;
+                return Err(e);
             }
-            self.cleanup_tmp(&tmp).await;
-            return Err(e);
-        }
-        if let Err(e) = writer.finish().await {
-            self.cleanup_tmp(&tmp).await;
+        };
+        if let Some(writer) = guard.writer.take()
+            && let Err(e) = writer.finish().await
+        {
+            guard.abort_and_cleanup().await;
             return Err(e.into());
         }
-        let hash = finish_hash(hasher)?;
-        let placed = self.place_staged(&tmp, &hash).await;
-        self.cleanup_tmp(&tmp).await;
+        let placed = self.place_staged(&guard.tmp, &hash).await;
+        guard.abort_and_cleanup().await;
         Ok(ArtifactRef {
             hash,
             bytes: total,
@@ -223,13 +232,6 @@ impl MediaStore {
                 }
             }
             Err(e) => Err(e.into()),
-        }
-    }
-
-    async fn cleanup_tmp(&self, tmp: &Path) {
-        match self.inner.delete(tmp).await {
-            Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
-            Err(e) => tracing::warn!(key = %tmp, error = %e, "failed to delete staging object"),
         }
     }
 
@@ -341,6 +343,65 @@ impl MediaStore {
                 let base = base_url.as_str().trim_end_matches('/');
                 format!("{base}/{}", keys::artifact_rel(&self.prefix, hash))
             }
+        }
+    }
+}
+
+/// Owns a staged multipart upload. Dropping it while armed (e.g. the caller cancelled the
+/// `put_stream` future) aborts the upload and deletes the staging object in a spawned task.
+///
+/// Known limitation: if no tokio runtime is available at drop time, or the abort/delete
+/// request fails, the staging object / orphan S3 parts stay behind and a warning is logged.
+/// An S3 lifecycle rule (abort incomplete multipart uploads, expire `tmp/`) is the backstop.
+struct StagingGuard {
+    store: Arc<dyn ObjectStore>,
+    tmp: Path,
+    writer: Option<WriteMultipart>,
+    armed: bool,
+}
+
+impl StagingGuard {
+    fn writer_mut(&mut self) -> Result<&mut WriteMultipart, MediaError> {
+        self.writer
+            .as_mut()
+            .ok_or_else(|| MediaError::Backend("multipart writer already consumed".into()))
+    }
+
+    /// Aborts the upload if still open, deletes the staging object, disarms the guard.
+    async fn abort_and_cleanup(&mut self) {
+        self.armed = false;
+        Self::cleanup(self.store.clone(), self.tmp.clone(), self.writer.take()).await;
+    }
+
+    async fn cleanup(store: Arc<dyn ObjectStore>, tmp: Path, writer: Option<WriteMultipart>) {
+        if let Some(writer) = writer
+            && let Err(e) = writer.abort().await
+        {
+            tracing::warn!(key = %tmp, error = %e, "failed to abort multipart upload");
+        }
+        match store.delete(&tmp).await {
+            Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+            Err(e) => tracing::warn!(key = %tmp, error = %e, "failed to delete staging object"),
+        }
+    }
+}
+
+impl Drop for StagingGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let store = self.store.clone();
+        let tmp = self.tmp.clone();
+        let writer = self.writer.take();
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(Self::cleanup(store, tmp, writer));
+            }
+            Err(_) => tracing::warn!(
+                key = %tmp,
+                "upload dropped outside a tokio runtime; staging object left behind"
+            ),
         }
     }
 }

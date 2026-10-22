@@ -187,6 +187,71 @@ backend_tests! {
         assert_eq!(r.hash.as_str(), sha_hex(b""));
     }
 
+    stream_boundaries(backing) {
+        let store = backing.store();
+        const MIB: usize = 1024 * 1024;
+        for (len, chunk, seed) in [
+            (8 * MIB, 64 * 1024, 11),
+            (8 * MIB + 1, 64 * 1024, 12),
+            (9 * MIB, 3 * MIB, 13),
+            (8 * MIB - 1, 64 * 1024, 14),
+        ] {
+            let data = pseudo_random(len, seed);
+            let r = store.put_stream(chunked(&data, chunk)).await.unwrap();
+            assert_eq!(r.hash.as_str(), sha_hex(&data), "len {len}");
+            assert_eq!(r.bytes, len as u64);
+            assert_eq!(store.get(&r.hash).await.unwrap()[..], data[..], "len {len}");
+            assert_eq!(count_files(&backing.object_path("tmp")), 0);
+        }
+    }
+
+    interrupted_during_buffering_leaves_nothing(backing) {
+        let store = backing.store();
+        let data = pseudo_random(2 * 1024 * 1024, 6);
+        let mut items: Vec<Result<Bytes, std::io::Error>> = data
+            .chunks(64 * 1024)
+            .map(|c| Ok(Bytes::copy_from_slice(c)))
+            .collect();
+        items.push(Err(std::io::Error::other("boom")));
+        let err = store.put_stream(futures::stream::iter(items)).await.unwrap_err();
+        assert!(matches!(err, MediaError::Io(_)), "{err:?}");
+        assert_eq!(count_files(&backing.object_path("tmp")), 0);
+        assert_eq!(count_files(&backing.object_path("artifacts")), 0);
+    }
+
+    cancelled_upload_cleans_staging(backing) {
+        let store = backing.store();
+        let data = pseudo_random(20 * 1024 * 1024, 8);
+        let chunks: Vec<Bytes> = data.chunks(64 * 1024).map(Bytes::copy_from_slice).collect();
+        // ~10 MiB flow immediately, then the producer stalls forever.
+        let fast = 160;
+        let stream = futures::StreamExt::then(
+            futures::stream::iter(chunks.into_iter().enumerate()),
+            move |(i, c)| async move {
+                if i >= fast {
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                }
+                Ok::<_, std::io::Error>(c)
+            },
+        );
+        let res = tokio::time::timeout(
+            Duration::from_millis(1500),
+            store.put_stream(Box::pin(stream)),
+        )
+        .await;
+        assert!(res.is_err(), "upload should have been cancelled by the timeout");
+        let mut left = usize::MAX;
+        for _ in 0..50 {
+            left = count_files(backing.storage_root());
+            if left == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_eq!(left, 0);
+        assert_eq!(count_files(&backing.object_path("artifacts")), 0);
+    }
+
     interrupted_stream_leaves_nothing(backing) {
         let store = backing.store();
         let data = pseudo_random(10 * 1024 * 1024, 4);
@@ -205,15 +270,15 @@ backend_tests! {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_same_payload_local() {
-    concurrent_same_payload(common::local_backend("")).await;
+    concurrent_same_payload(common::local_backend(""), true).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_same_payload_s3() {
-    concurrent_same_payload(common::s3_backend("").await).await;
+    concurrent_same_payload(common::s3_backend("").await, false).await;
 }
 
-async fn concurrent_same_payload(backing: common::Backing) {
+async fn concurrent_same_payload(backing: common::Backing, local: bool) {
     let store = Arc::new(backing.store());
     let data = Arc::new(pseudo_random(10 * 1024 * 1024, 9));
     let mut tasks = Vec::new();
@@ -230,7 +295,13 @@ async fn concurrent_same_payload(backing: common::Backing) {
     }
     assert!(refs.iter().all(|r| r.hash.as_str() == sha_hex(&data)));
     assert!(refs.iter().all(|r| r.bytes == data.len() as u64));
-    assert!(refs.iter().filter(|r| r.created).count() >= 1);
+    let creators = refs.iter().filter(|r| r.created).count();
+    if local {
+        assert_eq!(creators, 1);
+    } else {
+        // The S3 test server lacks copy-if-not-exists; the head+copy fallback may race.
+        assert!(creators >= 1);
+    }
     assert_eq!(count_files(&backing.object_path("artifacts")), 1);
     assert_eq!(count_files(&backing.object_path("tmp")), 0);
     assert_eq!(store.get(&refs[0].hash).await.unwrap()[..], data[..]);

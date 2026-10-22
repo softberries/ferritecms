@@ -34,6 +34,11 @@ impl Backing {
         self.objects_root.join(key)
     }
 
+    /// Everything the backend keeps on disk, including in-flight multipart state.
+    pub fn storage_root(&self) -> &std::path::Path {
+        self._dir.path()
+    }
+
     pub fn store(&self) -> MediaStore {
         MediaStore::open(self.config.clone()).expect("open store")
     }
