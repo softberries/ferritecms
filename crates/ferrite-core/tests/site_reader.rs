@@ -288,6 +288,51 @@ pub async fn no_leak_single(db: &TestDb) {
     assert!(shown.html.contains("needle visible body"));
 }
 
+/// The id- and offset-based reads behind plugin `content.read` (Review Focus 1).
+pub async fn no_leak_by_id_and_latest(db: &TestDb) {
+    let store = db.store();
+    let set = leak_set(store).await;
+    let author = set.author.clone();
+    let m = media(store, &author, ContentStatus::Published).await;
+    let r = reader(db.shared_store());
+    for id in set.hidden.iter().copied().chain([m]) {
+        let read = r.by_id(id).await.unwrap();
+        assert!(read.value.is_none(), "{id} leaked");
+        // Recorded even while hidden: publishing it must refresh the page.
+        assert!(read.deps.contains(&post_key(id)));
+        assert!(!r.is_visible(id).await.unwrap(), "{id} visible");
+    }
+    let shown = r.by_id(set.visible).await.unwrap();
+    assert!(shown.cacheable);
+    let shown = shown.value.unwrap();
+    assert_eq!(shown.item.slug, "visible");
+    assert_eq!(shown.url, "/visible/");
+    assert!(r.is_visible(set.visible).await.unwrap());
+    assert!(!r.is_visible(ContentId::new()).await.unwrap());
+
+    let latest = r.latest("post", 10, 0).await.unwrap();
+    assert_eq!(slugs(&latest.value), SHOWN);
+    assert!(latest.deps.contains(&archive_key("post")));
+    for p in &latest.value {
+        assert!(latest.deps.contains(&post_key(p.item.id)));
+    }
+    assert_eq!(
+        slugs(&r.latest("post", 10, 1).await.unwrap().value),
+        ["other"]
+    );
+    assert_eq!(
+        slugs(&r.latest("post", 1, 0).await.unwrap().value),
+        ["visible"]
+    );
+    assert!(r.latest("post", 10, 2).await.unwrap().value.is_empty());
+    assert!(r.latest("page", 10, 0).await.unwrap().value.is_empty());
+    assert!(r.latest("media", 10, 0).await.unwrap().value.is_empty());
+    assert!(r.latest("post", 0, 0).await.unwrap().value.is_empty());
+    // Past the paging cap: nothing, like deep archive pages.
+    let deep = u32::try_from(ferrite_core::site::MAX_SKIP).unwrap() + 1;
+    assert!(r.latest("post", 10, deep).await.unwrap().value.is_empty());
+}
+
 pub async fn no_leak_listings(db: &TestDb) {
     let store = db.store();
     let set = leak_set(store).await;
@@ -1154,6 +1199,7 @@ pub async fn listing_call_count_is_constant(db: &TestDb) {
 
 backend_tests!(
     no_leak_single,
+    no_leak_by_id_and_latest,
     no_leak_listings,
     search_never_trusts_index,
     search_total_is_capped,

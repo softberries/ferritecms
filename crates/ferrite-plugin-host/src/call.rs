@@ -12,6 +12,7 @@ use crate::failure::FailureKind;
 use crate::output::sanitize_guest_text;
 use crate::registry::LoadedPlugin;
 use crate::state::{HostState, MAX_RESOURCES};
+use crate::trace::CallTrace;
 use crate::types::{ActionEvent, FilterValue, RequestInfo, RouteRequest, RouteResponse};
 
 /// Fuel consumed between cooperative yields to the async runtime. Design 05 §6 says
@@ -95,15 +96,18 @@ fn deadline_ticks(deadline: Duration, tick: Duration) -> u64 {
 }
 
 /// Fresh store with memory/instance limits, fuel and an epoch deadline; then instantiate.
+/// The store records what the call touches into `trace`.
 async fn instantiate(
     loaded: &LoadedPlugin,
     deadline: Duration,
+    trace: CallTrace,
 ) -> Result<(Store<HostState>, Plugin), CallFailure> {
     let state = HostState::new(
         loaded.name.clone(),
         loaded.grants.clone(),
         loaded.services.clone(),
         loaded.memory_bytes,
+        trace,
     );
     let mut store = Store::new(loaded.pre.engine(), state);
     store.limiter(|s| &mut s.limits);
@@ -134,17 +138,19 @@ async fn bounded<T>(
         .unwrap_or(Err(CallFailure::Timeout))
 }
 
+/// `trace` receives the call's dependency keys and volatility, also when it fails.
 pub(crate) async fn call_filter(
     loaded: &LoadedPlugin,
     hook: &str,
     value: &FilterValue,
     req: &RequestInfo,
     deadline: Duration,
+    trace: &CallTrace,
 ) -> Result<FilterValue, CallFailure> {
     let value = value.clone().into();
     let req = req.clone().into();
     bounded(deadline, async {
-        let (mut store, plugin) = instantiate(loaded, deadline).await?;
+        let (mut store, plugin) = instantiate(loaded, deadline, trace.clone()).await?;
         plugin
             .ferrite_plugin_guest()
             .call_apply_filter(&mut store, hook, &value, &req)
@@ -164,7 +170,7 @@ pub(crate) async fn call_action(
 ) -> Result<(), CallFailure> {
     let event = event.into();
     bounded(deadline, async {
-        let (mut store, plugin) = instantiate(loaded, deadline).await?;
+        let (mut store, plugin) = instantiate(loaded, deadline, CallTrace::default()).await?;
         plugin
             .ferrite_plugin_guest()
             .call_on_action(&mut store, hook, &event)
@@ -182,7 +188,7 @@ pub(crate) async fn call_route(
 ) -> Result<RouteResponse, CallFailure> {
     let req = req.into();
     bounded(deadline, async {
-        let (mut store, plugin) = instantiate(loaded, deadline).await?;
+        let (mut store, plugin) = instantiate(loaded, deadline, CallTrace::default()).await?;
         plugin
             .ferrite_plugin_guest()
             .call_handle_request(&mut store, &req)

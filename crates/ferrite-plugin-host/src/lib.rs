@@ -16,9 +16,11 @@ mod services;
 mod state;
 #[cfg(test)]
 mod test_support;
+mod trace;
 mod types;
 mod validate;
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -37,6 +39,7 @@ pub use manifest::{
     SettingSpec,
 };
 pub use services::{HostServices, InMemoryServices};
+pub use trace::{FilterOutcome, dep_keys};
 pub use types::{
     ActionEvent, FilterValue, Head, LinkTag, MetaTag, Post, RequestInfo, RouteRequest,
     RouteResponse, ScriptTag, TermRef,
@@ -47,6 +50,7 @@ use call::{CallFailure, call_action, call_filter, call_route};
 use engine::{EpochTicker, build_engine};
 use failure::FailureTracker;
 use registry::{LoadedPlugin, Registry};
+use trace::CallTrace;
 use validate::{matches_type, validate_output};
 
 /// Runs installed plugins with capability-scoped imports and per-call limits.
@@ -234,21 +238,38 @@ impl PluginHost {
             .ok_or_else(|| PluginError::UnknownPlugin(name.to_string()))
     }
 
-    /// Run every plugin subscribed to filter `hook`, in priority order, each receiving
-    /// the previous output. A failing plugin is skipped (its input is passed on), so
-    /// this never fails. Unknown hooks, action hooks and a `value` of the wrong variant
-    /// return `value` unchanged.
+    /// [`apply_filter_traced`](Self::apply_filter_traced) without the trace.
     pub async fn apply_filter(
         &self,
         hook: &str,
         value: FilterValue,
         req: &RequestInfo,
     ) -> FilterValue {
+        self.apply_filter_traced(hook, value, req).await.value
+    }
+
+    /// Run every plugin subscribed to filter `hook`, in priority order, each receiving
+    /// the previous output. A failing plugin is skipped (its input is passed on), so
+    /// this never fails. Unknown hooks, action hooks and a `value` of the wrong variant
+    /// return `value` unchanged.
+    ///
+    /// `html` output is sanitised with `ammonia` unless the plugin declares
+    /// `render.html = "raw"` (design 05 §7). The outcome also carries the dependency
+    /// keys and volatility of every call made (design 05 §7a; see the `trace` module):
+    /// a failed call counts as volatile.
+    pub async fn apply_filter_traced(
+        &self,
+        hook: &str,
+        value: FilterValue,
+        req: &RequestInfo,
+    ) -> FilterOutcome {
+        let mut deps = BTreeSet::new();
+        let mut volatile = false;
         let Some(spec) = hook_catalogue().iter().find(|h| h.name == hook) else {
-            return value;
+            return outcome(value, deps, volatile);
         };
         let HookKind::Filter(ty) = spec.kind else {
-            return value;
+            return outcome(value, deps, volatile);
         };
         let deadline = self.deadline(spec.deadline);
         let registry = self.registry.load_full();
@@ -262,10 +283,14 @@ impl PluginHost {
                 continue;
             }
             let started = Instant::now();
-            match call_filter(&plugin, hook, &current, req, deadline).await {
-                Ok(out) => match validate_output(ty, &current, out) {
+            let trace = CallTrace::default();
+            let result = call_filter(&plugin, hook, &current, req, deadline, &trace).await;
+            let html_mode = plugin.manifest.capabilities.render_html;
+            match result {
+                Ok(out) => match validate_output(ty, &current, out, html_mode) {
                     Ok(valid) => current = valid,
                     Err(reason) => {
+                        trace.volatile();
                         self.record_failure(
                             &plugin,
                             hook,
@@ -275,10 +300,14 @@ impl PluginHost {
                         );
                     }
                 },
-                Err(failure) => self.record_call_failure(&plugin, hook, &failure, started),
+                Err(failure) => {
+                    trace.volatile();
+                    self.record_call_failure(&plugin, hook, &failure, started);
+                }
             }
+            trace.drain_into(&mut deps, &mut volatile);
         }
-        current
+        outcome(current, deps, volatile)
     }
 
     /// Deliver action `hook` to one plugin that subscribes to it.
@@ -364,6 +393,14 @@ impl PluginHost {
     /// plugins; older records are dropped.
     pub fn failures(&self) -> Vec<FailureRecord> {
         self.failures.history()
+    }
+}
+
+fn outcome(value: FilterValue, deps: BTreeSet<String>, volatile: bool) -> FilterOutcome {
+    FilterOutcome {
+        value,
+        deps: deps.into_iter().collect(),
+        volatile,
     }
 }
 

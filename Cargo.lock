@@ -1219,7 +1219,23 @@ dependencies = [
 name = "ferrite-http"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "bytes",
  "ferrite-core",
+ "ferrite-domain",
+ "ferrite-media",
+ "ferrite-plugin-host",
+ "ferrite-store",
+ "ferrite-store-tests",
+ "hyper-util",
+ "s3s",
+ "s3s-fs",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
 ]
 
 [[package]]
@@ -1249,6 +1265,7 @@ dependencies = [
 name = "ferrite-plugin-host"
 version = "0.1.0"
 dependencies = [
+ "ammonia",
  "anyhow",
  "arc-swap",
  "async-trait",

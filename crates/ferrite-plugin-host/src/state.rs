@@ -13,6 +13,7 @@ use crate::bindings::v0_1::ferrite::plugin::{
 use crate::manifest::Capabilities;
 use crate::output::{GuestOutput, sanitize_log_message};
 use crate::services::HostServices;
+use crate::trace::{CallTrace, TracingWallClock};
 
 /// Per-store instance/table/memory caps: the measured minimum for components built with
 /// `cargo build --target wasm32-wasip2` (wit-component output). One less instance or
@@ -172,6 +173,8 @@ pub(crate) struct HostState {
     /// dropped; `HostState` is dropped at the end of every call.
     output: GuestOutput,
     table: ResourceTable,
+    /// Dependency keys and volatility of this call (design 05 §7a, `trace.rs`).
+    trace: CallTrace,
 }
 
 impl HostState {
@@ -180,6 +183,7 @@ impl HostState {
         grants: Arc<Capabilities>,
         services: Arc<dyn HostServices>,
         memory_bytes: usize,
+        trace: CallTrace,
     ) -> Self {
         let limits = StoreLimitsBuilder::new()
             .memory_size(memory_bytes)
@@ -199,7 +203,8 @@ impl HostState {
         // cap and logged when the call ends.
         wasi.stdout(output.stdout.clone())
             .stderr(output.stderr.clone())
-            .max_random_size(MAX_RANDOM_BYTES);
+            .max_random_size(MAX_RANDOM_BYTES)
+            .wall_clock(TracingWallClock::new(trace.clone()));
         let mut table = ResourceTable::new();
         table.set_max_capacity(MAX_RESOURCES);
         Self {
@@ -211,6 +216,7 @@ impl HostState {
             wasi: wasi.build(),
             output,
             table,
+            trace,
         }
     }
 
@@ -264,23 +270,34 @@ impl content::Host for HostState {
         if !take(&mut self.budget.content) {
             return None;
         }
+        // Recorded found or not: publishing the item later must refresh the page.
+        self.trace.post(&id);
         let post = self.services.get_post(&id).await?;
-        self.content_type_granted(&post.kind).then(|| post.into())
+        self.content_type_granted(&post.kind).then(|| {
+            self.trace.post(&post.id);
+            post.into()
+        })
     }
 
     async fn get_post_by_slug(&mut self, kind: String, slug: String) -> Option<wit::Post> {
         if !take(&mut self.budget.content) || !self.content_type_granted(&kind) {
             return None;
         }
+        // A missing slug may appear when an item of `kind` is created or published.
+        self.trace.archive(&kind);
         let post = self.services.get_post_by_slug(&kind, &slug).await?;
         // Re-check: a services implementation must not widen the requested type.
-        self.content_type_granted(&post.kind).then(|| post.into())
+        self.content_type_granted(&post.kind).then(|| {
+            self.trace.post(&post.id);
+            post.into()
+        })
     }
 
     async fn list_posts(&mut self, kind: String, limit: u32, offset: u32) -> Vec<wit::Post> {
         if !take(&mut self.budget.content) || !self.content_type_granted(&kind) {
             return Vec::new();
         }
+        self.trace.archive(&kind);
         let posts = self
             .services
             .list_posts(&kind, limit.min(MAX_LIST), offset)
@@ -288,7 +305,10 @@ impl content::Host for HostState {
         posts
             .into_iter()
             .filter(|p| self.content_type_granted(&p.kind))
-            .map(Into::into)
+            .map(|p| {
+                self.trace.post(&p.id);
+                p.into()
+            })
             .collect()
     }
 }
@@ -301,6 +321,7 @@ impl meta::Host for HostState {
         if !take(&mut self.budget.content) || !readable {
             return None;
         }
+        self.trace.post(&post);
         self.services.meta_get(&post, &key).await
     }
 
@@ -331,12 +352,14 @@ impl options::Host for HostState {
         if !take(&mut self.budget.content) || !matches_any(&self.grants.options_read, &key) {
             return None;
         }
+        self.trace.option(&key);
         self.services.option_get(&key).await
     }
 }
 
 impl kv::Host for HostState {
     async fn get(&mut self, key: String) -> Option<Vec<u8>> {
+        self.trace.volatile();
         if !take(&mut self.budget.kv_ops) {
             return None;
         }
@@ -344,6 +367,7 @@ impl kv::Host for HostState {
     }
 
     async fn set(&mut self, key: String, value: Vec<u8>) -> Result<(), String> {
+        self.trace.volatile();
         if !take(&mut self.budget.kv_ops) {
             return Err(BUDGET_EXCEEDED.into());
         }
@@ -356,12 +380,14 @@ impl kv::Host for HostState {
     }
 
     async fn delete(&mut self, key: String) {
+        self.trace.volatile();
         if take(&mut self.budget.kv_ops) {
             self.services.kv_delete(&self.plugin, &key).await;
         }
     }
 
     async fn list_keys(&mut self, prefix: String, limit: u32) -> Vec<String> {
+        self.trace.volatile();
         if !take(&mut self.budget.kv_ops) {
             return Vec::new();
         }
@@ -382,6 +408,7 @@ impl settings::Host for HostState {
 
 impl http::Host for HostState {
     async fn fetch(&mut self, _req: http::Request) -> Result<http::Response, String> {
+        self.trace.volatile();
         if !take(&mut self.budget.http) {
             return Err(BUDGET_EXCEEDED.into());
         }
@@ -405,7 +432,13 @@ mod tests {
     use kv::Host as _;
 
     fn state(grants: Capabilities, services: Arc<dyn HostServices>) -> HostState {
-        HostState::new("tester".into(), Arc::new(grants), services, 1024 * 1024)
+        HostState::new(
+            "tester".into(),
+            Arc::new(grants),
+            services,
+            1024 * 1024,
+            CallTrace::default(),
+        )
     }
 
     #[tokio::test]

@@ -89,6 +89,8 @@ pub const FEED_LEN: u32 = 20;
 pub const SITEMAP_FILE_LEN: usize = 50_000;
 /// Most items [`SiteReader::related`] returns.
 pub const MAX_RELATED: usize = 10;
+/// Most items [`SiteReader::latest`] returns.
+pub const MAX_LATEST: u32 = 100;
 /// Most search matches paged through; a search `total` never exceeds it (ruling R9:
 /// bounds what one anonymous request can make the store load).
 pub const SEARCH_CAP: usize = 200;
@@ -531,6 +533,68 @@ impl SiteReader {
         Ok(public(items, deps))
     }
 
+    /// The public item `id` (any type but media), for lookups by id such as plugin
+    /// `content.get-post`. Records `post:<id>` whether or not the item is public, so
+    /// publishing it refreshes pages that asked for it.
+    pub async fn by_id(&self, id: ContentId) -> Result<SiteRead<Option<PageItem>>, CoreError> {
+        let now = (self.clock)();
+        let repos = self.store.read();
+        let mut deps = DepKeys::default();
+        deps.insert(post_key(id));
+        let Some(item) = repos
+            .content()
+            .get(id)
+            .await?
+            .filter(|i| i.kind != MEDIA_KIND && is_public(i, now))
+        else {
+            return Ok(public(None, deps));
+        };
+        let mut items = self
+            .hydrator(repos, now)
+            .hydrate(vec![item], Nodes::new(), &mut deps)
+            .await?;
+        Ok(public(items.pop(), deps))
+    }
+
+    /// Whether item `id` is public (and not media): one store call, no hydration. For
+    /// gating reads of per-item data such as meta.
+    pub async fn is_visible(&self, id: ContentId) -> Result<bool, CoreError> {
+        let now = (self.clock)();
+        let item = self.store.read().content().get(id).await?;
+        Ok(item.is_some_and(|i| i.kind != MEDIA_KIND && is_public(&i, now)))
+    }
+
+    /// Up to `limit` (at most [`MAX_LATEST`]) public items of `kind`, newest first,
+    /// after skipping `offset` of them; empty for media and when `offset` exceeds
+    /// [`MAX_SKIP`] (the same paging bound as archives).
+    pub async fn latest(
+        &self,
+        kind: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<SiteRead<Vec<PageItem>>, CoreError> {
+        let now = (self.clock)();
+        let repos = self.store.read();
+        let mut deps = DepKeys::default();
+        deps.insert(archive_key(kind));
+        let limit = limit.min(MAX_LATEST);
+        if kind == MEDIA_KIND || limit == 0 || u64::from(offset) > MAX_SKIP {
+            return Ok(public(Vec::new(), deps));
+        }
+        let mut q = published(now);
+        q.kind = Some(kind.to_owned());
+        if skip_rows(repos, &mut q, u64::from(offset)).await?.is_err() {
+            return Ok(public(Vec::new(), deps));
+        }
+        q.limit = limit;
+        let rows = repos.content().list(&q).await?.items;
+        let items = self
+            .hydrator(repos, now)
+            .hydrate(rows, Nodes::new(), &mut deps)
+            .await?;
+        Ok(public(items, deps))
+    }
+
     /// Item `id` in any status but trash, for an actor who may edit it (`can_edit`).
     /// Trashed or missing items are `NotFound`. The result is marked not cacheable.
     pub async fn preview(
@@ -609,18 +673,9 @@ impl SiteReader {
         if skipped > MAX_SKIP {
             return Ok(None);
         }
-        let mut walked = 0;
-        while walked < skipped {
-            let mut s = q.clone();
-            s.limit =
-                u32::try_from((skipped - walked).min(u64::from(MAX_PAGE))).unwrap_or(MAX_PAGE);
-            let p = repos.content().list(&s).await?;
-            walked += p.items.len() as u64;
-            match p.next_cursor {
-                Some(c) if !p.items.is_empty() => q.cursor = Some(c),
-                // Ran out before reaching the page: everything there is was walked.
-                _ => return Ok(Some(empty(page, per_page, walked))),
-            }
+        if let Err(walked) = skip_rows(repos, &mut q, skipped).await? {
+            // Ran out before reaching the page: everything there is was walked.
+            return Ok(Some(empty(page, per_page, walked)));
         }
         q.limit = per_page;
         let rows = repos.content().list(&q).await?;
@@ -640,6 +695,27 @@ impl SiteReader {
             total,
         }))
     }
+}
+
+/// Advance `q.cursor` past `skip` rows by walking pages of up to `MAX_PAGE` rows.
+/// `Err(walked)` when the rows ran out first (`walked` is how many there were).
+async fn skip_rows(
+    repos: &dyn Repos,
+    q: &mut ContentQuery,
+    skip: u64,
+) -> Result<Result<(), u64>, CoreError> {
+    let mut walked = 0;
+    while walked < skip {
+        let mut s = q.clone();
+        s.limit = u32::try_from((skip - walked).min(u64::from(MAX_PAGE))).unwrap_or(MAX_PAGE);
+        let p = repos.content().list(&s).await?;
+        walked += p.items.len() as u64;
+        match p.next_cursor {
+            Some(c) if !p.items.is_empty() => q.cursor = Some(c),
+            _ => return Ok(Err(walked)),
+        }
+    }
+    Ok(Ok(()))
 }
 
 fn public<T>(value: T, deps: DepKeys) -> SiteRead<T> {

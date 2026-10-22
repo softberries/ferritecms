@@ -1,0 +1,13 @@
+[plugin]
+name      = "html-inject"
+version   = "0.1.0"
+publisher = "ferritecms.dev"
+world     = "ferrite:plugin/plugin@0.1.0"
+
+[capabilities]
+render.html = "sanitized"
+render.text = true
+
+[hooks]
+"content.body"    = 10
+"content.excerpt" = 10

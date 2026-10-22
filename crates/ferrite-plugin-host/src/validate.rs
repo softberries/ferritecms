@@ -1,8 +1,24 @@
-//! Output validation for filter results (design 05 §7). M0 checks the variant and size
-//! caps only; HTML sanitising and head rendering belong to the M1 render pipeline.
+//! Output validation for filter results (design 05 §7): the variant, the size caps, and
+//! `ammonia` sanitising of `html` results (M0 ruling R4 closed in M1c-2). Head rendering
+//! (escaping, `script-tag` checks) is the HTTP layer's job: the head stays structured
+//! here.
+
+use std::sync::LazyLock;
 
 use crate::capability::FilterType;
+use crate::manifest::HtmlMode;
 use crate::types::{FilterValue, Head};
+
+/// Policy for `html` results of plugins without `render.html = "raw"`: ammonia's
+/// defaults (no `<script>`/`<style>`, no `on*` handlers, no `javascript:` or other
+/// non-allow-listed URL schemes), `rel="noopener noreferrer"` on links, plus `class` on
+/// `<code>` so core's `language-*` code-block classes survive a sanitising plugin.
+static SANITIZER: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
+    let mut b = ammonia::Builder::default();
+    b.link_rel(Some("noopener noreferrer"))
+        .add_tag_attributes("code", ["class"]);
+    b
+});
 
 /// Cap on the size of a returned `head`: all its strings plus [`HEAD_ELEMENT_COST`] per
 /// meta/link/script, so many empty tags cannot slip under it.
@@ -71,15 +87,30 @@ fn body_len(v: &FilterValue) -> usize {
 }
 
 /// Accept `output` of a filter of type `ty` that was given `input`, or say why not.
+/// `Html` output is sanitised unless `html` is [`HtmlMode::Raw`]; the size cap applies
+/// before and after sanitising (escaping can grow text).
 pub(crate) fn validate_output(
     ty: FilterType,
     input: &FilterValue,
     output: FilterValue,
+    html: HtmlMode,
 ) -> Result<FilterValue, String> {
     if !matches_type(ty, &output) {
         return Err(format!("output variant does not match filter type {ty:?}"));
     }
-    match &output {
+    check_size(input, &output)?;
+    match output {
+        FilterValue::Html(s) if html != HtmlMode::Raw => {
+            let clean = FilterValue::Html(SANITIZER.clean(&s).to_string());
+            check_size(input, &clean)?;
+            Ok(clean)
+        }
+        other => Ok(other),
+    }
+}
+
+fn check_size(input: &FilterValue, output: &FilterValue) -> Result<(), String> {
+    match output {
         FilterValue::Head(h) => {
             check_head_counts(h)?;
             let size = head_bytes(h);
@@ -96,7 +127,7 @@ pub(crate) fn validate_output(
             }
         }
     }
-    Ok(output)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -114,12 +145,12 @@ mod tests {
             title: Some("t".repeat(70 * 1024)),
             ..Head::default()
         });
-        assert!(validate_output(FilterType::Head, &input, big).is_err());
+        assert!(validate_output(FilterType::Head, &input, big, HtmlMode::Off).is_err());
         let ok = FilterValue::Head(Head {
             title: Some("t".repeat(64 * 1024)),
             ..Head::default()
         });
-        assert!(validate_output(FilterType::Head, &input, ok).is_ok());
+        assert!(validate_output(FilterType::Head, &input, ok, HtmlMode::Off).is_ok());
     }
 
     use crate::types::{LinkTag, MetaTag, ScriptTag};
@@ -137,6 +168,7 @@ mod tests {
             FilterType::Head,
             &FilterValue::Head(Head::default()),
             FilterValue::Head(h),
+            HtmlMode::Off,
         )
     }
 
@@ -204,30 +236,120 @@ mod tests {
     #[test]
     fn html_over_four_times_input_rejected() {
         let input = html(100 * 1024);
-        assert!(validate_output(FilterType::Html, &input, html(4 * 100 * 1024 + 1)).is_err());
-        assert!(validate_output(FilterType::Html, &input, html(4 * 100 * 1024)).is_ok());
+        assert!(
+            validate_output(
+                FilterType::Html,
+                &input,
+                html(4 * 100 * 1024 + 1),
+                HtmlMode::Raw
+            )
+            .is_err()
+        );
+        assert!(
+            validate_output(
+                FilterType::Html,
+                &input,
+                html(4 * 100 * 1024),
+                HtmlMode::Raw
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn small_input_gets_64_kib_floor() {
         let input = html(1);
-        assert!(validate_output(FilterType::Html, &input, html(60 * 1024)).is_ok());
-        assert!(validate_output(FilterType::Html, &input, html(64 * 1024 + 1)).is_err());
+        assert!(validate_output(FilterType::Html, &input, html(60 * 1024), HtmlMode::Raw).is_ok());
+        assert!(
+            validate_output(FilterType::Html, &input, html(64 * 1024 + 1), HtmlMode::Raw).is_err()
+        );
     }
 
     #[test]
     fn never_above_2_mib() {
         let input = html(1024 * 1024);
-        assert!(validate_output(FilterType::Html, &input, html(2 * 1024 * 1024)).is_ok());
-        assert!(validate_output(FilterType::Html, &input, html(2 * 1024 * 1024 + 1)).is_err());
+        assert!(
+            validate_output(
+                FilterType::Html,
+                &input,
+                html(2 * 1024 * 1024),
+                HtmlMode::Raw
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_output(
+                FilterType::Html,
+                &input,
+                html(2 * 1024 * 1024 + 1),
+                HtmlMode::Raw
+            )
+            .is_err()
+        );
+    }
+
+    fn sanitized(s: &str) -> Result<FilterValue, String> {
+        validate_output(
+            FilterType::Html,
+            &html(1),
+            FilterValue::Html(s.into()),
+            HtmlMode::Sanitized,
+        )
+    }
+
+    #[test]
+    fn hostile_html_is_sanitised() {
+        let out = sanitized(
+            "<p onclick=\"x()\">a</p><script>alert(1)</script>\
+             <a href=\"javascript:alert(1)\">j</a><a href=\"/ok\">k</a>\
+             <pre><code class=\"language-rust\">fn</code></pre><style>p{}</style>",
+        );
+        assert_eq!(
+            out,
+            Ok(FilterValue::Html(
+                "<p>a</p><a rel=\"noopener noreferrer\">j</a>\
+                 <a href=\"/ok\" rel=\"noopener noreferrer\">k</a>\
+                 <pre><code class=\"language-rust\">fn</code></pre>"
+                    .into()
+            ))
+        );
+    }
+
+    #[test]
+    fn raw_html_passes_through() {
+        let s = "<script>alert(1)</script><p onclick=\"x()\">a</p>";
+        let out = validate_output(
+            FilterType::Html,
+            &html(1),
+            FilterValue::Html(s.into()),
+            HtmlMode::Raw,
+        );
+        assert_eq!(out, Ok(FilterValue::Html(s.into())));
+    }
+
+    #[test]
+    fn sanitised_growth_is_capped() {
+        // 60 KiB of `&` fits the 64 KiB floor; escaped to `&amp;` it is 300 KiB.
+        assert!(sanitized(&"&".repeat(60 * 1024)).is_err());
+    }
+
+    #[test]
+    fn text_is_not_sanitised() {
+        let out = validate_output(
+            FilterType::Text,
+            &FilterValue::Text(String::new()),
+            FilterValue::Text("<b>".into()),
+            HtmlMode::Off,
+        );
+        assert_eq!(out, Ok(FilterValue::Text("<b>".into())));
     }
 
     #[test]
     fn wrong_variant_rejected() {
         let input = FilterValue::Head(Head::default());
         let out = FilterValue::Text("x".into());
-        assert!(validate_output(FilterType::Head, &input, out).is_err());
+        assert!(validate_output(FilterType::Head, &input, out, HtmlMode::Off).is_err());
         let out = FilterValue::Text("x".into());
-        assert!(validate_output(FilterType::Html, &html(1), out).is_err());
+        assert!(validate_output(FilterType::Html, &html(1), out, HtmlMode::Sanitized).is_err());
     }
 }

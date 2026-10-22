@@ -1,0 +1,14 @@
+[plugin]
+name      = "reader"
+version   = "0.1.0"
+publisher = "ferritecms.dev"
+world     = "ferrite:plugin/plugin@0.1.0"
+
+[capabilities]
+content.read      = ["post"]
+content.meta.read = ["seo.*"]
+options.read      = ["site.title"]
+render.head       = true
+
+[hooks]
+"render.head" = 20
