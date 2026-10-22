@@ -25,6 +25,19 @@ const MAX_MEMORIES: usize = 1;
 /// elements (measured), so 10_000 leaves >100x headroom.
 const MAX_TABLE_ELEMENTS: usize = 10_000;
 
+/// Most live host resources (WASI streams, pollables, …) one call may hold: caps both the
+/// `ResourceTable` and wasmtime's store-wide component handle count. Each entry is host
+/// memory outside the linear-memory cap; wasmtime's defaults are 1_000_000 and 100_000.
+/// hello holds fewer than 10.
+pub(crate) const MAX_RESOURCES: usize = 1_000;
+/// Largest `wasi:random` `get-random-bytes` / `get-insecure-random-bytes` request; the
+/// host allocates the whole buffer before copying it into the guest. Larger requests
+/// fail the call. (wasmtime-wasi's default is 64 MiB.)
+const MAX_RANDOM_BYTES: u64 = 64 * 1024;
+
+/// Largest value one `meta.set` may write.
+const MAX_META_VALUE: usize = 64 * 1024;
+
 /// Upper bound on `limit` for list imports, whatever the guest asks for.
 const MAX_LIST: u32 = 100;
 const BUDGET_EXCEEDED: &str = "budget exceeded";
@@ -38,6 +51,8 @@ pub(crate) struct Budget {
     kv_ops: u32,
     /// Bytes (key + value) `kv.set` may still write.
     kv_bytes: usize,
+    /// Bytes (post id + key + value) `meta.set` may still write.
+    meta_bytes: usize,
     http: u32,
 }
 
@@ -47,6 +62,7 @@ impl Budget {
             content: 100,
             kv_ops: 100,
             kv_bytes: 1024 * 1024,
+            meta_bytes: 1024 * 1024,
             http: 3,
         }
     }
@@ -180,7 +196,10 @@ impl HostState {
         // No preopens, no env, no args; stdin closed. stdout/stderr are captured with a
         // cap and logged when the call ends.
         wasi.stdout(output.stdout.clone())
-            .stderr(output.stderr.clone());
+            .stderr(output.stderr.clone())
+            .max_random_size(MAX_RANDOM_BYTES);
+        let mut table = ResourceTable::new();
+        table.set_max_capacity(MAX_RESOURCES);
         Self {
             plugin,
             grants,
@@ -189,7 +208,7 @@ impl HostState {
             budget: Budget::per_call(),
             wasi: wasi.build(),
             output,
-            table: ResourceTable::new(),
+            table,
         }
     }
 
@@ -289,6 +308,17 @@ impl meta::Host for HostState {
         }
         if !(matches_any(&self.grants.content_meta_write, &key) || self.own_meta_key(&key)) {
             return Err(format!("meta key `{key}` is not writable by this plugin"));
+        }
+        if value.len() > MAX_META_VALUE {
+            return Err(format!(
+                "meta value is {} bytes, limit {MAX_META_VALUE}",
+                value.len()
+            ));
+        }
+        let size = post.len() + key.len() + value.len();
+        match self.budget.meta_bytes.checked_sub(size) {
+            Some(left) => self.budget.meta_bytes = left,
+            None => return Err(BUDGET_EXCEEDED.into()),
         }
         self.services.meta_set(&post, &key, &value).await
     }
@@ -413,6 +443,47 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn meta_value_cap() {
+        let mut s = state(Capabilities::default(), Arc::new(InMemoryServices::new()));
+        let key = || "plugin.tester.k".to_string();
+        assert_eq!(
+            meta::Host::set(&mut s, "p".into(), key(), "v".repeat(64 * 1024)).await,
+            Ok(())
+        );
+        assert!(
+            meta::Host::set(&mut s, "p".into(), key(), "v".repeat(64 * 1024 + 1))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn meta_bytes_budget() {
+        let services = Arc::new(InMemoryServices::new());
+        let mut s = state(Capabilities::default(), services.clone());
+        let value = "v".repeat(64 * 1024);
+        // 15 x (64 KiB + post + key) fits in 1 MiB; a 16th full value does not.
+        for i in 0..15 {
+            let key = format!("plugin.tester.k{i:02}");
+            assert_eq!(
+                meta::Host::set(&mut s, "p".into(), key, value.clone()).await,
+                Ok(()),
+                "{i}"
+            );
+        }
+        assert_eq!(
+            meta::Host::set(&mut s, "p".into(), "plugin.tester.k15".into(), value).await,
+            Err(BUDGET_EXCEEDED.into())
+        );
+        assert_eq!(services.meta_get("p", "plugin.tester.k15").await, None);
+        // The refused write did not use up the rest of the budget.
+        assert_eq!(
+            meta::Host::set(&mut s, "p".into(), "plugin.tester.small".into(), "x".into()).await,
+            Ok(())
+        );
+    }
+
     fn post(id: &str, kind: &str) -> Post {
         Post {
             id: id.into(),
@@ -500,6 +571,33 @@ mod tests {
         assert_eq!(call(MAX_TABLE_ELEMENTS as u32).await, -1, "1 + max > max");
         // The store is still usable and small growth within the cap succeeds.
         assert_eq!(call(10).await, 1);
+    }
+
+    #[test]
+    fn resource_table_is_capped() {
+        let mut s = state(Capabilities::default(), Arc::new(InMemoryServices::new()));
+        let table = wasmtime_wasi_io::IoView::table(&mut s);
+        for i in 0..MAX_RESOURCES {
+            assert!(table.push(i).is_ok(), "entry {i}");
+        }
+        assert!(table.push(0usize).is_err(), "entry past the cap refused");
+    }
+
+    #[test]
+    fn random_requests_are_capped() {
+        use wasmtime_wasi::p2::bindings::random::{insecure, random};
+        let mut s = state(Capabilities::default(), Arc::new(InMemoryServices::new()));
+        let ctx = s.wasi.random();
+        let max = MAX_RANDOM_BYTES;
+        assert_eq!(
+            random::Host::get_random_bytes(ctx, max)
+                .map(|b| b.len())
+                .ok(),
+            Some(64 * 1024)
+        );
+        assert!(random::Host::get_random_bytes(ctx, max + 1).is_err());
+        assert!(random::Host::get_random_bytes(ctx, u64::MAX).is_err());
+        assert!(insecure::Host::get_insecure_random_bytes(ctx, max + 1).is_err());
     }
 
     #[test]

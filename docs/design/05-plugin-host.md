@@ -301,6 +301,10 @@ stdout/stderr are captured into a buffer capped at **64 KiB per stream per call*
 rest is discarded and counted), then logged through `tracing` with control and bidi
 characters escaped (no log injection). Guest `log` calls are capped at **4 KiB per message
 (`LOG_MESSAGE_CAP`) and 100 calls per hook call (`LOG_CALLS_MAX`)** in `src/output.rs`, also escaped.
+Guest-derived failure text (a `plugin-error` message, wasmtime error chains that can carry
+guest name-section frame names, install-time import/world names) is cut to **1 KiB
+(`GUEST_TEXT_CAP`)** and escaped the same way before it is logged, recorded or returned
+in a `PluginError`.
 
 ## 6. Execution model & limits
 
@@ -349,7 +353,8 @@ to instantiate), so **pooling defaults to off**; `HostConfig.pooling = true` ena
 under real concurrent load in M1.
 - `hard_deadline` (tokio timeout, = deadline + 50%) is the backstop for time spent in
   host imports (DB, HTTP), which epochs don't interrupt.
-- Host-import budgets per call: `content` ≤ 100 calls, `kv` ≤ 100 ops / 1 MB, `http` ≤ 3
+- Host-import budgets per call: `content` ≤ 100 calls, `kv` ≤ 100 ops / 1 MB, `meta.set`
+  ≤ 1 MiB written (post id + key + value) with each value ≤ 64 KiB, `http` ≤ 3
   requests, each ≤ 5 s / 2 MB response; exceeding → the import returns an error, the
   guest decides. In M0, `meta`, `options` and `settings` calls also count against the
   `content` budget (conservative; spec named only content/kv/http). Guest-supplied list
@@ -359,6 +364,10 @@ under real concurrent load in M1.
   several core instances (main module plus WASI adapter shims), so `instances = 1`
   fails; **3 is the minimum that worked** for the example plugins. `table_elements`
   bounds a guest `table.grow` (otherwise host OOM).
+- **WASI host allocations**: the per-store `ResourceTable` and wasmtime's store-wide
+  component handle count are both capped at **1_000** (`MAX_RESOURCES`; wasmtime's
+  defaults are 1_000_000 and 100_000), and `wasi:random` byte requests at **64 KiB**
+  (`max_random_size`; default 64 MiB). Past either cap the call fails (counted as `Trap`).
 - **Fuel yield interval**: `100_000`, not the 10 000 first drafted here. At 10 000 a
   one-off measurement during Task 6 (no bench covers it) showed the yield bookkeeping slowing a busy-loop guest by about 3.5x, which broke the
   fuel-exhaustion test (< 200 ms). Wall-clock stays bounded by the epoch deadline
@@ -382,7 +391,8 @@ under real concurrent load in M1.
 ## 7. Output validation
 
 - **M0 status (ruling R4)**: the host validates the output *variant* and *size* only
-  (head ≤ 64 KiB of serialised strings; html/text ≤ max(4 × input, 64 KiB), never above
+  (head ≤ 64 KiB of serialised strings plus 64 B per meta/link/script, and at most 256
+  metas, 64 links, 16 scripts; html/text ≤ max(4 × input, 64 KiB), never above
   2 MiB). `ammonia` sanitising of `html` and head→HTML rendering (escaping, `script-tag`
   checks) are deferred to the M1 render pipeline (ROADMAP M1).
 - `head` is structured: the host renders tags itself with proper escaping. Plugins can't
@@ -518,7 +528,7 @@ renders and the failure is recorded (state as of M0):
 | `panic` | `panic!()` on every call | trap; page renders |
 | `undeclared-import` | calls `http` without declaring it | install rejected; forced link fails to instantiate |
 | `sockets` | opens a TCP socket (`wasi:sockets`) | install rejected |
-| `big-output` | returns 100 MiB of HTML | rejected by size cap |
+| `big-output` | returns 3 MiB of HTML (fits the 32 MiB memory cap) | rejected by the 2 MiB output cap (`InvalidOutput`) |
 | `slow-import` | spends its call in a slow host import | hard timeout; page renders |
 | `wrong-variant` | returns `text` for `render.head` | ignored, recorded |
 | `fs-escape` | reads `/etc/passwd` | no preopens → error inside guest; nothing leaks |
@@ -526,5 +536,7 @@ renders and the failure is recorded (state as of M0):
 | `noisy` | floods stdout (10 MiB) / stderr (1 MiB) | capture capped at 64 KiB per stream; call succeeds |
 | `fat-init` | initial linear memory 40 MiB (above the 32 MiB cap) | instantiation fails; treated as a call failure |
 | `kv-budget` | `kv.set` 150 times | 101st+ operation refused (budget 100) |
+| `long-error` | fails with a 1 MiB `plugin-error` full of newlines and ANSI escapes | logged/recorded text cut to 1 KiB and escaped; page renders |
+| `resource-flood` | leaks 5 000 `wasi:cli/stdout` handles | resource cap (1 000) fails the call; host keeps serving |
 | `route-xss` | route returns HTML with `<script>` reading `document.cookie` | **M2 — not yet implemented** (needs mounted routes) |
 | `route-flood` | many POSTs to its route | **M2 — not yet implemented** (needs rate limiting across 2 nodes) |

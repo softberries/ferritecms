@@ -15,6 +15,9 @@ use wasmtime_wasi_io::streams::{OutputStream, StreamResult};
 pub(crate) const STREAM_CAP: usize = 64 * 1024;
 /// Longest `log.log` message kept, in bytes.
 const LOG_MESSAGE_CAP: usize = 4 * 1024;
+/// Longest guest-derived failure text (plugin-error message, wasmtime error chain)
+/// kept before escaping, in bytes.
+pub(crate) const GUEST_TEXT_CAP: usize = 1024;
 /// `log.log` calls honoured per plugin call.
 const LOG_CALLS_MAX: u32 = 100;
 
@@ -137,19 +140,29 @@ fn escape_text(text: &str) -> String {
     out
 }
 
-/// Truncate to [`LOG_MESSAGE_CAP`] bytes (on a char boundary) and escape control
-/// characters, so a message cannot forge extra log lines or terminal sequences.
-pub(crate) fn sanitize_log_message(message: &str) -> String {
-    let mut end = message.len().min(LOG_MESSAGE_CAP);
-    while !message.is_char_boundary(end) {
+/// Truncate to `cap` bytes (on a char boundary) and escape control characters, so the
+/// text cannot forge extra log lines or terminal sequences.
+fn truncate_escaped(text: &str, cap: usize) -> String {
+    let mut end = text.len().min(cap);
+    while !text.is_char_boundary(end) {
         end -= 1;
     }
-    let mut out = String::with_capacity(end);
-    out.push_str(&escape_text(&message[..end]));
-    if end < message.len() {
+    let mut out = escape_text(&text[..end]);
+    if end < text.len() {
         out.push_str("…[truncated]");
     }
     out
+}
+
+/// A `log.log` message, cut at [`LOG_MESSAGE_CAP`] bytes and escaped.
+pub(crate) fn sanitize_log_message(message: &str) -> String {
+    truncate_escaped(message, LOG_MESSAGE_CAP)
+}
+
+/// Guest-derived failure text, cut at [`GUEST_TEXT_CAP`] bytes and escaped. Every such
+/// string goes through this before it is logged, recorded or returned to a caller.
+pub(crate) fn sanitize_guest_text(text: &str) -> String {
+    truncate_escaped(text, GUEST_TEXT_CAP)
 }
 
 /// Everything a guest can emit besides return values, for one plugin call. Dropping it
@@ -244,6 +257,17 @@ mod tests {
             "ok\\nINFO forged\\n\\u{1b}[31mred\\u{202e}evil\\u{2028}"
         );
         assert!(!text.contains(['\n', '\u{1b}', '\u{202e}', '\u{2028}']));
+    }
+
+    #[test]
+    fn guest_text_is_capped_and_escaped() {
+        let long = "a\n\u{1b}[31m".repeat(GUEST_TEXT_CAP);
+        let out = sanitize_guest_text(&long);
+        let kept = out.strip_suffix("…[truncated]").expect("truncation marker");
+        let raw = kept.replace("\\n", "\n").replace("\\u{1b}", "\u{1b}");
+        assert_eq!(raw.len(), GUEST_TEXT_CAP);
+        assert!(!out.contains(['\n', '\u{1b}']));
+        assert_eq!(sanitize_guest_text("plain"), "plain");
     }
 
     #[test]

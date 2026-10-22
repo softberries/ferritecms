@@ -8,6 +8,7 @@ use wasmtime::component::Component;
 use crate::capability::{Iface, granted_interfaces};
 use crate::error::InspectError;
 use crate::manifest::Manifest;
+use crate::output::sanitize_guest_text;
 
 /// What a component imports and exports, after passing the capability check.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,8 +98,8 @@ pub(crate) fn inspect_component(
     if wasm.starts_with(b"\0asm\x01\0\0\0") {
         return Err(InspectError::NotAComponent);
     }
-    let component =
-        Component::new(engine, wasm).map_err(|e| InspectError::Invalid(format!("{e:#}")))?;
+    let component = Component::new(engine, wasm)
+        .map_err(|e| InspectError::Invalid(sanitize_guest_text(&format!("{e:#}"))))?;
     let ty = component.component_type();
     let imports: Vec<String> = ty.imports(engine).map(|(n, _)| n.to_string()).collect();
     let exports: Vec<String> = ty.exports(engine).map(|(n, _)| n.to_string()).collect();
@@ -131,7 +132,7 @@ fn classify_import(import: &str, granted: &BTreeSet<Iface>) -> Result<Option<Ifa
         let iface = all_ifaces()
             .into_iter()
             .find(|i| i.wit_name() == import)
-            .ok_or_else(|| InspectError::ForbiddenImport(import.to_string()))?;
+            .ok_or_else(|| InspectError::ForbiddenImport(sanitize_guest_text(import)))?;
         if !granted.contains(&iface) {
             return Err(InspectError::UndeclaredImport {
                 import: import.to_string(),
@@ -143,7 +144,7 @@ fn classify_import(import: &str, granted: &BTreeSet<Iface>) -> Result<Option<Ifa
     if wasi_allowed(import) {
         Ok(None)
     } else {
-        Err(InspectError::ForbiddenImport(import.to_string()))
+        Err(InspectError::ForbiddenImport(sanitize_guest_text(import)))
     }
 }
 
@@ -157,7 +158,7 @@ fn select_world(exports: &[String]) -> Result<String, InspectError> {
         other.get_or_insert(version);
     }
     match other {
-        Some(v) => Err(InspectError::UnsupportedWorld(v.to_string())),
+        Some(v) => Err(InspectError::UnsupportedWorld(sanitize_guest_text(v))),
         None => Err(InspectError::MissingGuestExport),
     }
 }

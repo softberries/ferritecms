@@ -48,11 +48,8 @@ async fn big_output_rejected() -> TestResult {
         .apply_filter("content.body", input.clone(), &req())
         .await;
     assert_eq!(out, input);
-    let kind = last_kind(&host);
-    assert!(
-        matches!(kind, Some(FailureKind::InvalidOutput | FailureKind::Memory)),
-        "{kind:?}"
-    );
+    // 3 MiB fits in the 32 MiB memory cap, so only the 2 MiB output cap can reject it.
+    assert_eq!(last_kind(&host), Some(FailureKind::InvalidOutput));
     Ok(())
 }
 
@@ -168,6 +165,7 @@ struct Captured {
     stream: String,
     truncated_bytes: u64,
     message: String,
+    error: String,
 }
 
 #[derive(Default)]
@@ -178,6 +176,7 @@ impl tracing::field::Visit for FieldVisitor {
         match field.name() {
             "plugin" => self.0.plugin = value.into(),
             "stream" => self.0.stream = value.into(),
+            "error" => self.0.error = value.into(),
             _ => {}
         }
     }
@@ -189,8 +188,11 @@ impl tracing::field::Visit for FieldVisitor {
     }
 
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "message" {
-            self.0.message = format!("{value:?}");
+        match field.name() {
+            "message" => self.0.message = format!("{value:?}"),
+            // `plugin = %name` arrives as a Display wrapper, whose Debug is its Display.
+            "plugin" => self.0.plugin = format!("{value:?}"),
+            _ => {}
         }
     }
 }
@@ -315,5 +317,58 @@ async fn kv_budget_enforced() -> TestResult {
     let host = host_with(HostConfig::default(), &["kv-budget"])?;
     let out = host.apply_filter("render.head", head(), &req()).await;
     assert_eq!(meta_content(&out, "kv-ok").as_deref(), Some("100"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn long_guest_error_is_capped_and_escaped() -> TestResult {
+    let host = host_with(HostConfig::default(), &["long-error"])?;
+    let recorder = recorder();
+    let out = host.apply_filter("render.head", head(), &req()).await;
+    assert_eq!(out, head(), "page value unchanged");
+    assert_eq!(last_kind(&host), Some(FailureKind::GuestError));
+
+    let events = recorder.0.lock().map_err(|e| e.to_string())?.clone();
+    let e = events
+        .iter()
+        .find(|e| e.plugin == "long-error" && !e.error.is_empty())
+        .ok_or("no failure event for long-error")?;
+    assert!(
+        !e.error.contains(['\n', '\u{1b}']),
+        "unescaped: {:?}",
+        e.error
+    );
+    let body = e
+        .error
+        .strip_prefix("plugin error: ")
+        .and_then(|s| s.strip_suffix("…[truncated]"))
+        .ok_or("expected prefix and truncation marker")?;
+    // Undo the escaping to count what was kept of the guest's text.
+    let raw = body.replace("\\n", "\n").replace("\\u{1b}", "\u{1b}");
+    assert!(raw.len() <= 1024, "{} bytes kept", raw.len());
+    assert!(raw.starts_with("FORGED\n\u{1b}[31mred\n"), "{raw:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_flood_is_contained() -> TestResult {
+    // A generous deadline, so only the resource-table cap can stop the flood.
+    let cfg = HostConfig {
+        render_deadline: Duration::from_secs(10),
+        ..HostConfig::default()
+    };
+    let host = host_with(cfg, &["resource-flood"])?;
+    let out = host.apply_filter("render.head", head(), &req()).await;
+    assert_eq!(out, head(), "page value unchanged");
+    assert_eq!(meta_content(&out, "resource-flood"), None);
+    // A full resource table surfaces as a host error inside the call (not a wasm trap),
+    // which the host classifies as `Trap`.
+    assert_eq!(last_kind(&host), Some(FailureKind::Trap));
+    host.install(
+        Manifest::parse(&plugin_manifest("hello"))?,
+        &plugin_wasm("hello"),
+    )?;
+    let out = host.apply_filter("render.head", head(), &req()).await;
+    assert!(meta_content(&out, "generator").is_some(), "{out:?}");
     Ok(())
 }

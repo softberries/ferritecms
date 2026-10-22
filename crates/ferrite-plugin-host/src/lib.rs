@@ -109,7 +109,7 @@ impl PluginHost {
         let name = manifest.plugin.name.clone();
         let link_err = |e: wasmtime::Error| PluginError::Link {
             plugin: name.clone(),
-            reason: format!("{e:#}"),
+            reason: output::sanitize_guest_text(&format!("{e:#}")),
         };
         let grants = manifest.capabilities.clone();
         let linker = linker::build_linker(&self.engine, &granted_interfaces(&grants))?;

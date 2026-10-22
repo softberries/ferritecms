@@ -16,4 +16,6 @@ members = [
     "examples/hostile/noisy",
     "examples/hostile/fat-init",
     "examples/hostile/kv-budget",
+    "examples/hostile/long-error",
+    "examples/hostile/resource-flood",
 ]

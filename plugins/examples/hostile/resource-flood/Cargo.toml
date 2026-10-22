@@ -1,0 +1,13 @@
+[package]
+name = "resource-flood"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ferrite-sdk = { path = "../../../../crates/ferrite-sdk" }
+# Raw WASI 0.2 bindings, to create host resources without std's caching.
+wasip2 = "1"

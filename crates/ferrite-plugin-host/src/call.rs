@@ -9,8 +9,9 @@ use wasmtime::{Store, Trap};
 use crate::bindings::v0_1::Plugin;
 use crate::bindings::v0_1::ferrite::plugin::types::PluginError as WitPluginError;
 use crate::failure::FailureKind;
+use crate::output::sanitize_guest_text;
 use crate::registry::LoadedPlugin;
-use crate::state::HostState;
+use crate::state::{HostState, MAX_RESOURCES};
 use crate::types::{ActionEvent, FilterValue, RequestInfo, RouteRequest, RouteResponse};
 
 /// Fuel consumed between cooperative yields to the async runtime. Design 05 §6 says
@@ -27,11 +28,12 @@ pub(crate) enum CallFailure {
     Memory,
     /// Hard deadline (`deadline × 1.5`) elapsed, e.g. inside a slow host import.
     Timeout,
-    /// The instance could not be created.
+    /// The instance could not be created. Text is capped and escaped.
     Instantiate(String),
-    /// The guest returned `plugin-error`.
+    /// The guest returned `plugin-error`. Text is capped and escaped.
     GuestError(String),
-    /// The call failed without a trap (host-side error during the call).
+    /// The call failed without a trap (host-side error during the call). Text is capped
+    /// and escaped: wasmtime's error chain can carry guest name-section frame names.
     Invalid(String),
 }
 
@@ -62,11 +64,12 @@ impl CallFailure {
 }
 
 fn guest_error(e: WitPluginError) -> CallFailure {
-    CallFailure::GuestError(match e {
-        WitPluginError::InvalidInput(m) => format!("invalid input: {m}"),
-        WitPluginError::Unavailable(m) => format!("unavailable: {m}"),
-        WitPluginError::Other(m) => m,
-    })
+    let (prefix, message) = match &e {
+        WitPluginError::InvalidInput(m) => ("invalid input: ", m),
+        WitPluginError::Unavailable(m) => ("unavailable: ", m),
+        WitPluginError::Other(m) => ("", m),
+    };
+    CallFailure::GuestError(format!("{prefix}{}", sanitize_guest_text(message)))
 }
 
 /// Classify an error from the guest call; `store` tells whether a grow was refused.
@@ -74,14 +77,14 @@ fn call_error(store: &Store<HostState>, e: wasmtime::Error) -> CallFailure {
     match e.downcast_ref::<Trap>() {
         Some(_) if store.data().limits.grow_denied() => CallFailure::Memory,
         Some(t) => CallFailure::Trap(*t),
-        None => CallFailure::Invalid(format!("{e:#}")),
+        None => CallFailure::Invalid(sanitize_guest_text(&format!("{e:#}"))),
     }
 }
 
 fn instantiate_error(e: wasmtime::Error) -> CallFailure {
     match e.downcast_ref::<Trap>() {
         Some(t) => CallFailure::Trap(*t),
-        None => CallFailure::Instantiate(format!("{e:#}")),
+        None => CallFailure::Instantiate(sanitize_guest_text(&format!("{e:#}"))),
     }
 }
 
@@ -104,6 +107,7 @@ async fn instantiate(
     );
     let mut store = Store::new(loaded.pre.engine(), state);
     store.limiter(|s| &mut s.limits);
+    store.set_max_component_handles(MAX_RESOURCES);
     store.set_fuel(loaded.fuel).map_err(instantiate_error)?;
     store
         .fuel_async_yield_interval(Some(FUEL_YIELD_INTERVAL))
@@ -210,6 +214,22 @@ mod tests {
             FailureKind::Trap
         );
         assert_eq!(CallFailure::Memory.kind(), FailureKind::Memory);
+    }
+
+    #[test]
+    fn guest_error_text_is_capped_and_escaped() {
+        let huge = "x\n\u{1b}".repeat(512 * 1024);
+        for e in [
+            WitPluginError::Other(huge.clone()),
+            WitPluginError::InvalidInput(huge.clone()),
+            WitPluginError::Unavailable(huge),
+        ] {
+            let shown = guest_error(e).to_string();
+            // 1 KiB kept, each newline/ESC escaped to at most 6 chars, plus a prefix.
+            assert!(shown.len() < 8 * 1024, "{} bytes", shown.len());
+            assert!(!shown.contains(['\n', '\u{1b}']), "unescaped control char");
+            assert!(shown.ends_with("…[truncated]"));
+        }
     }
 
     #[test]
