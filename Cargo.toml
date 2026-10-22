@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ferrite-domain", "crates/ferrite-store", "crates/ferrite-store-postgres", "crates/ferrite-store-sqlite", "crates/ferrite-store-tests", "crates/ferrite-plugin-host", "crates/ferrite-sdk"]
+members = ["crates/ferrite-domain", "crates/ferrite-store", "crates/ferrite-store-postgres", "crates/ferrite-store-sqlite", "crates/ferrite-store-tests", "crates/ferrite-plugin-host", "crates/ferrite-sdk", "crates/ferrite-media"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +15,14 @@ base64 = "0.23"
 bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 criterion = "0.8"
+futures = "0.3"
+hyper-util = { version = "0.1", features = ["server-auto", "tokio", "server"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+infer = "0.22"
+object_store = { version = "0.14", features = ["aws"] }
+s3s = "0.17"
+s3s-fs = "0.17"
+sha2 = "0.11"
 serde = { version = "1", features = ["derive"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "migrate", "macros", "json", "uuid", "chrono"] }
 semver = { version = "1.0.28", features = ["serde"] }
@@ -25,6 +33,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"
 toml = "1.1"
 tracing = "0.1"
 unicode-normalization = "0.1.25"
+url = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 wasmtime = "50"
 wasmtime-wasi = "50"
