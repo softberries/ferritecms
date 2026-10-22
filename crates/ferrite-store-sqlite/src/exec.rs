@@ -89,8 +89,8 @@ impl TxHandle {
     /// levels first, then checks this level is the innermost open one and not poisoned.
     pub(crate) async fn enter(&self) -> Result<ConnGuard<'_>, StoreError> {
         let mut guard = self.shared.conn.lock().await;
-        self.settle(&mut guard).await;
         self.release_if_dead(&mut guard);
+        self.settle(&mut guard).await;
         self.check()?;
         if guard.is_none() {
             return Err(finished());
@@ -138,8 +138,8 @@ impl TxHandle {
     /// back; committing it returns `Err(Aborted)`.
     pub(crate) async fn finish(&self, commit: bool) -> Result<(), StoreError> {
         let mut guard = self.shared.conn.lock().await;
-        self.settle(&mut guard).await;
         self.release_if_dead(&mut guard);
+        self.settle(&mut guard).await;
         let (poisoned, nested_open) = match self.check() {
             Ok(()) => (false, false),
             Err(StoreError::Aborted) => (true, false),
@@ -433,5 +433,60 @@ mod tests {
             Some(StoreError::Aborted)
         ));
         assert!(matches!(outer.finish(true).await, Err(StoreError::Aborted)));
+    }
+
+    /// Level 0 dropped while a nested statement holds the connection lock (so `abandon`
+    /// cannot release it), and again with a parked nested handle that is never called:
+    /// the connection is back once the last handle is gone, nothing is persisted.
+    async fn lazy_release(pool: SqlitePool) {
+        for in_flight in [true, false] {
+            let outer = TxHandle::new(pool.begin().await.unwrap());
+            let nested = outer.nested().await.unwrap();
+            {
+                let mut guard = nested.enter().await.unwrap();
+                let tx = guard.as_mut().unwrap();
+                sqlx::raw_sql("CREATE TABLE IF NOT EXISTS lazy_t (a INT)")
+                    .execute(&mut **tx)
+                    .await
+                    .unwrap();
+            }
+            let held = if in_flight {
+                Some(nested.enter().await.unwrap())
+            } else {
+                None
+            };
+            outer.abandon();
+            drop(held);
+            if in_flight {
+                // The next call releases the transaction and reports Aborted.
+                assert!(matches!(
+                    nested.enter().await.err(),
+                    Some(StoreError::Aborted)
+                ));
+            }
+            drop(nested);
+            let tx = tokio::time::timeout(std::time::Duration::from_secs(6), pool.begin())
+                .await
+                .expect("connection must be free")
+                .unwrap();
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE name = 'lazy_t')",
+            )
+            .fetch_one(&mut *{ tx })
+            .await
+            .unwrap();
+            assert!(!exists, "nothing persisted");
+        }
+    }
+
+    #[tokio::test]
+    async fn lazy_release_after_outer_drop() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_secs(2))
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        lazy_release(pool).await;
     }
 }

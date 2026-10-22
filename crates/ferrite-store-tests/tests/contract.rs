@@ -47,6 +47,7 @@ backend_tests!(
     nested_open_error_variant,
     outer_drop_finishes_nested,
     outer_rollback_finishes_nested,
+    outer_drop_with_parked_nested,
     outer_commit_with_nested_open_rolls_back,
 );
 

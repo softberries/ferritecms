@@ -305,3 +305,27 @@ pub async fn outer_commit_with_nested_open_rolls_back(db: &TestDb) {
         .unwrap();
     tx.rollback().await.unwrap();
 }
+
+/// The outer `Tx` is dropped while the nested one is parked and never called again; the
+/// nested handle is dropped later. The connection must come back and nothing persists.
+pub async fn outer_drop_with_parked_nested(db: &TestDb) {
+    let store = db.store();
+    let tx = store.begin().await.unwrap();
+    tx.options().set("outer", &json!(1), false).await.unwrap();
+    let nested = tx.begin_nested().await.unwrap();
+    nested
+        .options()
+        .set("inner", &json!(1), false)
+        .await
+        .unwrap();
+    drop(tx);
+    drop(nested);
+    let tx = tokio::time::timeout(Duration::from_secs(6), store.begin())
+        .await
+        .expect("begin() must not hang")
+        .unwrap();
+    tx.rollback().await.unwrap();
+    let r = store.read();
+    assert!(r.options().get("outer").await.unwrap().is_none());
+    assert!(r.options().get("inner").await.unwrap().is_none());
+}

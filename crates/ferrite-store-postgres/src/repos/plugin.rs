@@ -317,10 +317,10 @@ impl PluginKvRepo for PgRepos {
         validate_text("plugin kv plugin", plugin)?;
         validate_text("plugin kv key", key)?;
         // READ COMMITTED does not serialize read-modify-write, so each plugin's quota
-        // writes queue on a transaction-scoped advisory lock (class `KV_LOCK_CLASS`, held until the enclosing
-        // transaction ends, so the next holder's statement sees this commit). Then one
-        // conditional statement (P2) writes only if the totals, with this key's old value
-        // replaced by the new one, stay within quota.
+        // writes queue on a transaction-scoped advisory lock (class `KV_LOCK_CLASS`, held
+        // until the enclosing transaction ends, so the next holder's statement sees this
+        // commit). Then one conditional statement (P2) writes only if the totals, with
+        // this key's old value replaced by the new one, stay within quota.
         atomic!(&self.exec, |conn| async move {
             sqlx::query("SELECT pg_advisory_xact_lock($1::int4, hashtext($2::text))")
                 .bind(KV_LOCK_CLASS)
