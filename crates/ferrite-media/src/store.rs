@@ -93,8 +93,9 @@ impl MediaStore {
     pub async fn check(&self) -> Result<(), MediaError> {
         let key = keys::probe_key(&self.prefix);
         let payload = Bytes::from_static(b"ferrite-media-probe");
+        // Nothing to clean up if the put itself failed.
+        self.inner.put(&key, payload.clone().into()).await?;
         let result = async {
-            self.inner.put(&key, payload.clone().into()).await?;
             let read = self.inner.get(&key).await?.bytes().await?;
             if read != payload {
                 return Err(MediaError::Backend(
@@ -202,6 +203,11 @@ impl MediaStore {
     pub fn public_url(&self, hash: &ArtifactHash, filename: &str) -> String {
         match &self.public {
             PublicUrlMode::ServeViaApp { path_prefix } => {
+                // "", "." and ".." would be normalised away by clients and drop the hash segment.
+                let filename = match filename {
+                    "" | "." | ".." => "file",
+                    other => other,
+                };
                 let name = utf8_percent_encode(filename, SEGMENT);
                 format!("{}/{hash}/{name}", path_prefix.trim_end_matches('/'))
             }

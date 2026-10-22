@@ -82,9 +82,9 @@ backend_tests! {
         assert_eq!(&store.get_range(&r.hash, 0..5).await.unwrap()[..], &DATA[..5]);
         assert_eq!(&store.get_range(&r.hash, 5..len).await.unwrap()[..], &DATA[5..]);
         assert!(store.get_range(&r.hash, 3..3).await.unwrap().is_empty());
+        assert!(store.get_range(&r.hash, len..len).await.unwrap().is_empty());
         assert!(matches!(store.get_range(&r.hash, len..len + 1).await, Err(MediaError::Range(_))));
-        #[allow(clippy::reversed_empty_ranges)]
-        let inverted = 5..3;
+        let inverted = std::ops::Range { start: 5, end: 3 };
         assert!(matches!(store.get_range(&r.hash, inverted).await, Err(MediaError::Range(_))));
     }
 
@@ -103,6 +103,23 @@ backend_tests! {
         assert!(matches!(err, MediaError::Config(_)), "{err:?}");
     }
 
+    just_below_limit_is_accepted(backing) {
+        let store = backing.store();
+        let data = Bytes::from(vec![7u8; 8 * 1024 * 1024 - 1]);
+        let r = store.put_artifact(data).await.unwrap();
+        assert_eq!(r.bytes, 8 * 1024 * 1024 - 1);
+        assert!(r.created);
+    }
+
+    known_answer_sha256(backing) {
+        let store = backing.store();
+        let r = store.put_artifact(Bytes::from_static(b"abc")).await.unwrap();
+        assert_eq!(
+            r.hash.as_str(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
     sniffs_content_on_put(backing) {
         let store = backing.store();
         let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
@@ -115,6 +132,15 @@ backend_tests! {
         let store = backing.store();
         let url = store.public_url(&hash, "my photo é#1?.png");
         assert_eq!(url, format!("/_media/{hash}/my%20photo%20%C3%A9%231%3F.png"));
+
+        for (name, want) in [
+            ("a/../b", "a%2F..%2Fb"),
+            ("..", "file"),
+            (".", "file"),
+            ("", "file"),
+        ] {
+            assert_eq!(store.public_url(&hash, name), format!("/_media/{hash}/{want}"));
+        }
 
         for (base, prefix) in [("https://cdn.example.com/m", ""), ("https://cdn.example.com/m/", "site/a/")] {
             let mut cfg = backing.config.clone();
