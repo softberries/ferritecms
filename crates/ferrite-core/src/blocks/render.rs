@@ -176,6 +176,7 @@ fn render_text(map: &Map<String, Value>, out: &mut String) {
         return;
     };
     let mut closers: Vec<&'static str> = Vec::new();
+    let mut linked = false;
     if let Some(Value::Array(marks)) = map.get("marks") {
         for mark in marks {
             let Some(m) = mark.as_object() else { continue };
@@ -184,7 +185,7 @@ fn render_text(map: &Map<String, Value>, out: &mut String) {
                 Some("italic") => open(out, &mut closers, "<em>", "</em>"),
                 Some("strike") => open(out, &mut closers, "<s>", "</s>"),
                 Some("code") => open(out, &mut closers, "<code>", "</code>"),
-                Some("link") => {
+                Some("link") if !linked => {
                     let Some(href) = attr_str(m, "href").and_then(safe_href) else {
                         continue;
                     };
@@ -197,6 +198,7 @@ fn render_text(map: &Map<String, Value>, out: &mut String) {
                     }
                     out.push('>');
                     closers.push("</a>");
+                    linked = true;
                 }
                 _ => {}
             }
@@ -218,11 +220,12 @@ fn open(out: &mut String, closers: &mut Vec<&'static str>, o: &str, c: &'static 
 const MAX_LOGGED_TYPES: usize = 256;
 
 fn log_unknown(ty: &str) {
+    let ty: String = ty.chars().take(64).collect();
     static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     let Ok(mut seen) = SEEN.get_or_init(Default::default).lock() else {
         return;
     };
-    if seen.len() < MAX_LOGGED_TYPES && seen.insert(ty.to_owned()) {
+    if seen.len() < MAX_LOGGED_TYPES && seen.insert(ty.clone()) {
         tracing::debug!(node_type = %ty, "unknown block node type; rendering its text content");
     }
 }
@@ -399,6 +402,53 @@ mod tests {
             assert_eq!(p(json!({"href":bad})), "<p>x</p>", "{bad:?}");
         }
         assert_eq!(p(json!({})), "<p>x</p>");
+    }
+
+    #[test]
+    fn only_first_valid_link_is_emitted() {
+        let d = doc(vec![
+            json!({"type":"paragraph","content":[marked("x", json!([
+            {"type":"link","attrs":{"href":"javascript:x"}},
+            {"type":"link","attrs":{"href":"/a"}},
+            {"type":"link","attrs":{"href":"/b"}}]))]}),
+        ]);
+        assert_eq!(r(d), "<p><a href=\"/a\">x</a></p>");
+    }
+
+    #[test]
+    fn xss_boundary_regressions() {
+        let p = |attrs: Value| {
+            r(doc(vec![
+                json!({"type":"paragraph","content":[marked("x", json!([{"type":"link","attrs":attrs}]))]}),
+            ]))
+        };
+        for bad in [
+            "&#106;avascript:alert(1)",
+            "&#x6A;avascript:alert(1)",
+            "java\u{a0}script:alert(1)",
+            "java\u{2028}script:alert(1)",
+            "\u{a0}javascript:alert(1)",
+        ] {
+            assert_eq!(p(json!({"href":bad})), "<p>x</p>", "{bad:?}");
+        }
+        assert_eq!(
+            p(json!({"href":"/x\" onmouseover=\"alert(1)","title":"\" onclick=\"x"})),
+            "<p><a href=\"/x&quot; onmouseover=&quot;alert(1)\">x</a></p>"
+        );
+        let img = r(doc(vec![json!({"type":"image","attrs":{
+            "src":"/i.png\" onerror=\"alert(1)","alt":"\" onerror=\"x","title":"'\"><script>"}})]));
+        assert!(
+            !img.contains("\" onerror") && !img.contains("<script"),
+            "{img}"
+        );
+        assert_eq!(img.matches('<').count(), 1, "{img}");
+        assert!(img.ends_with('>'));
+    }
+
+    #[test]
+    fn long_unknown_type_is_handled() {
+        let d = doc(vec![json!({"type":"x".repeat(100_000),"content":[t("a")]})]);
+        assert_eq!(r(d), "a");
     }
 
     #[test]

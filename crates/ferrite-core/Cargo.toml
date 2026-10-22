@@ -10,7 +10,6 @@ workspace = true
 [dependencies]
 ammonia.workspace = true
 deunicode.workspace = true
-ferrite-domain = { path = "../ferrite-domain" }
 ferrite-store = { path = "../ferrite-store" }
 html-escape.workspace = true
 serde_json.workspace = true

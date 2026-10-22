@@ -1133,7 +1133,6 @@ version = "0.1.0"
 dependencies = [
  "ammonia",
  "deunicode",
- "ferrite-domain",
  "ferrite-store",
  "html-escape",
  "serde_json",

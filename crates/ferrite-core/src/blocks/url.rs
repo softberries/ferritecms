@@ -34,7 +34,8 @@ pub(super) fn safe_href(raw: &str) -> Option<String> {
     match scheme(s) {
         Some(sch) if matches!(sch.as_str(), "http" | "https" | "mailto") => Some(s.to_owned()),
         Some(_) => None,
-        None if s.starts_with("//") => None,
+        // Leading `//` is protocol-relative; leading `&` could be an entity-encoded scheme.
+        None if s.starts_with("//") || s.starts_with('&') => None,
         None => Some(s.to_owned()),
     }
 }

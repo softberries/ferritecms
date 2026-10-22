@@ -11,8 +11,8 @@ pub enum CoreError {
     Invalid(String),
     #[error("version conflict (current version {current_version})")]
     Conflict { current_version: i64 },
-    #[error("store error: {0}")]
-    Store(#[source] StoreError),
+    #[error(transparent)]
+    Store(StoreError),
 }
 
 impl From<StoreError> for CoreError {

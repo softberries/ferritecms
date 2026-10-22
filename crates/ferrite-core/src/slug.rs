@@ -46,24 +46,61 @@ pub fn validate(input: &str) -> Result<String, CoreError> {
             "slug longer than {MAX_LEN} characters"
         )));
     }
-    if s.chars()
-        .any(|c| c == '/' || c.is_whitespace() || c.is_control())
-    {
+    if s.chars().any(is_forbidden_char) {
         return Err(CoreError::Invalid(
-            "slug must not contain '/', whitespace or control characters".into(),
+            "slug must not contain whitespace, control or format characters, or any of / ? # % < > \" ' \\ `"
+                .into(),
         ));
     }
     Ok(s)
 }
 
-/// `base` if free, else the smallest `base-N` (N >= 2) not in `taken`.
+/// Unicode general category Cf (format characters), per Unicode 16.
+fn is_format_char(c: char) -> bool {
+    matches!(c as u32,
+        0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2
+        | 0x180E | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F
+        | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F
+        | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+}
+
+fn is_forbidden_char(c: char) -> bool {
+    c.is_whitespace()
+        || c.is_control()
+        || is_format_char(c)
+        || matches!(
+            c,
+            '/' | '?' | '#' | '%' | '<' | '>' | '"' | '\'' | '\\' | '`'
+        )
+}
+
+/// Shortens `base` to at most `max` chars, cutting at a `-` boundary when possible.
+fn truncate_base(base: &str, max: usize) -> &str {
+    let Some((end, _)) = base.char_indices().nth(max) else {
+        return base;
+    };
+    let head = &base[..end];
+    let cut = if base[end..].starts_with('-') {
+        head
+    } else {
+        head.rfind('-').map_or(head, |i| &head[..i])
+    };
+    cut.trim_end_matches('-')
+}
+
+/// `base` if free, else the smallest `base-N` (N >= 2) not in `taken`; `base` is
+/// shortened when needed so the result stays within 200 chars.
 pub fn next_free(base: &str, taken: &[String]) -> String {
     let taken: HashSet<&str> = taken.iter().map(String::as_str).collect();
     if !taken.contains(base) {
         return base.to_owned();
     }
     (2u64..)
-        .map(|n| format!("{base}-{n}"))
+        .map(|n| {
+            let suffix = format!("-{n}");
+            let max = MAX_LEN.saturating_sub(suffix.len());
+            format!("{}{suffix}", truncate_base(base, max))
+        })
         .find(|c| !taken.contains(c.as_str()))
         .unwrap_or_else(|| base.to_owned())
 }
@@ -108,6 +145,55 @@ mod tests {
             );
         }
         assert!(validate(&"x".repeat(200)).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_format_and_url_chars() {
+        for bad in [
+            "a\u{200B}b",
+            "a\u{202E}b",
+            "a\u{FEFF}",
+            "a?b",
+            "a#b",
+            "a%b",
+            "a<b",
+            "a>b",
+            "a\"b",
+            "a'b",
+            "a\\b",
+            "a`b",
+        ] {
+            assert!(
+                matches!(validate(bad), Err(CoreError::Invalid(_))),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn next_free_bounds_length() {
+        let taken = |v: Vec<String>| v;
+        let base = "a".repeat(200);
+        let r = next_free(&base, &taken(vec![base.clone()]));
+        assert_eq!(r, format!("{}-2", "a".repeat(198)));
+        let base = "a".repeat(199);
+        let mut t = vec![base.clone()];
+        t.extend((2..=9).map(|n| format!("{}-{n}", &base[..198])));
+        let r = next_free(&base, &t);
+        assert_eq!(r, format!("{}-10", "a".repeat(197)));
+        assert_eq!(r.len(), 200);
+        // dash boundary preferred, trailing dash trimmed
+        let base = format!("{}-{}", "a".repeat(190), "b".repeat(9));
+        let r = next_free(&base, std::slice::from_ref(&base));
+        assert_eq!(r, format!("{}-2", "a".repeat(190)));
+        let base = format!("{}-{}", "a".repeat(150), "b".repeat(49));
+        let r = next_free(&base, std::slice::from_ref(&base));
+        assert_eq!(r, format!("{}-2", "a".repeat(150)));
+        // unicode: counts chars not bytes
+        let base = "ż".repeat(200);
+        let r = next_free(&base, std::slice::from_ref(&base));
+        assert_eq!(r, format!("{}-2", "ż".repeat(198)));
+        assert_eq!(r.chars().count(), 200);
     }
 
     #[test]
