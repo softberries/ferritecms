@@ -206,6 +206,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "slow-import"
+version = "0.1.0"
+dependencies = [
+ "ferrite-sdk",
+]
+
+[[package]]
 name = "sockets"
 version = "0.1.0"
 dependencies = [

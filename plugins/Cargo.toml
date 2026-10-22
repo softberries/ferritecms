@@ -8,4 +8,5 @@ members = [
     "examples/hostile/spin-host-fuel",
     "examples/hostile/oom",
     "examples/hostile/panic",
+    "examples/hostile/slow-import",
 ]

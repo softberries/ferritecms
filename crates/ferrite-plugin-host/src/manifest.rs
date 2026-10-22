@@ -246,6 +246,25 @@ impl Cx {
         }
     }
 
+    /// [`Cx::strings`] whose items must be key patterns (see [`valid_pattern`]).
+    fn patterns(&mut self, table: &mut toml::Table, key: &str, path: &str) -> Option<Vec<String>> {
+        let items = self.strings(table, key, path)?;
+        let bad: Vec<_> = items.iter().filter(|p| !valid_pattern(p)).collect();
+        if !bad.is_empty() {
+            self.push(
+                path,
+                format!(
+                    "patterns must be an exact key, \"*\" or \"<prefix>.*\"; invalid: {}",
+                    bad.iter()
+                        .map(|p| format!("`{p}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            );
+        }
+        Some(items)
+    }
+
     fn strings(&mut self, table: &mut toml::Table, key: &str, path: &str) -> Option<Vec<String>> {
         match table.remove(key)? {
             toml::Value::Array(items) => {
@@ -341,6 +360,16 @@ fn parse_plugin(cx: &mut Cx, t: &mut toml::Table) -> Option<PluginMeta> {
     })
 }
 
+/// A capability key pattern: an exact key (no `*`), `"*"`, or `"<prefix>.*"` with a
+/// non-empty, `*`-free prefix.
+pub(crate) fn valid_pattern(p: &str) -> bool {
+    if p == "*" {
+        return true;
+    }
+    let prefix = p.strip_suffix(".*").unwrap_or(p);
+    !prefix.is_empty() && !prefix.contains('*')
+}
+
 fn valid_hostname(h: &str) -> bool {
     h.len() <= 253
         && h.split('.').all(|label| {
@@ -359,14 +388,14 @@ fn parse_capabilities(cx: &mut Cx, t: &mut toml::Table) -> Capabilities {
 
     if let Some(mut content) = cx.section_at(t, "content", "capabilities.content") {
         c.content_read = cx
-            .strings(&mut content, "read", "capabilities.content.read")
+            .patterns(&mut content, "read", "capabilities.content.read")
             .unwrap_or_default();
         if let Some(mut meta) = cx.section_at(&mut content, "meta", "capabilities.content.meta") {
             c.content_meta_read = cx
-                .strings(&mut meta, "read", "capabilities.content.meta.read")
+                .patterns(&mut meta, "read", "capabilities.content.meta.read")
                 .unwrap_or_default();
             c.content_meta_write = cx
-                .strings(&mut meta, "write", "capabilities.content.meta.write")
+                .patterns(&mut meta, "write", "capabilities.content.meta.write")
                 .unwrap_or_default();
             cx.unknown(meta, "capabilities.content.meta");
         }
@@ -374,7 +403,7 @@ fn parse_capabilities(cx: &mut Cx, t: &mut toml::Table) -> Capabilities {
     }
     if let Some(mut options) = cx.section_at(t, "options", "capabilities.options") {
         c.options_read = cx
-            .strings(&mut options, "read", "capabilities.options.read")
+            .patterns(&mut options, "read", "capabilities.options.read")
             .unwrap_or_default();
         cx.unknown(options, "capabilities.options");
     }
@@ -843,6 +872,25 @@ world = "ferrite:plugin/plugin@0.1.0"
         }
         let ok = with("[capabilities]\nhttp = [\"api.example.com\", \"x-y.io\"]\n");
         assert!(Manifest::parse(&ok).is_ok());
+    }
+
+    #[test]
+    fn capability_patterns_are_validated() {
+        for (key, path) in [
+            ("content.read", "capabilities.content.read"),
+            ("content.meta.read", "capabilities.content.meta.read"),
+            ("content.meta.write", "capabilities.content.meta.write"),
+            ("options.read", "capabilities.options.read"),
+        ] {
+            for bad in ["seo*", "*.seo", "a.*.b", "a**", ".*", "**"] {
+                let src = with(&format!("[capabilities]\n{key} = [\"{bad}\"]\n"));
+                assert_eq!(paths(Manifest::parse(&src)), [path], "{key} = {bad}");
+            }
+            let ok = with(&format!(
+                "[capabilities]\n{key} = [\"*\", \"seo.*\", \"site.title\"]\n"
+            ));
+            assert!(Manifest::parse(&ok).is_ok(), "{key}");
+        }
     }
 
     #[test]

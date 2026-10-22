@@ -19,7 +19,13 @@ use crate::services::HostServices;
 const MAX_INSTANCES: usize = 3;
 const MAX_TABLES: usize = 2;
 const MAX_MEMORIES: usize = 1;
+/// Largest size any one table may reach. Without it, `table.grow` on an unbounded table
+/// allocates host memory outside the linear-memory cap. hello needs between 81 and 90
+/// elements (measured), so 10_000 leaves >100x headroom.
+const MAX_TABLE_ELEMENTS: usize = 10_000;
 
+/// Upper bound on `limit` for list imports, whatever the guest asks for.
+const MAX_LIST: u32 = 100;
 const BUDGET_EXCEEDED: &str = "budget exceeded";
 const UNAVAILABLE: &str = "unavailable in this build";
 
@@ -56,12 +62,20 @@ fn take(counter: &mut u32) -> bool {
     }
 }
 
-/// Manifest-style patterns: `"*"` matches everything, `"prefix.*"` matches keys starting
-/// with `prefix.`, anything else matches exactly.
+/// Manifest key patterns (validated by `manifest::valid_pattern`): `"*"` matches every
+/// key, `"<prefix>.*"` matches `<prefix>.` followed by anything, anything else matches
+/// exactly.
 fn matches_any(patterns: &[String], key: &str) -> bool {
-    patterns.iter().any(|p| match p.strip_suffix('*') {
-        Some(prefix) => key.starts_with(prefix),
-        None => p == key,
+    patterns.iter().any(|p| {
+        if p == "*" {
+            return true;
+        }
+        match p.strip_suffix(".*") {
+            Some(prefix) => key
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('.')),
+            None => p == key,
+        }
     })
 }
 
@@ -72,7 +86,7 @@ pub(crate) struct HostState {
     services: Arc<dyn HostServices>,
     pub(crate) limits: StoreLimits,
     budget: Budget,
-    wasi: WasiCtx,
+    pub(crate) wasi: WasiCtx,
     table: ResourceTable,
 }
 
@@ -88,6 +102,7 @@ impl HostState {
             .instances(MAX_INSTANCES)
             .tables(MAX_TABLES)
             .memories(MAX_MEMORIES)
+            .table_elements(MAX_TABLE_ELEMENTS)
             .build();
         Self {
             plugin,
@@ -119,6 +134,12 @@ impl WasiView for HostState {
             ctx: &mut self.wasi,
             table: &mut self.table,
         }
+    }
+}
+
+impl wasmtime_wasi_io::IoView for HostState {
+    fn table(&mut self) -> &mut ResourceTable {
+        &mut self.table
     }
 }
 
@@ -159,7 +180,10 @@ impl content::Host for HostState {
         if !take(&mut self.budget.content) || !self.content_type_granted(&kind) {
             return Vec::new();
         }
-        let posts = self.services.list_posts(&kind, limit, offset).await;
+        let posts = self
+            .services
+            .list_posts(&kind, limit.min(MAX_LIST), offset)
+            .await;
         posts
             .into_iter()
             .filter(|p| self.content_type_granted(&p.kind))
@@ -229,7 +253,9 @@ impl kv::Host for HostState {
         if !take(&mut self.budget.kv_ops) {
             return Vec::new();
         }
-        self.services.kv_list(&self.plugin, &prefix, limit).await
+        self.services
+            .kv_list(&self.plugin, &prefix, limit.min(MAX_LIST))
+            .await
     }
 }
 
@@ -351,14 +377,93 @@ mod tests {
         assert!(s.get_post("g1".into()).await.is_some());
     }
 
+    /// A component exporting `grow(n)`, which runs `table.grow` by `n` on an unbounded
+    /// funcref table and returns the old size, or -1 if the grow was refused.
+    const TABLE_GROWER: &str = r#"
+        (component
+          (core module $m
+            (table $t 1 funcref)
+            (func (export "grow") (param i32) (result i32)
+              (table.grow $t (ref.null func) (local.get 0))))
+          (core instance $i (instantiate $m))
+          (func (export "grow") (param "n" u32) (result s32)
+            (canon lift (core func $i "grow"))))
+    "#;
+
+    #[tokio::test]
+    async fn table_growth_is_bounded() {
+        use crate::config::HostConfig;
+        use crate::engine::build_engine;
+        use wasmtime::Store;
+        use wasmtime::component::{Component, Linker};
+
+        let engine = build_engine(&HostConfig::default()).expect("engine");
+        let component = Component::new(&engine, TABLE_GROWER).expect("wat component");
+        let linker = Linker::<HostState>::new(&engine);
+        let mut store = Store::new(
+            &engine,
+            state(Capabilities::default(), Arc::new(InMemoryServices::new())),
+        );
+        store.limiter(|s| &mut s.limits);
+        store.set_fuel(1_000_000).expect("fuel");
+        store.set_epoch_deadline(1_000); // no ticker runs in this test
+        let instance = linker
+            .instantiate_async(&mut store, &component)
+            .await
+            .expect("instantiate");
+        let grow = instance
+            .get_typed_func::<(u32,), (i32,)>(&mut store, "grow")
+            .expect("grow export");
+        let mut call = async |n: u32| grow.call_async(&mut store, (n,)).await.expect("no trap").0;
+        // Refused without allocating: 100 M elements would be ~800 MB of host memory.
+        assert_eq!(call(100_000_000).await, -1);
+        assert_eq!(call(MAX_TABLE_ELEMENTS as u32).await, -1, "1 + max > max");
+        // The store is still usable and small growth within the cap succeeds.
+        assert_eq!(call(10).await, 1);
+    }
+
     #[test]
     fn key_patterns() {
         let pats = vec!["seo.*".to_string(), "site.title".to_string()];
         assert!(matches_any(&pats, "seo.title"));
+        assert!(matches_any(&pats, "seo.a.b"));
         assert!(matches_any(&pats, "site.title"));
         assert!(!matches_any(&pats, "site.titles"));
         assert!(!matches_any(&pats, "seox"));
+        assert!(!matches_any(&pats, "seo"));
+        assert!(!matches_any(&pats, "xseo.title"));
         assert!(matches_any(&["*".to_string()], "anything"));
+        // Invalid forms (rejected by manifest validation) never act as globs.
+        let bad = vec!["seo*".to_string(), "*.title".to_string()];
+        assert!(!matches_any(&bad, "seox"));
+        assert!(!matches_any(&bad, "site.title"));
+    }
+
+    #[tokio::test]
+    async fn list_limits_are_clamped() {
+        use content::Host as _;
+        let services = Arc::new(InMemoryServices::new());
+        for i in 0..150 {
+            services.insert_post(post(&format!("p{i:03}"), "post"));
+            services
+                .kv_set("tester", &format!("k{i:03}"), Vec::new())
+                .await
+                .expect("seed");
+        }
+        let caps = Capabilities {
+            content_read: vec!["post".into()],
+            kv: true,
+            ..Capabilities::default()
+        };
+        let mut s = state(caps, services);
+        assert_eq!(s.list_posts("post".into(), u32::MAX, 0).await.len(), 100);
+        assert_eq!(s.list_posts("post".into(), 7, 0).await.len(), 7);
+        assert_eq!(
+            kv::Host::list_keys(&mut s, "k".into(), u32::MAX)
+                .await
+                .len(),
+            100
+        );
     }
 
     #[test]

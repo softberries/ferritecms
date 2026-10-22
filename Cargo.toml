@@ -21,6 +21,7 @@ toml = "1.1"
 tracing = "0.1"
 wasmtime = "50"
 wasmtime-wasi = "50"
+wasmtime-wasi-io = "50"
 wit-bindgen = "0.63"
 
 [workspace.lints.clippy]
