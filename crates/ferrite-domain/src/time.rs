@@ -5,7 +5,7 @@ use crate::DomainError;
 
 /// UTC instant with microsecond precision (lossless in SQLite and PostgreSQL).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
+#[serde(from = "DateTime<Utc>", into = "DateTime<Utc>")]
 pub struct Timestamp(DateTime<Utc>);
 
 impl Timestamp {
@@ -37,5 +37,11 @@ impl From<DateTime<Utc>> for Timestamp {
     /// Truncates to microseconds.
     fn from(dt: DateTime<Utc>) -> Self {
         Self(dt.trunc_subsecs(6))
+    }
+}
+
+impl From<Timestamp> for DateTime<Utc> {
+    fn from(ts: Timestamp) -> Self {
+        ts.0
     }
 }

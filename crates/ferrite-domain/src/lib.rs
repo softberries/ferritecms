@@ -6,6 +6,7 @@ mod ids;
 mod menu;
 mod page;
 mod plugin;
+mod secret;
 mod site;
 mod taxonomy;
 mod time;
@@ -20,6 +21,7 @@ pub use ids::{ArtifactHash, ContentId, MenuItemId, RedirectId, RevisionId, TermI
 pub use menu::{Menu, MenuItem, MenuItemKind};
 pub use page::{Cursor, Page};
 pub use plugin::{Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, Media};
+pub use secret::Secret;
 pub use site::{OptionEntry, REDIRECT_CODES, Redirect, RedirectOrigin};
 pub use taxonomy::{Taxonomy, Term};
 pub use time::Timestamp;
@@ -29,7 +31,7 @@ pub use user::{NewUser, Role, User, UserStatus};
 pub const MAX_PAGE: u32 = 200;
 
 /// Errors produced while constructing or parsing domain values.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum DomainError {
     #[error("invalid id: {0}")]
     InvalidId(String),
@@ -86,6 +88,7 @@ pub(crate) use string_enum;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     use uuid::Uuid;
 
     #[test]
@@ -142,6 +145,11 @@ mod tests {
         assert!(Cursor::decode("").is_err());
         // valid base64, not valid JSON pair
         assert!(Cursor::decode("aGVsbG8").is_err());
+        let enc = |v: serde_json::Value| URL_SAFE_NO_PAD.encode(v.to_string());
+        let id = Uuid::now_v7();
+        assert!(Cursor::decode(&enc(serde_json::json!([1, id, 3]))).is_err());
+        assert!(Cursor::decode(&enc(serde_json::json!([1, "nope"]))).is_err());
+        assert!(Cursor::decode(&enc(serde_json::json!({"k": 1, "id": id}))).is_err());
     }
 
     #[test]
@@ -152,5 +160,47 @@ mod tests {
         assert!(ArtifactHash::parse(&"A".repeat(64)).is_err());
         assert!(ArtifactHash::parse(&"g".repeat(64)).is_err());
         assert!(serde_json::from_str::<ArtifactHash>("\"abc\"").is_err());
+    }
+
+    #[test]
+    fn timestamp_edge_cases() {
+        for m in [-1, -86_400_000_000_123, 0] {
+            assert_eq!(Timestamp::from_micros(m).unwrap().as_micros(), m);
+        }
+        assert!(Timestamp::from_micros(i64::MIN).is_err());
+        assert_eq!(
+            Timestamp::from_micros(i64::MIN),
+            Err(DomainError::TimestampOutOfRange(i64::MIN))
+        );
+    }
+
+    #[test]
+    fn timestamp_deserialize_truncates() {
+        let ts: Timestamp = serde_json::from_str("\"2026-01-01T00:00:00.123456789Z\"").unwrap();
+        assert_eq!(ts, Timestamp::from_micros(1_767_225_600_123_456).unwrap());
+    }
+
+    #[test]
+    fn user_debug_redacts_secrets() {
+        let user = User {
+            id: UserId::new(),
+            login: "a".into(),
+            email: "a@example.com".into(),
+            display_name: "A".into(),
+            password_hash: Some(Secret::new("$argon2id$topsecret")),
+            role: Role::Admin,
+            status: UserStatus::Active,
+            must_reset: false,
+            totp_secret: Some(Secret::new("JBSWY3DPEHPK3PXP")),
+            created_at: Timestamp::now(),
+            last_login_at: None,
+        };
+        let dbg = format!("{user:?}");
+        assert!(!dbg.contains("topsecret") && !dbg.contains("JBSWY3DP"));
+        assert!(dbg.contains("[redacted]"));
+        assert_eq!(
+            user.password_hash.as_ref().map(Secret::expose),
+            Some("$argon2id$topsecret")
+        );
     }
 }
