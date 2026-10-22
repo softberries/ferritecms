@@ -278,13 +278,11 @@ async fn noisy_output_is_capped() -> TestResult {
             .ok_or(format!("no {stream} event"))?;
         assert_eq!(e.plugin, "noisy");
         assert!(!e.message.is_empty());
-        assert!(
-            e.message.len() <= 64 * 1024,
-            "{stream}: {}",
-            e.message.len()
-        );
+        // The logged text is escaped (newline -> `\n`); undo that to count raw bytes.
+        let raw = e.message.replace("\\n", "\n").len();
+        assert!(raw <= 64 * 1024, "{stream}: {raw}");
         assert_eq!(
-            e.message.len() as u64 + e.truncated_bytes,
+            raw as u64 + e.truncated_bytes,
             total as u64,
             "{stream}: captured + truncated == written"
         );

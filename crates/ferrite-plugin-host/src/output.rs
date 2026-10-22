@@ -54,6 +54,12 @@ impl CappedPipe {
             buf.discarded,
         )
     }
+
+    /// Like [`Self::snapshot`] but escaped, safe to put in a log line.
+    fn loggable(&self) -> (String, u64) {
+        let (text, discarded) = self.snapshot();
+        (escape_text(&text), discarded)
+    }
 }
 
 #[async_trait::async_trait]
@@ -111,6 +117,26 @@ impl StdoutStream for CappedPipe {
     }
 }
 
+/// Characters that could forge log lines or disguise text in a terminal or log viewer:
+/// control chars, line/paragraph separators and bidi overrides/isolates.
+fn needs_escape(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{2028}' | '\u{2029}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Replace [`needs_escape`] characters with their `\n` / `\u{..}` forms.
+fn escape_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if needs_escape(c) {
+            out.extend(c.escape_default());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Truncate to [`LOG_MESSAGE_CAP`] bytes (on a char boundary) and escape control
 /// characters, so a message cannot forge extra log lines or terminal sequences.
 pub(crate) fn sanitize_log_message(message: &str) -> String {
@@ -119,13 +145,7 @@ pub(crate) fn sanitize_log_message(message: &str) -> String {
         end -= 1;
     }
     let mut out = String::with_capacity(end);
-    for c in message[..end].chars() {
-        if c.is_control() {
-            out.extend(c.escape_default());
-        } else {
-            out.push(c);
-        }
-    }
+    out.push_str(&escape_text(&message[..end]));
     if end < message.len() {
         out.push_str("…[truncated]");
     }
@@ -164,7 +184,7 @@ impl Drop for GuestOutput {
     fn drop(&mut self) {
         let plugin = &*self.plugin;
         for (stream, pipe) in [("stdout", &self.stdout), ("stderr", &self.stderr)] {
-            let (text, truncated_bytes) = pipe.snapshot();
+            let (text, truncated_bytes) = pipe.loggable();
             if !text.is_empty() || truncated_bytes > 0 {
                 tracing::info!(plugin, stream, truncated_bytes, "{text}");
             }
@@ -202,16 +222,28 @@ mod tests {
 
     #[test]
     fn log_messages_are_truncated() {
-        let long = "é".repeat(LOG_MESSAGE_CAP); // 2 bytes each: cap lands mid-char at odd sizes
+        // 3-byte chars: 4096 = 1365 * 3 + 1, so the cut lands mid-character.
+        let long = "€".repeat(LOG_MESSAGE_CAP);
         let out = sanitize_log_message(&long);
-        assert!(out.ends_with("…[truncated]"));
-        assert_eq!(
-            out.chars().filter(|c| *c == 'é').count(),
-            LOG_MESSAGE_CAP / 2
-        );
+        let kept = out.strip_suffix("…[truncated]").expect("truncation marker");
+        assert!(kept.len() <= LOG_MESSAGE_CAP);
+        assert_eq!(kept.chars().count(), LOG_MESSAGE_CAP / 3);
+        assert!(kept.chars().all(|c| c == '€'));
         assert_eq!(sanitize_log_message("short"), "short");
         let exact = "x".repeat(LOG_MESSAGE_CAP);
         assert_eq!(sanitize_log_message(&exact), exact);
+    }
+
+    #[test]
+    fn captured_output_is_escaped() {
+        let pipe = CappedPipe::default();
+        pipe.push("ok\nINFO forged\n\u{1b}[31mred\u{202e}evil\u{2028}".as_bytes());
+        let (text, _) = pipe.loggable();
+        assert_eq!(
+            text,
+            "ok\\nINFO forged\\n\\u{1b}[31mred\\u{202e}evil\\u{2028}"
+        );
+        assert!(!text.contains(['\n', '\u{1b}', '\u{202e}', '\u{2028}']));
     }
 
     #[test]
@@ -219,6 +251,10 @@ mod tests {
         assert_eq!(
             sanitize_log_message("a\nINFO fake\r\t\u{1b}[31m"),
             "a\\nINFO fake\\r\\t\\u{1b}[31m"
+        );
+        assert_eq!(
+            sanitize_log_message("\u{2067}x\u{2029}"),
+            "\\u{2067}x\\u{2029}"
         );
     }
 

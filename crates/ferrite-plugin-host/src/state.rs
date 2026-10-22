@@ -151,7 +151,8 @@ pub(crate) struct HostState {
     pub(crate) limits: CallLimits,
     budget: Budget,
     pub(crate) wasi: WasiCtx,
-    /// Declared after `wasi` so it drops last; its `Drop` logs captured output.
+    /// Holds the capture pipes (`wasi` has Arc clones) and logs their contents when
+    /// dropped; `HostState` is dropped at the end of every call.
     output: GuestOutput,
     table: ResourceTable,
 }
