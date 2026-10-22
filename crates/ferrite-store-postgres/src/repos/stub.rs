@@ -1,10 +1,9 @@
-//! TEMPORARY scaffolding (M1a Tasks 9–10): repositories not implemented yet return
-//! `StoreError::Unsupported`. Each task deletes the `stub!` block of the traits it
-//! implements; Task 10 deletes this file.
+//! TEMPORARY scaffolding (M1a Task 10): repositories not implemented yet return
+//! `StoreError::Unsupported`. Task 10 deletes the `SearchRepo` block and this file.
 
 use async_trait::async_trait;
-use ferrite_domain::{ContentId, Event, NewEvent, Timestamp};
-use ferrite_store::{EventRepo, SearchRepo, StoreError};
+use ferrite_domain::ContentId;
+use ferrite_store::{SearchRepo, StoreError};
 
 pub(crate) struct Unsupported;
 
@@ -20,13 +19,6 @@ macro_rules! stub {
         }
     };
 }
-
-stub!(EventRepo {
-    fn append(&NewEvent) -> i64;
-    fn since(i64, u32) -> Vec<Event>;
-    fn max_seq() -> i64;
-    fn prune(Timestamp) -> u64;
-});
 
 stub!(SearchRepo {
     fn index(ContentId, &str, &str) -> ();

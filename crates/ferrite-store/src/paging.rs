@@ -25,6 +25,19 @@ pub fn check_limit(limit: u32) -> Result<u32, StoreError> {
     Ok(limit)
 }
 
+/// Largest batch an event reader may request (design 04 §4 polls `LIMIT 1000`).
+pub const MAX_EVENT_BATCH: u32 = 1000;
+
+/// Validates an event batch size: 1 through [`MAX_EVENT_BATCH`].
+pub fn check_event_limit(limit: u32) -> Result<u32, StoreError> {
+    if limit == 0 || limit > MAX_EVENT_BATCH {
+        return Err(StoreError::Invalid(format!(
+            "limit must be between 1 and {MAX_EVENT_BATCH}"
+        )));
+    }
+    Ok(limit)
+}
+
 /// The sort key of `item` under `order`.
 pub fn content_sort_key(order: ContentOrder, item: &ContentItem) -> SortKey {
     match order {

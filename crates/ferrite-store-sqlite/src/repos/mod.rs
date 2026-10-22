@@ -14,6 +14,7 @@
 //! the transaction, so reads see the transaction's own writes.
 
 mod content;
+mod event;
 mod menu;
 mod plugin;
 mod site;
@@ -98,7 +99,7 @@ impl Repos for SqliteRepos {
         self
     }
     fn events(&self) -> &dyn EventRepo {
-        &Unsupported
+        self
     }
     fn search(&self) -> &dyn SearchRepo {
         &Unsupported

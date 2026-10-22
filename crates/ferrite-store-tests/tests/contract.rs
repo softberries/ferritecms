@@ -1,7 +1,7 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
-    backend_tests, backend_tests_spawning, content::*, menu::*, migration_dirs, migration_files,
-    migrations::*, plugin::*, site::*, taxonomy::*, user::*,
+    backend_tests, backend_tests_spawning, content::*, event::*, menu::*, migration_dirs,
+    migration_files, migrations::*, plugin::*, site::*, taxonomy::*, user::*,
 };
 
 backend_tests!(
@@ -82,7 +82,14 @@ backend_tests!(
     themes_single_active,
 );
 
-backend_tests_spawning!(concurrent_writers);
+backend_tests!(
+    events_append_since_max,
+    events_reject_nul,
+    events_in_tx_only_visible_after_commit,
+    events_prune,
+);
+
+backend_tests_spawning!(concurrent_writers, events_concurrent_appends_unique_seq);
 
 #[test]
 fn migration_sets_match() {

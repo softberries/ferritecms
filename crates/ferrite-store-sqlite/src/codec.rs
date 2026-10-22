@@ -2,9 +2,9 @@
 //! JSON = `TEXT`. Booleans bind and decode natively as 0/1.
 
 use ferrite_domain::{
-    Artifact, ArtifactHash, ContentId, ContentItem, ContentType, InstalledPlugin, InstalledTheme,
-    Media, MenuItem, MenuItemId, OptionEntry, Redirect, RedirectId, Revision, RevisionId, Secret,
-    Taxonomy, Term, TermId, Timestamp, User, UserId,
+    Artifact, ArtifactHash, ContentId, ContentItem, ContentType, Event, InstalledPlugin,
+    InstalledTheme, Media, MenuItem, MenuItemId, OptionEntry, Redirect, RedirectId, Revision,
+    RevisionId, Secret, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 use ferrite_store::StoreError;
 use sqlx::{Row, sqlite::SqliteRow};
@@ -283,5 +283,18 @@ pub(crate) fn theme(row: &SqliteRow) -> Result<InstalledTheme, StoreError> {
         manifest: json_from_db(&manifest)?,
         active: row.try_get("active").map_err(map_db_err)?,
         installed_at: ts(row.try_get("installed_at").map_err(map_db_err)?)?,
+    })
+}
+
+/// Maps a `SELECT seq, kind, keys, origin_node, created_at FROM events` row.
+pub(crate) fn event(row: &SqliteRow) -> Result<Event, StoreError> {
+    let keys: String = row.try_get("keys").map_err(map_db_err)?;
+    Ok(Event {
+        seq: row.try_get("seq").map_err(map_db_err)?,
+        kind: row.try_get("kind").map_err(map_db_err)?,
+        keys: serde_json::from_str(&keys)
+            .map_err(|e| StoreError::Database(format!("corrupt JSON: {e}")))?,
+        origin_node: row.try_get("origin_node").map_err(map_db_err)?,
+        created_at: ts(row.try_get("created_at").map_err(map_db_err)?)?,
     })
 }

@@ -2,6 +2,7 @@
 //! accessors with a real implementation on [`PgRepos`].
 
 mod content;
+mod event;
 mod menu;
 mod plugin;
 mod site;
@@ -83,7 +84,7 @@ impl Repos for PgRepos {
         self
     }
     fn events(&self) -> &dyn EventRepo {
-        &Unsupported
+        self
     }
     fn search(&self) -> &dyn SearchRepo {
         &Unsupported

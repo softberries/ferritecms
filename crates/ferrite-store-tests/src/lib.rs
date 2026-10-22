@@ -7,6 +7,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 pub mod content;
+pub mod event;
 pub mod fixtures;
 pub mod harness;
 pub mod menu;

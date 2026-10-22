@@ -2,9 +2,9 @@
 
 use chrono::{DateTime, Utc};
 use ferrite_domain::{
-    Artifact, ArtifactHash, ContentId, ContentItem, ContentType, InstalledPlugin, InstalledTheme,
-    Media, MenuItem, MenuItemId, OptionEntry, Redirect, RedirectId, Revision, RevisionId, Secret,
-    Taxonomy, Term, TermId, User, UserId,
+    Artifact, ArtifactHash, ContentId, ContentItem, ContentType, Event, InstalledPlugin,
+    InstalledTheme, Media, MenuItem, MenuItemId, OptionEntry, Redirect, RedirectId, Revision,
+    RevisionId, Secret, Taxonomy, Term, TermId, User, UserId,
 };
 use ferrite_store::StoreError;
 use sqlx::{Row, postgres::PgRow, types::Json};
@@ -285,6 +285,21 @@ pub(crate) fn theme(row: &PgRow) -> Result<InstalledTheme, StoreError> {
         active: row.try_get("active").map_err(map_db_err)?,
         installed_at: row
             .try_get::<DateTime<Utc>, _>("installed_at")
+            .map_err(map_db_err)?
+            .into(),
+    })
+}
+
+/// Maps a `SELECT seq, kind, keys, origin_node, created_at FROM events` row.
+pub(crate) fn event(row: &PgRow) -> Result<Event, StoreError> {
+    let keys: Json<Vec<String>> = row.try_get("keys").map_err(map_db_err)?;
+    Ok(Event {
+        seq: row.try_get("seq").map_err(map_db_err)?,
+        kind: row.try_get("kind").map_err(map_db_err)?,
+        keys: keys.0,
+        origin_node: row.try_get("origin_node").map_err(map_db_err)?,
+        created_at: row
+            .try_get::<DateTime<Utc>, _>("created_at")
             .map_err(map_db_err)?
             .into(),
     })
