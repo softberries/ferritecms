@@ -1,0 +1,24 @@
+{#- One listing entry. Expects `p` (an item) and optionally `level` (heading level, default 2).
+    The image is decorative (alt=""): the linked title right below names the same item. -#}
+{%- set level = level or 2 -%}
+{%- set show_excerpts = site.settings.show_excerpts is not defined or site.settings.show_excerpts -%}
+<article class="card">
+  {%- set img = image(p.featured, "card") %}
+  {%- if img %}
+  <div class="card__media">
+    <img src="{{ img.url }}" alt=""{% if img.width %} width="{{ img.width }}"{% endif %}{% if img.height %} height="{{ img.height }}"{% endif %}{% if img.srcset %} srcset="{{ img.srcset }}" sizes="(min-width: 60rem) 22rem, (min-width: 40rem) 45vw, 100vw"{% endif %} loading="lazy" decoding="async">
+  </div>
+  {%- endif %}
+  <div class="card__body">
+    <h{{ level }} class="card__title"><a href="{{ p.url }}">{{ p.title }}</a></h{{ level }}>
+    {%- if p.date %}
+    <p class="card__meta"><time datetime="{{ p.date }}">{{ p.date | date("%-d %B %Y") }}</time></p>
+    {%- endif %}
+    {%- if show_excerpts %}
+    {%- set summary = p.excerpt or (p.body | excerpt(30)) %}
+    {%- if summary %}
+    <p class="card__excerpt">{{ summary }}</p>
+    {%- endif %}
+    {%- endif %}
+  </div>
+</article>

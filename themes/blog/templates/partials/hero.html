@@ -1,0 +1,7 @@
+{#- The featured image of `post` at the theme's `hero` size, with the media's alt text. -#}
+{%- set hero = image(post.featured, "hero") %}
+{%- if hero %}
+<figure class="entry-hero">
+  <img src="{{ hero.url }}" alt="{{ post.featured.alt or '' }}"{% if hero.width %} width="{{ hero.width }}"{% endif %}{% if hero.height %} height="{{ hero.height }}"{% endif %}{% if hero.srcset %} srcset="{{ hero.srcset }}" sizes="(min-width: 80rem) 76rem, 100vw"{% endif %} decoding="async" fetchpriority="high">
+</figure>
+{%- endif %}

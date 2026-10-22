@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block body_class %}is-page{% endblock %}
+{% block content %}
+<article class="entry entry--page">
+  <header class="entry-header wrap wrap--prose">
+    <h1 class="entry-title">{{ post.title }}</h1>
+  </header>
+  {% include "partials/hero.html" %}
+  <div class="entry-content prose wrap wrap--prose">
+    {{ post.body | safe }}
+  </div>
+</article>
+{% endblock %}

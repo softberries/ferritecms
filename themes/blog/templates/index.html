@@ -1,0 +1,26 @@
+{#- The final fallback (06 §2) and the front page when it lists posts. -#}
+{% extends "base.html" %}
+{% block body_class %}is-index{% endblock %}
+{% block content %}
+{%- if post %}
+<article class="entry">
+  <header class="entry-header wrap wrap--prose">
+    <h1 class="entry-title">{{ post.title }}</h1>
+  </header>
+  <div class="entry-content prose wrap wrap--prose">
+    {{ post.body | safe }}
+  </div>
+</article>
+{%- else %}
+<div class="wrap">
+  <header class="page-header">
+    {%- if posts and posts.page > 1 %}
+    <h1 class="page-title">Latest posts <span class="page-title__sub">page {{ posts.page }}</span></h1>
+    {%- else %}
+    <h1 class="page-title visually-hidden">Latest posts</h1>
+    {%- endif %}
+  </header>
+  {% include "partials/listing.html" %}
+</div>
+{%- endif %}
+{% endblock %}

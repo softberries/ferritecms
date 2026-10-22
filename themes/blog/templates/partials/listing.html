@@ -1,0 +1,11 @@
+{#- The cards of `posts` plus pagination, or `empty` (a message) when there are none. -#}
+{%- if posts and posts.items %}
+<div class="card-grid">
+  {%- for p in posts.items %}
+  {% include "partials/card.html" %}
+  {%- endfor %}
+</div>
+{% include "partials/pagination.html" %}
+{%- else %}
+<p class="empty">{{ empty or "Nothing has been published here yet." }}</p>
+{%- endif %}

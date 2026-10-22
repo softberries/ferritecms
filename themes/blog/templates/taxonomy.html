@@ -1,0 +1,16 @@
+{#- Term archive. The context carries the listing, not the term, so the term is the one
+    on the listed items whose archive URL the request path starts with. -#}
+{% extends "archive.html" %}
+{% block body_class %}is-archive is-taxonomy{% endblock %}
+{% block archive_header %}
+{%- set ns = namespace(term=none) %}
+{%- for p in posts.items %}{% for t in p.terms %}
+{%- if not ns.term and t.url and request.path[:(t.url | length)] == t.url %}{% set ns.term = t %}{% endif %}
+{%- endfor %}{% endfor %}
+{%- if ns.term %}
+<p class="page-eyebrow">{% if ns.term.taxonomy == "category" %}Category{% elif ns.term.taxonomy in ["tag", "post_tag"] %}Tag{% else %}{{ ns.term.taxonomy | replace("_", " ") | capitalize }}{% endif %}</p>
+<h1 class="page-title">{{ ns.term.name }}</h1>
+{%- else %}
+<h1 class="page-title">Topic archive</h1>
+{%- endif %}
+{% endblock %}

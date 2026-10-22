@@ -1,0 +1,36 @@
+{#- Rendered with minimal context (06 §7): config defaults, no data helpers, no item or
+    listing. Standalone (no base.html) and every value guarded, so it renders even when
+    the rest of the theme is what failed. -#}
+<!doctype html>
+<html lang="{{ site.locale or 'en' }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+{{ head() }}
+<link rel="stylesheet" href="{{ asset('style.css') }}">
+{% include "partials/accent.html" %}
+</head>
+<body class="is-error">
+<header class="site-header">
+  <div class="wrap site-header__inner">
+    <div class="site-brand">
+      <a class="site-title" href="/" rel="home">{{ site.title or "Home" }}</a>
+    </div>
+  </div>
+</header>
+<main id="content" class="site-main">
+  <div class="wrap wrap--prose error-page">
+    <p class="error-page__code">500</p>
+    <h1 class="page-title">Something went wrong</h1>
+    <p>This page could not be shown. Please try again in a moment.</p>
+    <p><a href="/">Go to the home page</a></p>
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="wrap site-footer__inner">
+    <p class="site-credit">Powered by FerriteCMS</p>
+  </div>
+</footer>
+</body>
+</html>

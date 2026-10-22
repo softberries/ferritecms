@@ -1,0 +1,12 @@
+{#- Date archive at `/<yyyy>/` or `/<yyyy>/<mm>/` (plus `page/N/`): the heading comes from
+    the request path; anything unexpected falls back to a plain heading. -#}
+{% extends "archive.html" %}
+{% block body_class %}is-archive is-date{% endblock %}
+{% block archive_header %}
+{%- set months = {"01": "January", "02": "February", "03": "March", "04": "April", "05": "May", "06": "June", "07": "July", "08": "August", "09": "September", "10": "October", "11": "November", "12": "December"} %}
+{%- set p = request.path %}
+{%- set year = p[1:5] if p[5:6] == "/" else "" %}
+{%- set month = months[p[6:8]] if year and p[8:9] == "/" else none %}
+<p class="page-eyebrow">Archive</p>
+<h1 class="page-title">{% if month %}{{ month }} {{ year }}{% elif year %}{{ year }}{% else %}Posts by date{% endif %}</h1>
+{% endblock %}

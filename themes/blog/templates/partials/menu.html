@@ -1,0 +1,11 @@
+{#- A menu tree as nested lists. Expects `items` (MenuNode list: label, url, children). -#}
+<ul class="menu">
+{%- for node in items recursive %}
+  <li class="menu__item{% if node.children %} menu__item--parent{% endif %}">
+    <a href="{{ node.url }}"{% if request.path and node.url == request.path %} aria-current="page"{% endif %}>{{ node.label }}</a>
+    {%- if node.children %}
+    <ul class="menu__sub">{{ loop(node.children) }}</ul>
+    {%- endif %}
+  </li>
+{%- endfor %}
+</ul>

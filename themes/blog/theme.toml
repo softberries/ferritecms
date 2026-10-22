@@ -1,0 +1,20 @@
+# The default starter theme (06 §1, §8). Plain MiniJinja templates and CSS, no build step.
+[theme]
+name        = "blog"
+version     = "0.1.0"
+author      = "FerriteCMS"
+license     = "MIT"
+description = "A clean, readable blog theme with light and dark modes."
+
+[menus]
+primary = "Primary navigation"
+footer  = "Footer"
+
+[images]
+card = { width = 640, height = 360, crop = true }
+hero = { width = 1280, height = 640, crop = true }
+
+[settings]
+accent_color  = { type = "color", default = "#c2410c", label = "Accent colour" }
+show_author   = { type = "bool", default = true, label = "Show post authors" }
+show_excerpts = { type = "bool", default = true, label = "Show excerpts in listings" }

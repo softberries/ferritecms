@@ -1,0 +1,7 @@
+{% extends "archive.html" %}
+{% block body_class %}is-archive is-author{% endblock %}
+{% block archive_header %}
+{%- set author = ((posts.items or []) | first).author %}
+<p class="page-eyebrow">Author</p>
+<h1 class="page-title">{% if author.display_name %}Posts by {{ author.display_name }}{% else %}Posts by this author{% endif %}</h1>
+{% endblock %}

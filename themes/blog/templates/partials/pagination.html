@@ -1,0 +1,29 @@
+{#- Previous/next links for `posts`. Page N of a listing lives at `<base>page/N/`, page 1
+    at `<base>`. Search results carry the query in `?s=`; with no URL-encoding filter in
+    the sandbox they page through small GET forms instead of hand-built links. -#}
+{%- if posts and posts.pages > 1 %}
+{%- set suffix = "page/" ~ posts.page ~ "/" %}
+{%- set paged = posts.page > 1 and request.path[-(suffix | length):] == suffix %}
+{%- set base = (request.path[:(request.path | length) - (suffix | length)] if paged else request.path) or "/" %}
+{%- set prev_url = (base if posts.prev_page == 1 else base ~ "page/" ~ posts.prev_page ~ "/") if posts.prev_page else none %}
+{%- set next_url = base ~ "page/" ~ posts.next_page ~ "/" if posts.next_page else none %}
+<nav class="pagination" aria-label="Pagination">
+  {%- if request.s %}
+  {%- if prev_url %}
+  <form class="pagination__prev" method="get" action="{{ prev_url }}"><input type="hidden" name="s" value="{{ request.s }}"><button type="submit"><span aria-hidden="true">←</span> Previous page</button></form>
+  {%- endif %}
+  <p class="pagination__status">Page {{ posts.page }} of {{ posts.pages }}</p>
+  {%- if next_url %}
+  <form class="pagination__next" method="get" action="{{ next_url }}"><input type="hidden" name="s" value="{{ request.s }}"><button type="submit">Next page <span aria-hidden="true">→</span></button></form>
+  {%- endif %}
+  {%- else %}
+  {%- if prev_url %}
+  <a class="pagination__prev" rel="prev" href="{{ prev_url }}"><span aria-hidden="true">←</span> Previous page</a>
+  {%- endif %}
+  <p class="pagination__status">Page {{ posts.page }} of {{ posts.pages }}</p>
+  {%- if next_url %}
+  <a class="pagination__next" rel="next" href="{{ next_url }}">Next page <span aria-hidden="true">→</span></a>
+  {%- endif %}
+  {%- endif %}
+</nav>
+{%- endif %}
