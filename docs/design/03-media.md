@@ -132,6 +132,15 @@ suffix/open-ended ranges is the caller's job.
 `application/octet-stream`. `is_raster_image` accepts exactly `image/jpeg`, `image/png`,
 `image/gif`, `image/webp`. SVG is not a raster type and is not processed.
 
+**Serving safety.** `sniff_mime` can return `text/html` and `text/xml` (the bytes of an uploaded
+HTML or XML file), and SVG is not detected at all: it comes back as `text/xml` or
+`application/octet-stream`. The sniffed type must therefore never be echoed as `Content-Type`
+blindly. `inline_safe(mime)` is an exact-match allowlist: `image/jpeg`, `image/png`, `image/gif`,
+`image/webp`, `audio/mpeg`, `audio/ogg`, `audio/wav` (and `audio/x-wav`, which is what `infer`
+reports for WAV), `video/mp4`, `video/webm`, `application/pdf`. The serving layer (M1c) must send
+those inline with their type, and everything else as `application/octet-stream` with
+`Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`.
+
 ### Local backend
 
 - Root: `data/media/` (configurable) via `LocalFileSystem::new_with_prefix`, same key layout.
