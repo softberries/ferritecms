@@ -206,12 +206,14 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
   decoder allocation <= 512 MiB. `ImageTooLarge { pixels }` is returned when the header
   reports more than 100 MP, and when the decoder rejects a dimension/allocation limit
   (in that case `pixels` is `w*h` if the header was read, else `0`). Other decode failures are
-  `UnsupportedImage`. Specs with a zero width/height are `Config` errors.
+  `UnsupportedImage`. Invalid specs are `Config` errors: a zero width/height, an empty name, a
+  duplicate name, or a `height` without `crop` (a bounding box is not implemented).
 - **Orientation**: EXIF orientation is applied; `Processed.width/height` are post-orientation.
 - **Metadata**: output is re-encoded, so EXIF, XMP and GPS are dropped (no keep option yet).
   The **ICC profile** is kept only if its colour-space signature (header bytes 16..20) matches
   the output pixels: `RGB ` for JPEG and colour PNG, `GRAY` for grayscale PNG. A mismatching
-  profile (for example CMYK) is dropped, as is one the encoder rejects (M1b decision: keep colour fidelity).
+  profile (for example CMYK) is dropped, as is one the encoder rejects or one larger than 1 MiB
+  (M1b decision: keep colour fidelity).
 - **Output formats (decision: no WebP output in v1)**: JPEG sources -> JPEG quality 82;
   PNG, GIF and WebP sources -> PNG. GIF input yields its first frame as PNG. WebP is decoded
   but never written. Animated-WebP behaviour is not verified. WebP/AVIF output is deferred. Reason given for the decision: the `image`

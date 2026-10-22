@@ -220,3 +220,45 @@ fn icc_profile_kept() {
         .unwrap();
     assert_eq!(dec.icc_profile().unwrap(), Some(profile));
 }
+
+fn png_with_icc(profile_len: usize) -> (Vec<u8>, Vec<u8>) {
+    use image::codecs::png::PngEncoder;
+    use image::{ExtendedColorType, ImageEncoder};
+    let mut profile = vec![0u8; profile_len];
+    profile[16..20].copy_from_slice(b"RGB ");
+    let img = gradient(300, 300);
+    let mut data = Vec::new();
+    let mut enc = PngEncoder::new(&mut data);
+    enc.set_icc_profile(profile.clone()).unwrap();
+    enc.write_image(img.as_raw(), 300, 300, ExtendedColorType::Rgb8)
+        .unwrap();
+    (data, profile)
+}
+
+fn icc_of(data: &[u8]) -> Option<Vec<u8>> {
+    use image::ImageDecoder;
+    let mut dec = image::ImageReader::new(Cursor::new(data))
+        .with_guessed_format()
+        .unwrap()
+        .into_decoder()
+        .unwrap();
+    dec.icc_profile().unwrap()
+}
+
+#[test]
+fn oversized_icc_profile_is_dropped() {
+    let (data, _) = png_with_icc(2 * 1024 * 1024);
+    // The fixture really carries the 2 MiB profile.
+    assert_eq!(icc_of(&data).map(|p| p.len()), Some(2 * 1024 * 1024));
+    let p = process_image(&data, &default_variants()).unwrap();
+    for v in &p.variants {
+        assert_eq!(icc_of(&v.data), None, "{}", v.name);
+    }
+}
+
+#[test]
+fn icc_profile_of_exactly_one_mib_is_kept() {
+    let (data, profile) = png_with_icc(1024 * 1024);
+    let p = process_image(&data, &default_variants()).unwrap();
+    assert_eq!(icc_of(&variant(&p, "thumbnail").data), Some(profile));
+}

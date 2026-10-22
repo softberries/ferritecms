@@ -21,6 +21,8 @@ pub const MAX_PIXELS: u64 = 100_000_000;
 const MAX_DIMENSION: u32 = 50_000;
 const MAX_ALLOC: u64 = 512 * 1024 * 1024;
 const JPEG_QUALITY: u8 = 82;
+/// Source ICC profiles larger than this are dropped (real profiles are a few KiB to ~1 MiB).
+const MAX_ICC_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VariantSpec {
@@ -88,10 +90,26 @@ fn map_image_error(err: ImageError, dims: Option<(u32, u32)>) -> MediaError {
 }
 
 fn validate(specs: &[VariantSpec]) -> Result<(), MediaError> {
+    let mut seen = std::collections::HashSet::new();
     for spec in specs {
+        if spec.name.is_empty() {
+            return Err(MediaError::Config("variant with an empty name".into()));
+        }
+        if !seen.insert(spec.name.as_str()) {
+            return Err(MediaError::Config(format!(
+                "duplicate variant name '{}'",
+                spec.name
+            )));
+        }
         if spec.width == 0 || spec.height == Some(0) {
             return Err(MediaError::Config(format!(
                 "variant '{}' has a zero dimension",
+                spec.name
+            )));
+        }
+        if spec.height.is_some() && !spec.crop {
+            return Err(MediaError::Config(format!(
+                "variant '{}': a height without crop would be a bounding box, which is not implemented",
                 spec.name
             )));
         }
@@ -105,11 +123,15 @@ fn validate(specs: &[VariantSpec]) -> Result<(), MediaError> {
 /// Variants are encoded in the source format: JPEG (quality 82) or PNG; GIF
 /// (first frame) and WebP sources become PNG.
 ///
-/// The ICC profile of the source is kept (colour fidelity); EXIF/XMP are not.
+/// The ICC profile of the source is kept (colour fidelity) unless it is larger than 1 MiB;
+/// EXIF/XMP are not.
 ///
 /// Memory: peak usage is roughly 3 x w x h x 4 bytes (decoded buffer, oriented
 /// or converted copy, resized output). Callers must bound concurrency (the M1c
 /// job runner uses a semaphore).
+///
+/// Specs are validated first: names must be non-empty and unique, and a `height` requires
+/// `crop` (a bounding box is not implemented).
 ///
 /// A width-bounded spec keeps the aspect ratio and is skipped when the source
 /// is not wider than the target. A `crop` spec is cover-resized and center-cropped
@@ -145,6 +167,16 @@ pub fn process_image(data: &[u8], specs: &[VariantSpec]) -> Result<Processed, Me
     let icc = decoder.icc_profile().unwrap_or_else(|e| {
         tracing::debug!(error = %e, "could not read ICC profile");
         None
+    });
+    let icc = icc.filter(|profile| {
+        let keep = profile.len() <= MAX_ICC_BYTES;
+        if !keep {
+            tracing::debug!(
+                bytes = profile.len(),
+                "dropping ICC profile larger than {MAX_ICC_BYTES} bytes"
+            );
+        }
+        keep
     });
     let mut img = DynamicImage::from_decoder(decoder).map_err(|e| map_image_error(e, dims))?;
     img.apply_orientation(orientation);
@@ -289,6 +321,34 @@ mod tests {
         assert!(!icc_matches(&header(b"CMYK"), false));
         assert!(!icc_matches(&header(b"CMYK"), true));
         assert!(!icc_matches(b"short", false));
+    }
+
+    fn named(name: &str, width: u32, height: Option<u32>, crop: bool) -> VariantSpec {
+        VariantSpec {
+            name: name.to_owned(),
+            width,
+            height,
+            crop,
+        }
+    }
+
+    #[test]
+    fn invalid_variant_sets_rejected() {
+        let config_err = |specs: &[VariantSpec]| match validate(specs) {
+            Err(MediaError::Config(msg)) => msg,
+            other => panic!("expected Config error, got {other:?}"),
+        };
+        assert!(config_err(&[named("", 10, None, false)]).contains("name"));
+        assert!(
+            config_err(&[named("a", 10, None, false), named("a", 20, None, false)])
+                .contains("duplicate")
+        );
+        // A height without crop would be a bounding box, which is not implemented.
+        assert!(config_err(&[named("box", 10, Some(10), false)]).contains("bounding box"));
+        // Valid shapes.
+        assert!(validate(&[named("a", 10, None, false), named("b", 10, None, true)]).is_ok());
+        assert!(validate(&[named("c", 10, Some(20), true)]).is_ok());
+        assert!(validate(&[]).is_ok());
     }
 
     #[test]
