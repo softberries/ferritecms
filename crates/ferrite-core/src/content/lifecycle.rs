@@ -13,11 +13,12 @@
 use ferrite_domain::{ContentId, ContentItem, ContentStatus, Role, Timestamp};
 use ferrite_store::{Repos, StoreError};
 
-use super::{ContentService, PermalinkFn, clear_redirects_from};
+use super::{ContentService, clear_redirects_from};
 use crate::{
     Actor, CoreError,
     actor::{Capability, can_edit, require},
     blocks, events,
+    permalink::{Permalinks, load_input},
     tx::finish,
 };
 
@@ -179,7 +180,7 @@ impl ContentService {
             }
             for id in fresh {
                 let tx = self.store.begin().await?;
-                let done = publish_one_due(tx.as_ref(), self.permalink.as_ref(), id, now).await;
+                let done = publish_one_due(tx.as_ref(), self.permalinks.as_ref(), id, now).await;
                 match finish(tx, done).await {
                     Ok(true) => published += 1,
                     Ok(false) | Err(CoreError::Conflict { .. }) => {}
@@ -201,7 +202,7 @@ impl ContentService {
         let tx = self.store.begin().await?;
         let done = transition_in(
             tx.as_ref(),
-            self.permalink.as_ref(),
+            self.permalinks.as_ref(),
             actor,
             id,
             expected_version,
@@ -214,7 +215,7 @@ impl ContentService {
 
 async fn transition_in(
     repos: &dyn Repos,
-    permalink: &PermalinkFn,
+    permalinks: &dyn Permalinks,
     actor: &Actor,
     id: ContentId,
     expected_version: i64,
@@ -230,7 +231,7 @@ async fn transition_in(
     let next = apply(&current, action, Timestamp::now())?;
     let saved = repos.content().update(&next).await?;
     match action {
-        Action::Publish => clear_redirects_from(repos, &permalink(&saved)).await?,
+        Action::Publish => reclaim_path(repos, permalinks, &saved).await?,
         Action::Trash => repos.search().remove(id).await?,
         Action::Restore => {
             repos
@@ -280,7 +281,7 @@ async fn delete_in(
 /// Publishes `id` if it is still scheduled and due; `false` if it was skipped.
 async fn publish_one_due(
     repos: &dyn Repos,
-    permalink: &PermalinkFn,
+    permalinks: &dyn Permalinks,
     id: ContentId,
     now: Timestamp,
 ) -> Result<bool, CoreError> {
@@ -295,9 +296,19 @@ async fn publish_one_due(
     let next = apply(&current, Action::PublishDue, now)?;
     // Conflicts with a concurrent publisher surface as `Conflict` from the version check.
     let saved = repos.content().update(&next).await?;
-    clear_redirects_from(repos, &permalink(&saved)).await?;
+    reclaim_path(repos, permalinks, &saved).await?;
     emit(repos, &saved).await?;
     Ok(true)
+}
+
+/// Deletes the redirects that start at `item`'s permalink: it is live now.
+async fn reclaim_path(
+    repos: &dyn Repos,
+    permalinks: &dyn Permalinks,
+    item: &ContentItem,
+) -> Result<(), CoreError> {
+    let input = load_input(repos, item.clone()).await?;
+    clear_redirects_from(repos, &permalinks.path(&input)).await
 }
 
 /// The item as it looks after `action`, or `Invalid("illegal transition ...")`. Pure.

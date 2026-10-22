@@ -5,7 +5,7 @@
 use std::{sync::Arc, time::Duration};
 
 use ferrite_core::{
-    Actor, ContentDraft, ContentService, CoreError, PermalinkFn, RedirectService,
+    Actor, ContentDraft, ContentService, CoreError, PermalinkRules, RedirectService,
     events::{archive_key, post_key, term_key},
 };
 use ferrite_domain::{
@@ -36,8 +36,9 @@ async fn actor(store: &dyn Store, role: Role) -> Actor {
     Actor { user: id, role }
 }
 
-fn permalink() -> Arc<PermalinkFn> {
-    Arc::new(|item: &ContentItem| format!("/{}/{}", item.kind, item.slug))
+/// The default rules: posts at `/%slug%/`.
+fn permalink() -> Arc<PermalinkRules> {
+    Arc::new(PermalinkRules::default())
 }
 
 fn service(db: &TestDb) -> ContentService {
@@ -480,8 +481,8 @@ pub async fn slug_change_chain(db: &TestDb) {
     let mut d = draft("post", "A");
     d.slug = Some("a".into());
     let item = svc.update(&admin, item.id, item.version, d).await.unwrap();
-    assert_eq!(redirect_target(store, "/post/draft-only").await, None);
-    assert_eq!(redirect_target(store, "/post/a").await, None);
+    assert_eq!(redirect_target(store, "/draft-only/").await, None);
+    assert_eq!(redirect_target(store, "/a/").await, None);
 
     let mut item = force_status(store, item.id, ContentStatus::Published).await;
     // A manual redirect elsewhere pointing at the old path is re-targeted too.
@@ -491,7 +492,7 @@ pub async fn slug_change_chain(db: &TestDb) {
         .upsert(&Redirect {
             id: RedirectId::new(),
             source_path: "/legacy".into(),
-            target: "/post/a".into(),
+            target: "/a/".into(),
             code: 302,
             hits: 0,
             origin: RedirectOrigin::Manual,
@@ -506,14 +507,8 @@ pub async fn slug_change_chain(db: &TestDb) {
         d.slug = Some(slug.into());
         item = svc.update(&admin, item.id, item.version, d).await.unwrap();
     }
-    assert_eq!(
-        redirect_target(store, "/post/a").await.as_deref(),
-        Some("/post/c")
-    );
-    assert_eq!(
-        redirect_target(store, "/post/b").await.as_deref(),
-        Some("/post/c")
-    );
+    assert_eq!(redirect_target(store, "/a/").await.as_deref(), Some("/c/"));
+    assert_eq!(redirect_target(store, "/b/").await.as_deref(), Some("/c/"));
     let legacy = store
         .read()
         .redirects()
@@ -521,12 +516,12 @@ pub async fn slug_change_chain(db: &TestDb) {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!((legacy.target.as_str(), legacy.code), ("/post/c", 302));
+    assert_eq!((legacy.target.as_str(), legacy.code), ("/c/", 302));
     assert_eq!(legacy.origin, RedirectOrigin::Manual);
     let a = store
         .read()
         .redirects()
-        .get_by_source("/post/a")
+        .get_by_source("/a/")
         .await
         .unwrap()
         .unwrap();
@@ -537,18 +532,12 @@ pub async fn slug_change_chain(db: &TestDb) {
     d.slug = Some("a".into());
     item = svc.update(&admin, item.id, item.version, d).await.unwrap();
     assert_eq!(item.slug, "a");
-    assert_eq!(redirect_target(store, "/post/a").await, None);
-    assert_eq!(
-        redirect_target(store, "/post/b").await.as_deref(),
-        Some("/post/a")
-    );
-    assert_eq!(
-        redirect_target(store, "/post/c").await.as_deref(),
-        Some("/post/a")
-    );
+    assert_eq!(redirect_target(store, "/a/").await, None);
+    assert_eq!(redirect_target(store, "/b/").await.as_deref(), Some("/a/"));
+    assert_eq!(redirect_target(store, "/c/").await.as_deref(), Some("/a/"));
     assert_eq!(
         redirect_target(store, "/legacy").await.as_deref(),
-        Some("/post/a")
+        Some("/a/")
     );
 
     // An unchanged permalink touches no redirects.
@@ -722,39 +711,38 @@ pub async fn publish_reclaims_redirected_path(db: &TestDb) {
     d.slug = Some("hello-world".into());
     svc.update(&admin, old.id, old.version, d).await.unwrap();
     assert_eq!(
-        redirect_target(store, "/post/hello").await.as_deref(),
-        Some("/post/hello-world")
+        redirect_target(store, "/hello/").await.as_deref(),
+        Some("/hello-world/")
     );
-    manual_redirect(store, "/post/hello/", "/elsewhere").await;
+    manual_redirect(store, "/hello", "/elsewhere").await;
 
     let new = svc.create(&admin, draft("post", "Hello")).await.unwrap();
     assert_eq!(new.slug, "hello");
     // Still a draft: the redirects stay.
-    assert!(redirects.resolve("/post/hello").await.unwrap().is_some());
+    assert!(redirects.resolve("/hello/").await.unwrap().is_some());
     svc.publish(&admin, new.id, new.version).await.unwrap();
-    assert_eq!(redirects.resolve("/post/hello").await.unwrap(), None);
-    assert_eq!(redirects.resolve("/post/hello/").await.unwrap(), None);
+    assert_eq!(redirects.resolve("/hello/").await.unwrap(), None);
+    assert_eq!(redirects.resolve("/hello").await.unwrap(), None);
 
     // publish_due does the same.
     let later = svc.create(&admin, draft("post", "Later")).await.unwrap();
-    manual_redirect(store, "/post/later", "/x").await;
-    manual_redirect(store, "/post/later/", "/y").await;
+    manual_redirect(store, "/later/", "/x").await;
+    manual_redirect(store, "/later", "/y").await;
     let mut it = store.read().content().get(later.id).await.unwrap().unwrap();
     it.status = ContentStatus::Scheduled;
     it.scheduled_at =
         Some(Timestamp::from_micros(Timestamp::now().as_micros() - 1_000_000).unwrap());
     store.read().content().update(&it).await.unwrap();
     assert_eq!(svc.publish_due(Timestamp::now()).await.unwrap(), 1);
-    assert_eq!(redirects.resolve("/post/later").await.unwrap(), None);
-    assert_eq!(redirects.resolve("/post/later/").await.unwrap(), None);
+    assert_eq!(redirects.resolve("/later/").await.unwrap(), None);
+    assert_eq!(redirects.resolve("/later").await.unwrap(), None);
 }
 
 /// M1: a manual `/b -> /a/` plus a move of `/a/` to `/b/` must leave no redirect from
 /// `/b` or `/b/` (it would loop through the slash toggle).
 pub async fn move_onto_slash_variant_leaves_no_loop(db: &TestDb) {
     let store = db.store();
-    let permalink: Arc<PermalinkFn> = Arc::new(|item: &ContentItem| format!("/{}/", item.slug));
-    let svc = ContentService::new(db.shared_store(), permalink);
+    let svc = service(db);
     let redirects = RedirectService::new(db.shared_store());
     let admin = actor(store, Role::Admin).await;
     let mut d = draft("post", "A");

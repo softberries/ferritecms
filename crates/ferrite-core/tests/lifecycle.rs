@@ -5,12 +5,12 @@
 use std::sync::Arc;
 
 use ferrite_core::{
-    Actor, ContentDraft, ContentService, CoreError, PermalinkFn,
+    Actor, ContentDraft, ContentService, CoreError, PermalinkRules,
     events::{archive_key, post_key, term_key},
 };
 use ferrite_domain::{
-    ContentId, ContentItem, ContentStatus, NewUser, Role, SearchQuery, Term, TermId, Timestamp,
-    UserId, UserStatus,
+    ContentId, ContentStatus, NewUser, Role, SearchQuery, Term, TermId, Timestamp, UserId,
+    UserStatus,
 };
 use ferrite_store::Store;
 use ferrite_store_tests::{TestDb, backend_tests, backend_tests_spawning};
@@ -37,9 +37,7 @@ async fn actor(store: &dyn Store, role: Role) -> Actor {
 }
 
 fn service(db: &TestDb) -> ContentService {
-    let permalink: Arc<PermalinkFn> =
-        Arc::new(|item: &ContentItem| format!("/{}/{}", item.kind, item.slug));
-    ContentService::new(db.shared_store(), permalink)
+    ContentService::new(db.shared_store(), Arc::new(PermalinkRules::default()))
 }
 
 fn draft(kind: &str, title: &str) -> ContentDraft {
@@ -170,7 +168,7 @@ pub async fn transitions_and_events(db: &TestDb) {
         store
             .read()
             .redirects()
-            .get_by_source("/post/life")
+            .get_by_source("/life/")
             .await
             .unwrap()
             .is_none()

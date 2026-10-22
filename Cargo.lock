@@ -1191,6 +1191,7 @@ dependencies = [
  "ferrite-store",
  "ferrite-store-tests",
  "html-escape",
+ "percent-encoding",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",

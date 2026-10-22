@@ -1,11 +1,14 @@
 //! Content create/update: slugs, terms, revisions, search, redirects and outbox events,
 //! all in one transaction per call.
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeSet, VecDeque},
+    sync::Arc,
+};
 
 use ferrite_domain::{
-    ContentId, ContentItem, ContentStatus, ContentType, NewContent, Redirect, RedirectId,
-    RedirectOrigin, Revision, RevisionId, TermId, Timestamp,
+    ContentId, ContentItem, ContentQuery, ContentStatus, ContentType, NewContent, ParentFilter,
+    Redirect, RedirectId, RedirectOrigin, Revision, RevisionId, TermId, Timestamp,
 };
 use ferrite_store::{MAX_REDIRECTS_BY_TARGET, Repos, Store, StoreError, Tx};
 
@@ -13,17 +16,13 @@ use crate::{
     Actor, CoreError,
     actor::{Capability, can_edit, require},
     blocks, events,
+    permalink::{PermalinkInput, Permalinks, ancestors, load_input, primary_term},
     redirects::toggled,
     slug,
     tx::finish,
 };
 
 mod lifecycle;
-
-/// Maps an item to its public URL path (e.g. `/post/hello-world`). Supplied by the caller
-/// so core stays independent of routing; it must be pure and cheap (it runs inside the
-/// write transaction).
-pub type PermalinkFn = dyn Fn(&ContentItem) -> String + Send + Sync;
 
 /// Unique index on (type, parent, slug); a violation of it means another writer took
 /// the slug between our lookup and our write.
@@ -33,6 +32,10 @@ const KEEP_REVISIONS: u32 = 50;
 const EXCERPT_CHARS: usize = 160;
 /// Longest parent chain walked when checking a new parent for cycles.
 const MAX_PARENT_DEPTH: usize = 64;
+/// Most descendants re-pointed when a published item moves.
+const MAX_DESCENDANTS: usize = 1000;
+/// Children fetched per query while walking descendants.
+const DESCENDANT_BATCH: u32 = 200;
 
 /// Caller-editable fields of a content item. Status, author and publish times are not
 /// part of it: status changes go through the lifecycle methods only.
@@ -55,12 +58,21 @@ pub struct ContentDraft {
 /// Creates and edits content items.
 pub struct ContentService {
     store: Arc<dyn Store>,
-    permalink: Arc<PermalinkFn>,
+    permalinks: Arc<dyn Permalinks>,
 }
 
 impl ContentService {
-    pub fn new(store: Arc<dyn Store>, permalink: Arc<PermalinkFn>) -> Self {
-        Self { store, permalink }
+    pub fn new(store: Arc<dyn Store>, permalinks: Arc<dyn Permalinks>) -> Self {
+        Self { store, permalinks }
+    }
+
+    /// The public path of item `id` in any status (a missing item is `NotFound`).
+    /// Reads outside a transaction; never call it from inside one.
+    pub async fn permalink(&self, id: ContentId) -> Result<String, CoreError> {
+        let repos = self.store.read();
+        let item = repos.content().get(id).await?.ok_or(CoreError::NotFound)?;
+        let input = load_input(repos, item).await?;
+        Ok(self.permalinks.path(&input))
     }
 
     /// Fetches an item; a missing one is `NotFound`.
@@ -133,10 +145,13 @@ impl ContentService {
     ///
     /// `draft.slug = None` keeps the current slug; a slug that is taken gets `-N` as on
     /// create, and the [`slug::RESERVED`] rules of create apply. When the parent changes,
-    /// the new one is checked as on create. When a published item's permalink changes, a
-    /// `301` redirect from the old path is stored, redirects to the old path are
-    /// re-targeted (no chains), and redirects from the new path (either slash variant)
-    /// are deleted.
+    /// the new one is checked as on create. When a published item's permalink changes
+    /// (slug, parent, or primary category under a `%category%` structure), a `301`
+    /// redirect from the old path is stored, redirects to the old path are re-targeted
+    /// (no chains), and redirects from the new path (either slash variant) are deleted.
+    /// When its slug or parent changes, the same is done for each published descendant
+    /// whose path changes (walked breadth-first through published children only, at most
+    /// 1000; the rest are logged and left without redirects).
     pub async fn update(
         &self,
         actor: &Actor,
@@ -183,13 +198,18 @@ impl ContentService {
             let ty = content_type(tx, &current.kind).await?;
             check_parent(tx, &ty, Some(id), parent).await?;
         }
-        let old_terms: Vec<TermId> = tx
-            .terms()
-            .for_item(id)
-            .await?
-            .into_iter()
-            .map(|t| t.id)
-            .collect();
+        let old_term_rows = tx.terms().for_item(id).await?;
+        let old_terms: Vec<TermId> = old_term_rows.iter().map(|t| t.id).collect();
+        // Only a published item's old path matters (redirects); load it before writing.
+        let old_input = if current.status == ContentStatus::Published {
+            Some(PermalinkInput {
+                item: current.clone(),
+                ancestors: ancestors(tx, current.parent_id).await?,
+                primary_term: primary_term(old_term_rows),
+            })
+        } else {
+            None
+        };
 
         let excerpt = excerpt_of(&draft);
         let mut next = current.clone();
@@ -205,10 +225,25 @@ impl ContentService {
         let saved = save_with_free_slug(tx, Row::Existing(next), &base, own).await?;
 
         set_terms(tx, id, &terms).await?;
-        if current.status == ContentStatus::Published {
-            let (old_path, new_path) = ((self.permalink)(&current), (self.permalink)(&saved));
-            if old_path != new_path {
-                record_move(tx, &old_path, &new_path).await?;
+        if let Some(old) = old_input {
+            let ancestors = if saved.parent_id == current.parent_id {
+                old.ancestors.clone()
+            } else {
+                ancestors(tx, saved.parent_id).await?
+            };
+            let primary_term = if terms == old_terms {
+                old.primary_term.clone()
+            } else {
+                primary_term(tx.terms().for_item(id).await?)
+            };
+            let new = PermalinkInput {
+                item: saved.clone(),
+                ancestors,
+                primary_term,
+            };
+            record_item_move(tx, self.permalinks.as_ref(), &old, &new).await?;
+            if current.slug != saved.slug || current.parent_id != saved.parent_id {
+                move_descendants(tx, self.permalinks.as_ref(), &old, &new).await?;
             }
         }
         let keys = invalidation_keys(&saved, &old_terms, &terms, Some(current.parent_id));
@@ -384,6 +419,87 @@ pub(crate) async fn clear_redirects_from(repos: &dyn Repos, path: &str) -> Resul
     for source in std::iter::once(path.to_owned()).chain(toggled(path)) {
         if let Some(r) = redirects.get_by_source(&source).await? {
             redirects.delete(r.id).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Records a move when the paths of `old` and `new` (the same item) differ.
+async fn record_item_move(
+    repos: &dyn Repos,
+    permalinks: &dyn Permalinks,
+    old: &PermalinkInput,
+    new: &PermalinkInput,
+) -> Result<(), CoreError> {
+    let (old_path, new_path) = (permalinks.path(old), permalinks.path(new));
+    if old_path != new_path {
+        record_move(repos, &old_path, &new_path).await?;
+    }
+    Ok(())
+}
+
+/// Records moves for the published descendants of an item that went from `old` to
+/// `new` (slug or parent changed). Breadth-first through published children, at most
+/// [`MAX_DESCENDANTS`]; a draft child and everything below it is skipped.
+async fn move_descendants(
+    repos: &dyn Repos,
+    permalinks: &dyn Permalinks,
+    old: &PermalinkInput,
+    new: &PermalinkInput,
+) -> Result<(), CoreError> {
+    let chain = |input: &PermalinkInput| {
+        let mut c = input.ancestors.clone();
+        c.push((input.item.id, input.item.slug.clone()));
+        c
+    };
+    let mut queue = VecDeque::from([(old.item.id, chain(old), chain(new))]);
+    let mut walked = 0;
+    while let Some((parent, old_chain, new_chain)) = queue.pop_front() {
+        let mut cursor = None;
+        loop {
+            let page = repos
+                .content()
+                .list(&ContentQuery {
+                    parent: ParentFilter::Of(parent),
+                    statuses: vec![ContentStatus::Published],
+                    limit: DESCENDANT_BATCH,
+                    cursor,
+                    ..ContentQuery::default()
+                })
+                .await?;
+            let ids: Vec<ContentId> = page.items.iter().map(|i| i.id).collect();
+            let mut terms = if ids.is_empty() {
+                Default::default()
+            } else {
+                repos.terms().for_items(&ids).await?
+            };
+            for child in page.items {
+                if walked >= MAX_DESCENDANTS {
+                    tracing::warn!(
+                        item = %old.item.id,
+                        limit = MAX_DESCENDANTS,
+                        "descendant walk capped; remaining descendants get no redirects"
+                    );
+                    return Ok(());
+                }
+                walked += 1;
+                let primary = primary_term(terms.remove(&child.id).unwrap_or_default());
+                let child_old = PermalinkInput {
+                    item: child,
+                    ancestors: old_chain.clone(),
+                    primary_term: primary,
+                };
+                let child_new = PermalinkInput {
+                    ancestors: new_chain.clone(),
+                    ..child_old.clone()
+                };
+                record_item_move(repos, permalinks, &child_old, &child_new).await?;
+                queue.push_back((child_old.item.id, chain(&child_old), chain(&child_new)));
+            }
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
         }
     }
     Ok(())
