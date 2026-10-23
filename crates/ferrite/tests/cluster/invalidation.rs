@@ -154,6 +154,8 @@ async fn poll_only_node_converges_within_1s() {
     let p50 = sorted[sorted.len() / 2];
     let max = max(&samples);
     assert!(max < CONVERGE, "max latency {max:?} ≥ {CONVERGE:?}");
-    assert!(p50 <= Duration::from_millis(350), "p50 {p50:?} > 350 ms");
+    // A sanity bound only (listening is off, so the poll is the only path): two poll
+    // periods, loose enough for a loaded CI runner.
+    assert!(p50 <= Duration::from_millis(500), "p50 {p50:?} > 500 ms");
     c.finish().await;
 }
