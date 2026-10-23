@@ -9,7 +9,7 @@ use ferrite::extensions::{PLUGIN_MIME, install_plugin_file};
 use ferrite_config::PluginsConfig;
 use ferrite_core::events::PLUGINS_CHANGED;
 use ferrite_domain::ArtifactKind;
-use ferrite_http::load_plugins;
+use ferrite_http::{LoadSummary, PluginReloader};
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode};
 use ferrite_plugin_host::{HostConfig, InMemoryServices, PluginHost};
 use ferrite_store_tests::{TestDb, backend_tests};
@@ -90,9 +90,11 @@ async fn install_plugin_file_roundtrip(db: &TestDb) {
     let host = Arc::new(
         PluginHost::new(HostConfig::default(), Arc::new(InMemoryServices::new())).unwrap(),
     );
-    let summary = load_plugins(store.clone(), media.clone(), host.clone())
+    let report = PluginReloader::new(store.clone(), media.clone(), host.clone())
+        .reload()
         .await
         .unwrap();
+    let summary = LoadSummary::from(&report);
     assert_eq!(summary.loaded, ["hello"], "{:?}", summary.skipped);
 
     // Installing again with `enabled = false` keeps the row's state, like a theme's

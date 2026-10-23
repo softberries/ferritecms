@@ -9,7 +9,7 @@ use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ContentId, ContentStatus, InstalledPlugin, NewContent,
     NewUser, Role, Secret, Timestamp, User, UserId, UserStatus,
 };
-use ferrite_http::{LoadSummary, StoreHostServices, load_plugins};
+use ferrite_http::{LoadSummary, PluginReloader, StoreHostServices};
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode, S3Config};
 use ferrite_plugin_host::{HostConfig, PluginHost};
 use ferrite_store::Store;
@@ -223,10 +223,13 @@ impl Site {
         std::fs::write(path, bytes).expect("tamper");
     }
 
+    /// The startup load: the first reload of a fresh reloader, as `serve` does.
     pub async fn load(&self) -> LoadSummary {
-        load_plugins(self.store.clone(), self.media.clone(), self.host.clone())
+        let report = PluginReloader::new(self.store.clone(), self.media.clone(), self.host.clone())
+            .reload()
             .await
-            .expect("load plugins")
+            .expect("load plugins");
+        LoadSummary::from(&report)
     }
 
     pub async fn user(&self, login: &str, role: Role) -> User {

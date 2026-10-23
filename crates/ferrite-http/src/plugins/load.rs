@@ -1,17 +1,29 @@
-//! Installing the enabled plugins at startup (plan ruling P3): the first
-//! [`PluginReloader::reload`], plus the row checks every reload applies.
-
-use std::sync::Arc;
+//! The row checks every [`PluginReloader::reload`](super::PluginReloader::reload) applies (plan ruling P3), and the
+//! startup summary of its report.
+//!
+//! **Manifest storage.** The `manifest` column holds the `ferrite-plugin.toml` table in
+//! JSON form (every TOML value used by manifests has a JSON equivalent). It is turned
+//! back into TOML and validated with [`Manifest::parse`], so unknown keys and invalid
+//! values are rejected exactly as at install time. The manifest's `plugin.name` must
+//! equal the row's name.
+//!
+//! **Grants (ruling R21).** A non-null `granted` column holds the capabilities the
+//! admin approved, in the JSON form of a manifest `[capabilities]` table. The plugin
+//! loads only if its manifest's capabilities are a subset of them
+//! ([`Capabilities::is_subset_of`](ferrite_plugin_host::Capabilities::is_subset_of));
+//! otherwise it is skipped with a warning (approval must be renewed, e.g. after an
+//! update asking for more). A null `granted` means the manifest is honoured as written:
+//! the only writers of rows are operator paths (`install_plugin_file`, tests); the M2
+//! install flow will always set it. The host then runs with the manifest's
+//! capabilities, which are within the grant.
 
 use ferrite_domain::{ArtifactHash, InstalledPlugin};
-use ferrite_media::MediaStore;
-use ferrite_plugin_host::{Capabilities, Manifest, PluginHost};
-use ferrite_store::{Store, StoreError};
+use ferrite_plugin_host::{Capabilities, Manifest};
 use sha2::{Digest, Sha256};
 
-use super::reload::{PluginReloader, PluginStatus, ReloadReport};
+use super::reload::{PluginStatus, ReloadReport};
 
-/// What [`load_plugins`] did.
+/// What a [`ReloadReport`] did, as logged at startup.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LoadSummary {
     /// Installed plugin names, in row order (by name).
@@ -36,44 +48,8 @@ impl From<&ReloadReport> for LoadSummary {
     }
 }
 
-/// Install every enabled `plugins` row into `host`: one [`PluginReloader::reload`] by a
-/// fresh reloader. For each row: fetch its artifact from `media`, check the bytes
-/// against the row's hash, parse the manifest, check the grant and compile. A row that
-/// fails any step is logged (`warn`) and skipped; only failing to list the rows is an
-/// error. Plugins in `host` without an enabled row are removed.
-///
-/// **Manifest storage.** The `manifest` column holds the `ferrite-plugin.toml` table in
-/// JSON form (every TOML value used by manifests has a JSON equivalent). It is turned
-/// back into TOML and validated with [`Manifest::parse`], so unknown keys and invalid
-/// values are rejected exactly as at install time. The manifest's `plugin.name` must
-/// equal the row's name.
-///
-/// **Grants (ruling R21).** A non-null `granted` column holds the capabilities the
-/// admin approved, in the JSON form of a manifest `[capabilities]` table. The plugin
-/// loads only if its manifest's capabilities are a subset of them
-/// ([`Capabilities::is_subset_of`](ferrite_plugin_host::Capabilities::is_subset_of));
-/// otherwise it is skipped with a warning (approval must be renewed, e.g. after an
-/// update asking for more). A null `granted` means the manifest is honoured as written:
-/// the only writers of rows are operator paths (`install_plugin_file`, tests); the M2
-/// install flow will always set it. The host then runs with the manifest's
-/// capabilities, which are within the grant.
-pub async fn load_plugins(
-    store: Arc<dyn Store>,
-    media: Arc<MediaStore>,
-    host: Arc<PluginHost>,
-) -> Result<LoadSummary, StoreError> {
-    let report = PluginReloader::new(store, media, host).reload().await?;
-    let summary = LoadSummary::from(&report);
-    tracing::info!(
-        loaded = summary.loaded.len(),
-        skipped = summary.skipped.len(),
-        "plugins loaded"
-    );
-    Ok(summary)
-}
-
 /// The row's manifest, checked against the row: its name must be the row's and its
-/// capabilities within a non-null grant (see [`load_plugins`]).
+/// capabilities within a non-null grant (see the module docs).
 pub(super) fn check_row(row: &InstalledPlugin) -> Result<Manifest, String> {
     let manifest = manifest_from_json(&row.manifest)?;
     if manifest.plugin.name != row.name {
@@ -91,7 +67,7 @@ pub(super) fn check_row(row: &InstalledPlugin) -> Result<Manifest, String> {
     Ok(manifest)
 }
 
-/// The manifest stored as JSON (see [`load_plugins`]), validated by [`Manifest::parse`].
+/// The manifest stored as JSON (see the module docs), validated by [`Manifest::parse`].
 pub(crate) fn manifest_from_json(json: &serde_json::Value) -> Result<Manifest, String> {
     let table: toml::Table = serde_json::from_value(json.clone())
         .map_err(|e| format!("manifest is not a TOML table: {e}"))?;

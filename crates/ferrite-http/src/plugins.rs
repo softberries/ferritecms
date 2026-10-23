@@ -2,8 +2,8 @@
 //!
 //! * [`PluginReloader`]: brings the plugin host to the `plugins` rows, installing each
 //!   enabled row from its artifact in the [`MediaStore`](ferrite_media::MediaStore)
-//!   with one registry swap (hot reload, P18/P19); [`load_plugins`] is the first reload
-//!   at startup. A broken row is logged and skipped (an older loaded version keeps
+//!   with one registry swap (hot reload, P18/P19); `serve`'s first reload installs the
+//!   plugins at startup. A broken row is logged and skipped (an older loaded version keeps
 //!   running); it never stops the site.
 //! * [`SharedFailures`]: the node's [`FailureSink`](ferrite_plugin_host::FailureSink),
 //!   sharing failure counts through the database for the cluster-wide auto-disable
@@ -30,6 +30,6 @@ mod services;
 
 pub use apply::{PluginRequest, RenderTrace, filter_item, run_filter};
 pub use failures::{FLUSH_EVERY, SharedFailures};
-pub use load::{LoadSummary, load_plugins};
+pub use load::LoadSummary;
 pub use reload::{PluginReloader, PluginState, PluginStatus, ReloadReport};
 pub use services::{KV_MAX_BYTES, KV_MAX_KEYS, StoreHostServices};
