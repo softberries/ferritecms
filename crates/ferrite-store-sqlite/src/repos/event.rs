@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use ferrite_domain::{Event, NewEvent, Timestamp};
-use ferrite_store::{EventRepo, StoreError, check_event_limit, validate_text};
+use ferrite_store::{EventRepo, StoreError, check_event_limit, check_prune_limit, validate_text};
 
 use super::SqliteRepos;
 use crate::{codec, exec::run};
@@ -56,11 +56,14 @@ impl EventRepo for SqliteRepos {
         .fetch_one(e))
     }
 
-    async fn prune(&self, older_than: Timestamp) -> Result<u64, StoreError> {
+    async fn prune(&self, older_than: Timestamp, limit: u32) -> Result<u64, StoreError> {
+        let limit = check_prune_limit(limit)?;
         run!(&self.writer, |e| sqlx::query(
-            "DELETE FROM events WHERE created_at < ?"
+            "DELETE FROM events WHERE seq IN \
+             (SELECT seq FROM events WHERE created_at < ? ORDER BY seq LIMIT ?)"
         )
         .bind(older_than.as_micros())
+        .bind(limit)
         .execute(e))
         .map(|done| done.rows_affected())
     }

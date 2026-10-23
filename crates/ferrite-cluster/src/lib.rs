@@ -8,7 +8,7 @@ pub mod jobs;
 
 pub use error::ClusterError;
 pub use jobs::{
-    EXTEND_EVERY, HANDLER_TIMEOUT, IDLE_POLL, JOB_DRAIN, JobError, JobHandler, JobRunner, LEASE,
-    Periodic, RESUBSCRIBE_MAX, RESUBSCRIBE_MIN, RunnerConfig, SCHEDULER_TICK, Scheduler,
-    period_key,
+    ABORT_WAIT, EXTEND_EVERY, HANDLER_TIMEOUT, IDLE_POLL, JOB_DRAIN, JobError, JobHandler,
+    JobRunner, LEASE, Periodic, RELEASE_BUDGET, RENEW_TIMEOUT, RESUBSCRIBE_MAX, RESUBSCRIBE_MIN,
+    RunnerConfig, SCHEDULER_TICK, Scheduler, period_key,
 };

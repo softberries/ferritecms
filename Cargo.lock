@@ -1351,6 +1351,8 @@ dependencies = [
  "ferrite-domain",
  "ferrite-store",
  "ferrite-store-tests",
+ "futures",
+ "semver",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",

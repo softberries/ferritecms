@@ -7,8 +7,8 @@ use std::{collections::BTreeMap, time::Duration};
 use async_trait::async_trait;
 use ferrite_domain::{Job, JobId, JobLease, JobStatus, NewJob, NodeId, Timestamp};
 use ferrite_store::{
-    JobRepo, StoreError, check_claim, check_job_duration, check_new_job, job_backoff,
-    sanitize_job_error, sort_claimed,
+    JobRepo, StoreError, check_claim, check_job_duration, check_new_job, check_prune_limit,
+    job_backoff, sanitize_job_error, sort_claimed,
 };
 use sqlx::AssertSqlSafe;
 
@@ -253,13 +253,17 @@ impl JobRepo for SqliteRepos {
         &self,
         done_before: Timestamp,
         dead_before: Timestamp,
+        limit: u32,
     ) -> Result<u64, StoreError> {
+        let limit = check_prune_limit(limit)?;
         run!(&self.writer, |e| sqlx::query(
-            "DELETE FROM jobs WHERE (status = 'done' AND finished_at < ?) \
-             OR (status = 'dead' AND finished_at < ?)"
+            "DELETE FROM jobs WHERE rowid IN (SELECT rowid FROM jobs \
+             WHERE (status = 'done' AND finished_at < ?) \
+             OR (status = 'dead' AND finished_at < ?) LIMIT ?)"
         )
         .bind(done_before.as_micros())
         .bind(dead_before.as_micros())
+        .bind(limit)
         .execute(e))
         .map(|done| done.rows_affected())
     }

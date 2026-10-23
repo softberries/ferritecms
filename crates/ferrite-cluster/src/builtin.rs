@@ -1,12 +1,14 @@
 //! Built-in maintenance jobs (P11, P14): hourly pruning of the events outbox, finished
-//! jobs and stale node rows. Ages are measured on the database clock.
+//! jobs and stale node rows. Ages are measured on the database clock; rows go in
+//! batches of [`MAX_PRUNE_BATCH`] (R5) so no single statement holds locks for long.
 
-use std::{sync::Arc, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use ferrite_domain::{Job, Timestamp};
-use ferrite_store::{Store, StoreError};
+use ferrite_store::{MAX_PRUNE_BATCH, Store, StoreError};
 use serde_json::json;
+use tokio::time::Instant;
 
 use crate::jobs::{JobError, JobHandler, Periodic};
 
@@ -20,6 +22,38 @@ pub const DONE_JOB_RETENTION: Duration = Duration::from_secs(7 * 24 * 3600);
 pub const DEAD_JOB_RETENTION: Duration = Duration::from_secs(30 * 24 * 3600);
 /// Node rows whose last heartbeat is older than this are deleted.
 pub const NODE_RETENTION: Duration = Duration::from_secs(24 * 3600);
+
+/// How long one prune run keeps deleting batches; well inside the default handler
+/// timeout (300 s), so a large backlog ends the run cleanly and the next hour goes on.
+pub const PRUNE_BUDGET: Duration = Duration::from_secs(240);
+
+/// Calls `batch` until it deletes fewer than [`MAX_PRUNE_BATCH`] rows or
+/// [`PRUNE_BUDGET`] is used up; returns the total.
+async fn prune_batches<F, Fut>(what: &'static str, mut batch: F) -> Result<u64, JobError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<u64, StoreError>>,
+{
+    let started = Instant::now();
+    let mut total = 0;
+    loop {
+        let n = batch().await.map_err(retry)?;
+        total += n;
+        if n < u64::from(MAX_PRUNE_BATCH) {
+            break;
+        }
+        if started.elapsed() >= PRUNE_BUDGET {
+            tracing::info!(
+                what,
+                deleted = total,
+                "prune budget used; the rest goes next run"
+            );
+            break;
+        }
+    }
+    tracing::info!(what, deleted = total, "pruned");
+    Ok(total)
+}
 
 /// The database clock minus `age`.
 async fn db_now_minus(store: &dyn Store, age: Duration) -> Result<Timestamp, JobError> {
@@ -44,8 +78,8 @@ impl JobHandler for EventsPrune {
 
     async fn run(&self, _job: &Job) -> Result<(), JobError> {
         let before = db_now_minus(self.0.as_ref(), EVENT_RETENTION).await?;
-        let n = self.0.read().events().prune(before).await.map_err(retry)?;
-        tracing::info!(deleted = n, "pruned events");
+        let events = self.0.read().events();
+        prune_batches("events", || events.prune(before, MAX_PRUNE_BATCH)).await?;
         Ok(())
     }
 }
@@ -63,14 +97,8 @@ impl JobHandler for JobsPrune {
     async fn run(&self, _job: &Job) -> Result<(), JobError> {
         let done = db_now_minus(self.0.as_ref(), DONE_JOB_RETENTION).await?;
         let dead = db_now_minus(self.0.as_ref(), DEAD_JOB_RETENTION).await?;
-        let n = self
-            .0
-            .read()
-            .jobs()
-            .prune(done, dead)
-            .await
-            .map_err(retry)?;
-        tracing::info!(deleted = n, "pruned jobs");
+        let jobs = self.0.read().jobs();
+        prune_batches("jobs", || jobs.prune(done, dead, MAX_PRUNE_BATCH)).await?;
         Ok(())
     }
 }
@@ -86,8 +114,8 @@ impl JobHandler for NodesPrune {
 
     async fn run(&self, _job: &Job) -> Result<(), JobError> {
         let before = db_now_minus(self.0.as_ref(), NODE_RETENTION).await?;
-        let n = self.0.read().nodes().prune(before).await.map_err(retry)?;
-        tracing::info!(deleted = n, "pruned node rows");
+        let nodes = self.0.read().nodes();
+        prune_batches("nodes", || nodes.prune(before, MAX_PRUNE_BATCH)).await?;
         Ok(())
     }
 }

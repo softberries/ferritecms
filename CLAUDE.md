@@ -25,8 +25,10 @@ plugin wiring) -> `ferrite-cache` (page cache + outbox invalidation loop), `ferr
 (themes, hierarchy, MiniJinja renderer), `ferrite-core` (services, permalinks, `SiteReader`),
 `ferrite-media`, `ferrite-plugin-host`; `ferrite-core` -> `ferrite-store` (traits) <-
 `ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite);
-`ferrite-domain` (types), `ferrite-config`, `ferrite-sdk` (guest SDK). Starter theme:
-`themes/blog` (embedded). Not built yet: cluster, import-wp, REST API/admin
+`ferrite-domain` (types), `ferrite-config`, `ferrite-sdk` (guest SDK); `ferrite-cluster` (job
+runner, periodic scheduler, built-in prune jobs; M1.5, not wired into `serve` yet) ->
+`ferrite-store` (traits). Starter theme: `themes/blog` (embedded). Not built yet: cluster node
+registry, import-wp, REST API/admin
 (`docs/design/01-architecture.md` §1).
 
 Run a site locally:

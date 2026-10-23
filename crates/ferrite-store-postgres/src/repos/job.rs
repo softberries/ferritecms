@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use ferrite_domain::{Job, JobId, JobLease, JobStatus, NewJob, NodeId, Timestamp};
 use ferrite_store::{
     Channel, JobRepo, StoreError, check_claim, check_job_duration, check_new_job,
-    sanitize_job_error, sort_claimed,
+    check_prune_limit, sanitize_job_error, sort_claimed,
 };
 use sqlx::{AssertSqlSafe, types::Json};
 
@@ -213,13 +213,17 @@ impl JobRepo for PgRepos {
         &self,
         done_before: Timestamp,
         dead_before: Timestamp,
+        limit: u32,
     ) -> Result<u64, StoreError> {
+        let limit = check_prune_limit(limit)?;
         run!(&self.exec, |e| sqlx::query(
-            "DELETE FROM jobs WHERE (status = 'done' AND finished_at < $1) \
-             OR (status = 'dead' AND finished_at < $2)"
+            "DELETE FROM jobs WHERE id IN (SELECT id FROM jobs \
+             WHERE (status = 'done' AND finished_at < $1) \
+             OR (status = 'dead' AND finished_at < $2) LIMIT $3)"
         )
         .bind(DateTime::<Utc>::from(done_before))
         .bind(DateTime::<Utc>::from(dead_before))
+        .bind(limit)
         .execute(e))
         .map(|done| done.rows_affected())
     }

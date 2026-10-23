@@ -468,8 +468,10 @@ pub trait EventRepo: Send + Sync {
     /// Returns the lowest sequence number still stored (older ones were pruned), or 0 if
     /// empty. A reader whose cursor is below `min_seq - 1` has lost history (P3).
     async fn min_seq(&self) -> Result<i64, StoreError>;
-    /// Deletes events older than the given time; returns the deleted count.
-    async fn prune(&self, older_than: Timestamp) -> Result<u64, StoreError>;
+    /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) events
+    /// older than the given time, oldest first; returns the deleted count. Callers loop
+    /// until a batch comes back short (R5).
+    async fn prune(&self, older_than: Timestamp, limit: u32) -> Result<u64, StoreError>;
 }
 
 /// The job queue (design 04 §6). Every time comparison (`run_at`, `locked_until`) uses
@@ -542,12 +544,15 @@ pub trait JobRepo: Send + Sync {
     async fn get(&self, id: JobId) -> Result<Option<Job>, StoreError>;
     /// Number of jobs per status; every status is present (0 when none).
     async fn counts(&self) -> Result<BTreeMap<JobStatus, u64>, StoreError>;
-    /// Deletes `done` jobs finished before `done_before` and `dead` jobs finished before
-    /// `dead_before`; queued and running jobs are never deleted. Returns the count.
+    /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) of the
+    /// `done` jobs finished before `done_before` and `dead` jobs finished before
+    /// `dead_before`; queued and running jobs are never deleted. Returns the count;
+    /// callers loop until a batch comes back short (R5).
     async fn prune(
         &self,
         done_before: Timestamp,
         dead_before: Timestamp,
+        limit: u32,
     ) -> Result<u64, StoreError>;
 }
 
@@ -569,8 +574,9 @@ pub trait NodeRepo: Send + Sync {
     async fn list(&self) -> Result<Vec<Node>, StoreError>;
     /// The database clock: Postgres `SELECT now()`, SQLite `Timestamp::now()`.
     async fn db_now(&self) -> Result<Timestamp, StoreError>;
-    /// Deletes nodes whose `heartbeat_at` is before `heartbeat_before`; returns the count.
-    async fn prune(&self, heartbeat_before: Timestamp) -> Result<u64, StoreError>;
+    /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) nodes whose
+    /// `heartbeat_at` is before `heartbeat_before`; returns the count (R5).
+    async fn prune(&self, heartbeat_before: Timestamp, limit: u32) -> Result<u64, StoreError>;
 }
 
 /// Full-text search over an item's title and body text. Both backends match exactly the

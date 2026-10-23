@@ -4,7 +4,9 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ferrite_domain::{Event, NewEvent, Timestamp};
-use ferrite_store::{Channel, EventRepo, StoreError, check_event_limit, validate_text};
+use ferrite_store::{
+    Channel, EventRepo, StoreError, check_event_limit, check_prune_limit, validate_text,
+};
 use sqlx::types::Json;
 
 use super::PgRepos;
@@ -61,11 +63,14 @@ impl EventRepo for PgRepos {
         .fetch_one(e))
     }
 
-    async fn prune(&self, older_than: Timestamp) -> Result<u64, StoreError> {
+    async fn prune(&self, older_than: Timestamp, limit: u32) -> Result<u64, StoreError> {
+        let limit = check_prune_limit(limit)?;
         run!(&self.exec, |e| sqlx::query(
-            "DELETE FROM events WHERE created_at < $1"
+            "DELETE FROM events WHERE seq IN \
+             (SELECT seq FROM events WHERE created_at < $1 ORDER BY seq LIMIT $2)"
         )
         .bind(DateTime::<Utc>::from(older_than))
+        .bind(limit)
         .execute(e))
         .map(|done| done.rows_affected())
     }

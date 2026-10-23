@@ -9,7 +9,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use ferrite_domain::Job;
 
-pub use runner::{EXTEND_EVERY, IDLE_POLL, JOB_DRAIN, JobRunner, LEASE, RunnerConfig};
+pub use runner::{
+    ABORT_WAIT, EXTEND_EVERY, IDLE_POLL, JOB_DRAIN, JobRunner, LEASE, RELEASE_BUDGET,
+    RENEW_TIMEOUT, RunnerConfig,
+};
 pub use scheduler::{Periodic, SCHEDULER_TICK, Scheduler, period_key};
 
 /// Default [`JobHandler::timeout`] (P9).
@@ -33,7 +36,21 @@ pub enum JobError {
 
 /// Runs the jobs of one kind. Execution is at-least-once, so `run` must be idempotent
 /// (04 §6). The runner renews the lease while `run` is pending; `run` needs no lease
-/// code, but its future may be dropped at any await point (lease lost, shutdown).
+/// code, but its future may be dropped at any await point: when a renewal reports the
+/// lease lost, when no renewal succeeded for `lease - extend_every / 2` (the local
+/// fence, R4: the drop comes before the lease can lapse), on timeout and on shutdown.
+///
+/// **Remaining bound.** The fence runs on this process's clock and runtime. A frozen
+/// or paused process (SIGSTOP, VM pause, a starved runtime) cannot drop the handler in
+/// time: after it resumes, the handler may run on next to the job's new owner until the
+/// next renewal or fence check. Its job-store writes are no-ops then (lease token, P6),
+/// but side effects outside the job row are not fenced, which is one more reason
+/// handlers must be idempotent.
+///
+/// **Do not block.** `run` must yield regularly: a handler blocking its thread cannot be
+/// cancelled and holds up shutdown (after [`ABORT_WAIT`] its job is left to expire on
+/// its lease instead of being released). Work moved to `spawn_blocking` is not
+/// cancelled when the future is dropped.
 #[async_trait]
 pub trait JobHandler: Send + Sync + 'static {
     /// The job kind this handler runs (`[a-z0-9._-]{1,64}`).

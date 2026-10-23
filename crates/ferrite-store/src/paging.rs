@@ -99,6 +99,19 @@ pub fn check_event_limit(limit: u32) -> Result<u32, StoreError> {
 /// Most jobs one `JobRepo::claim` call returns.
 pub const MAX_CLAIM: u32 = 100;
 
+/// Most rows one `prune` call (events, jobs, nodes) deletes (R5).
+pub const MAX_PRUNE_BATCH: u32 = 10_000;
+
+/// Validates a prune batch size: 1..=[`MAX_PRUNE_BATCH`].
+pub fn check_prune_limit(limit: u32) -> Result<i64, StoreError> {
+    if limit == 0 || limit > MAX_PRUNE_BATCH {
+        return Err(StoreError::Invalid(format!(
+            "prune limit must be between 1 and {MAX_PRUNE_BATCH}"
+        )));
+    }
+    Ok(i64::from(limit))
+}
+
 /// Most kinds one `JobRepo::claim` call accepts.
 pub const MAX_CLAIM_KINDS: usize = 64;
 

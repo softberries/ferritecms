@@ -127,6 +127,7 @@ backend_tests!(
     events_reject_nul,
     events_in_tx_only_visible_after_commit,
     events_prune,
+    events_prune_in_batches,
     events_min_seq,
 );
 
@@ -165,6 +166,7 @@ backend_tests!(
     jobs_error_text_is_sanitised,
     jobs_validation_does_not_poison,
     jobs_prune_by_status_age,
+    jobs_prune_in_batches,
     jobs_tolerate_unknown_columns,
 );
 
@@ -174,6 +176,7 @@ backend_tests!(
     lock_released_when_holder_dies,
     lock_names_are_validated,
     nodes_register_heartbeat_list_prune,
+    nodes_prune_in_batches,
 );
 
 backend_tests_spawning!(

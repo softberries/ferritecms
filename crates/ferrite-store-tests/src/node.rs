@@ -110,7 +110,7 @@ pub async fn nodes_register_heartbeat_list_prune(db: &TestDb) {
     }
 
     // b last beat at registration, before a's heartbeat: only b is older than the cut.
-    assert_eq!(nodes.prune(beat.heartbeat_at).await.unwrap(), 1);
+    assert_eq!(nodes.prune(beat.heartbeat_at, 100).await.unwrap(), 1);
     assert_eq!(
         nodes
             .list()
@@ -121,10 +121,29 @@ pub async fn nodes_register_heartbeat_list_prune(db: &TestDb) {
             .collect::<Vec<_>>(),
         [a.id]
     );
-    assert_eq!(nodes.prune(beat.heartbeat_at).await.unwrap(), 0);
+    assert_eq!(nodes.prune(beat.heartbeat_at, 100).await.unwrap(), 0);
 
     nodes.deregister(a.id).await.unwrap();
     assert!(nodes.list().await.unwrap().is_empty());
     nodes.deregister(a.id).await.unwrap();
     assert!(!nodes.heartbeat(a.id, &meta).await.unwrap(), "deregistered");
+}
+
+/// R5: `prune` deletes at most `limit` nodes per call; the limit is checked.
+pub async fn nodes_prune_in_batches(db: &TestDb) {
+    let nodes = db.store().read().nodes();
+    for i in 0..3 {
+        nodes.register(&new_node(&format!("n{i}"))).await.unwrap();
+    }
+    let future = Timestamp::from_micros(Timestamp::now().as_micros() + 1_000_000).unwrap();
+    for bad in [0, ferrite_store::MAX_PRUNE_BATCH + 1] {
+        assert!(matches!(
+            nodes.prune(future, bad).await,
+            Err(StoreError::Invalid(_))
+        ));
+    }
+    assert_eq!(nodes.prune(future, 2).await.unwrap(), 2);
+    assert_eq!(nodes.list().await.unwrap().len(), 1);
+    assert_eq!(nodes.prune(future, 2).await.unwrap(), 1);
+    assert_eq!(nodes.prune(future, 2).await.unwrap(), 0);
 }

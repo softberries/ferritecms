@@ -114,16 +114,16 @@ pub async fn events_prune(db: &TestDb) {
             .unwrap();
     }
     let oldest = events.since(0, 10).await.unwrap()[0].created_at;
-    assert_eq!(events.prune(oldest).await.unwrap(), 0);
-    assert_eq!(events.prune(first).await.unwrap(), 0);
+    assert_eq!(events.prune(oldest, 100).await.unwrap(), 0);
+    assert_eq!(events.prune(first, 100).await.unwrap(), 0);
     assert_eq!(events.since(0, 10).await.unwrap().len(), 3);
 
     let last = events.max_seq().await.unwrap();
     // One second ahead, in microseconds.
     let future = Timestamp::from_micros(Timestamp::now().as_micros() + 1_000_000).unwrap();
-    assert_eq!(events.prune(future).await.unwrap(), 3);
+    assert_eq!(events.prune(future, 100).await.unwrap(), 3);
     assert!(events.since(0, 10).await.unwrap().is_empty());
-    assert_eq!(events.prune(future).await.unwrap(), 0);
+    assert_eq!(events.prune(future, 100).await.unwrap(), 0);
 
     // Sequence numbers are never reused, even after the outbox is emptied.
     let next = events.append(&event("a", &["after"])).await.unwrap();
@@ -163,4 +163,36 @@ pub async fn events_concurrent_appends_unique_seq(db: Arc<TestDb>) {
     let stored = db.store().read().events().since(0, 1000).await.unwrap();
     assert_eq!(stored.len(), TASKS * APPENDS);
     assert_eq!(stored.iter().map(|e| e.seq).collect::<BTreeSet<_>>(), seen);
+}
+
+/// R5: `prune` deletes at most `limit` rows per call, oldest first; the limit is checked.
+pub async fn events_prune_in_batches(db: &TestDb) {
+    let events = db.store().read().events();
+    let mut seqs = Vec::new();
+    for i in 0..5 {
+        seqs.push(
+            events
+                .append(&event("a", &[&format!("k{i}")]))
+                .await
+                .unwrap(),
+        );
+    }
+    let future = Timestamp::from_micros(Timestamp::now().as_micros() + 1_000_000).unwrap();
+    for bad in [0, ferrite_store::MAX_PRUNE_BATCH + 1] {
+        assert!(matches!(
+            events.prune(future, bad).await,
+            Err(StoreError::Invalid(_))
+        ));
+    }
+    assert_eq!(events.prune(future, 2).await.unwrap(), 2);
+    assert_eq!(events.min_seq().await.unwrap(), seqs[2]);
+    assert_eq!(events.prune(future, 2).await.unwrap(), 2);
+    assert_eq!(events.prune(future, 2).await.unwrap(), 1);
+    assert_eq!(
+        events
+            .prune(future, ferrite_store::MAX_PRUNE_BATCH)
+            .await
+            .unwrap(),
+        0
+    );
 }

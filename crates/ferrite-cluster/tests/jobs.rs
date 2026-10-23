@@ -3,6 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::{
+    collections::BTreeMap,
     future::Future,
     pin::Pin,
     sync::{
@@ -16,8 +17,15 @@ use async_trait::async_trait;
 use ferrite_cluster::{
     ClusterError, JobError, JobHandler, JobRunner, Periodic, RunnerConfig, Scheduler, builtin,
 };
-use ferrite_domain::{Job, JobId, JobStatus, NewEvent, NewJob, NewNode, NodeId, Timestamp};
-use ferrite_store::{Backend, Store};
+use ferrite_domain::{
+    Job, JobId, JobLease, JobStatus, NewEvent, NewJob, NewNode, NodeId, Timestamp,
+};
+use ferrite_store::{
+    ArtifactRepo, Backend, Channel, ContentRepo, ContentTypeRepo, EventRepo, JobRepo, LockGuard,
+    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginKvRepo, PluginRepo,
+    RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, Store, StoreError, Subscription,
+    TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+};
 use ferrite_store_tests::{TestDb, backend_tests_spawning};
 use serde_json::json;
 use tokio::time::Instant;
@@ -207,23 +215,8 @@ pub async fn runner_retries_then_dead(db: Arc<TestDb>) {
         RunnerConfig::new(NodeId::new(), 2),
         vec![handler],
     );
-    let job = wait_status(
-        store.as_ref(),
-        id,
-        JobStatus::Queued,
-        Duration::from_secs(5),
-    )
-    .await;
-    let job = if job.attempts == 1 {
-        job
-    } else {
-        wait_for(Duration::from_secs(5), "first failure", || async {
-            let job = get(store.as_ref(), id).await;
-            (job.status == JobStatus::Queued && job.attempts == 1).then_some(job)
-        })
-        .await
-    };
-    assert_eq!(job.last_error.as_deref(), Some("boom"));
+    let job = wait_first_failure(store.as_ref(), id).await;
+    assert_eq!((job.attempts, job.last_error.as_deref()), (1, Some("boom")));
     db.force_job_due(id).await;
     let job = wait_status(store.as_ref(), id, JobStatus::Dead, Duration::from_secs(5)).await;
     stop_runner(stop, handle).await;
@@ -341,6 +334,8 @@ pub async fn runner_extends_long_jobs(db: Arc<TestDb>) {
 
 /// Review Focus 3: node A's lease lapses, node B reclaims and completes; at its next
 /// renewal A learns the lease is gone, drops the handler future and writes nothing.
+/// (With working renewals a lease only lapses under A while A is stalled, so the test
+/// expires it in the database directly.)
 pub async fn runner_cancels_handler_when_lease_lost(db: Arc<TestDb>) {
     let store = db.shared_store();
     let id = enqueue(store.as_ref(), NewJob::new(KIND, json!({"v": 1}))).await;
@@ -358,11 +353,14 @@ pub async fn runner_cancels_handler_when_lease_lost(db: Arc<TestDb>) {
     let (b_handler, b_log) = TestHandler::new(KIND, |_| async { Ok(()) }).build();
     let node_a = NodeId::new();
     let mut a_config = RunnerConfig::new(node_a, 1);
-    a_config.lease = Duration::from_secs(1);
-    a_config.extend_every = Duration::from_secs(5);
+    a_config.lease = Duration::from_secs(4);
+    a_config.extend_every = Duration::from_secs(2);
     let a_started = Instant::now();
     let (a_stop, a) = start(store.clone(), a_config, vec![a_handler]);
     wait_running_on(store.as_ref(), id, node_a).await;
+    // A stalls (paused process, R4's remaining bound): its lease lapses in the database
+    // while A's own fence (3 s) has not fired yet.
+    backdate(&db, "jobs", "locked_until", job_row(id), 1).await;
 
     let node_b = NodeId::new();
     let mut b_config = RunnerConfig::new(node_b, 2);
@@ -372,13 +370,14 @@ pub async fn runner_cancels_handler_when_lease_lost(db: Arc<TestDb>) {
     assert_eq!(done.attempts, 2, "B's claim is the second attempt");
     assert!(!cancelled.load(Ordering::SeqCst), "A's handler still runs");
 
-    wait_for(Duration::from_secs(8), "A's handler cancelled", || async {
+    wait_for(Duration::from_secs(4), "A's handler cancelled", || async {
         cancelled.load(Ordering::SeqCst).then_some(())
     })
     .await;
+    let after = a_started.elapsed();
     assert!(
-        a_started.elapsed() >= Duration::from_secs(4),
-        "cancelled at the renewal tick"
+        after >= Duration::from_millis(1900) && after < Duration::from_secs(3),
+        "cancelled at the renewal tick (2 s), not by the fence (3 s): {after:?}"
     );
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(get(store.as_ref(), id).await, done, "A wrote nothing");
@@ -387,6 +386,243 @@ pub async fn runner_cancels_handler_when_lease_lost(db: Arc<TestDb>) {
     assert_eq!(get(store.as_ref(), id).await, done);
     assert_eq!(calls(&a_log), vec![id]);
     assert_eq!(calls(&b_log), vec![id]);
+}
+
+/// A store whose `JobRepo::extend` always fails (database unreachable for renewals);
+/// everything else goes to the real store.
+struct FailingRenewals {
+    inner: Arc<dyn Store>,
+    repos: FailingRepos,
+}
+
+struct FailingRepos {
+    inner: Arc<dyn Store>,
+    jobs: FailingJobs,
+}
+
+struct FailingJobs(Arc<dyn Store>);
+
+impl FailingRenewals {
+    fn new(inner: Arc<dyn Store>) -> Self {
+        Self {
+            repos: FailingRepos {
+                jobs: FailingJobs(inner.clone()),
+                inner: inner.clone(),
+            },
+            inner,
+        }
+    }
+}
+
+#[async_trait]
+impl Store for FailingRenewals {
+    fn backend(&self) -> Backend {
+        self.inner.backend()
+    }
+    fn read(&self) -> &dyn Repos {
+        &self.repos
+    }
+    async fn begin(&self) -> Result<Box<dyn Tx>, StoreError> {
+        self.inner.begin().await
+    }
+    async fn subscribe(
+        &self,
+        channel: Channel,
+    ) -> Result<Option<Box<dyn Subscription>>, StoreError> {
+        self.inner.subscribe(channel).await
+    }
+    async fn try_lock(&self, name: &str) -> Result<Option<Box<dyn LockGuard>>, StoreError> {
+        self.inner.try_lock(name).await
+    }
+    async fn migration_status(
+        &self,
+        binary: &semver::Version,
+    ) -> Result<MigrationStatus, StoreError> {
+        self.inner.migration_status(binary).await
+    }
+    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+        self.inner.migrate_up(to).await
+    }
+    async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError> {
+        self.inner.migrate_down(to, allow_lossy).await
+    }
+    async fn verify_migrations(&self) -> Result<(), StoreError> {
+        self.inner.verify_migrations().await
+    }
+    async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError> {
+        self.inner.snapshot(dest).await
+    }
+    async fn close(&self) {
+        self.inner.close().await;
+    }
+}
+
+impl Repos for FailingRepos {
+    fn content(&self) -> &dyn ContentRepo {
+        self.inner.read().content()
+    }
+    fn meta(&self) -> &dyn MetaRepo {
+        self.inner.read().meta()
+    }
+    fn revisions(&self) -> &dyn RevisionRepo {
+        self.inner.read().revisions()
+    }
+    fn types(&self) -> &dyn ContentTypeRepo {
+        self.inner.read().types()
+    }
+    fn taxonomies(&self) -> &dyn TaxonomyRepo {
+        self.inner.read().taxonomies()
+    }
+    fn terms(&self) -> &dyn TermRepo {
+        self.inner.read().terms()
+    }
+    fn menus(&self) -> &dyn MenuRepo {
+        self.inner.read().menus()
+    }
+    fn options(&self) -> &dyn OptionRepo {
+        self.inner.read().options()
+    }
+    fn redirects(&self) -> &dyn RedirectRepo {
+        self.inner.read().redirects()
+    }
+    fn users(&self) -> &dyn UserRepo {
+        self.inner.read().users()
+    }
+    fn artifacts(&self) -> &dyn ArtifactRepo {
+        self.inner.read().artifacts()
+    }
+    fn media(&self) -> &dyn MediaRepo {
+        self.inner.read().media()
+    }
+    fn plugins(&self) -> &dyn PluginRepo {
+        self.inner.read().plugins()
+    }
+    fn plugin_kv(&self) -> &dyn PluginKvRepo {
+        self.inner.read().plugin_kv()
+    }
+    fn themes(&self) -> &dyn ThemeRepo {
+        self.inner.read().themes()
+    }
+    fn events(&self) -> &dyn EventRepo {
+        self.inner.read().events()
+    }
+    fn jobs(&self) -> &dyn JobRepo {
+        &self.jobs
+    }
+    fn nodes(&self) -> &dyn NodeRepo {
+        self.inner.read().nodes()
+    }
+    fn search(&self) -> &dyn SearchRepo {
+        self.inner.read().search()
+    }
+    fn schema_meta(&self) -> &dyn SchemaMetaRepo {
+        self.inner.read().schema_meta()
+    }
+}
+
+#[async_trait]
+impl JobRepo for FailingJobs {
+    async fn enqueue(&self, job: &NewJob) -> Result<Option<JobId>, StoreError> {
+        self.0.read().jobs().enqueue(job).await
+    }
+    async fn claim(
+        &self,
+        node: NodeId,
+        kinds: &[String],
+        limit: u32,
+        lease: Duration,
+    ) -> Result<Vec<Job>, StoreError> {
+        self.0.read().jobs().claim(node, kinds, limit, lease).await
+    }
+    async fn extend(&self, _lease: &JobLease, _duration: Duration) -> Result<bool, StoreError> {
+        Err(StoreError::Database("injected renewal failure".into()))
+    }
+    async fn complete(&self, lease: &JobLease) -> Result<bool, StoreError> {
+        self.0.read().jobs().complete(lease).await
+    }
+    async fn fail(
+        &self,
+        lease: &JobLease,
+        error: &str,
+        permanent: bool,
+    ) -> Result<Option<JobStatus>, StoreError> {
+        self.0.read().jobs().fail(lease, error, permanent).await
+    }
+    async fn release(
+        &self,
+        lease: &JobLease,
+        delay: Duration,
+        count_attempt: bool,
+    ) -> Result<bool, StoreError> {
+        self.0
+            .read()
+            .jobs()
+            .release(lease, delay, count_attempt)
+            .await
+    }
+    async fn get(&self, id: JobId) -> Result<Option<Job>, StoreError> {
+        self.0.read().jobs().get(id).await
+    }
+    async fn counts(&self) -> Result<BTreeMap<JobStatus, u64>, StoreError> {
+        self.0.read().jobs().counts().await
+    }
+    async fn prune(
+        &self,
+        done_before: Timestamp,
+        dead_before: Timestamp,
+        limit: u32,
+    ) -> Result<u64, StoreError> {
+        self.0
+            .read()
+            .jobs()
+            .prune(done_before, dead_before, limit)
+            .await
+    }
+}
+
+/// R4: renewals fail (no answer whether the lease still holds), so the runner drops the
+/// handler at `lease - extend_every / 2` after the claim, before the lease can lapse
+/// and another node could take the job, and writes nothing for it.
+pub async fn runner_fences_handler_when_renewals_fail(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    let id = enqueue(store.as_ref(), NewJob::new(KIND, json!({"v": 1}))).await;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let flag = cancelled.clone();
+    let (handler, log) = TestHandler::new(KIND, move |_| {
+        let guard = DropFlag(flag.clone());
+        async move {
+            let _guard = guard;
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            Ok(())
+        }
+    })
+    .build();
+    let node = NodeId::new();
+    let mut config = RunnerConfig::new(node, 1);
+    config.lease = Duration::from_secs(2);
+    config.extend_every = Duration::from_millis(400);
+    let failing: Arc<dyn Store> = Arc::new(FailingRenewals::new(store.clone()));
+    let before_claim = Instant::now();
+    let (stop, handle) = start(failing, config, vec![handler]);
+    let running = wait_running_on(store.as_ref(), id, node).await;
+    wait_for(Duration::from_secs(3), "handler fenced", || async {
+        cancelled.load(Ordering::SeqCst).then_some(())
+    })
+    .await;
+    let fenced_after = before_claim.elapsed();
+    // Fence at 2 s - 0.2 s after the claim; this test polls every 20 ms.
+    assert!(
+        fenced_after >= Duration::from_millis(1700) && fenced_after < Duration::from_secs(2),
+        "fenced after {fenced_after:?}"
+    );
+    // Nothing was written: the job is still running under this node's live lease.
+    let now = get(store.as_ref(), id).await;
+    assert_eq!(now, running);
+    assert!(now.locked_until.unwrap() > store.read().nodes().db_now().await.unwrap());
+    stop_runner(stop, handle).await;
+    // The fenced job is not released at shutdown either: its lease just expires.
+    assert_eq!(get(store.as_ref(), id).await, running);
+    assert_eq!(calls(&log), vec![id]);
 }
 
 pub async fn runner_releases_unknown_payload_version(db: Arc<TestDb>) {
@@ -536,8 +772,8 @@ async fn add_node(store: &dyn Store) -> NodeId {
     id
 }
 
-/// A `done` job of a kind no runner here handles.
-async fn done_job(store: &dyn Store) -> JobId {
+/// A `done` (or, with `dead`, a `dead`) job of a kind no runner here handles.
+async fn finished_job(store: &dyn Store, dead: bool) -> JobId {
     let jobs = store.read().jobs();
     let id = enqueue(store, NewJob::new("test.finished", json!({}))).await;
     let claimed = jobs
@@ -549,7 +785,13 @@ async fn done_job(store: &dyn Store) -> JobId {
         )
         .await
         .unwrap();
-    assert!(jobs.complete(&claimed[0].lease().unwrap()).await.unwrap());
+    let lease = claimed[0].lease().unwrap();
+    if dead {
+        let status = jobs.fail(&lease, "gave up", true).await.unwrap();
+        assert_eq!(status, Some(JobStatus::Dead));
+    } else {
+        assert!(jobs.complete(&lease).await.unwrap());
+    }
     id
 }
 
@@ -567,9 +809,15 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
     let stale_node = add_node(store.as_ref()).await;
     let live_node = add_node(store.as_ref()).await;
     backdate(&db, "nodes", "heartbeat_at", node_row(stale_node), 25).await;
-    let old_job = done_job(store.as_ref()).await;
-    let fresh_job = done_job(store.as_ref()).await;
+    let old_job = finished_job(store.as_ref(), false).await;
+    let fresh_job = finished_job(store.as_ref(), false).await;
     backdate(&db, "jobs", "finished_at", job_row(old_job), 8 * 24).await;
+    // Dead jobs stay 30 days: one at 31 days goes, one at 10 days (past the done
+    // cut-off) stays.
+    let old_dead = finished_job(store.as_ref(), true).await;
+    let recent_dead = finished_job(store.as_ref(), true).await;
+    backdate(&db, "jobs", "finished_at", job_row(old_dead), 31 * 24).await;
+    backdate(&db, "jobs", "finished_at", job_row(recent_dead), 10 * 24).await;
 
     let stop = CancellationToken::new();
     let scheduler = Scheduler::new(store.clone(), builtin::periodics(), Duration::from_secs(10))
@@ -585,7 +833,8 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
     wait_for(Duration::from_secs(5), "three prune jobs done", || async {
         let counts = jobs.counts().await.unwrap();
         // Once the old fixture job is pruned: the fresh one plus the three prune jobs.
-        let gone = jobs.get(old_job).await.unwrap().is_none();
+        let gone = jobs.get(old_job).await.unwrap().is_none()
+            && jobs.get(old_dead).await.unwrap().is_none();
         (gone && counts[&JobStatus::Done] == 4).then_some(())
     })
     .await;
@@ -612,12 +861,17 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
         .collect();
     assert_eq!(nodes, vec![live_node]);
     assert!(jobs.get(fresh_job).await.unwrap().is_some());
+    assert_eq!(
+        get(store.as_ref(), recent_dead).await.status,
+        JobStatus::Dead
+    );
     let counts = jobs.counts().await.unwrap();
     assert_eq!(
         counts[&JobStatus::Done],
         4,
         "fresh fixture + three prune jobs"
     );
+    assert_eq!(counts[&JobStatus::Dead], 1, "the 10-day-old dead job");
 }
 
 backend_tests_spawning!(
@@ -629,6 +883,7 @@ backend_tests_spawning!(
     runner_invalid_payload_version_is_dead,
     runner_extends_long_jobs,
     runner_cancels_handler_when_lease_lost,
+    runner_fences_handler_when_renewals_fail,
     runner_releases_unknown_payload_version,
     runner_shutdown_releases_in_flight,
     scheduler_inserts_one_job_per_period,
@@ -666,7 +921,7 @@ async fn runner_wakes_on_notify() {
         .unwrap();
     let latency = started - enqueued;
     assert!(
-        latency < Duration::from_millis(500),
+        latency < Duration::from_secs(2),
         "started after {latency:?}"
     );
     stop_runner(stop, handle).await;

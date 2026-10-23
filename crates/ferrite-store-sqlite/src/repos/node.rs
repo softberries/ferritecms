@@ -3,7 +3,9 @@
 
 use async_trait::async_trait;
 use ferrite_domain::{NewNode, Node, NodeId, Timestamp};
-use ferrite_store::{MAX_NODES, NodeRepo, StoreError, check_new_node, check_node_meta};
+use ferrite_store::{
+    MAX_NODES, NodeRepo, StoreError, check_new_node, check_node_meta, check_prune_limit,
+};
 use sqlx::AssertSqlSafe;
 
 use super::SqliteRepos;
@@ -68,11 +70,14 @@ impl NodeRepo for SqliteRepos {
         Ok(Timestamp::now())
     }
 
-    async fn prune(&self, heartbeat_before: Timestamp) -> Result<u64, StoreError> {
+    async fn prune(&self, heartbeat_before: Timestamp, limit: u32) -> Result<u64, StoreError> {
+        let limit = check_prune_limit(limit)?;
         let done = run!(&self.writer, |e| sqlx::query(
-            "DELETE FROM nodes WHERE heartbeat_at < ?"
+            "DELETE FROM nodes WHERE rowid IN \
+             (SELECT rowid FROM nodes WHERE heartbeat_at < ? LIMIT ?)"
         )
         .bind(heartbeat_before.as_micros())
+        .bind(limit)
         .execute(e))?;
         Ok(done.rows_affected())
     }

@@ -551,15 +551,15 @@ pub async fn jobs_prune_by_status_age(db: &TestDb) {
     let past = Timestamp::from_micros(Timestamp::now().as_micros() - 3_600_000_000).unwrap();
     let future = plus(Timestamp::now(), Duration::from_secs(3600));
     // Cut-offs before every finish: nothing goes.
-    assert_eq!(jobs.prune(past, past).await.unwrap(), 0);
+    assert_eq!(jobs.prune(past, past, 100).await.unwrap(), 0);
     // Dead uses its own cut-off: done go, dead stays.
-    assert_eq!(jobs.prune(future, past).await.unwrap(), 2);
+    assert_eq!(jobs.prune(future, past, 100).await.unwrap(), 2);
     assert!(jobs.get(finish[0]).await.unwrap().is_none());
     assert!(jobs.get(finish[2]).await.unwrap().is_some());
-    assert_eq!(jobs.prune(past, future).await.unwrap(), 1);
+    assert_eq!(jobs.prune(past, future, 100).await.unwrap(), 1);
     assert!(jobs.get(finish[2]).await.unwrap().is_none());
     // Queued and running are never pruned.
-    assert_eq!(jobs.prune(future, future).await.unwrap(), 0);
+    assert_eq!(jobs.prune(future, future, 100).await.unwrap(), 0);
     assert!(jobs.get(queued).await.unwrap().is_some());
     assert!(jobs.get(running).await.unwrap().is_some());
     let counts = jobs.counts().await.unwrap();
@@ -671,4 +671,31 @@ pub async fn jobs_concurrent_enqueue_same_key(db: Arc<TestDb>) {
     let jobs = store.read().jobs();
     assert_eq!(get(jobs, first).await.unique_key.as_deref(), Some("race"));
     assert_eq!(jobs.counts().await.unwrap()[&JobStatus::Queued], 1);
+}
+
+/// R5: `prune` deletes at most `limit` finished jobs per call; the limit is checked.
+pub async fn jobs_prune_in_batches(db: &TestDb) {
+    let jobs = db.store().read().jobs();
+    let node = NodeId::new();
+    for _ in 0..3 {
+        enqueue(jobs, &job("k")).await;
+    }
+    let claimed = jobs.claim(node, &kinds(&["k"]), 3, LEASE).await.unwrap();
+    assert!(jobs.complete(&claimed[0].lease().unwrap()).await.unwrap());
+    assert!(jobs.complete(&claimed[1].lease().unwrap()).await.unwrap());
+    jobs.fail(&claimed[2].lease().unwrap(), "x", true)
+        .await
+        .unwrap();
+    let future = plus(Timestamp::now(), Duration::from_secs(3600));
+    for bad in [0, ferrite_store::MAX_PRUNE_BATCH + 1] {
+        assert!(matches!(
+            jobs.prune(future, future, bad).await,
+            Err(StoreError::Invalid(_))
+        ));
+    }
+    assert_eq!(jobs.prune(future, future, 2).await.unwrap(), 2);
+    assert_eq!(jobs.prune(future, future, 2).await.unwrap(), 1);
+    assert_eq!(jobs.prune(future, future, 2).await.unwrap(), 0);
+    let counts = jobs.counts().await.unwrap();
+    assert_eq!(counts.values().sum::<u64>(), 0);
 }

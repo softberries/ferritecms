@@ -369,7 +369,7 @@ mod tests {
         async fn min_seq(&self) -> Result<i64, StoreError> {
             unreachable!()
         }
-        async fn prune(&self, _older_than: Timestamp) -> Result<u64, StoreError> {
+        async fn prune(&self, _older_than: Timestamp, _limit: u32) -> Result<u64, StoreError> {
             unreachable!()
         }
     }

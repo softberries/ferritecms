@@ -38,7 +38,9 @@ pub struct RunnerConfig {
     pub workers: usize,
     /// Lease length per claim and per renewal.
     pub lease: Duration,
-    /// Renewal interval; keep it well under `lease`.
+    /// Renewal interval. A job whose lease was not renewed for
+    /// `lease - extend_every / 2` is cancelled locally (R4), so keep it under
+    /// `2 / 3 × lease` (default 20 s of 60 s) or jobs are cancelled before any renewal.
     pub extend_every: Duration,
     /// Poll interval while idle.
     pub idle_poll: Duration,
@@ -108,8 +110,8 @@ impl JobRunner {
     }
 
     /// Runs the runner on the current runtime until `stop` is cancelled, then drains
-    /// and releases (P10). The task ends at most `drain` (plus the release writes) after
-    /// `stop`.
+    /// and releases (P10). Once the loop sees `stop` (after its current claim or outcome
+    /// write) the task ends within `drain` + [`ABORT_WAIT`] + [`RELEASE_BUDGET`].
     pub fn spawn(self, stop: CancellationToken) -> JoinHandle<()> {
         tokio::spawn(self.run(stop))
     }
@@ -140,11 +142,32 @@ impl JobRunner {
     }
 }
 
+/// Longest one lease renewal may take; a slower one counts as failed.
+pub const RENEW_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long shutdown waits for aborted handlers to stop before releasing their jobs.
+pub const ABORT_WAIT: Duration = Duration::from_millis(500);
+/// How long shutdown spends on the final release and outcome writes, all together.
+pub const RELEASE_BUDGET: Duration = Duration::from_secs(2);
+
 /// One job running on this node.
 struct InFlight {
     lease: JobLease,
     abort: AbortHandle,
     span: Span,
+    /// When the lease was last known to run until `now + lease`: taken just before the
+    /// claim or the successful renewal was sent (R4).
+    renewed_at: Instant,
+    /// Aborted because the lease is lost or may have lapsed. The entry (and its worker
+    /// slot) stays until the task is joined; nothing is written for it.
+    cancelled: bool,
+}
+
+impl InFlight {
+    fn cancel(&mut self, why: &'static str) {
+        self.cancelled = true;
+        self.abort.abort();
+        tracing::warn!(parent: &self.span, "{why}; handler cancelled");
+    }
 }
 
 /// The runner loop's state.
@@ -156,9 +179,40 @@ struct State {
     in_flight: HashMap<Id, InFlight>,
 }
 
+/// A task's result as `join_next_with_id` reports it.
+type Joined = Result<(Id, Result<(), JobError>), JoinError>;
+
 impl State {
     fn jobs(&self) -> &dyn JobRepo {
         self.runner.store.read().jobs()
+    }
+
+    /// Local lease fencing (R4): how long after `renewed_at` a job is cancelled when no
+    /// renewal succeeded since; half a renewal interval before the lease itself ends.
+    fn fence(&self) -> Duration {
+        let config = &self.runner.config;
+        config.lease.saturating_sub(config.extend_every / 2)
+    }
+
+    /// The earliest local lease deadline among the running (not cancelled) jobs.
+    fn next_fence(&self) -> Option<Instant> {
+        let fence = self.fence();
+        self.in_flight
+            .values()
+            .filter(|job| !job.cancelled)
+            .map(|job| job.renewed_at + fence)
+            .min()
+    }
+
+    /// Cancels every job whose lease may lapse before a renewal could save it (R4).
+    fn enforce_fence(&mut self) {
+        let fence = self.fence();
+        let now = Instant::now();
+        for job in self.in_flight.values_mut() {
+            if !job.cancelled && now.duration_since(job.renewed_at) >= fence {
+                job.cancel("lease not renewed in time and may lapse");
+            }
+        }
     }
 
     /// Claims and runs jobs until `stop`.
@@ -183,14 +237,23 @@ impl State {
                 // The claim filled its whole limit: more may be due.
                 continue;
             }
+            let fence = self.next_fence();
             tokio::select! {
                 biased;
                 () = stop.cancelled() => return,
+                _ = extend.tick() => {
+                    // Renewals are idempotent, so dropping them on `stop` is harmless.
+                    tokio::select! {
+                        biased;
+                        () = stop.cancelled() => return,
+                        () = self.extend_all() => {}
+                    }
+                }
+                () = sleep_until_opt(fence) => self.enforce_fence(),
                 Some(joined) = self.tasks.join_next_with_id() => {
                     self.finish(joined).await;
                     claim_now = true;
                 }
-                _ = extend.tick() => self.extend_all().await,
                 () = wake.notified() => claim_now = true,
                 () = &mut poll => {
                     poll.as_mut().reset(Instant::now() + idle_poll);
@@ -205,6 +268,7 @@ impl State {
     async fn claim(&mut self) -> bool {
         let free = self.workers - self.in_flight.len();
         let limit = u32::try_from(free).unwrap_or(MAX_CLAIM).min(MAX_CLAIM);
+        let sent = Instant::now();
         let claimed = self
             .jobs()
             .claim(
@@ -218,7 +282,7 @@ impl State {
             Ok(jobs) => {
                 let full = jobs.len() == limit as usize;
                 for job in jobs {
-                    self.start(job).await;
+                    self.start(job, sent).await;
                 }
                 full && self.in_flight.len() < self.workers
             }
@@ -230,7 +294,7 @@ impl State {
     }
 
     /// Checks the payload version and spawns the handler, or settles the job at once.
-    async fn start(&mut self, job: Job) {
+    async fn start(&mut self, job: Job, claimed_at: Instant) {
         let span =
             tracing::info_span!("job", kind = %job.kind, id = %job.id, attempt = job.attempts);
         let Some(lease) = job.lease() else {
@@ -265,24 +329,41 @@ impl State {
             }
         };
         let abort = self.tasks.spawn(task.instrument(span.clone()));
-        self.in_flight
-            .insert(abort.id(), InFlight { lease, abort, span });
+        self.in_flight.insert(
+            abort.id(),
+            InFlight {
+                lease,
+                abort,
+                span,
+                renewed_at: claimed_at,
+                cancelled: false,
+            },
+        );
     }
 
-    /// Records the outcome of a finished task. A task cancelled by this runner (lease
-    /// lost) has no entry any more and writes nothing.
-    async fn finish(&mut self, joined: Result<(Id, Result<(), JobError>), JoinError>) {
+    /// Takes a joined task's entry off the books. `None` when there is nothing to
+    /// write: unknown, cancelled by this runner, or aborted.
+    fn settle(&mut self, joined: Joined) -> Option<(InFlight, Result<(), JobError>)> {
         let (id, outcome) = match joined {
             Ok((id, result)) => (id, result),
             Err(e) if e.is_panic() => (e.id(), Err(JobError::Retry("handler panicked".into()))),
             Err(e) => {
                 self.in_flight.remove(&e.id());
-                return;
+                return None;
             }
         };
-        let Some(job) = self.in_flight.remove(&id) else {
-            return;
-        };
+        let job = self.in_flight.remove(&id)?;
+        (!job.cancelled).then_some((job, outcome))
+    }
+
+    /// Records the outcome of a finished task.
+    async fn finish(&mut self, joined: Joined) {
+        if let Some((job, outcome)) = self.settle(joined) {
+            self.record(&job, outcome).await;
+        }
+    }
+
+    async fn record(&self, job: &InFlight, outcome: Result<(), JobError>) {
         match outcome {
             Ok(()) => match self.jobs().complete(&job.lease).await {
                 Ok(true) => tracing::debug!(parent: &job.span, "job done"),
@@ -326,53 +407,137 @@ impl State {
         }
     }
 
-    /// Renews every in-flight lease; a lease that is gone cancels its handler.
+    /// Renews every running lease at once, each bounded by [`RENEW_TIMEOUT`]. A lease
+    /// that is gone cancels its handler; a failed renewal leaves the job to the local
+    /// fence ([`Self::enforce_fence`]).
     async fn extend_all(&mut self) {
-        let leases: Vec<(Id, JobLease)> = self
+        let lease_len = self.runner.config.lease;
+        let targets: Vec<(Id, JobLease)> = self
             .in_flight
             .iter()
+            .filter(|(_, job)| !job.cancelled)
             .map(|(id, job)| (*id, job.lease))
             .collect();
-        for (id, lease) in leases {
-            match self.jobs().extend(&lease, self.runner.config.lease).await {
-                Ok(true) => {}
-                Ok(false) => {
-                    if let Some(job) = self.in_flight.remove(&id) {
-                        job.abort.abort();
-                        tracing::warn!(parent: &job.span, "lease lost; handler cancelled");
-                    }
-                }
-                Err(e) => {
-                    let span = self.in_flight.get(&id).map(|j| j.span.clone());
-                    tracing::warn!(parent: span.as_ref().and_then(Span::id), error = %e,
-                        "lease renewal failed; retrying at the next renewal");
-                }
+        let jobs = self.jobs();
+        let results = futures::future::join_all(targets.iter().map(|(id, lease)| async move {
+            let sent = Instant::now();
+            let renewed = tokio::time::timeout(RENEW_TIMEOUT, jobs.extend(lease, lease_len)).await;
+            (*id, sent, renewed)
+        }))
+        .await;
+        for (id, sent, renewed) in results {
+            let Some(job) = self.in_flight.get_mut(&id) else {
+                continue;
+            };
+            match renewed {
+                Ok(Ok(true)) => job.renewed_at = sent,
+                Ok(Ok(false)) => job.cancel("lease lost"),
+                Ok(Err(e)) => tracing::warn!(
+                    parent: &job.span, error = %e,
+                    "lease renewal failed; retrying at the next renewal"
+                ),
+                Err(_) => tracing::warn!(
+                    parent: &job.span, timeout = ?RENEW_TIMEOUT,
+                    "lease renewal timed out; retrying at the next renewal"
+                ),
             }
         }
+        self.enforce_fence();
     }
 
-    /// After `stop`: no new claims; in-flight jobs finish within `drain` (P10).
+    /// After `stop`: no new claims; in-flight jobs finish within `drain` (P10). Every
+    /// step is cut off at the deadline, so this returns by then.
     async fn drain(&mut self, extend: &mut tokio::time::Interval) {
         let deadline = Instant::now() + self.runner.config.drain;
         while !self.in_flight.is_empty() {
-            tokio::select! {
+            let fence = self.next_fence();
+            let in_time = tokio::select! {
                 biased;
-                Some(joined) = self.tasks.join_next_with_id() => self.finish(joined).await,
-                _ = extend.tick() => self.extend_all().await,
                 () = tokio::time::sleep_until(deadline) => return,
+                _ = extend.tick() => {
+                    tokio::time::timeout_at(deadline, self.extend_all()).await.is_ok()
+                }
+                () = sleep_until_opt(fence) => {
+                    self.enforce_fence();
+                    true
+                }
+                Some(joined) = self.tasks.join_next_with_id() => {
+                    if let Some((job, outcome)) = self.settle(joined) {
+                        let written = tokio::time::timeout_at(deadline, self.record(&job, outcome)).await;
+                        if written.is_err() {
+                            tracing::warn!(parent: &job.span, "outcome not written before the drain deadline; the job runs again after its lease");
+                        }
+                    }
+                    true
+                }
+            };
+            if !in_time {
+                return;
             }
         }
     }
 
-    /// Cancels what is still running and releases each lease with the attempt refunded,
-    /// so another node can take the job at once (P10).
+    /// Aborts what is still running, waits up to [`ABORT_WAIT`] for the tasks to end,
+    /// then releases the jobs whose tasks ended (attempt refunded, P10) and records the
+    /// outcome of any that finished meanwhile, within [`RELEASE_BUDGET`] overall. A task
+    /// that does not stop in time (a handler blocking its thread) keeps its job, which
+    /// another node takes once the lease expires.
     async fn release_rest(&mut self) {
-        self.tasks.abort_all();
-        let rest: Vec<InFlight> = self.in_flight.drain().map(|(_, job)| job).collect();
-        for job in rest {
-            tracing::info!(parent: &job.span, "shutting down; job released");
-            self.release(&job.lease, Duration::ZERO, &job.span).await;
+        if self.in_flight.is_empty() {
+            return;
         }
+        self.tasks.abort_all();
+        let deadline = Instant::now() + ABORT_WAIT;
+        let mut settled: Vec<(InFlight, Option<Result<(), JobError>>)> = Vec::new();
+        while let Ok(Some(joined)) =
+            tokio::time::timeout_at(deadline, self.tasks.join_next_with_id()).await
+        {
+            match joined {
+                Err(e) if e.is_cancelled() => {
+                    if let Some(job) = self.in_flight.remove(&e.id())
+                        && !job.cancelled
+                    {
+                        settled.push((job, None));
+                    }
+                }
+                other => {
+                    if let Some((job, outcome)) = self.settle(other) {
+                        settled.push((job, Some(outcome)));
+                    }
+                }
+            }
+        }
+        for (_, job) in self.in_flight.drain() {
+            if !job.cancelled {
+                tracing::warn!(parent: &job.span, "handler did not stop within {ABORT_WAIT:?}; job left to expire on its lease");
+            }
+        }
+        let this = &*self;
+        let writes = settled.iter().map(|(job, outcome)| async move {
+            match outcome {
+                None => {
+                    tracing::info!(parent: &job.span, "shutting down; job released");
+                    this.release(&job.lease, Duration::ZERO, &job.span).await;
+                }
+                Some(outcome) => this.record(job, outcome.clone()).await,
+            }
+        });
+        if tokio::time::timeout(RELEASE_BUDGET, futures::future::join_all(writes))
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                "shutdown releases not finished within {RELEASE_BUDGET:?}; the rest expire on their leases"
+            );
+        }
+    }
+}
+
+/// Sleeps until `at`, or forever without one.
+async fn sleep_until_opt(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -386,8 +551,9 @@ fn payload_version(payload: &Value) -> Option<u32> {
 
 /// Turns job notices into wake-ups until `stop`, draining the subscription continuously
 /// (a full Postgres notify queue fails every notifying commit). Re-subscribes after a
-/// failure with [`RESUBSCRIBE_MIN`] doubling to [`RESUBSCRIBE_MAX`]; a backend without
-/// notifications ends the listener (the runner polls).
+/// failure with [`RESUBSCRIBE_MIN`] doubling to [`RESUBSCRIBE_MAX`] (reset by every
+/// successful subscribe); a backend without notifications ends the listener (the runner
+/// polls).
 async fn listen(store: Arc<dyn Store>, wake: Arc<Notify>, stop: CancellationToken) {
     let mut delay = RESUBSCRIBE_MIN;
     loop {
@@ -399,6 +565,7 @@ async fn listen(store: Arc<dyn Store>, wake: Arc<Notify>, stop: CancellationToke
         match subscribed {
             Ok(None) => return,
             Ok(Some(mut sub)) => {
+                delay = RESUBSCRIBE_MIN;
                 // Jobs enqueued while not subscribed sent their notice to nobody.
                 wake.notify_one();
                 loop {
@@ -409,10 +576,7 @@ async fn listen(store: Arc<dyn Store>, wake: Arc<Notify>, stop: CancellationToke
                     };
                     match notice {
                         // `Reconnected` means notices may be lost: poll now, like a notice.
-                        Ok(_) => {
-                            delay = RESUBSCRIBE_MIN;
-                            wake.notify_one();
-                        }
+                        Ok(_) => wake.notify_one(),
                         Err(e) => {
                             tracing::warn!(error = %e, retry_in = ?delay, "job notice subscription failed");
                             break;

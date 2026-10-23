@@ -3,7 +3,9 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ferrite_domain::{NewNode, Node, NodeId, Timestamp};
-use ferrite_store::{MAX_NODES, NodeRepo, StoreError, check_new_node, check_node_meta};
+use ferrite_store::{
+    MAX_NODES, NodeRepo, StoreError, check_new_node, check_node_meta, check_prune_limit,
+};
 use sqlx::{AssertSqlSafe, types::Json};
 
 use super::PgRepos;
@@ -64,11 +66,14 @@ impl NodeRepo for PgRepos {
         Ok(now.into())
     }
 
-    async fn prune(&self, heartbeat_before: Timestamp) -> Result<u64, StoreError> {
+    async fn prune(&self, heartbeat_before: Timestamp, limit: u32) -> Result<u64, StoreError> {
+        let limit = check_prune_limit(limit)?;
         let done = run!(&self.exec, |e| sqlx::query(
-            "DELETE FROM nodes WHERE heartbeat_at < $1"
+            "DELETE FROM nodes WHERE id IN \
+             (SELECT id FROM nodes WHERE heartbeat_at < $1 LIMIT $2)"
         )
         .bind(DateTime::<Utc>::from(heartbeat_before))
+        .bind(limit)
         .execute(e))?;
         Ok(done.rows_affected())
     }
