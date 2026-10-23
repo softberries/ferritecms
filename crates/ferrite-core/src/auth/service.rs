@@ -324,7 +324,10 @@ impl AuthService {
             .await?
             .filter(|u| u.status == UserStatus::Active)
             .ok_or(CoreError::Unauthenticated)?;
-        if self.password_fingerprint(&user) != challenge.pw {
+        if !ct_eq(
+            self.password_fingerprint(&user).as_bytes(),
+            challenge.pw.as_bytes(),
+        ) {
             return Err(CoreError::Unauthenticated);
         }
         let secret = self.totp_secret_of(&user)?;
@@ -919,6 +922,11 @@ async fn user_audit(
         })
         .await?;
     Ok(())
+}
+
+/// Compares two byte strings in time independent of where they differ.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 #[cfg(test)]
