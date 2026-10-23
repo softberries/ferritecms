@@ -25,11 +25,12 @@ fn parse_env_file(src: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Every distinct `FERRITE_[A-Z0-9_]+` name in `src`, ignoring YAML comment lines.
+/// Every distinct `FERRITE_[A-Z0-9_]+` name in `src`, ignoring YAML comments (whole lines
+/// and trailing ones).
 fn ferrite_names(src: &str) -> Vec<String> {
     let mut names = Vec::new();
-    for line in src.lines().filter(|l| !l.trim_start().starts_with('#')) {
-        let mut rest = line;
+    for line in src.lines() {
+        let mut rest = strip_comment(line);
         while let Some(i) = rest.find("FERRITE_") {
             let tail = &rest[i..];
             let end = tail
@@ -43,6 +44,19 @@ fn ferrite_names(src: &str) -> Vec<String> {
         }
     }
     names
+}
+
+/// `line` without its comment: from a `#` at the start or after whitespace (the YAML and
+/// env-file rule; a `#` inside a word, as in `a#b`, is kept).
+fn strip_comment(line: &str) -> &str {
+    let mut prev_space = true;
+    for (i, c) in line.char_indices() {
+        if c == '#' && prev_space {
+            return &line[..i];
+        }
+        prev_space = c.is_whitespace();
+    }
+    line
 }
 
 /// A temp data folder holding a copy of the example's `ferrite.toml`.
@@ -159,4 +173,19 @@ fn ferrite_names_ignores_comment_lines() {
     let src =
         "# FERRITE_NOT_A_KEY in a comment\n  # indented FERRITE_ALSO_NOT\n  FERRITE_A__B: x\n";
     assert_eq!(ferrite_names(src), ["FERRITE_A__B"]);
+}
+
+#[test]
+fn ferrite_names_ignores_trailing_comments() {
+    let src = "  FERRITE_A__B: x # was FERRITE_OLD__KEY\nFERRITE_C__D=1\t# FERRITE_GONE\n\
+               FERRITE_E__F: a#FERRITE_KEPT\n";
+    assert_eq!(
+        ferrite_names(src),
+        [
+            "FERRITE_A__B",
+            "FERRITE_C__D",
+            "FERRITE_E__F",
+            "FERRITE_KEPT"
+        ]
+    );
 }
