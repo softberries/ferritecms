@@ -46,10 +46,7 @@ async fn admin(store: &dyn Store) -> Actor {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    Actor {
-        user: id,
-        role: Role::Admin,
-    }
+    Actor::new(id, Role::Admin)
 }
 
 async fn category(store: &dyn Store, slug: &str) -> TermId {

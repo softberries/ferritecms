@@ -31,7 +31,7 @@ async fn actor(store: &dyn Store, role: Role) -> Actor {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    Actor { user: id, role }
+    Actor::new(id, role)
 }
 
 fn service(db: &TestDb, rules: PermalinkRules) -> ContentService {

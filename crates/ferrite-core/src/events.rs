@@ -49,9 +49,10 @@
 //!   trailing-slash variant. **Informational**: the router checks redirects before the
 //!   cache, so no cached page depends on them; the keys exist so other nodes and
 //!   observers can follow the changes.
-//! * Users: pages show `user:<author id>`. There is no user-update service in core yet;
-//!   the user service added in M2 must emit `user:<id>` (via [`user_key`]) whenever a
-//!   login or display name changes or a user is deleted.
+//! * Users ([`UserService`](crate::UserService)): pages show `user:<author id>`. A
+//!   display-name or status change emits `user:<id>` (logins never change, R3). A delete
+//!   emits `user:<id>`, plus `user:<heir>` when the content was reassigned, because the
+//!   heir's author pages now list those items.
 //! * Theme install/activation ([`ExtensionService`](crate::ExtensionService)): kind
 //!   [`THEME_CHANGED`], keys `[<theme name>]`, only when the active theme changes (another
 //!   theme becomes active, or the active theme's row is replaced by a new version).

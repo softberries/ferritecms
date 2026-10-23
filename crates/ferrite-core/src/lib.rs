@@ -17,11 +17,14 @@ pub mod site;
 pub mod slug;
 mod taxonomy;
 mod tx;
+mod users;
 
 /// Longest parent chain (content items and terms) walked anywhere in core.
 pub(crate) const MAX_PARENT_DEPTH: usize = 64;
 
-pub use actor::{Actor, Capability, can};
+pub use actor::{
+    Access, Actor, Area, Capability, Scope, Scopes, can, can_edit, require, require_read,
+};
 pub use content::{ContentDraft, ContentService};
 pub use error::CoreError;
 pub use extensions::{EXTENSIONS_LOCK_WAIT, ExtensionService};
@@ -35,3 +38,7 @@ pub use site::{
     UserPublic,
 };
 pub use taxonomy::TaxonomyService;
+pub use users::{
+    MAX_DISPLAY_NAME, MAX_EMAIL, MAX_LOGIN, NewAccount, OperatorUsers, UserPatch, UserService,
+    normalize_display_name, normalize_email, normalize_login,
+};

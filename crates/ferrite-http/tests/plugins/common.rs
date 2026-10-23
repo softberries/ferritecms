@@ -291,10 +291,7 @@ impl Site {
     }
 
     pub fn actor(u: &User) -> Actor {
-        Actor {
-            user: u.id,
-            role: u.role,
-        }
+        Actor::new(u.id, u.role)
     }
 }
 

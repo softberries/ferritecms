@@ -37,10 +37,7 @@ async fn admin(store: &dyn Store) -> Actor {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    Actor {
-        user: id,
-        role: Role::Admin,
-    }
+    Actor::new(id, Role::Admin)
 }
 
 fn service(db: &TestDb) -> ContentService {

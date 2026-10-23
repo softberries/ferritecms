@@ -66,10 +66,7 @@ async fn user(store: &dyn Store, login: &str, role: Role) -> User {
 }
 
 fn actor(u: &User) -> Actor {
-    Actor {
-        user: u.id,
-        role: u.role,
-    }
+    Actor::new(u.id, u.role)
 }
 
 struct Item {

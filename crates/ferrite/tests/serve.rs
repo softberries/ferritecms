@@ -592,10 +592,7 @@ fn two_processes_share_invalidation() {
             .await
             .expect("users")
             .expect("seeded admin");
-        let actor = Actor {
-            user: admin.id,
-            role: Role::Admin,
-        };
+        let actor = Actor::new(admin.id, Role::Admin);
         let item = store
             .read()
             .content()

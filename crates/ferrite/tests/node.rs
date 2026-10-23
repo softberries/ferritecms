@@ -596,10 +596,7 @@ async fn plugin_hot_reload_on_enable_and_disable(db: Arc<TestDb>) {
 /// A published post by a fresh admin, written through core with the default rules.
 async fn published_post(store: Arc<dyn Store>, slug: &str) -> ferrite_domain::ContentItem {
     let user = fixture_user(store.as_ref()).await;
-    let actor = Actor {
-        user: user.id,
-        role: Role::Admin,
-    };
+    let actor = Actor::new(user.id, Role::Admin);
     let svc = ContentService::new(store, Arc::new(PermalinkRules::default()));
     let draft = svc
         .create(
@@ -632,10 +629,7 @@ async fn permalink_change_rebuilds_routes(db: Arc<TestDb>) {
     assert_ne!(get(node.addr, &new_path).await.0, 200);
 
     let user = fixture_user(store.as_ref()).await;
-    let admin = Actor {
-        user: user.id,
-        role: Role::Admin,
-    };
+    let admin = Actor::new(user.id, Role::Admin);
     OptionService::load(store.clone())
         .await
         .unwrap()
@@ -700,10 +694,7 @@ async fn scheduled_post_publishes_via_job(db: Arc<TestDb>) {
     let node = site.start(&db, opts).await;
     let store = db.shared_store();
     let user = fixture_user(store.as_ref()).await;
-    let actor = Actor {
-        user: user.id,
-        role: Role::Admin,
-    };
+    let actor = Actor::new(user.id, Role::Admin);
     let svc = ContentService::new(store.clone(), Arc::new(PermalinkRules::default()));
     let draft = svc
         .create(

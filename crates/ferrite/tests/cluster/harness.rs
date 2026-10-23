@@ -382,10 +382,7 @@ where
 /// An admin actor (a fresh fixture user).
 pub async fn admin(store: &dyn Store) -> Actor {
     let user = fixture_user(store).await;
-    Actor {
-        user: user.id,
-        role: Role::Admin,
-    }
+    Actor::new(user.id, Role::Admin)
 }
 
 /// Core's content service on `store` with the default permalink rules.

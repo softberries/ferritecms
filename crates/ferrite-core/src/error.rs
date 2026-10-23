@@ -4,9 +4,16 @@ use ferrite_store::StoreError;
 pub enum CoreError {
     #[error("not found")]
     NotFound,
-    /// Carries the name of the missing capability.
-    #[error("forbidden: missing capability {0}")]
+    /// Carries the name of the missing capability (`manage_users`), token scope
+    /// (`content:write`) or proof (`current password`).
+    #[error("forbidden: missing {0}")]
     Forbidden(&'static str),
+    /// No valid credentials: unknown login, wrong password, expired session or token.
+    #[error("not authenticated")]
+    Unauthenticated,
+    /// A rate limit was hit; retry after this many seconds.
+    #[error("rate limited (retry after {retry_after_secs} s)")]
+    RateLimited { retry_after_secs: u64 },
     #[error("invalid input: {0}")]
     Invalid(String),
     #[error("version conflict (current version {current_version})")]
@@ -14,6 +21,9 @@ pub enum CoreError {
     /// The operating system's random number generator failed (keys, nonces, tokens).
     #[error("system random number generator failed")]
     Random,
+    /// Password hashing failed (the blocking worker panicked or argon2 refused its input).
+    #[error("password hashing failed")]
+    Hashing,
     #[error(transparent)]
     Store(StoreError),
 }

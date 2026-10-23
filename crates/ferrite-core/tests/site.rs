@@ -34,7 +34,7 @@ async fn actor(store: &dyn Store, role: Role) -> Actor {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    Actor { user: id, role }
+    Actor::new(id, role)
 }
 
 async fn max_seq(store: &dyn Store) -> i64 {

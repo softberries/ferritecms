@@ -136,10 +136,7 @@ async fn seed_demo(
         );
     }
     let admin = admin_user(store.as_ref()).await?;
-    let actor = Actor {
-        user: admin.id,
-        role: admin.role,
-    };
+    let actor = Actor::new(admin.id, admin.role);
     let rules = permalink_rules(store.as_ref()).await?;
     let content = ContentService::new(store.clone(), Arc::new(rules));
 

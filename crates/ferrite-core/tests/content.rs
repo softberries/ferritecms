@@ -34,7 +34,7 @@ async fn actor(store: &dyn Store, role: Role) -> Actor {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    Actor { user: id, role }
+    Actor::new(id, role)
 }
 
 /// The default rules: posts at `/%slug%/`.
@@ -621,10 +621,7 @@ pub async fn non_slug_store_errors_surface(db: &TestDb) {
     // A store error other than a slug race surfaces unchanged (unknown author: FK).
     let store = db.store();
     let svc = service(db);
-    let ghost = Actor {
-        user: UserId::new(),
-        role: Role::Admin,
-    };
+    let ghost = Actor::new(UserId::new(), Role::Admin);
     assert!(matches!(
         svc.create(&ghost, draft("post", "Ghost")).await,
         Err(CoreError::Store(StoreError::ForeignKey { .. }))
