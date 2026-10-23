@@ -128,6 +128,11 @@ async fn drop_schema(url: &str, schema: &str, lock_timeout: &str) -> Result<(), 
 /// A Postgres store in a fresh `t_<uuid>` schema, migrated up. Returns `None` (after a
 /// `SKIP` line on stderr) when `FERRITE_TEST_PG_URL` is unset; panics if CI=true.
 pub async fn pg_store() -> Option<PgFixture> {
+    pg_store_with(true).await
+}
+
+/// [`pg_store`], migrated up only when `migrate` is set (an empty schema otherwise).
+async fn pg_store_with(migrate: bool) -> Option<PgFixture> {
     let Ok(url) = std::env::var(PG_URL_ENV) else {
         if std::env::var("CI").as_deref() == Ok("true") {
             panic!("{PG_URL_ENV} must be set in CI");
@@ -170,11 +175,13 @@ pub async fn pg_store() -> Option<PgFixture> {
         peer_count: AtomicUsize::new(0),
         torn_down: AtomicBool::new(false),
     };
-    fixture
-        .store
-        .migrate_up(None)
-        .await
-        .expect("migrate postgres up");
+    if migrate {
+        fixture
+            .store
+            .migrate_up(None)
+            .await
+            .expect("migrate postgres up");
+    }
     Some(fixture)
 }
 
@@ -222,6 +229,14 @@ impl TestDb {
     /// `None` when Postgres tests are skipped (see [`pg_store`]).
     pub async fn postgres() -> Option<Self> {
         pg_store().await.map(|f| Self {
+            backing: Backing::Postgres(Box::new(f)),
+        })
+    }
+
+    /// [`Self::postgres`] on an empty schema: no migration applied, so the code under
+    /// test migrates it (first start of a site).
+    pub async fn postgres_unmigrated() -> Option<Self> {
+        pg_store_with(false).await.map(|f| Self {
             backing: Backing::Postgres(Box::new(f)),
         })
     }

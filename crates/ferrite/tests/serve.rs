@@ -12,7 +12,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use ferrite_domain::{ContentId, ContentStatus, NewContent};
+use ferrite_core::{Actor, ContentDraft, ContentService, PermalinkRules};
+use ferrite_domain::{ContentId, ContentStatus, NewContent, Role};
 use ferrite_store::Store;
 use ferrite_store_postgres::{PgOptions, PgStore};
 use ferrite_store_sqlite::{SqliteOptions, SqliteStore};
@@ -129,9 +130,13 @@ impl Profile {
     }
 
     fn cmd(&self, args: &[&str]) -> Command {
+        self.cmd_in(self.data(), args)
+    }
+
+    fn cmd_in(&self, data: &Path, args: &[&str]) -> Command {
         let mut c = Command::new(BIN);
         c.env_clear().envs(self.env.iter().cloned()).args(args);
-        c.arg("--data").arg(self.data());
+        c.arg("--data").arg(data);
         c
     }
 
@@ -244,7 +249,12 @@ impl Drop for Server {
 impl Server {
     /// Spawns `serve` on a random port and waits for its "Listening on" line.
     fn start(p: &Profile) -> Self {
-        let mut cmd = p.cmd(&["serve"]);
+        Self::start_in(p, p.data())
+    }
+
+    /// [`Self::start`] with another data folder (same environment).
+    fn start_in(p: &Profile, data: &Path) -> Self {
+        let mut cmd = p.cmd_in(data, &["serve"]);
         cmd.env("FERRITE_SERVER__LISTEN", "127.0.0.1:0")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -540,6 +550,105 @@ fn serve_solo() {
 fn serve_cluster() {
     let Some(p) = Profile::cluster() else { return };
     serve_seeded_site(p);
+}
+
+/// Two `ferrite serve` processes (own data folders, one Postgres schema, one S3 bucket):
+/// an edit written through core by a third process reaches both within 1 s (the exit
+/// criterion across real processes; the in-process cluster tests cover the rest).
+#[test]
+fn two_processes_share_invalidation() {
+    let Some(p) = Profile::cluster() else { return };
+    p.init();
+    let out = seed(&p, &[]);
+    assert!(out.status.success(), "seed: {out:?}");
+    let second = tempfile::tempdir().expect("tempdir");
+    std::fs::copy(
+        p.data().join("ferrite.toml"),
+        second.path().join("ferrite.toml"),
+    )
+    .expect("copy config");
+    let servers = [Server::start(&p), Server::start_in(&p, second.path())];
+    let path = format!("/{NEWEST_SLUG}/");
+    for s in &servers {
+        wait_for(Duration::from_secs(10), || {
+            s.get(&path).text().contains(NEWEST_TITLE)
+        });
+    }
+
+    let title = "Edited across processes";
+    let saved = Instant::now();
+    rt().block_on(async {
+        let store: Arc<dyn Store> = p.store().await.into();
+        let admin = store
+            .read()
+            .users()
+            .get_by_login("admin")
+            .await
+            .expect("users")
+            .expect("seeded admin");
+        let actor = Actor {
+            user: admin.id,
+            role: Role::Admin,
+        };
+        let item = store
+            .read()
+            .content()
+            .get_by_slug("post", None, NEWEST_SLUG)
+            .await
+            .expect("content")
+            .expect("seeded post");
+        let terms = store
+            .read()
+            .terms()
+            .for_item(item.id)
+            .await
+            .expect("terms")
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        let draft = ContentDraft {
+            kind: item.kind.clone(),
+            title: title.into(),
+            slug: Some(item.slug.clone()),
+            parent_id: item.parent_id,
+            excerpt: Some(item.excerpt.clone()),
+            body: item.body.clone(),
+            fields: item.fields.clone(),
+            menu_order: item.menu_order,
+            terms,
+        };
+        ContentService::new(store.clone(), Arc::new(PermalinkRules::default()))
+            .update(&actor, item.id, item.version, draft)
+            .await
+            .expect("update");
+        store.close().await;
+    });
+    let mut took = Vec::new();
+    for s in &servers {
+        wait_for(Duration::from_secs(10), || {
+            s.get(&path).text().contains(title)
+        });
+        took.push(saved.elapsed());
+    }
+    eprintln!("two processes: edit served by both after {took:?}");
+    for (i, t) in took.iter().enumerate() {
+        assert!(*t < Duration::from_secs(1), "process {i}: {t:?}");
+    }
+    for s in servers {
+        assert!(s.stop_with("TERM").success());
+    }
+}
+
+/// Polls `f` every 10 ms; panics after `limit`.
+fn wait_for(limit: Duration, mut f: impl FnMut() -> bool) {
+    let start = Instant::now();
+    while !f() {
+        assert!(
+            start.elapsed() < limit,
+            "condition not met within {limit:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
