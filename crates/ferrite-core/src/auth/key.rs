@@ -5,7 +5,7 @@ use std::fmt;
 use std::net::IpAddr;
 
 use hmac::{Hmac, KeyInit, Mac};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 use crate::CoreError;
 
@@ -80,17 +80,41 @@ pub fn ip_hash(key: &SiteKey, ip: IpAddr) -> String {
     hex(&mac[..16])
 }
 
-/// HMAC-SHA256 with a 32-byte key. The key is zero-padded to the block size, which is
-/// exactly what HMAC does with a short key, so the infallible `KeyInit::new` applies.
+/// The first 32 hex characters of HMAC-SHA256 under the `label` subkey over `msg`: a
+/// keyed, non-reversible, bounded id (login rate-limit buckets, F7).
+pub(crate) fn keyed_id(key: &SiteKey, label: &str, msg: &[u8]) -> String {
+    let mac = hmac_sha256(&key.subkey(label), msg);
+    hex(&mac[..16])
+}
+
+/// HMAC-SHA256 with a 32-byte key.
 fn hmac_sha256(key: &[u8; KEY_LEN], msg: &[u8]) -> [u8; 32] {
-    let mut block = [0u8; HMAC_BLOCK];
-    block[..KEY_LEN].copy_from_slice(key);
-    let mut mac = <Hmac<Sha256> as KeyInit>::new(&block.into());
+    let mut mac = keyed_mac(key);
     mac.update(msg);
     mac.finalize().into_bytes().into()
 }
 
-fn hex(bytes: &[u8]) -> String {
+/// An HMAC-SHA256 instance keyed with `key` of any length. The key is prepared as RFC 2104
+/// §2 says (hashed when longer than the block, then zero-padded to it), so the
+/// infallible `KeyInit::new` applies and the result equals `new_from_slice(key)`.
+pub(crate) fn keyed_mac(key: &[u8]) -> Hmac<Sha256> {
+    let mut block = [0u8; HMAC_BLOCK];
+    if key.len() > HMAC_BLOCK {
+        let digest: [u8; 32] = Sha256::digest(key).into();
+        block[..digest.len()].copy_from_slice(&digest);
+    } else {
+        block[..key.len()].copy_from_slice(key);
+    }
+    <Hmac<Sha256> as KeyInit>::new(&block.into())
+}
+
+/// Lowercase hex SHA-256 of `bytes` (session and token ids in the database).
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
+}
+
+/// Lowercase hex.
+pub(crate) fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {
         out.push(char::from(HEX_DIGITS[usize::from(b >> 4)]));
@@ -169,6 +193,28 @@ mod tests {
         mac.update(SEAL_LABEL.as_bytes());
         let want: [u8; 32] = mac.finalize().into_bytes().into();
         assert_eq!(key.subkey(SEAL_LABEL), want);
+    }
+
+    #[test]
+    fn keyed_mac_matches_new_from_slice_for_any_length() {
+        use hmac::{KeyInit, Mac};
+        for len in [0, 1, 32, 63, 64, 65, 200] {
+            let key: Vec<u8> = (0..len).map(|i| i as u8).collect();
+            let mut want = Hmac::<Sha256>::new_from_slice(&key).unwrap();
+            want.update(b"msg");
+            let mut got = keyed_mac(&key);
+            got.update(b"msg");
+            assert_eq!(
+                got.finalize().into_bytes(),
+                want.finalize().into_bytes(),
+                "{len}"
+            );
+        }
+        assert_eq!(sha256_hex(b"abc").len(), 64);
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     #[test]
