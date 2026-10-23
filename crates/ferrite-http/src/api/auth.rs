@@ -24,9 +24,10 @@
 //!
 //! Bearer requests skip both: a browser never attaches a bearer token by itself.
 //!
-//! [`Authed`] then refuses accounts with `must_reset` (`403 password-reset-required`);
-//! only `GET /auth/me`, `POST /auth/logout` and `POST /auth/password` use
-//! [`AuthedAllowReset`].
+//! [`Authed`] then refuses session requests of accounts with `must_reset` (`403
+//! password-reset-required`); only `GET /auth/me`, `POST /auth/logout` and `POST
+//! /auth/password` use [`AuthedAllowReset`]. Bearer requests are not refused: a reset
+//! keeps the account's API tokens working (R22, R26).
 //!
 //! **Login** (`POST /auth/login`, `POST /auth/login/totp`) has no credentials yet, so it
 //! checks the origin alone ([`SameOrigin`], the same rule) before the body is read and
@@ -63,7 +64,8 @@ use crate::ClientIp;
 /// The CSRF header (P8).
 pub const CSRF_HEADER: &str = "x-csrf-token";
 
-/// An authenticated request whose account needs no password change.
+/// An authenticated request, refused when it uses a session of an account that must
+/// change its password (`must_reset`); bearer requests pass.
 #[derive(Debug, Clone)]
 pub struct Authed(pub Authenticated);
 
@@ -97,7 +99,9 @@ impl FromRequestParts<Arc<ApiState>> for Authed {
 
     async fn from_request_parts(parts: &mut Parts, api: &Arc<ApiState>) -> Result<Self, Problem> {
         let who = authenticate(parts, api).await?;
-        if who.user.must_reset {
+        // Only sessions are held to the password change; API tokens are independent
+        // credentials that a reset keeps (R22, R26).
+        if who.user.must_reset && matches!(who.via, Via::Session(_)) {
             return Err(Problem::password_reset_required());
         }
         Ok(Self(who))

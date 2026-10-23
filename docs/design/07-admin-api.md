@@ -186,7 +186,9 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   verifying WP hashes (`legacy_hash`) is **later**, only if a direct WP-database user
   import is added. An account with `must_reset` gets a session that may only call `GET
   /auth/me`, `POST /auth/logout` and `POST /auth/password` (else `403
-  password-reset-required`).
+  password-reset-required`). Its API tokens are not restricted (R26): they are
+  independent credentials that a reset keeps (R22), so a bot account keeps working
+  after an admin resets its password.
 - **Logins** (P14, R3): `^[a-z0-9][a-z0-9._-]{0,59}$` after trimming and ASCII
   lowercasing, immutable after creation, so `/author/<login>/` never moves. A login input
   containing `@` is looked up as an e-mail. E-mails are unique by the ASCII-lowercased

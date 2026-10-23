@@ -35,6 +35,7 @@ const ME: &str = "/api/v1/auth/me";
 const LOGIN: &str = "/api/v1/auth/login";
 const TOTP_SETUP: &str = "/api/v1/auth/totp/setup";
 const PASSWORD_PATH: &str = "/api/v1/auth/password";
+const POSTS: &str = "/api/v1/content/post";
 const EVIL: &str = "https://evil.example";
 
 /// A request with only the given cookie (no `Origin`, no CSRF token).
@@ -403,7 +404,8 @@ async fn login_429_has_retry_after(api: Api) -> Api {
 }
 
 async fn must_reset_user_is_limited(api: Api) -> Api {
-    api.user("newbie", Role::Editor, true).await;
+    let newbie = api.user("newbie", Role::Editor, true).await;
+    let token = api.bearer(&newbie, &["*"]).await;
     let mut c = api.logged_in("newbie").await;
     let old = c.cookie.clone().unwrap();
 
@@ -416,6 +418,16 @@ async fn must_reset_user_is_limited(api: Api) -> Api {
         .await
         .assert_problem(403, "password-reset-required");
     assert!(body["detail"].is_string());
+    c.get(&api, POSTS)
+        .await
+        .assert_problem(403, "password-reset-required");
+    // R26 (M1): `must_reset` restricts sessions only; the account's API tokens are
+    // independent credentials (R22) and keep working.
+    let r = token.get(&api, POSTS).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let r = token.get(&api, ME).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert_eq!(r.json()["must_reset"], true);
 
     let r = c
         .post(
