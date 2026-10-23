@@ -149,8 +149,8 @@ impl UserRepo for SqliteRepos {
     }
 
     async fn advance_totp_step(&self, id: UserId, step: i64) -> Result<bool, StoreError> {
-        // The row lock taken by the UPDATE makes a concurrent caller with the same step
-        // re-check the condition and match nothing.
+        // Writes go through the single writer connection, so a concurrent caller with the
+        // same step runs after this one and its condition matches nothing.
         let done = run!(&self.writer, |e| sqlx::query(
             "UPDATE users SET totp_last_step = ?1 \
              WHERE id = ?2 AND (totp_last_step IS NULL OR totp_last_step < ?1)"
