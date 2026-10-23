@@ -252,7 +252,100 @@ mod tests {
         assert!(err.contains("\"c\""), "{err}");
     }
 
+    /// Uploads `bytes` and records them as the active theme `name`, bypassing
+    /// `install_theme_dir`'s checks.
+    async fn record_raw(db: &TestDb, s: &Site, name: &str, bytes: Vec<u8>) -> ArtifactHash {
+        let stored = s.media.put_artifact(Bytes::from(bytes)).await.unwrap();
+        let artifact = Artifact {
+            hash: stored.hash.clone(),
+            kind: ArtifactKind::Theme,
+            bytes: stored.bytes as i64,
+            mime: THEME_MIME.into(),
+            created_at: Timestamp::now(),
+        };
+        let row = InstalledTheme {
+            name: name.into(),
+            version: "1.0.0".into(),
+            artifact_hash: stored.hash.clone(),
+            manifest: json!({"name": name}),
+            active: true,
+            installed_at: Timestamp::now(),
+        };
+        ExtensionService::new(db.shared_store())
+            .install_theme(&artifact, &row, true)
+            .await
+            .unwrap();
+        stored.hash
+    }
+
+    async fn bundle_naming_another_theme_is_refused(db: &TestDb) {
+        let s = site();
+        let other = pack(&ThemeSource::Dir(s.theme_dir("other", "other"))).unwrap();
+        let hash = record_raw(db, &s, "mine", other).await;
+        let loaded = load_theme(db.store(), &s.media, s.data.path(), ClusterMode::Cluster)
+            .await
+            .unwrap();
+        assert_eq!(loaded.origin, ThemeOrigin::Embedded);
+        assert_eq!(loaded.theme.name(), "blog");
+        let error = loaded.error.unwrap();
+        assert!(error.contains("the row names \"mine\""), "{error}");
+        assert!(error.contains(hash.as_str()), "{error}");
+    }
+
+    async fn oversized_artifact_is_refused(db: &TestDb) {
+        let s = site();
+        let huge = vec![0u8; ferrite_theme::MAX_BUNDLE_BYTES as usize + 1];
+        record_raw(db, &s, "mine", huge).await;
+        let loaded = load_theme(db.store(), &s.media, s.data.path(), ClusterMode::Cluster)
+            .await
+            .unwrap();
+        assert_eq!(loaded.theme.name(), "blog");
+        let error = loaded.error.unwrap();
+        assert!(error.contains("more than a theme bundle may be"), "{error}");
+    }
+
+    async fn cluster_ignores_the_folder_of_a_broken_active_theme(db: &TestDb) {
+        let s = site();
+        let row = install_theme_dir(
+            &db.shared_store(),
+            &s.media,
+            &s.theme_dir("mine", "a"),
+            true,
+        )
+        .await
+        .unwrap();
+        s.tamper(&row.artifact_hash, b"broken");
+        let folder = s.data.path().join("themes/mine");
+        std::fs::create_dir_all(folder.join("templates")).unwrap();
+        std::fs::write(
+            folder.join("theme.toml"),
+            "[theme]\nname = \"mine\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(folder.join("templates/index.html"), "folder").unwrap();
+        let cluster = load_theme(db.store(), &s.media, s.data.path(), ClusterMode::Cluster)
+            .await
+            .unwrap();
+        assert_eq!(cluster.origin, ThemeOrigin::Embedded);
+        assert_eq!(cluster.theme.name(), "blog");
+        assert!(cluster.error.unwrap().contains("hash mismatch"));
+        // `Auto` (unresolved) fails closed like cluster.
+        let auto = load_theme(db.store(), &s.media, s.data.path(), ClusterMode::Auto)
+            .await
+            .unwrap();
+        assert_eq!(auto.origin, ThemeOrigin::Embedded);
+        // Solo falls back to the folder.
+        let solo = load_theme(db.store(), &s.media, s.data.path(), ClusterMode::Solo)
+            .await
+            .unwrap();
+        assert_eq!(solo.origin, ThemeOrigin::Folder);
+        assert_eq!(solo.theme.name(), "mine");
+    }
+
     backend_tests!(
+        bundle_naming_another_theme_is_refused,
+        oversized_artifact_is_refused,
+        cluster_ignores_the_folder_of_a_broken_active_theme,
         install_theme_dir_roundtrip,
         install_refuses_a_theme_that_does_not_compile,
         artifact_hash_mismatch_falls_back_at_startup,

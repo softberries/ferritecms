@@ -13,7 +13,9 @@
 //! segments, backslashes, duplicate paths, paths over 255 bytes and nesting deeper
 //! than a folder may be. The folder limits apply while streaming: an entry whose header
 //! claims more than what is left of the 20 MiB budget is refused before its data is
-//! read, so a tar bomb costs at most its own (capped) size.
+//! read, so a tar bomb costs at most its own (capped) size. The archive must end with
+//! exactly the two zero blocks `pack` writes and nothing after them, so a bundle has one
+//! canonical form and no bytes ride along unparsed.
 
 use std::io::Read;
 
@@ -26,7 +28,7 @@ use crate::{
 };
 
 /// Longest entry path in a bundle (what a ustar header holds, prefix + name).
-pub const MAX_BUNDLE_PATH: usize = 255;
+pub(crate) const MAX_BUNDLE_PATH: usize = 255;
 
 /// Largest bundle accepted: the folder limits plus one header (512 bytes) and at most
 /// 511 bytes of padding per file, plus the two end-of-archive blocks.
@@ -105,6 +107,9 @@ fn path_problem(path: &str) -> Option<String> {
     }
 }
 
+/// Size of a tar block; an archive ends with two zero blocks.
+const BLOCK: u64 = 512;
+
 /// Unpacks a bundle in memory (see the module docs). Hidden files are skipped as in a
 /// folder, but count against the limits.
 pub(crate) fn unpack(bundle: &Bytes) -> Result<Files, ThemeError> {
@@ -119,6 +124,8 @@ pub(crate) fn unpack(bundle: &Bytes) -> Result<Files, ThemeError> {
     let entries = archive.entries().map_err(bad)?.raw(true);
     let mut files = Files::new();
     let mut total = 0u64;
+    // Where the last entry's padded data ends: the end-of-archive blocks start here.
+    let mut end = 0u64;
     for (count, entry) in entries.enumerate() {
         let mut entry = entry.map_err(bad)?;
         if count >= MAX_FILES {
@@ -151,6 +158,7 @@ pub(crate) fn unpack(bundle: &Bytes) -> Result<Files, ThemeError> {
             ));
         }
         total += size;
+        end = entry.raw_file_position() + size.div_ceil(BLOCK) * BLOCK;
         let mut data = Vec::new();
         (&mut entry)
             .take(size)
@@ -166,6 +174,16 @@ pub(crate) fn unpack(bundle: &Bytes) -> Result<Files, ThemeError> {
             return Err(invalid(&path, "duplicate path"));
         }
         files.insert(path, Bytes::from(data));
+    }
+    let tail = usize::try_from(end)
+        .ok()
+        .and_then(|end| bundle.get(end..))
+        .unwrap_or_default();
+    if tail.len() as u64 != 2 * BLOCK || tail.iter().any(|&b| b != 0) {
+        return Err(ThemeError::Invalid(vec![
+            "malformed bundle: it must end with exactly two zero blocks and nothing after them"
+                .into(),
+        ]));
     }
     Ok(files)
 }

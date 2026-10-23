@@ -20,7 +20,7 @@ mod view;
 pub use bridge::{
     Bridged, HelperBridge, ImageRef, MAX_QUERY_LIMIT, MAX_RELATED, MenuNode, MenuTree, NoBridge,
 };
-pub use bundle::{MAX_BUNDLE_BYTES, MAX_BUNDLE_PATH, pack};
+pub use bundle::{MAX_BUNDLE_BYTES, pack};
 pub use error::ThemeError;
 pub use hierarchy::{TemplateKey, error_template, resolve_template};
 pub use manifest::{ImageSize, SettingKind, SettingSpec, ThemeManifest};

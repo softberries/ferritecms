@@ -348,6 +348,36 @@ mod bundle_rejects_hostile_entries {
     }
 
     #[test]
+    fn non_canonical_ending() {
+        let refused = |tar: Vec<u8>| {
+            let err = Theme::load(&ThemeSource::Bundle(Bytes::from(tar))).unwrap_err();
+            assert!(err.to_string().contains("two zero blocks"), "{err}");
+        };
+        // No end blocks, only one, a third one, and a byte after the end.
+        refused(base());
+        let mut one = base();
+        one.extend_from_slice(&[0u8; 512]);
+        refused(one);
+        let mut three = base();
+        three.extend_from_slice(&[0u8; 1536]);
+        refused(three);
+        let mut trailing = base();
+        trailing.extend_from_slice(&[0u8; 1024]);
+        trailing.push(b'x');
+        refused(trailing);
+        // Data hidden after the first zero block (a second archive appended).
+        let mut smuggled = base();
+        smuggled.extend_from_slice(&[0u8; 512]);
+        entry(&mut smuggled, b"assets/smuggled", b'0', b"", b"x");
+        smuggled.extend_from_slice(&[0u8; 1024]);
+        refused(smuggled);
+        // A packed bundle is canonical.
+        let packed = pack(&ThemeSource::Dir(blog_dir())).unwrap();
+        assert_eq!(&packed[packed.len() - 1024..], &[0u8; 1024][..]);
+        Theme::load(&ThemeSource::Bundle(Bytes::from(packed))).unwrap();
+    }
+
+    #[test]
     fn non_ustar_header() {
         let mut tar = base();
         let mut h = tar::Header::new_old();

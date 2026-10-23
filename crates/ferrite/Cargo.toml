@@ -23,6 +23,7 @@ ferrite-store = { path = "../ferrite-store" }
 ferrite-store-postgres = { path = "../ferrite-store-postgres" }
 ferrite-store-sqlite = { path = "../ferrite-store-sqlite" }
 ferrite-theme = { path = "../ferrite-theme" }
+futures.workspace = true
 image.workspace = true
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 semver.workspace = true
@@ -42,7 +43,6 @@ hyper-util.workspace = true
 s3s.workspace = true
 s3s-fs.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "net"] }
 uuid.workspace = true

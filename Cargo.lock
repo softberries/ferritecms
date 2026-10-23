@@ -1310,6 +1310,7 @@ dependencies = [
  "ferrite-store-sqlite",
  "ferrite-store-tests",
  "ferrite-theme",
+ "futures",
  "hyper-util",
  "image",
  "rustls",
