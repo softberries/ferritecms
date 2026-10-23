@@ -454,8 +454,14 @@ pub trait EventRepo: Send + Sync {
 
 /// The job queue (design 04 §6). Every time comparison (`run_at`, `locked_until`) uses
 /// the database clock: `now()` on Postgres, the process clock on SQLite (one process is
-/// the only client there). No method takes a `now` argument. Inside a `Tx` on Postgres
-/// `now()` is the transaction's start time, so keep such transactions short.
+/// the only client there). No method takes a `now` argument.
+///
+/// **Clock inside a `Tx` differs by backend.** Postgres `now()` is the transaction's
+/// start time, the same for every statement of the `Tx`; SQLite reads the wall clock per
+/// call. A `Tx` that lives for seconds therefore claims, leases and backs off from an
+/// older "now" on Postgres than on SQLite (shorter effective leases, jobs due a little
+/// later). Claim and lease from `Store::read()` (autocommit), or keep such transactions
+/// short.
 ///
 /// **Lease token (P6).** A claim returns rows whose [`Job::lease`] is the token
 /// `(id, node, attempts)`. `extend`, `complete`, `fail` and `release` act only while
@@ -502,8 +508,10 @@ pub trait JobRepo: Send + Sync {
         permanent: bool,
     ) -> Result<Option<JobStatus>, StoreError>;
     /// Puts the job back to `queued` with `run_at = now + delay`; with
-    /// `count_attempt == false` the attempt is refunded. `false` if the lease is no
-    /// longer held.
+    /// `count_attempt == false` the attempt is refunded. Counting the final attempt
+    /// (`attempts >= max_attempts`) ends the job instead: `dead`, `finished_at` set,
+    /// `last_error = "released after final attempt"`. `false` if the lease is no longer
+    /// held.
     async fn release(
         &self,
         lease: &JobLease,

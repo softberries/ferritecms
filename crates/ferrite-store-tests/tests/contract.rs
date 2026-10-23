@@ -152,6 +152,7 @@ backend_tests!(
     jobs_stale_lease_holder_cannot_write,
     jobs_fail_backoff_then_dead,
     jobs_release_without_attempt,
+    jobs_release_final_attempt_goes_dead,
     jobs_error_text_is_sanitised,
     jobs_validation_does_not_poison,
     jobs_prune_by_status_age,
@@ -163,6 +164,7 @@ backend_tests_spawning!(
     events_concurrent_appends_unique_seq,
     kv_quota_never_exceeded,
     jobs_claim_is_exclusive_under_concurrency,
+    jobs_concurrent_enqueue_same_key,
 );
 
 #[test]

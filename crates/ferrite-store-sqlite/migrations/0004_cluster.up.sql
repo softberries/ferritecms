@@ -22,7 +22,11 @@ CREATE TABLE jobs (
     finished_at  INTEGER
 );
 CREATE UNIQUE INDEX jobs_unique_key_uq ON jobs (unique_key);
-CREATE INDEX jobs_claim_idx ON jobs (status, run_at);
+-- Due queued jobs and expired leases (claim pre-check, claim, reaper). SQLite's planner
+-- combines the two as a MULTI-INDEX OR and sorts the (few) due rows; it does not use a
+-- (priority DESC, run_at, id) index for the claim after ANALYZE, so there is none (R1).
+CREATE INDEX jobs_due_idx ON jobs (run_at) WHERE status = 'queued';
+CREATE INDEX jobs_lease_idx ON jobs (locked_until) WHERE status = 'running';
 CREATE INDEX jobs_finished_idx ON jobs (finished_at);
 
 CREATE TABLE nodes (

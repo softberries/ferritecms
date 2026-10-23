@@ -108,6 +108,23 @@ pub async fn jobs_unique_key_dedupes_in_any_status(db: &TestDb) {
     assert_eq!(get(jobs, id).await.status, JobStatus::Done);
     assert_eq!(jobs.enqueue(&keyed).await.unwrap(), None, "done");
 
+    // A dead row keeps its key too.
+    let mut doomed = job("k");
+    doomed.unique_key = Some("doomed".into());
+    let doomed_id = enqueue(jobs, &doomed).await;
+    let lease = jobs.claim(node, &kinds(&["k"]), 10, LEASE).await.unwrap();
+    let lease = lease
+        .iter()
+        .find(|j| j.id == doomed_id)
+        .expect("claimed")
+        .lease()
+        .unwrap();
+    assert_eq!(
+        jobs.fail(&lease, "bad", true).await.unwrap(),
+        Some(JobStatus::Dead)
+    );
+    assert_eq!(jobs.enqueue(&doomed).await.unwrap(), None, "dead");
+
     // Inside a Tx the duplicate does not poison it.
     let tx = store.begin().await.unwrap();
     assert_eq!(tx.jobs().enqueue(&keyed).await.unwrap(), None);
@@ -394,6 +411,55 @@ pub async fn jobs_release_without_attempt(db: &TestDb) {
     assert!(jobs.claim(node, &k, 1, LEASE).await.unwrap().is_empty());
 }
 
+/// Counting the final attempt on release ends the job like a failure would; refunding it
+/// does not.
+pub async fn jobs_release_final_attempt_goes_dead(db: &TestDb) {
+    let jobs = db.store().read().jobs();
+    let node = NodeId::new();
+    let k = kinds(&["k"]);
+    let mut last = job("k");
+    last.max_attempts = 2;
+    let id = enqueue(jobs, &last).await;
+
+    // Attempt 1 of 2, counted: back to queued.
+    let lease = jobs.claim(node, &k, 1, LEASE).await.unwrap()[0]
+        .lease()
+        .unwrap();
+    assert!(jobs.release(&lease, Duration::ZERO, true).await.unwrap());
+    let row = get(jobs, id).await;
+    assert_eq!((row.status, row.attempts), (JobStatus::Queued, 1));
+    assert_eq!((row.finished_at, row.last_error), (None, None));
+
+    // Attempt 2 of 2, refunded: still queued, attempt given back.
+    let lease = jobs.claim(node, &k, 1, LEASE).await.unwrap()[0]
+        .lease()
+        .unwrap();
+    assert_eq!(lease.attempt, 2);
+    assert!(jobs.release(&lease, Duration::ZERO, false).await.unwrap());
+    assert_eq!(get(jobs, id).await.status, JobStatus::Queued);
+
+    // Attempt 2 of 2, counted: dead.
+    let lease = jobs.claim(node, &k, 1, LEASE).await.unwrap()[0]
+        .lease()
+        .unwrap();
+    assert!(
+        jobs.release(&lease, Duration::from_secs(30), true)
+            .await
+            .unwrap()
+    );
+    let dead = get(jobs, id).await;
+    assert_eq!((dead.status, dead.attempts), (JobStatus::Dead, 2));
+    assert!(dead.finished_at.is_some());
+    assert_eq!(
+        dead.last_error.as_deref(),
+        Some("released after final attempt")
+    );
+    assert_eq!((dead.locked_by, dead.locked_until), (None, None));
+    db.force_job_due(id).await;
+    assert!(jobs.claim(node, &k, 1, LEASE).await.unwrap().is_empty());
+    assert!(!jobs.release(&lease, Duration::ZERO, true).await.unwrap());
+}
+
 pub async fn jobs_error_text_is_sanitised(db: &TestDb) {
     let jobs = db.store().read().jobs();
     let node = NodeId::new();
@@ -565,4 +631,44 @@ pub async fn jobs_claim_is_exclusive_under_concurrency(db: Arc<TestDb>) {
     assert_eq!(unique.len(), JOBS);
     let counts = store.read().jobs().counts().await.unwrap();
     assert_eq!(counts[&JobStatus::Done], JOBS as u64);
+}
+
+/// Two nodes enqueue the same key at once. Postgres: node A's insert is still
+/// uncommitted when node B's arrives; B waits on the unique index and gets `None` once A
+/// commits (no error, no duplicate). SQLite pins the single-writer equivalent: the second
+/// enqueue can only run after the first `Tx` commits, and it gets `None`.
+pub async fn jobs_concurrent_enqueue_same_key(db: Arc<TestDb>) {
+    let mut keyed = job("k");
+    keyed.unique_key = Some("race".into());
+    let store = db.shared_store();
+    let (Some(a), Some(b)) = (db.peer().await, db.peer().await) else {
+        let tx = store.begin().await.unwrap();
+        let first = tx.jobs().enqueue(&keyed).await.unwrap();
+        tx.commit().await.unwrap();
+        assert!(first.is_some());
+        assert_eq!(store.read().jobs().enqueue(&keyed).await.unwrap(), None);
+        assert_eq!(
+            store.read().jobs().counts().await.unwrap()[&JobStatus::Queued],
+            1
+        );
+        return;
+    };
+    let tx = a.begin().await.unwrap();
+    let first = tx.jobs().enqueue(&keyed).await.unwrap().expect("inserted");
+    let second = {
+        let keyed = keyed.clone();
+        tokio::spawn(async move { b.read().jobs().enqueue(&keyed).await })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!second.is_finished(), "B must wait for A's uncommitted key");
+    tx.commit().await.unwrap();
+    let second = tokio::time::timeout(Duration::from_secs(5), second)
+        .await
+        .expect("B finishes after A commits")
+        .unwrap()
+        .unwrap();
+    assert_eq!(second, None);
+    let jobs = store.read().jobs();
+    assert_eq!(get(jobs, first).await.unique_key.as_deref(), Some("race"));
+    assert_eq!(jobs.counts().await.unwrap()[&JobStatus::Queued], 1);
 }

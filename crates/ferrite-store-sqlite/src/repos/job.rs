@@ -27,6 +27,35 @@ const DUE: &str = "kind IN (SELECT value FROM json_each(?)) \
      AND ((status = 'queued' AND run_at <= ?) \
        OR (status = 'running' AND locked_until < ? AND attempts < max_attempts))";
 
+/// Claim pre-check on the reader: anything due or reapable? Two `EXISTS`, one per
+/// branch, so each is a search on its partial index (`jobs_due_idx`, `jobs_lease_idx`)
+/// whatever ANALYZE learns. Binds now, kinds, now, kinds.
+pub(crate) const PRECHECK_SQL: &str = "SELECT EXISTS (SELECT 1 FROM jobs \
+       WHERE status = 'queued' AND run_at <= ? AND kind IN (SELECT value FROM json_each(?))) \
+     OR EXISTS (SELECT 1 FROM jobs \
+       WHERE status = 'running' AND locked_until < ? \
+       AND kind IN (SELECT value FROM json_each(?)))";
+
+/// P7: an expired lease at max_attempts goes dead instead of being reclaimed. Binds
+/// now (finished_at), now, kinds.
+pub(crate) const REAPER_SQL: &str = "UPDATE jobs SET status = 'dead', \
+     last_error = 'lease expired after attempt ' || attempts || ' on node ' \
+       || COALESCE(locked_by, '?'), \
+     finished_at = ?, locked_by = NULL, locked_until = NULL \
+     WHERE status = 'running' AND locked_until < ? AND attempts >= max_attempts \
+     AND kind IN (SELECT value FROM json_each(?))";
+
+/// The claim; binds node, locked_until, kinds, now, now, limit.
+pub(crate) fn claim_sql() -> String {
+    format!(
+        "UPDATE jobs SET status = 'running', locked_by = ?, locked_until = ?, \
+         attempts = attempts + 1 \
+         WHERE id IN (SELECT id FROM jobs WHERE {DUE} \
+           ORDER BY priority DESC, run_at, id LIMIT ?) \
+         RETURNING {JOB_COLUMNS}"
+    )
+}
+
 fn micros(now: Timestamp, d: Duration, what: &str, positive: bool) -> Result<i64, StoreError> {
     let d = check_job_duration(what, d, positive)?;
     Ok(now.as_micros().saturating_add(d))
@@ -72,15 +101,12 @@ impl JobRepo for SqliteRepos {
         let now = Timestamp::now();
         // An idle node must not take the write lock every poll (C7): look on the reader
         // first. This also covers expired leases at max_attempts, which the reaper needs.
-        let due: bool = run!(&self.reader, |e| sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM jobs WHERE kind IN (SELECT value FROM json_each(?)) \
-             AND ((status = 'queued' AND run_at <= ?) \
-               OR (status = 'running' AND locked_until < ?)))"
-        )
-        .bind(&kinds)
-        .bind(now.as_micros())
-        .bind(now.as_micros())
-        .fetch_one(e))?;
+        let due: bool = run!(&self.reader, |e| sqlx::query_scalar(PRECHECK_SQL)
+            .bind(now.as_micros())
+            .bind(&kinds)
+            .bind(now.as_micros())
+            .bind(&kinds)
+            .fetch_one(e))?;
         if !due {
             return Ok(Vec::new());
         }
@@ -89,37 +115,23 @@ impl JobRepo for SqliteRepos {
             // Re-read the clock once the writer is ours (waiting for it can take seconds).
             let now = Timestamp::now();
             let until = now.as_micros().saturating_add(lease);
-            // P7: an expired lease at max_attempts goes dead instead of being reclaimed.
-            sqlx::query(
-                "UPDATE jobs SET status = 'dead', \
-                 last_error = 'lease expired after attempt ' || attempts || ' on node ' \
-                   || COALESCE(locked_by, '?'), \
-                 finished_at = ?, locked_by = NULL, locked_until = NULL \
-                 WHERE status = 'running' AND locked_until < ? AND attempts >= max_attempts \
-                 AND kind IN (SELECT value FROM json_each(?))",
-            )
-            .bind(now.as_micros())
-            .bind(now.as_micros())
-            .bind(&kinds)
-            .execute(&mut *conn)
-            .await
-            .map_err(map_db_err)?;
-            let rows = sqlx::query(AssertSqlSafe(format!(
-                "UPDATE jobs SET status = 'running', locked_by = ?, locked_until = ?, \
-                 attempts = attempts + 1 \
-                 WHERE id IN (SELECT id FROM jobs WHERE {DUE} \
-                   ORDER BY priority DESC, run_at, id LIMIT ?) \
-                 RETURNING {JOB_COLUMNS}"
-            )))
-            .bind(&node)
-            .bind(until)
-            .bind(&kinds)
-            .bind(now.as_micros())
-            .bind(now.as_micros())
-            .bind(i64::from(limit))
-            .fetch_all(&mut *conn)
-            .await
-            .map_err(map_db_err)?;
+            sqlx::query(REAPER_SQL)
+                .bind(now.as_micros())
+                .bind(now.as_micros())
+                .bind(&kinds)
+                .execute(&mut *conn)
+                .await
+                .map_err(map_db_err)?;
+            let rows = sqlx::query(AssertSqlSafe(claim_sql()))
+                .bind(&node)
+                .bind(until)
+                .bind(&kinds)
+                .bind(now.as_micros())
+                .bind(now.as_micros())
+                .bind(i64::from(limit))
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(map_db_err)?;
             rows.iter().map(codec::job).collect::<Result<Vec<_>, _>>()
         })?;
         sort_claimed(&mut jobs);
@@ -194,13 +206,21 @@ impl JobRepo for SqliteRepos {
         count_attempt: bool,
     ) -> Result<bool, StoreError> {
         let run_at = micros(Timestamp::now(), delay, "release delay", false)?;
-        let done = run!(&self.writer, |e| sqlx::query(AssertSqlSafe(format!(
-            "UPDATE jobs SET status = 'queued', run_at = ?, locked_by = NULL, \
-             locked_until = NULL, attempts = CASE WHEN ? THEN attempts ELSE attempts - 1 END \
-             WHERE {HELD}"
-        )))
-        .bind(run_at)
+        // Counting the final attempt ends the job: `dead`, like a failure would.
+        let done = run!(&self.writer, |e| sqlx::query(
+            "UPDATE jobs SET \
+             status = CASE WHEN ?1 AND attempts >= max_attempts THEN 'dead' ELSE 'queued' END, \
+             run_at = CASE WHEN ?1 AND attempts >= max_attempts THEN run_at ELSE ?2 END, \
+             finished_at = CASE WHEN ?1 AND attempts >= max_attempts THEN ?3 ELSE NULL END, \
+             last_error = CASE WHEN ?1 AND attempts >= max_attempts \
+               THEN 'released after final attempt' ELSE last_error END, \
+             locked_by = NULL, locked_until = NULL, \
+             attempts = CASE WHEN ?1 THEN attempts ELSE attempts - 1 END \
+             WHERE id = ?4 AND status = 'running' AND locked_by = ?5 AND attempts = ?6"
+        )
         .bind(count_attempt)
+        .bind(run_at)
+        .bind(Timestamp::now().as_micros())
         .bind(lease.id.as_uuid())
         .bind(lease.node.to_string())
         .bind(lease.attempt)
@@ -242,5 +262,84 @@ impl JobRepo for SqliteRepos {
         .bind(dead_before.as_micros())
         .execute(e))
         .map(|done| done.rows_affected())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ferrite_store::Store;
+    use sqlx::AssertSqlSafe;
+
+    use super::*;
+    use crate::{SqliteOptions, SqliteStore};
+
+    async fn plan(store: &SqliteStore, sql: &str, binds: &[&str]) -> String {
+        let mut q = sqlx::query_as::<_, (i64, i64, i64, String)>(AssertSqlSafe(format!(
+            "EXPLAIN QUERY PLAN {sql}"
+        )));
+        for b in binds {
+            q = match *b {
+                "kinds" => q.bind(r#"["a","b"]"#),
+                "node" => q.bind("n"),
+                _ => q.bind(2_000_000_i64),
+            };
+        }
+        let rows = q.fetch_all(&store.reader).await.unwrap();
+        rows.into_iter().map(|r| r.3).collect::<Vec<_>>().join("\n")
+    }
+
+    /// The claim pre-check, the claim and the reaper search the partial indexes (no
+    /// table scan), before and after ANALYZE on 20k mostly finished rows.
+    #[tokio::test]
+    async fn claim_statements_use_indexes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteStore::open(SqliteOptions::new(dir.path().join("ferrite.db")))
+            .await
+            .unwrap();
+        store.migrate_up(None).await.unwrap();
+        sqlx::raw_sql(
+            "WITH RECURSIVE g(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM g WHERE n < 20000) \
+             INSERT INTO jobs (id, kind, payload, run_at, priority, status, attempts, \
+               max_attempts, locked_by, locked_until, created_at, finished_at) \
+             SELECT randomblob(16), char(97 + n % 3), '{}', 1000000 + (n % 2) * 2000000, \
+               n % 5, \
+               CASE WHEN n <= 18000 THEN 'done' WHEN n <= 19600 THEN 'queued' \
+                 WHEN n <= 19800 THEN 'running' ELSE 'dead' END, \
+               1, 5, CASE WHEN n BETWEEN 19601 AND 19800 THEN 'n' END, \
+               CASE WHEN n BETWEEN 19601 AND 19800 THEN 1000000 + (n % 2) * 2000000 END, \
+               0, CASE WHEN n <= 18000 OR n > 19800 THEN 1 END \
+             FROM g",
+        )
+        .execute(&store.writer)
+        .await
+        .unwrap();
+        let claim = claim_sql();
+        for analyzed in [false, true] {
+            if analyzed {
+                sqlx::raw_sql("ANALYZE")
+                    .execute(&store.writer)
+                    .await
+                    .unwrap();
+            }
+            let pre = plan(&store, PRECHECK_SQL, &["now", "kinds", "now", "kinds"]).await;
+            let reaper = plan(&store, REAPER_SQL, &["now", "now", "kinds"]).await;
+            let claim = plan(
+                &store,
+                &claim,
+                &["node", "now", "kinds", "now", "now", "now"],
+            )
+            .await;
+            eprintln!(
+                "analyzed={analyzed}\n-- precheck\n{pre}\n-- reaper\n{reaper}\n-- claim\n{claim}"
+            );
+            for (name, plan) in [("precheck", &pre), ("claim", &claim)] {
+                assert!(plan.contains("jobs_due_idx"), "{name}: {plan}");
+                assert!(plan.contains("jobs_lease_idx"), "{name}: {plan}");
+            }
+            assert!(reaper.contains("jobs_lease_idx"), "reaper: {reaper}");
+            for plan in [&pre, &reaper, &claim] {
+                assert!(!plan.contains("SCAN jobs"), "{plan}");
+            }
+        }
     }
 }

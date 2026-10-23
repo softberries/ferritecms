@@ -137,7 +137,7 @@ impl JobRepo for PgRepos {
                    THEN 'dead' ELSE 'queued' END, \
                  run_at = CASE WHEN $4 OR attempts >= max_attempts THEN run_at \
                    ELSE now() + make_interval(secs => \
-                     LEAST(power(2, GREATEST(attempts, 0)) * 10, 3600)) END, \
+                     LEAST(power(2, LEAST(GREATEST(attempts, 0), 12)) * 10, 3600)) END, \
                  finished_at = CASE WHEN $4 OR attempts >= max_attempts \
                    THEN now() ELSE NULL END, \
                  last_error = $5, locked_by = NULL, locked_until = NULL \
@@ -161,8 +161,16 @@ impl JobRepo for PgRepos {
         count_attempt: bool,
     ) -> Result<bool, StoreError> {
         let secs = seconds("release delay", delay, false)?;
+        // Counting the final attempt ends the job: `dead`, like a failure would.
         let done = run!(&self.exec, |e| sqlx::query(AssertSqlSafe(format!(
-            "UPDATE jobs SET status = 'queued', run_at = now() + make_interval(secs => $4), \
+            "UPDATE jobs SET \
+             status = CASE WHEN $5 AND attempts >= max_attempts \
+               THEN 'dead' ELSE 'queued' END, \
+             run_at = CASE WHEN $5 AND attempts >= max_attempts THEN run_at \
+               ELSE now() + make_interval(secs => $4) END, \
+             finished_at = CASE WHEN $5 AND attempts >= max_attempts THEN now() ELSE NULL END, \
+             last_error = CASE WHEN $5 AND attempts >= max_attempts \
+               THEN 'released after final attempt' ELSE last_error END, \
              locked_by = NULL, locked_until = NULL, \
              attempts = CASE WHEN $5 THEN attempts ELSE attempts - 1 END \
              WHERE {HELD}"

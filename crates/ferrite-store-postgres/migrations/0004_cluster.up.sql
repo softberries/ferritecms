@@ -23,7 +23,10 @@ CREATE TABLE jobs (
     finished_at  timestamptz
 );
 CREATE UNIQUE INDEX jobs_unique_key_uq ON jobs (unique_key);
-CREATE INDEX jobs_claim_idx ON jobs (status, run_at) WHERE status IN ('queued', 'running');
+-- The claim scans this in ORDER BY order and stops at LIMIT (ruling R1); the reaper's
+-- expired-lease range uses jobs_lease_idx.
+CREATE INDEX jobs_claim_idx ON jobs (priority DESC, run_at, id) WHERE status IN ('queued', 'running');
+CREATE INDEX jobs_lease_idx ON jobs (locked_until) WHERE status = 'running';
 CREATE INDEX jobs_finished_idx ON jobs (finished_at);
 
 CREATE TABLE nodes (
