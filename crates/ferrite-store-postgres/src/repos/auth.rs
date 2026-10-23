@@ -113,7 +113,7 @@ impl SessionRepo for PgRepos {
     async fn list_for_user(&self, user: UserId) -> Result<Vec<Session>, StoreError> {
         let rows = run!(&self.exec, |e| sqlx::query(AssertSqlSafe(format!(
             "SELECT {SESSION_COLUMNS} FROM sessions WHERE user_id = $1 \
-             ORDER BY created_at DESC, id_hash LIMIT $2"
+             ORDER BY created_at DESC, id_hash DESC LIMIT $2"
         )))
         .bind(user.as_uuid())
         .bind(i64::from(MAX_AUTH_LIST))
@@ -234,9 +234,9 @@ impl RateLimitRepo for PgRepos {
              date_bin($2::bigint * interval '1 microsecond', now(), \
              timestamptz '1970-01-01 00:00:00+00'), 1) \
              ON CONFLICT (bucket) DO UPDATE SET count = CASE \
-             WHEN rate_limits.window_start = excluded.window_start \
-             THEN rate_limits.count + 1 ELSE 1 END, \
-             window_start = excluded.window_start \
+             WHEN excluded.window_start > rate_limits.window_start \
+             THEN 1 ELSE rate_limits.count + 1 END, \
+             window_start = GREATEST(rate_limits.window_start, excluded.window_start) \
              RETURNING count, window_start, now() AS now"
         )
         .bind(bucket)

@@ -108,7 +108,7 @@ impl SessionRepo for SqliteRepos {
     async fn list_for_user(&self, user: UserId) -> Result<Vec<Session>, StoreError> {
         let rows = run!(&self.reader, |e| sqlx::query(AssertSqlSafe(format!(
             "SELECT {SESSION_COLUMNS} FROM sessions WHERE user_id = ? \
-             ORDER BY created_at DESC, id_hash LIMIT ?"
+             ORDER BY created_at DESC, id_hash DESC LIMIT ?"
         )))
         .bind(user.as_uuid())
         .bind(i64::from(MAX_AUTH_LIST))
@@ -228,9 +228,9 @@ impl RateLimitRepo for SqliteRepos {
         let row = run!(&self.writer, |e| sqlx::query(
             "INSERT INTO rate_limits (bucket, window_start, count) VALUES (?, ?, 1) \
              ON CONFLICT (bucket) DO UPDATE SET count = CASE \
-             WHEN rate_limits.window_start = excluded.window_start \
-             THEN rate_limits.count + 1 ELSE 1 END, \
-             window_start = excluded.window_start \
+             WHEN excluded.window_start > rate_limits.window_start \
+             THEN 1 ELSE rate_limits.count + 1 END, \
+             window_start = max(rate_limits.window_start, excluded.window_start) \
              RETURNING count, window_start"
         )
         .bind(bucket)

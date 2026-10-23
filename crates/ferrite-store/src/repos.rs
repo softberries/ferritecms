@@ -689,7 +689,7 @@ pub trait SessionRepo: Send + Sync {
     /// the deleted count.
     async fn delete_for_user(&self, user: UserId, keep: Option<&str>) -> Result<u64, StoreError>;
     /// Up to [`MAX_AUTH_LIST`](crate::MAX_AUTH_LIST) sessions of `user`, newest first
-    /// (`created_at DESC, id_hash`).
+    /// (`created_at DESC, id_hash DESC`).
     async fn list_for_user(&self, user: UserId) -> Result<Vec<Session>, StoreError>;
     /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) sessions with
     /// `expires_at < now` or `last_seen_at < idle_before`; returns the count. Callers loop
@@ -733,7 +733,11 @@ pub trait RateLimitRepo: Send + Sync {
     /// upsert), so concurrent hits on any node never share a count. The window start is
     /// the database clock floored to a multiple of `window` since the Unix epoch
     /// (Postgres `now()`, which inside a `Tx` is the transaction's start; SQLite the
-    /// process clock). A row from an earlier window starts over at 1.
+    /// process clock). A row from an earlier window starts over at 1. The stored window
+    /// never moves backwards: a hit stamped in an older window than the stored one (it
+    /// took its clock before waiting for the row) counts in the stored window
+    /// (`window_start = max(stored, incoming)`; reset only when the incoming one is newer).
+    /// Callers must call this outside a `Tx`.
     ///
     /// Invalid: `bucket` empty, over [`MAX_RATE_BUCKET`](crate::MAX_RATE_BUCKET)
     /// characters or with NUL; `window` zero or over

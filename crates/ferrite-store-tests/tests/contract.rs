@@ -187,6 +187,7 @@ backend_tests!(
     sessions_prune_by_expiry_and_idle,
     api_tokens_unique_hash_and_owner_scoped_delete,
     rate_limit_counts_within_window_and_resets,
+    rate_limit_window_never_moves_back,
     audit_append_and_list_newest_first,
     auth_text_binds_reject_nul,
 );

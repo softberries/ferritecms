@@ -44,7 +44,13 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
     let objects = db.user_objects().await;
     assert!(objects.iter().any(|o| o.ends_with(":jobs")), "{objects:?}");
     assert!(objects.iter().any(|o| o.ends_with(":nodes")), "{objects:?}");
-    for table in ["sessions", "api_tokens", "rate_limits", "audit_log"] {
+    for table in [
+        "sessions",
+        "api_tokens",
+        "rate_limits",
+        "audit_log",
+        "audit_log_actor_idx",
+    ] {
         assert!(
             objects.iter().any(|o| o.ends_with(&format!(":{table}"))),
             "{table}: {objects:?}"

@@ -52,5 +52,7 @@ CREATE TABLE audit_log (
     node        text COLLATE "C"
 );
 CREATE INDEX audit_log_at_idx ON audit_log (at, id);
+-- Deleting a user sets actor_id NULL here (and reassigns) without a scan.
+CREATE INDEX audit_log_actor_idx ON audit_log (actor_id);
 
 ALTER TABLE users ADD COLUMN totp_last_step bigint;

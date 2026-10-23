@@ -103,7 +103,7 @@ The auth repositories exist since M2a-1 (migration `0005_auth`; domain types in
 
 - **`SessionRepo`** (`sessions()`): `insert`, `get(id_hash)`, `touch(id_hash, at) -> bool`
   (moves `last_seen_at` forward only), `delete`, `delete_for_user(user, keep: Option<id_hash>)
-  -> u64`, `list_for_user` (at most `MAX_AUTH_LIST` = 100, newest first), `prune(now,
+  -> u64`, `list_for_user` (at most `MAX_AUTH_LIST` = 100, newest first, `created_at DESC, id_hash DESC`), `prune(now,
   idle_before, limit)` (deletes `expires_at < now OR last_seen_at < idle_before`, R5 batches).
 - **`ApiTokenRepo`** (`api_tokens()`): `insert` (duplicate hash: `api_tokens_hash_uq`),
   `get_by_hash`, `list_for_user` (at most 100, by `created_at`), `count_for_user`,
@@ -111,9 +111,12 @@ The auth repositories exist since M2a-1 (migration `0005_auth`; domain types in
   owner's row), `delete_for_user -> u64`.
 - **`RateLimitRepo`** (`rate_limits()`, P5): `hit(bucket, window) -> RateHit { count,
   reset_at, now }` is one upsert on both backends (`ON CONFLICT (bucket) DO UPDATE SET count =
-  CASE WHEN rate_limits.window_start = excluded.window_start THEN rate_limits.count + 1 ELSE 1
-  END, window_start = excluded.window_start RETURNING …`), so concurrent hits on any node never
-  share a count. `window_start` is the database clock floored to the window since the epoch
+  CASE WHEN excluded.window_start > rate_limits.window_start THEN 1 ELSE rate_limits.count + 1
+  END, window_start = GREATEST(rate_limits.window_start, excluded.window_start) RETURNING …`;
+  SQLite `max(…)`), so concurrent hits on any node never share a count, and a late hit stamped
+  in an older window counts in the stored window instead of rolling it back (ruling R7).
+  Callers must call it outside a `Tx` (Postgres `now()` is the transaction's start there, and
+  the bucket's row lock would be held until commit). `window_start` is the database clock floored to the window since the epoch
   (Postgres `date_bin` over `now()`; SQLite the process clock), `reset_at = window_start +
   window`, `now` is the clock the hit used (F6: `Retry-After = reset_at − now` on any node).
   Buckets are 1 to `MAX_RATE_BUCKET` (200) characters, windows up to `MAX_RATE_WINDOW` (1 day).
@@ -347,7 +350,7 @@ new migration. Everything else exists in `0001_init` / `0002_search` / `0003_med
 | `api_tokens` *(since `0005_auth`)* | `id` PK (`api_tokens_pkey`), `user_id` → `users` `ON DELETE CASCADE` (`api_tokens_user_id_fk`), `name`, `token_hash` UNIQUE (`api_tokens_hash_uq`, SHA-256 hex), `scopes` json array, `created_at`, `last_used_at` null, `expires_at` null; index `api_tokens_user_idx` | |
 | `passkeys` *(not yet created: deferred past M2, P3)* | `id`, `user_id`, `credential` json, `created_at`, `last_used_at` | webauthn-rs has only a pre-release |
 | `rate_limits` *(since `0005_auth`)* | `bucket` PK (`rate_limits_pkey`), `window_start`, `count` int default 0; index `rate_limits_window_idx` | Fixed-window counters on the database clock; works across nodes (P5) |
-| `audit_log` *(since `0005_auth`)* | `id` PK (`audit_log_pkey`), `at`, `actor_id` null → `users` `ON DELETE SET NULL` (`audit_log_actor_id_fk`), `action`, `target_kind`, `target_id` null, `details` json object default `{}`, `node` null; index `audit_log_at_idx (at, id)` | Admin actions, plugin installs, capability grants; no secrets (P22) |
+| `audit_log` *(since `0005_auth`)* | `id` PK (`audit_log_pkey`), `at`, `actor_id` null → `users` `ON DELETE SET NULL` (`audit_log_actor_id_fk`), `action`, `target_kind`, `target_id` null, `details` json object default `{}`, `node` null; indexes `audit_log_at_idx (at, id)`, `audit_log_actor_idx (actor_id)` (user delete, R5) | Admin actions, plugin installs, capability grants; no secrets (P22) |
 
 ### Site, plugins, themes, artifacts
 

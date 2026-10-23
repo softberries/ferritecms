@@ -362,6 +362,43 @@ pub async fn rate_limit_counts_within_window_and_resets(db: &TestDb) {
     );
 }
 
+/// R7: a hit stamped in an older window than the stored one (it read its clock before
+/// waiting for the row) counts in the stored window and never rolls it back. The repo
+/// takes its stamp from the database clock, so the newer stored window (W+1) is written
+/// at the SQL level and the repo's hit then arrives stamped in W.
+pub async fn rate_limit_window_never_moves_back(db: &TestDb) {
+    let store = db.store();
+    let window = Duration::from_secs(3600);
+    let w: i64 = 3_600_000_000;
+    // At least 30 s left in W, so the repo's hit below is stamped in W, not W+1.
+    align_to_window(store, window, Duration::from_secs(30)).await;
+    let now = store.read().nodes().db_now().await.unwrap().as_micros();
+    let next = now - now.rem_euclid(w) + w;
+    let stamp = if db.is_sqlite() {
+        next.to_string()
+    } else {
+        format!("'{}'::timestamptz", at(next).to_rfc3339())
+    };
+    db.exec_raw(&format!(
+        "INSERT INTO rate_limits (bucket, window_start, count) VALUES ('late', {stamp}, 1)"
+    ))
+    .await;
+    let hit = store
+        .read()
+        .rate_limits()
+        .hit("late", window)
+        .await
+        .unwrap();
+    assert_eq!(hit.count, 2, "the late hit counts in the stored window");
+    assert_eq!(
+        hit.reset_at,
+        at(next + w),
+        "the stored window W+1 is kept, not rolled back to W"
+    );
+    // A hit in a strictly newer window still starts over (covered with real windows in
+    // `rate_limit_counts_within_window_and_resets`).
+}
+
 pub async fn rate_limit_is_atomic_under_concurrency(db: Arc<TestDb>) {
     const TASKS: usize = 8;
     const HITS: usize = 25;
