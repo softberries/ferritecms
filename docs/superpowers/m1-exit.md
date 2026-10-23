@@ -184,7 +184,7 @@ req GET "$MEDIA" -H "Range: bytes=99999999-"
 req GET "$MEDIA" -H "Range: bytes=0-0,5-9"
 echo "# theme asset: $THEME"
 req GET "$THEME"
-echo "# draft never public: a content item that does not exist publicly"
+echo "# unknown media hash is 404 (draft hiding is covered by serve_seeded_site in crates/ferrite/tests/serve.rs)"
 req GET /_media/0000000000000000000000000000000000000000000000000000000000000000/x.png
 
 if [ "$PROFILE" != solo ]; then
@@ -420,7 +420,7 @@ content-type: text/css; charset=utf-8
 vary: accept-encoding
 x-content-type-options: nosniff
 content-length: 13661
-# draft never public: a content item that does not exist publicly
+# unknown media hash is 404 (draft hiding is covered by serve_seeded_site in crates/ferrite/tests/serve.rs)
 $ curl -s -o /dev/null -X GET http://localhost:18080/_media/0000000000000000000000000000000000000000000000000000000000000000/x.png
 HTTP/1.1 404 Not Found
 content-type: text/plain; charset=utf-8
@@ -647,7 +647,7 @@ content-type: text/css; charset=utf-8
 vary: accept-encoding
 x-content-type-options: nosniff
 content-length: 13661
-# draft never public: a content item that does not exist publicly
+# unknown media hash is 404 (draft hiding is covered by serve_seeded_site in crates/ferrite/tests/serve.rs)
 $ curl -s -o /dev/null -X GET http://localhost:18080/_media/0000000000000000000000000000000000000000000000000000000000000000/x.png
 HTTP/1.1 404 Not Found
 content-type: text/plain; charset=utf-8
@@ -884,7 +884,7 @@ content-type: text/css; charset=utf-8
 vary: accept-encoding
 x-content-type-options: nosniff
 content-length: 13661
-# draft never public: a content item that does not exist publicly
+# unknown media hash is 404 (draft hiding is covered by serve_seeded_site in crates/ferrite/tests/serve.rs)
 $ curl -s -o /dev/null -X GET http://localhost:18080/_media/0000000000000000000000000000000000000000000000000000000000000000/x.png
 HTTP/1.1 404 Not Found
 content-type: text/plain; charset=utf-8

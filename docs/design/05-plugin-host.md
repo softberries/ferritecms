@@ -258,14 +258,14 @@ analytics; documented).
 
 ### 4c. Plugin settings
 
-*M0 status: the manifest `[settings]` schema is parsed and the `settings` import reads values through `HostServices`; storage under `options`, secret encryption, the admin form and `options.changed` cache flush are M2.*
+*Status (M1c-2): the manifest `[settings]` schema is parsed; the `settings` import reads `plugin.<name>.settings.<key>` from `options` (`StoreHostServices::setting_get`) and records an `option:` dependency key, so a settings change already invalidates through `options.changed`. Settings writes, secret encryption and the admin form are M2.*
 
 - `[settings]` uses the same field schema as theme settings (`text`, `textarea`, `bool`,
   `number`, `select`, `color`, `media`, `secret`) — one renderer in the admin.
 - Stored in `options` under `plugin.<name>.settings.<key>`; `secret` values are
   encrypted at rest with the site key and never returned by the API after being set.
 - Changing settings emits `options.changed` + flushes pages that rendered that plugin's
-  filters (dependency key `plugin:<name>`, recorded whenever a plugin filter runs).
+  filters (as built: through the `option:plugin.<name>.settings.<key>` keys recorded on read; the finer `plugin:<name>` key is not recorded, and plugin install/enable changes flush through `plugins`, see §7a).
 
 Filters run in priority order (ties: plugin name), each receiving the previous output.
 Actions run as `plugin.action` jobs ([04](04-cluster.md#job-queue)), never on the request
