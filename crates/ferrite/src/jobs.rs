@@ -1,14 +1,18 @@
-//! Core job handlers run by every node (ruling P12): scheduled publishing. The kinds and
-//! payloads are fixed in [`ferrite_core::jobs`]; the per-node 30 s ticker of M1c-2 is
-//! the periodic [`PUBLISH_DUE_KIND`] job now, so one node runs it per period.
+//! Core job handlers run by every node (ruling P12): scheduled publishing and the plugin
+//! data purge (M2a-2 P9). The kinds and payloads are fixed in [`ferrite_core::jobs`];
+//! the per-node 30 s ticker of M1c-2 is the periodic [`PUBLISH_DUE_KIND`] job now, so
+//! one node runs it per period.
 
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use ferrite_cluster::{JobError, JobHandler, Periodic};
 use ferrite_core::{
-    ContentService, CoreError,
-    jobs::{PUBLISH_DUE_KIND, PUBLISH_SCHEDULED_KIND, PUBLISH_SCHEDULED_VERSION, PublishScheduled},
+    ContentService, CoreError, ExtensionService,
+    jobs::{
+        PLUGIN_PURGE_KIND, PLUGIN_PURGE_VERSION, PUBLISH_DUE_KIND, PUBLISH_SCHEDULED_KIND,
+        PUBLISH_SCHEDULED_VERSION, PluginPurge, PublishScheduled,
+    },
 };
 use ferrite_domain::Job;
 use ferrite_store::Store;
@@ -88,13 +92,56 @@ impl JobHandler for PublishDueHandler {
     }
 }
 
-/// Both handlers, on `content`.
-pub fn handlers(store: Arc<dyn Store>, content: Arc<ContentService>) -> Vec<Arc<dyn JobHandler>> {
+/// `plugin.purge`: deletes a removed plugin's KV and settings
+/// ([`ExtensionService::purge_plugin_data`]) unless it was installed again or deleted
+/// later. A busy `extensions` lock or a store error is retried.
+pub struct PluginPurgeHandler {
+    pub extensions: Arc<ExtensionService>,
+}
+
+#[async_trait]
+impl JobHandler for PluginPurgeHandler {
+    fn kind(&self) -> &'static str {
+        PLUGIN_PURGE_KIND
+    }
+
+    fn versions(&self) -> &'static [u32] {
+        &[PLUGIN_PURGE_VERSION]
+    }
+
+    async fn run(&self, job: &Job) -> Result<(), JobError> {
+        let payload: PluginPurge = serde_json::from_value(job.payload.clone())
+            .map_err(|e| JobError::Permanent(format!("invalid payload: {e}")))?;
+        let purged = self
+            .extensions
+            .purge_plugin_data(&payload.name, payload.deleted_at, &payload.settings)
+            .await
+            .map_err(|e| match e {
+                CoreError::Invalid(_) | CoreError::InvalidField { .. } => {
+                    JobError::Permanent(e.to_string())
+                }
+                other => JobError::Retry(other.to_string()),
+            })?;
+        if purged {
+            tracing::info!(plugin = %payload.name, "purged deleted plugin's data");
+        }
+        Ok(())
+    }
+}
+
+/// The core handlers: scheduled publishing on `content`, the plugin purge on
+/// `extensions`.
+pub fn handlers(
+    store: Arc<dyn Store>,
+    content: Arc<ContentService>,
+    extensions: Arc<ExtensionService>,
+) -> Vec<Arc<dyn JobHandler>> {
     vec![
         Arc::new(PublishScheduledHandler {
             content: content.clone(),
         }),
         Arc::new(PublishDueHandler { store, content }),
+        Arc::new(PluginPurgeHandler { extensions }),
     ]
 }
 

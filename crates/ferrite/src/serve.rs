@@ -57,8 +57,8 @@ use ferrite_cluster::{
 };
 use ferrite_config::{Config, LoggedInCache, PluginsConfig};
 use ferrite_core::{
-    AuthService, ContentService, ContentTypeService, MenuService, OptionService, Permalinks,
-    RedirectService, SiteReader, SwappablePermalinks, TaxonomyService, UserService,
+    AuthService, ContentService, ContentTypeService, ExtensionService, MenuService, OptionService,
+    Permalinks, RedirectService, SiteReader, SwappablePermalinks, TaxonomyService, UserService,
 };
 use ferrite_domain::{NodeId, Timestamp};
 use ferrite_http::{
@@ -401,7 +401,8 @@ async fn boot(
         .context("site.url")?,
     );
     let mut handlers = builtin::handlers(store.clone(), builtin::failure_retention(failure_window));
-    handlers.extend(jobs::handlers(store.clone(), content));
+    let extensions = Arc::new(ExtensionService::new(store.clone()));
+    handlers.extend(jobs::handlers(store.clone(), content, extensions));
     handlers.extend(opts.extra_handlers);
     let mut runner_config = RunnerConfig::new(registry.id(), config.cluster.workers);
     let o = &opts.runner;

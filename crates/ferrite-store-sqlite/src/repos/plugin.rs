@@ -8,7 +8,7 @@ use ferrite_domain::{
 };
 use ferrite_store::{
     ArtifactRepo, MAX_ID_FILTER, MediaRepo, PluginKvRepo, PluginRepo, StoreError, ThemeRepo,
-    check_len, check_limit, validate_json, validate_text,
+    check_len, check_limit, check_prune_limit, validate_json, validate_text,
 };
 
 use sqlx::{QueryBuilder, Sqlite};
@@ -379,6 +379,19 @@ impl PluginKvRepo for SqliteRepos {
             u64::try_from(n).map_err(|_| StoreError::Database(format!("corrupt usage {n}")))
         };
         Ok((conv(bytes)?, conv(keys)?))
+    }
+
+    async fn delete_all(&self, plugin: &str, limit: u32) -> Result<u64, StoreError> {
+        validate_text("plugin kv plugin", plugin)?;
+        let limit = check_prune_limit(limit)?;
+        let done = run!(&self.writer, |e| sqlx::query(
+            "DELETE FROM plugin_kv WHERE rowid IN \
+             (SELECT rowid FROM plugin_kv WHERE plugin = ? LIMIT ?)"
+        )
+        .bind(plugin)
+        .bind(limit)
+        .execute(e))?;
+        Ok(done.rows_affected())
     }
 
     async fn set_with_quota(

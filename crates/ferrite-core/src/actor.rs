@@ -300,6 +300,20 @@ pub fn require_read(actor: &Actor, area: Area) -> Result<(), CoreError> {
     require_scope(actor, Some(Scope::read(area)))
 }
 
+/// `Ok` if `actor` may read what `cap` manages (extension reads, M2a-2 P10): the role
+/// holds `cap` (else `Forbidden(cap name)`), then [`require_read`] of the capability's
+/// area (else `Forbidden("<area>:read")`). A capability without a scope needs only
+/// `read_admin`.
+pub fn require_reader(actor: &Actor, cap: Capability) -> Result<(), CoreError> {
+    if !can(actor.role, cap) {
+        return Err(CoreError::Forbidden(cap.as_str()));
+    }
+    match cap.scope() {
+        Some(scope) => require_read(actor, scope.area),
+        None => require(actor, Capability::ReadAdmin),
+    }
+}
+
 /// `Ok` if `actor`'s scopes allow `scope` (or no scope is needed).
 pub(crate) fn require_scope(actor: &Actor, scope: Option<Scope>) -> Result<(), CoreError> {
     match scope {
@@ -461,6 +475,24 @@ mod tests {
             require_read(&admin, Area::Settings),
             Err(CoreError::Forbidden("settings:read"))
         ));
+        // A reader needs the role's capability and the area's read scope (P10).
+        let reader = Actor::new(UserId::new(), Role::Admin)
+            .with_scopes(Scopes::from_strs(&["extensions:read".to_owned()]).unwrap());
+        assert!(require_reader(&reader, ManagePlugins).is_ok());
+        assert!(matches!(
+            require(&reader, ManagePlugins),
+            Err(CoreError::Forbidden("extensions:write"))
+        ));
+        assert!(matches!(
+            require_reader(&admin, ManageThemes),
+            Err(CoreError::Forbidden("extensions:read"))
+        ));
+        let editor = Actor::new(UserId::new(), Role::Editor);
+        assert!(matches!(
+            require_reader(&editor, ManagePlugins),
+            Err(CoreError::Forbidden("manage_plugins"))
+        ));
+        assert!(require_reader(&editor, ReadAdmin).is_ok());
         // ReadAdmin carries no scope: any token may reach the admin at all.
         assert!(require(&admin, ReadAdmin).is_ok());
 

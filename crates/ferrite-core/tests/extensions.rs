@@ -386,6 +386,13 @@ pub async fn extensions_writes_take_the_lock(db: &TestDb) {
     busy(svc.activate_theme("t").await);
     busy(svc.install_plugin(&p, &plugin("p", &p, true)).await);
     busy(svc.set_plugin_enabled("p", false).await);
+    busy(svc.delete_plugin("p").await.map(|_| ()));
+    // The purge holds the lock across its check and deletes (F15).
+    busy(
+        svc.purge_plugin_data("p", Timestamp::now(), &[])
+            .await
+            .map(|_| ()),
+    );
     assert_eq!(store.read().artifacts().get(&a.hash).await.unwrap(), None);
     assert_eq!(max_seq(store).await, seq);
 

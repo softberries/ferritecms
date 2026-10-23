@@ -27,12 +27,12 @@ pub(crate) const MAX_PARENT_DEPTH: usize = 64;
 
 pub use actor::{
     Access, Actor, Area, Capability, Scope, Scopes, can, can_edit, can_read, require, require_read,
-    role_can_edit,
+    require_reader, role_can_edit,
 };
 pub use auth::{AuthService, Authenticated, IssuedSession, LoginAttempt, LoginOutcome, Via};
 pub use content::{AdminQuery, ContentDraft, ContentService, MAX_REVISIONS_LISTED};
 pub use error::{CoreError, RowError};
-pub use extensions::{EXTENSIONS_LOCK_WAIT, ExtensionService};
+pub use extensions::{EXTENSIONS_LOCK_WAIT, ExtensionAdmin, ExtensionService};
 pub use menu::{MAX_MENU_ITEMS, MenuService};
 pub use options::OptionService;
 pub use permalink::{PermalinkInput, PermalinkRules, Permalinks, SwappablePermalinks};

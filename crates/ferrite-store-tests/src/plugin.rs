@@ -523,6 +523,32 @@ pub async fn plugin_kv_crud_and_usage(db: &TestDb) {
     ));
 }
 
+pub async fn plugin_kv_delete_all_in_batches(db: &TestDb) {
+    let kv = db.store().read().plugin_kv();
+    for i in 0..25 {
+        kv.set("a", &format!("k{i:02}"), b"v").await.unwrap();
+    }
+    for i in 0..3 {
+        kv.set("b", &format!("k{i}"), b"v").await.unwrap();
+    }
+    for expected in [10, 10, 5, 0] {
+        assert_eq!(kv.delete_all("a", 10).await.unwrap(), expected);
+    }
+    assert_eq!(kv.usage("a").await.unwrap(), (0, 0));
+    assert_eq!(kv.usage("b").await.unwrap(), (3, 3));
+    for bad in [0, ferrite_store::MAX_PRUNE_BATCH + 1] {
+        assert!(matches!(
+            kv.delete_all("b", bad).await,
+            Err(StoreError::Invalid(_))
+        ));
+    }
+    assert!(matches!(
+        kv.delete_all("b\0", 10).await,
+        Err(StoreError::Invalid(_))
+    ));
+    assert_eq!(kv.usage("b").await.unwrap(), (3, 3));
+}
+
 fn theme(name: &str) -> InstalledTheme {
     InstalledTheme {
         name: name.into(),

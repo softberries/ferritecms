@@ -526,6 +526,10 @@ pub trait PluginKvRepo: Send + Sync {
     ) -> Result<Vec<String>, StoreError>;
     /// Returns (bytes, keys) stored by a plugin.
     async fn usage(&self, plugin: &str) -> Result<(u64, u64), StoreError>;
+    /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH), else
+    /// `Invalid`) keys of `plugin` and returns the count; other plugins' keys stay.
+    /// Callers loop until a batch comes back short (the plugin purge, M2a-2 P9).
+    async fn delete_all(&self, plugin: &str, limit: u32) -> Result<u64, StoreError>;
 }
 
 #[async_trait]

@@ -21,7 +21,10 @@ use ferrite_cluster::{JobError, JobHandler};
 use ferrite_config::Config;
 use ferrite_core::{
     Actor, AuthService, ContentDraft, ContentService, ContentTypeService, ExtensionService,
-    NewType, OptionService, PermalinkRules, Scopes, auth::SiteKey, events::options_changed,
+    NewType, OptionService, PermalinkRules, Scopes,
+    auth::SiteKey,
+    events::options_changed,
+    jobs::{PLUGIN_PURGE_VERSION, PluginPurge, plugin_purge_job},
 };
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, Job, JobStatus, NewJob, Role, Timestamp,
@@ -883,6 +886,88 @@ async fn scheduled_post_publishes_via_job(db: Arc<TestDb>) {
     node.shutdown().await.unwrap();
 }
 
+/// A due `plugin.purge` job runs through the node's runner (F17: enqueued with
+/// `run_at` = now) and removes the deleted plugin's KV.
+async fn purge_job_runs_through_the_runner(db: Arc<TestDb>) {
+    let site = Site::new(&db);
+    let opts = NodeOptions {
+        periodics: Some(Vec::new()),
+        ..NodeOptions::default()
+    };
+    let node = site.start(&db, opts).await;
+    let store = db.shared_store();
+    let extensions = ExtensionService::new(store.clone());
+    let artifact = Artifact {
+        hash: ArtifactHash::parse(&"7e".repeat(32)).unwrap(),
+        kind: ArtifactKind::Plugin,
+        bytes: 1,
+        mime: PLUGIN_MIME.into(),
+        created_at: Timestamp::now(),
+    };
+    let now = Timestamp::now();
+    extensions
+        .install_plugin(
+            &artifact,
+            &ferrite_domain::InstalledPlugin {
+                name: "gone".into(),
+                version: "0.1.0".into(),
+                artifact_hash: artifact.hash.clone(),
+                manifest: json!({"plugin": {"name": "gone"}}),
+                granted: Value::Null,
+                enabled: false,
+                disabled_reason: None,
+                installed_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .read()
+        .plugin_kv()
+        .set("gone", "k", b"v")
+        .await
+        .unwrap();
+    extensions.delete_plugin("gone").await.unwrap();
+    let marker = store
+        .read()
+        .options()
+        .get("plugin.gone.deleted_at")
+        .await
+        .unwrap()
+        .unwrap();
+    let deleted_at = Timestamp::from_micros(marker.value.as_i64().unwrap()).unwrap();
+    // The delete's own job is 30 days out; this copy is due now.
+    let mut job = plugin_purge_job(&PluginPurge {
+        v: PLUGIN_PURGE_VERSION,
+        name: "gone".into(),
+        deleted_at,
+        settings: Vec::new(),
+    });
+    job.unique_key = None;
+    job.run_at = None;
+    let id = store.read().jobs().enqueue(&job).await.unwrap().unwrap();
+    eventually(Duration::from_secs(5), "purge job done", || {
+        let store = store.clone();
+        async move { store.read().jobs().get(id).await.unwrap().unwrap().status == JobStatus::Done }
+    })
+    .await;
+    assert_eq!(
+        store.read().plugin_kv().usage("gone").await.unwrap(),
+        (0, 0)
+    );
+    assert!(
+        store
+            .read()
+            .options()
+            .get("plugin.gone.deleted_at")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    node.shutdown().await.unwrap();
+}
+
 /// Job rows per status.
 async fn counts(store: &dyn Store) -> std::collections::BTreeMap<JobStatus, u64> {
     store.read().jobs().counts().await.unwrap()
@@ -966,5 +1051,6 @@ backend_tests_spawning!(
     new_type_is_routable_without_restart,
     type_registered_over_api_serves_permalinks,
     scheduled_post_publishes_via_job,
+    purge_job_runs_through_the_runner,
     shutdown_releases_running_job_and_deregisters,
 );
