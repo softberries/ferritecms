@@ -33,8 +33,16 @@ ran on the solo profile only.
 5. **The transcripts below come from a debug build** on one laptop (Darwin 25.6.0 arm64,
    14 CPUs, rustc 1.99.1, PostgreSQL 17.11 at `localhost:54329`; CI uses `postgres:18`).
    CI has not run on this commit at the time of writing.
-6. **The workspace runs were made on `48ce393`, before the Task 14 edits.** Task 14 changed
-   only documentation and one doc comment (`crates/ferrite/src/seed.rs`); fmt, clippy and
+6. **Final fix wave (R26, through `160f182`).** After the final review the fixes in ruling
+   R26 changed code and tests (revisions need edit rights, tokens ignore `must_reset`,
+   TOTP enrollment ends other sessions, redirect slash variants and sitemap shards, the
+   untrusted `X-Forwarded-For` warning, the option cache removed, the OpenAPI sweep test,
+   the merged `serve` test binary). On that tree: fmt and clippy clean (workspace and the
+   plugins workspace for `wasm32-wasip2`), and both workspace runs (with `CI=true` and
+   Postgres, and without the Postgres URL) gave 68 test-result lines, 1584 passed, 0
+   failed, 1 ignored (one binary fewer than before: `serve` and `api` are one).
+7. **The workspace runs below were made on `48ce393`, before the Task 14 edits.** Task 14
+   changed only documentation and one doc comment (`crates/ferrite/src/seed.rs`); fmt, clippy and
    both workspace runs were repeated on the final tree with the same results (69
    test-result lines, 1576 passed, 0 failed, 1 ignored each). The plugins workspace checks
    ran on `48ce393` only (Task 14 did not touch `plugins/`).
@@ -61,7 +69,8 @@ instead of skipping, so the first run executed every Postgres case.
 
 ### `api_end_to_end_on_real_binary`
 
-`crates/ferrite/tests/api.rs`: `init` → `user create --password-stdin` → `ferrite serve` on a
+`crates/ferrite/tests/serve/api.rs` (the `serve` test binary since the final fix wave, R26
+M8; it was `tests/api.rs`): `init` → `user create --password-stdin` → `ferrite serve` on a
 free port (solo: SQLite + local media; cluster: Postgres + an in-process `s3s` S3 server),
 then a browser-like session (cookie, `X-CSRF-Token`, `Origin` = `site.url`) and bearer
 tokens over raw HTTP/1.1: login from a foreign origin refused, wrong password and unknown
@@ -69,19 +78,31 @@ login identical `401`s, CSRF required, content create/publish/preview, tokens an
 50-token cap, user disable revoking cookie and token, logout, and no secret in any
 response body except where it belongs.
 
+**TCP reset on an early refusal (Task 13 concern 4).** The origin check on login answers
+`403` before the server reads the request body, so a client still sending its body can
+get a TCP reset after the full response (Task 13 saw it on every run of the foreign-origin
+login). The server is unchanged; the harness accepts a reset only for a response with a
+`Content-Length` whose whole body arrived (`request` in
+`crates/ferrite/tests/serve/harness.rs`), and any other reset fails the test. Browsers
+handle this; `curl` may print "connection reset" with a large body (the manual session
+below uses small ones).
+
+Re-run on the final fix-wave tree (`160f182`), one test at a time so both runs list the
+tests in the same (alphabetical) order:
+
 ```
-$ CI=true FERRITE_TEST_PG_URL=$PG cargo test -p ferrite --test api -- --nocapture
+$ CI=true FERRITE_TEST_PG_URL=$PG cargo test -p ferrite --test serve api_end_to_end -- --nocapture --test-threads=1
 running 2 tests
-test api_end_to_end_on_real_binary_solo ... ok
-test api_end_to_end_on_real_binary_cluster ... ok
+test api::api_end_to_end_on_real_binary_cluster ... ok
+test api::api_end_to_end_on_real_binary_solo ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 4.02s
 
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.34s
-
-$ env -u CI -u FERRITE_TEST_PG_URL cargo test -p ferrite --test api -- --nocapture
-SKIP: Postgres API test skipped (FERRITE_TEST_PG_URL is not set)
-test api_end_to_end_on_real_binary_cluster ... ok
-test api_end_to_end_on_real_binary_solo ... ok
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.95s
+$ env -u CI -u FERRITE_TEST_PG_URL cargo test -p ferrite --test serve api_end_to_end -- --nocapture --test-threads=1
+running 2 tests
+test api::api_end_to_end_on_real_binary_cluster ... SKIP: Postgres serve test skipped (FERRITE_TEST_PG_URL is not set)
+ok
+test api::api_end_to_end_on_real_binary_solo ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 1.97s
 ```
 
 ### OpenAPI snapshot
