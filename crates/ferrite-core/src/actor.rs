@@ -308,6 +308,19 @@ pub(crate) fn require_scope(actor: &Actor, scope: Option<Scope>) -> Result<(), C
     }
 }
 
+/// Whether `actor` may read `item` in the admin (after [`require_read`]`(Content)`):
+/// published items are readable by everyone, own items in any status by their author,
+/// and everything else (others' drafts, pending, scheduled, private and trashed items)
+/// needs a role holding `edit_others` (editor, admin). There is no separate
+/// `read_private` capability: WordPress's `read_private_posts` is granted to the same
+/// roles as `edit_others_posts`, so `edit_others` stands for it. Only the role is
+/// checked, not a write scope: an admin's `content:read` token reads every item.
+pub fn can_read(actor: &Actor, item: &ContentItem) -> bool {
+    item.status == ContentStatus::Published
+        || item.author_id == actor.user
+        || can(actor.role, Capability::EditOthers)
+}
+
 /// Whether `actor` may edit the existing `item`: own items need `edit_own` (contributors
 /// only while the item is draft or pending), other people's need `edit_others`.
 pub fn can_edit(actor: &Actor, item: &ContentItem) -> Result<(), CoreError> {

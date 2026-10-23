@@ -1,7 +1,8 @@
 //! Admin reads of content (lists with filters or search, single items, terms,
 //! revisions) and revision restore. Every read takes the [`Actor`] and checks
 //! `require_read(Content)` (`read_admin` plus the `content:read` scope, F16), so a token
-//! without a content scope reads nothing.
+//! without a content scope reads nothing, and then [`can_read`] per item (R17): others'
+//! unpublished items only for roles with `edit_others`.
 
 use ferrite_domain::{
     ContentId, ContentItem, ContentOrder, ContentQuery, ContentStatus, Page, ParentFilter,
@@ -11,7 +12,7 @@ use ferrite_domain::{
 use super::{ContentDraft, ContentService, Edit, WALKED};
 use crate::{
     Actor, CoreError,
-    actor::{Area, Capability, require, require_read},
+    actor::{Area, Capability, can, can_read, require, require_read},
     tx::finish,
 };
 
@@ -73,12 +74,15 @@ impl ContentService {
             .ok_or(CoreError::NotFound)
     }
 
-    /// One page of the items `query` selects (needs `require_read(Content)`; any
-    /// author's items, as in WordPress). With search text, the ids come from the search
-    /// index (the query's type and statuses, best match first) and the items are loaded
-    /// in that order; the search cursor is passed through. Without, it is a
-    /// [`ContentQuery`] in `query.order`. A cursor that does not belong to the query's
-    /// kind of list is `Invalid`.
+    /// One page of the items `query` selects (needs `require_read(Content)`). Without
+    /// `edit_others` in its role, `actor` sees only published items and its own (any
+    /// status), as WordPress's REST API does for contributors and authors; the filter is
+    /// part of the query, so pages, cursors and sizes stay exact. With search text, the
+    /// ids come from the search index (the query's type, statuses and the same
+    /// visibility, best match first) and the items are loaded in that order, dropping any
+    /// whose status or visibility changed in between; the search cursor is passed
+    /// through. Without, it is a [`ContentQuery`] in `query.order`. A cursor that does not
+    /// belong to the query's kind of list is `Invalid`.
     pub async fn list(
         &self,
         actor: &Actor,
@@ -90,6 +94,7 @@ impl ContentService {
         } else {
             query.statuses.clone()
         };
+        let readable_by = (!can(actor.role, Capability::EditOthers)).then_some(actor.user);
         let repos = self.store.read();
         let Some(q) = query.search_text() else {
             return Ok(repos
@@ -100,6 +105,7 @@ impl ContentService {
                     parent: query.parent,
                     term: query.term,
                     author: query.author,
+                    readable_by,
                     order: query.order,
                     limit: query.limit,
                     cursor: query.cursor.clone(),
@@ -117,7 +123,8 @@ impl ContentService {
             .search(&SearchQuery {
                 q: q.to_owned(),
                 kinds: vec![query.kind.clone()],
-                statuses,
+                statuses: statuses.clone(),
+                readable_by,
                 limit: query.limit,
                 cursor: query.cursor.clone(),
             })
@@ -128,21 +135,34 @@ impl ContentService {
         } else {
             repos.content().get_many(&hits.items).await?
         };
+        // The rows may have changed since the search read them.
+        let items = items
+            .into_iter()
+            .filter(|i| i.kind == query.kind && statuses.contains(&i.status) && can_read(actor, i))
+            .collect();
         Ok(Page {
             items,
             next_cursor: hits.next_cursor,
         })
     }
 
-    /// Item `id` in any status (`require_read(Content)`); missing is `NotFound`.
+    /// Item `id` in any status, if `actor` may read it ([`can_read`] after
+    /// `require_read(Content)`). Missing or not readable is `NotFound`, so the existence
+    /// of others' unpublished items is not revealed.
     pub async fn get_for(&self, actor: &Actor, id: ContentId) -> Result<ContentItem, CoreError> {
         require_read(actor, Area::Content)?;
-        self.get(id).await
+        let item = self.get(id).await?;
+        if can_read(actor, &item) {
+            Ok(item)
+        } else {
+            Err(CoreError::NotFound)
+        }
     }
 
-    /// The terms of item `id`, in their stored order (`require_read(Content)`).
+    /// The terms of item `id`, in their stored order (as [`get_for`](Self::get_for)
+    /// checks it).
     pub async fn terms_of(&self, actor: &Actor, id: ContentId) -> Result<Vec<TermId>, CoreError> {
-        require_read(actor, Area::Content)?;
+        self.get_for(actor, id).await?;
         Ok(self
             .store
             .read()
@@ -155,31 +175,32 @@ impl ContentService {
     }
 
     /// Up to `limit` (clamped to 1..=[`MAX_REVISIONS_LISTED`]) revisions of item `id`,
-    /// newest first (`require_read(Content)`); a missing item is `NotFound`.
+    /// newest first, if `actor` may read the item ([`get_for`](Self::get_for):
+    /// `NotFound` otherwise).
     pub async fn revisions(
         &self,
         actor: &Actor,
         id: ContentId,
         limit: u32,
     ) -> Result<Vec<Revision>, CoreError> {
-        require_read(actor, Area::Content)?;
-        let repos = self.store.read();
-        repos.content().get(id).await?.ok_or(CoreError::NotFound)?;
-        Ok(repos
+        self.get_for(actor, id).await?;
+        Ok(self
+            .store
+            .read()
             .revisions()
             .list(id, limit.clamp(1, MAX_REVISIONS_LISTED))
             .await?)
     }
 
-    /// Revision `rid` of item `id` (`require_read(Content)`); a revision of another item
-    /// is `NotFound`.
+    /// Revision `rid` of item `id`, if `actor` may read the item; a revision of another
+    /// item is `NotFound`.
     pub async fn revision(
         &self,
         actor: &Actor,
         id: ContentId,
         rid: RevisionId,
     ) -> Result<Revision, CoreError> {
-        require_read(actor, Area::Content)?;
+        self.get_for(actor, id).await?;
         self.store
             .read()
             .revisions()

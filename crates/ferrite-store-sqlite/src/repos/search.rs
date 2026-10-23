@@ -93,6 +93,11 @@ impl SearchRepo for SqliteRepos {
             }
             list.push_unseparated(")");
         }
+        if let Some(reader) = query.readable_by {
+            qb.push(" AND (c.status = 'published' OR c.author_id = ")
+                .push_bind(reader.as_uuid())
+                .push(")");
+        }
         if let Some((rank, id)) = plan.after {
             qb.push(" AND (h.rank < ").push_bind(rank);
             qb.push(" OR (h.rank = ").push_bind(rank);

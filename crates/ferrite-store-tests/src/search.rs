@@ -30,6 +30,7 @@ async fn find(search: &dyn SearchRepo, q: &str, limit: u32) -> Result<Vec<Conten
         q: q.into(),
         kinds: Vec::new(),
         statuses: Vec::new(),
+        readable_by: None,
         limit,
         cursor: None,
     };
@@ -293,6 +294,7 @@ fn query(q: &str, kinds: &[&str], statuses: &[ContentStatus], limit: u32) -> Sea
         q: q.into(),
         kinds: kinds.iter().map(|k| (*k).into()).collect(),
         statuses: statuses.to_vec(),
+        readable_by: None,
         limit,
         cursor: None,
     }
@@ -497,4 +499,66 @@ pub async fn cursor_kinds_are_not_interchangeable(db: &TestDb) {
             .await;
         assert!(matches!(r, Err(StoreError::Invalid(_))), "{order:?}: {r:?}");
     }
+}
+
+/// `readable_by` in search: published items of anyone plus the user's own items.
+pub async fn search_readable_by(db: &TestDb) {
+    let store = db.store();
+    let me = fixture_user(store).await;
+    let other = fixture_user(store).await;
+    let mut ids = Vec::new();
+    for (author, slug, status) in [
+        (&me, "wombat-mine", ContentStatus::Draft),
+        (&other, "wombat-live", ContentStatus::Published),
+        (&other, "wombat-draft", ContentStatus::Draft),
+        (&other, "wombat-private", ContentStatus::Private),
+    ] {
+        let mut n = new_post(author, slug);
+        n.status = status;
+        let item = store.read().content().insert(&n).await.unwrap();
+        store
+            .read()
+            .search()
+            .index(item.id, "wombat", slug)
+            .await
+            .unwrap();
+        ids.push(item.id);
+    }
+    let query = |readable_by| SearchQuery {
+        q: "wombat".into(),
+        kinds: Vec::new(),
+        statuses: Vec::new(),
+        readable_by,
+        limit: 50,
+        cursor: None,
+    };
+    let mut got = store
+        .read()
+        .search()
+        .search(&query(Some(me.id)))
+        .await
+        .unwrap()
+        .items;
+    got.sort();
+    let mut want = vec![ids[0], ids[1]];
+    want.sort();
+    assert_eq!(got, want);
+    let all = store
+        .read()
+        .search()
+        .search(&query(None))
+        .await
+        .unwrap()
+        .items;
+    assert_eq!(all.len(), 4);
+    // Paging stays exact under the filter.
+    let mut q = query(Some(me.id));
+    q.limit = 1;
+    let first = store.read().search().search(&q).await.unwrap();
+    assert_eq!(first.items.len(), 1);
+    q.cursor = first.next_cursor;
+    let second = store.read().search().search(&q).await.unwrap();
+    assert_eq!(second.items.len(), 1);
+    assert!(second.next_cursor.is_none());
+    assert_ne!(first.items, second.items);
 }

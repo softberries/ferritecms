@@ -103,7 +103,7 @@ impl ContentService {
     /// to 5 times. A top-level item may not take a [`slug::RESERVED`] word, the name
     /// of a registered content type (its archive prefix) or taxonomy (its term
     /// prefix), a [`slug::ROUTE_WORDS`] word or four digits (a year archive; ruling
-    /// R13): a caller slug is `Invalid("reserved slug")`, a generated one gets the `-N`
+    /// R13): a caller slug is `InvalidField { field: "slug", .. }` ("reserved slug"), a generated one gets the `-N`
     /// suffix.
     ///
     /// Top-level items of types that share the root path namespace
@@ -350,7 +350,7 @@ fn base_slug(
     };
     let s = slug::validate(s)?;
     if parent.is_none() && slug::is_reserved(&s) {
-        return Err(CoreError::Invalid("reserved slug".into()));
+        return Err(CoreError::invalid_field("slug", "reserved slug"));
     }
     Ok(s)
 }
@@ -370,7 +370,7 @@ struct RootNamespace {
 impl ContentService {
     /// The root-namespace rules for an item of `kind` under `parent` (none below the
     /// top level). A caller slug (`explicit`) that is a router prefix or four digits
-    /// is `Invalid("reserved slug")`.
+    /// is `InvalidField { field: "slug", .. }` ("reserved slug").
     async fn root_namespace(
         &self,
         repos: &dyn Repos,
@@ -394,7 +394,7 @@ impl ContentService {
         names.extend(slug::ROUTE_WORDS.iter().map(|w| (*w).to_owned()));
         let year = slug::is_year(base);
         if explicit && (year || names.iter().any(|n| n == base)) {
-            return Err(CoreError::Invalid("reserved slug".into()));
+            return Err(CoreError::invalid_field("slug", "reserved slug"));
         }
         Ok(RootNamespace {
             names,
@@ -730,29 +730,35 @@ async fn check_parent(
     parent: ContentId,
 ) -> Result<(), CoreError> {
     if !ty.hierarchical {
-        return Err(CoreError::Invalid(format!(
-            "content type {:?} is not hierarchical; items cannot have a parent",
-            ty.name
-        )));
+        return Err(CoreError::invalid_field(
+            "parent_id",
+            format!(
+                "content type {:?} is not hierarchical; items cannot have a parent",
+                ty.name
+            ),
+        ));
     }
     let Some(mut item) = repos.content().get(parent).await? else {
-        return Err(CoreError::Invalid("unknown parent".into()));
+        return Err(CoreError::invalid_field("parent_id", "unknown parent"));
     };
     if item.kind != ty.name {
-        return Err(CoreError::Invalid(format!(
-            "parent must be of type {:?}",
-            ty.name
-        )));
+        return Err(CoreError::invalid_field(
+            "parent_id",
+            format!("parent must be of type {:?}", ty.name),
+        ));
     }
     if item.status == ContentStatus::Trash {
-        return Err(CoreError::Invalid("parent is trashed".into()));
+        return Err(CoreError::invalid_field("parent_id", "parent is trashed"));
     }
     let Some(child) = child else {
         return Ok(());
     };
     for _ in 0..MAX_PARENT_DEPTH {
         if item.id == child {
-            return Err(CoreError::Invalid("parent would create a cycle".into()));
+            return Err(CoreError::invalid_field(
+                "parent_id",
+                "parent would create a cycle",
+            ));
         }
         let Some(up) = item.parent_id else {
             return Ok(());
@@ -761,16 +767,19 @@ async fn check_parent(
             .content()
             .get(up)
             .await?
-            .ok_or_else(|| CoreError::Invalid("unknown parent".into()))?;
+            .ok_or_else(|| CoreError::invalid_field("parent_id", "unknown parent"))?;
     }
-    Err(CoreError::Invalid(format!(
-        "parent chain deeper than {MAX_PARENT_DEPTH}"
-    )))
+    Err(CoreError::invalid_field(
+        "parent_id",
+        format!("parent chain deeper than {MAX_PARENT_DEPTH}"),
+    ))
 }
 
 async fn set_terms(repos: &dyn Repos, item: ContentId, terms: &[TermId]) -> Result<(), CoreError> {
     match repos.terms().set_for_item(item, terms).await {
-        Err(StoreError::ForeignKey { .. }) => Err(CoreError::Invalid("unknown term".into())),
+        Err(StoreError::ForeignKey { .. }) => {
+            Err(CoreError::invalid_field("terms", "unknown term"))
+        }
         other => Ok(other?),
     }
 }

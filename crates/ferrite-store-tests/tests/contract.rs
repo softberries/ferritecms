@@ -72,6 +72,7 @@ backend_tests!(
     list_pagination_title_asc_mixed_case_unicode,
     revisions_newest_first_and_prune,
     list_filters_ids_exclude_dates,
+    list_readable_by,
     count_matches_list,
     get_many_order_and_missing,
     slugs_with_prefix_matches,
@@ -153,6 +154,7 @@ backend_tests!(
     search_rejects_nul_and_bad_limits,
     search_semantics_identical,
     search_filters_status_kind_and_pages,
+    search_readable_by,
     search_ties_break_by_id_descending,
     cursor_kinds_are_not_interchangeable,
 );

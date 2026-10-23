@@ -239,6 +239,7 @@ mod tests {
             q: "x".into(),
             kinds: Vec::new(),
             statuses: vec![Published, Draft, Published, Draft],
+            readable_by: None,
             limit: 10,
             cursor: None,
         };

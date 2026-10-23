@@ -42,7 +42,9 @@ impl JobHandler for PublishScheduledHandler {
             .await
             .map_err(|e| match e {
                 // Retrying cannot change these.
-                CoreError::Invalid(_) | CoreError::NotFound => JobError::Permanent(e.to_string()),
+                CoreError::Invalid(_) | CoreError::InvalidField { .. } | CoreError::NotFound => {
+                    JobError::Permanent(e.to_string())
+                }
                 other => JobError::Retry(other.to_string()),
             })?;
         if published {

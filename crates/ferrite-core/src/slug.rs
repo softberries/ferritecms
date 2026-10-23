@@ -72,22 +72,24 @@ pub fn slugify(input: &str) -> String {
 pub fn validate(input: &str) -> Result<String, CoreError> {
     let s = input.trim().to_lowercase();
     if s.is_empty() {
-        return Err(CoreError::Invalid("slug must not be empty".into()));
+        return Err(CoreError::invalid_field("slug", "slug must not be empty"));
     }
     if s.chars().count() > MAX_LEN {
-        return Err(CoreError::Invalid(format!(
-            "slug longer than {MAX_LEN} characters"
-        )));
+        return Err(CoreError::invalid_field(
+            "slug",
+            format!("slug longer than {MAX_LEN} characters"),
+        ));
     }
     if s == "." || s == ".." {
-        return Err(CoreError::Invalid(
-            "slug must not be \".\" or \"..\"".into(),
+        return Err(CoreError::invalid_field(
+            "slug",
+            "slug must not be \".\" or \"..\"",
         ));
     }
     if s.chars().any(is_forbidden_char) {
-        return Err(CoreError::Invalid(
-            "slug must not contain whitespace, control or format characters, or any of / ? # % < > \" ' \\ `"
-                .into(),
+        return Err(CoreError::invalid_field(
+            "slug",
+            "slug must not contain whitespace, control or format characters, or any of / ? # % < > \" ' \\ `",
         ));
     }
     Ok(s)
@@ -189,7 +191,10 @@ mod tests {
             " .. ",
         ] {
             assert!(
-                matches!(validate(bad), Err(CoreError::Invalid(_))),
+                matches!(
+                    validate(bad),
+                    Err(CoreError::InvalidField { field: "slug", .. })
+                ),
                 "{bad:?}"
             );
         }
@@ -215,7 +220,10 @@ mod tests {
             "a`b",
         ] {
             assert!(
-                matches!(validate(bad), Err(CoreError::Invalid(_))),
+                matches!(
+                    validate(bad),
+                    Err(CoreError::InvalidField { field: "slug", .. })
+                ),
                 "{bad:?}"
             );
         }

@@ -16,6 +16,14 @@ pub enum CoreError {
     RateLimited { retry_after_secs: u64 },
     #[error("invalid input: {0}")]
     Invalid(String),
+    /// Invalid input attributable to one input member: `field` is its name as the API
+    /// spells it (`slug`, `terms`, `parent_id`, …), so a form can show the message next
+    /// to it. Otherwise like [`Invalid`](Self::Invalid).
+    #[error("invalid {field}: {message}")]
+    InvalidField {
+        field: &'static str,
+        message: String,
+    },
     #[error("version conflict (current version {current_version})")]
     Conflict { current_version: i64 },
     /// The operating system's random number generator failed (keys, nonces, tokens).
@@ -26,6 +34,16 @@ pub enum CoreError {
     Hashing,
     #[error(transparent)]
     Store(StoreError),
+}
+
+impl CoreError {
+    /// `InvalidField { field, message }`.
+    pub fn invalid_field(field: &'static str, message: impl Into<String>) -> Self {
+        Self::InvalidField {
+            field,
+            message: message.into(),
+        }
+    }
 }
 
 impl From<StoreError> for CoreError {

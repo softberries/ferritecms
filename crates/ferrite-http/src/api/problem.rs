@@ -11,6 +11,7 @@
 //! | `Unauthenticated` | 401 | `unauthenticated` (login endpoints: `invalid-credentials`) |
 //! | `RateLimited { retry_after_secs }` | 429 | `rate-limited` + `Retry-After` |
 //! | `Invalid(msg)` | 422 | `validation` (detail = msg) |
+//! | `InvalidField { field, message }` | 422 | `validation` (detail = message, `errors[0] = { field, detail: message }`) |
 //! | `Conflict { .. }` | 412 | `precondition-failed` (+ `current`, set by the handler) |
 //! | `Store(UniqueViolation)` | 409 | `conflict` (a known constraint adds an `errors` entry for its field, see [`UNIQUE_FIELDS`]; the constraint name is never sent) |
 //! | `Store(ForeignKey)` | 409 | `conflict` ("a related record changed; retry", F15) |
@@ -305,6 +306,9 @@ impl From<CoreError> for Problem {
             )
             .with_retry_after(retry_after_secs),
             CoreError::Invalid(msg) => Self::validation(msg),
+            CoreError::InvalidField { field, message } => {
+                Self::validation(message.clone()).with_error(Some(field), message)
+            }
             CoreError::Conflict { current_version } => Self::new(
                 StatusCode::PRECONDITION_FAILED,
                 "precondition-failed",
@@ -420,6 +424,13 @@ mod tests {
                 None,
             ),
             (
+                CoreError::invalid_field("slug", "reserved slug"),
+                422,
+                "validation",
+                Some("reserved slug"),
+                None,
+            ),
+            (
                 CoreError::Conflict { current_version: 4 },
                 412,
                 "precondition-failed",
@@ -505,6 +516,19 @@ mod tests {
             }
             assert_eq!(got_retry, retry, "{name}");
         }
+    }
+
+    #[test]
+    fn invalid_field_names_the_member() {
+        let p = Problem::from(CoreError::invalid_field("terms", "unknown term"));
+        assert_eq!(p.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            p.errors,
+            [FieldError {
+                field: Some("terms".into()),
+                detail: "unknown term".into()
+            }]
+        );
     }
 
     #[test]

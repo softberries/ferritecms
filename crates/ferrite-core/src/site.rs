@@ -419,6 +419,7 @@ impl SiteReader {
             q: q.to_owned(),
             kinds: kinds.clone(),
             statuses: vec![ContentStatus::Published],
+            readable_by: None,
             limit: MAX_PAGE,
             cursor: None,
         };

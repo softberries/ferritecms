@@ -51,8 +51,9 @@ surface).
   | `Unauthenticated` | 401 | `unauthenticated` |
   | `RateLimited` | 429 | `rate-limited` + `Retry-After` |
   | `Invalid` | 422 | `validation` |
+  | `InvalidField { field, .. }` | 422 | `validation` with `errors[0].field` naming the input member |
   | `Conflict` (version) | 412 | `precondition-failed` + `current` |
-  | store unique violation | 409 | `conflict` (detail names the constraint) |
+  | store unique violation | 409 | `conflict`; a known constraint adds `errors[0].field` (e.g. `slug`); the constraint name is never sent |
   | store foreign-key violation | 409 | `conflict` ("a related record changed; retry") |
   | store busy | 503 | `busy` + `Retry-After: 5` |
   | randomness, hashing, other store errors | 500 | `internal` |
@@ -122,6 +123,14 @@ HTTP layer arrives with M2):
 - **R8: contributors cannot restore or permanently delete**, even their own items: a trashed
   item gives them nothing. For everyone else `restore` and `delete` need `edit_own` on
   own items and `edit_others` otherwise, whatever the status the item had before.
+- **Reading content (M2a-1 R17)**: every admin read needs `read_admin` and the
+  `content:read` scope, then `can_read`: published items are readable by every role,
+  own items in any status by their author, and others' draft, pending, scheduled,
+  private and trashed items (and their revisions) only by roles with `edit_others`
+  (editor, admin; it also stands for WordPress's `read_private_posts`). An item the actor
+  may not read is `404`, never `403`. Lists and `q` search apply the same rule in the
+  query, so pages and cursors stay exact. `publish` also accepts a scheduled item
+  ("publish now").
 
 ## 2. Auth
 

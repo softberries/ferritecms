@@ -297,7 +297,7 @@ pub async fn type_names_are_reserved_top_level(db: &TestDb) {
         for name in ["media", "Post", "page"] {
             let r = svc.create(&admin, draft(kind, name)).await;
             assert!(
-                matches!(&r, Err(ferrite_core::CoreError::Invalid(m)) if m == "reserved slug"),
+                matches!(&r, Err(ferrite_core::CoreError::InvalidField { field: "slug", message: m }) if m == "reserved slug"),
                 "{kind}/{name}: {r:?}"
             );
         }
@@ -319,7 +319,9 @@ pub async fn type_names_are_reserved_top_level(db: &TestDb) {
     let r = svc
         .update(&admin, top.id, top.version, draft("page", "post"))
         .await;
-    assert!(matches!(r, Err(ferrite_core::CoreError::Invalid(m)) if m == "reserved slug"));
+    assert!(
+        matches!(r, Err(ferrite_core::CoreError::InvalidField { field: "slug", message: m }) if m == "reserved slug")
+    );
 }
 
 /// Ruling R13: taxonomy names, router words and four-digit slugs are reserved at the
@@ -334,7 +336,7 @@ pub async fn route_words_are_reserved_top_level(db: &TestDb) {
         ] {
             let r = svc.create(&admin, draft(kind, name)).await;
             assert!(
-                matches!(&r, Err(ferrite_core::CoreError::Invalid(m)) if m == "reserved slug"),
+                matches!(&r, Err(ferrite_core::CoreError::InvalidField { field: "slug", message: m }) if m == "reserved slug"),
                 "{kind}/{name}: {r:?}"
             );
         }
@@ -370,7 +372,9 @@ pub async fn route_words_are_reserved_top_level(db: &TestDb) {
     let r = svc
         .update(&admin, top.id, top.version, draft("page", "tag"))
         .await;
-    assert!(matches!(r, Err(ferrite_core::CoreError::Invalid(m)) if m == "reserved slug"));
+    assert!(
+        matches!(r, Err(ferrite_core::CoreError::InvalidField { field: "slug", message: m }) if m == "reserved slug")
+    );
 }
 
 /// Ruling R3b: posts at `/%slug%/` and top-level pages share the root namespace.

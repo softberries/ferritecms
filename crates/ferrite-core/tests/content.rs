@@ -88,6 +88,7 @@ async fn search(store: &dyn Store, q: &str) -> Vec<ContentId> {
             q: q.into(),
             kinds: Vec::new(),
             statuses: Vec::new(),
+            readable_by: None,
             limit: 50,
             cursor: None,
         })
@@ -216,7 +217,7 @@ pub async fn create_update_roundtrip(db: &TestDb) {
     d.slug = Some("bad/slug".into());
     assert!(matches!(
         svc.update(&admin, other.id, 1, d).await,
-        Err(CoreError::Invalid(_))
+        Err(CoreError::Invalid(_) | CoreError::InvalidField { .. })
     ));
     // Renaming to its own slug keeps it (no `-N` against itself).
     let mut d = draft("post", "Other");
@@ -319,30 +320,30 @@ pub async fn parent_change_and_validation(db: &TestDb) {
     d.parent_id = Some(ContentId::new());
     assert!(matches!(
         svc.create(&admin, d).await,
-        Err(CoreError::Invalid(_))
+        Err(CoreError::Invalid(_) | CoreError::InvalidField { .. })
     ));
     let mut d = draft("page", "P2");
     d.parent_id = Some(p2.id);
     assert!(matches!(
         svc.update(&admin, p2.id, 1, d).await,
-        Err(CoreError::Invalid(_))
+        Err(CoreError::Invalid(_) | CoreError::InvalidField { .. })
     ));
     let mut d = draft("page", "P2");
     d.parent_id = Some(child.id);
     assert!(matches!(
         svc.update(&admin, p2.id, 1, d).await,
-        Err(CoreError::Invalid(_))
+        Err(CoreError::Invalid(_) | CoreError::InvalidField { .. })
     ));
     // Changing the type is Invalid; an unknown term is Invalid.
     assert!(matches!(
         svc.update(&admin, p2.id, 1, draft("post", "P2")).await,
-        Err(CoreError::Invalid(_))
+        Err(CoreError::Invalid(_) | CoreError::InvalidField { .. })
     ));
     let mut d = draft("post", "T");
     d.terms = vec![TermId::new()];
     assert!(matches!(
         svc.create(&admin, d).await,
-        Err(CoreError::Invalid(_))
+        Err(CoreError::Invalid(_) | CoreError::InvalidField { .. })
     ));
     assert_eq!(max_seq(store).await, seq);
 }
@@ -354,7 +355,7 @@ pub async fn unknown_type_is_invalid(db: &TestDb) {
     let seq = max_seq(store).await;
     assert!(matches!(
         svc.create(&admin, draft("nope", "Hello")).await,
-        Err(CoreError::Invalid(_))
+        Err(CoreError::Invalid(_) | CoreError::InvalidField { .. })
     ));
     assert_eq!(max_seq(store).await, seq);
     assert!(search(store, "hello").await.is_empty());
@@ -631,7 +632,7 @@ pub async fn non_slug_store_errors_surface(db: &TestDb) {
 
 fn invalid(r: Result<impl std::fmt::Debug, CoreError>) -> String {
     match r {
-        Err(CoreError::Invalid(m)) => m,
+        Err(CoreError::Invalid(m) | CoreError::InvalidField { message: m, .. }) => m,
         other => panic!("expected Invalid, got {other:?}"),
     }
 }

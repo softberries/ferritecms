@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::ContentStatus;
+use crate::{ContentStatus, UserId};
 
 /// A filtered, paginated full-text search.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -11,6 +11,10 @@ pub struct SearchQuery {
     pub kinds: Vec<String>,
     /// Only items in these statuses; empty means all statuses.
     pub statuses: Vec<ContentStatus>,
+    /// Only items that are published or authored by this user (see
+    /// [`ContentQuery::readable_by`](crate::ContentQuery::readable_by)); `None`: no such
+    /// filter.
+    pub readable_by: Option<UserId>,
     /// Page size, 1 through [`crate::MAX_PAGE`].
     pub limit: u32,
     /// Opaque cursor from a previous page's `next_cursor`.

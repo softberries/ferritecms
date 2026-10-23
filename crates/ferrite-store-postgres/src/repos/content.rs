@@ -383,6 +383,11 @@ fn push_filters(qb: &mut QueryBuilder<Postgres>, query: &ContentQuery) {
     if let Some(author) = query.author {
         qb.push(" AND author_id = ").push_bind(author.as_uuid());
     }
+    if let Some(reader) = query.readable_by {
+        qb.push(" AND (status = 'published' OR author_id = ")
+            .push_bind(reader.as_uuid())
+            .push(")");
+    }
     if let Some(term) = query.term {
         qb.push(" AND id IN (SELECT item_id FROM term_links WHERE term_id = ")
             .push_bind(term.as_uuid())

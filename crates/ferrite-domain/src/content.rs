@@ -112,6 +112,9 @@ pub struct ContentQuery {
     pub parent: ParentFilter,
     pub term: Option<TermId>,
     pub author: Option<UserId>,
+    /// Only items this user may read in the admin without `edit_others`: published
+    /// items, or items authored by this user (any status). `None`: no such filter.
+    pub readable_by: Option<UserId>,
     /// Only these items. **Empty means no filter, not "match nothing"**: a caller that
     /// computed an empty id set must short-circuit instead of querying. At most 200
     /// (`Invalid` beyond).
@@ -136,6 +139,7 @@ impl Default for ContentQuery {
             parent: ParentFilter::Any,
             term: None,
             author: None,
+            readable_by: None,
             ids: Vec::new(),
             exclude: Vec::new(),
             published_after: None,

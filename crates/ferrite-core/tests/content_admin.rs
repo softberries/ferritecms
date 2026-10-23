@@ -224,14 +224,80 @@ pub async fn admin_list_filters_and_search(db: &TestDb) {
         Err(CoreError::Invalid(_))
     ));
 
-    // A contributor may list (every author's items, like WordPress).
+    // A contributor lists published items and its own, nothing else (R17), in every
+    // mode: plain, status filter, author filter, search; pages stay exact.
     assert_eq!(
-        svc.list(&contributor, &query("post"))
-            .await
-            .unwrap()
-            .items
-            .len(),
+        ids(&svc.list(&contributor, &query("post")).await.unwrap().items),
+        HashSet::from([published.id, by_contributor.id])
+    );
+    let mut q = query("post");
+    q.statuses = vec![ContentStatus::Draft, ContentStatus::Trash];
+    assert_eq!(
+        ids(&svc.list(&contributor, &q).await.unwrap().items),
+        HashSet::from([by_contributor.id])
+    );
+    let mut q = query("post");
+    q.author = Some(admin.user);
+    assert_eq!(
+        ids(&svc.list(&contributor, &q).await.unwrap().items),
+        HashSet::from([published.id])
+    );
+    let mut q = query("post");
+    q.q = Some("quokka".into());
+    assert!(svc.list(&contributor, &q).await.unwrap().items.is_empty());
+    let mut q = query("post");
+    q.limit = 1;
+    let first = svc.list(&contributor, &q).await.unwrap();
+    assert_eq!(first.items.len(), 1);
+    q.cursor = first.next_cursor;
+    let second = svc.list(&contributor, &q).await.unwrap();
+    assert_eq!(second.items.len(), 1);
+    assert!(second.next_cursor.is_none());
+    // Single reads, terms and revisions of others' unpublished items: NotFound.
+    for id in [drafted.id, termed.id, trashed.id] {
+        assert!(matches!(
+            svc.get_for(&contributor, id).await,
+            Err(CoreError::NotFound)
+        ));
+        assert!(matches!(
+            svc.terms_of(&contributor, id).await,
+            Err(CoreError::NotFound)
+        ));
+        assert!(matches!(
+            svc.revisions(&contributor, id, 50).await,
+            Err(CoreError::NotFound)
+        ));
+    }
+    let rid = svc.revisions(&admin, drafted.id, 1).await.unwrap()[0].id;
+    assert!(matches!(
+        svc.revision(&contributor, drafted.id, rid).await,
+        Err(CoreError::NotFound)
+    ));
+    assert_eq!(
+        svc.get_for(&contributor, published.id).await.unwrap(),
+        published
+    );
+    assert_eq!(
+        svc.get_for(&contributor, by_contributor.id).await.unwrap(),
+        by_contributor
+    );
+    // An author likewise; an editor reads everything.
+    let author = actor(store, Role::Author).await;
+    assert_eq!(
+        svc.list(&author, &query("post")).await.unwrap().items.len(),
+        1
+    );
+    let editor = actor(store, Role::Editor).await;
+    assert_eq!(
+        svc.list(&editor, &query("post")).await.unwrap().items.len(),
         4
+    );
+    assert_eq!(svc.get_for(&editor, drafted.id).await.unwrap(), drafted);
+    // The role decides, not a write scope: an admin's read token reads others' drafts.
+    let reader = admin.with_scopes(Scopes::from_strs(&["content:read".into()]).unwrap());
+    assert_eq!(
+        svc.get_for(&reader, by_contributor.id).await.unwrap(),
+        by_contributor
     );
     // A token without a content scope may not.
     let narrow = admin.with_scopes(Scopes::from_strs(&["users:read".into()]).unwrap());

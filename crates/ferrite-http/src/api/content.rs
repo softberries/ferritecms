@@ -6,7 +6,8 @@
 //!
 //! * `{type}` must be a registered content type, else `404`; `media` is `404` too
 //!   (uploads are `/media`, M2a-2; F21). An item of another type is `404`, as is a
-//!   malformed id.
+//!   malformed id, and an item the caller may not read (others' unpublished items
+//!   without `edit_others`, R17; core's `can_read`), for reads and writes alike.
 //! * Writes to an item (`PATCH`, `DELETE`, lifecycle `POST`s, revision restore) need
 //!   `If-Match: "<version>"` (`428` without it). A stale version is `412
 //!   precondition-failed` with the item as stored now in `current`; nothing is written.
@@ -276,6 +277,8 @@ pub async fn list_content(
         (status = 404, description = "`not-found`: no such type", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 409, description = "`conflict`: the slug was taken concurrently (`errors[0].field` = `slug`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 400, description = "`malformed-json`", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn create_content(
@@ -307,6 +310,8 @@ pub async fn create_content(
     responses(
         (status = 200, description = "The item (`ETag`)", body = ContentDto),
         (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn get_content(
@@ -333,6 +338,9 @@ pub async fn get_content(
         (status = 412, description = "`precondition-failed`: stale version (`current`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 428, description = "`precondition-required`: no `If-Match`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 400, description = "`malformed-json` or `malformed-header` (`If-Match`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn update_content(
@@ -345,12 +353,9 @@ pub async fn update_content(
     let actor = &who.actor;
     let current = load(&api, actor, &kind, id).await?;
     let id = current.id;
-    // The patch is merged onto the version the client named: any other is a 412 before
-    // the merge (and `update` checks the version again in its transaction).
-    if current.version != version {
-        let current_version = current.version;
-        return Err(write_problem(&api, actor, id, CoreError::Conflict { current_version }).await);
-    }
+    // The patch is merged onto the item as read now. If that is not the version the
+    // client named, `update` refuses it in its transaction (after its permission check)
+    // with a `Conflict`, so a merge onto another version is never written.
     let terms = api.content.terms_of(actor, id).await?;
     let draft = patch.apply(&current, terms);
     let result = api.content.update(actor, id, version, draft).await;
@@ -371,6 +376,9 @@ pub async fn update_content(
         (status = 412, description = "`precondition-failed`: stale version (`current`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation`: not trashed (`force`), already trashed, or has children", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 428, description = "`precondition-required`: no `If-Match`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 400, description = "`malformed-header` (`If-Match`) or `malformed-query`", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn delete_content(
@@ -434,6 +442,9 @@ async fn transition(
         (status = 412, description = "`precondition-failed` (`current`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation`: illegal transition", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 428, description = "`precondition-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`: no such type, or no such item of this type that you may read", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 400, description = "`malformed-header` (`If-Match`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn publish_content(
@@ -457,6 +468,10 @@ pub async fn publish_content(
         (status = 412, description = "`precondition-failed` (`current`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation`: illegal transition", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 428, description = "`precondition-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`: no such type, or no such item of this type that you may read", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 400, description = "`malformed-header` (`If-Match`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn unpublish_content(
@@ -480,6 +495,10 @@ pub async fn unpublish_content(
         (status = 412, description = "`precondition-failed` (`current`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation`: illegal transition", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 428, description = "`precondition-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`: no such type, or no such item of this type that you may read", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 400, description = "`malformed-header` (`If-Match`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn submit_content(
@@ -503,6 +522,10 @@ pub async fn submit_content(
         (status = 412, description = "`precondition-failed` (`current`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation`: not trashed", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 428, description = "`precondition-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`: no such type, or no such item of this type that you may read", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 400, description = "`malformed-header` (`If-Match`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn restore_content(
@@ -527,6 +550,10 @@ pub async fn restore_content(
         (status = 412, description = "`precondition-failed` (`current`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation`: `at` not in the future, or illegal transition", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 428, description = "`precondition-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`: no such type, or no such item of this type that you may read", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 400, description = "`malformed-json` or `malformed-header` (`If-Match`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn schedule_content(
@@ -554,6 +581,8 @@ pub async fn schedule_content(
         (status = 200, description = "Newest first", body = RevisionList),
         (status = 400, description = "`validation` (`limit`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn list_revisions(
@@ -584,6 +613,8 @@ pub async fn list_revisions(
     responses(
         (status = 200, description = "The revision", body = RevisionDto),
         (status = 404, description = "`not-found` (also a revision of another item)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn get_revision(
@@ -612,6 +643,9 @@ pub async fn get_revision(
         (status = 412, description = "`precondition-failed` (`current`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 428, description = "`precondition-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 400, description = "`malformed-header` (`If-Match`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn restore_revision(

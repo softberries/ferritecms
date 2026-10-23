@@ -58,7 +58,10 @@ fn is_forbidden<T: std::fmt::Debug>(r: Result<T, CoreError>, cap: &str) -> bool 
 }
 
 fn is_invalid<T: std::fmt::Debug>(r: Result<T, CoreError>) -> bool {
-    matches!(r, Err(CoreError::Invalid(_)))
+    matches!(
+        r,
+        Err(CoreError::Invalid(_) | CoreError::InvalidField { .. })
+    )
 }
 
 // ---------------------------------------------------------------- taxonomies

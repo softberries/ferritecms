@@ -1160,3 +1160,79 @@ pub async fn slugs_with_prefix_limit_1000(db: &TestDb) {
     assert_eq!(got[0], "many-0000");
     assert_eq!(got[999], "many-0999");
 }
+
+/// `readable_by`: published items of anyone plus the user's own items in any status; the
+/// filter is part of the query (pages, cursors and `count` agree) and combines with the
+/// other filters.
+pub async fn list_readable_by(db: &TestDb) {
+    let store = db.store();
+    let me = fixture_user(store).await;
+    let other = fixture_user(store).await;
+    let mine_draft = insert(store, &new_post(&me, "mine-draft")).await;
+    let mut n = new_post(&me, "mine-private");
+    n.status = ContentStatus::Private;
+    let mine_private = insert(store, &n).await;
+    let theirs_live = published(store, &other, "theirs-live", 1_000).await;
+    insert(store, &new_post(&other, "theirs-draft")).await;
+    let mut n = new_post(&other, "theirs-private");
+    n.status = ContentStatus::Private;
+    insert(store, &n).await;
+    let mut n = new_post(&other, "theirs-pending");
+    n.status = ContentStatus::Pending;
+    insert(store, &n).await;
+
+    let query = ContentQuery {
+        readable_by: Some(me.id),
+        order: ContentOrder::TitleAsc,
+        limit: 1,
+        ..Default::default()
+    };
+    let got: Vec<String> = pages(store, query.clone()).await.concat();
+    let mut want = vec![
+        mine_draft.slug.clone(),
+        mine_private.slug.clone(),
+        theirs_live.slug.clone(),
+    ];
+    want.sort_by_key(|s| format!("Title of {s}"));
+    assert_eq!(got, want);
+    assert_eq!(store.read().content().count(&query).await.unwrap(), 3);
+    // Combined with statuses and author.
+    let q = ContentQuery {
+        statuses: vec![ContentStatus::Private],
+        limit: 50,
+        ..query.clone()
+    };
+    let slugs: Vec<String> = store
+        .read()
+        .content()
+        .list(&q)
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|i| i.slug)
+        .collect();
+    assert_eq!(slugs, ["mine-private"]);
+    let q = ContentQuery {
+        author: Some(other.id),
+        limit: 50,
+        ..query.clone()
+    };
+    let slugs: Vec<String> = store
+        .read()
+        .content()
+        .list(&q)
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|i| i.slug)
+        .collect();
+    assert_eq!(slugs, ["theirs-live"]);
+    // Without the filter: all six.
+    let all = ContentQuery {
+        limit: 50,
+        ..Default::default()
+    };
+    assert_eq!(store.read().content().count(&all).await.unwrap(), 6);
+}

@@ -86,6 +86,7 @@ async fn search(store: &dyn Store, q: &str) -> Vec<ContentId> {
             q: q.into(),
             kinds: Vec::new(),
             statuses: Vec::new(),
+            readable_by: None,
             limit: 50,
             cursor: None,
         })
@@ -125,7 +126,7 @@ const HOUR: i64 = 3_600_000_000;
 
 fn invalid(r: Result<impl std::fmt::Debug, CoreError>) -> String {
     match r {
-        Err(CoreError::Invalid(m)) => m,
+        Err(CoreError::Invalid(m) | CoreError::InvalidField { message: m, .. }) => m,
         other => panic!("expected Invalid, got {other:?}"),
     }
 }

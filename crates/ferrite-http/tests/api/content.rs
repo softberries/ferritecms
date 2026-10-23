@@ -24,6 +24,8 @@ api_tests!(
     token_scope_limits_writes,
     type_mismatch_is_404,
     revisions_over_http,
+    others_unpublished_items_are_hidden,
+    others_items_are_403,
     json_problems_are_no_store,
 );
 
@@ -212,15 +214,37 @@ async fn content_crud_roundtrip(api: Api) -> Api {
     assert_eq!(p["terms"], json!([]));
     assert_eq!(p["menu_order"], 3, "absent keeps");
 
-    // Core validation is 422: unknown term, reserved slug.
-    for body in [
-        json!({"title": "x", "terms": [uuid::Uuid::now_v7()]}),
-        json!({"title": "x", "slug": "admin"}),
+    // Core validation is 422 naming the member: unknown term, reserved or bad slug, a
+    // parent on a non-hierarchical type or an unknown parent.
+    for (body, field) in [
+        (
+            json!({"title": "x", "terms": [uuid::Uuid::now_v7()]}),
+            "terms",
+        ),
+        (json!({"title": "x", "slug": "admin"}), "slug"),
+        (json!({"title": "x", "slug": "a b"}), "slug"),
+        (
+            json!({"title": "x", "parent_id": created["id"]}),
+            "parent_id",
+        ),
     ] {
-        b.send(&api, Method::POST, POSTS, Some(&body), None)
+        let p = b
+            .send(&api, Method::POST, POSTS, Some(&body), None)
             .await
             .assert_problem(422, "validation");
+        assert_eq!(p["errors"][0]["field"], field, "{p}");
     }
+    let p = b
+        .send(
+            &api,
+            Method::POST,
+            PAGES,
+            Some(&json!({"title": "x", "parent_id": uuid::Uuid::now_v7()})),
+            None,
+        )
+        .await
+        .assert_problem(422, "validation");
+    assert_eq!(p["errors"][0]["field"], "parent_id", "{p}");
 
     // Pages: `parent_id` absent keeps the parent, `null` moves to the top level (F20).
     let parent = create(&api, &b, PAGES, json!({"title": "Parent"})).await;
@@ -964,5 +988,311 @@ async fn json_problems_are_no_store(api: Api) -> Api {
     assert!(p["detail"].is_string());
     // Nothing was created.
     assert_eq!(b.get(&api, POSTS).await.json()["items"], json!([]));
+    api
+}
+
+/// Marks item `id` private, bypassing the lifecycle (no transition sets it in M2a-1).
+async fn make_private(api: &Api, id: &str) {
+    let id: ferrite_domain::ContentId = id.parse().unwrap();
+    let mut item = api.store.read().content().get(id).await.unwrap().unwrap();
+    item.status = ferrite_domain::ContentStatus::Private;
+    api.store.read().content().update(&item).await.unwrap();
+}
+
+/// R17: a contributor (or author) sees published items and its own, never others'
+/// draft, pending, scheduled, private or trashed items or their revisions; an editor sees
+/// everything. Hidden items are 404, not 403.
+async fn others_unpublished_items_are_hidden(api: Api) -> Api {
+    let ed = api.user("ed", Role::Editor, false).await;
+    let eb = api.bearer(&ed, &["*"]).await;
+    let cora = api.user("cora", Role::Contributor, false).await;
+    let cb = api.bearer(&cora, &["*"]).await;
+    let ann = api.user("ann", Role::Author, false).await;
+    let ab = api.bearer(&ann, &["*"]).await;
+
+    let body = |t: &str| json!({"title": t, "body": doc("secret narwhal plans")});
+    let draft = create(&api, &eb, POSTS, body("Ed draft")).await;
+    let pending = create(&api, &eb, POSTS, body("Ed pending")).await;
+    let r = eb
+        .send(
+            &api,
+            Method::POST,
+            &format!("{}/submit", item_path(POSTS, &pending)),
+            None,
+            Some(1),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let private = create(&api, &eb, POSTS, body("Ed private")).await;
+    make_private(&api, private["id"].as_str().unwrap()).await;
+    let scheduled = create(&api, &eb, POSTS, body("Ed scheduled")).await;
+    let r = eb
+        .send(
+            &api,
+            Method::POST,
+            &format!("{}/schedule", item_path(POSTS, &scheduled)),
+            Some(&json!({"at": "2999-01-01T00:00:00Z"})),
+            Some(1),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let live = create(&api, &eb, POSTS, body("Ed live")).await;
+    let r = eb
+        .send(
+            &api,
+            Method::POST,
+            &format!("{}/publish", item_path(POSTS, &live)),
+            None,
+            Some(1),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let own = create(&api, &cb, POSTS, body("Cora own")).await;
+    let hidden = [&draft, &pending, &private, &scheduled];
+
+    let ids = |r: &Resp| -> Vec<String> {
+        assert_eq!(r.status, StatusCode::OK, "{r:?}");
+        let mut v: Vec<String> = r.json()["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["id"].as_str().unwrap().to_owned())
+            .collect();
+        v.sort();
+        v
+    };
+    let id = |v: &Value| v["id"].as_str().unwrap().to_owned();
+    let sorted = |mut v: Vec<String>| {
+        v.sort();
+        v
+    };
+
+    for (who, b) in [("contributor", &cb), ("author", &ab)] {
+        for item in hidden {
+            let path = item_path(POSTS, item);
+            b.get(&api, &path).await.assert_problem(404, "not-found");
+            b.get(&api, &format!("{path}/revisions"))
+                .await
+                .assert_problem(404, "not-found");
+            let rev = eb.get(&api, &format!("{path}/revisions")).await.json()["items"][0]["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            b.get(&api, &format!("{path}/revisions/{rev}"))
+                .await
+                .assert_problem(404, "not-found");
+        }
+        let mine = if who == "contributor" {
+            vec![id(&own)]
+        } else {
+            vec![]
+        };
+        let mut visible = mine.clone();
+        visible.push(id(&live));
+        assert_eq!(
+            ids(&b.get(&api, POSTS).await),
+            sorted(visible.clone()),
+            "{who}"
+        );
+        assert_eq!(
+            ids(&b
+                .get(
+                    &api,
+                    &format!("{POSTS}?status=draft,pending,private,scheduled,trash")
+                )
+                .await),
+            sorted(mine.clone()),
+            "{who}"
+        );
+        assert_eq!(
+            ids(&b.get(&api, &format!("{POSTS}?author={}", ed.id)).await),
+            [id(&live)],
+            "{who}"
+        );
+        assert_eq!(
+            ids(&b.get(&api, &format!("{POSTS}?q=narwhal")).await),
+            sorted(visible),
+            "{who}"
+        );
+        assert_eq!(
+            ids(&b
+                .get(&api, &format!("{POSTS}?q=narwhal&status=private"))
+                .await),
+            Vec::<String>::new(),
+            "{who}"
+        );
+        // Writes to a hidden item are 404 too.
+        let p = item_path(POSTS, &draft);
+        b.send(
+            &api,
+            Method::PATCH,
+            &p,
+            Some(&json!({"title": "x"})),
+            Some(1),
+        )
+        .await
+        .assert_problem(404, "not-found");
+    }
+    // The contributor reads its own item and the published one.
+    ok_item(&cb.get(&api, &item_path(POSTS, &own)).await);
+    ok_item(&cb.get(&api, &item_path(POSTS, &live)).await);
+
+    // An editor reads everything, in every mode.
+    let ed2 = api.user("ed2", Role::Editor, false).await;
+    let e2 = api.bearer(&ed2, &["content:read"]).await;
+    for item in hidden {
+        ok_item(&e2.get(&api, &item_path(POSTS, item)).await);
+        let r = e2
+            .get(&api, &format!("{}/revisions", item_path(POSTS, item)))
+            .await;
+        assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    }
+    let mut all: Vec<String> = hidden.iter().map(|i| id(i)).collect();
+    all.push(id(&live));
+    all.push(id(&own));
+    assert_eq!(ids(&e2.get(&api, POSTS).await), sorted(all.clone()));
+    assert_eq!(
+        ids(&e2.get(&api, &format!("{POSTS}?q=narwhal")).await),
+        sorted(all)
+    );
+    api
+}
+
+/// Writes to others' items (readable because published) and the contributor limits on
+/// own items are 403 naming the capability; nothing is written (Review Focus).
+async fn others_items_are_403(api: Api) -> Api {
+    let ed = api.user("ed", Role::Editor, false).await;
+    let eb = api.bearer(&ed, &["*"]).await;
+    let amy = api.user("amy", Role::Author, false).await;
+    let amy_b = api.bearer(&amy, &["*"]).await;
+    let bob = api.user("bob", Role::Author, false).await;
+    let bob_b = api.bearer(&bob, &["*"]).await;
+
+    let item = create(&api, &amy_b, POSTS, json!({"title": "Amy's"})).await;
+    let path = item_path(POSTS, &item);
+    let r = amy_b
+        .send(
+            &api,
+            Method::POST,
+            &format!("{path}/publish"),
+            None,
+            Some(1),
+        )
+        .await;
+    let live = ok_item(&r);
+    let v = version(&live);
+    let rev = amy_b.get(&api, &format!("{path}/revisions")).await.json()["items"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for (method, p, body, cap) in [
+        (
+            Method::PATCH,
+            path.clone(),
+            Some(json!({"title": "Bob's now"})),
+            "edit_others",
+        ),
+        (
+            Method::POST,
+            format!("{path}/unpublish"),
+            None,
+            "publish_others",
+        ),
+        (Method::DELETE, path.clone(), None, "edit_others"),
+        (
+            Method::POST,
+            format!("{path}/revisions/{rev}/restore"),
+            None,
+            "edit_others",
+        ),
+    ] {
+        let prob = bob_b
+            .send(&api, method.clone(), &p, body.as_ref(), Some(v))
+            .await
+            .assert_problem(403, "forbidden");
+        assert!(
+            prob["detail"].as_str().unwrap().contains(cap),
+            "{method} {p}: {prob}"
+        );
+        // A stale version does not change the answer: permission comes first.
+        let prob = bob_b
+            .send(&api, method.clone(), &p, body.as_ref(), Some(v - 1))
+            .await
+            .assert_problem(403, "forbidden");
+        assert!(
+            prob["detail"].as_str().unwrap().contains(cap),
+            "{method} {p}: {prob}"
+        );
+    }
+    assert_eq!(ok_item(&amy_b.get(&api, &path).await), live);
+    // A read-only token: 403 before the version, also on PATCH.
+    let ro = api.bearer(&amy, &["content:read"]).await;
+    let prob = ro
+        .send(
+            &api,
+            Method::PATCH,
+            &path,
+            Some(&json!({"title": "x"})),
+            Some(v - 1),
+        )
+        .await
+        .assert_problem(403, "forbidden");
+    assert!(
+        prob["detail"].as_str().unwrap().contains("content:write"),
+        "{prob}"
+    );
+
+    // Contributor: may trash its own draft, but not restore or delete it (R8), and may
+    // not edit its own published item.
+    let cora = api.user("cora", Role::Contributor, false).await;
+    let cb = api.bearer(&cora, &["*"]).await;
+    let own = create(&api, &cb, POSTS, json!({"title": "Cora's"})).await;
+    let own_path = item_path(POSTS, &own);
+    let trashed = ok_item(
+        &cb.send(&api, Method::DELETE, &own_path, None, Some(1))
+            .await,
+    );
+    let tv = version(&trashed);
+    for (method, p) in [
+        (Method::POST, format!("{own_path}/restore")),
+        (Method::DELETE, format!("{own_path}?force=true")),
+    ] {
+        let prob = cb
+            .send(&api, method.clone(), &p, None, Some(tv))
+            .await
+            .assert_problem(403, "forbidden");
+        assert!(
+            prob["detail"].as_str().unwrap().contains("edit_own"),
+            "{method} {p}: {prob}"
+        );
+    }
+    assert_eq!(ok_item(&cb.get(&api, &own_path).await), trashed);
+    let own2 = create(&api, &cb, POSTS, json!({"title": "Cora's live"})).await;
+    let own2_path = item_path(POSTS, &own2);
+    let live2 = ok_item(
+        &eb.send(
+            &api,
+            Method::POST,
+            &format!("{own2_path}/publish"),
+            None,
+            Some(1),
+        )
+        .await,
+    );
+    let prob = cb
+        .send(
+            &api,
+            Method::PATCH,
+            &own2_path,
+            Some(&json!({"title": "Changed"})),
+            Some(version(&live2)),
+        )
+        .await
+        .assert_problem(403, "forbidden");
+    assert!(
+        prob["detail"].as_str().unwrap().contains("edit_own"),
+        "{prob}"
+    );
+    assert_eq!(ok_item(&cb.get(&api, &own2_path).await), live2);
     api
 }

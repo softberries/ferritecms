@@ -683,6 +683,7 @@ pub async fn text_lookups_reject_nul(db: &TestDb) {
         q: q.into(),
         kinds: vec![kind.into()],
         statuses: Vec::new(),
+        readable_by: None,
         limit: 10,
         cursor,
     };
