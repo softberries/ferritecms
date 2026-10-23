@@ -9,7 +9,7 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 
-use crate::{PgStore, exec::map_db_err, listen::Channels, repos::PgRepos};
+use crate::{PgStore, exec::map_db_err, listen::Channels, lock::Locks, repos::PgRepos};
 
 /// `statement_timeout` on application connections.
 const STATEMENT_TIMEOUT: &str = "30s";
@@ -41,7 +41,8 @@ pub struct PgOptions {
     /// At most 48 bytes, so the notification channel names fit (P2).
     pub schema: Option<String>,
     /// `application_name` of the store's connections (default `"ferrite"`);
-    /// subscriptions use `<application_name>:listen`.
+    /// subscriptions use `<application_name>:listen`, named locks
+    /// `<application_name>:lock:<name>`.
     pub application_name: String,
 }
 
@@ -81,6 +82,7 @@ impl PgStore {
         let listen = base
             .clone()
             .application_name(&format!("{}:listen", opts.application_name));
+        let locks = Locks::new(base.clone(), &opts.application_name, opts.schema.as_deref());
         let connect = base.application_name(&opts.application_name);
         let search_path_sql = opts
             .schema
@@ -140,6 +142,7 @@ impl PgStore {
             connect,
             listen,
             channels,
+            locks,
             search_path_sql,
         })
     }

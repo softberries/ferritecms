@@ -16,6 +16,7 @@ mod content;
 mod event;
 mod job;
 mod menu;
+mod node;
 mod plugin;
 
 pub use plugin::FIND_MEDIA_BY_ARTIFACT_SQL;
@@ -27,8 +28,8 @@ mod user;
 use async_trait::async_trait;
 use ferrite_store::{
     ArtifactRepo, ContentRepo, ContentTypeRepo, EventRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo,
-    OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,
-    SearchRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    NodeRepo, OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos, RevisionRepo,
+    SchemaMetaRepo, SearchRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use sqlx::SqlitePool;
 
@@ -100,6 +101,9 @@ impl Repos for SqliteRepos {
         self
     }
     fn jobs(&self) -> &dyn JobRepo {
+        self
+    }
+    fn nodes(&self) -> &dyn NodeRepo {
         self
     }
     fn search(&self) -> &dyn SearchRepo {
@@ -178,6 +182,7 @@ delegate_repos!(
     themes: ThemeRepo,
     events: EventRepo,
     jobs: JobRepo,
+    nodes: NodeRepo,
     search: SearchRepo,
     schema_meta: SchemaMetaRepo,
 );

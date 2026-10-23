@@ -5,6 +5,7 @@ mod event;
 mod ids;
 mod job;
 mod menu;
+mod node;
 mod page;
 mod plugin;
 mod search;
@@ -24,6 +25,7 @@ pub use ids::{
 };
 pub use job::{DEFAULT_MAX_ATTEMPTS, Job, JobLease, JobStatus, NewJob};
 pub use menu::{Menu, MenuItem, MenuItemKind};
+pub use node::{NewNode, Node};
 pub use page::{Cursor, Page};
 pub use plugin::{Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, Media};
 pub use search::SearchQuery;

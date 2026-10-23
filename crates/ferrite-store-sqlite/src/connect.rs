@@ -83,6 +83,7 @@ impl SqliteStore {
             writer,
             reader,
             backups_dir: opts.backups_dir.unwrap_or_else(|| db_dir.join("backups")),
+            locks: crate::lock::Locks::default(),
             _lock: lock,
         })
     }

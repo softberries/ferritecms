@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use ferrite_domain::{
     Artifact, ArtifactHash, ContentId, ContentItem, ContentType, Event, InstalledPlugin,
-    InstalledTheme, Job, JobId, Media, MenuItem, MenuItemId, NodeId, OptionEntry, Redirect,
+    InstalledTheme, Job, JobId, Media, MenuItem, MenuItemId, Node, NodeId, OptionEntry, Redirect,
     RedirectId, Revision, RevisionId, Secret, Taxonomy, Term, TermId, User, UserId,
 };
 use ferrite_store::StoreError;
@@ -349,5 +349,26 @@ pub(crate) fn job(row: &PgRow) -> Result<Job, StoreError> {
         last_error: row.try_get("last_error").map_err(map_db_err)?,
         created_at: ts("created_at")?.into(),
         finished_at: ts_opt("finished_at")?.map(Into::into),
+    })
+}
+
+pub(crate) const NODE_COLUMNS: &str =
+    "id, name, version, schema_version, started_at, heartbeat_at, meta";
+
+/// Maps a row selected with [`NODE_COLUMNS`].
+pub(crate) fn node(row: &PgRow) -> Result<Node, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let meta: Json<serde_json::Value> = row.try_get("meta").map_err(map_db_err)?;
+    let ts = |name: &str| -> Result<DateTime<Utc>, StoreError> {
+        row.try_get::<DateTime<Utc>, _>(name).map_err(map_db_err)
+    };
+    Ok(Node {
+        id: NodeId::from_uuid(id),
+        name: row.try_get("name").map_err(map_db_err)?,
+        version: row.try_get("version").map_err(map_db_err)?,
+        schema_version: row.try_get("schema_version").map_err(map_db_err)?,
+        started_at: ts("started_at")?.into(),
+        heartbeat_at: ts("heartbeat_at")?.into(),
+        meta: meta.0,
     })
 }

@@ -5,6 +5,7 @@ mod codec;
 mod connect;
 mod constraint;
 mod exec;
+mod lock;
 mod migrate;
 mod repos;
 
@@ -12,7 +13,8 @@ use std::{fs::File, path::PathBuf};
 
 use async_trait::async_trait;
 use ferrite_store::{
-    Backend, Channel, MigrationStatus, Repos, Store, StoreError, Subscription, Tx,
+    Backend, Channel, LockGuard, MigrationStatus, Repos, Store, StoreError, Subscription, Tx,
+    check_lock_name,
 };
 use sqlx::SqlitePool;
 
@@ -30,6 +32,8 @@ pub struct SqliteStore {
     /// Autocommit repositories: reads on `reader`, writes on `writer`.
     read: SqliteRepos,
     backups_dir: PathBuf,
+    /// Named locks (`Store::try_lock`).
+    locks: lock::Locks,
     _lock: File,
 }
 
@@ -54,6 +58,15 @@ impl Store for SqliteStore {
         _channel: Channel,
     ) -> Result<Option<Box<dyn Subscription>>, StoreError> {
         Ok(None)
+    }
+
+    /// In-process mutex per name (P1): this process owns the data folder.
+    async fn try_lock(&self, name: &str) -> Result<Option<Box<dyn LockGuard>>, StoreError> {
+        check_lock_name(name)?;
+        if self.writer.is_closed() {
+            return Err(map_db_err(sqlx::Error::PoolClosed));
+        }
+        Ok(self.locks.try_lock(name))
     }
 
     async fn migration_status(

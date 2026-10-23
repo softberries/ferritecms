@@ -18,10 +18,10 @@ use ferrite_domain::{
     Page, SearchQuery, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 use ferrite_store::{
-    ArtifactRepo, Backend, Channel, ContentRepo, ContentTypeRepo, EventRepo, JobRepo, MediaRepo,
-    MenuRepo, MetaRepo, MigrationStatus, OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos,
-    RevisionRepo, SchemaMetaRepo, SearchRepo, Store, StoreError, Subscription, TaxonomyRepo,
-    TermRepo, ThemeRepo, Tx, UserRepo,
+    ArtifactRepo, Backend, Channel, ContentRepo, ContentTypeRepo, EventRepo, JobRepo, LockGuard,
+    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginKvRepo, PluginRepo,
+    RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, Store, StoreError, Subscription,
+    TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use serde_json::Value;
 
@@ -127,6 +127,9 @@ impl Repos for CountingRepos {
     fn jobs(&self) -> &dyn JobRepo {
         self.inner.read().jobs()
     }
+    fn nodes(&self) -> &dyn NodeRepo {
+        self.inner.read().nodes()
+    }
     fn search(&self) -> &dyn SearchRepo {
         &self.content
     }
@@ -152,6 +155,9 @@ impl Store for CountingStore {
         channel: Channel,
     ) -> Result<Option<Box<dyn Subscription>>, StoreError> {
         self.inner.store.subscribe(channel).await
+    }
+    async fn try_lock(&self, name: &str) -> Result<Option<Box<dyn LockGuard>>, StoreError> {
+        self.inner.store.try_lock(name).await
     }
     async fn migration_status(
         &self,

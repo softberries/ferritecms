@@ -1,8 +1,8 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
     backend_tests, backend_tests_spawning, batch::*, constraints::*, content::*, event::*, job::*,
-    menu::*, migration_dirs, migration_files, migrations::*, notify::*, plugin::*, search::*,
-    semantics::*, site::*, taxonomy::*, tx::*, user::*,
+    lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*, notify::*,
+    plugin::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*,
 };
 
 backend_tests!(
@@ -168,7 +168,16 @@ backend_tests!(
     jobs_tolerate_unknown_columns,
 );
 
+backend_tests!(
+    lock_is_exclusive_and_released,
+    lock_excludes_peer_store,
+    lock_released_when_holder_dies,
+    lock_names_are_validated,
+    nodes_register_heartbeat_list_prune,
+);
+
 backend_tests_spawning!(
+    lock_waits_then_busy,
     concurrent_writers,
     events_concurrent_appends_unique_seq,
     kv_quota_never_exceeded,

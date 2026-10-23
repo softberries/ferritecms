@@ -7,11 +7,11 @@ use async_trait::async_trait;
 use ferrite_domain::{
     Artifact, ArtifactHash, ContentId, ContentItem, ContentQuery, ContentType, Event,
     InstalledPlugin, InstalledTheme, Job, JobId, JobLease, JobStatus, Media, Menu, NewContent,
-    NewEvent, NewJob, NewUser, NodeId, OptionEntry, Page, Redirect, RedirectId, Revision,
-    RevisionId, SearchQuery, Taxonomy, Term, TermId, Timestamp, User, UserId,
+    NewEvent, NewJob, NewNode, NewUser, Node, NodeId, OptionEntry, Page, Redirect, RedirectId,
+    Revision, RevisionId, SearchQuery, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 
-use crate::{Channel, StoreError, Subscription, migrate::MigrationStatus};
+use crate::{Channel, LockGuard, StoreError, Subscription, migrate::MigrationStatus};
 
 /// Which database engine backs a store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +46,15 @@ pub trait Store: Send + Sync + 'static {
         &self,
         channel: Channel,
     ) -> Result<Option<Box<dyn Subscription>>, StoreError>;
+    /// Takes the named lock if it is free (04 §7, P1, P13); `Ok(None)` when it is held,
+    /// by this store or (Postgres) by any other process on the same database and schema.
+    /// Names are 1 to 64 characters from `[a-z0-9._-]` (`Invalid` otherwise; see
+    /// [`LOCK_MIGRATE`](crate::LOCK_MIGRATE) and friends). Postgres: a session-level
+    /// advisory lock keyed by `ferrite:<schema>:<name>` on a dedicated connection
+    /// (`application_name` `<app>:lock:<name>`), released when the guard is released or
+    /// dropped, or when the connection dies. SQLite: an in-process mutex per store (one
+    /// process owns the data folder). To wait for a lock use [`lock`](crate::lock()).
+    async fn try_lock(&self, name: &str) -> Result<Option<Box<dyn LockGuard>>, StoreError>;
     /// Compares applied migrations with those embedded in this binary.
     async fn migration_status(
         &self,
@@ -121,6 +130,7 @@ pub trait Repos: Send + Sync {
     fn themes(&self) -> &dyn ThemeRepo;
     fn events(&self) -> &dyn EventRepo;
     fn jobs(&self) -> &dyn JobRepo;
+    fn nodes(&self) -> &dyn NodeRepo;
     fn search(&self) -> &dyn SearchRepo;
     fn schema_meta(&self) -> &dyn SchemaMetaRepo;
 }
@@ -480,6 +490,28 @@ pub trait EventRepo: Send + Sync {
 /// they return `false`/`None` instead.
 ///
 /// Validation errors (`Invalid`) are raised before any SQL and never poison a `Tx`.
+/// The node registry (04 §3, P14). Times come from the database clock (Postgres
+/// `now()`, which inside a `Tx` is the transaction's start; SQLite the process clock).
+#[async_trait]
+pub trait NodeRepo: Send + Sync {
+    /// Inserts the node with `started_at = heartbeat_at = now`. Invalid: NUL in `name` or
+    /// `version`, `meta` not a JSON object (or with NUL). An id already registered is
+    /// `UniqueViolation { constraint: "nodes_pkey" }`.
+    async fn register(&self, node: &NewNode) -> Result<(), StoreError>;
+    /// Sets `heartbeat_at = now` and replaces `meta` (a JSON object); `false` when the
+    /// row is gone (pruned, or deregistered).
+    async fn heartbeat(&self, id: NodeId, meta: &serde_json::Value) -> Result<bool, StoreError>;
+    /// Removes the node's row; a missing row is `Ok(())`.
+    async fn deregister(&self, id: NodeId) -> Result<(), StoreError>;
+    /// Up to [`MAX_NODES`](crate::MAX_NODES) nodes, ordered by `(started_at, id)`, live or
+    /// stale (callers compare `heartbeat_at` with [`NodeRepo::db_now`]).
+    async fn list(&self) -> Result<Vec<Node>, StoreError>;
+    /// The database clock: Postgres `SELECT now()`, SQLite `Timestamp::now()`.
+    async fn db_now(&self) -> Result<Timestamp, StoreError>;
+    /// Deletes nodes whose `heartbeat_at` is before `heartbeat_before`; returns the count.
+    async fn prune(&self, heartbeat_before: Timestamp) -> Result<u64, StoreError>;
+}
+
 #[async_trait]
 pub trait JobRepo: Send + Sync {
     /// Inserts a job and returns its id, or `None` when `unique_key` is already taken

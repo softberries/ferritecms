@@ -3,7 +3,7 @@
 
 use ferrite_domain::{
     Artifact, ArtifactHash, ContentId, ContentItem, ContentType, Event, InstalledPlugin,
-    InstalledTheme, Job, JobId, Media, MenuItem, MenuItemId, NodeId, OptionEntry, Redirect,
+    InstalledTheme, Job, JobId, Media, MenuItem, MenuItemId, Node, NodeId, OptionEntry, Redirect,
     RedirectId, Revision, RevisionId, Secret, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 use ferrite_store::StoreError;
@@ -329,5 +329,23 @@ pub(crate) fn job(row: &SqliteRow) -> Result<Job, StoreError> {
         last_error: row.try_get("last_error").map_err(map_db_err)?,
         created_at: ts(row.try_get("created_at").map_err(map_db_err)?)?,
         finished_at: ts_opt(row.try_get("finished_at").map_err(map_db_err)?)?,
+    })
+}
+
+pub(crate) const NODE_COLUMNS: &str =
+    "id, name, version, schema_version, started_at, heartbeat_at, meta";
+
+/// Maps a row selected with [`NODE_COLUMNS`].
+pub(crate) fn node(row: &SqliteRow) -> Result<Node, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let meta: String = row.try_get("meta").map_err(map_db_err)?;
+    Ok(Node {
+        id: NodeId::from_uuid(id),
+        name: row.try_get("name").map_err(map_db_err)?,
+        version: row.try_get("version").map_err(map_db_err)?,
+        schema_version: row.try_get("schema_version").map_err(map_db_err)?,
+        started_at: ts(row.try_get("started_at").map_err(map_db_err)?)?,
+        heartbeat_at: ts(row.try_get("heartbeat_at").map_err(map_db_err)?)?,
+        meta: json_from_db(&meta)?,
     })
 }

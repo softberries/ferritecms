@@ -4,6 +4,7 @@ mod codec;
 mod connect;
 mod exec;
 mod listen;
+mod lock;
 mod migrate;
 mod repos;
 
@@ -11,7 +12,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use ferrite_store::{
-    Backend, Channel, MigrationStatus, Repos, Store, StoreError, Subscription, Tx,
+    Backend, Channel, LockGuard, MigrationStatus, Repos, Store, StoreError, Subscription, Tx,
+    check_lock_name,
 };
 use sqlx::{PgPool, postgres::PgConnectOptions};
 
@@ -29,6 +31,8 @@ pub struct PgStore {
     /// Options for subscriptions: `<application_name>:listen`, no session settings.
     listen: PgConnectOptions,
     channels: Arc<Channels>,
+    /// Dedicated connections for named locks (`<application_name>:lock:<name>`).
+    locks: lock::Locks,
     /// `SET search_path ...` for dedicated connections when a schema is configured.
     search_path_sql: Option<String>,
     read: PgRepos,
@@ -59,6 +63,15 @@ impl Store for PgStore {
         listen::subscribe(self.listen.clone(), self.channels.name(channel))
             .await
             .map(Some)
+    }
+
+    async fn try_lock(&self, name: &str) -> Result<Option<Box<dyn LockGuard>>, StoreError> {
+        check_lock_name(name)?;
+        // The lock connection is not from the pool; keep `close` final for it too.
+        if self.pool.is_closed() {
+            return Err(map_db_err(sqlx::Error::PoolClosed));
+        }
+        self.locks.try_lock(name).await
     }
 
     async fn migration_status(

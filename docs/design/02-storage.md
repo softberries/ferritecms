@@ -51,6 +51,7 @@ pub trait Store: Send + Sync + 'static {
     fn backend(&self) -> Backend;                       // Sqlite | Postgres
     fn read(&self) -> &dyn Repos;                       // autocommit, read pool
     async fn begin(&self) -> Result<Box<dyn Tx>, StoreError>;
+    async fn try_lock(&self, name: &str) -> Result<Option<Box<dyn LockGuard>>, StoreError>; // M1.5, 04 §7
     async fn migration_status(&self, binary: &semver::Version) -> Result<MigrationStatus, StoreError>;
     async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError>;
     async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError>;
@@ -84,14 +85,17 @@ pub trait Repos: Send + Sync {
     fn themes(&self) -> &dyn ThemeRepo;
     fn events(&self) -> &dyn EventRepo;
     fn jobs(&self) -> &dyn JobRepo;
+    fn nodes(&self) -> &dyn NodeRepo;
     fn search(&self) -> &dyn SearchRepo;
     fn schema_meta(&self) -> &dyn SchemaMetaRepo;
 }
 ```
 
 Repositories still to come, with the milestone that adds them: `sessions`, `tokens`
-(API tokens), `rate_limits`, `audit` and `comments` (M2); `nodes` (M1.5). `JobRepo`
-(`jobs()`) exists since M1.5 (migration `0004_cluster`); see the cluster table in §4.
+(API tokens), `rate_limits`, `audit` and `comments` (M2). `JobRepo` (`jobs()`) and
+`NodeRepo` (`nodes()`) exist since M1.5 (migration `0004_cluster`); see the cluster table
+in §4. Named locks are `Store::try_lock` (Postgres advisory locks, SQLite in-process;
+[04 §7](04-cluster.md#7-distributed-locks)).
 The `comments`, `user_meta` and `plugin_failures` tables already exist in `0001_init`
 but have no repository yet.
 
@@ -321,7 +325,7 @@ on both backends.
 
 | Table | Columns | Notes |
 |---|---|---|
-| `nodes` *(table since `0004_cluster`; repository: M1.5)* | `id` PK (`nodes_pkey`), `name`, `version`, `schema_version` bigint, `started_at`, `heartbeat_at` (index `nodes_heartbeat_idx`), `meta` json default `{}` | Stale after 3× heartbeat interval |
+| `nodes` *(since `0004_cluster`)* | `id` PK (`nodes_pkey`), `name`, `version`, `schema_version` bigint, `started_at`, `heartbeat_at` (index `nodes_heartbeat_idx`), `meta` json object default `{}` | `NodeRepo`: `register`/`heartbeat`/`deregister`/`list` (≤ 1000, by `started_at`, `id`)/`db_now`/`prune`, times from the database clock. Stale after 3× heartbeat interval |
 | `events` | `seq` PK (autoincrement / bigserial), `kind`, `keys` json, `origin_node`, `created_at` | Transactional outbox for invalidation; pruned after 24h |
 | `jobs` *(since `0004_cluster`)* | `id` PK (`jobs_pkey`), `kind`, `payload` json (an object), `unique_key` null (`jobs_unique_key_uq`, NULLs distinct), `run_at`, `priority` int default 0, `status` (`queued`/`running`/`done`/`dead`, CHECK; no `failed`, P8), `attempts` int default 0, `max_attempts` int default 5 (≥ 1), `locked_by` (node id text), `locked_until`, `last_error` (≤ 1024 bytes), `created_at`, `finished_at`; indexes `jobs_finished_idx (finished_at)`, `jobs_lease_idx (locked_until) WHERE status = 'running'` (expired leases: reaper, SQLite pre-check), and for due jobs Postgres `jobs_claim_idx (priority DESC, run_at, id) WHERE status IN ('queued','running')` (the claim's ORDER BY, scanned up to LIMIT; R1) / SQLite `jobs_due_idx (run_at) WHERE status = 'queued'` (SQLite's planner combines due + lease as a MULTI-INDEX OR and sorts the due rows; it does not use an ORDER BY index after ANALYZE) | `JobRepo`: claim by kind with lease (Postgres `FOR UPDATE SKIP LOCKED` in a `MATERIALIZED` CTE; SQLite on the single writer, reader-pool `EXISTS` pre-check), expired lease at `max_attempts` → `dead` (P7), lease-holder writes conditional on `(id, node, attempts)` (P6); a counted `release` of the final attempt goes `dead` ("released after final attempt"). See [04](04-cluster.md#job-queue) |
 | `schema_meta` | `key` PK, `value` | `min_binary_version`, `created_by_version`, `site_id` |

@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use ferrite_domain::{
-    ContentId, ContentItem, ContentOrder, ContentQuery, Cursor, Job, MAX_PAGE, NewJob,
+    ContentId, ContentItem, ContentOrder, ContentQuery, Cursor, Job, MAX_PAGE, NewJob, NewNode,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -166,6 +166,27 @@ pub fn check_new_job(job: &NewJob) -> Result<(), StoreError> {
         )));
     }
     Ok(())
+}
+
+/// Most rows `NodeRepo::list` returns.
+pub const MAX_NODES: u32 = 1000;
+
+/// Validates node `meta`: a JSON object without NUL.
+pub fn check_node_meta(meta: &Value) -> Result<(), StoreError> {
+    if !meta.is_object() {
+        return Err(StoreError::Invalid(
+            "node meta must be a JSON object".into(),
+        ));
+    }
+    validate_json(meta)
+}
+
+/// Validates a node registration: no NUL in `name` or `version`, `meta` as
+/// [`check_node_meta`].
+pub fn check_new_node(node: &NewNode) -> Result<(), StoreError> {
+    validate_text("node name", &node.name)?;
+    validate_text("node version", &node.version)?;
+    check_node_meta(&node.meta)
 }
 
 /// Validates claim arguments: 1 through [`MAX_CLAIM_KINDS`] valid kinds and a `limit`

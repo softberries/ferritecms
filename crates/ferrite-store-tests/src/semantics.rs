@@ -165,4 +165,5 @@ pub async fn close_fails_later_calls(db: &TestDb) {
     store.close().await;
     assert!(store.read().options().get("before.close").await.is_err());
     assert!(store.begin().await.is_err());
+    assert!(store.try_lock("after.close").await.is_err());
 }
