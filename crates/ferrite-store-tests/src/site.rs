@@ -553,9 +553,12 @@ pub async fn text_writes_reject_nul(db: &TestDb) {
     let mut hashed = author.clone();
     hashed.password_hash = Some(ferrite_domain::Secret::new("$argon2\0"));
     invalid(repos.users().update(&hashed).await);
-    let mut totp = author.clone();
-    totp.totp_secret = Some(ferrite_domain::Secret::new("JBSW\0"));
-    invalid(repos.users().update(&totp).await);
+    invalid(
+        repos
+            .users()
+            .set_totp(author.id, Some(&ferrite_domain::Secret::new("JBSW\0")))
+            .await,
+    );
     let mut new_user = NewUser {
         id: UserId::new(),
         login: "hash-nul".into(),

@@ -108,6 +108,10 @@ backend_tests!(
     unicode_login_and_slug_exact,
     users_update_and_list,
     email_folding_is_ascii_only,
+    set_totp_sets_secret_and_resets_step,
+    update_keeps_totp_last_step,
+    user_delete_restricted_by_content_then_ok_after_reassign,
+    count_active_admins_ignores_disabled_and_other_roles,
 );
 
 backend_tests!(
@@ -202,6 +206,8 @@ backend_tests_spawning!(
     plugin_auto_disable_concurrent_single_transition,
     plugin_get_for_update_locks_the_row,
     rate_limit_is_atomic_under_concurrency,
+    totp_step_only_moves_forward,
+    user_get_for_update_locks_the_row,
 );
 
 #[test]

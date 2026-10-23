@@ -250,6 +250,7 @@ mod tests {
             status: UserStatus::Active,
             must_reset: false,
             totp_secret: Some(Secret::new("JBSWY3DPEHPK3PXP")),
+            totp_last_step: Some(1),
             created_at: Timestamp::now(),
             last_login_at: None,
         };

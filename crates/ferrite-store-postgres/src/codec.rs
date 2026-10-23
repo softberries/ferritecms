@@ -81,7 +81,7 @@ pub(crate) fn content_type(row: &PgRow) -> Result<ContentType, StoreError> {
 }
 
 pub(crate) const USER_COLUMNS: &str = "id, login, email, display_name, password_hash, role, \
-     status, must_reset, totp_secret, created_at, last_login_at";
+     status, must_reset, totp_secret, totp_last_step, created_at, last_login_at";
 
 /// Maps a row selected with [`USER_COLUMNS`].
 pub(crate) fn user(row: &PgRow) -> Result<User, StoreError> {
@@ -102,6 +102,7 @@ pub(crate) fn user(row: &PgRow) -> Result<User, StoreError> {
         status: status.parse()?,
         must_reset: row.try_get("must_reset").map_err(map_db_err)?,
         totp_secret: totp_secret.map(Secret::new),
+        totp_last_step: row.try_get("totp_last_step").map_err(map_db_err)?,
         created_at: created_at.into(),
         last_login_at: last_login_at.map(Into::into),
     })

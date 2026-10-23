@@ -8,8 +8,8 @@ use ferrite_domain::{
     ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, ContentId, ContentItem,
     ContentQuery, ContentType, Event, InstalledPlugin, InstalledTheme, Job, JobId, JobLease,
     JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob, NewNode, NewUser, Node, NodeId,
-    OptionEntry, Page, RateHit, Redirect, RedirectId, Revision, RevisionId, SearchQuery, Session,
-    Taxonomy, Term, TermId, Timestamp, User, UserId,
+    OptionEntry, Page, RateHit, Redirect, RedirectId, Revision, RevisionId, SearchQuery, Secret,
+    Session, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 
 use crate::{Channel, LockGuard, StoreError, Subscription, migrate::MigrationStatus};
@@ -193,6 +193,10 @@ pub trait ContentRepo: Send + Sync {
     ) -> Result<Vec<String>, StoreError>;
     /// Deletes an item by id (missing: no-op). An item with children is `ForeignKey`.
     async fn delete(&self, id: ContentId) -> Result<(), StoreError>;
+    /// Moves every item authored by `from` to `to` in one `UPDATE`, bumping `version`
+    /// (`updated_at` stays); returns the count. An unknown `to` is `ForeignKey`. Callers
+    /// reassign revisions in the same `Tx` ([`RevisionRepo::reassign_author`]).
+    async fn reassign_author(&self, from: UserId, to: UserId) -> Result<u64, StoreError>;
     /// Returns up to `limit` scheduled items whose publish time is at or before `now`.
     async fn due_scheduled(
         &self,
@@ -238,6 +242,9 @@ pub trait RevisionRepo: Send + Sync {
     async fn get(&self, id: RevisionId) -> Result<Option<Revision>, StoreError>;
     /// Deletes all but the newest `keep` revisions; returns the deleted count.
     async fn prune(&self, id: ContentId, keep: u32) -> Result<u64, StoreError>;
+    /// Moves every revision authored by `from` to `to` in one `UPDATE`; returns the count.
+    /// An unknown `to` is `ForeignKey`.
+    async fn reassign_author(&self, from: UserId, to: UserId) -> Result<u64, StoreError>;
 }
 
 #[async_trait]
@@ -339,8 +346,30 @@ pub trait UserRepo: Send + Sync {
     async fn get_by_login(&self, login: &str) -> Result<Option<User>, StoreError>;
     /// Fetches a user by e-mail, case-insensitively.
     async fn get_by_email(&self, email: &str) -> Result<Option<User>, StoreError>;
-    /// Updates a user; a missing user is `NotFound`.
+    /// Fetches a user and, inside a `Tx`, locks its row until the `Tx` ends: Postgres
+    /// `SELECT … FOR UPDATE` (other writers of the row wait), SQLite a plain read (the
+    /// `Tx` already holds the single writer). Outside a `Tx` it is [`get`](Self::get).
+    /// Every read-modify-write of a user reads the row with this inside the `Tx` that
+    /// writes it, because [`update`](Self::update) is unversioned.
+    async fn get_for_update(&self, id: UserId) -> Result<Option<User>, StoreError>;
+    /// Updates a user (every column except `id`, `created_at`, `totp_secret` and
+    /// `totp_last_step`); a missing user is `NotFound`. TOTP state changes only through
+    /// [`set_totp`](Self::set_totp) and [`advance_totp_step`](Self::advance_totp_step).
     async fn update(&self, user: &User) -> Result<(), StoreError>;
+    /// Sets (or with `None` clears) the TOTP secret and resets `totp_last_step` to NULL,
+    /// in one statement; a missing user is `NotFound`.
+    async fn set_totp(&self, id: UserId, secret: Option<&Secret>) -> Result<(), StoreError>;
+    /// Records `step` as the last accepted TOTP step if it is newer than the stored one
+    /// (one conditional `UPDATE`, P9). `false` means a replayed or older step, or an
+    /// unknown user: the code must be refused. Concurrent calls with the same step on any
+    /// node: exactly one gets `true`.
+    async fn advance_totp_step(&self, id: UserId, step: i64) -> Result<bool, StoreError>;
+    /// Deletes a user (missing: no-op). Sessions and API tokens cascade, audit rows keep
+    /// a NULL actor; authored content or revisions make it `ForeignKey` (reassign them
+    /// first, in the same `Tx`).
+    async fn delete(&self, id: UserId) -> Result<(), StoreError>;
+    /// Number of users with role `admin` and status `active`.
+    async fn count_active_admins(&self) -> Result<u64, StoreError>;
     /// Lists users with cursor pagination.
     async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<User>, StoreError>;
     /// Fetches up to [`MAX_ID_FILTER`](crate::MAX_ID_FILTER) users in one query, returned

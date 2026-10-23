@@ -15,7 +15,7 @@ use std::{
 use async_trait::async_trait;
 use ferrite_domain::{
     ContentId, ContentItem, ContentQuery, ContentType, Media, NewContent, NewUser, OptionEntry,
-    Page, SearchQuery, Taxonomy, Term, TermId, Timestamp, User, UserId,
+    Page, SearchQuery, Secret, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, Backend, Channel, ContentRepo, ContentTypeRepo,
@@ -245,6 +245,9 @@ impl ContentRepo for Counted {
     async fn delete(&self, id: ContentId) -> Result<(), StoreError> {
         self.0.read().content().delete(id).await
     }
+    async fn reassign_author(&self, from: UserId, to: UserId) -> Result<u64, StoreError> {
+        self.0.read().content().reassign_author(from, to).await
+    }
     async fn due_scheduled(
         &self,
         now: Timestamp,
@@ -370,8 +373,23 @@ impl UserRepo for Counted {
     async fn get_by_email(&self, email: &str) -> Result<Option<User>, StoreError> {
         self.0.read().users().get_by_email(email).await
     }
+    async fn get_for_update(&self, id: UserId) -> Result<Option<User>, StoreError> {
+        self.0.read().users().get_for_update(id).await
+    }
     async fn update(&self, user: &User) -> Result<(), StoreError> {
         self.0.read().users().update(user).await
+    }
+    async fn set_totp(&self, id: UserId, secret: Option<&Secret>) -> Result<(), StoreError> {
+        self.0.read().users().set_totp(id, secret).await
+    }
+    async fn advance_totp_step(&self, id: UserId, step: i64) -> Result<bool, StoreError> {
+        self.0.read().users().advance_totp_step(id, step).await
+    }
+    async fn delete(&self, id: UserId) -> Result<(), StoreError> {
+        self.0.read().users().delete(id).await
+    }
+    async fn count_active_admins(&self) -> Result<u64, StoreError> {
+        self.0.read().users().count_active_admins().await
     }
     async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<User>, StoreError> {
         self.0.read().users().list(limit, cursor).await

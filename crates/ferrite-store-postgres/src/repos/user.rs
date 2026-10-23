@@ -20,22 +20,18 @@ use crate::{
     exec::run,
 };
 
-/// NUL checks shared by insert and update (R13), secrets included.
+/// NUL checks shared by insert and update (R13), the password hash included.
 fn validate_user_text(
     login: &str,
     email: &str,
     display_name: &str,
     password_hash: Option<&Secret>,
-    totp_secret: Option<&Secret>,
 ) -> Result<(), StoreError> {
     validate_text("user login", login)?;
     validate_text("user email", email)?;
     validate_text("user display_name", display_name)?;
     if let Some(hash) = password_hash {
         validate_text("user password_hash", hash.expose())?;
-    }
-    if let Some(totp) = totp_secret {
-        validate_text("user totp_secret", totp.expose())?;
     }
     Ok(())
 }
@@ -48,7 +44,6 @@ impl UserRepo for PgRepos {
             &user.email,
             &user.display_name,
             user.password_hash.as_ref(),
-            None,
         )?;
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO users (id, login, email, email_key, display_name, password_hash, \
@@ -101,19 +96,18 @@ impl UserRepo for PgRepos {
         row.as_ref().map(codec::user).transpose()
     }
 
-    // `id` and `created_at` are immutable; everything else is replaced.
+    // `id` and `created_at` are immutable; the TOTP columns have their own methods.
     async fn update(&self, user: &User) -> Result<(), StoreError> {
         validate_user_text(
             &user.login,
             &user.email,
             &user.display_name,
             user.password_hash.as_ref(),
-            user.totp_secret.as_ref(),
         )?;
         let done = run!(&self.exec, |e| sqlx::query(
             "UPDATE users SET login = $1, email = $2, email_key = $3, display_name = $4, \
              password_hash = $5, role = $6, status = $7, must_reset = $8, \
-             totp_secret = $9, last_login_at = $10 WHERE id = $11"
+             last_login_at = $9 WHERE id = $10"
         )
         .bind(&user.login)
         .bind(&user.email)
@@ -123,7 +117,6 @@ impl UserRepo for PgRepos {
         .bind(user.role.as_str())
         .bind(user.status.as_str())
         .bind(user.must_reset)
-        .bind(user.totp_secret.as_ref().map(Secret::expose))
         .bind(user.last_login_at.map(DateTime::<Utc>::from))
         .bind(user.id.as_uuid())
         .execute(e))?;
@@ -131,6 +124,64 @@ impl UserRepo for PgRepos {
             return Err(StoreError::NotFound);
         }
         Ok(())
+    }
+
+    async fn get_for_update(&self, id: UserId) -> Result<Option<User>, StoreError> {
+        let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {USER_COLUMNS} FROM users WHERE id = $1 FOR UPDATE"
+        )))
+        .bind(id.as_uuid())
+        .fetch_optional(e))?;
+        row.as_ref().map(codec::user).transpose()
+    }
+
+    async fn set_totp(&self, id: UserId, secret: Option<&Secret>) -> Result<(), StoreError> {
+        if let Some(secret) = secret {
+            validate_text("user totp_secret", secret.expose())?;
+        }
+        // One statement: a new (or no) secret always starts a fresh replay guard.
+        let done = run!(&self.exec, |e| sqlx::query(
+            "UPDATE users SET totp_secret = $1, totp_last_step = NULL WHERE id = $2"
+        )
+        .bind(secret.map(Secret::expose))
+        .bind(id.as_uuid())
+        .execute(e))?;
+        if done.rows_affected() == 0 {
+            return Err(StoreError::NotFound);
+        }
+        Ok(())
+    }
+
+    async fn advance_totp_step(&self, id: UserId, step: i64) -> Result<bool, StoreError> {
+        // The row lock taken by the UPDATE makes a concurrent caller with the same step
+        // re-check the condition and match nothing.
+        let done = run!(&self.exec, |e| sqlx::query(
+            "UPDATE users SET totp_last_step = $1 \
+             WHERE id = $2 AND (totp_last_step IS NULL OR totp_last_step < $1)"
+        )
+        .bind(step)
+        .bind(id.as_uuid())
+        .execute(e))?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    async fn delete(&self, id: UserId) -> Result<(), StoreError> {
+        // Sessions and tokens cascade, audit rows are set NULL; content and revisions
+        // restrict (ForeignKey).
+        run!(&self.exec, |e| sqlx::query(
+            "DELETE FROM users WHERE id = $1"
+        )
+        .bind(id.as_uuid())
+        .execute(e))
+        .map(|_| ())
+    }
+
+    async fn count_active_admins(&self) -> Result<u64, StoreError> {
+        let n: i64 = run!(&self.exec, |e| sqlx::query_scalar(
+            "SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active'"
+        )
+        .fetch_one(e))?;
+        Ok(u64::try_from(n).unwrap_or(0))
     }
 
     async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<User>, StoreError> {

@@ -55,17 +55,6 @@ fn audit(actor: Option<UserId>, i: usize) -> NewAudit {
     }
 }
 
-/// Deletes a user row directly (`UserRepo::delete` arrives in a later task).
-async fn delete_user_raw(db: &TestDb, id: UserId) {
-    let literal = if db.is_sqlite() {
-        format!("X'{}'", id.as_uuid().simple())
-    } else {
-        format!("'{id}'")
-    };
-    db.exec_raw(&format!("DELETE FROM users WHERE id = {literal}"))
-        .await;
-}
-
 fn is_invalid<T: std::fmt::Debug>(r: Result<T, StoreError>) -> bool {
     matches!(r, Err(StoreError::Invalid(_)))
 }
@@ -158,7 +147,7 @@ pub async fn sessions_roundtrip_touch_delete(db: &TestDb) {
     assert_eq!(sessions.get("b").await.unwrap(), None);
 
     // Deleting the user cascades.
-    delete_user_raw(db, user.id).await;
+    store.read().users().delete(user.id).await.unwrap();
     assert_eq!(sessions.get("a").await.unwrap(), None);
     assert!(sessions.list_for_user(user.id).await.unwrap().is_empty());
 }
@@ -286,7 +275,7 @@ pub async fn api_tokens_unique_hash_and_owner_scoped_delete(db: &TestDb) {
     assert!(tokens.get_by_hash("h-theirs").await.unwrap().is_some());
 
     // Deleting the user cascades.
-    delete_user_raw(db, other.id).await;
+    store.read().users().delete(other.id).await.unwrap();
     assert_eq!(tokens.get_by_hash("h-theirs").await.unwrap(), None);
 }
 
@@ -504,7 +493,7 @@ pub async fn audit_append_and_list_newest_first(db: &TestDb) {
     assert_eq!(log.list(1, None).await.unwrap().items[0].id, in_tx);
 
     // Deleting the actor keeps the rows with a NULL actor.
-    delete_user_raw(db, actor.id).await;
+    store.read().users().delete(actor.id).await.unwrap();
     let after = log.list(200, None).await.unwrap().items;
     assert_eq!(after.len(), 7);
     assert!(after.iter().all(|e| e.actor_id.is_none()));

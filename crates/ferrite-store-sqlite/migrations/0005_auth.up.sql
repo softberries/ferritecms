@@ -54,5 +54,8 @@ CREATE TABLE audit_log (
 CREATE INDEX audit_log_at_idx ON audit_log (at, id);
 -- Deleting a user sets actor_id NULL here (and reassigns) without a scan.
 CREATE INDEX audit_log_actor_idx ON audit_log (actor_id);
+-- Reassigning a deleted author's revisions, and the users FK check on delete, without a
+-- scan (content_items_author_idx exists since 0001).
+CREATE INDEX revisions_author_idx ON revisions (author_id);
 
 ALTER TABLE users ADD COLUMN totp_last_step INTEGER;

@@ -28,6 +28,9 @@ pub struct User {
     pub status: UserStatus,
     pub must_reset: bool,
     pub totp_secret: Option<Secret>,
+    /// The last TOTP step accepted for this user (P9 replay guard). Written only by
+    /// `UserRepo::advance_totp_step` and reset by `UserRepo::set_totp`.
+    pub totp_last_step: Option<i64>,
     pub created_at: Timestamp,
     pub last_login_at: Option<Timestamp>,
 }

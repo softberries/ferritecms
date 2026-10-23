@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ferrite_domain::{
     ContentId, ContentItem, ContentQuery, ContentType, NewContent, Page, ParentFilter, Revision,
-    RevisionId, Timestamp,
+    RevisionId, Timestamp, UserId,
 };
 use ferrite_store::{
     ContentRepo, ContentTypeRepo, ListPart, MAX_ID_FILTER, MAX_META_KEYS, MAX_SLUG_PREFIX_RESULTS,
@@ -317,6 +317,19 @@ impl ContentRepo for PgRepos {
         .map(|_| ())
     }
 
+    async fn reassign_author(&self, from: UserId, to: UserId) -> Result<u64, StoreError> {
+        // A new version, so a stale editor save is a Conflict rather than a write that
+        // restores the old author; `updated_at` stays (the content did not change).
+        let done = run!(&self.exec, |e| sqlx::query(
+            "UPDATE content_items SET author_id = $1, version = version + 1 \
+             WHERE author_id = $2"
+        )
+        .bind(to.as_uuid())
+        .bind(from.as_uuid())
+        .execute(e))?;
+        Ok(done.rows_affected())
+    }
+
     async fn due_scheduled(
         &self,
         now: Timestamp,
@@ -605,6 +618,16 @@ impl RevisionRepo for PgRepos {
         )
         .bind(id.as_uuid())
         .bind(i64::from(keep))
+        .execute(e))?;
+        Ok(done.rows_affected())
+    }
+
+    async fn reassign_author(&self, from: UserId, to: UserId) -> Result<u64, StoreError> {
+        let done = run!(&self.exec, |e| sqlx::query(
+            "UPDATE revisions SET author_id = $1 WHERE author_id = $2"
+        )
+        .bind(to.as_uuid())
+        .bind(from.as_uuid())
         .execute(e))?;
         Ok(done.rows_affected())
     }
