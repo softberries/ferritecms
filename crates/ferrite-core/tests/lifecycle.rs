@@ -670,7 +670,8 @@ pub async fn schedule_enqueues_publish_job(db: &TestDb) {
     let mut d = draft("post", "Timed");
     d.terms = vec![t1];
     let item = svc.create(&admin, d).await.unwrap();
-    let at = in_micros(300 * MS);
+    // Headroom: `at` must still be in the future when `schedule` checks it.
+    let at = in_micros(1_000 * MS);
     let sched = svc
         .schedule(&admin, item.id, item.version, at)
         .await
@@ -735,6 +736,38 @@ pub async fn schedule_rollback_leaves_no_job(db: &TestDb) {
     assert!(queued.values().all(|n| *n == 0), "{queued:?}");
     assert!(!job_exists(store, item.id, at).await);
     assert_eq!(svc.get(item.id).await.unwrap(), edited);
+
+    // A statement after the enqueue fails (the event insert, via an injected trigger):
+    // the job goes with the rest of the transaction.
+    let other = svc
+        .create(&admin, draft("post", "Late failure"))
+        .await
+        .unwrap();
+    fail_event_inserts(db, true).await;
+    let r = svc.schedule(&admin, other.id, other.version, at).await;
+    fail_event_inserts(db, false).await;
+    assert!(matches!(r, Err(CoreError::Store(_))), "{r:?}");
+    assert!(!job_exists(store, other.id, at).await);
+    assert_eq!(svc.get(other.id).await.unwrap(), other);
+}
+
+/// Makes every `events` insert fail (or stops doing so) with a trigger, outside the store.
+async fn fail_event_inserts(db: &TestDb, on: bool) {
+    let sql = match (db.is_sqlite(), on) {
+        (true, true) => {
+            "CREATE TRIGGER fail_events BEFORE INSERT ON events \
+             BEGIN SELECT RAISE(ABORT, 'injected failure'); END;"
+        }
+        (true, false) => "DROP TRIGGER fail_events;",
+        (false, true) => {
+            "CREATE FUNCTION fail_event_insert() RETURNS trigger LANGUAGE plpgsql AS \
+             $$ BEGIN RAISE EXCEPTION 'injected failure'; END $$; \
+             CREATE TRIGGER fail_events BEFORE INSERT ON events \
+             FOR EACH ROW EXECUTE FUNCTION fail_event_insert();"
+        }
+        (false, false) => "DROP TRIGGER fail_events ON events; DROP FUNCTION fail_event_insert();",
+    };
+    db.exec_raw(sql).await;
 }
 
 pub async fn reschedule_uses_new_key_and_old_job_noops(db: &TestDb) {
@@ -742,13 +775,13 @@ pub async fn reschedule_uses_new_key_and_old_job_noops(db: &TestDb) {
     let svc = service(db);
     let admin = actor(store, Role::Admin).await;
     let item = svc.create(&admin, draft("post", "Moved")).await.unwrap();
-    let first = in_micros(300 * MS);
+    let first = in_micros(1_000 * MS);
     let s1 = svc
         .schedule(&admin, item.id, item.version, first)
         .await
         .unwrap();
     let back = svc.unpublish(&admin, item.id, s1.version).await.unwrap();
-    let second = in_micros(600 * MS);
+    let second = in_micros(1_500 * MS);
     let s2 = svc
         .schedule(&admin, item.id, back.version, second)
         .await

@@ -5,7 +5,8 @@
 use std::{sync::Arc, time::Duration};
 
 use ferrite_core::{
-    Actor, ContentDraft, ContentService, CoreError, PermalinkRules, RedirectService,
+    Actor, ContentDraft, ContentService, CoreError, PermalinkInput, PermalinkRules, Permalinks,
+    RedirectService,
     events::{archive_key, post_key, term_key},
 };
 use ferrite_domain::{
@@ -842,7 +843,65 @@ pub async fn trashed_item_cannot_be_updated(db: &TestDb) {
     assert_eq!(revision_count(store, item.id).await, revs);
 }
 
+/// Rules that change under a running write: the first `path` call answers with the
+/// default rules (`/%slug%/`), every later one with `/moved/%slug%/`. `pin` returns a
+/// snapshot of the default rules, as `SwappablePermalinks` would before a swap.
+struct SwapsMidWrite {
+    calls: std::sync::atomic::AtomicUsize,
+    before: PermalinkRules,
+    after: PermalinkRules,
+}
+
+impl Permalinks for SwapsMidWrite {
+    fn path(&self, input: &PermalinkInput) -> String {
+        let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if n == 0 {
+            self.before.path(input)
+        } else {
+            self.after.path(input)
+        }
+    }
+
+    fn pin(&self) -> Arc<dyn Permalinks> {
+        Arc::new(self.before.clone())
+    }
+
+    fn root_namespace_peers(&self, kind: &str) -> Vec<String> {
+        self.before.root_namespace_peers(kind)
+    }
+}
+
+pub async fn update_pins_permalinks_once(db: &TestDb) {
+    // R10: a write computes the old and the new path from one pinned rule set, so a
+    // swap during the write cannot invent a move.
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let setup = service(db);
+    let item = setup.create(&admin, draft("post", "Pinned")).await.unwrap();
+    let item = setup.publish(&admin, item.id, item.version).await.unwrap();
+
+    let swapping = Arc::new(SwapsMidWrite {
+        calls: Default::default(),
+        before: PermalinkRules::default(),
+        after: PermalinkRules::from_options(Some("/moved/%slug%/"), None).unwrap(),
+    });
+    let svc = ContentService::new(db.shared_store(), swapping.clone());
+    let mut d = draft("post", "Pinned, retitled");
+    d.slug = Some(item.slug.clone());
+    let saved = svc.update(&admin, item.id, item.version, d).await.unwrap();
+    assert_eq!(saved.title, "Pinned, retitled");
+    assert_eq!(saved.slug, item.slug);
+    let redirects = store.read().redirects().list(100, None).await.unwrap();
+    assert!(redirects.items.is_empty(), "{:?}", redirects.items);
+    assert_eq!(
+        swapping.calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the write used the unpinned rules"
+    );
+}
+
 backend_tests!(
+    update_pins_permalinks_once,
     create_update_roundtrip,
     explicit_empty_excerpt_is_kept,
     revisions_pruned_to_50,

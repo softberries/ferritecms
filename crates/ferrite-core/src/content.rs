@@ -122,6 +122,8 @@ impl ContentService {
             slug::slugify(&draft.title)
         })?;
         let terms = dedup(&draft.terms);
+        // One set of rules for the whole write (R10).
+        let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
             let ty = content_type(tx.as_ref(), &draft.kind).await?;
@@ -131,6 +133,7 @@ impl ContentService {
             let root = self
                 .root_namespace(
                     tx.as_ref(),
+                    rules.as_ref(),
                     &draft.kind,
                     draft.parent_id,
                     draft.slug.is_some(),
@@ -188,9 +191,18 @@ impl ContentService {
         expected_version: i64,
         draft: ContentDraft,
     ) -> Result<ContentItem, CoreError> {
+        // One set of rules for the whole write (R10).
+        let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = self
-            .update_in(tx.as_ref(), actor, id, expected_version, draft)
+            .update_in(
+                tx.as_ref(),
+                rules.as_ref(),
+                actor,
+                id,
+                expected_version,
+                draft,
+            )
             .await;
         finish(tx, done).await
     }
@@ -198,6 +210,7 @@ impl ContentService {
     async fn update_in(
         &self,
         tx: &dyn Tx,
+        permalinks: &dyn Permalinks,
         actor: &Actor,
         id: ContentId,
         expected_version: i64,
@@ -247,6 +260,7 @@ impl ContentService {
         } else {
             self.root_namespace(
                 tx,
+                permalinks,
                 &current.kind,
                 next.parent_id,
                 draft.slug.is_some(),
@@ -285,11 +299,10 @@ impl ContentService {
                 primary_term: new_primary,
             };
             if published {
-                record_item_move(tx, self.permalinks.as_ref(), &old, &new).await?;
+                record_item_move(tx, permalinks, &old, &new).await?;
             }
             if moved {
-                moved_descendants =
-                    move_descendants(tx, self.permalinks.as_ref(), &old, &new).await?;
+                moved_descendants = move_descendants(tx, permalinks, &old, &new).await?;
             }
         }
         let keys = invalidation_keys(
@@ -341,6 +354,7 @@ impl ContentService {
     async fn root_namespace(
         &self,
         repos: &dyn Repos,
+        permalinks: &dyn Permalinks,
         kind: &str,
         parent: Option<ContentId>,
         explicit: bool,
@@ -365,7 +379,7 @@ impl ContentService {
         Ok(RootNamespace {
             names,
             year,
-            peers: self.permalinks.root_namespace_peers(kind),
+            peers: permalinks.root_namespace_peers(kind),
         })
     }
 }

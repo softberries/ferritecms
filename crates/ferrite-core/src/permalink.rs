@@ -66,8 +66,16 @@ pub struct PermalinkInput {
 
 /// Maps an item to its public URL path. Must be pure and cheap: it runs inside write
 /// transactions.
+///
+/// **Pin once per operation (ruling R10).** The rules can change while the site runs
+/// ([`SwappablePermalinks`]). An operation that computes several paths (an old and a new
+/// path for a redirect, slug allocation plus paths, a listing) calls [`pin`](Self::pin)
+/// once at its start and uses the snapshot throughout, so it never mixes two rule sets.
 pub trait Permalinks: Send + Sync {
     fn path(&self, input: &PermalinkInput) -> String;
+
+    /// A snapshot of the rules in effect now that never changes afterwards.
+    fn pin(&self) -> Arc<dyn Permalinks>;
 
     /// The other content types whose top-level items get paths of the same shape as
     /// top-level items of `kind` (so their slugs must not collide). Default: none.
@@ -331,6 +339,11 @@ impl Permalinks for PermalinkRules {
         }
     }
 
+    /// Immutable already; the snapshot is a copy.
+    fn pin(&self) -> Arc<dyn Permalinks> {
+        Arc::new(self.clone())
+    }
+
     /// Posts and pages are peers when both put top-level items at `/<slug>/` (the
     /// defaults do); other types live under their `/{type}/` prefix.
     fn root_namespace_peers(&self, kind: &str) -> Vec<String> {
@@ -346,8 +359,8 @@ impl Permalinks for PermalinkRules {
 /// [`PermalinkRules`] that can be replaced while the site runs (ruling P18): a node
 /// swaps them when the `permalink.*` options change, and every holder of the
 /// `Arc<dyn Permalinks>` (the site reader, the content service, the plugin host
-/// services) sees the new rules on its next call. Each call reads the rules once; a
-/// caller that needs one consistent set across several calls takes [`current`](Self::current).
+/// services) sees the new rules on its next call. Each call reads the rules once;
+/// operations pin one set with [`Permalinks::pin`] (R10).
 #[derive(Debug)]
 pub struct SwappablePermalinks {
     rules: ArcSwap<PermalinkRules>,
@@ -374,6 +387,10 @@ impl SwappablePermalinks {
 impl Permalinks for SwappablePermalinks {
     fn path(&self, input: &PermalinkInput) -> String {
         self.rules.load().path(input)
+    }
+
+    fn pin(&self) -> Arc<dyn Permalinks> {
+        self.rules.load_full()
     }
 
     fn root_namespace_peers(&self, kind: &str) -> Vec<String> {
@@ -706,5 +723,10 @@ mod tests {
         // A snapshot taken before the swap keeps the old rules.
         assert_eq!(*before, PermalinkRules::default());
         assert_eq!(before.path(&post), "/hello/");
+        let pinned = reader.pin();
+        swappable.swap(PermalinkRules::default());
+        assert_eq!(reader.path(&post), "/hello/");
+        assert_eq!(pinned.path(&post), "/blog/hello/");
+        assert!(pinned.root_namespace_peers("post").is_empty());
     }
 }

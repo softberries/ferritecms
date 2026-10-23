@@ -132,6 +132,7 @@ Design: [07](design/07-admin-api.md).
 - [ ] Admin SPA scaffold: Vite + React + TS, shadcn/ui, TanStack Router/Query, Motion, generated API client, embedded via `rust-embed`.
 - [ ] Screens: dashboard (Recharts), content list + TipTap editor + revisions, media library, content types/field builder, taxonomies, menus, users, comments, redirects, settings, system/nodes/jobs.
 - [ ] Themes + plugins screens incl. permission report and per-plugin metrics.
+- [ ] Admin API calls `ExtensionService` (theme/plugin install, activation, enable/disable) only after `require(ManageThemes)` / `require(ManagePlugins)`: the service is an unauthenticated system path (M1.5 ruling R11).
 - [ ] Plugin routes (`/_p/…`), plugin settings, `mail`, batched `request.served` (D21).
 - [ ] Playwright E2E against a real binary on both backends.
 - [ ] Hardening: sanitised `html` block nodes keep ammonia's default URL schemes, so `//evil` (scheme-relative), `ftp:` and `tel:` links pass (`ferrite-core/src/blocks`); decide an allowlist.

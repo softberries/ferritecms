@@ -5,6 +5,11 @@
 //! transaction. The artifact's bytes must already be in the media store: the caller
 //! uploads them **before** (an orphaned upload is harmless and collected later, 04 §8),
 //! so a node that sees the event can always fetch what the row names.
+//!
+//! **A system path without an actor (ruling R11).** Nothing here checks permissions:
+//! today only operator code (`install_theme_dir`, tests) calls it. The M2 admin API must
+//! `require(actor, Capability::ManageThemes)` (themes) or
+//! `require(actor, Capability::ManagePlugins)` (plugins) before calling any method.
 
 use std::{sync::Arc, time::Duration};
 
@@ -16,7 +21,8 @@ use crate::{CoreError, events, tx::finish};
 /// How long a write waits for the `extensions` lock by default.
 pub const EXTENSIONS_LOCK_WAIT: Duration = Duration::from_secs(30);
 
-/// Installs and activates themes and plugins.
+/// Installs and activates themes and plugins. Unauthenticated: callers check the
+/// actor's capability first (see the module docs).
 pub struct ExtensionService {
     store: Arc<dyn Store>,
     lock_wait: Duration,
@@ -57,7 +63,7 @@ impl ExtensionService {
         };
         self.locked(async |repos: &dyn Repos| {
             let before = active_theme(repos).await?;
-            repos.artifacts().insert_if_absent(artifact).await?;
+            record_artifact(repos, artifact).await?;
             repos.themes().upsert(&row).await?;
             if activate {
                 repos.themes().activate(&row.name).await?;
@@ -79,8 +85,13 @@ impl ExtensionService {
     }
 
     /// Records the plugin artifact (kind `plugin`, inserted if absent) and inserts or
-    /// replaces the plugin row as given; emits `plugins.changed` with its name. `Invalid`
-    /// when `artifact` is not a plugin artifact or `row.artifact_hash` is not its hash.
+    /// replaces the plugin row; emits `plugins.changed` with its name. `Invalid` when
+    /// `artifact` is not a plugin artifact or `row.artifact_hash` is not its hash.
+    ///
+    /// `row.enabled` and `row.disabled_reason` are ignored, as `install_theme` ignores
+    /// `active`: a new plugin is installed disabled, a replaced one keeps its state.
+    /// Enabling is [`set_plugin_enabled`](Self::set_plugin_enabled), which also resets
+    /// the plugin's failure counters (P20).
     pub async fn install_plugin(
         &self,
         artifact: &Artifact,
@@ -88,8 +99,17 @@ impl ExtensionService {
     ) -> Result<(), CoreError> {
         check_artifact(artifact, ArtifactKind::Plugin, &row.artifact_hash)?;
         self.locked(async |repos: &dyn Repos| {
-            repos.artifacts().insert_if_absent(artifact).await?;
-            repos.plugins().upsert(row).await?;
+            record_artifact(repos, artifact).await?;
+            let (enabled, disabled_reason) = match repos.plugins().get(&row.name).await? {
+                Some(existing) => (existing.enabled, existing.disabled_reason),
+                None => (false, None),
+            };
+            let row = InstalledPlugin {
+                enabled,
+                disabled_reason,
+                ..row.clone()
+            };
+            repos.plugins().upsert(&row).await?;
             repos
                 .events()
                 .append(&events::plugins_changed(&row.name))
@@ -153,6 +173,26 @@ fn check_artifact(
         return Err(CoreError::Invalid(format!(
             "row names artifact {row_hash}, given {}",
             artifact.hash
+        )));
+    }
+    Ok(())
+}
+
+/// Inserts `artifact` unless its hash exists, then checks the stored row's kind: the
+/// same bytes recorded earlier as another kind (say, a media upload) are `Invalid`.
+async fn record_artifact(repos: &dyn Repos, artifact: &Artifact) -> Result<(), CoreError> {
+    repos.artifacts().insert_if_absent(artifact).await?;
+    let stored = repos
+        .artifacts()
+        .get(&artifact.hash)
+        .await?
+        .ok_or(CoreError::NotFound)?;
+    if stored.kind != artifact.kind {
+        return Err(CoreError::Invalid(format!(
+            "artifact {} is already stored as kind {}, not {}",
+            artifact.hash,
+            stored.kind.as_str(),
+            artifact.kind.as_str()
         )));
     }
     Ok(())

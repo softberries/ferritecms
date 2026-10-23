@@ -155,6 +155,33 @@ pub async fn install_theme_writes_rows_and_event_atomically(db: &TestDb) {
     assert_eq!(store.read().artifacts().get(&m.hash).await.unwrap(), None);
     assert_eq!(store.read().artifacts().get(&d.hash).await.unwrap(), None);
     assert_eq!(max_seq(store).await, seq);
+
+    // The same bytes already stored as another kind: Invalid after the insert, rolled back.
+    let media = artifact(ArtifactKind::Media, 6);
+    store
+        .read()
+        .artifacts()
+        .insert_if_absent(&media)
+        .await
+        .unwrap();
+    let as_theme = Artifact {
+        kind: ArtifactKind::Theme,
+        ..media.clone()
+    };
+    let r = svc
+        .install_theme(&as_theme, &theme("dup", &as_theme), true)
+        .await;
+    assert!(
+        matches!(&r, Err(CoreError::Invalid(m)) if m.contains("already stored as kind media")),
+        "{r:?}"
+    );
+    assert_eq!(store.read().themes().get("dup").await.unwrap(), None);
+    assert_eq!(
+        store.read().artifacts().get(&media.hash).await.unwrap(),
+        Some(media)
+    );
+    assert_eq!(active_name(store).await.as_deref(), Some("blog"));
+    assert_eq!(max_seq(store).await, seq);
 }
 
 pub async fn activate_theme_emits_theme_changed(db: &TestDb) {
@@ -242,6 +269,40 @@ pub async fn plugin_enable_disable_emit_plugins_changed(db: &TestDb) {
             changed("plugins.changed", "seo")
         ]
     );
+
+    // Reinstalling (a new version) keeps the enabled state and reason of the row; a
+    // new plugin is installed disabled whatever the row says.
+    svc.set_plugin_enabled("seo", true).await.unwrap();
+    let b = artifact(ArtifactKind::Plugin, 9);
+    let mut v2 = plugin("seo", &b, false);
+    v2.version = "0.2.0".into();
+    v2.disabled_reason = Some("ignored".into());
+    svc.install_plugin(&b, &v2).await.unwrap();
+    let row = store.read().plugins().get("seo").await.unwrap().unwrap();
+    assert_eq!(
+        (row.version.as_str(), &row.artifact_hash),
+        ("0.2.0", &b.hash)
+    );
+    assert!(row.enabled);
+    assert_eq!(row.disabled_reason, None);
+    store
+        .read()
+        .plugins()
+        .set_enabled("seo", false, Some("auto: 20 failures"))
+        .await
+        .unwrap();
+    svc.install_plugin(&b, &plugin("seo", &b, true))
+        .await
+        .unwrap();
+    let row = store.read().plugins().get("seo").await.unwrap().unwrap();
+    assert!(!row.enabled);
+    assert_eq!(row.disabled_reason.as_deref(), Some("auto: 20 failures"));
+    let c = artifact(ArtifactKind::Plugin, 10);
+    svc.install_plugin(&c, &plugin("fresh", &c, true))
+        .await
+        .unwrap();
+    let fresh = store.read().plugins().get("fresh").await.unwrap().unwrap();
+    assert!(!fresh.enabled);
 
     // Missing plugin: NotFound, no event. Wrong artifact kind: Invalid, nothing written.
     let seq = max_seq(store).await;

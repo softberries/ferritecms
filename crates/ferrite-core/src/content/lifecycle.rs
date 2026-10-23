@@ -92,7 +92,9 @@ impl ContentService {
     /// [`publish_scheduled`](Self::publish_scheduled); [`publish_due`](Self::publish_due)
     /// is the periodic safety net. A job of an earlier schedule stays queued and does
     /// nothing when it runs. If the key is already taken (the same item scheduled for
-    /// the same instant before), that job is the one that publishes.
+    /// the same instant before), no job is added: a queued or running holder publishes;
+    /// a `done` or `dead` one does not, and `publish_due` (every 30 s) publishes the
+    /// item instead.
     pub async fn schedule(
         &self,
         actor: &Actor,
@@ -190,9 +192,10 @@ impl ContentService {
                 return Ok(published);
             }
             for id in fresh {
+                // One set of rules per item's write (R10).
+                let rules = self.permalinks.pin();
                 let tx = self.store.begin().await?;
-                let done =
-                    publish_one(tx.as_ref(), self.permalinks.as_ref(), id, now, Due::By(now)).await;
+                let done = publish_one(tx.as_ref(), rules.as_ref(), id, now, Due::By(now)).await;
                 match finish(tx, done).await {
                     Ok(true) => published += 1,
                     Ok(false) | Err(CoreError::Conflict { .. }) => {}
@@ -218,15 +221,11 @@ impl ContentService {
     pub async fn publish_scheduled(&self, id: ContentId, at: Timestamp) -> Result<bool, CoreError> {
         for attempt in 0..2 {
             let now = Timestamp::now().max(at);
+            // One set of rules for the write (R10).
+            let rules = self.permalinks.pin();
             let tx = self.store.begin().await?;
-            let done = publish_one(
-                tx.as_ref(),
-                self.permalinks.as_ref(),
-                id,
-                now,
-                Due::ScheduledFor(at),
-            )
-            .await;
+            let done =
+                publish_one(tx.as_ref(), rules.as_ref(), id, now, Due::ScheduledFor(at)).await;
             match finish(tx, done).await {
                 Err(CoreError::Conflict { .. }) if attempt == 0 => {}
                 Err(CoreError::Conflict { .. }) => return Ok(false),
@@ -243,10 +242,12 @@ impl ContentService {
         expected_version: i64,
         action: Action,
     ) -> Result<ContentItem, CoreError> {
+        // One set of rules for the write (R10).
+        let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = transition_in(
             tx.as_ref(),
-            self.permalinks.as_ref(),
+            rules.as_ref(),
             actor,
             id,
             expected_version,
@@ -277,8 +278,8 @@ async fn transition_in(
     match action {
         Action::Publish => reclaim_path(repos, permalinks, &saved).await?,
         Action::Schedule(at) => {
-            // `None`: the same (item, instant) was scheduled before and its job is
-            // still there; it publishes.
+            // `None`: the same (item, instant) was scheduled before and that job row
+            // still exists; if it already finished, `publish_due` covers the item.
             repos
                 .jobs()
                 .enqueue(&jobs::publish_scheduled_job(id, at))

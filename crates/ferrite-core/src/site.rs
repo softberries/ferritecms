@@ -171,6 +171,9 @@ impl SiteReader {
         path_parts: &[String],
     ) -> Result<SiteRead<Option<PageItem>>, CoreError> {
         let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
         let mut deps = DepKeys::default();
         if kind == MEDIA_KIND || path_parts.is_empty() || path_parts.len() > MAX_PARENT_DEPTH + 1 {
             return Ok(public(None, deps));
@@ -195,7 +198,7 @@ impl SiteReader {
             return Ok(public(None, deps));
         };
         let mut items = self
-            .hydrator(repos, now)
+            .hydrator(repos, now, rules)
             .hydrate(vec![item], nodes, &mut deps)
             .await?;
         Ok(public(items.pop(), deps))
@@ -205,6 +208,9 @@ impl SiteReader {
     /// page `page` of the post listing (`None` past [`MAX_SKIP`]).
     pub async fn front_page(&self, page: u32) -> Result<SiteRead<Option<FrontPage>>, CoreError> {
         let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         deps.insert(option_key(FRONT_PAGE_OPTION));
@@ -221,7 +227,7 @@ impl SiteReader {
                 && is_public(&item, now)
             {
                 let mut items = self
-                    .hydrator(repos, now)
+                    .hydrator(repos, now, rules)
                     .hydrate(vec![item], Nodes::new(), &mut deps)
                     .await?;
                 if let Some(p) = items.pop() {
@@ -229,7 +235,7 @@ impl SiteReader {
                 }
             }
         }
-        let listing = self.posts(repos, now, page, &mut deps).await?;
+        let listing = self.posts(repos, now, rules, page, &mut deps).await?;
         Ok(public(listing.map(FrontPage::Posts), deps))
     }
 
@@ -242,6 +248,9 @@ impl SiteReader {
         page: u32,
     ) -> Result<SiteRead<Option<Listing>>, CoreError> {
         let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         deps.insert(archive_key(kind));
@@ -253,7 +262,7 @@ impl SiteReader {
             kind: Some(kind.to_owned()),
             ..ContentQuery::default()
         };
-        let listing = self.listing(repos, now, q, page, &mut deps).await?;
+        let listing = self.listing(repos, now, rules, q, page, &mut deps).await?;
         Ok(public(listing, deps))
     }
 
@@ -279,6 +288,9 @@ impl SiteReader {
         page: u32,
     ) -> Result<SiteRead<Option<(TermPublic, Listing)>>, CoreError> {
         let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         let Some(term) = repos.terms().get_by_slug(taxonomy, slug).await? else {
@@ -291,7 +303,7 @@ impl SiteReader {
             term: Some(term.id),
             ..ContentQuery::default()
         };
-        let listing = self.listing(repos, now, q, page, &mut deps).await?;
+        let listing = self.listing(repos, now, rules, q, page, &mut deps).await?;
         let found = listing
             .filter(|l| l.total > 0)
             .map(|l| (hydrate::term_public(term), l));
@@ -307,6 +319,9 @@ impl SiteReader {
         page: u32,
     ) -> Result<SiteRead<Option<(UserPublic, Listing)>>, CoreError> {
         let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         let Some(user) = repos.users().get_by_login(login).await? else {
@@ -319,7 +334,7 @@ impl SiteReader {
             author: Some(user.id),
             ..ContentQuery::default()
         };
-        let listing = self.listing(repos, now, q, page, &mut deps).await?;
+        let listing = self.listing(repos, now, rules, q, page, &mut deps).await?;
         let found = listing.filter(|l| l.total > 0).map(|l| {
             let author = UserPublic {
                 id: user.id,
@@ -341,6 +356,9 @@ impl SiteReader {
         page: u32,
     ) -> Result<SiteRead<Option<Listing>>, CoreError> {
         let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
         let mut deps = DepKeys::default();
         let Some((from, to)) = date_range(year, month) else {
             return Ok(public(None, deps));
@@ -353,7 +371,7 @@ impl SiteReader {
             published_before: Some(to),
             ..ContentQuery::default()
         };
-        let listing = self.listing(repos, now, q, page, &mut deps).await?;
+        let listing = self.listing(repos, now, rules, q, page, &mut deps).await?;
         // R27: no public items in the range is the same as no archive (like R7).
         Ok(public(listing.filter(|l| l.total > 0), deps))
     }
@@ -369,6 +387,9 @@ impl SiteReader {
     /// `get_many` for the page, then hydration.
     pub async fn search(&self, q: &str, page: u32) -> Result<SiteRead<Option<Listing>>, CoreError> {
         let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         let kinds: Vec<String> = repos
@@ -443,7 +464,7 @@ impl SiteReader {
                 .collect()
         };
         let items = self
-            .hydrator(repos, now)
+            .hydrator(repos, now, rules)
             .hydrate(rows, Nodes::new(), &mut deps)
             .await?;
         Ok(public(
@@ -464,6 +485,9 @@ impl SiteReader {
         source: &FeedSource,
     ) -> Result<SiteRead<Option<Vec<PageItem>>>, CoreError> {
         let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         let mut q = published(now);
@@ -491,7 +515,7 @@ impl SiteReader {
             return Ok(public(None, deps));
         }
         let items = self
-            .hydrator(repos, now)
+            .hydrator(repos, now, rules)
             .hydrate(rows, Nodes::new(), &mut deps)
             .await?;
         Ok(public(Some(items), deps))
@@ -510,6 +534,9 @@ impl SiteReader {
         cursor: Option<&str>,
     ) -> Result<SiteRead<SitemapPage>, CoreError> {
         let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         deps.insert(archive_key(kind));
@@ -523,7 +550,7 @@ impl SiteReader {
         let mut q = published(now);
         q.kind = Some(kind.to_owned());
         q.cursor = cursor.map(str::to_owned);
-        let hydrator = self.hydrator(repos, now);
+        let hydrator = self.hydrator(repos, now, rules);
         let mut nodes = Nodes::new();
         let file_len = self.sitemap_file_len;
         while out.entries.len() < file_len {
@@ -544,7 +571,7 @@ impl SiteReader {
                     item,
                 };
                 out.entries.push(SitemapEntry {
-                    url: self.permalinks.path(&input),
+                    url: rules.path(&input),
                     lastmod: input.item.updated_at,
                 });
             }
@@ -568,6 +595,9 @@ impl SiteReader {
         n: usize,
     ) -> Result<SiteRead<Vec<PageItem>>, CoreError> {
         let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         deps.insert(archive_key(&item.item.kind));
@@ -589,7 +619,7 @@ impl SiteReader {
             }
         }
         let items = self
-            .hydrator(repos, now)
+            .hydrator(repos, now, rules)
             .hydrate(found, Nodes::new(), &mut deps)
             .await?;
         Ok(public(items, deps))
@@ -611,6 +641,9 @@ impl SiteReader {
         kind_ok: &(dyn Fn(&str) -> bool + Sync),
     ) -> Result<SiteRead<Option<PageItem>>, CoreError> {
         let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         deps.insert(post_key(id));
@@ -623,7 +656,7 @@ impl SiteReader {
             return Ok(public(None, deps));
         };
         let mut items = self
-            .hydrator(repos, now)
+            .hydrator(repos, now, rules)
             .hydrate(vec![item], Nodes::new(), &mut deps)
             .await?;
         Ok(public(items.pop(), deps))
@@ -640,6 +673,9 @@ impl SiteReader {
         ids: &[ContentId],
     ) -> Result<SiteRead<HashMap<ContentId, ItemLink>>, CoreError> {
         let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         let ids = unique(ids.iter().copied());
@@ -666,7 +702,7 @@ impl SiteReader {
             terms.extend(repos.terms().for_items(chunk).await?);
         }
         let mut nodes = Nodes::new();
-        self.hydrator(repos, now)
+        self.hydrator(repos, now, rules)
             .load_ancestors(&items, &mut nodes)
             .await?;
         for item in items {
@@ -683,7 +719,7 @@ impl SiteReader {
                 ancestors,
                 primary_term: primary_term(item_terms),
             };
-            let url = self.permalinks.path(&input);
+            let url = rules.path(&input);
             out.insert(
                 input.item.id,
                 ItemLink {
@@ -722,6 +758,9 @@ impl SiteReader {
     /// publishing it refreshes the page.
     pub async fn media(&self, id: ContentId) -> Result<SiteRead<Option<MediaPublic>>, CoreError> {
         let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         deps.insert(post_key(id));
@@ -734,7 +773,7 @@ impl SiteReader {
             return Ok(public(None, deps));
         }
         let row = repos.media().get(id).await?;
-        let hydrator = self.hydrator(repos, now);
+        let hydrator = self.hydrator(repos, now, rules);
         Ok(public(row.map(|m| hydrator.media_public(&m)), deps))
     }
 
@@ -804,6 +843,9 @@ impl SiteReader {
         offset: u32,
     ) -> Result<SiteRead<Vec<PageItem>>, CoreError> {
         let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         deps.insert(archive_key(kind));
@@ -819,7 +861,7 @@ impl SiteReader {
         q.limit = limit;
         let rows = repos.content().list(&q).await?.items;
         let items = self
-            .hydrator(repos, now)
+            .hydrator(repos, now, rules)
             .hydrate(rows, Nodes::new(), &mut deps)
             .await?;
         Ok(public(items, deps))
@@ -833,6 +875,9 @@ impl SiteReader {
         id: ContentId,
     ) -> Result<SiteRead<Previewed>, CoreError> {
         let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
         let repos = self.store.read();
         let item = repos.content().get(id).await?.ok_or(CoreError::NotFound)?;
         can_edit(actor, &item)?;
@@ -842,7 +887,7 @@ impl SiteReader {
         let mut deps = DepKeys::default();
         let status = item.status;
         let item = self
-            .hydrator(repos, now)
+            .hydrator(repos, now, rules)
             .hydrate(vec![item], Nodes::new(), &mut deps)
             .await?
             .pop()
@@ -854,10 +899,15 @@ impl SiteReader {
         })
     }
 
-    fn hydrator<'a>(&'a self, repos: &'a dyn Repos, now: Timestamp) -> Hydrator<'a> {
+    fn hydrator<'a>(
+        &'a self,
+        repos: &'a dyn Repos,
+        now: Timestamp,
+        rules: &'a dyn Permalinks,
+    ) -> Hydrator<'a> {
         Hydrator {
             repos,
-            permalinks: self.permalinks.as_ref(),
+            permalinks: rules,
             media_url: &self.media_url,
             now,
         }
@@ -867,6 +917,7 @@ impl SiteReader {
         &self,
         repos: &dyn Repos,
         now: Timestamp,
+        rules: &dyn Permalinks,
         page: u32,
         deps: &mut DepKeys,
     ) -> Result<Option<Listing>, CoreError> {
@@ -875,7 +926,7 @@ impl SiteReader {
             kind: Some(POST_KIND.to_owned()),
             ..ContentQuery::default()
         };
-        self.listing(repos, now, q, page, deps).await
+        self.listing(repos, now, rules, q, page, deps).await
     }
 
     /// Page `page` (1-based) of `filter` with the public restriction forced on, or
@@ -885,6 +936,7 @@ impl SiteReader {
         &self,
         repos: &dyn Repos,
         now: Timestamp,
+        rules: &dyn Permalinks,
         filter: ContentQuery,
         page: u32,
         deps: &mut DepKeys,
@@ -925,7 +977,7 @@ impl SiteReader {
             None => repos.content().count(&q).await?,
         };
         let items = self
-            .hydrator(repos, now)
+            .hydrator(repos, now, rules)
             .hydrate(rows.items, Nodes::new(), deps)
             .await?;
         Ok(Some(Listing {
