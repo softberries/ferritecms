@@ -451,13 +451,18 @@ pub async fn redirect_import_all_or_nothing(db: &TestDb) {
                 ("/l1", "/l2", 301),           // 6: loop within the file
                 ("/l2", "/l1", 301),           // 7
                 ("/t", "javascript:x()", 301), // 8: target
+                ("/ok/", "/q", 301),           // 9: duplicate (slash variant)
+                ("/api/x", "/q", 301),         // 10: router-owned source
+                ("/_theme/a.css", "/q", 301),  // 11: router-owned source
             ]),
         )
         .await,
     );
     let at: Vec<usize> = errors.iter().map(|e| e.row).collect();
-    assert_eq!(at, [1, 2, 3, 4, 5, 6, 7, 8], "{errors:?}");
+    assert_eq!(at, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], "{errors:?}");
     assert!(errors[2].message.contains("duplicate"), "{errors:?}");
+    assert!(errors[8].message.contains("duplicate"), "{errors:?}");
+    assert!(errors[9].message.contains("serves itself"), "{errors:?}");
     assert!(errors[4].message.contains("loop"), "{errors:?}");
     assert!(svc.resolve("/ok").await.unwrap().is_none());
     assert_eq!(max_seq(store).await, seq, "nothing emitted");
@@ -577,6 +582,47 @@ pub async fn redirect_update_moves_source(db: &TestDb) {
     assert!(matches!(
         svc.get(&admin, gone).await,
         Err(CoreError::NotFound)
+    ));
+    // Router-owned sources are refused on create and update; stored rows still resolve.
+    for owned in ["/feed/", "/robots.txt", "/_media/x", "/healthz"] {
+        let (field, _) = invalid(svc.upsert(&admin, owned, "/q", 301).await);
+        assert_eq!(field, Some("source"), "{owned}");
+        let (field, _) = invalid(svc.update(&admin, r.id, owned, "/q", 301).await);
+        assert_eq!(field, Some("source"), "{owned}");
+    }
+    store
+        .read()
+        .redirects()
+        .upsert(&ferrite_domain::Redirect {
+            id: ferrite_domain::RedirectId::new(),
+            source_path: "/feed/legacy".into(),
+            target: "/feed/".into(),
+            code: 301,
+            hits: 0,
+            origin: RedirectOrigin::Manual,
+            created_at: ferrite_domain::Timestamp::now(),
+            last_hit_at: None,
+        })
+        .await
+        .unwrap();
+    assert!(svc.resolve("/feed/legacy").await.unwrap().is_some());
+
+    // Reads: the role must hold manage_redirects; a redirects:read token is enough.
+    let reader = actor(store, Role::Admin)
+        .await
+        .with_scopes(Scopes::from_strs(&["redirects:read".to_owned()]).unwrap());
+    assert_eq!(svc.get(&reader, r.id).await.unwrap().id, r.id);
+    assert!(!svc.list(&reader, 10, None).await.unwrap().items.is_empty());
+    assert!(matches!(
+        svc.update(&reader, r.id, "/q", "/r", 301).await,
+        Err(CoreError::Forbidden("redirects:write"))
+    ));
+    let narrow = actor(store, Role::Admin)
+        .await
+        .with_scopes(Scopes::from_strs(&["content:read".to_owned()]).unwrap());
+    assert!(matches!(
+        svc.get(&narrow, r.id).await,
+        Err(CoreError::Forbidden("redirects:read"))
     ));
     let author = actor(store, Role::Author).await;
     assert!(matches!(

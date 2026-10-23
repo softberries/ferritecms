@@ -40,9 +40,14 @@ struct Change<'a> {
 ///
 /// Options flagged `autoload` are cached in memory; reading them never touches the
 /// store. Other options are read from the store each time. The cache is updated after a
-/// write commits, so a failed write never shows up in it. A value is only replaced by
-/// one with the same or a newer `updated_at`, so a slow re-read of an older write cannot
-/// overwrite a newer cached value. Removals (delete, `autoload = false`) always apply.
+/// write commits, so a failed write never shows up in it.
+///
+/// **Every cache update re-reads the store**, and what it read replaces the cached
+/// entry, unless the cache changed while it read (a generation counter, bumped by every
+/// update, tells): then the key is dropped instead, and reads fall back to the store
+/// until the key's next `options.changed` event re-caches it. A slow re-read therefore
+/// never puts an older value back over a newer one. `updated_at` is not compared: it
+/// comes from the writing node's clock, and nodes' clocks may differ.
 ///
 /// **Other nodes' writes** reach the cache through
 /// [`reload_from_event`](Self::reload_from_event) for each `options.changed` event (the
@@ -205,36 +210,37 @@ impl OptionService {
         Ok(())
     }
 
-    /// The cache after a committed write of `c`: the stored entry (it carries
-    /// `updated_at`) if it is autoloaded, else nothing. If the re-read fails the key is
-    /// dropped, so reads fall back to the store.
+    /// The cache after a committed write of `c`: the stored entry if it is autoloaded,
+    /// else nothing, under the generation guard (see the type docs). If the re-read
+    /// fails the key is dropped, so reads fall back to the store.
     async fn refresh_after_write(&self, c: &Change<'_>) {
-        let stored = if c.value.is_some() && c.autoload {
-            match self.store.read().options().get(c.key).await {
-                Ok(entry) => entry,
-                Err(e) => {
-                    tracing::warn!(key = c.key, error = %e, "option cache refresh failed; dropping key");
-                    None
-                }
+        if c.value.is_none() || !c.autoload {
+            self.store_guarded(c.key, self.generation(), None);
+            return;
+        }
+        let seen = self.generation();
+        match self.store.read().options().get(c.key).await {
+            Ok(entry) => self.store_guarded(c.key, seen, entry.filter(|e| e.autoload)),
+            Err(e) => {
+                tracing::warn!(key = c.key, error = %e, "option cache refresh failed; dropping key");
+                self.store_guarded(c.key, seen, None);
             }
-        } else {
-            None
-        };
+        }
+    }
+
+    /// Puts `entry` (`None`: removes the key) into the cache if its generation is still
+    /// `seen`, else drops the key; bumps the generation either way.
+    fn store_guarded(&self, key: &str, seen: u64, entry: Option<OptionEntry>) {
         let mut cache = self.cache.write().unwrap_or_else(PoisonError::into_inner);
-        cache.generation += 1;
-        merge(&mut cache.entries, c.key, stored);
+        put_guarded(&mut cache, key, seen, entry);
     }
 
     /// Re-reads the given keys from the store into the cache, for `options.changed`
     /// events (from any node, R13). Takes event keys (`option:<key>`); others are
     /// ignored.
     ///
-    /// What the store holds replaces the cached entry whatever its `updated_at` (nodes'
-    /// clocks may differ, so a newer write can carry an older time), unless the cache
-    /// changed while the key was read (a local write or another reload): then the key
-    /// is dropped and reads fall back to the store. A store error also drops the key
-    /// (and the keys after it) and is returned. Meant for one caller at a time (the
-    /// reloader's task).
+    /// Each key is re-read under the generation guard (see the type docs). A store error
+    /// drops the key (and the keys after it) and is returned.
     pub async fn reload_from_event(&self, keys: &[String]) -> Result<(), CoreError> {
         let keys: Vec<&str> = keys
             .iter()
@@ -253,20 +259,7 @@ impl OptionService {
                     return Err(e.into());
                 }
             };
-            let mut cache = self.cache.write().unwrap_or_else(PoisonError::into_inner);
-            if cache.generation == seen {
-                match entry {
-                    Some(e) => {
-                        cache.entries.insert((*key).to_owned(), e);
-                    }
-                    None => {
-                        cache.entries.remove(*key);
-                    }
-                }
-            } else {
-                cache.entries.remove(*key);
-            }
-            cache.generation += 1;
+            self.store_guarded(key, seen, entry);
         }
         Ok(())
     }
@@ -302,6 +295,19 @@ impl OptionService {
             .unwrap_or_else(PoisonError::into_inner)
             .generation
     }
+}
+
+/// [`OptionService::store_guarded`] on the locked cache.
+fn put_guarded(cache: &mut Cached, key: &str, seen: u64, entry: Option<OptionEntry>) {
+    match entry {
+        Some(e) if cache.generation == seen => {
+            cache.entries.insert(key.to_owned(), e);
+        }
+        _ => {
+            cache.entries.remove(key);
+        }
+    }
+    cache.generation += 1;
 }
 
 async fn autoloaded(store: &dyn Store) -> Result<HashMap<String, OptionEntry>, CoreError> {
@@ -406,24 +412,6 @@ async fn check_permalinks(repos: &dyn Repos, changes: &[&Change<'_>]) -> Result<
         })
 }
 
-/// Stores `entry` unless the cache holds a strictly newer one; `None` removes the key.
-fn merge(cache: &mut HashMap<String, OptionEntry>, key: &str, entry: Option<OptionEntry>) {
-    match entry {
-        Some(e) => {
-            if cache
-                .get(key)
-                .is_some_and(|old| old.updated_at > e.updated_at)
-            {
-                return;
-            }
-            cache.insert(key.to_owned(), e);
-        }
-        None => {
-            cache.remove(key);
-        }
-    }
-}
-
 fn check_key(key: &str) -> Result<(), CoreError> {
     if key.is_empty() || key.len() > MAX_KEY_LEN || key.chars().any(char::is_control) {
         return Err(CoreError::Invalid(format!(
@@ -451,19 +439,19 @@ mod tests {
     }
 
     #[test]
-    fn merge_keeps_the_newer_value() {
-        let mut cache = HashMap::new();
-        merge(&mut cache, "k", Some(entry(2, 2_000_000)));
-        // An older re-read does not overwrite.
-        merge(&mut cache, "k", Some(entry(1, 1_000_000)));
-        assert_eq!(cache["k"].value, json!(2));
-        // Same or newer does.
-        merge(&mut cache, "k", Some(entry(3, 2_000_000)));
-        assert_eq!(cache["k"].value, json!(3));
-        merge(&mut cache, "k", Some(entry(4, 3_000_000)));
-        assert_eq!(cache["k"].value, json!(4));
+    fn guarded_puts_drop_the_key_when_the_cache_moved() {
+        let mut cache = Cached::default();
+        // Unchanged generation: the re-read wins, even with an older `updated_at`.
+        put_guarded(&mut cache, "k", 0, Some(entry(2, 2_000_000)));
+        put_guarded(&mut cache, "k", 1, Some(entry(1, 1_000_000)));
+        assert_eq!(cache.entries["k"].value, json!(1));
+        assert_eq!(cache.generation, 2);
+        // Another update in between (generation 2 != 1): dropped, not guessed.
+        put_guarded(&mut cache, "k", 1, Some(entry(3, 3_000_000)));
+        assert!(cache.entries.is_empty());
         // Removal always applies.
-        merge(&mut cache, "k", None);
-        assert!(cache.is_empty());
+        put_guarded(&mut cache, "k", 3, Some(entry(4, 0)));
+        put_guarded(&mut cache, "k", 4, None);
+        assert!(cache.entries.is_empty());
     }
 }

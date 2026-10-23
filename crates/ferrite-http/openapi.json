@@ -2448,7 +2448,7 @@
             }
           },
           "403": {
-            "description": "`forbidden` (`manage_redirects`, `redirects:write`) or `password-reset-required`",
+            "description": "`forbidden` (`manage_redirects`, `redirects:read`) or `password-reset-required`",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2524,7 +2524,7 @@
             }
           },
           "422": {
-            "description": "`validation` (`errors[0].field`: `source`, `target` (also loops and chains of more than 10) or `code`)",
+            "description": "`validation` (`errors[0].field`: `source` (also a path the site serves itself), `target` (also loops and chains of more than 10) or `code`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2572,7 +2572,7 @@
             }
           },
           "403": {
-            "description": "`forbidden` (`manage_redirects`, `redirects:write`) or `password-reset-required`",
+            "description": "`forbidden` (`manage_redirects`, `redirects:read`) or `password-reset-required`",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2730,7 +2730,7 @@
             }
           },
           "403": {
-            "description": "`forbidden` (`manage_redirects`, `redirects:write`) or `password-reset-required`",
+            "description": "`forbidden` (`manage_redirects`, `redirects:read`) or `password-reset-required`",
             "content": {
               "application/problem+json": {
                 "schema": {

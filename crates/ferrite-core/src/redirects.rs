@@ -12,8 +12,8 @@ use ferrite_store::{Repos, Store};
 
 use crate::{
     Actor, CoreError, RowError,
-    actor::{Capability, require},
-    events,
+    actor::{Area, Capability, can, require, require_read},
+    events, slug,
     tx::finish,
 };
 
@@ -33,12 +33,15 @@ pub struct ImportReport {
     pub updated: u32,
 }
 
-/// Resolves and manages redirects (writes need `manage_redirects`).
+/// Resolves and manages redirects. Writes need `manage_redirects` (scope
+/// `redirects:write`); reads ([`list`](Self::list), [`get`](Self::get)) need a role
+/// holding `manage_redirects` and the scope `redirects:read` (or write).
 ///
 /// **Rules** (every write path: [`upsert`](Self::upsert), [`update`](Self::update),
 /// [`import`](Self::import)): `source` is a path starting with `/`, `target` a path or an
 /// absolute http(s) URL, both at most 2048 characters without whitespace or control
-/// characters (`InvalidField` `source` / `target`); `code` one of 301, 302, 307, 308,
+/// characters (`InvalidField` `source` / `target`); a source whose first segment is
+/// router-owned is refused too ([`check_source`]); `code` one of 301, 302, 307, 308,
 /// 410 (`InvalidField` `code`). Rejected as `InvalidField { field: "target", .. }`:
 /// `source == target`; a target that leads back to `source` through existing redirects
 /// (loop); a target that starts a chain of more than 10 existing redirects. Hops are
@@ -80,13 +83,13 @@ impl RedirectService {
         limit: u32,
         cursor: Option<&str>,
     ) -> Result<Page<Redirect>, CoreError> {
-        require(actor, Capability::ManageRedirects)?;
+        require_view(actor)?;
         Ok(self.store.read().redirects().list(limit, cursor).await?)
     }
 
-    /// Redirect `id` (`manage_redirects`; missing: `NotFound`).
+    /// Redirect `id` (see the type docs for the read check; missing: `NotFound`).
     pub async fn get(&self, actor: &Actor, id: RedirectId) -> Result<Redirect, CoreError> {
-        require(actor, Capability::ManageRedirects)?;
+        require_view(actor)?;
         self.store
             .read()
             .redirects()
@@ -210,7 +213,8 @@ impl RedirectService {
     /// Every row is checked first with the rules of the type docs, against the existing
     /// redirects (read before the transaction) with all of the file's rows applied on
     /// top, so loops and long chains among the file's own rows count too; a source
-    /// given twice is an error on its second row. If any row fails nothing is written
+    /// given twice, exactly or with its trailing slash toggled (as
+    /// [`update`](Self::update) counts it), is an error on its second row. If any row fails nothing is written
     /// and the result is `InvalidRows` listing each failing row. Otherwise one
     /// transaction upserts every row and emits one `invalidate` with the keys of every
     /// source. A redirect changed between the read and the write can still close a loop
@@ -231,7 +235,11 @@ impl RedirectService {
         let mut valid = vec![false; rows.len()];
         for (i, (source, target, code)) in rows.iter().enumerate() {
             let checked = check_row(source, target, *code).and_then(|()| {
-                if seen.insert(source.as_str()) {
+                let toggled = toggled(source);
+                let taken = seen.contains(source.as_str())
+                    || toggled.as_deref().is_some_and(|t| seen.contains(t));
+                if !taken {
+                    seen.insert(source.as_str());
                     Ok(())
                 } else {
                     Err(CoreError::invalid_field(
@@ -333,6 +341,15 @@ impl RedirectService {
             }
         }
     }
+}
+
+/// The read check of [`RedirectService::list`] and [`RedirectService::get`]: the role
+/// holds `manage_redirects` (only admins see redirects), and `require_read(Redirects)`.
+fn require_view(actor: &Actor) -> Result<(), CoreError> {
+    if !can(actor.role, Capability::ManageRedirects) {
+        return Err(CoreError::Forbidden(Capability::ManageRedirects.as_str()));
+    }
+    require_read(actor, Area::Redirects)
 }
 
 fn row_error(row: usize, e: CoreError) -> RowError {
@@ -475,7 +492,29 @@ fn check_source(source: &str) -> Result<(), CoreError> {
             "redirect source must be a path starting with '/'",
         ));
     }
+    if is_router_owned(source) {
+        return Err(CoreError::invalid_field(
+            "source",
+            "redirect source is a path the site serves itself (API, assets, health, feeds, sitemap, robots.txt)",
+        ));
+    }
     Ok(())
+}
+
+/// Whether the first segment of `source` (percent-decoded, any case) is one the router
+/// owns: a [`slug::RESERVED`] word (`/api`, `/feed/…`, `/_media`, `/healthz`,
+/// `/robots.txt`, `/sitemap.xml`, …) or any word starting with `_` (`/_theme`, `/_p`,
+/// `/_preview`, …). Redirects there either never fire (dispatched first) or would
+/// shadow a built-in. Only new writes are checked; stored rows keep working.
+fn is_router_owned(source: &str) -> bool {
+    let first = source
+        .trim_start_matches('/')
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    let decoded = percent_encoding::percent_decode_str(first).decode_utf8_lossy();
+    let word = decoded.to_lowercase();
+    word.starts_with('_') || slug::is_reserved(&word)
 }
 
 fn check_target(target: &str) -> Result<(), CoreError> {
@@ -505,6 +544,47 @@ fn check_target(target: &str) -> Result<(), CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn router_owned_sources() {
+        for owned in [
+            "/api",
+            "/api/v1/x",
+            "/API/",
+            "/_media/a.png",
+            "/_anything",
+            "/%5Fpreview/x",
+            "/healthz",
+            "/readyz",
+            "/robots.txt",
+            "/sitemap.xml",
+            "/feed/",
+            "/feed",
+            "/feed/atom/",
+        ] {
+            assert!(is_router_owned(owned), "{owned}");
+            assert!(
+                matches!(
+                    check_source(owned),
+                    Err(CoreError::InvalidField {
+                        field: "source",
+                        ..
+                    })
+                ),
+                "{owned}"
+            );
+        }
+        for free in [
+            "/",
+            "/apis",
+            "/about/",
+            "/feeds/",
+            "/blog/_draft",
+            "/my_page",
+        ] {
+            assert!(!is_router_owned(free), "{free}");
+        }
+    }
 
     #[test]
     fn toggle_variants() {

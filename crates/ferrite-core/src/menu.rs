@@ -68,7 +68,7 @@ impl MenuService {
                 "menu name must be lowercase without whitespace or '/'".into(),
             ));
         }
-        check_label(&menu.label, "menu label")?;
+        check_label(&menu.label, "label", "menu label")?;
         if menu.items.len() > MAX_MENU_ITEMS {
             return Err(CoreError::invalid_field(
                 "items",
@@ -109,17 +109,19 @@ impl MenuService {
     }
 }
 
-fn check_label(label: &str, what: &str) -> Result<(), CoreError> {
+/// `InvalidField { field, .. }` when `label` is longer than [`MAX_LABEL_LEN`].
+fn check_label(label: &str, field: &'static str, what: &str) -> Result<(), CoreError> {
     if label.chars().count() > MAX_LABEL_LEN {
-        return Err(CoreError::Invalid(format!(
-            "{what} longer than {MAX_LABEL_LEN} characters"
-        )));
+        return Err(CoreError::invalid_field(
+            field,
+            format!("{what} longer than {MAX_LABEL_LEN} characters"),
+        ));
     }
     Ok(())
 }
 
 async fn check_item(repos: &dyn Repos, item: &MenuItem) -> Result<(), CoreError> {
-    check_label(&item.label, "menu label")?;
+    check_label(&item.label, "items", "menu item label")?;
     match item.kind {
         MenuItemKind::Url => {
             if item.target_id.is_some() {

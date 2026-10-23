@@ -121,6 +121,17 @@ async fn menus_put_get_delete(api: Api) -> Api {
         .await
         .assert_problem(422, "validation");
     assert_eq!(p["errors"][0]["field"], "name");
+    let p = b
+        .send(
+            &api,
+            Method::PUT,
+            &path,
+            Some(&json!({"label": "x".repeat(201)})),
+            None,
+        )
+        .await
+        .assert_problem(422, "validation");
+    assert_eq!(p["errors"][0]["field"], "label");
     // An entry id another menu uses: 409 naming `items`, no constraint name.
     let r = b
         .send(
@@ -306,6 +317,37 @@ async fn redirects_crud_and_csv_roundtrip(api: Api) -> Api {
     let back = csv_import(&api, &b, "text/csv", &r.body).await;
     assert_eq!(back.json(), json!({"created": 3, "updated": 0}), "{back:?}");
     assert_eq!(all_redirects(&api, &b).await, before);
+
+    // A redirects:read token can list, read and export, but not write.
+    let ada = api.user("reader", Role::Admin, false).await;
+    let ro = api.bearer(&ada, &["redirects:read"]).await;
+    let r = ro.get(&api, &format!("{REDIRECTS}/export")).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert!(
+        r.body.starts_with("source,target,code\r\n/a,/b,301\r\n"),
+        "{}",
+        r.body
+    );
+    assert_eq!(ro.get(&api, REDIRECTS).await.status, StatusCode::OK);
+    let p = csv_import(&api, &ro, "text/csv", "/x,/y,301\n")
+        .await
+        .assert_problem(403, "forbidden");
+    assert!(
+        p["detail"].as_str().unwrap().contains("redirects:write"),
+        "{p}"
+    );
+    // A router-owned source is a field error.
+    let p = b
+        .send(
+            &api,
+            Method::POST,
+            REDIRECTS,
+            Some(&json!({"source": "/sitemap.xml", "target": "/x"})),
+            None,
+        )
+        .await
+        .assert_problem(422, "validation");
+    assert_eq!(p["errors"][0]["field"], "source");
 
     // An editor cannot touch redirects.
     let ed = api.user("eddie", Role::Editor, false).await;

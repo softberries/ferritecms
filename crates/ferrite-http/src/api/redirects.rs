@@ -1,8 +1,9 @@
 //! `/redirects`, with CSV import and export (07 §1, P29).
 //!
-//! Handlers only translate: `RedirectService` checks `manage_redirects` (reads too),
-//! the source/target/code rules and loops and chains, and emits `redirect:<source>`
-//! keys. No `If-Match` (P11): last write wins.
+//! Handlers only translate: `RedirectService` checks `manage_redirects` with
+//! `redirects:write` for writes and `manage_redirects` with `redirects:read` for reads
+//! (list, get, export), the source/target/code rules and loops and chains, and emits
+//! `redirect:<source>` keys. No `If-Match` (P11): last write wins.
 //!
 //! * `POST /redirects` creates the redirect for `source`, or replaces the target and
 //!   code of the one that has it; `201` with `Location` either way.
@@ -63,7 +64,7 @@ const HEADER: [&str; 3] = ["source", "target", "code"];
         (status = 200, description = "One page of redirects, by source", body = RedirectList),
         (status = 400, description = "`validation`: `limit` or `cursor`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 403, description = "`forbidden` (`manage_redirects`, `redirects:write`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_redirects`, `redirects:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn list_redirects(
@@ -97,7 +98,7 @@ pub async fn list_redirects(
         (status = 400, description = "`malformed-json`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (`manage_redirects`, `redirects:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 422, description = "`validation` (`errors[0].field`: `source`, `target` (also loops and chains of more than 10) or `code`)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation` (`errors[0].field`: `source` (also a path the site serves itself), `target` (also loops and chains of more than 10) or `code`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn create_redirect(
@@ -123,7 +124,7 @@ pub async fn create_redirect(
     responses(
         (status = 200, description = "The redirect", body = RedirectDto),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 403, description = "`forbidden` (`manage_redirects`, `redirects:write`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_redirects`, `redirects:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
@@ -288,7 +289,7 @@ pub async fn import_redirects(
     responses(
         (status = 200, description = "Every redirect as `source,target,code` with a header row, by source", body = String, content_type = "text/csv"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 403, description = "`forbidden` (`manage_redirects`, `redirects:write`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_redirects`, `redirects:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn export_redirects(
