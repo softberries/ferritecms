@@ -460,8 +460,30 @@ fn parse_cluster(cx: &mut Cx, root: &mut Table) -> ClusterConfig {
     let node_name = cx
         .string(&mut t, "cluster", "node_name")
         .filter(|s| !s.is_empty());
+    let workers = match cx.positive(&mut t, "cluster", "workers") {
+        None => default_workers(),
+        Some(n @ 1..=MAX_WORKERS) => n as usize,
+        Some(_) => {
+            cx.push("cluster.workers", "must be between 1 and 256");
+            default_workers()
+        }
+    };
     cx.unknown(t, "cluster");
-    ClusterConfig { mode, node_name }
+    ClusterConfig {
+        mode,
+        node_name,
+        workers,
+    }
+}
+
+/// Upper bound for an explicit `cluster.workers` (P16).
+const MAX_WORKERS: u64 = 256;
+
+/// `max(2, available_parallelism)` (04 §6 "default = CPU count, min 2", P16).
+fn default_workers() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .max(2)
 }
 
 fn parse_cache(cx: &mut Cx, root: &mut Table) -> CacheConfig {
@@ -617,7 +639,9 @@ pub fn render_default_toml(
             out.push_str("[media]\nbackend = \"local\"\nroot = \"media\"\n\n");
         }
     }
-    out.push_str("[cluster]\nmode = \"auto\"\n\n");
+    out.push_str("[cluster]\nmode = \"auto\"\n");
+    out.push_str("# Concurrent background jobs per node (1..=256); default max(2, CPU count).\n");
+    out.push_str("# workers = 4\n\n");
     out.push_str(
         "[cache]\nmax_bytes = \"256MB\"\nlogged_in = \"bypass\"\npoll_interval_ms = 250\n\n",
     );

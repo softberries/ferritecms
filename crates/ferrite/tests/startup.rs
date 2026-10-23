@@ -1,13 +1,17 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-//! `startup_check` against a real SQLite store (the pure decision table is unit-tested
-//! in `src/open.rs`).
+//! `startup_check` against real stores (the pure decision table is unit-tested in
+//! `src/open.rs`).
+
+use std::{sync::Arc, time::Duration};
 
 use ferrite::{binary_version, startup_check};
 use ferrite_config::DatabaseConfig;
 use ferrite_domain::Secret;
-use ferrite_store::{Compat, Store};
+use ferrite_store::{Compat, LOCK_MIGRATE, Store};
 use ferrite_store_sqlite::{SqliteOptions, SqliteStore};
+use ferrite_store_tests::{TestDb, backend_tests_spawning};
+use tokio::time::Instant;
 
 fn dbconf(auto_migrate: bool) -> DatabaseConfig {
     DatabaseConfig {
@@ -60,3 +64,43 @@ async fn up_to_date_is_ok() {
         .await
         .expect("check");
 }
+
+/// 02 §7, 04 §7: a node starting while `ferrite migrate` (or another node) holds the
+/// migrate lock waits for it, then checks and migrates.
+async fn startup_check_serialises_on_migrate_lock(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    let bin = binary_version().expect("version");
+    store.migrate_down(1, true).await.expect("down");
+    let guard = store
+        .try_lock(LOCK_MIGRATE)
+        .await
+        .expect("try_lock")
+        .expect("lock free");
+
+    let start = Instant::now();
+    let check = {
+        let store = store.clone();
+        let bin = bin.clone();
+        tokio::spawn(async move { startup_check(store.as_ref(), &bin, &dbconf(true)).await })
+    };
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!check.is_finished(), "startup_check must wait for the lock");
+    let st = store.migration_status(&bin).await.expect("status");
+    assert_eq!(st.verdict, Compat::NeedsUp, "nothing migrated while locked");
+    guard.release().await.expect("release");
+
+    tokio::time::timeout(Duration::from_secs(5), check)
+        .await
+        .expect("proceeds after release")
+        .expect("join")
+        .expect("check");
+    assert!(start.elapsed() >= Duration::from_millis(500));
+    let st = store.migration_status(&bin).await.expect("status");
+    assert_eq!(st.verdict, Compat::UpToDate);
+    // The check released the lock again.
+    let again = store.try_lock(LOCK_MIGRATE).await.expect("try_lock");
+    assert!(again.is_some(), "lock released after startup_check");
+    again.expect("held").release().await.expect("release");
+}
+
+backend_tests_spawning!(startup_check_serialises_on_migrate_lock);

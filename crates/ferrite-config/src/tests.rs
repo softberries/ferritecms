@@ -520,3 +520,23 @@ fn schema_longer_than_48_is_rejected() {
         e.problems[0].message
     );
 }
+
+#[test]
+fn workers_default_and_bounds() {
+    let (_d, r) = run(Some(MIN), &[]);
+    let c = r.unwrap();
+    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+    assert_eq!(c.cluster.workers, cpus.max(2));
+    assert!(c.cluster.workers >= 2);
+
+    for bad in ["0", "257", "-1", "\"4\""] {
+        let (_d, r) = run(Some(&format!("{MIN}[cluster]\nworkers = {bad}\n")), &[]);
+        assert_eq!(paths(&r.unwrap_err()), ["cluster.workers"], "{bad}");
+    }
+    for (ok, want) in [("1", 1), ("256", 256)] {
+        let (_d, r) = run(Some(&format!("{MIN}[cluster]\nworkers = {ok}\n")), &[]);
+        assert_eq!(r.unwrap().cluster.workers, want);
+    }
+    let (_d, r) = run(Some(MIN), &[("FERRITE_CLUSTER__WORKERS", "3")]);
+    assert_eq!(r.unwrap().cluster.workers, 3);
+}

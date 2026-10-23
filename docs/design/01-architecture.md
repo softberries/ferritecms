@@ -24,7 +24,7 @@ ferritecms/
 │   │                             #   other crates reuse its harness as a dev-dependency
 │   ├── ferrite-media/            # (built) MediaStore over object_store, sniffing, image variants
 │   ├── ferrite-cluster/          # (built, M1.5) job runner, periodic scheduler, built-in
-│   │                             #   prune jobs; node registry (M1.5, planned)
+│   │                             #   prune jobs, node registry (join checks, heartbeat)
 │   ├── ferrite-core/             # (built) services: content (+ lifecycle, revisions, redirects on
 │   │                             #   permalink change, search indexing), taxonomy, menus, options,
 │   │                             #   redirects; permalinks; the published-only read facade
@@ -235,7 +235,8 @@ root         = "media"                 # default; relative to the data folder
 
 [cluster]
 mode       = "auto"                    # "solo" | "cluster" | "auto"
-# node_name = ""                       # optional; empty means unset (no hostname-pid default yet)
+# node_name = ""                       # optional; unset or empty: $HOSTNAME-<pid>, else node-<pid>
+# workers  = 4                         # concurrent jobs per node, 1..=256; default max(2, CPU count)
 
 [cache]
 max_bytes  = "256MB"                   # 0 allowed
@@ -259,6 +260,14 @@ failure_window = "10m"
 or local with `local_shared = true`); otherwise `solo`, so single-node Postgres with local
 media works with defaults. An explicit `mode = "cluster"` is rejected with SQLite, and with
 local media unless `local_shared = true`.
+
+**Node startup checks** (`ferrite_cluster::Registry::join`, 04 §3, P15) need the database,
+so they run when a node joins the registry (wiring into `serve`: M1.5, planned), not in
+`load`: a *live* node (heartbeat within 30 s by the database clock) with another `site_id`
+or another `site.url` refuses the start; in solo mode another live node is waited for up
+to 35 s, then refused. `startup_check`
+(and `ferrite migrate up|down`) hold the `migrate` lock on both backends, waiting up to
+5 minutes and logging every 10 s.
 
 **Validation.** Unknown keys are errors. `load` returns `ConfigError` listing *all* problems
 at once with the offending key path (one line per problem); a TOML syntax error is reported

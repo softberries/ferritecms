@@ -20,8 +20,6 @@ pub const EVENT_RETENTION: Duration = Duration::from_secs(24 * 3600);
 pub const DONE_JOB_RETENTION: Duration = Duration::from_secs(7 * 24 * 3600);
 /// `dead` jobs finished longer ago than this are deleted.
 pub const DEAD_JOB_RETENTION: Duration = Duration::from_secs(30 * 24 * 3600);
-/// Node rows whose last heartbeat is older than this are deleted.
-pub const NODE_RETENTION: Duration = Duration::from_secs(24 * 3600);
 
 /// How long one prune run keeps deleting batches; well inside the default handler
 /// timeout (300 s), so a large backlog ends the run cleanly and the next hour goes on.
@@ -103,7 +101,7 @@ impl JobHandler for JobsPrune {
     }
 }
 
-/// `nodes.prune`: deletes node rows whose heartbeat is older than [`NODE_RETENTION`].
+/// `nodes.prune`: deletes node rows whose heartbeat is older than [`crate::node::NODE_EXPIRY`].
 pub struct NodesPrune(pub Arc<dyn Store>);
 
 #[async_trait]
@@ -113,7 +111,7 @@ impl JobHandler for NodesPrune {
     }
 
     async fn run(&self, _job: &Job) -> Result<(), JobError> {
-        let before = db_now_minus(self.0.as_ref(), NODE_RETENTION).await?;
+        let before = db_now_minus(self.0.as_ref(), crate::node::NODE_EXPIRY).await?;
         let nodes = self.0.read().nodes();
         prune_batches("nodes", || nodes.prune(before, MAX_PRUNE_BATCH)).await?;
         Ok(())

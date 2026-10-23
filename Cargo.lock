@@ -1308,6 +1308,7 @@ dependencies = [
  "ferrite-store",
  "ferrite-store-postgres",
  "ferrite-store-sqlite",
+ "ferrite-store-tests",
  "ferrite-theme",
  "hyper-util",
  "image",
@@ -1348,6 +1349,7 @@ name = "ferrite-cluster"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "ferrite-domain",
  "ferrite-store",
  "ferrite-store-tests",

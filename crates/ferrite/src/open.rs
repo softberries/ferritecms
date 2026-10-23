@@ -1,8 +1,10 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, bail};
 use ferrite_config::{Config, DatabaseConfig, DbKind};
-use ferrite_store::{Backend, Compat, MigrationStatus, Phase, Store};
+use ferrite_store::{
+    Backend, Compat, LOCK_MIGRATE, LockGuard, MigrationStatus, Phase, Store, StoreError, lock,
+};
 use ferrite_store_postgres::{PgOptions, PgStore};
 use ferrite_store_sqlite::{SqliteOptions, SqliteStore};
 
@@ -100,9 +102,61 @@ pub fn decide(
     }
 }
 
+/// How long startup and `ferrite migrate` wait for the migrate lock (02 §7, 04 §7).
+pub const MIGRATE_LOCK_WAIT: Duration = Duration::from_secs(5 * 60);
+/// How often a wait for the migrate lock is logged.
+const MIGRATE_LOCK_LOG_EVERY: Duration = Duration::from_secs(10);
+
+/// Takes [`LOCK_MIGRATE`] (both backends: another node or `ferrite migrate` may hold it),
+/// waiting up to [`MIGRATE_LOCK_WAIT`] and logging every 10 s while waiting.
+pub async fn migrate_lock(store: &dyn Store) -> anyhow::Result<Box<dyn LockGuard>> {
+    let started = tokio::time::Instant::now();
+    let wait = lock(store, LOCK_MIGRATE, MIGRATE_LOCK_WAIT);
+    tokio::pin!(wait);
+    let mut log =
+        tokio::time::interval_at(started + MIGRATE_LOCK_LOG_EVERY, MIGRATE_LOCK_LOG_EVERY);
+    loop {
+        tokio::select! {
+            r = &mut wait => {
+                return match r {
+                    Ok(guard) => Ok(guard),
+                    Err(StoreError::Busy) => bail!(
+                        "another node or `ferrite migrate` has held the migration lock for 5 minutes"
+                    ),
+                    Err(e) => Err(anyhow::Error::new(e).context("cannot take the migration lock")),
+                };
+            }
+            _ = log.tick() => tracing::info!(
+                waited_secs = started.elapsed().as_secs(),
+                "waiting for the migration lock (another node or `ferrite migrate` holds it)"
+            ),
+        }
+    }
+}
+
+/// Releases a migrate lock, logging (not failing on) a dirty release: the lock is gone
+/// either way once the guard is consumed.
+pub async fn release_migrate_lock(guard: Box<dyn LockGuard>) {
+    if let Err(e) = guard.release().await {
+        tracing::warn!(error = %e, "releasing the migration lock failed");
+    }
+}
+
 /// Startup compatibility check (02 §7-§8): applies pending migrations when allowed,
-/// refuses to start when the schema is incompatible with `binary`.
+/// refuses to start when the schema is incompatible with `binary`. Runs under the migrate
+/// lock, so concurrent starts migrate once and none reads a half-migrated schema.
 pub async fn startup_check(
+    store: &dyn Store,
+    binary: &semver::Version,
+    db: &DatabaseConfig,
+) -> anyhow::Result<()> {
+    let guard = migrate_lock(store).await?;
+    let result = check_and_migrate(store, binary, db).await;
+    release_migrate_lock(guard).await;
+    result
+}
+
+async fn check_and_migrate(
     store: &dyn Store,
     binary: &semver::Version,
     db: &DatabaseConfig,

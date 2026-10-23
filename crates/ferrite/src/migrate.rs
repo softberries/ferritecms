@@ -5,7 +5,7 @@ use anyhow::bail;
 use ferrite_store::{Compat, MigrationStatus, Phase};
 
 use crate::cli::{DataArg, MigrateCommand};
-use crate::open::{OpenMode, open_store};
+use crate::open::{OpenMode, migrate_lock, open_store, release_migrate_lock};
 use crate::{binary_version, load_config};
 
 pub async fn run(cmd: MigrateCommand) -> anyhow::Result<ExitCode> {
@@ -26,7 +26,10 @@ pub async fn run(cmd: MigrateCommand) -> anyhow::Result<ExitCode> {
             to,
         } => {
             let store = open_store(&load_config(&data)?, OpenMode::CreateIfMissing).await?;
-            let applied = store.migrate_up(to).await?;
+            let guard = migrate_lock(store.as_ref()).await?;
+            let applied = store.migrate_up(to).await;
+            release_migrate_lock(guard).await;
+            let applied = applied?;
             if applied.is_empty() {
                 println!("Nothing to apply.");
             } else {
@@ -43,7 +46,10 @@ pub async fn run(cmd: MigrateCommand) -> anyhow::Result<ExitCode> {
                 bail!("aborted");
             }
             let store = open_store(&load_config(&data)?, OpenMode::MustExist).await?;
-            let reverted = store.migrate_down(to, allow_lossy).await?;
+            let guard = migrate_lock(store.as_ref()).await?;
+            let reverted = store.migrate_down(to, allow_lossy).await;
+            release_migrate_lock(guard).await;
+            let reverted = reverted?;
             if reverted.is_empty() {
                 println!("Nothing to revert.");
             } else {

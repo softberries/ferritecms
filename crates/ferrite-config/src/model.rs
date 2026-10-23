@@ -75,6 +75,9 @@ pub enum ClusterMode {
 pub struct ClusterConfig {
     pub mode: ClusterMode,
     pub node_name: Option<String>,
+    /// Concurrent job handlers per node (`cluster.workers`): default
+    /// `max(2, available_parallelism)`, explicit values 1..=256 (P16).
+    pub workers: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
