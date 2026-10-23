@@ -22,7 +22,10 @@ use crate::{
     tx::finish,
 };
 
+mod admin;
 mod lifecycle;
+
+pub use admin::{AdminQuery, MAX_REVISIONS_LISTED};
 
 /// Unique index on (type, parent, slug); a violation of it means another writer took
 /// the slug between our lookup and our write.
@@ -160,7 +163,7 @@ impl ContentService {
             let saved = save_with_free_slug(tx.as_ref(), row, &base, None, &root).await?;
             set_terms(tx.as_ref(), saved.id, &terms).await?;
             let keys = invalidation_keys(&saved, &[], &terms, None, &[]);
-            after_save(tx.as_ref(), actor, &saved, keys).await?;
+            after_save(tx.as_ref(), actor, &saved, keys, None).await?;
             Ok(saved)
         }
         .await;
@@ -199,23 +202,31 @@ impl ContentService {
                 tx.as_ref(),
                 rules.as_ref(),
                 actor,
-                id,
-                expected_version,
-                draft,
+                Edit {
+                    id,
+                    expected_version,
+                    draft,
+                    note: None,
+                },
             )
             .await;
         finish(tx, done).await
     }
 
+    /// [`update`](Self::update) inside `tx`; the revision it writes carries `edit.note`.
     async fn update_in(
         &self,
         tx: &dyn Tx,
         permalinks: &dyn Permalinks,
         actor: &Actor,
-        id: ContentId,
-        expected_version: i64,
-        draft: ContentDraft,
+        edit: Edit,
     ) -> Result<ContentItem, CoreError> {
+        let Edit {
+            id,
+            expected_version,
+            draft,
+            note,
+        } = edit;
         let current = tx.content().get(id).await?.ok_or(CoreError::NotFound)?;
         can_edit(actor, &current)?;
         if current.version != expected_version {
@@ -312,9 +323,18 @@ impl ContentService {
             current.parent_id,
             &moved_descendants,
         );
-        after_save(tx, actor, &saved, keys).await?;
+        after_save(tx, actor, &saved, keys, note).await?;
         Ok(saved)
     }
+}
+
+/// One [`ContentService::update_in`] call: item `id`, expected at `expected_version`,
+/// gets `draft`; its revision carries `note`.
+struct Edit {
+    id: ContentId,
+    expected_version: i64,
+    draft: ContentDraft,
+    note: Option<String>,
 }
 
 /// The validated caller slug, or `fallback()` when there is none. A caller slug that is
@@ -481,12 +501,14 @@ async fn save_with_free_slug(
     }
 }
 
-/// Revision snapshot, prune, search index and the outbox event for a saved item.
+/// Revision snapshot (with `note`), prune, search index and the outbox event for a
+/// saved item.
 async fn after_save(
     repos: &dyn Repos,
     actor: &Actor,
     item: &ContentItem,
     keys: Vec<String>,
+    note: Option<String>,
 ) -> Result<(), CoreError> {
     let meta: serde_json::Map<String, serde_json::Value> =
         repos.meta().list(item.id).await?.into_iter().collect();
@@ -502,7 +524,7 @@ async fn after_save(
             body: item.body.clone(),
             fields: item.fields.clone(),
             meta: serde_json::Value::Object(meta),
-            note: None,
+            note,
         })
         .await?;
     repos.revisions().prune(item.id, KEEP_REVISIONS).await?;

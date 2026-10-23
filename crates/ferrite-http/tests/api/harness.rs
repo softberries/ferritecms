@@ -13,12 +13,13 @@ use axum::{
     extract::ConnectInfo,
     http::{HeaderMap, Method, Request, StatusCode, header, request},
 };
+use ferrite_cache::InvalidationLoop;
 use ferrite_cache::PageCache;
 use ferrite_core::{
-    AuthService, ContentService, MenuService, OptionService, PermalinkRules, RedirectService,
-    SiteReader, TaxonomyService, UserService, auth::SiteKey,
+    Actor, AuthService, ContentService, MenuService, NewAccount, OptionService, PermalinkRules,
+    RedirectService, Scopes, SiteReader, TaxonomyService, UserService, auth::SiteKey,
 };
-use ferrite_domain::{ArtifactHash, Secret, Timestamp};
+use ferrite_domain::{ArtifactHash, Role, Secret, Timestamp, User};
 use ferrite_http::{
     AppParts, AppState, HttpConfig, StoreHostServices,
     api::{ApiParts, ApiState},
@@ -299,6 +300,103 @@ impl Api {
     }
 }
 
+/// The password of every account [`Api::user`] creates.
+pub const PASSWORD: &str = "correct horse battery";
+
+impl Api {
+    /// An active account with [`PASSWORD`] (created through the operator path).
+    pub async fn user(&self, login: &str, role: Role, must_reset: bool) -> User {
+        self.api
+            .users
+            .operator()
+            .create(NewAccount {
+                login: login.into(),
+                email: format!("{login}@example.com"),
+                display_name: login.into(),
+                role,
+                password: Some(PASSWORD.into()),
+                must_reset,
+            })
+            .await
+            .unwrap()
+    }
+
+    /// A browser client logged in as `login` (with [`PASSWORD`]).
+    pub async fn logged_in(&self, login: &str) -> Client {
+        let mut c = Client::new();
+        let r = c.login(self, login, PASSWORD).await;
+        assert_eq!(r.status, StatusCode::OK, "{r:?}");
+        assert!(c.cookie.is_some() && c.csrf.is_some(), "{r:?}");
+        c
+    }
+
+    /// An API token of `user` holding `scopes` (`["*"]`: every scope).
+    pub async fn bearer(&self, user: &User, scopes: &[&str]) -> Bearer {
+        let scopes = if scopes == ["*"] {
+            Scopes::ALL
+        } else {
+            let names: Vec<String> = scopes.iter().map(|s| (*s).to_owned()).collect();
+            Scopes::from_strs(&names).unwrap()
+        };
+        let (token, _) = self
+            .api
+            .auth
+            .create_token(
+                &Actor::new(user.id, user.role),
+                user.id,
+                "test",
+                scopes,
+                None,
+            )
+            .await
+            .unwrap();
+        Bearer(token.expose().to_owned())
+    }
+
+    /// An invalidation loop over the page cache of [`Api::app`], positioned at the end
+    /// of the outbox (call `poll_once` to apply what was written since).
+    pub async fn poller(&self) -> InvalidationLoop {
+        InvalidationLoop::for_store(self.store.clone(), self.app.cache.clone())
+            .await
+            .expect("invalidation loop")
+    }
+}
+
+/// An API client authenticating with a bearer token (no `Origin`, no CSRF token).
+pub struct Bearer(pub String);
+
+impl Bearer {
+    /// A request carrying the token.
+    pub fn builder(&self, method: Method, path: &str) -> request::Builder {
+        builder(method, path).header(header::AUTHORIZATION, format!("Bearer {}", self.0))
+    }
+
+    pub async fn get(&self, api: &Api, path: &str) -> Resp {
+        api.send(self.builder(Method::GET, path).body(Body::empty()).unwrap())
+            .await
+    }
+
+    /// `method path` with an optional JSON body and `If-Match: "<if_match>"`.
+    pub async fn send(
+        &self,
+        api: &Api,
+        method: Method,
+        path: &str,
+        body: Option<&Value>,
+        if_match: Option<i64>,
+    ) -> Resp {
+        let mut b = self.builder(method, path);
+        if let Some(v) = if_match {
+            b = b.header(header::IF_MATCH, format!("\"{v}\""));
+        }
+        let req = match body {
+            Some(body) => json_body(b, body),
+            None => b.body(Body::empty()).unwrap(),
+        };
+        api.send(req).await
+    }
+}
+
 /// `router` with every request coming from [`CLIENT`]. The `ConnectInfo` extension is
 /// inserted directly: `record_client` reads that extension, and axum's
 /// `MockConnectInfo` would only feed the `ConnectInfo` extractor (F9).
@@ -413,6 +511,26 @@ impl Client {
 
     pub async fn post(&mut self, api: &Api, path: &str, body: Value) -> Resp {
         let req = json_body(self.builder(Method::POST, path), &body);
+        self.send_on(&api.router, req).await
+    }
+
+    /// `method path` with an optional JSON body and `If-Match: "<if_match>"`.
+    pub async fn send(
+        &mut self,
+        api: &Api,
+        method: Method,
+        path: &str,
+        body: Option<&Value>,
+        if_match: Option<i64>,
+    ) -> Resp {
+        let mut b = self.builder(method, path);
+        if let Some(v) = if_match {
+            b = b.header(header::IF_MATCH, format!("\"{v}\""));
+        }
+        let req = match body {
+            Some(body) => json_body(b, body),
+            None => b.body(Body::empty()).unwrap(),
+        };
         self.send_on(&api.router, req).await
     }
 

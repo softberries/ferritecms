@@ -89,7 +89,7 @@ Controller rulings: [m1a](superpowers/rulings/m1a.md), [m1b](superpowers/rulings
   - [x] Serve PDFs inline with a CSP `sandbox` header (`crates/ferrite-http/src/app/media.rs`).
   - [x] SVG sniff assertion test (`crates/ferrite-media/src/sniff.rs`, `inline_safe` false for sniffed SVG; plus an HTTP test that an SVG upload is served as an attachment).
   - [x] `ferrite migrate status` opens SQLite with the exclusive data-folder lock, so it fails while a server holds it: documented in the serve docs (09 §8); no read-only open.
-  - [ ] "Publish now" on a scheduled item currently requires unpublishing first (`publish` accepts draft and pending only); allow scheduled -> published directly (a one-line change in `content/lifecycle.rs`).
+  - [x] "Publish now" on a scheduled item: `publish` accepts scheduled items (clears `scheduled_at`; the queued job then does nothing) — M2a-1 Task 8.
   - [ ] Postgres `status`, `down` and `verify` may create an empty configured schema (`PgStore::open`); add a `PgOptions` flag so read-only commands do not create it.
 
 **Exit:** a seeded site renders identically on SQLite+local and Postgres+MinIO; editing via CLI/seed invalidates the right pages.

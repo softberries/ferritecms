@@ -7,13 +7,13 @@ use axum::{
     body::Body,
     http::{Method, StatusCode, header},
 };
-use ferrite_core::{Actor, NewAccount, Scopes};
-use ferrite_domain::{Role, User};
+use ferrite_core::{Actor, Scopes};
+use ferrite_domain::Role;
 use serde_json::{Value, json};
 
 use crate::{
     api_tests,
-    harness::{Api, Client, Resp, SITE_URL, builder, json_body, send},
+    harness::{Api, Client, PASSWORD, Resp, SITE_URL, builder, json_body, send},
 };
 
 api_tests!(
@@ -30,38 +30,12 @@ api_tests!(
     logout_clears_cookie_and_session,
 );
 
-const PASSWORD: &str = "correct horse battery";
 const NEW_PASSWORD: &str = "another long passphrase";
 const ME: &str = "/api/v1/auth/me";
 const LOGIN: &str = "/api/v1/auth/login";
 const TOTP_SETUP: &str = "/api/v1/auth/totp/setup";
 const PASSWORD_PATH: &str = "/api/v1/auth/password";
 const EVIL: &str = "https://evil.example";
-
-async fn user(api: &Api, login: &str, role: Role, must_reset: bool) -> User {
-    api.api
-        .users
-        .operator()
-        .create(NewAccount {
-            login: login.into(),
-            email: format!("{login}@example.com"),
-            display_name: login.into(),
-            role,
-            password: Some(PASSWORD.into()),
-            must_reset,
-        })
-        .await
-        .unwrap()
-}
-
-/// A client logged in as `login` (with [`PASSWORD`]).
-async fn logged_in(api: &Api, login: &str) -> Client {
-    let mut c = Client::new();
-    let r = c.login(api, login, PASSWORD).await;
-    assert_eq!(r.status, StatusCode::OK, "{r:?}");
-    assert!(c.cookie.is_some() && c.csrf.is_some(), "{r:?}");
-    c
-}
 
 /// A request with only the given cookie (no `Origin`, no CSRF token).
 async fn me_with_cookie(api: &Api, cookie: &str) -> Resp {
@@ -95,7 +69,7 @@ fn authenticator(setup: &Value) -> totp_rs::Totp {
 }
 
 async fn login_sets_cookie_and_me_works(api: Api) -> Api {
-    let eddie = user(&api, "eddie", Role::Editor, false).await;
+    let eddie = api.user("eddie", Role::Editor, false).await;
 
     let mut c = Client::new();
     let r = c.login(&api, "eddie", PASSWORD).await;
@@ -205,8 +179,8 @@ async fn login_sets_cookie_and_me_works(api: Api) -> Api {
 }
 
 async fn csrf_required_for_cookie_mutations(api: Api) -> Api {
-    user(&api, "ann", Role::Author, false).await;
-    let mut c = logged_in(&api, "ann").await;
+    api.user("ann", Role::Author, false).await;
+    let mut c = api.logged_in("ann").await;
     let good = c.csrf.take().unwrap();
 
     // No CSRF header.
@@ -219,7 +193,7 @@ async fn csrf_required_for_cookie_mutations(api: Api) -> Api {
         .await
         .assert_problem(403, "csrf");
     // Another session's token.
-    let other = logged_in(&api, "ann").await;
+    let other = api.logged_in("ann").await;
     c.csrf = other.csrf.clone();
     c.post_empty(&api, TOTP_SETUP)
         .await
@@ -258,8 +232,8 @@ async fn csrf_required_for_cookie_mutations(api: Api) -> Api {
 }
 
 async fn foreign_origin_is_refused(api: Api) -> Api {
-    user(&api, "ann", Role::Author, false).await;
-    let c = logged_in(&api, "ann").await;
+    api.user("ann", Role::Author, false).await;
+    let c = api.logged_in("ann").await;
     let cookie = format!("ferrite_session={}", c.cookie.as_deref().unwrap());
     let csrf = c.csrf.clone().unwrap();
     let setup = |origin: Option<&str>, referer: Option<&str>| {
@@ -305,7 +279,7 @@ async fn foreign_origin_is_refused(api: Api) -> Api {
 }
 
 async fn login_checks_origin(api: Api) -> Api {
-    user(&api, "ann", Role::Author, false).await;
+    api.user("ann", Role::Author, false).await;
     let body = json!({"login": "ann", "password": "wrong password!!"});
     // More attempts than either limit allows (10/min per IP, 5/min per login).
     for i in 0..11 {
@@ -329,7 +303,7 @@ async fn login_checks_origin(api: Api) -> Api {
 }
 
 async fn bearer_needs_no_csrf(api: Api) -> Api {
-    let ann = user(&api, "ann", Role::Author, false).await;
+    let ann = api.user("ann", Role::Author, false).await;
     let (bearer, _) = api
         .api
         .auth
@@ -370,7 +344,7 @@ async fn bearer_needs_no_csrf(api: Api) -> Api {
     api.send(req).await.assert_problem(400, "bad-request");
 
     // A bearer request never falls back to the cookie.
-    let c = logged_in(&api, "ann").await;
+    let c = api.logged_in("ann").await;
     let cookie = format!("ferrite_session={}", c.cookie.as_deref().unwrap());
     for value in [
         "Bearer fer_unknown",
@@ -388,8 +362,8 @@ async fn bearer_needs_no_csrf(api: Api) -> Api {
 
     // A valid bearer with someone else's valid cookie on an unsafe method and no CSRF
     // token: the bearer wins, CSRF is not asked for, and the request acts as its user.
-    user(&api, "bob", Role::Author, false).await;
-    let bob = logged_in(&api, "bob").await;
+    api.user("bob", Role::Author, false).await;
+    let bob = api.logged_in("bob").await;
     let req = builder(Method::POST, TOTP_SETUP)
         .header(header::AUTHORIZATION, &auth)
         .header(
@@ -407,7 +381,7 @@ async fn bearer_needs_no_csrf(api: Api) -> Api {
 }
 
 async fn login_429_has_retry_after(api: Api) -> Api {
-    user(&api, "dan", Role::Author, false).await;
+    api.user("dan", Role::Author, false).await;
     api.align_to_window(Duration::from_secs(40)).await;
     // Ten failures from one address, over three logins so the per-login limit (5/min)
     // never applies (F9).
@@ -429,8 +403,8 @@ async fn login_429_has_retry_after(api: Api) -> Api {
 }
 
 async fn must_reset_user_is_limited(api: Api) -> Api {
-    user(&api, "newbie", Role::Editor, true).await;
-    let mut c = logged_in(&api, "newbie").await;
+    api.user("newbie", Role::Editor, true).await;
+    let mut c = api.logged_in("newbie").await;
     let old = c.cookie.clone().unwrap();
 
     let r = c.get(&api, ME).await;
@@ -470,9 +444,9 @@ async fn must_reset_user_is_limited(api: Api) -> Api {
 }
 
 async fn password_change_keeps_only_this_session(api: Api) -> Api {
-    user(&api, "ann", Role::Author, false).await;
-    let mut a = logged_in(&api, "ann").await;
-    let b = logged_in(&api, "ann").await;
+    api.user("ann", Role::Author, false).await;
+    let mut a = api.logged_in("ann").await;
+    let b = api.logged_in("ann").await;
     let a_old = a.cookie.clone().unwrap();
 
     let r = a
@@ -519,10 +493,10 @@ async fn password_change_keeps_only_this_session(api: Api) -> Api {
 /// R11: the current-password check of a self password change counts on the login's
 /// per-login bucket (5/min).
 async fn password_check_is_rate_limited(api: Api) -> Api {
-    let ann = user(&api, "ann", Role::Author, false).await;
+    let ann = api.user("ann", Role::Author, false).await;
     api.align_to_window(Duration::from_secs(40)).await;
     // The login counts once on the bucket.
-    let mut c = logged_in(&api, "ann").await;
+    let mut c = api.logged_in("ann").await;
     // Refusals before the password check take no slot: a new password breaking the
     // policy, and a token without `users:write`.
     for _ in 0..6 {
@@ -583,10 +557,10 @@ async fn password_check_is_rate_limited(api: Api) -> Api {
 }
 
 async fn totp_login_flow_over_http(api: Api) -> Api {
-    user(&api, "ann", Role::Author, false).await;
+    api.user("ann", Role::Author, false).await;
     // Logins by e-mail here: the password re-checks below count on the login's own
     // bucket (5/min, R11).
-    let mut c = logged_in(&api, "ann@example.com").await;
+    let mut c = api.logged_in("ann@example.com").await;
 
     let r = c.post_empty(&api, TOTP_SETUP).await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
@@ -693,10 +667,10 @@ async fn totp_login_flow_over_http(api: Api) -> Api {
 }
 
 async fn logout_clears_cookie_and_session(api: Api) -> Api {
-    user(&api, "ann", Role::Author, false).await;
-    let mut c = logged_in(&api, "ann").await;
+    api.user("ann", Role::Author, false).await;
+    let mut c = api.logged_in("ann").await;
     let cookie = c.cookie.clone().unwrap();
-    let other = logged_in(&api, "ann").await;
+    let other = api.logged_in("ann").await;
 
     // Logout is a mutation: it needs the CSRF token.
     let csrf = c.csrf.take();

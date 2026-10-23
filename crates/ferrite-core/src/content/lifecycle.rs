@@ -1,9 +1,9 @@
 //! Content status transitions.
 //!
-//! Allowed: draft/pending -> published (publish) or scheduled (schedule); draft ->
-//! pending (submit); published/scheduled/private -> draft (unpublish); any non-trash
-//! status -> trash; trash -> draft (restore); trash -> deleted (delete). Anything else
-//! is `Invalid("illegal transition ...")`.
+//! Allowed: draft/pending/scheduled -> published (publish); draft/pending -> scheduled
+//! (schedule); draft -> pending (submit); published/scheduled/private -> draft
+//! (unpublish); any non-trash status -> trash; trash -> draft (restore); trash ->
+//! deleted (delete). Anything else is `Invalid("illegal transition ...")`.
 //!
 //! Every transition runs in one transaction, checks permission before writing, checks
 //! the expected version (`Conflict`) and emits one `invalidate` event for `post:<id>`,
@@ -55,11 +55,13 @@ impl Action {
 }
 
 impl ContentService {
-    /// Publishes a draft or pending item (needs `publish_own`, or `publish_others` for
-    /// someone else's item). `published_at` is set to now only if it was never set, so
-    /// it survives unpublish and republish. Redirects that start at the item's permalink
-    /// (either slash variant) are deleted, so the item is reachable at its URL. Writes
-    /// no revision.
+    /// Publishes a draft, pending or scheduled item (needs `publish_own`, or
+    /// `publish_others` for someone else's item). `published_at` is set to now only if it
+    /// was never set, so it survives unpublish and republish. A scheduled item is
+    /// published now ("publish now"): `scheduled_at` is cleared, and the queued
+    /// `content.publish_scheduled` job finds it no longer scheduled and does nothing.
+    /// Redirects that start at the item's permalink (either slash variant) are deleted,
+    /// so the item is reachable at its URL. Writes no revision.
     pub async fn publish(
         &self,
         actor: &Actor,
@@ -379,8 +381,9 @@ fn apply(current: &ContentItem, action: Action, now: Timestamp) -> Result<Conten
     use ContentStatus::*;
     let from = current.status;
     let legal = match action {
-        // Publishing a scheduled item goes through `publish_due` (or unpublish first).
-        Action::Publish | Action::Schedule(_) => matches!(from, Draft | Pending),
+        // "Publish now" on a scheduled item; the scheduler's own path is `PublishDue`.
+        Action::Publish => matches!(from, Draft | Pending | Scheduled),
+        Action::Schedule(_) => matches!(from, Draft | Pending),
         Action::PublishDue => from == Scheduled,
         Action::Submit => from == Draft,
         Action::Unpublish => matches!(from, Published | Scheduled | Private),
@@ -511,7 +514,7 @@ mod tests {
             ("restore", Action::Restore),
         ];
         let legal: &[(&str, &[ContentStatus])] = &[
-            ("publish", &[Draft, Pending]),
+            ("publish", &[Draft, Pending, Scheduled]),
             ("publish_due", &[Scheduled]),
             ("unpublish", &[Published, Scheduled, Private]),
             ("schedule", &[Draft, Pending]),

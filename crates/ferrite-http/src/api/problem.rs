@@ -12,7 +12,7 @@
 //! | `RateLimited { retry_after_secs }` | 429 | `rate-limited` + `Retry-After` |
 //! | `Invalid(msg)` | 422 | `validation` (detail = msg) |
 //! | `Conflict { .. }` | 412 | `precondition-failed` (+ `current`, set by the handler) |
-//! | `Store(UniqueViolation)` | 409 | `conflict` (detail names the constraint) |
+//! | `Store(UniqueViolation)` | 409 | `conflict` (a known constraint adds an `errors` entry for its field, see [`UNIQUE_FIELDS`]; the constraint name is never sent) |
 //! | `Store(ForeignKey)` | 409 | `conflict` ("a related record changed; retry", F15) |
 //! | `Store(Busy)` | 503 | `busy` + `Retry-After: 5` |
 //! | `Random`, `Hashing`, any other `Store` | 500 | `internal` |
@@ -53,6 +53,14 @@ pub const PROBLEM_TYPE_PREFIX: &str = "/api/v1/problems/";
 pub const PROBLEM_JSON: &str = "application/problem+json";
 /// `Retry-After` of a `busy` problem.
 pub const BUSY_RETRY_AFTER: u64 = 5;
+
+/// Unique constraints a request can run into, with the input member each one is about
+/// and what to tell the client: (constraint, field, detail). Later resources add theirs.
+pub const UNIQUE_FIELDS: &[(&str, &str, &str)] = &[(
+    "content_items_slug_uq",
+    "slug",
+    "the slug was taken by concurrent saves; retry",
+)];
 
 /// One entry of `errors`: what is wrong with one input (`field` = the JSON path or
 /// parameter name, when known).
@@ -318,12 +326,21 @@ impl From<StoreError> for Problem {
             StoreError::NotFound | StoreError::Conflict { .. } | StoreError::Invalid(_) => {
                 Self::from(CoreError::from(e))
             }
-            StoreError::UniqueViolation { constraint } => Self::new(
-                StatusCode::CONFLICT,
-                "conflict",
-                "Conflict",
-                format!("conflicts with an existing record ({constraint})"),
-            ),
+            StoreError::UniqueViolation { constraint } => {
+                let p = Self::new(
+                    StatusCode::CONFLICT,
+                    "conflict",
+                    "Conflict",
+                    "conflicts with an existing record",
+                );
+                match UNIQUE_FIELDS.iter().find(|(c, ..)| *c == constraint) {
+                    Some((_, field, detail)) => p.with_error(Some(field), *detail),
+                    None => {
+                        tracing::warn!(%constraint, "unique violation without a field mapping");
+                        p
+                    }
+                }
+            }
             StoreError::ForeignKey { .. } => Self::new(
                 StatusCode::CONFLICT,
                 "conflict",
@@ -429,7 +446,7 @@ mod tests {
                 }),
                 409,
                 "conflict",
-                Some("conflicts with an existing record (users_login_uq)"),
+                Some("conflicts with an existing record"),
                 None,
             ),
             (
@@ -488,6 +505,27 @@ mod tests {
             }
             assert_eq!(got_retry, retry, "{name}");
         }
+    }
+
+    #[test]
+    fn known_unique_constraints_name_a_field_not_the_constraint() {
+        let p = Problem::from(StoreError::UniqueViolation {
+            constraint: "content_items_slug_uq".into(),
+        });
+        assert_eq!(p.status, StatusCode::CONFLICT);
+        assert_eq!(p.errors.len(), 1);
+        assert_eq!(p.errors[0].field.as_deref(), Some("slug"));
+        let body = serde_json::to_string(&p.document()).unwrap();
+        assert!(!body.contains("_uq"), "{body}");
+        let p = Problem::from(StoreError::UniqueViolation {
+            constraint: "some_table_x_uq".into(),
+        });
+        assert!(p.errors.is_empty());
+        assert!(
+            !serde_json::to_string(&p.document())
+                .unwrap()
+                .contains("_uq")
+        );
     }
 
     #[tokio::test]

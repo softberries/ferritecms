@@ -20,6 +20,7 @@
 //! [`auth`] extractors; `GET /meta` and `GET /openapi.json` need none.
 
 pub mod auth;
+pub mod content;
 pub mod cookie;
 pub mod dto;
 pub mod extract;
@@ -44,7 +45,8 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub use auth::{Authed, AuthedAllowReset, CSRF_HEADER, ClientInfo, SameOrigin};
 pub use extract::{
-    ApiJson, ApiQuery, DEFAULT_LIMIT, IfMatch, MAX_JSON_BODY, PageParams, created, etag,
+    ApiJson, ApiPath, ApiQuery, DEFAULT_LIMIT, IfMatch, MAX_JSON_BODY, PageParams, check_limit,
+    created, etag, invalid_cursor, invalid_param,
 };
 pub use problem::{FieldError, Problem};
 pub use state::{ApiParts, ApiState, InvalidSiteUrl};
@@ -67,6 +69,20 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(auth::totp_setup))
         .routes(routes!(auth::totp_confirm))
         .routes(routes!(auth::totp_disable))
+        .routes(routes!(content::list_content, content::create_content))
+        .routes(routes!(
+            content::get_content,
+            content::update_content,
+            content::delete_content
+        ))
+        .routes(routes!(content::publish_content))
+        .routes(routes!(content::unpublish_content))
+        .routes(routes!(content::submit_content))
+        .routes(routes!(content::restore_content))
+        .routes(routes!(content::schedule_content))
+        .routes(routes!(content::list_revisions))
+        .routes(routes!(content::get_revision))
+        .routes(routes!(content::restore_revision))
 }
 
 /// The spec and routes, before the state and layers.

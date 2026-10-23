@@ -36,6 +36,7 @@ tower-http.workspace = true
 tracing.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 ferrite-store-tests = { path = "../ferrite-store-tests" }
@@ -48,4 +49,3 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["net"] }
 totp-rs.workspace = true
 tower = { workspace = true, features = ["util"] }
-uuid.workspace = true

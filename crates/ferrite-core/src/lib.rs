@@ -26,7 +26,7 @@ pub use actor::{
     Access, Actor, Area, Capability, Scope, Scopes, can, can_edit, require, require_read,
 };
 pub use auth::{AuthService, Authenticated, IssuedSession, LoginAttempt, LoginOutcome, Via};
-pub use content::{ContentDraft, ContentService};
+pub use content::{AdminQuery, ContentDraft, ContentService, MAX_REVISIONS_LISTED};
 pub use error::CoreError;
 pub use extensions::{EXTENSIONS_LOCK_WAIT, ExtensionService};
 pub use menu::MenuService;

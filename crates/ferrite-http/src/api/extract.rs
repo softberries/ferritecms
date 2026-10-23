@@ -13,12 +13,20 @@
 //! * [`IfMatch`]: `If-Match: "<n>"` (one strong entity tag holding a version number);
 //!   missing `428 precondition-required`; any other form (weak, unquoted, a list, `*`)
 //!   `400 malformed-header`.
+//! * [`ApiPath<T>`]: the path parameters as `T`; one that does not parse (a malformed
+//!   id) is `404 not-found`, as no resource has that path.
 //! * [`PageParams`]: `?limit=&cursor=`; [`PageParams::limit`] defaults to 50 and is
-//!   `400 validation` outside 1..=200.
+//!   `400 validation` outside 1..=200 ([`check_limit`]). A cursor the list cannot use is
+//!   `400 validation` with `field = "cursor"` ([`invalid_cursor`]): list handlers decode
+//!   it before calling core, which would report it as `422`.
+//!
+//! Query parameter values that parse but are not valid (`limit`, `cursor`, enumerated
+//! lists) are `400 validation` naming the parameter ([`invalid_param`]); rules of the
+//! resource itself, checked by core, stay `422 validation`.
 
 use axum::{
     body::Bytes,
-    extract::{FromRequest, FromRequestParts, Query, Request},
+    extract::{FromRequest, FromRequestParts, Path, Query, Request},
     http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
 };
 use ferrite_domain::MAX_PAGE;
@@ -149,6 +157,25 @@ where
     }
 }
 
+/// The path parameters as `T`; see the module docs.
+#[derive(Debug, Clone)]
+pub struct ApiPath<T>(pub T);
+
+impl<T, S> FromRequestParts<S> for ApiPath<T>
+where
+    T: DeserializeOwned + Send,
+    S: Send + Sync,
+{
+    type Rejection = Problem;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Problem> {
+        Path::<T>::from_request_parts(parts, state)
+            .await
+            .map(|Path(p)| Self(p))
+            .map_err(|_| Problem::not_found())
+    }
+}
+
 /// The version from `If-Match: "<n>"`; see the module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IfMatch(pub i64);
@@ -208,18 +235,42 @@ pub struct PageParams {
 impl PageParams {
     /// The page size: [`DEFAULT_LIMIT`] when absent, `400 validation` outside 1..=200.
     pub fn limit(&self) -> Result<u32, Problem> {
-        match self.limit {
-            None => Ok(DEFAULT_LIMIT),
-            Some(n) if (1..=MAX_PAGE).contains(&n) => Ok(n),
-            Some(_) => Err(Problem::new(
-                StatusCode::BAD_REQUEST,
-                "validation",
-                "Invalid input",
-                format!("limit must be between 1 and {MAX_PAGE}"),
-            )
-            .with_error(Some("limit"), format!("1..={MAX_PAGE}"))),
-        }
+        check_limit(self.limit, DEFAULT_LIMIT, MAX_PAGE)
     }
+}
+
+/// `limit`, or `default` when absent; `400 validation` (field `limit`) outside 1..=`max`.
+pub fn check_limit(limit: Option<u32>, default: u32, max: u32) -> Result<u32, Problem> {
+    match limit {
+        None => Ok(default),
+        Some(n) if (1..=max).contains(&n) => Ok(n),
+        Some(_) => Err(invalid_param(
+            "limit",
+            format!("limit must be between 1 and {max}"),
+            format!("1..={max}"),
+        )),
+    }
+}
+
+/// `400 validation`: query parameter `field` has a value the endpoint cannot use.
+pub fn invalid_param(field: &str, detail: impl Into<String>, error: impl Into<String>) -> Problem {
+    Problem::new(
+        StatusCode::BAD_REQUEST,
+        "validation",
+        "Invalid input",
+        detail,
+    )
+    .with_error(Some(field), error)
+}
+
+/// `400 validation` with `field = "cursor"`: the cursor is malformed or belongs to
+/// another list (another order, or search versus no search).
+pub fn invalid_cursor() -> Problem {
+    invalid_param(
+        "cursor",
+        "the cursor does not belong to this list",
+        "pass next_cursor of the same list unchanged",
+    )
 }
 
 /// The `ETag` of a resource at `version`: `"<n>"` (strong; what [`IfMatch`] reads).

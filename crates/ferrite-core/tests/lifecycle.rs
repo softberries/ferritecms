@@ -868,6 +868,47 @@ pub async fn publish_scheduled_only_if_still_scheduled_for_that_time(db: &TestDb
     assert_eq!(max_seq(store).await, seq_sched + 1);
 }
 
+pub async fn publish_now_from_scheduled(db: &TestDb) {
+    // "Publish now" on a scheduled item: published at once, `scheduled_at` cleared; the
+    // queued job's later run finds nothing to do.
+    let store = db.store();
+    let svc = service(db);
+    let admin = actor(store, Role::Admin).await;
+    let item = svc.create(&admin, draft("post", "Now")).await.unwrap();
+    let at = in_micros(HOUR);
+    let sched = svc
+        .schedule(&admin, item.id, item.version, at)
+        .await
+        .unwrap();
+    assert_eq!(sched.status, ContentStatus::Scheduled);
+    let before = max_seq(store).await;
+    let live = svc.publish(&admin, item.id, sched.version).await.unwrap();
+    assert_eq!(live.status, ContentStatus::Published);
+    assert_eq!(live.scheduled_at, None);
+    assert!(live.published_at.is_some());
+    assert_eq!(live.version, sched.version + 1);
+    assert_eq!(max_seq(store).await, before + 1);
+    assert_eq!(
+        last_event_keys(store).await,
+        sorted(vec![post_key(item.id), archive_key("post")])
+    );
+    // The job of the schedule is still queued; its run is a no-op.
+    assert!(job_exists(store, item.id, at).await);
+    assert!(!svc.publish_scheduled(item.id, at).await.unwrap());
+    assert_eq!(svc.get(item.id).await.unwrap(), live);
+    // A contributor still cannot publish a scheduled item (it cannot schedule one either).
+    let contributor = actor(store, Role::Contributor).await;
+    let own = svc
+        .create(&contributor, draft("post", "Contrib"))
+        .await
+        .unwrap();
+    force_scheduled(store, own.id, at).await;
+    assert!(matches!(
+        svc.publish(&contributor, own.id, own.version + 1).await,
+        Err(CoreError::Forbidden("publish_own"))
+    ));
+}
+
 backend_tests!(
     transitions_and_events,
     illegal_transitions_and_conflicts,
@@ -882,6 +923,7 @@ backend_tests!(
     schedule_rollback_leaves_no_job,
     reschedule_uses_new_key_and_old_job_noops,
     publish_scheduled_only_if_still_scheduled_for_that_time,
+    publish_now_from_scheduled,
 );
 
 backend_tests_spawning!(concurrent_publish_due_publishes_each_once);
