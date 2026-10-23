@@ -99,10 +99,11 @@ impl RedirectService {
     }
 
     /// Creates a manual redirect from `source` to `target`, or changes the target and
-    /// code of the existing one for `source` (see the type docs for the rules). A
-    /// `source` whose trailing-slash variant another redirect holds is
+    /// code of the existing one for `source` (see the type docs for the rules). Creating
+    /// a `source` whose trailing-slash variant another redirect holds is
     /// `InvalidField { field: "source", .. }` ("source taken", as [`update`](Self::update)
-    /// counts it; R26), so the two variants cannot lead to different targets.
+    /// counts it; R26), so the two variants cannot lead to different targets; a stored
+    /// pair from before is still changed in place.
     pub async fn upsert(
         &self,
         actor: &Actor,
@@ -114,8 +115,11 @@ impl RedirectService {
         check_row(source, target, code)?;
         let tx = self.store.begin().await?;
         let done = async {
+            // Creating `source` while its variant is stored would split the two; an
+            // existing row for `source` itself (legacy pairs) is changed in place.
             if let Some(other) = toggled(source)
                 && tx.redirects().get_by_source(&other).await?.is_some()
+                && tx.redirects().get_by_source(source).await?.is_none()
             {
                 return Err(source_taken());
             }
@@ -217,7 +221,7 @@ impl RedirectService {
     /// top, so loops and long chains among the file's own rows count too; a source
     /// given twice, exactly or with its trailing slash toggled (as
     /// [`update`](Self::update) counts it), is an error on its second row, and so is a
-    /// source whose toggled variant is already stored (R26). If any row fails nothing
+    /// new source whose toggled variant is already stored (R26). If any row fails nothing
     /// is written and the result is `InvalidRows` listing each failing row. Otherwise one
     /// transaction upserts every row and emits one `invalidate` with the keys of every
     /// source. A redirect changed between the read and the write can still close a loop
@@ -260,7 +264,10 @@ impl RedirectService {
         let mut map = self.all_targets().await?;
         // A source whose slash variant is stored is taken, as in `upsert` (R26).
         for (i, (source, _, _)) in rows.iter().enumerate() {
-            if valid[i] && toggled(source).is_some_and(|t| map.contains_key(&t)) {
+            if valid[i]
+                && !map.contains_key(source)
+                && toggled(source).is_some_and(|t| map.contains_key(&t))
+            {
                 valid[i] = false;
                 errors.push(row_error(i, source_taken()));
             }
