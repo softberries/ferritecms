@@ -1,0 +1,21 @@
+[package]
+name = "ferrite-cluster"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+ferrite-domain = { path = "../ferrite-domain" }
+ferrite-store = { path = "../ferrite-store" }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+ferrite-store-tests = { path = "../ferrite-store-tests" }

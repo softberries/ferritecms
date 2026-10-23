@@ -1344,6 +1344,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrite-cluster"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "ferrite-domain",
+ "ferrite-store",
+ "ferrite-store-tests",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "ferrite-config"
 version = "0.1.0"
 dependencies = [

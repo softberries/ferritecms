@@ -23,7 +23,8 @@ ferritecms/
 │   ├── ferrite-store-tests/      # (built) contract test suite run against both backends;
 │   │                             #   other crates reuse its harness as a dev-dependency
 │   ├── ferrite-media/            # (built) MediaStore over object_store, sniffing, image variants
-│   ├── ferrite-cluster/          # (M1.5) node registry, event bus, job queue, locks
+│   ├── ferrite-cluster/          # (built, M1.5) job runner, periodic scheduler, built-in
+│   │                             #   prune jobs; node registry (M1.5, planned)
 │   ├── ferrite-core/             # (built) services: content (+ lifecycle, revisions, redirects on
 │   │                             #   permalink change, search indexing), taxonomy, menus, options,
 │   │                             #   redirects; permalinks; the published-only read facade
@@ -72,7 +73,7 @@ ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-theme, ferrite-core, f
  │                ├─ ferrite-plugin-host (no ferrite-* dependencies)
  │                └─ ferrite-store, ferrite-domain
  ├─ ferrite-config ─── ferrite-domain
- ├─ ferrite-cluster (M1.5) ─── ferrite-store (traits)
+ ├─ ferrite-cluster ─── ferrite-store (traits), ferrite-domain (not yet used by the binary)
  └─ ferrite-import-wp (M3) ─── ferrite-core
 ```
 
