@@ -16,8 +16,12 @@
 //! needs a restart in M1c-2 (hot swap is M1.5).
 //!
 //! Shutdown on SIGINT or SIGTERM: stop accepting connections, let open requests finish
-//! for up to 10 s (then drop them), stop the background tasks, close the database
-//! pools. A clean shutdown exits 0.
+//! for up to 10 s, stop the background tasks (up to 1 s), close the database pools (up
+//! to 2 s); `main` then shuts the runtime down with a 1 s grace, which drops every
+//! connection task still running (axum spawns them, so they cannot be aborted
+//! individually) and abandons stuck blocking work. A clean shutdown exits 0, and the
+//! process is gone at most about 14 s after the first signal. A second SIGINT/SIGTERM
+//! during the drain exits at once with 130 (SIGINT) or 143 (SIGTERM).
 
 use std::{future::IntoFuture, net::SocketAddr, sync::Arc, time::Duration};
 
@@ -47,8 +51,13 @@ use crate::{
 const PUBLISH_DUE_EVERY: Duration = Duration::from_secs(30);
 /// How long open requests may run after a shutdown signal.
 const DRAIN: Duration = Duration::from_secs(10);
-/// How long closing the database pools may take at shutdown.
-const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the background tasks may take to stop after the drain.
+const BACKGROUND_STOP: Duration = Duration::from_secs(1);
+/// How long closing the database pools may take at shutdown (a request dropped
+/// mid-transaction can keep a connection checked out).
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+/// Grace `main` gives the runtime's remaining tasks when it shuts down.
+pub const RUNTIME_SHUTDOWN: Duration = Duration::from_secs(1);
 
 pub async fn run(args: DataArg) -> anyhow::Result<()> {
     let config = load_config(&args.data)?;
@@ -127,7 +136,7 @@ async fn serve(config: &Config, store: Arc<dyn Store>) -> anyhow::Result<()> {
 
     // Signal handlers before the address is announced: a signal right after it must
     // shut down cleanly, not kill the process.
-    let signals = Signals::install().context("cannot install signal handlers")?;
+    let mut signals = Signals::install().context("cannot install signal handlers")?;
     let listener = TcpListener::bind(config.server.listen)
         .await
         .with_context(|| format!("cannot listen on {}", config.server.listen))?;
@@ -146,23 +155,41 @@ async fn serve(config: &Config, store: Arc<dyn Store>) -> anyhow::Result<()> {
     );
     let served = tokio::select! {
         r = &mut server => r,
-        () = signals.recv() => {
-            tracing::info!("shutdown signal received; draining connections (up to {DRAIN:?})");
+        first = signals.recv() => {
+            tracing::info!(
+                signal = first.name(),
+                "shutdown signal received; draining connections (up to {DRAIN:?})"
+            );
             stop_accepting.cancel();
-            match tokio::time::timeout(DRAIN, &mut server).await {
-                Ok(r) => r,
-                Err(_) => {
-                    tracing::warn!("connections still open after {DRAIN:?}; closing them");
+            tokio::select! {
+                r = &mut server => r,
+                () = tokio::time::sleep(DRAIN) => {
+                    tracing::warn!(
+                        "connections still open after {DRAIN:?}; they are dropped at exit"
+                    );
                     server.abort();
                     Ok(Ok(()))
+                }
+                second = signals.recv() => {
+                    tracing::error!(
+                        signal = second.name(),
+                        "second signal during shutdown; exiting immediately"
+                    );
+                    std::process::exit(second.exit_code());
                 }
             }
         }
     };
     background.cancel();
     for task in [poller, publisher] {
-        if let Err(e) = task.await {
-            tracing::warn!(error = %e, "background task ended abnormally");
+        let abort = task.abort_handle();
+        match tokio::time::timeout(BACKGROUND_STOP, task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!(error = %e, "background task ended abnormally"),
+            Err(_) => {
+                tracing::warn!("background task did not stop within {BACKGROUND_STOP:?}");
+                abort.abort();
+            }
         }
     }
     served
@@ -210,6 +237,33 @@ fn spawn_publish_due(svc: ContentService, stop: CancellationToken) -> JoinHandle
     })
 }
 
+/// Which shutdown signal arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Signal {
+    Interrupt,
+    #[cfg(unix)]
+    Terminate,
+}
+
+impl Signal {
+    fn name(self) -> &'static str {
+        match self {
+            Signal::Interrupt => "SIGINT",
+            #[cfg(unix)]
+            Signal::Terminate => "SIGTERM",
+        }
+    }
+
+    /// 128 + the signal number, as shells report a process killed by it.
+    fn exit_code(self) -> i32 {
+        match self {
+            Signal::Interrupt => 130,
+            #[cfg(unix)]
+            Signal::Terminate => 143,
+        }
+    }
+}
+
 /// SIGINT and SIGTERM (Ctrl-C only on other platforms), installed up front.
 struct Signals {
     #[cfg(unix)]
@@ -234,21 +288,22 @@ impl Signals {
         }
     }
 
-    /// Resolves on the first signal.
-    async fn recv(mut self) {
-        #[cfg(unix)]
-        {
-            tokio::select! {
-                _ = self.interrupt.recv() => {}
-                _ = self.terminate.recv() => {}
-            }
+    /// Resolves on the next signal; may be awaited again for the one after.
+    #[cfg(unix)]
+    async fn recv(&mut self) -> Signal {
+        tokio::select! {
+            _ = self.interrupt.recv() => Signal::Interrupt,
+            _ = self.terminate.recv() => Signal::Terminate,
         }
-        #[cfg(not(unix))]
-        {
-            if tokio::signal::ctrl_c().await.is_err() {
-                std::future::pending::<()>().await;
-            }
+    }
+
+    /// Resolves on the next Ctrl-C (never, if it cannot be watched).
+    #[cfg(not(unix))]
+    async fn recv(&mut self) -> Signal {
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
         }
+        Signal::Interrupt
     }
 }
 
@@ -274,5 +329,14 @@ mod tests {
         assert_eq!(h.disable_after_failures, 3);
         assert_eq!(h.failure_window, Duration::from_secs(60));
         assert_eq!(h.epoch_tick, HostConfig::default().epoch_tick);
+    }
+
+    #[test]
+    fn shutdown_fits_the_documented_bound() {
+        let total = DRAIN + BACKGROUND_STOP + CLOSE_TIMEOUT + RUNTIME_SHUTDOWN;
+        assert!(total <= Duration::from_secs(14), "{total:?}");
+        assert_eq!(Signal::Interrupt.exit_code(), 130);
+        #[cfg(unix)]
+        assert_eq!(Signal::Terminate.exit_code(), 143);
     }
 }

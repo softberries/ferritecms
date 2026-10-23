@@ -10,6 +10,7 @@ mod site;
 
 pub use cli::{Cli, Command, MigrateCommand, run};
 pub use open::{Decision, OpenMode, decide, open_store, startup_check};
+pub use serve::RUNTIME_SHUTDOWN;
 
 /// The version of this binary, parsed from `Cargo.toml`.
 pub fn binary_version() -> anyhow::Result<semver::Version> {

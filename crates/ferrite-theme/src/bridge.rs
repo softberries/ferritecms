@@ -86,17 +86,30 @@ pub struct ImageRef {
 }
 
 impl ImageRef {
-    /// The `size` variant of `m`, or the original for an unknown size; `srcset` lists
-    /// every variant with a known width plus the original.
+    /// The `size` variant of `m`, or the original for an unknown size. `srcset` lists
+    /// one candidate per known width, ascending: of several files with the same width
+    /// (a `hero` crop and the `large` resize can both be 1280 wide), the requested
+    /// `size` wins, then the original, then the variant first by name.
     pub fn from_media(m: &MediaPublic, size: &str) -> Self {
-        let mut srcset: Vec<String> = m
+        // (width, rank, url): lower rank wins a width.
+        let mut candidates: Vec<(i32, u8, &str)> = m
             .variants
             .iter()
-            .filter_map(|v| v.width.map(|w| format!("{} {w}w", v.url)))
+            .filter_map(|v| {
+                let rank = if v.name == size { 0 } else { 2 };
+                v.width.map(|w| (w, rank, v.url.as_str()))
+            })
             .collect();
         if let Some(w) = m.width {
-            srcset.push(format!("{} {w}w", m.url));
+            candidates.push((w, 1, m.url.as_str()));
         }
+        // Stable: equal (width, rank) keep the variants' name order.
+        candidates.sort_by_key(|&(w, rank, _)| (w, rank));
+        candidates.dedup_by_key(|c| c.0);
+        let srcset: Vec<String> = candidates
+            .iter()
+            .map(|(w, _, url)| format!("{url} {w}w"))
+            .collect();
         let (url, width, height) = m
             .variants
             .iter()
@@ -108,5 +121,59 @@ impl ImageRef {
             height,
             srcset: srcset.join(", "),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ferrite_core::MediaVariant;
+
+    use super::*;
+
+    fn variant(name: &str, width: i32) -> MediaVariant {
+        MediaVariant {
+            name: name.into(),
+            url: format!("/_media/{name}/a.png"),
+            width: Some(width),
+            height: None,
+        }
+    }
+
+    #[test]
+    fn srcset_has_one_candidate_per_width() {
+        let m = MediaPublic {
+            id: ContentId::new(),
+            url: "/_media/orig/a.png".into(),
+            alt: String::new(),
+            width: Some(1280),
+            height: Some(720),
+            variants: vec![
+                variant("card", 640),
+                variant("hero", 1280),
+                variant("large", 1280),
+                variant("medium", 768),
+                variant("other", 640),
+            ],
+        };
+        // The requested size wins its width.
+        let r = ImageRef::from_media(&m, "hero");
+        assert_eq!(r.url, "/_media/hero/a.png");
+        assert_eq!(
+            r.srcset,
+            "/_media/card/a.png 640w, /_media/medium/a.png 768w, /_media/hero/a.png 1280w"
+        );
+        // Otherwise the original wins over variants of its width.
+        let r = ImageRef::from_media(&m, "card");
+        assert_eq!(
+            r.srcset,
+            "/_media/card/a.png 640w, /_media/medium/a.png 768w, /_media/orig/a.png 1280w"
+        );
+        // Among variants only, the first by name.
+        let r = ImageRef::from_media(&m, "nope");
+        assert!(
+            r.srcset.starts_with("/_media/card/a.png 640w, "),
+            "{}",
+            r.srcset
+        );
     }
 }

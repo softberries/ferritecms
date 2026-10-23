@@ -6,8 +6,9 @@
 //! * `X-Forwarded-For`: the client IP is the right-most entry that is not itself a
 //!   trusted proxy (entries are read right to left, so a client cannot spoof its
 //!   address by sending its own header through the proxy). An entry that does not
-//!   parse stops the walk and the last trusted hop is used. If every entry is trusted
-//!   the left-most one is the client.
+//!   parse, or a header line that is not visible ASCII, stops the walk and the last
+//!   trusted hop is used. If every entry is trusted the left-most one is the client
+//!   (ruling R31: only this header is honoured).
 //! * `X-Forwarded-Proto` and `X-Forwarded-Host` are **not used** by anything in M1c-2,
 //!   so they are ignored from every peer: absolute URLs are built from `site.url`, and
 //!   the cache key's host is pinned to it (ruling R25).
@@ -41,17 +42,19 @@ pub fn client_ip(peer: IpAddr, headers: &HeaderMap, trusted: &[IpNet]) -> IpAddr
     if !is_trusted(&peer) {
         return peer;
     }
-    // Every X-Forwarded-For line, in order, as one list.
-    let entries: Vec<&str> = headers
+    // Every X-Forwarded-For line, in order, as one list. A line that is not visible
+    // ASCII is one unparsable entry (`None`): the walk stops there, it is not skipped.
+    let entries: Vec<Option<&str>> = headers
         .get_all("x-forwarded-for")
         .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
-        .map(str::trim)
+        .flat_map(|v| match v.to_str() {
+            Ok(line) => line.split(',').map(|e| Some(e.trim())).collect::<Vec<_>>(),
+            Err(_) => vec![None],
+        })
         .collect();
     let mut client = peer;
     for entry in entries.iter().rev() {
-        let Some(ip) = parse_entry(entry) else {
+        let Some(ip) = entry.and_then(parse_entry) else {
             return client;
         };
         client = ip;
@@ -143,6 +146,14 @@ mod tests {
         assert_eq!(client_ip(ip("10.0.0.5"), &h, &trusted), ip("3.3.3.3"));
         // Garbage stops the walk at the last trusted hop.
         let h = xff(&["4.4.4.4, not-an-ip, 10.9.9.9"]);
+        assert_eq!(client_ip(ip("10.0.0.5"), &h, &trusted), ip("10.9.9.9"));
+        // A non-visible-ASCII line also stops the walk (it is not skipped).
+        let mut h = xff(&["4.4.4.4"]);
+        h.append(
+            "x-forwarded-for",
+            HeaderValue::from_bytes(b"\xff 7.7.7.7").unwrap(),
+        );
+        h.append("x-forwarded-for", HeaderValue::from_static("10.9.9.9"));
         assert_eq!(client_ip(ip("10.0.0.5"), &h, &trusted), ip("10.9.9.9"));
         // An IPv4-mapped peer is matched as IPv4.
         let h = xff(&["5.5.5.5"]);

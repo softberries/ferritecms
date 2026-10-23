@@ -9,7 +9,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use ferrite_domain::{ContentId, ContentStatus, NewContent};
@@ -219,16 +219,25 @@ async fn insert_draft(store: &dyn Store) {
     tx.commit().await.expect("commit");
 }
 
-/// `ferrite serve`, killed on drop if still running.
+/// `ferrite serve`, killed on drop if still running. Its stderr (the log) is collected
+/// and printed only when the test fails.
 struct Server {
     child: Child,
     addr: SocketAddr,
+    log: Arc<Mutex<Vec<u8>>>,
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if std::thread::panicking() {
+            let log = self.log.lock().map(|l| l.clone()).unwrap_or_default();
+            eprintln!(
+                "---- ferrite serve stderr ----\n{}",
+                String::from_utf8_lossy(&log)
+            );
+        }
     }
 }
 
@@ -238,9 +247,23 @@ impl Server {
         let mut cmd = p.cmd(&["serve"]);
         cmd.env("FERRITE_SERVER__LISTEN", "127.0.0.1:0")
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::piped());
         let mut child = cmd.spawn().expect("spawn serve");
         let stdout = child.stdout.take().expect("stdout");
+        let mut stderr = child.stderr.take().expect("stderr");
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let sink = log.clone();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = stderr.read(&mut buf) {
+                if n == 0 {
+                    return;
+                }
+                if let Ok(mut l) = sink.lock() {
+                    l.extend_from_slice(&buf[..n]);
+                }
+            }
+        });
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
@@ -250,38 +273,68 @@ impl Server {
                 }
             }
         });
-        let addr = match rx.recv_timeout(Duration::from_secs(60)) {
-            Ok(a) => a.parse().expect("listen address"),
-            Err(_) => {
-                let _ = child.kill();
-                panic!("serve did not report its address: {:?}", child.wait());
-            }
+        let addr = rx
+            .recv_timeout(Duration::from_secs(60))
+            .map(|a| a.parse().expect("listen address"));
+        let server = Self {
+            child,
+            addr: addr.unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0))),
+            log,
         };
-        Self { child, addr }
+        assert!(addr.is_ok(), "serve did not report its address");
+        server
     }
 
     fn get(&self, path: &str) -> Resp {
         get(self.addr, path)
     }
 
-    /// SIGTERM, then the exit status (panics after 15 s).
-    fn terminate(mut self) -> std::process::ExitStatus {
+    fn signal(&self, name: &str) {
         let pid = self.child.id().to_string();
         let ok = Command::new("kill")
-            .args(["-TERM", &pid])
+            .args([format!("-{name}"), pid])
             .status()
             .expect("kill");
         assert!(ok.success());
+    }
+
+    /// The exit status once the process ends (panics after `limit`).
+    fn wait_exit(&mut self, limit: Duration) -> std::process::ExitStatus {
         let start = Instant::now();
         loop {
             if let Some(status) = self.child.try_wait().expect("try_wait") {
                 return status;
             }
             assert!(
-                start.elapsed() < Duration::from_secs(15),
-                "serve did not exit within 15 s of SIGTERM"
+                start.elapsed() < limit,
+                "serve did not exit within {limit:?}"
             );
             std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// `signal`, then the exit status (panics after 15 s).
+    fn stop_with(mut self, signal: &str) -> std::process::ExitStatus {
+        self.signal(signal);
+        self.wait_exit(Duration::from_secs(15))
+    }
+
+    /// The collected log so far.
+    fn log(&self) -> String {
+        String::from_utf8_lossy(&self.log.lock().map(|l| l.clone()).unwrap_or_default())
+            .into_owned()
+    }
+
+    /// Waits until the log contains `needle` (the reader thread may lag the process).
+    fn wait_log(&self, needle: &str, limit: Duration) {
+        let start = Instant::now();
+        while !self.log().contains(needle) {
+            assert!(
+                start.elapsed() < limit,
+                "no {needle:?} in log: {}",
+                self.log()
+            );
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 }
@@ -427,6 +480,22 @@ fn serve_seeded_site(p: Profile) {
     let team = server.get("/about/team/").text();
     assert!(team.contains("Team"), "{team}");
 
+    // srcset lists each width once (the 1280 px original vs a 1280 px crop).
+    let unescaped = html.replace("&#x2f;", "/");
+    let mut srcsets = 0;
+    for part in unescaped.split("srcset=\"").skip(1) {
+        let set = part.split('"').next().unwrap_or("");
+        let mut widths: Vec<&str> = set
+            .split(',')
+            .filter_map(|c| c.split_whitespace().nth(1))
+            .collect();
+        let n = widths.len();
+        widths.sort_unstable();
+        widths.dedup();
+        assert_eq!(widths.len(), n, "duplicate widths in srcset {set:?}");
+        srcsets += 1;
+    }
+    assert!(srcsets > 0, "the cards have a srcset");
     // The sample image: a featured image on the home page cards.
     let url = media_url(&html).expect("a /_media URL on the home page");
     let img = server.get(&url);
@@ -437,7 +506,7 @@ fn serve_seeded_site(p: Profile) {
     let draft = server.get(&format!("/{DRAFT_SLUG}/"));
     assert_eq!(draft.status, 404, "drafts are not public");
 
-    let status = server.terminate();
+    let status = server.stop_with("TERM");
     assert!(status.success(), "serve exit status: {status:?}");
 
     // --force adds another batch with fresh slugs.
@@ -535,4 +604,58 @@ fn serve_refuses_permalink_shadowing_a_route() {
             "{structure}: {err}"
         );
     }
+}
+
+/// SIGINT shuts down cleanly (exit 0) like SIGTERM.
+#[test]
+fn sigint_shuts_down_cleanly() {
+    let p = Profile::solo();
+    p.init();
+    let server = Server::start(&p);
+    assert_eq!(server.get("/healthz").status, 200);
+    let status = server.stop_with("INT");
+    assert!(status.success(), "{status:?}");
+}
+
+/// A second signal during the drain exits at once with 128 + the signal number.
+#[test]
+fn second_signal_during_drain_exits_immediately() {
+    let p = Profile::solo();
+    p.init();
+    let mut server = Server::start(&p);
+    // An unfinished request keeps the drain waiting (up to 10 s).
+    let mut slow = TcpStream::connect(server.addr).expect("connect");
+    write!(slow, "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n").expect("partial request");
+    std::thread::sleep(Duration::from_millis(200));
+    server.signal("TERM");
+    server.wait_log("draining connections", Duration::from_secs(10));
+    assert!(
+        server.child.try_wait().expect("try_wait").is_none(),
+        "still draining"
+    );
+    server.signal("INT");
+    let status = server.wait_exit(Duration::from_secs(3));
+    assert_eq!(status.code(), Some(130), "{status:?}");
+    server.wait_log("second signal during shutdown", Duration::from_secs(3));
+    drop(slow);
+}
+
+/// A connection that never finishes its request cannot hold shutdown past the bound:
+/// 10 s drain, then the process exits 0 well within 15 s of the signal.
+#[test]
+fn stuck_connection_does_not_block_shutdown() {
+    let p = Profile::solo();
+    p.init();
+    let mut server = Server::start(&p);
+    let mut stuck = TcpStream::connect(server.addr).expect("connect");
+    write!(stuck, "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n").expect("partial request");
+    std::thread::sleep(Duration::from_millis(200));
+    let start = Instant::now();
+    server.signal("TERM");
+    let status = server.wait_exit(Duration::from_secs(15));
+    let took = start.elapsed();
+    assert!(status.success(), "{status:?}");
+    assert!(took >= Duration::from_secs(9), "drained first: {took:?}");
+    server.wait_log("connections still open after", Duration::from_secs(3));
+    drop(stuck);
 }

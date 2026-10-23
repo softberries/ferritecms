@@ -26,7 +26,8 @@ fn main() -> anyhow::Result<ExitCode> {
         .enable_all()
         .build()?;
     let result = runtime.block_on(ferrite::run(cli));
-    // Do not wait for stray blocking work (a render still running after the drain).
-    runtime.shutdown_timeout(std::time::Duration::from_secs(2));
+    // Drop connection tasks left after the drain and do not wait for stray blocking
+    // work (a render still running); part of `serve`'s shutdown bound.
+    runtime.shutdown_timeout(ferrite::RUNTIME_SHUTDOWN);
     result
 }

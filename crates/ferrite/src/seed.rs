@@ -14,6 +14,15 @@
 //! the content service allocates them), and both menus and the two options are
 //! replaced to point at the new batch.
 //!
+//! **Not atomic.** Each step is its own transaction (one per service call), so a run
+//! that fails part-way (store error, media backend down) leaves what it already
+//! wrote: possibly the user, terms, the image (as a draft media item if its media row
+//! failed, or stored files without a row) and some posts. A plain re-run then refuses
+//! because content exists; `--force` completes a demo by adding a **whole new batch**
+//! next to the partial one (reusing user, terms and stored image files; new `-N`
+//! slugs). It does not resume or clean up the partial batch: delete it by hand, or
+//! start from a fresh data folder, if it matters.
+//!
 //! There is no media service yet (M2), so the image's `media` row and its `artifacts`
 //! rows are written here, in one transaction that also emits `post:<media id>`
 //! (ruling R11); the media item itself is created and published through
