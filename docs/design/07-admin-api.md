@@ -86,7 +86,7 @@ importer. The admin SPA that uses them is M2b.
 | Auth | `POST /auth/login`, `POST /auth/login/totp`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/password`, `POST /auth/totp/setup`, `POST /auth/totp/confirm`, `POST /auth/totp/disable` | M2a-1 | own account |
 | Auth: password reset by e-mail | `POST /auth/password-reset`, `POST /auth/password-reset/confirm` | M2a-2 (needs `mail`) | — |
 | Content | `GET/POST /content/{type}`, `GET/PATCH/DELETE /content/{type}/{id}` (`DELETE` trashes; `?force=true` deletes a trashed item), `POST /content/{type}/{id}/publish`, `…/unpublish`, `…/submit`, `…/schedule`, `…/restore` (from trash); type `media` is 404 here (uploads are `/media`) | M2a-1 | `read_admin` + `content:read` and `can_read`; writes `edit_own`/`edit_others`/`publish_*` + `content:write` |
-| Revisions | `GET /content/{type}/{id}/revisions`, `GET …/revisions/{rid}`, `POST …/revisions/{rid}/restore` | M2a-1 | as content |
+| Revisions | `GET /content/{type}/{id}/revisions`, `GET …/revisions/{rid}`, `POST …/revisions/{rid}/restore` | M2a-1 | reads as content plus a role that may edit the item (R26, §1 "Reading revisions"); restore as a content update |
 | Content types | `GET/POST /types`, `GET/PATCH/DELETE /types/{name}` | M2a-1 | reads `content:read`; writes `manage_settings` + `settings:write` |
 | Taxonomies & terms | `GET/POST /taxonomies`, `GET/PATCH/DELETE /taxonomies/{name}`, `GET/POST /taxonomies/{taxonomy}/terms`, `GET/PATCH/DELETE /terms/{id}` | M2a-1 | taxonomy reads `content:read`, writes `manage_settings` + `settings:write`; term reads `terms:read`, writes `manage_terms` + `terms:write` |
 | Menus | `GET /menus`, `GET/PUT/DELETE /menus/{name}` (`PUT` replaces the whole tree) | M2a-1 | reads `menus:read`; writes `manage_menus` + `menus:write` |
@@ -111,6 +111,21 @@ restore restores title, excerpt, body and fields, not meta (P13). Field values a
 validated against the type's schema on every content write; a type whose `fields` has no
 `fields` member (the built-ins' `{}`) accepts any object, and `featured_image` (UUID string
 or null) is always allowed (F17).
+
+**Redirects (R20, R21, R26).** `POST /redirects` creates the redirect for `source` or
+changes the one stored for it; `PATCH /redirects/{id}` refuses a `source` another row
+holds, exactly or with its trailing slash toggled (F24), and creating a new source
+(`POST` or import) whose toggled variant is stored is refused the same way (`422`,
+`errors[0].field` = `source`; R26). A source whose first segment (percent-decoded, any
+case) the router owns is refused on write: a `slug::RESERVED` word (`admin`, `api`,
+`feed`, `_media`, `sitemap.xml`, `robots.txt`, `healthz`, …), any word starting with
+`_`, or a sitemap shard name `sitemap-*.xml` (R21, R26); stored rows keep resolving.
+`POST /redirects/import` takes `text/csv` (else `415`) of at most 1 MiB (`413
+too-large`) and 10 000 rows, `source,target,code` with an optional header row; every row
+is checked first and nothing is written if any fails (`422 validation`, one `errors`
+entry per bad line, at most 100). `GET /redirects/export` writes the same format; a
+field starting with `=`, `+`, `-`, `@`, a tab or CR gets a leading `'`, so a spreadsheet
+does not run it as a formula (R20).
 
 **Token scopes (P6).** A scope is `<area>:<read|write>` for the areas `content`, `media`,
 `terms`, `menus`, `comments`, `users`, `settings`, `redirects`, `extensions`, `import`,
@@ -211,8 +226,8 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   `Origin`, a same-origin `Referer`; neither: refused; `Origin: null` never matches), else
   `403 csrf` before the body is read. The token comes with the login response
   (`csrf_token`), `GET /auth/me` and a password change. `POST /auth/login` and
-  `/auth/login/totp` check the origin too (login CSRF). Bearer requests are exempt. There are no CORS headers: the
-  admin is same-origin and headless clients use tokens.
+  `/auth/login/totp` check the origin too (login CSRF). Bearer requests are exempt.
+  There are no CORS headers: the admin is same-origin and headless clients use tokens.
 - **API tokens**: `Authorization: Bearer fer_<43 base64url characters>` (32 random bytes),
   stored as SHA-256 hex, shown once at creation, scoped (§1 "Token scopes"), optional
   `expires_at`, `last_used_at` written at most every 5 minutes, no CSRF. A user holds at

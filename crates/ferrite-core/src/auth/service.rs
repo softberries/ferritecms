@@ -10,8 +10,10 @@
 //!   verify in every case (P15).
 //! * Rate limits are counted outside any `Tx` (R6), before the password is checked, so a
 //!   limited client cannot learn whether a password is right (see [`super::limits`]).
-//! * The 50-token cap is checked inside the creating `Tx` after locking the owner's row;
-//!   it is housekeeping, not a security boundary, and documented as a soft cap (F31).
+//! * The 50-token cap is checked inside the creating `Tx` after locking the owner's row
+//!   (`get_for_update`), so concurrent creates for one user queue and the cap holds (F31
+//!   had accepted a soft cap; no concurrency test covers the lock). It is housekeeping,
+//!   not a security boundary.
 //! * The clock (session times, challenge and enrollment expiry, TOTP steps) is
 //!   injectable for tests; rate-limit windows use the database clock.
 

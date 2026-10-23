@@ -30,10 +30,11 @@ then M2b (admin SPA). Work top-down in `docs/ROADMAP.md`; per-milestone rulings 
 Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers)
 -> `ferrite-http` (public site, router, head, previews and logged-in requests, plugin
 wiring, plugin reloader, shared failure counters; the REST API in `src/api/` with its
-OpenAPI snapshot `openapi.json`) -> `ferrite-cache` (page cache + outbox invalidation loop with LISTEN wake-ups),
-`ferrite-theme` (themes, bundles, hierarchy, MiniJinja renderer), `ferrite-core` (services,
-permalinks, `SiteReader`, `ExtensionService`; `AuthService`, `UserService`, content types,
-settings allowlist, roles + token scopes), `ferrite-media`, `ferrite-plugin-host`;
+OpenAPI snapshot `openapi.json`) -> `ferrite-cache` (page cache + outbox invalidation
+loop with LISTEN wake-ups), `ferrite-theme` (themes, bundles, hierarchy, MiniJinja
+renderer), `ferrite-core` (services, permalinks, `SiteReader`, `ExtensionService`;
+`AuthService`, `UserService`, content types, settings allowlist, roles + token scopes),
+`ferrite-media`, `ferrite-plugin-host`;
 `ferrite` also -> `ferrite-cluster` (node registry, job runner, periodic scheduler, built-in
 prune jobs) -> `ferrite-store` (traits); `ferrite-core` -> `ferrite-store` (traits) <-
 `ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite);
@@ -55,8 +56,9 @@ Ctrl-C/SIGTERM). The API is at `http://localhost:8080/api/v1` (spec at
 http://localhost:8080` header, then send the cookie plus `X-CSRF-Token` on writes, or use a
 bearer token from `POST /api/v1/users/{id}/tokens`. `cargo run -p ferrite -- migrate status
 --data /tmp/site` exits 0 ok, 2 pending, 3 incompatible, 1 error; with SQLite it (and `seed`
-and `user`) fails while `serve` holds the data-folder lock. `FERRITE_LOG=debug` sets log verbosity; `FERRITE_<SECTION>__<KEY>` overrides
-config (e.g. `FERRITE_SERVER__LISTEN=127.0.0.1:0` for a free port).
+and `user`) fails while `serve` holds the data-folder lock. `FERRITE_LOG=debug` sets log
+verbosity; `FERRITE_<SECTION>__<KEY>` overrides config (e.g.
+`FERRITE_SERVER__LISTEN=127.0.0.1:0` for a free port).
 `cargo run -p ferrite -- config check --data /tmp/site` validates config + env without
 touching the database (exit 0 prints `ok: mode=… database=… media=… workers=…`, exit 1 lists
 problems).

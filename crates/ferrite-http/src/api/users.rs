@@ -23,7 +23,7 @@
 //! * Tokens: the bearer value is in the `201` response of `POST /users/{id}/tokens`
 //!   and nowhere else; lists show metadata. A token gets only scopes the request's own
 //!   credential holds, and is narrowed by its owner's role whenever it is used. At most
-//!   50 per user, a soft cap (two concurrent creates can pass it, F31).
+//!   50 per user, counted after locking the owner's row (`AuthService::create_token`).
 
 use std::sync::Arc;
 

@@ -175,14 +175,14 @@ last-write-wins (P11); no recovery codes for TOTP (P9).
 
 Outline in the M2a-1 plan ("Next plan: M2a-2"); it gets its own plan.
 
-- [ ] Admin API calls `ExtensionService` (theme/plugin install, activation, enable/disable) only after `require(ManageThemes)` / `require(ManagePlugins)`: the service is an unauthenticated system path (M1.5 ruling R11).
+- [ ] Admin API calls `ExtensionService` (theme/plugin install, activation, enable/disable) only after `require(ManageThemes)` / `require(ManagePlugins)`: the service is an unauthenticated system path (M1.5 ruling R11). Plugin delete removes the row and keeps its KV 30 days unless `purge` (05 §2).
 - [ ] Plugin install flow with the permission report and grants; updates that widen capabilities need approval; the admin approval for limits above host defaults (P28). The install flow must always set `plugins.granted` (a non-null `{}` skips every plugin that needs a capability, M1c-2 R21).
-- [ ] Themes API + `ferrite theme install|activate|list`; refuse a broken theme on activation; flag a startup fallback to `blog` in the system status (06 §7).
+- [ ] Themes API + `ferrite theme install|activate|list`; refuse a broken theme on activation; theme settings `GET/PATCH /themes/{name}/settings` validated by `theme.toml [settings]`; flag a startup fallback to `blog` in the system status (06 §7).
 - [ ] `ferrite plugin check|install|list|enable|disable|remove` over the same core paths (M1.5 P21).
-- [ ] Plugin routes (`/_p/…`) with size caps on route responses, plugin settings (secrets sealed with the site key), `mail` + password reset by e-mail, batched `request.served` (D21).
+- [ ] Plugin routes (`/_p/<plugin>/<path>`, 05 §4b): only manifest paths and methods, body ≤ 1 MiB, response size caps, DB-backed per-route rate limits on the client-IP hash, an `Origin` check unless `cross_origin`, `Content-Security-Policy: sandbox allow-forms`, `nosniff`, `Set-Cookie` and auth headers stripped, only the `user` id passed; hostile `route-xss` and `route-flood` (two nodes) plugins. Plugin settings (secrets sealed with the site key), `mail` + password reset by e-mail, batched `request.served` (D21).
 - [ ] `plugin.action` jobs (action hooks off the request path, 04 §6); each call must snapshot the plugin registry once (M1.5 R13, P26); success-path tests for `dispatch_action` / `handle_route`.
 - [ ] Media service and uploads: `POST /media`, `media` row writes emit `post:<media id>` in the same transaction (M1c-2 R11); the `media.variants` job and its concurrency semaphore (moved from M1); upload limits on `put_stream`; `Idempotency-Key`; SVG sanitising on upload (SVG is not processed by `ferrite-media`; design 03 §5 requires sanitisation before inline serving).
-- [ ] Comments: moderation endpoints, public `POST` (rate-limited, honeypot).
+- [ ] Comments: moderation endpoints, public `POST` (rate-limited, honeypot), comment settings.
 - [ ] System API: status, jobs (queued kinds no node knows stay queued, M1.5 P5; dead jobs with `last_error`, retry), per-plugin metrics, metrics summary, audit log listing.
 - [ ] Hardening: sanitised `html` block nodes keep ammonia's default URL schemes, so `//evil` (scheme-relative), `ftp:` and `tel:` links pass (`ferrite-core/src/blocks`); decide an allowlist. Real `http` import (HTTPS only, allowlisted hosts, SSRF checks). `HostConfig` max-concurrent-calls semaphore, per-render plugin time budget, `HostServices` cancel-safety docs (plugin host follow-ups above).
 - [ ] Reintroduce the per-node option cache with its first reader (R13 refresh design in [rulings/m2a.md](superpowers/rulings/m2a.md)); theme and plugin settings are the likely first readers. The M2a-1 cache had no reader and was removed (R26), so options are read from the store today.
@@ -203,11 +203,11 @@ Outline in the M2a-1 plan ("Next plan: M2a-2"); it gets its own plan.
 
 ### M2b — admin SPA
 
-- [ ] Admin SPA scaffold: Vite + React + TS, shadcn/ui, TanStack Router/Query, Motion, API client generated from `crates/ferrite-http/openapi.json` (CI drift check), embedded via `rust-embed`.
-- [ ] Screens: dashboard (Recharts), content list + TipTap editor + revisions, media library, content types/field builder, taxonomies, menus, users, comments, redirects, settings, system/nodes/jobs.
+- [ ] Admin SPA scaffold: Vite + React + TS, shadcn/ui, TanStack Router/Query, Motion, API client generated from `crates/ferrite-http/openapi.json` (CI drift check), embedded via `rust-embed` (`/admin/*` with SPA fallback, hashed assets `immutable`, a placeholder page when `admin/dist` is missing, the admin CSP; 07 §3).
+- [ ] Screens: dashboard (Recharts), content list + TipTap editor + revisions + autosave + the 412 conflict UI, media library, content types/field builder, taxonomies, menus, users (roles, tokens, TOTP), comments, redirects, settings, import, system (nodes, jobs, backups).
 - [ ] Themes + plugins screens incl. permission report and per-plugin metrics.
 - [ ] Admin "Nodes" and "Jobs" screens reading `nodes` (incl. `nodes.meta` theme/plugin state) and `jobs` (deferred from M1.5).
-- [ ] Playwright E2E against a real binary on both backends.
+- [ ] Playwright E2E against a real binary on both backends; Vitest component tests; a CI admin job (`pnpm install --frozen-lockfile`, lint, test, build).
 
 ### Done from the earlier M2 deferred lists
 
@@ -278,3 +278,4 @@ Design: [09](design/09-operations.md).
 - Built-in forms, i18n/multilingual content, full-text search UI.
 - WP database user import with legacy password-hash verification.
 - Managed hosting offering.
+- Passkeys (WebAuthn, `webauthn-rs`): deferred past M2 (M2a P3; the newest `webauthn-rs` was a pre-release and the ceremony needs the SPA). There is no `passkeys` table yet.
