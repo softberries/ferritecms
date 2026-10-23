@@ -59,7 +59,7 @@ impl NodeRepo for SqliteRepos {
 
     async fn list(&self) -> Result<Vec<Node>, StoreError> {
         let rows = run!(&self.reader, |e| sqlx::query(AssertSqlSafe(format!(
-            "SELECT {NODE_COLUMNS} FROM nodes ORDER BY started_at, id LIMIT ?"
+            "SELECT {NODE_COLUMNS} FROM nodes ORDER BY heartbeat_at DESC, id LIMIT ?"
         )))
         .bind(i64::from(MAX_NODES))
         .fetch_all(e))?;

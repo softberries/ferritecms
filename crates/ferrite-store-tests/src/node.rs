@@ -48,10 +48,10 @@ pub async fn nodes_register_heartbeat_list_prune(db: &TestDb) {
     let listed = nodes.list().await.unwrap();
     assert_eq!(
         listed.iter().map(|n| n.id).collect::<Vec<_>>(),
-        [a.id, b.id],
-        "ordered by started_at"
+        [b.id, a.id],
+        "newest heartbeat first"
     );
-    let first = &listed[0];
+    let first = &listed[1];
     assert_eq!(
         (
             &first.name,
@@ -62,7 +62,7 @@ pub async fn nodes_register_heartbeat_list_prune(db: &TestDb) {
         (&a.name, &a.version, a.schema_version, &a.meta)
     );
     assert_eq!(first.started_at, first.heartbeat_at);
-    assert!(listed[0].started_at <= listed[1].started_at);
+    assert!(listed[1].heartbeat_at <= listed[0].heartbeat_at);
 
     assert!(matches!(
         nodes.register(&a).await,
@@ -79,6 +79,17 @@ pub async fn nodes_register_heartbeat_list_prune(db: &TestDb) {
     );
     assert_eq!(beat.started_at, first.started_at);
     assert_eq!(beat.meta, meta, "meta replaced");
+    assert_eq!(
+        nodes
+            .list()
+            .await
+            .unwrap()
+            .iter()
+            .map(|n| n.id)
+            .collect::<Vec<_>>(),
+        [a.id, b.id],
+        "a beat last, so it is listed first"
+    );
     assert!(
         !nodes.heartbeat(NodeId::new(), &meta).await.unwrap(),
         "missing row"
@@ -146,4 +157,30 @@ pub async fn nodes_prune_in_batches(db: &TestDb) {
     assert_eq!(nodes.list().await.unwrap().len(), 1);
     assert_eq!(nodes.prune(future, 2).await.unwrap(), 1);
     assert_eq!(nodes.prune(future, 2).await.unwrap(), 0);
+}
+
+/// M2: past [`MAX_NODES`](ferrite_store::MAX_NODES) rows, `list` keeps the newest
+/// heartbeats, so a live node is not hidden behind old stale rows.
+pub async fn nodes_list_keeps_newest_heartbeats(db: &TestDb) {
+    let nodes = db.store().read().nodes();
+    let max = ferrite_store::MAX_NODES as usize;
+    let first = new_node("oldest");
+    nodes.register(&first).await.unwrap();
+    for i in 1..max {
+        nodes.register(&new_node(&format!("n{i}"))).await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let live = new_node("live");
+    nodes.register(&live).await.unwrap();
+    let listed = nodes.list().await.unwrap();
+    assert_eq!(listed.len(), max);
+    assert_eq!(listed[0].id, live.id, "the newest heartbeat comes first");
+    assert!(
+        listed.iter().all(|n| n.id != first.id),
+        "the oldest row is the one cut"
+    );
+    // A heartbeat brings the oldest row back to the front.
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    assert!(nodes.heartbeat(first.id, &json!({})).await.unwrap());
+    assert_eq!(nodes.list().await.unwrap()[0].id, first.id);
 }

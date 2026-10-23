@@ -179,6 +179,7 @@ backend_tests!(
     lock_names_are_validated,
     nodes_register_heartbeat_list_prune,
     nodes_prune_in_batches,
+    nodes_list_keeps_newest_heartbeats,
 );
 
 backend_tests_spawning!(

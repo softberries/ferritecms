@@ -614,8 +614,10 @@ pub trait NodeRepo: Send + Sync {
     async fn heartbeat(&self, id: NodeId, meta: &serde_json::Value) -> Result<bool, StoreError>;
     /// Removes the node's row; a missing row is `Ok(())`.
     async fn deregister(&self, id: NodeId) -> Result<(), StoreError>;
-    /// Up to [`MAX_NODES`](crate::MAX_NODES) nodes, ordered by `(started_at, id)`, live or
-    /// stale (callers compare `heartbeat_at` with [`NodeRepo::db_now`]).
+    /// Up to [`MAX_NODES`](crate::MAX_NODES) nodes, live or stale (callers compare
+    /// `heartbeat_at` with [`NodeRepo::db_now`]), newest heartbeat first (`heartbeat_at
+    /// DESC, id`): when more rows exist (say a crash loop registering a new id per start,
+    /// pruned only after 24 h), the live nodes are the ones listed.
     async fn list(&self) -> Result<Vec<Node>, StoreError>;
     /// The database clock: Postgres `SELECT now()`, SQLite `Timestamp::now()`.
     async fn db_now(&self) -> Result<Timestamp, StoreError>;

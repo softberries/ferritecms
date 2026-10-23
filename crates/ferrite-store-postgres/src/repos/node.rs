@@ -53,7 +53,7 @@ impl NodeRepo for PgRepos {
 
     async fn list(&self) -> Result<Vec<Node>, StoreError> {
         let rows = run!(&self.exec, |e| sqlx::query(AssertSqlSafe(format!(
-            "SELECT {NODE_COLUMNS} FROM nodes ORDER BY started_at, id LIMIT $1"
+            "SELECT {NODE_COLUMNS} FROM nodes ORDER BY heartbeat_at DESC, id LIMIT $1"
         )))
         .bind(i64::from(MAX_NODES))
         .fetch_all(e))?;
