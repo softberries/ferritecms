@@ -299,7 +299,8 @@ also installs the `ring` rustls default crypto provider at start.
   permalink set that fails to load keeps the current one and is reported in `nodes.meta`
   (`theme.error`, `plugins.<name>.status = "failed"` with `error`, `permalinks_error`); there
   is no runtime fallback to `blog`. A failed reload is retried per component after 5 s,
-  doubling up to 5 min, until it succeeds (a newer event retries at once; ruling R14). The
+  doubling up to 5 min, until it succeeds (a newer event retries at once; ruling R14); a
+  theme that fell back or a plugin row skipped at startup is retried the same way (R17). The
   replaced theme's `/_theme/<hash>/` assets stay served until the next swap.
 - **`nodes.meta`** (heartbeat, and at once after every reload): `site_id`, `site_url`
   (normalised, no trailing slash), `mode`, `clock_skew_ms`, `theme` (`name`, `hash`,

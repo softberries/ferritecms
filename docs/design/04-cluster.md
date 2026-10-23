@@ -353,7 +353,8 @@ SQLite: an in-process mutex per store (one process owns the data folder).
   `nodes.meta` (`theme.error`, `plugins.<name>.status = "failed"`, `permalinks_error`,
   `plugins_error`) and logged, and is retried after 5 s, doubling to 5 min, until it
   succeeds or a newer event arrives (R14). The startup-only fallback to the `blog` theme is
-  never used at runtime.
+  never used at runtime; a startup that fell back, or that skipped a plugin row, is
+  retried the same way from 5 s after boot (R17), so a media blip at boot heals by itself.
 - The page cache is flushed twice per change: by the loop on the event, and by the reloader
   after each swap, because a page rendered during the swap may mix versions (R13).
 - Solo mode uses the same path (artifacts in the local media store).

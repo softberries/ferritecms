@@ -25,6 +25,9 @@
 //! component after [`RETRY_MIN`], doubling up to [`RETRY_MAX`], until it succeeds; a
 //! newer event for that component reloads at once and restarts the backoff. So a
 //! transient failure (media store briefly unreachable) heals without another change.
+//! A startup load that failed counts as a failed reload: a theme that fell back (for
+//! example to `blog`) or a plugin row that did not load is retried the same way, from
+//! [`RETRY_MIN`] after the task starts (R17).
 
 use std::{
     path::PathBuf,
@@ -122,7 +125,7 @@ impl Reloader {
     ) -> JoinHandle<()> {
         let this = self.clone();
         tokio::spawn(async move {
-            let mut retries = [Retry::default(); 3];
+            let mut retries = ctx.startup_retries(Instant::now());
             loop {
                 let next = retries.iter().filter_map(|r| r.due).min();
                 let retry_due = async {
@@ -194,6 +197,15 @@ struct Retry {
 }
 
 impl Retry {
+    /// A retry due [`RETRY_MIN`] after `now` (a failure at `now`), or none.
+    fn failed_at(failed: bool, now: Instant) -> Self {
+        let mut r = Retry::default();
+        if failed {
+            r.after(false, true, now);
+        }
+        r
+    }
+
     /// Updates after a reload: success clears; a failure after an event retries after
     /// [`RETRY_MIN`], a failed retry after twice the last delay (at most [`RETRY_MAX`]).
     fn after(&mut self, ok: bool, event: bool, now: Instant) {
@@ -243,6 +255,18 @@ impl EventHook for Reloader {
 }
 
 impl ReloadContext {
+    /// The retries startup leaves due (in [`Reloader::round`]'s order: permalinks, theme,
+    /// plugins): the theme when it fell back with an error, the plugins when the list
+    /// failed or a row did not load. Startup refuses bad permalinks, so they never are.
+    fn startup_retries(&self, now: Instant) -> [Retry; 3] {
+        let plugins_failed = self.plugins_error.is_some() || report_failed(&self.plugins_report);
+        [
+            Retry::default(),
+            Retry::failed_at(self.theme.error.is_some(), now),
+            Retry::failed_at(plugins_failed, now),
+        ]
+    }
+
     /// New rules from the options, checked, then the route table built with them; both
     /// swapped only if both succeed.
     async fn reload_permalinks(&mut self) -> bool {
@@ -281,7 +305,9 @@ impl ReloadContext {
         .await;
         match next {
             Ok(None) => {
-                self.status.set_theme(&self.theme, None);
+                // Still the theme startup chose; a fallback keeps reporting why.
+                self.status
+                    .set_theme(&self.theme, self.theme.error.as_deref());
                 true
             }
             Ok(Some(loaded)) => {
@@ -327,10 +353,7 @@ impl ReloadContext {
                     self.status.set_plugins(&report);
                     self.status.set_plugins_error(None);
                 }
-                let ok = !report
-                    .states
-                    .values()
-                    .any(|s| matches!(s.status, PluginStatus::Failed(_)));
+                let ok = !report_failed(&report);
                 self.plugins_report = report;
                 self.plugins_error = None;
                 (ok, changed)
@@ -347,6 +370,14 @@ impl ReloadContext {
             }
         }
     }
+}
+
+/// Whether any row of `report` failed to load.
+fn report_failed(report: &ReloadReport) -> bool {
+    report
+        .states
+        .values()
+        .any(|s| matches!(s.status, PluginStatus::Failed(_)))
 }
 
 #[cfg(test)]
@@ -437,5 +468,14 @@ mod tests {
         assert_eq!(r.delay, RETRY_MIN);
         r.after(true, false, now);
         assert_eq!(r, Retry::default());
+    }
+
+    #[test]
+    fn startup_failure_arms_a_first_retry() {
+        let now = Instant::now();
+        assert_eq!(Retry::failed_at(false, now), Retry::default());
+        let r = Retry::failed_at(true, now);
+        assert_eq!(r.delay, RETRY_MIN);
+        assert_eq!(r.due, Some(now + RETRY_MIN));
     }
 }

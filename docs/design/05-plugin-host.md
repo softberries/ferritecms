@@ -40,7 +40,8 @@ upload .wasm + manifest ──► validate manifest ──► inspect component 
   on-disk component cache); new or changed rows, and rows enabled again after a host-side
   disable, are fetched (SHA-256 checked), grant-checked (R21) and prepared; a version that
   fails keeps the previous one running (reported `Failed`); disabled and deleted rows are
-  dropped. Startup's `load_plugins` is the first reload. In `ferrite serve` one
+  dropped. Startup's call is the first reload; a row it could not load is retried like a
+  failed reload (R17). In `ferrite serve` one
   `PluginReloader` per process runs again on every `plugins.changed` and
   `plugin.disabled` event (the latter also disables the plugin in this host at once) and
   after lost event history, on the node's reload task (`crates/ferrite/src/reload.rs`,

@@ -477,6 +477,83 @@ async fn bad_plugin_update_keeps_previous_version(db: Arc<TestDb>) {
     node.shutdown().await.unwrap();
 }
 
+/// I2 / R17: a theme and a plugin whose artifacts cannot be read at startup (a media
+/// blip after the probe) are retried like a failed reload: once the bytes are readable
+/// the node converges, with no event.
+async fn startup_load_failure_is_retried(db: Arc<TestDb>) {
+    let site = Site::new(&db);
+    let store = db.shared_store();
+    let media = site.media();
+    let theme = install_theme_dir(&store, &media, &site.theme_dir("b", "MARK-B"), true)
+        .await
+        .unwrap();
+    let plugin = install_plugin_file(
+        &store,
+        &media,
+        &site.config.plugins,
+        &manifest("hello"),
+        &test_support::plugin_wasm("hello"),
+        true,
+    )
+    .await
+    .unwrap();
+    let good_theme = std::fs::read(site.blob(&theme.artifact_hash)).unwrap();
+    let good_plugin = std::fs::read(site.blob(&plugin.artifact_hash)).unwrap();
+    site.tamper(&theme.artifact_hash, b"temporarily unreadable");
+    site.tamper(&plugin.artifact_hash, b"temporarily unreadable");
+
+    let node = site.start(&db, NodeOptions::default()).await;
+    let seq = store.read().events().max_seq().await.unwrap();
+    assert!(
+        !home_contains(&node, "MARK-B").await,
+        "fell back at startup"
+    );
+    assert!(node.state.plugins.loaded().is_empty(), "hello not loaded");
+    eventually(Duration::from_secs(3), "startup failures reported", || {
+        let db = db.clone();
+        let node = &node;
+        async move {
+            let m = meta(&db, node).await;
+            m["theme"]["error"].is_string() && m["plugins"]["hello"]["status"] == "failed"
+        }
+    })
+    .await;
+
+    site.tamper(&theme.artifact_hash, &good_theme);
+    site.tamper(&plugin.artifact_hash, &good_plugin);
+    eventually(
+        reload_retry_wait() + CONVERGE,
+        "theme b after the retry",
+        || home_contains(&node, "MARK-B"),
+    )
+    .await;
+    // Theme b has no head hook, so the plugin is checked in the host.
+    eventually(CONVERGE, "hello after the retry", || async {
+        node.state.plugins.loaded().contains(&"hello".to_owned())
+    })
+    .await;
+    assert!(
+        store
+            .read()
+            .events()
+            .since(seq, 10)
+            .await
+            .unwrap()
+            .is_empty(),
+        "converged without an event"
+    );
+    eventually(CONVERGE, "errors cleared", || {
+        let db = db.clone();
+        let node = &node;
+        async move {
+            let m = meta(&db, node).await;
+            m["theme"]["error"].is_null() && m["plugins"]["hello"]["status"] == "loaded"
+        }
+    })
+    .await;
+    node.shutdown().await.unwrap();
+}
+
 /// Long enough for the first reload retry (5 s after the failure) to have run.
 fn reload_retry_wait() -> Duration {
     ferrite::reload::RETRY_MIN + Duration::from_secs(1)
@@ -744,6 +821,7 @@ backend_tests_spawning!(
     boot_race_change_during_startup_is_applied,
     boot_race_plugin_enable_is_applied,
     failed_theme_reload_is_retried,
+    startup_load_failure_is_retried,
     theme_hot_swap_without_restart,
     bad_theme_activation_keeps_previous_theme,
     bad_plugin_update_keeps_previous_version,

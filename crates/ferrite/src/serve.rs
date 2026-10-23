@@ -18,7 +18,9 @@
 //! 6. the permalink rules from the `permalink.post`/`permalink.page` options, checked
 //!    against the registered types and taxonomies (invalid: exit 1);
 //! 7. the active theme (a broken one falls back to the embedded `blog` theme at startup
-//!    only, 06 §7); the enabled plugins (a broken one is skipped); the route table;
+//!    only, 06 §7); the enabled plugins (a broken one is skipped); the route table. A
+//!    fallback or a skipped plugin is retried by the reload task with the R14 backoff
+//!    (R17);
 //! 8. bind `server.listen` (before any background task starts, so a busy port fails
 //!    cleanly);
 //! 9. the background tasks: the invalidation loop (`cache.poll_interval_ms`; with

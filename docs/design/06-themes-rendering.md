@@ -102,7 +102,8 @@ already flushed on the event). The replaced theme is kept as `previous_theme`, s
 `/_theme/<old hash>/…` URLs in pages rendered just before the swap keep working until the
 next swap. A theme that fails to load (missing or tampered artifact, template error)
 leaves the current theme serving, is reported in `nodes.meta.theme.error`, and is retried
-after 5 s, doubling to 5 min (R14). Theme install/activate commands and admin screens are
+after 5 s, doubling to 5 min (R14). A startup fallback (to the folder, embedded or `blog`
+theme) after the active row's artifact failed is retried the same way (R17). Theme install/activate commands and admin screens are
 M2 (P21); today `install_theme_dir` and `ExtensionService` are library calls.
 
 ## 2. Template hierarchy
