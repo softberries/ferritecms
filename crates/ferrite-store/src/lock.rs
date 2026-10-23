@@ -21,6 +21,16 @@ pub const LOCK_POLL: Duration = Duration::from_millis(250);
 /// closes, so the server releases it; a crashed process releases it the same way).
 /// Prefer `release().await` over drop: it frees the lock before returning and reports
 /// errors, while a drop leaves the release to the server noticing the closed connection.
+///
+/// **Not a fence.** On Postgres the holder is not told when it loses the lock: if the
+/// lock connection is terminated (`pg_terminate_backend`, a failover, a proxy or pooler
+/// that closes idle connections), the server frees the lock and another process can
+/// take it while the first one still runs and believes it holds it. A lock serialises
+/// cooperating processes in the normal case only. Work that must stay exclusive while
+/// the lock is lost needs its own check in the data it writes (a version or token
+/// column, a short `Tx`), not the lock; today `migrate` relies on sqlx's own advisory
+/// lock and per-migration transactions, and `extensions` writes are one short `Tx`. The
+/// M3 `import` lock, held for a long time, must not rely on it for exclusion.
 #[async_trait]
 pub trait LockGuard: Send {
     /// Releases the lock now and reports a failure to do so cleanly (the lock is gone

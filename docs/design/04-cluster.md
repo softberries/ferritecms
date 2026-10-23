@@ -328,6 +328,16 @@ releases it when its connection dies. Each attempt opens a new connection (a hel
 connection with `lock_timeout` is M4, R3). sqlx's own migration lock is taken as well.
 SQLite: an in-process mutex per store (one process owns the data folder).
 
+**A lock is not a fence.** The holder is not told when a Postgres advisory lock is lost:
+if its connection is terminated (`pg_terminate_backend`, a failover, a proxy or pooler
+that closes idle connections even with `idle_session_timeout = 0`), the server frees the
+lock and a second node can take it while the first still runs and believes it holds it.
+The locks serialise cooperating processes; they do not guarantee exclusion. Today that is
+enough: migrations are also protected by sqlx's own advisory lock and a `Tx` per
+migration, and `ExtensionService` writes are one short `Tx`. Long-held work (the M3
+`import` lock) must carry its own fencing in the data (for example a token checked on
+every write, as the job leases do, P6) and must not rely on the lock for exclusion.
+
 ## 8. Plugins & themes across nodes (D11)
 
 **As built (M1.5).**
