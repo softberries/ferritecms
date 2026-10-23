@@ -80,8 +80,20 @@ async fn serve(config: &Config, store: Arc<dyn Store>) -> anyhow::Result<()> {
         .await
         .context("the media store is not usable (write/read/delete probe failed)")?;
     let rules = Arc::new(permalink_rules(store.as_ref()).await?);
-    let theme = Arc::new(load_theme(store.as_ref(), &config.data_dir).await?);
-    tracing::info!(theme = %theme.name(), hash = %theme.hash(), "theme loaded");
+    let loaded = load_theme(
+        store.as_ref(),
+        &media,
+        &config.data_dir,
+        config.effective_cluster_mode(),
+    )
+    .await?;
+    let theme = loaded.theme;
+    tracing::info!(
+        theme = %theme.name(),
+        hash = %theme.hash(),
+        origin = ?loaded.origin,
+        "theme loaded"
+    );
 
     let mut http = HttpConfig::new(
         config.site.url.as_str(),

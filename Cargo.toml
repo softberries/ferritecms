@@ -40,6 +40,7 @@ serde = { version = "1", features = ["derive"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "migrate", "macros", "json", "uuid", "chrono"] }
 semver = { version = "1.0.28", features = ["serde"] }
 serde_json = "1"
+tar = { version = "0.4.46", default-features = false }
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }

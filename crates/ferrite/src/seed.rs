@@ -78,7 +78,14 @@ pub async fn run(cmd: SeedCommand) -> anyhow::Result<()> {
     let seeded = async {
         startup_check(store.as_ref(), &binary_version()?, &config.database).await?;
         let media = open_media(&config)?;
-        let theme = load_theme(store.as_ref(), &config.data_dir).await?;
+        let theme = load_theme(
+            store.as_ref(),
+            &media,
+            &config.data_dir,
+            config.effective_cluster_mode(),
+        )
+        .await?
+        .theme;
         let mut specs = default_variants();
         for (name, size) in &theme.manifest().images {
             // A height without crop is a bounding box, which the processor rejects.

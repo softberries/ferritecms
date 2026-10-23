@@ -17,7 +17,7 @@ use rust_embed::Embed;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ThemeError,
+    ThemeError, bundle,
     manifest::{self, ThemeManifest},
     render,
 };
@@ -26,8 +26,8 @@ use crate::{
 pub const MAX_FILES: usize = 2000;
 /// Most bytes all files of a theme may hold together (20 MiB).
 pub const MAX_TOTAL_BYTES: u64 = 20 * 1024 * 1024;
-/// Deepest directory nesting read from a theme folder.
-const MAX_DEPTH: usize = 16;
+/// Deepest directory nesting read from a theme folder or bundle.
+pub(crate) const MAX_DEPTH: usize = 16;
 
 const MANIFEST: &str = "theme.toml";
 const TEMPLATES: &str = "templates/";
@@ -39,13 +39,41 @@ const INDEX: &str = "index.html";
 #[folder = "../../themes/"]
 struct Embedded;
 
-/// Where a theme's files come from (plan ruling P1).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A theme's files by path relative to the theme root, sorted.
+pub(crate) type Files = BTreeMap<String, Bytes>;
+
+/// Where a theme's files come from (plan rulings P1, P17).
+#[derive(Clone, PartialEq, Eq)]
 pub enum ThemeSource {
     /// A starter theme embedded in the binary, by folder name under `themes/`.
     Embedded(&'static str),
     /// A theme folder on disk (`data/themes/<name>/`). Symlinks are refused.
     Dir(PathBuf),
+    /// A theme bundle (deterministic ustar, see [`pack`](crate::pack)), unpacked in
+    /// memory. Anything but plain regular files within the folder limits is refused.
+    Bundle(Bytes),
+}
+
+impl std::fmt::Debug for ThemeSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Embedded(name) => f.debug_tuple("Embedded").field(name).finish(),
+            Self::Dir(dir) => f.debug_tuple("Dir").field(dir).finish(),
+            // Never the bytes: a bundle can be 20 MiB.
+            Self::Bundle(b) => write!(f, "Bundle({} bytes)", b.len()),
+        }
+    }
+}
+
+impl ThemeSource {
+    /// Every file of the theme, validated as its source requires (hidden files left out).
+    pub(crate) fn files(&self) -> Result<Files, ThemeError> {
+        match self {
+            Self::Embedded(name) => read_embedded(name),
+            Self::Dir(dir) => read_dir(dir),
+            Self::Bundle(bytes) => bundle::unpack(bytes),
+        }
+    }
 }
 
 /// A loaded, validated theme with its templates compiled.
@@ -74,10 +102,7 @@ impl Theme {
     /// required), and compiles all templates. Template errors are collected, each with
     /// its file and line.
     pub fn load(source: &ThemeSource) -> Result<Theme, ThemeError> {
-        match source {
-            ThemeSource::Embedded(name) => Self::load_embedded(name),
-            ThemeSource::Dir(dir) => Self::from_files(read_dir(dir)?),
-        }
+        Self::from_files(source.files()?)
     }
 
     /// [`Theme::load`] of the embedded starter theme `name`, for names known only at
@@ -95,7 +120,7 @@ impl Theme {
         names.into_iter().collect()
     }
 
-    fn from_files(files: BTreeMap<String, Cow<'static, [u8]>>) -> Result<Theme, ThemeError> {
+    fn from_files(files: Files) -> Result<Theme, ThemeError> {
         let mut problems = Vec::new();
         let total: u64 = files.values().map(|d| d.len() as u64).sum();
         if files.len() > MAX_FILES {
@@ -136,11 +161,8 @@ impl Theme {
                     Err(_) => problems.push(format!("{path} is not UTF-8")),
                 }
             } else if let Some(name) = path.strip_prefix(ASSETS) {
-                let data = match data {
-                    Cow::Borrowed(b) => Bytes::from_static(b),
-                    Cow::Owned(v) => Bytes::copy_from_slice(v),
-                };
-                assets.insert(name.to_owned(), data);
+                // Shares the buffer read from the source: no copy.
+                assets.insert(name.to_owned(), data.clone());
             }
         }
         if !sources.contains_key(INDEX) {
@@ -229,7 +251,7 @@ const SEGMENT: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
     .add(b'\\')
     .add(b'\'');
 
-fn content_hash(files: &BTreeMap<String, Cow<'static, [u8]>>) -> String {
+fn content_hash(files: &Files) -> String {
     let mut h = Sha256::new();
     for (path, data) in files {
         h.update((path.len() as u64).to_le_bytes());
@@ -246,7 +268,7 @@ fn content_hash(files: &BTreeMap<String, Cow<'static, [u8]>>) -> String {
 
 /// Relative, `/`-separated, no empty, `.` or `..` segments, no backslash or control
 /// characters.
-fn valid_path(path: &str) -> bool {
+pub(crate) fn valid_path(path: &str) -> bool {
     !path.is_empty()
         && !path.contains('\\')
         && !path.chars().any(char::is_control)
@@ -255,11 +277,11 @@ fn valid_path(path: &str) -> bool {
             .all(|s| !s.is_empty() && s != "." && s != "..")
 }
 
-fn is_hidden(path: &str) -> bool {
+pub(crate) fn is_hidden(path: &str) -> bool {
     path.split('/').any(|s| s.starts_with('.'))
 }
 
-fn read_embedded(name: &str) -> Result<BTreeMap<String, Cow<'static, [u8]>>, ThemeError> {
+fn read_embedded(name: &str) -> Result<Files, ThemeError> {
     let prefix = format!("{name}/");
     let mut files = BTreeMap::new();
     if name.contains('/') || !valid_path(name) {
@@ -273,7 +295,11 @@ fn read_embedded(name: &str) -> Result<BTreeMap<String, Cow<'static, [u8]>>, The
             continue;
         }
         if let Some(file) = Embedded::get(&path) {
-            files.insert(rel.to_owned(), file.data);
+            let data = match file.data {
+                Cow::Borrowed(b) => Bytes::from_static(b),
+                Cow::Owned(v) => Bytes::from(v),
+            };
+            files.insert(rel.to_owned(), data);
         }
         if files.len() > MAX_FILES {
             break;
@@ -285,7 +311,7 @@ fn read_embedded(name: &str) -> Result<BTreeMap<String, Cow<'static, [u8]>>, The
     Ok(files)
 }
 
-fn read_dir(root: &Path) -> Result<BTreeMap<String, Cow<'static, [u8]>>, ThemeError> {
+fn read_dir(root: &Path) -> Result<Files, ThemeError> {
     let io = |path: &Path| {
         let path = path.to_path_buf();
         move |source| ThemeError::Io { path, source }
@@ -373,7 +399,7 @@ fn read_dir(root: &Path) -> Result<BTreeMap<String, Cow<'static, [u8]>>, ThemeEr
                         "files exceed {MAX_TOTAL_BYTES} bytes in total"
                     )]));
                 }
-                files.insert(rel_path, Cow::Owned(data));
+                files.insert(rel_path, Bytes::from(data));
             } else {
                 return Err(ThemeError::Invalid(vec![format!(
                     "{rel_path}: not a regular file"

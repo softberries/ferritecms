@@ -55,18 +55,47 @@ Setting kinds are the plugin manifest's minus `secret` (`text`, `textarea`, `boo
 collected, each as `templates/<file>:<line>: <message>`. Limits: 2000 files, 20 MiB in total,
 directory depth 16; symlinks are refused (`crates/ferrite-theme/src/package.rs`). The theme
 hash is the first 16 hex digits of a SHA-256 over all files and is part of every asset URL.
-Sources:
+Sources (`ThemeSource`):
 
 - embedded starter themes (`rust-embed` over the workspace `themes/` folder): `blog`;
-- a folder `<data>/themes/<name>/`, which wins over an embedded theme of the same name.
+- a folder `<data>/themes/<name>/` (solo mode only, see below);
+- a **bundle** (`ThemeSource::Bundle`), the artifact a theme is installed as.
 
-The active theme's name comes from the `themes` table (`active` row), default `blog`
-(`crates/ferrite/src/site.rs`). Theme names are `[a-z0-9_-]{1,64}`.
+**Bundles (as built, M1.5, ruling P17).** `ferrite_theme::pack` writes a theme's files as a
+plain, deterministic ustar archive: regular-file entries only, sorted by path, mode `0644`,
+mtime 0, uid/gid 0, empty user/group names, no PAX/GNU extension headers, paths at most 255
+bytes (ustar prefix + name). The same files give the same bytes whatever the folder's
+metadata, so the artifact hash (SHA-256 of the bundle, kind `theme`, mime
+`application/x-tar`) identifies the content. Not `tar.zst`: zstd needs a C library and
+themes are at most 20 MiB; the mime type leaves room for a compressed format later.
+`Theme::load(Bundle)` unpacks in memory, never to disk, treating the bytes as hostile: it
+reads the raw entry stream (no PAX/GNU processing, so no header can rename or resize the
+next entry) and refuses, naming the entry, anything but ustar regular files — symlinks,
+hard links, devices, FIFOs, directories, extension headers — plus absolute paths,
+`..`/`.`/empty segments, backslashes, duplicate paths, paths over 255 bytes, depth over 16,
+and more than 2000 entries or 20 MiB. Sizes are checked against the header before an entry
+is read, and a bundle larger than the limits allow (`MAX_BUNDLE_BYTES`, 20 MiB + 1 KiB per
+entry) is refused unparsed. Hidden files are skipped as in a folder; the theme hash is
+computed over the files exactly as for a folder, so the same files give the same
+`Theme::hash()` from any source (`crates/ferrite-theme/src/bundle.rs`).
 
-**Planned.** Installing themes as artifacts (tar.zst of the folder, the plugin distribution
-path of [04 §8](04-cluster.md#8-plugins--themes-across-nodes-d11)) is M1.5; theme
-install/activate commands and admin screens are M2. The theme is read once at startup; a
-change needs a restart until hot swap on `theme.changed` lands (M1.5).
+**Install and selection (as built, M1.5).** `ferrite::extensions::install_theme_dir` packs
+a folder, loads the bundle (a theme that does not compile is refused before anything is
+written), uploads it with `MediaStore::put_artifact` and records the artifact and theme rows
+through `ExtensionService::install_theme` (one transaction under the `extensions` lock,
+P21). At startup `load_theme` (`crates/ferrite/src/site.rs`) uses the active row's artifact
+(fetched, SHA-256 checked against the row, unpacked, its manifest name must match the row);
+if that fails, or there is no row (name `blog`), it tries `<data>/themes/<name>/` (**solo
+only**), then the embedded theme of that name, then the embedded `blog` theme, so a broken
+theme never takes the site down; the failure is logged and kept in `LoadedTheme::error`. In
+**cluster** mode `<data>/themes/` is never read (a warning says so if it exists): every node
+must run the same theme (C5). `reload_theme` is the hot-swap counterpart (P18): no change
+when the active row names the artifact already running, an error (the caller keeps the
+current theme) when the new artifact fails, never a fallback to `blog` at runtime.
+Theme names are `[a-z0-9_-]{1,64}`.
+
+**Planned.** Wiring `reload_theme` to `theme.changed` on every node is M1.5 Task 10; theme
+install/activate commands and admin screens are M2.
 
 ## 2. Template hierarchy
 

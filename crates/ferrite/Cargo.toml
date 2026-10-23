@@ -27,6 +27,7 @@ image.workspace = true
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 semver.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["net", "signal"] }
 tokio-util.workspace = true
@@ -41,6 +42,7 @@ hyper-util.workspace = true
 s3s.workspace = true
 s3s-fs.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "net"] }
 uuid.workspace = true

@@ -1,6 +1,7 @@
 //! The `ferrite` binary's logic, split from `main.rs` so tests can call it directly.
 
 mod cli;
+pub mod extensions;
 mod init;
 mod migrate;
 mod open;
@@ -11,6 +12,7 @@ mod site;
 pub use cli::{Cli, Command, MigrateCommand, run};
 pub use open::{Decision, OpenMode, decide, open_store, startup_check};
 pub use serve::RUNTIME_SHUTDOWN;
+pub use site::{LoadedTheme, ThemeOrigin, load_theme, reload_theme};
 
 /// The version of this binary, parsed from `Cargo.toml`.
 pub fn binary_version() -> anyhow::Result<semver::Version> {

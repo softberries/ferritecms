@@ -1,13 +1,16 @@
 //! Site parts shared by `serve` and `seed`: the media store and the active theme.
+//! [`load_theme`] / [`reload_theme`] are public for the M1.5 hot swap and its tests.
 
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use anyhow::{Context, bail};
-use ferrite_config::{Config, MediaSection};
+use ferrite_config::{ClusterMode, Config, MediaSection};
 use ferrite_core::PermalinkRules;
+use ferrite_domain::{ArtifactHash, InstalledTheme};
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode, S3Config};
 use ferrite_store::Store;
-use ferrite_theme::{Theme, ThemeSource};
+use ferrite_theme::{MAX_BUNDLE_BYTES, Theme, ThemeSource};
+use sha2::{Digest, Sha256};
 
 /// Path prefix under which the app serves media (`/_media/{hash}/{name}`).
 const MEDIA_PATH: &str = "/_media";
@@ -110,52 +113,229 @@ pub(crate) async fn permalink_rules(store: &dyn Store) -> anyhow::Result<Permali
     Ok(rules)
 }
 
-/// The active theme (06 §7): its name from the `themes` table (default `blog`), loaded
-/// from `<data>/themes/<name>/` if that exists, else the embedded starter theme of that
-/// name. A theme that fails to load is logged and the embedded `blog` theme is used, so
-/// a broken theme never takes the site down. Only a store error is an error.
-pub(crate) async fn load_theme(store: &dyn Store, data_dir: &Path) -> anyhow::Result<Theme> {
-    let name = store
+/// Where the running theme's files came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThemeOrigin {
+    /// The active row's bundle artifact (P17).
+    Artifact(ArtifactHash),
+    /// `<data>/themes/<name>/` (solo mode only).
+    Folder,
+    /// A starter theme compiled into the binary.
+    Embedded,
+}
+
+/// The theme a node serves, where it came from and, when it is a fallback, why.
+#[derive(Debug, Clone)]
+pub struct LoadedTheme {
+    pub theme: Arc<Theme>,
+    pub origin: ThemeOrigin,
+    /// Why the active theme could not be used (set only when this is a fallback).
+    pub error: Option<String>,
+}
+
+/// The active theme at startup (06 §1, §7, ruling P17). `mode` is the resolved cluster
+/// mode ([`Config::effective_cluster_mode`]).
+///
+/// Precedence: the active row's artifact (fetched, SHA-256 checked against the row's
+/// hash, unpacked in memory); when that fails, or there is no row (name `blog`), the
+/// folder `<data>/themes/<name>/` (**solo only**), then the embedded theme of that
+/// name, then the embedded `blog` theme. A broken theme never takes the site down: the
+/// failure is logged and returned in [`LoadedTheme::error`]. In cluster mode
+/// `<data>/themes/` is never read (every node must run the same theme, C5); a warning
+/// says so if the folder exists. Only a store error is an error.
+pub async fn load_theme(
+    store: &dyn Store,
+    media: &MediaStore,
+    data_dir: &Path,
+    mode: ClusterMode,
+) -> anyhow::Result<LoadedTheme> {
+    let folders = reads_folders(mode);
+    let themes_dir = data_dir.join("themes");
+    if !folders && std::fs::symlink_metadata(&themes_dir).is_ok() {
+        tracing::warn!(
+            dir = %themes_dir.display(),
+            "cluster mode: theme folders are ignored; install themes as artifacts"
+        );
+    }
+    let row = store
         .read()
         .themes()
         .active()
         .await
-        .context("cannot read the active theme")?
-        .map_or_else(|| DEFAULT_THEME.to_owned(), |t| t.name);
-    select_theme(&name, data_dir)
+        .context("cannot read the active theme")?;
+    let mut errors = Vec::new();
+    let name = match row {
+        None => DEFAULT_THEME.to_owned(),
+        Some(row) => match artifact_theme(media, &row).await {
+            Ok(theme) => {
+                return Ok(LoadedTheme {
+                    theme: Arc::new(theme),
+                    origin: ThemeOrigin::Artifact(row.artifact_hash),
+                    error: None,
+                });
+            }
+            Err(e) => {
+                errors.push(format!("artifact {}: {e:#}", row.artifact_hash));
+                row.name
+            }
+        },
+    };
+    fallback_theme(&name, data_dir, folders, errors)
 }
 
-/// [`load_theme`] once the name is known.
-fn select_theme(name: &str, data_dir: &Path) -> anyhow::Result<Theme> {
-    match try_theme(name, data_dir) {
-        Ok(theme) => Ok(theme),
-        Err(e) => {
-            tracing::error!(
-                theme = %name,
-                error = %format!("{e:#}"),
-                "active theme failed to load; using the embedded `{DEFAULT_THEME}` theme"
-            );
-            Theme::load_embedded(DEFAULT_THEME).context("the embedded blog theme failed to load")
+/// Re-reads the active theme for a hot swap (ruling P18). `Ok(None)`: nothing to do
+/// (the active row names the artifact `current` came from, or there is no row and
+/// `current` is not an artifact). `Ok(Some)`: the theme to swap in. `Err`: the new
+/// theme failed; the caller keeps `current` and reports the message. Unlike
+/// [`load_theme`] there is no fallback to `blog` for a broken artifact.
+pub async fn reload_theme(
+    store: &dyn Store,
+    media: &MediaStore,
+    data_dir: &Path,
+    mode: ClusterMode,
+    current: &LoadedTheme,
+) -> Result<Option<LoadedTheme>, String> {
+    let row = store
+        .read()
+        .themes()
+        .active()
+        .await
+        .map_err(|e| format!("cannot read the active theme: {e}"))?;
+    match row {
+        Some(row) => {
+            let origin = ThemeOrigin::Artifact(row.artifact_hash.clone());
+            if current.origin == origin {
+                return Ok(None);
+            }
+            let theme = artifact_theme(media, &row).await.map_err(|e| {
+                format!(
+                    "theme {:?} (artifact {}): {e:#}",
+                    row.name, row.artifact_hash
+                )
+            })?;
+            Ok(Some(LoadedTheme {
+                theme: Arc::new(theme),
+                origin,
+                error: None,
+            }))
         }
+        // The active row went away: back to the default, as at startup.
+        None if matches!(current.origin, ThemeOrigin::Artifact(_)) => {
+            fallback_theme(DEFAULT_THEME, data_dir, reads_folders(mode), Vec::new())
+                .map(Some)
+                .map_err(|e| format!("{e:#}"))
+        }
+        None => Ok(None),
     }
 }
 
-fn try_theme(name: &str, data_dir: &Path) -> anyhow::Result<Theme> {
+/// Theme folders are a solo-mode convenience (theme development, P17).
+fn reads_folders(mode: ClusterMode) -> bool {
+    !matches!(mode, ClusterMode::Cluster)
+}
+
+/// Fetches the row's bundle, checks its SHA-256 against the row and loads it. The
+/// bundle must hold the theme the row names.
+async fn artifact_theme(media: &MediaStore, row: &InstalledTheme) -> anyhow::Result<Theme> {
+    let hash = &row.artifact_hash;
+    let size = media
+        .head(hash)
+        .await
+        .context("cannot look up the artifact")?
+        .context("the artifact is missing from the media store")?;
+    if size > MAX_BUNDLE_BYTES {
+        bail!("the artifact is {size} bytes, more than a theme bundle may be ({MAX_BUNDLE_BYTES})");
+    }
+    let bytes = media.get(hash).await.context("cannot read the artifact")?;
+    let actual = sha256_hex(&bytes);
+    if actual != hash.as_str() {
+        bail!("content hash mismatch: the stored bytes hash to {actual}");
+    }
+    let theme = tokio::task::spawn_blocking(move || Theme::load(&ThemeSource::Bundle(bytes)))
+        .await
+        .context("the theme load task failed")?
+        .context("the bundle does not load")?;
+    if theme.name() != row.name {
+        bail!(
+            "the bundle holds theme {:?}, the row names {:?}",
+            theme.name(),
+            row.name
+        );
+    }
+    Ok(theme)
+}
+
+pub(crate) fn sha256_hex(data: &[u8]) -> String {
+    Sha256::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The startup fallback chain for `name`: folder (if `folders`), embedded `name`,
+/// embedded `blog`. `errors` holds what failed before; every failure here is added,
+/// logged and returned in [`LoadedTheme::error`].
+fn fallback_theme(
+    name: &str,
+    data_dir: &Path,
+    folders: bool,
+    mut errors: Vec<String>,
+) -> anyhow::Result<LoadedTheme> {
+    let found = match try_named(name, data_dir, folders, &mut errors) {
+        Some(found) => found,
+        None => (
+            Theme::load_embedded(DEFAULT_THEME)
+                .context("the embedded blog theme failed to load")?,
+            ThemeOrigin::Embedded,
+        ),
+    };
+    let error = (!errors.is_empty()).then(|| errors.join("; "));
+    if let Some(error) = &error {
+        tracing::error!(
+            theme = %name,
+            error = %error,
+            using = %found.0.name(),
+            "the active theme failed to load; using a fallback"
+        );
+    }
+    Ok(LoadedTheme {
+        theme: Arc::new(found.0),
+        origin: found.1,
+        error,
+    })
+}
+
+/// The folder (if `folders`) or embedded theme `name`; failures go to `errors`.
+fn try_named(
+    name: &str,
+    data_dir: &Path,
+    folders: bool,
+    errors: &mut Vec<String>,
+) -> Option<(Theme, ThemeOrigin)> {
     let valid = !name.is_empty()
         && name.len() <= MAX_THEME_NAME
         && name
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_');
     if !valid {
-        bail!("invalid theme name");
+        errors.push(format!("invalid theme name {name:?}"));
+        return None;
     }
     let dir = data_dir.join("themes").join(name);
     // A symlink counts as present: the loader refuses it rather than us skipping it.
-    if std::fs::symlink_metadata(&dir).is_ok() {
-        return Theme::load(&ThemeSource::Dir(dir.clone()))
-            .with_context(|| format!("theme folder {}", dir.display()));
+    if folders && std::fs::symlink_metadata(&dir).is_ok() {
+        match Theme::load(&ThemeSource::Dir(dir.clone())) {
+            Ok(theme) => return Some((theme, ThemeOrigin::Folder)),
+            Err(e) => errors.push(format!("theme folder {}: {e}", dir.display())),
+        }
     }
-    Theme::load_embedded(name).context("no theme folder and no embedded theme of that name")
+    match Theme::load_embedded(name) {
+        Ok(theme) => Some((theme, ThemeOrigin::Embedded)),
+        Err(e) => {
+            errors.push(format!("embedded theme: {e}"));
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -172,27 +352,35 @@ mod tests {
         std::fs::write(dir.join("templates/index.html"), index).unwrap();
     }
 
+    fn pick(name: &str, data: &Path) -> LoadedTheme {
+        fallback_theme(name, data, true, Vec::new()).unwrap()
+    }
+
     #[test]
     fn folder_wins_over_embedded() {
         let data = tempfile::tempdir().unwrap();
         // A folder named like the embedded theme replaces it.
         write_theme(&data.path().join("themes/blog"), "blog", "custom");
-        let t = select_theme("blog", data.path()).unwrap();
-        assert!(t.has_template("index.html"));
+        let t = pick("blog", data.path());
+        assert_eq!(t.origin, ThemeOrigin::Folder);
+        assert!(t.error.is_none());
+        assert!(t.theme.has_template("index.html"));
         assert!(
-            !t.has_template("single.html"),
+            !t.theme.has_template("single.html"),
             "the folder theme, not the embedded one"
         );
         write_theme(&data.path().join("themes/mine"), "mine", "mine");
-        assert_eq!(select_theme("mine", data.path()).unwrap().name(), "mine");
+        assert_eq!(pick("mine", data.path()).theme.name(), "mine");
     }
 
     #[test]
     fn embedded_when_no_folder() {
         let data = tempfile::tempdir().unwrap();
-        let t = select_theme("blog", data.path()).unwrap();
-        assert_eq!(t.name(), "blog");
-        assert!(t.has_template("single.html"));
+        let t = pick("blog", data.path());
+        assert_eq!(t.origin, ThemeOrigin::Embedded);
+        assert!(t.error.is_none());
+        assert_eq!(t.theme.name(), "blog");
+        assert!(t.theme.has_template("single.html"));
     }
 
     #[test]
@@ -200,10 +388,62 @@ mod tests {
         let data = tempfile::tempdir().unwrap();
         write_theme(&data.path().join("themes/broken"), "broken", "{% if %}");
         for name in ["broken", "missing", "../etc", "", "UPPER", "a/b"] {
-            let t = select_theme(name, data.path()).unwrap();
-            assert_eq!(t.name(), "blog", "{name:?}");
-            assert!(t.has_template("single.html"), "{name:?}");
+            let t = pick(name, data.path());
+            assert_eq!(t.theme.name(), "blog", "{name:?}");
+            assert!(t.theme.has_template("single.html"), "{name:?}");
+            assert!(t.error.is_some(), "{name:?}");
         }
+    }
+
+    async fn store_and_media() -> (
+        ferrite_store_sqlite::SqliteStore,
+        MediaStore,
+        tempfile::TempDir,
+        tempfile::TempDir,
+    ) {
+        let (store, db_dir) = ferrite_store_tests::sqlite_store().await;
+        let data = tempfile::tempdir().unwrap();
+        let media = MediaStore::open(MediaConfig {
+            backend: Backend::Local {
+                root: data.path().join("media"),
+            },
+            prefix: String::new(),
+            public: PublicUrlMode::ServeViaApp {
+                path_prefix: MEDIA_PATH.to_owned(),
+            },
+        })
+        .unwrap();
+        (store, media, data, db_dir)
+    }
+
+    #[tokio::test]
+    async fn cluster_ignores_theme_folders() {
+        let (store, media, data, _db) = store_and_media().await;
+        write_theme(&data.path().join("themes/blog"), "blog", "folder index");
+        let solo = load_theme(&store, &media, data.path(), ClusterMode::Solo)
+            .await
+            .unwrap();
+        assert_eq!(solo.origin, ThemeOrigin::Folder);
+        assert!(!solo.theme.has_template("single.html"));
+        let cluster = load_theme(&store, &media, data.path(), ClusterMode::Cluster)
+            .await
+            .unwrap();
+        assert_eq!(cluster.origin, ThemeOrigin::Embedded);
+        assert!(cluster.theme.has_template("single.html"));
+        assert!(cluster.error.is_none());
+        assert_ne!(cluster.theme.hash(), solo.theme.hash());
+    }
+
+    #[tokio::test]
+    async fn reload_without_a_row_keeps_a_non_artifact_theme() {
+        let (store, media, data, _db) = store_and_media().await;
+        let current = load_theme(&store, &media, data.path(), ClusterMode::Solo)
+            .await
+            .unwrap();
+        let next = reload_theme(&store, &media, data.path(), ClusterMode::Solo, &current)
+            .await
+            .unwrap();
+        assert!(next.is_none());
     }
 
     #[test]
