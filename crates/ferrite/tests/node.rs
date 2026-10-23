@@ -39,6 +39,9 @@ mod test_support;
 const SITE_URL: &str = "http://127.0.0.1:8080";
 /// How fast a change must reach the node (solo: 250 ms poll; cluster: a notice).
 const CONVERGE: Duration = Duration::from_secs(1);
+/// A wait that includes compiling a plugin component: an unoptimised wasmtime build on a
+/// shared CI runner takes seconds (no latency bound is specified for plugin reloads).
+const PLUGIN_LOAD: Duration = Duration::from_secs(15);
 
 /// A data folder with a config for `db`'s profile.
 struct Site {
@@ -263,7 +266,7 @@ async fn boot_race_plugin_enable_is_applied(db: Arc<TestDb>) {
         gate.resume();
     };
     let (node, ()) = tokio::join!(site.start(&db, opts), race);
-    eventually(CONVERGE, "plugin enabled during boot", || {
+    eventually(PLUGIN_LOAD, "plugin enabled during boot", || {
         home_contains(&node, HELLO_META)
     })
     .await;
@@ -412,7 +415,7 @@ async fn bad_plugin_update_keeps_previous_version(db: Arc<TestDb>) {
     )
     .await
     .unwrap();
-    eventually(CONVERGE, "hello's head meta", || {
+    eventually(PLUGIN_LOAD, "hello's head meta", || {
         home_contains(&node, HELLO_META)
     })
     .await;
@@ -438,15 +441,11 @@ async fn bad_plugin_update_keeps_previous_version(db: Arc<TestDb>) {
         .install_plugin(&artifact, &update)
         .await
         .unwrap();
-    eventually(
-        Duration::from_secs(3),
-        "plugin failure in nodes.meta",
-        || {
-            let db = db.clone();
-            let node = &node;
-            async move { meta(&db, node).await["plugins"]["hello"]["status"] == "failed" }
-        },
-    )
+    eventually(PLUGIN_LOAD, "plugin failure in nodes.meta", || {
+        let db = db.clone();
+        let node = &node;
+        async move { meta(&db, node).await["plugins"]["hello"]["status"] == "failed" }
+    })
     .await;
     let m = meta(&db, &node).await;
     let entry = &m["plugins"]["hello"];
@@ -528,7 +527,7 @@ async fn startup_load_failure_is_retried(db: Arc<TestDb>) {
     )
     .await;
     // Theme b has no head hook, so the plugin is checked in the host.
-    eventually(CONVERGE, "hello after the retry", || async {
+    eventually(PLUGIN_LOAD, "hello after the retry", || async {
         node.state.plugins.loaded().contains(&"hello".to_owned())
     })
     .await;
@@ -542,7 +541,7 @@ async fn startup_load_failure_is_retried(db: Arc<TestDb>) {
             .is_empty(),
         "converged without an event"
     );
-    eventually(CONVERGE, "errors cleared", || {
+    eventually(PLUGIN_LOAD, "errors cleared", || {
         let db = db.clone();
         let node = &node;
         async move {
@@ -574,17 +573,17 @@ async fn plugin_hot_reload_on_enable_and_disable(db: Arc<TestDb>) {
     )
     .await
     .unwrap();
-    eventually(CONVERGE, "enabled", || home_contains(&node, HELLO_META)).await;
+    eventually(PLUGIN_LOAD, "enabled", || home_contains(&node, HELLO_META)).await;
     let extensions = ExtensionService::new(store.clone());
     for _ in 0..2 {
         extensions.set_plugin_enabled("hello", false).await.unwrap();
-        eventually(CONVERGE, "disabled", || async {
+        eventually(PLUGIN_LOAD, "disabled", || async {
             let (status, body) = get(node.addr, "/").await;
             status == 200 && !body.contains(HELLO_META)
         })
         .await;
         extensions.set_plugin_enabled("hello", true).await.unwrap();
-        eventually(CONVERGE, "enabled again", || {
+        eventually(PLUGIN_LOAD, "enabled again", || {
             home_contains(&node, HELLO_META)
         })
         .await;

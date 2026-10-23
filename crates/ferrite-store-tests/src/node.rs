@@ -166,6 +166,9 @@ pub async fn nodes_list_keeps_newest_heartbeats(db: &TestDb) {
     let max = ferrite_store::MAX_NODES as usize;
     let first = new_node("oldest");
     nodes.register(&first).await.unwrap();
+    // Rows registered in the same clock tick tie on `heartbeat_at` (then order by id), so
+    // the oldest row must be strictly older than the rest.
+    tokio::time::sleep(Duration::from_millis(5)).await;
     for i in 1..max {
         nodes.register(&new_node(&format!("n{i}"))).await.unwrap();
     }
