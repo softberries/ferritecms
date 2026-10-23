@@ -50,8 +50,8 @@ impl OptionService {
     }
 
     /// Sets an option and emits `options.changed` with `option:<key>` in the same
-    /// transaction. `permalink.*` values are validated (see the type docs); other keys are stored as
-    /// given (this is the low-level option API; the admin's settings go through
+    /// transaction. `permalink.*` values are validated (see the type docs); other keys are
+    /// stored as given (this is the low-level option API; the admin's settings go through
     /// [`set_many`](Self::set_many)).
     pub async fn set(
         &self,

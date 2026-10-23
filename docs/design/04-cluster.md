@@ -181,7 +181,7 @@ used by `ferrite serve` in every mode); M1.5 added wake-ups and the history chec
 
 Cross-node behaviour is tested end to end in `crates/ferrite/tests/cluster/`
 (`invalidation_latency_under_1s`, `poll_only_node_converges_within_1s`) and with two
-`ferrite serve` processes (`crates/ferrite/tests/serve.rs`, `two_processes_share_invalidation`);
+`ferrite serve` processes (`crates/ferrite/tests/serve/site.rs`, `two_processes_share_invalidation`);
 see [`m15-exit.md`](../superpowers/m15-exit.md).
 
 ### Event kinds
