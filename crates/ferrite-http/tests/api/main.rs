@@ -8,5 +8,6 @@ mod auth;
 mod content;
 mod foundation;
 mod site;
+mod sweep;
 mod types;
 mod users;
