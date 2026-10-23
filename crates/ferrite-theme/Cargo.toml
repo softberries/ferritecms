@@ -8,6 +8,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+bytes.workspace = true
 chrono.workspace = true
 ferrite-core = { path = "../ferrite-core" }
 ferrite-domain = { path = "../ferrite-domain" }

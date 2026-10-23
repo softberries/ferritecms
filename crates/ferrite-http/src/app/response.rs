@@ -42,7 +42,7 @@ pub(crate) const SECURITY_HEADERS: [(HeaderName, &str); 3] = [
 /// `page` (an HTML page) as a response; `304 Not Modified` (no body) when it is a `200`
 /// and `if_none_match` matches its ETag.
 ///
-/// The ETag is sent **weak** (`W/"…"`, Task 8a review): the tag hashes the
+/// The ETag is sent **weak** (`W/"…"`): the tag hashes the
 /// uncompressed body while compression may change the bytes on the wire, and a strong
 /// validator must differ per content-coding (RFC 9110 §8.8.1). `If-None-Match` uses
 /// the weak comparison. Every response from here, the 304 included, carries

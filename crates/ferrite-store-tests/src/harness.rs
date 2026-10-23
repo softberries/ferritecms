@@ -449,7 +449,7 @@ mod tests {
     use super::*;
     use crate::fixtures::{fixture_user, new_post};
 
-    /// Task 6's stall: a test ending right after dropping an uncommitted `Tx` that holds
+    /// The teardown stall: a test ending right after dropping an uncommitted `Tx` that holds
     /// locks. Teardown must be quick and must remove the schema.
     #[tokio::test]
     async fn teardown_after_dropped_tx_is_quick_and_drops_schema() {

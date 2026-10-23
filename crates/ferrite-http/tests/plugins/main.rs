@@ -553,6 +553,61 @@ async fn services_kv_settings_options_meta(site: Site) -> Site {
     site
 }
 
+/// A store error that a plugin read swallows (the plugin still succeeds) marks the
+/// page volatile, so a transient failure is not cached for long (final review I2).
+async fn plugin_read_errors_are_volatile(site: Site) -> Site {
+    let author = site.user("ada", Role::Author).await;
+    site.post(
+        &author,
+        "hello",
+        "Hello",
+        ContentStatus::Published,
+        Some(-HOUR),
+    )
+    .await;
+    site.install("reader").await;
+    site.load().await;
+    let req = PluginRequest::public("/", "en", None);
+    let (_, trace) = head(&site, None, &req).await;
+    assert!(!trace.volatile);
+
+    site.store.close().await;
+    // No item: only the plugin's `list_posts` and `options.get` touch the store.
+    let (html, trace) = head(&site, None, &req).await;
+    assert_eq!(meta_value(&html, "reader-list"), Some(""), "{html}");
+    assert!(trace.volatile);
+    site
+}
+
+/// A failed `seo.description` read falls back to the excerpt and marks the page
+/// volatile (final review I2).
+async fn seo_read_error_is_volatile(site: Site) -> Site {
+    let author = site.user("ada", Role::Author).await;
+    let id = site
+        .post(
+            &author,
+            "hello",
+            "Hello",
+            ContentStatus::Published,
+            Some(-HOUR),
+        )
+        .await;
+    site.install("hello").await;
+    site.load().await;
+    let item = public_item(&site, id).await;
+    let (_, trace) = head(&site, Some(&item), &req_for(&item)).await;
+    assert!(!trace.volatile);
+
+    site.store.close().await;
+    let (html, trace) = head(&site, Some(&item), &req_for(&item)).await;
+    assert!(
+        html.contains(&meta_tag("description", "Excerpt of hello.")),
+        "{html}"
+    );
+    assert!(trace.volatile);
+    site
+}
+
 profile_tests!(
     hello_head_from_rows_and_artifact,
     hostile_plugins_do_not_break_the_page,
@@ -563,6 +618,8 @@ profile_tests!(
     kv_use_is_volatile,
     sanitised_content_filters,
     services_kv_settings_options_meta,
+    plugin_read_errors_are_volatile,
+    seo_read_error_is_volatile,
 );
 
 #[test]

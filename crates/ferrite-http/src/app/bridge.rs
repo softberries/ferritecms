@@ -12,8 +12,7 @@ use std::{
 
 use ferrite_core::{
     CoreError, DepKeys, MenuService, PageItem, SiteReader,
-    events::{archive_key, menu_key, term_key},
-    permalink::term_path,
+    events::{archive_key, menu_key},
 };
 use ferrite_domain::{ContentId, MenuItem, MenuItemId, MenuItemKind, TermId};
 use ferrite_store::Store;
@@ -67,59 +66,63 @@ impl BlockingBridge {
         }
     }
 
-    /// Label and URL of a menu entry; `None` when its target is not public (or gone).
-    /// Records the target's key whether or not it is shown.
-    async fn entry(
+    /// Label and URL of each shown entry of `menu`. Item targets are loaded with one
+    /// batched [`SiteReader::links`] call (published only; `post:<id>` recorded for
+    /// every target, hidden ones too); each term target is one cheap
+    /// [`SiteReader::term_link`] probe (`term:<id>` and `archive:post`).
+    async fn entries(
         &self,
-        item: &MenuItem,
+        items: &[MenuItem],
         deps: &mut DepKeys,
-    ) -> Result<Option<(String, String)>, CoreError> {
-        let label = |fallback: &str| {
+    ) -> Result<HashMap<MenuItemId, (String, String)>, CoreError> {
+        let label = |item: &MenuItem, fallback: &str| {
             if item.label.trim().is_empty() {
                 fallback.to_owned()
             } else {
                 item.label.clone()
             }
         };
-        Ok(match item.kind {
-            MenuItemKind::Url => match item.url.as_deref() {
-                Some(u) if safe_menu_url(u) => Some((label(u), u.to_owned())),
-                Some(u) => {
-                    tracing::warn!(url = u, "menu entry with a disallowed URL scheme dropped");
-                    None
-                }
-                None => None,
-            },
-            MenuItemKind::Item => {
-                let Some(id) = item.target_id else {
-                    return Ok(None);
-                };
-                let read = self.reader.by_id(ContentId::from_uuid(id)).await?;
-                deps.extend(read.deps);
-                read.value.map(|p| (label(&p.item.title), p.url))
+        let targets: Vec<ContentId> = items
+            .iter()
+            .filter(|i| i.kind == MenuItemKind::Item)
+            .filter_map(|i| i.target_id.map(ContentId::from_uuid))
+            .collect();
+        let links = if targets.is_empty() {
+            HashMap::new()
+        } else {
+            let read = self.reader.links(&targets).await?;
+            deps.extend(read.deps);
+            read.value
+        };
+        let mut shown = HashMap::new();
+        for item in items {
+            let entry = match item.kind {
+                MenuItemKind::Url => match item.url.as_deref() {
+                    Some(u) if safe_menu_url(u) => Some((label(item, u), u.to_owned())),
+                    Some(u) => {
+                        tracing::warn!(url = u, "menu entry with a disallowed URL scheme dropped");
+                        None
+                    }
+                    None => None,
+                },
+                MenuItemKind::Item => item
+                    .target_id
+                    .and_then(|id| links.get(&ContentId::from_uuid(id)))
+                    .map(|l| (label(item, &l.title), l.url.clone())),
+                MenuItemKind::Term => match item.target_id {
+                    Some(id) => {
+                        let read = self.reader.term_link(TermId::from_uuid(id)).await?;
+                        deps.extend(read.deps);
+                        read.value.map(|t| (label(item, &t.name), t.url))
+                    }
+                    None => None,
+                },
+            };
+            if let Some(entry) = entry {
+                shown.insert(item.id, entry);
             }
-            MenuItemKind::Term => {
-                let Some(id) = item.target_id else {
-                    return Ok(None);
-                };
-                let id = TermId::from_uuid(id);
-                deps.insert(term_key(id));
-                let Some(term) = self.store.read().terms().get(id).await? else {
-                    return Ok(None);
-                };
-                // Shown only if its archive would be (R7: at least one public post);
-                // the archive read records `term:<id>` and `archive:post`, so the
-                // first public post in it brings the link back.
-                let archive = self
-                    .reader
-                    .term_archive(&term.taxonomy, &term.slug, 1)
-                    .await?;
-                deps.extend(archive.deps);
-                archive
-                    .value
-                    .map(|_| (label(&term.name), term_path(&term.taxonomy, &term.slug)))
-            }
-        })
+        }
+        Ok(shown)
     }
 
     async fn load_menu(
@@ -132,12 +135,7 @@ impl BlockingBridge {
             Err(CoreError::NotFound) => return Ok(None),
             Err(e) => return Err(e),
         };
-        let mut shown = HashMap::new();
-        for item in &menu.items {
-            if let Some(entry) = self.entry(item, deps).await? {
-                shown.insert(item.id, entry);
-            }
-        }
+        let shown = self.entries(&menu.items, deps).await?;
         Ok(Some(MenuTree {
             items: tree(&menu.items, None, &shown, 0),
         }))

@@ -30,7 +30,7 @@
 //! Root namespace: posts under `/%slug%/` and top-level pages under
 //! `/%parent_path%/%slug%/` both live at `/<slug>/`. Core keeps them apart when it
 //! allocates slugs ([`Permalinks::root_namespace_peers`]), and a top-level slug may
-//! never be a type name (the `/{type}/` prefixes). The router (Task 4) additionally
+//! never be a type name (the `/{type}/` prefixes). The router (`ferrite-http`) additionally
 //! resolves a single segment as a page before a post, as a safety net for collisions
 //! that predate these rules or raced past them.
 

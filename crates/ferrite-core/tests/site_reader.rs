@@ -3,13 +3,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-mod common;
-
 use std::sync::Arc;
 
-use common::CountingStore;
 use ferrite_core::{
-    Actor, CoreError, FeedSource, FrontPage, PageItem, PermalinkRules, SiteReader,
+    Actor, CoreError, FeedSource, FrontPage, PageItem, PermalinkRules, SiteRead, SiteReader,
     events::{archive_key, option_key, post_key, term_key, user_key},
 };
 use ferrite_domain::{
@@ -17,7 +14,7 @@ use ferrite_domain::{
     Role, Term, TermId, Timestamp, User, UserId, UserStatus,
 };
 use ferrite_store::Store;
-use ferrite_store_tests::{TestDb, backend_tests};
+use ferrite_store_tests::{CountingStore, TestDb, backend_tests};
 use serde_json::{Value, json};
 
 /// The fixed "now" of every reader in these tests: 2026-06-15T12:00:00Z.
@@ -35,6 +32,17 @@ fn reader(store: Arc<dyn Store>) -> SiteReader {
         Arc::new(|hash: &ArtifactHash, name: &str| format!("/_media/{hash}/{name}")),
         Arc::new(|| at(0)),
     )
+}
+
+/// The author archive's listing alone (`author_archive_page` without the author).
+async fn author_archive(
+    r: &SiteReader,
+    login: &str,
+    page: u32,
+) -> Result<SiteRead<Option<ferrite_core::Listing>>, CoreError> {
+    Ok(r.author_archive_page(login, page)
+        .await?
+        .map(|v| v.map(|(_, l)| l)))
 }
 
 async fn user(store: &dyn Store, login: &str, role: Role) -> User {
@@ -288,6 +296,43 @@ pub async fn no_leak_single(db: &TestDb) {
     assert!(shown.html.contains("needle visible body"));
 }
 
+/// The menu reads (final review I3): `links` returns public items only and records
+/// `post:<id>` for every id; `term_link` needs a public post and records its keys.
+pub async fn no_leak_menu_links(db: &TestDb) {
+    let store = db.store();
+    let set = leak_set(store).await;
+    let m = media(store, &set.author, ContentStatus::Published).await;
+    let empty = term(store, "category", "empty").await;
+    let mut only_draft = item("post", "only-draft", ContentStatus::Draft, Some(-HOUR));
+    only_draft.terms = vec![empty];
+    insert(store, &set.author, only_draft).await;
+    let r = reader(db.shared_store());
+
+    let mut ids = set.hidden.clone();
+    ids.extend([m, set.visible, ContentId::new()]);
+    let links = r.links(&ids).await.unwrap();
+    assert_eq!(links.value.len(), 1, "{:?}", links.value);
+    let link = &links.value[&set.visible];
+    assert_eq!(
+        (link.title.as_str(), link.url.as_str()),
+        ("Needle visible", "/visible/")
+    );
+    for id in &ids {
+        assert!(links.deps.contains(&post_key(*id)), "{id}");
+    }
+    assert!(links.deps.contains(&term_key(set.news)));
+    assert!(r.links(&[]).await.unwrap().value.is_empty());
+
+    let news = r.term_link(set.news).await.unwrap();
+    assert_eq!(news.value.unwrap().url, "/category/news/");
+    for t in [empty, TermId::new()] {
+        let hidden = r.term_link(t).await.unwrap();
+        assert!(hidden.value.is_none(), "{t}");
+        assert!(hidden.deps.contains(&term_key(t)));
+        assert!(hidden.deps.contains(&archive_key("post")));
+    }
+}
+
 /// The id- and offset-based reads behind plugin `content.read` (Review Focus 1).
 pub async fn no_leak_by_id_and_latest(db: &TestDb) {
     let store = db.store();
@@ -362,7 +407,7 @@ pub async fn no_leak_listings(db: &TestDb) {
     let by_term = r.term_archive("category", "news", 1).await.unwrap().value;
     assert_eq!(slugs(&by_term.unwrap().items), SHOWN);
 
-    let by_author = r.author_archive("writer", 1).await.unwrap().value;
+    let by_author = author_archive(&r, "writer", 1).await.unwrap().value;
     let by_author = by_author.unwrap();
     assert_eq!(slugs(&by_author.items), SHOWN);
     assert_eq!(by_author.total, 2);
@@ -1013,7 +1058,7 @@ pub async fn archives_by_term_author_date(db: &TestDb) {
         insert(store, &drafter, it).await;
     }
     assert!(
-        r.author_archive("drafter", 1)
+        author_archive(&r, "drafter", 1)
             .await
             .unwrap()
             .value
@@ -1032,12 +1077,26 @@ pub async fn archives_by_term_author_date(db: &TestDb) {
     };
     assert!(r.feed(&secret_feed).await.unwrap().value.is_none());
     // Past the last page of a non-empty archive is an empty page, not None.
-    let beyond = r.author_archive("writer", 9).await.unwrap().value.unwrap();
+    let beyond = author_archive(&r, "writer", 9)
+        .await
+        .unwrap()
+        .value
+        .unwrap();
     assert!(beyond.items.is_empty() && beyond.total == 2);
 
-    let w = r.author_archive("writer", 1).await.unwrap().value.unwrap();
+    let w = author_archive(&r, "writer", 1)
+        .await
+        .unwrap()
+        .value
+        .unwrap();
     assert_eq!(slugs(&w.items), ["may", "last-year"]);
-    assert!(r.author_archive("nobody", 1).await.unwrap().value.is_none());
+    assert!(
+        author_archive(&r, "nobody", 1)
+            .await
+            .unwrap()
+            .value
+            .is_none()
+    );
 
     // R30: the `_page` variants return the term/author with the same listing, only
     // when the plain archive exists (no oracle), recording their keys.
@@ -1255,6 +1314,49 @@ pub async fn listing_call_count_is_constant(db: &TestDb) {
     assert!(counting.calls() <= 3, "{}", counting.calls());
 }
 
+/// A page past the last one costs one count, not a cursor walk over the earlier pages
+/// (final review I1): it is an empty page whose `total` is the count.
+pub async fn past_last_page_is_one_count(db: &TestDb) {
+    let store = db.store();
+    let author = user(store, "writer", Role::Author).await;
+    // More rows than one walk step (200), so walking would take several list calls.
+    for i in 0..201 {
+        insert(
+            store,
+            &author,
+            item(
+                "post",
+                &format!("p{i}"),
+                ContentStatus::Published,
+                Some(-HOUR),
+            ),
+        )
+        .await;
+    }
+    set_option(store, "reading.per_page", json!(100)).await;
+    let counting = Arc::new(CountingStore::new(db.shared_store()));
+    let r = reader(counting.clone());
+
+    counting.reset();
+    let beyond = r.archive("post", 4).await.unwrap().value.unwrap();
+    assert!(
+        beyond.items.is_empty() && beyond.total == 201,
+        "{}",
+        beyond.total
+    );
+    assert!(
+        counting.calls() <= 2,
+        "per_page + count, got {}",
+        counting.calls()
+    );
+
+    // The last page still walks to its rows and keeps the count as its total.
+    let last = r.archive("post", 3).await.unwrap().value.unwrap();
+    assert_eq!((last.items.len(), last.total), (1, 201));
+    let middle = r.archive("post", 2).await.unwrap().value.unwrap();
+    assert_eq!((middle.items.len(), middle.total), (100, 201));
+}
+
 /// `media(id)`: only published media items (R9/I4, the media rule); `post:<id>` is
 /// recorded either way; non-media items are `None`.
 pub async fn media_is_published_only(db: &TestDb) {
@@ -1393,6 +1495,7 @@ backend_tests!(
     media_file_is_published_only,
     no_leak_single,
     no_leak_by_id_and_latest,
+    no_leak_menu_links,
     no_leak_listings,
     search_never_trusts_index,
     search_total_is_capped,
@@ -1405,4 +1508,5 @@ backend_tests!(
     front_page_option,
     preview_is_gated,
     listing_call_count_is_constant,
+    past_last_page_is_one_count,
 );

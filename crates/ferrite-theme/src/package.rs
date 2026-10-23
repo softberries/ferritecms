@@ -11,6 +11,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use bytes::Bytes;
 use minijinja::Environment;
 use rust_embed::Embed;
 use sha2::{Digest, Sha256};
@@ -52,7 +53,8 @@ pub struct Theme {
     manifest: ThemeManifest,
     hash: String,
     templates: BTreeSet<String>,
-    assets: BTreeMap<String, Cow<'static, [u8]>>,
+    /// Shared buffers: serving an asset clones a handle, never the bytes.
+    assets: BTreeMap<String, Bytes>,
     pub(crate) env: Environment<'static>,
 }
 
@@ -134,7 +136,11 @@ impl Theme {
                     Err(_) => problems.push(format!("{path} is not UTF-8")),
                 }
             } else if let Some(name) = path.strip_prefix(ASSETS) {
-                assets.insert(name.to_owned(), data.clone());
+                let data = match data {
+                    Cow::Borrowed(b) => Bytes::from_static(b),
+                    Cow::Owned(v) => Bytes::copy_from_slice(v),
+                };
+                assets.insert(name.to_owned(), data);
             }
         }
         if !sources.contains_key(INDEX) {
@@ -186,8 +192,9 @@ impl Theme {
     /// normalised (the router decoded the URL once), so `..`, `%2e`, absolute paths and
     /// the like simply miss. Only files under `assets/` are served: templates and
     /// `theme.toml` are not reachable.
-    pub fn asset(&self, path: &str) -> Option<(&[u8], &'static str)> {
-        self.assets.get(path).map(|d| (d.as_ref(), mime_for(path)))
+    /// The returned [`Bytes`] shares the theme's buffer (no copy).
+    pub fn asset(&self, path: &str) -> Option<(Bytes, &'static str)> {
+        self.assets.get(path).map(|d| (d.clone(), mime_for(path)))
     }
 
     /// Public URL of an asset: `/_theme/<hash>/<path>`, each segment percent-encoded.

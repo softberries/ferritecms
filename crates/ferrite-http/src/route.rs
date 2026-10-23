@@ -71,7 +71,7 @@ mod query;
 #[cfg(test)]
 mod tests;
 
-pub use query::NormalQuery;
+pub use query::{MAX_SEARCH_CHARS, NormalQuery};
 
 /// Longest request path accepted, in raw bytes.
 pub const MAX_PATH_BYTES: usize = 2048;

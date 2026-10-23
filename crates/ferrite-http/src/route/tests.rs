@@ -546,6 +546,34 @@ fn category_and_literal_post_structures() {
     assert!(PermalinkRules::from_options(Some("/Blog/%slug%/"), None).is_err());
 }
 
+/// Ruling R33: `s` is cut to [`MAX_SEARCH_CHARS`] characters on a char boundary, and
+/// the cut form is the canonical one (route and cache key).
+#[test]
+fn search_query_is_capped() {
+    use super::MAX_SEARCH_CHARS;
+    let long = "ż".repeat(MAX_SEARCH_CHARS + 50);
+    let q = NormalQuery::parse(Some(&format!("s={long}")));
+    let s = q.s.clone().unwrap();
+    assert_eq!(s.chars().count(), MAX_SEARCH_CHARS);
+    assert!(long.starts_with(&s));
+    // Any longer query with the same first 200 characters shares the cache key.
+    let other = NormalQuery::parse(Some(&format!("s={long}xyz")));
+    assert_eq!(other.cache_query(), q.cache_query());
+    // A cut that ends in spaces is trimmed again.
+    let spaced = format!("{}{}", "a".repeat(MAX_SEARCH_CHARS - 1), "+".repeat(10));
+    let q = NormalQuery::parse(Some(&format!("s={spaced}b")));
+    assert_eq!(q.s.unwrap(), "a".repeat(MAX_SEARCH_CHARS - 1));
+    let exact = "b".repeat(MAX_SEARCH_CHARS);
+    assert_eq!(
+        NormalQuery::parse(Some(&format!("s={exact}"))).s.unwrap(),
+        exact
+    );
+    match resolve("/", Some(&format!("s={long}")), &table()) {
+        Route::Search { q, .. } => assert_eq!(q.chars().count(), MAX_SEARCH_CHARS),
+        other => panic!("{other:?}"),
+    }
+}
+
 #[test]
 fn normal_query() {
     let q = NormalQuery::parse(Some("utm=1&s=a+b%20c&page=2&s=ignored"));

@@ -10,6 +10,7 @@ mod harness;
 
 mod assets;
 mod content;
+mod cost;
 mod errors;
 mod feeds;
 mod freshness;

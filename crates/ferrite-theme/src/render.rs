@@ -57,8 +57,8 @@
 //!
 //! # Dependency keys
 //!
-//! A render records `theme`, `option:site.title`, `option:site.url`,
-//! `option:site.description`, `option:site.locale`; for every item in the context or
+//! A render records `theme`, `option:site.title`, `option:site.description`,
+//! `option:site.locale` (`site.url` is config, not an option, so it has no key); for every item in the context or
 //! returned by a helper `post:<id>`, `user:<author>`, `term:<id>` per term and
 //! `post:<featured media>`; `term:<id>`/`user:<id>` for `archive.term`/`archive.author`;
 //! `archive:<kind>` for `related`/`query`; `menu:<name>` for
@@ -100,8 +100,9 @@ pub const MAX_OUTPUT: usize = 8 * 1024 * 1024;
 pub const MAX_BRIDGE_CALLS: u32 = 20;
 const DEFAULT_RELATED: u32 = 3;
 const DEFAULT_QUERY_LIMIT: u32 = 10;
-/// Options every render reads through `site`.
-const SITE_OPTIONS: [&str; 4] = ["site.title", "site.url", "site.description", "site.locale"];
+/// Options every render reads through `site`. `site.url` is not one: it comes from the
+/// config, which no write changes at runtime.
+const SITE_OPTIONS: [&str; 3] = ["site.title", "site.description", "site.locale"];
 /// MiniJinja error details that mean "a limit was hit" rather than "the template is
 /// wrong". Pinned by tests, since they are MiniJinja's strings.
 const LIMIT_DETAILS: [&str; 4] = [

@@ -51,7 +51,7 @@ pub struct HeadPage<'a> {
 
 /// Core head, plugin filter and rendering for one page. Reads the item's
 /// `seo.description` meta (falling back to its excerpt). Never fails: a store error or
-/// a failing plugin leaves the core tags.
+/// a failing plugin leaves the core tags, and either marks `trace` volatile.
 pub async fn page_head(
     host: &PluginHost,
     store: &dyn Store,
@@ -61,7 +61,15 @@ pub async fn page_head(
     trace: &mut RenderTrace,
 ) -> String {
     let seo = match page.item {
-        Some(item) => seo_description(store, item).await,
+        Some(item) => match seo_description(store, item).await {
+            Ok(seo) => seo,
+            Err(e) => {
+                tracing::warn!(error = %e, "reading seo.description failed");
+                // May be transient: the excerpt fallback must not stay cached.
+                trace.volatile = true;
+                None
+            }
+        },
         None => None,
     };
     let core = core_head(site, page, seo.as_deref());
@@ -81,21 +89,17 @@ pub async fn page_head(
     render_head(&head, site)
 }
 
-async fn seo_description(store: &dyn Store, item: &PageItem) -> Option<String> {
-    match store
+async fn seo_description(
+    store: &dyn Store,
+    item: &PageItem,
+) -> Result<Option<String>, ferrite_store::StoreError> {
+    Ok(store
         .read()
         .meta()
         .get(item.item.id, SEO_DESCRIPTION_META)
-        .await
-    {
-        Ok(v) => v
-            .and_then(|v| v.as_str().map(str::to_owned))
-            .filter(|s| !s.trim().is_empty()),
-        Err(e) => {
-            tracing::warn!(error = %e, "reading seo.description failed");
-            None
-        }
-    }
+        .await?
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .filter(|s| !s.trim().is_empty()))
 }
 
 /// The core SEO head: title (`<item> – <site>` or the site title), meta description

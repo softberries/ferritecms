@@ -5,10 +5,16 @@ use ferrite_core::permalink::encode_segment;
 use super::MAX_PAGE;
 use super::path::{decode_form, number};
 
+/// Longest search query kept, in characters (ruling R33): bounds the cached page size,
+/// since themes echo the query; the store uses only the first 32 terms anyway.
+pub const MAX_SEARCH_CHARS: usize = 200;
+
 /// The allowlisted query parameters of a request; everything else is ignored.
 ///
-/// - `s`: the search terms, form-decoded (`+` is a space) and trimmed. Absent when
-///   empty, malformed (bad escape, invalid UTF-8) or containing a control character.
+/// - `s`: the search terms, form-decoded (`+` is a space), trimmed, and cut to
+///   [`MAX_SEARCH_CHARS`] characters (then trimmed again); the cut form is canonical
+///   (ruling R33). Absent when empty, malformed (bad escape, invalid UTF-8) or
+///   containing a control character.
 /// - `page`: a number in `2..=1000` without a leading zero; `1` is the same page as no
 ///   parameter, so it is dropped. Routing paginates by path (`/page/N/`) and does not
 ///   read it; it is kept only so cache keys follow the allowlist contract.
@@ -30,7 +36,7 @@ impl NormalQuery {
                 "s" if !seen_s => {
                     seen_s = true;
                     q.s = decode_form(value)
-                        .map(|v| v.trim().to_owned())
+                        .map(|v| cap_search(v.trim()))
                         .filter(|v| !v.is_empty());
                 }
                 "page" if !seen_page => {
@@ -54,5 +60,13 @@ impl NormalQuery {
             parts.push(format!("s={}", encode_segment(s)));
         }
         parts.join("&")
+    }
+}
+
+/// `s` cut to [`MAX_SEARCH_CHARS`] characters on a char boundary, trimmed again.
+fn cap_search(s: &str) -> String {
+    match s.char_indices().nth(MAX_SEARCH_CHARS) {
+        Some((end, _)) => s[..end].trim_end().to_owned(),
+        None => s.to_owned(),
     }
 }

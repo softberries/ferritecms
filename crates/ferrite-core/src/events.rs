@@ -60,11 +60,12 @@
 //! referenced as featured image, inline image or in fields, **whether it is public or
 //! not**, so that publishing a referenced draft refreshes the page), `term:<id>`
 //! for every term shown, `user:<id>` for every author shown, `archive:<kind>` for
-//! listings, and `option:<key>` for each option read (front page, per-page). Templates and feeds that read site options
-//! (`site.title` and the like) must record `option:<key>` too (theme rendering, Task 5/7).
-//! The sitemap index records `archive:<kind>` for every public kind. Menus must
-//! record `menu:<name>` and `post:<target>` for every target they link to. The HTTP
-//! layer adds `theme` and `plugins` to every page.
+//! listings, and `option:<key>` for each option read (front page, per-page). Templates
+//! and feeds that read site options (`site.title` and the like) record `option:<key>`
+//! too (the theme renderer and `ferrite-http` do). The sitemap index records
+//! `archive:<kind>` for every public kind. Menus record `menu:<name>`, `post:<target>`
+//! for every item target (shown or hidden), and `term:<id>` plus `archive:post` for
+//! every term target. The HTTP layer adds `theme` and `plugins` to every page.
 //!
 //! Because every item shown is recorded as `post:<id>`, a write that changes how an item
 //! appears needs only to emit that item's key; the extra keys above cover pages that

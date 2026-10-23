@@ -289,6 +289,22 @@ URLs and templates link there; the app does not proxy. The operator configures t
 bucket/CDN for public read of `artifacts/` only. Without `public_base_url`, S3 media is
 app-served like local media (`crates/ferrite/src/site.rs`, `media_config`).
 
+None of the app-served rules above apply in Direct mode:
+
+- **No published-only check.** Every object under `artifacts/` is readable by anyone who
+  knows its hash: unpublished or trashed media, variants of unpublished media, and plugin
+  `.wasm` artifacts as well. Unpublishing or trashing an item does not revoke access to a
+  URL that was already shared.
+- **No attachment, `nosniff` or PDF CSP headers from the app.** Whatever the bucket or CDN
+  sends is what the browser gets: the object's stored `Content-Type` and the CDN's header
+  rules. An SVG or HTML upload served inline from the media origin is the operator's risk.
+- **The operator must restrict the bucket**: public read of `artifacts/` only (never
+  `tmp/` or the prefix root), the security headers set at the CDN, and ideally a separate
+  origin for media so inline content cannot reach the site's cookies.
+
+Use app-served mode when unpublishing must revoke access. Signed or scoped direct media URLs
+(short-lived signatures, or published files only) are planned for M4 (ROADMAP).
+
 **SVG:** served inline (with `Content-Security-Policy: sandbox`) only once sanitisation on
 upload exists (ROADMAP M2); M1 stores no sanitised marker, so every SVG is an attachment.
 

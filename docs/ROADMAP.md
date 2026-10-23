@@ -73,7 +73,7 @@ Controller rulings: [m1a](superpowers/rulings/m1a.md), [m1b](superpowers/rulings
   - [ ] Admin approval flow for limits above host defaults (M2).
   - [ ] Revisit the pooling allocator under concurrent load (M4).
 - [ ] More plugin host follow-ups from the M0 review:
-  - [ ] `HostConfig` max-concurrent-calls semaphore (worst-case plugin memory = concurrency × per-call memory cap). (Template renders are bounded by R28; plugin calls inside them are not separately capped.)
+  - [ ] `HostConfig` max-concurrent-calls semaphore (worst-case plugin memory = concurrency × per-call memory cap). (Public content pages are bounded by the render slots: a page holds its slot for the whole pipeline, data load, plugin filters, head and template (R28, R32), so at most `2 × parallelism` pages run plugin calls at once. Plugin calls outside page renders, such as action hooks and plugin routes, are not capped.)
   - [ ] Per-render total plugin time budget (today each hook call has its own deadline; a page with many plugins can add them up).
   - [ ] Size caps on route responses (body and headers).
   - [ ] Success-path tests for `dispatch_action` / `handle_route` (M0 tests only cover rejection paths: unknown plugin, not subscribed, no matching route).
@@ -190,6 +190,10 @@ Design: [09](design/09-operations.md).
   - [ ] Atom feeds next to RSS 2.0 (06 §3).
   - [ ] `Cache-Control: public, max-age=0, s-maxage=<cfg>` on HTML for CDNs (06 §6; HTML pages send no `Cache-Control` today).
   - [ ] Automated accessibility checks (axe) in CI for the starter themes (06 §8).
+  - [ ] Signed or scoped direct media: with `[media.s3] public_base_url` (Direct mode) the published-only check and the attachment/`nosniff`/CSP headers do not apply, and unpublished media and plugin artifacts stay readable by hash (03 §5). Short-lived signed URLs, or a published-only bucket path.
+- [ ] Performance follow-ups from the M1c-2 final review:
+  - [ ] Sitemaps: the index walks every public row of every type (with ancestors, terms and permalinks) just to count files and take `max(lastmod)`, and `/sitemap-<kind>-<n>.xml` walks `n − 1` full files to find its cursor; both re-run on the first crawler request after any write to the kind. Use `sitemap_files` (a count) for the file count, a per-file aggregate for `lastmod`, and keyset seeking instead of walking (`crates/ferrite-http/src/app/feeds.rs`).
+  - [ ] Every hydration renders each body twice (`MediaRefs::of` collects references with a recording render, then the real render runs), including reads that never show the body: feeds, plugin `list_posts`/`get_post`. Add a reader option that skips `html`, or collect the references in one pass (`crates/ferrite-core/src/site/hydrate.rs`).
 
 ## Later
 

@@ -59,7 +59,7 @@ pub(crate) fn serve(
         *res.status_mut() = StatusCode::NOT_MODIFIED;
         res
     } else {
-        Response::new(Body::from(data.to_vec()))
+        Response::new(Body::from(data))
     };
     let set = |res: &mut Response<Body>, name, value: &str| {
         if let Ok(v) = HeaderValue::from_str(value) {

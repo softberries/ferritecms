@@ -13,7 +13,7 @@ fn fixture_loads_and_renders() {
     assert!(t.has_template("index.html"));
     assert!(t.has_template("partials/header.html"));
     let (css, mime) = t.asset("css/site.css").unwrap();
-    assert!(std::str::from_utf8(css).unwrap().contains("color"));
+    assert!(std::str::from_utf8(&css).unwrap().contains("color"));
     assert_eq!(mime, "text/css; charset=utf-8");
     assert_eq!(
         t.manifest().settings["accent_color"].default,

@@ -1529,6 +1529,7 @@ dependencies = [
 name = "ferrite-store-tests"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "ferrite-domain",
  "ferrite-store",
  "ferrite-store-postgres",
@@ -1545,6 +1546,7 @@ dependencies = [
 name = "ferrite-theme"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "chrono",
  "ferrite-core",
  "ferrite-domain",

@@ -58,8 +58,9 @@ pub struct HttpConfig {
     /// Host (and port) of `site_url`: the host of every cache key (ruling R25; the
     /// `Host` header is not used, so clients cannot multiply cache entries).
     pub default_host: String,
-    /// Most template renders running at once (each holds a blocking thread); default
-    /// twice the available parallelism (ruling R28).
+    /// Most pages being built at once (ruling R28): a content page holds its slot for
+    /// the whole pipeline (data load, plugin filters, head, template; R32), an error
+    /// page for its template render. Default twice the available parallelism.
     pub max_concurrent_renders: usize,
     /// How long a render waits for a slot before answering 503 with `Retry-After`.
     pub render_wait: Duration,
@@ -119,7 +120,8 @@ pub struct AppParts {
 }
 
 /// Shared state of the public site. The theme and the route table can be swapped at
-/// runtime (theme activation, permalink option changes; wired in later tasks).
+/// runtime (theme activation, permalink option changes); nothing swaps them yet, that
+/// is M1.5 hot reload, so a change needs a restart today.
 pub struct AppState {
     pub store: Arc<dyn Store>,
     pub reader: Arc<SiteReader>,

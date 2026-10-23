@@ -126,6 +126,13 @@ impl Previewed {
     }
 }
 
+/// Title and URL of a public item, for links (menus) that show nothing else.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ItemLink {
+    pub title: String,
+    pub url: String,
+}
+
 /// The public face of a user: nothing beyond these three fields leaves core.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UserPublic {

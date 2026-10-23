@@ -261,10 +261,10 @@ fn deps_cover_everything_shown() {
         term_key(listed.terms[0].id),
         "theme".to_owned(),
         "option:site.title".to_owned(),
-        "option:site.url".to_owned(),
         "option:site.description".to_owned(),
         "option:site.locale".to_owned(),
     ];
+    // `site.url` comes from the config, not an option: no key for it (final review M9).
     c.item = Some(single);
     c.listing = Some(listing(vec![listed], 1, 1));
     let out = render_str("x", c).unwrap();
@@ -272,4 +272,5 @@ fn deps_cover_everything_shown() {
         assert!(out.deps.contains(k), "missing {k}: {:?}", out.deps);
     }
     assert_eq!(out.deps.iter().count(), expect.len() + 2, "{:?}", out.deps);
+    assert!(!out.deps.contains("option:site.url"), "{:?}", out.deps);
 }

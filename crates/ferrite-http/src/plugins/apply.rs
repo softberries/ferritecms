@@ -1,6 +1,9 @@
 //! Running render filters for one request, with the request scope and the trace.
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{
+    Arc, Mutex, MutexGuard, PoisonError,
+    atomic::{AtomicBool, Ordering},
+};
 
 use ferrite_core::{DepKeys, PageItem, Previewed};
 use ferrite_domain::ContentId;
@@ -65,6 +68,8 @@ impl PluginRequest {
 pub(crate) struct Scope {
     pub(crate) preview: Option<Arc<Previewed>>,
     deps: Arc<Mutex<DepKeys>>,
+    /// Set when a service swallowed a store error during the call.
+    degraded: Arc<AtomicBool>,
 }
 
 tokio::task_local! {
@@ -91,8 +96,15 @@ pub(crate) fn record(deps: DepKeys) {
     let _ = SCOPE.try_with(|s| lock(&s.deps).extend(deps));
 }
 
+/// Mark the current scope degraded: a store error was swallowed (the plugin got "not
+/// found" or nothing), so the page must get the short TTL like a failed call (R19).
+pub(crate) fn mark_degraded() {
+    let _ = SCOPE.try_with(|s| s.degraded.store(true, Ordering::Relaxed));
+}
+
 /// Apply filter `hook` for `req`, adding the dependency keys and volatility of every
-/// plugin call to `trace`. Never fails: a failing plugin is skipped by the host.
+/// plugin call to `trace`; a store error swallowed by a service also makes it
+/// volatile. Never fails: a failing plugin is skipped by the host.
 pub async fn run_filter(
     host: &PluginHost,
     hook: &str,
@@ -101,9 +113,11 @@ pub async fn run_filter(
     trace: &mut RenderTrace,
 ) -> FilterValue {
     let deps = Arc::new(Mutex::new(DepKeys::default()));
+    let degraded = Arc::new(AtomicBool::new(false));
     let scope = Scope {
         preview: req.preview.clone(),
         deps: Arc::clone(&deps),
+        degraded: Arc::clone(&degraded),
     };
     let outcome = SCOPE
         .scope(scope, host.apply_filter_traced(hook, value, &req.info))
@@ -112,7 +126,7 @@ pub async fn run_filter(
         trace.deps.insert(key);
     }
     trace.deps.extend(std::mem::take(&mut *lock(&deps)));
-    trace.volatile |= outcome.volatile;
+    trace.volatile |= outcome.volatile || degraded.load(Ordering::Relaxed);
     outcome.value
 }
 

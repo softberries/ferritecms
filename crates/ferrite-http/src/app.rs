@@ -1,4 +1,4 @@
-//! The axum application for the public site (Task 8a).
+//! The axum application for the public site.
 //!
 //! [`build_app`] returns a [`Router`] with a single fallback handler; every public URL
 //! goes through it:

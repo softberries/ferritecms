@@ -13,7 +13,7 @@ use ferrite_theme::resolve_template;
 use ferrite_theme::{
     ArchiveInfo, Pagination, RenderContext, RenderOutput, RequestInfo, TemplateKey, ThemeError,
 };
-use tokio::runtime::Handle;
+use tokio::{runtime::Handle, sync::OwnedSemaphorePermit};
 
 use super::{AppState, bridge::BlockingBridge, error_page, feeds, response::HTML};
 use crate::{
@@ -80,6 +80,9 @@ async fn render_route(
         Route::Robots => return feeds::robots(state).await.map(Some),
         _ => {}
     }
+    // One slot for the whole pipeline (R32): data load, plugin filters, head and
+    // template, so plugin calls are bounded by the same limit as renders.
+    let slot = acquire_slot(state).await?;
     let mut deps = DepKeys::default();
     let Some(shown) = load(state, route, path, &mut deps).await? else {
         return Ok(None);
@@ -140,7 +143,7 @@ async fn render_route(
         state.reader.clone(),
         state.store.clone(),
     ));
-    let out = render_blocking(state, theme, template, ctx, bridge.clone()).await?;
+    let out = render_in_slot(state, slot, theme, template, ctx, bridge.clone()).await?;
     deps.extend(trace.deps);
     deps.extend(out.deps);
     deps.insert(THEME_KEY.to_owned());
@@ -155,17 +158,9 @@ async fn render_route(
     Ok(Some(html_page(200, out.html, deps.into_vec(), ttl)))
 }
 
-/// Renders on a blocking thread (MiniJinja is synchronous and the bridge blocks),
-/// holding one of [`HttpConfig::max_concurrent_renders`](super::HttpConfig) slots for
-/// the whole render; [`RenderError::Busy`] when none frees up within `render_wait`.
-pub(crate) async fn render_blocking(
-    state: &AppState,
-    theme: Arc<ferrite_theme::Theme>,
-    template: String,
-    ctx: RenderContext,
-    bridge: Arc<dyn ferrite_theme::HelperBridge>,
-) -> Result<RenderOutput, RenderError> {
-    // Bounded wait for a slot (R28): renders hold blocking threads.
+/// One of [`HttpConfig::max_concurrent_renders`](super::HttpConfig) render slots
+/// (R28, R32); [`RenderError::Busy`] when none frees up within `render_wait`.
+async fn acquire_slot(state: &AppState) -> Result<OwnedSemaphorePermit, RenderError> {
     let slot = tokio::time::timeout(
         state.config.render_wait,
         state.render_slots.clone().acquire_owned(),
@@ -175,10 +170,38 @@ pub(crate) async fn render_blocking(
         tracing::warn!("render slots saturated; answering 503");
         return Err(RenderError::Busy);
     };
+    Ok(permit)
+}
+
+/// Renders on a blocking thread (MiniJinja is synchronous and the bridge blocks),
+/// holding a render slot for the whole render; [`RenderError::Busy`] when none frees
+/// up within `render_wait`. Used by the error pages; content routes take their slot
+/// before loading data ([`render_in_slot`]).
+pub(crate) async fn render_blocking(
+    state: &AppState,
+    theme: Arc<ferrite_theme::Theme>,
+    template: String,
+    ctx: RenderContext,
+    bridge: Arc<dyn ferrite_theme::HelperBridge>,
+) -> Result<RenderOutput, RenderError> {
+    let slot = acquire_slot(state).await?;
+    render_in_slot(state, slot, theme, template, ctx, bridge).await
+}
+
+/// Renders on a blocking thread holding `slot` until the render ends (even if the
+/// client disconnects: the permit moves into the blocking closure).
+async fn render_in_slot(
+    state: &AppState,
+    slot: OwnedSemaphorePermit,
+    theme: Arc<ferrite_theme::Theme>,
+    template: String,
+    ctx: RenderContext,
+    bridge: Arc<dyn ferrite_theme::HelperBridge>,
+) -> Result<RenderOutput, RenderError> {
     state.count_render();
     let renderer = state.renderer.clone();
     let out = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
+        let _slot = slot;
         renderer.render(&theme, &template, ctx, bridge)
     })
     .await??;

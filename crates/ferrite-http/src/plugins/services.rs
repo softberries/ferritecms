@@ -10,7 +10,7 @@ use ferrite_domain::{ContentId, ContentStatus};
 use ferrite_plugin_host::{HostServices, KindOk, Post, TermRef};
 use ferrite_store::Store;
 
-use super::apply::{record, scoped_preview};
+use super::apply::{mark_degraded, record, scoped_preview};
 
 /// Most value bytes one plugin may keep in `kv` (design 05 §3).
 pub const KV_MAX_BYTES: u64 = 10 * 1024 * 1024;
@@ -35,6 +35,10 @@ const PLUGIN_OPTION_PREFIX: &str = "plugin.";
 /// * `options.get`: JSON text of the option; never `plugin.*` keys.
 /// * `kv`: per plugin, quota [`KV_MAX_BYTES`] / [`KV_MAX_KEYS`] via `set_with_quota`.
 /// * `settings.get`: option `plugin.<name>.settings.<key>`.
+///
+/// A store error is logged and the guest gets "not found" (reads) or a storage error
+/// (writes); inside a request scope it also marks the page volatile, so the degraded
+/// result gets the short TTL instead of staying cached.
 ///
 /// `Post.author` is the author's display name (never a login or e-mail); `Post.url` is
 /// absolute (site URL + path).
@@ -94,6 +98,7 @@ impl StoreHostServices {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(error = %e, "plugin meta visibility check failed");
+                mark_degraded();
                 false
             }
         }
@@ -110,6 +115,7 @@ fn take<T>(what: &str, read: Result<SiteRead<T>, ferrite_core::CoreError>) -> Op
         }
         Err(e) => {
             tracing::warn!(error = %e, read = what, "plugin content read failed");
+            mark_degraded();
             None
         }
     }
@@ -153,6 +159,7 @@ impl HostServices for StoreHostServices {
             Ok(v) => v.as_ref().map(json_text),
             Err(e) => {
                 tracing::warn!(error = %e, key, "plugin meta read failed");
+                mark_degraded();
                 None
             }
         }
@@ -178,6 +185,7 @@ impl HostServices for StoreHostServices {
             Ok(false) => Err("no such post".to_owned()),
             Err(e) => {
                 tracing::warn!(error = %e, key, "plugin meta write failed");
+                mark_degraded();
                 Err(STORAGE_ERROR.to_owned())
             }
         }
@@ -195,6 +203,7 @@ impl HostServices for StoreHostServices {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(plugin, error = %e, "plugin kv read failed");
+                mark_degraded();
                 None
             }
         }
@@ -212,6 +221,7 @@ impl HostServices for StoreHostServices {
             )),
             Err(e) => {
                 tracing::warn!(plugin, error = %e, "plugin kv write failed");
+                mark_degraded();
                 Err(STORAGE_ERROR.to_owned())
             }
         }
@@ -220,6 +230,7 @@ impl HostServices for StoreHostServices {
     async fn kv_delete(&self, plugin: &str, key: &str) {
         if let Err(e) = self.store.read().plugin_kv().delete(plugin, key).await {
             tracing::warn!(plugin, error = %e, "plugin kv delete failed");
+            mark_degraded();
         }
     }
 
@@ -234,6 +245,7 @@ impl HostServices for StoreHostServices {
             Ok(keys) => keys,
             Err(e) => {
                 tracing::warn!(plugin, error = %e, "plugin kv list failed");
+                mark_degraded();
                 Vec::new()
             }
         }
@@ -255,6 +267,7 @@ async fn option_text(store: &dyn Store, key: &str) -> Option<String> {
         Ok(entry) => entry.map(|e| json_text(&e.value)),
         Err(e) => {
             tracing::warn!(key, error = %e, "plugin option read failed");
+            mark_degraded();
             None
         }
     }

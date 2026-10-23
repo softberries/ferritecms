@@ -173,22 +173,24 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
   `menu()` calls are memoised, and `image()` of media already in the context needs no call.
   The objects are not lazy (the original idea of `minijinja::value::Object` impls querying on
   access was replaced by P2).
-- **Render slots (R28):** at most `2 × available parallelism` renders run at once on blocking
-  threads; a render waits up to 5 s for a slot, then the request gets a 503 with
-  `Retry-After: 5` (never cached).
+- **Render slots (R28, R32):** at most `2 × available parallelism` pages are built at once. A
+  content page takes its slot before loading data and holds it through the plugin filters,
+  the head and the template render (on a blocking thread), so plugin calls are bounded by the
+  same limit; error pages take a slot for their template render only. A request waits up to
+  5 s for a slot, then gets a 503 with `Retry-After: 5` (never cached).
 
 ### Globals and helpers (fixed set, as built)
 
 | Name | Description | Dependency keys recorded |
 |---|---|---|
-| `site` | `title`, `url`, `description`, `locale`, `settings` (every declared theme setting with its value) | `option:site.title`, `option:site.url`, `option:site.description`, `option:site.locale`, `theme`; the HTTP layer adds `option:theme.<name>.settings` |
+| `site` | `title`, `url`, `description`, `locale`, `settings` (every declared theme setting with its value) | `option:site.title`, `option:site.description`, `option:site.locale`, `theme` (`site.url` is config, not an option: no key); the HTTP layer adds `option:theme.<name>.settings` |
 | `post` | current item: `id`, `kind`, `slug`, `title`, `excerpt`, `url`, `body` (sanitised HTML after plugin filters, marked safe), `date`, `updated` (RFC 3339, UTC), `menu_order`, `parent_id`, `fields`, `author`, `terms`, `featured` | `post:<id>`, `user:<author>`, `term:<id>` per term, `post:<featured media>` |
 | `page` | same object as `post`, set when the item's kind is `page` | as `post` |
 | `posts` | current listing: `items`, `page`, `per_page`, `total`, `pages`, `prev_page`, `next_page` | per item as `post`; the read adds `archive:<kind>` / `term:<id>` |
 | `archive` | listing routes only (R30): `kind` (`front`, `type`, `term`, `author`, `date`, `search`), `content_type`, `term`, `author`, `year`, `month` | `term:<id>` / `user:<id>` |
 | `pagination` | listing routes only (R30): `page`, `pages`, `prev_url`, `next_url` (ready-made, encoded links; `none` at either end) | — |
 | `request` | `path`, `s` (the search query), `page`, `status`, `preview` | — |
-| `menu(name)` | menu tree; links to non-public items removed | `menu:<name>`, plus `post:<id>`/`term:<id>` for every target, removed ones included |
+| `menu(name)` | menu tree; links to non-public items, and to terms without a public post, removed. Item targets load in one batch (`SiteReader::links`: titles and URLs only, no body render); each term target is one existence probe (`SiteReader::term_link`) | `menu:<name>`, plus `post:<id>`/`term:<id>` for every target, removed ones included, and `archive:post` for term targets |
 | `related(post, n=3)` | public items of the same type sharing a term with `post`, newest first per term; `n` ≤ 10 | `archive:<kind>`, `post:<item>` |
 | `query(type=…, term="<tax>/<slug>", limit=10)` | public items, newest first; `limit` ≤ 50; with `term` the result is also capped at `reading.per_page` (page 1 of the term archive) | `archive:<kind>`, `term:<id>` |
 | `asset(path)` | `/_theme/<theme hash>/<path>`, each segment percent-encoded | `theme` |

@@ -9,6 +9,7 @@
 pub mod batch;
 pub mod constraints;
 pub mod content;
+pub mod counting;
 pub mod event;
 pub mod fixtures;
 pub mod harness;
@@ -22,4 +23,5 @@ pub mod taxonomy;
 pub mod tx;
 pub mod user;
 
+pub use counting::CountingStore;
 pub use harness::{PgFixture, TestDb, migration_dirs, migration_files, pg_store, sqlite_store};

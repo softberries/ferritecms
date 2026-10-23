@@ -17,7 +17,7 @@ use super::{
     response::{method_not_allowed, page_response, redirect, text},
     theme_asset,
 };
-use crate::route::{NormalQuery, Route, resolve};
+use crate::route::{MAX_PATH_BYTES, NormalQuery, Route, resolve};
 
 /// Longest wait for the `/readyz` database ping.
 const READY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -43,13 +43,17 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
         }
         _ => {}
     }
-    // Redirect rows, before the cache.
-    match state.redirects.resolve(&path).await {
-        Ok(Some(r)) => return follow(&state, r).await,
-        Ok(None) => {}
-        Err(e) => {
-            tracing::error!(error = %e, "redirect lookup failed");
-            return page_response(&error_page::server_error(&state).await, None);
+    // Redirect rows, before the cache. Longer paths cannot match a row: sources are at
+    // most 2048 characters (`RedirectService`), a raw path matches only an ASCII one,
+    // and the lookup also tries the path with its trailing slash toggled (+1 byte).
+    if path.len() <= MAX_PATH_BYTES + 1 {
+        match state.redirects.resolve(&path).await {
+            Ok(Some(r)) => return follow(&state, r).await,
+            Ok(None) => {}
+            Err(e) => {
+                tracing::error!(error = %e, "redirect lookup failed");
+                return page_response(&error_page::server_error(&state).await, None);
+            }
         }
     }
     if let Route::Canonical(to) = &route {

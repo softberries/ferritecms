@@ -280,7 +280,7 @@ fn loads_cleanly_with_declared_manifest() {
         assert!(t.has_template(name), "{name}");
     }
     let (css, mime) = t.asset("style.css").unwrap();
-    let css = std::str::from_utf8(css).unwrap();
+    let css = std::str::from_utf8(&css).unwrap();
     assert_eq!(mime, "text/css; charset=utf-8");
     for needle in [
         "prefers-color-scheme: dark",

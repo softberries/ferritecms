@@ -20,10 +20,12 @@
 //! media items, media rows; plus one per ancestor level for hierarchical types), never
 //! one per item, and empty id sets skip the query. A listing page therefore costs a
 //! constant number of store calls: the `reading.per_page` option, the page, its count
-//! (skipped when the page is the last one), terms, users, and, when any item shows
-//! media, media items and media rows: at most 7.
+//! (skipped when page 1 is the only page; taken before the walk on later pages),
+//! terms, users, and, when any item shows media, media items and media rows: at
+//! most 7.
 //!
-//! **Offset paging.** The store pages by cursor; `/page/N/` skips `N - 1` pages by
+//! **Offset paging.** The store pages by cursor; `/page/N/` first counts the matches
+//! (a page past the last one stops there, loading no rows), then skips `N - 1` pages by
 //! walking cursors in steps of up to 200 rows (`ceil(skip / 200)` extra round trips that
 //! load full rows). Requests that would skip more than [`MAX_SKIP`] rows return `None`
 //! (the router answers 404), which caps that cost (ruling R6). Fine for v1 archive
@@ -44,12 +46,12 @@
 mod hydrate;
 mod model;
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use chrono::NaiveDate;
 use ferrite_domain::{
     ArtifactHash, ContentId, ContentItem, ContentQuery, ContentStatus, MAX_PAGE, SearchQuery,
-    Timestamp,
+    TermId, Timestamp,
 };
 use ferrite_store::{MAX_ID_FILTER, MAX_SEARCH_KINDS, Repos, Store};
 
@@ -61,8 +63,8 @@ use crate::{
 };
 use hydrate::{Hydrator, Nodes, chain, unique};
 pub use model::{
-    DepKeys, FeedSource, FrontPage, Listing, MediaFile, MediaPublic, MediaVariant, PageItem,
-    Previewed, PublicItem, SiteRead, SitemapEntry, SitemapPage, TermPublic, UserPublic,
+    DepKeys, FeedSource, FrontPage, ItemLink, Listing, MediaFile, MediaPublic, MediaVariant,
+    PageItem, Previewed, PublicItem, SiteRead, SitemapEntry, SitemapPage, TermPublic, UserPublic,
 };
 
 /// Maps an artifact hash and a file name to a public URL (`MediaStore::public_url`).
@@ -296,20 +298,9 @@ impl SiteReader {
         Ok(public(found, deps))
     }
 
-    /// Posts by the user with `login`; `None` if there is no such user, the user has
-    /// no public posts (R7), or past [`MAX_SKIP`].
-    pub async fn author_archive(
-        &self,
-        login: &str,
-        page: u32,
-    ) -> Result<SiteRead<Option<Listing>>, CoreError> {
-        let read = self.author_archive_page(login, page).await?;
-        Ok(read.map(|v| v.map(|(_, l)| l)))
-    }
-
-    /// [`author_archive`](Self::author_archive) plus the author's public view, for the
-    /// archive's heading; only together with a public listing (R7). Records
-    /// `user:<id>`.
+    /// Posts by the user with `login`, with the author's public view for the archive's
+    /// heading; `None` if there is no such user, the user has no public posts (R7), or
+    /// past [`MAX_SKIP`]. Records `user:<id>`.
     pub async fn author_archive_page(
         &self,
         login: &str,
@@ -638,6 +629,93 @@ impl SiteReader {
         Ok(public(items.pop(), deps))
     }
 
+    /// Title and URL of each public item (any type but media) among `ids`, for menus:
+    /// one `get_many` per 200 ids, then terms (for the primary term in the URL) and
+    /// ancestors (hierarchical types) of the public ones; no authors, media or body
+    /// rendering. Records `post:<id>` for every id asked for, shown or not, so
+    /// publishing a hidden target refreshes the page, plus the keys of the terms and
+    /// ancestors the URLs use.
+    pub async fn links(
+        &self,
+        ids: &[ContentId],
+    ) -> Result<SiteRead<HashMap<ContentId, ItemLink>>, CoreError> {
+        let now = (self.clock)();
+        let repos = self.store.read();
+        let mut deps = DepKeys::default();
+        let ids = unique(ids.iter().copied());
+        let mut items = Vec::new();
+        for chunk in ids.chunks(MAX_ID_FILTER) {
+            for id in chunk {
+                deps.insert(post_key(*id));
+            }
+            items.extend(
+                repos
+                    .content()
+                    .get_many(chunk)
+                    .await?
+                    .into_iter()
+                    .filter(|i| i.kind != MEDIA_KIND && is_public(i, now)),
+            );
+        }
+        let mut out = HashMap::new();
+        if items.is_empty() {
+            return Ok(public(out, deps));
+        }
+        let mut terms = HashMap::new();
+        for chunk in unique(items.iter().map(|i| i.id)).chunks(MAX_ID_FILTER) {
+            terms.extend(repos.terms().for_items(chunk).await?);
+        }
+        let mut nodes = Nodes::new();
+        self.hydrator(repos, now)
+            .load_ancestors(&items, &mut nodes)
+            .await?;
+        for item in items {
+            let item_terms = terms.remove(&item.id).unwrap_or_default();
+            for t in &item_terms {
+                deps.insert(term_key(t.id));
+            }
+            let ancestors = chain(&nodes, item.parent_id);
+            for (id, _) in &ancestors {
+                deps.insert(post_key(*id));
+            }
+            let input = PermalinkInput {
+                item,
+                ancestors,
+                primary_term: primary_term(item_terms),
+            };
+            let url = self.permalinks.path(&input);
+            out.insert(
+                input.item.id,
+                ItemLink {
+                    title: input.item.title,
+                    url,
+                },
+            );
+        }
+        Ok(public(out, deps))
+    }
+
+    /// Term `id` if its archive would show (it has a public post, ruling R7): two store
+    /// calls (the term, then one public post id at most), no hydration. Records
+    /// `term:<id>` and `archive:post` either way, so the first public post in it brings
+    /// the link back.
+    pub async fn term_link(&self, id: TermId) -> Result<SiteRead<Option<TermPublic>>, CoreError> {
+        let now = (self.clock)();
+        let repos = self.store.read();
+        let mut deps = DepKeys::default();
+        deps.insert(term_key(id));
+        deps.insert(archive_key(POST_KIND));
+        let Some(term) = repos.terms().get(id).await? else {
+            return Ok(public(None, deps));
+        };
+        let mut q = published(now);
+        q.kind = Some(POST_KIND.to_owned());
+        q.term = Some(id);
+        q.limit = 1;
+        let shown = !repos.content().list(&q).await?.items.is_empty();
+        Ok(public(shown.then(|| hydrate::term_public(term)), deps))
+    }
+
     /// The published media item `id` with its variants, for the `image()` template
     /// helper: `None` unless `id` is a media item that is public (published,
     /// `published_at <= now`) and has a media row. Records `post:<id>` either way, so
@@ -826,16 +904,25 @@ impl SiteReader {
         if skipped > MAX_SKIP {
             return Ok(None);
         }
+        // Past the last page: one count instead of a walk (no rows loaded).
+        let mut counted = None;
+        if skipped > 0 {
+            let total = repos.content().count(&q).await?;
+            if skipped >= total {
+                return Ok(Some(empty(page, per_page, total)));
+            }
+            counted = Some(total);
+        }
         if let Err(walked) = skip_rows(repos, &mut q, skipped).await? {
-            // Ran out before reaching the page: everything there is was walked.
+            // Rows went away between the count and the walk.
             return Ok(Some(empty(page, per_page, walked)));
         }
         q.limit = per_page;
         let rows = repos.content().list(&q).await?;
-        let total = if rows.next_cursor.is_none() {
-            skipped + rows.items.len() as u64
-        } else {
-            repos.content().count(&q).await?
+        let total = match counted {
+            Some(total) => total.max(skipped + rows.items.len() as u64),
+            None if rows.next_cursor.is_none() => rows.items.len() as u64,
+            None => repos.content().count(&q).await?,
         };
         let items = self
             .hydrator(repos, now)

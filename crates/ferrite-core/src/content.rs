@@ -108,7 +108,7 @@ impl ContentService {
     /// pages) also count each other's top-level slugs as taken (`-N`, caller slugs
     /// too). That check reads committed rows: two concurrent creates of *different*
     /// types can still both take a slug (no unique index spans types); the router's
-    /// precedence (Task 4) decides which one is served.
+    /// precedence (page before post) decides which one is served.
     ///
     /// A parent is allowed only for hierarchical types; it must exist, have the same
     /// type and not be trashed.
