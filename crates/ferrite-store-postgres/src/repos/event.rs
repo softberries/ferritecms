@@ -67,7 +67,8 @@ impl EventRepo for PgRepos {
         let limit = check_prune_limit(limit)?;
         run!(&self.exec, |e| sqlx::query(
             "DELETE FROM events WHERE seq IN \
-             (SELECT seq FROM events WHERE created_at < $1 ORDER BY seq LIMIT $2)"
+             (SELECT seq FROM events WHERE created_at < $1 \
+               AND seq < (SELECT MAX(seq) FROM events) ORDER BY seq LIMIT $2)"
         )
         .bind(DateTime::<Utc>::from(older_than))
         .bind(limit)

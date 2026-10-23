@@ -109,19 +109,23 @@ P1). Notify is an optimisation only; correctness comes from the table.
   continuously. `Notified` wakes the loop for an immediate poll through a
   `tokio::sync::Notify`; permits coalesce, so a burst of notices costs one extra poll.
   `Reconnected` also sets a "check history" flag. A subscribe or `recv` error drops the
-  subscription and resubscribes after 1 s, doubling to 30 s; once that succeeds the flag is
-  set too. SQLite (`subscribe` → `None`) ends the subtask and the loop only polls. The
+  subscription and resubscribes after 1 s, doubling to 30 s; the delay resets only once a
+  subscription has delivered a notice or lived 30 s (one that fails at once keeps backing
+  off). Once a resubscribe succeeds the flag is set too. SQLite (`subscribe` → `None`) ends the subtask and the loop only polls. The
   ticker keeps polling every `cache.poll_interval_ms` regardless: notify is an
   optimisation only. The subtask ends on shutdown and drops the subscription before the
   loop's task completes.
-- **History check** runs before the poll when the flag is set, and on the first poll after
-  one or more failed polls: `min = events.min_seq()`; if `min > last_seq + 1`, events were
+- **History check** runs before the poll when the flag is set, on the first poll after
+  one or more failed polls, and when a poll first sees a gap right at the cursor
+  (`last_seq + 1`, one check per gap, so pruned history is caught even without a
+  `Reconnected`): `min = events.min_seq()`; if `min > last_seq + 1`, events were
   pruned past the cursor, so the loop warns, **flushes the whole page cache**, calls
   `EventHook::on_history_lost` (the node reloads its state), sets `last_seq = min - 1` and
-  drops open gaps, the applied-past-gap set and late seqs below `min`. Otherwise it only
-  catches up from `last_seq`. If the outbox was pruned to empty the check cannot detect
-  the loss (`min_seq` is 0); that needs a node to have missed 24 h of polls with no event
-  since.
+  drops open gaps, and applied-past-gap and late seqs below `min` (events already applied
+  stay remembered, so the hook still sees each seq at most once). Otherwise it only
+  catches up from `last_seq`. `events.prune` never deletes the newest row (ruling R9:
+  `AND seq < (SELECT MAX(seq) FROM events)` on both backends), so `min_seq` is 0 only for
+  an outbox that never had an event and pruned history is always detectable.
 - `EventHook { on_event, on_history_lost }` (synchronous, must not block) is attached with
   `InvalidationLoop::with_hook`. It sees every event applied after `new()` returned, late
   arrivals included, after the event's cache effect; events applied inside `new()` (the
@@ -131,8 +135,8 @@ P1). Notify is an optimisation only; correctness comes from the table.
   at 1000 rows per batch, resuming where the previous tick stopped, so a late arrival is
   found within ⌈span / (POLL_BATCH × probe budget)⌉ ticks (span = largest − smallest late
   seq; probe budget = the batches a tick has left after the main read, 1 to 10). The bound
-  counts from the probe's position; an arrival it already passed is found after it wraps,
-  at most one tick more. The algorithm is unchanged from M1c-2.
+  counts from the probe's position; an arrival it already passed is found after it wraps.
+  Worst case, at the minimum budget of one batch per tick: ⌈span / POLL_BATCH⌉ + 1 ticks. The algorithm is unchanged from M1c-2.
 - On Postgres, `idle_in_transaction_session_timeout` (60 s, set since Task 2) is shorter
   than the 10-minute late horizon, so no idle writer holds a seq uncommitted past it (a
   `Tx` busy with long statements is not bounded, P4).
@@ -150,8 +154,8 @@ P1). Notify is an optimisation only; correctness comes from the table.
 | `plugin.disabled` | plugin name, reason | stop calling it immediately |
 | `node.drain` | node id | admin-requested drain (optional) |
 
-Events older than 24 h are pruned by a periodic job (planned, M1.5; nothing prunes the
-outbox yet).
+Events older than 24 h are pruned by the periodic `events.prune` job (M1.5), except the
+newest row, which is always kept (R9) so `min_seq` can reveal pruned history.
 
 As built in M1c-2, the invalidation loop only touches the page cache: `invalidate` and
 `options.changed` drop the pages under their keys (`all` flushes); `theme.changed`,

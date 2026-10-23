@@ -121,11 +121,15 @@ pub async fn events_prune(db: &TestDb) {
     let last = events.max_seq().await.unwrap();
     // One second ahead, in microseconds.
     let future = Timestamp::from_micros(Timestamp::now().as_micros() + 1_000_000).unwrap();
-    assert_eq!(events.prune(future, 100).await.unwrap(), 3);
-    assert!(events.since(0, 10).await.unwrap().is_empty());
+    // R9: the newest row survives any cutoff, so `min_seq` never falls back to 0.
+    assert_eq!(events.prune(future, 100).await.unwrap(), 2);
+    let left = events.since(0, 10).await.unwrap();
+    assert_eq!(left.iter().map(|e| e.seq).collect::<Vec<_>>(), [last]);
+    assert_eq!(events.min_seq().await.unwrap(), last);
+    assert!(events.min_seq().await.unwrap() > 0);
     assert_eq!(events.prune(future, 100).await.unwrap(), 0);
 
-    // Sequence numbers are never reused, even after the outbox is emptied.
+    // Sequence numbers are never reused.
     let next = events.append(&event("a", &["after"])).await.unwrap();
     assert!(next > last, "seq {next} reused (previous max {last})");
     assert_eq!(events.since(last, 10).await.unwrap()[0].seq, next);
@@ -187,7 +191,7 @@ pub async fn events_prune_in_batches(db: &TestDb) {
     assert_eq!(events.prune(future, 2).await.unwrap(), 2);
     assert_eq!(events.min_seq().await.unwrap(), seqs[2]);
     assert_eq!(events.prune(future, 2).await.unwrap(), 2);
-    assert_eq!(events.prune(future, 2).await.unwrap(), 1);
+    // The newest row is kept (R9).
     assert_eq!(
         events
             .prune(future, ferrite_store::MAX_PRUNE_BATCH)
@@ -195,4 +199,5 @@ pub async fn events_prune_in_batches(db: &TestDb) {
             .unwrap(),
         0
     );
+    assert_eq!(events.min_seq().await.unwrap(), seqs[4]);
 }

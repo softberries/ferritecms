@@ -60,7 +60,8 @@ impl EventRepo for SqliteRepos {
         let limit = check_prune_limit(limit)?;
         run!(&self.writer, |e| sqlx::query(
             "DELETE FROM events WHERE seq IN \
-             (SELECT seq FROM events WHERE created_at < ? ORDER BY seq LIMIT ?)"
+             (SELECT seq FROM events WHERE created_at < ? \
+               AND seq < (SELECT MAX(seq) FROM events) ORDER BY seq LIMIT ?)"
         )
         .bind(older_than.as_micros())
         .bind(limit)

@@ -28,24 +28,30 @@
 //!
 //! **Late-probe bound**: the probe pages through committed rows from the smallest late
 //! seq, [`POLL_BATCH`] rows per batch, resuming where the previous tick stopped, so a
-//! late arrival is found within ⌈span / (POLL_BATCH × probe budget)⌉ ticks, where span
-//! is the distance between the smallest and largest late seq and the probe budget is
-//! the batches the tick has left after the main read (at least 1, at most 10). The
-//! bound counts from where the probe is; an arrival the probe had already passed is
-//! found after it wraps to the bottom of the span, at most one tick more.
+//! late arrival ahead of the probe is found within ⌈span / (POLL_BATCH × probe budget)⌉
+//! ticks, where span is the distance between the smallest and largest late seq and the
+//! probe budget is the batches the tick has left after the main read (at least 1, at
+//! most 10). An arrival the probe had already passed is found after it wraps to the
+//! bottom of the span. Worst case, at the minimum budget of one batch per tick:
+//! ⌈span / POLL_BATCH⌉ + 1 ticks.
 //!
 //! **Wake-ups and lost history (P3)**: with `listen` (cluster mode), a subtask owns the
 //! events [`Subscription`] and drains it continuously: `Notified` wakes the loop for an
 //! immediate poll (wake-ups coalesce, so a burst of notices costs one extra poll), and
 //! `Reconnected` (notices may have been lost) also requests a *history check*. A
 //! subscription error drops the subscription and resubscribes after 1 s, doubling up to
-//! 30 s; once that succeeds the history check is requested too. Polling on the ticker
+//! 30 s (the delay resets only once a subscription has delivered a notice or lived 30 s,
+//! so one that fails right away keeps backing off); once that succeeds the history
+//! check is requested too. Polling on the ticker
 //! continues regardless: notices are hints, the table is the truth. The history check
-//! also runs on the first poll after one or more failed polls. It reads
+//! also runs on the first poll after one or more failed polls, and when a poll first
+//! sees a gap right at the cursor (`last_seq + 1`; once per gap), which catches pruned
+//! history even when no `Reconnected` arrives. It reads
 //! `events.min_seq()`: if it is above `last_seq + 1`, events were pruned past the cursor,
 //! so the loop warns, flushes the cache, calls [`EventHook::on_history_lost`] (the node
 //! reloads its state), moves the cursor to `min_seq - 1` and forgets gaps and late seqs
-//! below it. If the outbox was pruned to empty the check cannot tell (`min_seq` is 0).
+//! below it. `events.prune` never deletes the newest row (R9), so `min_seq` is 0 only
+//! for an outbox that never had an event.
 //!
 //! **Hook**: [`InvalidationLoop::with_hook`] passes every event applied after
 //! [`InvalidationLoop::new`] returned (late arrivals included) to an [`EventHook`],
@@ -230,6 +236,13 @@ impl InvalidationLoop {
                 break;
             }
         }
+        // A new gap at the cursor may be pruned history rather than a late commit.
+        if let Some(first) = events.first()
+            && first.seq > self.last_seq + 1
+            && !self.gaps.contains_key(&first.seq)
+        {
+            self.check_history().await?;
+        }
         let applied = self.process(events).await;
         let late = self
             .probe_late(MAX_BATCHES.saturating_sub(batches).max(1))
@@ -252,7 +265,7 @@ impl InvalidationLoop {
             }
             self.last_seq = min - 1;
             self.gaps.clear();
-            self.applied.clear();
+            self.applied = self.applied.split_off(&min);
             self.late = self.late.split_off(&min);
         } else {
             tracing::debug!(
@@ -473,7 +486,8 @@ async fn run_listener(source: Arc<dyn EventSource>, wake: Arc<Wake>, shutdown: C
                 return;
             }
             Ok(Some(mut sub)) => {
-                backoff = RESUBSCRIBE_MIN;
+                let subscribed_at = Instant::now();
+                let mut delivered = false;
                 if failed {
                     tracing::info!("event listener resubscribed");
                     wake.history_unknown();
@@ -483,10 +497,17 @@ async fn run_listener(source: Arc<dyn EventSource>, wake: Arc<Wake>, shutdown: C
                         () = shutdown.cancelled() => return,
                         n = sub.recv() => n,
                     };
+                    if notice.is_ok() && !delivered {
+                        delivered = true;
+                        backoff = RESUBSCRIBE_MIN;
+                    }
                     match notice {
                         Ok(Notice::Notified) => wake.notify.notify_one(),
                         Ok(Notice::Reconnected) => wake.history_unknown(),
                         Err(e) => {
+                            if subscribed_at.elapsed() >= RESUBSCRIBE_MAX {
+                                backoff = RESUBSCRIBE_MIN;
+                            }
                             tracing::warn!(error = %e, retry_in = ?backoff, "event listener failed; resubscribing");
                             break;
                         }
@@ -508,19 +529,16 @@ async fn run_listener(source: Arc<dyn EventSource>, wake: Arc<Wake>, shutdown: C
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::VecDeque,
-        sync::{
-            Mutex,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
-        },
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
     use async_trait::async_trait;
     use bytes::Bytes;
     use ferrite_domain::{NewEvent, Timestamp};
     use ferrite_store::{Notice, Subscription};
-    use tokio::sync::Notify;
+    use tokio::sync::mpsc;
 
     use super::*;
     use crate::page::{CacheKey, CachedPage};
@@ -562,13 +580,20 @@ mod tests {
             v.sort_by_key(|e| e.seq);
         }
 
-        /// Deletes every event below `seq`, as `events.prune` would.
+        /// Deletes every event below `seq` except the newest, as `events.prune` would (R9).
         fn prune_below(&self, seq: i64) {
-            self.events.lock().unwrap().retain(|e| e.seq >= seq);
+            let mut v = self.events.lock().unwrap();
+            let newest = v.last().map(|e| e.seq);
+            v.retain(|e| e.seq >= seq || Some(e.seq) == newest);
         }
 
         fn notice(&self, notice: Notice) {
-            self.script.as_ref().unwrap().push(notice);
+            self.script.as_ref().unwrap().push(Ok(notice));
+        }
+
+        /// The next `recv` fails (the connection could not be re-established).
+        fn recv_error(&self) {
+            self.script.as_ref().unwrap().push(Err(()));
         }
 
         fn since_calls(&self) -> Vec<i64> {
@@ -576,40 +601,60 @@ mod tests {
         }
     }
 
-    /// Notices queued by the test; `recv` returns them without yielding while any are
-    /// queued (as a burst read from one socket buffer would).
-    #[derive(Default)]
+    /// Notices (or `recv` errors) queued by the test, over a tokio channel, so `recv`
+    /// yields under tokio's coop budget like a real socket read. The live subscription
+    /// owns the receiver and hands it back when dropped.
     struct Script {
-        queue: Mutex<VecDeque<Notice>>,
-        ready: Notify,
+        tx: mpsc::UnboundedSender<Result<Notice, ()>>,
+        rx: Mutex<Option<mpsc::UnboundedReceiver<Result<Notice, ()>>>>,
         dropped: AtomicBool,
     }
 
-    impl Script {
-        fn push(&self, notice: Notice) {
-            self.queue.lock().unwrap().push_back(notice);
-            self.ready.notify_one();
+    impl Default for Script {
+        fn default() -> Self {
+            let (tx, rx) = mpsc::unbounded_channel();
+            Self {
+                tx,
+                rx: Mutex::new(Some(rx)),
+                dropped: AtomicBool::new(false),
+            }
         }
     }
 
-    struct ScriptedSub(Arc<Script>);
+    impl Script {
+        fn push(&self, item: Result<Notice, ()>) {
+            self.tx.send(item).unwrap();
+        }
+    }
+
+    struct ScriptedSub {
+        script: Arc<Script>,
+        rx: Option<mpsc::UnboundedReceiver<Result<Notice, ()>>>,
+    }
+
+    impl ScriptedSub {
+        fn new(script: Arc<Script>) -> Self {
+            let rx = script.rx.lock().unwrap().take();
+            assert!(rx.is_some(), "one live subscription at a time");
+            Self { script, rx }
+        }
+    }
 
     #[async_trait]
     impl Subscription for ScriptedSub {
         async fn recv(&mut self) -> Result<Notice, StoreError> {
-            loop {
-                let next = self.0.queue.lock().unwrap().pop_front();
-                if let Some(notice) = next {
-                    return Ok(notice);
-                }
-                self.0.ready.notified().await;
+            match self.rx.as_mut().unwrap().recv().await {
+                Some(Ok(notice)) => Ok(notice),
+                Some(Err(())) => Err(StoreError::Busy),
+                None => std::future::pending().await,
             }
         }
     }
 
     impl Drop for ScriptedSub {
         fn drop(&mut self) {
-            self.0.dropped.store(true, Ordering::SeqCst);
+            *self.script.rx.lock().unwrap() = self.rx.take();
+            self.script.dropped.store(true, Ordering::SeqCst);
         }
     }
 
@@ -631,7 +676,7 @@ mod tests {
             {
                 return Err(StoreError::Busy);
             }
-            Ok(Some(Box::new(ScriptedSub(script.clone()))))
+            Ok(Some(Box::new(ScriptedSub::new(script.clone()))))
         }
     }
 
@@ -1045,7 +1090,12 @@ mod tests {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
         let polls = fake.since_calls().len() - before;
-        assert!((1..=3).contains(&polls), "{polls} since() calls");
+        // The listener yields to the loop at most every 64 notices (tokio's coop budget of
+        // 128, at most two units per notice: `recv` and the shutdown branch).
+        assert!(
+            (1..=1000_usize.div_ceil(64)).contains(&polls),
+            "{polls} since() calls for 1000 notices"
+        );
         shutdown.cancel();
         handle.await.unwrap();
     }
@@ -1244,5 +1294,154 @@ mod tests {
         }
         assert!(cache.get(&key("/top/")).await.is_none(), "applied");
         assert_eq!(lp.late.keys().copied().collect::<Vec<_>>(), [3]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn recv_error_backoff_resets_only_after_a_notice_or_30s() {
+        let fake = Arc::new(Fake::listening());
+        for _ in 0..3 {
+            fake.recv_error();
+        }
+        let cache = Arc::new(PageCache::new(1 << 20));
+        let (_hook, shutdown, handle) = spawn_listening(&fake, &cache).await;
+        let at = || fake.subscribe_at.lock().unwrap().clone();
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        let a = at();
+        assert_eq!(
+            a.len(),
+            4,
+            "three subscriptions failed at once, the fourth waits"
+        );
+        assert_eq!(
+            [a[1] - a[0], a[2] - a[1], a[3] - a[2]],
+            [1, 2, 4].map(Duration::from_secs),
+            "a subscription that fails right away does not reset the backoff"
+        );
+
+        // A delivered notice resets it.
+        fake.notice(Notice::Notified);
+        fake.recv_error();
+        let pushed = Instant::now();
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(at().len(), 5);
+        assert_eq!(at()[4] - pushed, Duration::from_secs(1));
+
+        // So does a subscription that lived 30 s (the delay would be 2 s otherwise).
+        tokio::time::sleep(Duration::from_secs(40)).await;
+        fake.recv_error();
+        let pushed = Instant::now();
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(at().len(), 6);
+        assert_eq!(at()[5] - pushed, Duration::from_secs(1));
+        shutdown.cancel();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn new_gap_at_cursor_checks_history() {
+        let (fake, cache, lp) = setup().await;
+        let hook = Arc::new(Recorder::default());
+        let mut lp = lp.with_hook(hook.clone());
+        for seq in 1..=10 {
+            fake.commit(seq, "invalidate", &["k"]);
+        }
+        lp.poll_once().await.unwrap();
+        assert_eq!(fake.min_seq_calls.load(Ordering::SeqCst), 0);
+
+        // Pruned history with no reconnect and no failed poll: the gap at the cursor.
+        cache.insert(key("/a/"), page(&["post:other"])).await;
+        for seq in 11..=60 {
+            fake.commit(seq, "invalidate", &["k"]);
+        }
+        fake.prune_below(50);
+        lp.poll_once().await.unwrap();
+        assert_eq!(fake.min_seq_calls.load(Ordering::SeqCst), 1);
+        assert!(cache.is_empty().await, "flushed");
+        assert_eq!(hook.lost(), 1);
+        assert_eq!(lp.last_seq(), 60);
+
+        // A late commit at the cursor costs one check per gap, not one per poll.
+        fake.commit(62, "invalidate", &["k"]);
+        for _ in 0..3 {
+            lp.poll_once().await.unwrap();
+            tokio::time::advance(Duration::from_secs(1)).await;
+        }
+        assert_eq!(lp.last_seq(), 60, "held at the gap");
+        assert_eq!(fake.min_seq_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(hook.lost(), 1, "intact history is not flushed");
+        fake.commit(61, "invalidate", &["k"]);
+        lp.poll_once().await.unwrap();
+        assert_eq!(lp.last_seq(), 62);
+    }
+
+    #[tokio::test]
+    async fn history_loss_does_not_reapply_events_past_a_gap() {
+        let (fake, _cache, lp) = setup().await;
+        let hook = Arc::new(Recorder::default());
+        let mut lp = lp.with_hook(hook.clone());
+        for seq in 1..=10 {
+            fake.commit(seq, "invalidate", &["k"]);
+        }
+        lp.poll_once().await.unwrap();
+        // 11 still in flight; 12..=60 applied past the gap.
+        for seq in 12..=60 {
+            fake.commit(seq, "invalidate", &["k"]);
+        }
+        lp.poll_once().await.unwrap();
+        assert_eq!(lp.last_seq(), 10);
+        fake.prune_below(50);
+        *fake.fail.lock().unwrap() = true;
+        assert!(lp.poll_once().await.is_err());
+        *fake.fail.lock().unwrap() = false;
+        lp.poll_once().await.unwrap();
+        assert_eq!(hook.lost(), 1);
+        assert_eq!(lp.last_seq(), 60);
+        assert_eq!(
+            hook.seqs(),
+            (1..=10).chain(12..=60).collect::<Vec<_>>(),
+            "each seq passed to the hook once"
+        );
+    }
+
+    /// Checks, from inside `on_event`, that the event's cache effect already happened.
+    struct OrderCheck {
+        cache: Arc<PageCache>,
+        page: CacheKey,
+        gone: Mutex<Vec<(String, bool)>>,
+    }
+
+    impl EventHook for OrderCheck {
+        fn on_event(&self, event: &Event) {
+            let cached = self.cache.state().snapshot().0.contains(&self.page);
+            self.gone
+                .lock()
+                .unwrap()
+                .push((event.kind.clone(), !cached));
+        }
+        fn on_history_lost(&self) {}
+    }
+
+    #[tokio::test]
+    async fn cache_effect_happens_before_on_event() {
+        let (fake, cache, lp) = setup().await;
+        let hook = Arc::new(OrderCheck {
+            cache: cache.clone(),
+            page: key("/a/"),
+            gone: Mutex::default(),
+        });
+        let mut lp = lp.with_hook(hook.clone());
+        cache.insert(key("/a/"), page(&["post:1"])).await;
+        fake.commit(1, "theme.changed", &["theme"]);
+        lp.poll_once().await.unwrap();
+        cache.insert(key("/a/"), page(&["post:1"])).await;
+        fake.commit(2, "invalidate", &["post:1"]);
+        lp.poll_once().await.unwrap();
+        assert_eq!(
+            *hook.gone.lock().unwrap(),
+            [
+                ("theme.changed".to_owned(), true),
+                ("invalidate".to_owned(), true)
+            ]
+        );
     }
 }

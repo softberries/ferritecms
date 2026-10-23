@@ -405,10 +405,11 @@ async fn listen_invalidates_peer_cache_within_1s() {
     let (own_cache, own_loop) = listening_node(store.clone(), &shutdown).await;
     let (peer_cache, peer_loop) = listening_node(peer, &shutdown).await;
 
-    // The listeners subscribe asynchronously: wait until a notice gets through (the
-    // first ticks have run, so only a notice can apply an event within 10 s).
+    // The listeners subscribe asynchronously: wait until notices get through twice in a
+    // row (the first ticks have run, so only a notice applies an event within 10 s, and
+    // two in a row rule out a lucky tick).
     let warm = CacheKey::anon("example.com", "/warm/", "");
-    let mut ready = false;
+    let mut streak = 0;
     for _ in 0..50 {
         cache_page(&peer_cache, warm.clone(), "warm").await;
         cache_page(&own_cache, warm.clone(), "warm").await;
@@ -416,10 +417,15 @@ async fn listen_invalidates_peer_cache_within_1s() {
         if gone_within(&peer_cache, &warm, Duration::from_millis(200)).await
             && gone_within(&own_cache, &warm, Duration::from_millis(200)).await
         {
-            ready = true;
-            break;
+            streak += 1;
+            if streak == 2 {
+                break;
+            }
+        } else {
+            streak = 0;
         }
     }
+    let ready = streak == 2;
     assert!(ready, "listeners never became ready");
 
     for i in 0..5 {

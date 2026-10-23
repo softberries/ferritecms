@@ -470,7 +470,9 @@ pub trait EventRepo: Send + Sync {
     async fn min_seq(&self) -> Result<i64, StoreError>;
     /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) events
     /// older than the given time, oldest first; returns the deleted count. Callers loop
-    /// until a batch comes back short (R5).
+    /// until a batch comes back short (R5). The newest event is never deleted (R9), so
+    /// once any event exists `min_seq` stays above 0 and a reader can always detect
+    /// pruned history.
     async fn prune(&self, older_than: Timestamp, limit: u32) -> Result<u64, StoreError>;
 }
 

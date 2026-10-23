@@ -205,8 +205,9 @@ pub async fn events_min_seq(db: &TestDb) {
         ferrite_domain::Timestamp::now().as_micros() + 1_000_000,
     )
     .unwrap();
-    assert_eq!(events.prune(future, 100).await.unwrap(), 2);
-    assert_eq!(events.min_seq().await.unwrap(), 0);
+    // The newest row is kept (R9), so min_seq never drops back to 0 once history exists.
+    assert_eq!(events.prune(future, 100).await.unwrap(), 1);
+    assert_eq!(events.min_seq().await.unwrap(), seqs[2]);
 }
 
 /// Channels are per schema (P2): writes in another site's schema on the same database
