@@ -35,6 +35,10 @@ const NODE_POOL: u32 = 8;
 /// Bound of one test HTTP request.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// The site key every node of a test cluster shares.
+const SITE_KEY: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0";
+const SITE_KEY_ENV: &str = "FERRITE_AUTH__SECRET_KEY";
+
 /// How a [`Cluster`] is prepared.
 pub struct Spec {
     pub nodes: usize,
@@ -127,10 +131,9 @@ impl Cluster {
                  [cache]\npoll_interval_ms = 250\n"
             );
             std::fs::write(dir.path().join("ferrite.toml"), toml).unwrap();
-            let env = spec
-                .env
-                .iter()
-                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+            // One site key for every node (cluster mode requires it, R1).
+            let env = std::iter::once((SITE_KEY_ENV.to_owned(), SITE_KEY.to_owned()))
+                .chain(spec.env.iter().map(|(k, v)| ((*k).to_owned(), v.clone())))
                 .collect::<Vec<_>>();
             let config = ferrite_config::load(dir.path(), env).unwrap();
             let store = PgStore::open(PgOptions {

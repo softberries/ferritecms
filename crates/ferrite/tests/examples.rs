@@ -79,7 +79,8 @@ fn cluster_example_config_is_valid() {
         [
             "FERRITE_DATABASE__URL",
             "FERRITE_MEDIA__S3__ACCESS_KEY_ID",
-            "FERRITE_MEDIA__S3__SECRET_ACCESS_KEY"
+            "FERRITE_MEDIA__S3__SECRET_ACCESS_KEY",
+            "FERRITE_AUTH__SECRET_KEY"
         ]
     );
     let data = data_dir();
@@ -116,6 +117,13 @@ fn cluster_example_config_is_valid() {
         }
         other => panic!("expected S3 media, got {other:?}"),
     }
+    // One site key for every node (R1), a valid 64-hex value.
+    let key = config
+        .auth
+        .secret_key
+        .as_ref()
+        .expect("example sets the site key");
+    assert!(ferrite_core::auth::SiteKey::from_hex(key.expose()).is_ok());
     match config.database_kind() {
         DbKind::Postgres { url } => {
             let url = url::Url::parse(url.expose()).unwrap();

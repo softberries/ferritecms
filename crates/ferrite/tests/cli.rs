@@ -69,7 +69,16 @@ fn init_creates_config_and_db() {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
+        let mode = std::fs::metadata(data.join("secret.key"))
+            .expect("secret.key metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
+    // The solo site key is never printed.
+    let key = std::fs::read_to_string(data.join("secret.key")).expect("read secret.key");
+    assert_eq!(key.len(), 65, "{key:?}");
+    assert!(!out.contains(key.trim()), "{out}");
     let status = stdout({
         let mut c = ferrite();
         c.args(["migrate", "status", "--data"]).arg(&data);
@@ -307,6 +316,110 @@ fn failed_init_removes_what_it_created() {
         .assert()
         .code(1);
     assert_eq!(std::fs::read_dir(tmp.path()).expect("readdir").count(), 0);
+}
+
+#[test]
+fn failed_init_removes_the_secret_key_it_created() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    // A file where the backups folder goes: init fails after creating secret.key.
+    std::fs::write(tmp.path().join("backups"), b"in the way").expect("write");
+    let out = ferrite()
+        .args(["init", "--url", "https://example.com", "--data"])
+        .arg(tmp.path())
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains("backups"), "{err}");
+    assert!(!tmp.path().join("secret.key").exists());
+    assert!(!tmp.path().join("ferrite.toml").exists());
+    assert!(!tmp.path().join("media").exists());
+}
+
+#[test]
+fn init_cluster_config_needs_key_and_writes_no_key_file() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let init = || {
+        let mut c = ferrite();
+        c.args(["init", "--url", "https://example.com"])
+            .args(["--db", "postgres://u:secret@127.0.0.1:1/d"])
+            .args(["--media", "s3://bucket", "--data"])
+            .arg(tmp.path());
+        c
+    };
+    // auto + Postgres + S3 is cluster mode: the key must be configured.
+    let out = init().assert().code(1).get_output().clone();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains("auth.secret_key"), "{err}");
+    assert!(err.contains("required in cluster mode"), "{err}");
+    assert_eq!(std::fs::read_dir(tmp.path()).expect("readdir").count(), 0);
+    // With the key the config is valid (the database is unreachable); no secret.key
+    // is written next to a cluster config.
+    let key = "cd".repeat(32);
+    let out = init()
+        .env("FERRITE_AUTH__SECRET_KEY", &key)
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(!err.contains("auth.secret_key"), "{err}");
+    assert!(!err.contains(&key), "{err}");
+    assert_eq!(std::fs::read_dir(tmp.path()).expect("readdir").count(), 0);
+}
+
+#[test]
+fn solo_site_key_file_created_once() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join("ferrite.toml"),
+        "[site]\nurl = \"https://example.com\"\n",
+    )
+    .unwrap();
+    let config = ferrite_config::load(tmp.path(), Vec::new()).unwrap();
+    let path = tmp.path().join("secret.key");
+    assert!(!path.exists());
+    let first = ferrite::keys::site_key(&config).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(text, format!("{}\n", first.to_hex()));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    // The second call reads the same key.
+    let second = ferrite::keys::site_key(&config).unwrap();
+    assert_eq!(second.to_hex(), first.to_hex());
+    // A file without the trailing newline is accepted.
+    std::fs::write(&path, first.to_hex()).unwrap();
+    assert_eq!(
+        ferrite::keys::site_key(&config).unwrap().to_hex(),
+        first.to_hex()
+    );
+
+    // A malformed file is an error naming it, without echoing its content.
+    std::fs::write(&path, "not-a-key-0123456789\n").unwrap();
+    let err = format!("{:#}", ferrite::keys::site_key(&config).unwrap_err());
+    assert!(err.contains("secret.key"), "{err}");
+    assert!(!err.contains("not-a-key-0123456789"), "{err}");
+    std::fs::write(&path, "").unwrap();
+    let err = format!("{:#}", ferrite::keys::site_key(&config).unwrap_err());
+    assert!(err.contains("secret.key"), "{err}");
+
+    // A configured key wins over the file and leaves it alone.
+    let configured = "ef".repeat(32);
+    let config = ferrite_config::load(
+        tmp.path(),
+        vec![("FERRITE_AUTH__SECRET_KEY".to_owned(), configured.clone())],
+    )
+    .unwrap();
+    assert_eq!(
+        ferrite::keys::site_key(&config).unwrap().to_hex(),
+        configured
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
 }
 
 #[test]
@@ -579,7 +692,8 @@ fn config_check_applies_env_like_serve() {
             .env("FERRITE_MEDIA__BACKEND", "s3")
             .env("FERRITE_MEDIA__S3__BUCKET", "b")
             .env("FERRITE_MEDIA__S3__REGION", "us-east-1")
-            .env("FERRITE_CLUSTER__WORKERS", "2");
+            .env("FERRITE_CLUSTER__WORKERS", "2")
+            .env("FERRITE_AUTH__SECRET_KEY", "ab".repeat(32));
         c
     });
     // auto + Postgres + S3 resolves to cluster.

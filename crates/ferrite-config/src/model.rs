@@ -14,6 +14,7 @@ pub struct Config {
     pub cluster: ClusterConfig,
     pub cache: CacheConfig,
     pub plugins: PluginsConfig,
+    pub auth: AuthConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +105,13 @@ pub struct PluginsConfig {
     pub failure_window_secs: u64,
 }
 
+/// `[auth]` (P4). `secret_key` is the site key as 64 hex characters; `None` means solo
+/// mode uses `<data>/secret.key`. Cluster mode requires it (validated in `load`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthConfig {
+    pub secret_key: Option<Secret>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DbKind {
     /// Path resolved against the data folder.
@@ -123,23 +131,29 @@ impl Config {
     /// `Auto` resolves to `Cluster` only when the database is Postgres and media is
     /// shareable between nodes (S3, or local with `local_shared = true`); otherwise `Solo`.
     pub fn effective_cluster_mode(&self) -> ClusterMode {
-        match self.cluster.mode {
-            ClusterMode::Auto => {
-                let shared_media = matches!(
-                    self.media,
-                    MediaSection::S3 { .. }
-                        | MediaSection::Local {
-                            local_shared: true,
-                            ..
-                        }
-                );
-                match self.database_kind() {
-                    DbKind::Postgres { .. } if shared_media => ClusterMode::Cluster,
-                    _ => ClusterMode::Solo,
-                }
+        effective_mode(self.cluster.mode, self.database.url.expose(), &self.media)
+    }
+}
+
+/// [`Config::effective_cluster_mode`] from its parts (also used while validating).
+pub(crate) fn effective_mode(mode: ClusterMode, db_url: &str, media: &MediaSection) -> ClusterMode {
+    match mode {
+        ClusterMode::Auto => {
+            let shared_media = matches!(
+                media,
+                MediaSection::S3 { .. }
+                    | MediaSection::Local {
+                        local_shared: true,
+                        ..
+                    }
+            );
+            if is_postgres(db_url) && shared_media {
+                ClusterMode::Cluster
+            } else {
+                ClusterMode::Solo
             }
-            mode => mode,
         }
+        mode => mode,
     }
 }
 

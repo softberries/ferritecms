@@ -195,9 +195,10 @@ environment variables, which win.
 
 **Secrets** may be given inline or as `<key>_file` (path relative to the data folder unless
 absolute; one trailing newline is stripped; an empty or unreadable file is a problem; setting
-both the inline key and `_file` is a problem). This applies to `database.url` and to
-`media.s3.access_key_id` / `media.s3.secret_access_key`. `Config` holds the database URL and
-the S3 secret key as `ferrite_domain::Secret`, and messages never contain secret values.
+both the inline key and `_file` is a problem). This applies to `database.url`,
+`media.s3.access_key_id` / `media.s3.secret_access_key` and `auth.secret_key`. `Config`
+holds the database URL, the S3 secret key and the site key as `ferrite_domain::Secret`, and
+messages never contain secret values.
 
 **Value formats.** Sizes: `"256MB"`, `"32MiB"`, `"512KB"`, `"1GB"` or bytes; KB/KiB = 1024,
 MB/MiB = 1024², GB/GiB = 1024³ (`cx.rs`, `parse_size`). Durations: seconds, `"90s"`,
@@ -250,6 +251,10 @@ max_bytes  = "256MB"                   # 0 allowed
 logged_in  = "bypass"                  # "bypass" | "per-user"
 poll_interval_ms = 250                 # > 0; how often the invalidation loop reads the outbox
 
+[auth]
+# secret_key = "<64 hex characters>"   # the site key (32 bytes); or secret_key_file
+                                       # unset: solo uses <data>/secret.key; required in cluster mode
+
 [plugins]
 default_memory = "32MB"                # > 0
 default_fuel   = 50_000_000            # > 0
@@ -267,6 +272,17 @@ failure_window = "10m"
 or local with `local_shared = true`); otherwise `solo`, so single-node Postgres with local
 media works with defaults. An explicit `mode = "cluster"` is rejected with SQLite, and with
 local media unless `local_shared = true`.
+
+**Site key** (`[auth]`, P4, R1): 32 bytes written as 64 hex characters (either case; any
+other length or a non-hex character is a problem). It never lives in the database, so a
+database dump does not carry the key that opens the secrets in it. When the effective mode
+is `cluster` (explicit, or `auto` resolving to it) and no key is configured, `load` reports
+`auth.secret_key: required in cluster mode (every node must use the same key)`, so
+`ferrite config check` shows it. In solo mode without a key the binary uses
+`<data>/secret.key` (`crates/ferrite/src/keys.rs`): 64 lowercase hex characters and a
+newline, read if present (a malformed file is an error naming it), otherwise created with
+`create_new` and mode `0600`. `ferrite init` creates it only for a solo config without a
+configured key (and removes it if `init` fails); the key is never logged or printed.
 
 **Node startup checks** (`ferrite_cluster::Registry::join`, 04 §3, P15) need the database,
 so they run when a node joins the registry (`serve`, after the migration check), not in
@@ -333,3 +349,12 @@ or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
 - Plugins: see [05](05-plugin-host.md). Themes: no code execution.
 - Rate limiting on login and API token auth (DB-backed counters so it works across
   nodes).
+- One site key ([§4](#4-configuration)) outside the database. Every use gets its own
+  subkey, HMAC-SHA256(site key, label) (`ferrite_core::auth`): `ferrite:seal:v1` for sealed
+  values, `ferrite:ip-hash:v1` for client IP hashes. A sealed value is
+  `v1.` + base64url(no padding) of a random 24-byte nonce followed by the
+  XChaCha20-Poly1305 ciphertext and tag, with the purpose as associated data, so it opens
+  only for the same purpose and key (TOTP secrets and stateless TOTP challenges in M2a-1,
+  plugin secrets in M2a-2). Client IPs are stored only as the first 32 hex characters of
+  an HMAC over the canonical address (an IPv4-mapped IPv6 address hashes like the IPv4
+  address). A lost or changed key makes sealed values unreadable (users re-enroll TOTP).

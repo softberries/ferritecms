@@ -235,13 +235,14 @@ fn cluster_validation() {
     let ok = format!(
         "{MIN}[cluster]\nmode = \"cluster\"\n[database]\nurl = \"postgres://h/d\"\n[media]\nbackend = \"s3\"\n[media.s3]\nbucket = \"b\"\nregion = \"r\"\n"
     );
-    assert!(run(Some(&ok), &[]).1.is_ok());
+    let key = [("FERRITE_AUTH__SECRET_KEY", KEY)];
+    assert!(run(Some(&ok), &key).1.is_ok());
 
     // Postgres + shared local volume is fine.
     let shared = format!(
         "{MIN}[cluster]\nmode = \"cluster\"\n[database]\nurl = \"postgres://h/d\"\n[media]\nlocal_shared = true\n"
     );
-    assert!(run(Some(&shared), &[]).1.is_ok());
+    assert!(run(Some(&shared), &key).1.is_ok());
 }
 
 #[test]
@@ -376,6 +377,7 @@ fn render_default_toml_roundtrips() {
     assert_eq!(c2.plugins, c3.plugins);
     assert_eq!(c2.server, c3.server);
     assert_eq!(c2.cluster, c3.cluster);
+    assert_eq!(c2.auth, c3.auth);
     assert!(matches!(c2.media, MediaSection::Local { .. }));
 }
 
@@ -389,7 +391,11 @@ fn auto_mode(db: &str, media: &str) -> ClusterMode {
     } else {
         t
     };
-    run(Some(&t), &[]).1.unwrap().effective_cluster_mode()
+    // The key is required when the result is cluster mode.
+    run(Some(&t), &[("FERRITE_AUTH__SECRET_KEY", KEY)])
+        .1
+        .unwrap()
+        .effective_cluster_mode()
 }
 
 #[test]
@@ -567,4 +573,83 @@ fn node_name_trimmed_and_bounded() {
         &[],
     );
     assert_eq!(r.unwrap().cluster.node_name.map(|n| n.len()), Some(64));
+}
+
+const KEY: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+#[test]
+fn auth_secret_key_rules() {
+    // Inline, env and file forms.
+    let (_d, r) = run(Some(&format!("{MIN}[auth]\nsecret_key = \"{KEY}\"\n")), &[]);
+    let c = r.unwrap();
+    assert_eq!(c.auth.secret_key.as_ref().map(Secret::expose), Some(KEY));
+    assert!(!format!("{c:?}").contains(KEY));
+    let upper = KEY.to_uppercase();
+    let (_d, r) = run(Some(MIN), &[("FERRITE_AUTH__SECRET_KEY", &upper)]);
+    assert!(r.is_ok());
+    // All-digit and float-looking values stay raw strings from the environment.
+    let digits = "1".repeat(64);
+    let (_d, r) = run(Some(MIN), &[("FERRITE_AUTH__SECRET_KEY", &digits)]);
+    assert_eq!(
+        r.unwrap().auth.secret_key.as_ref().map(Secret::expose),
+        Some(digits.as_str())
+    );
+    let float = format!("1e{}", "0".repeat(62));
+    let (_d, r) = run(Some(MIN), &[("FERRITE_AUTH__SECRET_KEY", &float)]);
+    assert!(r.is_ok());
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("ferrite.toml"),
+        format!("{MIN}[auth]\nsecret_key_file = \"site.key\"\n"),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("site.key"), format!("{KEY}\n")).unwrap();
+    let c = load(dir.path(), env(&[])).unwrap();
+    assert_eq!(c.auth.secret_key.as_ref().map(Secret::expose), Some(KEY));
+    std::fs::write(dir.path().join("site.key"), "nothex\n").unwrap();
+    let e = load(dir.path(), env(&[])).unwrap_err();
+    assert_eq!(paths(&e), ["auth.secret_key_file"]);
+
+    // Wrong length or not hex; the message never echoes the value.
+    let g = format!("{}g", &KEY[..63]);
+    for bad in [&KEY[..63], &format!("{KEY}0"), g.as_str(), ""] {
+        let (_d, r) = run(Some(&format!("{MIN}[auth]\nsecret_key = \"{bad}\"\n")), &[]);
+        let e = r.unwrap_err();
+        assert_eq!(paths(&e), ["auth.secret_key"], "{bad:?}");
+        assert_eq!(
+            e.problems[0].message, "must be 64 hex characters (32 bytes)",
+            "{bad:?}"
+        );
+        if !bad.is_empty() {
+            assert!(!format!("{e}").contains(bad), "{e}");
+        }
+    }
+    let (_d, r) = run(Some(MIN), &[("FERRITE_AUTH__SECRET_KEY", "abc")]);
+    assert_eq!(paths(&r.unwrap_err()), ["env:FERRITE_AUTH__SECRET_KEY"]);
+    let (_d, r) = run(Some(&format!("{MIN}[auth]\nbogus = 1\n")), &[]);
+    assert_eq!(paths(&r.unwrap_err()), ["auth.bogus"]);
+
+    // Solo without a key is fine (the binary uses <data>/secret.key).
+    let (_d, r) = run(Some(MIN), &[]);
+    assert_eq!(r.unwrap().auth.secret_key, None);
+
+    // Cluster (explicit, or auto resolving to cluster) requires it.
+    let cluster = format!(
+        "{MIN}[cluster]\nmode = \"cluster\"\n[database]\nurl = \"postgres://h/d\"\n[media]\nlocal_shared = true\n"
+    );
+    let auto = format!(
+        "{MIN}[database]\nurl = \"postgres://h/d\"\n[media]\nbackend = \"s3\"\n[media.s3]\nbucket = \"b\"\nregion = \"r\"\n"
+    );
+    for toml in [&cluster, &auto] {
+        let (_d, r) = run(Some(toml), &[]);
+        let e = r.unwrap_err();
+        assert_eq!(paths(&e), ["auth.secret_key"]);
+        assert_eq!(
+            e.problems[0].message,
+            "required in cluster mode (every node must use the same key)"
+        );
+        let (_d, r) = run(Some(toml), &[("FERRITE_AUTH__SECRET_KEY", KEY)]);
+        assert_eq!(r.unwrap().effective_cluster_mode(), ClusterMode::Cluster);
+    }
 }

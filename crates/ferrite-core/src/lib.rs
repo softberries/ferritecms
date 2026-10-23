@@ -2,6 +2,7 @@
 //! rendering) have no I/O; services compose store transactions.
 
 mod actor;
+pub mod auth;
 pub mod blocks;
 mod content;
 mod error;

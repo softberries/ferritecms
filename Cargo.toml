@@ -15,10 +15,13 @@ async-trait = "0.1.92"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "http2", "tokio"] }
 base64 = "0.23"
 bytes = "1"
+chacha20poly1305 = "=0.11.0"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 criterion = "0.8"
 deunicode = "1.6.2"
 futures = "0.3"
+getrandom = "=0.4.3"
+hmac = "=0.13.0"
 html-escape = "0.3.0"
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["server-auto", "tokio", "server"] }

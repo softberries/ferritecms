@@ -8,7 +8,7 @@ use toml::{Table, Value};
 use crate::cx::{Cx, join, resolve};
 use crate::error::{ConfigError, ConfigProblem};
 use crate::model::*;
-use crate::model::{is_sqlite, is_supported_db_url};
+use crate::model::{effective_mode, is_sqlite, is_supported_db_url};
 
 const FILE_NAME: &str = "ferrite.toml";
 const ENV_PREFIX: &str = "FERRITE_";
@@ -57,9 +57,19 @@ pub fn load(
     let cluster = parse_cluster(&mut cx, &mut table);
     let cache = parse_cache(&mut cx, &mut table);
     let plugins = parse_plugins(&mut cx, &mut table);
+    let (auth, key_given) = parse_auth(&mut cx, &mut table);
     cx.unknown(table, "");
 
     validate_cluster(&mut cx, &cluster, &database, &media);
+    // A given but invalid key is already a problem; only a missing one is reported here.
+    if !key_given
+        && effective_mode(cluster.mode, database.url.expose(), &media) == ClusterMode::Cluster
+    {
+        cx.push(
+            "auth.secret_key",
+            "required in cluster mode (every node must use the same key)",
+        );
+    }
 
     match site {
         Some(site) if cx.problems.is_empty() => Ok(Config {
@@ -71,6 +81,7 @@ pub fn load(
             cluster,
             cache,
             plugins,
+            auth,
         }),
         _ => Err(ConfigError {
             problems: cx.problems,
@@ -550,6 +561,32 @@ fn parse_plugins(cx: &mut Cx, root: &mut Table) -> PluginsConfig {
     }
 }
 
+/// Site key length in bytes; written as twice as many hex characters (P4).
+const SITE_KEY_BYTES: usize = 32;
+
+/// The `[auth]` section, and whether a key (inline or `_file`) was given at all.
+fn parse_auth(cx: &mut Cx, root: &mut Table) -> (AuthConfig, bool) {
+    let mut t = section(cx, root, "auth");
+    let given = t.contains_key("secret_key") || t.contains_key("secret_key_file");
+    let from_file = t.contains_key("secret_key_file") && !t.contains_key("secret_key");
+    let secret_key = cx.secret(&mut t, "auth", "secret_key").and_then(|key| {
+        let v = key.expose();
+        if v.len() == SITE_KEY_BYTES * 2 && v.bytes().all(|b| b.is_ascii_hexdigit()) {
+            Some(key)
+        } else {
+            let path = if from_file {
+                "auth.secret_key_file"
+            } else {
+                "auth.secret_key"
+            };
+            cx.push(path, "must be 64 hex characters (32 bytes)");
+            None
+        }
+    });
+    cx.unknown(t, "auth");
+    (AuthConfig { secret_key }, given)
+}
+
 /// Startup validation per design 04 §3 (the checks that need only configuration).
 fn validate_cluster(
     cx: &mut Cx,
@@ -661,6 +698,13 @@ pub fn render_default_toml(
     out.push_str(
         "[cache]\nmax_bytes = \"256MB\"\nlogged_in = \"bypass\"\npoll_interval_ms = 250\n\n",
     );
+    out.push_str("[auth]\n");
+    out.push_str("# Site key (64 hex characters) that seals stored secrets. Unset, a solo site\n");
+    out.push_str(
+        "# keeps a generated one in secret.key in the data folder; cluster mode requires\n",
+    );
+    out.push_str("# it here (the same key on every node), e.g. from `openssl rand -hex 32`.\n");
+    out.push_str("# secret_key_file = \"/run/secrets/ferrite_site_key\"\n\n");
     out.push_str(
         "[plugins]\ndefault_memory = \"32MB\"\ndefault_fuel = 50000000\nrender_deadline_ms = 200\naction_deadline_ms = 5000\ndisable_after_failures = 20\nfailure_window = \"10m\"\n",
     );

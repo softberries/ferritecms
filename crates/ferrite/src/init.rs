@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use clap::Args;
-use ferrite_config::{DbKind, InitMedia, MediaSection, render_default_toml};
+use ferrite_config::{ClusterMode, DbKind, InitMedia, MediaSection, render_default_toml};
 use sqlx::{AssertSqlSafe, Connection, PgConnection};
 
+use crate::keys::SECRET_KEY_FILE;
 use crate::load_config;
 use crate::open::{MIGRATE_LOCK_WAIT, OpenMode, open_store};
 
@@ -132,6 +133,12 @@ async fn prepare(data: &Path, created: &mut Vec<PathBuf>) -> anyhow::Result<()> 
         track(created, root.clone());
         std::fs::create_dir_all(root)
             .with_context(|| format!("cannot create {}", root.display()))?;
+    }
+    // Solo without a configured key: create `secret.key` now (F30). A cluster config
+    // must carry the key itself, so no unused key file is written next to it.
+    if config.auth.secret_key.is_none() && config.effective_cluster_mode() == ClusterMode::Solo {
+        track(created, data.join(SECRET_KEY_FILE));
+        crate::keys::site_key(&config)?;
     }
     let backups = data.join("backups");
     track(created, backups.clone());

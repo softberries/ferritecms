@@ -61,7 +61,9 @@ impl Site {
             ));
         }
         std::fs::write(dir.path().join("ferrite.toml"), toml).unwrap();
-        let config = ferrite_config::load(dir.path(), Vec::new()).unwrap();
+        // Cluster mode requires a configured site key (R1); both profiles get one.
+        let env = vec![("FERRITE_AUTH__SECRET_KEY".to_owned(), "ab".repeat(32))];
+        let config = ferrite_config::load(dir.path(), env).unwrap();
         Self { dir, config }
     }
 

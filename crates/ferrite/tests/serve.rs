@@ -105,6 +105,8 @@ impl Profile {
                 "test-secret".to_owned(),
             ),
             ("FERRITE_MEDIA__S3__ALLOW_HTTP", "true".to_owned()),
+            // Postgres + S3 is cluster mode: one site key for every process (R1).
+            ("FERRITE_AUTH__SECRET_KEY", "5a".repeat(32)),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v))

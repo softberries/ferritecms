@@ -11,7 +11,8 @@
 # either node reach the other through Postgres LISTEN/NOTIFY (design 04 §4).
 #
 # DEMO CREDENTIALS: the passwords below and in ferrite.env are placeholders shared
-# between the services. Change them together before exposing anything.
+# between the services, and ferrite.env's site key (FERRITE_AUTH__SECRET_KEY, one value for
+# both nodes) is public. Change them together before exposing anything.
 #
 # Status: verified by `ferrite config check` (crates/ferrite/tests/examples.rs) and by
 # `docker compose config`, `caddy validate` + `docker build` in CI; `docker compose up` itself is not run

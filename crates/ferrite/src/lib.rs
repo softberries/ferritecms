@@ -6,6 +6,7 @@ pub mod extensions;
 mod healthcheck;
 mod init;
 pub mod jobs;
+pub mod keys;
 mod migrate;
 mod node;
 mod open;

@@ -11,6 +11,9 @@ pub enum CoreError {
     Invalid(String),
     #[error("version conflict (current version {current_version})")]
     Conflict { current_version: i64 },
+    /// The operating system's random number generator failed (keys, nonces, tokens).
+    #[error("system random number generator failed")]
+    Random,
     #[error(transparent)]
     Store(StoreError),
 }
