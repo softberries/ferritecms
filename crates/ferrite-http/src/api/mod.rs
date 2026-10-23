@@ -1,0 +1,174 @@
+//! The REST API under `/api/v1` (07 §1; rulings P10, P12, P24).
+//!
+//! [`router`] builds it with utoipa-axum: handlers carry `#[utoipa::path]`s relative to
+//! `/api/v1` and are registered with `routes!` on an [`OpenApiRouter`] nested at
+//! [`BASE`], so the spec and the routes come from the same list. Around them:
+//!
+//! * `/api/v1`, `/api/v1/` and `/api/v1/{*rest}` that match no route: `404 not-found`
+//!   (any method). Paths outside `/api/v1` (`/api`, `/api/v2/…`) stay the public site's.
+//! * A known path with another method: `405 method-not-allowed` with `Allow`.
+//! * A panicking handler: `500 internal` (the public site's HTML 500 never shows for
+//!   the API).
+//! * `Cache-Control: no-store` on every API response, and request bodies of at most
+//!   [`MAX_JSON_BODY`] ([`body_limit`]).
+//!
+//! The API never touches the page cache. [`build_site`](crate::build_site) merges this
+//! router in front of the public fallback, inside the shared layers (security headers,
+//! compression, request span, client address, the outer catch-panic).
+//!
+//! Authentication (session cookie with CSRF, bearer tokens) arrives as extractors in a
+//! later task; the endpoints here are unauthenticated: `GET /meta`, `GET /openapi.json`.
+
+pub mod extract;
+pub mod list;
+pub mod meta;
+pub mod openapi;
+pub mod problem;
+mod state;
+
+use std::sync::Arc;
+
+use axum::{
+    Extension, Router,
+    extract::DefaultBodyLimit,
+    http::{HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
+    routing::any,
+};
+use tower_http::{catch_panic::CatchPanicLayer, set_header::SetResponseHeaderLayer};
+use utoipa::OpenApi as _;
+use utoipa_axum::{router::OpenApiRouter, routes};
+
+pub use extract::{
+    ApiJson, ApiQuery, DEFAULT_LIMIT, IfMatch, MAX_JSON_BODY, PageParams, created, etag,
+};
+pub use problem::{FieldError, Problem};
+pub use state::{ApiParts, ApiState, InvalidSiteUrl};
+
+use self::{meta::SpecJson, openapi::ApiDoc};
+
+/// Where the API is mounted.
+pub const BASE: &str = "/api/v1";
+
+/// Every endpoint, relative to [`BASE`]. Later tasks add their `routes!` here.
+fn v1() -> OpenApiRouter<Arc<ApiState>> {
+    OpenApiRouter::new()
+        .routes(routes!(meta::meta))
+        .routes(routes!(meta::openapi_json))
+}
+
+/// The spec and routes, before the state and layers.
+fn parts() -> (Router<Arc<ApiState>>, utoipa::openapi::OpenApi) {
+    OpenApiRouter::with_openapi(ApiDoc::openapi())
+        .nest(BASE, v1())
+        .split_for_parts()
+}
+
+/// The OpenAPI document of the API.
+pub fn openapi() -> utoipa::openapi::OpenApi {
+    parts().1
+}
+
+/// The committed snapshot's text: [`openapi`] pretty-printed, with a final newline.
+pub fn openapi_snapshot() -> String {
+    match openapi().to_pretty_json() {
+        Ok(mut s) => {
+            s.push('\n');
+            s
+        }
+        Err(e) => format!("cannot serialize the OpenAPI document: {e}\n"),
+    }
+}
+
+/// The API's routes (see the module docs) and its OpenAPI document.
+pub fn router(state: Arc<ApiState>) -> (Router, utoipa::openapi::OpenApi) {
+    let (routes, spec) = parts();
+    let json = spec.to_json().unwrap_or_else(|e| {
+        tracing::error!(error = %e, "cannot serialize the OpenAPI document");
+        String::new()
+    });
+    let router = routes
+        .route(BASE, any(not_found))
+        .route(&format!("{BASE}/"), any(not_found))
+        .route(&format!("{BASE}/{{*rest}}"), any(not_found))
+        .method_not_allowed_fallback(method_not_allowed)
+        .with_state(state)
+        .layer(Extension(SpecJson(json.into())));
+    (layers(router), spec)
+}
+
+/// The request-body limit of every API route ([`MAX_JSON_BODY`]).
+pub fn body_limit() -> DefaultBodyLimit {
+    DefaultBodyLimit::max(MAX_JSON_BODY)
+}
+
+/// The API-only layers: body limit, problem 500 on panic, `Cache-Control: no-store`.
+fn layers(router: Router) -> Router {
+    router
+        .layer(body_limit())
+        .layer(CatchPanicLayer::custom(panic_problem))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        ))
+}
+
+async fn not_found() -> Problem {
+    Problem::new(
+        StatusCode::NOT_FOUND,
+        "not-found",
+        "Not found",
+        "no such API endpoint",
+    )
+}
+
+async fn method_not_allowed() -> Problem {
+    Problem::new(
+        StatusCode::METHOD_NOT_ALLOWED,
+        "method-not-allowed",
+        "Method not allowed",
+        "this endpoint does not accept that method (see Allow)",
+    )
+}
+
+/// A panicking API handler: `500 internal`. The payload is not logged (it may echo
+/// request data).
+fn panic_problem(_panic: Box<dyn std::any::Any + Send + 'static>) -> Response {
+    tracing::error!("API handler panicked; 500 problem served");
+    Problem::internal().into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{body::Body, http::Request, routing::get};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn a_panicking_api_handler_is_a_problem_500() {
+        async fn boom() -> &'static str {
+            panic!("handler bug with secret")
+        }
+        let app = layers(Router::new().route("/boom", get(boom)));
+        let req = Request::builder().uri("/boom").body(Body::empty()).unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(res.headers()[header::CONTENT_TYPE], problem::PROBLEM_JSON);
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store");
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["type"], "/api/v1/problems/internal");
+        assert!(!body.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn every_path_is_under_the_base() {
+        let spec = openapi();
+        assert!(!spec.paths.paths.is_empty());
+        for path in spec.paths.paths.keys() {
+            assert!(path.starts_with("/api/v1/"), "{path}");
+        }
+    }
+}

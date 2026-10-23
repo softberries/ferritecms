@@ -13,7 +13,7 @@ anyhow = "1"
 arc-swap = "1"
 argon2 = "=0.6.0"
 async-trait = "0.1.92"
-axum = { version = "0.8.9", default-features = false, features = ["http1", "http2", "tokio"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "http2", "json", "query", "tokio"] }
 base64 = "0.23"
 bytes = "1"
 chacha20poly1305 = "=0.11.0"
@@ -44,6 +44,9 @@ serde = { version = "1", features = ["derive"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "migrate", "macros", "json", "uuid", "chrono"] }
 semver = { version = "1.0.28", features = ["serde"] }
 serde_json = "1"
+# Already in the tree through axum `json`/`query`; used directly for the field path of a
+# rejected JSON body.
+serde_path_to_error = "0.1.20"
 tar = { version = "0.4.46", default-features = false }
 tempfile = "3"
 thiserror = "2"
@@ -56,6 +59,8 @@ toml = "1.1"
 tracing = "0.1"
 unicode-normalization = "0.1.25"
 url = "2"
+utoipa = { version = "=6.0.0", features = ["uuid", "chrono"] }
+utoipa-axum = "=0.3.0"
 uuid = { version = "1", features = ["v7", "serde"] }
 wasmtime = "50"
 wasmtime-wasi = "50"

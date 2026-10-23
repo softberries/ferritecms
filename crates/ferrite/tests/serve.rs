@@ -523,6 +523,20 @@ fn serve_seeded_site(p: Profile) {
     let draft = server.get(&format!("/{DRAFT_SLUG}/"));
     assert_eq!(draft.status, 404, "drafts are not public");
 
+    // The API is served by the same process, never cached.
+    let meta = server.get("/api/v1/meta");
+    assert_eq!(meta.status, 200, "{meta:?}");
+    assert_eq!(meta.header("cache-control"), Some("no-store"), "{meta:?}");
+    let meta: serde_json::Value = serde_json::from_slice(&meta.body).expect("meta JSON");
+    assert_eq!(meta["api"], "v1");
+    assert_eq!(meta["version"], env!("CARGO_PKG_VERSION"));
+    let missing = server.get("/api/v1/nope");
+    assert_eq!(missing.status, 404);
+    assert_eq!(
+        missing.header("content-type"),
+        Some("application/problem+json")
+    );
+
     let status = server.stop_with("TERM");
     assert!(status.success(), "serve exit status: {status:?}");
     // A clean shutdown leaves the node registry.

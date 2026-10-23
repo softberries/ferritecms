@@ -1,0 +1,145 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "FerriteCMS API",
+    "description": "FerriteCMS REST API v1.",
+    "version": "1"
+  },
+  "paths": {
+    "/api/v1/meta": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "operationId": "get_meta",
+        "responses": {
+          "200": {
+            "description": "API and site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetaDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "operationId": "get_openapi",
+        "responses": {
+          "200": {
+            "description": "This OpenAPI 3.1 document",
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "FieldError": {
+        "type": "object",
+        "description": "One entry of `errors`: what is wrong with one input (`field` = the JSON path or\nparameter name, when known).",
+        "required": [
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "MetaDto": {
+        "type": "object",
+        "description": "The API version and the site it serves.",
+        "required": [
+          "api",
+          "version",
+          "site_url"
+        ],
+        "properties": {
+          "api": {
+            "type": "string",
+            "description": "Always `v1` under `/api/v1`."
+          },
+          "site_url": {
+            "type": "string",
+            "description": "`site.url`."
+          },
+          "version": {
+            "type": "string",
+            "description": "The FerriteCMS version serving the request."
+          }
+        }
+      },
+      "ProblemDocument": {
+        "type": "object",
+        "description": "The body of a problem response (the OpenAPI schema `ProblemDocument`).",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail"
+        ],
+        "properties": {
+          "current": {
+            "description": "The current resource; only on `precondition-failed` (412)."
+          },
+          "detail": {
+            "type": "string"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldError"
+            },
+            "description": "Omitted when empty."
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "`/api/v1/problems/<slug>`."
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer"
+      },
+      "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "ferrite_session"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "meta",
+      "description": "API metadata"
+    }
+  ]
+}

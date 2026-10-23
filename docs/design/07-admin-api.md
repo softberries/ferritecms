@@ -20,6 +20,56 @@ surface).
   admin's TypeScript client is generated from it (`openapi-typescript` +
   `openapi-fetch`), checked in CI for drift.
 
+### As implemented (M2a-1 foundation, `crates/ferrite-http/src/api/`)
+
+- **One process, one stack.** `ferrite_http::build_site` merges the API router in front
+  of the public fallback; both sit inside the same layers (security headers,
+  compression, request span, client address, catch-panic). The API never reads or fills
+  the page cache, and every API response has `Cache-Control: no-store` (P24).
+- **Routing.** Handlers carry `#[utoipa::path]`s relative to `/api/v1` and are
+  registered with utoipa-axum's `routes!` on an `OpenApiRouter` nested at `/api/v1`, so
+  the spec and the routes come from one list. An unknown path under `/api/v1` (also
+  `/api/v1` and `/api/v1/` themselves) is a `404 not-found` problem for any method; a
+  known path with another method is `405 method-not-allowed` with `Allow`; a panicking
+  handler is a `500 internal` problem. Paths outside `/api/v1` (`/api`, `/api/v2/…`)
+  belong to the public site (canonical slash, then the shared 404 page).
+- **Unauthenticated endpoints:** `GET /api/v1/meta` → `{ api: "v1", version, site_url }`
+  (the admin's first call) and `GET /api/v1/openapi.json`. The document is OpenAPI
+  3.1.0 with security schemes `session` (cookie `ferrite_session`) and `bearer`; the
+  pretty-printed copy `crates/ferrite-http/openapi.json` is checked by the test
+  `openapi_snapshot_is_current` (`FERRITE_UPDATE_OPENAPI=1 cargo test -p ferrite-http
+  --test api openapi` rewrites it).
+- **Problems** (RFC 9457, `application/problem+json`, P10): `type` is
+  `/api/v1/problems/<slug>`, plus `title`, `status`, `detail`, `errors[]` (`{ field,
+  detail }`, omitted when empty) and `current` (412 only); `Retry-After` when set.
+  Core errors map as follows:
+
+  | Core error | Status | Slug |
+  |---|---|---|
+  | `NotFound` | 404 | `not-found` |
+  | `Forbidden` | 403 | `forbidden` (detail names the capability or scope) |
+  | `Unauthenticated` | 401 | `unauthenticated` |
+  | `RateLimited` | 429 | `rate-limited` + `Retry-After` |
+  | `Invalid` | 422 | `validation` |
+  | `Conflict` (version) | 412 | `precondition-failed` + `current` |
+  | store unique violation | 409 | `conflict` (detail names the constraint) |
+  | store foreign-key violation | 409 | `conflict` ("a related record changed; retry") |
+  | store busy | 503 | `busy` + `Retry-After: 5` |
+  | randomness, hashing, other store errors | 500 | `internal` |
+
+  Store, randomness and hashing errors are logged with their text; the body says only
+  "internal error" or "busy, retry".
+- **Request rules.** JSON bodies need `Content-Type: application/json` (`415
+  unsupported-media-type`), are at most 4 MiB (`413 too-large`), and must parse into the
+  endpoint's shape (`400 malformed-json`, with the serde path of the bad member in
+  `errors[0].field`). A NUL character in any string of the document is `422
+  validation`. A query string that does not parse is `400 malformed-query`. Lists take
+  `?limit=` (default 50, outside 1..=200 `400 validation`) and `?cursor=` and answer
+  `{ items, next_cursor }` with one list type per resource. `If-Match` must be one
+  strong tag holding the version, `"<n>"`; without it `428 precondition-required`, any
+  other form `400 malformed-header`. Resources send `ETag: "<version>"`; creates answer
+  `201` with `Location` and `ETag`.
+
 ### Resources (M2)
 
 | Resource | Endpoints |

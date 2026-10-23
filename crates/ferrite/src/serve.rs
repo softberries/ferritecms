@@ -30,7 +30,9 @@
 //!    caller's handlers), the periodic scheduler (prune jobs hourly,
 //!    `content.publish_due` every 30 s) and the heartbeat (`nodes.meta` carries the
 //!    theme, plugin and permalink state; the reloader beats after every reload);
-//! 10. serve; [`run`] prints `Listening on http://<addr>` on stdout.
+//! 10. serve the public site and the API under `/api/v1` (`build_site`; the API's
+//!     services, the site key and the options are set up in step 7, so a missing or
+//!     bad key stops startup); [`run`] prints `Listening on http://<addr>` on stdout.
 //!
 //! Shutdown ([`RunningNode::shutdown`]; SIGINT or SIGTERM in [`run`]): stop accepting
 //! connections **and** stop the job runner at once; open requests get up to 10 s while
@@ -54,11 +56,16 @@ use ferrite_cluster::{
     SCHEDULER_TICK, Scheduler, builtin, node_name,
 };
 use ferrite_config::{Config, PluginsConfig};
-use ferrite_core::{ContentService, Permalinks, SiteReader, SwappablePermalinks};
+use ferrite_core::{
+    AuthService, ContentService, MenuService, OptionService, Permalinks, RedirectService,
+    SiteReader, SwappablePermalinks, TaxonomyService, UserService,
+};
 use ferrite_domain::{NodeId, Timestamp};
 use ferrite_http::{
     AppParts, AppState, FLUSH_EVERY, HttpConfig, LoadSummary, PluginReloader, SharedFailures,
-    StoreHostServices, build_app, load_route_table,
+    StoreHostServices,
+    api::{ApiParts, ApiState},
+    build_site, load_route_table,
 };
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::{HostConfig, PluginHost};
@@ -74,7 +81,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     binary_version,
     cli::DataArg,
-    jobs, load_config,
+    jobs, keys, load_config,
     node::{NodeStatus, node_mode},
     open::{OpenMode, open_store, startup_check},
     reload::{ReloadContext, Reloader},
@@ -366,7 +373,29 @@ async fn boot(
     status.set_theme(&loaded, loaded.error.as_deref());
     status.set_plugins(&report);
 
+    // The API's services; `content` also runs the scheduled-publishing jobs.
     let content = Arc::new(ContentService::new(store.clone(), dyn_permalinks));
+    let api = Arc::new(
+        ApiState::new(ApiParts {
+            store: store.clone(),
+            auth: Arc::new(
+                AuthService::new(store.clone(), keys::site_key(config)?)
+                    .with_issuer_name(config.site.title.clone()),
+            ),
+            users: Arc::new(UserService::new(store.clone())),
+            content: content.clone(),
+            taxonomy: Arc::new(TaxonomyService::new(store.clone())),
+            menus: Arc::new(MenuService::new(store.clone())),
+            options: Arc::new(
+                OptionService::load(store.clone())
+                    .await
+                    .context("cannot load the options")?,
+            ),
+            redirects: Arc::new(RedirectService::new(store.clone())),
+            site_url: state.config.site_url.clone(),
+        })
+        .context("site.url")?,
+    );
     let mut handlers = builtin::handlers(store.clone(), builtin::failure_retention(failure_window));
     handlers.extend(jobs::handlers(store.clone(), content));
     handlers.extend(opts.extra_handlers);
@@ -431,7 +460,7 @@ async fn boot(
     let server = tokio::spawn(
         axum::serve(
             listener,
-            build_app(state.clone()).into_make_service_with_connect_info::<SocketAddr>(),
+            build_site(state.clone(), api).into_make_service_with_connect_info::<SocketAddr>(),
         )
         .with_graceful_shutdown(stop_accepting.clone().cancelled_owned())
         .into_future(),

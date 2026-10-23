@@ -1,7 +1,8 @@
 //! The axum application for the public site.
 //!
 //! [`build_app`] returns a [`Router`] with a single fallback handler; every public URL
-//! goes through it:
+//! goes through it. [`build_site`] (what `serve` runs) puts the API's `/api/v1` routes
+//! ([`crate::api`]) in front of the same fallback, inside the same layers:
 //!
 //! 1. Methods other than GET and HEAD: `405` with `Allow: GET, HEAD`. HEAD is answered
 //!    like GET (same status and headers, compression included); axum's `Route` drops
@@ -84,17 +85,37 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+use crate::api::ApiState;
+
 pub use state::{
     AppParts, AppState, DESCRIPTION_OPTION, HttpConfig, LOCALE_OPTION, RENDER_WAIT, SHORT_TTL,
     TITLE_OPTION, load_route_table, theme_settings_option,
 };
 
-/// The public site as an axum [`Router`]; see the module docs.
+/// The public site as an axum [`Router`]; see the module docs. Without the API (tests);
+/// `serve` uses [`build_site`].
 pub fn build_app(state: Arc<AppState>) -> Router {
-    let state_proxies = state.config.trusted_proxies.clone();
-    let mut app = Router::new()
+    let public = Router::new()
         .fallback(handler::handle)
-        .with_state(state)
+        .with_state(state.clone());
+    shared_layers(&state, public)
+}
+
+/// The whole site: `/api/v1` ([`api::router`](crate::api::router)) in front of the
+/// public fallback, both inside the shared layers (catch-panic, compression, security
+/// headers, request span, client address). API responses also get `no-store`, and a
+/// panic in an API handler is a problem document (the API's own layers).
+pub fn build_site(state: Arc<AppState>, api: Arc<ApiState>) -> Router {
+    let (api, _) = crate::api::router(api);
+    let public = Router::new()
+        .fallback(handler::handle)
+        .with_state(state.clone());
+    shared_layers(&state, api.merge(public))
+}
+
+/// The layers every response passes, inner to outer (see the module docs).
+fn shared_layers(state: &AppState, router: Router) -> Router {
+    let mut app = router
         .layer(CatchPanicLayer::custom(response::panic_response))
         .layer(
             CompressionLayer::new()
@@ -108,7 +129,7 @@ pub fn build_app(state: Arc<AppState>) -> Router {
             HeaderValue::from_static(value),
         ));
     }
-    let trusted: Arc<[ipnet::IpNet]> = state_proxies.into();
+    let trusted: Arc<[ipnet::IpNet]> = state.config.trusted_proxies.clone().into();
     app.layer(
         TraceLayer::new_for_http()
             .make_span_with(response::request_span)
