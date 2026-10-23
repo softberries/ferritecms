@@ -51,6 +51,7 @@ pub trait Store: Send + Sync + 'static {
     fn backend(&self) -> Backend;                       // Sqlite | Postgres
     fn read(&self) -> &dyn Repos;                       // autocommit, read pool
     async fn begin(&self) -> Result<Box<dyn Tx>, StoreError>;
+    async fn subscribe(&self, channel: Channel) -> Result<Option<Box<dyn Subscription>>, StoreError>; // M1.5, 04 §4; SQLite: None
     async fn try_lock(&self, name: &str) -> Result<Option<Box<dyn LockGuard>>, StoreError>; // M1.5, 04 §7
     async fn migration_status(&self, binary: &semver::Version) -> Result<MigrationStatus, StoreError>;
     async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError>;
@@ -81,6 +82,7 @@ pub trait Repos: Send + Sync {
     fn artifacts(&self) -> &dyn ArtifactRepo;
     fn media(&self) -> &dyn MediaRepo;
     fn plugins(&self) -> &dyn PluginRepo;
+    fn plugin_failures(&self) -> &dyn PluginFailureRepo;
     fn plugin_kv(&self) -> &dyn PluginKvRepo;
     fn themes(&self) -> &dyn ThemeRepo;
     fn events(&self) -> &dyn EventRepo;
@@ -95,9 +97,17 @@ Repositories still to come, with the milestone that adds them: `sessions`, `toke
 (API tokens), `rate_limits`, `audit` and `comments` (M2). `JobRepo` (`jobs()`) and
 `NodeRepo` (`nodes()`) exist since M1.5 (migration `0004_cluster`); see the cluster table
 in §4. Named locks are `Store::try_lock` (Postgres advisory locks, SQLite in-process;
-[04 §7](04-cluster.md#7-distributed-locks)).
-The `comments`, `user_meta` and `plugin_failures` tables already exist in `0001_init`
-but have no repository yet.
+[04 §7](04-cluster.md#7-distributed-locks)); `ferrite_store::lock(store, name, wait)`
+retries `try_lock` every 250 ms until `wait`, then `Busy`. Notifications are
+`Store::subscribe(Channel::{Events, Jobs})` (Postgres `LISTEN` on a dedicated connection;
+SQLite `None`, callers poll; [04 §4](04-cluster.md#4-event-bus--cache-invalidation)).
+M1.5 also added `EventRepo::min_seq` (lost-history check, P3), batched prunes (`prune(…,
+limit)` with at most `MAX_PRUNE_BATCH` = 10 000 rows per call on events, jobs, nodes and
+plugin failures, R5), `PluginFailureRepo` (`plugin_failures()`: `add`/`sum_since`/`clear`/
+`prune`, P20), `PluginRepo::auto_disable` (conditional on `enabled` and the observed
+`updated_at`, R12) and `PluginRepo::get_for_update`.
+The `comments` and `user_meta` tables already exist in `0001_init` but have no
+repository yet.
 
 **Query and batch API (M1c-1)**, on both backends and contract-tested
 (`ferrite-store-tests`). Limits are constants exported by `ferrite-store`
@@ -318,7 +328,7 @@ on both backends.
 | `artifacts` | `hash` PK (sha256 hex), `kind` (`media`/`variant`/`plugin`/`theme`/`export`), `bytes`, `mime`, `created_at` | The blob lives in the MediaStore under `artifacts/<hash[0..2]>/<hash>` |
 | `plugins` | `name` PK, `version`, `artifact_hash` FK, `manifest` json, `granted` json (capabilities the admin approved), `enabled`, `disabled_reason`, `installed_at`, `updated_at` | |
 | `plugin_kv` | `plugin`, `key`, `value` bytes, `updated_at`, PK(`plugin`,`key`) | Quotas enforced in core (default 10 MB, 10k keys per plugin) |
-| `plugin_failures` | `plugin`, `hook`, `bucket_start`, `count`, PK(`plugin`,`hook`,`bucket_start`) | Shared failure counters → auto-disable cluster-wide |
+| `plugin_failures` | `plugin`, `hook`, `bucket_start`, `count`, PK(`plugin`,`hook`,`bucket_start`) | Shared failure counters → auto-disable cluster-wide (`PluginFailureRepo` since M1.5: 1-minute buckets from the database clock, pruned by `plugin_failures.prune` after `max(24 h, 2 × plugins.failure_window)`; 05 §8) |
 | `themes` | `name` PK, `version`, `artifact_hash`, `manifest` json, `active`, `installed_at` | Exactly one active (partial unique index / trigger) |
 
 ### Cluster
@@ -326,7 +336,7 @@ on both backends.
 | Table | Columns | Notes |
 |---|---|---|
 | `nodes` *(since `0004_cluster`)* | `id` PK (`nodes_pkey`), `name`, `version`, `schema_version` bigint, `started_at`, `heartbeat_at` (index `nodes_heartbeat_idx`), `meta` json object default `{}` | `NodeRepo`: `register`/`heartbeat`/`deregister`/`list` (≤ 1000, by `started_at`, `id`)/`db_now`/`prune`, times from the database clock. Stale after 3× heartbeat interval |
-| `events` | `seq` PK (autoincrement / bigserial), `kind`, `keys` json, `origin_node`, `created_at` | Transactional outbox for invalidation; pruned after 24h |
+| `events` | `seq` PK (autoincrement / bigserial), `kind`, `keys` json, `origin_node`, `created_at` | Transactional outbox for invalidation; pruned after 24 h by `events.prune`, except the newest row (R9). On Postgres `append` notifies `ferrite_events[_<schema>]` in the same statement (P2) |
 | `jobs` *(since `0004_cluster`)* | `id` PK (`jobs_pkey`), `kind`, `payload` json (an object), `unique_key` null (`jobs_unique_key_uq`, NULLs distinct), `run_at`, `priority` int default 0, `status` (`queued`/`running`/`done`/`dead`, CHECK; no `failed`, P8), `attempts` int default 0, `max_attempts` int default 5 (≥ 1), `locked_by` (node id text), `locked_until`, `last_error` (≤ 1024 bytes), `created_at`, `finished_at`; indexes `jobs_finished_idx (finished_at)`, `jobs_lease_idx (locked_until) WHERE status = 'running'` (expired leases: reaper, SQLite pre-check), and for due jobs Postgres `jobs_claim_idx (priority DESC, run_at, id) WHERE status IN ('queued','running')` (the claim's ORDER BY, scanned up to LIMIT; R1) / SQLite `jobs_due_idx (run_at) WHERE status = 'queued'` (SQLite's planner combines due + lease as a MULTI-INDEX OR and sorts the due rows; it does not use an ORDER BY index after ANALYZE) | `JobRepo`: claim by kind with lease (Postgres `FOR UPDATE SKIP LOCKED` in a `MATERIALIZED` CTE; SQLite on the single writer, reader-pool `EXISTS` pre-check), expired lease at `max_attempts` → `dead` (P7), lease-holder writes conditional on `(id, node, attempts)` (P6); a counted `release` of the final attempt goes `dead` ("released after final attempt"). See [04](04-cluster.md#job-queue) |
 | `schema_meta` | `key` PK, `value` | `min_binary_version`, `created_by_version`, `site_id` |
 

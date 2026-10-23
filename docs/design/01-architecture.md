@@ -5,7 +5,7 @@
 The brief's layout (§7) is extended with storage, media and cluster crates. Dependencies
 point downwards only; no cycles.
 
-Status after M1c-2: crates marked **(built)** exist in `crates/` and are workspace members
+Status after M1.5: crates marked **(built)** exist in `crates/` and are workspace members
 (`Cargo.toml`); the others are planned and carry their milestone.
 
 ```
@@ -13,8 +13,9 @@ ferritecms/
 ├── Cargo.toml                    # workspace, shared [workspace.dependencies], lints
 ├── rust-toolchain.toml           # stable, edition 2024
 ├── crates/
-│   ├── ferrite/                  # (built) BIN: clap CLI (`init`, `migrate`, `serve`, `seed demo`),
-│   │                             #   logging, startup check, shutdown; anyhow at the top level
+│   ├── ferrite/                  # (built) BIN: clap CLI (`init`, `migrate`, `serve`, `seed demo`,
+│   │                             #   `config check`, `healthcheck`), logging, startup check, node
+│   │                             #   wiring (hot swap, jobs), shutdown; anyhow at the top level
 │   ├── ferrite-config/           # (built) ferrite.toml + env parsing, validation, init template
 │   ├── ferrite-domain/           # (built) pure types: ids, Post, Term, User, Role, Block, errors
 │   ├── ferrite-store/            # (built) repository traits + Store facade (no SQL)
@@ -117,7 +118,8 @@ the `plugins` table + artifacts (a broken row is skipped) → route table → bi
 `server.listen` → background tasks: invalidation loop (`LISTEN` in cluster mode) with the
 reloader hook, plugin-failure flusher, job runner, periodic scheduler, heartbeat → print
 `Listening on http://<addr>`. Signal handlers are installed before all of this; a signal
-during startup exits at once.
+during startup exits at once (130/143), after deregistering the node (bounded at 1 s) if it
+had already joined.
 
 Shutdown on SIGINT or SIGTERM, as built: stop accepting **and** stop the job runner → drain
 open requests for up to 10 s while running jobs get 9 s, then the rest are released without
@@ -267,7 +269,7 @@ media works with defaults. An explicit `mode = "cluster"` is rejected with SQLit
 local media unless `local_shared = true`.
 
 **Node startup checks** (`ferrite_cluster::Registry::join`, 04 §3, P15) need the database,
-so they run when a node joins the registry (wiring into `serve`: M1.5, planned), not in
+so they run when a node joins the registry (`serve`, after the migration check), not in
 `load`: a *live* node (heartbeat within 30 s by the database clock) with another `site_id`
 or another `site.url` refuses the start; in solo mode another live node is waited for up
 to 35 s, then refused. The waiting is unlocked; the final check-and-register pass runs
@@ -279,6 +281,11 @@ under the `cluster.join` lock, so nodes starting together are checked one at a t
 at once with the offending key path (one line per problem); a TOML syntax error is reported
 as `ferrite.toml` with line and column but without the source text, since it may contain
 secrets.
+
+`ferrite config check --data DIR` runs exactly this `load` (file + `FERRITE_*` environment)
+without opening the database or media, and prints
+`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n>` (exit 0)
+or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
 
 `ferrite-config` also renders the template that `ferrite init` writes
 (`render_default_toml`, `InitMedia`); see [09](09-operations.md#8-cli-summary).

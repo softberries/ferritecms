@@ -52,3 +52,17 @@ jobs:
       - run: cargo test --workspace
         env:
           FERRITE_TEST_PG_URL: postgres://ferrite@localhost:5432/ferrite_test
+
+  # The cluster example (P24): validated and built, not started (`docker compose up`
+  # is not run in CI; docs/superpowers/m15-exit.md).
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose -f examples/cluster/docker-compose.yml config --quiet
+      - run: docker build -t ferrite:ci .
+      - name: Image runs and validates the example config
+        run: |
+          docker run --rm --env-file examples/cluster/ferrite.env \
+            -v "$PWD/examples/cluster/ferrite.toml:/data/ferrite.toml:ro" \
+            ferrite:ci config check --data /data

@@ -94,8 +94,16 @@ when the active row names the artifact already running, an error (the caller kee
 current theme) when the new artifact fails, never a fallback to `blog` at runtime.
 Theme names are `[a-z0-9_-]{1,64}`.
 
-**Planned.** Wiring `reload_theme` to `theme.changed` on every node is M1.5 Task 10; theme
-install/activate commands and admin screens are M2.
+**Hot swap (as built, M1.5, P18).** On every node the reloader task
+(`crates/ferrite/src/reload.rs`) calls `reload_theme` after a `theme.changed` event (and
+after lost event history), off the invalidation loop. A new theme replaces the old one
+with `AppState::swap_theme` and the page cache is flushed again after the swap (the loop
+already flushed on the event). The replaced theme is kept as `previous_theme`, so
+`/_theme/<old hash>/…` URLs in pages rendered just before the swap keep working until the
+next swap. A theme that fails to load (missing or tampered artifact, template error)
+leaves the current theme serving, is reported in `nodes.meta.theme.error`, and is retried
+after 5 s, doubling to 5 min (R14). Theme install/activate commands and admin screens are
+M2 (P21); today `install_theme_dir` and `ExtensionService` are library calls.
 
 ## 2. Template hierarchy
 
@@ -191,9 +199,15 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 - **Fuel:** 5 000 000 instructions per render (`FUEL`). **Output cap:** 8 MiB
   (`MAX_OUTPUT`), enforced by a capped writer. Exhausted fuel, the output cap, the recursion
   limit and MiniJinja's own size guards are `ThemeError::Limit`.
-- **Known gap (R14):** fuel counts instructions, not bytes or CPU time, so a template can
-  build large intermediate strings. Accepted because themes are installed by administrators;
-  revisit in M1.5 when third-party theme artifacts install.
+- **Known gap (M1c-2 R14, decided in M1.5 by plan ruling P23):** fuel counts
+  instructions, not bytes or CPU time, so a template can build large intermediate strings
+  and run the process out of memory. It stays open until M4 (render worker): a per-thread
+  counting allocator cannot fail one allocation gracefully (a `GlobalAlloc` returning null
+  aborts the process), and MiniJinja has no check point other than fuel where a budget
+  could stop a render; the fix is rendering in a separate worker process with an OS memory
+  limit. M1.5 adds no untrusted install path (themes are installed only by an operator
+  calling `install_theme_dir`; the upload UI is M2). New risk: with hot swap a hostile
+  theme reaches every node at once.
 - **Preloaded data (plan ruling P2).** MiniJinja is synchronous, so everything a template
   sees is loaded into the render context first, through `SiteReader` (published-only). The
   data-backed helpers go through a `HelperBridge` that calls the async store with
@@ -282,10 +296,15 @@ are never cached.
   drops every page indexed under any of them, `all` drops everything. A page whose keys were
   invalidated while it rendered is not stored (staleness guard), and concurrent misses for one
   key render once (single flight).
-- **Invalidation** comes only from the `events` outbox through the polling loop
-  ([04 §4](04-cluster.md#4-event-bus--cache-invalidation)): `invalidate` and `options.changed`
-  drop their keys; `theme.changed`, `plugins.changed` and `plugin.disabled` flush; unknown kinds
-  drop their keys. Coarse `archive:<type>` keys cover listings (correctness over hit rate).
+- **Invalidation** comes only from the `events` outbox through the invalidation loop
+  ([04 §4](04-cluster.md#4-event-bus--cache-invalidation)), which polls every
+  `cache.poll_interval_ms` and, in cluster mode, is also woken by Postgres `NOTIFY`:
+  `invalidate` and `options.changed` drop their keys; `theme.changed`, `plugins.changed` and
+  `plugin.disabled` flush; unknown kinds drop their keys. Coarse `archive:<type>` keys cover
+  listings (correctness over hit rate).
+- **Hot swap (M1.5):** after a theme, plugin or permalink reload the node flushes the cache a
+  second time, because pages rendered during the swap may mix old and new state (P18, R13);
+  the cache refuses in-flight renders that started before a flush.
 - Not cached under the request path: error statuses (≥ 400), responses with `Set-Cookie`,
   previews, the 500 page and 503. Only GET and HEAD reach the cache.
 - **Shared error pages (R26):** the 404 and 410 bodies are rendered without the request path
@@ -294,7 +313,9 @@ are never cached.
 - **Short TTL**: search results and pages whose plugin calls were volatile or failed, or whose
   theme helper reads failed, are cached for 60 s (`SHORT_TTL`; a constant, not configurable
   yet).
-- Scheduled publish: `serve` runs `publish_due` every 30 s; its writes emit normal events.
+- Scheduled publish (M1.5, P12): scheduling an item enqueues a `content.publish_scheduled`
+  job due at `scheduled_at`; the periodic `content.publish_due` job (every 30 s, one per
+  period cluster-wide) is the safety net. Their writes emit normal events.
 - **Planned:** `Cache-Control: public, max-age=0, s-maxage=<cfg>` for CDNs is not sent (HTML
   pages carry no `Cache-Control`); per-user variants (M2).
 

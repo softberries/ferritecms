@@ -536,3 +536,118 @@ fn postgres_init_and_migrate() {
     c.args(["migrate", "verify", "--data"]).arg(tmp.path());
     assert!(stdout(c).contains("checksums OK"));
 }
+
+#[test]
+fn config_check_reports_effective_settings() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join("ferrite.toml"),
+        "[site]\nurl = \"https://example.com\"\n[cluster]\nworkers = 3\n",
+    )
+    .unwrap();
+    let out = stdout({
+        let mut c = ferrite();
+        c.args(["config", "check", "--data"]).arg(tmp.path());
+        c
+    });
+    assert_eq!(
+        out.trim(),
+        "ok: mode=solo database=sqlite media=local workers=3"
+    );
+    // Never touches the database or media folder.
+    assert!(!tmp.path().join("ferrite.db").exists());
+    assert!(!tmp.path().join("media").exists());
+}
+
+#[test]
+fn config_check_applies_env_like_serve() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join("ferrite.toml"),
+        "[site]\nurl = \"https://example.com\"\n",
+    )
+    .unwrap();
+    let out = stdout({
+        let mut c = ferrite();
+        c.args(["config", "check", "--data"])
+            .arg(tmp.path())
+            .env("FERRITE_DATABASE__URL", "postgres://u@db.invalid/x")
+            .env("FERRITE_MEDIA__BACKEND", "s3")
+            .env("FERRITE_MEDIA__S3__BUCKET", "b")
+            .env("FERRITE_MEDIA__S3__REGION", "us-east-1")
+            .env("FERRITE_CLUSTER__WORKERS", "2");
+        c
+    });
+    // auto + Postgres + S3 resolves to cluster.
+    assert_eq!(
+        out.trim(),
+        "ok: mode=cluster database=postgres media=s3 workers=2"
+    );
+}
+
+#[test]
+fn config_check_lists_every_problem_and_exits_1() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join("ferrite.toml"),
+        "[site]\nurl = \"ftp://x\"\n[cluster]\nmode = \"cluster\"\nworkers = 0\n",
+    )
+    .unwrap();
+    let out = ferrite()
+        .args(["config", "check", "--data"])
+        .arg(tmp.path())
+        .env("FERRITE_DATABASE__URL", "postgres://u:hunter2@db.invalid/x")
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    for path in ["site.url", "cluster.workers", "media.backend"] {
+        assert!(stderr.contains(path), "missing {path}: {stderr}");
+    }
+    assert!(!stderr.contains("hunter2"), "{stderr}");
+    assert!(out.stdout.is_empty());
+}
+
+/// Serves one canned HTTP response per connection on a loopback port.
+fn canned_http(response: &'static str) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for mut s in listener.incoming().flatten() {
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            let _ = s.write_all(response.as_bytes());
+        }
+    });
+    format!("http://{addr}/readyz")
+}
+
+#[test]
+fn healthcheck_exit_code_follows_status() {
+    let ok = canned_http("HTTP/1.1 200 OK\r\ncontent-length: 6\r\n\r\nready\n");
+    ferrite()
+        .args(["healthcheck", "--url", &ok])
+        .assert()
+        .success();
+    let busy =
+        canned_http("HTTP/1.1 503 Service Unavailable\r\ncontent-length: 10\r\n\r\nnot ready\n");
+    ferrite()
+        .args(["healthcheck", "--url", &busy])
+        .assert()
+        .code(1);
+    // Nothing listening.
+    let closed = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap()
+    };
+    ferrite()
+        .args(["healthcheck", "--url", &format!("http://{closed}/readyz")])
+        .assert()
+        .code(1);
+    ferrite()
+        .args(["healthcheck", "--url", "https://127.0.0.1/readyz"])
+        .assert()
+        .code(1);
+}

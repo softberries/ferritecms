@@ -1,0 +1,9 @@
+# Round-robin over both nodes; a node is taken out while /readyz is not 200.
+:8080 {
+	reverse_proxy node1:8080 node2:8080 {
+		lb_policy round_robin
+		health_uri /readyz
+		health_interval 5s
+		health_timeout 3s
+	}
+}

@@ -15,20 +15,24 @@ Read before doing anything substantial:
 ## Current status
 
 M0 (plugin host spike), M1a (storage), M1b (media), M1c-1 (config, CLI `init`/`migrate`,
-core services) and M1c-2 (router, themes, page cache, plugin wiring, `serve`, `seed demo`) are
-done, and the M1 exit criterion is verified (`docs/superpowers/m1-exit.md`). Open M1
-follow-ups (deferred minors) stay listed under M1 in the roadmap. Next is M1.5 (cluster mode). Work top-down in
-`docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/`.
+core services), M1c-2 (router, themes, page cache, plugin wiring, `serve`, `seed demo`) and
+M1.5 (cluster mode: node registry, LISTEN/NOTIFY event bus, job queue, locks, themes as
+artifacts, hot swap, shared plugin failure counters, compose example) are done; the M1 and
+M1.5 exits are written up in `docs/superpowers/m1-exit.md` and `m15-exit.md` (the M1.5 one
+lists what was not verified). Open follow-ups stay listed in the roadmap. Next is M2 (API,
+auth, admin). Work top-down in `docs/ROADMAP.md`; per-milestone rulings are in
+`docs/superpowers/rulings/`.
 
-Crate map (`crates/`): `ferrite` (bin: CLI) -> `ferrite-http` (public site, router, head,
-plugin wiring) -> `ferrite-cache` (page cache + outbox invalidation loop), `ferrite-theme`
-(themes, hierarchy, MiniJinja renderer), `ferrite-core` (services, permalinks, `SiteReader`),
-`ferrite-media`, `ferrite-plugin-host`; `ferrite-core` -> `ferrite-store` (traits) <-
+Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers)
+-> `ferrite-http` (public site, router, head, plugin wiring, plugin reloader, shared failure
+counters) -> `ferrite-cache` (page cache + outbox invalidation loop with LISTEN wake-ups),
+`ferrite-theme` (themes, bundles, hierarchy, MiniJinja renderer), `ferrite-core` (services,
+permalinks, `SiteReader`, `ExtensionService`), `ferrite-media`, `ferrite-plugin-host`;
+`ferrite` also -> `ferrite-cluster` (node registry, job runner, periodic scheduler, built-in
+prune jobs) -> `ferrite-store` (traits); `ferrite-core` -> `ferrite-store` (traits) <-
 `ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite);
-`ferrite-domain` (types), `ferrite-config`, `ferrite-sdk` (guest SDK); `ferrite-cluster` (job
-runner, periodic scheduler, built-in prune jobs; M1.5, not wired into `serve` yet) ->
-`ferrite-store` (traits). Starter theme: `themes/blog` (embedded). Not built yet: cluster node
-registry, import-wp, REST API/admin
+`ferrite-domain` (types), `ferrite-config`, `ferrite-sdk` (guest SDK). Starter theme:
+`themes/blog` (embedded). Not built yet: import-wp, REST API/admin
 (`docs/design/01-architecture.md` §1).
 
 Run a site locally:
@@ -39,6 +43,18 @@ Ctrl-C/SIGTERM). `cargo run -p ferrite -- migrate status --data /tmp/site` exits
 2 pending, 3 incompatible, 1 error; with SQLite it (and `seed`) fails while `serve` holds the
 data-folder lock. `FERRITE_LOG=debug` sets log verbosity; `FERRITE_<SECTION>__<KEY>` overrides
 config (e.g. `FERRITE_SERVER__LISTEN=127.0.0.1:0` for a free port).
+`cargo run -p ferrite -- config check --data /tmp/site` validates config + env without
+touching the database (exit 0 prints `ok: mode=… database=… media=… workers=…`, exit 1 lists
+problems).
+
+Run two cluster nodes locally: two data folders whose `ferrite.toml` share `site.url`,
+`database.url` (Postgres) + `database.schema`, and `[media] root = "<shared dir>"` with
+`local_shared = true`, `cluster.mode = "cluster"`, different `server.listen` ports and
+`cluster.node_name`s; `init` the first folder with `--db postgres://… --schema …`, then
+`serve` both. Docker example (not run in CI, only validated): `examples/cluster/`
+(`docker compose -f examples/cluster/docker-compose.yml up --build`; design 09 §7).
+Cluster integration tests: `FERRITE_TEST_PG_URL=… cargo test -p ferrite --test cluster`
+(serialised in-process; about 30 s).
 
 Two deployment profiles must both work: **solo** (SQLite + local media, one node) and
 **cluster** (Postgres + S3-compatible media, N nodes). See `docs/design/00-overview.md`.

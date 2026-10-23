@@ -76,6 +76,27 @@ rollback is always driven by the newer binary before swapping back.
   DB has seen (`schema_meta.min_binary_version`), so operators know whether the old
   image can run.
 
+**Rolling deploy, as built (M1.5;
+[04 §9](04-cluster.md#9-rolling-deploys)):**
+
+- Start the first new node. It takes the `migrate` advisory lock and applies the pending
+  expand migrations (`database.auto_migrate`, default on); other nodes starting at the
+  same moment wait for the lock (up to 5 min, logged every 10 s), then find nothing to do.
+  Two nodes started together on an empty schema (what `docker compose up` does) migrate
+  exactly once.
+- Old nodes keep serving next to new ones: codecs ignore unknown columns, old runners
+  claim only job kinds they know and hand back unknown payload versions without using an
+  attempt, and an unknown event kind invalidates its keys.
+- Replace the remaining nodes one at a time. SIGTERM releases the node's running jobs
+  (another node claims them at once) and deregisters it; give the process manager at
+  least 15 s before SIGKILL (shutdown is bounded at 14 s; the compose example uses
+  `stop_grace_period: 20s`).
+- `site.url` must not change during a rolling deploy: a node whose `site.url` differs from
+  a live node's refuses to start (P15). Change it with all nodes stopped (or 30 s after the
+  last one stopped).
+- Watch the `nodes` table: `version`, `schema_version`, `heartbeat_at` and `meta` (theme
+  and plugin state per node) for every live node.
+
 ## 4. Backup & restore
 
 | | Solo (SQLite + local media) | Cluster (Postgres + S3) |
@@ -119,14 +140,52 @@ monitoring.)
 - Release targets: `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl`,
   `aarch64-unknown-linux-gnu`, `aarch64-unknown-linux-musl`, `aarch64-apple-darwin`,
   `x86_64-apple-darwin` (wasmtime/cranelift support for all to verify in CI).
-- Docker image: distroless/static or `scratch` + CA certs; `VOLUME /data`; non-root.
+- **Docker image (as built, M1.5):** `Dockerfile` at the repository root, multi-stage:
+  `rust:1-bookworm` (current stable, matching `rust-toolchain.toml`'s `channel = "stable"`)
+  builds `cargo build --release --locked -p ferrite`; the runtime is
+  `gcr.io/distroless/cc-debian12:nonroot` (glibc, no shell, uid 65532) with the binary at
+  `/ferrite`, an empty `/data` owned by the non-root user, `VOLUME /data`, `EXPOSE 8080`,
+  `ENTRYPOINT ["/ferrite"]`, `CMD ["serve", "--data", "/data"]`. CA certificates come with
+  the distroless base. `.dockerignore` keeps `target/`, `.git`, docs and examples out of
+  the build context. Health checks use `ferrite healthcheck` (§8), because the image has
+  no shell, curl or wget. CI builds the image (`docker build -t ferrite:ci .`) and runs
+  `config check` in it; publishing images is M4.
 - systemd unit with hardening (`ProtectSystem=strict`, `ReadWritePaths=/var/lib/ferrite`,
-  `NoNewPrivileges`, `MemoryMax`).
-- Example `docker-compose.yml` for cluster: 2× ferrite + postgres + minio + caddy.
+  `NoNewPrivileges`, `MemoryMax`) (M4).
+- **Cluster example (as built, M1.5):** `examples/cluster/` — `docker-compose.yml`,
+  `ferrite.toml`, `ferrite.env`, `Caddyfile`. Usage (also in the compose file's header):
+
+  ```
+  docker compose -f examples/cluster/docker-compose.yml up --build
+  open http://localhost:8080
+  docker compose -f examples/cluster/docker-compose.yml exec node1 /ferrite seed demo --data /data
+  ```
+
+  Services: `postgres` (`postgres:18`, `pg_isready` health check, data volume at
+  `/var/lib/postgresql`), `minio` (`minio/minio`, `server /data`), `minio-init`
+  (`minio/mc`: creates bucket `ferrite`, then exits), `node1`/`node2` (built from the
+  repository, `serve --data /data`, `env_file: ferrite.env`, `ferrite.toml` mounted
+  read-only at `/data/ferrite.toml`, `FERRITE_CLUSTER__NODE_NAME` per node, health check
+  `/ferrite healthcheck --url http://127.0.0.1:8080/readyz`, start after Postgres is
+  healthy and `minio-init` completed, `stop_grace_period: 20s`) and `caddy` (`caddy:2`,
+  port `8080:8080`, `reverse_proxy node1:8080 node2:8080` with `lb_policy round_robin`
+  and `health_uri /readyz`). The shared `ferrite.toml` sets `site.url =
+  "http://localhost:8080"`, `server.listen = "0.0.0.0:8080"`, `server.trusted_proxies =
+  ["172.28.0.0/16"]` (the compose network's subnet, so Caddy's `X-Forwarded-For` is
+  honoured), `cluster.mode = "cluster"` and S3 media on MinIO (`bucket = "ferrite"`,
+  `region = "us-east-1"`, `endpoint = "http://minio:9000"`, `allow_http = true`).
+  `ferrite.env` holds `FERRITE_DATABASE__URL` and the S3 key pair: **demo values**,
+  shared with the `postgres` and `minio` service definitions; replace them together.
+  **Verification status (P24):** `crates/ferrite/tests/examples.rs` loads the example's
+  `ferrite.toml` + `ferrite.env` through `ferrite_config::load` and `ferrite config check`,
+  and checks that every `FERRITE_*` name in the compose file is a known setting; CI runs
+  `docker compose … config --quiet` and `docker build`. `docker compose up` is not run
+  anywhere yet, so problems in the runtime wiring (Caddy health checks, the MinIO bucket
+  init) would only show when someone runs it.
 
 ## 8. CLI summary
 
-### Implemented (M1c-1 and M1c-2: `crates/ferrite`)
+### Implemented (M1c-1, M1c-2 and M1.5: `crates/ferrite`)
 
 ```
 ferrite init --data DIR --url URL [--title T] [--db URL] [--schema NAME] [--media s3://bucket/prefix]
@@ -134,9 +193,25 @@ ferrite migrate status --data DIR
 ferrite migrate up     --data DIR [--to VERSION]
 ferrite migrate down   --data DIR --to VERSION [--allow-lossy] [--yes]
 ferrite migrate verify --data DIR
-ferrite serve          --data DIR                      # M1c-2
+ferrite serve          --data DIR                      # M1c-2; cluster wiring M1.5
 ferrite seed demo      --data DIR [--force]            # M1c-2
+ferrite config check   --data DIR                      # M1.5
+ferrite healthcheck    [--url URL]                     # M1.5, for container health checks
 ```
+
+**`ferrite config check`** (`crates/ferrite/src/config_cmd.rs`): loads `<data>/ferrite.toml`
+plus the `FERRITE_*` environment exactly as `serve` does (`ferrite_config::load`) and never
+opens the database or the media store. Valid: prints one line,
+`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n>` (`mode`
+is the effective mode, `auto` resolved; `workers` the effective `cluster.workers`), exit
+0. Invalid: prints `error: invalid configuration (<n> problem(s))` and one
+`  <path>: <message>` line per problem to stderr (secret values are never printed), exit 1.
+Checks that need the database (site id, live nodes, migrations) are not part of it.
+
+**`ferrite healthcheck`** (`crates/ferrite/src/healthcheck.rs`): `GET`s `--url` (default
+`http://127.0.0.1:8080/readyz`; plain `http://` only) and exits 0 on a 200 response, 1 on
+any other status, a connection error or no response within 5 s. It exists because the
+distroless image has no HTTP client for a container `HEALTHCHECK`.
 
 **Logging.** Logs go to stderr. `FERRITE_LOG` is an `EnvFilter` expression (for example
 `FERRITE_LOG=debug`); unset, the filter is `info`; an invalid value prints a warning and falls
@@ -237,9 +312,9 @@ also installs the `ring` rustls default crypto provider at start.
   writes once more) and the node deregisters, together within 1 s; the database pools close
   (up to 2 s, cut so that shutdown so far ends within 13 s of the signal); `main` then shuts
   the runtime down with a 1 s grace, dropping connection tasks still running. A clean
-  shutdown exits 0; the process is gone at most 14 s after the first signal. A second
-  SIGINT/SIGTERM during startup (after joining the registry the node first leaves it, within
-  1 s) or shutdown exits at once with 130 (SIGINT) or 143 (SIGTERM).
+  shutdown exits 0; the process is gone at most 14 s after the first signal. A signal
+  during startup (after joining the registry the node first leaves it, within 1 s), or a
+  second signal during shutdown, exits at once with 130 (SIGINT) or 143 (SIGTERM).
 - **Health:** `/healthz` is `200 ok`; `/readyz` is `200` when a store read succeeds within
   2 s and the startup migration check passed, else `503`.
 - **Settings it uses** (`[server]`, `[cache]`, `[plugins]`, 01 §4): `server.listen`,
@@ -280,5 +355,5 @@ ferrite plugin new|check|install|list|enable|disable|remove     # M2
 ferrite theme install|activate|list                             # M2
 ferrite user create|reset-password|list                         # M2 (init will then create the admin user)
 ferrite self-update / rollback [--schema] [--restore-snapshot]  # M4
-ferrite doctor        # validates config, connectivity, permissions, clock skew, versions
+ferrite doctor        # validates connectivity, permissions, clock skew, versions (config: `config check`)
 ```

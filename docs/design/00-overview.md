@@ -97,10 +97,21 @@ Decisions taken during design discussion. "User" = decided by the project owner;
 Implementation-level rulings taken while building each milestone (smaller than these
 decisions, each with its reason and cost) are recorded per milestone in
 [`docs/superpowers/rulings/`](../superpowers/rulings/): `m1a.md`, `m1b.md`, `m1c1.md`,
-`m1c2.md`. Two M1c-2 rulings narrow decisions above for M1: themes load from the embedded
-starter themes and `data/themes/` folders, with artifact distribution (D11) moved to M1.5
-(plan ruling P1); plugins load from the `plugins` table and their artifacts at startup only,
-with hot reload in M1.5 (plan ruling P3).
+`m1c2.md`, `m15.md`. Two M1c-2 rulings narrowed decisions above for M1: themes loaded from
+the embedded starter themes and `data/themes/` folders, with artifact distribution (D11)
+moved to M1.5 (plan ruling P1); plugins loaded from the `plugins` table and their artifacts
+at startup only, with hot reload in M1.5 (plan ruling P3). M1.5 delivered both
+([`m15.md`](../superpowers/rulings/m15.md)) and refines D7 and D11:
+
+- **M1.5 P1:** the coordination mechanism follows the *database backend*, not
+  `cluster.mode`. Postgres always uses `SKIP LOCKED` job claims, advisory locks and
+  `NOTIFY` (even for a solo node, because `ferrite migrate` or a second node can reach the
+  same database); SQLite uses the single-writer claim, an in-process mutex and no
+  subscription. `cluster.mode` only decides whether a node listens for notifications, the
+  solo single-live-node rule and whether `data/themes/` folders are read.
+- **M1.5 P17:** theme artifacts (D11) are plain deterministic ustar bundles
+  (`application/x-tar`), not `tar.zst`; in cluster mode `data/themes/` is ignored so every
+  node runs the artifact recorded in the database.
 
 ## Verified facts this design relies on
 

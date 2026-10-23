@@ -40,7 +40,13 @@ upload .wasm + manifest ──► validate manifest ──► inspect component 
   on-disk component cache); new or changed rows, and rows enabled again after a host-side
   disable, are fetched (SHA-256 checked), grant-checked (R21) and prepared; a version that
   fails keeps the previous one running (reported `Failed`); disabled and deleted rows are
-  dropped. Startup's `load_plugins` is the first reload. Operators install with
+  dropped. Startup's `load_plugins` is the first reload. In `ferrite serve` one
+  `PluginReloader` per process runs again on every `plugins.changed` and
+  `plugin.disabled` event (the latter also disables the plugin in this host at once) and
+  after lost event history, on the node's reload task (`crates/ferrite/src/reload.rs`,
+  P18), never on the event loop; the page cache is flushed after each event-driven reload
+  (R13), and a failed reload is retried after 5 s, doubling to 5 min, until it succeeds or
+  a newer event arrives (R14). Operators install with
   `ferrite::extensions::install_plugin_file` (prepares on a scratch host first, uploads,
   then `ExtensionService` writes artifact row + plugin row + `plugins.changed` in one
   transaction; P21). Admin approval/permission display, the update-needs-approval flow
@@ -551,7 +557,9 @@ transaction, and so does an install that changes an existing row's artifact.
 - A page rendered across a swap can run early hooks on a plugin's old version and later
   hooks on its new one. This is accepted.
 - The node flushes the page cache after each committed reload (P18), which drops such
-  pages. Buckets are pruned hourly by the `plugin_failures.prune` job after
+  pages.
+
+**Retention.** Buckets are pruned hourly by the `plugin_failures.prune` job after
 `max(24 h, 2 × plugins.failure_window)`. Metrics are M4. "Plugin marked broken on this
 node" for instantiation failures is not separate: it counts as a failure like any other.
 

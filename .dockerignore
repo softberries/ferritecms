@@ -1,0 +1,14 @@
+# Build context for the Dockerfile: sources only.
+.git
+.github
+.claude
+.superpowers
+target
+plugins/target
+docs
+examples
+site
+**/*.db
+**/*.db-shm
+**/*.db-wal
+.env

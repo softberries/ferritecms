@@ -1,0 +1,109 @@
+# FerriteCMS cluster example: 2 ferrite nodes + Postgres + MinIO (S3) + Caddy.
+#
+# Usage (from the repository root):
+#   docker compose -f examples/cluster/docker-compose.yml up --build
+#   open http://localhost:8080
+#   docker compose -f examples/cluster/docker-compose.yml exec node1 /ferrite seed demo --data /data
+#   docker compose -f examples/cluster/docker-compose.yml exec node1 /ferrite config check --data /data
+#
+# Both nodes start at once on an empty database; one applies the migrations under the
+# `migrate` advisory lock, the other waits for it (design 04 §9). Changes saved through
+# either node reach the other through Postgres LISTEN/NOTIFY (design 04 §4).
+#
+# DEMO CREDENTIALS: the passwords below and in ferrite.env are placeholders shared
+# between the services. Change them together before exposing anything.
+#
+# Status: verified by `ferrite config check` (crates/ferrite/tests/examples.rs) and by
+# `docker compose config` + `docker build` in CI; `docker compose up` itself is not run
+# in CI (docs/superpowers/m15-exit.md).
+
+name: ferrite-cluster
+
+x-ferrite-node: &ferrite-node
+  build: ../..
+  image: ferrite:example
+  command: ["serve", "--data", "/data"]
+  env_file: ferrite.env
+  volumes:
+    - ./ferrite.toml:/data/ferrite.toml:ro
+  healthcheck:
+    test: ["CMD", "/ferrite", "healthcheck", "--url", "http://127.0.0.1:8080/readyz"]
+    interval: 5s
+    timeout: 6s
+    retries: 5
+    start_period: 30s
+  depends_on:
+    postgres:
+      condition: service_healthy
+    minio-init:
+      condition: service_completed_successfully
+  # Shutdown is bounded at 14 s (design 09 §3); give it room before SIGKILL.
+  stop_grace_period: 20s
+  networks: [ferrite]
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ferrite
+      POSTGRES_PASSWORD: ferrite-demo-password
+      POSTGRES_DB: ferrite
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "ferrite", "-d", "ferrite"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      # postgres:18 keeps its data under /var/lib/postgresql/18/docker.
+      - pgdata:/var/lib/postgresql
+    networks: [ferrite]
+
+  minio:
+    image: minio/minio
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ferrite-demo
+      MINIO_ROOT_PASSWORD: ferrite-demo-secret
+    volumes:
+      - miniodata:/data
+    networks: [ferrite]
+
+  minio-init:
+    image: minio/mc
+    depends_on: [minio]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 ferrite-demo ferrite-demo-secret; do sleep 1; done
+        mc mb --ignore-existing local/ferrite
+    networks: [ferrite]
+
+  node1:
+    <<: *ferrite-node
+    environment:
+      FERRITE_CLUSTER__NODE_NAME: node1
+
+  node2:
+    <<: *ferrite-node
+    environment:
+      FERRITE_CLUSTER__NODE_NAME: node2
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on: [node1, node2]
+    networks: [ferrite]
+
+networks:
+  ferrite:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  pgdata:
+  miniodata:

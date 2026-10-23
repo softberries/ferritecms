@@ -1,0 +1,24 @@
+# Shared by node1 and node2 (mounted read-only at /data/ferrite.toml). Secrets and the
+# per-node name come from the environment: ferrite.env and docker-compose.yml.
+
+[site]
+url = "http://localhost:8080"
+title = "FerriteCMS cluster example"
+
+[server]
+listen = "0.0.0.0:8080"
+# The compose network (docker-compose.yml `networks.ferrite`): Caddy's
+# X-Forwarded-For is trusted only from addresses in it.
+trusted_proxies = ["172.28.0.0/16"]
+
+[cluster]
+mode = "cluster"
+
+[media]
+backend = "s3"
+
+[media.s3]
+bucket = "ferrite"
+region = "us-east-1"
+endpoint = "http://minio:9000"
+allow_http = true

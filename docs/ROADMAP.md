@@ -59,7 +59,8 @@ Controller rulings: [m1a](superpowers/rulings/m1a.md), [m1b](superpowers/rulings
 - [x] Transactional outbox (`events`) written by every invalidating write:
   - [x] Written in the same transaction by content, lifecycle, term, menu and options writes in `ferrite-core` (`events.rs`).
   - [x] Redirect writes emit informational `redirect:<source>` events (M1c-2 Task 3); the dependency-key contract is documented in `events.rs`.
-  - Not yet emitted because no write path exists: `theme`/`theme.changed`, `plugins`/`plugins.changed` (M1.5/M2), `user:<id>` (M2 user service), `post:<media id>` for media-row writes outside `seed` (M2 media service).
+  - [x] `theme.changed`, `plugins.changed` and `plugin.disabled` are emitted by `ExtensionService` and the shared failure counters (M1.5; design 04 §4 "Event kinds").
+  - Not yet emitted because no write path exists: `user:<id>` (M2 user service), `post:<media id>` for media-row writes outside `seed` (M2 media service).
 - [x] `ferrite serve`: router (pure, canonical paths, permalink matching), redirects before the cache, 404/410 shared pages, RSS feeds, sitemaps, `robots.txt`, `/healthz`, `/readyz`, bounded shutdown (M1c-2; design 06 §3, 09 §8).
 - [x] `ferrite seed demo` (posts, pages, terms, menus, sample image with variants; M1c-2).
 - [x] Theme engine: MiniJinja (fuel, output cap, no loader), hierarchy resolution (incl. front page, R17), safe helpers, dependency recording; `blog` theme (M1c-2; design 06 §1–§4).
@@ -103,24 +104,35 @@ the event outbox. On SQLite the folder lock prevents a second process from writi
 
 ## M1.5 — Cluster mode (~3 weeks)
 
-Design: [04](design/04-cluster.md).
+Design: [04](design/04-cluster.md) (as built). Rulings: [`docs/superpowers/rulings/m15.md`](superpowers/rulings/m15.md).
 
-- [ ] Node registry + heartbeat, startup validation (mode/backends/site_id/clock skew).
-- [ ] Event bus: `LISTEN/NOTIFY` + catch-up polling + gap handling; cache flush on lost history.
-- [ ] Job queue: claim with `SKIP LOCKED`, leases, retries, dead jobs, periodic scheduler via unique keys.
-- [ ] Distributed locks (advisory), used by migrate / install / import.
-- [ ] Artifact sync for plugins and themes across nodes; per-node plugin state.
-- [ ] Shared plugin failure counters + cluster-wide auto-disable.
-- [ ] Cluster integration tests (2–3 in-process nodes): invalidation latency, job exclusivity, lease expiry, rolling version coexistence.
-- [ ] `docker-compose` example: 2× ferrite + postgres + minio + caddy.
-- [ ] Deferred from M1c-2:
-  - [ ] Event bus remainder: the outbox polling loop with gap handling and the late-commit probe (R24) is built (`crates/ferrite-cache`, 04 §4); still to do are `LISTEN/NOTIFY`, the lost-history flush on reconnect, and pruning events older than 24 h.
-  - [ ] Postgres `idle_in_transaction_session_timeout` shorter than the 10-minute late horizon (`LATE_HORIZON`), so no writer holds a seq uncommitted past it.
-  - [ ] Invalidation loop: test the late-probe resume path (`probe_from`); very wide late spans may delay probing.
-  - [ ] Themes as artifacts (plan ruling P1) and hot swap on `theme.changed`; plugin hot reload on `plugins.changed` (P3); rebuild the route table on permalink option changes. Today all three are read at startup and need a restart.
-  - [ ] Revisit template memory limits when third-party theme artifacts install (ruling R14: per-thread counting allocator or a render worker).
+- [x] Node registry + heartbeat, startup validation (mode/backends/site_id/site.url/solo single-live-node/clock skew) (`crates/ferrite-cluster/src/node.rs`; 04 §3, P14, P15, R7, R8).
+- [x] Event bus: `LISTEN/NOTIFY` (notify from the inserting statement, per-schema channels) + catch-up polling + gap handling; cache flush and node reload on lost history; events pruned after 24 h (04 §4; P1–P4, R9).
+- [x] Job queue: claim with `SKIP LOCKED`, lease token, renewals and local fencing, retries with backoff, dead jobs, periodic scheduler via unique keys, shutdown hand-back (`crates/ferrite-cluster/src/jobs/`; 04 §6; P5–P11, R1, R4–R6).
+- [x] Distributed locks (advisory on Postgres, in-process on SQLite), used by migrate (`migrate`), theme/plugin install and activation (`extensions`) and node join (`cluster.join`); `import` reserved for M3 (04 §7; P13).
+- [x] Artifact sync for plugins and themes across nodes (themes as deterministic tar artifacts, P17); hot swap of theme, plugins and permalink rules with keep-previous-on-failure and retry; per-node state in `nodes.meta` (04 §8, 05 §2, 06 §1; P18, P19, P22, R13, R14).
+- [x] Shared plugin failure counters + cluster-wide auto-disable (05 §8; P20, R12).
+- [x] Scheduled publishing as jobs (`content.publish_scheduled` per item, `content.publish_due` safety net every 30 s; P12).
+- [x] Cluster integration tests (2–3 in-process nodes on one Postgres schema, plus two `ferrite serve` processes): invalidation latency, job exclusivity, lease expiry after a crash, periodic once-per-period, rolling version coexistence, concurrent first start, reload on every node, cluster-wide auto-disable (`crates/ferrite/tests/cluster/`, `crates/ferrite/tests/serve.rs`).
+- [x] `docker-compose` example: 2× ferrite + postgres + minio + caddy (`examples/cluster/`, `Dockerfile`; 09 §7). Verified by `ferrite config check` in `crates/ferrite/tests/examples.rs` and by `docker compose config` + `docker build` in CI; `docker compose up` is not run (P24).
+- [x] `ferrite config check` (09 §8).
+- [x] Deferred from M1c-2:
+  - [x] Event bus remainder: `LISTEN/NOTIFY`, the lost-history flush on reconnect, and pruning events older than 24 h.
+  - [x] Postgres `idle_in_transaction_session_timeout` = 60 s, shorter than the 10-minute late horizon (P4).
+  - [x] Invalidation loop: the late-probe resume path is tested (`late_probe_resumes_where_it_stopped`; bound documented in 04 §4).
+  - [x] Themes as artifacts and hot swap on `theme.changed`; plugin hot reload on `plugins.changed`; route table rebuilt on permalink option changes.
+  - [x] Template memory limits (M1c-2 R14) revisited: decided by P23, deferred to M4 (render worker).
 
 **Exit:** two nodes behind a proxy; a save on node A is reflected on node B within ~1 s; killing a node mid-job doesn't lose the job.
+
+**Exit verified (2026-10-23), with limits:** [`docs/superpowers/m15-exit.md`](superpowers/m15-exit.md).
+Automated: in-process multi-node tests and a two-process `ferrite serve` test on one
+Postgres schema (invalidation p50 8–14 ms with `LISTEN` over two runs, max 258 ms in the
+poll-only phase, under the 1 s bound everywhere; a crashed node's job finished by another
+node 2.52 s after the crash with a 2 s test lease). Manual: two `ferrite serve` processes on local Postgres served an edit within one
+request round trip. Not verified: a reverse proxy in front (the Caddy config is validated
+only), `docker compose up`, and an OS-level kill of a process mid-job (the crash is
+simulated in process, P25).
 
 ## M2 — API, auth & admin (~6 weeks)
 
@@ -154,6 +166,11 @@ Design: [07](design/07-admin-api.md).
   - [ ] Wire the `render.footer` filter into rendering (in the hook catalogue, not called yet).
   - [ ] Make the 60 s short TTL configurable (search TTL with `0` disabling it, 06 §6; `plugins.volatile_ttl`, 05 §7a).
   - [ ] The M2 install flow must always set `plugins.granted` (a non-null `{}` skips every plugin that needs a capability, R21).
+- [ ] Deferred from M1.5:
+  - [ ] `ferrite theme install|activate|list` and `ferrite plugin …` commands over `ExtensionService` (P21; today `install_theme_dir` / `install_plugin_file` are library calls only).
+  - [ ] `plugin.action` jobs (action hooks off the request path, 04 §6); each call must snapshot the plugin registry once (R13) (P26).
+  - [ ] `sessions.prune` periodic job with the sessions table (P26).
+  - [ ] Admin "Nodes" and "Jobs" screens reading `nodes` (incl. `nodes.meta` theme/plugin state) and `jobs` (queued kinds no node knows stay queued, P5; dead jobs with `last_error`).
 
 ## M3 — WordPress import (~2 weeks)
 
@@ -166,6 +183,7 @@ Design: [08](design/08-wp-import.md).
 - [ ] Yoast / Rank Math → SEO fields; ACF → custom fields (verify key names on real exports).
 - [ ] `import-report.html`; CLI + admin job.
 - [ ] Tests against 2–3 real WP exports.
+- [ ] Deferred from M1.5: the import job must override `JobHandler::timeout()` (default 300 s, P9), take the `import` lock (P13), and batch its events per transaction (R2: Postgres serialises commits of transactions that ran `NOTIFY`).
 
 ## M4 — Ops & release (~2–3 weeks)
 
@@ -183,7 +201,7 @@ Design: [09](design/09-operations.md).
 - [ ] `self-update` (signed), `rollback`, `rollback --schema`, `--restore-snapshot`.
 - [ ] ACME TLS (solo).
 - [ ] `/metrics`, `node_metrics`, dashboard charts wired.
-- [ ] Release builds for all targets, Docker image, systemd unit, cluster runbook.
+- [ ] Release builds for all targets, published Docker image (a `Dockerfile` exists since M1.5, built in CI), systemd unit, cluster runbook.
 - [ ] Backward-compat CI job (from first tag).
 - [ ] Example plugins: SEO, privacy-friendly analytics, contact form; starter themes `docs`, `business`.
 - [ ] Docs site (built with FerriteCMS itself).
@@ -193,6 +211,13 @@ Design: [09](design/09-operations.md).
   - [ ] `Cache-Control: public, max-age=0, s-maxage=<cfg>` on HTML for CDNs (06 §6; HTML pages send no `Cache-Control` today).
   - [ ] Automated accessibility checks (axe) in CI for the starter themes (06 §8).
   - [ ] Signed or scoped direct media: with `[media.s3] public_base_url` (Direct mode) the published-only check and the attachment/`nosniff`/CSP headers do not apply, and unpublished media and plugin artifacts stay readable by hash (03 §5). Short-lived signed URLs, or a published-only bucket path.
+- [ ] Deferred from M1.5:
+  - [ ] Template memory bound via a render worker process with an OS memory limit (P23, M1c-2 R14); until then an operator-installed hostile theme can OOM every node at once (hot swap).
+  - [ ] On-disk artifact / precompiled-component cache keyed by hash + wasmtime version + CPU features (P19; restarts re-fetch and recompile today).
+  - [ ] `node.drain` handling (the event kind exists, the loop ignores it; P26).
+  - [ ] PgBouncer transaction pooling (listeners and locks need direct connections; 02 §6, P26).
+  - [ ] Run the cluster example end to end (`docker compose up` behind Caddy, MinIO bucket init, Caddy health checks) in CI or a release check (P24).
+  - [ ] An OS-level crash test (SIGKILL a `ferrite serve` child mid-job) and a silent network partition of the `LISTEN` connection (TCP proxy), neither exercised in M1.5 (P25; m15-exit.md).
 - [ ] Performance follow-ups from the M1c-2 final review:
   - [ ] Sitemaps: the index walks every public row of every type (with ancestors, terms and permalinks) just to count files and take `max(lastmod)`, and `/sitemap-<kind>-<n>.xml` walks `n − 1` full files to find its cursor; both re-run on the first crawler request after any write to the kind. Use `sitemap_files` (a count) for the file count, a per-file aggregate for `lastmod`, and keyset seeking instead of walking (`crates/ferrite-http/src/app/feeds.rs`).
   - [ ] Every hydration renders each body twice (`MediaRefs::of` collects references with a recording render, then the real render runs), including reads that never show the body: feeds, plugin `list_posts`/`get_post`. Add a reader option that skips `html`, or collect the references in one pass (`crates/ferrite-core/src/site/hydrate.rs`).
