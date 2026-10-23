@@ -285,9 +285,10 @@ never takes the writer); otherwise the reaper and the same claim without
 - **Payload versions (P5, 04 §9):** a payload without `v` is version 1; a `v` the handler
   does not support is released after the backoff with the attempt refunded; a `v` that is
   not an unsigned integer is `dead`.
-- **Wake-up:** idle runners poll every 1 s; a freed worker slot claims at once; in cluster
-  mode `jobs.enqueue` also notifies `ferrite_jobs[_<schema>]` (payload: the kind) and the
-  runner's listener wakes the claim loop (resubscribe backoff 1 s doubling to 30 s).
+- **Wake-up:** idle runners poll every 1 s; a freed worker slot claims at once. On Postgres
+  `jobs.enqueue` always notifies `ferrite_jobs[_<schema>]` (payload: the kind, every mode,
+  P1/P2); only in cluster mode does the runner listen, and then a notice wakes the claim
+  loop (resubscribe backoff 1 s doubling to 30 s).
 - **Concurrency:** `cluster.workers` handlers per node, default `max(2, available
   parallelism)`, explicit 1..=256 (P16).
 - **Shutdown (P10):** the first signal stops claiming; in-flight jobs get 9 s (alongside the

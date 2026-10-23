@@ -41,14 +41,19 @@ pub async fn run(args: HealthcheckArgs) -> anyhow::Result<ExitCode> {
 async fn probe(url: &str) -> anyhow::Result<u16> {
     let url = url::Url::parse(url).context("invalid --url")?;
     anyhow::ensure!(url.scheme() == "http", "--url must be an http:// URL");
+    // `host_str` keeps IPv6 brackets (`[::1]`): right for the Host header, not for connect.
     let host = url.host_str().context("--url has no host")?;
     let port = url.port_or_known_default().unwrap_or(80);
+    let connect_host = match url.host() {
+        Some(url::Host::Ipv6(ip)) => ip.to_string(),
+        _ => host.to_owned(),
+    };
     let mut target = url.path().to_owned();
     if let Some(q) = url.query() {
         target.push('?');
         target.push_str(q);
     }
-    let mut stream = TcpStream::connect((host, port))
+    let mut stream = TcpStream::connect((connect_host.as_str(), port))
         .await
         .with_context(|| format!("cannot connect to {host}:{port}"))?;
     let authority = match url.port() {

@@ -130,8 +130,8 @@ Automated: in-process multi-node tests and a two-process `ferrite serve` test on
 Postgres schema (invalidation p50 8–14 ms with `LISTEN` over two runs, max 258 ms in the
 poll-only phase, under the 1 s bound everywhere; a crashed node's job finished by another
 node 2.52 s after the crash with a 2 s test lease). Manual: two `ferrite serve` processes on local Postgres served an edit within one
-request round trip. Not verified: a reverse proxy in front (the Caddy config is validated
-only), `docker compose up`, and an OS-level kill of a process mid-job (the crash is
+request round trip. Not verified: a reverse proxy in front (the Caddyfile is checked by
+`caddy validate` in CI only; not validated locally, Docker is unavailable here), `docker compose up`, and an OS-level kill of a process mid-job (the crash is
 simulated in process, P25).
 
 ## M2 — API, auth & admin (~6 weeks)

@@ -60,6 +60,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker compose -f examples/cluster/docker-compose.yml config --quiet
+      # Parses and provisions the Caddyfile without starting it (upstreams are not dialled).
+      - run: >-
+          docker run --rm -v "$PWD/examples/cluster/Caddyfile:/etc/caddy/Caddyfile:ro"
+          caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - run: docker build -t ferrite:ci .
       - name: Image runs and validates the example config
         run: |

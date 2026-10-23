@@ -11,21 +11,30 @@ behind a reverse proxy or in Docker.
 |---|---|---|
 | Save on node A reflected on node B within ~1 s | in-process nodes (`invalidation_latency_under_1s`, `poll_only_node_converges_within_1s`), two `ferrite serve` children (`two_processes_share_invalidation`), manual two-process run | yes: p50 8.0–14.4 ms with `LISTEN`, max 258 ms poll-only, all under 1 s |
 | Killing a node mid-job doesn't lose the job | `lease_expiry_after_crashed_node` (in-process crash, P25) | yes: finished by node 1 2.52 s after the crash (2 s test lease) |
-| Behind a proxy | `examples/cluster/Caddyfile` validated only | **not run** |
+| Behind a proxy | `examples/cluster/Caddyfile`: `caddy validate` in CI only (not run locally: no Docker here) | **not run** |
 
 ## What was not verified (limits)
 
 1. **No reverse proxy run.** The Caddy configuration (`examples/cluster/Caddyfile`:
    `reverse_proxy node1:8080 node2:8080`, `lb_policy round_robin`, `health_uri /readyz`) was
-   written against the Caddy docs and is validated only as part of `docker compose config`;
-   no request went through Caddy. Nodes were reached directly on their own ports.
+   written against the Caddy docs. CI checks it with `caddy validate` (the `caddy:2` image,
+   `--adapter caddyfile`), which, per the Caddy docs, deserializes the config and provisions
+   its modules without starting it, so the upstream names `node1`/`node2` are not dialled
+   and need not resolve. It has **not** been validated locally (Docker is unavailable on this
+   machine), and the CI step has not run yet at the time of writing. `docker compose config`
+   does not parse the Caddyfile (it only checks that the bind-mount source exists). No
+   request went through Caddy; nodes were reached directly on their own ports.
 2. **No `docker compose up`.** Docker does not respond on the development machine
    (`docker info` hangs), so neither the image nor the compose stack was run here (P24).
    Locally verified: `docker compose -f examples/cluster/docker-compose.yml config --quiet`
    exits 0 (client-side, no daemon needed) and `crates/ferrite/tests/examples.rs` loads the
    example's config and env and runs `ferrite config check` on it. CI adds `docker compose
-   config --quiet`, `docker build -t ferrite:ci .` and `config check` inside the built image;
-   the first CI run of that job is its first real test. MinIO bucket init, Caddy active
+   config --quiet`, `caddy validate` on the Caddyfile, `docker build -t ferrite:ci .` and
+   `config check` inside the built image; the first CI run of that job is its first real
+   test. Known gaps in that job: the image build is a cold release build with no layer or
+   cargo cache (slow), and the builder (`rust:1-bookworm`) and service images (`postgres:18`,
+   `minio/minio`, `minio/mc`, `caddy:2`) are moving tags, not pinned digests; the MinIO
+   images are not pulled by CI at all, so their availability is unchecked. MinIO bucket init, Caddy active
    health checks, the container health check (`/ferrite healthcheck`) and volume
    permissions are untested at runtime.
 3. **The crash is simulated in process** (P25): `RunningNode::abort()` drops every task

@@ -179,7 +179,7 @@ monitoring.)
   **Verification status (P24):** `crates/ferrite/tests/examples.rs` loads the example's
   `ferrite.toml` + `ferrite.env` through `ferrite_config::load` and `ferrite config check`,
   and checks that every `FERRITE_*` name in the compose file is a known setting; CI runs
-  `docker compose … config --quiet` and `docker build`. `docker compose up` is not run
+  `docker compose … config --quiet`, `caddy validate` on the Caddyfile and `docker build`. `docker compose up` is not run
   anywhere yet, so problems in the runtime wiring (Caddy health checks, the MinIO bucket
   init) would only show when someone runs it.
 

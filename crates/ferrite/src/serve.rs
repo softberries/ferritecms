@@ -37,8 +37,9 @@
 //! that the steps so far end within 13 s of the signal), and `main` shuts the runtime
 //! down with a 1 s grace, which drops every connection task still running and abandons
 //! stuck blocking work. A clean shutdown exits 0 and the process is gone at most 14 s
-//! after the first signal. A second SIGINT/SIGTERM during startup or shutdown exits at
-//! once with 130 (SIGINT) or 143 (SIGTERM).
+//! after the first signal. A signal during startup (after joining the registry the node
+//! first leaves it, within 1 s), or a second signal during shutdown, exits at once with
+//! 130 (SIGINT) or 143 (SIGTERM).
 
 use std::{future::IntoFuture, net::SocketAddr, sync::Arc, time::Duration};
 

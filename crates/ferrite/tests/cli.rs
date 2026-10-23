@@ -611,8 +611,13 @@ fn config_check_lists_every_problem_and_exits_1() {
 
 /// Serves one canned HTTP response per connection on a loopback port.
 fn canned_http(response: &'static str) -> String {
+    canned_http_on("127.0.0.1:0", response)
+}
+
+/// [`canned_http`] on `bind`; the URL uses the bound address (IPv6 in brackets).
+fn canned_http_on(bind: &str, response: &'static str) -> String {
     use std::io::{Read, Write};
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = std::net::TcpListener::bind(bind).unwrap();
     let addr = listener.local_addr().unwrap();
     std::thread::spawn(move || {
         for mut s in listener.incoming().flatten() {
@@ -650,4 +655,22 @@ fn healthcheck_exit_code_follows_status() {
         .args(["healthcheck", "--url", "https://127.0.0.1/readyz"])
         .assert()
         .code(1);
+}
+
+#[test]
+fn healthcheck_accepts_ipv6_literals() {
+    // Skip where the machine has no IPv6 loopback.
+    if std::net::TcpListener::bind("[::1]:0").is_err() {
+        eprintln!("SKIP: no IPv6 loopback");
+        return;
+    }
+    let ok = canned_http_on(
+        "[::1]:0",
+        "HTTP/1.1 200 OK\r\ncontent-length: 6\r\n\r\nready\n",
+    );
+    assert!(ok.starts_with("http://[::1]:"), "{ok}");
+    ferrite()
+        .args(["healthcheck", "--url", &ok])
+        .assert()
+        .success();
 }

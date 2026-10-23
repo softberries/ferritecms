@@ -25,20 +25,22 @@ fn parse_env_file(src: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Every distinct `FERRITE_[A-Z0-9_]+` name in `src`.
+/// Every distinct `FERRITE_[A-Z0-9_]+` name in `src`, ignoring YAML comment lines.
 fn ferrite_names(src: &str) -> Vec<String> {
     let mut names = Vec::new();
-    let mut rest = src;
-    while let Some(i) = rest.find("FERRITE_") {
-        let tail = &rest[i..];
-        let end = tail
-            .find(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
-            .unwrap_or(tail.len());
-        let name = &tail[..end];
-        if !names.iter().any(|n| n == name) {
-            names.push(name.to_owned());
+    for line in src.lines().filter(|l| !l.trim_start().starts_with('#')) {
+        let mut rest = line;
+        while let Some(i) = rest.find("FERRITE_") {
+            let tail = &rest[i..];
+            let end = tail
+                .find(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+                .unwrap_or(tail.len());
+            let name = &tail[..end];
+            if !names.iter().any(|n| n == name) {
+                names.push(name.to_owned());
+            }
+            rest = &tail[end..];
         }
-        rest = &tail[end..];
     }
     names
 }
@@ -150,4 +152,11 @@ fn compose_ferrite_variables_are_known_settings() {
             panic!("{name} from docker-compose.yml is not a valid setting: {e}");
         }
     }
+}
+
+#[test]
+fn ferrite_names_ignores_comment_lines() {
+    let src =
+        "# FERRITE_NOT_A_KEY in a comment\n  # indented FERRITE_ALSO_NOT\n  FERRITE_A__B: x\n";
+    assert_eq!(ferrite_names(src), ["FERRITE_A__B"]);
 }

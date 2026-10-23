@@ -14,7 +14,7 @@
 # between the services. Change them together before exposing anything.
 #
 # Status: verified by `ferrite config check` (crates/ferrite/tests/examples.rs) and by
-# `docker compose config` + `docker build` in CI; `docker compose up` itself is not run
+# `docker compose config`, `caddy validate` + `docker build` in CI; `docker compose up` itself is not run
 # in CI (docs/superpowers/m15-exit.md).
 
 name: ferrite-cluster
