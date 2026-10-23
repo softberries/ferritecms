@@ -26,16 +26,17 @@ pub use paging::{
     ListPart, MAX_CLAIM, MAX_CLAIM_KINDS, MAX_EVENT_BATCH, MAX_ID_FILTER, MAX_JOB_ATTEMPTS,
     MAX_JOB_DURATION, MAX_JOB_ERROR, MAX_JOB_UNIQUE_KEY, MAX_META_KEYS, MAX_NODES, MAX_PRUNE_BATCH,
     MAX_REDIRECTS_BY_TARGET, MAX_SLUG_PREFIX_RESULTS, REDIRECT_CURSOR_TAG, SortKey,
-    USER_CURSOR_TAG, check_claim, check_content_filters, check_event_limit, check_id_list,
-    check_job_duration, check_job_kind, check_len, check_limit, check_new_job, check_new_node,
-    check_node_meta, check_prune_limit, content_cursor, content_list_plan, content_sort_key,
-    encode_content_cursor, encode_text_cursor, job_backoff, sanitize_job_error, slug_has_prefix,
-    slug_prefix_bounds, sort_claimed, text_cursor,
+    USER_CURSOR_TAG, check_claim, check_content_filters, check_event_limit, check_failure_count,
+    check_id_list, check_job_duration, check_job_kind, check_len, check_limit, check_new_job,
+    check_new_node, check_node_meta, check_prune_limit, content_cursor, content_list_plan,
+    content_sort_key, encode_content_cursor, encode_text_cursor, job_backoff, sanitize_job_error,
+    slug_has_prefix, slug_prefix_bounds, sort_claimed, text_cursor,
 };
 pub use repos::{
     ArtifactRepo, Backend, ContentRepo, ContentTypeRepo, EventRepo, JobRepo, MediaRepo, MenuRepo,
-    MetaRepo, NodeRepo, OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos, RevisionRepo,
-    SchemaMetaRepo, SearchRepo, Store, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    MetaRepo, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RedirectRepo,
+    Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, Store, TaxonomyRepo, TermRepo, ThemeRepo, Tx,
+    UserRepo,
 };
 pub use search::{
     IndexTerms, IndexedTerm, MAX_INDEX_TERMS, MAX_QUERY_TERMS, MAX_SEARCH_KINDS, MAX_TERM_CHARS,

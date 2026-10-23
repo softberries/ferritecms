@@ -102,6 +102,16 @@ pub const MAX_CLAIM: u32 = 100;
 /// Most rows one `prune` call (events, jobs, nodes) deletes (R5).
 pub const MAX_PRUNE_BATCH: u32 = 10_000;
 
+/// Validates a failure count added to a `plugin_failures` bucket: at least 1.
+pub fn check_failure_count(count: u32) -> Result<(), StoreError> {
+    if count == 0 {
+        return Err(StoreError::Invalid(
+            "plugin failure count must be at least 1".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Validates a prune batch size: 1..=[`MAX_PRUNE_BATCH`].
 pub fn check_prune_limit(limit: u32) -> Result<i64, StoreError> {
     if limit == 0 || limit > MAX_PRUNE_BATCH {

@@ -2,7 +2,7 @@ use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
     backend_tests, backend_tests_spawning, batch::*, constraints::*, content::*, event::*, job::*,
     lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*, notify::*,
-    plugin::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*,
+    plugin::*, plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*,
 };
 
 backend_tests!(
@@ -120,6 +120,8 @@ backend_tests!(
     plugin_kv_crud_and_usage,
     themes_single_active,
     kv_quota_semantics,
+    plugin_failures_add_sum_clear_prune,
+    plugin_auto_disable_is_one_transition,
 );
 
 backend_tests!(

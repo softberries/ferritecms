@@ -27,11 +27,24 @@ upload .wasm + manifest ──► validate manifest ──► inspect component 
      ──► every node: fetch artifact → compile (cached) → InstancePre per world → registry swap
 ```
 
-- **Status (M1c-2)**: `inspect` + manifest validation + `PluginHost::install(manifest, wasm)`
-  (compile, capability check, registry swap) exist, and `serve` installs the enabled
-  `plugins` rows from their artifacts at startup (§7a, "Loading"). Upload, admin
-  approval/permission display, writing the artifact and row, events, per-node fetch on
-  change, the update-needs-approval flow and uninstall/KV retention are M1.5/M2.
+- **Status (M1.5)**: `inspect` + manifest validation exist. The host API is split for hot
+  reload: `PluginHost::prepare(manifest, wasm)` inspects, compiles and links (slow; async
+  callers run it under `spawn_blocking`) and `PluginHost::commit(prepared, keep)` swaps the
+  registry once to exactly the prepared plugins plus the loaded ones named in `keep`;
+  `install` is both, keeping everything. Calls in flight keep the registry snapshot (and
+  instances) they loaded; later calls see the new one. `PluginHost::disable(name, reason)`
+  stops a loaded plugin at once; `loaded()` lists the registry.
+  `ferrite_http::PluginReloader::reload` brings a node's host to the `plugins` rows in one
+  commit: rows whose artifact, manifest and grant are unchanged (and that the host has
+  not disabled) are kept without recompiling (P19: reuse is in memory by artifact; no
+  on-disk component cache); new or changed rows, and rows enabled again after a host-side
+  disable, are fetched (SHA-256 checked), grant-checked (R21) and prepared; a version that
+  fails keeps the previous one running (reported `Failed`); disabled and deleted rows are
+  dropped. Startup's `load_plugins` is the first reload. Operators install with
+  `ferrite::extensions::install_plugin_file` (prepares on a scratch host first, uploads,
+  then `ExtensionService` writes artifact row + plugin row + `plugins.changed` in one
+  transaction; P21). Admin approval/permission display, the update-needs-approval flow
+  and uninstall/KV retention are M2.
 - **Install-time check (P2)**: walk the component type's imports. Allowed:
   - `ferrite:plugin/*` interfaces that the manifest's capabilities map to (§4),
   - the WASI subset in §5.
@@ -485,21 +498,29 @@ As built (M1c-2), in `crates/ferrite-http/src/plugins/` over the store-backed
 | Wrong variant / oversize output | host validation | same |
 | Instantiation failure (missing import) | `Err` at instantiate | plugin marked broken on this node |
 
-**M0 status (unchanged in M1c-2)**: failures are classified and counted in memory per host
+**Status (M1.5, P20)**: failures are classified and counted in memory per host
 (`PluginHost::failures`, `is_enabled`, `disabled_reason`; threshold and window from
-`HostConfig`). The `plugin_failures` table, metrics, the `plugins.enabled` update,
-`plugin.disabled` event and cluster-wide counting are M1.5 (ROADMAP). A plugin disabled
-by the in-memory counter stays disabled until the process restarts. "Plugin marked broken on
-this node" for instantiation failures is likewise not separate in M0: it counts as a
-failure like any other.
+`HostConfig`); a plugin crossing the threshold on one host is disabled there at once,
+until it is prepared and committed again. Every failure is also reported, synchronously
+and without blocking, to the host's `FailureSink`. The node's sink,
+`ferrite_http::SharedFailures`, buffers `(plugin, hook) → count`; its flusher (every 5 s,
+plus a final flush on shutdown) adds the counts to 1-minute `plugin_failures` buckets
+(bucket = database clock floored to the minute) in one transaction, then sums each flushed
+plugin's buckets over `plugins.failure_window`. At `≥ plugins.disable_after_failures`
+it runs `PluginRepo::auto_disable` (`UPDATE plugins SET enabled = false,
+disabled_reason = 'auto: <n> failures in <window>' … WHERE name = $1 AND enabled`) and,
+only when that statement made the transition, appends `plugin.disabled` (keys
+`[name, reason]`) in the same transaction, so exactly one node emits it however many
+cross the threshold; that node also disables the plugin locally at once, the others on
+the event. The cluster-wide disable lags the threshold by up to one flush. Enabling a
+plugin (`ExtensionService::set_plugin_enabled(name, true)`) clears its buckets in the same
+transaction. Buckets are pruned hourly by the `plugin_failures.prune` job after
+`max(24 h, 2 × plugins.failure_window)`. Metrics are M4. "Plugin marked broken on this
+node" for instantiation failures is not separate: it counts as a failure like any other.
 
 Every failure (target design): `tracing::warn!(plugin, hook, kind, duration, fuel_used)`, metric
-increment, and an upsert into `plugin_failures` (1-minute buckets; written
-asynchronously, batched per node every few seconds so failures don't add DB writes to
-the request path). When the sum over `failure_window` ≥ `disable_after_failures`, the
-node that crosses the threshold sets `plugins.enabled = false,
-disabled_reason = 'auto: …'` and emits `plugin.disabled`. Admin sees the reason and can
-re-enable.
+increment (M4), and an upsert into `plugin_failures` as above. Admin sees the reason and
+can re-enable.
 
 ## 9. Host-side API (Rust)
 

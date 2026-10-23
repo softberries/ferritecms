@@ -1,5 +1,6 @@
 //! Failing plugins never break a page: bad outputs are rejected, failures are classified
-//! and recorded, and repeat offenders are disabled.
+//! and recorded (and reported to a failure sink), and repeat offenders are disabled.
+//! Hot reload (`prepare` + `commit`) never drops a call in flight.
 mod common;
 
 use std::sync::Arc;
@@ -7,8 +8,10 @@ use std::time::Duration;
 
 use common::{plugin_manifest, plugin_wasm};
 use ferrite_plugin_host::{
-    FailureKind, FilterValue, Head, HostConfig, InMemoryServices, Manifest, PluginHost, RequestInfo,
+    FailureKind, FailureSink, FilterValue, Head, HostConfig, HostServices, InMemoryServices,
+    KindOk, Manifest, PluginHost, Post, RequestInfo,
 };
+use tokio::sync::Notify;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -376,5 +379,213 @@ async fn resource_flood_is_contained() -> TestResult {
     )?;
     let out = host.apply_filter("render.head", head(), &req()).await;
     assert!(meta_content(&out, "generator").is_some(), "{out:?}");
+    Ok(())
+}
+
+/// Services whose `get_post` signals `entered`, then waits for `release`; everything
+/// else is the empty in-memory services.
+#[derive(Default)]
+struct GatedServices {
+    entered: Notify,
+    release: Notify,
+    rest: InMemoryServices,
+}
+
+#[async_trait::async_trait]
+impl HostServices for GatedServices {
+    async fn get_post(&self, id: &str, _kind_ok: &KindOk) -> Option<Post> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        Some(Post {
+            id: id.into(),
+            kind: "post".into(),
+            slug: id.into(),
+            title: String::new(),
+            excerpt: String::new(),
+            status: "publish".into(),
+            published: None,
+            url: String::new(),
+            author: String::new(),
+            terms: Vec::new(),
+        })
+    }
+    async fn get_post_by_slug(&self, kind: &str, slug: &str) -> Option<Post> {
+        self.rest.get_post_by_slug(kind, slug).await
+    }
+    async fn list_posts(&self, kind: &str, limit: u32, offset: u32) -> Vec<Post> {
+        self.rest.list_posts(kind, limit, offset).await
+    }
+    async fn meta_get(&self, post: &str, key: &str) -> Option<String> {
+        self.rest.meta_get(post, key).await
+    }
+    async fn meta_set(&self, post: &str, key: &str, value: &str) -> Result<(), String> {
+        self.rest.meta_set(post, key, value).await
+    }
+    async fn option_get(&self, key: &str) -> Option<String> {
+        self.rest.option_get(key).await
+    }
+    async fn kv_get(&self, plugin: &str, key: &str) -> Option<Vec<u8>> {
+        self.rest.kv_get(plugin, key).await
+    }
+    async fn kv_set(&self, plugin: &str, key: &str, value: Vec<u8>) -> Result<(), String> {
+        self.rest.kv_set(plugin, key, value).await
+    }
+    async fn kv_delete(&self, plugin: &str, key: &str) {
+        self.rest.kv_delete(plugin, key).await;
+    }
+    async fn kv_list(&self, plugin: &str, prefix: &str, limit: u32) -> Vec<String> {
+        self.rest.kv_list(plugin, prefix, limit).await
+    }
+    async fn setting_get(&self, plugin: &str, key: &str) -> Option<String> {
+        self.rest.setting_get(plugin, key).await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prepare_commit_swaps_atomically() -> TestResult {
+    let services = Arc::new(GatedServices::default());
+    let cfg = HostConfig {
+        render_deadline: Duration::from_secs(20),
+        ..HostConfig::default()
+    };
+    let host = Arc::new(PluginHost::new(cfg, services.clone())?);
+    let manifest = || Manifest::parse(&plugin_manifest("slow-import"));
+    host.install(manifest()?, &plugin_wasm("slow-import"))?;
+
+    // The old instance's call parks inside its `get_post` import.
+    let req = RequestInfo {
+        post: Some("p1".into()),
+        ..req()
+    };
+    let in_flight = tokio::spawn({
+        let host = host.clone();
+        let req = req.clone();
+        async move { host.apply_filter("render.head", head(), &req).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), services.entered.notified()).await?;
+
+    // New version of `slow-import`: hello's component (never calls `get_post`).
+    let next = host.prepare(manifest()?, &plugin_wasm("hello"))?;
+    assert_eq!(next.name(), "slow-import");
+    host.commit(vec![next], &[]);
+    assert_eq!(host.loaded(), ["slow-import"]);
+
+    services.release.notify_one();
+    let old = tokio::time::timeout(Duration::from_secs(10), in_flight).await??;
+    assert_eq!(
+        meta_content(&old, "slow-import").as_deref(),
+        Some("returned")
+    );
+    assert_eq!(meta_content(&old, "generator"), None, "{old:?}");
+
+    let new = tokio::time::timeout(
+        Duration::from_secs(10),
+        host.apply_filter("render.head", head(), &req),
+    )
+    .await?;
+    assert_eq!(
+        meta_content(&new, "generator").as_deref(),
+        Some("ferrite-hello")
+    );
+    assert_eq!(meta_content(&new, "slow-import"), None, "{new:?}");
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
+    Ok(())
+}
+
+#[tokio::test]
+async fn commit_keep_preserves_untouched_plugins() -> TestResult {
+    let host = host_with(HostConfig::default(), &["hello", "clock"])?;
+    assert!(host.disable("hello", "operator"));
+    let order_a = host.prepare(
+        Manifest::parse(&plugin_manifest("order-a"))?,
+        &plugin_wasm("order-a"),
+    )?;
+    host.commit(vec![order_a], &["hello"]);
+
+    assert_eq!(host.loaded(), ["hello", "order-a"], "clock dropped");
+    // `hello` is the same instance, so it is still disabled.
+    assert_eq!(host.disabled_reason("hello").as_deref(), Some("operator"));
+    assert!(host.is_enabled("order-a"));
+    let out = host.apply_filter("render.head", head(), &req()).await;
+    assert_eq!(meta_content(&out, "generator"), None, "{out:?}");
+    assert_eq!(meta_content(&out, "clock"), None, "{out:?}");
+
+    // Preparing `hello` again replaces the kept instance with an enabled one.
+    let hello = host.prepare(
+        Manifest::parse(&plugin_manifest("hello"))?,
+        &plugin_wasm("hello"),
+    )?;
+    host.commit(vec![hello], &["hello", "order-a"]);
+    assert_eq!(host.loaded(), ["hello", "order-a"]);
+    assert!(host.is_enabled("hello"));
+    let out = host.apply_filter("render.head", head(), &req()).await;
+    assert_eq!(
+        meta_content(&out, "generator").as_deref(),
+        Some("ferrite-hello")
+    );
+
+    host.commit(Vec::new(), &[]);
+    assert!(host.loaded().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn disable_stops_calls_immediately() -> TestResult {
+    let host = host_with(HostConfig::default(), &["hello"])?;
+    let out = host.apply_filter("render.head", head(), &req()).await;
+    assert_eq!(
+        meta_content(&out, "generator").as_deref(),
+        Some("ferrite-hello")
+    );
+
+    assert!(host.disable("hello", "auto: 20 failures in 10m"));
+    assert!(!host.is_enabled("hello"));
+    let out = host.apply_filter("render.head", head(), &req()).await;
+    assert_eq!(out, head(), "the next call skips it");
+    assert!(!host.disable("hello", "again"), "already disabled");
+    assert_eq!(
+        host.disabled_reason("hello").as_deref(),
+        Some("auto: 20 failures in 10m"),
+        "the first reason is kept"
+    );
+    assert!(!host.disable("nope", "x"), "not loaded");
+    assert_eq!(host.loaded(), ["hello"], "disabled plugins stay loaded");
+    Ok(())
+}
+
+#[derive(Default)]
+struct SinkLog(std::sync::Mutex<Vec<(String, String, FailureKind)>>);
+
+impl FailureSink for SinkLog {
+    fn record(&self, plugin: &str, hook: &str, kind: FailureKind) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((plugin.into(), hook.into(), kind));
+    }
+}
+
+#[tokio::test]
+async fn failure_sink_receives_every_failure() -> TestResult {
+    let host = host_with(HostConfig::default(), &["panic", "hello"])?;
+    let sink = Arc::new(SinkLog::default());
+    host.set_failure_sink(sink.clone());
+    for _ in 0..3 {
+        host.apply_filter("render.head", head(), &req()).await;
+    }
+    let seen = sink.0.lock().map_err(|e| e.to_string())?.clone();
+    assert_eq!(
+        seen,
+        vec![
+            (
+                "panic".to_owned(),
+                "render.head".to_owned(),
+                FailureKind::Trap
+            );
+            3
+        ],
+        "one record per failed call, none for hello"
+    );
+    assert_eq!(host.failures().len(), 3);
     Ok(())
 }

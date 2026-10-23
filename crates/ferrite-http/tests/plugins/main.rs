@@ -5,6 +5,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+mod reload;
 
 use common::{HOUR, SITE_URL, Site};
 use ferrite_core::{

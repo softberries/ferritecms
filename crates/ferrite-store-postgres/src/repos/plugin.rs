@@ -284,6 +284,19 @@ impl PluginRepo for PgRepos {
         .execute(e))
         .map(|_| ())
     }
+
+    async fn auto_disable(&self, id: &str, reason: &str) -> Result<bool, StoreError> {
+        validate_text("plugin name", id)?;
+        validate_text("plugin disabled_reason", reason)?;
+        let done = run!(&self.exec, |e| sqlx::query(
+            "UPDATE plugins SET enabled = false, disabled_reason = $2, updated_at = now() \
+             WHERE name = $1 AND enabled"
+        )
+        .bind(id)
+        .bind(reason)
+        .execute(e))?;
+        Ok(done.rows_affected() == 1)
+    }
 }
 
 #[async_trait]

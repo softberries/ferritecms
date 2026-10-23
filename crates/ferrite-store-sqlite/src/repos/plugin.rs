@@ -278,6 +278,21 @@ impl PluginRepo for SqliteRepos {
         .execute(e))
         .map(|_| ())
     }
+
+    async fn auto_disable(&self, id: &str, reason: &str) -> Result<bool, StoreError> {
+        validate_text("plugin name", id)?;
+        validate_text("plugin disabled_reason", reason)?;
+        // The process clock is the database clock on SQLite.
+        let done = run!(&self.writer, |e| sqlx::query(
+            "UPDATE plugins SET enabled = 0, disabled_reason = ?, updated_at = ? \
+             WHERE name = ? AND enabled = 1"
+        )
+        .bind(reason)
+        .bind(Timestamp::now().as_micros())
+        .bind(id)
+        .execute(e))?;
+        Ok(done.rows_affected() == 1)
+    }
 }
 
 #[async_trait]

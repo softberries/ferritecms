@@ -18,6 +18,7 @@ mod job;
 mod menu;
 mod node;
 mod plugin;
+mod plugin_failure;
 
 pub use plugin::FIND_MEDIA_BY_ARTIFACT_SQL;
 mod search;
@@ -28,8 +29,9 @@ mod user;
 use async_trait::async_trait;
 use ferrite_store::{
     ArtifactRepo, ContentRepo, ContentTypeRepo, EventRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo,
-    NodeRepo, OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos, RevisionRepo,
-    SchemaMetaRepo, SearchRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos,
+    RevisionRepo, SchemaMetaRepo, SearchRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx,
+    UserRepo,
 };
 use sqlx::SqlitePool;
 
@@ -89,6 +91,9 @@ impl Repos for SqliteRepos {
         self
     }
     fn plugins(&self) -> &dyn PluginRepo {
+        self
+    }
+    fn plugin_failures(&self) -> &dyn PluginFailureRepo {
         self
     }
     fn plugin_kv(&self) -> &dyn PluginKvRepo {
@@ -178,6 +183,7 @@ delegate_repos!(
     artifacts: ArtifactRepo,
     media: MediaRepo,
     plugins: PluginRepo,
+    plugin_failures: PluginFailureRepo,
     plugin_kv: PluginKvRepo,
     themes: ThemeRepo,
     events: EventRepo,

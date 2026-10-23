@@ -13,6 +13,7 @@ mod manifest;
 mod output;
 mod registry;
 mod services;
+mod sink;
 mod state;
 #[cfg(test)]
 mod test_support;
@@ -21,7 +22,7 @@ mod types;
 mod validate;
 
 use std::collections::BTreeSet;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
@@ -39,6 +40,7 @@ pub use manifest::{
     SettingSpec,
 };
 pub use services::{HostServices, InMemoryServices, KindOk};
+pub use sink::FailureSink;
 pub use trace::{FilterOutcome, dep_keys};
 pub use types::{
     ActionEvent, FilterValue, Head, LinkTag, MetaTag, Post, RequestInfo, RouteRequest,
@@ -60,8 +62,31 @@ pub struct PluginHost {
     services: Arc<dyn HostServices>,
     registry: ArcSwap<Registry>,
     failures: FailureTracker,
+    /// Also told about every failure (P20); see [`PluginHost::set_failure_sink`].
+    failure_sink: RwLock<Option<Arc<dyn FailureSink>>>,
     /// Advances the engine epoch; joined when the host is dropped.
     _ticker: EpochTicker,
+}
+
+/// A compiled, linked plugin from [`PluginHost::prepare`], not callable until
+/// [`PluginHost::commit`] swaps it in.
+pub struct PreparedPlugin {
+    loaded: Arc<LoadedPlugin>,
+}
+
+impl PreparedPlugin {
+    /// The plugin's name (from its manifest).
+    pub fn name(&self) -> &str {
+        &self.loaded.name
+    }
+}
+
+impl std::fmt::Debug for PreparedPlugin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedPlugin")
+            .field("name", &self.name())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Effective limit (ruling R3): the manifest may lower the host default, not raise it.
@@ -111,13 +136,25 @@ impl PluginHost {
             services,
             registry: ArcSwap::from_pointee(Registry::default()),
             failures,
+            failure_sink: RwLock::new(None),
             _ticker: ticker,
         })
     }
 
-    /// Inspect, compile and link `wasm`, then make it callable. Replaces an installed
-    /// plugin of the same name. In M0 the grants are the manifest's capabilities.
+    /// Inspect, compile and link `wasm`, then make it callable: [`prepare`](Self::prepare)
+    /// plus a [`commit`](Self::commit) that keeps every other plugin. Replaces an
+    /// installed plugin of the same name. The grants are the manifest's capabilities.
     pub fn install(&self, manifest: Manifest, wasm: &[u8]) -> Result<(), PluginError> {
+        let prepared = self.prepare(manifest, wasm)?;
+        self.swap(vec![prepared], |_| true);
+        Ok(())
+    }
+
+    /// Inspect, compile and link `wasm` for `manifest` without making it callable. This
+    /// is the slow part of an install (milliseconds to seconds of CPU per component), so
+    /// async callers run it under `spawn_blocking`. The grants are the manifest's
+    /// capabilities: callers check them against what the admin approved first.
+    pub fn prepare(&self, manifest: Manifest, wasm: &[u8]) -> Result<PreparedPlugin, PluginError> {
         let memory_default = u64::try_from(self.cfg.memory_bytes).unwrap_or(u64::MAX);
         let memory = effective_limit("memory", manifest.limits.memory, memory_default)?;
         let fuel = effective_limit("fuel", manifest.limits.fuel, self.cfg.fuel)?;
@@ -134,28 +171,83 @@ impl PluginHost {
         let linker = linker::build_linker(&self.engine, &granted_interfaces(&grants))?;
         let pre = PluginPre::new(linker.instantiate_pre(&component).map_err(link_err)?)
             .map_err(link_err)?;
-
-        let loaded = Arc::new(LoadedPlugin {
-            name: Arc::from(name.as_str()),
-            manifest,
-            pre,
-            grants: Arc::new(grants),
-            services: Arc::clone(&self.services),
-            memory_bytes,
-            fuel,
-            epoch_tick: self.cfg.epoch_tick,
-            disabled: OnceLock::new(),
-        });
-        self.failures.reset(&name);
-        self.registry.rcu(|r| r.with(Arc::clone(&loaded)));
-        tracing::info!(
+        tracing::debug!(
             plugin = %name,
             imports = ?report.ferrite_imports,
             memory_bytes,
             fuel,
-            "plugin installed"
+            "plugin prepared"
         );
-        Ok(())
+        Ok(PreparedPlugin {
+            loaded: Arc::new(LoadedPlugin {
+                name: Arc::from(name.as_str()),
+                manifest,
+                pre,
+                grants: Arc::new(grants),
+                services: Arc::clone(&self.services),
+                memory_bytes,
+                fuel,
+                epoch_tick: self.cfg.epoch_tick,
+                disabled: OnceLock::new(),
+            }),
+        })
+    }
+
+    /// Swap the registry, once, to exactly `prepared` plus the currently loaded plugins
+    /// named in `keep` (a prepared plugin replaces a kept one of the same name). Every
+    /// other plugin is dropped. Kept plugins stay the same instances, so a disabled one
+    /// stays disabled; each prepared plugin starts enabled with an empty failure window.
+    ///
+    /// Calls already running keep the registry snapshot they loaded and finish on the
+    /// old instances; calls that start afterwards see the new registry.
+    pub fn commit(&self, prepared: Vec<PreparedPlugin>, keep: &[&str]) {
+        self.swap(prepared, |name| keep.contains(&name));
+    }
+
+    fn swap(&self, prepared: Vec<PreparedPlugin>, keep: impl Fn(&str) -> bool) {
+        let prepared: Vec<Arc<LoadedPlugin>> = prepared.into_iter().map(|p| p.loaded).collect();
+        for p in &prepared {
+            self.failures.reset(&p.name);
+        }
+        self.registry.rcu(|r| r.rebuilt(&prepared, &keep));
+        for p in &prepared {
+            tracing::info!(
+                plugin = %p.name,
+                version = %p.manifest.plugin.version,
+                memory_bytes = p.memory_bytes,
+                fuel = p.fuel,
+                "plugin installed"
+            );
+        }
+    }
+
+    /// Disable the loaded plugin `name` at once: calls that start afterwards skip it
+    /// (later hooks of a request already running included). `true` only when this call
+    /// disabled it; `false` when it is not loaded or already disabled (the first reason
+    /// is kept). Lasts until the plugin is prepared and committed again.
+    pub fn disable(&self, name: &str, reason: &str) -> bool {
+        let Some(plugin) = self.registry.load().get(name).cloned() else {
+            return false;
+        };
+        let done = plugin.disabled.set(reason.to_owned()).is_ok();
+        if done {
+            tracing::warn!(plugin = %name, reason, "plugin disabled");
+        }
+        done
+    }
+
+    /// Names of the loaded plugins (enabled or disabled), in name order.
+    pub fn loaded(&self) -> Vec<String> {
+        self.registry.load().names()
+    }
+
+    /// Report every later failure to `sink` as well (replacing an earlier sink).
+    /// [`FailureSink::record`] runs synchronously inside the failed call.
+    pub fn set_failure_sink(&self, sink: Arc<dyn FailureSink>) {
+        *self
+            .failure_sink
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(sink);
     }
 
     fn deadline(&self, class: DeadlineClass) -> Duration {
@@ -192,6 +284,14 @@ impl PluginHost {
             at: Instant::now(),
             duration,
         });
+        let sink = self
+            .failure_sink
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(sink) = sink {
+            sink.record(&plugin.name, hook, kind);
+        }
         if crossed {
             let reason = format!(
                 "auto: {} failures in window",
@@ -382,8 +482,9 @@ impl PluginHost {
             .is_some_and(|p| p.disabled.get().is_none())
     }
 
-    /// Why `plugin` was disabled, if it was. In M0 this lives in memory only: a restart
-    /// or a reinstall of the plugin enables it again.
+    /// Why `plugin` was disabled on this host, if it was. This lives in memory only: a
+    /// restart or a new prepare + commit of the plugin enables it again (the shared,
+    /// persistent disable is the `plugins` row, P20).
     pub fn disabled_reason(&self, plugin: &str) -> Option<String> {
         self.registry
             .load()

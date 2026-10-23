@@ -224,7 +224,7 @@ impl Site {
     }
 
     pub async fn load(&self) -> LoadSummary {
-        load_plugins(self.store.as_ref(), &self.media, &self.host)
+        load_plugins(self.store.clone(), self.media.clone(), self.host.clone())
             .await
             .expect("load plugins")
     }

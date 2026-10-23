@@ -121,10 +121,15 @@ impl ExtensionService {
 
     /// Enables or disables the plugin `name` (missing: `NotFound`) and clears its
     /// `disabled_reason` either way (an admin decision replaces an automatic one);
-    /// emits `plugins.changed` with its name.
+    /// enabling also deletes its shared failure counters in the same transaction (P20),
+    /// so old failures cannot disable it again at once. Emits `plugins.changed` with its
+    /// name.
     pub async fn set_plugin_enabled(&self, name: &str, enabled: bool) -> Result<(), CoreError> {
         self.locked(async |repos: &dyn Repos| {
             repos.plugins().set_enabled(name, enabled, None).await?;
+            if enabled {
+                repos.plugin_failures().clear(name).await?;
+            }
             repos
                 .events()
                 .append(&events::plugins_changed(name))

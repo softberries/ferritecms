@@ -126,6 +126,7 @@ pub trait Repos: Send + Sync {
     fn artifacts(&self) -> &dyn ArtifactRepo;
     fn media(&self) -> &dyn MediaRepo;
     fn plugins(&self) -> &dyn PluginRepo;
+    fn plugin_failures(&self) -> &dyn PluginFailureRepo;
     fn plugin_kv(&self) -> &dyn PluginKvRepo;
     fn themes(&self) -> &dyn ThemeRepo;
     fn events(&self) -> &dyn EventRepo;
@@ -399,6 +400,35 @@ pub trait PluginRepo: Send + Sync {
     ) -> Result<(), StoreError>;
     /// Removes an installed plugin (missing: no-op).
     async fn delete(&self, id: &str) -> Result<(), StoreError>;
+    /// Disables an enabled plugin with `reason` in one conditional statement (P20):
+    /// `true` only for the transition; `false` when the plugin is already disabled
+    /// (its reason is kept) or missing. Concurrent calls on any nodes: exactly one
+    /// returns `true`. `updated_at` is the database clock.
+    async fn auto_disable(&self, id: &str, reason: &str) -> Result<bool, StoreError>;
+}
+
+/// Shared per-minute plugin failure counters (P20): each node adds its buffered counts,
+/// then sums a plugin's recent buckets against the auto-disable threshold. Bucket
+/// times are chosen by the caller (the database clock floored to a minute).
+#[async_trait]
+pub trait PluginFailureRepo: Send + Sync {
+    /// Adds `count` (at least 1) failures of `plugin`'s `hook` to the bucket starting at
+    /// `bucket_start` (created if absent; `count = count + n` otherwise, one statement).
+    async fn add(
+        &self,
+        plugin: &str,
+        hook: &str,
+        bucket_start: Timestamp,
+        count: u32,
+    ) -> Result<(), StoreError>;
+    /// Total failures of `plugin`, all hooks, in buckets starting at or after `since`.
+    async fn sum_since(&self, plugin: &str, since: Timestamp) -> Result<u64, StoreError>;
+    /// Deletes every bucket of `plugin` (when it is enabled again).
+    async fn clear(&self, plugin: &str) -> Result<(), StoreError>;
+    /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) buckets
+    /// starting before `before`; returns the count. Callers loop until a batch comes
+    /// back short (R5).
+    async fn prune(&self, before: Timestamp, limit: u32) -> Result<u64, StoreError>;
 }
 
 #[async_trait]

@@ -1,10 +1,15 @@
-//! Installing the enabled plugins at startup (plan ruling P3).
+//! Installing the enabled plugins at startup (plan ruling P3): the first
+//! [`PluginReloader::reload`], plus the row checks every reload applies.
+
+use std::sync::Arc;
 
 use ferrite_domain::{ArtifactHash, InstalledPlugin};
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::{Capabilities, Manifest, PluginHost};
 use ferrite_store::{Store, StoreError};
 use sha2::{Digest, Sha256};
+
+use super::reload::{PluginReloader, PluginStatus, ReloadReport};
 
 /// What [`load_plugins`] did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -15,10 +20,27 @@ pub struct LoadSummary {
     pub skipped: Vec<(String, String)>,
 }
 
-/// Install every enabled `plugins` row into `host`: fetch its artifact from `media`,
-/// check the bytes against the row's hash, parse the manifest and install. A row that
+impl From<&ReloadReport> for LoadSummary {
+    fn from(report: &ReloadReport) -> Self {
+        let mut summary = Self::default();
+        for (name, state) in &report.states {
+            match &state.status {
+                PluginStatus::Loaded => summary.loaded.push(name.clone()),
+                PluginStatus::Failed(reason) => {
+                    summary.skipped.push((name.clone(), reason.clone()));
+                }
+                PluginStatus::Disabled(_) => {}
+            }
+        }
+        summary
+    }
+}
+
+/// Install every enabled `plugins` row into `host`: one [`PluginReloader::reload`] by a
+/// fresh reloader. For each row: fetch its artifact from `media`, check the bytes
+/// against the row's hash, parse the manifest, check the grant and compile. A row that
 /// fails any step is logged (`warn`) and skipped; only failing to list the rows is an
-/// error. Rows are installed in name order.
+/// error. Plugins in `host` without an enabled row are removed.
 ///
 /// **Manifest storage.** The `manifest` column holds the `ferrite-plugin.toml` table in
 /// JSON form (every TOML value used by manifests has a JSON equivalent). It is turned
@@ -32,26 +54,16 @@ pub struct LoadSummary {
 /// ([`Capabilities::is_subset_of`](ferrite_plugin_host::Capabilities::is_subset_of));
 /// otherwise it is skipped with a warning (approval must be renewed, e.g. after an
 /// update asking for more). A null `granted` means the manifest is honoured as written:
-/// in M1c-2 the only writer of rows is the admin (plan ruling P3: tests and operators
-/// write rows directly); the M2 install flow will always set it. The host then runs
-/// with the manifest's capabilities, which are within the grant.
+/// the only writers of rows are operator paths (`install_plugin_file`, tests); the M2
+/// install flow will always set it. The host then runs with the manifest's
+/// capabilities, which are within the grant.
 pub async fn load_plugins(
-    store: &dyn Store,
-    media: &MediaStore,
-    host: &PluginHost,
+    store: Arc<dyn Store>,
+    media: Arc<MediaStore>,
+    host: Arc<PluginHost>,
 ) -> Result<LoadSummary, StoreError> {
-    let mut rows = store.read().plugins().list().await?;
-    rows.sort_by(|a, b| a.name.cmp(&b.name));
-    let mut summary = LoadSummary::default();
-    for row in rows.into_iter().filter(|r| r.enabled) {
-        match install(&row, media, host).await {
-            Ok(()) => summary.loaded.push(row.name),
-            Err(reason) => {
-                tracing::warn!(plugin = %row.name, %reason, "plugin not loaded");
-                summary.skipped.push((row.name, reason));
-            }
-        }
-    }
+    let report = PluginReloader::new(store, media, host).reload().await?;
+    let summary = LoadSummary::from(&report);
     tracing::info!(
         loaded = summary.loaded.len(),
         skipped = summary.skipped.len(),
@@ -60,11 +72,9 @@ pub async fn load_plugins(
     Ok(summary)
 }
 
-async fn install(
-    row: &InstalledPlugin,
-    media: &MediaStore,
-    host: &PluginHost,
-) -> Result<(), String> {
+/// The row's manifest, checked against the row: its name must be the row's and its
+/// capabilities within a non-null grant (see [`load_plugins`]).
+pub(super) fn check_row(row: &InstalledPlugin) -> Result<Manifest, String> {
     let manifest = manifest_from_json(&row.manifest)?;
     if manifest.plugin.name != row.name {
         return Err(format!(
@@ -78,17 +88,7 @@ async fn install(
             return Err("manifest asks for capabilities beyond the approved grant".to_owned());
         }
     }
-    let wasm = media
-        .get(&row.artifact_hash)
-        .await
-        .map_err(|e| format!("artifact {}: {e}", row.artifact_hash))?;
-    if hash_of(&wasm).as_ref() != Some(&row.artifact_hash) {
-        return Err(format!(
-            "artifact {} does not match its hash",
-            row.artifact_hash
-        ));
-    }
-    host.install(manifest, &wasm).map_err(|e| e.to_string())
+    Ok(manifest)
 }
 
 /// The manifest stored as JSON (see [`load_plugins`]), validated by [`Manifest::parse`].
@@ -114,7 +114,7 @@ fn granted_capabilities(
         .map_err(|e| format!("granted: {e}"))
 }
 
-fn hash_of(bytes: &[u8]) -> Option<ArtifactHash> {
+pub(super) fn hash_of(bytes: &[u8]) -> Option<ArtifactHash> {
     let hex: String = Sha256::digest(bytes)
         .iter()
         .map(|b| format!("{b:02x}"))

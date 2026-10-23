@@ -22,9 +22,9 @@ use ferrite_domain::{
 };
 use ferrite_store::{
     ArtifactRepo, Backend, Channel, ContentRepo, ContentTypeRepo, EventRepo, JobRepo, LockGuard,
-    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginKvRepo, PluginRepo,
-    RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, Store, StoreError, Subscription,
-    TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo,
+    PluginKvRepo, PluginRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, Store,
+    StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use ferrite_store_tests::{TestDb, backend_tests_spawning};
 use serde_json::json;
@@ -515,6 +515,9 @@ impl Repos for FaultyRepos {
     fn plugins(&self) -> &dyn PluginRepo {
         self.inner.read().plugins()
     }
+    fn plugin_failures(&self) -> &dyn PluginFailureRepo {
+        self.inner.read().plugin_failures()
+    }
     fn plugin_kv(&self) -> &dyn PluginKvRepo {
         self.inner.read().plugin_kv()
     }
@@ -900,6 +903,18 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
     let recent_dead = finished_job(store.as_ref(), true).await;
     backdate(&db, "jobs", "finished_at", job_row(old_dead), 31 * 24).await;
     backdate(&db, "jobs", "finished_at", job_row(recent_dead), 10 * 24).await;
+    // Failure buckets: retention is max(24 h, 2 × 10 min) = 24 h.
+    let failures = store.read().plugin_failures();
+    let now = store.read().nodes().db_now().await.unwrap().as_micros();
+    let hours_ago = |h: i64| Timestamp::from_micros(now - h * 3_600_000_000).unwrap();
+    failures
+        .add("old", "render.head", hours_ago(25), 3)
+        .await
+        .unwrap();
+    failures
+        .add("fresh", "render.head", hours_ago(23), 2)
+        .await
+        .unwrap();
 
     let stop = CancellationToken::new();
     let scheduler = Scheduler::new(store.clone(), builtin::periodics(), Duration::from_secs(10))
@@ -907,17 +922,20 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
     let runner = JobRunner::new(
         store.clone(),
         RunnerConfig::new(NodeId::new(), 2),
-        builtin::handlers(store.clone()),
+        builtin::handlers(
+            store.clone(),
+            builtin::failure_retention(Duration::from_secs(600)),
+        ),
     )
     .unwrap()
     .spawn(stop.clone());
     let jobs = store.read().jobs();
-    wait_for(Duration::from_secs(5), "three prune jobs done", || async {
+    wait_for(Duration::from_secs(5), "four prune jobs done", || async {
         let counts = jobs.counts().await.unwrap();
-        // Once the old fixture job is pruned: the fresh one plus the three prune jobs.
+        // Once the old fixture job is pruned: the fresh one plus the four prune jobs.
         let gone = jobs.get(old_job).await.unwrap().is_none()
             && jobs.get(old_dead).await.unwrap().is_none();
-        (gone && counts[&JobStatus::Done] == 4).then_some(())
+        (gone && counts[&JobStatus::Done] == 5).then_some(())
     })
     .await;
     stop.cancel();
@@ -947,11 +965,14 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
         get(store.as_ref(), recent_dead).await.status,
         JobStatus::Dead
     );
+    let since = Timestamp::from_micros(0).unwrap();
+    assert_eq!(failures.sum_since("old", since).await.unwrap(), 0);
+    assert_eq!(failures.sum_since("fresh", since).await.unwrap(), 2);
     let counts = jobs.counts().await.unwrap();
     assert_eq!(
         counts[&JobStatus::Done],
-        4,
-        "fresh fixture + three prune jobs"
+        5,
+        "fresh fixture + four prune jobs"
     );
     assert_eq!(counts[&JobStatus::Dead], 1, "the 10-day-old dead job");
 }

@@ -1,20 +1,99 @@
-//! Operator install paths for themes and plugins (ruling P21): upload the artifact
-//! bytes first, then let [`ExtensionService`] write the rows and the event in one
-//! transaction. Used by tests now and by the M2 CLI/admin API.
+//! Operator install paths for themes and plugins (ruling P21): check that what is
+//! installed loads, upload the artifact bytes first, then let [`ExtensionService`] write
+//! the rows and the event in one transaction. Used by tests now and by the M2 CLI/admin
+//! API.
 
 use std::{path::Path, sync::Arc};
 
 use anyhow::Context;
 use bytes::Bytes;
 use ferrite_core::ExtensionService;
-use ferrite_domain::{Artifact, ArtifactKind, InstalledTheme, Timestamp};
+use ferrite_domain::{Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, Timestamp};
 use ferrite_media::MediaStore;
+use ferrite_plugin_host::{HostConfig, InMemoryServices, Manifest, PluginHost};
 use ferrite_store::Store;
 use ferrite_theme::{Theme, ThemeSource, pack};
 use serde_json::json;
 
 /// MIME type recorded for theme bundle artifacts (P17).
 pub const THEME_MIME: &str = "application/x-tar";
+
+/// MIME type recorded for plugin component artifacts.
+pub const PLUGIN_MIME: &str = "application/wasm";
+
+/// Installs a plugin from its `ferrite-plugin.toml` text and component bytes (P21):
+/// parses the manifest and prepares the component on a scratch host with the default
+/// limits (a plugin that would not load is refused before anything is written),
+/// uploads the bytes to the media store, and records the artifact and plugin rows
+/// through [`ExtensionService::install_plugin`]. A new plugin is installed disabled and
+/// a replaced one keeps its state; with `enabled` it is then enabled
+/// ([`ExtensionService::set_plugin_enabled`], which also clears its failure counters).
+/// The row's `granted` is null: an operator install honours the manifest as written
+/// (R21). Returns the plugin row as stored.
+pub async fn install_plugin_file(
+    store: &Arc<dyn Store>,
+    media: &MediaStore,
+    manifest_toml: &str,
+    wasm: &[u8],
+    enabled: bool,
+) -> anyhow::Result<InstalledPlugin> {
+    let manifest = Manifest::parse(manifest_toml).context("cannot install the plugin")?;
+    let table: toml::Table = manifest_toml.parse().context("invalid plugin manifest")?;
+    let name = manifest.plugin.name.clone();
+    let version = manifest.plugin.version.to_string();
+    let bytes = Bytes::copy_from_slice(wasm);
+    let component = bytes.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let host = PluginHost::new(HostConfig::default(), Arc::new(InMemoryServices::new()))
+            .context("cannot start a plugin host")?;
+        host.prepare(manifest, &component)
+            .context("the plugin does not load")?;
+        Ok(())
+    })
+    .await
+    .context("the plugin check task failed")??;
+    let stored = media
+        .put_artifact(bytes)
+        .await
+        .context("cannot upload the plugin component")?;
+    let artifact = Artifact {
+        hash: stored.hash.clone(),
+        kind: ArtifactKind::Plugin,
+        bytes: i64::try_from(stored.bytes)?,
+        mime: PLUGIN_MIME.to_owned(),
+        created_at: Timestamp::now(),
+    };
+    let now = Timestamp::now();
+    let row = InstalledPlugin {
+        name: name.clone(),
+        version,
+        artifact_hash: stored.hash,
+        manifest: serde_json::to_value(table).context("cannot store the manifest")?,
+        granted: serde_json::Value::Null,
+        enabled: false,
+        disabled_reason: None,
+        installed_at: now,
+        updated_at: now,
+    };
+    let service = ExtensionService::new(store.clone());
+    service
+        .install_plugin(&artifact, &row)
+        .await
+        .with_context(|| format!("cannot record plugin {name:?}"))?;
+    if enabled {
+        service
+            .set_plugin_enabled(&name, true)
+            .await
+            .with_context(|| format!("cannot enable plugin {name:?}"))?;
+    }
+    store
+        .read()
+        .plugins()
+        .get(&name)
+        .await
+        .context("cannot read back the plugin row")?
+        .with_context(|| format!("plugin {name:?} vanished after install"))
+}
 
 /// Installs the theme folder `dir` as an artifact (P17): packs it into a deterministic
 /// bundle, loads the bundle (a theme that does not compile is refused before anything

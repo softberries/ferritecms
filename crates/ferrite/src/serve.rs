@@ -116,7 +116,7 @@ async fn serve(config: &Config, store: Arc<dyn Store>) -> anyhow::Result<()> {
         PluginHost::new(host_config(&config.plugins), services)
             .context("cannot start the plugin host")?,
     );
-    load_plugins(store.as_ref(), &media, &plugins)
+    load_plugins(store.clone(), media.clone(), plugins.clone())
         .await
         .context("cannot list the installed plugins")?;
     let routes = load_route_table(store.as_ref(), &rules)

@@ -31,6 +31,7 @@ serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["net", "signal"] }
+toml.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

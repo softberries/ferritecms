@@ -19,9 +19,9 @@ use ferrite_domain::{
 };
 use ferrite_store::{
     ArtifactRepo, Backend, Channel, ContentRepo, ContentTypeRepo, EventRepo, JobRepo, LockGuard,
-    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginKvRepo, PluginRepo,
-    RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, Store, StoreError, Subscription,
-    TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo,
+    PluginKvRepo, PluginRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, Store,
+    StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use serde_json::Value;
 
@@ -114,6 +114,9 @@ impl Repos for CountingRepos {
     }
     fn plugins(&self) -> &dyn PluginRepo {
         self.inner.read().plugins()
+    }
+    fn plugin_failures(&self) -> &dyn PluginFailureRepo {
+        self.inner.read().plugin_failures()
     }
     fn plugin_kv(&self) -> &dyn PluginKvRepo {
         self.inner.read().plugin_kv()

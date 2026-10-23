@@ -1,5 +1,5 @@
-//! Built-in maintenance jobs (P11, P14): hourly pruning of the events outbox, finished
-//! jobs and stale node rows. Ages are measured on the database clock; rows go in
+//! Built-in maintenance jobs (P11, P14, P20): hourly pruning of the events outbox,
+//! finished jobs, stale node rows and old plugin failure buckets. Ages are measured on the database clock; rows go in
 //! batches of [`MAX_PRUNE_BATCH`] (R5) so no single statement holds locks for long.
 
 use std::{future::Future, sync::Arc, time::Duration};
@@ -20,6 +20,16 @@ pub const EVENT_RETENTION: Duration = Duration::from_secs(24 * 3600);
 pub const DONE_JOB_RETENTION: Duration = Duration::from_secs(7 * 24 * 3600);
 /// `dead` jobs finished longer ago than this are deleted.
 pub const DEAD_JOB_RETENTION: Duration = Duration::from_secs(30 * 24 * 3600);
+
+/// The shortest time plugin failure buckets are kept.
+pub const MIN_FAILURE_RETENTION: Duration = Duration::from_secs(24 * 3600);
+
+/// How long plugin failure buckets are kept for a failure window of `window`
+/// (`plugins.failure_window`): `max(24 h, 2 × window)`, so the auto-disable sum never
+/// misses a bucket and a day of history stays for operators.
+pub fn failure_retention(window: Duration) -> Duration {
+    MIN_FAILURE_RETENTION.max(window.saturating_mul(2))
+}
 
 /// How long one prune run keeps deleting batches; well inside the default handler
 /// timeout (300 s), so a large backlog ends the run cleanly and the next hour goes on.
@@ -118,23 +128,88 @@ impl JobHandler for NodesPrune {
     }
 }
 
-/// The built-in handlers, on `store`.
-pub fn handlers(store: Arc<dyn Store>) -> Vec<Arc<dyn JobHandler>> {
+/// `plugin_failures.prune`: deletes failure buckets older than its retention (see
+/// [`failure_retention`]).
+pub struct PluginFailuresPrune {
+    pub store: Arc<dyn Store>,
+    pub retention: Duration,
+}
+
+#[async_trait]
+impl JobHandler for PluginFailuresPrune {
+    fn kind(&self) -> &'static str {
+        "plugin_failures.prune"
+    }
+
+    async fn run(&self, _job: &Job) -> Result<(), JobError> {
+        let before = db_now_minus(self.store.as_ref(), self.retention).await?;
+        let failures = self.store.read().plugin_failures();
+        prune_batches("plugin_failures", || {
+            failures.prune(before, MAX_PRUNE_BATCH)
+        })
+        .await?;
+        Ok(())
+    }
+}
+
+/// The built-in handlers, on `store`; plugin failure buckets are kept for
+/// `failure_retention` (from [`failure_retention`]).
+pub fn handlers(store: Arc<dyn Store>, failure_retention: Duration) -> Vec<Arc<dyn JobHandler>> {
     vec![
         Arc::new(EventsPrune(store.clone())),
         Arc::new(JobsPrune(store.clone())),
-        Arc::new(NodesPrune(store)),
+        Arc::new(NodesPrune(store.clone())),
+        Arc::new(PluginFailuresPrune {
+            store,
+            retention: failure_retention,
+        }),
     ]
 }
 
 /// The built-in periodic jobs: every handler in [`handlers`], each [`PRUNE_EVERY`].
 pub fn periodics() -> Vec<Periodic> {
-    ["events.prune", "jobs.prune", "nodes.prune"]
-        .into_iter()
-        .map(|kind| Periodic {
-            kind,
-            every: PRUNE_EVERY,
-            payload: json!({"v": 1}),
-        })
-        .collect()
+    [
+        "events.prune",
+        "jobs.prune",
+        "nodes.prune",
+        "plugin_failures.prune",
+    ]
+    .into_iter()
+    .map(|kind| Periodic {
+        kind,
+        every: PRUNE_EVERY,
+        payload: json!({"v": 1}),
+    })
+    .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failure_retention_is_at_least_a_day() {
+        let min = Duration::from_secs(60);
+        assert_eq!(failure_retention(10 * min), MIN_FAILURE_RETENTION);
+        assert_eq!(failure_retention(Duration::ZERO), MIN_FAILURE_RETENTION);
+        assert_eq!(
+            failure_retention(Duration::from_secs(20 * 3600)),
+            Duration::from_secs(40 * 3600)
+        );
+        assert_eq!(failure_retention(Duration::MAX), Duration::MAX);
+    }
+
+    #[test]
+    fn every_handler_has_a_periodic() {
+        let periodic: Vec<&str> = periodics().iter().map(|p| p.kind).collect();
+        let expected: Vec<&str> = [
+            "events.prune",
+            "jobs.prune",
+            "nodes.prune",
+            "plugin_failures.prune",
+        ]
+        .into();
+        assert_eq!(periodic, expected);
+        assert!(periodics().iter().all(|p| p.every == PRUNE_EVERY));
+    }
 }
