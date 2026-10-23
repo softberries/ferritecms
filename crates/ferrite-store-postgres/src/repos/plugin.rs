@@ -241,6 +241,16 @@ impl PluginRepo for PgRepos {
         row.as_ref().map(codec::plugin).transpose()
     }
 
+    async fn get_for_update(&self, id: &str) -> Result<Option<InstalledPlugin>, StoreError> {
+        validate_text("plugin name", id)?;
+        let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {PLUGIN_COLUMNS} FROM plugins WHERE name = $1 FOR UPDATE"
+        )))
+        .bind(id)
+        .fetch_optional(e))?;
+        row.as_ref().map(codec::plugin).transpose()
+    }
+
     async fn list(&self) -> Result<Vec<InstalledPlugin>, StoreError> {
         let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {PLUGIN_COLUMNS} FROM plugins ORDER BY name COLLATE \"C\""

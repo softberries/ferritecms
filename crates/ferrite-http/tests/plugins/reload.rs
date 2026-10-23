@@ -403,15 +403,11 @@ async fn reenable_during_flush_is_not_disabled_again(site: Site) -> Site {
         SharedFailures::new(3, Duration::from_secs(600)).with_before_disable(move |name| {
             let store = store.clone();
             Box::pin(async move {
-                // What `ExtensionService::set_plugin_enabled(name, true)` writes (its
-                // future is not `Send`, which this seam needs).
                 tokio::time::sleep(Duration::from_millis(2)).await;
-                store
-                    .read()
-                    .plugins()
-                    .set_enabled(&name, true, None)
-                    .await?;
-                store.read().plugin_failures().clear(&name).await
+                ExtensionService::new(store)
+                    .set_plugin_enabled(&name, true)
+                    .await
+                    .map_err(|e| ferrite_store::StoreError::Database(e.to_string()))
             })
         }),
     );

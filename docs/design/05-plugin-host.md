@@ -534,9 +534,24 @@ transaction, and so does an install that changes an existing row's artifact.
 - A crash loses up to one flush interval (5 s) of buffered counts.
 - A counts commit that reports an error after it was in fact applied is retried with
   the same counts, which then count twice.
-- On Postgres, a re-enable committing between the flusher's row read and its add lets
-  those counts land after the clear. The token still stops that flush from disabling
-  the plugin. Buckets are pruned hourly by the `plugin_failures.prune` job after
+- The flusher reads the rows with `PluginRepo::get_for_update` (Postgres
+  `SELECT … FOR UPDATE`, in name order; SQLite a plain read under the single writer).
+  A re-enable, which clears the counters, waits for the flush and never lands between
+  the read and the add.
+
+**Wiring obligations.**
+
+- A node that shares failure counts must attach its `SharedFailures` to its reloader
+  (`PluginReloader::with_failures`).
+- Without it, counts carry no row version and are accepted whenever the row is enabled.
+  The reloader logs a debug line for each such reload.
+
+**Mixed plugin versions per page (ruling R13).** Each hook call loads the registry.
+
+- A page rendered across a swap can run early hooks on a plugin's old version and later
+  hooks on its new one. This is accepted.
+- The node flushes the page cache after each committed reload (P18), which drops such
+  pages. Buckets are pruned hourly by the `plugin_failures.prune` job after
 `max(24 h, 2 × plugins.failure_window)`. Metrics are M4. "Plugin marked broken on this
 node" for instantiation failures is not separate: it counts as a failure like any other.
 

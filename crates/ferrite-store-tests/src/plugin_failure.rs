@@ -298,3 +298,76 @@ pub async fn plugin_auto_disable_concurrent_single_transition(db: Arc<TestDb>) {
         );
     }
 }
+
+/// `get_for_update` reads like `get`; inside a `Tx` the row stays locked until the `Tx`
+/// ends. Postgres: a peer's write of the row waits for the commit. SQLite: the `Tx`
+/// holds the single writer, so the equivalent is the plain read (pinned here).
+pub async fn plugin_get_for_update_locks_the_row(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    let hash = plugin_artifact(store.as_ref()).await;
+    store
+        .read()
+        .plugins()
+        .upsert(&row("locked", &hash))
+        .await
+        .unwrap();
+    let plain = store.read().plugins().get("locked").await.unwrap();
+    assert_eq!(
+        store
+            .read()
+            .plugins()
+            .get_for_update("locked")
+            .await
+            .unwrap(),
+        plain,
+        "outside a Tx it is `get`"
+    );
+    assert!(
+        store
+            .read()
+            .plugins()
+            .get_for_update("none")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        store.read().plugins().get_for_update("a\0").await,
+        Err(StoreError::Invalid(_))
+    ));
+
+    let tx = store.begin().await.unwrap();
+    assert_eq!(tx.plugins().get_for_update("locked").await.unwrap(), plain);
+    let Some(peer) = db.peer().await else {
+        // SQLite: one writer; the Tx's own writes still work.
+        tx.plugins()
+            .set_enabled("locked", false, None)
+            .await
+            .unwrap();
+        tx.rollback().await.unwrap();
+        return;
+    };
+    let write = tokio::spawn(async move {
+        peer.read()
+            .plugins()
+            .set_enabled("locked", false, Some("peer"))
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !write.is_finished(),
+        "the peer's write waits for the row lock"
+    );
+    tx.plugin_failures()
+        .add("locked", "render.head", Timestamp::now(), 1)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), write)
+        .await
+        .unwrap()
+        .unwrap();
+    let got = store.read().plugins().get("locked").await.unwrap().unwrap();
+    assert_eq!(got.disabled_reason.as_deref(), Some("peer"));
+}

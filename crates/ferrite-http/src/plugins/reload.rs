@@ -15,6 +15,19 @@
 //!
 //! Calls already running finish on the registry snapshot they loaded (old instances
 //! included); calls that start after the swap use the new one. Reloads are serialised.
+//!
+//! **Mixed versions per page (ruling R13).** One request runs several hooks, and each
+//! hook call loads the registry, so a page rendered across a swap can run some hooks on
+//! the old version of a plugin and later ones on the new version. This is accepted.
+//! The caller flushes the page cache after each reload that committed (P18), which
+//! drops such pages.
+//!
+//! **Failure counter wiring.** A node that shares failure counts must attach its
+//! [`SharedFailures`] with [`PluginReloader::with_failures`]. Every commit then tells
+//! it each plugin's row version, and counts recorded against an older row (say, before
+//! a re-enable cleared the counters) are dropped at flush. Without it, the counts carry
+//! no version and are accepted whenever the row is enabled; a debug line is logged per
+//! reload.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -217,8 +230,12 @@ impl PluginReloader {
         let compiled = prepared.len();
         let keep: Vec<&str> = keep.iter().map(String::as_str).collect();
         self.host.commit(prepared, &keep);
-        if let Some(failures) = &self.failures {
-            failures.set_versions(versions);
+        match &self.failures {
+            Some(failures) => failures.set_versions(versions),
+            None => tracing::debug!(
+                "plugin reloader has no shared failure counters attached (with_failures); \
+                 failure counts are not tied to row versions"
+            ),
         }
         *loaded = next;
         tracing::info!(

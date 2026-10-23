@@ -391,6 +391,11 @@ pub trait PluginRepo: Send + Sync {
     async fn get(&self, id: &str) -> Result<Option<InstalledPlugin>, StoreError>;
     /// Lists installed plugins.
     async fn list(&self) -> Result<Vec<InstalledPlugin>, StoreError>;
+    /// Fetches an installed plugin and, inside a `Tx`, locks its row until the `Tx`
+    /// ends: Postgres `SELECT … FOR UPDATE` (other writers of the row wait), SQLite a
+    /// plain read (the `Tx` already holds the single writer). Outside a `Tx` it is
+    /// [`get`](Self::get). Callers locking several rows lock them in name order.
+    async fn get_for_update(&self, id: &str) -> Result<Option<InstalledPlugin>, StoreError>;
     /// Enables or disables a plugin, recording an optional reason; missing: `NotFound`.
     async fn set_enabled(
         &self,

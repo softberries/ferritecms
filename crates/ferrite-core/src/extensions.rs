@@ -14,7 +14,7 @@
 use std::{sync::Arc, time::Duration};
 
 use ferrite_domain::{Artifact, ArtifactKind, InstalledPlugin, InstalledTheme};
-use ferrite_store::{LOCK_EXTENSIONS, LockGuard, Repos, Store, lock};
+use ferrite_store::{LOCK_EXTENSIONS, LockGuard, Repos, Store, Tx, lock};
 
 use crate::{CoreError, events, tx::finish};
 
@@ -61,27 +61,17 @@ impl ExtensionService {
             active: false,
             ..theme.clone()
         };
-        self.locked(async |repos: &dyn Repos| {
-            let before = active_theme(repos).await?;
-            record_artifact(repos, artifact).await?;
-            repos.themes().upsert(&row).await?;
-            if activate {
-                repos.themes().activate(&row.name).await?;
-            }
-            emit_if_active_changed(repos, before).await
-        })
-        .await
+        let (guard, tx) = self.begin_locked().await?;
+        let done = write_install_theme(tx.as_ref(), artifact, &row, activate).await;
+        finish_locked(guard, tx, done).await
     }
 
     /// Makes `name` the only active theme; a missing theme is `NotFound` and the active
     /// theme stays. Emits `theme.changed` unless `name` was already active.
     pub async fn activate_theme(&self, name: &str) -> Result<(), CoreError> {
-        self.locked(async |repos: &dyn Repos| {
-            let before = active_theme(repos).await?;
-            repos.themes().activate(name).await?;
-            emit_if_active_changed(repos, before).await
-        })
-        .await
+        let (guard, tx) = self.begin_locked().await?;
+        let done = write_activate_theme(tx.as_ref(), name).await;
+        finish_locked(guard, tx, done).await
     }
 
     /// Records the plugin artifact (kind `plugin`, inserted if absent) and inserts or
@@ -89,42 +79,19 @@ impl ExtensionService {
     /// `artifact` is not a plugin artifact or `row.artifact_hash` is not its hash.
     ///
     /// `row.enabled` and `row.disabled_reason` are ignored, as `install_theme` ignores
-    /// `active`: a new plugin is installed disabled, a replaced one keeps its state. A
-    /// replacement with a different artifact clears the plugin's shared failure counters
-    /// in the same transaction (P20).
-    /// Enabling is [`set_plugin_enabled`](Self::set_plugin_enabled), which also resets
-    /// the plugin's failure counters (P20).
+    /// `active`: a new plugin is installed disabled, a replaced one keeps its state.
+    /// Enabling is [`set_plugin_enabled`](Self::set_plugin_enabled). A replacement with
+    /// a different artifact clears the plugin's shared failure counters in the same
+    /// transaction (P20).
     pub async fn install_plugin(
         &self,
         artifact: &Artifact,
         row: &InstalledPlugin,
     ) -> Result<(), CoreError> {
         check_artifact(artifact, ArtifactKind::Plugin, &row.artifact_hash)?;
-        self.locked(async |repos: &dyn Repos| {
-            record_artifact(repos, artifact).await?;
-            let (enabled, disabled_reason) = match repos.plugins().get(&row.name).await? {
-                Some(existing) => {
-                    // A new artifact starts with clean failure counters (P20).
-                    if existing.artifact_hash != row.artifact_hash {
-                        repos.plugin_failures().clear(&row.name).await?;
-                    }
-                    (existing.enabled, existing.disabled_reason)
-                }
-                None => (false, None),
-            };
-            let row = InstalledPlugin {
-                enabled,
-                disabled_reason,
-                ..row.clone()
-            };
-            repos.plugins().upsert(&row).await?;
-            repos
-                .events()
-                .append(&events::plugins_changed(&row.name))
-                .await?;
-            Ok(())
-        })
-        .await
+        let (guard, tx) = self.begin_locked().await?;
+        let done = write_install_plugin(tx.as_ref(), artifact, row).await;
+        finish_locked(guard, tx, done).await
     }
 
     /// Enables or disables the plugin `name` (missing: `NotFound`) and clears its
@@ -133,40 +100,102 @@ impl ExtensionService {
     /// so old failures cannot disable it again at once. Emits `plugins.changed` with its
     /// name.
     pub async fn set_plugin_enabled(&self, name: &str, enabled: bool) -> Result<(), CoreError> {
-        self.locked(async |repos: &dyn Repos| {
-            repos.plugins().set_enabled(name, enabled, None).await?;
-            if enabled {
-                repos.plugin_failures().clear(name).await?;
-            }
-            repos
-                .events()
-                .append(&events::plugins_changed(name))
-                .await?;
-            Ok(())
-        })
-        .await
+        let (guard, tx) = self.begin_locked().await?;
+        let done = write_plugin_enabled(tx.as_ref(), name, enabled).await;
+        finish_locked(guard, tx, done).await
     }
 
-    /// Runs `write` in one transaction while holding the `extensions` lock. The lock is
-    /// released after the transaction ends, so the next holder sees the committed rows.
-    async fn locked(
-        &self,
-        write: impl AsyncFnOnce(&dyn Repos) -> Result<(), CoreError>,
-    ) -> Result<(), CoreError> {
+    /// Takes the `extensions` lock, then opens the write transaction. The lock is
+    /// released by [`finish_locked`] after the transaction ends, so the next holder sees
+    /// the committed rows. (Plain async fns rather than closure helpers: rustc cannot
+    /// prove an `AsyncFnOnce(&dyn Repos)` future `Send`.)
+    async fn begin_locked(&self) -> Result<(Box<dyn LockGuard>, Box<dyn Tx>), CoreError> {
         let guard = lock(self.store.as_ref(), LOCK_EXTENSIONS, self.lock_wait).await?;
-        let done = self.in_tx(write).await;
-        release(guard).await;
-        done
+        match self.store.begin().await {
+            Ok(tx) => Ok((guard, tx)),
+            Err(e) => {
+                release(guard).await;
+                Err(e.into())
+            }
+        }
     }
+}
 
-    async fn in_tx(
-        &self,
-        write: impl AsyncFnOnce(&dyn Repos) -> Result<(), CoreError>,
-    ) -> Result<(), CoreError> {
-        let tx = self.store.begin().await?;
-        let done = write(tx.as_ref()).await;
-        finish(tx, done).await
+/// Commits `tx` on `Ok` (rolls back on `Err`), then releases the lock.
+async fn finish_locked(
+    guard: Box<dyn LockGuard>,
+    tx: Box<dyn Tx>,
+    result: Result<(), CoreError>,
+) -> Result<(), CoreError> {
+    let done = finish(tx, result).await;
+    release(guard).await;
+    done
+}
+
+async fn write_install_theme(
+    repos: &dyn Repos,
+    artifact: &Artifact,
+    row: &InstalledTheme,
+    activate: bool,
+) -> Result<(), CoreError> {
+    let before = active_theme(repos).await?;
+    record_artifact(repos, artifact).await?;
+    repos.themes().upsert(row).await?;
+    if activate {
+        repos.themes().activate(&row.name).await?;
     }
+    emit_if_active_changed(repos, before).await
+}
+
+async fn write_activate_theme(repos: &dyn Repos, name: &str) -> Result<(), CoreError> {
+    let before = active_theme(repos).await?;
+    repos.themes().activate(name).await?;
+    emit_if_active_changed(repos, before).await
+}
+
+async fn write_install_plugin(
+    repos: &dyn Repos,
+    artifact: &Artifact,
+    row: &InstalledPlugin,
+) -> Result<(), CoreError> {
+    record_artifact(repos, artifact).await?;
+    let (enabled, disabled_reason) = match repos.plugins().get(&row.name).await? {
+        Some(existing) => {
+            // A new artifact starts with clean failure counters (P20).
+            if existing.artifact_hash != row.artifact_hash {
+                repos.plugin_failures().clear(&row.name).await?;
+            }
+            (existing.enabled, existing.disabled_reason)
+        }
+        None => (false, None),
+    };
+    let row = InstalledPlugin {
+        enabled,
+        disabled_reason,
+        ..row.clone()
+    };
+    repos.plugins().upsert(&row).await?;
+    repos
+        .events()
+        .append(&events::plugins_changed(&row.name))
+        .await?;
+    Ok(())
+}
+
+async fn write_plugin_enabled(
+    repos: &dyn Repos,
+    name: &str,
+    enabled: bool,
+) -> Result<(), CoreError> {
+    repos.plugins().set_enabled(name, enabled, None).await?;
+    if enabled {
+        repos.plugin_failures().clear(name).await?;
+    }
+    repos
+        .events()
+        .append(&events::plugins_changed(name))
+        .await?;
+    Ok(())
 }
 
 /// `Invalid` unless `artifact` has `kind` and the row names its hash.

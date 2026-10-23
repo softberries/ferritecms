@@ -31,9 +31,10 @@
 //! * A crash loses up to one interval of buffered counts.
 //! * A commit that errors after it has in fact applied is retried with the same
 //!   counts, which are then counted twice.
-//! * On Postgres a re-enable can commit between the row read and the add of step 1,
-//!   and those counts then land after the clear. The token in step 2 still stops the
-//!   disable from that flush.
+//!
+//! Step 1 locks each buffered plugin's row (`get_for_update`, in name order) for its
+//! transaction, so a re-enable, which clears the counters, waits for the flush and never
+//! lands between the read and the add.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -189,12 +190,15 @@ impl SharedFailures {
         }
         let bucket = bucket_start(now)?;
         let tx = store.begin().await?;
+        // Lock each row (Postgres `FOR UPDATE`; SQLite: the Tx holds the single writer)
+        // in name order, so two nodes flushing the same plugins cannot deadlock, and a
+        // re-enable (which clears the counters) waits for this Tx instead of landing
+        // between the read and the add.
+        let plugins: BTreeSet<&str> = batch.keys().map(|(p, _, _)| p.as_str()).collect();
         let mut current: BTreeMap<&str, Option<Timestamp>> = BTreeMap::new();
-        for (plugin, _, _) in batch.keys() {
-            if !current.contains_key(plugin.as_str()) {
-                let row = tx.plugins().get(plugin).await?;
-                current.insert(plugin, row.filter(|r| r.enabled).map(|r| r.updated_at));
-            }
+        for plugin in plugins {
+            let row = tx.plugins().get_for_update(plugin).await?;
+            current.insert(plugin, row.filter(|r| r.enabled).map(|r| r.updated_at));
         }
         let mut written = BTreeSet::new();
         let mut dropped = 0u64;
