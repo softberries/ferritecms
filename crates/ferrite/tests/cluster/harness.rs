@@ -79,7 +79,10 @@ pub struct Cluster {
 
 /// One cluster test at a time in this binary: each runs 2–3 nodes with their own
 /// workers and timers, and the latency assertions must not depend on how many other
-/// clusters share the machine.
+/// clusters share the machine. The mutex is per process: `cargo test` runs the tests
+/// of a binary as threads of one process, so it serialises them; nextest runs every
+/// test in its own process, where it does nothing — run this binary there with
+/// `--test-threads=1` (or a nextest test group of max 1 thread).
 fn serial() -> &'static tokio::sync::Mutex<()> {
     static SERIAL: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
     SERIAL.get_or_init(|| tokio::sync::Mutex::new(()))
@@ -295,6 +298,19 @@ impl Cluster {
             s.store.close().await;
         }
         self.db.teardown().await;
+    }
+}
+
+/// A test that panicked never reaches [`Cluster::finish`]: its nodes are aborted here,
+/// before the stores and the schema fixture drop, so no node task outlives the test's
+/// database.
+impl Drop for Cluster {
+    fn drop(&mut self) {
+        for slot in &mut self.slots {
+            if let Some(node) = slot.node.take() {
+                node.abort();
+            }
+        }
     }
 }
 

@@ -117,6 +117,10 @@ pub struct NodeOptions {
     pub periodics: Option<Vec<Periodic>>,
     /// Scheduler tick (default `SCHEDULER_TICK`, 10 s).
     pub scheduler_tick: Option<Duration>,
+    /// Test seam: whether the invalidation loop and the job runner use `LISTEN`
+    /// wake-ups (default: in cluster mode). `Some(false)` leaves the node on polling only.
+    #[doc(hidden)]
+    pub listen: Option<bool>,
     /// Test seam: [`start`] pauses right after the invalidation cursor is set.
     #[doc(hidden)]
     pub boot_barrier: Option<BootBarrier>,
@@ -273,7 +277,7 @@ async fn boot(
     registry: Registry,
 ) -> anyhow::Result<RunningNode> {
     let mode = config.effective_cluster_mode();
-    let listen = node_mode(mode) == NodeMode::Cluster;
+    let listen = opts.listen.unwrap_or(node_mode(mode) == NodeMode::Cluster);
     let media = Arc::new(open_media(config)?);
     media
         .check()

@@ -9,6 +9,7 @@ use std::time::Duration;
 use ferrite::{NodeOptions, RunnerOverrides};
 use ferrite_core::events::post_key;
 use ferrite_domain::{JobId, JobStatus, NewEvent, NewJob};
+use ferrite_store::LOCK_MIGRATE;
 use ferrite_store_tests::{migration_dirs, migration_files};
 use serde_json::json;
 use sqlx::Connection;
@@ -234,16 +235,35 @@ async fn concurrent_first_start_migrates_once() {
         return;
     };
     let mut pg = c.pg().await;
-    let tables: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM information_schema.tables WHERE table_schema = $1",
-    )
-    .bind(&c.schema)
-    .fetch_one(&mut pg)
-    .await
-    .unwrap();
-    assert_eq!(tables, 0, "empty schema");
+    let schema = c.schema.clone();
+    async fn tables(pg: &mut sqlx::PgConnection, schema: &str) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM information_schema.tables WHERE table_schema = $1")
+            .bind(schema)
+            .fetch_one(pg)
+            .await
+            .unwrap()
+    }
+    assert_eq!(tables(&mut pg, &schema).await, 0, "empty schema");
 
-    c.start_concurrently(|_| NodeOptions::default()).await;
+    // Hold the migrate lock (as a running `ferrite migrate` would): both nodes must wait
+    // on it rather than migrate, then one migrates and the other finds the schema
+    // current once it is released.
+    let holder = c.db.shared_store();
+    let guard = holder
+        .try_lock(LOCK_MIGRATE)
+        .await
+        .unwrap()
+        .expect("migrate lock free");
+    let gate = async {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(
+            tables(&mut pg, &schema).await,
+            0,
+            "no node migrated while the lock was held"
+        );
+        guard.release().await.unwrap();
+    };
+    tokio::join!(c.start_concurrently(|_| NodeOptions::default()), gate);
     for i in 0..c.len() {
         for path in ["/healthz", "/readyz"] {
             let (status, body) = c.get(i, path).await;

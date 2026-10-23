@@ -2,8 +2,6 @@
 //! node (P18, P21), and the shared failure counters disabling a plugin cluster-wide
 //! (P20).
 
-use std::time::Duration;
-
 use ferrite::NodeOptions;
 use ferrite::extensions::{install_plugin_file, install_theme_dir};
 use ferrite_core::ExtensionService;
@@ -164,11 +162,9 @@ async fn auto_disable_is_cluster_wide() {
         }
     }
     let last_request = Instant::now();
-    wait_until(
-        Duration::from_secs(6),
-        "flapper disabled on both nodes",
-        || async { (0..c.len()).all(|i| !c.node(i).state.plugins.is_enabled("flapper")) },
-    )
+    wait_until(SETUP, "flapper disabled on both nodes", || async {
+        (0..c.len()).all(|i| !c.node(i).state.plugins.is_enabled("flapper"))
+    })
     .await;
     let took = last_request.elapsed();
 

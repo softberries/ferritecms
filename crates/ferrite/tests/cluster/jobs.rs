@@ -6,12 +6,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ferrite::{NodeOptions, RunnerOverrides};
-use ferrite_cluster::Periodic;
+use ferrite_cluster::{Periodic, STALE_AFTER};
 use ferrite_domain::{JobId, JobStatus, NewJob};
 use ferrite_store::Store;
 use serde_json::json;
 use sqlx::Connection;
-use tokio::time::Instant;
 
 use crate::harness::{Cluster, Recorder, Run, SETUP, Spec, Then, runs, wait_until};
 
@@ -131,6 +130,11 @@ async fn lease_expiry_after_crashed_node() {
         }
     })
     .await;
+    // The claim is not enough: the crash must hit the handler mid-run.
+    wait_until(SETUP, "node 0's handler started", || async {
+        runs(&log).iter().any(|r| r.node == 0 && r.job == id)
+    })
+    .await;
     // Node 1 joins while node 0 is alive: node 0 renews its lease, so node 1 must not
     // take the job for longer than one lease.
     c.start(1, short_lease(&log, 1)).await;
@@ -143,11 +147,7 @@ async fn lease_expiry_after_crashed_node() {
         "a live node keeps its lease: {job:?}"
     );
     assert_eq!(job.attempts, 1, "{job:?}");
-    let row0 = |nodes: &[ferrite_domain::Node]| nodes.iter().find(|n| n.id == node0).cloned();
-    let before = row0(&store.read().nodes().list().await.unwrap()).expect("node 0 registered");
-
     c.crash(0).await;
-    let crashed = Instant::now();
     let took =
         wait_until(
             LEASE + Duration::from_secs(2),
@@ -177,12 +177,27 @@ async fn lease_expiry_after_crashed_node() {
         "node 1 ran it once: {runs:?}"
     );
 
-    // The dead node's row stays (it goes stale; pruning is 24 h later) and blocks
-    // nothing: a new job runs at once and a new node joins.
-    let after = row0(&store.read().nodes().list().await.unwrap()).expect("row kept");
-    assert_eq!(
-        after.heartbeat_at, before.heartbeat_at,
-        "no heartbeat after the crash"
+    // The dead node's row stays and goes stale (no heartbeat for STALE_AFTER = 30 s;
+    // pruned after 24 h). Instead of waiting 30 s, its heartbeat is backdated by 31 s:
+    // it leaves the live set (heartbeat within STALE_AFTER of the database clock, the
+    // registry's rule), the row is kept, and it blocks nothing: a new node joins and a
+    // new job runs at once.
+    c.db.exec_raw(&format!(
+        "UPDATE nodes SET heartbeat_at = heartbeat_at - interval '31 seconds' \
+         WHERE id = '{node0}'"
+    ))
+    .await;
+    let nodes = store.read().nodes().list().await.unwrap();
+    let now = store.read().nodes().db_now().await.unwrap();
+    let live = |n: &ferrite_domain::Node| {
+        now.as_micros() - n.heartbeat_at.as_micros() <= STALE_AFTER.as_micros() as i64
+    };
+    let row0 = nodes.iter().find(|n| n.id == node0).expect("row kept");
+    assert!(!live(row0), "node 0 is stale: {row0:?}");
+    let node1 = c.node(1).node_id;
+    assert!(
+        nodes.iter().any(|n| n.id == node1 && live(n)),
+        "node 1 is live: {nodes:?}"
     );
     c.start(2, short_lease(&log, 2)).await;
     let next = store
@@ -201,10 +216,16 @@ async fn lease_expiry_after_crashed_node() {
     .await;
     let job = store.read().jobs().get(next).await.unwrap().unwrap();
     assert_eq!(job.attempts, 1, "{job:?}");
-    assert!(
-        crashed.elapsed() < Duration::from_secs(30),
-        "well before node 0 goes stale"
-    );
+    let ids: Vec<_> = store
+        .read()
+        .nodes()
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|n| n.id)
+        .collect();
+    assert!(ids.contains(&node0), "stale row still kept: {ids:?}");
     c.finish().await;
 }
 

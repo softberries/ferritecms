@@ -576,8 +576,7 @@ fn two_processes_share_invalidation() {
     }
 
     let title = "Edited across processes";
-    let saved = Instant::now();
-    rt().block_on(async {
+    let saved = rt().block_on(async {
         let store: Arc<dyn Store> = p.store().await.into();
         let admin = store
             .read()
@@ -617,11 +616,14 @@ fn two_processes_share_invalidation() {
             menu_order: item.menu_order,
             terms,
         };
-        ContentService::new(store.clone(), Arc::new(PermalinkRules::default()))
-            .update(&actor, item.id, item.version, draft)
+        let svc = ContentService::new(store.clone(), Arc::new(PermalinkRules::default()));
+        // Timed from the start of the save.
+        let saved = Instant::now();
+        svc.update(&actor, item.id, item.version, draft)
             .await
             .expect("update");
         store.close().await;
+        saved
     });
     let mut took = Vec::new();
     for s in &servers {
