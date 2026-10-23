@@ -422,6 +422,99 @@ fn solo_site_key_file_created_once() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
 }
 
+fn solo_config(dir: &Path) -> ferrite_config::Config {
+    std::fs::write(
+        dir.join("ferrite.toml"),
+        "[site]\nurl = \"https://example.com\"\n",
+    )
+    .unwrap();
+    ferrite_config::load(dir, Vec::new()).unwrap()
+}
+
+fn temp_files(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".tmp"))
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn site_key_create_ignores_crash_leftovers() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config = solo_config(tmp.path());
+    // Temp files a crashed run may have left: a partial write and an empty file, one
+    // with this process's id in the name.
+    let pid = std::process::id();
+    std::fs::write(tmp.path().join(".secret.key.1.00ff00ff00ff00ff.tmp"), "abc").unwrap();
+    std::fs::write(
+        tmp.path()
+            .join(format!(".secret.key.{pid}.0000000000000000.tmp")),
+        "",
+    )
+    .unwrap();
+    let before = temp_files(tmp.path());
+    let key = ferrite::keys::site_key(&config).unwrap();
+    let text = std::fs::read_to_string(tmp.path().join("secret.key")).unwrap();
+    assert_eq!(text, format!("{}\n", key.to_hex()));
+    // Leftovers are untouched and the new temp file is gone.
+    assert_eq!(temp_files(tmp.path()), before);
+    assert_eq!(
+        ferrite::keys::site_key(&config).unwrap().to_hex(),
+        key.to_hex()
+    );
+}
+
+/// Collects formatted log output from the current thread's subscriber.
+#[derive(Clone, Default)]
+struct LogBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogBuf {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn site_key_file_with_loose_mode_warns_without_content() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config = solo_config(tmp.path());
+    let path = tmp.path().join("secret.key");
+    let hex = "ab".repeat(32);
+    std::fs::write(&path, format!("{hex}\n")).unwrap();
+    let logs = LogBuf::default();
+    let writer = logs.clone();
+    let dispatch = tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish(),
+    );
+    let read = |mode: u32| {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        logs.0.lock().unwrap().clear();
+        let key = tracing::dispatcher::with_default(&dispatch, || {
+            ferrite::keys::site_key(&config).unwrap()
+        });
+        assert_eq!(key.to_hex(), hex);
+        String::from_utf8(logs.0.lock().unwrap().clone()).unwrap()
+    };
+    let out = read(0o644);
+    assert!(out.contains("WARN"), "{out}");
+    assert!(out.contains("secret.key") && out.contains("0644"), "{out}");
+    assert!(!out.contains(&hex), "{out}");
+    let out = read(0o600);
+    assert!(!out.contains("WARN"), "{out}");
+}
+
 #[test]
 fn non_utf8_ferrite_env_names_the_key_not_the_value() {
     #[cfg(unix)]

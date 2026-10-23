@@ -1,8 +1,8 @@
 //! The site key (P4, R1): `auth.secret_key[_file]` when configured, otherwise (solo mode
 //! only) `<data>/secret.key`, created on first use. The key is never logged or printed.
 
-use std::io::Write;
-use std::path::Path;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use ferrite_config::{ClusterMode, Config};
@@ -33,15 +33,36 @@ fn solo_key(path: &Path) -> anyhow::Result<SiteKey> {
     }
 }
 
-/// `None` when the file does not exist.
+/// `None` when the file does not exist. On Unix, group or other permission bits on the
+/// file are warned about (path and mode only) and the key is still used.
 fn read_key(path: &Path) -> anyhow::Result<Option<SiteKey>> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => {
             return Err(e).with_context(|| format!("cannot read {}", path.display()));
         }
     };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = file
+            .metadata()
+            .with_context(|| format!("cannot read {}", path.display()))?
+            .permissions()
+            .mode()
+            & 0o777;
+        if mode & 0o077 != 0 {
+            tracing::warn!(
+                path = %path.display(),
+                mode = %format!("{mode:04o}"),
+                "site key file is readable by group or others; chmod 600 it"
+            );
+        }
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .with_context(|| format!("cannot read {}", path.display()))?;
     let hex = text
         .strip_suffix("\r\n")
         .or_else(|| text.strip_suffix('\n'))
@@ -55,10 +76,48 @@ fn read_key(path: &Path) -> anyhow::Result<Option<SiteKey>> {
     }
 }
 
-/// Creates the file exclusively (`create_new`, 0600); if another process created it
-/// first, its key is used instead.
+/// Creates the file atomically: the key is written to a uniquely named temp file (0600)
+/// in the same folder and fsynced, then hard-linked to `path`, which fails rather than
+/// overwrite. The temp file is removed either way, so a crash can leave only an unused
+/// temp file, never a partial `secret.key`. If another process linked its key first,
+/// that key is used instead.
 fn create_key(path: &Path) -> anyhow::Result<SiteKey> {
     let key = SiteKey::generate().context("cannot generate a site key")?;
+    let tmp = temp_path(path)?;
+    let written = write_temp(&tmp, &key);
+    let linked = written.and_then(|()| std::fs::hard_link(&tmp, path));
+    let _ = std::fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return read_key(path)?
+                .with_context(|| format!("{} disappeared while reading it", path.display()));
+        }
+        Err(e) => return Err(e).with_context(|| format!("cannot create {}", path.display())),
+    }
+    // Best effort: make the new directory entry durable.
+    if let Some(dir) = path.parent()
+        && let Ok(dir) = std::fs::File::open(dir)
+    {
+        let _ = dir.sync_all();
+    }
+    tracing::info!(path = %path.display(), "created a new site key");
+    Ok(key)
+}
+
+/// `<dir>/.secret.key.<pid>.<16 random hex>.tmp`: unique per attempt, so a temp file a
+/// crashed run left behind never collides with a new one.
+fn temp_path(path: &Path) -> anyhow::Result<PathBuf> {
+    let suffix: [u8; 8] =
+        ferrite_core::auth::random_bytes().context("cannot generate a temp file name")?;
+    let suffix: String = suffix.iter().map(|b| format!("{b:02x}")).collect();
+    let name = path
+        .file_name()
+        .map_or_else(|| SECRET_KEY_FILE.into(), |n| n.to_string_lossy());
+    Ok(path.with_file_name(format!(".{name}.{}.{suffix}.tmp", std::process::id())))
+}
+
+fn write_temp(tmp: &Path, key: &SiteKey) -> std::io::Result<()> {
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
@@ -66,23 +125,7 @@ fn create_key(path: &Path) -> anyhow::Result<SiteKey> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut file = match opts.open(path) {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            return read_key(path)?
-                .with_context(|| format!("{} disappeared while reading it", path.display()));
-        }
-        Err(e) => return Err(e).with_context(|| format!("cannot create {}", path.display())),
-    };
-    let written = file
-        .write_all(format!("{}\n", key.to_hex()).as_bytes())
-        .and_then(|()| file.sync_all());
-    if let Err(e) = written {
-        // Do not leave a partial key behind for the next start to trip over.
-        drop(file);
-        let _ = std::fs::remove_file(path);
-        return Err(e).with_context(|| format!("cannot write {}", path.display()));
-    }
-    tracing::info!(path = %path.display(), "created a new site key");
-    Ok(key)
+    let mut file = opts.open(tmp)?;
+    file.write_all(format!("{}\n", key.to_hex()).as_bytes())?;
+    file.sync_all()
 }
