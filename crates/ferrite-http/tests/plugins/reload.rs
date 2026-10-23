@@ -322,7 +322,174 @@ async fn enable_clears_failure_counters(site: Site) -> Site {
     site
 }
 
+/// Counts buffered before the row was enabled again (it changed since the reloader
+/// loaded it) are dropped at flush: the re-enabled plugin starts with a clean slate.
+async fn stale_counts_dropped_after_reenable(site: Site) -> Site {
+    site.install("flapper").await;
+    let shared = Arc::new(SharedFailures::new(3, Duration::from_secs(600)));
+    let reloader = reloader(&site).with_failures(shared.clone());
+    reloader.reload().await.unwrap();
+    site.host.set_failure_sink(shared.clone());
+    let stop = CancellationToken::new();
+    let flusher = shared.clone().spawn_flusher(
+        site.store.clone(),
+        site.host.clone(),
+        Duration::from_secs(3600),
+        stop.clone(),
+    );
+    for _ in 0..3 {
+        metas(&site.host).await;
+    }
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    ExtensionService::new(site.store.clone())
+        .set_plugin_enabled("flapper", true)
+        .await
+        .unwrap();
+    stop.cancel();
+    flusher.await.unwrap();
+    let epoch = Timestamp::from_micros(0).unwrap();
+    assert_eq!(
+        site.store
+            .read()
+            .plugin_failures()
+            .sum_since("flapper", epoch)
+            .await
+            .unwrap(),
+        0,
+        "stale counts dropped"
+    );
+    assert!(disabled_events(site.store.as_ref()).await.is_empty());
+    let row = site
+        .store
+        .read()
+        .plugins()
+        .get("flapper")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(row.enabled);
+
+    // After the reload picks up the new row, failures count again.
+    reloader.reload().await.unwrap();
+    let stop = CancellationToken::new();
+    let flusher = shared.clone().spawn_flusher(
+        site.store.clone(),
+        site.host.clone(),
+        Duration::from_secs(3600),
+        stop.clone(),
+    );
+    metas(&site.host).await;
+    stop.cancel();
+    flusher.await.unwrap();
+    assert_eq!(
+        site.store
+            .read()
+            .plugin_failures()
+            .sum_since("flapper", epoch)
+            .await
+            .unwrap(),
+        1
+    );
+    site
+}
+
+/// R12: the plugin is enabled again between the flusher's threshold check and its
+/// conditional disable; the stale observation makes `auto_disable` a no-op.
+async fn reenable_during_flush_is_not_disabled_again(site: Site) -> Site {
+    site.install("flapper").await;
+    reloader(&site).reload().await.unwrap();
+    let store = site.store.clone();
+    let shared = Arc::new(
+        SharedFailures::new(3, Duration::from_secs(600)).with_before_disable(move |name| {
+            let store = store.clone();
+            Box::pin(async move {
+                // What `ExtensionService::set_plugin_enabled(name, true)` writes (its
+                // future is not `Send`, which this seam needs).
+                tokio::time::sleep(Duration::from_millis(2)).await;
+                store
+                    .read()
+                    .plugins()
+                    .set_enabled(&name, true, None)
+                    .await?;
+                store.read().plugin_failures().clear(&name).await
+            })
+        }),
+    );
+    site.host.set_failure_sink(shared.clone());
+    let stop = CancellationToken::new();
+    let flusher = shared.clone().spawn_flusher(
+        site.store.clone(),
+        site.host.clone(),
+        Duration::from_secs(3600),
+        stop.clone(),
+    );
+    for _ in 0..3 {
+        metas(&site.host).await;
+    }
+    stop.cancel();
+    flusher.await.unwrap();
+    let row = site
+        .store
+        .read()
+        .plugins()
+        .get("flapper")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(row.enabled, "not disabled again");
+    assert!(disabled_events(site.store.as_ref()).await.is_empty());
+    assert!(site.host.is_enabled("flapper"));
+    site
+}
+
+/// A threshold check that errors is retried on the next flush even without new failures.
+async fn failed_check_is_retried_without_new_failures(site: Site) -> Site {
+    site.install("flapper").await;
+    reloader(&site).reload().await.unwrap();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let shared = Arc::new(
+        SharedFailures::new(3, Duration::from_secs(600)).with_before_disable({
+            let attempts = attempts.clone();
+            move |_name| {
+                let first = attempts.fetch_add(1, Ordering::SeqCst) == 0;
+                Box::pin(async move {
+                    if first {
+                        Err(ferrite_store::StoreError::Database("injected".into()))
+                    } else {
+                        Ok(())
+                    }
+                })
+            }
+        }),
+    );
+    site.host.set_failure_sink(shared.clone());
+    let stop = CancellationToken::new();
+    let flusher = shared.clone().spawn_flusher(
+        site.store.clone(),
+        site.host.clone(),
+        Duration::from_millis(50),
+        stop.clone(),
+    );
+    for _ in 0..3 {
+        metas(&site.host).await;
+    }
+    let reason = wait_disabled(site.store.as_ref(), "flapper").await;
+    assert_eq!(reason, "auto: 3 failures in 10m");
+    stop.cancel();
+    flusher.await.unwrap();
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        2,
+        "one failed check, one retry"
+    );
+    assert_eq!(disabled_events(site.store.as_ref()).await.len(), 1);
+    site
+}
+
 profile_tests!(
+    stale_counts_dropped_after_reenable,
+    reenable_during_flush_is_not_disabled_again,
+    failed_check_is_retried_without_new_failures,
     reload_keeps_previous_version_on_bad_update,
     reload_drops_disabled_rows,
     reload_reuses_unchanged_plugins,
@@ -394,9 +561,20 @@ async fn shared_failures_disable_cluster_wide() {
             .unwrap(),
         20
     );
+    // Only the node whose conditional disable won disables locally at once; the other
+    // one waits for the `plugin.disabled` event (Task 10's reloader).
     assert!(
-        !site.host.is_enabled("flapper") || !peer_host.is_enabled("flapper"),
-        "the node that disabled the row disabled it locally too"
+        site.host.is_enabled("flapper") != peer_host.is_enabled("flapper"),
+        "exactly one host disabled flapper locally"
+    );
+    let local = if site.host.is_enabled("flapper") {
+        &peer_host
+    } else {
+        &site.host
+    };
+    assert_eq!(
+        local.disabled_reason("flapper").as_deref(),
+        Some(reason.as_str())
     );
     site.db.teardown().await;
 }

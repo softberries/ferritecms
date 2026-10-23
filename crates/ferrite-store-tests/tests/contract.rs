@@ -188,6 +188,7 @@ backend_tests_spawning!(
     kv_quota_never_exceeded,
     jobs_claim_is_exclusive_under_concurrency,
     jobs_concurrent_enqueue_same_key,
+    plugin_auto_disable_concurrent_single_transition,
 );
 
 #[test]

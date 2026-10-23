@@ -400,11 +400,19 @@ pub trait PluginRepo: Send + Sync {
     ) -> Result<(), StoreError>;
     /// Removes an installed plugin (missing: no-op).
     async fn delete(&self, id: &str) -> Result<(), StoreError>;
-    /// Disables an enabled plugin with `reason` in one conditional statement (P20):
-    /// `true` only for the transition; `false` when the plugin is already disabled
-    /// (its reason is kept) or missing. Concurrent calls on any nodes: exactly one
-    /// returns `true`. `updated_at` is the database clock.
-    async fn auto_disable(&self, id: &str, reason: &str) -> Result<bool, StoreError>;
+    /// Disables the plugin with `reason` in one conditional statement (P20, R12), only
+    /// while it is enabled **and** its `updated_at` is still `observed_updated_at` (the
+    /// value the caller read before summing its failures): `true` only for the
+    /// transition; `false` when the plugin is disabled (its reason is kept), missing, or
+    /// changed since the observation (say, enabled again, which also cleared its
+    /// counters). Concurrent calls on any nodes: at most one returns `true`. The new
+    /// `updated_at` is the database clock.
+    async fn auto_disable(
+        &self,
+        id: &str,
+        reason: &str,
+        observed_updated_at: Timestamp,
+    ) -> Result<bool, StoreError>;
 }
 
 /// Shared per-minute plugin failure counters (P20): each node adds its buffered counts,

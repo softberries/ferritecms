@@ -505,16 +505,38 @@ until it is prepared and committed again. Every failure is also reported, synchr
 and without blocking, to the host's `FailureSink`. The node's sink,
 `ferrite_http::SharedFailures`, buffers `(plugin, hook) → count`; its flusher (every 5 s,
 plus a final flush on shutdown) adds the counts to 1-minute `plugin_failures` buckets
-(bucket = database clock floored to the minute) in one transaction, then sums each flushed
-plugin's buckets over `plugins.failure_window`. At `≥ plugins.disable_after_failures`
-it runs `PluginRepo::auto_disable` (`UPDATE plugins SET enabled = false,
-disabled_reason = 'auto: <n> failures in <window>' … WHERE name = $1 AND enabled`) and,
-only when that statement made the transition, appends `plugin.disabled` (keys
-`[name, reason]`) in the same transaction, so exactly one node emits it however many
-cross the threshold; that node also disables the plugin locally at once, the others on
-the event. The cluster-wide disable lags the threshold by up to one flush. Enabling a
-plugin (`ExtensionService::set_plugin_enabled(name, true)`) clears its buckets in the same
-transaction. Buckets are pruned hourly by the `plugin_failures.prune` job after
+(bucket = database clock floored to the minute) in one transaction. Each buffered count
+carries the plugin row's `updated_at` that the node's `PluginReloader` last committed
+(`with_failures`). Counts recorded against an older row version, or for a disabled or
+deleted row, are dropped, so a plugin enabled again never gets its pre-enable failures
+back. For each plugin written (and any whose previous check errored, retried even with
+no new failures), the flusher reads the row's `updated_at` as an optimistic token
+(ruling R12) and sums the buckets starting at or after the start of the bucket holding
+`now - plugins.failure_window` (floored, so a window shorter than a minute still sees
+the current bucket). At `≥ plugins.disable_after_failures` it runs
+`PluginRepo::auto_disable(name, reason, token)`:
+
+```sql
+UPDATE plugins
+SET enabled = false, disabled_reason = 'auto: <n> failures in <window>', …
+WHERE name = $1 AND enabled AND updated_at = $token
+```
+
+A re-enable racing the check makes it a no-op. Only when that statement made the
+transition does the flusher append `plugin.disabled` (keys `[name, reason]`) in the same
+transaction, so exactly one node emits it however many cross the threshold. That node
+also disables the plugin locally at once; the others do on the event. Enabling a plugin
+(`ExtensionService::set_plugin_enabled(name, true)`) clears its buckets in the same
+transaction, and so does an install that changes an existing row's artifact.
+**Accuracy limits:**
+
+- The cluster-wide disable lags the threshold by up to one flush.
+- A crash loses up to one flush interval (5 s) of buffered counts.
+- A counts commit that reports an error after it was in fact applied is retried with
+  the same counts, which then count twice.
+- On Postgres, a re-enable committing between the flusher's row read and its add lets
+  those counts land after the clear. The token still stops that flush from disabling
+  the plugin. Buckets are pruned hourly by the `plugin_failures.prune` job after
 `max(24 h, 2 × plugins.failure_window)`. Metrics are M4. "Plugin marked broken on this
 node" for instantiation failures is not separate: it counts as a failure like any other.
 

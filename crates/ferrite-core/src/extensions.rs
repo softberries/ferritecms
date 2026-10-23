@@ -89,7 +89,9 @@ impl ExtensionService {
     /// `artifact` is not a plugin artifact or `row.artifact_hash` is not its hash.
     ///
     /// `row.enabled` and `row.disabled_reason` are ignored, as `install_theme` ignores
-    /// `active`: a new plugin is installed disabled, a replaced one keeps its state.
+    /// `active`: a new plugin is installed disabled, a replaced one keeps its state. A
+    /// replacement with a different artifact clears the plugin's shared failure counters
+    /// in the same transaction (P20).
     /// Enabling is [`set_plugin_enabled`](Self::set_plugin_enabled), which also resets
     /// the plugin's failure counters (P20).
     pub async fn install_plugin(
@@ -101,7 +103,13 @@ impl ExtensionService {
         self.locked(async |repos: &dyn Repos| {
             record_artifact(repos, artifact).await?;
             let (enabled, disabled_reason) = match repos.plugins().get(&row.name).await? {
-                Some(existing) => (existing.enabled, existing.disabled_reason),
+                Some(existing) => {
+                    // A new artifact starts with clean failure counters (P20).
+                    if existing.artifact_hash != row.artifact_hash {
+                        repos.plugin_failures().clear(&row.name).await?;
+                    }
+                    (existing.enabled, existing.disabled_reason)
+                }
                 None => (false, None),
             };
             let row = InstalledPlugin {

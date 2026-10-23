@@ -315,6 +315,57 @@ pub async fn plugin_enable_disable_emit_plugins_changed(db: &TestDb) {
     assert_eq!(max_seq(store).await, seq);
 }
 
+/// The shared failure counters (P20) are cleared when a plugin is enabled and when an
+/// install changes the row's artifact; a same-artifact reinstall or a disable keeps them.
+pub async fn plugin_counters_cleared_on_enable_and_new_artifact(db: &TestDb) {
+    let store = db.store();
+    let svc = ExtensionService::new(db.shared_store());
+    let failures = store.read().plugin_failures();
+    let epoch = Timestamp::from_micros(0).unwrap();
+    let bump = || async {
+        failures
+            .add("seo", "render.head", Timestamp::now(), 4)
+            .await
+            .unwrap();
+    };
+    let a = artifact(ArtifactKind::Plugin, 7);
+    svc.install_plugin(&a, &plugin("seo", &a, false))
+        .await
+        .unwrap();
+    bump().await;
+    svc.install_plugin(&a, &plugin("seo", &a, false))
+        .await
+        .unwrap();
+    assert_eq!(
+        failures.sum_since("seo", epoch).await.unwrap(),
+        4,
+        "same artifact"
+    );
+    svc.set_plugin_enabled("seo", false).await.unwrap();
+    assert_eq!(
+        failures.sum_since("seo", epoch).await.unwrap(),
+        4,
+        "disable keeps"
+    );
+    svc.set_plugin_enabled("seo", true).await.unwrap();
+    assert_eq!(
+        failures.sum_since("seo", epoch).await.unwrap(),
+        0,
+        "enable clears"
+    );
+
+    bump().await;
+    let b = artifact(ArtifactKind::Plugin, 9);
+    svc.install_plugin(&b, &plugin("seo", &b, false))
+        .await
+        .unwrap();
+    assert_eq!(
+        failures.sum_since("seo", epoch).await.unwrap(),
+        0,
+        "new artifact clears"
+    );
+}
+
 pub async fn extensions_writes_take_the_lock(db: &TestDb) {
     let store = db.store();
     let svc = ExtensionService::new(db.shared_store()).with_lock_wait(Duration::from_millis(300));
@@ -352,5 +403,6 @@ backend_tests!(
     install_theme_writes_rows_and_event_atomically,
     activate_theme_emits_theme_changed,
     plugin_enable_disable_emit_plugins_changed,
+    plugin_counters_cleared_on_enable_and_new_artifact,
     extensions_writes_take_the_lock,
 );

@@ -16,7 +16,7 @@
 //! Calls already running finish on the registry snapshot they loaded (old instances
 //! included); calls that start after the swap use the new one. Reloads are serialised.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use ferrite_domain::{ArtifactHash, InstalledPlugin, Timestamp};
@@ -26,6 +26,7 @@ use ferrite_store::{Store, StoreError};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
+use super::SharedFailures;
 use super::load::{check_row, hash_of};
 
 /// Compiles one plugin; [`PluginHost::prepare`] unless replaced in tests.
@@ -92,6 +93,8 @@ pub struct PluginReloader {
     media: Arc<MediaStore>,
     host: Arc<PluginHost>,
     prepare: PrepareFn,
+    /// Told the row version of every committed plugin (stale failure counts are dropped).
+    failures: Option<Arc<SharedFailures>>,
     /// What the last reload committed, per plugin; the lock serialises reloads.
     loaded: Mutex<BTreeMap<String, Loaded>>,
 }
@@ -103,8 +106,17 @@ impl PluginReloader {
             media,
             host,
             prepare: Arc::new(|host, manifest, wasm| host.prepare(manifest, wasm)),
+            failures: None,
             loaded: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// After each commit, tell `failures` the row version (`updated_at`) of every plugin
+    /// in the host, so failure counts recorded before a row changed (for example before
+    /// it was enabled again, which cleared its shared counters) are dropped (R12).
+    pub fn with_failures(mut self, failures: Arc<SharedFailures>) -> Self {
+        self.failures = Some(failures);
+        self
     }
 
     /// Test seam: compile through `prepare` instead of [`PluginHost::prepare`] (for
@@ -133,6 +145,9 @@ impl PluginReloader {
         let mut prepared = Vec::new();
         let mut keep = Vec::new();
         let mut next = BTreeMap::new();
+        // Row version of every plugin left in the host (kept, prepared or kept after a
+        // failed update: the row's current `updated_at` in each case).
+        let mut versions = HashMap::new();
         for row in rows {
             let state = |status| PluginState {
                 version: row.version.clone(),
@@ -193,12 +208,18 @@ impl PluginReloader {
                     }
                 },
             };
+            if next.contains_key(&row.name) {
+                versions.insert(row.name.clone(), row.updated_at);
+            }
             report.states.insert(row.name.clone(), state(status));
         }
 
         let compiled = prepared.len();
         let keep: Vec<&str> = keep.iter().map(String::as_str).collect();
         self.host.commit(prepared, &keep);
+        if let Some(failures) = &self.failures {
+            failures.set_versions(versions);
+        }
         *loaded = next;
         tracing::info!(
             compiled,
