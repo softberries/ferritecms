@@ -20,10 +20,6 @@ const MEDIA_PATH: &str = "/_media";
 pub(crate) const DEFAULT_THEME: &str = "blog";
 /// Longest theme name accepted from the `themes` table.
 const MAX_THEME_NAME: usize = 64;
-/// Option holding the post permalink structure.
-const POST_PERMALINK_OPTION: &str = "permalink.post";
-/// Option holding the page permalink structure.
-const PAGE_PERMALINK_OPTION: &str = "permalink.page";
 
 /// The media store settings from `ferrite.toml`. Local media and S3 without
 /// `public_base_url` are served by the app under `/_media`; S3 with it links there.
@@ -75,44 +71,9 @@ pub(crate) fn open_media(config: &Config) -> anyhow::Result<MediaStore> {
 /// Permalink rules from the options (defaults when unset), checked against the
 /// registered content types and taxonomies (rulings R3, R13).
 pub(crate) async fn permalink_rules(store: &dyn Store) -> anyhow::Result<PermalinkRules> {
-    let repos = store.read();
-    let mut structures = Vec::new();
-    for key in [POST_PERMALINK_OPTION, PAGE_PERMALINK_OPTION] {
-        let value = repos
-            .options()
-            .get(key)
-            .await
-            .with_context(|| format!("cannot read option {key}"))?;
-        structures.push(match value {
-            None => None,
-            Some(entry) => match entry.value.as_str() {
-                Some(s) => Some(s.to_owned()),
-                None => bail!("option {key} must be a string"),
-            },
-        });
-    }
-    let rules = PermalinkRules::from_options(structures[0].as_deref(), structures[1].as_deref())
-        .context("invalid permalink option")?;
-    let types: Vec<String> = repos
-        .types()
-        .list()
+    ferrite_core::permalink::rules_from(store.read(), &[])
         .await
-        .context("cannot list content types")?
-        .into_iter()
-        .map(|t| t.name)
-        .collect();
-    let taxonomies: Vec<String> = repos
-        .taxonomies()
-        .list()
-        .await
-        .context("cannot list taxonomies")?
-        .into_iter()
-        .map(|t| t.name)
-        .collect();
-    rules
-        .check_types(&types, &taxonomies)
-        .context("invalid permalink option")?;
-    Ok(rules)
+        .context("invalid permalink option")
 }
 
 /// Where the running theme's files came from.

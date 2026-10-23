@@ -303,7 +303,7 @@ fn empty_object() -> serde_json::Value {
 
 /// A member that may be absent (`#[serde(default)]` gives `None`) but not `null` (also
 /// for `serde_json::Value`, which would take `null` as a value).
-fn present<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+pub(crate) fn present<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de>,
@@ -325,7 +325,7 @@ where
 }
 
 /// A member that may be absent (`None`) or `null` (`Some(None)`).
-fn nullable<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+pub(crate) fn nullable<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de>,

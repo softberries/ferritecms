@@ -37,8 +37,14 @@
 //! * Menu writes: `menu:<name>`. Option writes: kind `options.changed`, key
 //!   `option:<key>`; a key starting with `permalink.` additionally emits an `invalidate`
 //!   event with [`ALL_KEY`], because every URL changes.
-//! * Content type registration changes should emit [`ALL_KEY`]. Types are only
-//!   registered at startup today, so a change takes effect on restart.
+//! * Content type and taxonomy writes
+//!   ([`ContentTypeService`](crate::ContentTypeService), the taxonomy methods of
+//!   [`TaxonomyService`](crate::TaxonomyService)): kind [`TYPES_CHANGED`], keys
+//!   `[type:<name>]` or `[taxonomy:<name>]` ([`type_key`], [`taxonomy_key`]), plus an
+//!   `invalidate` event with [`ALL_KEY`] in the same transaction: routes, archives and
+//!   the permalink checks change with them (P18). Nodes rebuild their permalink rules
+//!   and route table on `types.changed`; an older node treats the unknown kind as
+//!   "invalidate its keys" (M1.5 P28) and still flushes on the `all` event.
 //! * Media rows: a media item is a content item, so lifecycle transitions already emit
 //!   `post:<id>`. Writes to the `media` row itself (alt text, variants, replacing the
 //!   file) must emit `post:<media id>` in the same transaction. No code path writes
@@ -165,6 +171,29 @@ pub fn plugin_disabled(name: &str, reason: &str) -> NewEvent {
     }
 }
 
+/// Event kind: a content type or taxonomy was registered, changed or removed (keys:
+/// [`type_key`] or [`taxonomy_key`]).
+pub const TYPES_CHANGED: &str = "types.changed";
+
+/// The key of content type `name` in a [`TYPES_CHANGED`] event.
+pub fn type_key(name: &str) -> String {
+    format!("type:{name}")
+}
+
+/// The key of taxonomy `name` in a [`TYPES_CHANGED`] event.
+pub fn taxonomy_key(name: &str) -> String {
+    format!("taxonomy:{name}")
+}
+
+/// A `types.changed` event with one key (`type:<name>` or `taxonomy:<name>`).
+pub fn types_changed(key: &str) -> NewEvent {
+    NewEvent {
+        kind: TYPES_CHANGED.to_owned(),
+        keys: vec![key.to_owned()],
+        origin_node: None,
+    }
+}
+
 /// Dependency key of an option.
 pub fn option_key(key: &str) -> String {
     format!("option:{key}")
@@ -232,6 +261,15 @@ mod tests {
         assert_eq!(
             (p.kind.as_str(), p.keys.as_slice()),
             ("plugins.changed", &["seo".to_owned()][..])
+        );
+        let ty = types_changed(&type_key("event"));
+        assert_eq!(
+            (ty.kind.as_str(), ty.keys.as_slice()),
+            ("types.changed", &["type:event".to_owned()][..])
+        );
+        assert_eq!(
+            types_changed(&taxonomy_key("genre")).keys,
+            ["taxonomy:genre"]
         );
         let d = plugin_disabled("seo", "auto: 20 failures");
         assert_eq!(d.kind, "plugin.disabled");

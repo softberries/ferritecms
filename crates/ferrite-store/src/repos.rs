@@ -255,6 +255,9 @@ pub trait TaxonomyRepo: Send + Sync {
     async fn get(&self, name: &str) -> Result<Option<Taxonomy>, StoreError>;
     /// Lists all taxonomies.
     async fn list(&self) -> Result<Vec<Taxonomy>, StoreError>;
+    /// Deletes a taxonomy in one statement; a built-in one is `Invalid`, one that still
+    /// has terms `ForeignKey`, a missing one a no-op.
+    async fn delete(&self, name: &str) -> Result<(), StoreError>;
 }
 
 #[async_trait]

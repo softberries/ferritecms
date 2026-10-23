@@ -7,3 +7,4 @@ mod harness;
 mod auth;
 mod content;
 mod foundation;
+mod types;

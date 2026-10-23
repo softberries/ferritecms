@@ -61,19 +61,6 @@ impl AdminQuery {
 }
 
 impl ContentService {
-    /// `Ok` when content type `kind` exists (`NotFound` otherwise) and `actor` may read
-    /// content.
-    pub async fn check_type(&self, actor: &Actor, kind: &str) -> Result<(), CoreError> {
-        require_read(actor, Area::Content)?;
-        self.store
-            .read()
-            .types()
-            .get(kind)
-            .await?
-            .map(|_| ())
-            .ok_or(CoreError::NotFound)
-    }
-
     /// One page of the items `query` selects (needs `require_read(Content)`). Without
     /// `edit_others` in its role, `actor` sees only published items and its own (any
     /// status), as WordPress's REST API does for contributors and authors; the filter is

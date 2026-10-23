@@ -23,8 +23,8 @@
 //! Validation: a literal first segment may not be a [`slug::RESERVED`] word (checked by
 //! [`Structure::parse`]) or a content type name (checked by
 //! [`PermalinkRules::check_types`], since the parser does not know the registered
-//! types; it also rejects taxonomy names, router words and years; whoever builds the
-//! rules from options calls it with `types().list()` and `taxonomies().list()`). The
+//! types; it also rejects taxonomy names, router words and years; [`rules_from`] builds
+//! the rules from the options and runs it with the stored types and taxonomies). The
 //! page structure must contain `%parent_path%`, or child pages would collide.
 //!
 //! Root namespace: posts under `/%slug%/` and top-level pages under
@@ -244,6 +244,63 @@ pub struct PermalinkRules {
     other: Structure,
 }
 
+/// Option holding the post structure.
+pub const POST_OPTION: &str = "permalink.post";
+/// Option holding the page structure.
+pub const PAGE_OPTION: &str = "permalink.page";
+
+/// The rules the `permalink.post` / `permalink.page` options give, read through `repos`
+/// (a transaction's repos inside a write, so the result sees its pending changes), with
+/// `overrides` applied on top: `(key, Some(structure))` replaces a stored value,
+/// `(key, None)` stands for a deleted option (the default); keys other than the two
+/// options are ignored. Then [`PermalinkRules::check_types`] runs with the types and
+/// taxonomies `repos` lists. Every caller that builds or changes the rules uses it:
+/// node startup and reloads, type and taxonomy writes (P18) and option writes (P19).
+///
+/// An option that is not a string, an invalid structure, or a first segment that
+/// shadows a type, taxonomy, route word or year is `Invalid` naming the structure.
+pub async fn rules_from(
+    repos: &dyn Repos,
+    overrides: &[(&str, Option<&str>)],
+) -> Result<PermalinkRules, CoreError> {
+    let mut structures: [Option<String>; 2] = [None, None];
+    for (slot, key) in structures.iter_mut().zip([POST_OPTION, PAGE_OPTION]) {
+        *slot = match overrides.iter().find(|(k, _)| *k == key) {
+            Some((_, value)) => value.map(str::to_owned),
+            None => match repos.options().get(key).await? {
+                None => None,
+                Some(entry) => Some(
+                    entry
+                        .value
+                        .as_str()
+                        .ok_or_else(|| {
+                            CoreError::Invalid(format!("option {key} must be a string"))
+                        })?
+                        .to_owned(),
+                ),
+            },
+        };
+    }
+    let [post, page] = structures;
+    let rules = PermalinkRules::from_options(post.as_deref(), page.as_deref())?;
+    let types: Vec<String> = repos
+        .types()
+        .list()
+        .await?
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    let taxonomies: Vec<String> = repos
+        .taxonomies()
+        .list()
+        .await?
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    rules.check_types(&types, &taxonomies)?;
+    Ok(rules)
+}
+
 /// Default post structure.
 pub const DEFAULT_POST: &str = "/%slug%/";
 /// Default page structure.
@@ -309,7 +366,6 @@ impl PermalinkRules {
     pub fn post(&self) -> &Structure {
         &self.post
     }
-
     pub fn page(&self) -> &Structure {
         &self.page
     }

@@ -6,7 +6,7 @@
 //! | kind | effect |
 //! |------|--------|
 //! | `invalidate`, `options.changed` | [`PageCache::invalidate`] with the event's keys (`all` flushes) |
-//! | `theme.changed`, `plugins.changed`, `plugin.disabled` | flush |
+//! | `theme.changed`, `plugins.changed`, `plugin.disabled`, `types.changed` | flush |
 //! | `node.drain` | none |
 //! | anything else | logged, and its keys invalidated (unknown means "may have changed") |
 //!
@@ -385,7 +385,9 @@ impl InvalidationLoop {
     async fn apply(&self, event: &Event) {
         match event.kind.as_str() {
             "invalidate" | "options.changed" => self.cache.invalidate(&event.keys).await,
-            "theme.changed" | "plugins.changed" | "plugin.disabled" => self.cache.flush(),
+            "theme.changed" | "plugins.changed" | "plugin.disabled" | "types.changed" => {
+                self.cache.flush()
+            }
             "node.drain" => {}
             other => {
                 tracing::warn!(
@@ -965,6 +967,7 @@ mod tests {
             (2, "theme.changed"),
             (3, "plugins.changed"),
             (4, "plugin.disabled"),
+            (5, "types.changed"),
         ] {
             fill().await;
             fake.commit(seq, kind, &["whatever"]);
@@ -973,22 +976,22 @@ mod tests {
         }
 
         fill().await;
-        fake.commit(5, "invalidate", &["all"]);
+        fake.commit(6, "invalidate", &["all"]);
         lp.poll_once().await.unwrap();
         assert!(cache.is_empty().await);
 
         fill().await;
-        fake.commit(6, "node.drain", &["post:1"]);
+        fake.commit(7, "node.drain", &["post:1"]);
         lp.poll_once().await.unwrap();
         assert_eq!(cache.len().await, 2);
 
-        fake.commit(7, "something.new", &["post:1"]);
+        fake.commit(8, "something.new", &["post:1"]);
         lp.poll_once().await.unwrap();
         assert!(
             cache.get(&key("/b/")).await.is_none(),
             "unknown kind invalidates its keys"
         );
-        assert_eq!(lp.last_seq(), 7);
+        assert_eq!(lp.last_seq(), 8);
     }
 
     #[tokio::test]

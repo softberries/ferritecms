@@ -8,6 +8,7 @@ mod content;
 mod error;
 pub mod events;
 mod extensions;
+pub mod fields;
 pub mod jobs;
 mod menu;
 mod options;
@@ -17,6 +18,7 @@ pub mod site;
 pub mod slug;
 mod taxonomy;
 mod tx;
+mod types;
 mod users;
 
 /// Longest parent chain (content items and terms) walked anywhere in core.
@@ -39,6 +41,7 @@ pub use site::{
     UserPublic,
 };
 pub use taxonomy::TaxonomyService;
+pub use types::{ContentTypeService, MAX_TYPE_LABEL, MAX_TYPE_NAME, NewType, TypePatch};
 pub use users::{
     MAX_DISPLAY_NAME, MAX_EMAIL, MAX_LOGIN, NewAccount, OperatorUsers, UserPatch, UserService,
     normalize_display_name, normalize_email, normalize_login,

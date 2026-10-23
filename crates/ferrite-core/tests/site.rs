@@ -110,8 +110,10 @@ pub async fn term_crud_and_events(db: &TestDb) {
         svc.create_term(&admin, "category", "A", Some("a/b".into()), None, "")
             .await
     ));
-    assert!(is_invalid(
-        svc.create_term(&admin, "nope", "A", None, None, "").await
+    // An unknown taxonomy is NotFound (`POST /taxonomies/{taxonomy}/terms` is a 404).
+    assert!(matches!(
+        svc.create_term(&admin, "nope", "A", None, None, "").await,
+        Err(CoreError::NotFound)
     ));
 
     // Update: slug kept when None, own slug is not a conflict, a taken slug gets -N.

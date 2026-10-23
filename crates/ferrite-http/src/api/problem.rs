@@ -57,11 +57,18 @@ pub const BUSY_RETRY_AFTER: u64 = 5;
 
 /// Unique constraints a request can run into, with the input member each one is about
 /// and what to tell the client: (constraint, field, detail). Later resources add theirs.
-pub const UNIQUE_FIELDS: &[(&str, &str, &str)] = &[(
-    "content_items_slug_uq",
-    "slug",
-    "the slug was taken by concurrent saves; retry",
-)];
+pub const UNIQUE_FIELDS: &[(&str, &str, &str)] = &[
+    (
+        "content_items_slug_uq",
+        "slug",
+        "the slug was taken by concurrent saves; retry",
+    ),
+    (
+        "terms_taxonomy_slug_uq",
+        "slug",
+        "the slug was taken by concurrent saves; retry",
+    ),
+];
 
 /// One entry of `errors`: what is wrong with one input (`field` = the JSON path or
 /// parameter name, when known).

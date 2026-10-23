@@ -57,8 +57,8 @@ use ferrite_cluster::{
 };
 use ferrite_config::{Config, PluginsConfig};
 use ferrite_core::{
-    AuthService, ContentService, MenuService, OptionService, Permalinks, RedirectService,
-    SiteReader, SwappablePermalinks, TaxonomyService, UserService,
+    AuthService, ContentService, ContentTypeService, MenuService, OptionService, Permalinks,
+    RedirectService, SiteReader, SwappablePermalinks, TaxonomyService, UserService,
 };
 use ferrite_domain::{NodeId, Timestamp};
 use ferrite_http::{
@@ -384,6 +384,7 @@ async fn boot(
             ),
             users: Arc::new(UserService::new(store.clone())),
             content: content.clone(),
+            types: Arc::new(ContentTypeService::new(store.clone())),
             taxonomy: Arc::new(TaxonomyService::new(store.clone())),
             menus: Arc::new(MenuService::new(store.clone())),
             options: Arc::new(

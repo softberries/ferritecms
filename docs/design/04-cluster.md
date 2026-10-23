@@ -196,12 +196,14 @@ As built. The invalidation loop (`ferrite-cache`) applies the cache effect; the 
 | `theme.changed` | theme name | `ExtensionService` when the active `(name, artifact)` changes | flush | reload the theme from its artifact |
 | `plugins.changed` | plugin name | `ExtensionService` on every plugin install / enable / disable | flush | reload the plugin registry |
 | `plugin.disabled` | plugin name, reason | the failure flusher on the auto-disable transition (P20) | flush | disable the plugin in this host at once, then reload |
+| `types.changed` | `type:<name>` or `taxonomy:<name>` | `ContentTypeService` and `TaxonomyService` on every type or taxonomy create / update / delete (M2a P18), together with `invalidate [all]` in the same transaction | flush | rebuild the permalink rules (re-read from the options, checked against the types and taxonomies) and the route table |
 | `node.drain` | node id | nothing yet | none | none (P26) |
 | any other kind | any | a newer binary (P28) | drop pages under the keys (logged) | — |
 
 Events are versioned by kind, not by payload (P28): `events` rows have no payload column,
 a new event shape gets a new kind, and an older node treats an unknown kind as "invalidate
-its keys". Lost history (`on_history_lost`) reloads all three components. Events older than
+its keys" (for `types.changed` the accompanying `invalidate [all]` still flushes it, but
+it keeps its routes until restart). Lost history (`on_history_lost`) reloads all three components. Events older than
 24 h are pruned by the hourly `events.prune` job, except the newest row, which is always
 kept (R9) so `min_seq` can reveal pruned history.
 

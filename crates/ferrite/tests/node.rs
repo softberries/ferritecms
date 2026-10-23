@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 //! In-process nodes (`ferrite::start`) on both profiles: hot swap of theme, plugins and
-//! permalinks (P18), the boot race (P22), scheduled publishing through jobs (P12) and
+//! permalinks and content types (P18), the boot race (P22), scheduled publishing through jobs (P12) and
 //! shutdown releasing jobs and leaving the registry (P10). Solo runs on SQLite (250 ms
 //! poll); the Postgres cases run in cluster mode (`LISTEN` wake-ups) and print `SKIP`
 //! without `FERRITE_TEST_PG_URL`.
@@ -20,8 +20,8 @@ use ferrite::{NodeOptions, RunningNode, start};
 use ferrite_cluster::{JobError, JobHandler};
 use ferrite_config::Config;
 use ferrite_core::{
-    Actor, ContentDraft, ContentService, ExtensionService, OptionService, PermalinkRules,
-    events::options_changed,
+    Actor, AuthService, ContentDraft, ContentService, ContentTypeService, ExtensionService,
+    NewType, OptionService, PermalinkRules, Scopes, auth::SiteKey, events::options_changed,
 };
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, Job, JobStatus, NewJob, Role, Timestamp,
@@ -127,6 +127,43 @@ async fn get(addr: SocketAddr, path: &str) -> (u16, String) {
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
     s.write_all(
         format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut raw = Vec::new();
+    s.read_to_end(&mut raw).await.unwrap();
+    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let head = String::from_utf8_lossy(&raw[..split]).into_owned();
+    let status = head.split(' ').nth(1).and_then(|c| c.parse().ok()).unwrap();
+    let mut body = raw[split + 4..].to_vec();
+    if head
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
+        body = dechunk(&body);
+    }
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+/// `method path` with a JSON body and `Authorization: Bearer <token>` (identity
+/// encoding, `Connection: close`): status and body.
+async fn send_json(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    token: &str,
+    body: &Value,
+) -> (u16, String) {
+    let body = body.to_string();
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    s.write_all(
+        format!(
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+             Authorization: Bearer {token}\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .as_bytes(),
     )
     .await
     .unwrap();
@@ -684,6 +721,115 @@ async fn permalink_change_rebuilds_routes(db: Arc<TestDb>) {
     node.shutdown().await.unwrap();
 }
 
+/// P18: a type registered through core while the node runs is routed within a poll
+/// interval (the reloader rebuilds the rules and the route table on `types.changed`).
+async fn new_type_is_routable_without_restart(db: Arc<TestDb>) {
+    let site = Site::new(&db);
+    let node = site.start(&db, NodeOptions::default()).await;
+    let store = db.shared_store();
+    assert_eq!(get(node.addr, "/event/").await.0, 404);
+    let user = fixture_user(store.as_ref()).await;
+    let admin = Actor::new(user.id, Role::Admin);
+    ContentTypeService::new(store.clone())
+        .create(
+            &admin,
+            NewType {
+                name: "event".into(),
+                label: "Events".into(),
+                hierarchical: false,
+                has_archive: true,
+                fields: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let took = eventually(CONVERGE, "/event/ archive served", || async {
+        get(node.addr, "/event/").await.0 == 200
+    })
+    .await;
+    eprintln!("new type routed after {took:?}");
+
+    // Removing it takes the route away again.
+    ContentTypeService::new(store.clone())
+        .delete(&admin, "event")
+        .await
+        .unwrap();
+    // A request that resolved its route just before the swap must not leave the old
+    // archive cached after the reload's flush (the render re-resolves the route).
+    eventually(CONVERGE, "/event/ gone", || async {
+        get(node.addr, "/event/").await.0 == 404
+    })
+    .await;
+    for _ in 0..10 {
+        assert_eq!(get(node.addr, "/event/").await.0, 404, "stays gone");
+    }
+    node.shutdown().await.unwrap();
+}
+
+/// A type registered over the API, and an item of it created and published over the
+/// API, is served at its permalink on the public site of the running node.
+async fn type_registered_over_api_serves_permalinks(db: Arc<TestDb>) {
+    let site = Site::new(&db);
+    let node = site.start(&db, NodeOptions::default()).await;
+    let store = db.shared_store();
+    let user = fixture_user(store.as_ref()).await;
+    // Tokens are stored as SHA-256 hashes, so any site key issues one the node accepts.
+    let (token, _) = AuthService::new(store.clone(), SiteKey::generate().unwrap())
+        .create_token(
+            &Actor::new(user.id, Role::Admin),
+            user.id,
+            "t",
+            Scopes::ALL,
+            None,
+        )
+        .await
+        .unwrap();
+    let token = token.expose();
+    let (status, body) = send_json(
+        node.addr,
+        "POST",
+        "/api/v1/types",
+        token,
+        &json!({"name": "event", "label": "Events", "has_archive": true,
+                "fields": [{"name": "venue", "kind": "text", "required": true}]}),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    let (status, body) = send_json(
+        node.addr,
+        "POST",
+        "/api/v1/content/event",
+        token,
+        &json!({"title": "RustConf", "slug": "rustconf", "fields": {"venue": "Hall A"}}),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    let item: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(item["permalink"], "/event/rustconf/");
+    let id = item["id"].as_str().unwrap();
+    let publish = format!("/api/v1/content/event/{id}/publish");
+    let mut s = tokio::net::TcpStream::connect(node.addr).await.unwrap();
+    s.write_all(
+        format!(
+            "POST {publish} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+             Authorization: Bearer {token}\r\nIf-Match: \"1\"\r\nContent-Length: 0\r\n\r\n"
+        )
+        .as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut raw = Vec::new();
+    s.read_to_end(&mut raw).await.unwrap();
+    let head = String::from_utf8_lossy(&raw);
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    eventually(CONVERGE, "the item's permalink served", || async {
+        let (status, body) = get(node.addr, "/event/rustconf/").await;
+        status == 200 && body.contains("RustConf")
+    })
+    .await;
+    node.shutdown().await.unwrap();
+}
+
 async fn scheduled_post_publishes_via_job(db: Arc<TestDb>) {
     let site = Site::new(&db);
     // Without periodics `content.publish_due` never runs: only the item's job publishes.
@@ -819,6 +965,8 @@ backend_tests_spawning!(
     bad_plugin_update_keeps_previous_version,
     plugin_hot_reload_on_enable_and_disable,
     permalink_change_rebuilds_routes,
+    new_type_is_routable_without_restart,
+    type_registered_over_api_serves_permalinks,
     scheduled_post_publishes_via_job,
     shutdown_releases_running_job_and_deregisters,
 );

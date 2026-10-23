@@ -1,5 +1,6 @@
 //! Hot swap of node-local state (rulings P18, P22; design 04 §8): the theme, the plugin
-//! registry and the permalink rules with the route table.
+//! registry and the permalink rules with the route table (re-read from the options and
+//! checked against the registered types and taxonomies).
 //!
 //! [`Reloader`] is the invalidation loop's [`EventHook`]. On the loop's task it only
 //! sets dirty flags and wakes one background task (a burst of events costs one reload):
@@ -10,6 +11,7 @@
 //! | `plugins.changed` | plugins |
 //! | `plugin.disabled` | the plugin is disabled in this host at once, then plugins |
 //! | `options.changed` with `option:permalink.post` or `option:permalink.page` | permalinks |
+//! | `types.changed` (a content type or taxonomy was registered, changed or removed) | permalinks |
 //! | history lost | all three |
 //!
 //! The task re-reads the state from the database (never from event payloads), swaps it
@@ -43,7 +45,9 @@ use ferrite_cluster::Registry;
 use ferrite_config::ClusterMode;
 use ferrite_core::{
     SwappablePermalinks,
-    events::{OPTIONS_CHANGED, PLUGIN_DISABLED, PLUGINS_CHANGED, THEME_CHANGED, option_key},
+    events::{
+        OPTIONS_CHANGED, PLUGIN_DISABLED, PLUGINS_CHANGED, THEME_CHANGED, TYPES_CHANGED, option_key,
+    },
 };
 use ferrite_domain::Event;
 use ferrite_http::{AppState, PluginReloader, PluginStatus, ReloadReport, load_route_table};
@@ -234,6 +238,7 @@ impl EventHook for Reloader {
                 }
                 self.mark(&self.dirty.plugins);
             }
+            TYPES_CHANGED => self.mark(&self.dirty.permalinks),
             OPTIONS_CHANGED => {
                 let permalink = PERMALINK_OPTIONS
                     .iter()
@@ -443,6 +448,9 @@ mod tests {
         assert_eq!(flags(&r), [false, false, true]);
         r.on_event(&event(THEME_CHANGED, &["b"]));
         assert_eq!(flags(&r), [true, false, true]);
+        let r = Reloader::new(host());
+        r.on_event(&event(TYPES_CHANGED, &["type:event"]));
+        assert_eq!(flags(&r), [false, false, true]);
     }
 
     #[test]

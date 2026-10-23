@@ -16,8 +16,9 @@ use axum::{
 use ferrite_cache::InvalidationLoop;
 use ferrite_cache::PageCache;
 use ferrite_core::{
-    Actor, AuthService, ContentService, MenuService, NewAccount, OptionService, PermalinkRules,
-    RedirectService, Scopes, SiteReader, TaxonomyService, UserService, auth::SiteKey,
+    Actor, AuthService, ContentService, ContentTypeService, MenuService, NewAccount, OptionService,
+    PermalinkRules, RedirectService, Scopes, SiteReader, TaxonomyService, UserService,
+    auth::SiteKey,
 };
 use ferrite_domain::{ArtifactHash, Role, Secret, Timestamp, User};
 use ferrite_http::{
@@ -217,6 +218,7 @@ impl Api {
                     store.clone(),
                     Arc::new(PermalinkRules::default()),
                 )),
+                types: Arc::new(ContentTypeService::new(store.clone())),
                 taxonomy: Arc::new(TaxonomyService::new(store.clone())),
                 menus: Arc::new(MenuService::new(store.clone())),
                 options: Arc::new(OptionService::load(store.clone()).await.expect("options")),
@@ -267,6 +269,7 @@ impl Api {
                 auth: a.auth.clone(),
                 users: a.users.clone(),
                 content: a.content.clone(),
+                types: a.types.clone(),
                 taxonomy: a.taxonomy.clone(),
                 menus: a.menus.clone(),
                 options: a.options.clone(),

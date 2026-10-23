@@ -307,6 +307,9 @@ impl TaxonomyRepo for Counted {
     async fn list(&self) -> Result<Vec<Taxonomy>, StoreError> {
         self.0.read().taxonomies().list().await
     }
+    async fn delete(&self, name: &str) -> Result<(), StoreError> {
+        self.0.read().taxonomies().delete(name).await
+    }
 }
 
 #[async_trait]

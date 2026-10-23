@@ -69,6 +69,52 @@ pub async fn taxonomies_seeded_and_upsert(db: &TestDb) {
     ));
 }
 
+pub async fn taxonomy_delete(db: &TestDb) {
+    let store = db.store();
+    let taxes = store.read().taxonomies();
+    let genre = Taxonomy {
+        name: "genre".into(),
+        label: "Genres".into(),
+        hierarchical: false,
+        content_types: vec!["post".into()],
+        built_in: false,
+    };
+    taxes.upsert(&genre).await.unwrap();
+    // Missing: a no-op.
+    taxes.delete("nope").await.unwrap();
+    // Built in: Invalid, the row stays.
+    assert!(matches!(
+        taxes.delete("category").await,
+        Err(StoreError::Invalid(m)) if m.contains("built-in")
+    ));
+    assert!(taxes.get("category").await.unwrap().is_some());
+    // With terms: ForeignKey, the row stays.
+    let t = term("genre", "jazz", "Jazz", None);
+    insert_terms(store, &[&t]).await;
+    assert!(matches!(
+        taxes.delete("genre").await,
+        Err(StoreError::ForeignKey { .. })
+    ));
+    assert!(taxes.get("genre").await.unwrap().is_some());
+    // Without: gone.
+    store.read().terms().delete(t.id).await.unwrap();
+    taxes.delete("genre").await.unwrap();
+    assert!(taxes.get("genre").await.unwrap().is_none());
+    assert_eq!(taxes.list().await.unwrap().len(), 2);
+    // Inside a transaction, rolled back: still there.
+    taxes.upsert(&genre).await.unwrap();
+    let tx = store.begin().await.unwrap();
+    tx.taxonomies().delete("genre").await.unwrap();
+    assert!(tx.taxonomies().get("genre").await.unwrap().is_none());
+    tx.rollback().await.unwrap();
+    assert!(taxes.get("genre").await.unwrap().is_some());
+    // NUL in the name: Invalid.
+    assert!(matches!(
+        taxes.delete("a\u{0}").await,
+        Err(StoreError::Invalid(_))
+    ));
+}
+
 pub async fn terms_crud_and_hierarchy(db: &TestDb) {
     let store = db.store();
     let terms = store.read().terms();

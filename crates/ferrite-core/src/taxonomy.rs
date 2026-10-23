@@ -1,15 +1,26 @@
-//! Terms: create, update, delete and list, with slugs unique per taxonomy.
+//! Taxonomies and their terms.
+//!
+//! Terms: create, update, delete and list, with slugs unique per taxonomy (needs
+//! `manage_terms`; reads `require_read(Terms)`, F16).
+//!
+//! Taxonomies: register, change and remove (needs `manage_settings`; reads
+//! `require_read(Content)`, F16). The name rules, the permalink check inside the
+//! transaction, the `types.changed` (`taxonomy:<name>`) + `invalidate [all]` events, the
+//! audit rows (`taxonomy.create|update|delete`) and the accepted races are those of
+//! [`ContentTypeService`](crate::ContentTypeService) (see `types.rs`).
 
 use std::sync::Arc;
 
 use ferrite_domain::{Taxonomy, Term, TermId};
 use ferrite_store::{Repos, Store, StoreError, Tx};
+use serde_json::json;
 
 use crate::{
     Actor, CoreError, MAX_PARENT_DEPTH,
-    actor::{Capability, require},
+    actor::{Area, Capability, require, require_read},
     events, slug,
     tx::finish,
+    types::{Change, announce, check_label, check_name_free, check_permalinks, check_type_name},
 };
 
 /// Unique index on (taxonomy, slug); a violation means another writer took the slug
@@ -26,7 +37,171 @@ impl TaxonomyService {
         Self { store }
     }
 
-    /// Lists all terms of `taxonomy` (unknown taxonomy: `NotFound`).
+    /// Every taxonomy, by name (`require_read(Content)`).
+    pub async fn list_taxonomies(&self, actor: &Actor) -> Result<Vec<Taxonomy>, CoreError> {
+        require_read(actor, Area::Content)?;
+        Ok(self.store.read().taxonomies().list().await?)
+    }
+
+    /// Taxonomy `name` (`require_read(Content)`; missing: `NotFound`).
+    pub async fn get_taxonomy(&self, actor: &Actor, name: &str) -> Result<Taxonomy, CoreError> {
+        require_read(actor, Area::Content)?;
+        self.store
+            .read()
+            .taxonomies()
+            .get(name)
+            .await?
+            .ok_or(CoreError::NotFound)
+    }
+
+    /// Registers a taxonomy (needs `manage_settings`). The name follows the type name
+    /// rules, the label is 1..=100 characters, every entry of `content_types` must be a
+    /// registered type (duplicates are dropped), and `built_in` must be `false`.
+    pub async fn create_taxonomy(
+        &self,
+        actor: &Actor,
+        taxonomy: Taxonomy,
+    ) -> Result<Taxonomy, CoreError> {
+        require(actor, Capability::ManageSettings)?;
+        check_type_name(&taxonomy.name)?;
+        if taxonomy.built_in {
+            return Err(CoreError::invalid_field(
+                "built_in",
+                "only the site's own taxonomies are built in",
+            ));
+        }
+        let tax = Taxonomy {
+            label: check_label(&taxonomy.label)?,
+            content_types: dedup_names(&taxonomy.content_types),
+            ..taxonomy
+        };
+        let tx = self.store.begin().await?;
+        let done = async {
+            check_name_free(tx.as_ref(), &tax.name).await?;
+            check_types_exist(tx.as_ref(), &tax.content_types).await?;
+            tx.taxonomies().upsert(&tax).await?;
+            check_permalinks(tx.as_ref()).await?;
+            let details = json!({
+                "label": tax.label,
+                "hierarchical": tax.hierarchical,
+                "content_types": tax.content_types,
+            });
+            announce(
+                tx.as_ref(),
+                actor.user,
+                Change::Taxonomy,
+                "create",
+                &tax.name,
+                details,
+            )
+            .await?;
+            Ok(tax)
+        }
+        .await;
+        finish(tx, done).await
+    }
+
+    /// Changes the label or the content types of taxonomy `name` (needs
+    /// `manage_settings`; built-in taxonomies too). `None` keeps the stored value; the
+    /// name and `hierarchical` cannot change. Missing: `NotFound`.
+    pub async fn update_taxonomy(
+        &self,
+        actor: &Actor,
+        name: &str,
+        label: Option<String>,
+        content_types: Option<Vec<String>>,
+    ) -> Result<Taxonomy, CoreError> {
+        require(actor, Capability::ManageSettings)?;
+        let label = label.as_deref().map(check_label).transpose()?;
+        let content_types = content_types.as_deref().map(dedup_names);
+        let tx = self.store.begin().await?;
+        let done = async {
+            let mut tax = tx
+                .taxonomies()
+                .get(name)
+                .await?
+                .ok_or(CoreError::NotFound)?;
+            if let Some(label) = label {
+                tax.label = label;
+            }
+            if let Some(types) = content_types {
+                check_types_exist(tx.as_ref(), &types).await?;
+                tax.content_types = types;
+            }
+            tx.taxonomies().upsert(&tax).await?;
+            check_permalinks(tx.as_ref()).await?;
+            let details = json!({"label": tax.label, "content_types": tax.content_types});
+            announce(
+                tx.as_ref(),
+                actor.user,
+                Change::Taxonomy,
+                "update",
+                &tax.name,
+                details,
+            )
+            .await?;
+            Ok(tax)
+        }
+        .await;
+        finish(tx, done).await
+    }
+
+    /// Removes taxonomy `name` (needs `manage_settings`). Built-in taxonomies are
+    /// `Invalid("built-in taxonomy")`, one with terms `Invalid("taxonomy has terms")`.
+    /// Missing: `NotFound`.
+    pub async fn delete_taxonomy(&self, actor: &Actor, name: &str) -> Result<(), CoreError> {
+        require(actor, Capability::ManageSettings)?;
+        let tx = self.store.begin().await?;
+        let done = async {
+            let tax = tx
+                .taxonomies()
+                .get(name)
+                .await?
+                .ok_or(CoreError::NotFound)?;
+            if tax.built_in {
+                return Err(CoreError::Invalid("built-in taxonomy".into()));
+            }
+            if !tx.terms().list(&tax.name).await?.is_empty() {
+                return Err(CoreError::Invalid("taxonomy has terms".into()));
+            }
+            tx.taxonomies().delete(&tax.name).await?;
+            announce(
+                tx.as_ref(),
+                actor.user,
+                Change::Taxonomy,
+                "delete",
+                &tax.name,
+                json!({}),
+            )
+            .await
+        }
+        .await;
+        finish(tx, done).await
+    }
+
+    /// Every term of `taxonomy` (`require_read(Terms)`; unknown taxonomy: `NotFound`).
+    pub async fn list_terms_for(
+        &self,
+        actor: &Actor,
+        taxonomy: &str,
+    ) -> Result<Vec<Term>, CoreError> {
+        require_read(actor, Area::Terms)?;
+        self.list_terms(taxonomy).await
+    }
+
+    /// Term `id` (`require_read(Terms)`; missing: `NotFound`).
+    pub async fn get_term(&self, actor: &Actor, id: TermId) -> Result<Term, CoreError> {
+        require_read(actor, Area::Terms)?;
+        self.store
+            .read()
+            .terms()
+            .get(id)
+            .await?
+            .ok_or(CoreError::NotFound)
+    }
+
+    /// Lists all terms of `taxonomy` (unknown taxonomy: `NotFound`). No actor: for the
+    /// public site and system paths; the API uses [`list_terms_for`](Self::list_terms_for).
     pub async fn list_terms(&self, taxonomy: &str) -> Result<Vec<Term>, CoreError> {
         let repos = self.store.read();
         if repos.taxonomies().get(taxonomy).await?.is_none() {
@@ -35,7 +210,8 @@ impl TaxonomyService {
         Ok(repos.terms().list(taxonomy).await?)
     }
 
-    /// Creates a term. `slug = None` derives it from `name`; a slug that is taken in the
+    /// Creates a term (an unknown `taxonomy` is `NotFound`). `slug = None` derives it
+    /// from `name`; a slug that is taken in the
     /// taxonomy gets `-2`, `-3`, … (also caller slugs). `parent` must be a term of the
     /// same taxonomy.
     ///
@@ -145,6 +321,29 @@ impl TaxonomyService {
     }
 }
 
+/// `names` without repeats, in their first order.
+fn dedup_names(names: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(names.len());
+    for n in names {
+        if !out.contains(n) {
+            out.push(n.clone());
+        }
+    }
+    out
+}
+
+/// Every name in `types` is a registered content type.
+async fn check_types_exist(repos: &dyn Repos, types: &[String]) -> Result<(), CoreError> {
+    let known = repos.types().list().await?;
+    match types.iter().find(|t| !known.iter().any(|k| &k.name == *t)) {
+        Some(t) => Err(CoreError::invalid_field(
+            "content_types",
+            format!("unknown content type {t:?}"),
+        )),
+        None => Ok(()),
+    }
+}
+
 /// Only hierarchical taxonomies have parents.
 fn check_flat(tax: &Taxonomy, parent: Option<TermId>) -> Result<(), CoreError> {
     if parent.is_some() && !tax.hierarchical {
@@ -169,7 +368,7 @@ async fn get_taxonomy(repos: &dyn Repos, name: &str) -> Result<Taxonomy, CoreErr
         .taxonomies()
         .get(name)
         .await?
-        .ok_or_else(|| CoreError::Invalid(format!("unknown taxonomy {name:?}")))
+        .ok_or(CoreError::NotFound)
 }
 
 /// The parent must exist and belong to `taxonomy`.

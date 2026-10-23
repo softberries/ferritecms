@@ -29,6 +29,8 @@ pub mod meta;
 pub mod openapi;
 pub mod problem;
 mod state;
+pub mod taxonomies;
+pub mod types;
 
 use std::sync::Arc;
 
@@ -46,7 +48,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 pub use auth::{Authed, AuthedAllowReset, CSRF_HEADER, ClientInfo, SameOrigin};
 pub use extract::{
     ApiJson, ApiPath, ApiQuery, DEFAULT_LIMIT, IfMatch, MAX_JSON_BODY, PageParams, check_limit,
-    created, etag, invalid_cursor, invalid_param,
+    created, created_at, etag, invalid_cursor, invalid_param,
 };
 pub use problem::{FieldError, Problem};
 pub use state::{ApiParts, ApiState, InvalidSiteUrl};
@@ -83,6 +85,27 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(content::list_revisions))
         .routes(routes!(content::get_revision))
         .routes(routes!(content::restore_revision))
+        .routes(routes!(types::list_types, types::create_type))
+        .routes(routes!(
+            types::get_type,
+            types::update_type,
+            types::delete_type
+        ))
+        .routes(routes!(
+            taxonomies::list_taxonomies,
+            taxonomies::create_taxonomy
+        ))
+        .routes(routes!(
+            taxonomies::get_taxonomy,
+            taxonomies::update_taxonomy,
+            taxonomies::delete_taxonomy
+        ))
+        .routes(routes!(taxonomies::list_terms, taxonomies::create_term))
+        .routes(routes!(
+            taxonomies::get_term,
+            taxonomies::update_term,
+            taxonomies::delete_term
+        ))
 }
 
 /// The spec and routes, before the state and layers.

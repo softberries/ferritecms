@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use axum::http::Uri;
 use ferrite_core::{
-    AuthService, ContentService, MenuService, OptionService, RedirectService, TaxonomyService,
-    UserService,
+    AuthService, ContentService, ContentTypeService, MenuService, OptionService, RedirectService,
+    TaxonomyService, UserService,
 };
 use ferrite_store::Store;
 
@@ -16,6 +16,7 @@ pub struct ApiParts {
     pub auth: Arc<AuthService>,
     pub users: Arc<UserService>,
     pub content: Arc<ContentService>,
+    pub types: Arc<ContentTypeService>,
     pub taxonomy: Arc<TaxonomyService>,
     pub menus: Arc<MenuService>,
     pub options: Arc<OptionService>,
@@ -30,6 +31,7 @@ pub struct ApiState {
     pub auth: Arc<AuthService>,
     pub users: Arc<UserService>,
     pub content: Arc<ContentService>,
+    pub types: Arc<ContentTypeService>,
     pub taxonomy: Arc<TaxonomyService>,
     pub menus: Arc<MenuService>,
     pub options: Arc<OptionService>,
@@ -55,6 +57,7 @@ impl ApiState {
             auth,
             users,
             content,
+            types,
             taxonomy,
             menus,
             options,
@@ -67,6 +70,7 @@ impl ApiState {
             auth,
             users,
             content,
+            types,
             taxonomy,
             menus,
             options,

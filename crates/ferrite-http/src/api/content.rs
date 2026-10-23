@@ -256,7 +256,7 @@ pub async fn list_content(
     ApiQuery(params): ApiQuery<ContentListParams>,
 ) -> Result<Json<ContentList>, Problem> {
     served(&kind)?;
-    api.content.check_type(&who.actor, &kind).await?;
+    api.types.get(&who.actor, &kind).await?;
     let query = params.into_query(&kind)?;
     let page = api.content.list(&who.actor, &query).await?;
     let (items, next_cursor) = list::items(page, ContentSummaryDto::from);
@@ -288,7 +288,7 @@ pub async fn create_content(
     ApiJson(input): ApiJson<ContentInput>,
 ) -> Result<Response, Problem> {
     served(&kind)?;
-    api.content.check_type(&who.actor, &kind).await?;
+    api.types.get(&who.actor, &kind).await?;
     let item = api
         .content
         .create(&who.actor, input.into_draft(&kind))

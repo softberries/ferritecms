@@ -6,7 +6,8 @@
 use std::{collections::HashSet, sync::Arc};
 
 use ferrite_core::{
-    Actor, AdminQuery, ContentDraft, ContentService, CoreError, PermalinkRules, Scopes,
+    Actor, AdminQuery, ContentDraft, ContentService, ContentTypeService, CoreError, PermalinkRules,
+    Scopes,
 };
 use ferrite_domain::{
     ContentId, ContentOrder, ContentStatus, NewUser, ParentFilter, Role, Term, TermId, UserId,
@@ -317,14 +318,16 @@ pub async fn admin_list_filters_and_search(db: &TestDb) {
         Err(CoreError::NotFound)
     ));
 
-    // The type check: known types pass, unknown ones are NotFound.
-    svc.check_type(&reader, "post").await.unwrap();
+    // The type check (now `ContentTypeService::get`): known types pass, unknown ones
+    // are NotFound.
+    let types = ContentTypeService::new(db.shared_store());
+    types.get(&reader, "post").await.unwrap();
     assert!(matches!(
-        svc.check_type(&reader, "nope").await,
+        types.get(&reader, "nope").await,
         Err(CoreError::NotFound)
     ));
     assert!(matches!(
-        svc.check_type(&narrow, "post").await,
+        types.get(&narrow, "post").await,
         Err(CoreError::Forbidden("content:read"))
     ));
 }

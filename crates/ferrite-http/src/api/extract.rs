@@ -283,6 +283,14 @@ pub fn etag(version: i64) -> HeaderValue {
 /// valid header value (never the case for API paths built from ids) is left out and
 /// logged.
 pub fn created(location: &str, etag: HeaderValue) -> (StatusCode, HeaderMap) {
+    let (status, mut headers) = created_at(location);
+    headers.insert(header::ETAG, etag);
+    (status, headers)
+}
+
+/// `201 Created` with `Location` only, for resources without a version (types,
+/// taxonomies, terms; P11).
+pub fn created_at(location: &str) -> (StatusCode, HeaderMap) {
     let mut headers = HeaderMap::new();
     match HeaderValue::from_str(location) {
         Ok(v) => {
@@ -290,7 +298,6 @@ pub fn created(location: &str, etag: HeaderValue) -> (StatusCode, HeaderMap) {
         }
         Err(_) => tracing::warn!(location, "Location is not a valid header value"),
     }
-    headers.insert(header::ETAG, etag);
     (StatusCode::CREATED, headers)
 }
 

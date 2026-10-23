@@ -63,6 +63,30 @@ impl TaxonomyRepo for PgRepos {
         .fetch_all(e))?;
         rows.iter().map(codec::taxonomy).collect()
     }
+
+    async fn delete(&self, name: &str) -> Result<(), StoreError> {
+        validate_text("taxonomy name", name)?;
+        let done = run!(&self.exec, |e| sqlx::query(
+            "DELETE FROM taxonomies WHERE name = $1 AND NOT built_in"
+        )
+        .bind(name)
+        .execute(e))?;
+        if done.rows_affected() > 0 {
+            return Ok(());
+        }
+        // Nothing deleted: missing (a no-op) or built in.
+        let built_in: Option<bool> = run!(&self.exec, |e| sqlx::query_scalar(
+            "SELECT built_in FROM taxonomies WHERE name = $1"
+        )
+        .bind(name)
+        .fetch_optional(e))?;
+        if built_in == Some(true) {
+            return Err(StoreError::Invalid(format!(
+                "built-in taxonomy {name} cannot be deleted"
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Replaces the links of `item` on `conn` (the caller supplies the transaction).

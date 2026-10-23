@@ -74,7 +74,17 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
-    let render = pipeline::render(state.clone(), route, path, query);
+    // The route is resolved again when the render starts, which is inside the cache's
+    // flush guard: a route-table swap and its flush (a node reload) that land between
+    // the lookup above and the render would otherwise let a page built from the old
+    // table be stored after the flush, where no later event drops it.
+    let render = {
+        let state = state.clone();
+        async move {
+            let route = resolve(&path, raw_query.as_deref(), &state.routes.load());
+            pipeline::render(state, route, path, query).await
+        }
+    };
     match state.cache.get_or_render(key, render).await {
         Ok(page) => page_response(&page, if_none_match.as_deref()),
         // Never cached under the path: the shared 404 body (R26).

@@ -1,16 +1,19 @@
 //! Extension changes reach every node: theme activation and plugin disable through one
-//! node (P18, P21), and the shared failure counters disabling a plugin cluster-wide
-//! (P20).
+//! node (P18, P21), the shared failure counters disabling a plugin cluster-wide (P20),
+//! and content types and taxonomies registered on one node (M2a P18).
 
 use ferrite::NodeOptions;
 use ferrite::extensions::{install_plugin_file, install_theme_dir};
-use ferrite_core::ExtensionService;
 use ferrite_core::events::PLUGIN_DISABLED;
+use ferrite_core::{ContentDraft, ContentTypeService, ExtensionService, NewType, TaxonomyService};
+use ferrite_domain::Taxonomy;
 use ferrite_domain::Timestamp;
+use serde_json::json;
 use tokio::time::Instant;
 
 use crate::harness::{
-    CONVERGE, Cluster, SETUP, Spec, admin, content, manifest, published_post, wait_until,
+    CONVERGE, Cluster, SETUP, Spec, admin, content, manifest, post_draft, published_post,
+    wait_until,
 };
 use crate::test_support;
 
@@ -220,5 +223,100 @@ async fn auto_disable_is_cluster_wide() {
         },
     )
     .await;
+    c.finish().await;
+}
+
+/// Does every node answer `path` with `status`?
+async fn all_status(c: &Cluster, path: &str, status: u16) -> bool {
+    for i in 0..c.len() {
+        if c.get(i, path).await.0 != status {
+            return false;
+        }
+    }
+    true
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn type_registration_reaches_every_node() {
+    let Some(c) = Cluster::new(2, |_| NodeOptions::default()).await else {
+        return;
+    };
+    let store = c.store(0);
+    let actor = admin(store.as_ref()).await;
+    let saved = Instant::now();
+    ContentTypeService::new(store.clone())
+        .create(
+            &actor,
+            NewType {
+                name: "event".into(),
+                label: "Events".into(),
+                hierarchical: false,
+                has_archive: true,
+                fields: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    wait_until(CONVERGE, "/event/ on every node", || {
+        all_status(&c, "/event/", 200)
+    })
+    .await;
+    let type_took = saved.elapsed();
+
+    // An item of the type and a term of a new taxonomy for it, written on node 1's store.
+    let store1 = c.store(1);
+    let taxes = TaxonomyService::new(store1.clone());
+    taxes
+        .create_taxonomy(
+            &actor,
+            Taxonomy {
+                name: "track".into(),
+                label: "Tracks".into(),
+                hierarchical: false,
+                content_types: vec!["event".into(), "post".into()],
+                built_in: false,
+            },
+        )
+        .await
+        .unwrap();
+    let systems = taxes
+        .create_term(&actor, "track", "Systems", None, None, "")
+        .await
+        .unwrap();
+    let svc = content(store1);
+    let draft = svc
+        .create(
+            &actor,
+            ContentDraft {
+                kind: "event".into(),
+                title: "RustConf".into(),
+                slug: Some("rustconf".into()),
+                parent_id: None,
+                excerpt: None,
+                body: json!({"type": "doc", "content": []}),
+                fields: json!({}),
+                menu_order: 0,
+                terms: vec![systems.id],
+            },
+        )
+        .await
+        .unwrap();
+    // Term archives list posts (M1c-2), so a post carries the term too.
+    let mut post = post_draft("Systems talk", "systems-talk");
+    post.terms = vec![systems.id];
+    let post = svc.create(&actor, post).await.unwrap();
+    let saved = Instant::now();
+    svc.publish(&actor, draft.id, draft.version).await.unwrap();
+    svc.publish(&actor, post.id, post.version).await.unwrap();
+    wait_until(CONVERGE, "/event/rustconf/ on every node", || {
+        all_status(&c, "/event/rustconf/", 200)
+    })
+    .await;
+    wait_until(CONVERGE, "/track/systems/ on every node", || {
+        all_status(&c, "/track/systems/", 200)
+    })
+    .await;
+    let item_took = saved.elapsed();
+    eprintln!("types: new type on 2 nodes {type_took:?}, taxonomy term and item {item_took:?}");
     c.finish().await;
 }

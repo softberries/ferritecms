@@ -15,7 +15,7 @@ use ferrite_store::{MAX_REDIRECTS_BY_TARGET, Repos, Store, StoreError, Tx};
 use crate::{
     Actor, CoreError, MAX_PARENT_DEPTH,
     actor::{Capability, can_edit, require},
-    blocks, events,
+    blocks, events, fields,
     permalink::{PermalinkInput, Permalinks, ancestors, load_input, primary_term},
     redirects::{emit_redirects_changed, toggled},
     slug,
@@ -114,7 +114,8 @@ impl ContentService {
     /// precedence (page before post) decides which one is served.
     ///
     /// A parent is allowed only for hierarchical types; it must exist, have the same
-    /// type and not be trashed.
+    /// type and not be trashed. `draft.fields` must satisfy the type's field schema
+    /// ([`fields::validate_item`]; a type without a schema takes any object).
     pub async fn create(
         &self,
         actor: &Actor,
@@ -130,6 +131,7 @@ impl ContentService {
         let tx = self.store.begin().await?;
         let done = async {
             let ty = content_type(tx.as_ref(), &draft.kind).await?;
+            fields::validate_item(&ty.fields, &draft.fields)?;
             if let Some(parent) = draft.parent_id {
                 check_parent(tx.as_ref(), &ty, None, parent).await?;
             }
@@ -173,7 +175,8 @@ impl ContentService {
     /// Replaces the editable fields of item `id`, which must still be at
     /// `expected_version` (else `Conflict`). The status is kept. Own items need
     /// `edit_own` (contributors: only while draft or pending), others' `edit_others`.
-    /// A trashed item is `Invalid("restore first")`.
+    /// A trashed item is `Invalid("restore first")`. `draft.fields` is validated as on
+    /// create, also when a revision is restored.
     ///
     /// `draft.slug = None` keeps the current slug; a slug that is taken gets `-N` as on
     /// create, and the reserved-slug and root-namespace rules of create apply (an item
@@ -244,11 +247,12 @@ impl ContentService {
             current.slug.clone()
         })?;
         let terms = dedup(&draft.terms);
+        let ty = content_type(tx, &current.kind).await?;
+        fields::validate_item(&ty.fields, &draft.fields)?;
         // Parent rules and the cycle walk only apply when the parent actually changes.
         if let Some(parent) = draft.parent_id
             && draft.parent_id != current.parent_id
         {
-            let ty = content_type(tx, &current.kind).await?;
             check_parent(tx, &ty, Some(id), parent).await?;
         }
         let old_term_rows = tx.terms().for_item(id).await?;

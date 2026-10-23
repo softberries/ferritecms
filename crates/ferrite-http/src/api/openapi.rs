@@ -24,6 +24,8 @@ pub const SESSION_COOKIE: &str = "ferrite_session";
         (name = "meta", description = "API metadata"),
         (name = "auth", description = "Login, session, password and TOTP"),
         (name = "content", description = "Content items, their lifecycle and revisions"),
+        (name = "types", description = "Content types and their field schemas"),
+        (name = "taxonomies", description = "Taxonomies and their terms"),
     ),
 )]
 pub struct ApiDoc;

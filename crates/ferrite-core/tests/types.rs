@@ -1,0 +1,673 @@
+//! Content types and taxonomies registered through core (P18/P19, F17, F26), and the
+//! validation of item fields against a type's schema, on both backends.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use std::sync::Arc;
+
+use ferrite_core::{
+    Actor, ContentDraft, ContentService, ContentTypeService, CoreError, NewType, OptionService,
+    PermalinkRules, Scopes, TaxonomyService, TypePatch,
+    events::{ALL_KEY, TYPES_CHANGED},
+    fields::{FieldDef, FieldKind},
+};
+use ferrite_domain::{NewUser, Role, Taxonomy, UserId, UserStatus};
+use ferrite_store::Store;
+use ferrite_store_tests::{TestDb, backend_tests};
+use serde_json::{Value, json};
+
+async fn actor(store: &dyn Store, role: Role) -> Actor {
+    let id = UserId::new();
+    let tx = store.begin().await.unwrap();
+    tx.users()
+        .insert(&NewUser {
+            id,
+            login: format!("user-{id}"),
+            email: format!("{id}@example.com"),
+            display_name: "Test".into(),
+            password_hash: None,
+            role,
+            status: UserStatus::Active,
+            must_reset: false,
+        })
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    Actor::new(id, role)
+}
+
+fn content(db: &TestDb) -> ContentService {
+    ContentService::new(db.shared_store(), Arc::new(PermalinkRules::default()))
+}
+
+fn types(db: &TestDb) -> ContentTypeService {
+    ContentTypeService::new(db.shared_store())
+}
+
+fn field(name: &str, kind: FieldKind) -> FieldDef {
+    FieldDef {
+        name: name.into(),
+        label: name.into(),
+        kind,
+        required: false,
+        options: Vec::new(),
+        fields: Vec::new(),
+    }
+}
+
+fn new_type(name: &str, fields: Vec<FieldDef>) -> NewType {
+    NewType {
+        name: name.into(),
+        label: format!("{name} label"),
+        hierarchical: false,
+        has_archive: true,
+        fields,
+    }
+}
+
+fn draft(kind: &str, title: &str, fields: Value) -> ContentDraft {
+    ContentDraft {
+        kind: kind.into(),
+        title: title.into(),
+        slug: None,
+        parent_id: None,
+        excerpt: None,
+        body: json!({"type": "doc", "content": []}),
+        fields,
+        menu_order: 0,
+        terms: Vec::new(),
+    }
+}
+
+/// The message of an `InvalidField { field, .. }` (or the text of an `Invalid`).
+fn invalid<T: std::fmt::Debug>(r: Result<T, CoreError>, want_field: &str) -> String {
+    match r {
+        Err(CoreError::InvalidField { field, message }) if field == want_field => message,
+        other => panic!("expected InvalidField({want_field}), got {other:?}"),
+    }
+}
+
+fn plain_invalid<T: std::fmt::Debug>(r: Result<T, CoreError>) -> String {
+    match r {
+        Err(CoreError::Invalid(m)) => m,
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+fn genre(types: &[&str]) -> Taxonomy {
+    Taxonomy {
+        name: "genre".into(),
+        label: "Genres".into(),
+        hierarchical: false,
+        content_types: types.iter().map(|t| (*t).to_owned()).collect(),
+        built_in: false,
+    }
+}
+
+pub async fn field_values_validated_on_write(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let svc = content(db);
+    let mut title = field("subtitle", FieldKind::Text);
+    title.required = true;
+    let mut kind = field("format", FieldKind::Select);
+    kind.options = vec!["hardcover".into(), "paperback".into()];
+    let mut notes = field("notes", FieldKind::Repeater);
+    notes.fields = vec![field("text", FieldKind::Text)];
+    let mut heading = field("heading", FieldKind::Text);
+    heading.required = true;
+    let mut chapters = field("chapters", FieldKind::Repeater);
+    chapters.fields = vec![heading, field("pages", FieldKind::Number), notes];
+    let book = types(db)
+        .create(
+            &admin,
+            new_type(
+                "book",
+                vec![title, field("pages", FieldKind::Number), kind, chapters],
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(book.fields["fields"].as_array().unwrap().len(), 4);
+
+    let ok = json!({
+        "subtitle": "A tale",
+        "pages": 320,
+        "format": "paperback",
+        "chapters": [
+            {"heading": "One", "pages": 12, "notes": [{"text": "n"}]},
+            {"heading": "Two"}
+        ],
+        "featured_image": null,
+    });
+    let item = svc
+        .create(&admin, draft("book", "B", ok.clone()))
+        .await
+        .unwrap();
+    assert_eq!(item.fields, ok);
+
+    let refused = |fields: Value| {
+        let svc = &svc;
+        let admin = &admin;
+        async move {
+            invalid(
+                svc.create(admin, draft("book", "B", fields)).await,
+                "fields",
+            )
+        }
+    };
+    // Unknown key, wrong kind, missing required, a select value not offered.
+    let m = refused(json!({"subtitle": "s", "colour": "red"})).await;
+    assert_eq!(m, "fields.colour: unknown field");
+    let m = refused(json!({"subtitle": "s", "pages": "320"})).await;
+    assert!(m.starts_with("fields.pages:"), "{m}");
+    assert_eq!(
+        refused(json!({"pages": 3})).await,
+        "fields.subtitle: required"
+    );
+    assert_eq!(
+        refused(json!({"subtitle": null})).await,
+        "fields.subtitle: required"
+    );
+    refused(json!({"subtitle": "s", "format": "scroll"})).await;
+    // Repeater rows are validated recursively, with the path.
+    let m = refused(json!({"subtitle": "s", "chapters": [{"heading": "a"}, {"pages": 1}]})).await;
+    assert_eq!(m, "fields.chapters[1].heading: required");
+    let m = refused(json!({"subtitle": "s", "chapters": [
+        {"heading": "a", "notes": [{"text": 5}]}
+    ]}))
+    .await;
+    assert!(m.starts_with("fields.chapters[0].notes[0].text:"), "{m}");
+    refused(json!({"subtitle": "s", "chapters": {"heading": "a"}})).await;
+    refused(json!({"subtitle": "s", "featured_image": "not-a-uuid"})).await;
+    refused(json!(["not", "an", "object"])).await;
+
+    // Update validates too (and keeps the stored item on refusal).
+    let r = svc
+        .update(
+            &admin,
+            item.id,
+            item.version,
+            draft("book", "B", json!({"pages": 1})),
+        )
+        .await;
+    assert_eq!(invalid(r, "fields"), "fields.subtitle: required");
+    assert_eq!(svc.get(item.id).await.unwrap(), item);
+
+    // A registered type with an empty schema takes `{}` (and featured_image) only.
+    types(db)
+        .create(&admin, new_type("note", vec![]))
+        .await
+        .unwrap();
+    svc.create(&admin, draft("note", "N", json!({})))
+        .await
+        .unwrap();
+    let image = uuid::Uuid::now_v7().to_string();
+    svc.create(&admin, draft("note", "N", json!({"featured_image": image})))
+        .await
+        .unwrap();
+    invalid(
+        svc.create(&admin, draft("note", "N", json!({"x": 1})))
+            .await,
+        "fields",
+    );
+
+    // A built-in type without a schema (`{}`, F17) takes any object, but only objects.
+    let any = json!({"featured_image": image, "anything": [1, {"x": true}]});
+    svc.create(&admin, draft("post", "P", any)).await.unwrap();
+    invalid(
+        svc.create(&admin, draft("post", "P", json!(3))).await,
+        "fields",
+    );
+
+    // Giving `post` a schema makes its next save validate.
+    types(db)
+        .update(
+            &admin,
+            "post",
+            TypePatch {
+                fields: Some(vec![field("mood", FieldKind::Text)]),
+                ..TypePatch::default()
+            },
+        )
+        .await
+        .unwrap();
+    invalid(
+        svc.create(&admin, draft("post", "P", json!({"anything": 1})))
+            .await,
+        "fields",
+    );
+    svc.create(&admin, draft("post", "P", json!({"mood": "ok"})))
+        .await
+        .unwrap();
+}
+
+pub async fn type_names_and_permalink_conflicts(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let svc = types(db);
+    let options = OptionService::load(db.shared_store()).await.unwrap();
+    options
+        .set(&admin, "permalink.post", &json!("/news/%slug%/"), true)
+        .await
+        .unwrap();
+    // The new type's archive `/news/` would shadow every post.
+    let m = invalid(svc.create(&admin, new_type("news", vec![])).await, "name");
+    assert!(
+        m.contains("\"/news/%slug%/\"") && m.contains("content type"),
+        "{m}"
+    );
+    assert!(store.read().types().get("news").await.unwrap().is_none());
+    // So would a taxonomy of that name.
+    let mut tax = genre(&["post"]);
+    tax.name = "news".into();
+    let m = invalid(
+        TaxonomyService::new(db.shared_store())
+            .create_taxonomy(&admin, tax)
+            .await,
+        "name",
+    );
+    assert!(m.contains("taxonomy"), "{m}");
+
+    // Router words, reserved words, years and malformed names.
+    for bad in [
+        "admin", "api", "feed", "author", "page", "search", "healthz", "Event", "1999", "a b",
+        "_x", "",
+    ] {
+        invalid(svc.create(&admin, new_type(bad, vec![])).await, "name");
+    }
+    invalid(
+        svc.create(&admin, new_type(&"a".repeat(33), vec![])).await,
+        "name",
+    );
+    // Built-in and existing types, and taxonomies.
+    for taken in ["post", "page", "media", "category", "tag"] {
+        invalid(svc.create(&admin, new_type(taken, vec![])).await, "name");
+    }
+    // A top-level page (or post) slug (F26).
+    let page = content(db)
+        .create(&admin, {
+            let mut d = draft("page", "About", json!({}));
+            d.slug = Some("about".into());
+            d
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.slug, "about");
+    let m = invalid(svc.create(&admin, new_type("about", vec![])).await, "name");
+    assert_eq!(m, "name used by an existing item");
+    // Labels and schemas are checked.
+    let mut nameless = new_type("event", vec![]);
+    nameless.label = "  ".into();
+    invalid(svc.create(&admin, nameless).await, "label");
+    invalid(
+        svc.create(
+            &admin,
+            new_type("event", vec![field("Bad", FieldKind::Text)]),
+        )
+        .await,
+        "fields",
+    );
+    // A fine name works, and is then taken.
+    let event = svc.create(&admin, new_type("event", vec![])).await.unwrap();
+    assert!(!event.built_in && event.has_archive);
+    assert_eq!(event.fields, json!({"fields": []}));
+    invalid(svc.create(&admin, new_type("event", vec![])).await, "name");
+
+    // Permissions: manage_settings for writes, content:read for reads.
+    let editor = actor(store, Role::Editor).await;
+    assert!(matches!(
+        svc.create(&editor, new_type("film", vec![])).await,
+        Err(CoreError::Forbidden("manage_settings"))
+    ));
+    let settings_read = admin.with_scopes(Scopes::from_strs(&["settings:read".into()]).unwrap());
+    assert!(matches!(
+        svc.create(&settings_read, new_type("film", vec![])).await,
+        Err(CoreError::Forbidden("settings:write"))
+    ));
+    assert!(matches!(
+        svc.list(&settings_read).await,
+        Err(CoreError::Forbidden("content:read"))
+    ));
+    let names: Vec<String> = svc
+        .list(&editor)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(names, ["event", "media", "page", "post"]);
+    assert_eq!(svc.get(&editor, "event").await.unwrap(), event);
+    assert!(matches!(
+        svc.get(&editor, "nope").await,
+        Err(CoreError::NotFound)
+    ));
+}
+
+pub async fn type_delete_rules(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let svc = types(db);
+    assert_eq!(
+        plain_invalid(svc.delete(&admin, "post").await),
+        "built-in type"
+    );
+    assert!(matches!(
+        svc.delete(&admin, "nope").await,
+        Err(CoreError::NotFound)
+    ));
+
+    // Update: label, has_archive and schema change; hierarchical stays.
+    let mut ev = new_type("event", vec![]);
+    ev.hierarchical = true;
+    let created = svc.create(&admin, ev).await.unwrap();
+    let updated = svc
+        .update(
+            &admin,
+            "event",
+            TypePatch {
+                label: Some(" Events ".into()),
+                has_archive: Some(false),
+                fields: Some(vec![field("venue", FieldKind::Text)]),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.label, "Events");
+    assert!(!updated.has_archive && updated.hierarchical);
+    assert_eq!(updated.created_at, created.created_at);
+    assert_eq!(updated.fields["fields"][0]["name"], "venue");
+    assert_eq!(
+        store.read().types().get("event").await.unwrap().unwrap(),
+        updated
+    );
+    assert!(matches!(
+        svc.update(&admin, "nope", TypePatch::default()).await,
+        Err(CoreError::NotFound)
+    ));
+    invalid(
+        svc.update(
+            &admin,
+            "event",
+            TypePatch {
+                label: Some(String::new()),
+                ..TypePatch::default()
+            },
+        )
+        .await,
+        "label",
+    );
+
+    // With content (trash too): refused.
+    let svc_content = content(db);
+    let item = svc_content
+        .create(&admin, draft("event", "E", json!({})))
+        .await
+        .unwrap();
+    let trashed = svc_content
+        .trash(&admin, item.id, item.version)
+        .await
+        .unwrap();
+    assert_eq!(
+        plain_invalid(svc.delete(&admin, "event").await),
+        "type has content"
+    );
+    svc_content
+        .delete(&admin, trashed.id, trashed.version)
+        .await
+        .unwrap();
+
+    // Attached to a taxonomy: refused, naming it.
+    let taxes = TaxonomyService::new(db.shared_store());
+    taxes
+        .create_taxonomy(&admin, genre(&["event"]))
+        .await
+        .unwrap();
+    let m = plain_invalid(svc.delete(&admin, "event").await);
+    assert!(m.contains("\"genre\""), "{m}");
+    taxes
+        .update_taxonomy(&admin, "genre", None, Some(vec!["post".into()]))
+        .await
+        .unwrap();
+
+    // Editors cannot; an admin can, and the type is gone.
+    let editor = actor(store, Role::Editor).await;
+    assert!(matches!(
+        svc.delete(&editor, "event").await,
+        Err(CoreError::Forbidden("manage_settings"))
+    ));
+    svc.delete(&admin, "event").await.unwrap();
+    assert!(store.read().types().get("event").await.unwrap().is_none());
+    // Items of a removed type cannot be created.
+    assert!(
+        svc_content
+            .create(&admin, draft("event", "E", json!({})))
+            .await
+            .is_err()
+    );
+}
+
+pub async fn taxonomy_register_and_delete(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    types(db)
+        .create(&admin, new_type("book", vec![]))
+        .await
+        .unwrap();
+    let svc = TaxonomyService::new(db.shared_store());
+
+    // Rules: types must exist, not built in, name free, label set.
+    let m = invalid(
+        svc.create_taxonomy(&admin, genre(&["nope"])).await,
+        "content_types",
+    );
+    assert!(m.contains("\"nope\""), "{m}");
+    let mut built = genre(&["book"]);
+    built.built_in = true;
+    invalid(svc.create_taxonomy(&admin, built).await, "built_in");
+    for taken in ["book", "category", "post", "page"] {
+        let mut t = genre(&["book"]);
+        t.name = taken.into();
+        invalid(svc.create_taxonomy(&admin, t).await, "name");
+    }
+    let mut unlabeled = genre(&["book"]);
+    unlabeled.label = String::new();
+    invalid(svc.create_taxonomy(&admin, unlabeled).await, "label");
+
+    let created = svc
+        .create_taxonomy(&admin, genre(&["book", "post", "book"]))
+        .await
+        .unwrap();
+    assert_eq!(created.content_types, ["book", "post"]);
+    assert_eq!(
+        store
+            .read()
+            .taxonomies()
+            .get("genre")
+            .await
+            .unwrap()
+            .unwrap(),
+        created
+    );
+    invalid(svc.create_taxonomy(&admin, genre(&["book"])).await, "name");
+    let names: Vec<String> = svc
+        .list_taxonomies(&admin)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(names, ["category", "genre", "tag"]);
+    assert_eq!(svc.get_taxonomy(&admin, "genre").await.unwrap(), created);
+
+    // Update: label and types; unknown types refused.
+    let updated = svc
+        .update_taxonomy(
+            &admin,
+            "genre",
+            Some("Kinds".into()),
+            Some(vec!["book".into()]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (updated.label.as_str(), updated.content_types.as_slice()),
+        ("Kinds", &["book".to_owned()][..])
+    );
+    invalid(
+        svc.update_taxonomy(&admin, "genre", None, Some(vec!["nope".into()]))
+            .await,
+        "content_types",
+    );
+    assert!(matches!(
+        svc.update_taxonomy(&admin, "nope", None, None).await,
+        Err(CoreError::NotFound)
+    ));
+
+    // Terms: reads need terms:read.
+    let jazz = svc
+        .create_term(&admin, "genre", "Jazz", None, None, "")
+        .await
+        .unwrap();
+    assert_eq!(
+        svc.list_terms_for(&admin, "genre").await.unwrap(),
+        std::slice::from_ref(&jazz)
+    );
+    assert_eq!(svc.get_term(&admin, jazz.id).await.unwrap(), jazz);
+    let content_only = admin.with_scopes(Scopes::from_strs(&["content:read".into()]).unwrap());
+    assert!(matches!(
+        svc.list_terms_for(&content_only, "genre").await,
+        Err(CoreError::Forbidden("terms:read"))
+    ));
+    assert!(matches!(
+        svc.get_term(&content_only, jazz.id).await,
+        Err(CoreError::Forbidden("terms:read"))
+    ));
+    assert!(svc.list_taxonomies(&content_only).await.is_ok());
+
+    // Delete: with terms, built in, missing, by an editor.
+    assert_eq!(
+        plain_invalid(svc.delete_taxonomy(&admin, "genre").await),
+        "taxonomy has terms"
+    );
+    assert_eq!(
+        plain_invalid(svc.delete_taxonomy(&admin, "category").await),
+        "built-in taxonomy"
+    );
+    assert!(matches!(
+        svc.delete_taxonomy(&admin, "nope").await,
+        Err(CoreError::NotFound)
+    ));
+    let editor = actor(store, Role::Editor).await;
+    assert!(matches!(
+        svc.delete_taxonomy(&editor, "genre").await,
+        Err(CoreError::Forbidden("manage_settings"))
+    ));
+    assert!(matches!(
+        svc.create_taxonomy(&editor, genre(&["book"])).await,
+        Err(CoreError::Forbidden("manage_settings"))
+    ));
+    svc.delete_term(&admin, jazz.id).await.unwrap();
+    svc.delete_taxonomy(&admin, "genre").await.unwrap();
+    assert!(
+        store
+            .read()
+            .taxonomies()
+            .get("genre")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Terms of a removed taxonomy cannot be created.
+    assert!(
+        svc.create_term(&admin, "genre", "Jazz", None, None, "")
+            .await
+            .is_err()
+    );
+}
+
+pub async fn types_changed_emitted_with_all(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let svc = types(db);
+    let taxes = TaxonomyService::new(db.shared_store());
+    let events = store.read().events();
+
+    // Every write: `types.changed` with its key, `invalidate [all]`, an audit row.
+    let steps: Vec<(&str, &str)> = vec![
+        ("type:event", "type.create"),
+        ("type:event", "type.update"),
+        ("taxonomy:genre", "taxonomy.create"),
+        ("taxonomy:genre", "taxonomy.update"),
+        ("taxonomy:genre", "taxonomy.delete"),
+        ("type:event", "type.delete"),
+    ];
+    for (i, (key, action)) in steps.iter().enumerate() {
+        let before = events.max_seq().await.unwrap();
+        match i {
+            0 => {
+                svc.create(&admin, new_type("event", vec![])).await.unwrap();
+            }
+            1 => {
+                svc.update(
+                    &admin,
+                    "event",
+                    TypePatch {
+                        has_archive: Some(false),
+                        ..TypePatch::default()
+                    },
+                )
+                .await
+                .unwrap();
+            }
+            2 => {
+                taxes
+                    .create_taxonomy(&admin, genre(&["event"]))
+                    .await
+                    .unwrap();
+            }
+            3 => {
+                taxes
+                    .update_taxonomy(&admin, "genre", Some("G".into()), None)
+                    .await
+                    .unwrap();
+            }
+            4 => taxes.delete_taxonomy(&admin, "genre").await.unwrap(),
+            _ => svc.delete(&admin, "event").await.unwrap(),
+        }
+        let got: Vec<(String, Vec<String>)> = events
+            .since(before, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.kind, e.keys))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (TYPES_CHANGED.to_owned(), vec![(*key).to_owned()]),
+                ("invalidate".to_owned(), vec![ALL_KEY.to_owned()]),
+            ],
+            "{action}"
+        );
+        let audit = store.read().audit().list(1, None).await.unwrap();
+        let row = &audit.items[0];
+        assert_eq!(row.action, *action);
+        assert_eq!(row.actor_id, Some(admin.user));
+        assert_eq!(row.target_id.as_deref(), key.split(':').nth(1));
+    }
+
+    // A refused write emits nothing.
+    let before = events.max_seq().await.unwrap();
+    assert!(svc.create(&admin, new_type("page", vec![])).await.is_err());
+    assert!(svc.delete(&admin, "post").await.is_err());
+    assert_eq!(events.max_seq().await.unwrap(), before);
+}
+
+backend_tests!(
+    field_values_validated_on_write,
+    type_names_and_permalink_conflicts,
+    type_delete_rules,
+    taxonomy_register_and_delete,
+    types_changed_emitted_with_all,
+);
