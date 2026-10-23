@@ -35,6 +35,17 @@ pub struct TotpConfirm {
     /// `enrollment` from `POST /auth/totp/setup` (valid 10 minutes).
     pub enrollment: String,
     pub code: String,
+    /// The account's current password: a stolen session alone cannot enroll another
+    /// authenticator.
+    pub password: String,
+}
+
+/// The result of `POST /auth/password`.
+#[derive(Serialize, ToSchema)]
+pub struct PasswordChanged {
+    /// The new session's `X-CSRF-Token` (its cookie is set with this response); `null`
+    /// for a bearer request, which gets no session.
+    pub csrf_token: Option<String>,
 }
 
 /// `POST /auth/totp/disable`.

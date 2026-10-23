@@ -443,6 +443,9 @@ impl AuthService {
     /// new one (F12: issued only after the check passed), returned here for the caller's
     /// cookie; a token request gets `None` and its token stays valid.
     ///
+    /// The `users:write` scope and the new-password policy are checked before the bucket
+    /// is hit, so a refused request of that kind uses up no slot.
+    ///
     /// This is the only path for a self change made by a request: calling
     /// `UserService::set_password` directly for oneself skips the rate limit.
     pub async fn change_password(
@@ -454,12 +457,10 @@ impl AuthService {
         ip: Option<IpAddr>,
         user_agent: Option<&str>,
     ) -> Result<Option<IssuedSession>, CoreError> {
-        limits::hit(
-            self.store.as_ref(),
-            &limits::login_user(&self.key, &who.user.login),
-            limits::LOGIN_PER_USER,
-        )
-        .await?;
+        // The cheap refusals first, so only a real current-password check takes a slot.
+        require_scope(&who.actor, Some(Scope::write(Area::Users)))?;
+        password::check_policy(new)?;
+        self.password_attempt(&who.user.login).await?;
         users
             .set_password(&who.actor, who.user.id, Some(current), new, None)
             .await?;
@@ -681,16 +682,23 @@ impl AuthService {
         })
     }
 
-    /// Finishes enrollment with a code from the authenticator: the secret is stored
-    /// sealed under `totp-secret:<user id>`, the code's step is recorded (it cannot log
-    /// in again) and `totp.enable` is audited. A bad or expired enrollment, someone
-    /// else's, or a wrong code is `Invalid`. Each checked code counts on `totp:user:<id>`
-    /// (5/min, shared with `login_totp`; exceeded → `RateLimited`).
+    /// Finishes enrollment with a code from the authenticator and the account's current
+    /// password: the secret is stored sealed under `totp-secret:<user id>`, the code's
+    /// step is recorded (it cannot log in again) and `totp.enable` is audited.
+    ///
+    /// * A bad or expired enrollment, or someone else's, is `Invalid` (no slot used).
+    /// * The password re-check counts on the login's `login:user` bucket (5/min, as
+    ///   R11), so a stolen session cannot enroll an attacker's authenticator without
+    ///   the password; wrong → `Forbidden("current password")`.
+    /// * Then each checked code counts on `totp:user:<id>` (5/min, shared with
+    ///   `login_totp`); a wrong code is `Invalid`. Either limit exceeded →
+    ///   `RateLimited`.
     pub async fn totp_confirm(
         &self,
         actor: &Actor,
         enrollment: &str,
         code: &str,
+        password: &str,
     ) -> Result<(), CoreError> {
         require_scope(actor, Some(Scope::write(Area::Users)))?;
         let invalid = || CoreError::Invalid("enrollment is not valid".into());
@@ -714,6 +722,10 @@ impl AuthService {
             .get(actor.user)
             .await?
             .ok_or(CoreError::NotFound)?;
+        self.password_attempt(&user.login).await?;
+        if password::verify(password, user.password_hash.as_ref()).await == Verified::Mismatch {
+            return Err(CoreError::Forbidden("current password"));
+        }
         limits::hit(
             self.store.as_ref(),
             &limits::totp_user(user.id),
@@ -731,6 +743,9 @@ impl AuthService {
                 .get_for_update(user.id)
                 .await?
                 .ok_or(CoreError::NotFound)?;
+            if locked.password_hash != user.password_hash {
+                return Err(CoreError::Forbidden("current password"));
+            }
             if locked.totp_secret.is_some() {
                 return Err(CoreError::Invalid("disable TOTP first".into()));
             }
@@ -761,12 +776,7 @@ impl AuthService {
             return Err(CoreError::Invalid("TOTP is not enabled".into()));
         }
         // The re-check is a password guess like a login: same per-login bucket (R12).
-        limits::hit(
-            self.store.as_ref(),
-            &limits::login_user(&self.key, &user.login),
-            limits::LOGIN_PER_USER,
-        )
-        .await?;
+        self.password_attempt(&user.login).await?;
         if password::verify(password, user.password_hash.as_ref()).await == Verified::Mismatch {
             return Err(CoreError::Forbidden("current password"));
         }
@@ -788,6 +798,17 @@ impl AuthService {
     }
 
     // ---- helpers -------------------------------------------------------------------
+
+    /// Counts one password re-check of `login` on its login bucket (R11): a re-check is
+    /// a guess like a login.
+    async fn password_attempt(&self, login: &str) -> Result<(), CoreError> {
+        limits::hit(
+            self.store.as_ref(),
+            &limits::login_user(&self.key, login),
+            limits::LOGIN_PER_USER,
+        )
+        .await
+    }
 
     fn now(&self) -> Timestamp {
         (self.clock)()

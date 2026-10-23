@@ -385,6 +385,24 @@ async fn bearer_needs_no_csrf(api: Api) -> Api {
             .unwrap();
         assert_unauthenticated(&api.send(req).await);
     }
+
+    // A valid bearer with someone else's valid cookie on an unsafe method and no CSRF
+    // token: the bearer wins, CSRF is not asked for, and the request acts as its user.
+    user(&api, "bob", Role::Author, false).await;
+    let bob = logged_in(&api, "bob").await;
+    let req = builder(Method::POST, TOTP_SETUP)
+        .header(header::AUTHORIZATION, &auth)
+        .header(
+            header::COOKIE,
+            format!("ferrite_session={}", bob.cookie.as_deref().unwrap()),
+        )
+        .header(header::ORIGIN, EVIL)
+        .body(Body::empty())
+        .unwrap();
+    let r = api.send(req).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let url = r.json()["otpauth_url"].as_str().unwrap().to_owned();
+    assert!(url.contains("ann") && !url.contains("bob"), "{url}");
     api
 }
 
@@ -432,15 +450,20 @@ async fn must_reset_user_is_limited(api: Api) -> Api {
             json!({"current": PASSWORD, "new": NEW_PASSWORD}),
         )
         .await;
-    assert_eq!(r.status, StatusCode::NO_CONTENT, "{r:?}");
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
     let new = c.cookie.clone().unwrap();
     assert_ne!(old, new, "a new session is issued");
     assert_unauthenticated(&me_with_cookie(&api, &old).await);
+    // The response carries the new session's CSRF token: no `me` call needed.
+    let csrf = r.json()["csrf_token"].as_str().unwrap().to_owned();
+    assert_eq!(c.csrf.as_deref(), Some(csrf.as_str()));
+    let r = c.post_empty(&api, TOTP_SETUP).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
 
     let r = c.get(&api, ME).await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
     assert_eq!(r.json()["must_reset"], false);
-    assert!(c.csrf.is_some());
+    assert_eq!(r.json()["csrf_token"], csrf.as_str());
     let r = c.post_empty(&api, TOTP_SETUP).await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
     api
@@ -459,7 +482,8 @@ async fn password_change_keeps_only_this_session(api: Api) -> Api {
             json!({"current": PASSWORD, "new": NEW_PASSWORD}),
         )
         .await;
-    assert_eq!(r.status, StatusCode::NO_CONTENT, "{r:?}");
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert!(r.json()["csrf_token"].is_string(), "{r:?}");
     let cookie = r.header("set-cookie").unwrap();
     assert!(cookie.ends_with("; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000; Secure"));
 
@@ -495,10 +519,43 @@ async fn password_change_keeps_only_this_session(api: Api) -> Api {
 /// R11: the current-password check of a self password change counts on the login's
 /// per-login bucket (5/min).
 async fn password_check_is_rate_limited(api: Api) -> Api {
-    user(&api, "ann", Role::Author, false).await;
+    let ann = user(&api, "ann", Role::Author, false).await;
     api.align_to_window(Duration::from_secs(40)).await;
     // The login counts once on the bucket.
     let mut c = logged_in(&api, "ann").await;
+    // Refusals before the password check take no slot: a new password breaking the
+    // policy, and a token without `users:write`.
+    for _ in 0..6 {
+        c.post(
+            &api,
+            PASSWORD_PATH,
+            json!({"current": "not the password", "new": "short"}),
+        )
+        .await
+        .assert_problem(422, "validation");
+    }
+    let (read_only, _) = api
+        .api
+        .auth
+        .create_token(
+            &Actor::new(ann.id, ann.role),
+            ann.id,
+            "read",
+            Scopes::from_strs(&["users:read".to_owned()]).unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    for _ in 0..6 {
+        let req = json_body(
+            builder(Method::POST, PASSWORD_PATH).header(
+                header::AUTHORIZATION,
+                format!("Bearer {}", read_only.expose()),
+            ),
+            &json!({"current": "not the password", "new": NEW_PASSWORD}),
+        );
+        api.send(req).await.assert_problem(403, "forbidden");
+    }
     for i in 0..4 {
         let r = c
             .post(
@@ -527,7 +584,9 @@ async fn password_check_is_rate_limited(api: Api) -> Api {
 
 async fn totp_login_flow_over_http(api: Api) -> Api {
     user(&api, "ann", Role::Author, false).await;
-    let mut c = logged_in(&api, "ann").await;
+    // Logins by e-mail here: the password re-checks below count on the login's own
+    // bucket (5/min, R11).
+    let mut c = logged_in(&api, "ann@example.com").await;
 
     let r = c.post_empty(&api, TOTP_SETUP).await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
@@ -537,15 +596,33 @@ async fn totp_login_flow_over_http(api: Api) -> Api {
         .post(
             &api,
             "/api/v1/auth/totp/confirm",
-            json!({"enrollment": setup["enrollment"], "code": "000000x"}),
+            json!({"enrollment": setup["enrollment"], "code": "000000x", "password": PASSWORD}),
         )
         .await;
     r.assert_problem(422, "validation");
+    // The right code without the password: a stolen session cannot enroll.
     let r = c
         .post(
             &api,
             "/api/v1/auth/totp/confirm",
-            json!({"enrollment": setup["enrollment"], "code": totp.generate(now_secs()).to_string()}),
+            json!({
+                "enrollment": setup["enrollment"],
+                "code": totp.generate(now_secs()).to_string(),
+                "password": "not the password",
+            }),
+        )
+        .await;
+    r.assert_problem(403, "forbidden");
+    assert_eq!(c.get(&api, ME).await.json()["totp_enabled"], false);
+    let r = c
+        .post(
+            &api,
+            "/api/v1/auth/totp/confirm",
+            json!({
+                "enrollment": setup["enrollment"],
+                "code": totp.generate(now_secs()).to_string(),
+                "password": PASSWORD,
+            }),
         )
         .await;
     assert_eq!(r.status, StatusCode::NO_CONTENT, "{r:?}");
@@ -553,7 +630,7 @@ async fn totp_login_flow_over_http(api: Api) -> Api {
 
     // The password alone gives a challenge, no cookie.
     let mut d = Client::new();
-    let r = d.login(&api, "ann", PASSWORD).await;
+    let r = d.login(&api, "ann@example.com", PASSWORD).await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
     assert!(r.header("set-cookie").is_none());
     let body = r.json();

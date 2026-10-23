@@ -229,8 +229,15 @@
           "required": true
         },
         "responses": {
-          "204": {
-            "description": "Changed; every session of the user is deleted, and a session request gets a new cookie"
+          "200": {
+            "description": "Changed; every session of the user is deleted. A session request gets a new `ferrite_session` cookie and its `X-CSRF-Token` in `csrf_token` (as the login response); a bearer request gets `csrf_token: null`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordChanged"
+                }
+              }
+            }
           },
           "401": {
             "description": "`unauthenticated`",
@@ -314,7 +321,7 @@
             }
           },
           "403": {
-            "description": "`csrf`, `forbidden` or `password-reset-required`",
+            "description": "`forbidden` (wrong current password), `csrf` or `password-reset-required`",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -707,6 +714,19 @@
           }
         }
       },
+      "PasswordChanged": {
+        "type": "object",
+        "description": "The result of `POST /auth/password`.",
+        "properties": {
+          "csrf_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The new session's `X-CSRF-Token` (its cookie is set with this response); `null`\nfor a bearer request, which gets no session."
+          }
+        }
+      },
       "ProblemDocument": {
         "type": "object",
         "description": "The body of a problem response (the OpenAPI schema `ProblemDocument`).",
@@ -749,7 +769,8 @@
         "description": "`POST /auth/totp/confirm`.",
         "required": [
           "enrollment",
-          "code"
+          "code",
+          "password"
         ],
         "properties": {
           "code": {
@@ -758,6 +779,10 @@
           "enrollment": {
             "type": "string",
             "description": "`enrollment` from `POST /auth/totp/setup` (valid 10 minutes)."
+          },
+          "password": {
+            "type": "string",
+            "description": "The account's current password: a stolen session alone cannot enroll another\nauthenticator."
           }
         }
       },

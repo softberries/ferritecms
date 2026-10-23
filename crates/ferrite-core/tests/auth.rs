@@ -494,19 +494,31 @@ async fn totp_enroll_login_and_replay(db: &TestDb) {
             % 1_000_000
     );
     assert!(matches!(
-        auth.totp_confirm(&actor, &setup.enrollment, &wrong).await,
+        auth.totp_confirm(&actor, &setup.enrollment, &wrong, PASSWORD)
+            .await,
         Err(CoreError::Invalid(_))
     ));
     let other = make_user(db, "oz", Role::Author).await;
     let code = totp.generate(clock.secs()).to_string();
     assert!(matches!(
-        auth.totp_confirm(&Actor::new(other.id, other.role), &setup.enrollment, &code)
-            .await,
+        auth.totp_confirm(
+            &Actor::new(other.id, other.role),
+            &setup.enrollment,
+            &code,
+            PASSWORD
+        )
+        .await,
         Err(CoreError::Invalid(_))
+    ));
+    // The right code without the account's password does not enable it either.
+    assert!(matches!(
+        auth.totp_confirm(&actor, &setup.enrollment, &code, "not the password")
+            .await,
+        Err(CoreError::Forbidden("current password"))
     ));
     assert!(stored(db.store(), &user).await.totp_secret.is_none());
 
-    auth.totp_confirm(&actor, &setup.enrollment, &code)
+    auth.totp_confirm(&actor, &setup.enrollment, &code, PASSWORD)
         .await
         .unwrap();
     let row = stored(db.store(), &user).await;
@@ -529,10 +541,13 @@ async fn totp_enroll_login_and_replay(db: &TestDb) {
         Err(CoreError::Invalid(m)) if m == "disable TOTP first"
     ));
 
-    // The confirm code's step is used up; the next step logs in.
+    // The confirm code's step is used up; the next step logs in. Logins go by e-mail
+    // here: the confirm's password re-checks used the login's own bucket (R11).
     clock.advance(Duration::from_secs(30));
-    let LoginOutcome::TotpRequired { challenge } =
-        auth.login(attempt("tia", PASSWORD, None)).await.unwrap()
+    let LoginOutcome::TotpRequired { challenge } = auth
+        .login(attempt("tia@example.com", PASSWORD, None))
+        .await
+        .unwrap()
     else {
         panic!("expected a TOTP challenge");
     };
@@ -550,8 +565,10 @@ async fn totp_enroll_login_and_replay(db: &TestDb) {
     );
 
     // The same code again (fresh challenge) is a replay.
-    let LoginOutcome::TotpRequired { challenge } =
-        auth.login(attempt("tia", PASSWORD, None)).await.unwrap()
+    let LoginOutcome::TotpRequired { challenge } = auth
+        .login(attempt("tia@example.com", PASSWORD, None))
+        .await
+        .unwrap()
     else {
         panic!("expected a TOTP challenge");
     };
@@ -578,7 +595,9 @@ async fn totp_enroll_login_and_replay(db: &TestDb) {
     auth.totp_disable(&actor, PASSWORD).await.unwrap();
     assert!(stored(db.store(), &user).await.totp_secret.is_none());
     assert!(matches!(
-        auth.login(attempt("tia", PASSWORD, None)).await.unwrap(),
+        auth.login(attempt("tia@example.com", PASSWORD, None))
+            .await
+            .unwrap(),
         LoginOutcome::Session(_)
     ));
     let actions = audit_actions(db.store()).await;
@@ -592,7 +611,7 @@ async fn enrol(auth: &AuthService, clock: &Clock, user: &User) -> totp_rs::Totp 
     let setup = auth.totp_setup(&actor).await.unwrap();
     let totp = authenticator(&setup);
     let code = totp.generate(clock.secs()).to_string();
-    auth.totp_confirm(&actor, &setup.enrollment, &code)
+    auth.totp_confirm(&actor, &setup.enrollment, &code, PASSWORD)
         .await
         .unwrap();
     totp
@@ -665,7 +684,9 @@ async fn totp_login_needs_both_factors(db: &TestDb) {
     assert!(unauthenticated(
         auth.login_totp(&stale, &code, None, None).await
     ));
-    let fresh = challenge(&auth, "lee", "a brand new password").await;
+    // By e-mail: the confirm's password re-check and five logins used the login's own
+    // bucket (5/min).
+    let fresh = challenge(&auth, "lee@example.com", "a brand new password").await;
     auth.login_totp(&fresh, &code, None, None).await.unwrap();
 }
 
@@ -676,7 +697,8 @@ async fn totp_attempts_are_rate_limited(db: &TestDb) {
     let ben = make_user(db, "ben", Role::Author).await;
     align_to_window(db.store(), MINUTE, Duration::from_secs(30)).await;
 
-    // totp_confirm: 5 codes a minute; the 6th is refused even when right.
+    // totp_confirm: 5 attempts a minute (each also re-checks the password on the login
+    // bucket); the 6th is refused even when right.
     let ann_actor = Actor::new(ann.id, ann.role);
     let setup = auth.totp_setup(&ann_actor).await.unwrap();
     let totp = authenticator(&setup);
@@ -684,7 +706,7 @@ async fn totp_attempts_are_rate_limited(db: &TestDb) {
     for i in 0..5 {
         assert!(
             matches!(
-                auth.totp_confirm(&ann_actor, &setup.enrollment, &wrong)
+                auth.totp_confirm(&ann_actor, &setup.enrollment, &wrong, PASSWORD)
                     .await,
                 Err(CoreError::Invalid(_))
             ),
@@ -694,7 +716,7 @@ async fn totp_attempts_are_rate_limited(db: &TestDb) {
     }
     let code = totp.generate(clock.secs()).to_string();
     assert!(rate_limited(
-        auth.totp_confirm(&ann_actor, &setup.enrollment, &code)
+        auth.totp_confirm(&ann_actor, &setup.enrollment, &code, PASSWORD)
             .await
     ));
     assert!(stored(db.store(), &ann).await.totp_secret.is_none());
@@ -715,10 +737,10 @@ async fn totp_attempts_are_rate_limited(db: &TestDb) {
     assert!(rate_limited(auth.login_totp(&ch, &code, None, None).await));
     assert_eq!(stored(db.store(), &ben).await.last_login_at, None);
 
-    // totp_disable's password re-check shares the login bucket: one login so far, 4
-    // wrong passwords, then the right one is refused.
+    // totp_disable's password re-check shares the login bucket: the confirm's re-check
+    // and one login so far, 3 wrong passwords, then the right one is refused.
     let ben_actor = Actor::new(ben.id, ben.role);
-    for i in 0..4 {
+    for i in 0..3 {
         assert!(
             matches!(
                 auth.totp_disable(&ben_actor, "wrong password!").await,

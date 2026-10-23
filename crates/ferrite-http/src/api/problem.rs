@@ -17,8 +17,14 @@
 //! | `Store(Busy)` | 503 | `busy` + `Retry-After: 5` |
 //! | `Random`, `Hashing`, any other `Store` | 500 | `internal` |
 //!
-//! The auth layer ([`auth`](super::auth)) adds `403 csrf` (cookie request without a valid
-//! `X-CSRF-Token` or from another origin) and `403 password-reset-required`.
+//! Problems built by the API layer itself, not mapped from a core error:
+//!
+//! | Status | Slug | When |
+//! |---|---|---|
+//! | 400 | `bad-request` | the request is well formed but not valid for the endpoint (e.g. logout with a bearer token) |
+//! | 401 | `invalid-credentials` | a login or TOTP login step failed |
+//! | 403 | `csrf` | a cookie request without a valid `X-CSRF-Token`, or from another origin |
+//! | 403 | `password-reset-required` | the account must change its password first |
 //!
 //! **Every 401 carries `WWW-Authenticate`** (RFC 9110 §11.6.1): `Bearer` unless the
 //! problem names another challenge ([`Problem::with_challenge`], e.g. `Bearer
@@ -154,6 +160,16 @@ impl Problem {
     pub fn with_challenge(mut self, challenge: Challenge) -> Self {
         self.challenge = Some(challenge);
         self
+    }
+
+    /// `400 bad-request`: a well-formed request this endpoint does not accept.
+    pub fn bad_request(detail: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            "bad-request",
+            "Bad request",
+            detail,
+        )
     }
 
     /// `401 invalid-credentials`: a login or its TOTP step failed (whatever failed).

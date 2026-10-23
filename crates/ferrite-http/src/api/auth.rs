@@ -51,8 +51,8 @@ use super::{
     ApiState,
     cookie::{clear_cookie, read_session_cookie, session_cookie},
     dto::auth::{
-        LoginRequest, LoginResponse, MeDto, PasswordChange, TotpConfirm, TotpDisable,
-        TotpLoginRequest, TotpSetupDto,
+        LoginRequest, LoginResponse, MeDto, PasswordChange, PasswordChanged, TotpConfirm,
+        TotpDisable, TotpLoginRequest, TotpSetupDto,
     },
     extract::ApiJson,
     problem::{Challenge, Problem, ProblemDocument},
@@ -332,10 +332,7 @@ pub async fn logout(
     headers: HeaderMap,
 ) -> Result<Response, Problem> {
     if !matches!(who.via, Via::Session(_)) {
-        return Err(Problem::new(
-            StatusCode::BAD_REQUEST,
-            "bad-request",
-            "Bad request",
+        return Err(Problem::bad_request(
             "logout ends a cookie session; revoke an API token instead",
         ));
     }
@@ -376,7 +373,7 @@ pub async fn me(
     security(("session" = []), ("bearer" = [])),
     request_body = PasswordChange,
     responses(
-        (status = 204, description = "Changed; every session of the user is deleted, and a session request gets a new cookie"),
+        (status = 200, description = "Changed; every session of the user is deleted. A session request gets a new `ferrite_session` cookie and its `X-CSRF-Token` in `csrf_token` (as the login response); a bearer request gets `csrf_token: null`", body = PasswordChanged),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (wrong current password) or `csrf`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation`: the new password breaks the policy", body = ProblemDocument, content_type = "application/problem+json"),
@@ -401,15 +398,18 @@ pub async fn change_password(
         )
         .await?;
     Ok(match issued {
-        Some(issued) => (
-            StatusCode::NO_CONTENT,
-            [(
-                header::SET_COOKIE,
-                session_cookie(issued.token.expose(), api.cookie_secure),
-            )],
-        )
-            .into_response(),
-        None => StatusCode::NO_CONTENT.into_response(),
+        Some(issued) => {
+            let csrf_token = Some(api.auth.csrf_token(&issued.session));
+            (
+                [(
+                    header::SET_COOKIE,
+                    session_cookie(issued.token.expose(), api.cookie_secure),
+                )],
+                Json(PasswordChanged { csrf_token }),
+            )
+                .into_response()
+        }
+        None => Json(PasswordChanged { csrf_token: None }).into_response(),
     })
 }
 
@@ -443,7 +443,7 @@ pub async fn totp_setup(
     responses(
         (status = 204, description = "TOTP is on"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 403, description = "`csrf`, `forbidden` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (wrong current password), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation`: bad or expired enrollment, wrong code", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 429, description = "`rate-limited` (see `Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
@@ -454,7 +454,7 @@ pub async fn totp_confirm(
     ApiJson(req): ApiJson<TotpConfirm>,
 ) -> Result<StatusCode, Problem> {
     api.auth
-        .totp_confirm(&who.actor, &req.enrollment, &req.code)
+        .totp_confirm(&who.actor, &req.enrollment, &req.code, &req.password)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
