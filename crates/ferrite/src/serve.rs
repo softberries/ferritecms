@@ -130,6 +130,7 @@ async fn serve(config: &Config, store: Arc<dyn Store>) -> anyhow::Result<()> {
         .context("cannot read the event outbox")?
         .spawn(
             Duration::from_millis(config.cache.poll_interval_ms),
+            false,
             background.clone(),
         );
     let publisher = spawn_publish_due(ContentService::new(store, rules), background.clone());

@@ -13,7 +13,10 @@
 //!   cache, following the sequence-gap rule of 04 §4 (skipping a gap flushes and
 //!   watches the skipped seqs for late commits). The boot cursor is `max_seq()`, or the
 //!   first hole among the last 1000 events if there is one; create the loop (which
-//!   reads it, and fails on a store error) before serving traffic.
+//!   reads it, and fails on a store error) before serving traffic. With `listen` it
+//!   also polls on every `LISTEN/NOTIFY` wake-up and checks for pruned history after a
+//!   reconnect (P3); an [`EventHook`] sees each applied event, for node state beyond the
+//!   cache.
 //! * [`etag_for`] / [`if_none_match_matches`]: ETag and `304` helpers.
 //!
 //! Correctness over hit rate: a stale page after an edit is the bug this crate exists
@@ -30,6 +33,6 @@ pub use cache::PageCache;
 pub use http::{etag_for, if_none_match_matches};
 pub use index::ALL_KEY;
 pub use invalidation::{
-    EventSource, GAP_TIMEOUT, InvalidationLoop, LATE_HORIZON, MAX_LATE, POLL_BATCH,
+    EventHook, EventSource, GAP_TIMEOUT, InvalidationLoop, LATE_HORIZON, MAX_LATE, POLL_BATCH,
 };
 pub use page::{CacheKey, CachedPage, Variant};

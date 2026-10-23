@@ -58,7 +58,7 @@ P1). Notify is an optimisation only; correctness comes from the table.
 ### Read path (every node)
 
 **As built in M1c-2** (`crates/ferrite-cache/src/invalidation.rs`, both backends, used by
-`ferrite serve` in every mode): polling only, no `LISTEN/NOTIFY` yet.
+`ferrite serve` in every mode): polling. M1.5 adds wake-ups and the history check (below).
 
 - Every `cache.poll_interval_ms` (default 250 ms) the loop reads
   `events.since(last_seq, 1000)`, continuing while batches come back full (at most 10
@@ -102,16 +102,42 @@ P1). Notify is an optimisation only; correctness comes from the table.
   transaction that notifies fails.
 - App connections run `idle_in_transaction_session_timeout = 60s`.
 
-**Planned (M1.5, cluster mode):**
+**Loop side, as built (M1.5 Task 6, P3):**
 
-- The invalidation loop listens on the events channel; a notice triggers an immediate
-  poll. Notify is an optimisation only; polling stays the source of truth.
-- On (re)connect of the listener: catch up from `last_seq`. If the gap is larger than
-  retained history (events pruned), the node **flushes its whole page cache**.
+- `InvalidationLoop::spawn(poll_interval, listen, shutdown)`. With `listen` (cluster mode;
+  wired by `serve` in Task 10) a subtask owns the events subscription and drains it
+  continuously. `Notified` wakes the loop for an immediate poll through a
+  `tokio::sync::Notify`; permits coalesce, so a burst of notices costs one extra poll.
+  `Reconnected` also sets a "check history" flag. A subscribe or `recv` error drops the
+  subscription and resubscribes after 1 s, doubling to 30 s; once that succeeds the flag is
+  set too. SQLite (`subscribe` → `None`) ends the subtask and the loop only polls. The
+  ticker keeps polling every `cache.poll_interval_ms` regardless: notify is an
+  optimisation only. The subtask ends on shutdown and drops the subscription before the
+  loop's task completes.
+- **History check** runs before the poll when the flag is set, and on the first poll after
+  one or more failed polls: `min = events.min_seq()`; if `min > last_seq + 1`, events were
+  pruned past the cursor, so the loop warns, **flushes the whole page cache**, calls
+  `EventHook::on_history_lost` (the node reloads its state), sets `last_seq = min - 1` and
+  drops open gaps, the applied-past-gap set and late seqs below `min`. Otherwise it only
+  catches up from `last_seq`. If the outbox was pruned to empty the check cannot detect
+  the loss (`min_seq` is 0); that needs a node to have missed 24 h of polls with no event
+  since.
+- `EventHook { on_event, on_history_lost }` (synchronous, must not block) is attached with
+  `InvalidationLoop::with_hook`. It sees every event applied after `new()` returned, late
+  arrivals included, after the event's cache effect; events applied inside `new()` (the
+  boot window) are not passed on, because the caller reads node state after creating the
+  loop (P22). `node.drain` stays a no-op (P26).
+- **Late-probe bound.** The probe pages through committed rows from the smallest late seq
+  at 1000 rows per batch, resuming where the previous tick stopped, so a late arrival is
+  found within ⌈span / (POLL_BATCH × probe budget)⌉ ticks (span = largest − smallest late
+  seq; probe budget = the batches a tick has left after the main read, 1 to 10). The bound
+  counts from the probe's position; an arrival it already passed is found after it wraps,
+  at most one tick more. The algorithm is unchanged from M1c-2.
 - On Postgres, `idle_in_transaction_session_timeout` (60 s, set since Task 2) is shorter
   than the 10-minute late horizon, so no idle writer holds a seq uncommitted past it (a
   `Tx` busy with long statements is not bounded, P4).
-- Contract tests with concurrent writers across nodes.
+
+**Planned (M1.5):** contract tests with concurrent writers across nodes.
 
 ### Event kinds
 
