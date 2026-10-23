@@ -24,6 +24,10 @@ pub enum CoreError {
         field: &'static str,
         message: String,
     },
+    /// Several rows of a batch (a redirect import) are invalid; nothing was written.
+    /// Each entry names the row's index in the input and what is wrong with it.
+    #[error("invalid input in {} rows", .0.len())]
+    InvalidRows(Vec<RowError>),
     #[error("version conflict (current version {current_version})")]
     Conflict { current_version: i64 },
     /// The operating system's random number generator failed (keys, nonces, tokens).
@@ -34,6 +38,14 @@ pub enum CoreError {
     Hashing,
     #[error(transparent)]
     Store(StoreError),
+}
+
+/// One invalid row of a batch ([`CoreError::InvalidRows`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowError {
+    /// The row's index in the input (0-based).
+    pub row: usize,
+    pub message: String,
 }
 
 impl CoreError {

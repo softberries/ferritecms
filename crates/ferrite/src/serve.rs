@@ -195,6 +195,8 @@ pub struct RunningNode {
     pub addr: SocketAddr,
     pub node_id: NodeId,
     pub state: Arc<AppState>,
+    /// The API's state (its services; the option service's cache follows events).
+    pub api: Arc<ApiState>,
     server: Option<JoinHandle<std::io::Result<()>>>,
     /// The server's result when it ended before shutdown.
     server_result: Option<Result<std::io::Result<()>, JoinError>>,
@@ -375,6 +377,11 @@ async fn boot(
 
     // The API's services; `content` also runs the scheduled-publishing jobs.
     let content = Arc::new(ContentService::new(store.clone(), dyn_permalinks));
+    let options = Arc::new(
+        OptionService::load(store.clone())
+            .await
+            .context("cannot load the options")?,
+    );
     let api = Arc::new(
         ApiState::new(ApiParts {
             store: store.clone(),
@@ -387,11 +394,7 @@ async fn boot(
             types: Arc::new(ContentTypeService::new(store.clone())),
             taxonomy: Arc::new(TaxonomyService::new(store.clone())),
             menus: Arc::new(MenuService::new(store.clone())),
-            options: Arc::new(
-                OptionService::load(store.clone())
-                    .await
-                    .context("cannot load the options")?,
-            ),
+            options: options.clone(),
             redirects: Arc::new(RedirectService::new(store.clone())),
             site_url: state.config.site_url.clone(),
         })
@@ -435,6 +438,7 @@ async fn boot(
             mode,
             state: state.clone(),
             permalinks,
+            options,
             plugins,
             theme: loaded,
             plugins_report: report,
@@ -461,7 +465,8 @@ async fn boot(
     let server = tokio::spawn(
         axum::serve(
             listener,
-            build_site(state.clone(), api).into_make_service_with_connect_info::<SocketAddr>(),
+            build_site(state.clone(), api.clone())
+                .into_make_service_with_connect_info::<SocketAddr>(),
         )
         .with_graceful_shutdown(stop_accepting.clone().cancelled_owned())
         .into_future(),
@@ -471,6 +476,7 @@ async fn boot(
         addr,
         node_id: registry.id(),
         state,
+        api,
         server: Some(server),
         server_result: None,
         stop_accepting,

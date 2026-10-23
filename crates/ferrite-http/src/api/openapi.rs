@@ -26,6 +26,9 @@ pub const SESSION_COOKIE: &str = "ferrite_session";
         (name = "content", description = "Content items, their lifecycle and revisions"),
         (name = "types", description = "Content types and their field schemas"),
         (name = "taxonomies", description = "Taxonomies and their terms"),
+        (name = "menus", description = "Navigation menus"),
+        (name = "redirects", description = "Redirects, with CSV import and export"),
+        (name = "settings", description = "Site settings"),
     ),
 )]
 pub struct ApiDoc;

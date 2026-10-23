@@ -12,6 +12,7 @@
 //! | `RateLimited { retry_after_secs }` | 429 | `rate-limited` + `Retry-After` |
 //! | `Invalid(msg)` | 422 | `validation` (detail = msg) |
 //! | `InvalidField { field, message }` | 422 | `validation` (detail = message, `errors[0] = { field, detail: message }`) |
+//! | `InvalidRows(rows)` | 422 | `validation` (one `errors` entry per row, `field` = `row <index>`; the CSV import names lines instead) |
 //! | `Conflict { .. }` | 412 | `precondition-failed` (+ `current`, set by the handler) |
 //! | `Store(UniqueViolation)` | 409 | `conflict` (a known constraint adds an `errors` entry for its field, see [`UNIQUE_FIELDS`]; the constraint name is never sent) |
 //! | `Store(ForeignKey)` | 409 | `conflict` ("a related record changed; retry", F15) |
@@ -77,6 +78,11 @@ pub const UNIQUE_FIELDS: &[(&str, &str, &str)] = &[
         "taxonomies_pkey",
         "name",
         "a taxonomy with this name exists",
+    ),
+    (
+        "menu_items_pkey",
+        "items",
+        "an entry id is used by another menu (or twice in this one)",
     ),
 ];
 
@@ -326,6 +332,13 @@ impl From<CoreError> for Problem {
             CoreError::InvalidField { field, message } => {
                 Self::validation(message.clone()).with_error(Some(field), message)
             }
+            CoreError::InvalidRows(rows) => {
+                let mut p = Self::validation("some rows are invalid; nothing was written");
+                for row in rows {
+                    p = p.with_error(Some(&format!("row {}", row.row)), row.message);
+                }
+                p
+            }
             CoreError::Conflict { current_version } => Self::new(
                 StatusCode::PRECONDITION_FAILED,
                 "precondition-failed",
@@ -445,6 +458,16 @@ mod tests {
                 422,
                 "validation",
                 Some("reserved slug"),
+                None,
+            ),
+            (
+                CoreError::InvalidRows(vec![ferrite_core::RowError {
+                    row: 2,
+                    message: "redirect loop".into(),
+                }]),
+                422,
+                "validation",
+                Some("some rows are invalid; nothing was written"),
                 None,
             ),
             (

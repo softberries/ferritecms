@@ -320,3 +320,74 @@ async fn type_registration_reaches_every_node() {
     eprintln!("types: new type on 2 nodes {type_took:?}, taxonomy term and item {item_took:?}");
     c.finish().await;
 }
+
+/// The value of option `key` as node `i`'s option service reads it.
+async fn option_on(c: &Cluster, i: usize, key: &str) -> Option<serde_json::Value> {
+    c.node(i)
+        .api
+        .options
+        .get(key)
+        .await
+        .unwrap()
+        .map(|e| e.value)
+}
+
+/// R13: a setting saved through one node reaches every node's option cache, and a
+/// `permalink.*` setting rebuilds every node's routes (P19).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn settings_reach_every_node() {
+    let Some(c) = Cluster::new(2, |_| NodeOptions::default()).await else {
+        return;
+    };
+    let actor = admin(c.store(0).as_ref()).await;
+    let set = |i: usize, key: &'static str, value: serde_json::Value| {
+        let options = c.node(i).api.options.clone();
+        async move {
+            options
+                .set_many(&actor, &[(key.to_owned(), Some(value))])
+                .await
+                .unwrap();
+        }
+    };
+    // Node 1 caches the value it wrote.
+    set(1, "site.title", json!("One")).await;
+    assert_eq!(option_on(&c, 1, "site.title").await, Some(json!("One")));
+    // Written on node 0: node 1's cache follows the event.
+    let saved = Instant::now();
+    set(0, "site.title", json!("Two")).await;
+    wait_until(CONVERGE, "node 1's cache has the new title", || async {
+        option_on(&c, 1, "site.title").await == Some(json!("Two"))
+    })
+    .await;
+    let cache_took = saved.elapsed();
+    // A reset (delete) too.
+    let options = c.node(0).api.options.clone();
+    options
+        .set_many(&actor, &[("site.title".to_owned(), None)])
+        .await
+        .unwrap();
+    wait_until(CONVERGE, "node 1's cache drops the title", || async {
+        option_on(&c, 1, "site.title").await.is_none()
+    })
+    .await;
+
+    // A permalink setting through node 0 moves posts on node 1.
+    let svc = content(c.store(0));
+    let post = published_post(&svc, &actor, "moving").await;
+    wait_until(SETUP, "/moving/ on every node", || {
+        all_status(&c, "/moving/", 200)
+    })
+    .await;
+    let saved = Instant::now();
+    set(0, "permalink.post", json!("/blog/%slug%/")).await;
+    wait_until(CONVERGE, "/blog/moving/ on every node", || {
+        all_status(&c, "/blog/moving/", 200)
+    })
+    .await;
+    let routes_took = saved.elapsed();
+    assert_eq!(post.slug, "moving");
+    eprintln!(
+        "settings: option cache on node 1 {cache_took:?}, permalinks on 2 nodes {routes_took:?}"
+    );
+    c.finish().await;
+}

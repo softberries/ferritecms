@@ -5,19 +5,36 @@ use std::{
     sync::{Arc, PoisonError, RwLock},
 };
 
-use ferrite_domain::OptionEntry;
+use ferrite_domain::{NewAudit, OptionEntry};
 use ferrite_store::{Repos, Store};
+use serde_json::{Value, json};
 
 use crate::{
     Actor, CoreError,
     actor::{Capability, require},
     events,
+    permalink::{self, PAGE_OPTION, POST_OPTION},
+    settings,
+    site::FRONT_PAGE_OPTION,
     tx::finish,
+    types::{begin_locked, finish_locked},
 };
 
 const MAX_KEY_LEN: usize = 200;
 
-type Cache = Arc<RwLock<HashMap<String, OptionEntry>>>;
+/// The autoloaded options, and a counter bumped by every change to them.
+#[derive(Default)]
+struct Cached {
+    entries: HashMap<String, OptionEntry>,
+    generation: u64,
+}
+
+/// One pending write: `value` `None` deletes the option.
+struct Change<'a> {
+    key: &'a str,
+    value: Option<&'a Value>,
+    autoload: bool,
+}
 
 /// Reads and writes options (writes need `manage_settings`).
 ///
@@ -26,25 +43,36 @@ type Cache = Arc<RwLock<HashMap<String, OptionEntry>>>;
 /// write commits, so a failed write never shows up in it. A value is only replaced by
 /// one with the same or a newer `updated_at`, so a slow re-read of an older write cannot
 /// overwrite a newer cached value. Removals (delete, `autoload = false`) always apply.
+///
+/// **Other nodes' writes** reach the cache through
+/// [`reload_from_event`](Self::reload_from_event) for each `options.changed` event (the
+/// node's reloader calls it, R13) and [`reload_all`](Self::reload_all) when event history
+/// was lost.
+///
+/// **`permalink.*` writes** ([`set`](Self::set), [`delete`](Self::delete),
+/// [`set_many`](Self::set_many)) take the [`LOCK_TYPES`](ferrite_store::LOCK_TYPES)
+/// lock that type and taxonomy writes take (R19) and check the resulting pair of
+/// structures against the registered types and taxonomies inside the transaction
+/// ([`permalink::stored_rules`] + [`permalink::check_registered`], P19), so neither
+/// side can race the other into a combination the router cannot serve. A clash is
+/// `InvalidField { field: "permalink.post" | "permalink.page", .. }` naming the
+/// structure. They emit `invalidate [all]` (R10) besides `options.changed`; each node's
+/// reloader rebuilds its permalink rules and route table from the event.
 pub struct OptionService {
     store: Arc<dyn Store>,
-    cache: Cache,
+    cache: Arc<RwLock<Cached>>,
 }
 
 impl OptionService {
     /// Loads all autoloaded options into the cache.
     pub async fn load(store: Arc<dyn Store>) -> Result<Self, CoreError> {
-        let cache: HashMap<String, OptionEntry> = store
-            .read()
-            .options()
-            .autoloaded()
-            .await?
-            .into_iter()
-            .map(|e| (e.key.clone(), e))
-            .collect();
+        let entries = autoloaded(store.as_ref()).await?;
         Ok(Self {
             store,
-            cache: Arc::new(RwLock::new(cache)),
+            cache: Arc::new(RwLock::new(Cached {
+                entries,
+                generation: 0,
+            })),
         })
     }
 
@@ -55,6 +83,7 @@ impl OptionService {
             .cache
             .read()
             .unwrap_or_else(PoisonError::into_inner)
+            .entries
             .get(key)
             .cloned();
         if hit.is_some() {
@@ -65,81 +94,316 @@ impl OptionService {
 
     /// Sets an option and emits `options.changed` with `option:<key>` in the same
     /// transaction. Afterwards the cache holds the key if `autoload`, else it is removed.
+    /// `permalink.*` values are validated (see the type docs); other keys are stored as
+    /// given (this is the low-level option API; the admin's settings go through
+    /// [`set_many`](Self::set_many)).
     pub async fn set(
         &self,
         actor: &Actor,
         key: &str,
-        value: &serde_json::Value,
+        value: &Value,
         autoload: bool,
     ) -> Result<(), CoreError> {
         require(actor, Capability::ManageSettings)?;
         check_key(key)?;
-        let tx = self.store.begin().await?;
-        let done = async {
-            tx.options().set(key, value, autoload).await?;
-            tx.events().append(&events::options_changed(key)).await?;
-            emit_all_for_permalinks(tx.as_ref(), key).await?;
-            Ok(())
+        if is_permalink(key) {
+            settings::validate(key, value)?;
         }
-        .await;
-        finish(tx, done).await?;
-        // Re-read what was stored (it carries `updated_at`). If that fails the key is
-        // dropped from the cache, so reads fall back to the store.
-        let stored = if autoload {
-            match self.store.read().options().get(key).await {
-                Ok(entry) => entry,
-                Err(e) => {
-                    tracing::warn!(key, error = %e, "option cache refresh failed; dropping key");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        self.apply(key, stored);
-        Ok(())
+        self.write(
+            actor,
+            &[Change {
+                key,
+                value: Some(value),
+                autoload,
+            }],
+            false,
+        )
+        .await
     }
 
     /// Deletes an option (a missing one is a no-op) and emits `options.changed`.
     pub async fn delete(&self, actor: &Actor, key: &str) -> Result<(), CoreError> {
         require(actor, Capability::ManageSettings)?;
         check_key(key)?;
-        let tx = self.store.begin().await?;
-        let done = async {
-            tx.options().delete(key).await?;
-            tx.events().append(&events::options_changed(key)).await?;
-            emit_all_for_permalinks(tx.as_ref(), key).await?;
-            Ok(())
+        self.write(
+            actor,
+            &[Change {
+                key,
+                value: None,
+                autoload: false,
+            }],
+            false,
+        )
+        .await
+    }
+
+    /// Writes allowlisted settings ([`settings::SETTINGS`]) in one transaction (P19):
+    /// `(key, Some(value))` sets the key with `autoload = true` (every render reads
+    /// them, F23), `(key, None)` or a JSON `null` deletes it (back to the default).
+    ///
+    /// Needs `manage_settings`. Every change is validated first ([`settings::validate`]:
+    /// an unknown key or a key given twice is `Invalid`, a bad value
+    /// `InvalidField { field: <key>, .. }`), then in the transaction: the front page
+    /// must be an existing page, and the `permalink.*` pair (stored values with these
+    /// changes on top) must fit the registered types and taxonomies. Any failure writes
+    /// nothing and emits nothing. On success each key gets its own `options.changed`
+    /// event, `permalink.*` changes add one `invalidate [all]`, and one audit row
+    /// `settings.update` lists the keys (P22). The cache is updated after the commit as
+    /// [`set`](Self::set) does. An empty list is a no-op.
+    pub async fn set_many(
+        &self,
+        actor: &Actor,
+        changes: &[(String, Option<Value>)],
+    ) -> Result<(), CoreError> {
+        require(actor, Capability::ManageSettings)?;
+        let mut pending: Vec<Change<'_>> = Vec::with_capacity(changes.len());
+        for (key, value) in changes {
+            let value = value.as_ref().filter(|v| !v.is_null());
+            match value {
+                Some(v) => settings::validate(key, v)?,
+                None if settings::def(key).is_none() => {
+                    return Err(CoreError::Invalid(format!("unknown setting {key:?}")));
+                }
+                None => {}
+            }
+            if pending.iter().any(|c| c.key == key) {
+                return Err(CoreError::Invalid(format!("setting {key:?} given twice")));
+            }
+            pending.push(Change {
+                key,
+                value,
+                autoload: true,
+            });
         }
-        .await;
-        finish(tx, done).await?;
-        self.apply(key, None);
+        if pending.is_empty() {
+            return Ok(());
+        }
+        self.write(actor, &pending, true).await
+    }
+
+    /// The one write path: [`write_changes`] in one transaction (under
+    /// [`LOCK_TYPES`](ferrite_store::LOCK_TYPES) when a `permalink.*` key changes), then
+    /// the cache.
+    async fn write(
+        &self,
+        actor: &Actor,
+        changes: &[Change<'_>],
+        settings_write: bool,
+    ) -> Result<(), CoreError> {
+        if changes.iter().any(|c| is_permalink(c.key)) {
+            let (guard, tx) = begin_locked(self.store.as_ref()).await?;
+            let done = write_changes(tx.as_ref(), actor, changes, settings_write).await;
+            finish_locked(guard, tx, done).await?;
+        } else {
+            let tx = self.store.begin().await?;
+            let done = write_changes(tx.as_ref(), actor, changes, settings_write).await;
+            finish(tx, done).await?;
+        }
+        for c in changes {
+            self.refresh_after_write(c).await;
+        }
         Ok(())
+    }
+
+    /// The cache after a committed write of `c`: the stored entry (it carries
+    /// `updated_at`) if it is autoloaded, else nothing. If the re-read fails the key is
+    /// dropped, so reads fall back to the store.
+    async fn refresh_after_write(&self, c: &Change<'_>) {
+        let stored = if c.value.is_some() && c.autoload {
+            match self.store.read().options().get(c.key).await {
+                Ok(entry) => entry,
+                Err(e) => {
+                    tracing::warn!(key = c.key, error = %e, "option cache refresh failed; dropping key");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let mut cache = self.cache.write().unwrap_or_else(PoisonError::into_inner);
+        cache.generation += 1;
+        merge(&mut cache.entries, c.key, stored);
     }
 
     /// Re-reads the given keys from the store into the cache, for `options.changed`
-    /// events from other nodes. Takes event keys (`option:<key>`); others are ignored.
+    /// events (from any node, R13). Takes event keys (`option:<key>`); others are
+    /// ignored.
+    ///
+    /// What the store holds replaces the cached entry whatever its `updated_at` (nodes'
+    /// clocks may differ, so a newer write can carry an older time), unless the cache
+    /// changed while the key was read (a local write or another reload): then the key
+    /// is dropped and reads fall back to the store. A store error also drops the key
+    /// (and the keys after it) and is returned. Meant for one caller at a time (the
+    /// reloader's task).
     pub async fn reload_from_event(&self, keys: &[String]) -> Result<(), CoreError> {
-        for raw in keys {
-            let Some(key) = raw.strip_prefix("option:") else {
-                continue;
+        let keys: Vec<&str> = keys
+            .iter()
+            .filter_map(|raw| raw.strip_prefix("option:"))
+            .collect();
+        for (i, key) in keys.iter().enumerate() {
+            let seen = self.generation();
+            let entry = match self.store.read().options().get(key).await {
+                Ok(entry) => entry.filter(|e| e.autoload),
+                Err(e) => {
+                    let mut cache = self.cache.write().unwrap_or_else(PoisonError::into_inner);
+                    cache.generation += 1;
+                    for key in &keys[i..] {
+                        cache.entries.remove(*key);
+                    }
+                    return Err(e.into());
+                }
             };
-            let entry = self
-                .store
-                .read()
-                .options()
-                .get(key)
-                .await?
-                .filter(|e| e.autoload);
-            self.apply(key, entry);
+            let mut cache = self.cache.write().unwrap_or_else(PoisonError::into_inner);
+            if cache.generation == seen {
+                match entry {
+                    Some(e) => {
+                        cache.entries.insert((*key).to_owned(), e);
+                    }
+                    None => {
+                        cache.entries.remove(*key);
+                    }
+                }
+            } else {
+                cache.entries.remove(*key);
+            }
+            cache.generation += 1;
         }
         Ok(())
     }
 
-    fn apply(&self, key: &str, entry: Option<OptionEntry>) {
+    /// Re-reads every autoloaded option (after the node lost event history). The cache
+    /// is replaced by what the store holds, or emptied if it changed during the read or
+    /// the read failed (the error is returned); reads then fall back to the store.
+    pub async fn reload_all(&self) -> Result<(), CoreError> {
+        let seen = self.generation();
+        let read = autoloaded(self.store.as_ref()).await;
         let mut cache = self.cache.write().unwrap_or_else(PoisonError::into_inner);
-        merge(&mut cache, key, entry);
+        let unchanged = cache.generation == seen;
+        cache.generation += 1;
+        match read {
+            Ok(entries) if unchanged => {
+                cache.entries = entries;
+                Ok(())
+            }
+            Ok(_) => {
+                cache.entries.clear();
+                Ok(())
+            }
+            Err(e) => {
+                cache.entries.clear();
+                Err(e)
+            }
+        }
     }
+
+    fn generation(&self) -> u64 {
+        self.cache
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .generation
+    }
+}
+
+async fn autoloaded(store: &dyn Store) -> Result<HashMap<String, OptionEntry>, CoreError> {
+    Ok(store
+        .read()
+        .options()
+        .autoloaded()
+        .await?
+        .into_iter()
+        .map(|e| (e.key.clone(), e))
+        .collect())
+}
+
+/// Inside the write's transaction: the checks that need the store (`permalink.*` pair;
+/// for a `settings_write`, the front page), each set or delete with its
+/// `options.changed`, `invalidate [all]` for `permalink.*`, and for a `settings_write`
+/// the audit row `settings.update`.
+async fn write_changes(
+    repos: &dyn Repos,
+    actor: &Actor,
+    changes: &[Change<'_>],
+    settings_write: bool,
+) -> Result<(), CoreError> {
+    let permalinks: Vec<&Change<'_>> = changes.iter().filter(|c| is_permalink(c.key)).collect();
+    if !permalinks.is_empty() {
+        check_permalinks(repos, &permalinks).await?;
+    }
+    if settings_write {
+        for c in changes {
+            if c.key == FRONT_PAGE_OPTION
+                && let Some(v) = c.value
+            {
+                settings::check_front_page(repos, v).await?;
+            }
+        }
+    }
+    for c in changes {
+        match c.value {
+            Some(v) => repos.options().set(c.key, v, c.autoload).await?,
+            None => repos.options().delete(c.key).await?,
+        }
+        repos
+            .events()
+            .append(&events::options_changed(c.key))
+            .await?;
+    }
+    if !permalinks.is_empty() {
+        repos
+            .events()
+            .append(&events::invalidate([events::ALL_KEY.to_owned()]))
+            .await?;
+    }
+    if settings_write {
+        let keys: Vec<&str> = changes.iter().map(|c| c.key).collect();
+        repos
+            .audit()
+            .append(&NewAudit {
+                actor_id: Some(actor.user),
+                action: "settings.update".to_owned(),
+                target_kind: "settings".to_owned(),
+                target_id: None,
+                details: json!({ "keys": keys }),
+            })
+            .await?;
+    }
+    Ok(())
+}
+
+fn is_permalink(key: &str) -> bool {
+    key == POST_OPTION || key == PAGE_OPTION
+}
+
+/// The `permalink.*` pair with `changes` on top fits the registered types and
+/// taxonomies (read through `repos`, the write's transaction). A clash blames the
+/// changed key whose structure the message names (else the first changed key); stored
+/// options that no longer parse are plain `Invalid`.
+async fn check_permalinks(repos: &dyn Repos, changes: &[&Change<'_>]) -> Result<(), CoreError> {
+    let overrides: Vec<(&str, Option<&str>)> = changes
+        .iter()
+        .map(|c| (c.key, c.value.and_then(Value::as_str)))
+        .collect();
+    let rules = permalink::stored_rules(repos, &overrides).await?;
+    permalink::check_registered(repos, &rules)
+        .await
+        .map_err(|e| match e {
+            CoreError::Invalid(message) => {
+                let blamed = changes
+                    .iter()
+                    .find(|c| {
+                        c.value
+                            .and_then(Value::as_str)
+                            .is_some_and(|s| message.contains(&format!("{s:?}")))
+                    })
+                    .or(changes.first());
+                let field = match blamed.map(|c| c.key) {
+                    Some(PAGE_OPTION) => PAGE_OPTION,
+                    _ => POST_OPTION,
+                };
+                CoreError::InvalidField { field, message }
+            }
+            e => e,
+        })
 }
 
 /// Stores `entry` unless the cache holds a strictly newer one; `None` removes the key.
@@ -165,17 +429,6 @@ fn check_key(key: &str) -> Result<(), CoreError> {
         return Err(CoreError::Invalid(format!(
             "option key must be 1-{MAX_KEY_LEN} bytes without control characters"
         )));
-    }
-    Ok(())
-}
-
-/// Every URL changes with a `permalink.*` option: flush everything.
-async fn emit_all_for_permalinks(repos: &dyn Repos, key: &str) -> Result<(), CoreError> {
-    if key.starts_with("permalink.") {
-        repos
-            .events()
-            .append(&events::invalidate([events::ALL_KEY.to_owned()]))
-            .await?;
     }
     Ok(())
 }

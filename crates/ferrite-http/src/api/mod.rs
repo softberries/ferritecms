@@ -22,12 +22,16 @@
 pub mod auth;
 pub mod content;
 pub mod cookie;
+pub mod csv;
 pub mod dto;
 pub mod extract;
 pub mod list;
+pub mod menus;
 pub mod meta;
 pub mod openapi;
 pub mod problem;
+pub mod redirects;
+pub mod settings;
 mod state;
 pub mod taxonomies;
 pub mod types;
@@ -106,6 +110,24 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
             taxonomies::update_term,
             taxonomies::delete_term
         ))
+        .routes(routes!(menus::list_menus))
+        .routes(routes!(
+            menus::get_menu,
+            menus::put_menu,
+            menus::delete_menu
+        ))
+        .routes(routes!(
+            redirects::list_redirects,
+            redirects::create_redirect
+        ))
+        .routes(routes!(redirects::import_redirects))
+        .routes(routes!(redirects::export_redirects))
+        .routes(routes!(
+            redirects::get_redirect,
+            redirects::update_redirect,
+            redirects::delete_redirect
+        ))
+        .routes(routes!(settings::get_settings, settings::update_settings))
 }
 
 /// The spec and routes, before the state and layers.

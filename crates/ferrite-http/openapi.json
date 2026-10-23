@@ -2078,6 +2078,280 @@
         ]
       }
     },
+    "/api/v1/menus": {
+      "get": {
+        "tags": [
+          "menus"
+        ],
+        "operationId": "list_menus",
+        "responses": {
+          "200": {
+            "description": "Every menu (name and label), by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MenuList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (needs `menus:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/menus/{name}": {
+      "get": {
+        "tags": [
+          "menus"
+        ],
+        "operationId": "get_menu",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Menu",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The menu with its entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MenuDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (needs `menus:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "menus"
+        ],
+        "operationId": "put_menu",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Menu",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MenuInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Created or replaced; the menu as stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MenuDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_menus`, `menus:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`conflict`: an entry id is used by another menu (`errors[0].field` = `items`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: name, label, entry kind/target/url, parent outside the menu or in a cycle, more than 500 entries",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "menus"
+        ],
+        "operationId": "delete_menu",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Menu",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted with its entries"
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_menus`, `menus:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/meta": {
       "get": {
         "tags": [
@@ -2112,6 +2386,660 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/redirects": {
+      "get": {
+        "tags": [
+          "redirects"
+        ],
+        "operationId": "list_redirects",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1..=200; default 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of redirects, by source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedirectList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation`: `limit` or `cursor`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_redirects`, `redirects:write`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "redirects"
+        ],
+        "operationId": "create_redirect",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedirectInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created, or the redirect with this source changed (`Location`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedirectDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_redirects`, `redirects:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`errors[0].field`: `source`, `target` (also loops and chains of more than 10) or `code`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/redirects/export": {
+      "get": {
+        "tags": [
+          "redirects"
+        ],
+        "operationId": "export_redirects",
+        "responses": {
+          "200": {
+            "description": "Every redirect as `source,target,code` with a header row, by source",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_redirects`, `redirects:write`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/redirects/import": {
+      "post": {
+        "tags": [
+          "redirects"
+        ],
+        "operationId": "import_redirects",
+        "requestBody": {
+          "description": "`source,target,code` rows (RFC 4180), optional header row; at most 1 MiB and 10 000 rows",
+          "content": {
+            "text/csv": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Every row imported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReportDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-body`: not UTF-8",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_redirects`, `redirects:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`too-large`: more than 1 MiB",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported-media-type`: not `text/csv`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: nothing imported; `errors[]` = `{ field: \"line <n>\", detail }` per bad line, or more than 10 000 rows",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/redirects/{id}": {
+      "get": {
+        "tags": [
+          "redirects"
+        ],
+        "operationId": "get_redirect",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The redirect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedirectDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_redirects`, `redirects:write`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "redirects"
+        ],
+        "operationId": "delete_redirect",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted (also when there was none)"
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_redirects`, `redirects:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "redirects"
+        ],
+        "operationId": "update_redirect",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedirectPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedirectDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_redirects`, `redirects:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`errors[0].field`: `source` (also taken by another redirect), `target` or `code`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/settings": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "operationId": "get_settings",
+        "responses": {
+          "200": {
+            "description": "Every setting (`null`: the default)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (needs `settings:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "settings"
+        ],
+        "operationId": "update_settings",
+        "requestBody": {
+          "description": "Any of the keys; `null` resets one to its default",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved; every setting as stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json` (the body must be an object)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_settings`, `settings:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: an unknown key, or a bad value (`errors[0].field` = the key: type, bounds, a front page that is not a page, a permalink structure that is invalid or clashes with a type, taxonomy or route)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`busy`: a type or taxonomy change holds the lock a `permalink.*` change needs; retry",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
       }
     },
     "/api/v1/taxonomies": {
@@ -3801,6 +4729,28 @@
           "repeater"
         ]
       },
+      "ImportReportDto": {
+        "type": "object",
+        "description": "`POST /redirects/import`: what the import did.",
+        "required": [
+          "created",
+          "updated"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Rows whose source had no redirect.",
+            "minimum": 0
+          },
+          "updated": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Rows that replaced the target and code of an existing redirect.",
+            "minimum": 0
+          }
+        }
+      },
       "LoginRequest": {
         "type": "object",
         "description": "`POST /auth/login`.",
@@ -3928,6 +4878,148 @@
           }
         }
       },
+      "MenuDto": {
+        "type": "object",
+        "description": "A menu with its entries in tree order (roots first, each followed by its children).",
+        "required": [
+          "name",
+          "label",
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuItemDto"
+            }
+          },
+          "label": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "Lowercase, no whitespace or `/` (a theme's menu location, e.g. `primary`)."
+          }
+        }
+      },
+      "MenuInput": {
+        "type": "object",
+        "description": "`PUT /menus/{name}`: the whole menu (the path names it; a `name` member, if sent,\nmust match).",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuItemDto"
+            },
+            "description": "At most 500 entries."
+          },
+          "label": {
+            "type": "string",
+            "description": "At most 200 characters."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "MenuItemDto": {
+        "type": "object",
+        "description": "One menu entry. The tree is flat: `parent_id` names another entry of the same menu\n(`null` for a top-level one), and siblings are ordered by `position`, then `id`.",
+        "required": [
+          "id",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Chosen by the client (a new UUID for a new entry); unique across all menus."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MenuItemKindDto"
+          },
+          "label": {
+            "type": "string",
+            "description": "At most 200 characters."
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "target_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The content item or term (`item`, `term`); `null` for `url`."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Only for `url`."
+          }
+        }
+      },
+      "MenuItemKindDto": {
+        "type": "string",
+        "description": "What a menu entry links to.",
+        "enum": [
+          "item",
+          "term",
+          "url"
+        ]
+      },
+      "MenuList": {
+        "type": "object",
+        "description": "`GET /menus`: every menu, by name.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuSummary"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Always `null`: one page holds every menu."
+          }
+        }
+      },
+      "MenuSummary": {
+        "type": "object",
+        "description": "A menu's name and label.",
+        "required": [
+          "name",
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "MetaDto": {
         "type": "object",
         "description": "The API version and the site it serves.",
@@ -4015,6 +5107,126 @@
           "type": {
             "type": "string",
             "description": "`/api/v1/problems/<slug>`."
+          }
+        }
+      },
+      "RedirectDto": {
+        "type": "object",
+        "description": "A redirect.",
+        "required": [
+          "id",
+          "source",
+          "target",
+          "code",
+          "hits",
+          "origin",
+          "created_at"
+        ],
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32",
+            "description": "301, 302, 307, 308 or 410.",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "hits": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_hit_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/RedirectOriginDto"
+          },
+          "source": {
+            "type": "string",
+            "description": "The path it matches (exactly, or with the trailing slash toggled)."
+          },
+          "target": {
+            "type": "string",
+            "description": "A local path or an absolute http(s) URL."
+          }
+        }
+      },
+      "RedirectInput": {
+        "type": "object",
+        "description": "`POST /redirects`.",
+        "required": [
+          "source",
+          "target"
+        ],
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Default 301.",
+            "minimum": 0
+          },
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
+      "RedirectList": {
+        "type": "object",
+        "description": "`GET /redirects`: one page, by source.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RedirectDto"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RedirectOriginDto": {
+        "type": "string",
+        "description": "How a redirect came to be.",
+        "enum": [
+          "manual",
+          "import",
+          "slug-change"
+        ]
+      },
+      "RedirectPatch": {
+        "type": "object",
+        "description": "`PATCH /redirects/{id}`: merged into the current redirect.",
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
           }
         }
       },
@@ -4126,6 +5338,70 @@
             "type": "string",
             "format": "date-time",
             "description": "When to publish; must lie in the future."
+          }
+        }
+      },
+      "SettingsDto": {
+        "type": "object",
+        "description": "The site settings (`GET /settings`, and the result of `PATCH /settings`): every key,\n`null` when unset (the default applies). A `PATCH` body is an object with any of\nthese keys (`null` resets one to its default); an unknown key is `422`.",
+        "properties": {
+          "permalink.page": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The page permalink structure (default `/%parent_path%/%slug%/`; needs\n`%parent_path%`)."
+          },
+          "permalink.post": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The post permalink structure (default `/%slug%/`)."
+          },
+          "reading.discourage_indexing": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Ask search engines not to index the site (`robots.txt` disallows everything)."
+          },
+          "reading.front_page": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The id of an existing page shown at `/`, or `null` for the post listing."
+          },
+          "reading.per_page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "1..=100."
+          },
+          "site.description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 1000 characters."
+          },
+          "site.locale": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1 to 35 ASCII letters, digits, `-` or `_` (e.g. `en`, `pt-BR`)."
+          },
+          "site.title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 200 characters."
           }
         }
       },
@@ -4448,6 +5724,18 @@
     {
       "name": "taxonomies",
       "description": "Taxonomies and their terms"
+    },
+    {
+      "name": "menus",
+      "description": "Navigation menus"
+    },
+    {
+      "name": "redirects",
+      "description": "Redirects, with CSV import and export"
+    },
+    {
+      "name": "settings",
+      "description": "Site settings"
     }
   ]
 }

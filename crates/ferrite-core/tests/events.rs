@@ -355,6 +355,53 @@ pub async fn redirect_service_emits_source_keys(db: &TestDb) {
     assert_eq!(seq(store).await, before);
 }
 
+pub async fn redirect_update_and_import_emit_source_keys(db: &TestDb) {
+    let store = db.store();
+    let svc = RedirectService::new(db.shared_store());
+    let a = admin(store).await;
+    let r = svc.upsert(&a, "/from", "/to", 301).await.unwrap();
+
+    // A moved source: both the old and the new source (with variants).
+    let before = seq(store).await;
+    svc.update(&a, r.id, "/moved/", "/to", 301).await.unwrap();
+    let mut want: Keys = redirect_pair("/from").into_iter().collect();
+    want.extend(redirect_pair("/moved/"));
+    assert_eq!(keys_since(store, before).await, want);
+
+    // Same source: only its keys.
+    let before = seq(store).await;
+    svc.update(&a, r.id, "/moved/", "/else", 302).await.unwrap();
+    assert_eq!(
+        keys_since(store, before).await,
+        redirect_pair("/moved/").into_iter().collect()
+    );
+
+    // An import: every row's source.
+    let before = seq(store).await;
+    svc.import(
+        &a,
+        &[
+            ("/i1".to_owned(), "/x".to_owned(), 301),
+            ("/moved/".to_owned(), "/y".to_owned(), 308),
+        ],
+    )
+    .await
+    .unwrap();
+    let mut want: Keys = redirect_pair("/i1").into_iter().collect();
+    want.extend(redirect_pair("/moved/"));
+    assert_eq!(keys_since(store, before).await, want);
+
+    // A rejected update or import emits nothing.
+    let before = seq(store).await;
+    assert!(svc.update(&a, r.id, "/i1", "/x", 301).await.is_err());
+    assert!(
+        svc.import(&a, &[("/z".to_owned(), "/z".to_owned(), 301)])
+            .await
+            .is_err()
+    );
+    assert_eq!(seq(store).await, before);
+}
+
 pub async fn term_writes_emit_term_and_archive_keys(db: &TestDb) {
     let store = db.store();
     let svc = TaxonomyService::new(db.shared_store());
@@ -510,6 +557,7 @@ backend_tests!(
     lifecycle_emits_item_archive_terms_parent,
     publish_over_a_redirect_emits_its_keys,
     redirect_service_emits_source_keys,
+    redirect_update_and_import_emit_source_keys,
     term_writes_emit_term_and_archive_keys,
     permalink_options_flush_everything,
     publishing_a_referenced_draft_is_a_dependency,

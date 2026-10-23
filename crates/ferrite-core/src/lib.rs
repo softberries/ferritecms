@@ -14,6 +14,7 @@ mod menu;
 mod options;
 pub mod permalink;
 mod redirects;
+pub mod settings;
 pub mod site;
 pub mod slug;
 mod taxonomy;
@@ -29,12 +30,12 @@ pub use actor::{
 };
 pub use auth::{AuthService, Authenticated, IssuedSession, LoginAttempt, LoginOutcome, Via};
 pub use content::{AdminQuery, ContentDraft, ContentService, MAX_REVISIONS_LISTED};
-pub use error::CoreError;
+pub use error::{CoreError, RowError};
 pub use extensions::{EXTENSIONS_LOCK_WAIT, ExtensionService};
-pub use menu::MenuService;
+pub use menu::{MAX_MENU_ITEMS, MenuService};
 pub use options::OptionService;
 pub use permalink::{PermalinkInput, PermalinkRules, Permalinks, SwappablePermalinks};
-pub use redirects::RedirectService;
+pub use redirects::{ImportReport, MAX_IMPORT_ROWS, RedirectService};
 pub use site::{
     DepKeys, FeedSource, FrontPage, ItemLink, Listing, MediaFile, MediaPublic, MediaVariant,
     PageItem, Previewed, PublicItem, SiteRead, SiteReader, SitemapEntry, SitemapPage, TermPublic,

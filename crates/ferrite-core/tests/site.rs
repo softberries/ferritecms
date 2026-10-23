@@ -884,7 +884,7 @@ pub async fn redirect_loops_and_chains(db: &TestDb) {
     // New /g -> /h0: 11 existing hops: too long.
     assert!(matches!(
         svc.upsert(&admin, "/g", "/h0", 301).await,
-        Err(CoreError::Invalid(m)) if m.contains("chain")
+        Err(CoreError::InvalidField { field: "target", message: m }) if m.contains("chain")
     ));
     assert!(svc.resolve("/g").await.unwrap().is_none());
 }
@@ -912,7 +912,7 @@ pub async fn redirect_slash_variants_and_caps(db: &TestDb) {
     svc.upsert(&admin, "/h0", "/h1/", 301).await.unwrap();
     assert!(matches!(
         svc.upsert(&admin, "/g", "/h0/", 301).await,
-        Err(CoreError::Invalid(m)) if m.contains("chain")
+        Err(CoreError::InvalidField { field: "target", message: m }) if m.contains("chain")
     ));
 
     // Length caps.

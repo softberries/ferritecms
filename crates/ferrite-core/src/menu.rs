@@ -7,13 +7,15 @@ use ferrite_store::{Repos, Store};
 
 use crate::{
     Actor, CoreError,
-    actor::{Capability, require},
+    actor::{Area, Capability, require, require_read},
     events, slug,
     tx::finish,
 };
 
 const MAX_URL_LEN: usize = 2048;
 const MAX_LABEL_LEN: usize = 200;
+/// Most items one menu holds (each is checked inside the write's transaction).
+pub const MAX_MENU_ITEMS: usize = 500;
 
 /// Reads and edits menus (writes need `manage_menus`).
 pub struct MenuService {
@@ -40,17 +42,37 @@ impl MenuService {
         Ok(self.store.read().menus().list().await?)
     }
 
+    /// [`get`](Self::get) for the admin (`require_read(Menus)`, F16).
+    pub async fn get_for(&self, actor: &Actor, name: &str) -> Result<Menu, CoreError> {
+        require_read(actor, Area::Menus)?;
+        self.get(name).await
+    }
+
+    /// [`list`](Self::list) for the admin (`require_read(Menus)`, F16).
+    pub async fn list_for(&self, actor: &Actor) -> Result<Vec<(String, String)>, CoreError> {
+        require_read(actor, Area::Menus)?;
+        self.list().await
+    }
+
     /// Creates the menu or replaces its whole item tree. Every item is validated:
     /// - `url`: needs a URL that is `http(s)://…` or a local path (`/…`, not `//…`);
     /// - `item`: `target_id` must be an existing, non-trashed content item;
     /// - `term`: `target_id` must be an existing term.
     ///
-    /// Emits `menu:<name>`.
+    /// The menu label and item labels are at most 200 characters, and a menu holds at
+    /// most [`MAX_MENU_ITEMS`] items. Emits `menu:<name>`.
     pub async fn put(&self, actor: &Actor, menu: &Menu) -> Result<(), CoreError> {
         require(actor, Capability::ManageMenus)?;
         if slug::validate(&menu.name)? != menu.name {
             return Err(CoreError::Invalid(
                 "menu name must be lowercase without whitespace or '/'".into(),
+            ));
+        }
+        check_label(&menu.label, "menu label")?;
+        if menu.items.len() > MAX_MENU_ITEMS {
+            return Err(CoreError::invalid_field(
+                "items",
+                format!("a menu holds at most {MAX_MENU_ITEMS} items"),
             ));
         }
         let tx = self.store.begin().await?;
@@ -87,12 +109,17 @@ impl MenuService {
     }
 }
 
-async fn check_item(repos: &dyn Repos, item: &MenuItem) -> Result<(), CoreError> {
-    if item.label.chars().count() > MAX_LABEL_LEN {
+fn check_label(label: &str, what: &str) -> Result<(), CoreError> {
+    if label.chars().count() > MAX_LABEL_LEN {
         return Err(CoreError::Invalid(format!(
-            "menu label longer than {MAX_LABEL_LEN} characters"
+            "{what} longer than {MAX_LABEL_LEN} characters"
         )));
     }
+    Ok(())
+}
+
+async fn check_item(repos: &dyn Repos, item: &MenuItem) -> Result<(), CoreError> {
+    check_label(&item.label, "menu label")?;
     match item.kind {
         MenuItemKind::Url => {
             if item.target_id.is_some() {
