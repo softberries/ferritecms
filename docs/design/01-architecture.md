@@ -272,7 +272,9 @@ local media unless `local_shared = true`.
 so they run when a node joins the registry (`serve`, after the migration check), not in
 `load`: a *live* node (heartbeat within 30 s by the database clock) with another `site_id`
 or another `site.url` refuses the start; in solo mode another live node is waited for up
-to 35 s, then refused. The waiting is unlocked; the final check-and-register pass runs
+to 35 s, then refused. On SQLite (the data-folder lock keeps other processes out) rows of
+other nodes are from dead processes and are deleted instead, with no wait or comparison
+(R17). The waiting is unlocked; the final check-and-register pass runs
 under the `cluster.join` lock, so nodes starting together are checked one at a time. `startup_check`
 (and `ferrite migrate up|down`) hold the `migrate` lock on both backends, waiting up to
 5 minutes and logging every 10 s.

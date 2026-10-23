@@ -8,7 +8,9 @@
 //! 2. the migration check under the migrate lock (02 §8: pending migrations are applied
 //!    when allowed, an incompatible schema is refused);
 //! 3. join the node registry (`Registry::join`: refuses another site or `site.url`; in
-//!    solo mode waits for another live node to go stale);
+//!    solo mode waits for another live node to go stale). On SQLite the data-folder lock
+//!    already keeps other processes out, so rows left by a crashed process are deleted
+//!    instead: no wait and no `site.url` check (ruling R17);
 //! 4. open the media store and probe it;
 //! 5. the page cache and the invalidation loop's cursor; **everything below is read
 //!    after the cursor is set**, so a theme, plugin or permalink change committed while
@@ -58,7 +60,7 @@ use ferrite_http::{
 };
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::{HostConfig, PluginHost};
-use ferrite_store::Store;
+use ferrite_store::{Backend, Store};
 use tokio::{
     net::TcpListener,
     sync::oneshot,
@@ -197,7 +199,9 @@ pub struct RunningNode {
 }
 
 /// Boots a node on `store` (see the module docs for the order). `config` must be the
-/// site's; `store` is not closed by the node.
+/// site's; `store` is not closed by the node. A SQLite `store` must be this process's
+/// alone (as `open_store` makes it, with the data-folder lock): other node rows are
+/// taken to be from dead processes.
 pub async fn start(
     config: &Config,
     store: Arc<dyn Store>,
@@ -235,6 +239,8 @@ async fn join(
             mode: node_mode(mode),
             // Normalised (no trailing slash), so every node compares the same text.
             site_url: http.site_url.clone(),
+            // SQLite: the data-folder lock keeps every other process out (R17).
+            owns_database: store.backend() == Backend::Sqlite,
         },
     )
     .await

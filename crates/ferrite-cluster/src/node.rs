@@ -11,6 +11,13 @@
 //! running; a replacement may then join, and when the first node's link comes back both
 //! are live. The heartbeat detects that and logs an error (once per transition) on both
 //! nodes; it does not exit, since stopping one of them is the operator's decision.
+//!
+//! **A process that owns its database** ([`NodeIdentity::owns_database`]: SQLite, where
+//! the data-folder lock keeps every other process out) skips all of that: any other row
+//! was left by a dead process (a crash, `kill -9`), so the join neither waits for it nor
+//! compares its `site_id`/`site.url`, and deletes it; the heartbeat does not look for
+//! other live nodes either (ruling R17). The checks above apply where several processes
+//! share the database (Postgres, in either mode).
 
 use std::{
     sync::{
@@ -83,6 +90,10 @@ pub struct NodeIdentity {
     pub mode: ClusterMode,
     /// `site.url` as configured; compared verbatim with other live nodes (P15).
     pub site_url: String,
+    /// No other process can use this database while this one runs (SQLite: the caller
+    /// holds the data-folder lock). Other rows are then from dead processes; see the
+    /// module docs.
+    pub owns_database: bool,
 }
 
 /// The node name (P14): `configured` (`cluster.node_name`) when set and not blank, else
@@ -225,6 +236,8 @@ fn check_site(live: &[&Node], site_id: &str, site_url: &str) -> Result<(), crate
 /// One look at the registry during a join.
 struct Survey {
     skew: i64,
+    /// [`NodeIdentity::owns_database`] only: every other row (left by dead processes).
+    dead: Vec<NodeId>,
     /// Solo mode only: the most recently beating other live node, with its age.
     blocker: Option<(String, Duration)>,
     /// Names of other live nodes registered in solo mode.
@@ -239,6 +252,18 @@ async fn survey(
 ) -> Result<Survey, crate::ClusterError> {
     let (db, skew) = measure(store).await?;
     let nodes = store.read().nodes().list().await?;
+    if me.owns_database {
+        return Ok(Survey {
+            skew,
+            dead: nodes
+                .iter()
+                .map(|n| n.id)
+                .filter(|&id| id != me.id)
+                .collect(),
+            blocker: None,
+            solo_peers: Vec::new(),
+        });
+    }
     let live = live_others(&nodes, me.id, db, stale_after);
     check_site(&live, site_id, &me.site_url)?;
     let blocker = match me.mode {
@@ -255,6 +280,7 @@ async fn survey(
         .collect();
     Ok(Survey {
         skew,
+        dead: Vec::new(),
         blocker,
         solo_peers,
     })
@@ -299,7 +325,9 @@ impl Registry {
     /// - a live node with another `site_url` → [`SiteUrlMismatch`](crate::ClusterError::SiteUrlMismatch);
     /// - in solo mode, any other live node is waited for until it goes stale, up to
     ///   `timings.solo_wait`, then [`SoloNodeLive`](crate::ClusterError::SoloNodeLive);
-    /// - in cluster mode, a live node registered in solo mode is warned about.
+    /// - in cluster mode, a live node registered in solo mode is warned about;
+    /// - with [`NodeIdentity::owns_database`], none of the above: the other rows are
+    ///   deleted instead (see the module docs).
     ///
     /// The waiting happens without any lock. Then one final pass (list, checks, register)
     /// runs under [`LOCK_JOIN`] (R7, both modes), so two nodes joining at once are checked
@@ -402,6 +430,15 @@ impl Registry {
                  give every node the same cluster.mode"
             );
         }
+        for &id in &s.dead {
+            store.read().nodes().deregister(id).await?;
+        }
+        if !s.dead.is_empty() {
+            tracing::info!(
+                rows = s.dead.len(),
+                "removed node rows left by earlier processes (this process owns the database)"
+            );
+        }
         let meta = base_meta(site_id, me, s.skew, Value::Null);
         store.read().nodes().register(&new_node(me, meta)).await?;
         Ok(Some(s.skew))
@@ -416,8 +453,9 @@ impl Registry {
     /// [`Registry::beat_now`]) it re-measures the clock skew and writes `meta()` merged
     /// with the registry's own keys (`site_id`, `site_url`, `mode`, `clock_skew_ms`, which
     /// `meta()` cannot override; a non-object `meta()` is ignored). A heartbeat that finds
-    /// no row (pruned or deleted) registers the node again. In solo mode each beat also
-    /// lists the nodes and logs an error when another node is live (see the module docs).
+    /// no row (pruned or deleted) registers the node again. In solo mode on a shared
+    /// database each beat also lists the nodes and logs an error when another node is
+    /// live (R8; see the module docs).
     /// Failures are logged and retried at the next beat; each beat is bounded by
     /// [`HEARTBEAT_EVERY`]. Ends on `stop`; stop it and await the handle before
     /// [`Registry::leave`], or a late beat re-registers.
@@ -545,7 +583,7 @@ impl Inner {
             tracing::info!(id = %self.me.id, "node row is gone; registering again");
             nodes.register(&new_node(&self.me, meta)).await?;
         }
-        if self.me.mode == ClusterMode::Solo {
+        if self.me.mode == ClusterMode::Solo && !self.me.owns_database {
             let all = nodes.list().await?;
             self.note_solo_peers(&live_others(&all, self.me.id, db, self.stale_after));
         }
@@ -611,6 +649,7 @@ mod tests {
                 schema_version: 4,
                 mode: ClusterMode::Solo,
                 site_url: "https://example.com/".into(),
+                owns_database: false,
             },
             site_id: "s".into(),
             stale_after: STALE_AFTER,

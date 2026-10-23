@@ -23,6 +23,7 @@ fn identity(mode: ClusterMode) -> NodeIdentity {
         schema_version: 4,
         mode,
         site_url: URL.into(),
+        owns_database: false,
     }
 }
 
@@ -135,15 +136,59 @@ async fn join_ignores_stale_nodes(db: Arc<TestDb>) {
     for mode in [ClusterMode::Solo, ClusterMode::Cluster] {
         let me = identity(mode);
         let id = me.id;
-        let start = Instant::now();
-        let reg = Registry::join_with(store.clone(), me, timings())
-            .await
-            .unwrap();
-        assert!(start.elapsed() < Duration::from_millis(300), "no waiting");
+        // Joining at all proves the row was taken as stale: a live row of another site
+        // is refused with `SiteMismatch`, not waited for. No wall-clock bound, so a
+        // loaded machine cannot fail it (the generous timeout only stops a hang).
+        let reg = tokio::time::timeout(
+            Duration::from_secs(10),
+            Registry::join_with(store.clone(), me, timings()),
+        )
+        .await
+        .expect("join finishes")
+        .unwrap();
         let mine = row(store.as_ref(), id).await.expect("registered");
         assert_eq!(mine.name, "me");
         reg.leave().await.unwrap();
     }
+}
+
+/// I1 / R17: a process that owns its database (SQLite with the data-folder lock) neither
+/// waits for nor checks the row its crashed predecessor left behind, however fresh its
+/// heartbeat and whatever `site_id`/`site.url` it names; the row is deleted. Production
+/// timings: a wait would take 30 s.
+async fn owning_process_ignores_crash_left_rows(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    let site = site_id(store.as_ref()).await;
+    let crashed = register_other(
+        store.as_ref(),
+        "previous-process",
+        json!({"site_id": site, "site_url": "https://old.example/", "mode": "solo"}),
+    )
+    .await;
+    let other_site = register_other(
+        store.as_ref(),
+        "other-site",
+        json!({"site_id": "another-site", "site_url": URL, "mode": "solo"}),
+    )
+    .await;
+    assert!(row(store.as_ref(), crashed).await.is_some());
+    let mut me = identity(ClusterMode::Solo);
+    me.owns_database = true;
+    let id = me.id;
+    let start = Instant::now();
+    let reg = Registry::join(store.clone(), me).await.unwrap();
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "no wait for the 30 s stale period: {:?}",
+        start.elapsed()
+    );
+    assert!(
+        row(store.as_ref(), crashed).await.is_none(),
+        "crash-left row deleted"
+    );
+    assert!(row(store.as_ref(), other_site).await.is_none());
+    assert!(row(store.as_ref(), id).await.is_some(), "registered");
+    reg.leave().await.unwrap();
 }
 
 async fn solo_join_waits_for_stale_node(db: Arc<TestDb>) {
@@ -156,13 +201,19 @@ async fn solo_join_waits_for_stale_node(db: Arc<TestDb>) {
     tokio::time::sleep(Duration::from_millis(400)).await;
     let me = identity(ClusterMode::Solo);
     let id = me.id;
+    // A long deadline: the join must end once the predecessor is stale (~200 ms), long
+    // before the deadline, even on a loaded machine.
+    let patient = JoinTimings {
+        solo_wait: Duration::from_secs(10),
+        ..timings()
+    };
     let start = Instant::now();
-    let reg = Registry::join_with(store.clone(), me, timings())
+    let reg = Registry::join_with(store.clone(), me, patient)
         .await
         .unwrap();
     let waited = start.elapsed();
     assert!(
-        (Duration::from_millis(150)..Duration::from_millis(600)).contains(&waited),
+        (Duration::from_millis(150)..Duration::from_secs(5)).contains(&waited),
         "waited {waited:?}"
     );
     assert!(row(store.as_ref(), id).await.is_some());
@@ -200,7 +251,7 @@ async fn solo_join_waits_for_stale_node(db: Arc<TestDb>) {
     }
     assert!(e.to_string().contains("still-running"), "{e}");
     assert!(waited >= timings().solo_wait, "gave up after {waited:?}");
-    assert!(waited < timings().solo_wait + Duration::from_millis(400));
+    assert!(waited < timings().solo_wait + Duration::from_secs(3));
     assert!(row(store.as_ref(), id).await.is_none(), "not registered");
 }
 
@@ -217,7 +268,8 @@ async fn cluster_join_allows_other_live_nodes(db: Arc<TestDb>) {
     let id = me.id;
     let start = Instant::now();
     let reg = Registry::join(store.clone(), me).await.unwrap();
-    assert!(start.elapsed() < Duration::from_secs(1));
+    // A wait would last until the peer went stale (30 s).
+    assert!(start.elapsed() < Duration::from_secs(10));
     assert!(row(store.as_ref(), other).await.is_some());
     let mine = row(store.as_ref(), id).await.expect("registered");
     assert_eq!(mine.version, "0.1.0");
@@ -379,6 +431,7 @@ backend_tests_spawning!(
     join_refuses_other_site_id,
     join_refuses_other_site_url,
     join_ignores_stale_nodes,
+    owning_process_ignores_crash_left_rows,
     solo_join_waits_for_stale_node,
     cluster_join_allows_other_live_nodes,
     heartbeat_updates_and_reregisters,

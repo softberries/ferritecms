@@ -254,7 +254,12 @@ impl Server {
 
     /// [`Self::start`] with another data folder (same environment).
     fn start_in(p: &Profile, data: &Path) -> Self {
-        let mut cmd = p.cmd_in(data, &["serve"]);
+        Self::spawn(p.cmd_in(data, &["serve"]))
+    }
+
+    /// Spawns `cmd` (a `serve` command) on a random port and waits for its "Listening
+    /// on" line.
+    fn spawn(mut cmd: Command) -> Self {
         cmd.env("FERRITE_SERVER__LISTEN", "127.0.0.1:0")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -719,6 +724,39 @@ fn serve_refuses_permalink_shadowing_a_route() {
             "{structure}: {err}"
         );
     }
+}
+
+/// I1 / R17: after a `kill -9` on SQLite the restarted process does not wait for the
+/// crashed one's row to go stale (30 s), and a `site.url` changed in between is not
+/// refused: the data-folder lock already proves the old process is gone.
+#[test]
+fn solo_restart_after_kill_is_immediate() {
+    let p = Profile::solo();
+    p.init();
+    let mut first = Server::start(&p);
+    assert_eq!(first.get("/healthz").status, 200);
+    first.signal("KILL");
+    first.wait_exit(Duration::from_secs(15));
+    drop(first);
+
+    let mut cmd = p.cmd(&["serve"]);
+    cmd.env("FERRITE_SITE__URL", "http://127.0.0.1:9");
+    let start = Instant::now();
+    let second = Server::spawn(cmd);
+    let took = start.elapsed();
+    assert!(
+        took < Duration::from_secs(15),
+        "restart took {took:?}: {}",
+        second.log()
+    );
+    assert!(
+        !second.log().contains("another node is live"),
+        "{}",
+        second.log()
+    );
+    assert_eq!(second.get("/healthz").status, 200);
+    let status = second.stop_with("TERM");
+    assert!(status.success(), "{status:?}");
 }
 
 /// SIGINT shuts down cleanly (exit 0) like SIGTERM.

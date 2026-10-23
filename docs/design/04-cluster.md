@@ -66,6 +66,11 @@ Checks that need the database run when `serve` joins the node registry
   second live node appears (R8: detection only; job leases keep correctness).
 - A schema without `site_id` (never migrated) is refused.
 - SQLite: the data-folder lock (`ferrite.lock`) refuses a second process on the same folder.
+  So on SQLite every other `nodes` row was left by a dead process (a crash, `kill -9`):
+  the join deletes those rows without waiting or comparing `site_id`/`site.url`, and the
+  heartbeat skips the R8 check (ruling R17). A restart after a crash is immediate, and a
+  `site.url` changed in between is accepted. The live-node checks above apply where
+  processes share the database (Postgres, either mode).
 
 Clock skew is measured on every heartbeat against `SELECT now()` at the round trip's
 midpoint and logged when it goes above 2 s (and when it is back under 1.5 s); it is

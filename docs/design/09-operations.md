@@ -276,7 +276,8 @@ also installs the `ring` rustls default crypto provider at start.
   migrations are applied when `database.auto_migrate` is on; on Postgres a pending contract
   migration also needs `database.allow_contract`; an incompatible schema is refused; 02 §8);
   join the node registry (refused when a live node has another `site_id` or `site.url`; in
-  solo mode another live node is waited for up to 35 s; 04 §3); open the media store and run
+  solo mode another live node is waited for up to 35 s; on SQLite rows left by a crashed
+  process are deleted instead, so a restart is immediate; 04 §3); open the media store and run
   a write/read/delete probe; create the page cache and set the invalidation cursor
   (**before** any node state is read, so a change committed during boot is applied by the
   first poll); build the permalink rules from the `permalink.post`/`permalink.page` options
