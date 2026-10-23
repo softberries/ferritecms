@@ -34,6 +34,9 @@
 //! resolves a single segment as a page before a post, as a safety net for collisions
 //! that predate these rules or raced past them.
 
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
 use ferrite_domain::{ContentId, ContentItem, Term};
 use ferrite_store::Repos;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
@@ -337,6 +340,44 @@ impl Permalinks for PermalinkRules {
             "page" if shared => vec!["post".to_owned()],
             _ => Vec::new(),
         }
+    }
+}
+
+/// [`PermalinkRules`] that can be replaced while the site runs (ruling P18): a node
+/// swaps them when the `permalink.*` options change, and every holder of the
+/// `Arc<dyn Permalinks>` (the site reader, the content service, the plugin host
+/// services) sees the new rules on its next call. Each call reads the rules once; a
+/// caller that needs one consistent set across several calls takes [`current`](Self::current).
+#[derive(Debug)]
+pub struct SwappablePermalinks {
+    rules: ArcSwap<PermalinkRules>,
+}
+
+impl SwappablePermalinks {
+    pub fn new(rules: PermalinkRules) -> Self {
+        Self {
+            rules: ArcSwap::from_pointee(rules),
+        }
+    }
+
+    /// Replaces the rules; calls that already loaded the old ones finish on them.
+    pub fn swap(&self, rules: PermalinkRules) {
+        self.rules.store(Arc::new(rules));
+    }
+
+    /// The rules in effect now.
+    pub fn current(&self) -> Arc<PermalinkRules> {
+        self.rules.load_full()
+    }
+}
+
+impl Permalinks for SwappablePermalinks {
+    fn path(&self, input: &PermalinkInput) -> String {
+        self.rules.load().path(input)
+    }
+
+    fn root_namespace_peers(&self, kind: &str) -> Vec<String> {
+        self.rules.load().root_namespace_peers(kind)
     }
 }
 
@@ -645,5 +686,25 @@ mod tests {
         ];
         assert_eq!(primary_term(terms).unwrap().slug, "b");
         assert_eq!(primary_term(vec![category("tag", "t")]), None);
+    }
+
+    #[test]
+    fn swappable_permalinks_swap_is_seen_by_reader() {
+        let swappable = std::sync::Arc::new(SwappablePermalinks::new(PermalinkRules::default()));
+        // Holders keep it as `Arc<dyn Permalinks>`, like SiteReader and ContentService.
+        let reader: std::sync::Arc<dyn Permalinks> = swappable.clone();
+        let post = input(item("post", "hello"));
+        assert_eq!(reader.path(&post), "/hello/");
+        assert_eq!(reader.root_namespace_peers("post"), ["page"]);
+
+        let blog = PermalinkRules::from_options(Some("/blog/%slug%/"), None).unwrap();
+        let before = swappable.current();
+        swappable.swap(blog.clone());
+        assert_eq!(reader.path(&post), "/blog/hello/");
+        assert!(reader.root_namespace_peers("post").is_empty());
+        assert_eq!(*swappable.current(), blog);
+        // A snapshot taken before the swap keeps the old rules.
+        assert_eq!(*before, PermalinkRules::default());
+        assert_eq!(before.path(&post), "/hello/");
     }
 }

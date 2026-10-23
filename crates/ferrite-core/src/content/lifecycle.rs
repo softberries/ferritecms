@@ -10,6 +10,10 @@
 //! `archive:<kind>`, the item's `term:<id>` keys and `post:<parent>` (see
 //! [`events`](crate::events)). Transitions only
 //! change status and publish times, so they write **no revision**.
+//!
+//! `schedule` also enqueues a [`content.publish_scheduled`](crate::jobs) job in the same
+//! transaction (ruling P12); its handler calls
+//! [`publish_scheduled`](ContentService::publish_scheduled).
 
 use ferrite_domain::{ContentId, ContentItem, ContentStatus, Role, Term, Timestamp};
 use ferrite_store::{Repos, StoreError};
@@ -18,7 +22,7 @@ use super::{ContentService, clear_redirects_from};
 use crate::{
     Actor, CoreError,
     actor::{Capability, can_edit, require},
-    blocks, events,
+    blocks, events, jobs,
     permalink::{Permalinks, load_input},
     tx::finish,
 };
@@ -81,8 +85,14 @@ impl ContentService {
 
     /// Schedules a draft or pending item for `at`, which must lie in the future
     /// (`Invalid` otherwise); same permissions as publish. Sets `scheduled_at`;
-    /// `published_at` stays as it is. [`publish_due`](Self::publish_due) publishes it
-    /// later. Writes no revision.
+    /// `published_at` stays as it is. Writes no revision.
+    ///
+    /// In the same transaction it enqueues [`jobs::publish_scheduled_job`]`(id, at)`,
+    /// whose handler publishes the item at `at` through
+    /// [`publish_scheduled`](Self::publish_scheduled); [`publish_due`](Self::publish_due)
+    /// is the periodic safety net. A job of an earlier schedule stays queued and does
+    /// nothing when it runs. If the key is already taken (the same item scheduled for
+    /// the same instant before), that job is the one that publishes.
     pub async fn schedule(
         &self,
         actor: &Actor,
@@ -181,7 +191,8 @@ impl ContentService {
             }
             for id in fresh {
                 let tx = self.store.begin().await?;
-                let done = publish_one_due(tx.as_ref(), self.permalinks.as_ref(), id, now).await;
+                let done =
+                    publish_one(tx.as_ref(), self.permalinks.as_ref(), id, now, Due::By(now)).await;
                 match finish(tx, done).await {
                     Ok(true) => published += 1,
                     Ok(false) | Err(CoreError::Conflict { .. }) => {}
@@ -191,6 +202,38 @@ impl ContentService {
                 }
             }
         }
+    }
+
+    /// Publishes `id` if it is still scheduled for exactly `at`; `false` (nothing
+    /// written) when it is missing, not scheduled, or scheduled for another time. The
+    /// handler of a [`content.publish_scheduled`](crate::jobs::PUBLISH_SCHEDULED_KIND)
+    /// job calls it with the job's payload: the job's `run_at` is the schedule, so the
+    /// clock is not compared again. A system path without an actor.
+    ///
+    /// Same transaction and event as one item of [`publish_due`](Self::publish_due),
+    /// with `now` = the later of the process clock and `at` (so `published_at`, when it
+    /// was never set, is not earlier than the scheduled time on a node whose clock lags
+    /// the database's). A version `Conflict` with a concurrent writer is retried once,
+    /// then reported as `false` (the periodic `publish_due` still catches the item).
+    pub async fn publish_scheduled(&self, id: ContentId, at: Timestamp) -> Result<bool, CoreError> {
+        for attempt in 0..2 {
+            let now = Timestamp::now().max(at);
+            let tx = self.store.begin().await?;
+            let done = publish_one(
+                tx.as_ref(),
+                self.permalinks.as_ref(),
+                id,
+                now,
+                Due::ScheduledFor(at),
+            )
+            .await;
+            match finish(tx, done).await {
+                Err(CoreError::Conflict { .. }) if attempt == 0 => {}
+                Err(CoreError::Conflict { .. }) => return Ok(false),
+                other => return other,
+            }
+        }
+        Ok(false)
     }
 
     async fn transition(
@@ -233,6 +276,14 @@ async fn transition_in(
     let saved = repos.content().update(&next).await?;
     match action {
         Action::Publish => reclaim_path(repos, permalinks, &saved).await?,
+        Action::Schedule(at) => {
+            // `None`: the same (item, instant) was scheduled before and its job is
+            // still there; it publishes.
+            repos
+                .jobs()
+                .enqueue(&jobs::publish_scheduled_job(id, at))
+                .await?;
+        }
         Action::Trash => repos.search().remove(id).await?,
         Action::Restore => {
             repos
@@ -275,19 +326,33 @@ async fn delete_in(
     emit_for(repos, &current, &terms).await
 }
 
-/// Publishes `id` if it is still scheduled and due; `false` if it was skipped.
-async fn publish_one_due(
+/// Which scheduled item [`publish_one`] publishes.
+#[derive(Debug, Clone, Copy)]
+enum Due {
+    /// Scheduled at or before this time (`publish_due`).
+    By(Timestamp),
+    /// Scheduled for exactly this time (`publish_scheduled`).
+    ScheduledFor(Timestamp),
+}
+
+/// Publishes `id` with `now` as the publish time if it is still scheduled and matches
+/// `due`; `false` if it was skipped.
+async fn publish_one(
     repos: &dyn Repos,
     permalinks: &dyn Permalinks,
     id: ContentId,
     now: Timestamp,
+    due: Due,
 ) -> Result<bool, CoreError> {
     let Some(current) = repos.content().get(id).await? else {
         return Ok(false);
     };
-    let due = current.status == ContentStatus::Scheduled
-        && current.scheduled_at.is_some_and(|at| at <= now);
-    if !due {
+    let matches = current.status == ContentStatus::Scheduled
+        && current.scheduled_at.is_some_and(|at| match due {
+            Due::By(limit) => at <= limit,
+            Due::ScheduledFor(exact) => at == exact,
+        });
+    if !matches {
         return Ok(false);
     }
     let next = apply(&current, Action::PublishDue, now)?;

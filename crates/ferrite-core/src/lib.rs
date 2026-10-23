@@ -6,6 +6,8 @@ pub mod blocks;
 mod content;
 mod error;
 pub mod events;
+mod extensions;
+pub mod jobs;
 mod menu;
 mod options;
 pub mod permalink;
@@ -21,9 +23,10 @@ pub(crate) const MAX_PARENT_DEPTH: usize = 64;
 pub use actor::{Actor, Capability, can};
 pub use content::{ContentDraft, ContentService};
 pub use error::CoreError;
+pub use extensions::{EXTENSIONS_LOCK_WAIT, ExtensionService};
 pub use menu::MenuService;
 pub use options::OptionService;
-pub use permalink::{PermalinkInput, PermalinkRules, Permalinks};
+pub use permalink::{PermalinkInput, PermalinkRules, Permalinks, SwappablePermalinks};
 pub use redirects::RedirectService;
 pub use site::{
     DepKeys, FeedSource, FrontPage, ItemLink, Listing, MediaFile, MediaPublic, MediaVariant,

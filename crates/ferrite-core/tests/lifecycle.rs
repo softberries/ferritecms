@@ -2,15 +2,19 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use ferrite_core::{
     Actor, ContentDraft, ContentService, CoreError, PermalinkRules,
     events::{archive_key, post_key, term_key},
+    jobs::{PUBLISH_SCHEDULED_KIND, PublishScheduled, publish_scheduled_job},
 };
 use ferrite_domain::{
-    ContentId, ContentStatus, NewUser, Role, SearchQuery, Term, TermId, Timestamp, UserId,
-    UserStatus,
+    ContentId, ContentStatus, DEFAULT_MAX_ATTEMPTS, Job, NewUser, NodeId, Role, SearchQuery, Term,
+    TermId, Timestamp, UserId, UserStatus,
 };
 use ferrite_store::Store;
 use ferrite_store_tests::{TestDb, backend_tests, backend_tests_spawning};
@@ -618,6 +622,219 @@ pub async fn stale_version_conflicts(db: &TestDb) {
     svc.create(&admin, draft("post", "Done")).await.unwrap();
 }
 
+/// Claims `content.publish_scheduled` jobs until `n` came due (database clock), at most
+/// 10 s; returned ordered by `run_at`.
+async fn claim_scheduled(store: &dyn Store, n: usize) -> Vec<Job> {
+    let kinds = vec![PUBLISH_SCHEDULED_KIND.to_owned()];
+    let node = NodeId::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut got: Vec<Job> = Vec::new();
+    while got.len() < n {
+        assert!(
+            Instant::now() < deadline,
+            "only {} of {n} jobs came due",
+            got.len()
+        );
+        let claimed = store
+            .read()
+            .jobs()
+            .claim(node, &kinds, 10, Duration::from_secs(60))
+            .await
+            .unwrap();
+        got.extend(claimed);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    got.sort_by_key(|j| j.run_at);
+    got
+}
+
+/// Whether a `content.publish_scheduled` job for (`id`, `at`) exists: enqueueing its
+/// unique key again is refused. Leaves a job behind when there was none.
+async fn job_exists(store: &dyn Store, id: ContentId, at: Timestamp) -> bool {
+    store
+        .read()
+        .jobs()
+        .enqueue(&publish_scheduled_job(id, at))
+        .await
+        .unwrap()
+        .is_none()
+}
+
+const MS: i64 = 1_000;
+
+pub async fn schedule_enqueues_publish_job(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let admin = actor(store, Role::Admin).await;
+    let t1 = term(store, "sched").await;
+    let mut d = draft("post", "Timed");
+    d.terms = vec![t1];
+    let item = svc.create(&admin, d).await.unwrap();
+    let at = in_micros(300 * MS);
+    let sched = svc
+        .schedule(&admin, item.id, item.version, at)
+        .await
+        .unwrap();
+    assert_eq!(sched.scheduled_at, Some(at));
+
+    let jobs = claim_scheduled(store, 1).await;
+    assert_eq!(jobs.len(), 1);
+    let job = &jobs[0];
+    assert_eq!(job.kind, "content.publish_scheduled");
+    assert_eq!(
+        job.unique_key.as_deref(),
+        Some(format!("publish:{}:{}", item.id, at.as_micros()).as_str())
+    );
+    assert_eq!(job.run_at, at);
+    assert_eq!(job.priority, 0);
+    assert_eq!(job.max_attempts, DEFAULT_MAX_ATTEMPTS);
+    assert_eq!(
+        job.payload,
+        json!({"v": 1, "id": item.id.to_string(), "at": at})
+    );
+    let payload: PublishScheduled = serde_json::from_value(job.payload.clone()).unwrap();
+    assert_eq!(
+        payload,
+        PublishScheduled {
+            v: 1,
+            id: item.id,
+            at
+        }
+    );
+
+    // The handler's call publishes it with the usual event.
+    let before = max_seq(store).await;
+    assert!(svc.publish_scheduled(payload.id, payload.at).await.unwrap());
+    let published = svc.get(item.id).await.unwrap();
+    assert_eq!(published.status, ContentStatus::Published);
+    assert_eq!(published.scheduled_at, None);
+    assert_eq!(max_seq(store).await, before + 1);
+    assert_eq!(
+        last_event_keys(store).await,
+        sorted(vec![post_key(item.id), archive_key("post"), term_key(t1)])
+    );
+}
+
+pub async fn schedule_rollback_leaves_no_job(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let admin = actor(store, Role::Admin).await;
+    let item = svc.create(&admin, draft("post", "Stale")).await.unwrap();
+    let edited = svc
+        .update(&admin, item.id, item.version, draft("post", "Stale 2"))
+        .await
+        .unwrap();
+    let at = in_micros(HOUR);
+    let seq = max_seq(store).await;
+    assert!(matches!(
+        svc.schedule(&admin, item.id, item.version, at).await,
+        Err(CoreError::Conflict { current_version }) if current_version == edited.version
+    ));
+    assert_eq!(max_seq(store).await, seq);
+    let queued = store.read().jobs().counts().await.unwrap();
+    assert!(queued.values().all(|n| *n == 0), "{queued:?}");
+    assert!(!job_exists(store, item.id, at).await);
+    assert_eq!(svc.get(item.id).await.unwrap(), edited);
+}
+
+pub async fn reschedule_uses_new_key_and_old_job_noops(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let admin = actor(store, Role::Admin).await;
+    let item = svc.create(&admin, draft("post", "Moved")).await.unwrap();
+    let first = in_micros(300 * MS);
+    let s1 = svc
+        .schedule(&admin, item.id, item.version, first)
+        .await
+        .unwrap();
+    let back = svc.unpublish(&admin, item.id, s1.version).await.unwrap();
+    let second = in_micros(600 * MS);
+    let s2 = svc
+        .schedule(&admin, item.id, back.version, second)
+        .await
+        .unwrap();
+
+    let jobs = claim_scheduled(store, 2).await;
+    assert_eq!(jobs.len(), 2);
+    let keys: Vec<_> = jobs.iter().map(|j| j.unique_key.clone().unwrap()).collect();
+    assert_eq!(
+        keys,
+        [
+            format!("publish:{}:{}", item.id, first.as_micros()),
+            format!("publish:{}:{}", item.id, second.as_micros()),
+        ]
+    );
+    let payloads: Vec<PublishScheduled> = jobs
+        .iter()
+        .map(|j| serde_json::from_value(j.payload.clone()).unwrap())
+        .collect();
+
+    // The job of the first time is a no-op: the item is scheduled for the second.
+    let seq = max_seq(store).await;
+    assert!(
+        !svc.publish_scheduled(payloads[0].id, payloads[0].at)
+            .await
+            .unwrap()
+    );
+    assert_eq!(svc.get(item.id).await.unwrap(), s2);
+    assert_eq!(max_seq(store).await, seq);
+    assert!(
+        svc.publish_scheduled(payloads[1].id, payloads[1].at)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        svc.get(item.id).await.unwrap().status,
+        ContentStatus::Published
+    );
+}
+
+pub async fn publish_scheduled_only_if_still_scheduled_for_that_time(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let admin = actor(store, Role::Admin).await;
+    let t1 = term(store, "later").await;
+    let mut d = draft("post", "Exact");
+    d.terms = vec![t1];
+    let item = svc.create(&admin, d).await.unwrap();
+    let at = in_micros(HOUR);
+    let seq = max_seq(store).await;
+
+    // Missing item, unscheduled item: nothing happens.
+    assert!(!svc.publish_scheduled(ContentId::new(), at).await.unwrap());
+    assert!(!svc.publish_scheduled(item.id, at).await.unwrap());
+    assert_eq!(svc.get(item.id).await.unwrap(), item);
+
+    // Scheduled, but for another time.
+    let sched = svc
+        .schedule(&admin, item.id, item.version, at)
+        .await
+        .unwrap();
+    let seq_sched = max_seq(store).await;
+    assert_eq!(seq_sched, seq + 1);
+    let other = Timestamp::from_micros(at.as_micros() + 1).unwrap();
+    assert!(!svc.publish_scheduled(item.id, other).await.unwrap());
+    assert_eq!(svc.get(item.id).await.unwrap(), sched);
+    assert_eq!(max_seq(store).await, seq_sched);
+
+    // Matching time: published (the job's run_at is the schedule, so no clock check;
+    // published_at is never earlier than the scheduled time).
+    assert!(svc.publish_scheduled(item.id, at).await.unwrap());
+    let published = svc.get(item.id).await.unwrap();
+    assert_eq!(published.status, ContentStatus::Published);
+    assert_eq!(published.scheduled_at, None);
+    assert_eq!(published.published_at, Some(at));
+    assert_eq!(published.version, sched.version + 1);
+    assert_eq!(max_seq(store).await, seq_sched + 1);
+    assert_eq!(
+        last_event_keys(store).await,
+        sorted(vec![post_key(item.id), archive_key("post"), term_key(t1)])
+    );
+    // A second run of the same job is a no-op.
+    assert!(!svc.publish_scheduled(item.id, at).await.unwrap());
+    assert_eq!(max_seq(store).await, seq_sched + 1);
+}
+
 backend_tests!(
     transitions_and_events,
     illegal_transitions_and_conflicts,
@@ -628,6 +845,10 @@ backend_tests!(
     publish_due_skips_items_changed_since_listing,
     stale_version_conflicts,
     delete_is_guarded_by_version,
+    schedule_enqueues_publish_job,
+    schedule_rollback_leaves_no_job,
+    reschedule_uses_new_key_and_old_job_noops,
+    publish_scheduled_only_if_still_scheduled_for_that_time,
 );
 
 backend_tests_spawning!(concurrent_publish_due_publishes_each_once);

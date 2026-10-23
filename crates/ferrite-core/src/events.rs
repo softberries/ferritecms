@@ -28,8 +28,9 @@
 //!   and `post:<d>` for each published descendant whose URL moved (the descendant walk
 //!   of the redirect bookkeeping). Create emits the same set with no old terms.
 //! * Every lifecycle transition (publish, unpublish, schedule, submit, publish_due,
-//!   trash, restore, delete): `post:<id>`, `archive:<kind>`, `term:<t>` for all current
-//!   terms (read before the links are removed on delete) and `post:<parent>` if any.
+//!   publish_scheduled, trash, restore, delete): `post:<id>`, `archive:<kind>`,
+//!   `term:<t>` for all current terms (read before the links are removed on delete) and
+//!   `post:<parent>` if any.
 //! * Term create/update/delete: `term:<id>` and `archive:<type>` for each content type of
 //!   the taxonomy. Pages showing the term depend on `term:<id>`, so linked items need no
 //!   keys of their own.
@@ -51,7 +52,19 @@
 //! * Users: pages show `user:<author id>`. There is no user-update service in core yet;
 //!   the user service added in M2 must emit `user:<id>` (via [`user_key`]) whenever a
 //!   login or display name changes or a user is deleted.
-//! * Theme and plugin changes emit `theme` / `plugins` (not written by core yet).
+//! * Theme install/activation ([`ExtensionService`](crate::ExtensionService)): kind
+//!   [`THEME_CHANGED`], keys `[<theme name>]`, only when the active theme changes (another
+//!   theme becomes active, or the active theme's row is replaced by a new version).
+//!   Installing an inactive theme emits nothing.
+//! * Plugin install and enable/disable (`ExtensionService`): kind [`PLUGINS_CHANGED`],
+//!   keys `[<plugin name>]`, on every such write.
+//! * Cluster-wide auto-disable (the shared failure counters, P20): kind
+//!   [`PLUGIN_DISABLED`], keys `[<plugin name>, <reason>]`, emitted by the one node whose
+//!   conditional disable succeeded.
+//! * These three kinds carry names, not dependency keys: the invalidation loop flushes
+//!   the whole cache on them (06 §6), and nodes reload the theme or plugin registry
+//!   from the database. The `theme` and `plugins` dependency keys stay recorded by
+//!   every page; no event names them.
 //!
 //! # Renderer side ([`SiteReader`](crate::SiteReader))
 //!
@@ -115,6 +128,42 @@ pub const PLUGINS_KEY: &str = "plugins";
 /// Flush-everything key: the cache drops every entry.
 pub const ALL_KEY: &str = "all";
 
+/// Event kind: the active theme changed (keys: its name).
+pub const THEME_CHANGED: &str = "theme.changed";
+
+/// Event kind: a plugin was installed, updated, enabled or disabled (keys: its name).
+pub const PLUGINS_CHANGED: &str = "plugins.changed";
+
+/// Event kind: a plugin was disabled automatically (keys: its name, the reason).
+pub const PLUGIN_DISABLED: &str = "plugin.disabled";
+
+/// A `theme.changed` event for the theme `name` that is active now.
+pub fn theme_changed(name: &str) -> NewEvent {
+    NewEvent {
+        kind: THEME_CHANGED.to_owned(),
+        keys: vec![name.to_owned()],
+        origin_node: None,
+    }
+}
+
+/// A `plugins.changed` event for the plugin `name`.
+pub fn plugins_changed(name: &str) -> NewEvent {
+    NewEvent {
+        kind: PLUGINS_CHANGED.to_owned(),
+        keys: vec![name.to_owned()],
+        origin_node: None,
+    }
+}
+
+/// A `plugin.disabled` event: plugin `name` was disabled for `reason`.
+pub fn plugin_disabled(name: &str, reason: &str) -> NewEvent {
+    NewEvent {
+        kind: PLUGIN_DISABLED.to_owned(),
+        keys: vec![name.to_owned(), reason.to_owned()],
+        origin_node: None,
+    }
+}
+
 /// Dependency key of an option.
 pub fn option_key(key: &str) -> String {
     format!("option:{key}")
@@ -169,5 +218,22 @@ mod tests {
         let u = UserId::new();
         assert_eq!(user_key(u), format!("user:{u}"));
         assert_eq!(redirect_key("/a/"), "redirect:/a/");
+    }
+
+    #[test]
+    fn extension_events() {
+        let t = theme_changed("blog");
+        assert_eq!(
+            (t.kind.as_str(), t.keys.as_slice()),
+            ("theme.changed", &["blog".to_owned()][..])
+        );
+        let p = plugins_changed("seo");
+        assert_eq!(
+            (p.kind.as_str(), p.keys.as_slice()),
+            ("plugins.changed", &["seo".to_owned()][..])
+        );
+        let d = plugin_disabled("seo", "auto: 20 failures");
+        assert_eq!(d.kind, "plugin.disabled");
+        assert_eq!(d.keys, ["seo", "auto: 20 failures"]);
     }
 }

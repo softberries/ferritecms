@@ -1379,6 +1379,7 @@ name = "ferrite-core"
 version = "0.1.0"
 dependencies = [
  "ammonia",
+ "arc-swap",
  "async-trait",
  "chrono",
  "deunicode",

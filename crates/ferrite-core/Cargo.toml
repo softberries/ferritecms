@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 ammonia.workspace = true
+arc-swap.workspace = true
 chrono.workspace = true
 deunicode.workspace = true
 ferrite-domain = { path = "../ferrite-domain" }
