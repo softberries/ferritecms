@@ -14,6 +14,7 @@ pub use jobs::{
     SCHEDULER_TICK, Scheduler, period_key,
 };
 pub use node::{
-    ClusterMode, HEARTBEAT_EVERY, JoinTimings, MAX_CLOCK_SKEW, NODE_EXPIRY, NodeIdentity, Registry,
-    SOLO_WAIT, STALE_AFTER, clock_skew, node_name,
+    CLOCK_SKEW_RECOVERED, ClusterMode, HEARTBEAT_EVERY, JOIN_LOCK_WAIT, JoinTimings, LOCK_JOIN,
+    MAX_CLOCK_SKEW, MAX_NODE_NAME, NODE_EXPIRY, NodeIdentity, Registry, SOLO_WAIT, STALE_AFTER,
+    clock_skew, node_name,
 };

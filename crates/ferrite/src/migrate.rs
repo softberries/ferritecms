@@ -5,7 +5,13 @@ use anyhow::bail;
 use ferrite_store::{Compat, MigrationStatus, Phase};
 
 use crate::cli::{DataArg, MigrateCommand};
-use crate::open::{OpenMode, migrate_lock, open_store, release_migrate_lock};
+use std::time::Duration;
+
+use ferrite_store::Store;
+
+use crate::open::{
+    MIGRATE_LOCK_WAIT, OpenMode, migrate_lock_with, open_store, release_migrate_lock,
+};
 use crate::{binary_version, load_config};
 
 pub async fn run(cmd: MigrateCommand) -> anyhow::Result<ExitCode> {
@@ -26,10 +32,7 @@ pub async fn run(cmd: MigrateCommand) -> anyhow::Result<ExitCode> {
             to,
         } => {
             let store = open_store(&load_config(&data)?, OpenMode::CreateIfMissing).await?;
-            let guard = migrate_lock(store.as_ref()).await?;
-            let applied = store.migrate_up(to).await;
-            release_migrate_lock(guard).await;
-            let applied = applied?;
+            let applied = up_locked(store.as_ref(), to, MIGRATE_LOCK_WAIT).await?;
             if applied.is_empty() {
                 println!("Nothing to apply.");
             } else {
@@ -46,10 +49,7 @@ pub async fn run(cmd: MigrateCommand) -> anyhow::Result<ExitCode> {
                 bail!("aborted");
             }
             let store = open_store(&load_config(&data)?, OpenMode::MustExist).await?;
-            let guard = migrate_lock(store.as_ref()).await?;
-            let reverted = store.migrate_down(to, allow_lossy).await;
-            release_migrate_lock(guard).await;
-            let reverted = reverted?;
+            let reverted = down_locked(store.as_ref(), to, allow_lossy, MIGRATE_LOCK_WAIT).await?;
             if reverted.is_empty() {
                 println!("Nothing to revert.");
             } else {
@@ -63,6 +63,31 @@ pub async fn run(cmd: MigrateCommand) -> anyhow::Result<ExitCode> {
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// `migrate_up` under the migrate lock (02 §7, 04 §7), waiting up to `wait` for it.
+pub(crate) async fn up_locked(
+    store: &dyn Store,
+    to: Option<i64>,
+    wait: Duration,
+) -> anyhow::Result<Vec<i64>> {
+    let guard = migrate_lock_with(store, wait).await?;
+    let applied = store.migrate_up(to).await;
+    release_migrate_lock(guard).await;
+    Ok(applied?)
+}
+
+/// `migrate_down` under the migrate lock, waiting up to `wait` for it.
+async fn down_locked(
+    store: &dyn Store,
+    to: i64,
+    allow_lossy: bool,
+    wait: Duration,
+) -> anyhow::Result<Vec<i64>> {
+    let guard = migrate_lock_with(store, wait).await?;
+    let reverted = store.migrate_down(to, allow_lossy).await;
+    release_migrate_lock(guard).await;
+    Ok(reverted?)
 }
 
 fn join(versions: &[i64]) -> String {
@@ -136,4 +161,51 @@ fn render_status(status: &MigrationStatus, binary: &semver::Version) -> String {
     };
     out.push_str(&format!("verdict: {verdict}\n"));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use ferrite_store::LOCK_MIGRATE;
+    use ferrite_store_sqlite::{SqliteOptions, SqliteStore};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn migrate_up_and_down_take_the_migrate_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteStore::open(SqliteOptions::new(dir.path().join("ferrite.db")))
+            .await
+            .unwrap();
+        let short = Duration::from_millis(300);
+        let guard = store.try_lock(LOCK_MIGRATE).await.unwrap().unwrap();
+        let e = up_locked(&store, None, short).await.unwrap_err();
+        let msg = format!("{e:#}");
+        assert!(
+            msg.contains("has held the migration lock for 300ms"),
+            "{msg}"
+        );
+        let e = down_locked(&store, 1, true, short).await.unwrap_err();
+        assert!(format!("{e:#}").contains("migration lock"), "{e:#}");
+        assert_eq!(
+            store
+                .migration_status(&crate::binary_version().unwrap())
+                .await
+                .unwrap()
+                .db_version,
+            0
+        );
+        guard.release().await.unwrap();
+
+        let applied = up_locked(&store, None, short).await.unwrap();
+        assert!(!applied.is_empty());
+        // Released again afterwards.
+        store
+            .try_lock(LOCK_MIGRATE)
+            .await
+            .unwrap()
+            .unwrap()
+            .release()
+            .await
+            .unwrap();
+    }
 }

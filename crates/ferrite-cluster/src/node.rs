@@ -5,6 +5,12 @@
 //! `heartbeat_at >= db_now - STALE_AFTER`. A restarted process registers under a new id,
 //! so its predecessor's row simply goes stale (and is pruned by `nodes.prune` after
 //! [`NODE_EXPIRY`]).
+//!
+//! **Solo mode allows one live node per site**, but it is enforced at join only. A node
+//! that loses its database link for longer than [`STALE_AFTER`] goes stale while still
+//! running; a replacement may then join, and when the first node's link comes back both
+//! are live. The heartbeat detects that and logs an error (once per transition) on both
+//! nodes; it does not exit, since stopping one of them is the operator's decision.
 
 use std::{
     sync::{
@@ -15,7 +21,7 @@ use std::{
 };
 
 use ferrite_domain::{NewNode, Node, NodeId, Timestamp};
-use ferrite_store::{Store, StoreError};
+use ferrite_store::{LockGuard, Store, StoreError, lock};
 use serde_json::{Map, Value, json};
 use tokio::{sync::Notify, task::JoinHandle, time::Instant};
 use tokio_util::sync::CancellationToken;
@@ -28,9 +34,20 @@ pub const STALE_AFTER: Duration = Duration::from_secs(30);
 pub const NODE_EXPIRY: Duration = Duration::from_secs(24 * 60 * 60);
 /// Clock skew against the database above this is warned about (04 §3).
 pub const MAX_CLOCK_SKEW: Duration = Duration::from_secs(2);
+/// After a skew warning, "back within" is logged only once the skew is below this
+/// (hysteresis, so a skew hovering around 2 s does not log every beat).
+pub const CLOCK_SKEW_RECOVERED: Duration = Duration::from_millis(1500);
 /// How long a solo node waits for another live node to go stale before refusing to start
 /// (a crashed predecessor goes stale after [`STALE_AFTER`]).
 pub const SOLO_WAIT: Duration = Duration::from_secs(35);
+
+/// Held for the final check-and-register pass of a join (R7), so two nodes joining at
+/// once are checked one after the other.
+pub const LOCK_JOIN: &str = "cluster.join";
+/// How long a join waits for [`LOCK_JOIN`]; the pass under it is a few statements.
+pub const JOIN_LOCK_WAIT: Duration = Duration::from_secs(10);
+/// Longest node name, in bytes (the same cap as `cluster.node_name`).
+pub const MAX_NODE_NAME: usize = 64;
 
 /// Slack added when sleeping until a node goes stale, so the re-check sees it stale.
 const STALE_MARGIN: Duration = Duration::from_millis(10);
@@ -68,19 +85,35 @@ pub struct NodeIdentity {
     pub site_url: String,
 }
 
-/// The node name (P14): `configured` (`cluster.node_name`) when set and not empty, else
-/// `$HOSTNAME-<pid>`, else `node-<pid>`.
+/// The node name (P14): `configured` (`cluster.node_name`) when set and not blank, else
+/// `$HOSTNAME-<pid>`, else `node-<pid>`. Trimmed and cut to [`MAX_NODE_NAME`] bytes (the
+/// hostname is cut, so the pid survives).
 pub fn node_name(configured: Option<&str>) -> String {
     let hostname = std::env::var("HOSTNAME").ok();
     name_from(configured, hostname.as_deref(), std::process::id())
 }
 
 fn name_from(configured: Option<&str>, hostname: Option<&str>, pid: u32) -> String {
+    let configured = configured.map(str::trim).filter(|s| !s.is_empty());
+    let hostname = hostname.map(str::trim).filter(|s| !s.is_empty());
     match (configured, hostname) {
-        (Some(name), _) if !name.is_empty() => name.to_owned(),
-        (_, Some(host)) if !host.is_empty() => format!("{host}-{pid}"),
-        _ => format!("node-{pid}"),
+        (Some(name), _) => truncate(name, MAX_NODE_NAME).to_owned(),
+        (None, Some(host)) => {
+            let suffix = format!("-{pid}");
+            let host = truncate(host, MAX_NODE_NAME.saturating_sub(suffix.len()));
+            format!("{host}{suffix}")
+        }
+        (None, None) => format!("node-{pid}"),
     }
+}
+
+/// `s` cut to at most `max` bytes on a character boundary.
+fn truncate(s: &str, max: usize) -> &str {
+    let mut end = s.len().min(max);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 /// Timings for [`Registry::join_with`]; the default is the production constants.
@@ -116,8 +149,33 @@ fn age(db_now: Timestamp, heartbeat_at: Timestamp) -> Duration {
     Duration::from_micros(u64::try_from(micros).unwrap_or(0))
 }
 
-fn skew_too_large(skew_ms: i64) -> bool {
-    skew_ms.unsigned_abs() > MAX_CLOCK_SKEW.as_millis() as u64
+/// A change of a logged condition (clock skew, two live solo nodes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Crossing {
+    Unchanged,
+    Entered,
+    Left,
+}
+
+/// Skew state with hysteresis: enter above [`MAX_CLOCK_SKEW`], leave below
+/// [`CLOCK_SKEW_RECOVERED`] (either sign). Returns the new state and the crossing.
+fn skew_state(was_over: bool, skew_ms: i64) -> (bool, Crossing) {
+    let abs = u128::from(skew_ms.unsigned_abs());
+    if !was_over && abs > MAX_CLOCK_SKEW.as_millis() {
+        (true, Crossing::Entered)
+    } else if was_over && abs < CLOCK_SKEW_RECOVERED.as_millis() {
+        (false, Crossing::Left)
+    } else {
+        (was_over, Crossing::Unchanged)
+    }
+}
+
+fn flag_crossing(was: bool, now: bool) -> Crossing {
+    match (was, now) {
+        (false, true) => Crossing::Entered,
+        (true, false) => Crossing::Left,
+        _ => Crossing::Unchanged,
+    }
 }
 
 /// Reads the database clock and measures the skew against it.
@@ -126,6 +184,14 @@ async fn measure(store: &dyn Store) -> Result<(Timestamp, i64), StoreError> {
     let db = store.read().nodes().db_now().await?;
     let after = Timestamp::now();
     Ok((db, clock_skew(before, db, after)))
+}
+
+/// Other nodes live at `db` (heartbeat within `stale_after`).
+fn live_others(nodes: &[Node], me: NodeId, db: Timestamp, stale_after: Duration) -> Vec<&Node> {
+    nodes
+        .iter()
+        .filter(|n| n.id != me && age(db, n.heartbeat_at) <= stale_after)
+        .collect()
 }
 
 /// P15: refuses a live node of another site or another `site.url`. A node whose meta
@@ -156,6 +222,50 @@ fn check_site(live: &[&Node], site_id: &str, site_url: &str) -> Result<(), crate
     Ok(())
 }
 
+/// One look at the registry during a join.
+struct Survey {
+    skew: i64,
+    /// Solo mode only: the most recently beating other live node, with its age.
+    blocker: Option<(String, Duration)>,
+    /// Names of other live nodes registered in solo mode.
+    solo_peers: Vec<String>,
+}
+
+async fn survey(
+    store: &dyn Store,
+    me: &NodeIdentity,
+    site_id: &str,
+    stale_after: Duration,
+) -> Result<Survey, crate::ClusterError> {
+    let (db, skew) = measure(store).await?;
+    let nodes = store.read().nodes().list().await?;
+    let live = live_others(&nodes, me.id, db, stale_after);
+    check_site(&live, site_id, &me.site_url)?;
+    let blocker = match me.mode {
+        ClusterMode::Solo => live
+            .iter()
+            .max_by_key(|n| n.heartbeat_at)
+            .map(|n| (n.name.clone(), age(db, n.heartbeat_at))),
+        ClusterMode::Cluster => None,
+    };
+    let solo_peers = live
+        .iter()
+        .filter(|n| n.meta.get("mode").and_then(Value::as_str) == Some("solo"))
+        .map(|n| n.name.clone())
+        .collect();
+    Ok(Survey {
+        skew,
+        blocker,
+        solo_peers,
+    })
+}
+
+async fn release(guard: Box<dyn LockGuard>) {
+    if let Err(e) = guard.release().await {
+        tracing::warn!(error = %e, "releasing the join lock failed");
+    }
+}
+
 /// This node's membership in the registry. Cheap to clone.
 #[derive(Clone)]
 pub struct Registry {
@@ -166,8 +276,11 @@ struct Inner {
     store: Arc<dyn Store>,
     me: NodeIdentity,
     site_id: String,
-    /// Whether the last measured skew was above [`MAX_CLOCK_SKEW`] (warn on crossings).
+    stale_after: Duration,
+    /// Skew state for the hysteresis in [`skew_state`].
     skew_over: AtomicBool,
+    /// Solo mode: whether another live node was seen at the last beat.
+    dual_live: AtomicBool,
     wake: Notify,
 }
 
@@ -185,12 +298,15 @@ impl Registry {
     /// - a live node with another `site_id` → [`SiteMismatch`](crate::ClusterError::SiteMismatch);
     /// - a live node with another `site_url` → [`SiteUrlMismatch`](crate::ClusterError::SiteUrlMismatch);
     /// - in solo mode, any other live node is waited for until it goes stale, up to
-    ///   `timings.solo_wait`, then [`SoloNodeLive`](crate::ClusterError::SoloNodeLive).
+    ///   `timings.solo_wait`, then [`SoloNodeLive`](crate::ClusterError::SoloNodeLive);
+    /// - in cluster mode, a live node registered in solo mode is warned about.
     ///
-    /// Then the clock skew is measured (warned above [`MAX_CLOCK_SKEW`]) and the row is
-    /// registered with `meta = {site_id, site_url, mode, clock_skew_ms}`. Two solo nodes
-    /// starting in the same instant can both pass the check; on SQLite the data-folder lock
-    /// already prevents that.
+    /// The waiting happens without any lock. Then one final pass (list, checks, register)
+    /// runs under [`LOCK_JOIN`] (R7, both modes), so two nodes joining at once are checked
+    /// one after the other; the lock is never held while sleeping: a blocker seen in that
+    /// pass releases it and goes back to waiting. The row is registered with
+    /// `meta = {site_id, site_url, mode, clock_skew_ms}`; skew above [`MAX_CLOCK_SKEW`]
+    /// is warned about. An empty `site_id` counts as missing.
     pub async fn join_with(
         store: Arc<dyn Store>,
         me: NodeIdentity,
@@ -201,38 +317,20 @@ impl Registry {
             .schema_meta()
             .get("site_id")
             .await?
+            .filter(|s| !s.is_empty())
             .ok_or(crate::ClusterError::MissingSiteId)?;
         let deadline = Instant::now() + timings.solo_wait;
         let skew = loop {
-            let (db, skew) = measure(store.as_ref()).await?;
-            let nodes = store.read().nodes().list().await?;
-            let live: Vec<&Node> = nodes
-                .iter()
-                .filter(|n| n.id != me.id && age(db, n.heartbeat_at) <= timings.stale_after)
-                .collect();
-            check_site(&live, &site_id, &me.site_url)?;
-            let blocker = live.iter().max_by_key(|n| n.heartbeat_at);
-            let (ClusterMode::Solo, Some(blocker)) = (me.mode, blocker) else {
+            Self::wait_until_clear(store.as_ref(), &me, &site_id, timings, deadline).await?;
+            let guard = lock(store.as_ref(), LOCK_JOIN, JOIN_LOCK_WAIT).await?;
+            let pass = Self::final_pass(store.as_ref(), &me, &site_id, timings).await;
+            release(guard).await;
+            if let Some(skew) = pass? {
                 break skew;
-            };
-            let age = age(db, blocker.heartbeat_at);
-            let now = Instant::now();
-            if now >= deadline {
-                return Err(crate::ClusterError::SoloNodeLive {
-                    name: blocker.name.clone(),
-                    age,
-                });
             }
-            tracing::info!(
-                node = %blocker.name,
-                ?age,
-                "solo mode: another node is live; waiting for it to stop heartbeating"
-            );
-            let to_stale = timings.stale_after.saturating_sub(age) + STALE_MARGIN;
-            tokio::time::sleep(to_stale.min(deadline - now)).await;
         };
-        let over = skew_too_large(skew);
-        if over {
+        let (over, crossing) = skew_state(false, skew);
+        if crossing == Crossing::Entered {
             tracing::warn!(
                 clock_skew_ms = skew,
                 "this node's clock differs from the database clock by more than 2 s; \
@@ -244,18 +342,12 @@ impl Registry {
                 store,
                 me,
                 site_id,
+                stale_after: timings.stale_after,
                 skew_over: AtomicBool::new(over),
+                dual_live: AtomicBool::new(false),
                 wake: Notify::new(),
             }),
         };
-        let meta = registry.inner.meta(skew, Value::Null);
-        registry
-            .inner
-            .store
-            .read()
-            .nodes()
-            .register(&registry.inner.new_node(meta))
-            .await?;
         tracing::info!(
             node = %registry.inner.me.name,
             id = %registry.inner.me.id,
@@ -263,6 +355,56 @@ impl Registry {
             "node registered"
         );
         Ok(registry)
+    }
+
+    /// Unlocked: returns once no other live node blocks this one (solo mode), or fails.
+    async fn wait_until_clear(
+        store: &dyn Store,
+        me: &NodeIdentity,
+        site_id: &str,
+        timings: JoinTimings,
+        deadline: Instant,
+    ) -> Result<(), crate::ClusterError> {
+        loop {
+            let s = survey(store, me, site_id, timings.stale_after).await?;
+            let Some((name, age)) = s.blocker else {
+                return Ok(());
+            };
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(crate::ClusterError::SoloNodeLive { name, age });
+            }
+            tracing::info!(
+                node = %name,
+                ?age,
+                "solo mode: another node is live; waiting for it to stop heartbeating"
+            );
+            let to_stale = timings.stale_after.saturating_sub(age) + STALE_MARGIN;
+            tokio::time::sleep(to_stale.min(deadline - now)).await;
+        }
+    }
+
+    /// Under [`LOCK_JOIN`]: checks again and registers. `None` when a blocker appeared.
+    async fn final_pass(
+        store: &dyn Store,
+        me: &NodeIdentity,
+        site_id: &str,
+        timings: JoinTimings,
+    ) -> Result<Option<i64>, crate::ClusterError> {
+        let s = survey(store, me, site_id, timings.stale_after).await?;
+        if s.blocker.is_some() {
+            return Ok(None);
+        }
+        if me.mode == ClusterMode::Cluster && !s.solo_peers.is_empty() {
+            tracing::warn!(
+                nodes = ?s.solo_peers,
+                "joining in cluster mode while live nodes run in solo mode; \
+                 give every node the same cluster.mode"
+            );
+        }
+        let meta = base_meta(site_id, me, s.skew, Value::Null);
+        store.read().nodes().register(&new_node(me, meta)).await?;
+        Ok(Some(s.skew))
     }
 
     /// This node's id.
@@ -274,9 +416,11 @@ impl Registry {
     /// [`Registry::beat_now`]) it re-measures the clock skew and writes `meta()` merged
     /// with the registry's own keys (`site_id`, `site_url`, `mode`, `clock_skew_ms`, which
     /// `meta()` cannot override; a non-object `meta()` is ignored). A heartbeat that finds
-    /// no row (pruned or deleted) registers the node again. Failures are logged and retried
-    /// at the next beat; each beat is bounded by [`HEARTBEAT_EVERY`]. Ends on `stop`; stop
-    /// it and await the handle before [`Registry::leave`], or a late beat re-registers.
+    /// no row (pruned or deleted) registers the node again. In solo mode each beat also
+    /// lists the nodes and logs an error when another node is live (see the module docs).
+    /// Failures are logged and retried at the next beat; each beat is bounded by
+    /// [`HEARTBEAT_EVERY`]. Ends on `stop`; stop it and await the handle before
+    /// [`Registry::leave`], or a late beat re-registers.
     pub fn spawn_heartbeat(
         &self,
         meta: Arc<dyn Fn() -> Value + Send + Sync>,
@@ -325,60 +469,85 @@ impl Registry {
     }
 }
 
+fn new_node(me: &NodeIdentity, meta: Value) -> NewNode {
+    NewNode {
+        id: me.id,
+        name: me.name.clone(),
+        version: me.version.to_string(),
+        schema_version: me.schema_version,
+        meta,
+    }
+}
+
+/// `extra` (if an object) plus the registry's own keys, which win.
+fn base_meta(site_id: &str, me: &NodeIdentity, skew_ms: i64, extra: Value) -> Value {
+    let mut map = match extra {
+        Value::Object(map) => map,
+        Value::Null => Map::new(),
+        other => {
+            tracing::warn!(meta = %other, "node meta is not a JSON object; ignored");
+            Map::new()
+        }
+    };
+    for (key, value) in [
+        ("site_id", json!(site_id)),
+        ("site_url", json!(me.site_url)),
+        ("mode", json!(me.mode.as_str())),
+        ("clock_skew_ms", json!(skew_ms)),
+    ] {
+        map.insert(key.to_owned(), value);
+    }
+    Value::Object(map)
+}
+
 impl Inner {
-    fn new_node(&self, meta: Value) -> NewNode {
-        NewNode {
-            id: self.me.id,
-            name: self.me.name.clone(),
-            version: self.me.version.to_string(),
-            schema_version: self.me.schema_version,
-            meta,
-        }
-    }
-
-    /// `extra` (if an object) plus the registry's own keys, which win.
-    fn meta(&self, skew_ms: i64, extra: Value) -> Value {
-        let mut map = match extra {
-            Value::Object(map) => map,
-            Value::Null => Map::new(),
-            other => {
-                tracing::warn!(meta = %other, "node meta is not a JSON object; ignored");
-                Map::new()
-            }
-        };
-        for (key, value) in [
-            ("site_id", json!(self.site_id)),
-            ("site_url", json!(self.me.site_url)),
-            ("mode", json!(self.me.mode.as_str())),
-            ("clock_skew_ms", json!(skew_ms)),
-        ] {
-            map.insert(key.to_owned(), value);
-        }
-        Value::Object(map)
-    }
-
-    /// Logs only when the skew crosses [`MAX_CLOCK_SKEW`] (either sign), not every beat.
-    fn note_skew(&self, skew_ms: i64) {
-        let over = skew_too_large(skew_ms);
-        let was = self.skew_over.swap(over, Ordering::Relaxed);
-        if over && !was {
-            tracing::warn!(
+    /// Logs when the skew crosses the thresholds (hysteresis, either sign); returns the
+    /// crossing.
+    fn note_skew(&self, skew_ms: i64) -> Crossing {
+        let was = self.skew_over.load(Ordering::Relaxed);
+        let (over, crossing) = skew_state(was, skew_ms);
+        self.skew_over.store(over, Ordering::Relaxed);
+        match crossing {
+            Crossing::Entered => tracing::warn!(
                 clock_skew_ms = skew_ms,
                 "this node's clock now differs from the database clock by more than 2 s"
-            );
-        } else if was && !over {
-            tracing::info!(clock_skew_ms = skew_ms, "clock skew is back within 2 s");
+            ),
+            Crossing::Left => {
+                tracing::info!(clock_skew_ms = skew_ms, "clock skew is back within 1.5 s")
+            }
+            Crossing::Unchanged => {}
         }
+        crossing
+    }
+
+    /// Solo mode: logs (once per transition) whether other live nodes exist.
+    fn note_solo_peers(&self, others: &[&Node]) -> Crossing {
+        let now = !others.is_empty();
+        let crossing = flag_crossing(self.dual_live.swap(now, Ordering::Relaxed), now);
+        match crossing {
+            Crossing::Entered => tracing::error!(
+                nodes = ?others.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(),
+                "two live nodes in solo mode: another node of this site is heartbeating \
+                 (e.g. this node lost its database link and was replaced); stop one of them"
+            ),
+            Crossing::Left => tracing::info!("no other live node in solo mode any more"),
+            Crossing::Unchanged => {}
+        }
+        crossing
     }
 
     async fn beat(&self, extra: &(dyn Fn() -> Value + Send + Sync)) -> Result<(), StoreError> {
-        let (_, skew) = measure(self.store.as_ref()).await?;
+        let (db, skew) = measure(self.store.as_ref()).await?;
         self.note_skew(skew);
-        let meta = self.meta(skew, extra());
+        let meta = base_meta(&self.site_id, &self.me, skew, extra());
         let nodes = self.store.read().nodes();
         if !nodes.heartbeat(self.me.id, &meta).await? {
             tracing::info!(id = %self.me.id, "node row is gone; registering again");
-            nodes.register(&self.new_node(meta)).await?;
+            nodes.register(&new_node(&self.me, meta)).await?;
+        }
+        if self.me.mode == ClusterMode::Solo {
+            let all = nodes.list().await?;
+            self.note_solo_peers(&live_others(&all, self.me.id, db, self.stale_after));
         }
         Ok(())
     }
@@ -410,8 +579,95 @@ mod tests {
             -3100
         );
         assert_eq!(clock_skew(before, at("2026-10-23T10:00:00.100Z"), after), 0);
-        assert!(skew_too_large(3100) && skew_too_large(-3100));
-        assert!(!skew_too_large(2000) && !skew_too_large(-2000));
+    }
+
+    #[test]
+    fn skew_hysteresis() {
+        use Crossing::*;
+        assert_eq!(skew_state(false, 2000), (false, Unchanged));
+        assert_eq!(skew_state(false, 2001), (true, Entered));
+        assert_eq!(skew_state(false, -3100), (true, Entered));
+        // Between 1.5 s and 2 s: stays over, no log.
+        assert_eq!(skew_state(true, 1800), (true, Unchanged));
+        assert_eq!(skew_state(true, -1500), (true, Unchanged));
+        assert_eq!(skew_state(true, 1499), (false, Left));
+        assert_eq!(skew_state(true, -10), (false, Left));
+        assert_eq!(skew_state(true, 5000), (true, Unchanged));
+        assert_eq!(flag_crossing(false, true), Entered);
+        assert_eq!(flag_crossing(true, true), Unchanged);
+        assert_eq!(flag_crossing(true, false), Left);
+        assert_eq!(flag_crossing(false, false), Unchanged);
+    }
+
+    #[tokio::test]
+    async fn note_skew_reports_crossings_once() {
+        let (store, _dir) = ferrite_store_tests::sqlite_store().await;
+        let inner = Inner {
+            store: Arc::new(store),
+            me: NodeIdentity {
+                id: NodeId::new(),
+                name: "n".into(),
+                version: semver::Version::new(0, 1, 0),
+                schema_version: 4,
+                mode: ClusterMode::Solo,
+                site_url: "https://example.com/".into(),
+            },
+            site_id: "s".into(),
+            stale_after: STALE_AFTER,
+            skew_over: AtomicBool::new(false),
+            dual_live: AtomicBool::new(false),
+            wake: Notify::new(),
+        };
+        let seq: Vec<Crossing> = [100, 2500, 2600, 1700, 1400, 1600, -2100]
+            .into_iter()
+            .map(|ms| inner.note_skew(ms))
+            .collect();
+        use Crossing::*;
+        assert_eq!(
+            seq,
+            [
+                Unchanged, Entered, Unchanged, Unchanged, Left, Unchanged, Entered
+            ]
+        );
+
+        let other = Node {
+            id: NodeId::new(),
+            name: "other".into(),
+            version: "0.1.0".into(),
+            schema_version: 4,
+            started_at: Timestamp::now(),
+            heartbeat_at: Timestamp::now(),
+            meta: json!({}),
+        };
+        assert_eq!(inner.note_solo_peers(&[&other]), Entered);
+        assert_eq!(inner.note_solo_peers(&[&other]), Unchanged);
+        assert_eq!(inner.note_solo_peers(&[]), Left);
+    }
+
+    #[test]
+    fn live_filter() {
+        let db = at("2026-10-23T10:00:31.000Z");
+        let mk = |hb: &str| Node {
+            id: NodeId::new(),
+            name: hb.into(),
+            version: "0.1.0".into(),
+            schema_version: 4,
+            started_at: at(hb),
+            heartbeat_at: at(hb),
+            meta: json!({}),
+        };
+        let nodes = [
+            mk("2026-10-23T10:00:00.000Z"),
+            mk("2026-10-23T10:00:01.000Z"),
+            mk("2026-10-23T10:00:30.000Z"),
+        ];
+        let me = nodes[2].id;
+        let live = live_others(&nodes, me, db, STALE_AFTER);
+        assert_eq!(
+            live.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(),
+            ["2026-10-23T10:00:01.000Z"],
+            "31 s old is stale, exactly 30 s is live, own row excluded"
+        );
     }
 
     #[test]
@@ -421,6 +677,11 @@ mod tests {
         assert_eq!(name_from(None, Some("host"), 7), "host-7");
         assert_eq!(name_from(None, Some(""), 7), "node-7");
         assert_eq!(name_from(None, None, 7), "node-7");
+        assert_eq!(name_from(Some("  web-1 \n"), None, 7), "web-1");
+        assert_eq!(name_from(Some("   "), Some(" host "), 7), "host-7");
+        assert_eq!(name_from(Some(&"x".repeat(80)), None, 7).len(), 64);
+        let long = name_from(None, Some(&"é".repeat(40)), 12345);
+        assert!(long.len() <= 64 && long.ends_with("-12345"), "{long}");
     }
 
     #[test]

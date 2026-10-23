@@ -531,7 +531,11 @@ fn workers_default_and_bounds() {
 
     for bad in ["0", "257", "-1", "\"4\""] {
         let (_d, r) = run(Some(&format!("{MIN}[cluster]\nworkers = {bad}\n")), &[]);
-        assert_eq!(paths(&r.unwrap_err()), ["cluster.workers"], "{bad}");
+        let e = r.unwrap_err();
+        assert_eq!(paths(&e), ["cluster.workers"], "{bad}");
+        if bad == "0" || bad == "257" {
+            assert_eq!(e.problems[0].message, "must be between 1 and 256", "{bad}");
+        }
     }
     for (ok, want) in [("1", 1), ("256", 256)] {
         let (_d, r) = run(Some(&format!("{MIN}[cluster]\nworkers = {ok}\n")), &[]);
@@ -539,4 +543,28 @@ fn workers_default_and_bounds() {
     }
     let (_d, r) = run(Some(MIN), &[("FERRITE_CLUSTER__WORKERS", "3")]);
     assert_eq!(r.unwrap().cluster.workers, 3);
+}
+
+#[test]
+fn node_name_trimmed_and_bounded() {
+    let (_d, r) = run(
+        Some(&format!("{MIN}[cluster]\nnode_name = \"  web-1 \"\n")),
+        &[],
+    );
+    assert_eq!(r.unwrap().cluster.node_name.as_deref(), Some("web-1"));
+    for bad in ["", "   ", &"x".repeat(65)] {
+        let (_d, r) = run(
+            Some(&format!("{MIN}[cluster]\nnode_name = \"{bad}\"\n")),
+            &[],
+        );
+        assert_eq!(paths(&r.unwrap_err()), ["cluster.node_name"], "{bad:?}");
+    }
+    let (_d, r) = run(
+        Some(&format!(
+            "{MIN}[cluster]\nnode_name = \"{}\"\n",
+            "x".repeat(64)
+        )),
+        &[],
+    );
+    assert_eq!(r.unwrap().cluster.node_name.map(|n| n.len()), Some(64));
 }

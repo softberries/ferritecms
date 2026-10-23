@@ -457,10 +457,23 @@ fn parse_cluster(cx: &mut Cx, root: &mut Table) -> ClusterConfig {
             ClusterMode::Auto
         }
     };
-    let node_name = cx
-        .string(&mut t, "cluster", "node_name")
-        .filter(|s| !s.is_empty());
-    let workers = match cx.positive(&mut t, "cluster", "workers") {
+    // Trimmed; 1..=64 bytes (P14). Omit the key for the $HOSTNAME-<pid> default.
+    let node_name = cx.string(&mut t, "cluster", "node_name").and_then(|s| {
+        let name = s.trim();
+        if name.is_empty() {
+            cx.push(
+                "cluster.node_name",
+                "must not be empty (omit it to use $HOSTNAME-<pid>)",
+            );
+            None
+        } else if name.len() > MAX_NODE_NAME {
+            cx.push("cluster.node_name", "must be at most 64 bytes");
+            None
+        } else {
+            Some(name.to_owned())
+        }
+    });
+    let workers = match cx.uint(&mut t, "cluster", "workers") {
         None => default_workers(),
         Some(n @ 1..=MAX_WORKERS) => n as usize,
         Some(_) => {
@@ -475,6 +488,9 @@ fn parse_cluster(cx: &mut Cx, root: &mut Table) -> ClusterConfig {
         workers,
     }
 }
+
+/// Longest `cluster.node_name`, in bytes (`ferrite_cluster::MAX_NODE_NAME`).
+const MAX_NODE_NAME: usize = 64;
 
 /// Upper bound for an explicit `cluster.workers` (P16).
 const MAX_WORKERS: u64 = 256;

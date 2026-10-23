@@ -301,7 +301,81 @@ async fn leave_removes_row(db: Arc<TestDb>) {
     reg.leave().await.unwrap();
 }
 
+async fn join_without_site_id_is_refused(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    store.read().schema_meta().set("site_id", "").await.unwrap();
+    let me = identity(ClusterMode::Solo);
+    let id = me.id;
+    let e = Registry::join(store.clone(), me)
+        .await
+        .err()
+        .expect("refused");
+    assert!(matches!(e, ClusterError::MissingSiteId), "{e:?}");
+    assert!(row(store.as_ref(), id).await.is_none());
+}
+
+/// The second store a concurrent joiner uses: a peer on Postgres (another process),
+/// the same store on SQLite (one process owns the data folder).
+async fn second_store(db: &TestDb) -> Arc<dyn Store> {
+    db.peer().await.unwrap_or_else(|| db.shared_store())
+}
+
+/// R7: two solo nodes starting at once; the join lock serialises the final pass, so the
+/// second one sees the first live and is refused.
+async fn concurrent_solo_joins_admit_one(db: Arc<TestDb>) {
+    let a = db.shared_store();
+    let b = second_store(&db).await;
+    // The winner stays live (no heartbeat needed) for longer than the loser waits.
+    let t = JoinTimings {
+        stale_after: Duration::from_secs(5),
+        solo_wait: Duration::from_millis(300),
+    };
+    for _ in 0..3 {
+        let (ra, rb) = tokio::join!(
+            Registry::join_with(a.clone(), identity(ClusterMode::Solo), t),
+            Registry::join_with(b.clone(), identity(ClusterMode::Solo), t),
+        );
+        let (ok, err) = match (ra, rb) {
+            (Ok(r), Err(e)) | (Err(e), Ok(r)) => (r, e),
+            (Ok(_), Ok(_)) => panic!("both solo nodes joined"),
+            (Err(x), Err(y)) => panic!("both refused: {x:?} / {y:?}"),
+        };
+        assert!(matches!(err, ClusterError::SoloNodeLive { .. }), "{err:?}");
+        let live = a.read().nodes().list().await.unwrap();
+        assert_eq!(live.len(), 1, "{live:?}");
+        ok.leave().await.unwrap();
+    }
+}
+
+/// R7: two cluster nodes with different site.url starting at once: one is refused.
+async fn concurrent_join_with_other_site_url_refuses_one(db: Arc<TestDb>) {
+    let a = db.shared_store();
+    let b = second_store(&db).await;
+    for _ in 0..3 {
+        let mut other = identity(ClusterMode::Cluster);
+        other.site_url = "https://other.example/".into();
+        let (ra, rb) = tokio::join!(
+            Registry::join(a.clone(), identity(ClusterMode::Cluster)),
+            Registry::join(b.clone(), other),
+        );
+        let (ok, err) = match (ra, rb) {
+            (Ok(r), Err(e)) | (Err(e), Ok(r)) => (r, e),
+            (Ok(_), Ok(_)) => panic!("both joined with different site.url"),
+            (Err(x), Err(y)) => panic!("both refused: {x:?} / {y:?}"),
+        };
+        assert!(
+            matches!(err, ClusterError::SiteUrlMismatch { .. }),
+            "{err:?}"
+        );
+        assert_eq!(a.read().nodes().list().await.unwrap().len(), 1);
+        ok.leave().await.unwrap();
+    }
+}
+
 backend_tests_spawning!(
+    join_without_site_id_is_refused,
+    concurrent_solo_joins_admit_one,
+    concurrent_join_with_other_site_url_refuses_one,
     join_refuses_other_site_id,
     join_refuses_other_site_url,
     join_ignores_stale_nodes,

@@ -110,8 +110,16 @@ const MIGRATE_LOCK_LOG_EVERY: Duration = Duration::from_secs(10);
 /// Takes [`LOCK_MIGRATE`] (both backends: another node or `ferrite migrate` may hold it),
 /// waiting up to [`MIGRATE_LOCK_WAIT`] and logging every 10 s while waiting.
 pub async fn migrate_lock(store: &dyn Store) -> anyhow::Result<Box<dyn LockGuard>> {
+    migrate_lock_with(store, MIGRATE_LOCK_WAIT).await
+}
+
+/// [`migrate_lock`] with another wait (the CLI passes the default; tests shorten it).
+pub(crate) async fn migrate_lock_with(
+    store: &dyn Store,
+    max_wait: Duration,
+) -> anyhow::Result<Box<dyn LockGuard>> {
     let started = tokio::time::Instant::now();
-    let wait = lock(store, LOCK_MIGRATE, MIGRATE_LOCK_WAIT);
+    let wait = lock(store, LOCK_MIGRATE, max_wait);
     tokio::pin!(wait);
     let mut log =
         tokio::time::interval_at(started + MIGRATE_LOCK_LOG_EVERY, MIGRATE_LOCK_LOG_EVERY);
@@ -121,7 +129,11 @@ pub async fn migrate_lock(store: &dyn Store) -> anyhow::Result<Box<dyn LockGuard
                 return match r {
                     Ok(guard) => Ok(guard),
                     Err(StoreError::Busy) => bail!(
-                        "another node or `ferrite migrate` has held the migration lock for 5 minutes"
+                        "another node or `ferrite migrate` has held the migration lock for {}: \
+                         a long migration may still be running elsewhere, or a hung `ferrite` \
+                         process holds it (on Postgres: the session with application_name \
+                         `ferrite:lock:migrate` in pg_stat_activity); stop that process and retry",
+                        describe_wait(max_wait)
                     ),
                     Err(e) => Err(anyhow::Error::new(e).context("cannot take the migration lock")),
                 };
@@ -131,6 +143,16 @@ pub async fn migrate_lock(store: &dyn Store) -> anyhow::Result<Box<dyn LockGuard
                 "waiting for the migration lock (another node or `ferrite migrate` holds it)"
             ),
         }
+    }
+}
+
+fn describe_wait(wait: Duration) -> String {
+    let secs = wait.as_secs();
+    if secs >= 60 && secs.is_multiple_of(60) && wait.subsec_nanos() == 0 {
+        let m = secs / 60;
+        format!("{m} minute{}", if m == 1 { "" } else { "s" })
+    } else {
+        format!("{wait:?}")
     }
 }
 
@@ -221,6 +243,13 @@ mod tests {
 
     fn err_text(r: anyhow::Result<Decision>) -> String {
         format!("{:#}", r.unwrap_err())
+    }
+
+    #[test]
+    fn lock_wait_wording() {
+        assert_eq!(describe_wait(MIGRATE_LOCK_WAIT), "5 minutes");
+        assert_eq!(describe_wait(Duration::from_secs(60)), "1 minute");
+        assert_eq!(describe_wait(Duration::from_millis(300)), "300ms");
     }
 
     #[test]

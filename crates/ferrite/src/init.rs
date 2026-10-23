@@ -7,7 +7,7 @@ use ferrite_config::{DbKind, InitMedia, MediaSection, render_default_toml};
 use sqlx::{AssertSqlSafe, Connection, PgConnection};
 
 use crate::load_config;
-use crate::open::{OpenMode, open_store};
+use crate::open::{MIGRATE_LOCK_WAIT, OpenMode, open_store};
 
 const CONFIG_FILE: &str = "ferrite.toml";
 
@@ -138,7 +138,7 @@ async fn prepare(data: &Path, created: &mut Vec<PathBuf>) -> anyhow::Result<()> 
     std::fs::create_dir_all(&backups)
         .with_context(|| format!("cannot create {}", backups.display()))?;
     let store = open_store(&config, OpenMode::CreateIfMissing).await?;
-    let applied = store.migrate_up(None).await?;
+    let applied = crate::migrate::up_locked(store.as_ref(), None, MIGRATE_LOCK_WAIT).await?;
     tracing::info!(?applied, "database migrated");
     Ok(())
 }

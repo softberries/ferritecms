@@ -235,7 +235,7 @@ root         = "media"                 # default; relative to the data folder
 
 [cluster]
 mode       = "auto"                    # "solo" | "cluster" | "auto"
-# node_name = ""                       # optional; unset or empty: $HOSTNAME-<pid>, else node-<pid>
+# node_name = "web-1"                  # optional, trimmed, 1..=64 bytes; unset: $HOSTNAME-<pid>, else node-<pid>
 # workers  = 4                         # concurrent jobs per node, 1..=256; default max(2, CPU count)
 
 [cache]
@@ -265,7 +265,8 @@ local media unless `local_shared = true`.
 so they run when a node joins the registry (wiring into `serve`: M1.5, planned), not in
 `load`: a *live* node (heartbeat within 30 s by the database clock) with another `site_id`
 or another `site.url` refuses the start; in solo mode another live node is waited for up
-to 35 s, then refused. `startup_check`
+to 35 s, then refused. The waiting is unlocked; the final check-and-register pass runs
+under the `cluster.join` lock, so nodes starting together are checked one at a time. `startup_check`
 (and `ferrite migrate up|down`) hold the `migrate` lock on both backends, waiting up to
 5 minutes and logging every 10 s.
 
