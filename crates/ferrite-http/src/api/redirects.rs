@@ -6,7 +6,8 @@
 //! `redirect:<source>` keys. No `If-Match` (P11): last write wins.
 //!
 //! * `POST /redirects` creates the redirect for `source`, or replaces the target and
-//!   code of the one that has it; `201` with `Location` either way.
+//!   code of the one that has it; `201` with `Location` either way. A `source` whose
+//!   trailing-slash variant another redirect holds is `422` (`source`; R26).
 //! * `PATCH /redirects/{id}` merges the body into the redirect as read now; a new
 //!   `source` another redirect holds is `422` (`errors[0].field` = `source`).
 //! * `POST /redirects/import` takes `text/csv` of at most [`MAX_CSV_BODY`] bytes and

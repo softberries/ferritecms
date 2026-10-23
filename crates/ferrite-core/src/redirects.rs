@@ -99,7 +99,10 @@ impl RedirectService {
     }
 
     /// Creates a manual redirect from `source` to `target`, or changes the target and
-    /// code of the existing one for `source` (see the type docs for the rules).
+    /// code of the existing one for `source` (see the type docs for the rules). A
+    /// `source` whose trailing-slash variant another redirect holds is
+    /// `InvalidField { field: "source", .. }` ("source taken", as [`update`](Self::update)
+    /// counts it; R26), so the two variants cannot lead to different targets.
     pub async fn upsert(
         &self,
         actor: &Actor,
@@ -111,6 +114,11 @@ impl RedirectService {
         check_row(source, target, code)?;
         let tx = self.store.begin().await?;
         let done = async {
+            if let Some(other) = toggled(source)
+                && tx.redirects().get_by_source(&other).await?.is_some()
+            {
+                return Err(source_taken());
+            }
             check_chain(tx.as_ref(), source, target).await?;
             let saved = tx
                 .redirects()
@@ -167,10 +175,7 @@ impl RedirectService {
                         .await?
                         .is_some_and(|r| r.id != id)
                     {
-                        return Err(CoreError::invalid_field(
-                            "source",
-                            "source taken by another redirect",
-                        ));
+                        return Err(source_taken());
                     }
                 }
                 // The old mapping must not take part in the loop check.
@@ -190,10 +195,7 @@ impl RedirectService {
             if saved.id != id {
                 // A concurrent write took the source after the check above: the upsert
                 // hit that row. Roll back rather than change it.
-                return Err(CoreError::invalid_field(
-                    "source",
-                    "source taken by another redirect",
-                ));
+                return Err(source_taken());
             }
             let mut sources = vec![current.source_path];
             if sources[0] != source {
@@ -214,8 +216,9 @@ impl RedirectService {
     /// redirects (read before the transaction) with all of the file's rows applied on
     /// top, so loops and long chains among the file's own rows count too; a source
     /// given twice, exactly or with its trailing slash toggled (as
-    /// [`update`](Self::update) counts it), is an error on its second row. If any row fails nothing is written
-    /// and the result is `InvalidRows` listing each failing row. Otherwise one
+    /// [`update`](Self::update) counts it), is an error on its second row, and so is a
+    /// source whose toggled variant is already stored (R26). If any row fails nothing
+    /// is written and the result is `InvalidRows` listing each failing row. Otherwise one
     /// transaction upserts every row and emits one `invalidate` with the keys of every
     /// source. A redirect changed between the read and the write can still close a loop
     /// (P2).
@@ -255,6 +258,13 @@ impl RedirectService {
         }
         // Existing redirects with the file on top.
         let mut map = self.all_targets().await?;
+        // A source whose slash variant is stored is taken, as in `upsert` (R26).
+        for (i, (source, _, _)) in rows.iter().enumerate() {
+            if valid[i] && toggled(source).is_some_and(|t| map.contains_key(&t)) {
+                valid[i] = false;
+                errors.push(row_error(i, source_taken()));
+            }
+        }
         for (i, (source, target, _)) in rows.iter().enumerate() {
             if valid[i] {
                 map.insert(source.clone(), target.clone());
@@ -429,6 +439,10 @@ fn variants(source: &str) -> Vec<String> {
     v
 }
 
+fn source_taken() -> CoreError {
+    CoreError::invalid_field("source", "source taken by another redirect")
+}
+
 fn loop_error() -> CoreError {
     CoreError::invalid_field("target", "redirect loop")
 }
@@ -503,9 +517,11 @@ fn check_source(source: &str) -> Result<(), CoreError> {
 
 /// Whether the first segment of `source` (percent-decoded, any case) is one the router
 /// owns: a [`slug::RESERVED`] word (`/api`, `/feed/…`, `/_media`, `/healthz`,
-/// `/robots.txt`, `/sitemap.xml`, …) or any word starting with `_` (`/_theme`, `/_p`,
-/// `/_preview`, …). Redirects there either never fire (dispatched first) or would
-/// shadow a built-in. Only new writes are checked; stored rows keep working.
+/// `/robots.txt`, `/sitemap.xml`, …), any word starting with `_` (`/_theme`, `/_p`,
+/// `/_preview`, …), or a sitemap shard name `sitemap-*.xml` (the router answers every
+/// such name itself, 404 for an unknown type or number; R26). Redirects there either
+/// never fire (dispatched first) or would shadow a built-in (redirect rows are checked
+/// before the sitemap render). Only new writes are checked; stored rows keep working.
 fn is_router_owned(source: &str) -> bool {
     let first = source
         .trim_start_matches('/')
@@ -514,7 +530,9 @@ fn is_router_owned(source: &str) -> bool {
         .unwrap_or_default();
     let decoded = percent_encoding::percent_decode_str(first).decode_utf8_lossy();
     let word = decoded.to_lowercase();
-    word.starts_with('_') || slug::is_reserved(&word)
+    word.starts_with('_')
+        || slug::is_reserved(&word)
+        || (word.starts_with("sitemap-") && word.ends_with(".xml"))
 }
 
 fn check_target(target: &str) -> Result<(), CoreError> {
@@ -561,6 +579,10 @@ mod tests {
             "/feed/",
             "/feed",
             "/feed/atom/",
+            "/sitemap-post-1.xml",
+            "/Sitemap-Book-12.xml",
+            "/sitemap-x.xml/",
+            "/sitemap-%70ost-1.xml",
         ] {
             assert!(is_router_owned(owned), "{owned}");
             assert!(
@@ -581,6 +603,9 @@ mod tests {
             "/feeds/",
             "/blog/_draft",
             "/my_page",
+            "/sitemap-guide/",
+            "/sitemaps.xml",
+            "/sitemap-a.xml.bak",
         ] {
             assert!(!is_router_owned(free), "{free}");
         }

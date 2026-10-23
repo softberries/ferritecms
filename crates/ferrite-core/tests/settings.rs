@@ -635,10 +635,78 @@ pub async fn redirect_update_moves_source(db: &TestDb) {
     ));
 }
 
+/// R26 (M4, M5): create and import refuse a source whose slash-toggled variant another
+/// redirect holds, as update does (F24), so `/old` and `/old/` cannot go to different
+/// targets; the exact source still upserts in place. Sitemap shard paths are
+/// router-owned sources.
+pub async fn redirect_create_refuses_slash_variant(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let svc = RedirectService::new(db.shared_store());
+    let old = svc.upsert(&admin, "/old", "/a", 301).await.unwrap();
+    let trailing = svc.upsert(&admin, "/dir/", "/a", 301).await.unwrap();
+    let seq = max_seq(store).await;
+    for (taken, row) in [("/old/", &old), ("/dir", &trailing)] {
+        let (field, m) = invalid(svc.upsert(&admin, taken, "/b", 302).await);
+        assert_eq!(field, Some("source"), "{taken}");
+        assert!(m.contains("source taken"), "{m}");
+        assert_eq!(svc.resolve(taken).await.unwrap().unwrap(), *row);
+    }
+    assert_eq!(max_seq(store).await, seq, "nothing emitted");
+    // The exact source changes in place.
+    let same = svc.upsert(&admin, "/old", "/c", 307).await.unwrap();
+    assert_eq!(
+        (same.id, same.target.as_str(), same.code),
+        (old.id, "/c", 307)
+    );
+
+    // Import: the same rule against the stored rows; nothing written on failure.
+    let seq = max_seq(store).await;
+    let errors = row_errors(
+        svc.import(
+            &admin,
+            &rows(&[
+                ("/new", "/x", 301),
+                ("/old/", "/d", 301),
+                ("/dir", "/d", 301),
+            ]),
+        )
+        .await,
+    );
+    let at: Vec<usize> = errors.iter().map(|e| e.row).collect();
+    assert_eq!(at, [1, 2], "{errors:?}");
+    assert!(
+        errors.iter().all(|e| e.message.contains("source taken")),
+        "{errors:?}"
+    );
+    assert!(svc.resolve("/new").await.unwrap().is_none());
+    assert_eq!(max_seq(store).await, seq);
+    let report = svc
+        .import(&admin, &rows(&[("/old", "/e", 301), ("/new", "/x", 301)]))
+        .await
+        .unwrap();
+    assert_eq!((report.created, report.updated), (1, 1));
+    assert_eq!(svc.resolve("/old").await.unwrap().unwrap().id, old.id);
+
+    // Sitemap shards are served by the router (M5).
+    for owned in [
+        "/sitemap-post-1.xml",
+        "/Sitemap-Book-12.xml",
+        "/sitemap-x.xml/",
+    ] {
+        let (field, m) = invalid(svc.upsert(&admin, owned, "/q", 301).await);
+        assert_eq!(field, Some("source"), "{owned}");
+        assert!(m.contains("serves itself"), "{m}");
+        let errors = row_errors(svc.import(&admin, &rows(&[(owned, "/q", 301)])).await);
+        assert_eq!(errors.len(), 1, "{owned}");
+    }
+}
+
 backend_tests!(
     settings_allowlist_and_validation,
     permalink_option_write_is_validated,
     set_many_is_atomic,
     redirect_import_all_or_nothing,
     redirect_update_moves_source,
+    redirect_create_refuses_slash_variant,
 );
