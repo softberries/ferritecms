@@ -125,11 +125,18 @@ includes `secret.key`.
 - Default: run behind a reverse proxy (Caddy/nginx/Traefik/LB). As built (M1c-2, ruling
   R31): only `X-Forwarded-For` is honoured, and only when the TCP peer is inside
   `server.trusted_proxies` (CIDRs or bare IPs; default none). The client address is the
-  right-most entry that is not itself a trusted proxy and is used for logging (`client_ip`
-  on the request span). `X-Forwarded-Proto` and `X-Forwarded-Host` are ignored from every
-  peer: absolute URLs come from `site.url`, and the page-cache host is pinned to it (R25),
-  so a TLS-terminating proxy cannot change the scheme (not needed while `site.url` is set to
-  the public `https://` URL). `crates/ferrite-http/src/app/client.rs`.
+  right-most entry that is not itself a trusted proxy. It is logged (`client_ip` on the
+  request span) **and keys the per-IP rate limits** (M2a-1: 10 login attempts and 10
+  unknown or expired bearer tokens a minute per address, [07 §2](07-admin-api.md#2-auth)).
+  **Behind a proxy, list it in `server.trusted_proxies`**: otherwise every request has the
+  proxy's address, the per-IP limits become one bucket for the whole site, and 10 login
+  attempts a minute from anyone stop everyone from logging in. A request with
+  `X-Forwarded-For` from a peer that is not trusted logs a warning naming the peer, once
+  per peer address (for the first 64 such peers of the process; R26). `X-Forwarded-Proto`
+  and `X-Forwarded-Host` are ignored from every peer: absolute URLs come from `site.url`,
+  and the page-cache host is pinned to it (R25), so a TLS-terminating proxy cannot change
+  the scheme (not needed while `site.url` is set to the public `https://` URL).
+  `crates/ferrite-http/src/app/client.rs`.
 - Built-in ACME (solo only in v1): rustls + an ACME client crate (`instant-acme` or
   `rustls-acme` — choose in M4), HTTP-01 on :80 or TLS-ALPN-01. Certificates stored in
   `data/tls/`. In cluster mode ACME would need shared challenge state — out of scope;

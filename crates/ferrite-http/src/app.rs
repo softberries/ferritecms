@@ -141,7 +141,9 @@ fn shared_layers(state: &AppState, router: Router) -> Router {
             HeaderValue::from_static(value),
         ));
     }
-    let trusted: Arc<[ipnet::IpNet]> = state.config.trusted_proxies.clone().into();
+    let resolver = Arc::new(client::ClientResolver::new(
+        state.config.trusted_proxies.clone().into(),
+    ));
     app.layer(
         TraceLayer::new_for_http()
             .make_span_with(response::request_span)
@@ -149,7 +151,7 @@ fn shared_layers(state: &AppState, router: Router) -> Router {
     )
     // Outermost: the client address is known before the request span opens.
     .layer(axum::middleware::from_fn_with_state(
-        trusted,
+        resolver,
         client::record_client,
     ))
 }

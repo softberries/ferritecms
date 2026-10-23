@@ -230,12 +230,17 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   confirm): 5/min per user; unknown or expired bearer tokens: 10/min per IP hash.
   Over the limit: `429 rate-limited` with `Retry-After` (seconds to the window end on the
   database clock, 1..=60), checked before the password, so a limited client learns nothing.
-  IPv6 addresses are limited per /64. Login buckets hold a keyed HMAC of the trimmed,
-  ASCII-lowercased input, never the text; a login and its e-mail address are **separate
-  budgets**, so one account takes at most 2 × 5 = 10 password guesses a minute (keying on
-  the resolved user id would reveal whether the account exists). The current-password
-  checks of `POST /auth/password` and TOTP confirm/disable go through the same per-login
-  bucket (R11, R15). Fixed windows allow up to 2× the limit across a window edge. On
+  IPv6 addresses are limited per /64. The address is the TCP peer unless the peer is in
+  `server.trusted_proxies` ([09 §5](09-operations.md#5-tls)): **behind a reverse proxy that
+  is not listed there, the per-IP limits are one bucket for the whole site**, so 10 login
+  attempts a minute from anyone block every login. A request with `X-Forwarded-For` from
+  an untrusted peer logs a warning, once per peer address (R26). Login buckets hold a
+  keyed HMAC of the trimmed, ASCII-lowercased input, never the text; a login and its
+  e-mail address are **separate budgets**, so one account takes at most 2 × 5 = 10
+  password guesses a minute (keying on the resolved user id would reveal whether the
+  account exists). The current-password checks of `POST /auth/password` and TOTP
+  confirm/disable go through the same per-login bucket (R11, R15). Fixed windows allow up
+  to 2× the limit across a window edge. On
   SQLite the clock is the process clock: if it jumps back, a bucket stays in its (now
   future) window until time catches up and keeps counting meanwhile; `Retry-After` stays
   within one window. Windows older than 1 hour are pruned by `sessions.prune`.

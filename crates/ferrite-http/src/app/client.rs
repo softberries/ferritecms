@@ -1,4 +1,5 @@
-//! The client's address, for logs (`server.trusted_proxies`).
+//! The client's address (`server.trusted_proxies`), for logs **and for the per-IP rate
+//! limits** of login and bearer tokens (`login:ip:<hash>`, `token:ip:<hash>`; 07 §2).
 //!
 //! What is honoured, and only when the TCP peer is inside
 //! [`HttpConfig::trusted_proxies`](super::HttpConfig::trusted_proxies):
@@ -14,13 +15,19 @@
 //!   the cache key's host is pinned to it (ruling R25).
 //!
 //! From any other peer, every forwarding header is ignored and the peer address is the
-//! client. The result is stored as a [`ClientIp`] request extension and logged as
-//! `client_ip` on the request span. Requests without a peer address (in-process tests)
-//! get no extension.
+//! client. Behind a reverse proxy that is not listed, every request therefore has the
+//! proxy's address, and the per-IP limits become one bucket for the whole site (10 bad
+//! logins a minute from anyone lock everyone out of logging in). An `X-Forwarded-For`
+//! from an untrusted peer is the sign of that misconfiguration, so it is logged as a
+//! warning once per peer address (for the first [`MAX_WARNED_PEERS`] peers of the
+//! process; M2a-1 R26). The result is stored as a [`ClientIp`] request extension and
+//! logged as `client_ip` on the request span. Requests without a peer address
+//! (in-process tests) get no extension.
 
 use std::{
+    collections::HashSet,
     net::{IpAddr, SocketAddr},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use axum::{
@@ -75,14 +82,57 @@ fn parse_entry(entry: &str) -> Option<IpAddr> {
         .map(|ip| ip.to_canonical())
 }
 
+/// Most distinct untrusted peers whose `X-Forwarded-For` is warned about per process.
+pub const MAX_WARNED_PEERS: usize = 64;
+
+/// The state of [`record_client`]: the trusted proxies, and the untrusted peers already
+/// warned about.
+pub(crate) struct ClientResolver {
+    trusted: Arc<[IpNet]>,
+    warned: Mutex<HashSet<IpAddr>>,
+}
+
+impl ClientResolver {
+    pub(crate) fn new(trusted: Arc<[IpNet]>) -> Self {
+        Self {
+            trusted,
+            warned: Mutex::new(HashSet::new()),
+        }
+    }
+
+    /// Whether a request from `peer` with `headers` should log the misconfigured-proxy
+    /// warning: the peer is not trusted, the request has `X-Forwarded-For`, and this
+    /// peer was not reported yet (at most [`MAX_WARNED_PEERS`] peers are).
+    fn should_warn(&self, peer: IpAddr, headers: &HeaderMap) -> bool {
+        let peer = peer.to_canonical();
+        if !headers.contains_key("x-forwarded-for")
+            || self.trusted.iter().any(|net| net.contains(&peer))
+        {
+            return false;
+        }
+        // A poisoned lock only means another thread panicked mid-insert: the set is
+        // still a valid set.
+        let mut warned = self.warned.lock().unwrap_or_else(|e| e.into_inner());
+        warned.len() < MAX_WARNED_PEERS && warned.insert(peer)
+    }
+}
+
 /// Middleware: inserts [`ClientIp`] when the connection's peer address is known.
 pub(crate) async fn record_client(
-    State(trusted): State<Arc<[IpNet]>>,
+    State(resolver): State<Arc<ClientResolver>>,
     mut req: Request,
     next: Next,
 ) -> Response {
     if let Some(ConnectInfo(peer)) = req.extensions().get::<ConnectInfo<SocketAddr>>().copied() {
-        let ip = client_ip(peer.ip(), req.headers(), &trusted);
+        if resolver.should_warn(peer.ip(), req.headers()) {
+            tracing::warn!(
+                peer = %peer.ip().to_canonical(),
+                "X-Forwarded-For from a peer outside server.trusted_proxies is ignored; \
+                 if this is your reverse proxy, add it to server.trusted_proxies, or the \
+                 per-IP login and token rate limits treat every client as this one address"
+            );
+        }
+        let ip = client_ip(peer.ip(), req.headers(), &resolver.trusted);
         req.extensions_mut().insert(ClientIp(ip));
     }
     next.run(req).await
@@ -108,6 +158,26 @@ mod tests {
             h.append("x-forwarded-for", HeaderValue::from_str(v).unwrap());
         }
         h
+    }
+
+    #[test]
+    fn untrusted_forwarding_is_warned_once_per_peer() {
+        let resolver = ClientResolver::new(nets(&["10.0.0.0/8"]).into());
+        let h = xff(&["1.1.1.1"]);
+        // A trusted proxy, or no header: never.
+        assert!(!resolver.should_warn(ip("10.0.0.5"), &h));
+        assert!(!resolver.should_warn(ip("9.9.9.9"), &HeaderMap::new()));
+        // Once per untrusted peer (IPv4-mapped counts as IPv4).
+        assert!(resolver.should_warn(ip("9.9.9.9"), &h));
+        assert!(!resolver.should_warn(ip("9.9.9.9"), &h));
+        assert!(!resolver.should_warn(ip("::ffff:9.9.9.9"), &h));
+        assert!(resolver.should_warn(ip("8.8.8.8"), &h));
+        // At most MAX_WARNED_PEERS peers in all.
+        for i in 2..MAX_WARNED_PEERS {
+            let peer = IpAddr::from([192, 0, 2, u8::try_from(i).unwrap()]);
+            assert!(resolver.should_warn(peer, &h), "{peer}");
+        }
+        assert!(!resolver.should_warn(ip("203.0.113.1"), &h));
     }
 
     #[test]
