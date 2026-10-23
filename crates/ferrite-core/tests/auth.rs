@@ -494,7 +494,7 @@ async fn totp_enroll_login_and_replay(db: &TestDb) {
             % 1_000_000
     );
     assert!(matches!(
-        auth.totp_confirm(&actor, &setup.enrollment, &wrong, PASSWORD)
+        auth.totp_confirm(&actor, None, &setup.enrollment, &wrong, PASSWORD)
             .await,
         Err(CoreError::Invalid(_))
     ));
@@ -503,6 +503,7 @@ async fn totp_enroll_login_and_replay(db: &TestDb) {
     assert!(matches!(
         auth.totp_confirm(
             &Actor::new(other.id, other.role),
+            None,
             &setup.enrollment,
             &code,
             PASSWORD
@@ -512,13 +513,13 @@ async fn totp_enroll_login_and_replay(db: &TestDb) {
     ));
     // The right code without the account's password does not enable it either.
     assert!(matches!(
-        auth.totp_confirm(&actor, &setup.enrollment, &code, "not the password")
+        auth.totp_confirm(&actor, None, &setup.enrollment, &code, "not the password")
             .await,
         Err(CoreError::Forbidden("current password"))
     ));
     assert!(stored(db.store(), &user).await.totp_secret.is_none());
 
-    auth.totp_confirm(&actor, &setup.enrollment, &code, PASSWORD)
+    auth.totp_confirm(&actor, None, &setup.enrollment, &code, PASSWORD)
         .await
         .unwrap();
     let row = stored(db.store(), &user).await;
@@ -611,7 +612,7 @@ async fn enrol(auth: &AuthService, clock: &Clock, user: &User) -> totp_rs::Totp 
     let setup = auth.totp_setup(&actor).await.unwrap();
     let totp = authenticator(&setup);
     let code = totp.generate(clock.secs()).to_string();
-    auth.totp_confirm(&actor, &setup.enrollment, &code, PASSWORD)
+    auth.totp_confirm(&actor, None, &setup.enrollment, &code, PASSWORD)
         .await
         .unwrap();
     totp
@@ -706,7 +707,7 @@ async fn totp_attempts_are_rate_limited(db: &TestDb) {
     for i in 0..5 {
         assert!(
             matches!(
-                auth.totp_confirm(&ann_actor, &setup.enrollment, &wrong, PASSWORD)
+                auth.totp_confirm(&ann_actor, None, &setup.enrollment, &wrong, PASSWORD)
                     .await,
                 Err(CoreError::Invalid(_))
             ),
@@ -716,7 +717,7 @@ async fn totp_attempts_are_rate_limited(db: &TestDb) {
     }
     let code = totp.generate(clock.secs()).to_string();
     assert!(rate_limited(
-        auth.totp_confirm(&ann_actor, &setup.enrollment, &code, PASSWORD)
+        auth.totp_confirm(&ann_actor, None, &setup.enrollment, &code, PASSWORD)
             .await
     ));
     assert!(stored(db.store(), &ann).await.totp_secret.is_none());
@@ -961,6 +962,64 @@ async fn rehash_on_login_when_params_change(db: &TestDb) {
     session(&auth, "old").await;
 }
 
+/// R26 (M2): enabling TOTP ends the user's other sessions, so a stolen cookie stops
+/// working; the session that confirmed is kept. Confirmed through a token (no session
+/// to keep), every session ends. Other users' sessions are untouched.
+async fn totp_confirm_ends_other_sessions(db: &TestDb) {
+    let clock = Clock::new();
+    let auth = auth_on(db.shared_store(), &clock);
+    let session_of = |o: LoginOutcome| match o {
+        LoginOutcome::Session(s) => s,
+        _ => panic!("expected a session"),
+    };
+    let mia = make_user(db, "mia", Role::Author).await;
+    let bystander = make_user(db, "bo", Role::Author).await;
+    let mine = session_of(auth.login(attempt("mia", PASSWORD, None)).await.unwrap());
+    let stolen = session_of(
+        auth.login(attempt("mia@example.com", PASSWORD, None))
+            .await
+            .unwrap(),
+    );
+    let theirs = session_of(auth.login(attempt("bo", PASSWORD, None)).await.unwrap());
+
+    let actor = Actor::new(mia.id, mia.role);
+    let setup = auth.totp_setup(&actor).await.unwrap();
+    let code = authenticator(&setup).generate(clock.secs()).to_string();
+    auth.totp_confirm(
+        &actor,
+        Some(&mine.session.id_hash),
+        &setup.enrollment,
+        &code,
+        PASSWORD,
+    )
+    .await
+    .unwrap();
+    let alive = |s: &IssuedSession| {
+        let token = s.token.expose().to_owned();
+        let auth = &auth;
+        async move { auth.resolve_session(&token).await.unwrap().is_some() }
+    };
+    assert!(alive(&mine).await, "the confirming session is kept");
+    assert!(!alive(&stolen).await, "other sessions end");
+    assert!(alive(&theirs).await, "other users are untouched");
+
+    // Through a token there is no session to keep: all of them end.
+    let other = session_of(
+        auth.login(attempt("bo@example.com", PASSWORD, None))
+            .await
+            .unwrap(),
+    );
+    let bo = Actor::new(bystander.id, bystander.role);
+    let setup = auth.totp_setup(&bo).await.unwrap();
+    let code = authenticator(&setup).generate(clock.secs()).to_string();
+    auth.totp_confirm(&bo, None, &setup.enrollment, &code, PASSWORD)
+        .await
+        .unwrap();
+    assert!(!alive(&theirs).await);
+    assert!(!alive(&other).await);
+    assert!(alive(&mine).await);
+}
+
 backend_tests!(
     login_issues_session_and_resolves,
     unknown_user_wrong_password_and_disabled_look_the_same,
@@ -969,6 +1028,7 @@ backend_tests!(
     touch_is_throttled,
     revocation_is_immediate_on_peer,
     totp_enroll_login_and_replay,
+    totp_confirm_ends_other_sessions,
     totp_login_needs_both_factors,
     totp_attempts_are_rate_limited,
     csrf_token_is_bound_to_the_session,

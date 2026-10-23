@@ -699,9 +699,14 @@ impl AuthService {
     /// * Then each checked code counts on `totp:user:<id>` (5/min, shared with
     ///   `login_totp`); a wrong code is `Invalid`. Either limit exceeded →
     ///   `RateLimited`.
+    /// * On success the user's other sessions are deleted in the same `Tx` (R26): a user
+    ///   who enrolls because a session may be stolen ends it. `keep_session` is the
+    ///   `id_hash` of the caller's session (`None` through an API token: every session
+    ///   ends). API tokens are kept.
     pub async fn totp_confirm(
         &self,
         actor: &Actor,
+        keep_session: Option<&str>,
         enrollment: &str,
         code: &str,
         password: &str,
@@ -759,6 +764,7 @@ impl AuthService {
             if !tx.users().advance_totp_step(user.id, step).await? {
                 return Err(wrong());
             }
+            tx.sessions().delete_for_user(user.id, keep_session).await?;
             user_audit(tx.as_ref(), actor, "totp.enable", user.id).await
         }
         .await;

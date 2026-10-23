@@ -201,9 +201,10 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   Idle timeout 7 days, absolute 30 days, `last_seen_at` written at most every 5 minutes. No
   per-node cache: every request reads its session row, so a revocation applies on every
   node at once. Sessions are deleted on logout, on a password change (the API then issues a
-  new cookie for the caller), on a role change, disable and delete, and by `ferrite user
-  reset-password`. A cookie sent with a successful login is deleted server-side (no session
-  fixation). The cookie has no `__Host-` prefix yet (M2a-2).
+  new cookie for the caller), on a role change, disable and delete, by `ferrite user
+  reset-password`, and when TOTP is enabled (all but the confirming session, R26). A
+  cookie sent with a successful login is deleted server-side (no session fixation). The
+  cookie has no `__Host-` prefix yet (M2a-2).
 - **CSRF and origin** (P8): a cookie-authenticated request with a method other than GET or
   HEAD needs `X-CSRF-Token` = base64url(HMAC-SHA256(session `csrf_secret`,
   `"ferrite-csrf:v1:" + id_hash`)) and an `Origin` equal to the `site.url` origin (without
@@ -241,14 +242,17 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
 - **TOTP** (P9): RFC 6238 SHA-1, 6 digits, 30 s steps, skew 1, 20-byte secrets. `POST
   /auth/totp/setup` returns the secret (base32), an `otpauth://` URL and a sealed
   `enrollment` (valid 10 minutes, nothing stored); `POST /auth/totp/confirm` with the
-  enrollment, a code and the current password stores the secret sealed under the site key; setup while TOTP is on is
-  `422` (disable first). A correct password for an account with TOTP answers `{ "status":
-  "totp_required", "challenge" }` (a sealed blob, valid 5 minutes, bound to the current
-  password hash) instead of `{ "status": "session", "user", "csrf_token" }`; `POST
-  /auth/login/totp` finishes it. A code's step must be newer than `users.totp_last_step` (one conditional
-  update), so a code cannot be replayed. The issuer is the configured `site.title`
-  (`ferrite.toml`, read at startup) without `:` (`FerriteCMS` when empty). There are no
-  recovery codes: an operator runs `ferrite user disable-totp --login <login>`.
+  enrollment, a code and the current password stores the secret sealed under the site
+  key and deletes the user's other sessions in the same `Tx` (R26; the confirming
+  session is kept, through a token every session ends, API tokens are kept); setup while
+  TOTP is on is `422` (disable first). A correct password for an account with TOTP
+  answers `{ "status": "totp_required", "challenge" }` (a sealed blob, valid 5 minutes,
+  bound to the current password hash) instead of `{ "status": "session", "user",
+  "csrf_token" }`; `POST /auth/login/totp` finishes it. A code's step must be newer than
+  `users.totp_last_step` (one conditional update), so a code cannot be replayed. The
+  issuer is the configured `site.title` (`ferrite.toml`, read at startup) without `:`
+  (`FerriteCMS` when empty). There are no recovery codes: an operator runs `ferrite user
+  disable-totp --login <login>`.
 - **Site key** (P4, R1; [01 §4](01-architecture.md#4-configuration), §8):
   `auth.secret_key[_file]`, or in solo mode `<data>/secret.key`; cluster mode refuses to
   start without a configured key. It seals TOTP secrets and login/enrollment challenges and

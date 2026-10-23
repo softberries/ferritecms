@@ -457,8 +457,13 @@ pub async fn totp_confirm(
     Authed(who): Authed,
     ApiJson(req): ApiJson<TotpConfirm>,
 ) -> Result<StatusCode, Problem> {
+    // The caller's session survives; the user's other sessions end (R26).
+    let keep = match &who.via {
+        Via::Session(s) => Some(s.id_hash.as_str()),
+        Via::Token(_) => None,
+    };
     api.auth
-        .totp_confirm(&who.actor, &req.enrollment, &req.code, &req.password)
+        .totp_confirm(&who.actor, keep, &req.enrollment, &req.code, &req.password)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -573,6 +573,8 @@ async fn totp_login_flow_over_http(api: Api) -> Api {
     // Logins by e-mail here: the password re-checks below count on the login's own
     // bucket (5/min, R11).
     let mut c = api.logged_in("ann@example.com").await;
+    // A second session, ended by the enrollment (R26).
+    let other = api.logged_in("ann@example.com").await;
 
     let r = c.post_empty(&api, TOTP_SETUP).await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
@@ -613,6 +615,7 @@ async fn totp_login_flow_over_http(api: Api) -> Api {
         .await;
     assert_eq!(r.status, StatusCode::NO_CONTENT, "{r:?}");
     assert_eq!(c.get(&api, ME).await.json()["totp_enabled"], true);
+    assert_unauthenticated(&me_with_cookie(&api, other.cookie.as_deref().unwrap()).await);
 
     // The password alone gives a challenge, no cookie.
     let mut d = Client::new();
