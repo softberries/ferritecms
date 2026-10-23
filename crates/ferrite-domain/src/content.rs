@@ -104,6 +104,15 @@ pub enum ContentOrder {
     TitleAsc,
 }
 
+/// The reader of a [`ContentQuery::readable_by`] / `SearchQuery::readable_by` filter:
+/// who reads, and the instant "publicly visible" is judged at (core's clock, so the SQL
+/// filter agrees with core's `is_public` re-check).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadableBy {
+    pub user: UserId,
+    pub now: Timestamp,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContentQuery {
     pub kind: Option<String>,
@@ -112,9 +121,11 @@ pub struct ContentQuery {
     pub parent: ParentFilter,
     pub term: Option<TermId>,
     pub author: Option<UserId>,
-    /// Only items this user may read in the admin without `edit_others`: published
-    /// items, or items authored by this user (any status). `None`: no such filter.
-    pub readable_by: Option<UserId>,
+    /// Only items [`ReadableBy::user`] may read in the admin without `edit_others`:
+    /// items publicly visible at [`ReadableBy::now`] (`status = published` and
+    /// `published_at <= now`; a NULL `published_at` never matches), or items authored by
+    /// this user (any status). `None`: no such filter.
+    pub readable_by: Option<ReadableBy>,
     /// Only these items. **Empty means no filter, not "match nothing"**: a caller that
     /// computed an empty id set must short-circuit instead of querying. At most 200
     /// (`Invalid` beyond).

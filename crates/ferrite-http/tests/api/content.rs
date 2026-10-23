@@ -25,6 +25,7 @@ api_tests!(
     type_mismatch_is_404,
     revisions_over_http,
     others_unpublished_items_are_hidden,
+    others_future_dated_items_are_hidden,
     others_items_are_403,
     json_problems_are_no_store,
 );
@@ -1155,6 +1156,123 @@ async fn others_unpublished_items_are_hidden(api: Api) -> Api {
         ids(&e2.get(&api, &format!("{POSTS}?q=narwhal")).await),
         sorted(all)
     );
+    api
+}
+
+/// Moves item `id`'s `published_at` an hour into the future, bypassing the lifecycle
+/// (a lagging node's clock, a direct store write, or an import can leave one there).
+async fn make_future_dated(api: &Api, id: &str) {
+    let id: ferrite_domain::ContentId = id.parse().unwrap();
+    let mut item = api.store.read().content().get(id).await.unwrap().unwrap();
+    let later = ferrite_domain::Timestamp::now().as_micros() + 3_600_000_000;
+    item.published_at = Some(ferrite_domain::Timestamp::from_micros(later).unwrap());
+    api.store.read().content().update(&item).await.unwrap();
+}
+
+/// R23: "published" in `can_read` means publicly visible now. Another author's item in
+/// status published with a future `published_at` is hidden from contributors and
+/// authors like a draft (single GET, revisions, list, `q` search, the 412 body); its
+/// owner and editors still read it.
+async fn others_future_dated_items_are_hidden(api: Api) -> Api {
+    let ed = api.user("ed", Role::Editor, false).await;
+    let eb = api.bearer(&ed, &["*"]).await;
+    let cora = api.user("cora", Role::Contributor, false).await;
+    let cb = api.bearer(&cora, &["*"]).await;
+    let ann = api.user("ann", Role::Author, false).await;
+    let ab = api.bearer(&ann, &["*"]).await;
+    let body = |t: &str| json!({"title": t, "body": doc("future platypus news")});
+    let mut made = Vec::new();
+    for title in ["Ed future", "Ed live"] {
+        let item = create(&api, &eb, POSTS, body(title)).await;
+        let r = eb
+            .send(
+                &api,
+                Method::POST,
+                &format!("{}/publish", item_path(POSTS, &item)),
+                None,
+                Some(1),
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::OK, "{r:?}");
+        made.push(r.json());
+    }
+    let (future, live) = (&made[0], &made[1]);
+    make_future_dated(&api, future["id"].as_str().unwrap()).await;
+    let ids = |r: &Resp| -> Vec<String> {
+        assert_eq!(r.status, StatusCode::OK, "{r:?}");
+        r.json()["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let live_id = live["id"].as_str().unwrap().to_owned();
+    let path = item_path(POSTS, future);
+    let rev = eb.get(&api, &format!("{path}/revisions")).await.json()["items"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for (who, b) in [("contributor", &cb), ("author", &ab)] {
+        b.get(&api, &path).await.assert_problem(404, "not-found");
+        b.get(&api, &format!("{path}/revisions"))
+            .await
+            .assert_problem(404, "not-found");
+        b.get(&api, &format!("{path}/revisions/{rev}"))
+            .await
+            .assert_problem(404, "not-found");
+        assert_eq!(
+            ids(&b.get(&api, POSTS).await),
+            std::slice::from_ref(&live_id),
+            "{who}"
+        );
+        assert_eq!(
+            ids(&b.get(&api, &format!("{POSTS}?status=published")).await),
+            std::slice::from_ref(&live_id),
+            "{who}"
+        );
+        assert_eq!(
+            ids(&b.get(&api, &format!("{POSTS}?q=platypus")).await),
+            std::slice::from_ref(&live_id),
+            "{who}"
+        );
+        // A stale write is 404 like a read: no 412, never the item in `current`.
+        let r = b
+            .send(
+                &api,
+                Method::POST,
+                &format!("{path}/unpublish"),
+                None,
+                Some(99),
+            )
+            .await;
+        let p = r.assert_problem(404, "not-found");
+        assert!(p.get("current").is_none(), "{who}: {r:?}");
+    }
+    // The owner and another editor still read it, and its 412 carries `current`.
+    let ed2 = api.user("ed2", Role::Editor, false).await;
+    let e2 = api.bearer(&ed2, &["*"]).await;
+    for b in [&eb, &e2] {
+        ok_item(&b.get(&api, &path).await);
+        let r = b.get(&api, &format!("{path}/revisions")).await;
+        assert_eq!(r.status, StatusCode::OK, "{r:?}");
+        let mut got = ids(&b.get(&api, &format!("{POSTS}?q=platypus")).await);
+        got.sort();
+        let mut want = vec![future["id"].as_str().unwrap().to_owned(), live_id.clone()];
+        want.sort();
+        assert_eq!(got, want);
+        let r = b
+            .send(
+                &api,
+                Method::POST,
+                &format!("{path}/unpublish"),
+                None,
+                Some(99),
+            )
+            .await;
+        let p = r.assert_problem(412, "precondition-failed");
+        assert_eq!(p["current"]["id"], future["id"]);
+    }
     api
 }
 

@@ -379,7 +379,6 @@ fn files_and_reserved_routes() {
     );
 }
 
-/// Review Focus 3: path tricks are 404 or a canonical 301, never another item.
 /// `/_preview/<id>`: exactly a lowercase hyphenated UUID, no trailing slash, never
 /// redirected; anything else under `/_preview` is 404 (P20, F27).
 #[test]
@@ -421,6 +420,7 @@ fn preview_paths() {
     }
 }
 
+/// Review Focus 3: path tricks are 404 or a canonical 301, never another item.
 #[test]
 fn path_tricks() {
     let long_ok = format!("/{}/", "a".repeat(2046));

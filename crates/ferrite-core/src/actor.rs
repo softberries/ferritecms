@@ -1,6 +1,6 @@
 //! Who is acting, what their role allows (07 §1), and which token scopes narrow it (P6).
 
-use ferrite_domain::{ContentItem, ContentStatus, Role, UserId};
+use ferrite_domain::{ContentItem, ContentStatus, Role, Timestamp, UserId};
 
 use crate::CoreError;
 
@@ -308,15 +308,18 @@ pub(crate) fn require_scope(actor: &Actor, scope: Option<Scope>) -> Result<(), C
     }
 }
 
-/// Whether `actor` may read `item` in the admin (after [`require_read`]`(Content)`):
-/// published items are readable by everyone, own items in any status by their author,
-/// and everything else (others' drafts, pending, scheduled, private and trashed items)
-/// needs a role holding `edit_others` (editor, admin). There is no separate
+/// Whether `actor` may read `item` in the admin (after [`require_read`]`(Content)`) at
+/// `now`: items publicly visible at `now` (the same predicate as the public site,
+/// [`is_public`](crate::site::is_public): status published and `published_at <= now`)
+/// are readable by everyone, own items in any status by their author, and everything
+/// else (others' drafts, pending, scheduled, private, trashed and future-dated
+/// published items) needs a role holding `edit_others` (editor, admin). The SQL mirror
+/// is `ContentQuery::readable_by` / `SearchQuery::readable_by`. There is no separate
 /// `read_private` capability: WordPress's `read_private_posts` is granted to the same
 /// roles as `edit_others_posts`, so `edit_others` stands for it. Only the role is
 /// checked, not a write scope: an admin's `content:read` token reads every item.
-pub fn can_read(actor: &Actor, item: &ContentItem) -> bool {
-    item.status == ContentStatus::Published
+pub fn can_read(actor: &Actor, item: &ContentItem, now: Timestamp) -> bool {
+    crate::site::is_public(item, now)
         || item.author_id == actor.user
         || can(actor.role, Capability::EditOthers)
 }

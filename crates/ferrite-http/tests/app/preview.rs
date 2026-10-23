@@ -71,6 +71,17 @@ async fn preview_renders_draft_for_editor(app: App) -> App {
     let r = app.send(head).await;
     assert_eq!(r.status, StatusCode::OK);
     assert_private_noindex(&r);
+    // No validator, and `If-None-Match` never yields a 304 (no-store).
+    let r = app.get_with_cookie(&preview_path(draft.id), &cookie).await;
+    assert_eq!(r.header("etag"), None, "{r:?}");
+    let mut conditional = with_cookie(&preview_path(draft.id), &cookie);
+    conditional
+        .headers_mut()
+        .insert("if-none-match", "*".parse().unwrap());
+    let r = app.send(conditional).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert!(r.body.contains("<h1>Secret draft</h1>"));
+    assert_private_noindex(&r);
     app
 }
 
@@ -195,6 +206,7 @@ async fn logged_in_bypasses_cache(app: App) -> App {
     assert!(r.body.contains("<h1>Hello</h1>"));
     assert_eq!(r.header("cache-control"), Some("private, no-store"));
     assert!(r.header("set-cookie").is_none());
+    let etag = r.header("etag").unwrap().to_owned();
     assert_eq!(
         app.state.renders(),
         renders + 1,
@@ -204,6 +216,16 @@ async fn logged_in_bypasses_cache(app: App) -> App {
     let r = app.get("/hello/").await;
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(app.state.renders(), renders + 1, "anonymous: cache hit");
+
+    // A conditional logged-in request: 304, still `private, no-store`, nothing stored.
+    let mut conditional = with_cookie("/hello/", &cookie);
+    conditional
+        .headers_mut()
+        .insert("if-none-match", etag.parse().unwrap());
+    let r = app.send(conditional).await;
+    assert_eq!(r.status, StatusCode::NOT_MODIFIED, "{r:?}");
+    assert_eq!(r.header("cache-control"), Some("private, no-store"));
+    assert_eq!(app.cached().await, cached);
 
     // The other direction: a logged-in render is not stored for anonymous visitors.
     let r = app.get_with_cookie("/other/", &cookie).await;
@@ -237,24 +259,43 @@ async fn per_user_variant_caches_per_user(app: App) -> App {
         None => send(&router, request(Method::GET, "/shared/")).await,
     };
 
+    // The anonymous entry exists first; a user under per-user renders their own.
     let renders = state.renders();
+    let anon = get(None).await;
+    assert_eq!(anon.status, StatusCode::OK);
+    assert_eq!(state.cache.len().await, 1);
     for c in [&ada, &eddie] {
         let r = get(Some(c)).await;
         assert_eq!(r.status, StatusCode::OK);
         assert_eq!(r.header("cache-control"), Some("private, no-store"));
     }
-    assert_eq!(state.renders(), renders + 2, "one render per user");
-    assert_eq!(state.cache.len().await, 2, "one entry per user");
+    assert_eq!(
+        state.renders(),
+        renders + 3,
+        "one render per user, not the anon page"
+    );
+    assert_eq!(
+        state.cache.len().await,
+        3,
+        "one entry per user next to anonymous"
+    );
     for c in [&ada, &eddie] {
         get(Some(c)).await;
     }
-    assert_eq!(state.renders(), renders + 2, "per-user hits");
-    // Anonymous has its own entry; users never read it.
     get(None).await;
-    assert_eq!(state.renders(), renders + 3);
-    assert_eq!(state.cache.len().await, 3);
+    assert_eq!(state.renders(), renders + 3, "per-user and anonymous hits");
+    // A conditional request from a logged-in user: 304 still `private, no-store`.
+    let etag = get(Some(&ada)).await.header("etag").unwrap().to_owned();
+    let mut conditional = with_cookie("/shared/", &ada);
+    conditional
+        .headers_mut()
+        .insert("if-none-match", etag.parse().unwrap());
+    let r = send(&router, conditional).await;
+    assert_eq!(r.status, StatusCode::NOT_MODIFIED, "{r:?}");
+    assert_eq!(r.header("cache-control"), Some("private, no-store"));
     // An invalid cookie is anonymous: the anonymous entry.
     let r = get(Some("ferrite_session=bogus")).await;
+    assert_eq!(r.body, anon.body);
     assert_eq!(state.renders(), renders + 3);
     assert_eq!(r.header("cache-control"), None);
 
@@ -367,8 +408,24 @@ async fn anonymous_requests_skip_the_session_lookup(app: App) -> App {
         anon,
         "an unrelated cookie is not a session"
     );
+    // Junk that cannot be one of our tokens is dropped without a store read.
+    for junk in ["bogus", &"x".repeat(44), &format!("{}=", "a".repeat(42))] {
+        counting.reset();
+        send(
+            &router,
+            with_cookie("/hello/", &format!("ferrite_session={junk}")),
+        )
+        .await;
+        assert_eq!(
+            counting.calls(),
+            anon,
+            "junk cookie {junk:?}: no session read"
+        );
+    }
+    // A well-formed unknown token costs exactly the one session read.
     counting.reset();
-    send(&router, with_cookie("/hello/", "ferrite_session=bogus")).await;
+    let unknown = format!("ferrite_session={}", "A".repeat(43));
+    send(&router, with_cookie("/hello/", &unknown)).await;
     assert_eq!(counting.calls(), anon + 1, "one session read");
     app
 }

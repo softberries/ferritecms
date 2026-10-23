@@ -12,6 +12,13 @@ const INTERNAL: char = '\0';
 /// with `cache.logged_in = "per-user"` a logged-in user's pages are stored under
 /// [`User`](Self::User) (P21), never shown to anyone else. Dependency invalidation
 /// does not look at the variant: an edit drops every variant of a page.
+///
+/// **Invariant:** the user id alone is the key because no user-specific data reaches
+/// the render (plugins see only `is_logged_in`; templates get no user, role or
+/// capability). Per-user output added later must put role/capabilities into the key
+/// (or bypass the cache) and invalidate `user:<id>` on role change and logout. Entries
+/// are not evicted on logout: an ended session no longer resolves, so they are
+/// unreachable until LRU or invalidation drops them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Variant {
     Anon,

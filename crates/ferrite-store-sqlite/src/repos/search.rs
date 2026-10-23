@@ -94,8 +94,11 @@ impl SearchRepo for SqliteRepos {
             list.push_unseparated(")");
         }
         if let Some(reader) = query.readable_by {
-            qb.push(" AND (c.status = 'published' OR c.author_id = ")
-                .push_bind(reader.as_uuid())
+            // Publicly visible now (core's `is_public`), or the reader's own item.
+            qb.push(" AND ((c.status = 'published' AND c.published_at <= ")
+                .push_bind(reader.now.as_micros())
+                .push(") OR c.author_id = ")
+                .push_bind(reader.user.as_uuid())
                 .push(")");
         }
         if let Some((rank, id)) = plan.after {

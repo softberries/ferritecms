@@ -22,7 +22,7 @@ pub use auth::{
 };
 pub use content::{
     ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, NewContent, ParentFilter,
-    Revision,
+    ReadableBy, Revision,
 };
 pub use event::{Event, NewEvent};
 pub use ids::{

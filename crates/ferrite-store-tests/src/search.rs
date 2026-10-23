@@ -1,6 +1,6 @@
 //! Contract tests for full-text search (FTS5 on SQLite, tsvector on Postgres).
 
-use ferrite_domain::{ContentId, ContentStatus, MAX_PAGE, SearchQuery};
+use ferrite_domain::{ContentId, ContentStatus, MAX_PAGE, ReadableBy, SearchQuery, Timestamp};
 use ferrite_store::{SearchRepo, Store, StoreError};
 
 use crate::{
@@ -515,6 +515,8 @@ pub async fn search_readable_by(db: &TestDb) {
     ] {
         let mut n = new_post(author, slug);
         n.status = status;
+        n.published_at =
+            (status == ContentStatus::Published).then(|| Timestamp::from_micros(1_000).unwrap());
         let item = store.read().content().insert(&n).await.unwrap();
         store
             .read()
@@ -535,7 +537,10 @@ pub async fn search_readable_by(db: &TestDb) {
     let mut got = store
         .read()
         .search()
-        .search(&query(Some(me.id)))
+        .search(&query(Some(ReadableBy {
+            user: me.id,
+            now: Timestamp::now(),
+        })))
         .await
         .unwrap()
         .items;
@@ -552,7 +557,10 @@ pub async fn search_readable_by(db: &TestDb) {
         .items;
     assert_eq!(all.len(), 4);
     // Paging stays exact under the filter.
-    let mut q = query(Some(me.id));
+    let mut q = query(Some(ReadableBy {
+        user: me.id,
+        now: Timestamp::now(),
+    }));
     q.limit = 1;
     let first = store.read().search().search(&q).await.unwrap();
     assert_eq!(first.items.len(), 1);
@@ -561,4 +569,62 @@ pub async fn search_readable_by(db: &TestDb) {
     assert_eq!(second.items.len(), 1);
     assert!(second.next_cursor.is_none());
     assert_ne!(first.items, second.items);
+}
+
+/// Search `readable_by` judges "published" at its `now` (R23), like the content list.
+pub async fn search_readable_by_hides_future_dated(db: &TestDb) {
+    let store = db.store();
+    let me = fixture_user(store).await;
+    let other = fixture_user(store).await;
+    let now = Timestamp::now().as_micros();
+    let hour = 3_600_000_000;
+    let mut ids = Vec::new();
+    for (author, slug, at) in [
+        (&other, "quokka-past", Some(now - hour)),
+        (&other, "quokka-future", Some(now + hour)),
+        (&me, "quokka-mine-future", Some(now + hour)),
+        (&other, "quokka-undated", None),
+    ] {
+        let mut n = new_post(author, slug);
+        n.status = ContentStatus::Published;
+        n.published_at = at.map(|m| Timestamp::from_micros(m).unwrap());
+        let item = store.read().content().insert(&n).await.unwrap();
+        store
+            .read()
+            .search()
+            .index(item.id, "quokka", slug)
+            .await
+            .unwrap();
+        ids.push(item.id);
+    }
+    let at = |m: i64| async move {
+        let mut got = store
+            .read()
+            .search()
+            .search(&SearchQuery {
+                q: "quokka".into(),
+                kinds: Vec::new(),
+                statuses: Vec::new(),
+                readable_by: Some(ReadableBy {
+                    user: me.id,
+                    now: Timestamp::from_micros(m).unwrap(),
+                }),
+                limit: 50,
+                cursor: None,
+            })
+            .await
+            .unwrap()
+            .items;
+        got.sort();
+        got
+    };
+    let sorted = |mut v: Vec<ContentId>| {
+        v.sort();
+        v
+    };
+    assert_eq!(at(now).await, sorted(vec![ids[0], ids[2]]));
+    assert_eq!(
+        at(now + 2 * hour).await,
+        sorted(vec![ids[0], ids[1], ids[2]])
+    );
 }

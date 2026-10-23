@@ -2,7 +2,7 @@
 
 use ferrite_domain::{
     ContentId, ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, ParentFilter,
-    Revision, RevisionId, Timestamp, User,
+    ReadableBy, Revision, RevisionId, Timestamp, User,
 };
 use ferrite_store::{Store, StoreError};
 use serde_json::json;
@@ -1182,7 +1182,10 @@ pub async fn list_readable_by(db: &TestDb) {
     insert(store, &n).await;
 
     let query = ContentQuery {
-        readable_by: Some(me.id),
+        readable_by: Some(ReadableBy {
+            user: me.id,
+            now: Timestamp::now(),
+        }),
         order: ContentOrder::TitleAsc,
         limit: 1,
         ..Default::default()
@@ -1235,4 +1238,51 @@ pub async fn list_readable_by(db: &TestDb) {
         ..Default::default()
     };
     assert_eq!(store.read().content().count(&all).await.unwrap(), 6);
+}
+
+/// `readable_by` judges "published" at its `now` (R23): another author's item in status
+/// published with `published_at` after `now`, or with no `published_at`, is excluded;
+/// the reader's own future-dated item is included; once `now` passes the publish time
+/// the other author's item is readable too.
+pub async fn list_readable_by_hides_future_dated(db: &TestDb) {
+    let store = db.store();
+    let me = fixture_user(store).await;
+    let other = fixture_user(store).await;
+    let now = Timestamp::now().as_micros();
+    let hour = 3_600_000_000;
+    published(store, &other, "theirs-past", now - hour).await;
+    published(store, &other, "theirs-future", now + hour).await;
+    published(store, &me, "mine-future", now + hour).await;
+    let mut n = new_post(&other, "theirs-undated");
+    n.status = ContentStatus::Published;
+    insert(store, &n).await;
+    let slugs_at = |at: i64| async move {
+        let q = ContentQuery {
+            readable_by: Some(ReadableBy {
+                user: me.id,
+                now: micros(at),
+            }),
+            order: ContentOrder::TitleAsc,
+            limit: 50,
+            ..Default::default()
+        };
+        let count = store.read().content().count(&q).await.unwrap();
+        let slugs: Vec<String> = store
+            .read()
+            .content()
+            .list(&q)
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|i| i.slug)
+            .collect();
+        assert_eq!(count, slugs.len() as u64);
+        slugs
+    };
+    assert_eq!(slugs_at(now).await, ["mine-future", "theirs-past"]);
+    assert_eq!(
+        slugs_at(now + 2 * hour).await,
+        ["mine-future", "theirs-future", "theirs-past"]
+    );
 }

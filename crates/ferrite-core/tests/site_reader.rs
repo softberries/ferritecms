@@ -1228,17 +1228,27 @@ pub async fn preview_is_gated(db: &TestDb) {
         assert_eq!(got.value.item().item.id, id);
         assert_eq!(got.value.status(), status, "real status carried");
         assert!(!got.cacheable, "previews are never cached");
-        // R17 `can_read`: another author sees only items in status published (a
-        // future-dated one included, as in the API).
-        let theirs = r.preview(&actor(&stranger), id).await;
-        if status == ContentStatus::Published {
-            assert_eq!(theirs.unwrap().value.item().item.id, id, "{slug}");
-        } else {
-            assert!(
-                matches!(theirs, Err(CoreError::Forbidden("edit_others"))),
-                "{slug}"
-            );
-        }
+        // R17/R23 `can_read`: another author without `edit_others` sees none of the
+        // hidden items, the future-dated published one included (not public yet).
+        assert!(
+            matches!(
+                r.preview(&actor(&stranger), id).await,
+                Err(CoreError::Forbidden("edit_others"))
+            ),
+            "{slug}"
+        );
+        // The owner previews it in every status.
+        assert_eq!(
+            r.preview(&actor(&writer), id)
+                .await
+                .unwrap()
+                .value
+                .item()
+                .item
+                .id,
+            id,
+            "{slug}"
+        );
     }
     // The contributor previews nobody else's draft, but published items of others.
     let editors = insert(

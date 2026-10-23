@@ -46,8 +46,11 @@ pub type Clock = Arc<dyn Fn() -> Timestamp + Send + Sync>;
 
 /// Longest login or e-mail input accepted at login, in bytes (F7).
 const MAX_LOGIN_INPUT: usize = 254;
-/// Longest cookie or bearer value looked up (ours are 43 and 47 characters).
+/// Longest bearer value looked up (ours are 47 characters; cookies must be exactly
+/// [`SESSION_TOKEN_LEN`]).
 const MAX_TOKEN_INPUT: usize = 256;
+/// Length of a session token: 32 random bytes as base64url without padding.
+const SESSION_TOKEN_LEN: usize = 43;
 /// Longest stored user agent, in characters.
 const MAX_USER_AGENT: usize = 256;
 /// API tokens per user.
@@ -384,8 +387,11 @@ impl AuthService {
     /// The session behind a cookie value. Unknown, past `expires_at`, idle for more than
     /// 7 days, or of a missing or disabled user → `None`; expired rows are deleted on
     /// sight. `last_seen_at` is written when it is more than 5 minutes old.
+    ///
+    /// A value that cannot be one of our tokens (not 43 base64url characters) is `None`
+    /// without a store read, so junk cookies cost nothing on cached public pages.
     pub async fn resolve_session(&self, token: &str) -> Result<Option<Authenticated>, CoreError> {
-        if token.is_empty() || token.len() > MAX_TOKEN_INPUT {
+        if !is_session_token_shape(token) {
             return Ok(None);
         }
         let repos = self.store.read();
@@ -414,7 +420,7 @@ impl AuthService {
 
     /// Deletes the session behind a cookie value (unknown: no-op).
     pub async fn logout(&self, token: &str) -> Result<(), CoreError> {
-        if token.is_empty() || token.len() > MAX_TOKEN_INPUT {
+        if !is_session_token_shape(token) {
             return Ok(());
         }
         let id_hash = sha256_hex(token.as_bytes());
@@ -987,9 +993,34 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+/// Whether `token` has the shape of a session token we issue (43 base64url characters).
+fn is_session_token_shape(token: &str) -> bool {
+    token.len() == SESSION_TOKEN_LEN
+        && token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_token_shape() {
+        let issued = URL_SAFE_NO_PAD.encode([0xfbu8; 32]);
+        assert!(is_session_token_shape(&issued), "{issued}");
+        for bad in [
+            "",
+            "bogus",
+            &"a".repeat(42),
+            &"a".repeat(44),
+            &format!("{}=", "a".repeat(42)),
+            &format!("{}+", "a".repeat(42)),
+            &format!("{}é", "a".repeat(41)),
+        ] {
+            assert!(!is_session_token_shape(bad), "{bad:?}");
+        }
+    }
 
     #[test]
     fn user_agent_is_cut_on_a_char_boundary() {

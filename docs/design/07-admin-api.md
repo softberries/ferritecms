@@ -124,9 +124,11 @@ HTTP layer arrives with M2):
   item gives them nothing. For everyone else `restore` and `delete` need `edit_own` on
   own items and `edit_others` otherwise, whatever the status the item had before.
 - **Reading content (M2a-1 R17)**: every admin read needs `read_admin` and the
-  `content:read` scope, then `can_read`: published items are readable by every role,
+  `content:read` scope, then `can_read`: items publicly visible now (status published and
+  `published_at <= now`, the public site's predicate; R23) are readable by every role,
   own items in any status by their author, and others' draft, pending, scheduled,
-  private and trashed items (and their revisions) only by roles with `edit_others`
+  private, trashed and future-dated published items (and their revisions) only by roles
+  with `edit_others`
   (editor, admin; it also stands for WordPress's `read_private_posts`). An item the actor
   may not read is `404`, never `403`. Lists and `q` search apply the same rule in the
   query, so pages and cursors stay exact. `publish` also accepts a scheduled item

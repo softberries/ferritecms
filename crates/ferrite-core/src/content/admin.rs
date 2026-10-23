@@ -1,12 +1,13 @@
 //! Admin reads of content (lists with filters or search, single items, terms,
 //! revisions) and revision restore. Every read takes the [`Actor`] and checks
 //! `require_read(Content)` (`read_admin` plus the `content:read` scope, F16), so a token
-//! without a content scope reads nothing, and then [`can_read`] per item (R17): others'
-//! unpublished items only for roles with `edit_others`.
+//! without a content scope reads nothing, and then [`can_read`] per item (R17, R23):
+//! others' items that are not publicly visible now (unpublished, or published with a
+//! future `published_at`) only for roles with `edit_others`.
 
 use ferrite_domain::{
     ContentId, ContentItem, ContentOrder, ContentQuery, ContentStatus, Page, ParentFilter,
-    Revision, RevisionId, SearchQuery, TermId, UserId,
+    ReadableBy, Revision, RevisionId, SearchQuery, TermId, Timestamp, UserId,
 };
 
 use super::{ContentDraft, ContentService, Edit, WALKED};
@@ -62,9 +63,10 @@ impl AdminQuery {
 
 impl ContentService {
     /// One page of the items `query` selects (needs `require_read(Content)`). Without
-    /// `edit_others` in its role, `actor` sees only published items and its own (any
-    /// status), as WordPress's REST API does for contributors and authors; the filter is
-    /// part of the query, so pages, cursors and sizes stay exact. With search text, the
+    /// `edit_others` in its role, `actor` sees only items publicly visible now
+    /// (published, `published_at <= now`; R23) and its own (any status), as WordPress's
+    /// REST API does for contributors and authors; the filter is part of the query, so
+    /// pages, cursors and sizes stay exact. With search text, the
     /// ids come from the search index (the query's type, statuses and the same
     /// visibility, best match first) and the items are loaded in that order, dropping any
     /// whose status or visibility changed in between; the search cursor is passed
@@ -81,7 +83,11 @@ impl ContentService {
         } else {
             query.statuses.clone()
         };
-        let readable_by = (!can(actor.role, Capability::EditOthers)).then_some(actor.user);
+        let now = Timestamp::now();
+        let readable_by = (!can(actor.role, Capability::EditOthers)).then_some(ReadableBy {
+            user: actor.user,
+            now,
+        });
         let repos = self.store.read();
         let Some(q) = query.search_text() else {
             return Ok(repos
@@ -125,7 +131,9 @@ impl ContentService {
         // The rows may have changed since the search read them.
         let items = items
             .into_iter()
-            .filter(|i| i.kind == query.kind && statuses.contains(&i.status) && can_read(actor, i))
+            .filter(|i| {
+                i.kind == query.kind && statuses.contains(&i.status) && can_read(actor, i, now)
+            })
             .collect();
         Ok(Page {
             items,
@@ -135,11 +143,11 @@ impl ContentService {
 
     /// Item `id` in any status, if `actor` may read it ([`can_read`] after
     /// `require_read(Content)`). Missing or not readable is `NotFound`, so the existence
-    /// of others' unpublished items is not revealed.
+    /// of others' items that are not publicly visible is not revealed.
     pub async fn get_for(&self, actor: &Actor, id: ContentId) -> Result<ContentItem, CoreError> {
         require_read(actor, Area::Content)?;
         let item = self.get(id).await?;
-        if can_read(actor, &item) {
+        if can_read(actor, &item, Timestamp::now()) {
             Ok(item)
         } else {
             Err(CoreError::NotFound)

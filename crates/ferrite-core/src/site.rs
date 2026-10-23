@@ -102,7 +102,8 @@ pub const MAX_LATEST: u32 = 100;
 pub const SEARCH_CAP: usize = 200;
 
 /// Whether `item` is publicly visible at `now`: published, with a publish time not in
-/// the future.
+/// the future. The one definition of "public": `SiteReader`'s re-checks and
+/// [`can_read`] (admin reads, previews) both use it.
 pub(crate) fn is_public(item: &ContentItem, now: Timestamp) -> bool {
     item.status == ContentStatus::Published && item.published_at.is_some_and(|t| t <= now)
 }
@@ -869,8 +870,8 @@ impl SiteReader {
     }
 
     /// Item `id` in any status but trash, for an actor who may read it in the admin
-    /// ([`can_read`], ruling R17: own items, published items, or `edit_others`; else
-    /// `Forbidden("edit_others")`). Trashed or missing items are `NotFound`. The result
+    /// ([`can_read`] at the reader's clock, rulings R17/R23: own items, items publicly
+    /// visible now, or `edit_others`; else `Forbidden("edit_others")`). Trashed or missing items are `NotFound`. The result
     /// is marked not cacheable.
     pub async fn preview(
         &self,
@@ -883,7 +884,7 @@ impl SiteReader {
         let rules = pinned.as_ref();
         let repos = self.store.read();
         let item = repos.content().get(id).await?.ok_or(CoreError::NotFound)?;
-        if !can_read(actor, &item) {
+        if !can_read(actor, &item, now) {
             return Err(CoreError::Forbidden(Capability::EditOthers.as_str()));
         }
         if item.status == ContentStatus::Trash {

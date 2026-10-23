@@ -397,8 +397,11 @@ fn push_filters(qb: &mut QueryBuilder<Sqlite>, query: &ContentQuery) {
         qb.push(" AND author_id = ").push_bind(author.as_uuid());
     }
     if let Some(reader) = query.readable_by {
-        qb.push(" AND (status = 'published' OR author_id = ")
-            .push_bind(reader.as_uuid())
+        // Publicly visible now (core's `is_public`), or the reader's own item.
+        qb.push(" AND ((status = 'published' AND published_at <= ")
+            .push_bind(reader.now.as_micros())
+            .push(") OR author_id = ")
+            .push_bind(reader.user.as_uuid())
             .push(")");
     }
     if let Some(term) = query.term {

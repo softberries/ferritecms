@@ -73,6 +73,7 @@ backend_tests!(
     revisions_newest_first_and_prune,
     list_filters_ids_exclude_dates,
     list_readable_by,
+    list_readable_by_hides_future_dated,
     count_matches_list,
     get_many_order_and_missing,
     slugs_with_prefix_matches,
@@ -157,6 +158,7 @@ backend_tests!(
     search_semantics_identical,
     search_filters_status_kind_and_pages,
     search_readable_by,
+    search_readable_by_hides_future_dated,
     search_ties_break_by_id_descending,
     cursor_kinds_are_not_interchangeable,
 );

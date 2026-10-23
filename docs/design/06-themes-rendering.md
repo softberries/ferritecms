@@ -182,12 +182,13 @@ session cookie (logged in or anonymous) → page cache (or none: logged-in bypas
 **Previews** (P20). `GET /_preview/<id>` takes the `ferrite_session` cookie only (no bearer
 tokens) of an account that need not reset its password, and loads the item with
 `SiteReader::preview(actor, id)`: any status but trash, readable by the actor under the API's
-rule (R17 `can_read`: own items, published items, or `edit_others`). A contributor previewing
+rule (R17/R23 `can_read`: own items, items publicly visible now (published with
+`published_at <= now`), or `edit_others`). A contributor previewing
 another author's draft, no or a bad session, a trashed or missing item and a malformed id all
 get the shared 404 page. The item is rendered through the single-item pipeline with the
 plugin preview scope (05 §7a) and `request.preview = true` (the blog theme shows a notice),
 never through the cache; every preview answer carries `Cache-Control: private, no-store` and
-`X-Robots-Tag: noindex`.
+`X-Robots-Tag: noindex`, and no `ETag` (`If-None-Match` is ignored).
 
 **Logged-in requests** (P21). A request whose `ferrite_session` cookie resolves to a session
 is logged in; without the cookie no session lookup happens, and a cookie that resolves to
@@ -312,7 +313,14 @@ are never cached.
   parameters are `s` and `page`. Variant: `anon`, or `user(<id>)` for logged-in requests
   under `cache.logged_in = "per-user"` (P21; under the default `"bypass"` logged-in requests
   are not cached at all). Dependency invalidation ignores the variant, so an edit drops every
-  user's copy too.
+  user's copy too. **Invariant:** the variant is the user id alone, which is safe only
+  because nothing user-specific reaches the render (plugins see only `is_logged_in`;
+  templates get no user, role or capability), so every user's copy is identical to what
+  the render would give anyone logged in. Per-user output added later (an admin bar, the
+  current user in templates) must add role/capabilities to the key or bypass the cache,
+  and emit a `user:<id>` invalidation on role change and logout. Entries are not evicted
+  on logout (an ended session no longer resolves, so they are unreachable); `per-user`
+  stores one copy per active user in the shared `cache.max_bytes` budget.
 - Value: status, headers, uncompressed body, ETag (16 hex digits of SHA-256 over the body),
   dependency keys, optional TTL. Compression (br, gzip) happens per response in the HTTP layer,
   so the ETag is sent weak (`W/"…"`) and every HTML response, 304 included, has

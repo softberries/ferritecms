@@ -6,6 +6,7 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use ferrite_domain::{ContentId, Page, SearchQuery};
 use ferrite_store::{
     IndexedTerm, SearchRepo, StoreError, encode_rank_cursor, index_terms, plan_search,
@@ -120,8 +121,11 @@ impl SearchRepo for PgRepos {
             list.push_unseparated(")");
         }
         if let Some(reader) = query.readable_by {
-            qb.push(" AND (c.status = 'published' OR c.author_id = ")
-                .push_bind(reader.as_uuid())
+            // Publicly visible now (core's `is_public`), or the reader's own item.
+            qb.push(" AND ((c.status = 'published' AND c.published_at <= ")
+                .push_bind(DateTime::<Utc>::from(reader.now))
+                .push(") OR c.author_id = ")
+                .push_bind(reader.user.as_uuid())
                 .push(")");
         }
         if let Some((rank, id)) = plan.after {

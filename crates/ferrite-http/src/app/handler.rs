@@ -81,6 +81,11 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
     let query = NormalQuery::parse(raw_query.as_deref());
     let user = session(&state, req.headers()).await.map(|who| who.user.id);
     let host = state.config.default_host.clone();
+    // Per-user variants are keyed by the user id alone, which is safe only because
+    // nothing user-specific reaches the render: plugins get `is_logged_in` and nothing
+    // else, templates get no user, role or capability. Any future per-user output (an
+    // admin bar, the current user in templates) must add role/capabilities to the key
+    // (or bypass) and invalidate `user:<id>` on role change and logout.
     let key = match (user, state.config.logged_in) {
         (None, _) => Some(CacheKey::anon(host, path.clone(), query.cache_query())),
         (Some(user), LoggedIn::PerUser) => Some(CacheKey::user(
@@ -141,7 +146,7 @@ async fn session(state: &AppState, headers: &HeaderMap) -> Option<Authenticated>
 /// `/_preview/<id>` (P20): the session cookie only (no bearer tokens), an account that
 /// need not reset its password, and `SiteReader::preview`'s rights (R17); anything
 /// else is the shared 404 page. Never cached; `private, no-store` and `noindex` on
-/// every answer.
+/// every answer, no `ETag`, and `If-None-Match` is ignored (always the full page).
 async fn preview(
     state: &Arc<AppState>,
     headers: &HeaderMap,
@@ -159,6 +164,9 @@ async fn preview(
         Ok(page) => page_response(&page, None),
         Err(pipeline::NotFound) => missing(state, Missing::NotFound).await,
     };
+    // `no-store`: nothing to revalidate, so no validator (and `If-None-Match` is
+    // ignored above).
+    res.headers_mut().remove(header::ETAG);
     private_no_store(&mut res);
     noindex(&mut res);
     res
