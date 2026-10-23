@@ -321,6 +321,15 @@ pub trait OptionRepo: Send + Sync {
     async fn delete(&self, name: &str) -> Result<(), StoreError>;
     /// Lists all options flagged autoload.
     async fn autoloaded(&self) -> Result<Vec<OptionEntry>, StoreError>;
+    /// Lists up to `limit` (1..=200, else `Invalid`) options whose key starts with
+    /// `prefix` (compared literally) and sorts after `after` (`""`: from the first), in
+    /// binary key order. Callers page by passing the last key as `after`.
+    async fn list_prefix(
+        &self,
+        prefix: &str,
+        after: &str,
+        limit: u32,
+    ) -> Result<Vec<OptionEntry>, StoreError>;
 }
 
 #[async_trait]

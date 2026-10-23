@@ -633,6 +633,47 @@ async fn plugin_hot_reload_on_enable_and_disable(db: Arc<TestDb>) {
     node.shutdown().await.unwrap();
 }
 
+/// Review round 1: deleting an enabled, loaded plugin stops its hook on the node (the
+/// reload drops rows that are gone), and nodes.meta no longer lists it.
+async fn plugin_delete_stops_its_hook(db: Arc<TestDb>) {
+    let site = Site::new(&db);
+    let node = site.start(&db, NodeOptions::default()).await;
+    let store = db.shared_store();
+    let wasm = test_support::plugin_wasm("hello");
+    install_plugin_file(
+        &store,
+        &node.state.media,
+        &site.config.plugins,
+        &manifest("hello"),
+        &wasm,
+        true,
+    )
+    .await
+    .unwrap();
+    eventually(PLUGIN_LOAD, "loaded", || home_contains(&node, HELLO_META)).await;
+    eventually(Duration::from_secs(15), "meta lists the plugin", || async {
+        meta(&db, &node).await.pointer("/plugins/hello").is_some()
+    })
+    .await;
+    let deleted = ExtensionService::new(store.clone())
+        .delete_plugin("hello")
+        .await
+        .unwrap();
+    assert!(deleted.enabled);
+    eventually(PLUGIN_LOAD, "hook stopped", || async {
+        let (status, body) = get(node.addr, "/").await;
+        status == 200 && !body.contains(HELLO_META)
+    })
+    .await;
+    eventually(
+        Duration::from_secs(15),
+        "meta without the plugin",
+        || async { meta(&db, &node).await.pointer("/plugins/hello").is_none() },
+    )
+    .await;
+    node.shutdown().await.unwrap();
+}
+
 /// A published post by a fresh admin, written through core with the default rules.
 async fn published_post(store: Arc<dyn Store>, slug: &str) -> ferrite_domain::ContentItem {
     let user = fixture_user(store.as_ref()).await;
@@ -1047,6 +1088,7 @@ backend_tests_spawning!(
     bad_theme_activation_keeps_previous_theme,
     bad_plugin_update_keeps_previous_version,
     plugin_hot_reload_on_enable_and_disable,
+    plugin_delete_stops_its_hook,
     permalink_change_rebuilds_routes,
     new_type_is_routable_without_restart,
     type_registered_over_api_serves_permalinks,

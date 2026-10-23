@@ -10,8 +10,9 @@ use ferrite_cluster::{JobError, JobHandler, Periodic};
 use ferrite_core::{
     ContentService, CoreError, ExtensionService,
     jobs::{
-        PLUGIN_PURGE_KIND, PLUGIN_PURGE_VERSION, PUBLISH_DUE_KIND, PUBLISH_SCHEDULED_KIND,
-        PUBLISH_SCHEDULED_VERSION, PluginPurge, PublishScheduled,
+        PLUGIN_PURGE_KIND, PLUGIN_PURGE_SWEEP_EVERY, PLUGIN_PURGE_SWEEP_KIND, PLUGIN_PURGE_VERSION,
+        PUBLISH_DUE_KIND, PUBLISH_SCHEDULED_KIND, PUBLISH_SCHEDULED_VERSION, PluginPurge,
+        PublishScheduled,
     },
 };
 use ferrite_domain::Job;
@@ -129,8 +130,43 @@ impl JobHandler for PluginPurgeHandler {
     }
 }
 
-/// The core handlers: scheduled publishing on `content`, the plugin purge on
-/// `extensions`.
+/// `plugin.purge_sweep` (daily periodic): enqueues the purge of every deleted plugin
+/// past its retention whose purge has not happened
+/// ([`ExtensionService::enqueue_overdue_purges`]), so a purge job that went dead is
+/// retried the next day. The run's period start keys the enqueued jobs.
+pub struct PluginPurgeSweepHandler {
+    pub store: Arc<dyn Store>,
+    pub extensions: Arc<ExtensionService>,
+}
+
+#[async_trait]
+impl JobHandler for PluginPurgeSweepHandler {
+    fn kind(&self) -> &'static str {
+        PLUGIN_PURGE_SWEEP_KIND
+    }
+
+    async fn run(&self, job: &Job) -> Result<(), JobError> {
+        let now = self
+            .store
+            .read()
+            .nodes()
+            .db_now()
+            .await
+            .map_err(|e| JobError::Retry(e.to_string()))?;
+        let n = self
+            .extensions
+            .enqueue_overdue_purges(now, job.run_at)
+            .await
+            .map_err(|e| JobError::Retry(e.to_string()))?;
+        if n > 0 {
+            tracing::info!(enqueued = n, "re-enqueued overdue plugin purges");
+        }
+        Ok(())
+    }
+}
+
+/// The core handlers: scheduled publishing on `content`, the plugin purge and its
+/// sweep on `extensions`.
 pub fn handlers(
     store: Arc<dyn Store>,
     content: Arc<ContentService>,
@@ -140,8 +176,14 @@ pub fn handlers(
         Arc::new(PublishScheduledHandler {
             content: content.clone(),
         }),
-        Arc::new(PublishDueHandler { store, content }),
-        Arc::new(PluginPurgeHandler { extensions }),
+        Arc::new(PublishDueHandler {
+            store: store.clone(),
+            content,
+        }),
+        Arc::new(PluginPurgeHandler {
+            extensions: extensions.clone(),
+        }),
+        Arc::new(PluginPurgeSweepHandler { store, extensions }),
     ]
 }
 
@@ -150,6 +192,15 @@ pub fn publish_due_periodic() -> Periodic {
     Periodic {
         kind: PUBLISH_DUE_KIND,
         every: PUBLISH_DUE_EVERY,
+        payload: json!({"v": 1}),
+    }
+}
+
+/// The [`PLUGIN_PURGE_SWEEP_KIND`] periodic, every [`PLUGIN_PURGE_SWEEP_EVERY`].
+pub fn plugin_purge_sweep_periodic() -> Periodic {
+    Periodic {
+        kind: PLUGIN_PURGE_SWEEP_KIND,
+        every: PLUGIN_PURGE_SWEEP_EVERY,
         payload: json!({"v": 1}),
     }
 }

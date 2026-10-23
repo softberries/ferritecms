@@ -91,6 +91,27 @@ impl OptionRepo for SqliteRepos {
         })?;
         rows.iter().map(codec::option_entry).collect()
     }
+
+    async fn list_prefix(
+        &self,
+        prefix: &str,
+        after: &str,
+        limit: u32,
+    ) -> Result<Vec<OptionEntry>, StoreError> {
+        validate_text("option prefix", prefix)?;
+        validate_text("option cursor", after)?;
+        let limit = check_limit(limit)?;
+        // substr/length compare by characters, so the prefix needs no LIKE escaping.
+        let rows = run!(&self.reader, |e| sqlx::query(
+            "SELECT key, value, autoload, updated_at FROM options \
+             WHERE substr(key, 1, length(?1)) = ?1 AND key > ?2 ORDER BY key LIMIT ?3"
+        )
+        .bind(prefix)
+        .bind(after)
+        .bind(i64::from(limit))
+        .fetch_all(e))?;
+        rows.iter().map(codec::option_entry).collect()
+    }
 }
 
 #[async_trait]

@@ -55,6 +55,19 @@ pub const PLUGIN_PURGE_VERSION: u32 = 1;
 /// this time finds them.
 pub const PLUGIN_DATA_RETENTION: Duration = Duration::from_secs(30 * 24 * 3600);
 
+/// With `purge = true` the delete purges at once and its job sweeps again this long
+/// after the deletion: a node that had not reloaded yet may still have written KV
+/// (review round 1).
+pub const PLUGIN_PURGE_GRACE: Duration = Duration::from_secs(120);
+
+/// Daily safety net: enqueues a [`PLUGIN_PURGE_KIND`] job for every deletion marker
+/// older than [`PLUGIN_DATA_RETENTION`] whose plugin is not installed, so a purge job
+/// that went dead is retried. Payload `{"v":1}`.
+pub const PLUGIN_PURGE_SWEEP_KIND: &str = "plugin.purge_sweep";
+
+/// Period of the [`PLUGIN_PURGE_SWEEP_KIND`] job.
+pub const PLUGIN_PURGE_SWEEP_EVERY: Duration = Duration::from_secs(24 * 3600);
+
 /// Payload of a [`PLUGIN_PURGE_KIND`] job:
 /// `{"v":1,"name":"<plugin>","deleted_at":"<RFC 3339>","settings":["<key>",…]}`.
 /// `settings` are the keys of the deleted row's `manifest.settings` table; the job
@@ -89,14 +102,17 @@ pub fn plugin_purge_job(purge: &PluginPurge) -> NewJob {
         purge.name,
         purge.deleted_at.as_micros()
     ));
-    // 30 days cannot overflow a timestamp the store accepted; `deleted_at` is the
-    // fallback only to avoid a panic path.
-    let due = chrono::TimeDelta::from_std(PLUGIN_DATA_RETENTION)
-        .ok()
-        .and_then(|d| purge.deleted_at.as_datetime().checked_add_signed(d))
-        .map_or(purge.deleted_at, Timestamp::from);
-    job.run_at = Some(due);
+    job.run_at = Some(after(purge.deleted_at, PLUGIN_DATA_RETENTION));
     job
+}
+
+/// `at + d`; `at` itself if that overflowed (unreachable for the durations used here,
+/// it only avoids a panic path).
+pub(crate) fn after(at: Timestamp, d: Duration) -> Timestamp {
+    chrono::TimeDelta::from_std(d)
+        .ok()
+        .and_then(|d| at.as_datetime().checked_add_signed(d))
+        .map_or(at, Timestamp::from)
 }
 
 /// Same form as `Timestamp`'s serde (chrono's RFC 3339 with `Z`).

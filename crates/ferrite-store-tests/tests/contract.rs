@@ -16,6 +16,7 @@ backend_tests!(
 
 backend_tests!(
     options_crud,
+    options_list_prefix,
     tx_commit_visible,
     tx_rollback_invisible,
     tx_dropped_is_rolled_back,

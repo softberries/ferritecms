@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use ferrite_core::{
     Actor, CoreError, ExtensionAdmin, ExtensionService, Scopes,
-    jobs::{PLUGIN_PURGE_KIND, PluginPurge, plugin_purge_job},
+    jobs::{PLUGIN_PURGE_GRACE, PLUGIN_PURGE_KIND, PluginPurge, plugin_purge_job},
 };
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, InstalledPlugin, InstalledTheme, NewUser, NodeId, Role,
@@ -454,7 +454,8 @@ pub async fn delete_keeps_data_until_purge(db: &TestDb) {
             .unwrap()
     );
 
-    // `purge = true` removes the data at once (and still leaves a due job, F16).
+    // `purge = true` removes the data at once but keeps the marker; the delete's job,
+    // due after the grace, is the final sweep (F16, review round 1).
     let q = artifact(ArtifactKind::Plugin, 2);
     svc.install_plugin(&admin, &q, &plugin("other", &q, json!({})))
         .await
@@ -470,24 +471,39 @@ pub async fn delete_keeps_data_until_purge(db: &TestDb) {
     svc.delete_plugin(&admin, "other", true).await.unwrap();
     assert_eq!(kv.usage("other").await.unwrap(), (0, 0));
     assert_eq!(setting(store, "other", "api_key").await, None);
-    assert_eq!(deleted_at(store, "other").await, None);
     assert_eq!(kv.get("seo", "kept").await.unwrap().unwrap(), b"1");
-    let due = store
-        .read()
-        .jobs()
-        .claim(NodeId::new(), &kinds, 10, Duration::from_secs(30))
-        .await
-        .unwrap();
-    assert_eq!(due.len(), 1, "{due:?}");
-    let payload: PluginPurge = serde_json::from_value(due[0].payload.clone()).unwrap();
-    assert_eq!(payload.name, "other");
-    assert_eq!(payload.settings, settings);
+    let gone = deleted_at(store, "other").await.expect("marker kept");
+    let job = plugin_purge_job(&PluginPurge {
+        v: 1,
+        name: "other".into(),
+        deleted_at: gone,
+        settings: settings.clone(),
+    });
+    // Same job (unique key taken), due PLUGIN_PURGE_GRACE after the deletion.
+    assert_eq!(store.read().jobs().enqueue(&job).await.unwrap(), None);
+    assert_eq!(PLUGIN_PURGE_GRACE, Duration::from_secs(120));
     assert!(
-        !system
-            .purge_plugin_data("other", payload.deleted_at, &payload.settings)
+        store
+            .read()
+            .jobs()
+            .claim(NodeId::new(), &kinds, 10, Duration::from_secs(30))
+            .await
+            .unwrap()
+            .is_empty(),
+        "not due before the grace ends"
+    );
+    // A node that had not reloaded yet writes KV after the immediate purge; the final
+    // sweep removes it and the marker.
+    kv.set("other", "late", b"1").await.unwrap();
+    assert!(
+        system
+            .purge_plugin_data("other", gone, &settings)
             .await
             .unwrap()
     );
+    assert_eq!(kv.usage("other").await.unwrap(), (0, 0));
+    assert_eq!(deleted_at(store, "other").await, None);
+    assert_eq!(kv.get("seo", "kept").await.unwrap().unwrap(), b"1");
 
     // Deleting a missing plugin is NotFound and writes nothing.
     assert!(matches!(
@@ -496,9 +512,149 @@ pub async fn delete_keeps_data_until_purge(db: &TestDb) {
     ));
 }
 
+/// Review round 1: purging `foo` never touches `foo-bar` (exact plugin and option
+/// keys, no prefix match).
+pub async fn purge_spares_name_prefix_neighbours(db: &TestDb) {
+    let store = db.store();
+    let svc = ExtensionAdmin::new(db.shared_store());
+    let admin = actor(store, Role::Admin).await;
+    let kv = store.read().plugin_kv();
+    for (seed, name) in [(1, "foo"), (2, "foo-bar"), (3, "foobar")] {
+        let a = artifact(ArtifactKind::Plugin, seed);
+        svc.install_plugin(&admin, &a, &plugin(name, &a, json!({})))
+            .await
+            .unwrap();
+        kv.set(name, "k", b"v").await.unwrap();
+        kv.set(name, "foo", b"v").await.unwrap();
+        for key in ["title", "api_key"] {
+            store
+                .read()
+                .options()
+                .set(
+                    &format!("plugin.{name}.settings.{key}"),
+                    &json!(name),
+                    false,
+                )
+                .await
+                .unwrap();
+        }
+    }
+    svc.delete_plugin(&admin, "foo", true).await.unwrap();
+    let marker = deleted_at(store, "foo").await.unwrap();
+    assert!(
+        ExtensionService::new(db.shared_store())
+            .purge_plugin_data("foo", marker, &["title".into(), "api_key".into()])
+            .await
+            .unwrap()
+    );
+    assert_eq!(kv.usage("foo").await.unwrap(), (0, 0));
+    assert_eq!(setting(store, "foo", "title").await, None);
+    for name in ["foo-bar", "foobar"] {
+        assert_eq!(kv.usage(name).await.unwrap(), (2, 2), "{name}");
+        assert!(store.read().plugins().get(name).await.unwrap().is_some());
+        for key in ["title", "api_key"] {
+            assert_eq!(setting(store, name, key).await, Some(json!(name)), "{name}");
+        }
+    }
+}
+
+/// Review round 1: the daily sweep re-enqueues the purge of every deletion past the
+/// retention whose plugin is not installed, with the stored settings keys.
+pub async fn sweep_enqueues_overdue_purges(db: &TestDb) {
+    let store = db.store();
+    let system = ExtensionService::new(db.shared_store());
+    let opts = store.read().options();
+    let kv = store.read().plugin_kv();
+    let now = Timestamp::now();
+    let day = 24 * 3600 * 1_000_000_i64;
+    let old = Timestamp::from_micros(now.as_micros() - 31 * day).unwrap();
+    let recent = Timestamp::from_micros(now.as_micros() - day).unwrap();
+    // `dead`: past the retention, no row (its own job went dead).
+    opts.set("plugin.dead.deleted_at", &json!(old.as_micros()), false)
+        .await
+        .unwrap();
+    opts.set("plugin.dead.settings.b", &json!(1), false)
+        .await
+        .unwrap();
+    opts.set("plugin.dead.settings.a", &json!(1), false)
+        .await
+        .unwrap();
+    kv.set("dead", "k", b"v").await.unwrap();
+    // `fresh`: still within the retention.
+    opts.set("plugin.fresh.deleted_at", &json!(recent.as_micros()), false)
+        .await
+        .unwrap();
+    // `back`: past the retention but installed again (a stale marker).
+    opts.set("plugin.back.deleted_at", &json!(old.as_micros()), false)
+        .await
+        .unwrap();
+    let a = artifact(ArtifactKind::Plugin, 9);
+    system
+        .install_plugin(&a, &plugin("back", &a, json!(null)))
+        .await
+        .unwrap();
+    // `install_plugin` removed `back`'s marker; put a stale one back.
+    opts.set("plugin.back.deleted_at", &json!(old.as_micros()), false)
+        .await
+        .unwrap();
+    // Unrelated `plugin.` options are ignored.
+    opts.set("plugin.x", &json!(1), false).await.unwrap();
+    opts.set("plugin.y.deleted_at", &json!("not a number"), false)
+        .await
+        .unwrap();
+
+    let sweep_at = Timestamp::from_micros(now.as_micros() - now.as_micros() % day).unwrap();
+    assert_eq!(
+        system.enqueue_overdue_purges(now, sweep_at).await.unwrap(),
+        1
+    );
+    // The same sweep run enqueues nothing twice.
+    assert_eq!(
+        system.enqueue_overdue_purges(now, sweep_at).await.unwrap(),
+        0
+    );
+    let kinds = [PLUGIN_PURGE_KIND.to_owned()];
+    let due = store
+        .read()
+        .jobs()
+        .claim(NodeId::new(), &kinds, 10, Duration::from_secs(30))
+        .await
+        .unwrap();
+    assert_eq!(due.len(), 1, "{due:?}");
+    let payload: PluginPurge = serde_json::from_value(due[0].payload.clone()).unwrap();
+    assert_eq!(payload.name, "dead");
+    assert_eq!(payload.deleted_at, old);
+    assert_eq!(payload.settings, ["a", "b"]);
+    assert_eq!(
+        due[0].unique_key.as_deref(),
+        Some(
+            format!(
+                "plugin.purge:dead:{}:sweep:{}",
+                old.as_micros(),
+                sweep_at.as_micros()
+            )
+            .as_str()
+        )
+    );
+    assert!(
+        system
+            .purge_plugin_data("dead", payload.deleted_at, &payload.settings)
+            .await
+            .unwrap()
+    );
+    assert_eq!(kv.usage("dead").await.unwrap(), (0, 0));
+    assert!(opts.get("plugin.dead.settings.a").await.unwrap().is_none());
+    assert!(opts.get("plugin.dead.deleted_at").await.unwrap().is_none());
+    // A later sweep finds nothing more to do for `dead`.
+    let next = Timestamp::from_micros(sweep_at.as_micros() + day).unwrap();
+    assert_eq!(system.enqueue_overdue_purges(now, next).await.unwrap(), 0);
+}
+
 backend_tests!(
     extension_writes_need_capabilities,
     install_requires_a_grant,
     writes_are_audited,
     delete_keeps_data_until_purge,
+    purge_spares_name_prefix_neighbours,
+    sweep_enqueues_overdue_purges,
 );

@@ -8,6 +8,72 @@ use serde_json::json;
 
 use crate::TestDb;
 
+pub async fn options_list_prefix(db: &TestDb) {
+    let opts = db.store().read().options();
+    for key in [
+        "plugin.a.x",
+        "plugin.b.z",
+        "plugin.a.y",
+        "plugin.%",
+        "plugin_x",
+        "plugins",
+        "other",
+        "plugin.ä",
+        "plugin.B",
+    ] {
+        opts.set(key, &serde_json::json!(key), false).await.unwrap();
+    }
+    let keys = |rows: Vec<ferrite_domain::OptionEntry>| -> Vec<String> {
+        rows.into_iter().map(|e| e.key).collect()
+    };
+    // Binary order: `%` < uppercase < lowercase < non-ASCII.
+    assert_eq!(
+        keys(opts.list_prefix("plugin.", "", 200).await.unwrap()),
+        [
+            "plugin.%",
+            "plugin.B",
+            "plugin.a.x",
+            "plugin.a.y",
+            "plugin.b.z",
+            "plugin.ä"
+        ]
+    );
+    let first = keys(opts.list_prefix("plugin.", "", 2).await.unwrap());
+    assert_eq!(first, ["plugin.%", "plugin.B"]);
+    assert_eq!(
+        keys(opts.list_prefix("plugin.", &first[1], 2).await.unwrap()),
+        ["plugin.a.x", "plugin.a.y"]
+    );
+    assert!(
+        opts.list_prefix("plugin.", "plugin.ä", 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // The prefix is literal: `%` and `_` are no wildcards.
+    assert_eq!(
+        keys(opts.list_prefix("plugin.%", "", 10).await.unwrap()),
+        ["plugin.%"]
+    );
+    assert_eq!(
+        keys(opts.list_prefix("plugin_", "", 10).await.unwrap()),
+        ["plugin_x"]
+    );
+    for entry in opts.list_prefix("plugin.", "", 200).await.unwrap() {
+        assert_eq!(entry.value, serde_json::json!(entry.key));
+    }
+    for bad in [0, 201] {
+        assert!(matches!(
+            opts.list_prefix("plugin.", "", bad).await,
+            Err(ferrite_store::StoreError::Invalid(_))
+        ));
+    }
+    assert!(matches!(
+        opts.list_prefix("plugin\0", "", 10).await,
+        Err(ferrite_store::StoreError::Invalid(_))
+    ));
+}
+
 pub async fn options_crud(db: &TestDb) {
     let store = db.store();
     let tx = store.begin().await.unwrap();

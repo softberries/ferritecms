@@ -93,6 +93,26 @@ impl OptionRepo for PgRepos {
         })?;
         rows.iter().map(codec::option_entry).collect()
     }
+
+    async fn list_prefix(
+        &self,
+        prefix: &str,
+        after: &str,
+        limit: u32,
+    ) -> Result<Vec<OptionEntry>, StoreError> {
+        validate_text("option prefix", prefix)?;
+        validate_text("option cursor", after)?;
+        let limit = check_limit(limit)?;
+        let rows = run!(&self.exec, |e| sqlx::query(
+            "SELECT key, value, autoload, updated_at FROM options \
+             WHERE starts_with(key, $1) AND key > $2 ORDER BY key COLLATE \"C\" LIMIT $3"
+        )
+        .bind(prefix)
+        .bind(after)
+        .bind(i64::from(limit))
+        .fetch_all(e))?;
+        rows.iter().map(codec::option_entry).collect()
+    }
 }
 
 #[async_trait]

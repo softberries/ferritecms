@@ -122,9 +122,11 @@ impl ExtensionAdmin {
     }
 
     /// [`ExtensionService::delete_plugin`] with audit `plugin.delete {name, purge}`.
-    /// Without `purge` the KV and settings stay for the retention (P9); with `purge`
-    /// they are deleted right after the commit, and the purge job (due at once, F16)
-    /// finishes that if it fails.
+    /// Without `purge` the KV and settings stay for the retention (P9). With `purge`
+    /// they are deleted right after the commit, keeping the deletion marker, and the
+    /// delete's purge job runs [`PLUGIN_PURGE_GRACE`](crate::jobs::PLUGIN_PURGE_GRACE)
+    /// later as the final sweep: it removes KV a node wrote before it reloaded, finishes
+    /// the purge if the immediate one failed (F16), and deletes the marker.
     pub async fn delete_plugin(
         &self,
         actor: &Actor,
@@ -141,9 +143,10 @@ impl ExtensionAdmin {
             .await?;
         if purge {
             let settings = setting_keys(&row.manifest);
+            // The marker stays: the delete's job sweeps again after the grace.
             if let Err(e) = self
                 .service
-                .purge_plugin_data(name, deleted_at, &settings)
+                .purge_plugin_data_with(name, deleted_at, &settings, true)
                 .await
             {
                 tracing::warn!(plugin = name, error = %e, "purge after delete failed; the purge job retries");

@@ -20,14 +20,16 @@
 //! ([`ExtensionService::purge_plugin_data`]) runs only when no row of that name exists
 //! and the marker still names the job's deletion, so a reinstall (which removes the
 //! marker) keeps the data, and only the latest deletion's job purges. Setting keys a
-//! later version dropped from its schema are not purged.
+//! later version dropped from its schema are purged only by the daily sweep
+//! ([`ExtensionService::enqueue_overdue_purges`]), which re-enqueues the purge for
+//! every marker past the retention, so a purge job that went dead is retried.
 //!
 //! [`PLUGIN_DATA_RETENTION`]: crate::jobs::PLUGIN_DATA_RETENTION
 //! [`PLUGIN_PURGE_KIND`]: crate::jobs::PLUGIN_PURGE_KIND
 
 mod admin;
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use ferrite_domain::{
     Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, NewAudit, Timestamp,
@@ -37,7 +39,10 @@ use serde_json::{Value, json};
 
 use crate::{
     CoreError, events,
-    jobs::{PLUGIN_PURGE_VERSION, PluginPurge, plugin_purge_job},
+    jobs::{
+        PLUGIN_DATA_RETENTION, PLUGIN_PURGE_GRACE, PLUGIN_PURGE_VERSION, PluginPurge,
+        plugin_purge_job,
+    },
     tx::finish,
 };
 
@@ -45,6 +50,12 @@ pub use admin::ExtensionAdmin;
 
 /// KV keys deleted per statement by a purge.
 const KV_PURGE_BATCH: u32 = 1_000;
+/// Options per page read by the purge sweep.
+const OPTION_PAGE: u32 = 200;
+/// Prefix of every plugin-owned option.
+const PLUGIN_OPTION_PREFIX: &str = "plugin.";
+/// Last segment of the deletion marker option.
+const DELETED_AT: &str = "deleted_at";
 
 /// How long a write waits for the `extensions` lock by default.
 pub const EXTENSIONS_LOCK_WAIT: Duration = Duration::from_secs(30);
@@ -183,8 +194,9 @@ impl ExtensionService {
     }
 
     /// [`delete_plugin`](Self::delete_plugin) at `deleted_at`; with `purge_now` the
-    /// purge job is due at once (F16: it finishes a purge the caller starts after the
-    /// commit if that one fails).
+    /// purge job is due [`PLUGIN_PURGE_GRACE`] after the deletion instead of the
+    /// retention: it sweeps KV a node wrote before it reloaded, and finishes the purge
+    /// the caller starts after the commit if that one failed (F16, review round 1).
     pub(crate) async fn delete_plugin_with(
         &self,
         name: &str,
@@ -214,10 +226,92 @@ impl ExtensionService {
         deleted_at: Timestamp,
         settings: &[String],
     ) -> Result<bool, CoreError> {
+        self.purge_plugin_data_with(name, deleted_at, settings, false)
+            .await
+    }
+
+    /// [`purge_plugin_data`](Self::purge_plugin_data); with `keep_marker` the deletion
+    /// marker stays, so the delete's own job (the final sweep) still runs.
+    pub(crate) async fn purge_plugin_data_with(
+        &self,
+        name: &str,
+        deleted_at: Timestamp,
+        settings: &[String],
+        keep_marker: bool,
+    ) -> Result<bool, CoreError> {
         let guard = lock(self.store.as_ref(), LOCK_EXTENSIONS, self.lock_wait).await?;
-        let done = self.purge_locked(name, deleted_at, settings).await;
+        let done = self
+            .purge_locked(name, deleted_at, settings, keep_marker)
+            .await;
         release(guard).await;
         done
+    }
+
+    /// Enqueues a [`PLUGIN_PURGE_KIND`](crate::jobs::PLUGIN_PURGE_KIND) job, due at
+    /// once, for every deletion marker older than
+    /// [`PLUGIN_DATA_RETENTION`](crate::jobs::PLUGIN_DATA_RETENTION) at `now` whose
+    /// plugin is not installed (the daily sweep, review round 1): a purge job that went
+    /// dead is retried. The job's settings are the plugin's stored
+    /// `plugin.<name>.settings.*` options (so keys a later version dropped go too); its
+    /// unique key is the deletion's plus `:sweep:<sweep_at micros>`, one per sweep run.
+    /// Returns how many jobs were enqueued.
+    pub async fn enqueue_overdue_purges(
+        &self,
+        now: Timestamp,
+        sweep_at: Timestamp,
+    ) -> Result<u64, CoreError> {
+        let repos = self.store.read();
+        let mut markers: BTreeMap<String, i64> = BTreeMap::new();
+        let mut settings: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut after = String::new();
+        loop {
+            let page = repos
+                .options()
+                .list_prefix(PLUGIN_OPTION_PREFIX, &after, OPTION_PAGE)
+                .await?;
+            for entry in &page {
+                match parse_plugin_option(&entry.key) {
+                    Some((name, PluginOption::DeletedAt)) => {
+                        if let Some(micros) = entry.value.as_i64() {
+                            markers.insert(name.to_owned(), micros);
+                        }
+                    }
+                    Some((name, PluginOption::Setting(key))) => settings
+                        .entry(name.to_owned())
+                        .or_default()
+                        .push(key.to_owned()),
+                    None => {}
+                }
+            }
+            match page.last() {
+                Some(last) if page.len() >= OPTION_PAGE as usize => after = last.key.clone(),
+                _ => break,
+            }
+        }
+        let mut enqueued = 0;
+        for (name, micros) in markers {
+            let deleted_at = Timestamp::from_micros(micros)
+                .map_err(|e| CoreError::Invalid(format!("deletion marker of {name}: {e}")))?;
+            if crate::jobs::after(deleted_at, PLUGIN_DATA_RETENTION) > now
+                || repos.plugins().get(&name).await?.is_some()
+            {
+                continue;
+            }
+            let mut job = plugin_purge_job(&PluginPurge {
+                v: PLUGIN_PURGE_VERSION,
+                settings: settings.remove(&name).unwrap_or_default(),
+                name,
+                deleted_at,
+            });
+            job.run_at = None;
+            job.unique_key = job
+                .unique_key
+                .map(|key| format!("{key}:sweep:{}", sweep_at.as_micros()));
+            if repos.jobs().enqueue(&job).await?.is_some() {
+                enqueued += 1;
+            }
+        }
+        Ok(enqueued)
     }
 
     async fn purge_locked(
@@ -225,6 +319,7 @@ impl ExtensionService {
         name: &str,
         deleted_at: Timestamp,
         settings: &[String],
+        keep_marker: bool,
     ) -> Result<bool, CoreError> {
         let repos = self.store.read();
         if repos.plugins().get(name).await?.is_some() {
@@ -242,7 +337,7 @@ impl ExtensionService {
             }
         }
         let tx = self.store.begin().await?;
-        let done = delete_options(tx.as_ref(), name, settings).await;
+        let done = delete_options(tx.as_ref(), name, settings, keep_marker).await;
         finish(tx, done).await?;
         Ok(true)
     }
@@ -385,8 +480,7 @@ async fn write_delete_plugin(
         settings: setting_keys(&row.manifest),
     });
     if purge_now {
-        // Due at once (the database clock).
-        job.run_at = None;
+        job.run_at = Some(crate::jobs::after(deleted_at, PLUGIN_PURGE_GRACE));
     }
     // `None` (key taken) needs a second delete of the same name in the same
     // microsecond; that deletion's job is the one already queued.
@@ -399,16 +493,41 @@ async fn write_delete_plugin(
     Ok(row)
 }
 
-/// Deletes the purged plugin's settings options and its deletion marker.
+/// Deletes the purged plugin's settings options and (unless `keep_marker`) its
+/// deletion marker.
 async fn delete_options(
     repos: &dyn Repos,
     name: &str,
     settings: &[String],
+    keep_marker: bool,
 ) -> Result<(), CoreError> {
     for key in settings {
-        delete_option(repos, &format!("plugin.{name}.settings.{key}")).await?;
+        delete_option(
+            repos,
+            &format!("{PLUGIN_OPTION_PREFIX}{name}.settings.{key}"),
+        )
+        .await?;
+    }
+    if keep_marker {
+        return Ok(());
     }
     delete_option(repos, &deleted_marker(name)).await
+}
+
+/// A plugin-owned option the sweep reads.
+enum PluginOption<'a> {
+    DeletedAt,
+    Setting(&'a str),
+}
+
+/// `plugin.<name>.deleted_at` or `plugin.<name>.settings.<key>` (names have no `.`).
+fn parse_plugin_option(key: &str) -> Option<(&str, PluginOption<'_>)> {
+    let (name, rest) = key.strip_prefix(PLUGIN_OPTION_PREFIX)?.split_once('.')?;
+    if rest == DELETED_AT {
+        return Some((name, PluginOption::DeletedAt));
+    }
+    let setting = rest.strip_prefix("settings.")?;
+    Some((name, PluginOption::Setting(setting)))
 }
 
 async fn delete_option(repos: &dyn Repos, key: &str) -> Result<(), CoreError> {
@@ -420,7 +539,7 @@ async fn delete_option(repos: &dyn Repos, key: &str) -> Result<(), CoreError> {
 /// The option recording when plugin `name` was last deleted (unix micros). Hidden from
 /// plugins by the `plugin.` rule of `options.get`.
 fn deleted_marker(name: &str) -> String {
-    format!("plugin.{name}.deleted_at")
+    format!("{PLUGIN_OPTION_PREFIX}{name}.{DELETED_AT}")
 }
 
 /// The keys of a row manifest's `[settings]` table (sorted).

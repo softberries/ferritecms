@@ -366,6 +366,18 @@ impl OptionRepo for Counted {
     async fn autoloaded(&self) -> Result<Vec<OptionEntry>, StoreError> {
         self.0.read().options().autoloaded().await
     }
+    async fn list_prefix(
+        &self,
+        prefix: &str,
+        after: &str,
+        limit: u32,
+    ) -> Result<Vec<OptionEntry>, StoreError> {
+        self.0
+            .read()
+            .options()
+            .list_prefix(prefix, after, limit)
+            .await
+    }
 }
 
 #[async_trait]

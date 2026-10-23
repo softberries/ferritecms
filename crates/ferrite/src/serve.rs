@@ -415,6 +415,7 @@ async fn boot(
     let periodics = opts.periodics.unwrap_or_else(|| {
         let mut p = builtin::periodics();
         p.push(jobs::publish_due_periodic());
+        p.push(jobs::plugin_purge_sweep_periodic());
         p
     });
     let scheduler = Scheduler::new(
