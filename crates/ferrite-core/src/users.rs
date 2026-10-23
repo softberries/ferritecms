@@ -3,7 +3,9 @@
 //!
 //! * Logins match `^[a-z0-9][a-z0-9._-]{0,59}$` after trimming and ASCII lowercasing, and
 //!   never change after creation (R3). E-mails are unique by the store's ASCII
-//!   `email_key`; display names are 1..=100 characters.
+//!   `email_key`; display names are 1..=100 characters. Errors about one input
+//!   (`login`, `email`, `display_name`, `password`, a taken login or e-mail) are
+//!   `InvalidField` naming it; constraint names never leave core.
 //! * The last active admin cannot be demoted, disabled or deleted. The check counts
 //!   active admins inside the writing `Tx`, after locking the target row. Under READ
 //!   COMMITTED (Postgres default) two concurrent writes on two *different* admins can each
@@ -43,6 +45,9 @@ pub const MAX_DISPLAY_NAME: usize = 100;
 
 const LAST_ADMIN: &str = "the site needs at least one active admin";
 const OWN_ROLE: &str = "cannot change your own role or status";
+const LOGIN_FIXED: &str = "a login cannot be changed";
+const LOGIN_TAKEN: &str = "login taken";
+const EMAIL_TAKEN: &str = "e-mail taken";
 
 /// Input for a new account.
 #[derive(Debug, Clone)]
@@ -60,6 +65,9 @@ pub struct NewAccount {
 /// A partial user update; `None` keeps the stored value.
 #[derive(Debug, Clone, Default)]
 pub struct UserPatch {
+    /// Logins never change (R3): the stored login (after normalisation) is accepted and
+    /// ignored, so clients can send whole objects; any other value is `InvalidField`.
+    pub login: Option<String>,
     pub email: Option<String>,
     pub display_name: Option<String>,
     pub role: Option<Role>,
@@ -125,6 +133,7 @@ impl UserService {
         } else {
             require(actor, Capability::ManageUsers)?;
         }
+        let login = patch.login.as_deref().map(normalize_login).transpose()?;
         let email = patch.email.as_deref().map(normalize_email).transpose()?;
         let display_name = patch
             .display_name
@@ -134,6 +143,9 @@ impl UserService {
         let tx = self.store.begin().await?;
         let done = async {
             let old = locked(tx.as_ref(), id).await?;
+            if login.as_ref().is_some_and(|l| *l != old.login) {
+                return Err(CoreError::invalid_field("login", LOGIN_FIXED));
+            }
             if is_self
                 && (patch.role.is_some_and(|r| r != old.role)
                     || patch.status.is_some_and(|st| st != old.status))
@@ -348,7 +360,10 @@ impl UserService {
         let display_name = normalize_display_name(&account.display_name)?;
         let password_hash = match &account.password {
             Some(pw) => {
-                password::check_policy(pw)?;
+                password::check_policy(pw).map_err(|e| match e {
+                    CoreError::Invalid(msg) => CoreError::invalid_field("password", msg),
+                    other => other,
+                })?;
                 Some(password::hash(pw).await?)
             }
             None => None,
@@ -360,7 +375,7 @@ impl UserService {
             // checking the login first gives the same message on both. The unique
             // constraints still decide races.
             if tx.users().get_by_login(&login).await?.is_some() {
-                return Err(CoreError::Invalid("login taken".into()));
+                return Err(CoreError::invalid_field("login", LOGIN_TAKEN));
             }
             let user = tx
                 .users()
@@ -511,10 +526,10 @@ async fn audit(
 fn map_unique(e: StoreError) -> CoreError {
     match e {
         StoreError::UniqueViolation { constraint } if constraint == "users_login_uq" => {
-            CoreError::Invalid("login taken".into())
+            CoreError::invalid_field("login", LOGIN_TAKEN)
         }
         StoreError::UniqueViolation { constraint } if constraint == "users_email_uq" => {
-            CoreError::Invalid("e-mail taken".into())
+            CoreError::invalid_field("email", EMAIL_TAKEN)
         }
         other => other.into(),
     }
@@ -529,9 +544,12 @@ pub fn normalize_login(login: &str) -> Result<String, CoreError> {
         .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
     let rest_ok = chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "._-".contains(c));
     if !first_ok || !rest_ok || login.len() > MAX_LOGIN {
-        return Err(CoreError::Invalid(format!(
-            "login must be 1 to {MAX_LOGIN} of a-z, 0-9, '.', '_', '-', starting with a letter or digit"
-        )));
+        return Err(CoreError::invalid_field(
+            "login",
+            format!(
+                "login must be 1 to {MAX_LOGIN} of a-z, 0-9, '.', '_', '-', starting with a letter or digit"
+            ),
+        ));
     }
     Ok(login)
 }
@@ -549,9 +567,10 @@ pub fn normalize_email(email: &str) -> Result<String, CoreError> {
         || email.len() > MAX_EMAIL
         || email.chars().any(|c| c.is_whitespace() || c.is_control())
     {
-        return Err(CoreError::Invalid(format!(
-            "e-mail must look like name@example.com (at most {MAX_EMAIL} bytes)"
-        )));
+        return Err(CoreError::invalid_field(
+            "email",
+            format!("e-mail must look like name@example.com (at most {MAX_EMAIL} bytes)"),
+        ));
     }
     Ok(email.to_owned())
 }
@@ -561,9 +580,12 @@ pub fn normalize_display_name(name: &str) -> Result<String, CoreError> {
     let name = name.trim();
     let len = name.chars().count();
     if len == 0 || len > MAX_DISPLAY_NAME || name.chars().any(char::is_control) {
-        return Err(CoreError::Invalid(format!(
-            "display name must be 1 to {MAX_DISPLAY_NAME} characters without control characters"
-        )));
+        return Err(CoreError::invalid_field(
+            "display_name",
+            format!(
+                "display name must be 1 to {MAX_DISPLAY_NAME} characters without control characters"
+            ),
+        ));
     }
     Ok(name.to_owned())
 }
@@ -623,11 +645,17 @@ mod tests {
         let login = map_unique(StoreError::UniqueViolation {
             constraint: "users_login_uq".into(),
         });
-        assert!(matches!(login, CoreError::Invalid(m) if m == "login taken"));
+        assert!(matches!(
+            login,
+            CoreError::InvalidField { field: "login", message } if message == "login taken"
+        ));
         let email = map_unique(StoreError::UniqueViolation {
             constraint: "users_email_uq".into(),
         });
-        assert!(matches!(email, CoreError::Invalid(m) if m == "e-mail taken"));
+        assert!(matches!(
+            email,
+            CoreError::InvalidField { field: "email", message } if message == "e-mail taken"
+        ));
         assert!(matches!(
             map_unique(StoreError::UniqueViolation {
                 constraint: "users_pkey".into()

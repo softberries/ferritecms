@@ -13,9 +13,11 @@ use argon2::{
     ARGON2ID_IDENT, Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier,
     Version,
 };
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ferrite_domain::Secret;
 use tokio::sync::Semaphore;
 
+use super::random_bytes;
 use crate::CoreError;
 
 /// Shortest password accepted, in characters.
@@ -55,6 +57,16 @@ pub fn check_policy(password: &str) -> Result<(), CoreError> {
         return Err(CoreError::Invalid("password must not contain NUL".into()));
     }
     Ok(())
+}
+
+/// Length of a [`generate`]d password, in characters.
+pub const GENERATED_LEN: usize = 20;
+
+/// A random password for an operator to hand over (`ferrite user create` and
+/// `reset-password` without `--password-stdin`, P17): base64url of 15 random bytes,
+/// [`GENERATED_LEN`] characters (120 bits), within the policy.
+pub fn generate() -> Result<String, CoreError> {
+    Ok(URL_SAFE_NO_PAD.encode(random_bytes::<15>()?))
 }
 
 /// Hashes `password` with a fresh random salt. It does not check the policy (callers do,
@@ -150,6 +162,20 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+
+    #[test]
+    fn generated_passwords_are_random_and_within_policy() {
+        let a = generate().unwrap();
+        let b = generate().unwrap();
+        assert_eq!(a.len(), GENERATED_LEN);
+        assert!(
+            a.bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'),
+            "{a}"
+        );
+        assert_ne!(a, b);
+        check_policy(&a).unwrap();
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn password_policy_and_rehash() {

@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand};
 
 use crate::config_cmd::ConfigCommand;
-use crate::{config_cmd, healthcheck, init, migrate, seed, serve};
+use crate::{config_cmd, healthcheck, init, migrate, seed, serve, user_cmd};
 
 #[derive(Debug, Parser)]
 #[command(name = "ferrite", version, about = "FerriteCMS")]
@@ -28,6 +28,9 @@ pub enum Command {
     /// Validate the configuration.
     #[command(subcommand)]
     Config(ConfigCommand),
+    /// Manage user accounts (the operator path: no login needed).
+    #[command(subcommand)]
+    User(user_cmd::UserCommand),
     /// Probe a node's HTTP endpoint (for container health checks): exit 0 on 200, else 1.
     Healthcheck(healthcheck::HealthcheckArgs),
 }
@@ -81,5 +84,6 @@ pub async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Seed(cmd) => seed::run(cmd).await.map(|()| ExitCode::SUCCESS),
         Command::Config(cmd) => config_cmd::run(cmd),
         Command::Healthcheck(args) => healthcheck::run(args).await,
+        Command::User(cmd) => user_cmd::run(cmd).await.map(|()| ExitCode::SUCCESS),
     }
 }

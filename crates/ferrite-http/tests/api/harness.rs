@@ -281,6 +281,34 @@ impl Api {
         with_client(build_site(self.app.clone(), api))
     }
 
+    /// The API of another node on `store` (a [`TestDb::peer`]): fresh core services and
+    /// site key over that store, the same `site.url`. The public side stays this node's;
+    /// tests use it for API requests only.
+    pub async fn router_on(&self, store: Arc<dyn Store>) -> Router {
+        let api = Arc::new(
+            ApiState::new(ApiParts {
+                store: store.clone(),
+                auth: Arc::new(
+                    AuthService::new(store.clone(), SiteKey::generate().expect("site key"))
+                        .with_issuer_name(SITE_TITLE.into()),
+                ),
+                users: Arc::new(UserService::new(store.clone())),
+                content: Arc::new(ContentService::new(
+                    store.clone(),
+                    Arc::new(PermalinkRules::default()),
+                )),
+                types: Arc::new(ContentTypeService::new(store.clone())),
+                taxonomy: Arc::new(TaxonomyService::new(store.clone())),
+                menus: Arc::new(MenuService::new(store.clone())),
+                options: Arc::new(OptionService::load(store.clone()).await.expect("options")),
+                redirects: Arc::new(RedirectService::new(store.clone())),
+                site_url: SITE_URL.into(),
+            })
+            .expect("api state"),
+        );
+        with_client(build_site(self.app.clone(), api))
+    }
+
     /// Waits for the next rate-limit window (database clock) unless at least `need` of
     /// the current one is left (F10).
     pub async fn align_to_window(&self, need: Duration) {

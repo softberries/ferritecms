@@ -185,7 +185,7 @@ monitoring.)
 
 ## 8. CLI summary
 
-### Implemented (M1c-1, M1c-2 and M1.5: `crates/ferrite`)
+### Implemented (M1c-1, M1c-2, M1.5 and M2a: `crates/ferrite`)
 
 ```
 ferrite init --data DIR --url URL [--title T] [--db URL] [--schema NAME] [--media s3://bucket/prefix]
@@ -197,6 +197,11 @@ ferrite serve          --data DIR                      # M1c-2; cluster wiring M
 ferrite seed demo      --data DIR [--force]            # M1c-2
 ferrite config check   --data DIR                      # M1.5
 ferrite healthcheck    [--url URL]                     # M1.5, for container health checks
+ferrite user create    --data DIR --login L --email E [--role admin|editor|author|contributor]
+                       [--display-name N] [--password-stdin]                     # M2a
+ferrite user reset-password --data DIR --login L [--password-stdin]              # M2a
+ferrite user list      --data DIR                                                # M2a
+ferrite user disable-totp --data DIR --login L                                   # M2a
 ```
 
 **`ferrite config check`** (`crates/ferrite/src/config_cmd.rs`): loads `<data>/ferrite.toml`
@@ -243,7 +248,8 @@ also installs the `ring` rustls default crypto provider at start.
   (normally `public`), so drop that database instead or remove its ferrite tables and
   `_sqlx_migrations` by hand.
 - The validation step applies `FERRITE_*` environment overrides, so it checks the effective config, which can differ from the file that was written.
-- It does **not** create an admin user yet (`ferrite user create` is a later milestone).
+- It does **not** create an admin user: run `ferrite user create --login … --email …`
+  next (it prints a one-time password).
 
 **`ferrite migrate`** (`crates/ferrite/src/migrate.rs`, `open.rs`):
 
@@ -262,10 +268,10 @@ also installs the `ring` rustls default crypto provider at start.
   "database not found at <path>; run `ferrite init` first" when the file is missing, without
   creating the folder, lock file or database. Only `init` and `up` may create one.
 - SQLite caveat: opening the database takes the exclusive data-folder lock
-  (`ferrite.lock`), so **every `migrate` subcommand, `status` included, and `seed demo` fail
-  while another process holds the lock, and a running `ferrite serve` holds it**: stop the
-  server first. There is no read-only open. Postgres has no folder lock, so
-  these commands work next to a running server.
+  (`ferrite.lock`), so **every `migrate` subcommand, `status` included, `seed demo` and every
+  `user` subcommand fail while another process holds the lock, and a running `ferrite
+  serve` holds it**: stop the server first. There is no read-only open. Postgres has no
+  folder lock, so these commands work next to a running server.
 - Postgres caveat: `status`, `down` and `verify` do not create tables, but connecting with
   a configured `database.schema` that does not exist creates that empty schema.
 
@@ -329,6 +335,31 @@ also installs the `ring` rustls default crypto provider at start.
   unused until logins exist (M2). Render concurrency (2 × available parallelism, 5 s wait,
   then 503) and the 60 s short TTL are constants.
 
+**`ferrite user`** (`crates/ferrite/src/user_cmd.rs`, ruling P17): the operator path for
+accounts. It acts without a login or capability checks (`UserService::operator()`): it is
+how the first admin is created and how a locked-out admin gets back in, so whoever can run
+it on the data folder (or with the database URL) controls the site. Every subcommand loads
+the config, opens the database and runs the same migration check as `serve`; with SQLite it
+takes the data-folder lock, so it fails while `serve` runs (stop the server first; Postgres
+has no folder lock). The same rules as the API apply (login format, unique login and
+e-mail, password policy of 12 to 1024 bytes); any error exits 1 with the message, e.g.
+`Error: invalid login: …`, `Error: invalid login: login taken`, `Error: user not found:
+"bob"`.
+
+- **Passwords never come from the command line.** With `--password-stdin` one line is read
+  from stdin (a trailing `\n` or `\r\n` is dropped) and `must_reset` is cleared, e.g.
+  `printf '%s\n' "$PW" | ferrite user create … --password-stdin`. Without it a random
+  password (base64url of 15 random bytes, 20 characters) is generated and printed once as
+  `password: <p>`, and the account must change it at its first login (`must_reset`).
+- `create`: `--role` defaults to `admin`, `--display-name` to the login. Prints
+  `created user <login> (<role>)`.
+- `reset-password`: sets the password (rules above) and deletes every session of the user,
+  on every node at once; API tokens stay valid (revoke them over the API).
+- `list`: one line per account, by login: `<login>  <role>  <status>  <email>` (two spaces
+  between columns, no header).
+- `disable-totp`: turns TOTP off (clears the secret and the replay step); the recovery for
+  a lost authenticator, as there are no recovery codes.
+
 **`ferrite seed demo`** (`crates/ferrite/src/seed.rs`):
 
 - Writes demo content through the core services where they exist: an `admin` user (no
@@ -355,7 +386,6 @@ ferrite media sync / media gc                                   # M4
 ferrite import wordpress …                                      # M3
 ferrite plugin new|check|install|list|enable|disable|remove     # M2
 ferrite theme install|activate|list                             # M2
-ferrite user create|reset-password|list                         # M2 (init will then create the admin user)
 ferrite self-update / rollback [--schema] [--restore-snapshot]  # M4
 ferrite doctor        # validates connectivity, permissions, clock skew, versions (config: `config check`)
 ```

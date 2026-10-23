@@ -35,6 +35,7 @@ pub mod settings;
 mod state;
 pub mod taxonomies;
 pub mod types;
+pub mod users;
 
 use std::sync::Arc;
 
@@ -128,6 +129,15 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
             redirects::delete_redirect
         ))
         .routes(routes!(settings::get_settings, settings::update_settings))
+        .routes(routes!(users::list_users, users::create_user))
+        .routes(routes!(
+            users::get_user,
+            users::update_user,
+            users::delete_user
+        ))
+        .routes(routes!(users::set_user_password))
+        .routes(routes!(users::list_tokens, users::create_token))
+        .routes(routes!(users::revoke_token))
 }
 
 /// The spec and routes, before the state and layers.

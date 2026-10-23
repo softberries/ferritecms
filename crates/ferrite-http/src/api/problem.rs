@@ -79,6 +79,9 @@ pub const UNIQUE_FIELDS: &[(&str, &str, &str)] = &[
         "name",
         "a taxonomy with this name exists",
     ),
+    // Core maps these two itself (`UserService`); listed for any path that does not.
+    ("users_login_uq", "login", "login taken"),
+    ("users_email_uq", "email", "e-mail taken"),
     (
         "menu_items_pkey",
         "items",

@@ -885,3 +885,383 @@ fn healthcheck_accepts_ipv6_literals() {
         .assert()
         .success();
 }
+
+// ---- ferrite user (P17) ------------------------------------------------------------
+
+/// Runs `f` on the site's store opened in-process (taking the SQLite folder lock), then
+/// closes it so the next command can take the lock.
+fn with_site_store<T>(
+    dir: &Path,
+    f: impl AsyncFnOnce(std::sync::Arc<dyn ferrite_store::Store>) -> T,
+) -> T {
+    tokio_rt().expect("runtime").block_on(async {
+        let config = ferrite_config::load(dir, Vec::new()).unwrap();
+        let store = ferrite::open_store(&config, ferrite::OpenMode::MustExist)
+            .await
+            .unwrap();
+        let out = f(store.clone()).await;
+        store.close().await;
+        out
+    })
+}
+
+/// Logs `login` in through `AuthService` and returns the session (`None`: refused).
+async fn login_session(
+    store: std::sync::Arc<dyn ferrite_store::Store>,
+    login: &str,
+    password: &str,
+) -> Option<ferrite_core::IssuedSession> {
+    let auth =
+        ferrite_core::AuthService::new(store, ferrite_core::auth::SiteKey::generate().unwrap());
+    match auth
+        .login(ferrite_core::LoginAttempt {
+            login,
+            password,
+            ip: None,
+            user_agent: None,
+        })
+        .await
+    {
+        Ok(ferrite_core::LoginOutcome::Session(s)) => Some(*s),
+        Ok(other) => panic!("unexpected outcome {other:?}"),
+        Err(ferrite_core::CoreError::Unauthenticated) => None,
+        Err(e) => panic!("login failed: {e}"),
+    }
+}
+
+fn user_cmd(dir: &Path, args: &[&str]) -> Command {
+    let mut c = ferrite();
+    c.arg("user").args(args).arg("--data").arg(dir);
+    c
+}
+
+/// The generated password from a `password: <p>` line.
+fn printed_password(out: &str) -> String {
+    let p = out
+        .lines()
+        .find_map(|l| l.strip_prefix("password: "))
+        .unwrap_or_else(|| panic!("no password line in {out:?}"))
+        .to_owned();
+    assert_eq!(p.len(), 20, "{p:?}");
+    assert!(
+        p.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+        "{p:?}"
+    );
+    p
+}
+
+#[test]
+fn user_create_generates_password_and_login_works() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let out = stdout(user_cmd(
+        tmp.path(),
+        &["create", "--login", "Ann", "--email", "ann@example.com"],
+    ));
+    let password = printed_password(&out);
+    let other = printed_password(&stdout(user_cmd(
+        tmp.path(),
+        &["create", "--login", "ben", "--email", "ben@example.com"],
+    )));
+    assert_ne!(password, other, "passwords are random");
+    with_site_store(tmp.path(), async |store| {
+        let ann = store
+            .read()
+            .users()
+            .get_by_login("ann")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ann.role, ferrite_domain::Role::Admin);
+        assert_eq!(ann.display_name, "Ann");
+        assert!(ann.must_reset);
+        let session = login_session(store.clone(), "ann", &password).await;
+        assert!(session.is_some_and(|s| s.user.must_reset));
+    });
+}
+
+#[test]
+fn user_create_password_stdin() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let mut c = user_cmd(
+        tmp.path(),
+        &[
+            "create",
+            "--login",
+            "ed",
+            "--email",
+            "ed@example.com",
+            "--role",
+            "editor",
+            "--display-name",
+            "Ed Editor",
+            "--password-stdin",
+        ],
+    );
+    c.write_stdin("a long enough passphrase\n");
+    let out = stdout(c);
+    assert!(!out.contains("password:"), "{out}");
+    assert!(!out.contains("passphrase"), "{out}");
+    with_site_store(tmp.path(), async |store| {
+        let ed = store
+            .read()
+            .users()
+            .get_by_login("ed")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ed.role, ferrite_domain::Role::Editor);
+        assert_eq!(ed.display_name, "Ed Editor");
+        assert!(!ed.must_reset);
+        let s = login_session(store.clone(), "ed", "a long enough passphrase").await;
+        assert!(s.is_some_and(|s| !s.user.must_reset));
+    });
+    // A password under the policy is refused.
+    let mut c = user_cmd(
+        tmp.path(),
+        &[
+            "create",
+            "--login",
+            "fay",
+            "--email",
+            "fay@example.com",
+            "--password-stdin",
+        ],
+    );
+    c.write_stdin("short\n");
+    let err = c.assert().code(1).get_output().stderr.clone();
+    let err = String::from_utf8(err).unwrap();
+    assert!(err.contains("password"), "{err}");
+}
+
+#[test]
+fn user_reset_password_revokes_sessions() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let mut c = user_cmd(
+        tmp.path(),
+        &[
+            "create",
+            "--login",
+            "ann",
+            "--email",
+            "ann@example.com",
+            "--password-stdin",
+        ],
+    );
+    c.write_stdin("the first passphrase\r\n");
+    c.assert().success();
+    let token = with_site_store(tmp.path(), async |store| {
+        let s = login_session(store, "ann", "the first passphrase")
+            .await
+            .expect("logged in");
+        s.token.expose().to_owned()
+    });
+
+    let password = printed_password(&stdout(user_cmd(
+        tmp.path(),
+        &["reset-password", "--login", "ANN"],
+    )));
+    with_site_store(tmp.path(), async |store| {
+        let auth = ferrite_core::AuthService::new(
+            store.clone(),
+            ferrite_core::auth::SiteKey::generate().unwrap(),
+        );
+        assert!(auth.resolve_session(&token).await.unwrap().is_none());
+        assert!(
+            login_session(store.clone(), "ann", "the first passphrase")
+                .await
+                .is_none()
+        );
+        let s = login_session(store, "ann", &password).await;
+        assert!(s.is_some_and(|s| s.user.must_reset));
+    });
+
+    // With --password-stdin: must_reset is cleared.
+    let mut c = user_cmd(
+        tmp.path(),
+        &["reset-password", "--login", "ann", "--password-stdin"],
+    );
+    c.write_stdin("the third passphrase\n");
+    let out = stdout(c);
+    assert!(!out.contains("password:"), "{out}");
+    with_site_store(tmp.path(), async |store| {
+        let s = login_session(store, "ann", "the third passphrase").await;
+        assert!(s.is_some_and(|s| !s.user.must_reset));
+    });
+
+    let err = user_cmd(tmp.path(), &["reset-password", "--login", "nobody"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stderr
+        .clone();
+    assert!(String::from_utf8(err).unwrap().contains("not found"));
+}
+
+#[test]
+fn user_list_output() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    for (login, role) in [("zed", "contributor"), ("amy", "author")] {
+        user_cmd(
+            tmp.path(),
+            &[
+                "create",
+                "--login",
+                login,
+                "--email",
+                &format!("{login}@example.com"),
+                "--role",
+                role,
+            ],
+        )
+        .assert()
+        .success();
+    }
+    with_site_store(tmp.path(), async |store| {
+        let zed = store
+            .read()
+            .users()
+            .get_by_login("zed")
+            .await
+            .unwrap()
+            .unwrap();
+        let admin = ferrite_core::UserService::new(store.clone())
+            .operator()
+            .create(ferrite_core::NewAccount {
+                login: "root".into(),
+                email: "root@example.com".into(),
+                display_name: "Root".into(),
+                role: ferrite_domain::Role::Admin,
+                password: None,
+                must_reset: true,
+            })
+            .await
+            .unwrap();
+        ferrite_core::UserService::new(store)
+            .update(
+                &ferrite_core::Actor::new(admin.id, admin.role),
+                zed.id,
+                ferrite_core::UserPatch {
+                    status: Some(ferrite_domain::UserStatus::Disabled),
+                    ..ferrite_core::UserPatch::default()
+                },
+            )
+            .await
+            .unwrap();
+    });
+    let out = stdout(user_cmd(tmp.path(), &["list"]));
+    assert_eq!(
+        out,
+        "amy  author  active  amy@example.com\n\
+         root  admin  active  root@example.com\n\
+         zed  contributor  disabled  zed@example.com\n"
+    );
+
+    // The SQLite folder lock: refused while another process (here: this one) holds it.
+    tokio_rt().expect("runtime").block_on(async {
+        let config = ferrite_config::load(tmp.path(), Vec::new()).unwrap();
+        let store = ferrite::open_store(&config, ferrite::OpenMode::MustExist)
+            .await
+            .unwrap();
+        user_cmd(tmp.path(), &["list"]).assert().code(1);
+        store.close().await;
+    });
+}
+
+#[test]
+fn user_disable_totp_clears_the_secret() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    user_cmd(
+        tmp.path(),
+        &["create", "--login", "ann", "--email", "ann@example.com"],
+    )
+    .assert()
+    .success();
+    with_site_store(tmp.path(), async |store| {
+        let ann = store
+            .read()
+            .users()
+            .get_by_login("ann")
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .read()
+            .users()
+            .set_totp(ann.id, Some(&ferrite_domain::Secret::new("sealed")))
+            .await
+            .unwrap();
+    });
+    let out = stdout(user_cmd(tmp.path(), &["disable-totp", "--login", "ann"]));
+    assert!(out.contains("ann"), "{out}");
+    with_site_store(tmp.path(), async |store| {
+        let ann = store
+            .read()
+            .users()
+            .get_by_login("ann")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(ann.totp_secret.is_none());
+    });
+}
+
+#[test]
+fn user_cli_refuses_invalid_login() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    for login in ["-bad", "a b", "é", ""] {
+        let out = user_cmd(
+            tmp.path(),
+            &[
+                "create",
+                &format!("--login={login}"),
+                "--email",
+                "x@example.com",
+            ],
+        )
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert!(err.contains("login must be"), "{err}");
+        assert!(out.stdout.is_empty(), "no password printed");
+    }
+    user_cmd(
+        tmp.path(),
+        &["create", "--login", "ann", "--email", "ann@example.com"],
+    )
+    .assert()
+    .success();
+    let err = user_cmd(
+        tmp.path(),
+        &["create", "--login", "ANN", "--email", "other@example.com"],
+    )
+    .assert()
+    .code(1)
+    .get_output()
+    .stderr
+    .clone();
+    assert!(String::from_utf8(err).unwrap().contains("login taken"));
+    // Unknown role: a usage error from the argument parser (exit 2).
+    user_cmd(
+        tmp.path(),
+        &[
+            "create",
+            "--login",
+            "x",
+            "--email",
+            "x@example.com",
+            "--role",
+            "root",
+        ],
+    )
+    .assert()
+    .code(2);
+}

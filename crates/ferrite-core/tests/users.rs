@@ -49,7 +49,7 @@ async fn bootstrap_admin(users: &UserService, login: &str) -> (User, Actor) {
 
 fn invalid(r: Result<impl std::fmt::Debug, CoreError>) -> String {
     match r {
-        Err(CoreError::Invalid(m)) => m,
+        Err(CoreError::Invalid(m) | CoreError::InvalidField { message: m, .. }) => m,
         other => panic!("expected Invalid, got {other:?}"),
     }
 }
