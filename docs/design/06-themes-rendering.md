@@ -151,7 +151,7 @@ rejects a structure whose first literal is a type or taxonomy name, a router wor
 **Root namespace** (R3, R13). Posts under `/%slug%/` and top-level pages share `/<slug>/`;
 core allocates slugs so they do not collide (`about-2`), and the router tries a page before a
 post as a safety net. Top-level slugs may not be reserved words (`admin`, `api`, `feed`,
-`_media`, `_theme`, `_p`, …), type or taxonomy names, `author`, `page`, `search`, or four
+`_media`, `_theme`, `_preview`, `_p`, …), type or taxonomy names, `author`, `page`, `search`, or four
 digits, so static routes never hide content.
 
 **Canonical form.** Each segment is percent-decoded once and re-encoded, so a request
@@ -165,7 +165,8 @@ segment.
 **Static routes.** `/`, `/feed/`, `/robots.txt`, `/sitemap.xml`, `/sitemap-<kind>-<n>.xml`,
 `/{taxonomy}/{slug}/`, `/{taxonomy}/{slug}/feed/`, `/author/{login}/`, `/{yyyy}/`,
 `/{yyyy}/{mm}/`, `/{type}/` (types with an archive), `/_media/{hash}/{name}`,
-`/_theme/{hash}/{path…}`, `/healthz`, `/readyz`. Listings take `/page/N/` with `N` in
+`/_theme/{hash}/{path…}`, `/_preview/{id}` (`id` a lowercase hyphenated UUID, no trailing
+slash; anything else under `/_preview/` is 404), `/healthz`, `/readyz`. Listings take `/page/N/` with `N` in
 `2..=1000`; `/page/1/` redirects to the path without it. `?s=` on `/` is a search. Whatever is
 left goes to the permalink matcher, which returns the candidates in order (pages, then posts,
 then other types); a hit counts only when the item's computed URL equals the request path, so
@@ -173,8 +174,29 @@ a wrong year, month or category is a 404.
 
 **Request order** (`crates/ferrite-http/src/app/handler.rs`): methods other than GET/HEAD →
 405; `/healthz`, `/readyz`, `/_media`, `/_theme` (never redirected, not in the page cache) →
-redirect table (exact path, then the trailing slash toggled; before the cache) → canonical
-301 → page cache → render. `410` redirect rows answer with the shared gone page.
+`/_preview/<id>` (before the redirect rows, so none can shadow it; never cached) → redirect
+table (exact path, then the trailing slash toggled; before the cache) → canonical 301 →
+session cookie (logged in or anonymous) → page cache (or none: logged-in bypass) → render.
+`410` redirect rows answer with the shared gone page.
+
+**Previews** (P20). `GET /_preview/<id>` takes the `ferrite_session` cookie only (no bearer
+tokens) of an account that need not reset its password, and loads the item with
+`SiteReader::preview(actor, id)`: any status but trash, readable by the actor under the API's
+rule (R17 `can_read`: own items, published items, or `edit_others`). A contributor previewing
+another author's draft, no or a bad session, a trashed or missing item and a malformed id all
+get the shared 404 page. The item is rendered through the single-item pipeline with the
+plugin preview scope (05 §7a) and `request.preview = true` (the blog theme shows a notice),
+never through the cache; every preview answer carries `Cache-Control: private, no-store` and
+`X-Robots-Tag: noindex`.
+
+**Logged-in requests** (P21). A request whose `ferrite_session` cookie resolves to a session
+is logged in; without the cookie no session lookup happens, and a cookie that resolves to
+nothing (unknown, expired, logged out, disabled user) or a failed lookup is ignored (the
+request is anonymous, no `Set-Cookie`, never a 401). Plugins see `is_logged_in = true`.
+`cache.logged_in = "bypass"` (default): the page renders on every request without reading or
+filling the cache. `"per-user"`: cached under the user's own variant (§6). Either way the
+answer is `Cache-Control: private, no-store`, and logged-in requests never read or fill the
+anonymous entries.
 
 **Feeds and sitemaps** (`crates/ferrite-http/src/app/feeds.rs`): RSS 2.0 for posts (`/feed/`)
 and for terms, the latest 20 public items each; a term without public posts is 404 (R7).
@@ -183,7 +205,7 @@ only. `robots.txt` disallows everything when option `reading.discourage_indexing
 names the sitemap index. Feeds, sitemaps and `robots.txt` go through the page cache. Atom feeds
 are not built (deferred, ROADMAP M4).
 
-**Not built:** `/api`, `/admin` and plugin routes `/_p/…` (M2).
+**Not built:** `/admin` and plugin routes `/_p/…` (M2).
 
 ## 4. MiniJinja environment
 
@@ -275,8 +297,8 @@ TipTap/ProseMirror JSON document model ([07](07-admin-api.md#editor)). The Rust 
 `ferrite-core` (`blocks`) maps node types to HTML with escaping; raw `html` blocks are
 sanitised with `ammonia`.
 
-**Previews.** `SiteReader::preview(actor, id)` and the preview request scope for plugins exist
-(05 §7a), but no route serves previews yet: that needs authentication (M2). Preview responses
+**Previews.** `/_preview/<id>` (§3) renders `SiteReader::preview(actor, id)` with the
+preview request scope for plugins (05 §7a) and `request.preview = true`. Preview responses
 are never cached.
 
 ## 6. Page cache (as built)
@@ -287,8 +309,10 @@ are never cached.
   256 MiB); an entry weighs its body plus key, header, ETag and dependency-key bytes.
 - Key: `(host, path, normalised allowlisted query, variant)`. The host is always the
   configured `site.url` host, never the `Host` header (R25). The only allowlisted query
-  parameters are `s` and `page`. Variant: `anon` only; there is no login yet, and
-  `cache.logged_in = "per-user"` is parsed but unused until M2.
+  parameters are `s` and `page`. Variant: `anon`, or `user(<id>)` for logged-in requests
+  under `cache.logged_in = "per-user"` (P21; under the default `"bypass"` logged-in requests
+  are not cached at all). Dependency invalidation ignores the variant, so an edit drops every
+  user's copy too.
 - Value: status, headers, uncompressed body, ETag (16 hex digits of SHA-256 over the body),
   dependency keys, optional TTL. Compression (br, gzip) happens per response in the HTTP layer,
   so the ETag is sent weak (`W/"…"`) and every HTML response, 304 included, has
@@ -317,8 +341,9 @@ are never cached.
 - Scheduled publish (M1.5, P12): scheduling an item enqueues a `content.publish_scheduled`
   job due at `scheduled_at`; the periodic `content.publish_due` job (every 30 s, one per
   period cluster-wide) is the safety net. Their writes emit normal events.
-- **Planned:** `Cache-Control: public, max-age=0, s-maxage=<cfg>` for CDNs is not sent (HTML
-  pages carry no `Cache-Control`); per-user variants (M2).
+- **Planned:** `Cache-Control: public, max-age=0, s-maxage=<cfg>` for CDNs is not sent
+  (anonymous HTML pages carry no `Cache-Control`; logged-in pages and previews are
+  `private, no-store`).
 
 ## 7. Error behaviour (as built)
 

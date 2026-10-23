@@ -10,7 +10,8 @@ use axum::{
 };
 use ferrite_cache::{InvalidationLoop, PageCache};
 use ferrite_core::{
-    Actor, ContentDraft, ContentService, PermalinkRules, RedirectService, TaxonomyService,
+    Actor, AuthService, ContentDraft, ContentService, PermalinkRules, RedirectService,
+    TaxonomyService, auth::SiteKey,
 };
 use ferrite_domain::{ContentId, ContentItem, Role, TermId, User};
 use ferrite_http::{AppParts, AppState, HttpConfig, build_app, load_route_table};
@@ -130,17 +131,43 @@ impl App {
         let routes = load_route_table(site.store.as_ref(), &PermalinkRules::default())
             .await
             .expect("route table");
-        Arc::new(AppState::new(AppParts {
-            store: site.store.clone(),
-            reader,
-            plugins: site.host.clone(),
-            media: site.media.clone(),
-            theme,
-            cache: Arc::new(PageCache::new(64 * 1024 * 1024)),
-            routes,
-            config,
-            migrations_ok,
-        }))
+        Arc::new(
+            AppState::new(AppParts {
+                store: site.store.clone(),
+                reader,
+                plugins: site.host.clone(),
+                media: site.media.clone(),
+                theme,
+                cache: Arc::new(PageCache::new(64 * 1024 * 1024)),
+                routes,
+                config,
+                migrations_ok,
+            })
+            .with_auth(Self::auth(site)),
+        )
+    }
+
+    /// An auth service over `site`'s store (sessions live in the database, so any
+    /// instance resolves the cookies another one issued).
+    pub fn auth(site: &Site) -> Arc<AuthService> {
+        Arc::new(AuthService::new(
+            site.store.clone(),
+            SiteKey::generate().expect("site key"),
+        ))
+    }
+
+    /// A `Cookie` header value holding a new session of `user`.
+    pub async fn session(&self, user: &User) -> String {
+        let issued = Self::auth(&self.site)
+            .issue_session(user, None, None)
+            .await
+            .expect("session");
+        format!("ferrite_session={}", issued.token.expose())
+    }
+
+    /// GET `path` with the `Cookie` header `cookie`.
+    pub async fn get_with_cookie(&self, path: &str, cookie: &str) -> Resp {
+        send(&self.router, with_cookie(path, cookie)).await
     }
 
     pub async fn teardown(self) {
@@ -245,6 +272,14 @@ pub fn request(method: Method, path: &str) -> Request<Body> {
         .header(header::HOST, "example.com")
         .body(Body::empty())
         .expect("request")
+}
+
+/// A GET request for `path` with the `Cookie` header `cookie`.
+pub fn with_cookie(path: &str, cookie: &str) -> Request<Body> {
+    let mut req = request(Method::GET, path);
+    req.headers_mut()
+        .insert(header::COOKIE, cookie.parse().expect("cookie header"));
+    req
 }
 
 pub async fn send(router: &Router, req: Request<Body>) -> Resp {

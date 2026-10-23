@@ -335,6 +335,31 @@ mod tests {
         assert_eq!(keys, in_moka, "index and moka disagree");
     }
 
+    /// Per-user variants (P21): one entry per user next to the anonymous one, and
+    /// dependency invalidation drops every variant of the page.
+    #[tokio::test]
+    async fn user_variants_are_separate_and_invalidated_together() {
+        use crate::Variant;
+        use ferrite_domain::UserId;
+        let c = PageCache::new(1 << 20);
+        let (a, b) = (UserId::new(), UserId::new());
+        let ua = CacheKey::user("example.com", "/p/", "", a);
+        let ub = CacheKey::user("example.com", "/p/", "", b);
+        assert_eq!(ua.variant, Variant::User(a));
+        assert_ne!(ua, ub);
+        assert_ne!(ua, key("/p/"));
+        assert!(!ua.is_internal());
+        for (k, body) in [(key("/p/"), "anon"), (ua.clone(), "a"), (ub.clone(), "b")] {
+            assert!(c.insert(k, page(body, &["post:1"])).await);
+        }
+        assert_eq!(&c.get(&ua).await.unwrap().body[..], b"a");
+        assert_eq!(&c.get(&ub).await.unwrap().body[..], b"b");
+        assert_eq!(&c.get(&key("/p/")).await.unwrap().body[..], b"anon");
+        c.invalidate(&["post:1".to_owned()]).await;
+        assert!(c.is_empty().await);
+        assert_index_consistent(&c).await;
+    }
+
     #[tokio::test]
     async fn refuses_errors_set_cookie_and_zero_ttl() {
         let c = PageCache::new(1 << 20);

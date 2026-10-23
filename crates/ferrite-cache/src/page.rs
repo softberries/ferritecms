@@ -3,15 +3,19 @@
 use std::time::Duration;
 
 use bytes::Bytes;
+use ferrite_domain::UserId;
 
 /// First character of an internal key's path.
 const INTERNAL: char = '\0';
 
-/// Who a cached page was rendered for. M1c-2 caches anonymous responses only;
-/// logged-in requests bypass the cache.
+/// Who a cached page was rendered for: anonymous visitors share [`Anon`](Self::Anon);
+/// with `cache.logged_in = "per-user"` a logged-in user's pages are stored under
+/// [`User`](Self::User) (P21), never shown to anyone else. Dependency invalidation
+/// does not look at the variant: an edit drops every variant of a page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Variant {
     Anon,
+    User(UserId),
 }
 
 /// Identity of a cached response: (host, path, normalised allowlisted query, variant).
@@ -39,6 +43,19 @@ impl CacheKey {
         }
     }
 
+    /// A per-user key: the page as `user` sees it (P21).
+    pub fn user(
+        host: impl Into<String>,
+        path: impl Into<String>,
+        query: impl Into<String>,
+        user: UserId,
+    ) -> Self {
+        Self {
+            variant: Variant::User(user),
+            ..Self::anon(host, path, query)
+        }
+    }
+
     /// The key of a shared internal page (the 404 body, the 410 body): empty host,
     /// path `\0<name>`. Request paths never contain a NUL byte (the router rejects
     /// control characters), so it cannot collide with a URL.
@@ -52,7 +69,11 @@ impl CacheKey {
     }
 
     fn weight(&self) -> usize {
-        self.host.len() + self.path.len() + self.query.len()
+        let variant = match self.variant {
+            Variant::Anon => 0,
+            Variant::User(_) => size_of::<UserId>(),
+        };
+        self.host.len() + self.path.len() + self.query.len() + variant
     }
 }
 

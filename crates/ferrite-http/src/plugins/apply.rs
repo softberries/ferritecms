@@ -31,8 +31,8 @@ pub struct PluginRequest {
     /// The item being previewed by an editor, during an authenticated preview (whose
     /// response is never cached). Plugins see it through `content.get-post` on its id
     /// and `meta.get` on it; nothing else changes. A [`Previewed`] can only come from
-    /// `SiteReader::preview` (its `can_edit` check passed), so a public request cannot
-    /// smuggle a draft into the scope.
+    /// `SiteReader::preview` (its `can_read` check passed, R17), so a public request
+    /// cannot smuggle a draft into the scope.
     preview: Option<Arc<Previewed>>,
 }
 
@@ -50,7 +50,13 @@ impl PluginRequest {
         }
     }
 
-    /// The preview of `preview` at `path`, by a logged-in editor.
+    /// Marks the request as made by a logged-in user (`RequestInfo.is_logged_in`, P21).
+    pub fn logged_in(mut self, logged_in: bool) -> Self {
+        self.info.is_logged_in = logged_in;
+        self
+    }
+
+    /// The preview of `preview` at `path`, by a logged-in user who may read it.
     pub fn preview(path: &str, locale: &str, preview: Previewed) -> Self {
         let mut req = Self::public(path, locale, Some(preview.item().item.id));
         req.info.is_logged_in = true;
@@ -148,5 +154,18 @@ pub async fn filter_item(
     let excerpt = FilterValue::Text(item.item.excerpt.clone());
     if let FilterValue::Text(t) = run_filter(host, "content.excerpt", excerpt, req, trace).await {
         item.item.excerpt = t;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn logged_in_sets_request_info() {
+        let req = PluginRequest::public("/a/", "en", None);
+        assert!(!req.info.is_logged_in);
+        assert!(req.clone().logged_in(true).info.is_logged_in);
+        assert!(!req.logged_in(true).logged_in(false).info.is_logged_in);
     }
 }

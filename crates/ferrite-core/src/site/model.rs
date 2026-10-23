@@ -100,7 +100,7 @@ pub struct PageItem {
 /// An item loaded by [`SiteReader::preview`](super::SiteReader::preview): the only way
 /// to get one (private fields, no public constructor), so code that requires a
 /// `Previewed` (the plugin preview scope in `ferrite-http`) can only be handed an item
-/// whose `can_edit` check passed.
+/// whose `can_read` check passed (R17).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Previewed {
     item: PageItem,

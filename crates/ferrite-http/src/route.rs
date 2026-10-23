@@ -19,8 +19,8 @@
 //! route's canonical path the result is [`Route::Canonical`] (a 301 target). The raw
 //! query is appended with every byte outside visible ASCII (`0x21..=0x7E`) and `#`
 //! percent-encoded, so a target is always visible ASCII; a canonical path longer than
-//! [`MAX_PATH_BYTES`] is 404 instead. `/_media/…`, `/_theme/…`, `/healthz` and
-//! `/readyz` must be exact and are never redirected.
+//! [`MAX_PATH_BYTES`] is 404 instead. `/_media/…`, `/_theme/…`, `/_preview/…`,
+//! `/healthz` and `/readyz` must be exact and are never redirected.
 //!
 //! # Rejected (404)
 //!
@@ -35,7 +35,8 @@
 //! `/`, `/feed/`, `/robots.txt`, `/sitemap.xml`, `/sitemap-<kind>-<n>.xml`,
 //! `/{taxonomy}/{slug}/` (the shape of `term_path`), `/{taxonomy}/{slug}/feed/`,
 //! `/author/{login}/`, `/{yyyy}/`, `/{yyyy}/{mm}/`, `/{type}/` for types with an
-//! archive, `/_media/{hash}/{name}`, `/_theme/{hash}/{path…}`, `/healthz`, `/readyz`.
+//! archive, `/_media/{hash}/{name}`, `/_theme/{hash}/{path…}`, `/_preview/{id}` (`id` a
+//! lowercase hyphenated UUID, no trailing slash; P20), `/healthz`, `/readyz`.
 //! Listings (front, search, archive, term, author, date) take a `/page/N/` suffix with
 //! `N` in `2..=1000` written without a leading zero; `/page/1/` redirects to the path
 //! without it, any other `N` is 404 (the 5000-row skip cap of ruling R6 is enforced by
@@ -65,6 +66,7 @@
 
 use ferrite_core::FeedSource;
 use ferrite_core::permalink::{PermalinkRules, Segment, Structure, encode_segment, term_path};
+use ferrite_domain::ContentId;
 
 mod path;
 mod query;
@@ -193,13 +195,18 @@ pub enum Route {
         month: Option<u32>,
         page: u32,
     },
+    /// `/_preview/<id>`: the preview of item `id` (P20; the handler checks the session
+    /// and the reader's rights, and never caches it).
+    Preview {
+        id: ContentId,
+    },
     /// Try in order; see the module docs for the handler's permalink check.
     Content(Vec<Candidate>),
     NotFound,
 }
 
 /// Fixed words that are never content and never redirected.
-const EXACT_ONLY: &[&str] = &["_media", "_theme", "healthz", "readyz"];
+const EXACT_ONLY: &[&str] = &["_media", "_theme", "_preview", "healthz", "readyz"];
 
 /// Resolves `raw_path` (as received, still percent-encoded) and `raw_query` (without
 /// `?`). Pure.
@@ -217,6 +224,9 @@ pub fn resolve(raw_path: &str, raw_query: Option<&str>, table: &RouteTable) -> R
     }
     if let Some(rest) = raw_path.strip_prefix("/_theme/") {
         return theme(rest).unwrap_or(Route::NotFound);
+    }
+    if let Some(rest) = raw_path.strip_prefix("/_preview/") {
+        return preview(rest).unwrap_or(Route::NotFound);
     }
     let Some(segs) = path::segments(raw_path) else {
         return Route::NotFound;
@@ -257,6 +267,20 @@ pub fn resolve(raw_path: &str, raw_query: Option<&str>, table: &RouteTable) -> R
         }
         Matched::None => Route::NotFound,
     }
+}
+
+/// `<id>` of `/_preview/<id>`: exactly the 36-character lowercase hyphenated form
+/// (`Uuid::parse_str` alone would also take upper case, braces and `urn:uuid:`).
+fn preview(rest: &str) -> Option<Route> {
+    let shape = rest.len() == 36
+        && rest.bytes().enumerate().all(|(i, b)| match i {
+            8 | 13 | 18 | 23 => b == b'-',
+            _ => b.is_ascii_digit() || (b'a'..=b'f').contains(&b),
+        });
+    shape
+        .then(|| rest.parse().ok())
+        .flatten()
+        .map(|id| Route::Preview { id })
 }
 
 /// A match and the canonical path it implies.

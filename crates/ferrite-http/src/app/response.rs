@@ -80,6 +80,17 @@ fn vary(res: &mut Response<Body>) {
         .insert(header::VARY, HeaderValue::from_static("accept-encoding"));
 }
 
+/// `Cache-Control: private, no-store`: a response made for one logged-in user (P20,
+/// P21) that no shared cache may keep.
+pub(crate) fn private_no_store(res: &mut Response<Body>) {
+    insert(res, header::CACHE_CONTROL, "private, no-store");
+}
+
+/// `X-Robots-Tag: noindex` (previews, P20).
+pub(crate) fn noindex(res: &mut Response<Body>) {
+    insert(res, HeaderName::from_static("x-robots-tag"), "noindex");
+}
+
 /// A plain-text response.
 pub(crate) fn text(status: StatusCode, body: &'static str) -> Response<Body> {
     let mut res = Response::new(Body::from(body));

@@ -9,7 +9,14 @@
 //!    the body.
 //! 2. [`resolve`](crate::route::resolve) gives the route. `/healthz` is `200 ok`;
 //!    `/readyz` is `200` when a store read succeeds (2 s timeout) and the startup
-//!    migration check passed, else `503`.
+//!    migration check passed, else `503`. `/_preview/<id>` (P20) is answered here,
+//!    before redirect rows and never through the cache: the `ferrite_session` cookie
+//!    (bearer tokens are not accepted), an account without `must_reset`, and
+//!    `SiteReader::preview` (R17 `can_read`); the item is rendered like a single page
+//!    with the plugin preview scope and `request.preview = true`. Every failure (no or
+//!    bad session, no right, trashed, missing, malformed id) is the shared 404 page.
+//!    Every preview answer has `Cache-Control: private, no-store` and
+//!    `X-Robots-Tag: noindex`.
 //! 3. Redirect rows (exact path, then the trailing slash toggled), **before the cache**:
 //!    301/302/307/308 to the row's target, `410` as the shared gone page. The hit is
 //!    counted in a spawned task (fire and forget).
@@ -20,8 +27,13 @@
 //!    path, and [`NormalQuery::cache_query`](crate::route::NormalQuery::cache_query).
 //!    Never cached under the request path: error statuses (404/410/500/503). TTL 60 s
 //!    ([`HttpConfig`]): search results, and pages whose plugin calls were volatile or
-//!    failed or whose theme helper reads failed. Previews (never cached) need
-//!    authentication, which does not exist yet.
+//!    failed or whose theme helper reads failed. **Logged-in requests (P21)**: a
+//!    `ferrite_session` cookie that resolves to a session (looked up only when the
+//!    cookie is present; an unusable one is ignored, the request stays anonymous) makes
+//!    the request logged in: with [`LoggedIn::Bypass`] (default) it renders without
+//!    reading or filling the cache, with [`LoggedIn::PerUser`] it uses the user's own
+//!    cache variant; both answer `Cache-Control: private, no-store`, and plugins see
+//!    `is_logged_in = true`.
 //! 6. The render pipeline (06 §5): the candidates' items through `SiteReader`
 //!    (published-only; a hit counts only if its URL equals the request path), plugin
 //!    filters `content.body`/`content.excerpt` on every item, the head (core SEO +
@@ -88,8 +100,8 @@ use tower_http::{
 use crate::api::ApiState;
 
 pub use state::{
-    AppParts, AppState, DESCRIPTION_OPTION, HttpConfig, LOCALE_OPTION, RENDER_WAIT, SHORT_TTL,
-    TITLE_OPTION, load_route_table, theme_settings_option,
+    AppParts, AppState, DESCRIPTION_OPTION, HttpConfig, LOCALE_OPTION, LoggedIn, RENDER_WAIT,
+    SHORT_TTL, TITLE_OPTION, load_route_table, theme_settings_option,
 };
 
 /// The public site as an axum [`Router`]; see the module docs. Without the API (tests);

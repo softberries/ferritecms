@@ -55,15 +55,15 @@ use ferrite_cluster::{
     ClusterMode as NodeMode, JobHandler, JobRunner, NodeIdentity, Periodic, Registry, RunnerConfig,
     SCHEDULER_TICK, Scheduler, builtin, node_name,
 };
-use ferrite_config::{Config, PluginsConfig};
+use ferrite_config::{Config, LoggedInCache, PluginsConfig};
 use ferrite_core::{
     AuthService, ContentService, ContentTypeService, MenuService, OptionService, Permalinks,
     RedirectService, SiteReader, SwappablePermalinks, TaxonomyService, UserService,
 };
 use ferrite_domain::{NodeId, Timestamp};
 use ferrite_http::{
-    AppParts, AppState, FLUSH_EVERY, HttpConfig, LoadSummary, PluginReloader, SharedFailures,
-    StoreHostServices,
+    AppParts, AppState, FLUSH_EVERY, HttpConfig, LoadSummary, LoggedIn, PluginReloader,
+    SharedFailures, StoreHostServices,
     api::{ApiParts, ApiState},
     build_site, load_route_table,
 };
@@ -359,17 +359,25 @@ async fn boot(
     let routes = load_route_table(store.as_ref(), &permalinks.current())
         .await
         .context("cannot load content types and taxonomies")?;
-    let state = Arc::new(AppState::new(AppParts {
-        store: store.clone(),
-        reader,
-        plugins: host.clone(),
-        media: media.clone(),
-        theme: loaded.theme.clone(),
-        cache: cache.clone(),
-        routes,
-        config: http,
-        migrations_ok: true,
-    }));
+    // One auth service for the API and the public site (previews, logged-in requests).
+    let auth = Arc::new(
+        AuthService::new(store.clone(), keys::site_key(config)?)
+            .with_issuer_name(config.site.title.clone()),
+    );
+    let state = Arc::new(
+        AppState::new(AppParts {
+            store: store.clone(),
+            reader,
+            plugins: host.clone(),
+            media: media.clone(),
+            theme: loaded.theme.clone(),
+            cache: cache.clone(),
+            routes,
+            config: http,
+            migrations_ok: true,
+        })
+        .with_auth(auth.clone()),
+    );
 
     let status = Arc::new(NodeStatus::default());
     status.set_theme(&loaded, loaded.error.as_deref());
@@ -385,10 +393,7 @@ async fn boot(
     let api = Arc::new(
         ApiState::new(ApiParts {
             store: store.clone(),
-            auth: Arc::new(
-                AuthService::new(store.clone(), keys::site_key(config)?)
-                    .with_issuer_name(config.site.title.clone()),
-            ),
+            auth,
             users: Arc::new(UserService::new(store.clone())),
             content: content.clone(),
             types: Arc::new(ContentTypeService::new(store.clone())),
@@ -685,6 +690,10 @@ fn http_config(config: &Config) -> HttpConfig {
         &config.site.locale,
     );
     http.trusted_proxies = config.server.trusted_proxies.clone();
+    http.logged_in = match config.cache.logged_in {
+        LoggedInCache::Bypass => LoggedIn::Bypass,
+        LoggedInCache::PerUser => LoggedIn::PerUser,
+    };
     http
 }
 
@@ -779,6 +788,30 @@ impl Signals {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `cache.logged_in` reaches the public site's settings (P21).
+    #[test]
+    fn http_config_maps_logged_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = |v: Option<&str>| {
+            let mut e = vec![(
+                "FERRITE_SITE__URL".to_owned(),
+                "http://localhost:8080".to_owned(),
+            )];
+            if let Some(v) = v {
+                e.push(("FERRITE_CACHE__LOGGED_IN".to_owned(), v.to_owned()));
+            }
+            e
+        };
+        for (value, want) in [
+            (None, LoggedIn::Bypass),
+            (Some("bypass"), LoggedIn::Bypass),
+            (Some("per-user"), LoggedIn::PerUser),
+        ] {
+            let config = ferrite_config::load(dir.path(), env(value)).unwrap();
+            assert_eq!(http_config(&config).logged_in, want, "{value:?}");
+        }
+    }
 
     #[test]
     fn host_config_from_plugins_section() {

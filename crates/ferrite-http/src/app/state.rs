@@ -11,7 +11,8 @@ use std::{
 use arc_swap::{ArcSwap, ArcSwapOption};
 use ferrite_cache::PageCache;
 use ferrite_core::{
-    CoreError, DepKeys, PermalinkRules, RedirectService, SiteReader, events::option_key,
+    AuthService, CoreError, DepKeys, PermalinkRules, RedirectService, SiteReader,
+    events::option_key,
 };
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::PluginHost;
@@ -38,6 +39,18 @@ pub const LOCALE_OPTION: &str = "site.locale";
 /// Option holding the active theme's settings: a JSON object, key = setting name.
 pub fn theme_settings_option(theme: &str) -> String {
     format!("theme.{theme}.settings")
+}
+
+/// How the public site treats requests of logged-in users (`cache.logged_in`, P21).
+/// Either way they never read or fill the anonymous cache entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LoggedIn {
+    /// Rendered on every request, never cached (the default).
+    #[default]
+    Bypass,
+    /// Cached per user ([`Variant::User`](ferrite_cache::Variant)), invalidated like
+    /// anonymous pages.
+    PerUser,
 }
 
 /// The HTTP layer's settings, mapped from `ferrite.toml` by the binary.
@@ -67,6 +80,8 @@ pub struct HttpConfig {
     /// Peers whose `X-Forwarded-For` is honoured for the logged client address
     /// (`server.trusted_proxies`; see [`client`](super::client)). Default: none.
     pub trusted_proxies: Vec<ipnet::IpNet>,
+    /// Caching of logged-in requests (`cache.logged_in`). Default [`LoggedIn::Bypass`].
+    pub logged_in: LoggedIn,
 }
 
 impl HttpConfig {
@@ -92,6 +107,7 @@ impl HttpConfig {
                 .saturating_mul(2),
             render_wait: RENDER_WAIT,
             trusted_proxies: Vec::new(),
+            logged_in: LoggedIn::Bypass,
         }
     }
 }
@@ -137,6 +153,9 @@ pub struct AppState {
     pub config: HttpConfig,
     pub migrations_ok: bool,
     pub(crate) redirects: Arc<RedirectService>,
+    /// Resolves `ferrite_session` cookies for previews and logged-in requests; `None`
+    /// (no [`with_auth`](Self::with_auth)): every request is anonymous, previews 404.
+    pub(crate) auth: Option<Arc<AuthService>>,
     pub(crate) renderer: Renderer,
     /// Render slots ([`HttpConfig::max_concurrent_renders`]).
     pub(crate) render_slots: Arc<Semaphore>,
@@ -147,6 +166,7 @@ impl AppState {
     pub fn new(parts: AppParts) -> Self {
         Self {
             redirects: Arc::new(RedirectService::new(parts.store.clone())),
+            auth: None,
             renderer: Renderer::new(),
             render_slots: Arc::new(Semaphore::new(
                 parts
@@ -166,6 +186,13 @@ impl AppState {
             config: parts.config,
             migrations_ok: parts.migrations_ok,
         }
+    }
+
+    /// Session cookies are resolved with `auth` (previews and logged-in requests, P20,
+    /// P21); without it the site is anonymous-only.
+    pub fn with_auth(mut self, auth: Arc<AuthService>) -> Self {
+        self.auth = Some(auth);
+        self
     }
 
     /// Makes `theme` the served theme; the replaced one becomes

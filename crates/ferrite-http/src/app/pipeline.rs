@@ -1,14 +1,15 @@
-//! The render pipeline for content routes (06 §5): load through [`SiteReader`], plugin
-//! content filters, head, template, dependency keys.
+//! The render pipeline for content routes and previews (06 §5): load through
+//! [`SiteReader`], plugin content filters, head, template, dependency keys.
 
 use std::{sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use ferrite_cache::{CachedPage, etag_for};
 use ferrite_core::{
-    CoreError, DepKeys, FrontPage, Listing, PageItem, SiteRead,
+    Actor, CoreError, DepKeys, FrontPage, Listing, PageItem, Previewed, SiteRead,
     events::{PLUGINS_KEY, THEME_KEY, archive_key},
 };
+use ferrite_domain::ContentId;
 use ferrite_theme::resolve_template;
 use ferrite_theme::{
     ArchiveInfo, Pagination, RenderContext, RenderOutput, RequestInfo, TemplateKey, ThemeError,
@@ -49,23 +50,63 @@ enum Shown {
 
 /// The response for a content route: the rendered page, a 503 when no render slot
 /// frees up in time, the 500 page when rendering fails, or [`NotFound`]. Runs as the
-/// page cache's render future under the request path; 503 and 500 have an error status
-/// and are not cached, and `NotFound` is an error result, which is never cached.
+/// page cache's render future under the request path (or uncached for a logged-in
+/// request under `LoggedIn::Bypass`); 503 and 500 have an error status and are not
+/// cached, and `NotFound` is an error result, which is never cached. `logged_in` is
+/// what plugins see as `is_logged_in` (P21).
 pub(crate) async fn render(
     state: Arc<AppState>,
     route: Route,
     path: String,
     query: NormalQuery,
+    logged_in: bool,
 ) -> Result<CachedPage, NotFound> {
-    match render_route(&state, &route, &path, query).await {
+    let result = render_route(&state, &route, &path, query, logged_in).await;
+    outcome(&state, &path, result).await
+}
+
+/// The preview of item `id` for `actor` (P20): loaded with `SiteReader::preview`
+/// (R17 `can_read`; trashed, missing or not readable → [`NotFound`]) inside a render
+/// slot, then rendered like a single item with the plugin preview scope and
+/// `request.preview = true`. Never cached by the caller.
+pub(crate) async fn preview(
+    state: Arc<AppState>,
+    route: Route,
+    path: String,
+    actor: Actor,
+    id: ContentId,
+) -> Result<CachedPage, NotFound> {
+    let result = preview_route(&state, &route, &path, &actor, id).await;
+    outcome(&state, &path, result).await
+}
+
+async fn outcome(
+    state: &Arc<AppState>,
+    path: &str,
+    result: Result<Option<CachedPage>, RenderError>,
+) -> Result<CachedPage, NotFound> {
+    match result {
         Ok(Some(page)) => Ok(page),
         Ok(None) => Err(NotFound),
         Err(RenderError::Busy) => Ok(error_page::busy()),
         Err(e) => {
             tracing::error!(path = %path, error = %e, "page render failed");
-            Ok(error_page::server_error(&state).await)
+            Ok(error_page::server_error(state).await)
         }
     }
+}
+
+/// The request a page answers.
+struct Target<'a> {
+    route: &'a Route,
+    path: &'a str,
+    query: NormalQuery,
+}
+
+/// Who a page is rendered for, as plugins and templates see it.
+enum Viewer {
+    Public { logged_in: bool },
+    Preview(Box<Previewed>),
 }
 
 async fn render_route(
@@ -73,6 +114,7 @@ async fn render_route(
     route: &Route,
     path: &str,
     query: NormalQuery,
+    logged_in: bool,
 ) -> Result<Option<CachedPage>, RenderError> {
     match route {
         Route::Feed(source) => return feeds::feed(state, source).await,
@@ -87,6 +129,59 @@ async fn render_route(
     let Some(shown) = load(state, route, path, &mut deps).await? else {
         return Ok(None);
     };
+    let target = Target { route, path, query };
+    let viewer = Viewer::Public { logged_in };
+    finish(state, slot, target, shown, deps, viewer)
+        .await
+        .map(Some)
+}
+
+async fn preview_route(
+    state: &Arc<AppState>,
+    route: &Route,
+    path: &str,
+    actor: &Actor,
+    id: ContentId,
+) -> Result<Option<CachedPage>, RenderError> {
+    let slot = acquire_slot(state).await?;
+    let read = match state.reader.preview(actor, id).await {
+        Ok(read) => read,
+        Err(CoreError::NotFound | CoreError::Forbidden(_)) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let mut deps = DepKeys::default();
+    let previewed = take(read, &mut deps);
+    let item = previewed.item().clone();
+    let key = item_template(&item);
+    let shown = Shown::Item(Box::new(item), key);
+    let target = Target {
+        route,
+        path,
+        query: NormalQuery::default(),
+    };
+    finish(
+        state,
+        slot,
+        target,
+        shown,
+        deps,
+        Viewer::Preview(Box::new(previewed)),
+    )
+    .await
+    .map(Some)
+}
+
+/// Plugin filters, head and template for what the target's route shows, holding
+/// `slot`.
+async fn finish(
+    state: &Arc<AppState>,
+    slot: OwnedSemaphorePermit,
+    target: Target<'_>,
+    shown: Shown,
+    mut deps: DepKeys,
+    viewer: Viewer,
+) -> Result<CachedPage, RenderError> {
+    let Target { route, path, query } = target;
     let theme = state.theme.load_full();
     let site = state.site_info(&theme, &mut deps).await?;
     let (mut item, mut listing, key, archive) = match shown {
@@ -94,7 +189,14 @@ async fn render_route(
         Shown::Listing(listing, key, archive) => (None, Some(listing), key, Some(*archive)),
     };
     let pagination = listing.as_ref().map(|l| pagination(route, l));
-    let req = PluginRequest::public(path, &site.locale, item.as_ref().map(|i| i.item.id));
+    let preview = matches!(viewer, Viewer::Preview(_));
+    let req = match viewer {
+        Viewer::Public { logged_in } => {
+            PluginRequest::public(path, &site.locale, item.as_ref().map(|i| i.item.id))
+                .logged_in(logged_in)
+        }
+        Viewer::Preview(previewed) => PluginRequest::preview(path, &site.locale, *previewed),
+    };
     let mut trace = RenderTrace::default();
     if let Some(item) = item.as_mut() {
         filter_item(&state.plugins, item, &req, &mut trace).await;
@@ -136,7 +238,7 @@ async fn render_route(
         },
         head_html,
         status: 200,
-        preview: false,
+        preview,
     };
     let bridge = Arc::new(BlockingBridge::new(
         Handle::current(),
@@ -155,7 +257,7 @@ async fn render_route(
     if search {
         ttl = Some(ttl.map_or(state.config.search_ttl, |t| t.min(state.config.search_ttl)));
     }
-    Ok(Some(html_page(200, out.html, deps.into_vec(), ttl)))
+    Ok(html_page(200, out.html, deps.into_vec(), ttl))
 }
 
 /// One of [`HttpConfig::max_concurrent_renders`](super::HttpConfig) render slots
@@ -377,6 +479,8 @@ async fn load(
         // Rendered by `feeds` (above), or answered before the cache by the handler.
         Route::Feed(_) | Route::Sitemap(_) | Route::Robots => None,
         Route::Media { .. } | Route::Theme { .. } => None,
+        // Answered by the handler through `preview`, never through the cache.
+        Route::Preview { .. } => None,
         Route::Canonical(_) | Route::Health | Route::Ready | Route::NotFound => None,
     })
 }
@@ -398,21 +502,26 @@ async fn content(
         let found = take(state.reader.single(kind, &parts).await?, deps);
         match found.filter(|item| item.url == path) {
             Some(item) => {
-                let key = if item.item.kind == "page" {
-                    TemplateKey::Page {
-                        slug: item.item.slug.clone(),
-                        id: item.item.id.to_string(),
-                    }
-                } else {
-                    TemplateKey::Single {
-                        kind: item.item.kind.clone(),
-                        slug: item.item.slug.clone(),
-                    }
-                };
+                let key = item_template(&item);
                 return Ok(Some(Shown::Item(Box::new(item), key)));
             }
             None => deps.insert(archive_key(kind)),
         }
     }
     Ok(None)
+}
+
+/// The template key of a single item: `page` items use the page hierarchy.
+fn item_template(item: &PageItem) -> TemplateKey {
+    if item.item.kind == "page" {
+        TemplateKey::Page {
+            slug: item.item.slug.clone(),
+            id: item.item.id.to_string(),
+        }
+    } else {
+        TemplateKey::Single {
+            kind: item.item.kind.clone(),
+            slug: item.item.slug.clone(),
+        }
+    }
 }

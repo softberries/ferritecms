@@ -6,7 +6,7 @@
 //! `published_at <= now` (the clock is injected). Items fetched another way (by slug,
 //! by id, through the search index) are re-checked with the same predicate in Rust, so
 //! a lagging search index or a future-dated published item never shows. Drafts are
-//! reachable only through [`SiteReader::preview`], which is gated by `can_edit` and
+//! reachable only through [`SiteReader::preview`], which is gated by `can_read` and
 //! marked not cacheable. Media items are never listed or rendered as singles; they
 //! appear only as featured or inline images, and only while they are published too.
 //!
@@ -56,8 +56,8 @@ use ferrite_domain::{
 use ferrite_store::{MAX_ID_FILTER, MAX_SEARCH_KINDS, Repos, Store};
 
 use crate::{
-    Actor, CoreError, MAX_PARENT_DEPTH,
-    actor::can_edit,
+    Actor, Capability, CoreError, MAX_PARENT_DEPTH,
+    actor::can_read,
     events::{archive_key, option_key, post_key, term_key, user_key},
     permalink::{PermalinkInput, Permalinks, primary_term},
 };
@@ -868,8 +868,10 @@ impl SiteReader {
         Ok(public(items, deps))
     }
 
-    /// Item `id` in any status but trash, for an actor who may edit it (`can_edit`).
-    /// Trashed or missing items are `NotFound`. The result is marked not cacheable.
+    /// Item `id` in any status but trash, for an actor who may read it in the admin
+    /// ([`can_read`], ruling R17: own items, published items, or `edit_others`; else
+    /// `Forbidden("edit_others")`). Trashed or missing items are `NotFound`. The result
+    /// is marked not cacheable.
     pub async fn preview(
         &self,
         actor: &Actor,
@@ -881,7 +883,9 @@ impl SiteReader {
         let rules = pinned.as_ref();
         let repos = self.store.read();
         let item = repos.content().get(id).await?.ok_or(CoreError::NotFound)?;
-        can_edit(actor, &item)?;
+        if !can_read(actor, &item) {
+            return Err(CoreError::Forbidden(Capability::EditOthers.as_str()));
+        }
         if item.status == ContentStatus::Trash {
             return Err(CoreError::NotFound);
         }

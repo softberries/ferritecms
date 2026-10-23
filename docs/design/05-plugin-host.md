@@ -457,9 +457,10 @@ As built (M1c-2), in `crates/ferrite-http/src/plugins/` over the store-backed
 - **Preview scoping.** Per-request state travels in a tokio task-local set around each filter
   chain (`run_filter`). During an authenticated preview, `get-post` and `meta.get` on *that one
   item* return it, so plugins render previews faithfully. The preview item can only come from
-  `SiteReader::preview` (its `can_edit` check), so a public request cannot put a draft in
-  scope. No route serves previews yet (authentication is M2); preview responses are never
-  cached.
+  `SiteReader::preview` (its `can_read` check, R17), so a public request cannot put a draft in
+  scope. `/_preview/<id>` (06 §3) serves previews; their responses are never cached and
+  `request-info.is-logged-in` is `true`. On other pages `is-logged-in` is `true` for requests
+  with a valid session cookie (P21).
 - **No writes on the render path (ruling R20).** `meta.set` during a render-class filter
   (`render.head`, `content.body`, `content.excerpt`, `render.footer`) returns
   `"meta.set is not allowed during render filters"`, is logged and does not use budget.

@@ -380,6 +380,47 @@ fn files_and_reserved_routes() {
 }
 
 /// Review Focus 3: path tricks are 404 or a canonical 301, never another item.
+/// `/_preview/<id>`: exactly a lowercase hyphenated UUID, no trailing slash, never
+/// redirected; anything else under `/_preview` is 404 (P20, F27).
+#[test]
+fn preview_paths() {
+    const ID: &str = "0192f0c4-7e3a-7b1c-9d2e-3f4a5b6c7d8e";
+    let preview = Route::Preview {
+        id: ID.parse().unwrap(),
+    };
+    let upper = ID.to_ascii_uppercase();
+    let simple = ID.replace('-', "");
+    for t in [
+        table(),
+        table_with(Some("/%year%/%month%/%slug%/")),
+        table_with(Some("/%category%/%slug%/")),
+    ] {
+        check(
+            &t,
+            &[
+                (&format!("/_preview/{ID}"), preview.clone()),
+                (&format!("/_preview/{ID}?x=1"), preview.clone()),
+                (&format!("/_preview/{ID}/"), Route::NotFound),
+                (&format!("/_preview/{upper}"), Route::NotFound),
+                (&format!("/_preview/{simple}"), Route::NotFound),
+                (&format!("/_preview/{{{ID}}}"), Route::NotFound),
+                (&format!("/_preview/urn:uuid:{ID}"), Route::NotFound),
+                (&format!("/_preview/{}", &ID[1..]), Route::NotFound),
+                (&format!("/_preview/{ID}0"), Route::NotFound),
+                (&format!("/_preview/{ID}/x"), Route::NotFound),
+                (&format!("/_preview/%30{}", &ID[1..]), Route::NotFound),
+                (&format!("/_PREVIEW/{ID}"), Route::NotFound),
+                (&format!("/_Preview/{ID}/"), Route::NotFound),
+                ("/_preview/not-an-id", Route::NotFound),
+                ("/_preview/", Route::NotFound),
+                ("/_preview", Route::NotFound),
+                ("/_preview/page/2/", Route::NotFound),
+                ("/_preview/feed/", Route::NotFound),
+            ],
+        );
+    }
+}
+
 #[test]
 fn path_tricks() {
     let long_ok = format!("/{}/", "a".repeat(2046));

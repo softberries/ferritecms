@@ -12,6 +12,7 @@ pub const RESERVED: &[&str] = &[
     "feed",
     "_media",
     "_theme",
+    "_preview",
     "_p",
     "sitemap.xml",
     "robots.txt",
@@ -148,6 +149,16 @@ pub fn next_free(base: &str, taken: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every path prefix the public handler answers itself is reserved (P20: previews).
+    #[test]
+    fn handler_prefixes_are_reserved() {
+        for w in [
+            "_media", "_theme", "_preview", "_p", "api", "healthz", "readyz",
+        ] {
+            assert!(is_reserved(w), "{w}");
+        }
+    }
 
     #[test]
     fn slugify_table() {

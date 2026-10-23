@@ -9,7 +9,8 @@ pub mod plugins;
 pub mod route;
 
 pub use app::{
-    AppParts, AppState, HttpConfig, build_app, build_site, client::ClientIp, load_route_table,
+    AppParts, AppState, HttpConfig, LoggedIn, build_app, build_site, client::ClientIp,
+    load_route_table,
 };
 pub use head::{HeadPage, HeadSite, core_head, page_head, render_head};
 pub use plugins::{

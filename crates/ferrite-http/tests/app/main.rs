@@ -1,6 +1,7 @@
 //! The public app end to end on both profiles (Task 8a): every content route type,
 //! canonical and redirect responses, error pages, HEAD, ETag/304, 405, health checks,
-//! compression, Review Focus 1 and 2 over HTTP, plugin head tags and cache hits.
+//! compression, Review Focus 1 and 2 over HTTP, plugin head tags and cache hits; previews
+//! and logged-in requests (M2a-1 Task 12).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -14,5 +15,6 @@ mod cost;
 mod errors;
 mod feeds;
 mod freshness;
+mod preview;
 mod protocol;
 mod reload_race;

@@ -766,7 +766,15 @@ pub async fn reserved_and_dot_slugs(db: &TestDb) {
     let store = db.store();
     let svc = service(db);
     let admin = actor(store, Role::Admin).await;
-    for s in ["admin", "API", "sitemap.xml", "_p", "healthz"] {
+    for s in [
+        "admin",
+        "API",
+        "sitemap.xml",
+        "_p",
+        "healthz",
+        "_preview",
+        "_Preview",
+    ] {
         let mut d = draft("post", "X");
         d.slug = Some(s.into());
         assert_eq!(invalid(svc.create(&admin, d).await), "reserved slug", "{s}");
