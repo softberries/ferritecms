@@ -110,17 +110,17 @@ impl UserService {
 
     /// Changes e-mail, display name, role or status. Users may change their own e-mail
     /// and display name (with the `users:write` scope); everything else, and any change
-    /// to another user, needs `manage_users`. Role and status never change on oneself.
+    /// to another user, needs `manage_users`. Role and status never change on oneself: a
+    /// self-patch carrying the current role or status ignores it (admin forms send whole
+    /// objects), a different value is `Invalid`.
     pub async fn update(
         &self,
         actor: &Actor,
         id: UserId,
         patch: UserPatch,
     ) -> Result<User, CoreError> {
-        if id == actor.user {
-            if patch.role.is_some() || patch.status.is_some() {
-                return Err(CoreError::Invalid(OWN_ROLE.into()));
-            }
+        let is_self = id == actor.user;
+        if is_self {
             require_scope(actor, Some(Scope::write(Area::Users)))?;
         } else {
             require(actor, Capability::ManageUsers)?;
@@ -134,6 +134,12 @@ impl UserService {
         let tx = self.store.begin().await?;
         let done = async {
             let old = locked(tx.as_ref(), id).await?;
+            if is_self
+                && (patch.role.is_some_and(|r| r != old.role)
+                    || patch.status.is_some_and(|st| st != old.status))
+            {
+                return Err(CoreError::Invalid(OWN_ROLE.into()));
+            }
             let mut new = old.clone();
             if let Some(email) = email {
                 new.email = email;
@@ -251,8 +257,9 @@ impl UserService {
     /// to `reassign_to` (an existing active user) in the same `Tx`; a user with content
     /// and no `reassign_to` is `Invalid("reassign the user's content first")`.
     ///
-    /// The target and then the heir are row-locked; two concurrent deletes reassigning
-    /// to each other can deadlock on Postgres, which aborts one of them (a store error).
+    /// The target and the heir are row-locked in ascending id order, so two concurrent
+    /// deletes reassigning to each other serialize instead of deadlocking: the second
+    /// one then finds its target or its heir gone (`NotFound` / `Invalid`).
     pub async fn delete(
         &self,
         actor: &Actor,
@@ -265,19 +272,29 @@ impl UserService {
         }
         let tx = self.store.begin().await?;
         let done = async {
-            let user = locked(tx.as_ref(), id).await?;
+            if reassign_to == Some(id) {
+                return Err(CoreError::Invalid(
+                    "cannot reassign content to the deleted user".into(),
+                ));
+            }
+            // Lock both rows in id order (R10) before any check.
+            let (user, target) = match reassign_to {
+                Some(heir) if heir < id => {
+                    let target = tx.users().get_for_update(heir).await?;
+                    (locked(tx.as_ref(), id).await?, target)
+                }
+                Some(heir) => {
+                    let user = locked(tx.as_ref(), id).await?;
+                    (user, tx.users().get_for_update(heir).await?)
+                }
+                None => (locked(tx.as_ref(), id).await?, None),
+            };
             if is_active_admin(&user) {
                 check_not_last_admin(tx.as_ref()).await?;
             }
             let mut keys = vec![events::user_key(id)];
             let mut moved = 0;
             if let Some(heir) = reassign_to {
-                if heir == id {
-                    return Err(CoreError::Invalid(
-                        "cannot reassign content to the deleted user".into(),
-                    ));
-                }
-                let target = tx.users().get_for_update(heir).await?;
                 match target {
                     None => {
                         return Err(CoreError::Invalid("reassign target not found".into()));

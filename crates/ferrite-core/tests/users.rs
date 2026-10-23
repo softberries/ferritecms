@@ -3,7 +3,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
 use ferrite_core::{
     Actor, CoreError, NewAccount, UserPatch, UserService,
@@ -15,8 +15,9 @@ use ferrite_domain::{
     UserStatus,
 };
 use ferrite_store::Store;
-use ferrite_store_tests::{TestDb, backend_tests, fixtures::new_post};
+use ferrite_store_tests::{TestDb, backend_tests, backend_tests_spawning, fixtures::new_post};
 use serde_json::json;
+use tokio::sync::Barrier;
 
 const PASSWORD: &str = "correct horse battery";
 
@@ -264,6 +265,35 @@ async fn login_and_email_validation(db: &TestDb) {
         )
         .await;
     assert_eq!(invalid(r), "cannot change your own role or status");
+    // R10: a self-patch carrying the current role and status is a no-op for them.
+    let me = users
+        .update(
+            &admin,
+            admin.user,
+            UserPatch {
+                display_name: Some("Root Renamed".into()),
+                role: Some(Role::Admin),
+                status: Some(UserStatus::Active),
+                ..UserPatch::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(me.display_name, "Root Renamed");
+    assert_eq!(me.role, Role::Admin);
+    assert_eq!(me.status, UserStatus::Active);
+    let unchanged = users
+        .update(
+            &bob_actor,
+            bob.id,
+            UserPatch {
+                role: Some(Role::Author),
+                ..UserPatch::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(unchanged.role, Role::Author);
     assert!(matches!(
         users.create(&bob_actor, account("eve", Role::Admin)).await,
         Err(CoreError::Forbidden("manage_users"))
@@ -410,12 +440,26 @@ async fn delete_requires_reassign_and_moves_content(db: &TestDb) {
     ));
     assert!(store.read().users().get(author.id).await.unwrap().is_some());
 
+    add_session(store, author.id, "writer-session").await;
+    add_token(store, author.id, "writer-token").await;
     let before = seq(store).await;
     users
         .delete(&admin, author.id, Some(heir.id))
         .await
         .unwrap();
     assert!(store.read().users().get(author.id).await.unwrap().is_none());
+    // Review Focus 3: the deleted user's sessions and tokens are gone.
+    assert!(session_ids(store, author.id).await.is_empty());
+    assert_eq!(token_count(store, author.id).await, 0);
+    assert!(
+        store
+            .read()
+            .sessions()
+            .get("writer-session")
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         keys_since(store, before).await,
         [user_key(author.id), user_key(heir.id)]
@@ -730,6 +774,68 @@ async fn operator_path_bypasses_actor(db: &TestDb) {
         );
     }
 }
+
+/// R10: two deletes reassigning to each other, on two nodes (Postgres `peer()`; one
+/// store on SQLite), lock in id order and serialize: one wins, the other fails cleanly.
+async fn mutual_reassign_deletes_serialize(db: Arc<TestDb>) {
+    let one = db.shared_store();
+    let two = db.peer().await.unwrap_or_else(|| db.shared_store());
+    let (_, admin) = bootstrap_admin(&UserService::new(one.clone()), "root").await;
+    for round in 0..5 {
+        let users = UserService::new(one.clone());
+        let x = users
+            .create(&admin, account(&format!("x{round}"), Role::Author))
+            .await
+            .unwrap();
+        let y = users
+            .create(&admin, account(&format!("y{round}"), Role::Author))
+            .await
+            .unwrap();
+        let px = one
+            .read()
+            .content()
+            .insert(&new_post(&x, &format!("px{round}")))
+            .await
+            .unwrap();
+        let py = one
+            .read()
+            .content()
+            .insert(&new_post(&y, &format!("py{round}")))
+            .await
+            .unwrap();
+
+        let barrier = Arc::new(Barrier::new(2));
+        let run = |store: Arc<dyn Store>, id: UserId, heir: UserId| {
+            let barrier = barrier.clone();
+            tokio::spawn(async move {
+                let users = UserService::new(store);
+                barrier.wait().await;
+                users.delete(&admin, id, Some(heir)).await
+            })
+        };
+        let a = run(one.clone(), x.id, y.id);
+        let b = run(two.clone(), y.id, x.id);
+        let results = [a.await.unwrap(), b.await.unwrap()];
+        let ok = results.iter().filter(|r| r.is_ok()).count();
+        assert_eq!(ok, 1, "round {round}: {results:?}");
+        for r in &results {
+            assert!(
+                matches!(r, Ok(()) | Err(CoreError::NotFound | CoreError::Invalid(_))),
+                "round {round}: {r:?}"
+            );
+        }
+        let survivor = if results[0].is_ok() { y.id } else { x.id };
+        let gone = if results[0].is_ok() { x.id } else { y.id };
+        assert!(one.read().users().get(gone).await.unwrap().is_none());
+        assert!(one.read().users().get(survivor).await.unwrap().is_some());
+        for post in [px.id, py.id] {
+            let item = one.read().content().get(post).await.unwrap().unwrap();
+            assert_eq!(item.author_id, survivor, "round {round}");
+        }
+    }
+}
+
+backend_tests_spawning!(mutual_reassign_deletes_serialize);
 
 backend_tests!(
     login_and_email_validation,
