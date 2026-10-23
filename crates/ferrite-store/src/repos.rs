@@ -490,28 +490,6 @@ pub trait EventRepo: Send + Sync {
 /// they return `false`/`None` instead.
 ///
 /// Validation errors (`Invalid`) are raised before any SQL and never poison a `Tx`.
-/// The node registry (04 §3, P14). Times come from the database clock (Postgres
-/// `now()`, which inside a `Tx` is the transaction's start; SQLite the process clock).
-#[async_trait]
-pub trait NodeRepo: Send + Sync {
-    /// Inserts the node with `started_at = heartbeat_at = now`. Invalid: NUL in `name` or
-    /// `version`, `meta` not a JSON object (or with NUL). An id already registered is
-    /// `UniqueViolation { constraint: "nodes_pkey" }`.
-    async fn register(&self, node: &NewNode) -> Result<(), StoreError>;
-    /// Sets `heartbeat_at = now` and replaces `meta` (a JSON object); `false` when the
-    /// row is gone (pruned, or deregistered).
-    async fn heartbeat(&self, id: NodeId, meta: &serde_json::Value) -> Result<bool, StoreError>;
-    /// Removes the node's row; a missing row is `Ok(())`.
-    async fn deregister(&self, id: NodeId) -> Result<(), StoreError>;
-    /// Up to [`MAX_NODES`](crate::MAX_NODES) nodes, ordered by `(started_at, id)`, live or
-    /// stale (callers compare `heartbeat_at` with [`NodeRepo::db_now`]).
-    async fn list(&self) -> Result<Vec<Node>, StoreError>;
-    /// The database clock: Postgres `SELECT now()`, SQLite `Timestamp::now()`.
-    async fn db_now(&self) -> Result<Timestamp, StoreError>;
-    /// Deletes nodes whose `heartbeat_at` is before `heartbeat_before`; returns the count.
-    async fn prune(&self, heartbeat_before: Timestamp) -> Result<u64, StoreError>;
-}
-
 #[async_trait]
 pub trait JobRepo: Send + Sync {
     /// Inserts a job and returns its id, or `None` when `unique_key` is already taken
@@ -571,6 +549,28 @@ pub trait JobRepo: Send + Sync {
         done_before: Timestamp,
         dead_before: Timestamp,
     ) -> Result<u64, StoreError>;
+}
+
+/// The node registry (04 §3, P14). Times come from the database clock (Postgres
+/// `now()`, which inside a `Tx` is the transaction's start; SQLite the process clock).
+#[async_trait]
+pub trait NodeRepo: Send + Sync {
+    /// Inserts the node with `started_at = heartbeat_at = now`. Invalid: NUL in `name` or
+    /// `version`, `meta` not a JSON object (or with NUL). An id already registered is
+    /// `UniqueViolation { constraint: "nodes_pkey" }`.
+    async fn register(&self, node: &NewNode) -> Result<(), StoreError>;
+    /// Sets `heartbeat_at = now` and replaces `meta` (a JSON object); `false` when the
+    /// row is gone (pruned, or deregistered).
+    async fn heartbeat(&self, id: NodeId, meta: &serde_json::Value) -> Result<bool, StoreError>;
+    /// Removes the node's row; a missing row is `Ok(())`.
+    async fn deregister(&self, id: NodeId) -> Result<(), StoreError>;
+    /// Up to [`MAX_NODES`](crate::MAX_NODES) nodes, ordered by `(started_at, id)`, live or
+    /// stale (callers compare `heartbeat_at` with [`NodeRepo::db_now`]).
+    async fn list(&self) -> Result<Vec<Node>, StoreError>;
+    /// The database clock: Postgres `SELECT now()`, SQLite `Timestamp::now()`.
+    async fn db_now(&self) -> Result<Timestamp, StoreError>;
+    /// Deletes nodes whose `heartbeat_at` is before `heartbeat_before`; returns the count.
+    async fn prune(&self, heartbeat_before: Timestamp) -> Result<u64, StoreError>;
 }
 
 /// Full-text search over an item's title and body text. Both backends match exactly the

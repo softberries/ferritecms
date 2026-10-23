@@ -19,6 +19,8 @@ pub const LOCK_POLL: Duration = Duration::from_millis(250);
 
 /// A held lock. Dropping it also releases it (Postgres: the dedicated connection
 /// closes, so the server releases it; a crashed process releases it the same way).
+/// Prefer `release().await` over drop: it frees the lock before returning and reports
+/// errors, while a drop leaves the release to the server noticing the closed connection.
 #[async_trait]
 pub trait LockGuard: Send {
     /// Releases the lock now and reports a failure to do so cleanly (the lock is gone
