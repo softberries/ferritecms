@@ -461,7 +461,25 @@ async fn bad_plugin_update_keeps_previous_version(db: Arc<TestDb>) {
         home_contains(&node, HELLO_META).await,
         "old version still filters"
     );
+    // The failed row is retried 5 s after the failure; the retry finds the same state,
+    // so it must not flush: a page cached now is still served from the cache after it.
+    assert!(home_contains(&node, HELLO_META).await);
+    let renders = node.state.renders();
+    assert!(home_contains(&node, HELLO_META).await);
+    assert_eq!(node.state.renders(), renders, "home page is cached");
+    tokio::time::sleep(reload_retry_wait()).await;
+    assert!(home_contains(&node, HELLO_META).await);
+    assert_eq!(
+        node.state.renders(),
+        renders,
+        "an unchanged plugin retry kept the cache"
+    );
     node.shutdown().await.unwrap();
+}
+
+/// Long enough for the first reload retry (5 s after the failure) to have run.
+fn reload_retry_wait() -> Duration {
+    ferrite::reload::RETRY_MIN + Duration::from_secs(1)
 }
 
 async fn plugin_hot_reload_on_enable_and_disable(db: Arc<TestDb>) {

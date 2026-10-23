@@ -43,7 +43,7 @@ use ferrite_core::{
     events::{OPTIONS_CHANGED, PLUGIN_DISABLED, PLUGINS_CHANGED, THEME_CHANGED, option_key},
 };
 use ferrite_domain::Event;
-use ferrite_http::{AppState, PluginReloader, PluginStatus, load_route_table};
+use ferrite_http::{AppState, PluginReloader, PluginStatus, ReloadReport, load_route_table};
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::PluginHost;
 use ferrite_store::Store;
@@ -92,6 +92,9 @@ pub(crate) struct ReloadContext {
     pub plugins: Arc<PluginReloader>,
     /// The theme being served.
     pub theme: LoadedTheme,
+    /// What the last plugin reload reported (startup's first), and its list error.
+    pub plugins_report: ReloadReport,
+    pub plugins_error: Option<String>,
     pub status: Arc<NodeStatus>,
     pub registry: Registry,
 }
@@ -153,20 +156,29 @@ impl Reloader {
             take(&self.dirty.plugins),
         ];
         let now = Instant::now();
-        let mut ran = false;
+        let mut changed = false;
         for (i, (event, retry)) in events.into_iter().zip(retries.iter_mut()).enumerate() {
             if !event && !retry.due.is_some_and(|at| at <= now) {
                 continue;
             }
-            ran = true;
             let ok = match i {
-                0 => ctx.reload_permalinks().await,
-                1 => ctx.reload_theme().await,
-                _ => ctx.reload_plugins().await,
+                0 => {
+                    changed = true;
+                    ctx.reload_permalinks().await
+                }
+                1 => {
+                    changed = true;
+                    ctx.reload_theme().await
+                }
+                _ => {
+                    let (ok, plugins_changed) = ctx.reload_plugins(event).await;
+                    changed |= plugins_changed;
+                    ok
+                }
             };
             retry.after(ok, event, Instant::now());
         }
-        if ran {
+        if changed {
             ctx.registry.beat_now();
         }
     }
@@ -297,24 +309,41 @@ impl ReloadContext {
         }
     }
 
-    /// `false` when the rows cannot be read or any row failed to load.
-    async fn reload_plugins(&mut self) -> bool {
+    /// `(ok, changed)`: `ok` is `false` when the rows cannot be read or any row failed
+    /// to load; `changed` when the reload was asked for by an event, or its report or
+    /// list error differs from the last reload's. Only a changed reload flushes the
+    /// page cache, so a retry that finds the same state (a row still broken) costs no
+    /// cache. An event-driven reload always flushes: a row change the report does not
+    /// show (a new manifest or grant with the same version and hash) may still have
+    /// swapped an instance (R13).
+    async fn reload_plugins(&mut self, event: bool) -> (bool, bool) {
         match self.plugins.reload().await {
             Ok(report) => {
-                // After the commit (ruling R13): drops pages that mixed versions.
-                self.state.cache.flush();
-                self.status.set_plugins(&report);
-                self.status.set_plugins_error(None);
-                !report
+                let changed =
+                    event || report != self.plugins_report || self.plugins_error.is_some();
+                if changed {
+                    // After the commit (ruling R13): drops pages that mixed versions.
+                    self.state.cache.flush();
+                    self.status.set_plugins(&report);
+                    self.status.set_plugins_error(None);
+                }
+                let ok = !report
                     .states
                     .values()
-                    .any(|s| matches!(s.status, PluginStatus::Failed(_)))
+                    .any(|s| matches!(s.status, PluginStatus::Failed(_)));
+                self.plugins_report = report;
+                self.plugins_error = None;
+                (ok, changed)
             }
             Err(e) => {
                 let error = format!("cannot list the plugins: {e}");
                 tracing::error!(error = %error, "plugin reload failed; keeping the current registry");
-                self.status.set_plugins_error(Some(&error));
-                false
+                let changed = self.plugins_error.as_deref() != Some(error.as_str());
+                if changed {
+                    self.status.set_plugins_error(Some(&error));
+                }
+                self.plugins_error = Some(error);
+                (false, changed)
             }
         }
     }

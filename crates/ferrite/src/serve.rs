@@ -394,6 +394,8 @@ async fn boot(
             permalinks,
             plugins,
             theme: loaded,
+            plugins_report: report,
+            plugins_error: None,
             status: status.clone(),
             registry: registry.clone(),
         },
