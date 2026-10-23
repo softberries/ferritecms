@@ -1,7 +1,9 @@
 //! `/_theme/{hash}/{*path}`: the active theme's files under `assets/`.
 //!
-//! Served only when `hash` is the active theme's content hash (any other, an old
-//! theme's included, is `404`) and `path` names an asset exactly. The path arrives
+//! Served only when `hash` is the content hash of the active theme or of the theme the
+//! last hot swap replaced ([`AppState::previous_theme`], so pages rendered just before
+//! a swap keep their assets; ruling P18); any other hash, older themes' included, is
+//! `404`. `path` must name an asset exactly. The path arrives
 //! decoded once by the router and is never decoded again; templates and `theme.toml`
 //! are not assets and cannot be reached. The URL changes with the content, so caching
 //! is immutable. The ETag is `"<theme hash>-<16 hex of SHA-256(path)>"`: **weak**
@@ -37,10 +39,15 @@ pub(crate) fn serve(
     hash: &str,
     path: &str,
 ) -> Response<Body> {
-    let theme = state.theme.load_full();
-    if hash != theme.hash() {
-        return not_found();
-    }
+    let current = state.theme.load_full();
+    let theme = if hash == current.hash() {
+        current
+    } else {
+        match state.previous_theme.load_full() {
+            Some(previous) if hash == previous.hash() => previous,
+            _ => return not_found(),
+        }
+    };
     let Some((data, mime)) = theme.asset(path) else {
         return not_found();
     };

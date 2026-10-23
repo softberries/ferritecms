@@ -475,7 +475,28 @@ async fn media_names_are_sanitised(app: App) -> App {
     app
 }
 
+/// After a hot swap the replaced theme's assets stay served (pages rendered just before
+/// the swap link to them); after the next swap they are gone (P18).
+async fn previous_theme_assets_survive_one_swap(app: App) -> App {
+    let old = app.state.theme.load().hash().to_owned();
+    let url = format!("/_theme/{old}/css/site.css");
+    assert_eq!(app.get(&url).await.status, StatusCode::OK);
+    let blog = std::sync::Arc::new(ferrite_theme::Theme::load_embedded("blog").unwrap());
+    assert_ne!(blog.hash(), old);
+    app.state.swap_theme(blog.clone());
+    assert_eq!(app.state.theme.load().hash(), blog.hash());
+    assert_eq!(app.get(&url).await.status, StatusCode::OK, "previous theme");
+    app.state.swap_theme(blog);
+    assert_eq!(
+        app.get(&url).await.status,
+        StatusCode::NOT_FOUND,
+        "two swaps ago"
+    );
+    app
+}
+
 app_tests!(
+    previous_theme_assets_survive_one_swap,
     media_names_are_sanitised,
     media_ranges_and_headers,
     media_rule_published_only,

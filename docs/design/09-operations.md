@@ -196,25 +196,47 @@ also installs the `ring` rustls default crypto provider at start.
 
 **`ferrite serve`** (`crates/ferrite/src/serve.rs`):
 
-- **Startup**, in order; any failure exits 1: load the config; open the database (created if
-  missing); the migration check (pending migrations are applied when `database.auto_migrate`
-  is on; on Postgres a pending contract migration also needs `database.allow_contract`; an
-  incompatible schema is refused; 02 §8); open the media store and run a write/read/delete
-  probe; build the permalink rules from the `permalink.post`/`permalink.page` options and
-  check them against the registered types and taxonomies; load the active theme (a broken one
-  falls back to the embedded `blog`, 06 §7); install the enabled plugins (a broken row is
-  skipped, 05 §7a); start the cache invalidation loop and the scheduled-publishing ticker
-  (`publish_due` every 30 s); bind `server.listen` (default `127.0.0.1:8080`; override with
-  `FERRITE_SERVER__LISTEN`, port `0` picks a free one) and print `Listening on http://<addr>`
-  on stdout.
-- **Read once at startup:** permalink options, the theme and the plugins. Changing them needs
-  a restart (hot swap is M1.5).
-- **Shutdown** on SIGINT or SIGTERM: stop accepting connections, let open requests finish for
-  up to 10 s, stop the background tasks (up to 1 s), close the database pools (up to 2 s);
-  `main` then shuts the runtime down with a 1 s grace, dropping connection tasks still
-  running. A clean shutdown exits 0; the process is gone at most about 14 s after the first
-  signal. A second SIGINT/SIGTERM during the drain exits at once with 130 (SIGINT) or 143
-  (SIGTERM).
+- **Startup**, in order; any failure exits 1 (rulings P15, P22): load the config; open the
+  database (created if missing); the migration check under the migrate lock (pending
+  migrations are applied when `database.auto_migrate` is on; on Postgres a pending contract
+  migration also needs `database.allow_contract`; an incompatible schema is refused; 02 §8);
+  join the node registry (refused when a live node has another `site_id` or `site.url`; in
+  solo mode another live node is waited for up to 35 s; 04 §3); open the media store and run
+  a write/read/delete probe; create the page cache and set the invalidation cursor
+  (**before** any node state is read, so a change committed during boot is applied by the
+  first poll); build the permalink rules from the `permalink.post`/`permalink.page` options
+  and check them against the registered types and taxonomies; load the active theme (at
+  startup a broken one falls back to the embedded `blog`, 06 §7); install the enabled plugins
+  (a broken row is skipped, 05 §7a); build the route table; bind `server.listen` (default
+  `127.0.0.1:8080`; override with `FERRITE_SERVER__LISTEN`, port `0` picks a free one); start
+  the background tasks: the invalidation loop (with `LISTEN` wake-ups in cluster mode) and the
+  hot-reload task, the plugin-failure flusher (every 5 s), the job runner (`cluster.workers`
+  handlers; prune jobs, scheduled publishing), the periodic scheduler (every 10 s: the prune
+  jobs hourly and `content.publish_due` every 30 s) and the heartbeat (every 10 s); print
+  `Listening on http://<addr>` on stdout. A failure after joining the registry removes the
+  node's row again.
+- **Hot swap** (ruling P18, 04 §8): `theme.changed`, `plugins.changed`, `plugin.disabled`
+  (the plugin stops on this node at once) and `options.changed` for `permalink.post` /
+  `permalink.page` make one background task re-read the theme, the plugins or the permalink
+  rules (and route table) from the database and swap them in; history lost past the cursor
+  reloads all three. The page cache is flushed after each swap. A theme, plugin version or
+  permalink set that fails to load keeps the current one and is reported in `nodes.meta`
+  (`theme.error`, `plugins.<name>.status = "failed"` with `error`, `permalinks_error`); there
+  is no runtime fallback to `blog`. The replaced theme's `/_theme/<hash>/` assets stay served
+  until the next swap.
+- **`nodes.meta`** (heartbeat, and at once after every reload): `site_id`, `site_url`
+  (normalised, no trailing slash), `mode`, `clock_skew_ms`, `theme` (`name`, `hash`,
+  `origin`, `error`), `plugins` (per plugin row: `version`, `hash`, `status` =
+  `loaded`/`failed`/`disabled`, `error` up to 1 KiB), `permalinks_error`.
+- **Shutdown** on SIGINT or SIGTERM: stop accepting connections and stop the job runner at
+  once; open requests get up to 10 s while running jobs get 9 s, after which the runner
+  releases the rest without using an attempt (another node takes them at once; the runner
+  is abandoned after 12 s, ruling R6); then the background tasks stop (the failure flusher
+  writes once more) and the node deregisters, together within 1 s; the database pools close
+  (up to 2 s, cut so that shutdown so far ends within 13 s of the signal); `main` then shuts
+  the runtime down with a 1 s grace, dropping connection tasks still running. A clean
+  shutdown exits 0; the process is gone at most 14 s after the first signal. A second
+  SIGINT/SIGTERM during startup or shutdown exits at once with 130 (SIGINT) or 143 (SIGTERM).
 - **Health:** `/healthz` is `200 ok`; `/readyz` is `200` when a store read succeeds within
   2 s and the startup migration check passed, else `503`.
 - **Settings it uses** (`[server]`, `[cache]`, `[plugins]`, 01 §4): `server.listen`,
@@ -222,7 +244,8 @@ also installs the `ring` rustls default crypto provider at start.
   (default 250; how often the invalidation loop reads the event outbox),
   `plugins.render_deadline_ms` (default 200, ruling R18; the hard timeout is 1.5 × it),
   `plugins.action_deadline_ms`, `plugins.default_memory`, `plugins.default_fuel`,
-  `plugins.disable_after_failures`, `plugins.failure_window`. `cache.logged_in` is parsed but
+  `plugins.disable_after_failures`, `plugins.failure_window` (counted cluster-wide, P20),
+  `cluster.mode`, `cluster.node_name`, `cluster.workers`. `cache.logged_in` is parsed but
   unused until logins exist (M2). Render concurrency (2 × available parallelism, 5 s wait,
   then 503) and the 60 s short TTL are constants.
 

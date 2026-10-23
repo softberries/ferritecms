@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use ferrite_cache::PageCache;
 use ferrite_core::{
     CoreError, DepKeys, PermalinkRules, RedirectService, SiteReader, events::option_key,
@@ -119,15 +119,19 @@ pub struct AppParts {
     pub migrations_ok: bool,
 }
 
-/// Shared state of the public site. The theme and the route table can be swapped at
-/// runtime (theme activation, permalink option changes); nothing swaps them yet, that
-/// is M1.5 hot reload, so a change needs a restart today.
+/// Shared state of the public site. The theme and the route table are swapped at
+/// runtime by the node's reloader (theme activation, permalink option changes; ruling
+/// P18) through [`swap_theme`](Self::swap_theme) and [`swap_routes`](Self::swap_routes).
+/// A request loads each once (`load_full`) and finishes on what it loaded.
 pub struct AppState {
     pub store: Arc<dyn Store>,
     pub reader: Arc<SiteReader>,
     pub plugins: Arc<PluginHost>,
     pub media: Arc<MediaStore>,
     pub theme: ArcSwap<Theme>,
+    /// The theme [`swap_theme`](Self::swap_theme) replaced last: its assets stay served
+    /// until the next swap, so pages rendered just before a swap keep working.
+    pub previous_theme: ArcSwapOption<Theme>,
     pub cache: Arc<PageCache>,
     pub routes: ArcSwap<RouteTable>,
     pub config: HttpConfig,
@@ -156,11 +160,24 @@ impl AppState {
             plugins: parts.plugins,
             media: parts.media,
             theme: ArcSwap::new(parts.theme),
+            previous_theme: ArcSwapOption::empty(),
             cache: parts.cache,
             routes: ArcSwap::from_pointee(parts.routes),
             config: parts.config,
             migrations_ok: parts.migrations_ok,
         }
+    }
+
+    /// Makes `theme` the served theme; the replaced one becomes
+    /// [`previous_theme`](Self::previous_theme) (the one before it is dropped).
+    pub fn swap_theme(&self, theme: Arc<Theme>) {
+        let old = self.theme.swap(theme);
+        self.previous_theme.store(Some(old));
+    }
+
+    /// Replaces the route table (requests already resolved finish on the old one).
+    pub fn swap_routes(&self, table: RouteTable) {
+        self.routes.store(Arc::new(table));
     }
 
     /// Template renders started since the app was built (pages and error pages): a

@@ -58,13 +58,13 @@ ferritecms/
 
 ### Dependency graph
 
-As built after M1c-2 (normal dependencies, from each crate's `Cargo.toml`; crates not yet
+As built in M1.5 (normal dependencies, from each crate's `Cargo.toml`; crates not yet
 built are marked with their milestone):
 
 ```
-ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-theme, ferrite-core, ferrite-plugin-host,
- │               ferrite-media, ferrite-config, ferrite-store, ferrite-store-{sqlite,postgres},
- │               ferrite-domain
+ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-cluster, ferrite-theme, ferrite-core,
+ │               ferrite-plugin-host, ferrite-media, ferrite-config, ferrite-store,
+ │               ferrite-store-{sqlite,postgres}, ferrite-domain
  ├─ ferrite-http ─┬─ ferrite-cache ─── ferrite-store, ferrite-domain
  │                ├─ ferrite-theme ─── ferrite-core, ferrite-domain
  │                ├─ ferrite-core ──── ferrite-store (traits) ◄── ferrite-store-{sqlite,postgres}
@@ -73,7 +73,7 @@ ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-theme, ferrite-core, f
  │                ├─ ferrite-plugin-host (no ferrite-* dependencies)
  │                └─ ferrite-store, ferrite-domain
  ├─ ferrite-config ─── ferrite-domain
- ├─ ferrite-cluster ─── ferrite-store (traits), ferrite-domain (not yet used by the binary)
+ ├─ ferrite-cluster ─── ferrite-store (traits), ferrite-domain
  └─ ferrite-import-wp (M3) ─── ferrite-core
 ```
 
@@ -89,38 +89,43 @@ exist yet (no `[features]` section in any crate).
 
 ## 2. Runtime components
 
-One `ferrite serve` process contains (as built after M1c-2; planned parts marked):
+One `ferrite serve` process contains (as built after M1.5; planned parts marked):
 
 | Component | Responsibility | Crate |
 |---|---|---|
 | Config | Load `ferrite.toml`, env overrides (`FERRITE_*`), validate profile | ferrite-config |
 | Store | Pooled DB access, transactions, migrations | ferrite-store-* |
 | MediaStore | Blob get/put/list/delete, public URLs | ferrite-media |
-| Cluster *(M1.5)* | Node heartbeat, `LISTEN/NOTIFY` event bus, job queue, distributed locks | ferrite-cluster |
+| Cluster | Node registry and heartbeat, job runner, periodic scheduler, built-in prune jobs (`LISTEN/NOTIFY`, locks and the job queue are in the store) | ferrite-cluster |
 | Core services | Business rules, permission checks, revisions, emitting events; `SiteReader` for public reads | ferrite-core |
 | Plugin host | Load components, run filters/actions under limits | ferrite-plugin-host |
 | Theme engine | Resolve template, render with MiniJinja | ferrite-theme |
 | Page cache | URL → rendered response, dependency-based invalidation | ferrite-cache |
-| Invalidation loop | Polls the `events` outbox every `cache.poll_interval_ms` (default 250) and applies events to the page cache | ferrite-cache |
-| Scheduled publishing | `publish_due` every 30 s (a tokio task; the job queue replaces it in M1.5) | ferrite (bin) + core |
+| Invalidation loop | Polls the `events` outbox every `cache.poll_interval_ms` (default 250; woken by `LISTEN` in cluster mode) and applies events to the page cache; its hook drives the hot swap | ferrite-cache |
+| Reloader | Hot swap of theme, plugin registry and permalink rules/route table on events (P18) | ferrite (bin) |
+| Scheduled publishing | `content.publish_scheduled` job per scheduled item, `content.publish_due` periodic every 30 s (P12) | ferrite (bin) + core |
 | HTTP | Public routes, `/_media`, `/_theme`, `/healthz`, `/readyz`; later `/api/v1`, `/admin`, `/_p/<plugin>`, `/metrics` | ferrite-http |
-| Workers *(M1.5)* | Job queue consumers (actions, variants, imports) | ferrite-cluster + core |
+| Workers | Job queue consumers (`cluster.workers` per node; prune jobs and publishing now; actions, variants, imports later) | ferrite-cluster + core |
 
-Startup order as built (`crates/ferrite/src/serve.rs`; any failure exits 1): config → open
-the database → migration check (pending migrations applied when allowed, an incompatible
-schema refused) → media store write/read/delete probe → permalink rules from options,
-checked against types and taxonomies → active theme (falls back to the embedded `blog`) →
-plugins from the `plugins` table + artifacts (a broken row is skipped) → route table →
-invalidation loop (cursor set before any page is cached) → scheduled-publish ticker →
-signal handlers → bind `server.listen` and print `Listening on http://<addr>`. Planned
-additions: cluster register (M1.5), workers (M1.5).
+Startup order as built (`crates/ferrite/src/serve.rs`, `ferrite::start`; any failure exits
+1; rulings P15, P22): config → open the database → migration check under the migrate lock
+(pending migrations applied when allowed, an incompatible schema refused) → join the node
+registry → media store write/read/delete probe → page cache + invalidation cursor (**set
+before any node state is read**) → permalink rules from options, checked against types and
+taxonomies → active theme (falls back to the embedded `blog` at startup only) → plugins from
+the `plugins` table + artifacts (a broken row is skipped) → route table → bind
+`server.listen` → background tasks: invalidation loop (`LISTEN` in cluster mode) with the
+reloader hook, plugin-failure flusher, job runner, periodic scheduler, heartbeat → print
+`Listening on http://<addr>`. Signal handlers are installed before all of this; a signal
+during startup exits at once.
 
-Shutdown on SIGINT or SIGTERM, as built: stop accepting → drain open requests for up to 10 s
-→ stop the background tasks (up to 1 s) → close the database pools (up to 2 s) → the
-runtime gets a 1 s grace, then remaining connection tasks are dropped. The process is gone
-about 14 s after the first signal at most; a second signal during the drain exits at once
-(130 for SIGINT, 143 for SIGTERM). Planned: stop workers after the current job, deregister
-the node (M1.5).
+Shutdown on SIGINT or SIGTERM, as built: stop accepting **and** stop the job runner → drain
+open requests for up to 10 s while running jobs get 9 s, then the rest are released without
+using an attempt (runner abandoned after 12 s) → stop the background tasks (final failure
+flush) and deregister the node (together up to 1 s) → close the database pools (up to 2 s,
+cut to end within 13 s of the signal) → the runtime gets a 1 s grace, then remaining
+connection tasks are dropped. The process is gone at most 14 s after the first signal; a
+second signal during startup or shutdown exits at once (130 for SIGINT, 143 for SIGTERM).
 
 ## 3. Request lifecycle (public page)
 

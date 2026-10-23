@@ -508,6 +508,10 @@ fn serve_seeded_site(p: Profile) {
 
     let status = server.stop_with("TERM");
     assert!(status.success(), "serve exit status: {status:?}");
+    // A clean shutdown leaves the node registry.
+    let nodes =
+        rt().block_on(async { p.store().await.read().nodes().list().await.expect("nodes") });
+    assert!(nodes.is_empty(), "node rows after shutdown: {nodes:?}");
 
     // --force adds another batch with fresh slugs.
     let forced = seed(&p, &["--force"]);

@@ -1295,10 +1295,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "async-trait",
  "axum",
  "bytes",
  "clap",
  "ferrite-cache",
+ "ferrite-cluster",
  "ferrite-config",
  "ferrite-core",
  "ferrite-domain",

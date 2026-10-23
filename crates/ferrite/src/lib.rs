@@ -3,15 +3,18 @@
 mod cli;
 pub mod extensions;
 mod init;
+pub mod jobs;
 mod migrate;
+mod node;
 mod open;
+pub mod reload;
 mod seed;
-mod serve;
+pub mod serve;
 mod site;
 
 pub use cli::{Cli, Command, MigrateCommand, run};
 pub use open::{Decision, OpenMode, decide, open_store, startup_check};
-pub use serve::RUNTIME_SHUTDOWN;
+pub use serve::{NodeOptions, RUNTIME_SHUTDOWN, RunnerOverrides, RunningNode, start};
 pub use site::{LoadedTheme, ThemeOrigin, load_theme, reload_theme};
 
 /// The version of this binary, parsed from `Cargo.toml`.
