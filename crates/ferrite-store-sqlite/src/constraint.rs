@@ -9,7 +9,10 @@
 
 /// `t.col[, t.col...]` as SQLite reports it → the constraint name used on every backend.
 const UNIQUE_NAMES: &[(&str, &str)] = &[
+    ("api_tokens.id", "api_tokens_pkey"),
+    ("api_tokens.token_hash", "api_tokens_hash_uq"),
     ("artifacts.hash", "artifacts_pkey"),
+    ("audit_log.id", "audit_log_pkey"),
     ("comments.id", "comments_pkey"),
     ("content_items.id", "content_items_pkey"),
     (
@@ -34,12 +37,14 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ),
     ("plugin_kv.plugin, plugin_kv.key", "plugin_kv_pkey"),
     ("plugins.name", "plugins_pkey"),
+    ("rate_limits.bucket", "rate_limits_pkey"),
     ("redirects.id", "redirects_pkey"),
     ("redirects.source_path", "redirects_source_path_uq"),
     ("revisions.id", "revisions_pkey"),
     ("schema_meta.key", "schema_meta_pkey"),
     // On Postgres `item_id` is the primary key of search_docs.
     ("search_docs.item_id", "search_docs_pkey"),
+    ("sessions.id_hash", "sessions_pkey"),
     ("taxonomies.name", "taxonomies_pkey"),
     ("term_links.item_id, term_links.term_id", "term_links_pkey"),
     ("terms.id", "terms_pkey"),

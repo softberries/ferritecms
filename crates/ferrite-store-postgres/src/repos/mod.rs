@@ -1,5 +1,6 @@
 //! Repository implementations, all on [`PgRepos`].
 
+mod auth;
 mod content;
 mod event;
 mod job;
@@ -18,10 +19,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use ferrite_store::{
-    ArtifactRepo, ContentRepo, ContentTypeRepo, EventRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo,
-    NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos,
-    RevisionRepo, SchemaMetaRepo, SearchRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx,
-    UserRepo,
+    ApiTokenRepo, ArtifactRepo, AuditRepo, ContentRepo, ContentTypeRepo, EventRepo, JobRepo,
+    MediaRepo, MenuRepo, MetaRepo, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo,
+    PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo,
+    SessionRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use sqlx::PgPool;
 
@@ -110,6 +111,18 @@ impl Repos for PgRepos {
     fn schema_meta(&self) -> &dyn SchemaMetaRepo {
         self
     }
+    fn sessions(&self) -> &dyn SessionRepo {
+        self
+    }
+    fn api_tokens(&self) -> &dyn ApiTokenRepo {
+        self
+    }
+    fn rate_limits(&self) -> &dyn RateLimitRepo {
+        self
+    }
+    fn audit(&self) -> &dyn AuditRepo {
+        self
+    }
 }
 
 /// A write transaction (or a nested savepoint) on a pool connection; dropping it rolls
@@ -187,4 +200,8 @@ delegate_repos!(
     nodes: NodeRepo,
     search: SearchRepo,
     schema_meta: SchemaMetaRepo,
+    sessions: SessionRepo,
+    api_tokens: ApiTokenRepo,
+    rate_limits: RateLimitRepo,
+    audit: AuditRepo,
 );

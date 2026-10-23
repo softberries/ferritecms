@@ -1,5 +1,6 @@
 //! Pure domain types shared by every FerriteCMS storage backend.
 
+mod auth;
 mod content;
 mod event;
 mod ids;
@@ -15,13 +16,18 @@ mod taxonomy;
 mod time;
 mod user;
 
+pub use auth::{
+    ApiToken, AuditEntry, NewAudit, RateHit, SESSION_ABSOLUTE, SESSION_IDLE, SESSION_TOUCH_EVERY,
+    Session,
+};
 pub use content::{
     ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, NewContent, ParentFilter,
     Revision,
 };
 pub use event::{Event, NewEvent};
 pub use ids::{
-    ArtifactHash, ContentId, JobId, MenuItemId, NodeId, RedirectId, RevisionId, TermId, UserId,
+    ApiTokenId, ArtifactHash, AuditId, ContentId, JobId, MenuItemId, NodeId, RedirectId,
+    RevisionId, TermId, UserId,
 };
 pub use job::{DEFAULT_MAX_ATTEMPTS, Job, JobLease, JobStatus, NewJob};
 pub use menu::{Menu, MenuItem, MenuItemKind};

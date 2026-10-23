@@ -6,6 +6,7 @@
 // Test-support crate: failing fast with a message is the desired behaviour.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+pub mod auth;
 pub mod batch;
 pub mod constraints;
 pub mod content;

@@ -2,9 +2,10 @@
 
 use chrono::{DateTime, Utc};
 use ferrite_domain::{
-    Artifact, ArtifactHash, ContentId, ContentItem, ContentType, Event, InstalledPlugin,
-    InstalledTheme, Job, JobId, Media, MenuItem, MenuItemId, Node, NodeId, OptionEntry, Redirect,
-    RedirectId, Revision, RevisionId, Secret, Taxonomy, Term, TermId, User, UserId,
+    ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, ContentId, ContentItem,
+    ContentType, Event, InstalledPlugin, InstalledTheme, Job, JobId, Media, MenuItem, MenuItemId,
+    Node, NodeId, OptionEntry, Redirect, RedirectId, Revision, RevisionId, Secret, Session,
+    Taxonomy, Term, TermId, User, UserId,
 };
 use ferrite_store::StoreError;
 use sqlx::{Row, postgres::PgRow, types::Json};
@@ -370,5 +371,75 @@ pub(crate) fn node(row: &PgRow) -> Result<Node, StoreError> {
         started_at: ts("started_at")?.into(),
         heartbeat_at: ts("heartbeat_at")?.into(),
         meta: meta.0,
+    })
+}
+
+pub(crate) const SESSION_COLUMNS: &str = "id_hash, user_id, csrf_secret, created_at, \
+     last_seen_at, expires_at, ip_hash, user_agent";
+
+/// Maps a row selected with [`SESSION_COLUMNS`].
+pub(crate) fn session(row: &PgRow) -> Result<Session, StoreError> {
+    let user: Uuid = row.try_get("user_id").map_err(map_db_err)?;
+    let csrf: String = row.try_get("csrf_secret").map_err(map_db_err)?;
+    let created_at: DateTime<Utc> = row.try_get("created_at").map_err(map_db_err)?;
+    let last_seen_at: DateTime<Utc> = row.try_get("last_seen_at").map_err(map_db_err)?;
+    let expires_at: DateTime<Utc> = row.try_get("expires_at").map_err(map_db_err)?;
+    Ok(Session {
+        id_hash: row.try_get("id_hash").map_err(map_db_err)?,
+        user_id: UserId::from_uuid(user),
+        csrf_secret: Secret::new(csrf),
+        created_at: created_at.into(),
+        last_seen_at: last_seen_at.into(),
+        expires_at: expires_at.into(),
+        ip_hash: row.try_get("ip_hash").map_err(map_db_err)?,
+        user_agent: row.try_get("user_agent").map_err(map_db_err)?,
+    })
+}
+
+pub(crate) const API_TOKEN_COLUMNS: &str =
+    "id, user_id, name, token_hash, scopes, created_at, last_used_at, expires_at";
+
+/// Maps a row selected with [`API_TOKEN_COLUMNS`].
+pub(crate) fn api_token(row: &PgRow) -> Result<ApiToken, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let user: Uuid = row.try_get("user_id").map_err(map_db_err)?;
+    let scopes: Json<Vec<String>> = row.try_get("scopes").map_err(map_db_err)?;
+    let created_at: DateTime<Utc> = row.try_get("created_at").map_err(map_db_err)?;
+    let last_used_at: Option<DateTime<Utc>> = row.try_get("last_used_at").map_err(map_db_err)?;
+    let expires_at: Option<DateTime<Utc>> = row.try_get("expires_at").map_err(map_db_err)?;
+    Ok(ApiToken {
+        id: ApiTokenId::from_uuid(id),
+        user_id: UserId::from_uuid(user),
+        name: row.try_get("name").map_err(map_db_err)?,
+        token_hash: row.try_get("token_hash").map_err(map_db_err)?,
+        scopes: scopes.0,
+        created_at: created_at.into(),
+        last_used_at: last_used_at.map(Into::into),
+        expires_at: expires_at.map(Into::into),
+    })
+}
+
+pub(crate) const AUDIT_COLUMNS: &str =
+    "id, at, actor_id, action, target_kind, target_id, details, node";
+
+/// Maps a row selected with [`AUDIT_COLUMNS`].
+pub(crate) fn audit_entry(row: &PgRow) -> Result<AuditEntry, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let at: DateTime<Utc> = row.try_get("at").map_err(map_db_err)?;
+    let actor: Option<Uuid> = row.try_get("actor_id").map_err(map_db_err)?;
+    let details: Json<serde_json::Value> = row.try_get("details").map_err(map_db_err)?;
+    let node: Option<String> = row.try_get("node").map_err(map_db_err)?;
+    Ok(AuditEntry {
+        id: AuditId::from_uuid(id),
+        at: at.into(),
+        actor_id: actor.map(UserId::from_uuid),
+        action: row.try_get("action").map_err(map_db_err)?,
+        target_kind: row.try_get("target_kind").map_err(map_db_err)?,
+        target_id: row.try_get("target_id").map_err(map_db_err)?,
+        details: details.0,
+        node: node
+            .map(|n| n.parse::<NodeId>())
+            .transpose()
+            .map_err(|e| StoreError::Database(format!("corrupt audit node: {e}")))?,
     })
 }

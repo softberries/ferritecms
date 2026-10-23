@@ -5,10 +5,11 @@ use std::{
 
 use async_trait::async_trait;
 use ferrite_domain::{
-    Artifact, ArtifactHash, ContentId, ContentItem, ContentQuery, ContentType, Event,
-    InstalledPlugin, InstalledTheme, Job, JobId, JobLease, JobStatus, Media, Menu, NewContent,
-    NewEvent, NewJob, NewNode, NewUser, Node, NodeId, OptionEntry, Page, Redirect, RedirectId,
-    Revision, RevisionId, SearchQuery, Taxonomy, Term, TermId, Timestamp, User, UserId,
+    ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, ContentId, ContentItem,
+    ContentQuery, ContentType, Event, InstalledPlugin, InstalledTheme, Job, JobId, JobLease,
+    JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob, NewNode, NewUser, Node, NodeId,
+    OptionEntry, Page, RateHit, Redirect, RedirectId, Revision, RevisionId, SearchQuery, Session,
+    Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 
 use crate::{Channel, LockGuard, StoreError, Subscription, migrate::MigrationStatus};
@@ -134,6 +135,10 @@ pub trait Repos: Send + Sync {
     fn nodes(&self) -> &dyn NodeRepo;
     fn search(&self) -> &dyn SearchRepo;
     fn schema_meta(&self) -> &dyn SchemaMetaRepo;
+    fn sessions(&self) -> &dyn SessionRepo;
+    fn api_tokens(&self) -> &dyn ApiTokenRepo;
+    fn rate_limits(&self) -> &dyn RateLimitRepo;
+    fn audit(&self) -> &dyn AuditRepo;
 }
 
 #[async_trait]
@@ -663,4 +668,91 @@ pub trait SchemaMetaRepo: Send + Sync {
     async fn get(&self, key: &str) -> Result<Option<String>, StoreError>;
     /// Sets a schema_meta value.
     async fn set(&self, key: &str, value: &str) -> Result<(), StoreError>;
+}
+
+/// Login sessions (07 §2, P7), keyed by the SHA-256 hex of the cookie token (`id_hash`).
+/// Every text bound (hashes, secrets, user agent) is NUL-checked (`Invalid`). No per-node
+/// cache: every request reads the row, so a delete takes effect at once on every node.
+#[async_trait]
+pub trait SessionRepo: Send + Sync {
+    /// Inserts a session. An `id_hash` already stored is
+    /// `UniqueViolation { constraint: "sessions_pkey" }`; an unknown user is `ForeignKey`.
+    async fn insert(&self, session: &Session) -> Result<(), StoreError>;
+    /// Fetches a session by `id_hash`, expired or not (the caller checks the times).
+    async fn get(&self, id_hash: &str) -> Result<Option<Session>, StoreError>;
+    /// Moves `last_seen_at` forward to `at` (an older `at` leaves it unchanged); `false`
+    /// when the session is gone.
+    async fn touch(&self, id_hash: &str, at: Timestamp) -> Result<bool, StoreError>;
+    /// Deletes a session (missing: no-op).
+    async fn delete(&self, id_hash: &str) -> Result<(), StoreError>;
+    /// Deletes every session of `user` except the one whose `id_hash` is `keep`; returns
+    /// the deleted count.
+    async fn delete_for_user(&self, user: UserId, keep: Option<&str>) -> Result<u64, StoreError>;
+    /// Up to [`MAX_AUTH_LIST`](crate::MAX_AUTH_LIST) sessions of `user`, newest first
+    /// (`created_at DESC, id_hash`).
+    async fn list_for_user(&self, user: UserId) -> Result<Vec<Session>, StoreError>;
+    /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) sessions with
+    /// `expires_at < now` or `last_seen_at < idle_before`; returns the count. Callers loop
+    /// until a batch comes back short (R5).
+    async fn prune(
+        &self,
+        now: Timestamp,
+        idle_before: Timestamp,
+        limit: u32,
+    ) -> Result<u64, StoreError>;
+}
+
+/// Personal API tokens (07 §2, P6), looked up by the SHA-256 hex of the bearer value.
+/// Text binds (name, hash, scopes) are NUL-checked (`Invalid`).
+#[async_trait]
+pub trait ApiTokenRepo: Send + Sync {
+    /// Inserts a token. A hash already stored is
+    /// `UniqueViolation { constraint: "api_tokens_hash_uq" }`, an id already stored
+    /// `api_tokens_pkey`; an unknown user is `ForeignKey`.
+    async fn insert(&self, token: &ApiToken) -> Result<(), StoreError>;
+    /// Fetches a token by its hash, expired or not (the caller checks `expires_at`).
+    async fn get_by_hash(&self, token_hash: &str) -> Result<Option<ApiToken>, StoreError>;
+    /// Up to [`MAX_AUTH_LIST`](crate::MAX_AUTH_LIST) tokens of `user`, oldest first
+    /// (`created_at, id`).
+    async fn list_for_user(&self, user: UserId) -> Result<Vec<ApiToken>, StoreError>;
+    /// Number of tokens `user` holds.
+    async fn count_for_user(&self, user: UserId) -> Result<u64, StoreError>;
+    /// Moves `last_used_at` forward to `at`; `false` when the token is gone.
+    async fn touch(&self, id: ApiTokenId, at: Timestamp) -> Result<bool, StoreError>;
+    /// Deletes the token only if `user` owns it; `true` if a row was deleted.
+    async fn delete(&self, user: UserId, id: ApiTokenId) -> Result<bool, StoreError>;
+    /// Deletes every token of `user`; returns the count.
+    async fn delete_for_user(&self, user: UserId) -> Result<u64, StoreError>;
+}
+
+/// Fixed-window rate-limit counters shared by every node (P5).
+#[async_trait]
+pub trait RateLimitRepo: Send + Sync {
+    /// Counts one hit on `bucket` in the current window of length `window` and returns
+    /// the count so far, the window's end and the clock used, in **one statement** (an
+    /// upsert), so concurrent hits on any node never share a count. The window start is
+    /// the database clock floored to a multiple of `window` since the Unix epoch
+    /// (Postgres `now()`, which inside a `Tx` is the transaction's start; SQLite the
+    /// process clock). A row from an earlier window starts over at 1.
+    ///
+    /// Invalid: `bucket` empty, over [`MAX_RATE_BUCKET`](crate::MAX_RATE_BUCKET)
+    /// characters or with NUL; `window` zero or over
+    /// [`MAX_RATE_WINDOW`](crate::MAX_RATE_WINDOW).
+    async fn hit(&self, bucket: &str, window: Duration) -> Result<RateHit, StoreError>;
+    /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) buckets
+    /// whose window started before `window_before`; returns the count (R5).
+    async fn prune(&self, window_before: Timestamp, limit: u32) -> Result<u64, StoreError>;
+}
+
+/// The audit log (P22): append-only rows written in the same `Tx` as the change they
+/// record.
+#[async_trait]
+pub trait AuditRepo: Send + Sync {
+    /// Appends a row with a new UUIDv7 id, `at` = the database clock and `node` = `None`.
+    /// Invalid (before any SQL, so a `Tx` is not poisoned): `details` not a JSON object,
+    /// NUL in `details` or in any text.
+    async fn append(&self, entry: &NewAudit) -> Result<AuditId, StoreError>;
+    /// Lists rows newest first (`at DESC, id DESC`) with cursor pagination (tag
+    /// [`AUDIT_CURSOR_TAG`](crate::AUDIT_CURSOR_TAG)); `limit` 1..=200.
+    async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<AuditEntry>, StoreError>;
 }

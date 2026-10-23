@@ -2,9 +2,10 @@
 //! JSON = `TEXT`. Booleans bind and decode natively as 0/1.
 
 use ferrite_domain::{
-    Artifact, ArtifactHash, ContentId, ContentItem, ContentType, Event, InstalledPlugin,
-    InstalledTheme, Job, JobId, Media, MenuItem, MenuItemId, Node, NodeId, OptionEntry, Redirect,
-    RedirectId, Revision, RevisionId, Secret, Taxonomy, Term, TermId, Timestamp, User, UserId,
+    ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, ContentId, ContentItem,
+    ContentType, Event, InstalledPlugin, InstalledTheme, Job, JobId, Media, MenuItem, MenuItemId,
+    Node, NodeId, OptionEntry, Redirect, RedirectId, Revision, RevisionId, Secret, Session,
+    Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 use ferrite_store::StoreError;
 use sqlx::{Row, sqlite::SqliteRow};
@@ -347,5 +348,69 @@ pub(crate) fn node(row: &SqliteRow) -> Result<Node, StoreError> {
         started_at: ts(row.try_get("started_at").map_err(map_db_err)?)?,
         heartbeat_at: ts(row.try_get("heartbeat_at").map_err(map_db_err)?)?,
         meta: json_from_db(&meta)?,
+    })
+}
+
+pub(crate) const SESSION_COLUMNS: &str = "id_hash, user_id, csrf_secret, created_at, \
+     last_seen_at, expires_at, ip_hash, user_agent";
+
+/// Maps a row selected with [`SESSION_COLUMNS`].
+pub(crate) fn session(row: &SqliteRow) -> Result<Session, StoreError> {
+    let user: Uuid = row.try_get("user_id").map_err(map_db_err)?;
+    let csrf: String = row.try_get("csrf_secret").map_err(map_db_err)?;
+    Ok(Session {
+        id_hash: row.try_get("id_hash").map_err(map_db_err)?,
+        user_id: UserId::from_uuid(user),
+        csrf_secret: Secret::new(csrf),
+        created_at: ts(row.try_get("created_at").map_err(map_db_err)?)?,
+        last_seen_at: ts(row.try_get("last_seen_at").map_err(map_db_err)?)?,
+        expires_at: ts(row.try_get("expires_at").map_err(map_db_err)?)?,
+        ip_hash: row.try_get("ip_hash").map_err(map_db_err)?,
+        user_agent: row.try_get("user_agent").map_err(map_db_err)?,
+    })
+}
+
+pub(crate) const API_TOKEN_COLUMNS: &str =
+    "id, user_id, name, token_hash, scopes, created_at, last_used_at, expires_at";
+
+/// Maps a row selected with [`API_TOKEN_COLUMNS`].
+pub(crate) fn api_token(row: &SqliteRow) -> Result<ApiToken, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let user: Uuid = row.try_get("user_id").map_err(map_db_err)?;
+    let scopes: String = row.try_get("scopes").map_err(map_db_err)?;
+    Ok(ApiToken {
+        id: ApiTokenId::from_uuid(id),
+        user_id: UserId::from_uuid(user),
+        name: row.try_get("name").map_err(map_db_err)?,
+        token_hash: row.try_get("token_hash").map_err(map_db_err)?,
+        scopes: serde_json::from_str(&scopes)
+            .map_err(|e| StoreError::Database(format!("corrupt token scopes: {e}")))?,
+        created_at: ts(row.try_get("created_at").map_err(map_db_err)?)?,
+        last_used_at: ts_opt(row.try_get("last_used_at").map_err(map_db_err)?)?,
+        expires_at: ts_opt(row.try_get("expires_at").map_err(map_db_err)?)?,
+    })
+}
+
+pub(crate) const AUDIT_COLUMNS: &str =
+    "id, at, actor_id, action, target_kind, target_id, details, node";
+
+/// Maps a row selected with [`AUDIT_COLUMNS`].
+pub(crate) fn audit_entry(row: &SqliteRow) -> Result<AuditEntry, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let actor: Option<Uuid> = row.try_get("actor_id").map_err(map_db_err)?;
+    let details: String = row.try_get("details").map_err(map_db_err)?;
+    let node: Option<String> = row.try_get("node").map_err(map_db_err)?;
+    Ok(AuditEntry {
+        id: AuditId::from_uuid(id),
+        at: ts(row.try_get("at").map_err(map_db_err)?)?,
+        actor_id: actor.map(UserId::from_uuid),
+        action: row.try_get("action").map_err(map_db_err)?,
+        target_kind: row.try_get("target_kind").map_err(map_db_err)?,
+        target_id: row.try_get("target_id").map_err(map_db_err)?,
+        details: json_from_db(&details)?,
+        node: node
+            .map(|n| n.parse::<NodeId>())
+            .transpose()
+            .map_err(|e| StoreError::Database(format!("corrupt audit node: {e}")))?,
     })
 }

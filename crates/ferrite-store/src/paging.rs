@@ -3,7 +3,8 @@
 use std::time::Duration;
 
 use ferrite_domain::{
-    ContentId, ContentItem, ContentOrder, ContentQuery, Cursor, Job, MAX_PAGE, NewJob, NewNode,
+    ContentId, ContentItem, ContentOrder, ContentQuery, Cursor, Job, MAX_PAGE, NewAudit, NewJob,
+    NewNode, RateHit, Timestamp,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -297,6 +298,93 @@ pub const REDIRECT_CURSOR_TAG: &str = "r:source";
 
 /// Cursor tag of the user listing (see [`encode_text_cursor`]).
 pub const USER_CURSOR_TAG: &str = "u:login";
+
+/// Cursor tag of the audit-log listing (see [`encode_audit_cursor`]).
+pub const AUDIT_CURSOR_TAG: &str = "a:at";
+
+/// Encodes the audit-log cursor pointing just after the row (`at`, `id`).
+pub fn encode_audit_cursor(at: Timestamp, id: Uuid) -> String {
+    Cursor::encode(AUDIT_CURSOR_TAG, &json!(at.as_micros()), id)
+}
+
+/// Decodes a cursor made by [`encode_audit_cursor`] into (`at` micros, `id`).
+pub fn audit_cursor(cursor: &str) -> Result<(i64, Uuid), StoreError> {
+    match Cursor::decode(cursor, AUDIT_CURSOR_TAG)? {
+        (Value::Number(n), id) => n
+            .as_i64()
+            .map(|at| (at, id))
+            .ok_or_else(|| StoreError::Invalid("cursor does not match the query order".into())),
+        _ => Err(StoreError::Invalid(
+            "cursor does not match the query order".into(),
+        )),
+    }
+}
+
+/// Most sessions or API tokens one `list_for_user` returns.
+pub const MAX_AUTH_LIST: u32 = 100;
+
+/// Longest rate-limit bucket name, in characters.
+pub const MAX_RATE_BUCKET: usize = 200;
+
+/// Longest rate-limit window.
+pub const MAX_RATE_WINDOW: Duration = Duration::from_secs(24 * 3600);
+
+/// Validates a rate-limit bucket: 1..=[`MAX_RATE_BUCKET`] characters, no NUL.
+pub fn check_rate_bucket(bucket: &str) -> Result<(), StoreError> {
+    validate_text("rate limit bucket", bucket)?;
+    if bucket.is_empty() || bucket.chars().count() > MAX_RATE_BUCKET {
+        return Err(StoreError::Invalid(format!(
+            "rate limit bucket must be 1 to {MAX_RATE_BUCKET} characters"
+        )));
+    }
+    Ok(())
+}
+
+/// Validates a rate-limit window (more than zero, at most [`MAX_RATE_WINDOW`]) and
+/// returns it in microseconds.
+pub fn check_rate_window(window: Duration) -> Result<i64, StoreError> {
+    if window.is_zero() || window > MAX_RATE_WINDOW {
+        return Err(StoreError::Invalid(
+            "rate limit window must be more than zero and at most one day".into(),
+        ));
+    }
+    i64::try_from(window.as_micros())
+        .map_err(|_| StoreError::Invalid("rate limit window out of range".into()))
+}
+
+/// Builds the [`RateHit`] a backend returns from the stored `count` and `window_start`
+/// (micros), the clock the hit used and the window length in micros.
+pub fn rate_hit(
+    count: i64,
+    window_start: i64,
+    now: Timestamp,
+    window: i64,
+) -> Result<RateHit, StoreError> {
+    let count = u32::try_from(count)
+        .map_err(|_| StoreError::Database(format!("corrupt rate limit count {count}")))?;
+    let reset_at = Timestamp::from_micros(window_start.saturating_add(window))
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+    Ok(RateHit {
+        count,
+        reset_at,
+        now,
+    })
+}
+
+/// Validates an audit row before any SQL: NUL-free text, `details` a NUL-free object.
+pub fn check_new_audit(entry: &NewAudit) -> Result<(), StoreError> {
+    validate_text("audit action", &entry.action)?;
+    validate_text("audit target_kind", &entry.target_kind)?;
+    if let Some(id) = &entry.target_id {
+        validate_text("audit target_id", id)?;
+    }
+    if !entry.details.is_object() {
+        return Err(StoreError::Invalid(
+            "audit details must be a JSON object".into(),
+        ));
+    }
+    validate_json(&entry.details)
+}
 
 /// Encodes the cursor pointing just after `item`.
 pub fn encode_content_cursor(order: ContentOrder, item: &ContentItem) -> String {

@@ -21,10 +21,11 @@ use ferrite_domain::{
     Job, JobId, JobLease, JobStatus, NewEvent, NewJob, NewNode, NodeId, Timestamp,
 };
 use ferrite_store::{
-    ArtifactRepo, Backend, Channel, ContentRepo, ContentTypeRepo, EventRepo, JobRepo, LockGuard,
-    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo,
-    PluginKvRepo, PluginRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, Store,
-    StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    ApiTokenRepo, ArtifactRepo, AuditRepo, Backend, Channel, ContentRepo, ContentTypeRepo,
+    EventRepo, JobRepo, LockGuard, MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo,
+    OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos,
+    RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription,
+    TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use ferrite_store_tests::{TestDb, backend_tests_spawning};
 use serde_json::json;
@@ -538,6 +539,18 @@ impl Repos for FaultyRepos {
     }
     fn schema_meta(&self) -> &dyn SchemaMetaRepo {
         self.inner.read().schema_meta()
+    }
+    fn sessions(&self) -> &dyn SessionRepo {
+        self.inner.read().sessions()
+    }
+    fn api_tokens(&self) -> &dyn ApiTokenRepo {
+        self.inner.read().api_tokens()
+    }
+    fn rate_limits(&self) -> &dyn RateLimitRepo {
+        self.inner.read().rate_limits()
+    }
+    fn audit(&self) -> &dyn AuditRepo {
+        self.inner.read().audit()
     }
 }
 

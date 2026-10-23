@@ -90,11 +90,40 @@ pub trait Repos: Send + Sync {
     fn nodes(&self) -> &dyn NodeRepo;
     fn search(&self) -> &dyn SearchRepo;
     fn schema_meta(&self) -> &dyn SchemaMetaRepo;
+    fn sessions(&self) -> &dyn SessionRepo;
+    fn api_tokens(&self) -> &dyn ApiTokenRepo;
+    fn rate_limits(&self) -> &dyn RateLimitRepo;
+    fn audit(&self) -> &dyn AuditRepo;
 }
 ```
 
-Repositories still to come, with the milestone that adds them: `sessions`, `tokens`
-(API tokens), `rate_limits`, `audit` and `comments` (M2). `JobRepo` (`jobs()`) and
+The auth repositories exist since M2a-1 (migration `0005_auth`; domain types in
+`ferrite_domain::auth`, session constants `SESSION_IDLE` 7 d, `SESSION_ABSOLUTE` 30 d,
+`SESSION_TOUCH_EVERY` 5 min):
+
+- **`SessionRepo`** (`sessions()`): `insert`, `get(id_hash)`, `touch(id_hash, at) -> bool`
+  (moves `last_seen_at` forward only), `delete`, `delete_for_user(user, keep: Option<id_hash>)
+  -> u64`, `list_for_user` (at most `MAX_AUTH_LIST` = 100, newest first), `prune(now,
+  idle_before, limit)` (deletes `expires_at < now OR last_seen_at < idle_before`, R5 batches).
+- **`ApiTokenRepo`** (`api_tokens()`): `insert` (duplicate hash: `api_tokens_hash_uq`),
+  `get_by_hash`, `list_for_user` (at most 100, by `created_at`), `count_for_user`,
+  `touch(id, at) -> bool` (`last_used_at`, forward only), `delete(user, id) -> bool` (only the
+  owner's row), `delete_for_user -> u64`.
+- **`RateLimitRepo`** (`rate_limits()`, P5): `hit(bucket, window) -> RateHit { count,
+  reset_at, now }` is one upsert on both backends (`ON CONFLICT (bucket) DO UPDATE SET count =
+  CASE WHEN rate_limits.window_start = excluded.window_start THEN rate_limits.count + 1 ELSE 1
+  END, window_start = excluded.window_start RETURNING …`), so concurrent hits on any node never
+  share a count. `window_start` is the database clock floored to the window since the epoch
+  (Postgres `date_bin` over `now()`; SQLite the process clock), `reset_at = window_start +
+  window`, `now` is the clock the hit used (F6: `Retry-After = reset_at − now` on any node).
+  Buckets are 1 to `MAX_RATE_BUCKET` (200) characters, windows up to `MAX_RATE_WINDOW` (1 day).
+  `prune(window_before, limit)`.
+- **`AuditRepo`** (`audit()`, P22): `append(&NewAudit) -> AuditId` (UUIDv7 id, `at` = database
+  clock, `node` NULL; `details` must be a JSON object, else `Invalid` before any SQL) and
+  `list(limit, cursor)`, newest first (`at DESC, id DESC`), cursor tag `a:at`
+  (`AUDIT_CURSOR_TAG`).
+
+The `comments` repository is still to come (M2a-2). `JobRepo` (`jobs()`) and
 `NodeRepo` (`nodes()`) exist since M1.5 (migration `0004_cluster`); see the cluster table
 in §4. Named locks are `Store::try_lock` (Postgres advisory locks, SQLite in-process;
 [04 §7](04-cluster.md#7-distributed-locks)); `ferrite_store::lock(store, name, wait)`
@@ -288,8 +317,8 @@ Notes:
 
 Same logical schema on both backends. Physical type mapping is in §5.
 Tables marked *not yet created* are planned; the milestone in the mark adds them in a
-new migration. Everything else exists in `0001_init` / `0002_search` / `0003_media_variants`
-on both backends.
+new migration. Everything else exists in `0001_init` / `0002_search` / `0003_media_variants` /
+`0004_cluster` / `0005_auth` on both backends.
 
 ### Content
 
@@ -312,13 +341,13 @@ on both backends.
 
 | Table | Columns | Notes |
 |---|---|---|
-| `users` | `id`, `login` UNIQUE, `email` UNIQUE (case-insensitive), `display_name`, `password_hash` (argon2id, nullable), `role`, `status`, `must_reset`, `totp_secret` (encrypted, nullable), `created_at`, `last_login_at` | |
+| `users` | `id`, `login` UNIQUE, `email` UNIQUE (case-insensitive), `display_name`, `password_hash` (argon2id, nullable), `role`, `status`, `must_reset`, `totp_secret` (encrypted, nullable), `created_at`, `last_login_at`, `totp_last_step` bigint null (since `0005_auth`) | `totp_last_step`: last accepted TOTP step, refuses replays (P9) |
 | `user_meta` | `user_id`, `key`, `value` json | |
-| `sessions` *(not yet created: M2)* | `id_hash` PK (SHA-256 of token), `user_id`, `csrf_secret`, `created_at`, `last_seen_at`, `expires_at`, `ip_hash`, `user_agent` | DB-backed so any node can serve any request |
-| `api_tokens` *(not yet created: M2)* | `id`, `user_id`, `name`, `token_hash`, `scopes` json, `created_at`, `last_used_at`, `expires_at` | |
-| `passkeys` *(not yet created: M2 stretch)* | `id`, `user_id`, `credential` json, `created_at`, `last_used_at` | M2 stretch |
-| `rate_limits` *(not yet created: M2)* | `bucket` PK, `window_start`, `count` | Fixed-window counters; works across nodes |
-| `audit_log` *(not yet created: M2)* | `id`, `at`, `actor_id`, `action`, `target_kind`, `target_id`, `details` json, `node` | Admin actions, plugin installs, capability grants |
+| `sessions` *(since `0005_auth`)* | `id_hash` PK (`sessions_pkey`, SHA-256 hex of the cookie token), `user_id` → `users` `ON DELETE CASCADE` (`sessions_user_id_fk`), `csrf_secret`, `created_at`, `last_seen_at`, `expires_at` (absolute end), `ip_hash` null, `user_agent` null; indexes `sessions_user_idx`, `sessions_expires_idx`, `sessions_last_seen_idx` | DB-backed so any node can serve any request; no per-node cache (P7) |
+| `api_tokens` *(since `0005_auth`)* | `id` PK (`api_tokens_pkey`), `user_id` → `users` `ON DELETE CASCADE` (`api_tokens_user_id_fk`), `name`, `token_hash` UNIQUE (`api_tokens_hash_uq`, SHA-256 hex), `scopes` json array, `created_at`, `last_used_at` null, `expires_at` null; index `api_tokens_user_idx` | |
+| `passkeys` *(not yet created: deferred past M2, P3)* | `id`, `user_id`, `credential` json, `created_at`, `last_used_at` | webauthn-rs has only a pre-release |
+| `rate_limits` *(since `0005_auth`)* | `bucket` PK (`rate_limits_pkey`), `window_start`, `count` int default 0; index `rate_limits_window_idx` | Fixed-window counters on the database clock; works across nodes (P5) |
+| `audit_log` *(since `0005_auth`)* | `id` PK (`audit_log_pkey`), `at`, `actor_id` null → `users` `ON DELETE SET NULL` (`audit_log_actor_id_fk`), `action`, `target_kind`, `target_id` null, `details` json object default `{}`, `node` null; index `audit_log_at_idx (at, id)` | Admin actions, plugin installs, capability grants; no secrets (P22) |
 
 ### Site, plugins, themes, artifacts
 
