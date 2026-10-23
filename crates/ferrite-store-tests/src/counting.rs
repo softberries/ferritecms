@@ -18,10 +18,10 @@ use ferrite_domain::{
     Page, SearchQuery, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 use ferrite_store::{
-    ArtifactRepo, Backend, ContentRepo, ContentTypeRepo, EventRepo, JobRepo, MediaRepo, MenuRepo,
-    MetaRepo, MigrationStatus, OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos,
-    RevisionRepo, SchemaMetaRepo, SearchRepo, Store, StoreError, TaxonomyRepo, TermRepo, ThemeRepo,
-    Tx, UserRepo,
+    ArtifactRepo, Backend, Channel, ContentRepo, ContentTypeRepo, EventRepo, JobRepo, MediaRepo,
+    MenuRepo, MetaRepo, MigrationStatus, OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos,
+    RevisionRepo, SchemaMetaRepo, SearchRepo, Store, StoreError, Subscription, TaxonomyRepo,
+    TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use serde_json::Value;
 
@@ -146,6 +146,12 @@ impl Store for CountingStore {
     async fn begin(&self) -> Result<Box<dyn Tx>, StoreError> {
         self.inner.calls.fetch_add(1, Ordering::SeqCst);
         self.inner.store.begin().await
+    }
+    async fn subscribe(
+        &self,
+        channel: Channel,
+    ) -> Result<Option<Box<dyn Subscription>>, StoreError> {
+        self.inner.store.subscribe(channel).await
     }
     async fn migration_status(
         &self,

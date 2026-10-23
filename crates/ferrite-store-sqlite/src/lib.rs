@@ -11,7 +11,9 @@ mod repos;
 use std::{fs::File, path::PathBuf};
 
 use async_trait::async_trait;
-use ferrite_store::{Backend, MigrationStatus, Repos, Store, StoreError, Tx};
+use ferrite_store::{
+    Backend, Channel, MigrationStatus, Repos, Store, StoreError, Subscription, Tx,
+};
 use sqlx::SqlitePool;
 
 pub use connect::SqliteOptions;
@@ -44,6 +46,14 @@ impl Store for SqliteStore {
     async fn begin(&self) -> Result<Box<dyn Tx>, StoreError> {
         let tx = self.writer.begin().await.map_err(map_db_err)?;
         Ok(Box::new(SqliteTx::new(exec::TxHandle::new(tx))))
+    }
+
+    /// No subscription on SQLite (P1): one process owns the database, so it polls.
+    async fn subscribe(
+        &self,
+        _channel: Channel,
+    ) -> Result<Option<Box<dyn Subscription>>, StoreError> {
+        Ok(None)
     }
 
     async fn migration_status(

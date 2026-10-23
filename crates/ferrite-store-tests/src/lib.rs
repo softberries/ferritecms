@@ -16,6 +16,7 @@ pub mod harness;
 pub mod job;
 pub mod menu;
 pub mod migrations;
+pub mod notify;
 pub mod plugin;
 pub mod search;
 pub mod semantics;

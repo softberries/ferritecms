@@ -1,8 +1,8 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
     backend_tests, backend_tests_spawning, batch::*, constraints::*, content::*, event::*, job::*,
-    menu::*, migration_dirs, migration_files, migrations::*, plugin::*, search::*, semantics::*,
-    site::*, taxonomy::*, tx::*, user::*,
+    menu::*, migration_dirs, migration_files, migrations::*, notify::*, plugin::*, search::*,
+    semantics::*, site::*, taxonomy::*, tx::*, user::*,
 };
 
 backend_tests!(
@@ -127,6 +127,14 @@ backend_tests!(
     events_reject_nul,
     events_in_tx_only_visible_after_commit,
     events_prune,
+    events_min_seq,
+);
+
+backend_tests!(
+    subscribe_is_none_on_sqlite,
+    notify_events_only_after_commit,
+    notify_jobs_on_enqueue,
+    subscribe_reports_reconnect,
 );
 
 backend_tests!(

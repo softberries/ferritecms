@@ -156,9 +156,9 @@ impl Profile {
             ),
             Some((url, schema)) => Box::new(
                 PgStore::open(PgOptions {
-                    url: url.clone(),
                     max_connections: 2,
                     schema: Some(schema.clone()),
+                    ..PgOptions::new(url.clone())
                 })
                 .await
                 .expect("open pg"),

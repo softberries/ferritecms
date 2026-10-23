@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -38,6 +38,8 @@ pub struct PgFixture {
     schema: String,
     /// Extra stores on the same schema ([`TestDb::peer`]), closed by teardown.
     peers: Mutex<Vec<Arc<PgStore>>>,
+    /// Peers opened so far; numbers each peer's `application_name`.
+    peer_count: AtomicUsize,
     torn_down: AtomicBool,
 }
 
@@ -142,12 +144,9 @@ pub async fn pg_store() -> Option<PgFixture> {
     .execute(&mut admin)
     .await
     .expect("create test schema");
-    let opened = PgStore::open(PgOptions {
-        url: url.clone(),
-        max_connections: 4,
-        schema: Some(schema.clone()),
-    })
-    .await;
+    // The schema doubles as `application_name`, so `terminate_backends` stays inside
+    // this test.
+    let opened = PgStore::open(pg_options(&url, &schema, schema.clone())).await;
     let store = match opened {
         Ok(store) => store,
         Err(e) => {
@@ -168,6 +167,7 @@ pub async fn pg_store() -> Option<PgFixture> {
         url,
         schema,
         peers: Mutex::new(Vec::new()),
+        peer_count: AtomicUsize::new(0),
         torn_down: AtomicBool::new(false),
     };
     fixture
@@ -176,6 +176,15 @@ pub async fn pg_store() -> Option<PgFixture> {
         .await
         .expect("migrate postgres up");
     Some(fixture)
+}
+
+/// Options for a test store on `schema` (`max_connections` 4).
+fn pg_options(url: &str, schema: &str, application_name: String) -> PgOptions {
+    let mut opts = PgOptions::new(url);
+    opts.max_connections = 4;
+    opts.schema = Some(schema.to_owned());
+    opts.application_name = application_name;
+    opts
 }
 
 fn quote_ident(s: &str) -> String {
@@ -242,18 +251,20 @@ impl TestDb {
     }
 
     /// A second store on the same database, as another node would open it. Postgres: a
-    /// new `PgStore` (own pool, `max_connections` 4) on the same schema, closed by
-    /// teardown. SQLite: `None` (one process owns the data folder; share the store).
+    /// new `PgStore` (own pool, `max_connections` 4) on the same schema, with
+    /// `application_name` `<schema>-peer<n>` (n from 1), closed by teardown. SQLite:
+    /// `None` (one process owns the data folder; share the store).
     pub async fn peer(&self) -> Option<Arc<dyn Store>> {
         let Backing::Postgres(f) = &self.backing else {
             return None;
         };
+        let n = f.peer_count.fetch_add(1, Ordering::SeqCst) + 1;
         let peer = Arc::new(
-            PgStore::open(PgOptions {
-                url: f.url.clone(),
-                max_connections: 4,
-                schema: Some(f.schema.clone()),
-            })
+            PgStore::open(pg_options(
+                &f.url,
+                &f.schema,
+                format!("{}-peer{n}", f.schema),
+            ))
             .await
             .expect("open peer store"),
         );
@@ -262,6 +273,46 @@ impl TestDb {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(peer.clone());
         Some(peer)
+    }
+
+    /// Terminates every server connection whose `application_name` starts with
+    /// `application_name_prefix` (as a crash or a network cut would), returning how many
+    /// were terminated. The fixture store's name is the schema (see [`Self::pg_location`]),
+    /// its subscriptions use `<schema>:listen`, peers `<schema>-peer<n>`. SQLite: 0.
+    pub async fn terminate_backends(&self, application_name_prefix: &str) -> u64 {
+        let Backing::Postgres(f) = &self.backing else {
+            return 0;
+        };
+        let mut c = PgConnection::connect(&f.url).await.expect("connect");
+        let killed: Vec<bool> = sqlx::query_scalar(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+             WHERE starts_with(application_name, $1) AND pid <> pg_backend_pid()",
+        )
+        .bind(application_name_prefix)
+        .fetch_all(&mut c)
+        .await
+        .expect("terminate backends");
+        c.close().await.expect("close admin connection");
+        killed.into_iter().filter(|k| *k).count() as u64
+    }
+
+    /// How many server connections have an `application_name` starting with
+    /// `application_name_prefix` (see [`Self::terminate_backends`]). SQLite: 0.
+    pub async fn active_backends(&self, application_name_prefix: &str) -> u64 {
+        let Backing::Postgres(f) = &self.backing else {
+            return 0;
+        };
+        let mut c = PgConnection::connect(&f.url).await.expect("connect");
+        let n: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity \
+             WHERE starts_with(application_name, $1) AND pid <> pg_backend_pid()",
+        )
+        .bind(application_name_prefix)
+        .fetch_one(&mut c)
+        .await
+        .expect("count backends");
+        c.close().await.expect("close admin connection");
+        u64::try_from(n).expect("non-negative count")
     }
 
     /// `(url, schema)` of the Postgres backing; `None` on SQLite.

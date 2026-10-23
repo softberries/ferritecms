@@ -4,6 +4,7 @@ mod error;
 mod json;
 mod menu;
 mod migrate;
+mod notify;
 mod paging;
 mod repos;
 mod search;
@@ -16,6 +17,7 @@ pub use migrate::{
     Compat, Directives, MigrationStatus, PendingMigration, Phase, SCHEMA_META_MIN_BINARY,
     expand_lint, next_min_binary, parse_directives, plan_down, verdict,
 };
+pub use notify::{Channel, Notice, Subscription};
 pub use paging::{
     ListPart, MAX_CLAIM, MAX_CLAIM_KINDS, MAX_EVENT_BATCH, MAX_ID_FILTER, MAX_JOB_ATTEMPTS,
     MAX_JOB_DURATION, MAX_JOB_ERROR, MAX_JOB_UNIQUE_KEY, MAX_META_KEYS, MAX_REDIRECTS_BY_TARGET,

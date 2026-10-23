@@ -38,6 +38,7 @@ pub async fn open_store(config: &Config, mode: OpenMode) -> anyhow::Result<Arc<d
                 url: url.expose().to_owned(),
                 max_connections: config.database.max_connections,
                 schema: config.database.schema.clone(),
+                application_name: "ferrite".into(),
             })
             .await
             .context("cannot open the Postgres database")?;

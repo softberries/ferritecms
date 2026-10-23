@@ -11,7 +11,7 @@ use ferrite_domain::{
     RevisionId, SearchQuery, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 
-use crate::{StoreError, migrate::MigrationStatus};
+use crate::{Channel, StoreError, Subscription, migrate::MigrationStatus};
 
 /// Which database engine backs a store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +39,13 @@ pub trait Store: Send + Sync + 'static {
     /// Isolation differs by backend (decision pending, M1c): SQLite serializes all
     /// writers; Postgres runs `READ COMMITTED`.
     async fn begin(&self) -> Result<Box<dyn Tx>, StoreError>;
+    /// Subscribes to change notifications on `channel` (04 §4, P1). Postgres: a
+    /// dedicated `LISTEN` connection per subscription, reconnecting by itself. SQLite:
+    /// `Ok(None)`; one process owns the database there, so callers poll instead.
+    async fn subscribe(
+        &self,
+        channel: Channel,
+    ) -> Result<Option<Box<dyn Subscription>>, StoreError>;
     /// Compares applied migrations with those embedded in this binary.
     async fn migration_status(
         &self,
@@ -448,6 +455,9 @@ pub trait EventRepo: Send + Sync {
     async fn since(&self, after_seq: i64, limit: u32) -> Result<Vec<Event>, StoreError>;
     /// Returns the highest sequence number, or 0 if empty.
     async fn max_seq(&self) -> Result<i64, StoreError>;
+    /// Returns the lowest sequence number still stored (older ones were pruned), or 0 if
+    /// empty. A reader whose cursor is below `min_seq - 1` has lost history (P3).
+    async fn min_seq(&self) -> Result<i64, StoreError>;
     /// Deletes events older than the given time; returns the deleted count.
     async fn prune(&self, older_than: Timestamp) -> Result<u64, StoreError>;
 }

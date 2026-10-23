@@ -313,6 +313,15 @@ fn parse_database(cx: &mut Cx, root: &mut Table) -> DatabaseConfig {
             "must be a non-empty identifier of letters, digits and underscores",
         );
     }
+    if let Some(s) = &schema
+        && s.len() > MAX_SCHEMA_LEN
+    {
+        cx.push(
+            "database.schema",
+            "at most 48 characters, so the notification channel name fits Postgres' 63-byte \
+             limit",
+        );
+    }
     if schema.is_some() && is_sqlite(url.expose()) {
         cx.push("database.schema", "only valid with a Postgres database");
     }
@@ -325,6 +334,10 @@ fn parse_database(cx: &mut Cx, root: &mut Table) -> DatabaseConfig {
         schema,
     }
 }
+
+/// Longest `database.schema` (P2): `ferrite_events_` + 48 = 63 bytes, Postgres'
+/// identifier limit for the notification channel.
+const MAX_SCHEMA_LEN: usize = 48;
 
 fn parse_media(cx: &mut Cx, root: &mut Table) -> MediaSection {
     let mut t = section(cx, root, "media");

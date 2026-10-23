@@ -366,6 +366,9 @@ mod tests {
             }
             Ok(self.events.lock().unwrap().last().map_or(0, |e| e.seq))
         }
+        async fn min_seq(&self) -> Result<i64, StoreError> {
+            unreachable!()
+        }
         async fn prune(&self, _older_than: Timestamp) -> Result<u64, StoreError> {
             unreachable!()
         }

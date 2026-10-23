@@ -49,6 +49,13 @@ impl EventRepo for SqliteRepos {
         .fetch_one(e))
     }
 
+    async fn min_seq(&self) -> Result<i64, StoreError> {
+        run!(&self.reader, |e| sqlx::query_scalar(
+            "SELECT COALESCE(MIN(seq), 0) FROM events"
+        )
+        .fetch_one(e))
+    }
+
     async fn prune(&self, older_than: Timestamp) -> Result<u64, StoreError> {
         run!(&self.writer, |e| sqlx::query(
             "DELETE FROM events WHERE created_at < ?"

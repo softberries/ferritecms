@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ferrite_domain::{Job, JobId, JobLease, JobStatus, NewJob, NodeId, Timestamp};
 use ferrite_store::{
-    JobRepo, StoreError, check_claim, check_job_duration, check_new_job, sanitize_job_error,
-    sort_claimed,
+    Channel, JobRepo, StoreError, check_claim, check_job_duration, check_new_job,
+    sanitize_job_error, sort_claimed,
 };
 use sqlx::{AssertSqlSafe, types::Json};
 
@@ -34,11 +34,14 @@ fn seconds(what: &str, d: Duration, positive: bool) -> Result<f64, StoreError> {
 impl JobRepo for PgRepos {
     async fn enqueue(&self, job: &NewJob) -> Result<Option<JobId>, StoreError> {
         check_new_job(job)?;
+        // P2: notify the jobs channel (payload: the kind) only when a row was inserted;
+        // delivered when the insert commits.
         let id: Option<uuid::Uuid> = run!(&self.exec, |e| sqlx::query_scalar(
-            "INSERT INTO jobs (id, kind, payload, unique_key, run_at, priority, status, \
-             attempts, max_attempts, created_at) \
-             VALUES ($1, $2, $3, $4, COALESCE($5, now()), $6, 'queued', 0, $7, now()) \
-             ON CONFLICT (unique_key) DO NOTHING RETURNING id"
+            "WITH ins AS (INSERT INTO jobs (id, kind, payload, unique_key, run_at, priority, \
+               status, attempts, max_attempts, created_at) \
+               VALUES ($1, $2, $3, $4, COALESCE($5, now()), $6, 'queued', 0, $7, now()) \
+               ON CONFLICT (unique_key) DO NOTHING RETURNING id, kind) \
+             SELECT id, pg_notify($8, kind) FROM ins"
         )
         .bind(JobId::new().as_uuid())
         .bind(&job.kind)
@@ -47,6 +50,7 @@ impl JobRepo for PgRepos {
         .bind(job.run_at.map(DateTime::<Utc>::from))
         .bind(job.priority)
         .bind(job.max_attempts)
+        .bind(self.channels.name(Channel::Jobs))
         .fetch_optional(e))?;
         Ok(id.map(JobId::from_uuid))
     }

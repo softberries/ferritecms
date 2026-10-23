@@ -12,6 +12,8 @@ mod site;
 mod taxonomy;
 mod user;
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use ferrite_store::{
     ArtifactRepo, ContentRepo, ContentTypeRepo, EventRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo,
@@ -20,17 +22,23 @@ use ferrite_store::{
 };
 use sqlx::PgPool;
 
-use crate::exec::{Exec, TxHandle};
+use crate::{
+    exec::{Exec, TxHandle},
+    listen::Channels,
+};
 
 /// Every repository, bound to one executor (the pool or a write transaction).
 pub(crate) struct PgRepos {
     exec: Exec,
+    /// Where `events.append` and `jobs.enqueue` notify (P2).
+    channels: Arc<Channels>,
 }
 
 impl PgRepos {
-    pub(crate) fn new(pool: PgPool) -> Self {
+    pub(crate) fn new(pool: PgPool, channels: Arc<Channels>) -> Self {
         Self {
             exec: Exec::Pool(pool),
+            channels,
         }
     }
 }
@@ -103,10 +111,11 @@ pub(crate) struct PgTx {
 }
 
 impl PgTx {
-    pub(crate) fn new(handle: TxHandle) -> Self {
+    pub(crate) fn new(handle: TxHandle, channels: Arc<Channels>) -> Self {
         Self {
             repos: PgRepos {
                 exec: Exec::Tx(handle.clone()),
+                channels,
             },
             handle,
         }
@@ -130,7 +139,10 @@ impl Tx for PgTx {
     }
 
     async fn begin_nested(&self) -> Result<Box<dyn Tx>, StoreError> {
-        Ok(Box::new(PgTx::new(self.handle.nested().await?)))
+        Ok(Box::new(PgTx::new(
+            self.handle.nested().await?,
+            self.repos.channels.clone(),
+        )))
     }
 }
 

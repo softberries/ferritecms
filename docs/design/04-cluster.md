@@ -51,8 +51,9 @@ transaction**:
 events(seq, kind = "invalidate", keys = ["post:0192…", "term:0192…", "archive:post"], origin_node, created_at)
 ```
 
-After commit (cluster mode) the writer sends `NOTIFY ferrite_events, '<seq>'`. Notify is
-an optimisation only; correctness comes from the table.
+The insert itself notifies the site's events channel (`ferrite_events[_<schema>]`, payload
+`<seq>`), which Postgres delivers when the transaction commits (P2; every mode on Postgres,
+P1). Notify is an optimisation only; correctness comes from the table.
 
 ### Read path (every node)
 
@@ -82,15 +83,29 @@ an optimisation only; correctness comes from the table.
   the server binds, so no page is cached before the cursor is set; the cache starts empty.
 - Store errors are logged and retried on the next tick.
 
+**Store side, as built (M1.5 Task 2, P1/P2/P4):**
+
+- `pg_notify` runs inside the writing statement: `events.append` is
+  `WITH ins AS (INSERT … RETURNING seq) SELECT seq, pg_notify(<channel>, seq::text) FROM ins`,
+  `jobs.enqueue` notifies with the job kind only when a row was inserted. Postgres delivers
+  it at commit, never for a rollback, so no write path can forget it.
+- Channels are database-wide, sites are schemas: `ferrite_events` / `ferrite_jobs` without
+  a schema, `ferrite_events_<schema>` / `ferrite_jobs_<schema>` (ASCII-lowercased) with one.
+- `Store::subscribe(Channel)` returns a `Subscription` on its own one-connection pool
+  (`<application_name>:listen`); `recv` gives `Notified`, or `Reconnected` after the
+  connection was lost and re-established (notifications in between are lost). SQLite
+  returns `None` and keeps polling. `EventRepo::min_seq` is the history check for P3.
+- App connections run `idle_in_transaction_session_timeout = 60s`.
+
 **Planned (M1.5, cluster mode):**
 
-- A dedicated listener connection runs `LISTEN ferrite_events`; the writer sends
-  `NOTIFY ferrite_events, '<seq>'` after commit. Notify is an optimisation only; polling stays
-  the source of truth.
+- The invalidation loop listens on the events channel; a notice triggers an immediate
+  poll. Notify is an optimisation only; polling stays the source of truth.
 - On (re)connect of the listener: catch up from `last_seq`. If the gap is larger than
   retained history (events pruned), the node **flushes its whole page cache**.
-- On Postgres, `idle_in_transaction_session_timeout` must be shorter than the 10-minute late
-  horizon, so no writer can hold a seq uncommitted past it (not set yet).
+- On Postgres, `idle_in_transaction_session_timeout` (60 s, set since Task 2) is shorter
+  than the 10-minute late horizon, so no idle writer holds a seq uncommitted past it (a
+  `Tx` busy with long statements is not bounded, P4).
 - Contract tests with concurrent writers across nodes.
 
 ### Event kinds

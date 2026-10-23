@@ -390,14 +390,20 @@ insert (useful for imports and the outbox).
 
 **Postgres** (`ferrite-store-postgres`):
 
-- One pool; `max_connections` from config; `statement_timeout` default 30 s on app
-  connections (migrations use their own connection without it).
-- Optional `schema` setting (`search_path`) so several sites can share one server.
+- One pool; `max_connections` from config; `statement_timeout` 30 s and
+  `idle_in_transaction_session_timeout` 60 s (P4) on app connections (migrations use their
+  own connection without them).
+- Optional `schema` setting (`search_path`) so several sites can share one server; at most
+  48 bytes, so the per-schema notification channel names fit Postgres' 63-byte limit.
+- `application_name` per connection role (`PgOptions.application_name`, default
+  `ferrite`): the pool and migrations use it as is, each `LISTEN` subscription
+  `<name>:listen` (no `search_path`, no timeouts).
 - TLS via rustls; `sslmode` honoured from the URL.
 - Requires PostgreSQL 15 or newer (`UNIQUE NULLS NOT DISTINCT`); `PgStore::open`
   checks `server_version_num` and returns `Unsupported("postgres >= 15 required")`.
 - **PgBouncer in transaction mode: not supported yet.** Each pooled connection runs
-  session-level `SET search_path` and `SET statement_timeout` once, when it connects.
+  session-level `SET search_path`, `SET statement_timeout` and
+  `SET idle_in_transaction_session_timeout` once, when it connects.
   With transaction pooling, consecutive transactions run on whichever server connection
   is free, so those settings leak to other clients and are missing on ours. Supporting it
   needs per-transaction `SET LOCAL` (or settings in the connection string / role), a

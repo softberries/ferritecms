@@ -499,3 +499,24 @@ fn render_default_toml_s3_roundtrips() {
     assert!(InitMedia::parse_s3_url("s3:///x").is_err());
     assert!(InitMedia::parse_s3_url("http://x").is_err());
 }
+
+#[test]
+fn schema_longer_than_48_is_rejected() {
+    let toml = |schema: &str| {
+        format!("{MIN}[database]\nurl = \"postgres://u@h/d\"\nschema = \"{schema}\"\n")
+    };
+    let (_d, r) = run(Some(&toml(&"s".repeat(48))), &[]);
+    assert_eq!(
+        r.unwrap().database.schema.as_deref(),
+        Some("s".repeat(48).as_str())
+    );
+
+    let (_d, r) = run(Some(&toml(&"s".repeat(49))), &[]);
+    let e = r.unwrap_err();
+    assert_eq!(paths(&e), ["database.schema"]);
+    assert!(
+        e.problems[0].message.contains("at most 48 characters"),
+        "{}",
+        e.problems[0].message
+    );
+}
