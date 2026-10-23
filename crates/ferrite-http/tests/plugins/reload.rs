@@ -13,6 +13,7 @@ use ferrite_http::{
 };
 use ferrite_plugin_host::{FilterValue, Head, HostConfig, PluginHost, RequestInfo};
 use ferrite_store::Store;
+use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::common::{self, SITE_URL, Site, plugin_manifest, plugin_wasm};
@@ -179,9 +180,9 @@ async fn reload_reuses_unchanged_plugins(site: Site) -> Site {
     let prepared = Arc::new(AtomicUsize::new(0));
     let reloader = reloader(&site).with_prepare({
         let prepared = prepared.clone();
-        move |host, manifest, wasm| {
+        move |host, manifest, wasm, approved| {
             prepared.fetch_add(1, Ordering::SeqCst);
-            host.prepare(manifest, wasm)
+            host.prepare_with(manifest, wasm, approved)
         }
     });
     let count = || prepared.load(Ordering::SeqCst);
@@ -482,7 +483,57 @@ async fn failed_check_is_retried_without_new_failures(site: Site) -> Site {
     site
 }
 
+/// Plan ruling P5: a manifest asking 64 MiB (over the 32 MiB host default) loads only
+/// with a grant approving at least 64 MiB; a legacy bare grant approves no limits, and a
+/// null grant honours the manifest (pre-flight F9).
+async fn reload_honours_approved_limits(site: Site) -> Site {
+    const MIB: u64 = 1024 * 1024;
+    let manifest = format!(
+        "{}\n[limits]\nmemory = \"64MiB\"\n",
+        plugin_manifest("hello")
+    );
+    let hash = site.put_artifact(plugin_wasm("hello")).await;
+    let caps = json!({ "render": { "head": true } });
+    let grant = |memory: Option<u64>| json!({ "v": 1, "capabilities": caps, "limits": { "memory": memory, "fuel": null } });
+    let reloader = reloader(&site);
+    for (granted, loads) in [
+        (grant(None), false),
+        (caps.clone(), false),
+        (grant(Some(48 * MIB)), false),
+        (grant(Some(64 * MIB)), true),
+        (grant(Some(48 * MIB)), false),
+        (Value::Null, true),
+        (grant(Some(300 * MIB)), true),
+    ] {
+        site.row_granted("hello", &manifest, hash.clone(), true, granted.clone())
+            .await;
+        let report = reloader.reload().await.unwrap();
+        match status(&report, "hello") {
+            PluginStatus::Loaded => assert!(loads, "{granted} must not load"),
+            PluginStatus::Failed(reason) => {
+                assert!(!loads, "{granted}: {reason}");
+                assert!(reason.contains("above the host default"), "{reason}");
+            }
+            other => panic!("{granted}: {other:?}"),
+        }
+    }
+    // Above the ceiling nothing loads, whatever the grant says.
+    let huge = format!(
+        "{}\n[limits]\nmemory = \"300MiB\"\n",
+        plugin_manifest("hello")
+    );
+    site.row_granted("hello", &huge, hash, true, grant(Some(300 * MIB)))
+        .await;
+    let report = reloader.reload().await.unwrap();
+    let PluginStatus::Failed(reason) = status(&report, "hello") else {
+        panic!("{report:?}");
+    };
+    assert!(reason.contains("above the ceiling"), "{reason}");
+    site
+}
+
 profile_tests!(
+    reload_honours_approved_limits,
     stale_counts_dropped_after_reenable,
     reenable_during_flush_is_not_disabled_again,
     failed_check_is_retried_without_new_failures,

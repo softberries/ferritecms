@@ -18,7 +18,7 @@ pub(crate) struct LoadedPlugin {
     pub(crate) pre: PluginPre<HostState>,
     pub(crate) grants: Arc<Capabilities>,
     pub(crate) services: Arc<dyn HostServices>,
-    /// Effective limits: `min(manifest [limits], host default)`.
+    /// Effective limits (plan ruling P5; see `PluginHost::prepare_with`).
     pub(crate) memory_bytes: usize,
     pub(crate) fuel: u64,
     pub(crate) epoch_tick: Duration,

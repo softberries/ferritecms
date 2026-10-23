@@ -26,6 +26,18 @@ pub struct ManifestError {
     pub problems: Vec<ManifestProblem>,
 }
 
+impl ManifestError {
+    /// An error with one problem at `path` (empty: the whole manifest).
+    pub(crate) fn single(path: &str, message: impl Into<String>) -> Self {
+        Self {
+            problems: vec![ManifestProblem {
+                path: path.to_owned(),
+                message: message.into(),
+            }],
+        }
+    }
+}
+
 fn list(problems: &[ManifestProblem]) -> String {
     problems.iter().map(|p| format!("\n  - {p}")).collect()
 }
@@ -42,12 +54,23 @@ pub enum PluginError {
     /// The component failed install-time inspection.
     #[error("component rejected: {0}")]
     Inspect(#[from] InspectError),
-    /// `[limits]` asks for more than the host default (admin approval is post-M0).
-    #[error("plugin requests {limit} = {requested}, above the host default {default}")]
+    /// `[limits]` asks for more than the host default and the admin did not approve
+    /// at least that much (plan ruling P5).
+    #[error(
+        "plugin requests {limit} = {requested}, above the host default {default}, without approval"
+    )]
     LimitAboveDefault {
         limit: &'static str,
         requested: u64,
         default: u64,
+    },
+    /// `[limits]` asks for more than any approval may grant (P5: memory 256 MiB, fuel
+    /// 10 x the default).
+    #[error("plugin requests {limit} = {requested}, above the ceiling {ceiling}")]
+    LimitAboveCeiling {
+        limit: &'static str,
+        requested: u64,
+        ceiling: u64,
     },
     /// The component cannot be linked against its granted interfaces.
     #[error("linking plugin `{plugin}` failed: {reason}")]

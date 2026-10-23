@@ -2,23 +2,24 @@
 //! startup summary of its report.
 //!
 //! **Manifest storage.** The `manifest` column holds the `ferrite-plugin.toml` table in
-//! JSON form (every TOML value used by manifests has a JSON equivalent). It is turned
-//! back into TOML and validated with [`Manifest::parse`], so unknown keys and invalid
-//! values are rejected exactly as at install time. The manifest's `plugin.name` must
-//! equal the row's name.
+//! JSON form (every TOML value used by manifests has a JSON equivalent). It is read by
+//! [`Manifest::from_json`], so unknown keys and invalid values are rejected exactly as
+//! at install time. The manifest's `plugin.name` must equal the row's name.
 //!
-//! **Grants (ruling R21).** A non-null `granted` column holds the capabilities the
-//! admin approved, in the JSON form of a manifest `[capabilities]` table. The plugin
-//! loads only if its manifest's capabilities are a subset of them
+//! **Grants (rulings R21, P3, P5).** A non-null `granted` column holds what the admin
+//! approved, read by [`Grant::from_json`]: the v1 object (capabilities plus approved
+//! limits) or the M1c-2 bare `[capabilities]` table (no approved limits). The plugin
+//! loads only if its manifest's capabilities are a subset of the granted ones
 //! ([`Capabilities::is_subset_of`](ferrite_plugin_host::Capabilities::is_subset_of));
 //! otherwise it is skipped with a warning (approval must be renewed, e.g. after an
-//! update asking for more). A null `granted` means the manifest is honoured as written:
-//! the only writers of rows are operator paths (`install_plugin_file`, tests); the M2
-//! install flow will always set it. The host then runs with the manifest's
-//! capabilities, which are within the grant.
+//! update asking for more). Its `[limits]` above the host defaults load only when the
+//! grant approved them ([`PluginHost::prepare_with`](ferrite_plugin_host::PluginHost::prepare_with)).
+//! A null `granted` (legacy operator rows) counts as [`Grant::of`] the row's manifest
+//! (pre-flight F9): the manifest is honoured as written, limits included. The host
+//! then runs with the manifest's capabilities, which are within the grant.
 
 use ferrite_domain::{ArtifactHash, InstalledPlugin};
-use ferrite_plugin_host::{Capabilities, Manifest};
+use ferrite_plugin_host::{ApprovedLimits, Grant, Manifest};
 use sha2::{Digest, Sha256};
 
 use super::reload::{PluginStatus, ReloadReport};
@@ -48,46 +49,25 @@ impl From<&ReloadReport> for LoadSummary {
     }
 }
 
-/// The row's manifest, checked against the row: its name must be the row's and its
-/// capabilities within a non-null grant (see the module docs).
-pub(super) fn check_row(row: &InstalledPlugin) -> Result<Manifest, String> {
-    let manifest = manifest_from_json(&row.manifest)?;
+/// The row's manifest, checked against the row, and the limits its grant approved: the
+/// name must be the row's and the capabilities within the grant (see the module docs).
+pub(super) fn check_row(row: &InstalledPlugin) -> Result<(Manifest, ApprovedLimits), String> {
+    let manifest = Manifest::from_json(&row.manifest).map_err(|e| format!("manifest: {e}"))?;
     if manifest.plugin.name != row.name {
         return Err(format!(
             "manifest names plugin `{}`, row is `{}`",
             manifest.plugin.name, row.name
         ));
     }
-    if !row.granted.is_null() {
-        let granted = granted_capabilities(&row.manifest, &row.granted)?;
-        if !manifest.capabilities.is_subset_of(&granted) {
-            return Err("manifest asks for capabilities beyond the approved grant".to_owned());
-        }
+    let grant = if row.granted.is_null() {
+        Grant::of(&manifest)
+    } else {
+        Grant::from_json(&row.manifest["plugin"], &row.granted)?
+    };
+    if !manifest.capabilities.is_subset_of(&grant.capabilities) {
+        return Err("manifest asks for capabilities beyond the approved grant".to_owned());
     }
-    Ok(manifest)
-}
-
-/// The manifest stored as JSON (see the module docs), validated by [`Manifest::parse`].
-pub(crate) fn manifest_from_json(json: &serde_json::Value) -> Result<Manifest, String> {
-    let table: toml::Table = serde_json::from_value(json.clone())
-        .map_err(|e| format!("manifest is not a TOML table: {e}"))?;
-    let src = toml::to_string(&table).map_err(|e| format!("manifest: {e}"))?;
-    Manifest::parse(&src).map_err(|e| format!("manifest: {e}"))
-}
-
-/// Parse a `granted` value as a `[capabilities]` table, validated by
-/// [`Manifest::parse`] (paired with the manifest's own `[plugin]` table).
-fn granted_capabilities(
-    manifest: &serde_json::Value,
-    granted: &serde_json::Value,
-) -> Result<Capabilities, String> {
-    let doc = serde_json::json!({
-        "plugin": manifest.get("plugin").cloned().unwrap_or(serde_json::Value::Null),
-        "capabilities": granted,
-    });
-    manifest_from_json(&doc)
-        .map(|m| m.capabilities)
-        .map_err(|e| format!("granted: {e}"))
+    Ok((manifest, grant.limits))
 }
 
 pub(super) fn hash_of(bytes: &[u8]) -> Option<ArtifactHash> {
@@ -117,7 +97,7 @@ mod tests {
             "hooks": { "render.head": 10 },
             "limits": { "fuel": 1_000_000 },
         });
-        let m = manifest_from_json(&json).unwrap();
+        let m = Manifest::from_json(&json).unwrap();
         assert_eq!(m.plugin.name, "seo");
         assert_eq!(m.capabilities.content_read, ["post"]);
         assert_eq!(m.hooks.get("render.head"), Some(&10));
@@ -131,7 +111,7 @@ mod tests {
             json!({"plugin": {"name": null}}),
             json!({"plugin": {"name": "x"}, "unknown": 1}),
         ] {
-            assert!(manifest_from_json(&bad).is_err(), "{bad}");
+            assert!(Manifest::from_json(&bad).is_err(), "{bad}");
         }
     }
 

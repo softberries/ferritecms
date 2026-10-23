@@ -7,11 +7,13 @@ mod config;
 pub mod engine;
 mod error;
 mod failure;
+mod grant;
 mod inspect;
 mod linker;
 mod manifest;
 mod output;
 mod registry;
+mod report;
 mod services;
 mod sink;
 mod state;
@@ -34,11 +36,13 @@ pub use capability::{
 pub use config::HostConfig;
 pub use error::{InspectError, ManifestError, ManifestProblem, PluginError};
 pub use failure::{FailureKind, FailureRecord};
+pub use grant::{ApprovedLimits, Grant, LIMIT_CEILING_FUEL_FACTOR, LIMIT_CEILING_MEMORY};
 pub use inspect::{ComponentReport, inspect};
 pub use manifest::{
-    Capabilities, HtmlMode, LimitRequest, MailScope, Manifest, PluginMeta, RouteSpec, SettingKind,
-    SettingSpec,
+    Capabilities, HtmlMode, LimitRequest, MAX_MANIFEST_BYTES, MailScope, Manifest, PluginMeta,
+    RouteSpec, SettingKind, SettingSpec,
 };
+pub use report::{LimitItem, PermissionItem, PermissionReport};
 pub use services::{HostServices, InMemoryServices, KindOk};
 pub use sink::FailureSink;
 pub use trace::{FilterOutcome, dep_keys};
@@ -51,6 +55,7 @@ use bindings::v0_1::PluginPre;
 use call::{CallFailure, call_action, call_filter, call_route};
 use engine::{EpochTicker, build_engine};
 use failure::FailureTracker;
+use grant::LimitBounds;
 use registry::{LoadedPlugin, Registry};
 use trace::CallTrace;
 use validate::{matches_type, validate_output};
@@ -79,6 +84,16 @@ impl PreparedPlugin {
     pub fn name(&self) -> &str {
         &self.loaded.name
     }
+
+    /// The effective memory limit, in bytes (plan ruling P5).
+    pub fn memory_bytes(&self) -> u64 {
+        u64::try_from(self.loaded.memory_bytes).unwrap_or(u64::MAX)
+    }
+
+    /// The effective fuel per call (plan ruling P5).
+    pub fn fuel(&self) -> u64 {
+        self.loaded.fuel
+    }
 }
 
 impl std::fmt::Debug for PreparedPlugin {
@@ -86,23 +101,6 @@ impl std::fmt::Debug for PreparedPlugin {
         f.debug_struct("PreparedPlugin")
             .field("name", &self.name())
             .finish_non_exhaustive()
-    }
-}
-
-/// Effective limit (ruling R3): the manifest may lower the host default, not raise it.
-fn effective_limit(
-    limit: &'static str,
-    requested: Option<u64>,
-    default: u64,
-) -> Result<u64, PluginError> {
-    match requested {
-        Some(requested) if requested > default => Err(PluginError::LimitAboveDefault {
-            limit,
-            requested,
-            default,
-        }),
-        Some(requested) => Ok(requested),
-        None => Ok(default),
     }
 }
 
@@ -150,16 +148,45 @@ impl PluginHost {
         Ok(())
     }
 
+    /// [`prepare_with`](Self::prepare_with) with nothing approved: the manifest's
+    /// `[limits]` may only lower the host defaults.
+    pub fn prepare(&self, manifest: Manifest, wasm: &[u8]) -> Result<PreparedPlugin, PluginError> {
+        self.prepare_with(manifest, wasm, ApprovedLimits::default())
+    }
+
     /// Inspect, compile and link `wasm` for `manifest` without making it callable. This
     /// is the slow part of an install (milliseconds to seconds of CPU per component), so
     /// async callers run it under `spawn_blocking`. The grants are the manifest's
     /// capabilities: callers check them against what the admin approved first.
-    pub fn prepare(&self, manifest: Manifest, wasm: &[u8]) -> Result<PreparedPlugin, PluginError> {
+    ///
+    /// Limits (plan ruling P5): per resource, the manifest's request applies when it is
+    /// at most the host default, or at most both the ceiling ([`LIMIT_CEILING_MEMORY`],
+    /// [`LIMIT_CEILING_FUEL_FACTOR`] x the default fuel) and the `approved` value;
+    /// otherwise `LimitAboveDefault` (not approved) or `LimitAboveCeiling`. A pooling
+    /// host's memory ceiling is its default: the pool's slots are that size.
+    pub fn prepare_with(
+        &self,
+        manifest: Manifest,
+        wasm: &[u8],
+        approved: ApprovedLimits,
+    ) -> Result<PreparedPlugin, PluginError> {
         let memory_default = u64::try_from(self.cfg.memory_bytes).unwrap_or(u64::MAX);
-        let memory = effective_limit("memory", manifest.limits.memory, memory_default)?;
-        let fuel = effective_limit("fuel", manifest.limits.fuel, self.cfg.fuel)?;
-        // `memory <= memory_default`, which came from a usize.
-        let memory_bytes = usize::try_from(memory).unwrap_or(self.cfg.memory_bytes);
+        let memory_bounds = if self.cfg.pooling {
+            LimitBounds::fixed(memory_default)
+        } else {
+            LimitBounds::memory(memory_default)
+        };
+        let memory = memory_bounds.effective("memory", manifest.limits.memory, approved.memory)?;
+        let fuel = LimitBounds::fuel(self.cfg.fuel).effective(
+            "fuel",
+            manifest.limits.fuel,
+            approved.fuel,
+        )?;
+        let memory_bytes = usize::try_from(memory).map_err(|_| PluginError::LimitAboveCeiling {
+            limit: "memory",
+            requested: memory,
+            ceiling: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
+        })?;
 
         let (component, report) = inspect::inspect_component(&self.engine, wasm, &manifest)?;
         let name = manifest.plugin.name.clone();

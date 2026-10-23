@@ -1,8 +1,14 @@
 //! `ferrite-plugin.toml` parsing and validation (design 05 §3).
 
 use std::collections::BTreeMap;
+use std::net::Ipv4Addr;
+
+use serde_json::{Map, Value, json};
 
 use crate::error::{ManifestError, ManifestProblem};
+
+/// Largest `ferrite-plugin.toml` accepted (plan "Exact values": manifest part <= 64 KiB).
+pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Manifest {
@@ -72,7 +78,7 @@ impl Capabilities {
     }
 }
 
-fn html_level(m: HtmlMode) -> u8 {
+pub(crate) fn html_level(m: HtmlMode) -> u8 {
     match m {
         HtmlMode::Off => 0,
         HtmlMode::Sanitized => 1,
@@ -81,7 +87,7 @@ fn html_level(m: HtmlMode) -> u8 {
 }
 
 /// Whether pattern `p` (`*`, `<prefix>.*` or an exact key) is within `granted`.
-fn pattern_covered(p: &str, granted: &[String]) -> bool {
+pub(crate) fn pattern_covered(p: &str, granted: &[String]) -> bool {
     granted.iter().any(|g| {
         g == "*"
             || g == p
@@ -148,18 +154,22 @@ pub struct SettingSpec {
 }
 
 impl Manifest {
-    /// Parse and validate. All problems are collected before returning.
+    /// Parse and validate. All problems are collected before returning. A manifest
+    /// larger than [`MAX_MANIFEST_BYTES`] is refused before parsing.
     pub fn parse(src: &str) -> Result<Manifest, ManifestError> {
+        if src.len() > MAX_MANIFEST_BYTES {
+            return Err(ManifestError::single(
+                "",
+                format!(
+                    "manifest is {} bytes, more than the {} KiB allowed",
+                    src.len(),
+                    MAX_MANIFEST_BYTES / 1024
+                ),
+            ));
+        }
         let mut table: toml::Table = match src.parse() {
             Ok(t) => t,
-            Err(e) => {
-                return Err(ManifestError {
-                    problems: vec![ManifestProblem {
-                        path: String::new(),
-                        message: format!("invalid TOML: {e}"),
-                    }],
-                });
-            }
+            Err(e) => return Err(ManifestError::single("", format!("invalid TOML: {e}"))),
         };
         let mut cx = Cx::default();
 
@@ -214,6 +224,60 @@ impl Manifest {
             }),
         }
     }
+
+    /// A manifest stored as JSON (the `plugins.manifest` column: the `ferrite-plugin.toml`
+    /// table in JSON form, dotted keys as nested objects), turned back into TOML and
+    /// validated by [`Manifest::parse`], so stored manifests obey the install-time rules.
+    pub fn from_json(json: &Value) -> Result<Manifest, ManifestError> {
+        let table: toml::Table = serde_json::from_value(json.clone())
+            .map_err(|e| ManifestError::single("", format!("not a TOML table: {e}")))?;
+        let src = toml::to_string(&table)
+            .map_err(|e| ManifestError::single("", format!("cannot be written as TOML: {e}")))?;
+        Manifest::parse(&src)
+    }
+}
+
+/// The JSON form of a `[capabilities]` table holding `c`, with only its non-default
+/// members (read back by [`Manifest::from_json`]).
+pub(crate) fn capabilities_json(c: &Capabilities) -> Value {
+    fn put(map: &mut Map<String, Value>, key: &str, value: Value) {
+        let empty = match &value {
+            Value::Array(a) => a.is_empty(),
+            Value::Object(o) => o.is_empty(),
+            Value::Bool(b) => !b,
+            _ => false,
+        };
+        if !empty {
+            map.insert(key.to_owned(), value);
+        }
+    }
+    let mut meta = Map::new();
+    put(&mut meta, "read", json!(c.content_meta_read));
+    put(&mut meta, "write", json!(c.content_meta_write));
+    let mut content = Map::new();
+    put(&mut content, "read", json!(c.content_read));
+    put(&mut content, "meta", Value::Object(meta));
+    let mut options = Map::new();
+    put(&mut options, "read", json!(c.options_read));
+    let mut render = Map::new();
+    put(&mut render, "head", json!(c.render_head));
+    put(&mut render, "text", json!(c.render_text));
+    match c.render_html {
+        HtmlMode::Off => {}
+        HtmlMode::Sanitized => put(&mut render, "html", json!("sanitized")),
+        HtmlMode::Raw => put(&mut render, "html", json!("raw")),
+    }
+    let mut out = Map::new();
+    put(&mut out, "content", Value::Object(content));
+    put(&mut out, "options", Value::Object(options));
+    put(&mut out, "kv", json!(c.kv));
+    put(&mut out, "http", json!(c.http));
+    put(&mut out, "render", Value::Object(render));
+    put(&mut out, "routes", json!(c.routes));
+    if c.mail == MailScope::Admins {
+        put(&mut out, "mail", json!("admins"));
+    }
+    Value::Object(out)
 }
 
 const WORLD: &str = "ferrite:plugin/plugin@0.1.0";
@@ -432,6 +496,32 @@ fn valid_hostname(h: &str) -> bool {
         })
 }
 
+/// A hostname an allowlist must not name (P7, pre-flight F5): it parses as an IPv4
+/// address, has no dot (single-label names resolve through search domains), its last
+/// label is all digits (inet_aton forms such as `127.1` or `0177.0.0.1`), a label starts
+/// with `0x` (hex forms), or a label is `localhost`. Case-insensitive. IPv6 literals
+/// never get here: `:`, `[` and `%` already fail [`valid_hostname`].
+fn bare_host(h: &str) -> bool {
+    let lower = h.to_ascii_lowercase();
+    let labels: Vec<&str> = lower.split('.').collect();
+    lower.parse::<Ipv4Addr>().is_ok()
+        || labels.len() < 2
+        || labels
+            .last()
+            .is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit()))
+        || labels
+            .iter()
+            .any(|l| l.starts_with("0x") || *l == "localhost")
+}
+
+fn listed(items: &[&String]) -> String {
+    items
+        .iter()
+        .map(|h| format!("`{h}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn parse_capabilities(cx: &mut Cx, t: &mut toml::Table) -> Capabilities {
     let mut c = Capabilities::default();
     const P: &str = "capabilities";
@@ -459,16 +549,24 @@ fn parse_capabilities(cx: &mut Cx, t: &mut toml::Table) -> Capabilities {
     }
     c.kv = cx.boolean(t, "kv", "capabilities.kv").unwrap_or(false);
     if let Some(hosts) = cx.strings(t, "http", "capabilities.http") {
-        let bad: Vec<_> = hosts.iter().filter(|h| !valid_hostname(h)).collect();
+        let (names, bad): (Vec<_>, Vec<_>) = hosts.iter().partition(|h| valid_hostname(h));
         if !bad.is_empty() {
             cx.push(
                 "capabilities.http",
                 format!(
                     "must be plain hostnames (no scheme, port, path or wildcard); invalid: {}",
-                    bad.iter()
-                        .map(|h| format!("`{h}`"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    listed(&bad)
+                ),
+            );
+        }
+        let bare: Vec<_> = names.into_iter().filter(|h| bare_host(h)).collect();
+        if !bare.is_empty() {
+            cx.push(
+                "capabilities.http",
+                format!(
+                    "bare IP addresses and localhost are not allowed (a hostname needs a dot \
+                     and a last label that is not a number); invalid: {}",
+                    listed(&bare)
                 ),
             );
         }

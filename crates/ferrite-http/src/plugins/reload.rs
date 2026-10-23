@@ -8,7 +8,8 @@
 //!   (P19: reuse is in memory, by artifact);
 //! * a new or changed row, or a row enabled again after a host-side disable (its
 //!   `updated_at` moved), is fetched (SHA-256 checked), its manifest parsed, its grant
-//!   checked (R21) and the component prepared on a blocking thread;
+//!   checked (R21) and the component prepared on a blocking thread with the limits the
+//!   grant approved (P5);
 //! * if any of that fails, the previously loaded version keeps running (reported as
 //!   [`PluginStatus::Failed`]); a plugin with no previous version stays absent;
 //! * disabled and deleted rows are dropped.
@@ -34,7 +35,7 @@ use std::sync::Arc;
 
 use ferrite_domain::{ArtifactHash, InstalledPlugin, Timestamp};
 use ferrite_media::MediaStore;
-use ferrite_plugin_host::{Manifest, PluginError, PluginHost, PreparedPlugin};
+use ferrite_plugin_host::{ApprovedLimits, Manifest, PluginError, PluginHost, PreparedPlugin};
 use ferrite_store::{Store, StoreError};
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -42,9 +43,13 @@ use tokio::sync::Mutex;
 use super::SharedFailures;
 use super::load::{check_row, hash_of};
 
-/// Compiles one plugin; [`PluginHost::prepare`] unless replaced in tests.
-type PrepareFn =
-    Arc<dyn Fn(&PluginHost, Manifest, &[u8]) -> Result<PreparedPlugin, PluginError> + Send + Sync>;
+/// Compiles one plugin with the limits its grant approved; [`PluginHost::prepare_with`]
+/// unless replaced in tests.
+type PrepareFn = Arc<
+    dyn Fn(&PluginHost, Manifest, &[u8], ApprovedLimits) -> Result<PreparedPlugin, PluginError>
+        + Send
+        + Sync,
+>;
 
 /// What a [`PluginReloader::reload`] left each plugin row at.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -118,7 +123,9 @@ impl PluginReloader {
             store,
             media,
             host,
-            prepare: Arc::new(|host, manifest, wasm| host.prepare(manifest, wasm)),
+            prepare: Arc::new(|host, manifest, wasm, approved| {
+                host.prepare_with(manifest, wasm, approved)
+            }),
             failures: None,
             loaded: Mutex::new(BTreeMap::new()),
         }
@@ -132,12 +139,17 @@ impl PluginReloader {
         self
     }
 
-    /// Test seam: compile through `prepare` instead of [`PluginHost::prepare`] (for
+    /// Test seam: compile through `prepare` instead of [`PluginHost::prepare_with`] (for
     /// example a wrapper that counts compiles).
     #[doc(hidden)]
     pub fn with_prepare(
         mut self,
-        prepare: impl Fn(&PluginHost, Manifest, &[u8]) -> Result<PreparedPlugin, PluginError>
+        prepare: impl Fn(
+            &PluginHost,
+            Manifest,
+            &[u8],
+            ApprovedLimits,
+        ) -> Result<PreparedPlugin, PluginError>
         + Send
         + Sync
         + 'static,
@@ -249,7 +261,7 @@ impl PluginReloader {
 
     /// Fetch, check and compile `row`'s plugin (the slow part on a blocking thread).
     async fn prepare_row(&self, row: &InstalledPlugin) -> Result<PreparedPlugin, String> {
-        let manifest = check_row(row)?;
+        let (manifest, approved) = check_row(row)?;
         let wasm = self
             .media
             .get(&row.artifact_hash)
@@ -263,7 +275,7 @@ impl PluginReloader {
         }
         let host = self.host.clone();
         let prepare = self.prepare.clone();
-        tokio::task::spawn_blocking(move || prepare(&host, manifest, &wasm))
+        tokio::task::spawn_blocking(move || prepare(&host, manifest, &wasm, approved))
             .await
             .map_err(|e| format!("the compile task failed: {e}"))?
             .map_err(|e| e.to_string())

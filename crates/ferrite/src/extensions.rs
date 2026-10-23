@@ -11,7 +11,7 @@ use ferrite_config::PluginsConfig;
 use ferrite_core::ExtensionService;
 use ferrite_domain::{Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, Timestamp};
 use ferrite_media::MediaStore;
-use ferrite_plugin_host::{InMemoryServices, Manifest, PluginHost};
+use ferrite_plugin_host::{Grant, InMemoryServices, Manifest, PluginHost};
 use ferrite_store::Store;
 use ferrite_theme::{Theme, ThemeSource, pack};
 use serde_json::json;
@@ -24,14 +24,15 @@ pub const PLUGIN_MIME: &str = "application/wasm";
 
 /// Installs a plugin from its `ferrite-plugin.toml` text and component bytes (P21):
 /// parses the manifest and prepares the component on a scratch host with the site's
-/// `[plugins]` limits (a plugin that would not load on the site's nodes is refused
-/// before anything is written),
+/// `[plugins]` limits and the manifest's own `[limits]` approved up to the ceilings (P5;
+/// a plugin that would not load on the site's nodes is refused before anything is
+/// written),
 /// uploads the bytes to the media store, and records the artifact and plugin rows
 /// through [`ExtensionService::install_plugin`]. A new plugin is installed disabled and
 /// a replaced one keeps its state; with `enabled` it is then enabled
 /// ([`ExtensionService::set_plugin_enabled`], which also clears its failure counters).
-/// The row's `granted` is null: an operator install honours the manifest as written
-/// (R21). Returns the plugin row as stored.
+/// The row's `granted` is [`Grant::of`] the manifest: an operator install approves the
+/// manifest as written (R21, P26), limits included. Returns the plugin row as stored.
 pub async fn install_plugin_file(
     store: &Arc<dyn Store>,
     media: &MediaStore,
@@ -44,13 +45,15 @@ pub async fn install_plugin_file(
     let table: toml::Table = manifest_toml.parse().context("invalid plugin manifest")?;
     let name = manifest.plugin.name.clone();
     let version = manifest.plugin.version.to_string();
+    let grant = Grant::of(&manifest);
+    let approved = grant.limits;
     let bytes = Bytes::copy_from_slice(wasm);
     let component = bytes.clone();
     let host_config = crate::serve::host_config(limits);
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         let host = PluginHost::new(host_config, Arc::new(InMemoryServices::new()))
             .context("cannot start a plugin host")?;
-        host.prepare(manifest, &component)
+        host.prepare_with(manifest, &component, approved)
             .context("the plugin does not load")?;
         Ok(())
     })
@@ -73,7 +76,7 @@ pub async fn install_plugin_file(
         version,
         artifact_hash: stored.hash,
         manifest: serde_json::to_value(table).context("cannot store the manifest")?,
-        granted: serde_json::Value::Null,
+        granted: grant.to_json(),
         enabled: false,
         disabled_reason: None,
         installed_at: now,
