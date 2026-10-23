@@ -63,7 +63,7 @@ Controller rulings: [m1a](superpowers/rulings/m1a.md), [m1b](superpowers/rulings
   - Not yet emitted because no write path exists: `user:<id>` (M2 user service), `post:<media id>` for media-row writes outside `seed` (M2 media service).
 - [x] `ferrite serve`: router (pure, canonical paths, permalink matching), redirects before the cache, 404/410 shared pages, RSS feeds, sitemaps, `robots.txt`, `/healthz`, `/readyz`, bounded shutdown (M1c-2; design 06 §3, 09 §8).
 - [x] `ferrite seed demo` (posts, pages, terms, menus, sample image with variants; M1c-2).
-- [x] Theme engine: MiniJinja (fuel, output cap, no loader), hierarchy resolution (incl. front page, R17), safe helpers, dependency recording; `blog` theme (M1c-2; design 06 §1–§4).
+- [x] Theme engine: MiniJinja (fuel, output cap, no loader), hierarchy resolution (incl. front page, m1c2 R17), safe helpers, dependency recording; `blog` theme (M1c-2; design 06 §1–§4).
 - [x] Page cache with dependency index and the outbox polling loop, gap handling with late-commit probe (R24) (M1c-2; design 06 §6, 04 §4).
 - [x] Plugin host wired into rendering (`render.head`, `content.body`, `content.excerpt`; traced dependency keys and volatile marking), plugins loaded from the `plugins` table + artifacts at startup (M1c-2; design 05 §7a).
 - [ ] Plugin host follow-ups from M0:
@@ -184,7 +184,7 @@ Design: [08](design/08-wp-import.md).
 - [ ] `import-report.html`; CLI + admin job.
 - [ ] Tests against 2–3 real WP exports.
 - [ ] Deferred from M1.5: the import job must override `JobHandler::timeout()` (default 300 s, P9), take the `import` lock (P13), and batch its events per transaction (R2: Postgres serialises commits of transactions that ran `NOTIFY`).
-- [ ] Carried from the M1.5 final review (R17):
+- [ ] Carried from the M1.5 final review (rulings/m15.md R17):
   - [ ] Run `EXPLAIN (ANALYZE, BUFFERS)` on the Postgres job claim (`crates/ferrite-store-postgres/src/repos/job.rs`, the `claim` query) with ~50k future-scheduled `content.publish_scheduled` rows before the import creates them in bulk. With fewer due jobs than `limit`, the `OR` branch for expired leases stops the index scan from ending at `run_at > now()`, so each idle claim may read every future row (review M5). If it does, split the claim into a `UNION ALL` of the due branch and the expired-lease branch.
   - [ ] The `import` lock must not be relied on for exclusion: a Postgres advisory lock is not a fence (the holder is not told when its connection is terminated; `LockGuard` docs, 04 §7). Fence the import's writes in the data, for example with a run token checked on every write (review M3).
 
