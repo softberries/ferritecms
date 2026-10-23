@@ -4,12 +4,13 @@ use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
+use ferrite_domain::JobId;
 use ferrite_store::Store;
 use ferrite_store_postgres::{PgOptions, PgStore};
 use ferrite_store_sqlite::{SqliteOptions, SqliteStore};
@@ -35,6 +36,8 @@ pub struct PgFixture {
     pub store: Arc<PgStore>,
     url: String,
     schema: String,
+    /// Extra stores on the same schema ([`TestDb::peer`]), closed by teardown.
+    peers: Mutex<Vec<Arc<PgStore>>>,
     torn_down: AtomicBool,
 }
 
@@ -50,6 +53,20 @@ impl PgFixture {
     pub async fn teardown(&self) {
         if self.torn_down.swap(true, Ordering::SeqCst) {
             return;
+        }
+        let peers: Vec<Arc<PgStore>> = self
+            .peers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain(..)
+            .collect();
+        for peer in peers {
+            if tokio::time::timeout(CLOSE_TIMEOUT, peer.close())
+                .await
+                .is_err()
+            {
+                eprintln!("warning: peer pool for {} not closed in time", self.schema);
+            }
         }
         if tokio::time::timeout(CLOSE_TIMEOUT, self.store.close())
             .await
@@ -150,6 +167,7 @@ pub async fn pg_store() -> Option<PgFixture> {
         store: Arc::new(store),
         url,
         schema,
+        peers: Mutex::new(Vec::new()),
         torn_down: AtomicBool::new(false),
     };
     fixture
@@ -221,6 +239,91 @@ impl TestDb {
             Backing::Sqlite { store, .. } => store.clone(),
             Backing::Postgres(f) => f.store.clone(),
         }
+    }
+
+    /// A second store on the same database, as another node would open it. Postgres: a
+    /// new `PgStore` (own pool, `max_connections` 4) on the same schema, closed by
+    /// teardown. SQLite: `None` (one process owns the data folder; share the store).
+    pub async fn peer(&self) -> Option<Arc<dyn Store>> {
+        let Backing::Postgres(f) = &self.backing else {
+            return None;
+        };
+        let peer = Arc::new(
+            PgStore::open(PgOptions {
+                url: f.url.clone(),
+                max_connections: 4,
+                schema: Some(f.schema.clone()),
+            })
+            .await
+            .expect("open peer store"),
+        );
+        f.peers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(peer.clone());
+        Some(peer)
+    }
+
+    /// `(url, schema)` of the Postgres backing; `None` on SQLite.
+    pub fn pg_location(&self) -> Option<(String, String)> {
+        match &self.backing {
+            Backing::Postgres(f) => Some((f.url.clone(), f.schema.clone())),
+            Backing::Sqlite { .. } => None,
+        }
+    }
+
+    /// Runs raw SQL on a dedicated connection (Postgres: with the test schema as
+    /// `search_path`), outside the store under test.
+    pub async fn exec_raw(&self, sql: &str) {
+        match &self.backing {
+            Backing::Sqlite { path, .. } => {
+                let mut c = sqlite_conn(path).await;
+                sqlx::raw_sql(AssertSqlSafe(sql.to_owned()))
+                    .execute(&mut c)
+                    .await
+                    .expect("exec raw sqlite");
+                c.close().await.expect("close raw sqlite connection");
+            }
+            Backing::Postgres(f) => {
+                let mut c = PgConnection::connect(&f.url).await.expect("connect");
+                sqlx::raw_sql(AssertSqlSafe(format!(
+                    "SET search_path TO {}; {sql}",
+                    quote_ident(&f.schema)
+                )))
+                .execute(&mut c)
+                .await
+                .expect("exec raw postgres");
+                c.close().await.expect("close raw postgres connection");
+            }
+        }
+    }
+
+    /// Makes a job due: sets its `run_at` one second into the past (database clock).
+    pub async fn force_job_due(&self, id: JobId) {
+        let done = match &self.backing {
+            Backing::Sqlite { path, .. } => {
+                let mut c = sqlite_conn(path).await;
+                let past = ferrite_domain::Timestamp::now().as_micros() - 1_000_000;
+                sqlx::query("UPDATE jobs SET run_at = ? WHERE id = ?")
+                    .bind(past)
+                    .bind(id.as_uuid())
+                    .execute(&mut c)
+                    .await
+                    .map(|r| r.rows_affected())
+            }
+            Backing::Postgres(f) => {
+                let mut c = PgConnection::connect(&f.url).await.expect("connect");
+                sqlx::query(AssertSqlSafe(format!(
+                    "UPDATE {}.jobs SET run_at = now() - interval '1 second' WHERE id = $1",
+                    quote_ident(&f.schema)
+                )))
+                .bind(id.as_uuid())
+                .execute(&mut c)
+                .await
+                .map(|r| r.rows_affected())
+            }
+        };
+        assert_eq!(done.expect("force job due"), 1);
     }
 
     /// Names of user tables and indexes, excluding sqlx's `_sqlx_migrations`.

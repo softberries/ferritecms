@@ -1,11 +1,14 @@
-use std::collections::HashMap;
+use std::{
+    collections::{BTreeMap, HashMap},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use ferrite_domain::{
     Artifact, ArtifactHash, ContentId, ContentItem, ContentQuery, ContentType, Event,
-    InstalledPlugin, InstalledTheme, Media, Menu, NewContent, NewEvent, NewUser, OptionEntry, Page,
-    Redirect, RedirectId, Revision, RevisionId, SearchQuery, Taxonomy, Term, TermId, Timestamp,
-    User, UserId,
+    InstalledPlugin, InstalledTheme, Job, JobId, JobLease, JobStatus, Media, Menu, NewContent,
+    NewEvent, NewJob, NewUser, NodeId, OptionEntry, Page, Redirect, RedirectId, Revision,
+    RevisionId, SearchQuery, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 
 use crate::{StoreError, migrate::MigrationStatus};
@@ -110,6 +113,7 @@ pub trait Repos: Send + Sync {
     fn plugin_kv(&self) -> &dyn PluginKvRepo;
     fn themes(&self) -> &dyn ThemeRepo;
     fn events(&self) -> &dyn EventRepo;
+    fn jobs(&self) -> &dyn JobRepo;
     fn search(&self) -> &dyn SearchRepo;
     fn schema_meta(&self) -> &dyn SchemaMetaRepo;
 }
@@ -446,6 +450,77 @@ pub trait EventRepo: Send + Sync {
     async fn max_seq(&self) -> Result<i64, StoreError>;
     /// Deletes events older than the given time; returns the deleted count.
     async fn prune(&self, older_than: Timestamp) -> Result<u64, StoreError>;
+}
+
+/// The job queue (design 04 §6). Every time comparison (`run_at`, `locked_until`) uses
+/// the database clock: `now()` on Postgres, the process clock on SQLite (one process is
+/// the only client there). No method takes a `now` argument. Inside a `Tx` on Postgres
+/// `now()` is the transaction's start time, so keep such transactions short.
+///
+/// **Lease token (P6).** A claim returns rows whose [`Job::lease`] is the token
+/// `(id, node, attempts)`. `extend`, `complete`, `fail` and `release` act only while
+/// the job is still `running` under exactly that token, so a node whose lease lapsed
+/// (even one that reclaimed the same job since) cannot overwrite the current attempt;
+/// they return `false`/`None` instead.
+///
+/// Validation errors (`Invalid`) are raised before any SQL and never poison a `Tx`.
+#[async_trait]
+pub trait JobRepo: Send + Sync {
+    /// Inserts a job and returns its id, or `None` when `unique_key` is already taken
+    /// by a job in any status (that is not an error and never poisons a `Tx`).
+    /// Invalid: kind not `[a-z0-9._-]{1,64}`, `unique_key` over 200 characters or with
+    /// NUL, payload not a JSON object (or with NUL), `max_attempts` outside 1..=100.
+    async fn enqueue(&self, job: &NewJob) -> Result<Option<JobId>, StoreError>;
+    /// Claims up to `limit` (1..=[`MAX_CLAIM`](crate::MAX_CLAIM)) due jobs whose kind is
+    /// in `kinds` (1..=[`MAX_CLAIM_KINDS`](crate::MAX_CLAIM_KINDS)) for `node`: queued
+    /// jobs with `run_at <= now`, and running jobs whose lease expired with
+    /// `attempts < max_attempts`. Claimed rows become `running` with
+    /// `locked_until = now + lease` and one more attempt; they are returned ordered by
+    /// `(priority DESC, run_at, id)`. First, expired leases of jobs at `max_attempts`
+    /// (of these kinds) go `dead` (P7). Exclusive: no two concurrent calls, on any node,
+    /// return the same attempt of a job.
+    async fn claim(
+        &self,
+        node: NodeId,
+        kinds: &[String],
+        limit: u32,
+        lease: Duration,
+    ) -> Result<Vec<Job>, StoreError>;
+    /// Sets `locked_until = now + lease`; `false` if the lease is no longer held.
+    async fn extend(&self, lease: &JobLease, duration: Duration) -> Result<bool, StoreError>;
+    /// Marks the job `done`; `false` if the lease is no longer held.
+    async fn complete(&self, lease: &JobLease) -> Result<bool, StoreError>;
+    /// Records a failed attempt: `dead` when `permanent` or the attempts are used up,
+    /// otherwise `queued` again with `run_at = now + job_backoff(attempts)`
+    /// ([`job_backoff`](crate::job_backoff)). `error` is stored sanitised
+    /// ([`sanitize_job_error`](crate::sanitize_job_error)). Returns the new status, or
+    /// `None` if the lease is no longer held.
+    async fn fail(
+        &self,
+        lease: &JobLease,
+        error: &str,
+        permanent: bool,
+    ) -> Result<Option<JobStatus>, StoreError>;
+    /// Puts the job back to `queued` with `run_at = now + delay`; with
+    /// `count_attempt == false` the attempt is refunded. `false` if the lease is no
+    /// longer held.
+    async fn release(
+        &self,
+        lease: &JobLease,
+        delay: Duration,
+        count_attempt: bool,
+    ) -> Result<bool, StoreError>;
+    /// Fetches a job by id.
+    async fn get(&self, id: JobId) -> Result<Option<Job>, StoreError>;
+    /// Number of jobs per status; every status is present (0 when none).
+    async fn counts(&self) -> Result<BTreeMap<JobStatus, u64>, StoreError>;
+    /// Deletes `done` jobs finished before `done_before` and `dead` jobs finished before
+    /// `dead_before`; queued and running jobs are never deleted. Returns the count.
+    async fn prune(
+        &self,
+        done_before: Timestamp,
+        dead_before: Timestamp,
+    ) -> Result<u64, StoreError>;
 }
 
 /// Full-text search over an item's title and body text. Both backends match exactly the

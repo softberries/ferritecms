@@ -13,6 +13,7 @@ pub mod counting;
 pub mod event;
 pub mod fixtures;
 pub mod harness;
+pub mod job;
 pub mod menu;
 pub mod migrations;
 pub mod plugin;

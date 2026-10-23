@@ -13,7 +13,7 @@ pub async fn fresh_db_is_up_to_date(db: &TestDb) {
     let store = db.store();
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::UpToDate);
-    assert_eq!((s.db_version, s.binary_version), (3, 3));
+    assert_eq!((s.db_version, s.binary_version), (4, 4));
     assert!(s.pending.is_empty() && s.unknown_applied.is_empty());
     assert_eq!(s.min_binary, None);
 
@@ -41,12 +41,26 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
             .any(|o| o.ends_with(":search_fts") || o.ends_with(":search_docs"))
     );
 
-    assert_eq!(store.migrate_down(0, false).await.unwrap(), vec![3, 2, 1]);
+    let objects = db.user_objects().await;
+    assert!(objects.iter().any(|o| o.ends_with(":jobs")), "{objects:?}");
+    assert!(objects.iter().any(|o| o.ends_with(":nodes")), "{objects:?}");
+
+    // 0004's down loses queued jobs: refused without allow_lossy, nothing reverted.
+    let err = store.migrate_down(0, false).await.unwrap_err();
+    assert!(
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 4 has a lossy down")),
+        "{err:?}"
+    );
+    assert_eq!(
+        store.migration_status(&binary()).await.unwrap().db_version,
+        4
+    );
+    assert_eq!(store.migrate_down(0, true).await.unwrap(), vec![4, 3, 2, 1]);
     assert_eq!(db.user_objects().await, Vec::<String>::new());
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!((s.db_version, s.verdict), (0, Compat::NeedsUp));
 
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![1, 2, 3]);
+    assert_eq!(store.migrate_up(None).await.unwrap(), vec![1, 2, 3, 4]);
     assert_eq!(store.migrate_up(None).await.unwrap(), Vec::<i64>::new());
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::UpToDate);
@@ -63,19 +77,25 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
 
 pub async fn verdict_after_partial_down(db: &TestDb) {
     let store = db.store();
-    assert_eq!(store.migrate_down(1, false).await.unwrap(), vec![3, 2]);
+    assert_eq!(store.migrate_down(1, true).await.unwrap(), vec![4, 3, 2]);
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::NeedsUp);
     assert_eq!(
         s.pending.iter().map(|p| p.version).collect::<Vec<_>>(),
-        vec![2, 3]
+        vec![2, 3, 4]
     );
-    assert_eq!((s.db_version, s.binary_version), (1, 3));
+    assert_eq!((s.db_version, s.binary_version), (1, 4));
     let objects = db.user_objects().await;
     assert!(objects.iter().any(|o| o.ends_with(":content_items")));
     assert!(!objects.iter().any(|o| o.contains("search")), "{objects:?}");
     assert!(
         !objects.iter().any(|o| o.contains("media_variants")),
+        "{objects:?}"
+    );
+    assert!(
+        !objects
+            .iter()
+            .any(|o| o.ends_with(":jobs") || o.ends_with(":nodes")),
         "{objects:?}"
     );
 
@@ -85,7 +105,7 @@ pub async fn verdict_after_partial_down(db: &TestDb) {
         store.migration_status(&binary()).await.unwrap().verdict,
         Compat::NeedsUp
     );
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![3]);
+    assert_eq!(store.migrate_up(None).await.unwrap(), vec![3, 4]);
     assert_eq!(
         store.migration_status(&binary()).await.unwrap().verdict,
         Compat::UpToDate
@@ -129,13 +149,20 @@ pub async fn min_binary_survives_older_binary(db: &TestDb) {
 /// Pending migrations carry their description and parsed directives.
 pub async fn status_reports_pending_directives(db: &TestDb) {
     let store = db.store();
-    assert_eq!(store.migrate_down(2, false).await.unwrap(), vec![3]);
+    assert_eq!(store.migrate_down(2, true).await.unwrap(), vec![4, 3]);
     let s = store.migration_status(&binary()).await.unwrap();
-    assert_eq!(s.pending.len(), 1);
+    assert_eq!(s.pending.len(), 2);
     let pending = &s.pending[0];
     assert_eq!(pending.version, 3);
     assert!(!pending.description.is_empty());
     assert_eq!(pending.directives.phase, Phase::Expand);
     assert_eq!(pending.directives.min_binary, None);
     assert!(!pending.directives.lossy_down);
+    let cluster = &s.pending[1];
+    assert_eq!(
+        (cluster.version, cluster.description.as_str()),
+        (4, "cluster")
+    );
+    assert_eq!(cluster.directives.phase, Phase::Expand);
+    assert!(cluster.directives.lossy_down);
 }

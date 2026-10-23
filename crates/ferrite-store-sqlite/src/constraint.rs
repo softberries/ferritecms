@@ -17,6 +17,8 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
         "content_meta_pkey",
     ),
     ("content_types.name", "content_types_pkey"),
+    ("jobs.id", "jobs_pkey"),
+    ("jobs.unique_key", "jobs_unique_key_uq"),
     ("media.item_id", "media_pkey"),
     (
         "media_variants.item_id, media_variants.name",
@@ -24,6 +26,7 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ),
     ("menu_items.id", "menu_items_pkey"),
     ("menus.name", "menus_pkey"),
+    ("nodes.id", "nodes_pkey"),
     ("options.key", "options_pkey"),
     (
         "plugin_failures.plugin, plugin_failures.hook, plugin_failures.bucket_start",

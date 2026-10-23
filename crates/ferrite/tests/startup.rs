@@ -31,7 +31,7 @@ async fn auto_migrates_an_old_schema() {
     let s = store(&dir).await;
     let bin = binary_version().expect("version");
     s.migrate_up(None).await.expect("up");
-    s.migrate_down(1, false).await.expect("down");
+    s.migrate_down(1, true).await.expect("down");
     startup_check(&s, &bin, &dbconf(true)).await.expect("check");
     let st = s.migration_status(&bin).await.expect("status");
     assert_eq!(st.verdict, Compat::UpToDate);
@@ -43,7 +43,7 @@ async fn refuses_old_schema_without_auto_migrate() {
     let s = store(&dir).await;
     let bin = binary_version().expect("version");
     s.migrate_up(None).await.expect("up");
-    s.migrate_down(1, false).await.expect("down");
+    s.migrate_down(1, true).await.expect("down");
     let e = startup_check(&s, &bin, &dbconf(false)).await.unwrap_err();
     assert!(format!("{e:#}").contains("ferrite migrate up"));
     let st = s.migration_status(&bin).await.expect("status");

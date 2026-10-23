@@ -1,8 +1,8 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
-    backend_tests, backend_tests_spawning, batch::*, constraints::*, content::*, event::*, menu::*,
-    migration_dirs, migration_files, migrations::*, plugin::*, search::*, semantics::*, site::*,
-    taxonomy::*, tx::*, user::*,
+    backend_tests, backend_tests_spawning, batch::*, constraints::*, content::*, event::*, job::*,
+    menu::*, migration_dirs, migration_files, migrations::*, plugin::*, search::*, semantics::*,
+    site::*, taxonomy::*, tx::*, user::*,
 };
 
 backend_tests!(
@@ -143,10 +143,26 @@ backend_tests!(
 
 backend_tests!(batch_loaders_match_single_gets);
 
+backend_tests!(
+    jobs_enqueue_and_get_roundtrip,
+    jobs_unique_key_dedupes_in_any_status,
+    jobs_claim_respects_run_at_priority_and_kinds,
+    jobs_expired_lease_is_reclaimed,
+    jobs_expired_lease_at_max_attempts_goes_dead,
+    jobs_stale_lease_holder_cannot_write,
+    jobs_fail_backoff_then_dead,
+    jobs_release_without_attempt,
+    jobs_error_text_is_sanitised,
+    jobs_validation_does_not_poison,
+    jobs_prune_by_status_age,
+    jobs_tolerate_unknown_columns,
+);
+
 backend_tests_spawning!(
     concurrent_writers,
     events_concurrent_appends_unique_seq,
     kv_quota_never_exceeded,
+    jobs_claim_is_exclusive_under_concurrency,
 );
 
 #[test]

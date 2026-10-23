@@ -14,6 +14,7 @@
 
 mod content;
 mod event;
+mod job;
 mod menu;
 mod plugin;
 
@@ -25,7 +26,7 @@ mod user;
 
 use async_trait::async_trait;
 use ferrite_store::{
-    ArtifactRepo, ContentRepo, ContentTypeRepo, EventRepo, MediaRepo, MenuRepo, MetaRepo,
+    ArtifactRepo, ContentRepo, ContentTypeRepo, EventRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo,
     OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,
     SearchRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
@@ -96,6 +97,9 @@ impl Repos for SqliteRepos {
         self
     }
     fn events(&self) -> &dyn EventRepo {
+        self
+    }
+    fn jobs(&self) -> &dyn JobRepo {
         self
     }
     fn search(&self) -> &dyn SearchRepo {
@@ -173,6 +177,7 @@ delegate_repos!(
     plugin_kv: PluginKvRepo,
     themes: ThemeRepo,
     events: EventRepo,
+    jobs: JobRepo,
     search: SearchRepo,
     schema_meta: SchemaMetaRepo,
 );

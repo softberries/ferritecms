@@ -1,10 +1,14 @@
 //! Keyset-pagination helpers shared by the backends so cursors mean the same thing everywhere.
 
-use ferrite_domain::{ContentId, ContentItem, ContentOrder, ContentQuery, Cursor, MAX_PAGE};
+use std::time::Duration;
+
+use ferrite_domain::{
+    ContentId, ContentItem, ContentOrder, ContentQuery, Cursor, Job, MAX_PAGE, NewJob,
+};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::{StoreError, validate_text};
+use crate::{StoreError, validate_json, validate_text};
 
 /// The sort-key part of a content cursor, typed by [`ContentOrder`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +94,138 @@ pub fn check_event_limit(limit: u32) -> Result<u32, StoreError> {
         )));
     }
     Ok(limit)
+}
+
+/// Most jobs one `JobRepo::claim` call returns.
+pub const MAX_CLAIM: u32 = 100;
+
+/// Most kinds one `JobRepo::claim` call accepts.
+pub const MAX_CLAIM_KINDS: usize = 64;
+
+/// Longest stored `last_error`, in bytes (longer handler text is cut on a char boundary).
+pub const MAX_JOB_ERROR: usize = 1024;
+
+/// Longest job `unique_key`, in characters.
+pub const MAX_JOB_UNIQUE_KEY: usize = 200;
+
+/// Largest `max_attempts` a job may ask for.
+pub const MAX_JOB_ATTEMPTS: i32 = 100;
+
+/// Longest lease or release delay a `JobRepo` call accepts (one year).
+pub const MAX_JOB_DURATION: Duration = Duration::from_secs(365 * 24 * 3600);
+
+/// Retry delay after a failed attempt: `min(2^attempts × 10 s, 3600 s)`; `attempts <= 0`
+/// counts as 0 (10 s).
+pub fn job_backoff(attempts: i32) -> Duration {
+    const CAP: u64 = 3600;
+    let exp = u32::try_from(attempts.max(0)).unwrap_or(0);
+    let secs = 2u64
+        .checked_pow(exp)
+        .and_then(|p| p.checked_mul(10))
+        .map_or(CAP, |s| s.min(CAP));
+    Duration::from_secs(secs)
+}
+
+/// Validates a job kind: 1 to 64 characters from `[a-z0-9._-]`.
+pub fn check_job_kind(kind: &str) -> Result<(), StoreError> {
+    let ok = (1..=64).contains(&kind.len())
+        && kind
+            .bytes()
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'));
+    if ok {
+        Ok(())
+    } else {
+        Err(StoreError::Invalid(format!(
+            "job kind {kind:?} must be 1 to 64 characters from [a-z0-9._-]"
+        )))
+    }
+}
+
+/// Validates an enqueue input: kind, unique key (at most [`MAX_JOB_UNIQUE_KEY`]
+/// characters, no NUL), payload (a JSON object without NUL) and `max_attempts`
+/// (1 through [`MAX_JOB_ATTEMPTS`]).
+pub fn check_new_job(job: &NewJob) -> Result<(), StoreError> {
+    check_job_kind(&job.kind)?;
+    if let Some(key) = &job.unique_key {
+        validate_text("job unique_key", key)?;
+        if key.chars().count() > MAX_JOB_UNIQUE_KEY {
+            return Err(StoreError::Invalid(format!(
+                "job unique_key is longer than {MAX_JOB_UNIQUE_KEY} characters"
+            )));
+        }
+    }
+    if !job.payload.is_object() {
+        return Err(StoreError::Invalid(
+            "job payload must be a JSON object".into(),
+        ));
+    }
+    validate_json(&job.payload)?;
+    if !(1..=MAX_JOB_ATTEMPTS).contains(&job.max_attempts) {
+        return Err(StoreError::Invalid(format!(
+            "job max_attempts must be between 1 and {MAX_JOB_ATTEMPTS}"
+        )));
+    }
+    Ok(())
+}
+
+/// Validates claim arguments: 1 through [`MAX_CLAIM_KINDS`] valid kinds and a `limit`
+/// of 1 through [`MAX_CLAIM`].
+pub fn check_claim(kinds: &[String], limit: u32) -> Result<(), StoreError> {
+    if kinds.is_empty() || kinds.len() > MAX_CLAIM_KINDS {
+        return Err(StoreError::Invalid(format!(
+            "claim needs between 1 and {MAX_CLAIM_KINDS} kinds"
+        )));
+    }
+    kinds.iter().try_for_each(|k| check_job_kind(k))?;
+    if limit == 0 || limit > MAX_CLAIM {
+        return Err(StoreError::Invalid(format!(
+            "claim limit must be between 1 and {MAX_CLAIM}"
+        )));
+    }
+    Ok(())
+}
+
+/// Sorts claimed jobs into claim order: `(priority DESC, run_at, id)` (`RETURNING` order
+/// is unspecified on both engines).
+pub fn sort_claimed(jobs: &mut [Job]) {
+    jobs.sort_by(|a, b| {
+        b.priority
+            .cmp(&a.priority)
+            .then_with(|| a.run_at.cmp(&b.run_at))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+}
+
+/// Validates a lease or delay (at most [`MAX_JOB_DURATION`]; a lease must also be
+/// positive) and returns it in microseconds.
+pub fn check_job_duration(what: &str, d: Duration, positive: bool) -> Result<i64, StoreError> {
+    if d > MAX_JOB_DURATION || (positive && d.is_zero()) {
+        let min = if positive {
+            "more than 0"
+        } else {
+            "at least 0"
+        };
+        return Err(StoreError::Invalid(format!(
+            "{what} must be {min} and at most {} s",
+            MAX_JOB_DURATION.as_secs()
+        )));
+    }
+    i64::try_from(d.as_micros()).map_err(|_| StoreError::Invalid(format!("{what} too large")))
+}
+
+/// Handler error text as stored: NUL replaced by U+FFFD, cut to [`MAX_JOB_ERROR`] bytes
+/// on a char boundary. Handler text is not caller-validated input, so it is sanitised
+/// rather than refused.
+pub fn sanitize_job_error(error: &str) -> String {
+    let mut text = error.replace('\0', "\u{FFFD}");
+    if text.len() > MAX_JOB_ERROR {
+        let mut cut = MAX_JOB_ERROR;
+        while !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        text.truncate(cut);
+    }
+    text
 }
 
 /// The sort key of `item` under `order`.
@@ -228,6 +364,71 @@ pub fn text_cursor(tag: &str, cursor: &str) -> Result<(String, Uuid), StoreError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn job_backoff_values() {
+        let secs = |a| job_backoff(a).as_secs();
+        assert_eq!(secs(1), 20);
+        assert_eq!(secs(2), 40);
+        assert_eq!(secs(5), 320);
+        assert_eq!(secs(9), 3600);
+        assert_eq!(secs(30), 3600);
+        assert_eq!(secs(0), 10);
+        assert_eq!(secs(-3), 10);
+        assert_eq!(secs(i32::MAX), 3600);
+    }
+
+    #[test]
+    fn job_error_is_sanitised() {
+        assert_eq!(sanitize_job_error("a\0b"), "a\u{FFFD}b");
+        let long = "é".repeat(MAX_JOB_ERROR); // 2 bytes each
+        let cut = sanitize_job_error(&format!("x{long}"));
+        assert_eq!(cut.len(), MAX_JOB_ERROR - 1);
+        assert!(cut.starts_with('x') && !cut.contains('\0'));
+        assert_eq!(sanitize_job_error("short"), "short");
+    }
+
+    #[test]
+    fn job_inputs_are_checked() {
+        let ok = NewJob::new("a.b-c_1", json!({}));
+        check_new_job(&ok).unwrap();
+        for kind in ["", "A", "a b", &"a".repeat(65), "a\0"] {
+            assert!(
+                check_new_job(&NewJob::new(kind, json!({}))).is_err(),
+                "{kind:?}"
+            );
+        }
+        assert!(check_new_job(&NewJob::new("k", json!([]))).is_err());
+        assert!(check_new_job(&NewJob::new("k", json!({"a": "\0"}))).is_err());
+        let with = |f: fn(&mut NewJob)| {
+            let mut j = ok.clone();
+            f(&mut j);
+            check_new_job(&j)
+        };
+        assert!(with(|j| j.max_attempts = 0).is_err());
+        assert!(with(|j| j.max_attempts = 101).is_err());
+        assert!(with(|j| j.unique_key = Some("é".repeat(200))).is_ok());
+        assert!(with(|j| j.unique_key = Some("é".repeat(201))).is_err());
+        assert!(with(|j| j.unique_key = Some("a\0".into())).is_err());
+        let kinds = |n: usize| vec!["k".to_string(); n];
+        assert!(check_claim(&kinds(1), 1).is_ok());
+        assert!(check_claim(&kinds(0), 1).is_err());
+        assert!(check_claim(&kinds(65), 1).is_err());
+        assert!(check_claim(&kinds(64), MAX_CLAIM).is_ok());
+        assert!(check_claim(&kinds(1), 0).is_err());
+        assert!(check_claim(&kinds(1), MAX_CLAIM + 1).is_err());
+        assert!(check_claim(&["Bad".to_string()], 1).is_err());
+        assert_eq!(
+            check_job_duration("lease", Duration::from_secs(1), true).unwrap(),
+            1_000_000
+        );
+        assert!(check_job_duration("lease", Duration::ZERO, true).is_err());
+        assert_eq!(
+            check_job_duration("delay", Duration::ZERO, false).unwrap(),
+            0
+        );
+        assert!(check_job_duration("delay", MAX_JOB_DURATION * 2, false).is_err());
+    }
 
     #[test]
     fn limit_bounds() {

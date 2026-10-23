@@ -3,6 +3,7 @@
 mod content;
 mod event;
 mod ids;
+mod job;
 mod menu;
 mod page;
 mod plugin;
@@ -18,7 +19,10 @@ pub use content::{
     Revision,
 };
 pub use event::{Event, NewEvent};
-pub use ids::{ArtifactHash, ContentId, MenuItemId, RedirectId, RevisionId, TermId, UserId};
+pub use ids::{
+    ArtifactHash, ContentId, JobId, MenuItemId, NodeId, RedirectId, RevisionId, TermId, UserId,
+};
+pub use job::{DEFAULT_MAX_ATTEMPTS, Job, JobLease, JobStatus, NewJob};
 pub use menu::{Menu, MenuItem, MenuItemKind};
 pub use page::{Cursor, Page};
 pub use plugin::{Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, Media};
@@ -130,6 +134,47 @@ mod tests {
         for o in RedirectOrigin::ALL {
             assert_eq!(o.as_str().parse::<RedirectOrigin>().unwrap(), *o);
         }
+    }
+
+    #[test]
+    fn job_status_and_lease() {
+        for s in JobStatus::ALL {
+            assert_eq!(s.as_str().parse::<JobStatus>().unwrap(), *s);
+        }
+        assert!("failed".parse::<JobStatus>().is_err());
+        assert!(JobStatus::Queued < JobStatus::Dead);
+        let node = NodeId::new();
+        let mut job = Job {
+            id: JobId::new(),
+            kind: "k".into(),
+            payload: serde_json::json!({}),
+            unique_key: None,
+            run_at: Timestamp::now(),
+            priority: 0,
+            status: JobStatus::Running,
+            attempts: 3,
+            max_attempts: DEFAULT_MAX_ATTEMPTS,
+            locked_by: Some(node),
+            locked_until: None,
+            last_error: None,
+            created_at: Timestamp::now(),
+            finished_at: None,
+        };
+        assert_eq!(
+            job.lease(),
+            Some(JobLease {
+                id: job.id,
+                node,
+                attempt: 3
+            })
+        );
+        job.status = JobStatus::Done;
+        assert_eq!(job.lease(), None);
+        job.status = JobStatus::Running;
+        job.locked_by = None;
+        assert_eq!(job.lease(), None);
+        let new = NewJob::new("k", serde_json::json!({}));
+        assert_eq!((new.priority, new.max_attempts, new.run_at), (0, 5, None));
     }
 
     #[test]

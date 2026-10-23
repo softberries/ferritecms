@@ -3,8 +3,8 @@
 
 use ferrite_domain::{
     Artifact, ArtifactHash, ContentId, ContentItem, ContentType, Event, InstalledPlugin,
-    InstalledTheme, Media, MenuItem, MenuItemId, OptionEntry, Redirect, RedirectId, Revision,
-    RevisionId, Secret, Taxonomy, Term, TermId, Timestamp, User, UserId,
+    InstalledTheme, Job, JobId, Media, MenuItem, MenuItemId, NodeId, OptionEntry, Redirect,
+    RedirectId, Revision, RevisionId, Secret, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 use ferrite_store::StoreError;
 use sqlx::{Row, sqlite::SqliteRow};
@@ -298,5 +298,36 @@ pub(crate) fn event(row: &SqliteRow) -> Result<Event, StoreError> {
             .map_err(|e| StoreError::Database(format!("corrupt JSON: {e}")))?,
         origin_node: row.try_get("origin_node").map_err(map_db_err)?,
         created_at: ts(row.try_get("created_at").map_err(map_db_err)?)?,
+    })
+}
+
+pub(crate) const JOB_COLUMNS: &str = "id, kind, payload, unique_key, run_at, priority, status, \
+     attempts, max_attempts, locked_by, locked_until, last_error, created_at, finished_at";
+
+/// Maps a row selected (or returned) with [`JOB_COLUMNS`]. Columns are read by name, so
+/// extra columns added by a newer schema are ignored (04 §9).
+pub(crate) fn job(row: &SqliteRow) -> Result<Job, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let payload: String = row.try_get("payload").map_err(map_db_err)?;
+    let status: String = row.try_get("status").map_err(map_db_err)?;
+    let locked_by: Option<String> = row.try_get("locked_by").map_err(map_db_err)?;
+    Ok(Job {
+        id: JobId::from_uuid(id),
+        kind: row.try_get("kind").map_err(map_db_err)?,
+        payload: json_from_db(&payload)?,
+        unique_key: row.try_get("unique_key").map_err(map_db_err)?,
+        run_at: ts(row.try_get("run_at").map_err(map_db_err)?)?,
+        priority: row.try_get("priority").map_err(map_db_err)?,
+        status: status.parse()?,
+        attempts: row.try_get("attempts").map_err(map_db_err)?,
+        max_attempts: row.try_get("max_attempts").map_err(map_db_err)?,
+        locked_by: locked_by
+            .map(|n| n.parse::<NodeId>())
+            .transpose()
+            .map_err(|e| StoreError::Database(format!("corrupt jobs.locked_by: {e}")))?,
+        locked_until: ts_opt(row.try_get("locked_until").map_err(map_db_err)?)?,
+        last_error: row.try_get("last_error").map_err(map_db_err)?,
+        created_at: ts(row.try_get("created_at").map_err(map_db_err)?)?,
+        finished_at: ts_opt(row.try_get("finished_at").map_err(map_db_err)?)?,
     })
 }

@@ -18,9 +18,10 @@ use ferrite_domain::{
     Page, SearchQuery, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 use ferrite_store::{
-    ArtifactRepo, Backend, ContentRepo, ContentTypeRepo, EventRepo, MediaRepo, MenuRepo, MetaRepo,
-    MigrationStatus, OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos, RevisionRepo,
-    SchemaMetaRepo, SearchRepo, Store, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    ArtifactRepo, Backend, ContentRepo, ContentTypeRepo, EventRepo, JobRepo, MediaRepo, MenuRepo,
+    MetaRepo, MigrationStatus, OptionRepo, PluginKvRepo, PluginRepo, RedirectRepo, Repos,
+    RevisionRepo, SchemaMetaRepo, SearchRepo, Store, StoreError, TaxonomyRepo, TermRepo, ThemeRepo,
+    Tx, UserRepo,
 };
 use serde_json::Value;
 
@@ -122,6 +123,9 @@ impl Repos for CountingRepos {
     }
     fn events(&self) -> &dyn EventRepo {
         self.inner.read().events()
+    }
+    fn jobs(&self) -> &dyn JobRepo {
+        self.inner.read().jobs()
     }
     fn search(&self) -> &dyn SearchRepo {
         &self.content

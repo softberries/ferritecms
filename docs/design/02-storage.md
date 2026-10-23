@@ -83,13 +83,15 @@ pub trait Repos: Send + Sync {
     fn plugin_kv(&self) -> &dyn PluginKvRepo;
     fn themes(&self) -> &dyn ThemeRepo;
     fn events(&self) -> &dyn EventRepo;
+    fn jobs(&self) -> &dyn JobRepo;
     fn search(&self) -> &dyn SearchRepo;
     fn schema_meta(&self) -> &dyn SchemaMetaRepo;
 }
 ```
 
 Repositories still to come, with the milestone that adds them: `sessions`, `tokens`
-(API tokens), `rate_limits`, `audit` and `comments` (M2); `jobs` and `nodes` (M1.5).
+(API tokens), `rate_limits`, `audit` and `comments` (M2); `nodes` (M1.5). `JobRepo`
+(`jobs()`) exists since M1.5 (migration `0004_cluster`); see the cluster table in §4.
 The `comments`, `user_meta` and `plugin_failures` tables already exist in `0001_init`
 but have no repository yet.
 
@@ -319,9 +321,9 @@ on both backends.
 
 | Table | Columns | Notes |
 |---|---|---|
-| `nodes` *(not yet created: M1.5)* | `id` PK, `name`, `version`, `schema_version`, `started_at`, `heartbeat_at`, `meta` json | Stale after 3× heartbeat interval |
+| `nodes` *(table since `0004_cluster`; repository: M1.5)* | `id` PK (`nodes_pkey`), `name`, `version`, `schema_version` bigint, `started_at`, `heartbeat_at` (index `nodes_heartbeat_idx`), `meta` json default `{}` | Stale after 3× heartbeat interval |
 | `events` | `seq` PK (autoincrement / bigserial), `kind`, `keys` json, `origin_node`, `created_at` | Transactional outbox for invalidation; pruned after 24h |
-| `jobs` *(not yet created: M1.5)* | `id`, `kind`, `payload` json, `unique_key` UNIQUE null, `run_at`, `priority`, `status` (`queued`/`running`/`done`/`failed`/`dead`), `attempts`, `max_attempts`, `locked_by`, `locked_until`, `last_error`, `created_at`, `finished_at` | See [04](04-cluster.md#job-queue) |
+| `jobs` *(since `0004_cluster`)* | `id` PK (`jobs_pkey`), `kind`, `payload` json (an object), `unique_key` null (`jobs_unique_key_uq`, NULLs distinct), `run_at`, `priority` int default 0, `status` (`queued`/`running`/`done`/`dead`, CHECK; no `failed`, P8), `attempts` int default 0, `max_attempts` int default 5 (≥ 1), `locked_by` (node id text), `locked_until`, `last_error` (≤ 1024 bytes), `created_at`, `finished_at`; indexes `jobs_claim_idx (status, run_at)` (Postgres: partial on queued/running), `jobs_finished_idx (finished_at)` | `JobRepo`: claim by kind with lease (Postgres `FOR UPDATE SKIP LOCKED` in a `MATERIALIZED` CTE; SQLite on the single writer, reader-pool `EXISTS` pre-check), expired lease at `max_attempts` → `dead` (P7), lease-holder writes conditional on `(id, node, attempts)` (P6). See [04](04-cluster.md#job-queue) |
 | `schema_meta` | `key` PK, `value` | `min_binary_version`, `created_by_version`, `site_id` |
 
 ### Search
@@ -415,6 +417,8 @@ crates/ferrite-store-sqlite/migrations/
     0002_search.down.sql
     0003_media_variants.up.sql      # M1c-2, phase expand (R29)
     0003_media_variants.down.sql    # drops the derived table; not lossy
+    0004_cluster.up.sql             # M1.5, phase expand, lossy-down: jobs + nodes (P27)
+    0004_cluster.down.sql
 crates/ferrite-store-postgres/migrations/
     0001_init.up.sql
     0001_init.down.sql
@@ -422,6 +426,8 @@ crates/ferrite-store-postgres/migrations/
     0002_search.down.sql
     0003_media_variants.up.sql
     0003_media_variants.down.sql
+    0004_cluster.up.sql
+    0004_cluster.down.sql
 ```
 
 - sqlx reversible migrations, embedded with `sqlx::migrate!()`; sqlx's

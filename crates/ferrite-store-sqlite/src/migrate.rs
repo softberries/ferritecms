@@ -336,12 +336,12 @@ mod tests {
             .unwrap();
         let backups = dir.path().join("backups");
         store.migrate_up(None).await.unwrap();
-        store.migrate_down(0, false).await.unwrap();
+        store.migrate_down(0, true).await.unwrap();
         store.migrate_up(None).await.unwrap();
         let names = snapshots(&backups);
         assert_eq!(names.len(), 2, "{names:?}");
         assert!(
-            names.iter().all(|n| n.starts_with("pre-0-to-3-")),
+            names.iter().all(|n| n.starts_with("pre-0-to-4-")),
             "{names:?}"
         );
 
@@ -365,7 +365,7 @@ mod tests {
         }
 
         for _ in 0..4 {
-            store.migrate_down(0, false).await.unwrap();
+            store.migrate_down(0, true).await.unwrap();
             store.migrate_up(None).await.unwrap();
         }
         // Six snapshots written, five kept.
