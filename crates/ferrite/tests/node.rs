@@ -99,10 +99,15 @@ impl Site {
         dir
     }
 
+    /// Where the local media store keeps the blob of `hash`.
+    fn blob(&self, hash: &ArtifactHash) -> PathBuf {
+        let h = hash.as_str();
+        self.data().join("media/artifacts").join(&h[..2]).join(h)
+    }
+
     /// Overwrites the stored blob of `hash` (bypassing the media store).
     fn tamper(&self, hash: &ArtifactHash, bytes: &[u8]) {
-        let h = hash.as_str();
-        let path = self.data().join("media/artifacts").join(&h[..2]).join(h);
+        let path = self.blob(hash);
         assert!(path.is_file(), "blob at {}", path.display());
         std::fs::write(path, bytes).unwrap();
     }
@@ -188,6 +193,14 @@ async fn meta(db: &TestDb, node: &RunningNode) -> Value {
 
 /// Review Focus 1 (P22): a theme activated while the node boots, after its invalidation
 /// cursor is set and before it reads the theme, is served once it is up.
+///
+/// What it guards: `start` must set the cursor **before** it reads any node state. The
+/// barrier pauses `start` right after the cursor, and the activation commits there. With
+/// the correct order the node either reads the new theme directly or replays the event
+/// on its first poll; with the M1c-2 order (state read first, cursor set later) the
+/// event would sit below the cursor and the node would serve theme `a` forever.
+/// Checked by mutation: moving the barrier after `load_theme` and the cursor to spawn
+/// time makes this test fail.
 async fn boot_race_change_during_startup_is_applied(db: Arc<TestDb>) {
     let site = Site::new(&db);
     let media = site.media();
@@ -219,6 +232,81 @@ async fn boot_race_change_during_startup_is_applied(db: Arc<TestDb>) {
     node.shutdown().await.unwrap();
 }
 
+/// The plugin variant of the boot race: a plugin enabled at the barrier is running once
+/// the node is up.
+async fn boot_race_plugin_enable_is_applied(db: Arc<TestDb>) {
+    let site = Site::new(&db);
+    let media = site.media();
+    let store = db.shared_store();
+    let wasm = test_support::plugin_wasm("hello");
+    install_plugin_file(
+        &store,
+        &media,
+        &site.config.plugins,
+        &manifest("hello"),
+        &wasm,
+        false,
+    )
+    .await
+    .unwrap();
+    let (barrier, mut gate) = BootBarrier::new();
+    let opts = NodeOptions {
+        boot_barrier: Some(barrier),
+        ..NodeOptions::default()
+    };
+    let race = async {
+        gate.reached().await;
+        ExtensionService::new(store.clone())
+            .set_plugin_enabled("hello", true)
+            .await
+            .unwrap();
+        gate.resume();
+    };
+    let (node, ()) = tokio::join!(site.start(&db, opts), race);
+    eventually(CONVERGE, "plugin enabled during boot", || {
+        home_contains(&node, HELLO_META)
+    })
+    .await;
+    node.shutdown().await.unwrap();
+}
+
+/// R14: a theme whose fetch fails is retried without another event; once the bytes are
+/// readable again the node swaps to it (first retry after 5 s).
+async fn failed_theme_reload_is_retried(db: Arc<TestDb>) {
+    let site = Site::new(&db);
+    let node = site.start(&db, NodeOptions::default()).await;
+    let store = db.shared_store();
+    let media = node.state.media.clone();
+    let b = install_theme_dir(&store, &media, &site.theme_dir("b", "MARK-B"), false)
+        .await
+        .unwrap();
+    let good = std::fs::read(site.blob(&b.artifact_hash)).unwrap();
+    site.tamper(&b.artifact_hash, b"temporarily unreadable");
+    ExtensionService::new(store.clone())
+        .activate_theme("b")
+        .await
+        .unwrap();
+    eventually(Duration::from_secs(3), "theme error reported", || {
+        let db = db.clone();
+        let node = &node;
+        async move { meta(&db, node).await["theme"]["error"].is_string() }
+    })
+    .await;
+    assert!(!home_contains(&node, "MARK-B").await);
+    site.tamper(&b.artifact_hash, &good);
+    eventually(Duration::from_secs(7), "theme b after the retry", || {
+        home_contains(&node, "MARK-B")
+    })
+    .await;
+    eventually(CONVERGE, "error cleared", || {
+        let db = db.clone();
+        let node = &node;
+        async move { meta(&db, node).await["theme"]["error"].is_null() }
+    })
+    .await;
+    node.shutdown().await.unwrap();
+}
+
 async fn theme_hot_swap_without_restart(db: Arc<TestDb>) {
     let site = Site::new(&db);
     let node = site.start(&db, NodeOptions::default()).await;
@@ -234,8 +322,7 @@ async fn theme_hot_swap_without_restart(db: Arc<TestDb>) {
     install_theme_dir(&store, &media, &site.theme_dir("b", "MARK-B"), true)
         .await
         .unwrap();
-    let took = eventually(CONVERGE, "theme b", || home_contains(&node, "MARK-B")).await;
-    eprintln!("theme swap visible after {took:?}");
+    eventually(CONVERGE, "theme b", || home_contains(&node, "MARK-B")).await;
     let (status, body) = get(node.addr, &a_asset).await;
     assert_eq!(status, 200, "the previous theme's assets stay served");
     assert!(body.contains("/* a */"), "{body}");
@@ -315,9 +402,16 @@ async fn bad_plugin_update_keeps_previous_version(db: Arc<TestDb>) {
     let store = db.shared_store();
     let media = node.state.media.clone();
     let wasm = test_support::plugin_wasm("hello");
-    let row = install_plugin_file(&store, &media, &manifest("hello"), &wasm, true)
-        .await
-        .unwrap();
+    let row = install_plugin_file(
+        &store,
+        &media,
+        &site.config.plugins,
+        &manifest("hello"),
+        &wasm,
+        true,
+    )
+    .await
+    .unwrap();
     eventually(CONVERGE, "hello's head meta", || {
         home_contains(&node, HELLO_META)
     })
@@ -375,12 +469,19 @@ async fn plugin_hot_reload_on_enable_and_disable(db: Arc<TestDb>) {
     let node = site.start(&db, NodeOptions::default()).await;
     let store = db.shared_store();
     let wasm = test_support::plugin_wasm("hello");
-    install_plugin_file(&store, &node.state.media, &manifest("hello"), &wasm, true)
-        .await
-        .unwrap();
+    install_plugin_file(
+        &store,
+        &node.state.media,
+        &site.config.plugins,
+        &manifest("hello"),
+        &wasm,
+        true,
+    )
+    .await
+    .unwrap();
     eventually(CONVERGE, "enabled", || home_contains(&node, HELLO_META)).await;
     let extensions = ExtensionService::new(store.clone());
-    for round in 0..2 {
+    for _ in 0..2 {
         extensions.set_plugin_enabled("hello", false).await.unwrap();
         eventually(CONVERGE, "disabled", || async {
             let (status, body) = get(node.addr, "/").await;
@@ -388,11 +489,10 @@ async fn plugin_hot_reload_on_enable_and_disable(db: Arc<TestDb>) {
         })
         .await;
         extensions.set_plugin_enabled("hello", true).await.unwrap();
-        let took = eventually(CONVERGE, "enabled again", || {
+        eventually(CONVERGE, "enabled again", || {
             home_contains(&node, HELLO_META)
         })
         .await;
-        eprintln!("round {round}: re-enable visible after {took:?}");
     }
     node.shutdown().await.unwrap();
 }
@@ -532,13 +632,12 @@ async fn scheduled_post_publishes_via_job(db: Arc<TestDb>) {
         .unwrap();
     let scheduled = Instant::now();
     assert_eq!(get(node.addr, "/later/").await.0, 404);
-    let took = eventually(
+    eventually(
         Duration::from_millis(3500),
         "scheduled post visible",
         || async { get(node.addr, "/later/").await.0 == 200 },
     )
     .await;
-    eprintln!("visible {took:?} after scheduling (due after 2 s)");
     assert!(scheduled.elapsed() >= Duration::from_millis(1900));
     // No periodics run on this node, so the one job is the item's own.
     eventually(Duration::from_secs(2), "job done", || {
@@ -601,7 +700,6 @@ async fn shutdown_releases_running_job_and_deregisters(db: Arc<TestDb>) {
     let started = Instant::now();
     node.shutdown().await.unwrap();
     let took = started.elapsed();
-    eprintln!("shutdown took {took:?}");
     assert!(took < Duration::from_secs(14), "{took:?}");
     assert!(
         took >= Duration::from_secs(8),
@@ -626,6 +724,8 @@ async fn shutdown_releases_running_job_and_deregisters(db: Arc<TestDb>) {
 
 backend_tests_spawning!(
     boot_race_change_during_startup_is_applied,
+    boot_race_plugin_enable_is_applied,
+    failed_theme_reload_is_retried,
     theme_hot_swap_without_restart,
     bad_theme_activation_keeps_previous_theme,
     bad_plugin_update_keeps_previous_version,

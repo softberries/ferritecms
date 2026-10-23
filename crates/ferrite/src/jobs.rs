@@ -7,7 +7,7 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use ferrite_cluster::{JobError, JobHandler, Periodic};
 use ferrite_core::{
-    ContentService,
+    ContentService, CoreError,
     jobs::{PUBLISH_DUE_KIND, PUBLISH_SCHEDULED_KIND, PUBLISH_SCHEDULED_VERSION, PublishScheduled},
 };
 use ferrite_domain::Job;
@@ -40,7 +40,11 @@ impl JobHandler for PublishScheduledHandler {
             .content
             .publish_scheduled(payload.id, payload.at)
             .await
-            .map_err(|e| JobError::Retry(e.to_string()))?;
+            .map_err(|e| match e {
+                // Retrying cannot change these.
+                CoreError::Invalid(_) | CoreError::NotFound => JobError::Permanent(e.to_string()),
+                other => JobError::Retry(other.to_string()),
+            })?;
         if published {
             tracing::info!(item = %payload.id, "published scheduled item");
         }

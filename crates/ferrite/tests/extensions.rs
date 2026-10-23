@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use ferrite::extensions::{PLUGIN_MIME, install_plugin_file};
+use ferrite_config::PluginsConfig;
 use ferrite_core::events::PLUGINS_CHANGED;
 use ferrite_domain::ArtifactKind;
 use ferrite_http::load_plugins;
@@ -21,6 +22,19 @@ fn manifest(name: &str) -> String {
         .join("plugins/examples")
         .join(name);
     std::fs::read_to_string(dir.join("ferrite-plugin.toml")).unwrap()
+}
+
+/// The `[plugins]` section of a site whose `ferrite.toml` adds `extra`.
+fn limits(extra: &str) -> PluginsConfig {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("ferrite.toml"),
+        format!("[site]\nurl = \"https://example.com\"\n{extra}"),
+    )
+    .unwrap();
+    ferrite_config::load(dir.path(), Vec::new())
+        .unwrap()
+        .plugins
 }
 
 fn media(dir: &tempfile::TempDir) -> Arc<MediaStore> {
@@ -43,7 +57,7 @@ async fn install_plugin_file_roundtrip(db: &TestDb) {
     let media = media(&dir);
     let store = db.shared_store();
     let wasm = test_support::plugin_wasm("hello");
-    let row = install_plugin_file(&store, &media, &manifest("hello"), &wasm, true)
+    let row = install_plugin_file(&store, &media, &limits(""), &manifest("hello"), &wasm, true)
         .await
         .unwrap();
     assert_eq!(row.name, "hello");
@@ -83,9 +97,16 @@ async fn install_plugin_file_roundtrip(db: &TestDb) {
 
     // Installing again with `enabled = false` keeps the row's state, like a theme's
     // `activate = false`.
-    let again = install_plugin_file(&store, &media, &manifest("hello"), &wasm, false)
-        .await
-        .unwrap();
+    let again = install_plugin_file(
+        &store,
+        &media,
+        &limits(""),
+        &manifest("hello"),
+        &wasm,
+        false,
+    )
+    .await
+    .unwrap();
     assert_eq!(again.artifact_hash, row.artifact_hash);
     assert!(again.enabled);
 
@@ -93,6 +114,7 @@ async fn install_plugin_file_roundtrip(db: &TestDb) {
     let clock = install_plugin_file(
         &store,
         &media,
+        &limits(""),
         &manifest("clock"),
         &test_support::plugin_wasm("clock"),
         false,
@@ -121,7 +143,7 @@ async fn install_plugin_file_refuses_what_does_not_load(db: &TestDb) {
             "does not load",
         ),
     ] {
-        let err = install_plugin_file(&store, &media, &manifest, &wasm, true)
+        let err = install_plugin_file(&store, &media, &limits(""), &manifest, &wasm, true)
             .await
             .unwrap_err();
         assert!(format!("{err:#}").contains(expect), "{err:#}");
@@ -133,7 +155,27 @@ async fn install_plugin_file_refuses_what_does_not_load(db: &TestDb) {
     );
 }
 
+/// The check uses the site's limits: a memory request within the host default but above
+/// the site's `plugins.default_memory` is refused.
+async fn install_plugin_file_uses_the_site_limits(db: &TestDb) {
+    let dir = tempfile::tempdir().unwrap();
+    let media = media(&dir);
+    let store = db.shared_store();
+    let wasm = test_support::plugin_wasm("hello");
+    let manifest = format!("{}\n[limits]\nmemory = \"32MiB\"\n", manifest("hello"));
+    let small = limits("[plugins]\ndefault_memory = \"16MiB\"\n");
+    let err = install_plugin_file(&store, &media, &small, &manifest, &wasm, true)
+        .await
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("does not load"), "{err:#}");
+    assert!(store.read().plugins().list().await.unwrap().is_empty());
+    install_plugin_file(&store, &media, &limits(""), &manifest, &wasm, true)
+        .await
+        .unwrap();
+}
+
 backend_tests!(
+    install_plugin_file_uses_the_site_limits,
     install_plugin_file_roundtrip,
     install_plugin_file_refuses_what_does_not_load,
 );

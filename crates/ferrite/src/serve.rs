@@ -198,6 +198,16 @@ pub async fn start(
     store: Arc<dyn Store>,
     opts: NodeOptions,
 ) -> anyhow::Result<RunningNode> {
+    let (registry, http) = join(config, &store, &opts).await?;
+    boot_or_leave(config, store, opts, http, registry).await
+}
+
+/// Startup up to and including joining the node registry.
+async fn join(
+    config: &Config,
+    store: &Arc<dyn Store>,
+    opts: &NodeOptions,
+) -> anyhow::Result<(Registry, HttpConfig)> {
     let version = match &opts.version {
         Some(v) => v.clone(),
         None => binary_version()?,
@@ -224,18 +234,33 @@ pub async fn start(
     )
     .await
     .context("cannot join the node registry")?;
+    Ok((registry, http))
+}
+
+/// [`boot`]; on error leaves the registry at once, so a restart (solo mode) need not
+/// wait for the row to go stale.
+async fn boot_or_leave(
+    config: &Config,
+    store: Arc<dyn Store>,
+    opts: NodeOptions,
+    http: HttpConfig,
+    registry: Registry,
+) -> anyhow::Result<RunningNode> {
     match boot(config, store, opts, http, registry.clone()).await {
         Ok(node) => Ok(node),
         Err(e) => {
-            // Leave at once, so a restart (solo mode) need not wait for the row to go
-            // stale.
-            match tokio::time::timeout(BACKGROUND_STOP, registry.leave()).await {
-                Ok(Ok(())) => {}
-                Ok(Err(le)) => tracing::warn!(error = %le, "could not leave the node registry"),
-                Err(_) => tracing::warn!("leaving the node registry timed out"),
-            }
+            leave_bounded(&registry).await;
             Err(e)
         }
+    }
+}
+
+/// `Registry::leave`, bounded by [`BACKGROUND_STOP`]; failures are logged.
+async fn leave_bounded(registry: &Registry) {
+    match tokio::time::timeout(BACKGROUND_STOP, registry.leave()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!(error = %e, "could not leave the node registry"),
+        Err(_) => tracing::warn!("leaving the node registry timed out"),
     }
 }
 
@@ -457,7 +482,10 @@ impl RunningNode {
         let (served, ()) = tokio::join!(http, jobs);
 
         background.cancel();
-        let deadline = Instant::now() + BACKGROUND_STOP;
+        // Normally 1 s from now; anchored so that an abandoned runner (12 s plus its
+        // abort grace) still ends shutdown within RUNNER_STOP + BACKGROUND_STOP.
+        let deadline =
+            (Instant::now() + BACKGROUND_STOP).min(started + RUNNER_STOP + BACKGROUND_STOP);
         futures::future::join_all(
             tasks
                 .into_iter()
@@ -548,10 +576,24 @@ async fn serve(
     store: Arc<dyn Store>,
     signals: &mut Signals,
 ) -> (anyhow::Result<()>, Instant) {
-    let started = tokio::select! {
-        node = start(config, store, NodeOptions::default()) => node,
+    let opts = NodeOptions::default();
+    let joined = tokio::select! {
+        joined = join(config, &store, &opts) => joined,
         signal = signals.recv() => {
             tracing::error!(signal = signal.name(), "signal during startup; exiting immediately");
+            std::process::exit(signal.exit_code());
+        }
+    };
+    let (registry, http) = match joined {
+        Ok(joined) => joined,
+        Err(e) => return (Err(e), Instant::now() + CLOSE_TIMEOUT),
+    };
+    let started = tokio::select! {
+        node = boot_or_leave(config, store, opts, http, registry.clone()) => node,
+        signal = signals.recv() => {
+            // Nothing is spawned before boot returns; only the row needs removing.
+            tracing::error!(signal = signal.name(), "signal during startup; leaving and exiting");
+            leave_bounded(&registry).await;
             std::process::exit(signal.exit_code());
         }
     };
@@ -601,7 +643,7 @@ fn media_url(media: Arc<MediaStore>) -> ferrite_core::site::MediaUrlFn {
 }
 
 /// The plugin host limits from `[plugins]`; the rest are the host defaults.
-fn host_config(p: &PluginsConfig) -> HostConfig {
+pub(crate) fn host_config(p: &PluginsConfig) -> HostConfig {
     HostConfig {
         memory_bytes: usize::try_from(p.default_memory).unwrap_or(usize::MAX),
         fuel: p.default_fuel,
@@ -716,10 +758,20 @@ mod tests {
         assert!(LEAVE_BUDGET < BACKGROUND_STOP);
         // Normal case: HTTP drain, background stop and the full pool close fit.
         assert!(DRAIN + BACKGROUND_STOP + CLOSE_TIMEOUT <= SHUTDOWN_BOUND);
-        // Worst case (runner abandoned): the pool close is cut to what is left.
-        assert!(RUNNER_STOP + BACKGROUND_STOP <= SHUTDOWN_BOUND);
-        let total = SHUTDOWN_BOUND + RUNTIME_SHUTDOWN;
+        // Worst case: the runner is abandoned at RUNNER_STOP and gets ABORT_GRACE; the
+        // background deadline is anchored at RUNNER_STOP + BACKGROUND_STOP, so that grace
+        // and the tasks' own abort grace (inside LEAVE_BUDGET) are absorbed.
+        assert!(ABORT_GRACE < BACKGROUND_STOP);
+        assert!(ABORT_GRACE < LEAVE_BUDGET);
+        let background_end = RUNNER_STOP + BACKGROUND_STOP;
+        assert!(background_end <= SHUTDOWN_BOUND);
+        // Then the pool close gets what is left of SHUTDOWN_BOUND, then the runtime.
+        let close = SHUTDOWN_BOUND
+            .saturating_sub(background_end)
+            .min(CLOSE_TIMEOUT);
+        let total = background_end + close + RUNTIME_SHUTDOWN;
         assert!(total <= Duration::from_secs(14), "{total:?}");
+        assert!(SHUTDOWN_BOUND + RUNTIME_SHUTDOWN <= Duration::from_secs(14));
         assert_eq!(Signal::Interrupt.exit_code(), 130);
         #[cfg(unix)]
         assert_eq!(Signal::Terminate.exit_code(), 143);

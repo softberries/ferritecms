@@ -1,5 +1,6 @@
 //! What this node reports in `nodes.meta` (ruling P14, 04 §8): the theme, the plugins
-//! and the permalink rules it runs, with the last reload error of each. The registry
+//! and the permalink rules it runs, with the last reload error of each
+//! (`theme.error`, `plugins.<name>.error` / `plugins_error`, `permalinks_error`). The registry
 //! adds `site_id`, `site_url`, `mode` and `clock_skew_ms` itself.
 
 use std::sync::{Arc, Mutex, PoisonError};
@@ -34,6 +35,7 @@ pub struct NodeStatus {
 struct Status {
     theme: Value,
     plugins: Value,
+    plugins_error: Option<String>,
     permalinks_error: Option<String>,
 }
 
@@ -75,6 +77,12 @@ impl NodeStatus {
         self.lock().plugins = Value::Object(map);
     }
 
+    /// `nodes.meta.plugins_error`: why the plugin rows could not be read at the last
+    /// reload (the registry and `plugins` stay as they were).
+    pub fn set_plugins_error(&self, error: Option<&str>) {
+        self.lock().plugins_error = error.map(cap);
+    }
+
     /// `nodes.meta.permalinks_error`: why the current option values are not in effect.
     pub fn set_permalinks_error(&self, error: Option<&str>) {
         self.lock().permalinks_error = error.map(cap);
@@ -86,6 +94,7 @@ impl NodeStatus {
         json!({
             "theme": s.theme,
             "plugins": s.plugins,
+            "plugins_error": s.plugins_error,
             "permalinks_error": s.permalinks_error,
         })
     }
@@ -156,6 +165,9 @@ mod tests {
         }
         status.set_plugins(&ReloadReport { states });
         status.set_permalinks_error(Some("bad"));
+        assert!(status.meta()["plugins_error"].is_null());
+        status.set_plugins_error(Some("list failed"));
+        assert_eq!(status.meta()["plugins_error"], "list failed");
         let meta = status.meta();
         assert_eq!(meta["theme"]["name"], "blog");
         assert_eq!(meta["theme"]["hash"], hash.as_str());

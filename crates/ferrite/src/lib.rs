@@ -11,6 +11,9 @@ pub mod reload;
 mod seed;
 pub mod serve;
 mod site;
+#[cfg(test)]
+#[path = "../../ferrite-plugin-host/src/test_support.rs"]
+mod test_support;
 
 pub use cli::{Cli, Command, MigrateCommand, run};
 pub use open::{Decision, OpenMode, decide, open_store, startup_check};

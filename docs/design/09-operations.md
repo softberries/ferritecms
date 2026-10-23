@@ -222,12 +222,14 @@ also installs the `ring` rustls default crypto provider at start.
   reloads all three. The page cache is flushed after each swap. A theme, plugin version or
   permalink set that fails to load keeps the current one and is reported in `nodes.meta`
   (`theme.error`, `plugins.<name>.status = "failed"` with `error`, `permalinks_error`); there
-  is no runtime fallback to `blog`. The replaced theme's `/_theme/<hash>/` assets stay served
-  until the next swap.
+  is no runtime fallback to `blog`. A failed reload is retried per component after 5 s,
+  doubling up to 5 min, until it succeeds (a newer event retries at once; ruling R14). The
+  replaced theme's `/_theme/<hash>/` assets stay served until the next swap.
 - **`nodes.meta`** (heartbeat, and at once after every reload): `site_id`, `site_url`
   (normalised, no trailing slash), `mode`, `clock_skew_ms`, `theme` (`name`, `hash`,
   `origin`, `error`), `plugins` (per plugin row: `version`, `hash`, `status` =
-  `loaded`/`failed`/`disabled`, `error` up to 1 KiB), `permalinks_error`.
+  `loaded`/`failed`/`disabled`, `error` up to 1 KiB), `plugins_error` (the plugin rows could
+  not be read), `permalinks_error`.
 - **Shutdown** on SIGINT or SIGTERM: stop accepting connections and stop the job runner at
   once; open requests get up to 10 s while running jobs get 9 s, after which the runner
   releases the rest without using an attempt (another node takes them at once; the runner
@@ -236,7 +238,8 @@ also installs the `ring` rustls default crypto provider at start.
   (up to 2 s, cut so that shutdown so far ends within 13 s of the signal); `main` then shuts
   the runtime down with a 1 s grace, dropping connection tasks still running. A clean
   shutdown exits 0; the process is gone at most 14 s after the first signal. A second
-  SIGINT/SIGTERM during startup or shutdown exits at once with 130 (SIGINT) or 143 (SIGTERM).
+  SIGINT/SIGTERM during startup (after joining the registry the node first leaves it, within
+  1 s) or shutdown exits at once with 130 (SIGINT) or 143 (SIGTERM).
 - **Health:** `/healthz` is `200 ok`; `/readyz` is `200` when a store read succeeds within
   2 s and the startup migration check passed, else `503`.
 - **Settings it uses** (`[server]`, `[cache]`, `[plugins]`, 01 §4): `server.listen`,
