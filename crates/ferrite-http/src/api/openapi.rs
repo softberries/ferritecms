@@ -20,7 +20,10 @@ pub const SESSION_COOKIE: &str = "ferrite_session";
     info(title = "FerriteCMS API", version = "1", description = "FerriteCMS REST API v1."),
     modifiers(&SecuritySchemes),
     components(schemas(ProblemDocument, FieldError)),
-    tags((name = "meta", description = "API metadata")),
+    tags(
+        (name = "meta", description = "API metadata"),
+        (name = "auth", description = "Login, session, password and TOTP"),
+    ),
 )]
 pub struct ApiDoc;
 

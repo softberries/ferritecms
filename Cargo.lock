@@ -1536,6 +1536,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml",
+ "totp-rs",
  "tower",
  "tower-http 0.7.1",
  "tracing",

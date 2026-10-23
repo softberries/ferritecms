@@ -4,4 +4,5 @@
 
 mod harness;
 
+mod auth;
 mod foundation;

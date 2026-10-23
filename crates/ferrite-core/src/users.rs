@@ -203,6 +203,10 @@ impl UserService {
     /// `Forbidden("current password")`) and clears `must_reset`; for another user it needs
     /// `manage_users` and sets `must_reset`. Every session of the user is deleted except
     /// the one whose `id_hash` is `keep_session`.
+    ///
+    /// A self change made by a request goes through
+    /// [`AuthService::change_password`](crate::AuthService::change_password), which rate
+    /// limits the current-password check (R11) first.
     pub async fn set_password(
         &self,
         actor: &Actor,

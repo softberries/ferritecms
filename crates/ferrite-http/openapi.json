@@ -6,6 +6,483 @@
     "version": "1"
   },
   "paths": {
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Logged in (sets the `ferrite_session` cookie), or a TOTP code is needed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid-credentials`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`csrf`: not from the site's origin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate-limited` (see `Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login/totp": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "login_totp",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TotpLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Logged in (sets the `ferrite_session` cookie)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid-credentials`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`csrf`: not from the site's origin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate-limited` (see `Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "Session deleted, cookie cleared"
+          },
+          "400": {
+            "description": "`bad-request`: the request used a bearer token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`csrf`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "get_me",
+        "responses": {
+          "200": {
+            "description": "The authenticated user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "change_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Changed; every session of the user is deleted, and a session request gets a new cookie"
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (wrong current password) or `csrf`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: the new password breaks the policy",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate-limited` (see `Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/totp/confirm": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "totp_confirm",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TotpConfirm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "TOTP is on"
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`csrf`, `forbidden` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: bad or expired enrollment, wrong code",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate-limited` (see `Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/totp/disable": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "totp_disable",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TotpDisable"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "TOTP is off"
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (wrong password), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: TOTP is not on",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate-limited` (see `Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/totp/setup": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "totp_setup",
+        "responses": {
+          "200": {
+            "description": "Enrollment started (nothing stored yet)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TotpSetupDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`csrf`, `forbidden` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: TOTP is already on",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/meta": {
       "get": {
         "tags": [
@@ -63,6 +540,133 @@
           }
         }
       },
+      "LoginRequest": {
+        "type": "object",
+        "description": "`POST /auth/login`.",
+        "required": [
+          "login",
+          "password"
+        ],
+        "properties": {
+          "login": {
+            "type": "string",
+            "description": "Login or e-mail address."
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "LoginResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Logged in; the session cookie is set.",
+            "required": [
+              "user",
+              "csrf_token",
+              "status"
+            ],
+            "properties": {
+              "csrf_token": {
+                "type": "string",
+                "description": "The session's `X-CSRF-Token` (also in `user.csrf_token`)."
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "session"
+                ]
+              },
+              "user": {
+                "$ref": "#/components/schemas/MeDto"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The account uses TOTP: send a code with `challenge` to `POST /auth/login/totp`\nwithin 5 minutes.",
+            "required": [
+              "challenge",
+              "status"
+            ],
+            "properties": {
+              "challenge": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "totp_required"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The result of a correct password (`status` tells which)."
+      },
+      "MeDto": {
+        "type": "object",
+        "description": "The authenticated user and what the request's credential allows.",
+        "required": [
+          "id",
+          "login",
+          "email",
+          "display_name",
+          "role",
+          "must_reset",
+          "totp_enabled",
+          "capabilities",
+          "scopes"
+        ],
+        "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Capabilities granted by the role and the credential's scopes (07 §1 names)."
+          },
+          "csrf_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `X-CSRF-Token` for this session's unsafe requests; `null` for a bearer token."
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "login": {
+            "type": "string"
+          },
+          "must_reset": {
+            "type": "boolean",
+            "description": "Only `GET /auth/me`, `POST /auth/logout` and `POST /auth/password` are open until\nthe password is changed."
+          },
+          "role": {
+            "type": "string",
+            "description": "`admin`, `editor`, `author` or `contributor`."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The credential's scopes (a session holds every scope)."
+          },
+          "totp_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
       "MetaDto": {
         "type": "object",
         "description": "The API version and the site it serves.",
@@ -83,6 +687,23 @@
           "version": {
             "type": "string",
             "description": "The FerriteCMS version serving the request."
+          }
+        }
+      },
+      "PasswordChange": {
+        "type": "object",
+        "description": "`POST /auth/password`.",
+        "required": [
+          "current",
+          "new"
+        ],
+        "properties": {
+          "current": {
+            "type": "string"
+          },
+          "new": {
+            "type": "string",
+            "description": "12 to 1024 bytes, at least 12 characters."
           }
         }
       },
@@ -122,6 +743,74 @@
             "description": "`/api/v1/problems/<slug>`."
           }
         }
+      },
+      "TotpConfirm": {
+        "type": "object",
+        "description": "`POST /auth/totp/confirm`.",
+        "required": [
+          "enrollment",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "enrollment": {
+            "type": "string",
+            "description": "`enrollment` from `POST /auth/totp/setup` (valid 10 minutes)."
+          }
+        }
+      },
+      "TotpDisable": {
+        "type": "object",
+        "description": "`POST /auth/totp/disable`.",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The account's current password."
+          }
+        }
+      },
+      "TotpLoginRequest": {
+        "type": "object",
+        "description": "`POST /auth/login/totp`.",
+        "required": [
+          "challenge",
+          "code"
+        ],
+        "properties": {
+          "challenge": {
+            "type": "string",
+            "description": "`challenge` from the `totp_required` login response (valid 5 minutes)."
+          },
+          "code": {
+            "type": "string",
+            "description": "The 6-digit code from the authenticator."
+          }
+        }
+      },
+      "TotpSetupDto": {
+        "type": "object",
+        "description": "A started TOTP enrollment: show the URL (as a QR code) or the secret, then confirm a\ncode with `enrollment` within 10 minutes.",
+        "required": [
+          "secret_base32",
+          "otpauth_url",
+          "enrollment"
+        ],
+        "properties": {
+          "enrollment": {
+            "type": "string"
+          },
+          "otpauth_url": {
+            "type": "string"
+          },
+          "secret_base32": {
+            "type": "string"
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -140,6 +829,10 @@
     {
       "name": "meta",
       "description": "API metadata"
+    },
+    {
+      "name": "auth",
+      "description": "Login, session, password and TOTP"
     }
   ]
 }

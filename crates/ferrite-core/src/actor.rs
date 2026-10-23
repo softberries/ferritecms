@@ -207,6 +207,25 @@ pub enum Capability {
 }
 
 impl Capability {
+    /// Every capability, in the order of 07 §1.
+    pub const ALL: [Capability; 15] = [
+        Self::ReadAdmin,
+        Self::EditOwn,
+        Self::PublishOwn,
+        Self::EditOthers,
+        Self::PublishOthers,
+        Self::UploadMedia,
+        Self::ManageTerms,
+        Self::ManageMenus,
+        Self::ModerateComments,
+        Self::ManageUsers,
+        Self::ManageSettings,
+        Self::ManageThemes,
+        Self::ManagePlugins,
+        Self::Import,
+        Self::ManageRedirects,
+    ];
+
     /// The capability's name as in 07 §1, e.g. `edit_own`.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -309,26 +328,9 @@ mod tests {
     use super::*;
     use Capability::*;
 
-    const ALL: [Capability; 15] = [
-        ReadAdmin,
-        EditOwn,
-        PublishOwn,
-        EditOthers,
-        PublishOthers,
-        UploadMedia,
-        ManageTerms,
-        ManageMenus,
-        ModerateComments,
-        ManageUsers,
-        ManageSettings,
-        ManageThemes,
-        ManagePlugins,
-        Import,
-        ManageRedirects,
-    ];
-
     fn granted(role: Role) -> Vec<&'static str> {
-        ALL.iter()
+        Capability::ALL
+            .iter()
             .filter(|c| can(role, **c))
             .map(|c| c.as_str())
             .collect()
@@ -336,7 +338,7 @@ mod tests {
 
     #[test]
     fn capability_table() {
-        assert_eq!(granted(Role::Admin).len(), ALL.len());
+        assert_eq!(granted(Role::Admin).len(), Capability::ALL.len());
         assert_eq!(
             granted(Role::Editor),
             [
@@ -460,7 +462,7 @@ mod tests {
             (Import, Some("import:write")),
             (ManageRedirects, Some("redirects:write")),
         ];
-        assert_eq!(expect.len(), ALL.len());
+        assert_eq!(expect.len(), Capability::ALL.len());
         for (cap, scope) in expect {
             assert_eq!(cap.scope().map(Scope::as_str), scope, "{cap:?}");
         }

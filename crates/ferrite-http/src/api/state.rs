@@ -79,7 +79,7 @@ impl ApiState {
 }
 
 /// The origin of `url` and whether it is `https`.
-fn origin_of(url: &str) -> Result<(String, bool), InvalidSiteUrl> {
+pub(super) fn origin_of(url: &str) -> Result<(String, bool), InvalidSiteUrl> {
     let invalid = || InvalidSiteUrl(url.to_owned());
     let uri: Uri = url.parse().map_err(|_| invalid())?;
     let scheme = uri

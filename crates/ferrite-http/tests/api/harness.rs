@@ -5,13 +5,13 @@
 //! Its own small fixture rather than `tests/plugins/common.rs`: this crate needs none
 //! of the plugin helpers, and including them would leave them unused here.
 
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use axum::{
-    Router,
+    Extension, Router,
     body::Body,
-    extract::connect_info::MockConnectInfo,
-    http::{HeaderMap, Method, Request, StatusCode, header},
+    extract::ConnectInfo,
+    http::{HeaderMap, Method, Request, StatusCode, header, request},
 };
 use ferrite_cache::PageCache;
 use ferrite_core::{
@@ -224,7 +224,7 @@ impl Api {
             })
             .expect("api state"),
         );
-        let router = build_site(app.clone(), api.clone()).layer(MockConnectInfo(CLIENT));
+        let router = with_client(build_site(app.clone(), api.clone()));
         Self {
             db,
             _media: media,
@@ -254,6 +254,176 @@ impl Api {
 
     pub async fn get(&self, path: &str) -> Resp {
         self.send(request(Method::GET, path)).await
+    }
+
+    /// The whole site again, with the same store and services but another `site.url`
+    /// for the API (origin and the cookie's `Secure` follow it).
+    pub fn router_for_site(&self, site_url: &str) -> Router {
+        let a = &self.api;
+        let api = Arc::new(
+            ApiState::new(ApiParts {
+                store: a.store.clone(),
+                auth: a.auth.clone(),
+                users: a.users.clone(),
+                content: a.content.clone(),
+                taxonomy: a.taxonomy.clone(),
+                menus: a.menus.clone(),
+                options: a.options.clone(),
+                redirects: a.redirects.clone(),
+                site_url: site_url.into(),
+            })
+            .expect("api state"),
+        );
+        with_client(build_site(self.app.clone(), api))
+    }
+
+    /// Waits for the next rate-limit window (database clock) unless at least `need` of
+    /// the current one is left (F10).
+    pub async fn align_to_window(&self, need: Duration) {
+        let w = i64::try_from(WINDOW.as_micros()).unwrap();
+        let now = self
+            .store
+            .read()
+            .nodes()
+            .db_now()
+            .await
+            .unwrap()
+            .as_micros();
+        let left = w - now.rem_euclid(w);
+        if left < i64::try_from(need.as_micros()).unwrap() {
+            tokio::time::sleep(
+                Duration::from_micros(left.unsigned_abs()) + Duration::from_millis(50),
+            )
+            .await;
+        }
+    }
+}
+
+/// `router` with every request coming from [`CLIENT`]. The `ConnectInfo` extension is
+/// inserted directly: `record_client` reads that extension, and axum's
+/// `MockConnectInfo` would only feed the `ConnectInfo` extractor (F9).
+fn with_client(router: Router) -> Router {
+    router.layer(Extension(ConnectInfo(CLIENT)))
+}
+
+/// The rate-limit window of every auth limit.
+pub const WINDOW: Duration = Duration::from_secs(60);
+
+/// A request builder with the harness `Host`.
+pub fn builder(method: Method, path: &str) -> request::Builder {
+    Request::builder()
+        .method(method)
+        .uri(path)
+        .header(header::HOST, "example.com")
+}
+
+/// `b` with a JSON body.
+pub fn json_body(b: request::Builder, body: &Value) -> Request<Body> {
+    b.header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("request")
+}
+
+/// A browser-like API client: sends `Origin`, keeps the session cookie from
+/// `Set-Cookie` and the CSRF token from login and `me` responses, and sends the token on
+/// every request but GET/HEAD.
+pub struct Client {
+    pub origin: String,
+    pub cookie: Option<String>,
+    pub csrf: Option<String>,
+}
+
+impl Default for Client {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Client {
+    /// A client of the default site (`Origin` = [`SITE_URL`]).
+    pub fn new() -> Self {
+        Self::with_origin(SITE_URL)
+    }
+
+    pub fn with_origin(origin: &str) -> Self {
+        Self {
+            origin: origin.to_owned(),
+            cookie: None,
+            csrf: None,
+        }
+    }
+
+    /// A request carrying the client's `Origin`, cookie and (for unsafe methods) CSRF
+    /// token.
+    pub fn builder(&self, method: Method, path: &str) -> request::Builder {
+        let unsafe_method = method != Method::GET && method != Method::HEAD;
+        let mut b = builder(method, path).header(header::ORIGIN, &self.origin);
+        if let Some(c) = &self.cookie {
+            b = b.header(header::COOKIE, format!("ferrite_session={c}"));
+        }
+        if let (true, Some(t)) = (unsafe_method, &self.csrf) {
+            b = b.header("x-csrf-token", t);
+        }
+        b
+    }
+
+    /// Takes the cookie from `Set-Cookie` (dropped on `Max-Age=0`; a new cookie drops
+    /// the old CSRF token) and the CSRF token from a JSON body's `csrf_token`.
+    pub fn absorb(&mut self, r: &Resp) {
+        if let Some(set) = r.header("set-cookie") {
+            let value = set
+                .split(';')
+                .next()
+                .and_then(|kv| kv.strip_prefix("ferrite_session="))
+                .expect("session cookie")
+                .to_owned();
+            self.csrf = None;
+            self.cookie = if set.contains("Max-Age=0") {
+                None
+            } else {
+                Some(value)
+            };
+        }
+        if r.header("content-type") == Some("application/json")
+            && let Some(t) = r.json()["csrf_token"].as_str()
+        {
+            self.csrf = Some(t.to_owned());
+        }
+    }
+
+    pub async fn send_on(&mut self, router: &Router, req: Request<Body>) -> Resp {
+        let r = send(router, req).await;
+        self.absorb(&r);
+        r
+    }
+
+    pub async fn get(&mut self, api: &Api, path: &str) -> Resp {
+        let req = self.builder(Method::GET, path).body(Body::empty()).unwrap();
+        self.send_on(&api.router, req).await
+    }
+
+    /// POST without a body.
+    pub async fn post_empty(&mut self, api: &Api, path: &str) -> Resp {
+        let req = self
+            .builder(Method::POST, path)
+            .body(Body::empty())
+            .unwrap();
+        self.send_on(&api.router, req).await
+    }
+
+    pub async fn post(&mut self, api: &Api, path: &str, body: Value) -> Resp {
+        let req = json_body(self.builder(Method::POST, path), &body);
+        self.send_on(&api.router, req).await
+    }
+
+    /// `POST /api/v1/auth/login`.
+    pub async fn login(&mut self, api: &Api, login: &str, password: &str) -> Resp {
+        self.post(
+            api,
+            "/api/v1/auth/login",
+            serde_json::json!({"login": login, "password": password}),
+        )
+        .await
     }
 }
 

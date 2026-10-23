@@ -8,7 +8,7 @@
 //! |---|---|---|
 //! | `NotFound` | 404 | `not-found` |
 //! | `Forbidden(what)` | 403 | `forbidden` (detail names the capability or scope) |
-//! | `Unauthenticated` | 401 | `unauthenticated` |
+//! | `Unauthenticated` | 401 | `unauthenticated` (login endpoints: `invalid-credentials`) |
 //! | `RateLimited { retry_after_secs }` | 429 | `rate-limited` + `Retry-After` |
 //! | `Invalid(msg)` | 422 | `validation` (detail = msg) |
 //! | `Conflict { .. }` | 412 | `precondition-failed` (+ `current`, set by the handler) |
@@ -16,6 +16,16 @@
 //! | `Store(ForeignKey)` | 409 | `conflict` ("a related record changed; retry", F15) |
 //! | `Store(Busy)` | 503 | `busy` + `Retry-After: 5` |
 //! | `Random`, `Hashing`, any other `Store` | 500 | `internal` |
+//!
+//! The auth layer ([`auth`](super::auth)) adds `403 csrf` (cookie request without a valid
+//! `X-CSRF-Token` or from another origin) and `403 password-reset-required`.
+//!
+//! **Every 401 carries `WWW-Authenticate`** (RFC 9110 §11.6.1): `Bearer` unless the
+//! problem names another challenge ([`Problem::with_challenge`], e.g. `Bearer
+//! error="invalid_token"`). Bearer is the API's only HTTP authentication scheme; the
+//! session cookie has no standard challenge, so a cookie request that fails is answered
+//! with the same `Bearer` challenge, and browsers (the admin SPA) branch on the status
+//! and the slug instead.
 //!
 //! Store, randomness and hashing failures are logged with their text; the body says only
 //! "internal error" or "busy, retry". Request-level problems (malformed JSON or query,
@@ -59,6 +69,29 @@ pub struct Problem {
     pub current: Option<Box<serde_json::Value>>,
     /// Seconds for the `Retry-After` header.
     pub retry_after: Option<u64>,
+    /// The `WWW-Authenticate` value of a 401 ([`Challenge::Bearer`] when `None`).
+    pub challenge: Option<Challenge>,
+}
+
+/// The `WWW-Authenticate` challenge of a 401 (RFC 6750 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Challenge {
+    /// `Bearer`: no credentials were sent.
+    Bearer,
+    /// `Bearer error="invalid_request"`: a malformed `Authorization` header.
+    InvalidRequest,
+    /// `Bearer error="invalid_token"`: an unknown, expired or revoked token.
+    InvalidToken,
+}
+
+impl Challenge {
+    pub fn header_value(self) -> &'static str {
+        match self {
+            Self::Bearer => "Bearer",
+            Self::InvalidRequest => "Bearer error=\"invalid_request\"",
+            Self::InvalidToken => "Bearer error=\"invalid_token\"",
+        }
+    }
 }
 
 /// The body of a problem response (the OpenAPI schema `ProblemDocument`).
@@ -93,6 +126,7 @@ impl Problem {
             errors: Vec::new(),
             current: None,
             retry_after: None,
+            challenge: None,
         }
     }
 
@@ -114,6 +148,37 @@ impl Problem {
     pub fn with_retry_after(mut self, secs: u64) -> Self {
         self.retry_after = Some(secs);
         self
+    }
+
+    /// Sets the `WWW-Authenticate` value sent with a 401.
+    pub fn with_challenge(mut self, challenge: Challenge) -> Self {
+        self.challenge = Some(challenge);
+        self
+    }
+
+    /// `401 invalid-credentials`: a login or its TOTP step failed (whatever failed).
+    pub fn invalid_credentials() -> Self {
+        Self::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid-credentials",
+            "Invalid credentials",
+            "login, password or code is not valid",
+        )
+    }
+
+    /// `403 csrf`: a cookie request without a valid CSRF token, or from another origin.
+    pub fn csrf(detail: &'static str) -> Self {
+        Self::new(StatusCode::FORBIDDEN, "csrf", "CSRF check failed", detail)
+    }
+
+    /// `403 password-reset-required`: the account must change its password first.
+    pub fn password_reset_required() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            "password-reset-required",
+            "Password change required",
+            "change your password first (POST /api/v1/auth/password)",
+        )
     }
 
     pub fn not_found() -> Self {
@@ -179,6 +244,14 @@ impl IntoResponse for Problem {
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(PROBLEM_JSON));
         if let Some(secs) = self.retry_after {
             headers.insert(header::RETRY_AFTER, HeaderValue::from(secs));
+        }
+        if self.status == StatusCode::UNAUTHORIZED {
+            headers.insert(
+                header::WWW_AUTHENTICATE,
+                HeaderValue::from_static(
+                    self.challenge.unwrap_or(Challenge::Bearer).header_value(),
+                ),
+            );
         }
         res
     }
@@ -435,5 +508,19 @@ mod tests {
         let res = Problem::busy().into_response();
         assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(res.headers()[header::RETRY_AFTER], "5");
+        assert!(res.headers().get(header::WWW_AUTHENTICATE).is_none());
+
+        // Every 401 has a challenge.
+        let res = Problem::from(CoreError::Unauthenticated).into_response();
+        assert_eq!(res.headers()[header::WWW_AUTHENTICATE], "Bearer");
+        let res = Problem::invalid_credentials().into_response();
+        assert_eq!(res.headers()[header::WWW_AUTHENTICATE], "Bearer");
+        let res = Problem::from(CoreError::Unauthenticated)
+            .with_challenge(Challenge::InvalidToken)
+            .into_response();
+        assert_eq!(
+            res.headers()[header::WWW_AUTHENTICATE],
+            "Bearer error=\"invalid_token\""
+        );
     }
 }

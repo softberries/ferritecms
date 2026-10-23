@@ -35,7 +35,7 @@ use super::password::{self, Verified};
 use super::seal::{open, seal};
 use super::{limits, totp};
 use crate::{
-    Actor, CoreError, Scopes,
+    Actor, CoreError, Scopes, UserService,
     actor::{Area, Capability, Scope, can, require, require_scope},
     normalize_login,
     tx::finish,
@@ -433,6 +433,43 @@ impl AuthService {
             Ok(tag) => csrf_mac(session).verify_slice(&tag).is_ok(),
             Err(_) => false,
         }
+    }
+
+    /// A user changes their own password (`POST /auth/password`). The current-password
+    /// check is a password guess like a login, so it first counts on the login's
+    /// `login:user` bucket (5/min, exceeded → `RateLimited`, R11); then
+    /// [`UserService::set_password`] checks it, stores the new hash, clears `must_reset`
+    /// and deletes **every** session of the user. A request made with a session gets a
+    /// new one (F12: issued only after the check passed), returned here for the caller's
+    /// cookie; a token request gets `None` and its token stays valid.
+    ///
+    /// This is the only path for a self change made by a request: calling
+    /// `UserService::set_password` directly for oneself skips the rate limit.
+    pub async fn change_password(
+        &self,
+        users: &UserService,
+        who: &Authenticated,
+        current: &str,
+        new: &str,
+        ip: Option<IpAddr>,
+        user_agent: Option<&str>,
+    ) -> Result<Option<IssuedSession>, CoreError> {
+        limits::hit(
+            self.store.as_ref(),
+            &limits::login_user(&self.key, &who.user.login),
+            limits::LOGIN_PER_USER,
+        )
+        .await?;
+        users
+            .set_password(&who.actor, who.user.id, Some(current), new, None)
+            .await?;
+        if !matches!(who.via, Via::Session(_)) {
+            return Ok(None);
+        }
+        let user = active_user(self.store.read(), who.user.id)
+            .await?
+            .ok_or(CoreError::Unauthenticated)?;
+        self.issue_session(&user, ip, user_agent).await.map(Some)
     }
 
     // ---- API tokens ----------------------------------------------------------------

@@ -16,9 +16,12 @@
 //! router in front of the public fallback, inside the shared layers (security headers,
 //! compression, request span, client address, the outer catch-panic).
 //!
-//! Authentication (session cookie with CSRF, bearer tokens) arrives as extractors in a
-//! later task; the endpoints here are unauthenticated: `GET /meta`, `GET /openapi.json`.
+//! Authentication (session cookie with CSRF and `Origin` checks, bearer tokens) is the
+//! [`auth`] extractors; `GET /meta` and `GET /openapi.json` need none.
 
+pub mod auth;
+pub mod cookie;
+pub mod dto;
 pub mod extract;
 pub mod list;
 pub mod meta;
@@ -39,6 +42,7 @@ use tower_http::{catch_panic::CatchPanicLayer, set_header::SetResponseHeaderLaye
 use utoipa::OpenApi as _;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
+pub use auth::{Authed, AuthedAllowReset, CSRF_HEADER, ClientInfo, SameOrigin};
 pub use extract::{
     ApiJson, ApiQuery, DEFAULT_LIMIT, IfMatch, MAX_JSON_BODY, PageParams, created, etag,
 };
@@ -55,6 +59,14 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
     OpenApiRouter::new()
         .routes(routes!(meta::meta))
         .routes(routes!(meta::openapi_json))
+        .routes(routes!(auth::login))
+        .routes(routes!(auth::login_totp))
+        .routes(routes!(auth::logout))
+        .routes(routes!(auth::me))
+        .routes(routes!(auth::change_password))
+        .routes(routes!(auth::totp_setup))
+        .routes(routes!(auth::totp_confirm))
+        .routes(routes!(auth::totp_disable))
 }
 
 /// The spec and routes, before the state and layers.
