@@ -158,12 +158,17 @@ the HTTP endpoints above since M2a-1):
   `content:read` scope, then `can_read`: items publicly visible now (status published and
   `published_at <= now`, the public site's predicate; R23) are readable by every role,
   own items in any status by their author, and others' draft, pending, scheduled,
-  private, trashed and future-dated published items (and their revisions) only by roles
-  with `edit_others`
+  private, trashed and future-dated published items only by roles with `edit_others`
   (editor, admin; it also stands for WordPress's `read_private_posts`). An item the actor
   may not read is `404`, never `403`. Lists and `q` search apply the same rule in the
   query, so pages and cursors stay exact. `publish` also accepts a scheduled item
   ("publish now").
+- **Reading revisions (M2a-1 R26)** needs more than reading the item: the actor's role
+  must be able to edit it (`role_can_edit`, the role half of the edit rule above, so a
+  `content:read` token of such a role still reads them). Revisions keep text that was
+  removed from the item, so a contributor or author gets `404` for the revisions of
+  another author's published post, and a contributor for those of its own published
+  post. WordPress likewise requires `edit_post` on the parent.
 
 ## 2. Auth
 

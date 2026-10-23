@@ -339,10 +339,74 @@ pub fn can_edit(actor: &Actor, item: &ContentItem) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// Whether `actor`'s role may edit `item`: the role half of [`can_edit`], without the
+/// `content:write` scope check. Revisions are read with this (R26): their history can
+/// hold text that was removed, so only someone who could edit the item reads it (as
+/// WordPress requires `edit_post` on the parent), while a read-only token of such a
+/// role still may.
+pub fn role_can_edit(actor: &Actor, item: &ContentItem) -> bool {
+    if item.author_id != actor.user {
+        return can(actor.role, Capability::EditOthers);
+    }
+    can(actor.role, Capability::EditOwn)
+        && (actor.role != Role::Contributor
+            || matches!(item.status, ContentStatus::Draft | ContentStatus::Pending))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use Capability::*;
+
+    fn item(author_id: UserId, status: ContentStatus) -> ContentItem {
+        let now = Timestamp::now();
+        ContentItem {
+            id: ferrite_domain::ContentId::new(),
+            kind: "post".into(),
+            status,
+            slug: "s".into(),
+            parent_id: None,
+            author_id,
+            title: String::new(),
+            excerpt: String::new(),
+            body: serde_json::json!({}),
+            body_html: None,
+            fields: serde_json::json!({}),
+            menu_order: 0,
+            published_at: None,
+            scheduled_at: None,
+            created_at: now,
+            updated_at: now,
+            version: 1,
+        }
+    }
+
+    /// `role_can_edit` is `can_edit` for a full-scope actor, and ignores the scopes.
+    #[test]
+    fn role_can_edit_mirrors_can_edit() {
+        use ContentStatus::*;
+        let read_only = Scopes::from_strs(&["content:read".to_owned()]).unwrap();
+        for role in [Role::Admin, Role::Editor, Role::Author, Role::Contributor] {
+            let actor = Actor::new(UserId::new(), role);
+            for author in [actor.user, UserId::new()] {
+                for status in [Draft, Pending, Scheduled, Published, Private, Trash] {
+                    let it = item(author, status);
+                    let full = can_edit(&actor, &it).is_ok();
+                    assert_eq!(role_can_edit(&actor, &it), full, "{role:?} {status:?}");
+                    let reader = actor.with_scopes(read_only);
+                    assert!(can_edit(&reader, &it).is_err());
+                    assert_eq!(role_can_edit(&reader, &it), full, "{role:?} {status:?}");
+                }
+            }
+        }
+        let contributor = Actor::new(UserId::new(), Role::Contributor);
+        assert!(role_can_edit(&contributor, &item(contributor.user, Draft)));
+        assert!(!role_can_edit(
+            &contributor,
+            &item(contributor.user, Published)
+        ));
+        assert!(!role_can_edit(&contributor, &item(UserId::new(), Draft)));
+    }
 
     fn granted(role: Role) -> Vec<&'static str> {
         Capability::ALL

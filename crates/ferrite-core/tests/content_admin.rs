@@ -438,4 +438,71 @@ pub async fn revisions_list_get_restore(db: &TestDb) {
         .unwrap();
 }
 
-backend_tests!(admin_list_filters_and_search, revisions_list_get_restore);
+/// R26: revisions need edit rights on the item, not only read rights. Another author's
+/// published post is readable by everyone, but its revisions (which keep removed text)
+/// are `NotFound` to contributors and authors; editors and the owner read them, also
+/// through a read-only token. A contributor's own published post is no longer editable
+/// by it, so its revisions are hidden from it too.
+pub async fn revisions_need_edit_rights(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let editor = actor(store, Role::Editor).await;
+    let post = svc
+        .create(&editor, draft("post", "Live", "removed by mistake"))
+        .await
+        .unwrap();
+    let post = svc.publish(&editor, post.id, post.version).await.unwrap();
+    let rid = svc.revisions(&editor, post.id, 1).await.unwrap()[0].id;
+
+    for role in [Role::Contributor, Role::Author] {
+        let other = actor(store, role).await;
+        // The item itself stays readable (R17).
+        assert_eq!(svc.get_for(&other, post.id).await.unwrap(), post);
+        assert!(
+            matches!(
+                svc.revisions(&other, post.id, 50).await,
+                Err(CoreError::NotFound)
+            ),
+            "{role:?}"
+        );
+        assert!(
+            matches!(
+                svc.revision(&other, post.id, rid).await,
+                Err(CoreError::NotFound)
+            ),
+            "{role:?}"
+        );
+    }
+    let read_scope = Scopes::from_strs(&["content:read".into()]).unwrap();
+    for reader in [
+        editor.with_scopes(read_scope),
+        actor(store, Role::Editor).await.with_scopes(read_scope),
+        actor(store, Role::Admin).await,
+    ] {
+        assert_eq!(svc.revisions(&reader, post.id, 50).await.unwrap().len(), 1);
+        assert_eq!(svc.revision(&reader, post.id, rid).await.unwrap().id, rid);
+    }
+
+    // A contributor reads the revisions of its own draft, not of its published post.
+    let cora = actor(store, Role::Contributor).await;
+    let own = svc
+        .create(&cora, draft("post", "Mine", "mine"))
+        .await
+        .unwrap();
+    assert_eq!(svc.revisions(&cora, own.id, 50).await.unwrap().len(), 1);
+    let own = svc.publish(&editor, own.id, own.version).await.unwrap();
+    assert!(matches!(
+        svc.revisions(&cora, own.id, 50).await,
+        Err(CoreError::NotFound)
+    ));
+    // End on a committed operation.
+    svc.create(&editor, draft("post", "Done", "done"))
+        .await
+        .unwrap();
+}
+
+backend_tests!(
+    admin_list_filters_and_search,
+    revisions_list_get_restore,
+    revisions_need_edit_rights
+);

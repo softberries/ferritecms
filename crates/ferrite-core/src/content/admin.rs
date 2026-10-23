@@ -3,7 +3,8 @@
 //! `require_read(Content)` (`read_admin` plus the `content:read` scope, F16), so a token
 //! without a content scope reads nothing, and then [`can_read`] per item (R17, R23):
 //! others' items that are not publicly visible now (unpublished, or published with a
-//! future `published_at`) only for roles with `edit_others`.
+//! future `published_at`) only for roles with `edit_others`. Revisions need more: the
+//! actor's role must be able to edit the item ([`role_can_edit`], R26).
 
 use ferrite_domain::{
     ContentId, ContentItem, ContentOrder, ContentQuery, ContentStatus, Page, ParentFilter,
@@ -13,7 +14,7 @@ use ferrite_domain::{
 use super::{ContentDraft, ContentService, Edit, WALKED};
 use crate::{
     Actor, CoreError,
-    actor::{Area, Capability, can, can_read, require, require_read},
+    actor::{Area, Capability, can, can_read, require, require_read, role_can_edit},
     tx::finish,
 };
 
@@ -169,16 +170,32 @@ impl ContentService {
             .collect())
     }
 
+    /// Item `id` if `actor` may read its revisions: [`get_for`](Self::get_for), then
+    /// [`role_can_edit`] (R26: revisions keep text removed from the item, so readers of
+    /// a published item do not see them). Either failing is `NotFound`.
+    async fn get_for_revisions(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+    ) -> Result<ContentItem, CoreError> {
+        let item = self.get_for(actor, id).await?;
+        if role_can_edit(actor, &item) {
+            Ok(item)
+        } else {
+            Err(CoreError::NotFound)
+        }
+    }
+
     /// Up to `limit` (clamped to 1..=[`MAX_REVISIONS_LISTED`]) revisions of item `id`,
-    /// newest first, if `actor` may read the item ([`get_for`](Self::get_for):
-    /// `NotFound` otherwise).
+    /// newest first, if `actor`'s role may edit the item (`NotFound` otherwise, see
+    /// [`get_for_revisions`](Self::get_for_revisions)).
     pub async fn revisions(
         &self,
         actor: &Actor,
         id: ContentId,
         limit: u32,
     ) -> Result<Vec<Revision>, CoreError> {
-        self.get_for(actor, id).await?;
+        self.get_for_revisions(actor, id).await?;
         Ok(self
             .store
             .read()
@@ -187,15 +204,15 @@ impl ContentService {
             .await?)
     }
 
-    /// Revision `rid` of item `id`, if `actor` may read the item; a revision of another
-    /// item is `NotFound`.
+    /// Revision `rid` of item `id`, if `actor`'s role may edit the item (as
+    /// [`revisions`](Self::revisions)); a revision of another item is `NotFound`.
     pub async fn revision(
         &self,
         actor: &Actor,
         id: ContentId,
         rid: RevisionId,
     ) -> Result<Revision, CoreError> {
-        self.get_for(actor, id).await?;
+        self.get_for_revisions(actor, id).await?;
         self.store
             .read()
             .revisions()

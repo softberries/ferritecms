@@ -1002,7 +1002,8 @@ async fn make_private(api: &Api, id: &str) {
 
 /// R17: a contributor (or author) sees published items and its own, never others'
 /// draft, pending, scheduled, private or trashed items or their revisions; an editor sees
-/// everything. Hidden items are 404, not 403.
+/// everything. Hidden items are 404, not 403. R26: revisions of others' published items
+/// are hidden too.
 async fn others_unpublished_items_are_hidden(api: Api) -> Api {
     let ed = api.user("ed", Role::Editor, false).await;
     let eb = api.bearer(&ed, &["*"]).await;
@@ -1137,17 +1138,40 @@ async fn others_unpublished_items_are_hidden(api: Api) -> Api {
     // The contributor reads its own item and the published one.
     ok_item(&cb.get(&api, &item_path(POSTS, &own)).await);
     ok_item(&cb.get(&api, &item_path(POSTS, &live)).await);
+    // R26: the published item's revisions need edit rights, so they are 404 to the
+    // contributor and the author; the contributor reads its own draft's.
+    let live_path = item_path(POSTS, &live);
+    let live_rev = eb.get(&api, &format!("{live_path}/revisions")).await.json()["items"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for b in [&cb, &ab] {
+        b.get(&api, &format!("{live_path}/revisions"))
+            .await
+            .assert_problem(404, "not-found");
+        b.get(&api, &format!("{live_path}/revisions/{live_rev}"))
+            .await
+            .assert_problem(404, "not-found");
+    }
+    let r = cb
+        .get(&api, &format!("{}/revisions", item_path(POSTS, &own)))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
 
     // An editor reads everything, in every mode.
     let ed2 = api.user("ed2", Role::Editor, false).await;
     let e2 = api.bearer(&ed2, &["content:read"]).await;
-    for item in hidden {
+    for item in hidden.into_iter().chain([&live]) {
         ok_item(&e2.get(&api, &item_path(POSTS, item)).await);
         let r = e2
             .get(&api, &format!("{}/revisions", item_path(POSTS, item)))
             .await;
         assert_eq!(r.status, StatusCode::OK, "{r:?}");
     }
+    let r = e2
+        .get(&api, &format!("{live_path}/revisions/{live_rev}"))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
     let mut all: Vec<String> = hidden.iter().map(|i| id(i)).collect();
     all.push(id(&live));
     all.push(id(&own));

@@ -27,6 +27,7 @@ pub(crate) const MAX_PARENT_DEPTH: usize = 64;
 
 pub use actor::{
     Access, Actor, Area, Capability, Scope, Scopes, can, can_edit, can_read, require, require_read,
+    role_can_edit,
 };
 pub use auth::{AuthService, Authenticated, IssuedSession, LoginAttempt, LoginOutcome, Via};
 pub use content::{AdminQuery, ContentDraft, ContentService, MAX_REVISIONS_LISTED};

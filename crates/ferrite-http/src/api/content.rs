@@ -8,7 +8,9 @@
 //!   (uploads are `/media`, M2a-2; F21). An item of another type is `404`, as is a
 //!   malformed id, and an item the caller may not read (others' items that are not
 //!   publicly visible now, future-dated published ones included, without
-//!   `edit_others`; R17, R23; core's `can_read`), for reads and writes alike.
+//!   `edit_others`; R17, R23; core's `can_read`), for reads and writes alike. Reading
+//!   revisions also needs a role that may edit the item (R26; core's `role_can_edit`),
+//!   else `404`.
 //! * Writes to an item (`PATCH`, `DELETE`, lifecycle `POST`s, revision restore) need
 //!   `If-Match: "<version>"` (`428` without it). A stale version is `412
 //!   precondition-failed` with the item as stored now in `current`; nothing is written.
