@@ -10,13 +10,12 @@
 //! | `theme.changed` | theme |
 //! | `plugins.changed` | plugins |
 //! | `plugin.disabled` | the plugin is disabled in this host at once, then plugins |
-//! | `options.changed` | the option cache's keys ([`OptionService::reload_from_event`], R13) |
 //! | `options.changed` with `option:permalink.post` or `option:permalink.page` | permalinks |
 //! | `types.changed` (a content type or taxonomy was registered, changed or removed) | permalinks |
-//! | history lost | all three, and the whole option cache ([`OptionService::reload_all`]) |
+//! | history lost | all three |
 //!
-//! The option cache is refreshed first in each round and is not retried: a failed
-//! re-read drops the keys from the cache, so reads fall back to the store.
+//! There is no option cache to refresh: nothing reads options through a per-node
+//! cache yet (R26; it comes back with its first reader, M2a-2).
 //!
 //! The task re-reads the state from the database (never from event payloads), swaps it
 //! in and flushes the page cache after every completed swap: the loop flushed on the
@@ -36,10 +35,9 @@
 //! [`RETRY_MIN`] after the task starts (R17).
 
 use std::{
-    collections::BTreeSet,
     path::PathBuf,
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -49,7 +47,7 @@ use ferrite_cache::EventHook;
 use ferrite_cluster::Registry;
 use ferrite_config::ClusterMode;
 use ferrite_core::{
-    OptionService, SwappablePermalinks,
+    SwappablePermalinks,
     events::{
         OPTIONS_CHANGED, PLUGIN_DISABLED, PLUGINS_CHANGED, THEME_CHANGED, TYPES_CHANGED, option_key,
     },
@@ -82,16 +80,6 @@ struct Dirty {
     theme: AtomicBool,
     plugins: AtomicBool,
     permalinks: AtomicBool,
-    options: Mutex<OptionKeys>,
-}
-
-/// Option cache keys waiting for a re-read.
-#[derive(Debug, Default, PartialEq, Eq)]
-struct OptionKeys {
-    /// `option:<key>` event keys.
-    keys: BTreeSet<String>,
-    /// Re-read every autoloaded option (history lost).
-    all: bool,
 }
 
 /// The node's [`EventHook`]; see the module docs.
@@ -110,8 +98,6 @@ pub(crate) struct ReloadContext {
     pub mode: ClusterMode,
     pub state: Arc<AppState>,
     pub permalinks: Arc<SwappablePermalinks>,
-    /// The API's option service, whose autoload cache follows `options.changed`.
-    pub options: Arc<OptionService>,
     /// The process's one reloader (it remembers what it loaded).
     pub plugins: Arc<PluginReloader>,
     /// The theme being served.
@@ -173,14 +159,6 @@ impl Reloader {
 
     /// One coalesced round: every component whose flag is set or whose retry is due.
     async fn round(&self, ctx: &mut ReloadContext, retries: &mut [Retry; 3]) {
-        let options = std::mem::take(
-            &mut *self
-                .dirty
-                .options
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner),
-        );
-        ctx.reload_options(options).await;
         let take = |f: &AtomicBool| f.swap(false, Ordering::AcqRel);
         let events = [
             take(&self.dirty.permalinks),
@@ -265,13 +243,6 @@ impl EventHook for Reloader {
             }
             TYPES_CHANGED => self.mark(&self.dirty.permalinks),
             OPTIONS_CHANGED => {
-                self.dirty
-                    .options
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .keys
-                    .extend(event.keys.iter().cloned());
-                self.wake.notify_one();
                 let permalink = PERMALINK_OPTIONS
                     .iter()
                     .any(|key| event.keys.contains(&option_key(key)));
@@ -284,11 +255,6 @@ impl EventHook for Reloader {
     }
 
     fn on_history_lost(&self) {
-        self.dirty
-            .options
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .all = true;
         self.dirty.theme.store(true, Ordering::Release);
         self.dirty.plugins.store(true, Ordering::Release);
         self.dirty.permalinks.store(true, Ordering::Release);
@@ -307,22 +273,6 @@ impl ReloadContext {
             Retry::failed_at(self.theme.error.is_some(), now),
             Retry::failed_at(plugins_failed, now),
         ]
-    }
-
-    /// Re-reads the option cache's pending keys (or all of it). A failure is logged;
-    /// the service has dropped the keys it could not read.
-    async fn reload_options(&self, pending: OptionKeys) {
-        let result = if pending.all {
-            self.options.reload_all().await
-        } else if pending.keys.is_empty() {
-            return;
-        } else {
-            let keys: Vec<String> = pending.keys.into_iter().collect();
-            self.options.reload_from_event(&keys).await
-        };
-        if let Err(e) = result {
-            tracing::warn!(error = %e, "option cache reload failed; the keys are read from the store");
-        }
     }
 
     /// New rules from the options, checked, then the route table built with them; both
@@ -511,19 +461,6 @@ mod tests {
         let r = Reloader::new(host());
         r.on_history_lost();
         assert_eq!(flags(&r), [true, true, true]);
-        assert!(r.dirty.options.lock().unwrap().all);
-    }
-
-    #[test]
-    fn option_events_queue_their_keys() {
-        let r = Reloader::new(host());
-        r.on_event(&event(OPTIONS_CHANGED, &["option:site.title"]));
-        r.on_event(&event(OPTIONS_CHANGED, &["option:a", "option:site.title"]));
-        r.on_event(&event("invalidate", &["option:ignored"]));
-        let pending = r.dirty.options.lock().unwrap();
-        let keys: Vec<&str> = pending.keys.iter().map(String::as_str).collect();
-        assert_eq!(keys, ["option:a", "option:site.title"]);
-        assert!(!pending.all);
     }
 
     #[test]

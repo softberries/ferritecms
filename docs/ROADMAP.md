@@ -185,6 +185,7 @@ Outline in the M2a-1 plan ("Next plan: M2a-2"); it gets its own plan.
 - [ ] Comments: moderation endpoints, public `POST` (rate-limited, honeypot).
 - [ ] System API: status, jobs (queued kinds no node knows stay queued, M1.5 P5; dead jobs with `last_error`, retry), per-plugin metrics, metrics summary, audit log listing.
 - [ ] Hardening: sanitised `html` block nodes keep ammonia's default URL schemes, so `//evil` (scheme-relative), `ftp:` and `tel:` links pass (`ferrite-core/src/blocks`); decide an allowlist. Real `http` import (HTTPS only, allowlisted hosts, SSRF checks). `HostConfig` max-concurrent-calls semaphore, per-render plugin time budget, `HostServices` cancel-safety docs (plugin host follow-ups above).
+- [ ] Reintroduce the per-node option cache with its first reader (R13 refresh design in [rulings/m2a.md](superpowers/rulings/m2a.md)); theme and plugin settings are the likely first readers. The M2a-1 cache had no reader and was removed (R26), so options are read from the store today.
 - [ ] Auth follow-ups from M2a-1:
   - [ ] `__Host-` prefix for the session cookie on `https` sites (defence against cookie tossing from a sibling subdomain; the cookie is `ferrite_session` today).
   - [ ] Zeroize key material and passwords in memory (`SiteKey` is `Clone`; subkeys, HMAC blocks and password `String` copies stay in memory after use); parked from the M2a-1 Task 3 and Task 4 reviews (logs and `Debug` already redact them).

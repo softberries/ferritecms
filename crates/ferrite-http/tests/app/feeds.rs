@@ -245,9 +245,7 @@ async fn robots_txt(app: App) -> App {
         r.body,
         "User-agent: *\nDisallow:\n\nSitemap: https://example.com/sitemap.xml\n"
     );
-    OptionService::load(app.site.store.clone())
-        .await
-        .unwrap()
+    OptionService::new(app.site.store.clone())
         .set(&app.admin, DISCOURAGE_INDEXING_OPTION, &json!(true), false)
         .await
         .unwrap();

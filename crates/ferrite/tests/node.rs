@@ -667,9 +667,7 @@ async fn permalink_change_rebuilds_routes(db: Arc<TestDb>) {
 
     let user = fixture_user(store.as_ref()).await;
     let admin = Actor::new(user.id, Role::Admin);
-    OptionService::load(store.clone())
-        .await
-        .unwrap()
+    OptionService::new(store.clone())
         .set(
             &admin,
             "permalink.post",

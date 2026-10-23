@@ -221,7 +221,7 @@ impl Api {
                 types: Arc::new(ContentTypeService::new(store.clone())),
                 taxonomy: Arc::new(TaxonomyService::new(store.clone())),
                 menus: Arc::new(MenuService::new(store.clone())),
-                options: Arc::new(OptionService::load(store.clone()).await.expect("options")),
+                options: Arc::new(OptionService::new(store.clone())),
                 redirects: Arc::new(RedirectService::new(store.clone())),
                 site_url: SITE_URL.into(),
             })
@@ -300,7 +300,7 @@ impl Api {
                 types: Arc::new(ContentTypeService::new(store.clone())),
                 taxonomy: Arc::new(TaxonomyService::new(store.clone())),
                 menus: Arc::new(MenuService::new(store.clone())),
-                options: Arc::new(OptionService::load(store.clone()).await.expect("options")),
+                options: Arc::new(OptionService::new(store.clone())),
                 redirects: Arc::new(RedirectService::new(store.clone())),
                 site_url: SITE_URL.into(),
             })

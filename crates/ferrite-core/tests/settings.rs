@@ -84,7 +84,7 @@ fn draft(kind: &str, title: &str) -> ContentDraft {
 pub async fn settings_allowlist_and_validation(db: &TestDb) {
     let store = db.store();
     let admin = actor(store, Role::Admin).await;
-    let svc = OptionService::load(db.shared_store()).await.unwrap();
+    let svc = OptionService::new(db.shared_store());
 
     // The allowlist, in order.
     let keys: Vec<&str> = SETTINGS.iter().map(|d| d.key).collect();
@@ -219,10 +219,6 @@ pub async fn settings_allowlist_and_validation(db: &TestDb) {
         let e = store.read().options().get(key).await.unwrap().unwrap();
         assert!(e.autoload, "{key}");
     }
-    assert_eq!(
-        svc.get("site.title").await.unwrap().unwrap().value,
-        json!("New title")
-    );
     // An audit row for the batch.
     let audit = store.read().audit().list(10, None).await.unwrap();
     let row = audit
@@ -256,7 +252,6 @@ pub async fn settings_allowlist_and_validation(db: &TestDb) {
             .unwrap()
             .is_none()
     );
-    assert!(svc.get("site.title").await.unwrap().is_none());
     svc.set_many(&admin, &[change("reading.front_page", Value::Null)])
         .await
         .unwrap();
@@ -292,7 +287,7 @@ pub async fn settings_allowlist_and_validation(db: &TestDb) {
 pub async fn permalink_option_write_is_validated(db: &TestDb) {
     let store = db.store();
     let admin = actor(store, Role::Admin).await;
-    let svc = OptionService::load(db.shared_store()).await.unwrap();
+    let svc = OptionService::new(db.shared_store());
     let seq = max_seq(store).await;
 
     // A first segment that is a content type.
@@ -371,7 +366,7 @@ pub async fn permalink_option_write_is_validated(db: &TestDb) {
 pub async fn set_many_is_atomic(db: &TestDb) {
     let store = db.store();
     let admin = actor(store, Role::Admin).await;
-    let svc = OptionService::load(db.shared_store()).await.unwrap();
+    let svc = OptionService::new(db.shared_store());
     svc.set_many(&admin, &[change("site.title", json!("Before"))])
         .await
         .unwrap();
@@ -405,10 +400,6 @@ pub async fn set_many_is_atomic(db: &TestDb) {
             .unwrap()
             .unwrap()
             .value,
-        json!("Before")
-    );
-    assert_eq!(
-        svc.get("site.title").await.unwrap().unwrap().value,
         json!("Before")
     );
     assert_eq!(max_seq(store).await, seq, "no events");

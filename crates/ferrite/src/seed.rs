@@ -243,7 +243,7 @@ async fn seed_demo(
         .await
         .context("footer menu")?;
 
-    let options = OptionService::load(store.clone()).await?;
+    let options = OptionService::new(store.clone());
     options
         .set(&actor, "site.title", &json!(demo::SITE_TITLE), true)
         .await?;

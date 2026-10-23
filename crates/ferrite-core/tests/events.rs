@@ -435,7 +435,7 @@ pub async fn term_writes_emit_term_and_archive_keys(db: &TestDb) {
 pub async fn permalink_options_flush_everything(db: &TestDb) {
     let store = db.store();
     let a = admin(store).await;
-    let svc = OptionService::load(db.shared_store()).await.unwrap();
+    let svc = OptionService::new(db.shared_store());
 
     let kinds = |after: i64| async move {
         let ev = store.read().events().since(after, 100).await.unwrap();

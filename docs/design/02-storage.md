@@ -380,7 +380,7 @@ new migration. Everything else exists in `0001_init` / `0002_search` / `0003_med
 
 | Table | Columns | Notes |
 |---|---|---|
-| `options` | `key` PK, `value` json, `autoload`, `updated_at` | Site settings; autoloaded set cached per node, invalidated via events |
+| `options` | `key` PK, `value` json, `autoload`, `updated_at` | Site settings; `autoload` marks the set every render reads (F23). No per-node cache yet: it was removed with no reader (M2a-1 R26) and comes back with its first reader (M2a-2) |
 | `artifacts` | `hash` PK (sha256 hex), `kind` (`media`/`variant`/`plugin`/`theme`/`export`), `bytes`, `mime`, `created_at` | The blob lives in the MediaStore under `artifacts/<hash[0..2]>/<hash>` |
 | `plugins` | `name` PK, `version`, `artifact_hash` FK, `manifest` json, `granted` json (capabilities the admin approved), `enabled`, `disabled_reason`, `installed_at`, `updated_at` | |
 | `plugin_kv` | `plugin`, `key`, `value` bytes, `updated_at`, PK(`plugin`,`key`) | Quotas enforced in core (default 10 MB, 10k keys per plugin) |

@@ -629,51 +629,24 @@ pub async fn menu_permissions(db: &TestDb) {
 
 // ------------------------------------------------------------------- options
 
-pub async fn option_cache_coherence(db: &TestDb) {
+/// The stored value of option `key`.
+async fn stored_option(store: &dyn Store, key: &str) -> Option<serde_json::Value> {
+    store
+        .read()
+        .options()
+        .get(key)
+        .await
+        .unwrap()
+        .map(|e| e.value)
+}
+
+/// `set` and `delete` write the store and emit `options.changed` (there is no option
+/// cache to keep coherent since R26).
+pub async fn option_set_and_delete(db: &TestDb) {
     let store = db.store();
     let admin = actor(store, Role::Admin).await;
-    // Pre-existing autoload option is loaded at construction; others are not.
-    store
-        .read()
-        .options()
-        .set("pre", &json!(1), true)
-        .await
-        .unwrap();
-    store
-        .read()
-        .options()
-        .set("lazy", &json!("a"), false)
-        .await
-        .unwrap();
-    let svc = OptionService::load(db.shared_store()).await.unwrap();
-    assert_eq!(svc.get("pre").await.unwrap().unwrap().value, json!(1));
-    assert!(svc.get("nope").await.unwrap().is_none());
+    let svc = OptionService::new(db.shared_store());
 
-    // Autoloaded values come from the cache: a store change behind its back is invisible
-    // until reload_from_event.
-    store
-        .read()
-        .options()
-        .set("pre", &json!(2), true)
-        .await
-        .unwrap();
-    assert_eq!(svc.get("pre").await.unwrap().unwrap().value, json!(1));
-    svc.reload_from_event(&[option_key("pre"), "post:abc".into()])
-        .await
-        .unwrap();
-    assert_eq!(svc.get("pre").await.unwrap().unwrap().value, json!(2));
-
-    // Non-autoload values are always read live.
-    assert_eq!(svc.get("lazy").await.unwrap().unwrap().value, json!("a"));
-    store
-        .read()
-        .options()
-        .set("lazy", &json!("b"), false)
-        .await
-        .unwrap();
-    assert_eq!(svc.get("lazy").await.unwrap().unwrap().value, json!("b"));
-
-    // set: stored, event emitted, cache updated.
     svc.set(&admin, "site", &json!({"title": "T"}), true)
         .await
         .unwrap();
@@ -681,71 +654,33 @@ pub async fn option_cache_coherence(db: &TestDb) {
         last_event(store).await,
         ("options.changed".to_owned(), vec![option_key("site")])
     );
-    store.read().options().delete("site").await.unwrap(); // behind its back
     assert_eq!(
-        svc.get("site").await.unwrap().unwrap().value,
-        json!({"title": "T"})
+        stored_option(store, "site").await,
+        Some(json!({"title": "T"}))
     );
-    // reload_from_event drops keys that are gone.
-    svc.reload_from_event(&[option_key("site")]).await.unwrap();
-    assert!(svc.get("site").await.unwrap().is_none());
+    // The autoload flag is stored as given.
+    svc.set(&admin, "flip", &json!(1), false).await.unwrap();
+    let e = store.read().options().get("flip").await.unwrap().unwrap();
+    assert!(!e.autoload);
 
-    // autoload=false removes the key from the cache.
-    svc.set(&admin, "flip", &json!(1), true).await.unwrap();
-    svc.set(&admin, "flip", &json!(2), false).await.unwrap();
-    store
-        .read()
-        .options()
-        .set("flip", &json!(3), false)
-        .await
-        .unwrap();
-    assert_eq!(svc.get("flip").await.unwrap().unwrap().value, json!(3));
-    // And back to autoload.
-    svc.set(&admin, "flip", &json!(4), true).await.unwrap();
-    store
-        .read()
-        .options()
-        .set("flip", &json!(5), true)
-        .await
-        .unwrap();
-    assert_eq!(svc.get("flip").await.unwrap().unwrap().value, json!(4));
-    // reload of a key that turned non-autoload evicts it.
-    store
-        .read()
-        .options()
-        .set("flip", &json!(6), false)
-        .await
-        .unwrap();
-    svc.reload_from_event(&[option_key("flip")]).await.unwrap();
-    store
-        .read()
-        .options()
-        .set("flip", &json!(7), false)
-        .await
-        .unwrap();
-    assert_eq!(svc.get("flip").await.unwrap().unwrap().value, json!(7));
-
-    // A second service sees the stored autoload options.
-    svc.set(&admin, "shared", &json!(true), true).await.unwrap();
-    let other = OptionService::load(db.shared_store()).await.unwrap();
-    assert_eq!(
-        other.get("shared").await.unwrap().unwrap().value,
-        json!(true)
-    );
-
-    // delete.
-    svc.delete(&admin, "shared").await.unwrap();
-    assert!(svc.get("shared").await.unwrap().is_none());
+    svc.delete(&admin, "site").await.unwrap();
+    assert!(stored_option(store, "site").await.is_none());
     assert_eq!(
         last_event(store).await,
-        ("options.changed".to_owned(), vec![option_key("shared")])
+        ("options.changed".to_owned(), vec![option_key("site")])
+    );
+    // Deleting a missing option is a no-op write that still emits.
+    svc.delete(&admin, "never").await.unwrap();
+    assert_eq!(
+        last_event(store).await,
+        ("options.changed".to_owned(), vec![option_key("never")])
     );
 }
 
 pub async fn option_permissions_and_failures(db: &TestDb) {
     let store = db.store();
     let admin = actor(store, Role::Admin).await;
-    let svc = OptionService::load(db.shared_store()).await.unwrap();
+    let svc = OptionService::new(db.shared_store());
     svc.set(&admin, "k", &json!("v"), true).await.unwrap();
     for role in [Role::Editor, Role::Author, Role::Contributor] {
         let who = actor(store, role).await;
@@ -757,9 +692,9 @@ pub async fn option_permissions_and_failures(db: &TestDb) {
         assert!(is_forbidden(svc.delete(&who, "k").await, "manage_settings"));
         assert_eq!(max_seq(store).await, seq);
     }
-    assert_eq!(svc.get("k").await.unwrap().unwrap().value, json!("v"));
+    assert_eq!(stored_option(store, "k").await, Some(json!("v")));
 
-    // A failed write leaves cache and store alone.
+    // A failed write leaves the store alone.
     let seq = max_seq(store).await;
     assert!(is_invalid(svc.set(&admin, "", &json!(1), true).await));
     assert!(is_invalid(svc.set(&admin, "a\nb", &json!(1), true).await));
@@ -769,7 +704,7 @@ pub async fn option_permissions_and_failures(db: &TestDb) {
         "store rejects NUL in json"
     );
     assert_eq!(max_seq(store).await, seq);
-    assert_eq!(svc.get("k").await.unwrap().unwrap().value, json!("v"));
+    assert_eq!(stored_option(store, "k").await, Some(json!("v")));
 }
 
 // ----------------------------------------------------------------- redirects
@@ -798,9 +733,24 @@ pub async fn redirect_resolve(db: &TestDb) {
     assert!(svc.resolve("/OLD").await.unwrap().is_none());
     assert!(svc.resolve("/other").await.unwrap().is_none());
     assert!(svc.resolve("/").await.unwrap().is_none());
-    // Exact match wins over the toggled one.
-    let exact = svc
-        .upsert(&admin, "/old/", "/elsewhere", 307)
+    // Exact match wins over the toggled one. `upsert` refuses a source whose variant is
+    // taken (R26), so the second variant is a row written directly (legacy data).
+    assert!(is_invalid(
+        svc.upsert(&admin, "/old/", "/elsewhere", 307).await
+    ));
+    let exact = store
+        .read()
+        .redirects()
+        .upsert(&ferrite_domain::Redirect {
+            id: ferrite_domain::RedirectId::new(),
+            source_path: "/old/".into(),
+            target: "/elsewhere".into(),
+            code: 307,
+            hits: 0,
+            origin: ferrite_domain::RedirectOrigin::Manual,
+            created_at: ferrite_domain::Timestamp::now(),
+            last_hit_at: None,
+        })
         .await
         .unwrap();
     assert_eq!(svc.resolve("/old/").await.unwrap().unwrap().id, exact.id);
@@ -955,7 +905,7 @@ backend_tests!(
     menu_roundtrip_and_events,
     menu_validation,
     menu_permissions,
-    option_cache_coherence,
+    option_set_and_delete,
     option_permissions_and_failures,
     redirect_resolve,
     redirect_validation,

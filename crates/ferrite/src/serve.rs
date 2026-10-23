@@ -31,8 +31,8 @@
 //!    `content.publish_due` every 30 s) and the heartbeat (`nodes.meta` carries the
 //!    theme, plugin and permalink state; the reloader beats after every reload);
 //! 10. serve the public site and the API under `/api/v1` (`build_site`; the API's
-//!     services, the site key and the options are set up in step 7, so a missing or
-//!     bad key stops startup); [`run`] prints `Listening on http://<addr>` on stdout.
+//!     services and the site key are set up in step 7, so a missing or bad key stops
+//!     startup); [`run`] prints `Listening on http://<addr>` on stdout.
 //!
 //! Shutdown ([`RunningNode::shutdown`]; SIGINT or SIGTERM in [`run`]): stop accepting
 //! connections **and** stop the job runner at once; open requests get up to 10 s while
@@ -195,7 +195,7 @@ pub struct RunningNode {
     pub addr: SocketAddr,
     pub node_id: NodeId,
     pub state: Arc<AppState>,
-    /// The API's state (its services; the option service's cache follows events).
+    /// The API's state (its services).
     pub api: Arc<ApiState>,
     server: Option<JoinHandle<std::io::Result<()>>>,
     /// The server's result when it ended before shutdown.
@@ -385,11 +385,6 @@ async fn boot(
 
     // The API's services; `content` also runs the scheduled-publishing jobs.
     let content = Arc::new(ContentService::new(store.clone(), dyn_permalinks));
-    let options = Arc::new(
-        OptionService::load(store.clone())
-            .await
-            .context("cannot load the options")?,
-    );
     let api = Arc::new(
         ApiState::new(ApiParts {
             store: store.clone(),
@@ -399,7 +394,7 @@ async fn boot(
             types: Arc::new(ContentTypeService::new(store.clone())),
             taxonomy: Arc::new(TaxonomyService::new(store.clone())),
             menus: Arc::new(MenuService::new(store.clone())),
-            options: options.clone(),
+            options: Arc::new(OptionService::new(store.clone())),
             redirects: Arc::new(RedirectService::new(store.clone())),
             site_url: state.config.site_url.clone(),
         })
@@ -443,7 +438,6 @@ async fn boot(
             mode,
             state: state.clone(),
             permalinks,
-            options,
             plugins,
             theme: loaded,
             plugins_report: report,

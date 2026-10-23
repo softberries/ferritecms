@@ -364,9 +364,7 @@ async fn site_title_change_refreshes_pages(app: App) -> App {
     let mut poller = app.poller().await;
     let r = app.get("/hello-world/").await;
     assert!(r.body.contains("<title>Hello World – Test Site</title>"));
-    ferrite_core::OptionService::load(app.site.store.clone())
-        .await
-        .unwrap()
+    ferrite_core::OptionService::new(app.site.store.clone())
         .set(
             &app.admin,
             ferrite_http::app::TITLE_OPTION,

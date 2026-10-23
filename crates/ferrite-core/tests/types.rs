@@ -281,7 +281,7 @@ pub async fn type_names_and_permalink_conflicts(db: &TestDb) {
     let store = db.store();
     let admin = actor(store, Role::Admin).await;
     let svc = types(db);
-    let options = OptionService::load(db.shared_store()).await.unwrap();
+    let options = OptionService::new(db.shared_store());
     options
         .set(&admin, "permalink.post", &json!("/news/%slug%/"), true)
         .await
