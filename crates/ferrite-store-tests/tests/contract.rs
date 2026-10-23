@@ -36,6 +36,7 @@ backend_tests!(
     missing_rows_update_not_found_delete_ok,
     revisions_list_checks_limit,
     redirects_upsert_returns_stored_and_hit_time,
+    close_fails_later_calls,
 );
 
 backend_tests!(

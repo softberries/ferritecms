@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::{init, migrate};
+use crate::{init, migrate, seed, serve};
 
 #[derive(Debug, Parser)]
 #[command(name = "ferrite", version, about = "FerriteCMS")]
@@ -19,6 +19,11 @@ pub enum Command {
     /// Inspect and run database migrations.
     #[command(subcommand)]
     Migrate(MigrateCommand),
+    /// Serve the site (stops cleanly on SIGINT/SIGTERM).
+    Serve(DataArg),
+    /// Add sample content.
+    #[command(subcommand)]
+    Seed(seed::SeedCommand),
 }
 
 #[derive(Debug, Args)]
@@ -66,5 +71,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
         Command::Init(args) => init::run(args).await.map(|()| ExitCode::SUCCESS),
         Command::Migrate(cmd) => migrate::run(cmd).await,
+        Command::Serve(args) => serve::run(args).await.map(|()| ExitCode::SUCCESS),
+        Command::Seed(cmd) => seed::run(cmd).await.map(|()| ExitCode::SUCCESS),
     }
 }

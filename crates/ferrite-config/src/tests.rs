@@ -53,6 +53,7 @@ fn defaults_minimal() {
     assert_eq!(c.cluster.node_name, None);
     assert_eq!(c.cache.max_bytes, 256 << 20);
     assert_eq!(c.cache.logged_in, LoggedInCache::Bypass);
+    assert_eq!(c.cache.poll_interval_ms, 250);
     assert_eq!(c.plugins.default_memory, 32 << 20);
     assert_eq!(c.plugins.default_fuel, 50_000_000);
     assert_eq!(c.plugins.render_deadline_ms, 200);
@@ -207,7 +208,7 @@ fn s3_secret_files() {
 fn collects_all_problems() {
     let (_d, r) = run(
         Some(
-            "[server]\nlisten = \"nope\"\n[database]\nmax_connections = 0\n[cache]\nmax_bytes = \"12XB\"\n",
+            "[server]\nlisten = \"nope\"\n[database]\nmax_connections = 0\n[cache]\nmax_bytes = \"12XB\"\npoll_interval_ms = 0\n",
         ),
         &[],
     );
@@ -217,7 +218,8 @@ fn collects_all_problems() {
     assert!(p.contains(&"server.listen"), "{p:?}");
     assert!(p.contains(&"database.max_connections"), "{p:?}");
     assert!(p.contains(&"cache.max_bytes"), "{p:?}");
-    assert_eq!(p.len(), 4, "{p:?}");
+    assert!(p.contains(&"cache.poll_interval_ms"), "{p:?}");
+    assert_eq!(p.len(), 5, "{p:?}");
 }
 
 #[test]
@@ -336,12 +338,13 @@ fn problem_messages_do_not_leak_database_url() {
 fn sizes_and_durations() {
     let (_d, r) = run(
         Some(&format!(
-            "{MIN}[cache]\nmax_bytes = 1024\n[plugins]\ndefault_memory = \"32MiB\"\nfailure_window = \"2h\"\n"
+            "{MIN}[cache]\nmax_bytes = 1024\npoll_interval_ms = 50\n[plugins]\ndefault_memory = \"32MiB\"\nfailure_window = \"2h\"\n"
         )),
         &[],
     );
     let c = r.unwrap();
     assert_eq!(c.cache.max_bytes, 1024);
+    assert_eq!(c.cache.poll_interval_ms, 50);
     assert_eq!(c.plugins.default_memory, 32 << 20);
     assert_eq!(c.plugins.failure_window_secs, 7200);
 }

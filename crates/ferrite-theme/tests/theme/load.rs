@@ -48,7 +48,15 @@ fn unknown_embedded_theme_is_not_found() {
             ),
             "{name}"
         );
+        // Runtime names (the `themes` table) go through the same check.
+        let owned = name.to_owned();
+        assert!(
+            matches!(Theme::load_embedded(&owned), Err(ThemeError::NotFound(_))),
+            "{name}"
+        );
     }
+    let blog = Theme::load_embedded("blog").unwrap();
+    assert_eq!(blog.name(), "blog");
 }
 
 #[test]

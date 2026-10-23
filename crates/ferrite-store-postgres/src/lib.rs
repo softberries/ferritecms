@@ -25,15 +25,6 @@ pub struct PgStore {
     read: PgRepos,
 }
 
-impl PgStore {
-    /// Closes the pool: waits until every checked-out connection is back (so the
-    /// rollback of a dropped `Tx` runs and its locks are released), then closes them.
-    /// Later calls on this store fail.
-    pub async fn close(&self) {
-        self.pool.close().await;
-    }
-}
-
 #[async_trait]
 impl Store for PgStore {
     fn backend(&self) -> Backend {
@@ -71,5 +62,9 @@ impl Store for PgStore {
     async fn snapshot(&self, _dest: &std::path::Path) -> Result<(), StoreError> {
         // Would need pg_dump on the host (02 §7); operators use provider snapshots.
         Err(StoreError::Unsupported("snapshot"))
+    }
+
+    async fn close(&self) {
+        self.pool.close().await;
     }
 }

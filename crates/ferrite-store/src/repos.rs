@@ -49,6 +49,11 @@ pub trait Store: Send + Sync + 'static {
     async fn verify_migrations(&self) -> Result<(), StoreError>;
     /// Writes a consistent copy of the database to `dest`; Postgres returns `Unsupported`.
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError>;
+    /// Closes the connection pools: waits until every checked-out connection is back
+    /// (so a dropped `Tx` finishes its rollback), then closes them. Every later call on
+    /// this store fails. For a clean shutdown (SQLite: the WAL is checkpointed when the
+    /// last connection closes). Idempotent.
+    async fn close(&self);
 }
 
 /// A write transaction exposing all repositories.

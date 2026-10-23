@@ -462,10 +462,14 @@ fn parse_cache(cx: &mut Cx, root: &mut Table) -> CacheConfig {
             LoggedInCache::Bypass
         }
     };
+    let poll_interval_ms = cx
+        .positive(&mut t, "cache", "poll_interval_ms")
+        .unwrap_or(250);
     cx.unknown(t, "cache");
     CacheConfig {
         max_bytes,
         logged_in,
+        poll_interval_ms,
     }
 }
 
@@ -599,7 +603,9 @@ pub fn render_default_toml(
         }
     }
     out.push_str("[cluster]\nmode = \"auto\"\n\n");
-    out.push_str("[cache]\nmax_bytes = \"256MB\"\nlogged_in = \"bypass\"\n\n");
+    out.push_str(
+        "[cache]\nmax_bytes = \"256MB\"\nlogged_in = \"bypass\"\npoll_interval_ms = 250\n\n",
+    );
     out.push_str(
         "[plugins]\ndefault_memory = \"32MB\"\ndefault_fuel = 50000000\nrender_deadline_ms = 200\naction_deadline_ms = 5000\ndisable_after_failures = 20\nfailure_window = \"10m\"\n",
     );

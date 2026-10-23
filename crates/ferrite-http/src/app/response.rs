@@ -10,6 +10,8 @@ use axum::{
 use ferrite_cache::{CachedPage, if_none_match_matches};
 use tracing::Span;
 
+use super::client::ClientIp;
+
 /// Response extension: the compression layer leaves this response alone (media files,
 /// binary theme assets, ranged responses).
 #[derive(Debug, Clone, Copy)]
@@ -119,16 +121,22 @@ pub(crate) fn panic_response(_panic: Box<dyn std::any::Any + Send + 'static>) ->
     res
 }
 
-/// The request span: method and path only. The query is never logged (`s=` may hold
-/// personal data); status and latency are recorded when the response is ready.
+/// The request span: method, path and the client address ([`ClientIp`], when known).
+/// The query is never logged (`s=` may hold personal data); status and latency are
+/// recorded when the response is ready.
 pub(crate) fn request_span(req: &Request) -> Span {
-    tracing::info_span!(
+    let span = tracing::info_span!(
         "request",
         method = %req.method(),
         path = %req.uri().path(),
+        client_ip = tracing::field::Empty,
         status = tracing::field::Empty,
         latency_ms = tracing::field::Empty,
-    )
+    );
+    if let Some(ClientIp(ip)) = req.extensions().get::<ClientIp>() {
+        span.record("client_ip", tracing::field::display(ip));
+    }
+    span
 }
 
 pub(crate) fn record_response(res: &Response<Body>, latency: Duration, span: &Span) {

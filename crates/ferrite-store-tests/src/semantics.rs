@@ -150,3 +150,19 @@ pub async fn redirects_upsert_returns_stored_and_hit_time(db: &TestDb) {
         stored
     );
 }
+
+/// `close` waits for checked-out connections, then every later call fails; a second
+/// `close` is a no-op.
+pub async fn close_fails_later_calls(db: &TestDb) {
+    let store = db.store();
+    store
+        .read()
+        .options()
+        .set("before.close", &serde_json::json!(1), false)
+        .await
+        .expect("write before close");
+    store.close().await;
+    store.close().await;
+    assert!(store.read().options().get("before.close").await.is_err());
+    assert!(store.begin().await.is_err());
+}

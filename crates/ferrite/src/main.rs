@@ -22,8 +22,11 @@ fn main() -> anyhow::Result<ExitCode> {
         .with_writer(std::io::stderr)
         .init();
     let cli = Cli::parse();
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()?
-        .block_on(ferrite::run(cli))
+        .build()?;
+    let result = runtime.block_on(ferrite::run(cli));
+    // Do not wait for stray blocking work (a render still running after the drain).
+    runtime.shutdown_timeout(std::time::Duration::from_secs(2));
+    result
 }

@@ -68,4 +68,10 @@ impl Store for SqliteStore {
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError> {
         self.vacuum_into(dest).await
     }
+
+    async fn close(&self) {
+        // Readers first: the writer's close checkpoints the WAL as the last connection.
+        self.reader.close().await;
+        self.writer.close().await;
+    }
 }

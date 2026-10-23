@@ -207,6 +207,7 @@ mode       = "auto"                    # "solo" | "cluster" | "auto"
 [cache]
 max_bytes  = "256MB"                   # 0 allowed
 logged_in  = "bypass"                  # "bypass" | "per-user"
+poll_interval_ms = 250                 # > 0; how often the invalidation loop reads the outbox
 
 [plugins]
 default_memory = "32MB"                # > 0

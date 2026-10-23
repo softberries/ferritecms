@@ -161,6 +161,9 @@ impl Store for CountingStore {
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError> {
         self.inner.store.snapshot(dest).await
     }
+    async fn close(&self) {
+        self.inner.store.close().await;
+    }
 }
 
 #[async_trait]

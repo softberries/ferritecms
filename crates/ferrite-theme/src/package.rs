@@ -72,11 +72,17 @@ impl Theme {
     /// required), and compiles all templates. Template errors are collected, each with
     /// its file and line.
     pub fn load(source: &ThemeSource) -> Result<Theme, ThemeError> {
-        let files = match source {
-            ThemeSource::Embedded(name) => read_embedded(name)?,
-            ThemeSource::Dir(dir) => read_dir(dir)?,
-        };
-        Self::from_files(files)
+        match source {
+            ThemeSource::Embedded(name) => Self::load_embedded(name),
+            ThemeSource::Dir(dir) => Self::from_files(read_dir(dir)?),
+        }
+    }
+
+    /// [`Theme::load`] of the embedded starter theme `name`, for names known only at
+    /// runtime (the active theme recorded in the `themes` table). An unknown name is
+    /// [`ThemeError::NotFound`].
+    pub fn load_embedded(name: &str) -> Result<Theme, ThemeError> {
+        Self::from_files(read_embedded(name)?)
     }
 
     /// Names of the embedded starter themes.

@@ -49,7 +49,9 @@
 //! `Referrer-Policy: strict-origin-when-cross-origin` and `X-Frame-Options: SAMEORIGIN`
 //! unless it sets them itself; bodies are compressed (br, gzip) per `Accept-Encoding`
 //! with tower-http's default predicate (no images, nothing under 32 bytes). Each request
-//! runs in a `request` span with method, path, status and latency (never the query).
+//! runs in a `request` span with method, path, status, latency (never the query) and
+//! the client address (`client_ip`; `X-Forwarded-For` only from
+//! `server.trusted_proxies`, see [`client`]).
 //!
 //! **406 (tower-http 0.7 compression).** A request whose `Accept-Encoding` rules out
 //! every encoding we offer, identity included (`identity;q=0` alone, or `*;q=0`), gets
@@ -62,6 +64,7 @@
 //! `robots.txt` (see [`feeds`]) go through the page cache like pages.
 
 mod bridge;
+pub mod client;
 mod error_page;
 pub mod feeds;
 mod handler;
@@ -88,6 +91,7 @@ pub use state::{
 
 /// The public site as an axum [`Router`]; see the module docs.
 pub fn build_app(state: Arc<AppState>) -> Router {
+    let state_proxies = state.config.trusted_proxies.clone();
     let mut app = Router::new()
         .fallback(handler::handle)
         .with_state(state)
@@ -104,9 +108,15 @@ pub fn build_app(state: Arc<AppState>) -> Router {
             HeaderValue::from_static(value),
         ));
     }
+    let trusted: Arc<[ipnet::IpNet]> = state_proxies.into();
     app.layer(
         TraceLayer::new_for_http()
             .make_span_with(response::request_span)
             .on_response(response::record_response),
     )
+    // Outermost: the client address is known before the request span opens.
+    .layer(axum::middleware::from_fn_with_state(
+        trusted,
+        client::record_client,
+    ))
 }

@@ -23,7 +23,8 @@
 //! Validation: a literal first segment may not be a [`slug::RESERVED`] word (checked by
 //! [`Structure::parse`]) or a content type name (checked by
 //! [`PermalinkRules::check_types`], since the parser does not know the registered
-//! types; whoever builds the rules from options calls it with `types().list()`). The
+//! types; it also rejects taxonomy names, router words and years; whoever builds the
+//! rules from options calls it with `types().list()` and `taxonomies().list()`). The
 //! page structure must contain `%parent_path%`, or child pages would collide.
 //!
 //! Root namespace: posts under `/%slug%/` and top-level pages under
@@ -258,21 +259,38 @@ impl PermalinkRules {
         })
     }
 
-    /// `Invalid` when the post or page structure starts with a literal that is a
-    /// content type name in `type_names` (it would shadow that type's `/{type}/` paths).
-    /// Compared case-insensitively.
-    pub fn check_types<S: AsRef<str>>(&self, type_names: &[S]) -> Result<(), CoreError> {
+    /// `Invalid` when the post or page structure starts with a literal that the router
+    /// resolves to something else (rulings R3, R13): a content type name in
+    /// `type_names` (its `/{type}/` paths), a taxonomy name in `taxonomy_names` (its
+    /// `/{taxonomy}/{slug}/` archives), a [`slug::ROUTE_WORDS`] word (author archives,
+    /// pagination, search) or four digits (a `/{yyyy}/` date archive). Compared
+    /// case-insensitively. Whoever builds the rules from options calls it at startup
+    /// with `types().list()` and `taxonomies().list()`.
+    pub fn check_types<S: AsRef<str>, T: AsRef<str>>(
+        &self,
+        type_names: &[S],
+        taxonomy_names: &[T],
+    ) -> Result<(), CoreError> {
         for structure in [&self.post, &self.page] {
-            if let Some(first) = structure.segments.first().and_then(Segment::literal)
-                && type_names
-                    .iter()
-                    .any(|t| t.as_ref().eq_ignore_ascii_case(first))
-            {
-                return Err(CoreError::Invalid(format!(
-                    "permalink structure {:?}: first segment {first:?} is a content type",
-                    structure.source
-                )));
-            }
+            let Some(first) = structure.segments.first().and_then(Segment::literal) else {
+                continue;
+            };
+            let matches = |name: &str| name.eq_ignore_ascii_case(first);
+            let what = if type_names.iter().any(|t| matches(t.as_ref())) {
+                "a content type"
+            } else if taxonomy_names.iter().any(|t| matches(t.as_ref())) {
+                "a taxonomy"
+            } else if slug::ROUTE_WORDS.iter().any(|w| matches(w)) {
+                "a route word"
+            } else if slug::is_year(first) {
+                "a year archive"
+            } else {
+                continue;
+            };
+            return Err(CoreError::Invalid(format!(
+                "permalink structure {:?}: first segment {first:?} is {what}",
+                structure.source
+            )));
         }
         Ok(())
     }
@@ -502,16 +520,49 @@ mod tests {
     #[test]
     fn type_names_as_first_segment() {
         let types = ["post", "page", "media", "book"];
-        assert!(PermalinkRules::default().check_types(&types).is_ok());
+        let taxes = ["category", "tag"];
+        assert!(
+            PermalinkRules::default()
+                .check_types(&types, &taxes)
+                .is_ok()
+        );
         let shadow = PermalinkRules::from_options(Some("/media/%slug%/"), None).unwrap();
         assert!(matches!(
-            shadow.check_types(&types),
+            shadow.check_types(&types, &taxes),
             Err(CoreError::Invalid(_))
         ));
         let page = PermalinkRules::from_options(None, Some("/book/%parent_path%/%slug%/")).unwrap();
-        assert!(page.check_types(&types).is_err());
+        assert!(page.check_types(&types, &taxes).is_err());
         let fine = PermalinkRules::from_options(Some("/blog/%slug%/"), None).unwrap();
-        assert!(fine.check_types(&types).is_ok());
+        assert!(fine.check_types(&types, &taxes).is_ok());
+    }
+
+    #[test]
+    fn router_words_as_first_segment() {
+        let types = ["post", "page"];
+        let taxes = ["category", "tag", "genre"];
+        for (post, why) in [
+            ("/category/%slug%/", "taxonomy"),
+            ("/genre/%slug%/", "taxonomy"),
+            ("/author/%slug%/", "route word"),
+            // `page` is also a content type, which is reported first.
+            ("/page/%slug%/", "content type"),
+            ("/search/%slug%/", "route word"),
+            ("/2024/%slug%/", "year archive"),
+        ] {
+            let r = PermalinkRules::from_options(Some(post), None).unwrap();
+            match r.check_types(&types, &taxes) {
+                Err(CoreError::Invalid(m)) => assert!(m.contains(why), "{post}: {m}"),
+                other => panic!("{post}: {other:?}"),
+            }
+        }
+        let page = PermalinkRules::from_options(None, Some("/tag/%parent_path%/%slug%/")).unwrap();
+        assert!(page.check_types(&types, &taxes).is_err());
+        // Not a first literal, or not a router word: fine.
+        for post in ["/news/2024/%slug%/", "/12345/%slug%/", "/%year%/%slug%/"] {
+            let r = PermalinkRules::from_options(Some(post), None).unwrap();
+            assert!(r.check_types(&types, &taxes).is_ok(), "{post}");
+        }
     }
 
     #[test]

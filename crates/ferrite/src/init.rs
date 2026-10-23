@@ -92,7 +92,8 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
     println!("Initialised {data}");
     println!("Next steps:");
     println!("  ferrite migrate status --data {data}");
-    println!("  ferrite serve --data {data}   (arrives in a later milestone)");
+    println!("  ferrite seed demo --data {data}   (optional sample content)");
+    println!("  ferrite serve --data {data}");
     if matches!(media, InitMedia::S3 { .. }) {
         println!(
             "Edit {data}/{CONFIG_FILE} to set the S3 region, endpoint and credentials before serving."

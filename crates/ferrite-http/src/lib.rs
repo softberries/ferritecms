@@ -6,7 +6,7 @@ pub mod head;
 pub mod plugins;
 pub mod route;
 
-pub use app::{AppParts, AppState, HttpConfig, build_app, load_route_table};
+pub use app::{AppParts, AppState, HttpConfig, build_app, client::ClientIp, load_route_table};
 pub use head::{HeadPage, HeadSite, core_head, page_head, render_head};
 pub use plugins::{
     LoadSummary, PluginRequest, RenderTrace, StoreHostServices, filter_item, load_plugins,

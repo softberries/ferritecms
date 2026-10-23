@@ -63,6 +63,9 @@ pub struct HttpConfig {
     pub max_concurrent_renders: usize,
     /// How long a render waits for a slot before answering 503 with `Retry-After`.
     pub render_wait: Duration,
+    /// Peers whose `X-Forwarded-For` is honoured for the logged client address
+    /// (`server.trusted_proxies`; see [`client`](super::client)). Default: none.
+    pub trusted_proxies: Vec<ipnet::IpNet>,
 }
 
 impl HttpConfig {
@@ -87,6 +90,7 @@ impl HttpConfig {
                 .map_or(1, std::num::NonZeroUsize::get)
                 .saturating_mul(2),
             render_wait: RENDER_WAIT,
+            trusted_proxies: Vec::new(),
         }
     }
 }

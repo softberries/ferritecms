@@ -87,6 +87,8 @@ pub enum LoggedInCache {
 pub struct CacheConfig {
     pub max_bytes: u64,
     pub logged_in: LoggedInCache,
+    /// How often the invalidation loop polls the event outbox (milliseconds, >= 1).
+    pub poll_interval_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

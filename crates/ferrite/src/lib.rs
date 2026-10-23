@@ -1,10 +1,12 @@
-//! The `ferrite` binary's logic, split from `main.rs` so tests (and later `serve`) can
-//! call it directly.
+//! The `ferrite` binary's logic, split from `main.rs` so tests can call it directly.
 
 mod cli;
 mod init;
 mod migrate;
 mod open;
+mod seed;
+mod serve;
+mod site;
 
 pub use cli::{Cli, Command, MigrateCommand, run};
 pub use open::{Decision, OpenMode, decide, open_store, startup_check};
