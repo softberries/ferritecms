@@ -108,7 +108,8 @@ The auth repositories exist since M2a-1 (migration `0005_auth`; domain types in
 - **`ApiTokenRepo`** (`api_tokens()`): `insert` (duplicate hash: `api_tokens_hash_uq`),
   `get_by_hash`, `list_for_user` (at most 100, by `created_at`), `count_for_user`,
   `touch(id, at) -> bool` (`last_used_at`, forward only), `delete(user, id) -> bool` (only the
-  owner's row), `delete_for_user -> u64`.
+  owner's row), `delete_for_user -> u64`, `prune(now, limit)` (deletes tokens with
+  `expires_at < now`; tokens without an expiry stay; used by `sessions.prune`).
 - **`RateLimitRepo`** (`rate_limits()`, P5): `hit(bucket, window) -> RateHit { count,
   reset_at, now }` is one upsert on both backends (`ON CONFLICT (bucket) DO UPDATE SET count =
   CASE WHEN excluded.window_start > rate_limits.window_start THEN 1 ELSE rate_limits.count + 1
@@ -125,6 +126,29 @@ The auth repositories exist since M2a-1 (migration `0005_auth`; domain types in
   clock, `node` NULL; `details` must be a JSON object, else `Invalid` before any SQL) and
   `list(limit, cursor)`, newest first (`at DESC, id DESC`), cursor tag `a:at`
   (`AUDIT_CURSOR_TAG`).
+
+Other M2a-1 store additions, on both backends and contract-tested:
+
+- **`UserRepo`**: `get_for_update(id)` (Postgres `FOR UPDATE`, SQLite a plain read on the
+  writer; every user read-modify-write uses it inside its `Tx`, because `update` is
+  unversioned, F5), `set_totp(id, secret: Option<&Secret>)` (sets or clears the sealed
+  secret and resets `totp_last_step` in one statement; `update` writes neither TOTP
+  column, F4), `advance_totp_step(id, step) -> bool` (one conditional `UPDATE`; `false` for
+  a replayed or older step or an unknown user, P9), `delete(id)` (sessions and tokens
+  cascade, audit rows keep a NULL actor, authored content or revisions are `ForeignKey`),
+  `count_active_admins()`.
+- **`ContentRepo::reassign_author(from, to)`** and **`RevisionRepo::reassign_author(from,
+  to)`**: one `UPDATE` each, returning the count; content gets a `version` bump but keeps
+  `updated_at` (ruling R8). `UserService::delete` runs both in the deleting `Tx`.
+- **`ContentTypeRepo::insert`** and **`TaxonomyRepo::insert`** (a taken name is
+  `UniqueViolation` on `content_types_pkey` / `taxonomies_pkey`) next to the old `upsert`,
+  and **`TaxonomyRepo::delete(name)`** (built-in: `Invalid`; with terms: `ForeignKey`).
+  Type and taxonomy writes in core run under the named lock `types` (ruling R19), which
+  `permalink.*` option writes take too.
+- **`ContentQuery::readable_by` / `SearchQuery::readable_by`** (`Option<ReadableBy { user,
+  now }>`, R17/R23): in SQL, `(status = 'published' AND published_at <= now) OR author_id =
+  user` on both backends, so admin lists, counts, cursors and search pages hold only items
+  the reader may see. A NULL `published_at` never matches the first branch.
 
 The `comments` repository is still to come (M2a-2). `JobRepo` (`jobs()`) and
 `NodeRepo` (`nodes()`) exist since M1.5 (migration `0004_cluster`); see the cluster table

@@ -209,11 +209,18 @@ kept (R9) so `min_seq` can reveal pruned history.
 
 ## 5. Sessions
 
-**Planned (M2; not built).** DB-backed (`sessions` table, [02](02-storage.md)). Session token = 32 random bytes,
-cookie holds the token, DB stores SHA-256. `last_seen_at` is updated at most once per
-5 minutes per session to avoid a write per request. Logout/role change/password change
-delete sessions → effective on all nodes immediately (no session cache), or with a
-≤ 30 s per-node cache if profiling demands it (then invalidated via event).
+**As built (M2a-1, P7):** the `sessions` table ([02 §4](02-storage.md#users--auth)),
+`SessionRepo` on both backends and `AuthService` in `ferrite-core` (07 §2). The session
+token is 32 random bytes; the cookie holds it as base64url and the database stores its
+SHA-256 hex (`id_hash`). `last_seen_at` is written at most once per 5 minutes per session
+(`SESSION_TOUCH_EVERY`), so a busy session does not write on every request; idle 7 days,
+absolute 30 days (`SESSION_IDLE`, `SESSION_ABSOLUTE` in `ferrite_domain::auth`). There is
+**no per-node session cache**: every authenticated request (and every public request whose
+cookie has the shape of a session token) reads its session row, so logout, a password change, a role change,
+disable and delete, which delete the user's session rows, take effect on the next request
+on every node (tested across two nodes on one Postgres schema). Rate-limit counters for
+logins and tokens live in the database for the same reason (07 §2). Expired and idle rows
+are deleted by `sessions.prune` (§6); an expired row met on a request is deleted then.
 
 ## 6. Job queue
 
@@ -226,11 +233,11 @@ delete sessions → effective on all nodes immediately (no session cache), or wi
 | `content.publish_scheduled` | `ContentService` schedule: enqueued in the same `Tx`, `unique_key = "publish:<id>:<scheduled_at unix micros>"`, `run_at = scheduled_at`; publishes only if the item is still scheduled for that time (P12) | built |
 | `content.publish_due` | periodic, every 30 s: publishes every item whose `scheduled_at` has passed (safety net for items scheduled before M1.5 or by an older binary; it replaced the M1c-2 per-node ticker) | built |
 | `events.prune` (24 h), `jobs.prune` (done 7 d, dead 30 d), `nodes.prune` (24 h after the last heartbeat), `plugin_failures.prune` (`max(24 h, 2 × plugins.failure_window)`) | periodic, hourly; delete in 10 000-row batches for at most 240 s per run (R5) | built |
-| `plugin.action` | action hooks (`post.saved`, …): one job per (plugin, event), off the request path | M2 (no action hooks are dispatched yet, P26) |
-| `media.variants` | image upload | M2 |
+| `sessions.prune` | periodic, hourly (M2a P23): one reading of the database clock, then sessions past `expires_at` or idle longer than 7 d, API tokens past `expires_at`, and rate-limit windows that started more than 1 h ago; 10 000-row batches, each table within its own 80 s slice of the 240 s budget so a backlog in one does not starve the others | built (M2a-1) |
+| `plugin.action` | action hooks (`post.saved`, …): one job per (plugin, event), off the request path | M2a-2 (no action hooks are dispatched yet, P26) |
+| `media.variants` | image upload | M2a-2 |
 | `import.wordpress` | admin-triggered import; must override the handler timeout | M3 |
 | `artifacts.gc` | periodic | M4 |
-| `sessions.prune` | periodic | M2 (sessions) |
 
 `revisions.prune` is not a job: core prunes revisions on save (P26).
 
@@ -320,7 +327,7 @@ A node whose ticks all miss a period (stalled) does not create that period's row
 |---|---|---|
 | `migrate` | `startup_check` (`serve`, `seed`, `init`) and `ferrite migrate up/down` (not `status`/`verify`), on both backends | 5 min, logged every 10 s |
 | `extensions` | `ExtensionService`: theme/plugin install, activation, enable/disable (artifact row + theme/plugin row + event in one `Tx`) | 30 s |
-| `types` | `ContentTypeService` and the taxonomy writes of `TaxonomyService` (M2a P18): the cross-table name checks, the insert/update/delete and the events in one `Tx`; a lost lock leaves only the type/taxonomy same-name check unprotected (each table's primary key still holds) | 30 s |
+| `types` | `ContentTypeService`, the taxonomy writes of `TaxonomyService` (M2a P18) and `OptionService` writes that change a `permalink.*` key (R19): the cross-table name and permalink checks, the insert/update/delete and the events in one `Tx`; a lost lock leaves only the type/taxonomy same-name check unprotected (each table's primary key still holds) | 30 s |
 | `cluster.join` | the final check-and-register pass of `Registry::join` (R7) | 10 s |
 | `import` | reserved for the WordPress import | M3 |
 

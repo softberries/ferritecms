@@ -15,33 +15,47 @@ Read before doing anything substantial:
 ## Current status
 
 M0 (plugin host spike), M1a (storage), M1b (media), M1c-1 (config, CLI `init`/`migrate`,
-core services), M1c-2 (router, themes, page cache, plugin wiring, `serve`, `seed demo`) and
+core services), M1c-2 (router, themes, page cache, plugin wiring, `serve`, `seed demo`),
 M1.5 (cluster mode: node registry, LISTEN/NOTIFY event bus, job queue, locks, themes as
-artifacts, hot swap, shared plugin failure counters, compose example) are done; the M1 and
-M1.5 exits are written up in `docs/superpowers/m1-exit.md` and `m15-exit.md` (the M1.5 one
-lists what was not verified). Open follow-ups stay listed in the roadmap. Next is M2 (API,
-auth, admin). Work top-down in `docs/ROADMAP.md`; per-milestone rulings are in
+artifacts, hot swap, shared plugin failure counters, compose example) and M2a-1 (REST API
+core under `/api/v1` with OpenAPI, auth: argon2id, DB sessions + CSRF, scoped API tokens,
+DB rate limits, TOTP, site key; users + `ferrite user`; content/types/taxonomies/menus/
+redirects/settings endpoints; previews; logged-in requests; `sessions.prune`) are done; the
+exits are written up in `docs/superpowers/m1-exit.md`, `m15-exit.md` and `m2a1-exit.md`
+(each lists what was not verified). Open follow-ups stay listed in the roadmap. Next is
+M2a-2 (extensions and plugin API extras, media, comments, system endpoints, hardening),
+then M2b (admin SPA). Work top-down in `docs/ROADMAP.md`; per-milestone rulings are in
 `docs/superpowers/rulings/`.
 
 Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers)
--> `ferrite-http` (public site, router, head, plugin wiring, plugin reloader, shared failure
-counters) -> `ferrite-cache` (page cache + outbox invalidation loop with LISTEN wake-ups),
+-> `ferrite-http` (public site, router, head, previews and logged-in requests, plugin
+wiring, plugin reloader, shared failure counters; the REST API in `src/api/` with its
+OpenAPI snapshot `openapi.json`) -> `ferrite-cache` (page cache + outbox invalidation loop with LISTEN wake-ups),
 `ferrite-theme` (themes, bundles, hierarchy, MiniJinja renderer), `ferrite-core` (services,
-permalinks, `SiteReader`, `ExtensionService`), `ferrite-media`, `ferrite-plugin-host`;
+permalinks, `SiteReader`, `ExtensionService`; `AuthService`, `UserService`, content types,
+settings allowlist, roles + token scopes), `ferrite-media`, `ferrite-plugin-host`;
 `ferrite` also -> `ferrite-cluster` (node registry, job runner, periodic scheduler, built-in
 prune jobs) -> `ferrite-store` (traits); `ferrite-core` -> `ferrite-store` (traits) <-
 `ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite);
 `ferrite-domain` (types), `ferrite-config`, `ferrite-sdk` (guest SDK). Starter theme:
-`themes/blog` (embedded). Not built yet: import-wp, REST API/admin
-(`docs/design/01-architecture.md` §1).
+`themes/blog` (embedded). Not built yet: import-wp, the admin SPA, media uploads, plugin
+routes (`docs/design/01-architecture.md` §1; API status per endpoint in 07 §1).
 
 Run a site locally:
-`cargo run -p ferrite -- init --data /tmp/site --url http://localhost:8080`, then
-`cargo run -p ferrite -- seed demo --data /tmp/site` (optional sample content), then
+`cargo run -p ferrite -- init --data /tmp/site --url http://localhost:8080` (for a solo site
+it also creates the site key `<data>/secret.key`), then optionally
+`cargo run -p ferrite -- seed demo --data /tmp/site` (sample content), then an account:
+`cargo run -p ferrite -- user create --data /tmp/site --login me --email me@example.com`
+(prints a one-time password that must be changed at the first login; `--password-stdin`
+reads one from stdin instead; seed's own `admin` has no password until
+`user reset-password --data /tmp/site --login admin`), then
 `cargo run -p ferrite -- serve --data /tmp/site` (prints `Listening on http://…`; stop with
-Ctrl-C/SIGTERM). `cargo run -p ferrite -- migrate status --data /tmp/site` exits 0 ok,
-2 pending, 3 incompatible, 1 error; with SQLite it (and `seed`) fails while `serve` holds the
-data-folder lock. `FERRITE_LOG=debug` sets log verbosity; `FERRITE_<SECTION>__<KEY>` overrides
+Ctrl-C/SIGTERM). The API is at `http://localhost:8080/api/v1` (spec at
+`/api/v1/openapi.json`): log in with `POST /api/v1/auth/login` and an `Origin:
+http://localhost:8080` header, then send the cookie plus `X-CSRF-Token` on writes, or use a
+bearer token from `POST /api/v1/users/{id}/tokens`. `cargo run -p ferrite -- migrate status
+--data /tmp/site` exits 0 ok, 2 pending, 3 incompatible, 1 error; with SQLite it (and `seed`
+and `user`) fails while `serve` holds the data-folder lock. `FERRITE_LOG=debug` sets log verbosity; `FERRITE_<SECTION>__<KEY>` overrides
 config (e.g. `FERRITE_SERVER__LISTEN=127.0.0.1:0` for a free port).
 `cargo run -p ferrite -- config check --data /tmp/site` validates config + env without
 touching the database (exit 0 prints `ok: mode=… database=… media=… workers=…`, exit 1 lists
@@ -50,7 +64,9 @@ problems).
 Run two cluster nodes locally: two data folders whose `ferrite.toml` share `site.url`,
 `database.url` (Postgres) + `database.schema`, and `[media] root = "<shared dir>"` with
 `local_shared = true`, `cluster.mode = "cluster"`, different `server.listen` ports and
-`cluster.node_name`s; `init` the first folder with `--db postgres://… --schema …`, then
+`cluster.node_name`s, and the same site key in `FERRITE_AUTH__SECRET_KEY` (64 hex
+characters, e.g. `openssl rand -hex 32`; cluster mode refuses to start without one); `init`
+the first folder with `--db postgres://… --schema …`, then
 `serve` both. Docker example (not run in CI, only validated): `examples/cluster/`
 (`docker compose -f examples/cluster/docker-compose.yml up --build`; design 09 §7).
 Cluster integration tests: `FERRITE_TEST_PG_URL=… cargo test -p ferrite --test cluster`
@@ -90,6 +106,10 @@ Two deployment profiles must both work: **solo** (SQLite + local media, one node
   Each test creates and drops its own schema, so a shared database is fine. Without the
   variable the Postgres cases print `SKIP` and pass; CI (which sets `CI=true`) panics if
   it is missing and runs a `postgres:18` service.
+- API changes: DTOs in `crates/ferrite-http/src/api/` with `utoipa` annotations; regenerate the
+  checked-in spec with `FERRITE_UPDATE_OPENAPI=1 cargo test -p ferrite-http --test api openapi`
+  (`openapi_snapshot_is_current` fails on drift). Capabilities are checked in core, never in
+  handlers.
 - Prefer small, reviewable commits per checklist item.
 
 ## Naming

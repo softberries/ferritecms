@@ -5,7 +5,7 @@
 The brief's layout (§7) is extended with storage, media and cluster crates. Dependencies
 point downwards only; no cycles.
 
-Status after M1.5: crates marked **(built)** exist in `crates/` and are workspace members
+Status after M2a-1: crates marked **(built)** exist in `crates/` and are workspace members
 (`Cargo.toml`); the others are planned and carry their milestone.
 
 ```
@@ -14,8 +14,9 @@ ferritecms/
 ├── rust-toolchain.toml           # stable, edition 2024
 ├── crates/
 │   ├── ferrite/                  # (built) BIN: clap CLI (`init`, `migrate`, `serve`, `seed demo`,
-│   │                             #   `config check`, `healthcheck`), logging, startup check, node
-│   │                             #   wiring (hot swap, jobs), shutdown; anyhow at the top level
+│   │                             #   `config check`, `healthcheck`, `user`), logging, startup check,
+│   │                             #   site key file, node wiring (hot swap, jobs), shutdown; anyhow
+│   │                             #   at the top level
 │   ├── ferrite-config/           # (built) ferrite.toml + env parsing, validation, init template
 │   ├── ferrite-domain/           # (built) pure types: ids, Post, Term, User, Role, Block, errors
 │   ├── ferrite-store/            # (built) repository traits + Store facade (no SQL)
@@ -28,10 +29,13 @@ ferritecms/
 │   │                             #   prune jobs, node registry (join checks, heartbeat)
 │   ├── ferrite-core/             # (built) services: content (+ lifecycle, revisions, redirects on
 │   │                             #   permalink change, search indexing), taxonomy, menus, options,
-│   │                             #   redirects; permalinks; the published-only read facade
-│   │                             #   `SiteReader` (+ preview); blocks rendering, slugs, events and
-│   │                             #   the dependency-key contract, roles/capabilities. Depends on
-│   │                             #   domain + store only; users/auth and media services are M2
+│   │                             #   redirects, content types + field schemas, settings allowlist;
+│   │                             #   users (`UserService`) and auth (`AuthService`: site key,
+│   │                             #   sealing, argon2id, sessions, tokens, TOTP, rate limits; M2a-1);
+│   │                             #   permalinks; the published-only read facade `SiteReader`
+│   │                             #   (+ preview); blocks rendering, slugs, events and the
+│   │                             #   dependency-key contract, roles/capabilities + token scopes.
+│   │                             #   Depends on domain + store only; the media service is M2a-2
 │   ├── ferrite-cache/            # (built, M1c-2) page cache (moka) + dependency index + outbox
 │   │                             #   invalidation loop
 │   ├── ferrite-theme/            # (built, M1c-2) theme packages, hierarchy resolution, sandboxed
@@ -39,13 +43,14 @@ ferritecms/
 │   ├── ferrite-plugin-host/      # (built) wasmtime engine, capability linker, limits, registry,
 │   │                             #   output validation + ammonia sanitising, call tracing
 │   ├── ferrite-http/             # (built, M1c-2: public site, router, head, plugin wiring;
-│   │                             #   M2: REST API v1, auth, admin assets)
+│   │                             #   M2a-1: REST API v1 in `src/api/`, previews, logged-in requests;
+│   │                             #   M2b: admin assets)
 │   ├── ferrite-import-wp/        # (M3) WXR importer
 │   └── ferrite-sdk/              # (built, M0) guest SDK for Rust plugins (`export_plugin!` macro
 │                                 #   lives in the crate; there is no separate macros crate)
 ├── wit/                          # WIT packages (source of truth for plugin API)
 │   └── ferrite-plugin@0.1.0/
-├── admin/                        # (M2) React SPA (pnpm workspace), built into dist/
+├── admin/                        # (M2b) React SPA (pnpm workspace), built into dist/
 ├── themes/                       # (built) starter themes embedded in the binary: `blog`
 ├── plugins/examples/             # (built) hello, order-a, order-b, clock, html-inject,
 │                                 #   meta-writer, reader, hostile/*; seo, analytics,
@@ -59,7 +64,7 @@ ferritecms/
 
 ### Dependency graph
 
-As built in M1.5 (normal dependencies, from each crate's `Cargo.toml`; crates not yet
+As built in M2a-1, unchanged since M1.5 (normal dependencies, from each crate's `Cargo.toml`; crates not yet
 built are marked with their milestone):
 
 ```
@@ -90,7 +95,7 @@ exist yet (no `[features]` section in any crate).
 
 ## 2. Runtime components
 
-One `ferrite serve` process contains (as built after M1.5; planned parts marked):
+One `ferrite serve` process contains (as built after M2a-1; planned parts marked):
 
 | Component | Responsibility | Crate |
 |---|---|---|
@@ -98,15 +103,15 @@ One `ferrite serve` process contains (as built after M1.5; planned parts marked)
 | Store | Pooled DB access, transactions, migrations | ferrite-store-* |
 | MediaStore | Blob get/put/list/delete, public URLs | ferrite-media |
 | Cluster | Node registry and heartbeat, job runner, periodic scheduler, built-in prune jobs (`LISTEN/NOTIFY`, locks and the job queue are in the store) | ferrite-cluster |
-| Core services | Business rules, permission checks, revisions, emitting events; `SiteReader` for public reads | ferrite-core |
+| Core services | Business rules, permission checks (role + token scope), revisions, emitting events; users, sessions, tokens, rate limits, TOTP (`AuthService`, `UserService`); `SiteReader` for public reads and previews | ferrite-core |
 | Plugin host | Load components, run filters/actions under limits | ferrite-plugin-host |
 | Theme engine | Resolve template, render with MiniJinja | ferrite-theme |
 | Page cache | URL → rendered response, dependency-based invalidation | ferrite-cache |
 | Invalidation loop | Polls the `events` outbox every `cache.poll_interval_ms` (default 250; woken by `LISTEN` in cluster mode) and applies events to the page cache; its hook drives the hot swap | ferrite-cache |
 | Reloader | Hot swap of theme, plugin registry and permalink rules/route table on events (P18) | ferrite (bin) |
 | Scheduled publishing | `content.publish_scheduled` job per scheduled item, `content.publish_due` periodic every 30 s (P12) | ferrite (bin) + core |
-| HTTP | Public routes, `/_media`, `/_theme`, `/healthz`, `/readyz`; later `/api/v1`, `/admin`, `/_p/<plugin>`, `/metrics` | ferrite-http |
-| Workers | Job queue consumers (`cluster.workers` per node; prune jobs and publishing now; actions, variants, imports later) | ferrite-cluster + core |
+| HTTP | Public routes, `/_media`, `/_theme`, `/_preview/<id>`, `/healthz`, `/readyz`, the REST API `/api/v1` (M2a-1, same process and layers, never cached); later `/_p/<plugin>` (M2a-2), `/admin` (M2b), `/metrics` (M4) | ferrite-http |
+| Workers | Job queue consumers (`cluster.workers` per node; prune jobs incl. `sessions.prune` and publishing now; actions, variants, imports later) | ferrite-cluster + core |
 
 Startup order as built (`crates/ferrite/src/serve.rs`, `ferrite::start`; any failure exits
 1; rulings P15, P22): config → open the database → migration check under the migrate lock
@@ -114,9 +119,12 @@ Startup order as built (`crates/ferrite/src/serve.rs`, `ferrite::start`; any fai
 registry → media store write/read/delete probe → page cache + invalidation cursor (**set
 before any node state is read**) → permalink rules from options, checked against types and
 taxonomies → active theme (falls back to the embedded `blog` at startup only) → plugins from
-the `plugins` table + artifacts (a broken row is skipped) → route table → bind
+the `plugins` table + artifacts (a broken row is skipped) → route table → site key
+(`auth.secret_key[_file]`, else solo `<data>/secret.key`; a missing or bad key exits 1) and
+the API's services (`AuthService`, users, content types, options) → bind
 `server.listen` → background tasks: invalidation loop (`LISTEN` in cluster mode) with the
-reloader hook, plugin-failure flusher, job runner, periodic scheduler, heartbeat → print
+reloader hook, plugin-failure flusher, job runner, periodic scheduler, heartbeat → serve the
+public site with the API merged in front of it (`build_site`) and print
 `Listening on http://<addr>`. Signal handlers are installed before all of this; a signal
 during startup exits at once (130/143), after deregistering the node (bounded at 1 s) if it
 had already joined.
@@ -159,14 +167,18 @@ request ─► GET/HEAD? ──no──► 405
           store in cache with the dependency keys (unless an error status) → respond
 ```
 
-- **Cache variant**: anonymous only in M1. There is no login yet, so every request is
-  anonymous; logged-in bypass or per-user variants arrive with auth (M2).
+- **Cache variant** (M2a-1, P21): a request whose `ferrite_session` cookie resolves to a
+  session is logged in. `cache.logged_in = "bypass"` (default) renders it without the cache;
+  `"per-user"` caches it under the user's own variant. Both answer `Cache-Control: private,
+  no-store`. Everything else is anonymous. `/_preview/<id>` is handled right after
+  `/_media`/`/_theme`, before the redirect table, and never cached ([06 §3](06-themes-rendering.md#3-routing)).
 - **Single-flight**: concurrent misses for the same key wait on one render
   (per-node; cross-node duplication is acceptable).
 - **Failure**: a plugin hook failure skips that hook ([05](05-plugin-host.md#8-failure-isolation-p5-p6))
   and gives the page a short TTL. A theme render error returns a 500 rendered via the theme's
-  `500.html` if present, otherwise a built-in minimal page; the server keeps serving. Admin
-  reachability with a broken theme applies once the admin exists (M2).
+  `500.html` if present, otherwise a built-in minimal page; the server keeps serving. The
+  API does not use the theme, so it keeps working with a broken one; admin reachability
+  applies once the admin exists (M2b).
 - Details: [06 §3](06-themes-rendering.md#3-routing) (routing), §5 (pipeline), §6 (cache).
 
 ## 4. Configuration
@@ -341,17 +353,22 @@ or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
 
 ## 8. Security baseline
 
-- All admin/API mutations require auth + CSRF protection ([07](07-admin-api.md#auth)).
+- Every API endpoint except `GET /api/v1/meta`, `GET /api/v1/openapi.json` and login needs a
+  session cookie or a bearer token; cookie-authenticated mutations also need the CSRF token
+  and a same-origin `Origin`/`Referer`, and login checks the origin (M2a-1, P8;
+  [07 §2](07-admin-api.md#2-auth)). API responses are `Cache-Control: no-store`.
 - Strict security headers by default (CSP for admin, `X-Content-Type-Options`,
   `Referrer-Policy`, HSTS when TLS).
 - Uploaded files: content-type sniffed, SVG sanitised or served with
   `Content-Disposition: attachment` and a sandboxing CSP; never executed.
 - Plugins: see [05](05-plugin-host.md). Themes: no code execution.
-- Rate limiting on login and API token auth (DB-backed counters so it works across
-  nodes).
+- Rate limiting on login, TOTP codes and unknown API tokens (DB-backed fixed windows, so it
+  works across nodes; P5, 07 §2).
 - One site key ([§4](#4-configuration)) outside the database. Every use gets its own
   subkey, HMAC-SHA256(site key, label) (`ferrite_core::auth`): `ferrite:seal:v1` for sealed
-  values, `ferrite:ip-hash:v1` for client IP hashes. A sealed value is
+  values, `ferrite:ip-hash:v1` for client IP hashes, `ferrite:login-bucket:v1` for the
+  per-login rate-limit buckets and `ferrite:challenge-pw:v1` for the password fingerprint
+  inside a TOTP login challenge. A sealed value is
   `v1.` + base64url(no padding) of a random 24-byte nonce followed by the
   XChaCha20-Poly1305 ciphertext and tag, with the purpose as associated data, so it opens
   only for the same purpose and key (TOTP secrets and stateless TOTP challenges in M2a-1,

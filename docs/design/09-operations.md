@@ -112,6 +112,14 @@ point-in-time is backup restore (solo) or PITR (cluster).
 Backups are verified: after writing, the snapshot is opened read-only and
 `PRAGMA integrity_check` runs; S3 uploads compare sha256.
 
+**The site key is not in the database** (M2a-1, P4). A solo site keeps it in
+`<data>/secret.key` (mode `0600`); a cluster gets it from `auth.secret_key[_file]`. Back it
+up separately from database dumps and keep it with the same care as the database
+credentials: without it, a restored database still has its users, sessions and API tokens,
+but stored TOTP secrets cannot be opened (those users need `ferrite user disable-totp` and a
+new enrollment). Until `ferrite backup` exists (M4), copying the data folder by hand
+includes `secret.key`.
+
 ## 5. TLS
 
 - Default: run behind a reverse proxy (Caddy/nginx/Traefik/LB). As built (M1c-2, ruling
@@ -248,6 +256,17 @@ also installs the `ring` rustls default crypto provider at start.
   (normally `public`), so drop that database instead or remove its ferrite tables and
   `_sqlx_migrations` by hand.
 - The validation step applies `FERRITE_*` environment overrides, so it checks the effective config, which can differ from the file that was written.
+- **Site key** (P4, F30): when the written config resolves to solo mode and configures no
+  `auth.secret_key`, `init` creates `<data>/secret.key` (64 hex characters, mode `0600`,
+  never printed) and removes it again if `init` fails. Otherwise it writes no key file; a
+  solo site without one gets it at its first `serve`.
+- **Cluster configs need the key up front** (R1, R9): a config that resolves to cluster
+  mode (explicit `cluster.mode = "cluster"`, or `auto` with Postgres and S3 or
+  `local_shared` media) fails validation without `auth.secret_key[_file]`, so `ferrite init
+  --db postgres://… --media s3://…` needs the key in the environment, e.g.
+  `FERRITE_AUTH__SECRET_KEY=$(openssl rand -hex 32) ferrite init …`, and every node must
+  then use the same key. The error is `auth.secret_key: required in cluster mode (every node
+  must use the same key)`, and `init` removes what it created.
 - It does **not** create an admin user: run `ferrite user create --login … --email …`
   next (it prints a one-time password).
 
@@ -331,8 +350,9 @@ also installs the `ring` rustls default crypto provider at start.
   `plugins.render_deadline_ms` (default 200, ruling R18; the hard timeout is 1.5 × it),
   `plugins.action_deadline_ms`, `plugins.default_memory`, `plugins.default_fuel`,
   `plugins.disable_after_failures`, `plugins.failure_window` (counted cluster-wide, P20),
-  `cluster.mode`, `cluster.node_name`, `cluster.workers`. `cache.logged_in` is parsed but
-  unused until logins exist (M2). Render concurrency (2 × available parallelism, 5 s wait,
+  `cluster.mode`, `cluster.node_name`, `cluster.workers`, `cache.logged_in` (`bypass` or
+  `per-user`, 06 §3), `auth.secret_key[_file]` (else `<data>/secret.key` in solo mode, created
+  on first start if missing). Render concurrency (2 × available parallelism, 5 s wait,
   then 503) and the 60 s short TTL are constants.
 
 **`ferrite user`** (`crates/ferrite/src/user_cmd.rs`, ruling P17): the operator path for
@@ -363,7 +383,8 @@ e-mail, password policy of 12 to 1024 bytes); any error exits 1 with the message
 **`ferrite seed demo`** (`crates/ferrite/src/seed.rs`):
 
 - Writes demo content through the core services where they exist: an `admin` user (no
-  password, `must_reset`; login arrives in M2), categories News and Guides, tags rust and cms,
+  password, `must_reset`, so it cannot log in until `ferrite user reset-password --login
+  admin` sets one), categories News and Guides, tags rust and cms,
   12 published posts with block bodies dated over the past months, three pages (About,
   About/Team, Contact), a `primary` and a `footer` menu, one generated sample PNG with its
   variants (the core sizes plus the active theme's `[images]`) used as the featured image of
@@ -372,7 +393,7 @@ e-mail, password policy of 12 to 1024 bytes); any error exits 1 with the message
   batch (user, terms and image file reused; posts and pages get fresh `-2`, `-3`, … slugs;
   both menus and the two options are replaced to point at the new batch).
 - **Not atomic:** each step is its own transaction, so a run that fails part-way leaves what
-  it wrote; `--force` then adds a whole new batch, it does not resume (ROADMAP M2: seed
+  it wrote; `--force` then adds a whole new batch, it does not resume (ROADMAP M2a-2: seed
   atomicity).
 - Requires an initialised site (with SQLite it fails when `ferrite.db` is missing instead of
   creating it) and runs the same migration check as `serve`.
@@ -384,8 +405,8 @@ ferrite backup / restore                                        # M4
 ferrite export / import-site / db copy                          # M4
 ferrite media sync / media gc                                   # M4
 ferrite import wordpress …                                      # M3
-ferrite plugin new|check|install|list|enable|disable|remove     # M2
-ferrite theme install|activate|list                             # M2
+ferrite plugin new|check|install|list|enable|disable|remove     # M2a-2 (new: later)
+ferrite theme install|activate|list                             # M2a-2
 ferrite self-update / rollback [--schema] [--restore-snapshot]  # M4
 ferrite doctor        # validates connectivity, permissions, clock skew, versions (config: `config check`)
 ```

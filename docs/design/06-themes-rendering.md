@@ -41,7 +41,7 @@ footer  = "Footer"
 [images]                                  # variant sizes this theme wants (03 §4)
 card = { width = 640, height = 360, crop = true }
 
-[settings]                                # declarative, rendered by the admin (M2)
+[settings]                                # declarative; API M2a-2, admin form M2b
 accent_color = { type = "color", default = "#c2410c", label = "Accent colour" }
 show_author  = { type = "bool", default = true }
 ```
@@ -103,8 +103,8 @@ already flushed on the event). The replaced theme is kept as `previous_theme`, s
 next swap. A theme that fails to load (missing or tampered artifact, template error)
 leaves the current theme serving, is reported in `nodes.meta.theme.error`, and is retried
 after 5 s, doubling to 5 min (R14). A startup fallback (to the folder, embedded or `blog`
-theme) after the active row's artifact failed is retried the same way (R17). Theme install/activate commands and admin screens are
-M2 (P21); today `install_theme_dir` and `ExtensionService` are library calls.
+theme) after the active row's artifact failed is retried the same way (R17). Theme install/activate commands and the themes API are
+M2a-2 and the admin screens M2b (P21); today `install_theme_dir` and `ExtensionService` are library calls.
 
 ## 2. Template hierarchy
 
@@ -206,7 +206,9 @@ only. `robots.txt` disallows everything when option `reading.discourage_indexing
 names the sitemap index. Feeds, sitemaps and `robots.txt` go through the page cache. Atom feeds
 are not built (deferred, ROADMAP M4).
 
-**Not built:** `/admin` and plugin routes `/_p/…` (M2).
+**Not built:** plugin routes `/_p/…` (M2a-2) and `/admin` (M2b). The REST API lives under
+`/api/v1` in the same process (07 §1); `/api` itself and other `/api/…` paths are ordinary
+public paths (canonical slash, then the shared 404).
 
 ## 4. MiniJinja environment
 
@@ -230,7 +232,7 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
   aborts the process), and MiniJinja has no check point other than fuel where a budget
   could stop a render; the fix is rendering in a separate worker process with an OS memory
   limit. M1.5 adds no untrusted install path (themes are installed only by an operator
-  calling `install_theme_dir`; the upload UI is M2). New risk: with hot swap a hostile
+  calling `install_theme_dir`; the upload API is M2a-2). New risk: with hot swap a hostile
   theme reaches every node at once.
 - **Preloaded data (plan ruling P2).** MiniJinja is synchronous, so everything a template
   sees is loaded into the render context first, through `SiteReader` (published-only). The
@@ -363,8 +365,8 @@ are never cached.
   with `request.status` 410.
 - A theme that fails to load at startup (bad manifest, template syntax error, unknown or
   invalid name) is logged and the embedded `blog` theme is used, so a broken theme never takes
-  the site down (`crates/ferrite/src/site.rs`). Flagging it in the admin and refusing a broken
-  theme on activation are M2 (no admin or activation flow yet).
+  the site down (`crates/ferrite/src/site.rs`). Flagging it in the system status and refusing a
+  broken theme on activation are M2a-2 (no activation flow yet), the admin view M2b.
 - Security headers on every response unless it sets them itself: `X-Content-Type-Options:
   nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: SAMEORIGIN`.
 

@@ -97,7 +97,7 @@ Decisions taken during design discussion. "User" = decided by the project owner;
 Implementation-level rulings taken while building each milestone (smaller than these
 decisions, each with its reason and cost) are recorded per milestone in
 [`docs/superpowers/rulings/`](../superpowers/rulings/): `m1a.md`, `m1b.md`, `m1c1.md`,
-`m1c2.md`, `m15.md`. Two M1c-2 rulings narrowed decisions above for M1: themes loaded from
+`m1c2.md`, `m15.md`, `m2a.md`. Two M1c-2 rulings narrowed decisions above for M1: themes loaded from
 the embedded starter themes and `data/themes/` folders, with artifact distribution (D11)
 moved to M1.5 (plan ruling P1); plugins loaded from the `plugins` table and their artifacts
 at startup only, with hot reload in M1.5 (plan ruling P3). M1.5 delivered both
@@ -112,6 +112,23 @@ at startup only, with hot reload in M1.5 (plan ruling P3). M1.5 delivered both
 - **M1.5 P17:** theme artifacts (D11) are plain deterministic ustar bundles
   (`application/x-tar`), not `tar.zst`; in cluster mode `data/themes/` is ignored so every
   node runs the artifact recorded in the database.
+
+M2a-1 (the REST API core and auth; [`m2a.md`](../superpowers/rulings/m2a.md)) adds three
+rulings at this level:
+
+- **M2a P1:** M2 is split into M2a-1 (auth, API conventions, users, content, types,
+  taxonomies, menus, redirects, settings endpoints, previews, logged-in requests), M2a-2
+  (extensions and plugin API extras, media, comments, system endpoints, hardening) and M2b
+  (the admin SPA, D6/D12), each with its own plan.
+- **M2a P4 (refines D7):** the site key that seals secrets (TOTP now, plugin secrets in
+  M2a-2) is the one piece of shared state that is **not** in the database:
+  `auth.secret_key[_file]`, required in cluster mode; a solo site generates
+  `<data>/secret.key`. A database dump or export therefore never carries the key that
+  opens the secrets in it.
+- **M2a P5 (applies D7):** rate limits are fixed windows counted in the database
+  (`rate_limits`, one upsert on the database clock), not an in-process limiter such as
+  `tower_governor`, so limits hold across nodes; a fixed window admits up to 2× the limit
+  across its edge.
 
 ## Verified facts this design relies on
 

@@ -1,12 +1,12 @@
 //! `ferrite seed demo`: demo content for a new site.
 //!
 //! Writes, through the core services where they exist: an `admin` user (no password,
-//! `must_reset`; login arrives in M2), categories News and Guides, tags rust and cms,
-//! 12 published posts with block bodies dated over the past months, three pages
-//! (About, About/Team, Contact), a `primary` and a `footer` menu, one sample image
-//! (a PNG generated here, stored with its variants: the core sizes plus the active
-//! theme's) used as the featured image of some posts, and the `site.title` /
-//! `site.description` options.
+//! `must_reset`, so it logs in only after `ferrite user reset-password`), categories News
+//! and Guides, tags rust and cms, 12 published posts with block bodies dated over the
+//! past months, three pages (About, About/Team, Contact), a `primary` and a `footer`
+//! menu, one sample image (a PNG generated here, stored with its variants: the core
+//! sizes plus the active theme's) used as the featured image of some posts, and the
+//! `site.title` / `site.description` options.
 //!
 //! Idempotency: if the site has any content item, `seed demo` refuses (exit 1) unless
 //! `--force` is given. With `--force` it adds another batch: the user, terms and image
