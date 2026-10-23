@@ -11,6 +11,8 @@ use crate::{Store, StoreError};
 pub const LOCK_MIGRATE: &str = "migrate";
 /// Held while a theme or plugin is installed or activated.
 pub const LOCK_EXTENSIONS: &str = "extensions";
+/// Held while a content type or taxonomy is registered, changed or removed (M2a P18).
+pub const LOCK_TYPES: &str = "types";
 /// Reserved for the WordPress import (M3): one at a time per site.
 pub const LOCK_IMPORT: &str = "import";
 
@@ -84,6 +86,7 @@ mod tests {
             LOCK_MIGRATE,
             LOCK_EXTENSIONS,
             LOCK_IMPORT,
+            LOCK_TYPES,
             "a.b_c-9",
             &"x".repeat(64),
         ] {

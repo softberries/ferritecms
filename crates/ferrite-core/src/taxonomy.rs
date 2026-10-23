@@ -20,7 +20,10 @@ use crate::{
     actor::{Area, Capability, require, require_read},
     events, slug,
     tx::finish,
-    types::{Change, announce, check_label, check_name_free, check_permalinks, check_type_name},
+    types::{
+        Change, announce, begin_locked, check_label, check_name_free, check_permalinks,
+        check_type_name, finish_locked,
+    },
 };
 
 /// Unique index on (taxonomy, slug); a violation means another writer took the slug
@@ -75,12 +78,12 @@ impl TaxonomyService {
             content_types: dedup_names(&taxonomy.content_types),
             ..taxonomy
         };
-        let tx = self.store.begin().await?;
+        let (guard, tx) = begin_locked(self.store.as_ref()).await?;
         let done = async {
-            check_name_free(tx.as_ref(), &tax.name).await?;
+            check_name_free(tx.as_ref(), &tax.name, Change::Taxonomy).await?;
             check_types_exist(tx.as_ref(), &tax.content_types).await?;
-            tx.taxonomies().upsert(&tax).await?;
-            check_permalinks(tx.as_ref()).await?;
+            tx.taxonomies().insert(&tax).await?;
+            check_permalinks(tx.as_ref(), true).await?;
             let details = json!({
                 "label": tax.label,
                 "hierarchical": tax.hierarchical,
@@ -98,7 +101,7 @@ impl TaxonomyService {
             Ok(tax)
         }
         .await;
-        finish(tx, done).await
+        finish_locked(guard, tx, done).await
     }
 
     /// Changes the label or the content types of taxonomy `name` (needs
@@ -114,7 +117,7 @@ impl TaxonomyService {
         require(actor, Capability::ManageSettings)?;
         let label = label.as_deref().map(check_label).transpose()?;
         let content_types = content_types.as_deref().map(dedup_names);
-        let tx = self.store.begin().await?;
+        let (guard, tx) = begin_locked(self.store.as_ref()).await?;
         let done = async {
             let mut tax = tx
                 .taxonomies()
@@ -129,7 +132,7 @@ impl TaxonomyService {
                 tax.content_types = types;
             }
             tx.taxonomies().upsert(&tax).await?;
-            check_permalinks(tx.as_ref()).await?;
+            check_permalinks(tx.as_ref(), false).await?;
             let details = json!({"label": tax.label, "content_types": tax.content_types});
             announce(
                 tx.as_ref(),
@@ -143,7 +146,7 @@ impl TaxonomyService {
             Ok(tax)
         }
         .await;
-        finish(tx, done).await
+        finish_locked(guard, tx, done).await
     }
 
     /// Removes taxonomy `name` (needs `manage_settings`). Built-in taxonomies are
@@ -151,7 +154,7 @@ impl TaxonomyService {
     /// Missing: `NotFound`.
     pub async fn delete_taxonomy(&self, actor: &Actor, name: &str) -> Result<(), CoreError> {
         require(actor, Capability::ManageSettings)?;
-        let tx = self.store.begin().await?;
+        let (guard, tx) = begin_locked(self.store.as_ref()).await?;
         let done = async {
             let tax = tx
                 .taxonomies()
@@ -176,7 +179,7 @@ impl TaxonomyService {
             .await
         }
         .await;
-        finish(tx, done).await
+        finish_locked(guard, tx, done).await
     }
 
     /// Every term of `taxonomy` (`require_read(Terms)`; unknown taxonomy: `NotFound`).
@@ -347,10 +350,13 @@ async fn check_types_exist(repos: &dyn Repos, types: &[String]) -> Result<(), Co
 /// Only hierarchical taxonomies have parents.
 fn check_flat(tax: &Taxonomy, parent: Option<TermId>) -> Result<(), CoreError> {
     if parent.is_some() && !tax.hierarchical {
-        return Err(CoreError::Invalid(format!(
-            "taxonomy {:?} is not hierarchical; terms cannot have a parent",
-            tax.name
-        )));
+        return Err(CoreError::invalid_field(
+            "parent_id",
+            format!(
+                "taxonomy {:?} is not hierarchical; terms cannot have a parent",
+                tax.name
+            ),
+        ));
     }
     Ok(())
 }
@@ -358,7 +364,10 @@ fn check_flat(tax: &Taxonomy, parent: Option<TermId>) -> Result<(), CoreError> {
 fn check_name(name: &str) -> Result<String, CoreError> {
     let name = name.trim();
     if name.is_empty() {
-        return Err(CoreError::Invalid("term name must not be empty".into()));
+        return Err(CoreError::invalid_field(
+            "name",
+            "term name must not be empty",
+        ));
     }
     Ok(name.to_owned())
 }
@@ -378,9 +387,10 @@ async fn check_parent_taxonomy(
     parent: TermId,
 ) -> Result<(), CoreError> {
     match repos.terms().get(parent).await? {
-        None => Err(CoreError::Invalid("unknown parent".into())),
-        Some(p) if p.taxonomy != taxonomy => Err(CoreError::Invalid(
-            "parent belongs to another taxonomy".into(),
+        None => Err(CoreError::invalid_field("parent_id", "unknown parent")),
+        Some(p) if p.taxonomy != taxonomy => Err(CoreError::invalid_field(
+            "parent_id",
+            "parent belongs to another taxonomy",
         )),
         Some(_) => Ok(()),
     }
@@ -395,21 +405,25 @@ async fn check_cycle(repos: &dyn Repos, id: TermId, parent: TermId) -> Result<()
             return Ok(());
         };
         if cur == id {
-            return Err(CoreError::Invalid("parent would create a cycle".into()));
+            return Err(CoreError::invalid_field(
+                "parent_id",
+                "parent would create a cycle",
+            ));
         }
         at = repos
             .terms()
             .get(cur)
             .await?
-            .ok_or_else(|| CoreError::Invalid("unknown parent".into()))?
+            .ok_or_else(|| CoreError::invalid_field("parent_id", "unknown parent"))?
             .parent_id;
     }
     if at.is_none() {
         return Ok(());
     }
-    Err(CoreError::Invalid(format!(
-        "parent chain deeper than {MAX_PARENT_DEPTH}"
-    )))
+    Err(CoreError::invalid_field(
+        "parent_id",
+        format!("parent chain deeper than {MAX_PARENT_DEPTH}"),
+    ))
 }
 
 /// Writes `term` (insert, or update when `existing`) with the first free slug derived

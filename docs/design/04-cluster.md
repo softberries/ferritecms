@@ -320,6 +320,7 @@ A node whose ticks all miss a period (stalled) does not create that period's row
 |---|---|---|
 | `migrate` | `startup_check` (`serve`, `seed`, `init`) and `ferrite migrate up/down` (not `status`/`verify`), on both backends | 5 min, logged every 10 s |
 | `extensions` | `ExtensionService`: theme/plugin install, activation, enable/disable (artifact row + theme/plugin row + event in one `Tx`) | 30 s |
+| `types` | `ContentTypeService` and the taxonomy writes of `TaxonomyService` (M2a P18): the cross-table name checks, the insert/update/delete and the events in one `Tx`; a lost lock leaves only the type/taxonomy same-name check unprotected (each table's primary key still holds) | 30 s |
 | `cluster.join` | the final check-and-register pass of `Registry::join` (R7) | 10 s |
 | `import` | reserved for the WordPress import | M3 |
 

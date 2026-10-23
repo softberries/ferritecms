@@ -46,6 +46,25 @@ impl TaxonomyRepo for SqliteRepos {
         .map(|_| ())
     }
 
+    async fn insert(&self, taxonomy: &Taxonomy) -> Result<(), StoreError> {
+        validate_text("taxonomy name", &taxonomy.name)?;
+        validate_text("taxonomy label", &taxonomy.label)?;
+        let types = serde_json::to_value(&taxonomy.content_types)
+            .map_err(|e| StoreError::Invalid(e.to_string()))?;
+        validate_json(&types)?;
+        run!(&self.writer, |e| sqlx::query(
+            "INSERT INTO taxonomies (name, label, hierarchical, content_types, built_in) \
+             VALUES (?, ?, ?, ?, ?)"
+        )
+        .bind(&taxonomy.name)
+        .bind(&taxonomy.label)
+        .bind(taxonomy.hierarchical)
+        .bind(codec::json_to_db(&types)?)
+        .bind(taxonomy.built_in)
+        .execute(e))
+        .map(|_| ())
+    }
+
     async fn get(&self, name: &str) -> Result<Option<Taxonomy>, StoreError> {
         validate_text("taxonomy name", name)?;
         let row = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(

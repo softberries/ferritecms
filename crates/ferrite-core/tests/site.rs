@@ -102,9 +102,10 @@ pub async fn term_crud_and_events(db: &TestDb) {
     assert_eq!(tag.slug, "news");
 
     // Invalid input.
-    assert!(is_invalid(
+    assert!(matches!(
         svc.create_term(&admin, "category", "  ", None, None, "")
-            .await
+            .await,
+        Err(CoreError::InvalidField { field: "name", .. })
     ));
     assert!(is_invalid(
         svc.create_term(&admin, "category", "A", Some("a/b".into()), None, "")
@@ -245,10 +246,14 @@ pub async fn term_parent_rules(db: &TestDb) {
             .parent_id,
         None
     );
-    // Unknown parent, parent in another taxonomy.
-    assert!(is_invalid(
+    // Unknown parent, parent in another taxonomy: errors on `parent_id`.
+    assert!(matches!(
         svc.create_term(&admin, "category", "Z", None, Some(TermId::new()), "")
-            .await
+            .await,
+        Err(CoreError::InvalidField {
+            field: "parent_id",
+            ..
+        })
     ));
     let tag = svc
         .create_term(&admin, "tag", "T", None, None, "")
@@ -306,7 +311,7 @@ pub async fn term_parent_rules(db: &TestDb) {
         .unwrap();
     assert!(matches!(
         svc.update_term(&admin, x.id, "X", None, Some(leaf), "").await,
-        Err(CoreError::Invalid(m)) if m.contains("deeper")
+        Err(CoreError::InvalidField { field: "parent_id", message: m }) if m.contains("deeper")
     ));
 }
 

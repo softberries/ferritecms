@@ -263,6 +263,17 @@ pub async fn rules_from(
     repos: &dyn Repos,
     overrides: &[(&str, Option<&str>)],
 ) -> Result<PermalinkRules, CoreError> {
+    let rules = stored_rules(repos, overrides).await?;
+    check_registered(repos, &rules).await?;
+    Ok(rules)
+}
+
+/// The first half of [`rules_from`]: the rules the options (with `overrides`) give,
+/// parsed but not yet checked against the registered types and taxonomies.
+pub async fn stored_rules(
+    repos: &dyn Repos,
+    overrides: &[(&str, Option<&str>)],
+) -> Result<PermalinkRules, CoreError> {
     let mut structures: [Option<String>; 2] = [None, None];
     for (slot, key) in structures.iter_mut().zip([POST_OPTION, PAGE_OPTION]) {
         *slot = match overrides.iter().find(|(k, _)| *k == key) {
@@ -282,7 +293,12 @@ pub async fn rules_from(
         };
     }
     let [post, page] = structures;
-    let rules = PermalinkRules::from_options(post.as_deref(), page.as_deref())?;
+    PermalinkRules::from_options(post.as_deref(), page.as_deref())
+}
+
+/// The second half of [`rules_from`]: [`PermalinkRules::check_types`] with the types
+/// and taxonomies `repos` lists.
+pub async fn check_registered(repos: &dyn Repos, rules: &PermalinkRules) -> Result<(), CoreError> {
     let types: Vec<String> = repos
         .types()
         .list()
@@ -297,8 +313,7 @@ pub async fn rules_from(
         .into_iter()
         .map(|t| t.name)
         .collect();
-    rules.check_types(&types, &taxonomies)?;
-    Ok(rules)
+    rules.check_types(&types, &taxonomies)
 }
 
 /// Default post structure.

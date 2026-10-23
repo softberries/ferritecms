@@ -1,6 +1,6 @@
 //! Taxonomy, term and term-link contract tests.
 
-use ferrite_domain::{ContentQuery, Taxonomy, Term, TermId};
+use ferrite_domain::{ContentQuery, ContentType, Taxonomy, Term, TermId, Timestamp};
 use ferrite_store::{Store, StoreError};
 
 use crate::{
@@ -67,6 +67,88 @@ pub async fn taxonomies_seeded_and_upsert(db: &TestDb) {
         taxes.upsert(&genre).await,
         Err(StoreError::Invalid(_))
     ));
+}
+
+pub async fn type_and_taxonomy_insert(db: &TestDb) {
+    let store = db.store();
+    let ty = ContentType {
+        name: "event".into(),
+        label: "Events".into(),
+        hierarchical: true,
+        has_archive: true,
+        fields: serde_json::json!({"fields": []}),
+        built_in: false,
+        created_at: Timestamp::from_micros(1_700_000_000_000_000).unwrap(),
+    };
+    store.read().types().insert(&ty).await.unwrap();
+    assert_eq!(
+        store.read().types().get("event").await.unwrap().unwrap(),
+        ty
+    );
+    // A taken name is a unique violation and the stored row is unchanged.
+    let mut other = ty.clone();
+    other.label = "Other".into();
+    other.hierarchical = false;
+    for name in ["event", "post"] {
+        other.name = name.into();
+        assert!(matches!(
+            store.read().types().insert(&other).await,
+            Err(StoreError::UniqueViolation { constraint }) if constraint == "content_types_pkey"
+        ));
+    }
+    assert_eq!(
+        store.read().types().get("event").await.unwrap().unwrap(),
+        ty
+    );
+    let mut nul = ty.clone();
+    nul.name = "a\u{0}".into();
+    assert!(matches!(
+        store.read().types().insert(&nul).await,
+        Err(StoreError::Invalid(_))
+    ));
+
+    let genre = Taxonomy {
+        name: "genre".into(),
+        label: "Genres".into(),
+        hierarchical: false,
+        content_types: vec!["event".into()],
+        built_in: false,
+    };
+    store.read().taxonomies().insert(&genre).await.unwrap();
+    assert_eq!(
+        store
+            .read()
+            .taxonomies()
+            .get("genre")
+            .await
+            .unwrap()
+            .unwrap(),
+        genre
+    );
+    let mut dup = genre.clone();
+    dup.label = "Kinds".into();
+    for name in ["genre", "category"] {
+        dup.name = name.into();
+        assert!(matches!(
+            store.read().taxonomies().insert(&dup).await,
+            Err(StoreError::UniqueViolation { constraint }) if constraint == "taxonomies_pkey"
+        ));
+    }
+    assert_eq!(
+        store
+            .read()
+            .taxonomies()
+            .get("genre")
+            .await
+            .unwrap()
+            .unwrap(),
+        genre
+    );
+    // In a transaction the violation poisons it (R18); the store stays usable.
+    let tx = store.begin().await.unwrap();
+    assert!(tx.taxonomies().insert(&genre).await.is_err());
+    tx.rollback().await.unwrap();
+    assert_eq!(store.read().taxonomies().list().await.unwrap().len(), 3);
 }
 
 pub async fn taxonomy_delete(db: &TestDb) {

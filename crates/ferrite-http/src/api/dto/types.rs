@@ -132,18 +132,20 @@ pub struct ContentTypeDto {
     pub has_archive: bool,
     /// `post`, `page` and `media`: cannot be removed.
     pub built_in: bool,
-    /// The field schema items are validated against. Empty for a type without a schema
-    /// (the built-in types until one is set), whose items take any `fields` object.
-    pub fields: Vec<FieldDefDto>,
+    /// The field schema items are validated against; `[]` means items take `{}` only
+    /// (plus `featured_image`). `null`: the type has no schema and its items take any
+    /// `fields` object (the built-in types until one is set).
+    pub fields: Option<Vec<FieldDefDto>>,
 }
 
 impl From<ContentType> for ContentTypeDto {
     fn from(t: ContentType) -> Self {
         let fields = match fields::schema_of(&t.fields) {
-            Ok(schema) => schema.unwrap_or_default(),
+            Ok(schema) => schema,
             Err(e) => {
+                // Written past core: shown as no schema (validation refuses its items).
                 tracing::warn!(r#type = %t.name, error = %e, "stored field schema unreadable");
-                Vec::new()
+                None
             }
         };
         Self {
@@ -152,7 +154,7 @@ impl From<ContentType> for ContentTypeDto {
             hierarchical: t.hierarchical,
             has_archive: t.has_archive,
             built_in: t.built_in,
-            fields: fields.into_iter().map(FieldDefDto::from).collect(),
+            fields: fields.map(|f| f.into_iter().map(FieldDefDto::from).collect()),
         }
     }
 }
@@ -177,8 +179,11 @@ pub struct ContentTypeInput {
     pub hierarchical: bool,
     #[serde(default)]
     pub has_archive: bool,
-    #[serde(default)]
-    pub fields: Vec<FieldDefDto>,
+    /// The schema; absent is `[]` (items take `{}` only), `null` registers the type
+    /// without a schema (items take any object).
+    #[serde(default, deserialize_with = "nullable")]
+    #[schema(value_type = Option<Vec<FieldDefDto>>, required = false)]
+    pub fields: Option<Option<Vec<FieldDefDto>>>,
 }
 
 impl ContentTypeInput {
@@ -188,7 +193,10 @@ impl ContentTypeInput {
             label: self.label,
             hierarchical: self.hierarchical,
             has_archive: self.has_archive,
-            fields: defs(self.fields),
+            fields: match self.fields {
+                None => Some(Vec::new()),
+                Some(f) => f.map(defs),
+            },
         }
     }
 }
@@ -202,10 +210,11 @@ pub struct ContentTypePatch {
     #[serde(default, deserialize_with = "present")]
     #[schema(value_type = bool, required = false)]
     pub has_archive: Option<bool>,
-    /// Replaces the schema; stored items are validated against it on their next save.
-    #[serde(default, deserialize_with = "present")]
-    #[schema(value_type = Vec<FieldDefDto>, required = false)]
-    pub fields: Option<Vec<FieldDefDto>>,
+    /// Absent keeps the schema, a list replaces it (`[]`: items take `{}` only), `null`
+    /// removes it (items take any object). Stored items are validated on their next save.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schema(value_type = Option<Vec<FieldDefDto>>, required = false)]
+    pub fields: Option<Option<Vec<FieldDefDto>>>,
 }
 
 impl ContentTypePatch {
@@ -213,7 +222,7 @@ impl ContentTypePatch {
         TypePatch {
             label: self.label,
             has_archive: self.has_archive,
-            fields: self.fields.map(defs),
+            fields: self.fields.map(|f| f.map(defs)),
         }
     }
 }
@@ -374,16 +383,33 @@ mod tests {
             serde_json::from_value::<FieldDefDto>(json!({"name": "x", "kind": "nope"})).is_err()
         );
 
-        for (field, v) in [
-            ("label", json!(null)),
-            ("fields", json!(null)),
-            ("has_archive", json!(null)),
-        ] {
+        for (field, v) in [("label", json!(null)), ("has_archive", json!(null))] {
             assert!(
                 serde_json::from_value::<ContentTypePatch>(json!({ field: v })).is_err(),
                 "{field}"
             );
         }
+        // fields: absent keeps, null removes the schema, [] is a strict empty one.
+        let p = |v: serde_json::Value| {
+            serde_json::from_value::<ContentTypePatch>(v)
+                .unwrap()
+                .into_patch()
+                .fields
+        };
+        assert_eq!(p(json!({})), None);
+        assert_eq!(p(json!({"fields": null})), Some(None));
+        assert_eq!(p(json!({"fields": []})), Some(Some(Vec::new())));
+        let input = |v: serde_json::Value| {
+            serde_json::from_value::<ContentTypeInput>(v)
+                .unwrap()
+                .into_new()
+                .fields
+        };
+        assert_eq!(input(json!({"name": "a", "label": "A"})), Some(Vec::new()));
+        assert_eq!(
+            input(json!({"name": "a", "label": "A", "fields": null})),
+            None
+        );
         let p: TermPatch = serde_json::from_value(json!({"parent_id": null})).unwrap();
         assert_eq!(p.parent_id, Some(None));
         assert!(serde_json::from_value::<TermPatch>(json!({"slug": null})).is_err());

@@ -15,3 +15,4 @@ mod errors;
 mod feeds;
 mod freshness;
 mod protocol;
+mod reload_race;

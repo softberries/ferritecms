@@ -1527,6 +1527,7 @@ dependencies = [
  "quick-xml 0.38.4",
  "s3s",
  "s3s-fs",
+ "semver",
  "serde",
  "serde_json",
  "serde_path_to_error",

@@ -738,7 +738,7 @@ async fn new_type_is_routable_without_restart(db: Arc<TestDb>) {
                 label: "Events".into(),
                 hierarchical: false,
                 has_archive: true,
-                fields: Vec::new(),
+                fields: Some(Vec::new()),
             },
         )
         .await

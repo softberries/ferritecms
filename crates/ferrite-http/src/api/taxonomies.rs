@@ -63,6 +63,7 @@ pub async fn list_taxonomies(
         (status = 400, description = "`malformed-json`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (`manage_settings`, `settings:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 409, description = "`conflict`: a taxonomy with this name exists (`errors[0].field` = `name`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation` (`errors[0].field`: `name`, `label` or `content_types`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]

@@ -145,6 +145,9 @@ pub trait Repos: Send + Sync {
 pub trait ContentTypeRepo: Send + Sync {
     /// Inserts or replaces a content type by name.
     async fn upsert(&self, ty: &ContentType) -> Result<(), StoreError>;
+    /// Inserts a new content type; a taken name is
+    /// `UniqueViolation { constraint: "content_types_pkey" }`.
+    async fn insert(&self, ty: &ContentType) -> Result<(), StoreError>;
     /// Fetches a content type by name.
     async fn get(&self, name: &str) -> Result<Option<ContentType>, StoreError>;
     /// Lists all content types.
@@ -251,6 +254,9 @@ pub trait RevisionRepo: Send + Sync {
 pub trait TaxonomyRepo: Send + Sync {
     /// Inserts or replaces a taxonomy by name.
     async fn upsert(&self, taxonomy: &Taxonomy) -> Result<(), StoreError>;
+    /// Inserts a new taxonomy; a taken name is
+    /// `UniqueViolation { constraint: "taxonomies_pkey" }`.
+    async fn insert(&self, taxonomy: &Taxonomy) -> Result<(), StoreError>;
     /// Fetches a taxonomy by name.
     async fn get(&self, name: &str) -> Result<Option<Taxonomy>, StoreError>;
     /// Lists all taxonomies.

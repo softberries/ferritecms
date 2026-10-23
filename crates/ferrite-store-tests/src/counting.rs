@@ -285,6 +285,9 @@ impl ContentTypeRepo for Counted {
     async fn upsert(&self, ty: &ContentType) -> Result<(), StoreError> {
         self.0.read().types().upsert(ty).await
     }
+    async fn insert(&self, ty: &ContentType) -> Result<(), StoreError> {
+        self.0.read().types().insert(ty).await
+    }
     async fn get(&self, name: &str) -> Result<Option<ContentType>, StoreError> {
         self.0.read().types().get(name).await
     }
@@ -300,6 +303,9 @@ impl ContentTypeRepo for Counted {
 impl TaxonomyRepo for Counted {
     async fn upsert(&self, taxonomy: &Taxonomy) -> Result<(), StoreError> {
         self.0.read().taxonomies().upsert(taxonomy).await
+    }
+    async fn insert(&self, taxonomy: &Taxonomy) -> Result<(), StoreError> {
+        self.0.read().taxonomies().insert(taxonomy).await
     }
     async fn get(&self, name: &str) -> Result<Option<Taxonomy>, StoreError> {
         self.0.read().taxonomies().get(name).await

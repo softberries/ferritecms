@@ -252,7 +252,7 @@ async fn type_registration_reaches_every_node() {
                 label: "Events".into(),
                 hierarchical: false,
                 has_archive: true,
-                fields: Vec::new(),
+                fields: Some(Vec::new()),
             },
         )
         .await

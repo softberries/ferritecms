@@ -46,7 +46,7 @@ async fn types_crud_over_http(api: Api) -> Api {
     assert_eq!(list["next_cursor"], Value::Null);
     let post = &list["items"][2];
     assert_eq!(post["built_in"], true);
-    assert_eq!(post["fields"], json!([]));
+    assert_eq!(post["fields"], Value::Null, "built-in types have no schema");
 
     // Create with a schema: 201, Location, the DTO; a page in the public cache is
     // flushed once the event is applied.
@@ -97,7 +97,6 @@ async fn types_crud_over_http(api: Api) -> Api {
     for (body, field) in [
         (json!({"name": "Bad Name", "label": "x"}), "name"),
         (json!({"name": "author", "label": "x"}), "name"),
-        (json!({"name": "event", "label": "again"}), "name"),
         (json!({"name": "news", "label": " "}), "label"),
         (
             json!({"name": "news", "label": "N", "fields": [{"name": "s", "kind": "select"}]}),
@@ -108,6 +107,15 @@ async fn types_crud_over_http(api: Api) -> Api {
         let p = r.assert_problem(422, "validation");
         assert_eq!(p["errors"][0]["field"], field, "{body}: {p}");
     }
+    // A taken name (own registry, built-in too) is a conflict on `name`; nothing changes.
+    for name in ["event", "post"] {
+        let body = json!({"name": name, "label": "again", "hierarchical": true});
+        let r = b.send(&api, Method::POST, TYPES, Some(&body), None).await;
+        let p = r.assert_problem(409, "conflict");
+        assert_eq!(p["errors"][0]["field"], "name", "{p}");
+        assert!(!p.to_string().contains("pkey"), "{p}");
+    }
+    assert_eq!(b.get(&api, "/api/v1/types/event").await.json(), created);
     let r = b
         .send(&api, Method::POST, TYPES, Some(&json!({"name": "x"})), None)
         .await;
@@ -179,6 +187,44 @@ async fn types_crud_over_http(api: Api) -> Api {
     assert_eq!(patched["has_archive"], false);
     assert_eq!(patched["hierarchical"], false, "hierarchical cannot change");
     assert_eq!(patched["fields"], created["fields"]);
+    // Schema round trip: `[]` is strict empty, `null` removes it, absent keeps it, and a
+    // DTO sent back unchanged keeps what it says.
+    let patch = |body: Value| {
+        let (api, b) = (&api, &b);
+        async move {
+            let r = b
+                .send(api, Method::PATCH, "/api/v1/types/post", Some(&body), None)
+                .await;
+            assert_eq!(r.status, StatusCode::OK, "{r:?}");
+            r.json()
+        }
+    };
+    assert_eq!(patch(json!({"fields": []})).await["fields"], json!([]));
+    assert_eq!(patch(json!({"label": "Posts"})).await["fields"], json!([]));
+    let schemaless = patch(json!({"fields": null})).await;
+    assert_eq!(schemaless["fields"], Value::Null);
+    assert_eq!(patch(schemaless.clone()).await, schemaless);
+    let r = b
+        .send(
+            &api,
+            Method::POST,
+            "/api/v1/content/post",
+            Some(&json!({"title": "Free", "fields": {"anything": [1, 2]}})),
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "schemaless again: {r:?}");
+    let r = b
+        .send(
+            &api,
+            Method::POST,
+            TYPES,
+            Some(&json!({"name": "loose", "label": "Loose", "fields": null})),
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
+    assert_eq!(r.json()["fields"], Value::Null);
     let r = b
         .send(
             &api,
@@ -345,6 +391,18 @@ async fn terms_crud_over_http(api: Api) -> Api {
         r.assert_problem(422, "validation")["errors"][0]["field"],
         "slug"
     );
+    // Term errors name their member (review Minor 2).
+    for (body, field) in [
+        (json!({"name": "  "}), "name"),
+        (
+            json!({"name": "x", "parent_id": uuid::Uuid::now_v7()}),
+            "parent_id",
+        ),
+    ] {
+        let r = b.send(&api, Method::POST, terms, Some(&body), None).await;
+        let p = r.assert_problem(422, "validation");
+        assert_eq!(p["errors"][0]["field"], field, "{body}: {p}");
+    }
 
     // PATCH merges: absent members keep, `parent_id: null` moves to the top level.
     let r = b

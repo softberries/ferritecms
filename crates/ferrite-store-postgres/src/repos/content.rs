@@ -59,6 +59,26 @@ impl ContentTypeRepo for PgRepos {
         .map(|_| ())
     }
 
+    async fn insert(&self, ty: &ContentType) -> Result<(), StoreError> {
+        validate_text("content type name", &ty.name)?;
+        validate_text("content type label", &ty.label)?;
+        validate_json(&ty.fields)?;
+        run!(&self.exec, |e| sqlx::query(
+            "INSERT INTO content_types \
+             (name, label, hierarchical, has_archive, fields, built_in, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)"
+        )
+        .bind(&ty.name)
+        .bind(&ty.label)
+        .bind(ty.hierarchical)
+        .bind(ty.has_archive)
+        .bind(Json(&ty.fields))
+        .bind(ty.built_in)
+        .bind(dt(ty.created_at))
+        .execute(e))
+        .map(|_| ())
+    }
+
     async fn get(&self, name: &str) -> Result<Option<ContentType>, StoreError> {
         validate_text("content type name", name)?;
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(

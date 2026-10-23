@@ -13,7 +13,7 @@ use ferrite_core::{
 };
 use ferrite_domain::{NewUser, Role, Taxonomy, UserId, UserStatus};
 use ferrite_store::Store;
-use ferrite_store_tests::{TestDb, backend_tests};
+use ferrite_store_tests::{TestDb, backend_tests, backend_tests_spawning};
 use serde_json::{Value, json};
 
 async fn actor(store: &dyn Store, role: Role) -> Actor {
@@ -61,7 +61,7 @@ fn new_type(name: &str, fields: Vec<FieldDef>) -> NewType {
         label: format!("{name} label"),
         hierarchical: false,
         has_archive: true,
-        fields,
+        fields: Some(fields),
     }
 }
 
@@ -84,6 +84,15 @@ fn invalid<T: std::fmt::Debug>(r: Result<T, CoreError>, want_field: &str) -> Str
     match r {
         Err(CoreError::InvalidField { field, message }) if field == want_field => message,
         other => panic!("expected InvalidField({want_field}), got {other:?}"),
+    }
+}
+
+/// A name its own registry already holds: the primary key's unique violation (409).
+fn conflict<T: std::fmt::Debug>(r: Result<T, CoreError>, constraint: &str) {
+    match r {
+        Err(CoreError::Store(ferrite_store::StoreError::UniqueViolation { constraint: c }))
+            if c == constraint => {}
+        other => panic!("expected UniqueViolation({constraint}), got {other:?}"),
     }
 }
 
@@ -226,7 +235,7 @@ pub async fn field_values_validated_on_write(db: &TestDb) {
             &admin,
             "post",
             TypePatch {
-                fields: Some(vec![field("mood", FieldKind::Text)]),
+                fields: Some(Some(vec![field("mood", FieldKind::Text)])),
                 ..TypePatch::default()
             },
         )
@@ -238,6 +247,32 @@ pub async fn field_values_validated_on_write(db: &TestDb) {
         "fields",
     );
     svc.create(&admin, draft("post", "P", json!({"mood": "ok"})))
+        .await
+        .unwrap();
+    // Removing the schema again (`Some(None)`) makes `post` schemaless: stored `{}`.
+    let post = types(db)
+        .update(
+            &admin,
+            "post",
+            TypePatch {
+                fields: Some(None),
+                ..TypePatch::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(post.fields, json!({}));
+    svc.create(&admin, draft("post", "P", json!({"anything": 1})))
+        .await
+        .unwrap();
+    // A type registered without a schema takes any object too.
+    let mut free = new_type("free", vec![]);
+    free.fields = None;
+    assert_eq!(
+        types(db).create(&admin, free).await.unwrap().fields,
+        json!({})
+    );
+    svc.create(&admin, draft("free", "F", json!({"x": [1]})))
         .await
         .unwrap();
 }
@@ -281,7 +316,13 @@ pub async fn type_names_and_permalink_conflicts(db: &TestDb) {
         "name",
     );
     // Built-in and existing types, and taxonomies.
-    for taken in ["post", "page", "media", "category", "tag"] {
+    for taken in ["post", "media"] {
+        conflict(
+            svc.create(&admin, new_type(taken, vec![])).await,
+            "content_types_pkey",
+        );
+    }
+    for taken in ["category", "tag"] {
         invalid(svc.create(&admin, new_type(taken, vec![])).await, "name");
     }
     // A top-level page (or post) slug (F26).
@@ -312,7 +353,15 @@ pub async fn type_names_and_permalink_conflicts(db: &TestDb) {
     let event = svc.create(&admin, new_type("event", vec![])).await.unwrap();
     assert!(!event.built_in && event.has_archive);
     assert_eq!(event.fields, json!({"fields": []}));
-    invalid(svc.create(&admin, new_type("event", vec![])).await, "name");
+    conflict(
+        svc.create(&admin, new_type("event", vec![])).await,
+        "content_types_pkey",
+    );
+    // The losing create changed nothing.
+    assert_eq!(
+        store.read().types().get("event").await.unwrap().unwrap(),
+        event
+    );
 
     // Permissions: manage_settings for writes, content:read for reads.
     let editor = actor(store, Role::Editor).await;
@@ -344,6 +393,45 @@ pub async fn type_names_and_permalink_conflicts(db: &TestDb) {
     ));
 }
 
+/// Stored permalink options that no longer parse are not the request's fault: plain
+/// `Invalid` naming them, on create and update alike (review Minor 1).
+pub async fn stored_permalink_errors_are_not_field_errors(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let svc = types(db);
+    svc.create(&admin, new_type("event", vec![])).await.unwrap();
+    store
+        .read()
+        .options()
+        .set("permalink.post", &json!(5), true)
+        .await
+        .unwrap();
+    let m = plain_invalid(svc.create(&admin, new_type("film", vec![])).await);
+    assert!(
+        m.contains("stored permalink options") && m.contains("permalink.post"),
+        "{m}"
+    );
+    let m = plain_invalid(
+        svc.update(
+            &admin,
+            "event",
+            TypePatch {
+                has_archive: Some(false),
+                ..TypePatch::default()
+            },
+        )
+        .await,
+    );
+    assert!(m.contains("stored permalink options"), "{m}");
+    assert!(store.read().types().get("film").await.unwrap().is_none());
+    store
+        .read()
+        .options()
+        .delete("permalink.post")
+        .await
+        .unwrap();
+}
+
 pub async fn type_delete_rules(db: &TestDb) {
     let store = db.store();
     let admin = actor(store, Role::Admin).await;
@@ -368,7 +456,7 @@ pub async fn type_delete_rules(db: &TestDb) {
             TypePatch {
                 label: Some(" Events ".into()),
                 has_archive: Some(false),
-                fields: Some(vec![field("venue", FieldKind::Text)]),
+                fields: Some(Some(vec![field("venue", FieldKind::Text)])),
             },
         )
         .await
@@ -465,7 +553,16 @@ pub async fn taxonomy_register_and_delete(db: &TestDb) {
     let mut built = genre(&["book"]);
     built.built_in = true;
     invalid(svc.create_taxonomy(&admin, built).await, "built_in");
-    for taken in ["book", "category", "post", "page"] {
+    conflict(
+        svc.create_taxonomy(&admin, {
+            let mut t = genre(&["book"]);
+            t.name = "category".into();
+            t
+        })
+        .await,
+        "taxonomies_pkey",
+    );
+    for taken in ["book", "post", "page"] {
         let mut t = genre(&["book"]);
         t.name = taken.into();
         invalid(svc.create_taxonomy(&admin, t).await, "name");
@@ -489,7 +586,10 @@ pub async fn taxonomy_register_and_delete(db: &TestDb) {
             .unwrap(),
         created
     );
-    invalid(svc.create_taxonomy(&admin, genre(&["book"])).await, "name");
+    conflict(
+        svc.create_taxonomy(&admin, genre(&["book"])).await,
+        "taxonomies_pkey",
+    );
     let names: Vec<String> = svc
         .list_taxonomies(&admin)
         .await
@@ -664,7 +764,67 @@ pub async fn types_changed_emitted_with_all(db: &TestDb) {
     assert_eq!(events.max_seq().await.unwrap(), before);
 }
 
+/// Review Important 1: concurrent registrations on two nodes (Postgres `peer()`; on
+/// SQLite one store, whose writes are serialised, takes the same conflict path).
+/// Exactly one of two same-name creates wins, within a registry and across them.
+pub async fn concurrent_registration_one_wins(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    let other = db.peer().await.unwrap_or_else(|| db.shared_store());
+    let admin = actor(store.as_ref(), Role::Admin).await;
+    for round in 0..4 {
+        let name = format!("race{round}");
+        let both_types = round % 2 == 0;
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let spawn = |store: Arc<dyn Store>, as_type: bool| {
+            let (barrier, name) = (barrier.clone(), name.clone());
+            tokio::spawn(async move {
+                barrier.wait().await;
+                if as_type {
+                    ContentTypeService::new(store)
+                        .create(&admin, new_type(&name, vec![]))
+                        .await
+                        .map(|_| ())
+                } else {
+                    let mut t = genre(&["post"]);
+                    t.name = name;
+                    TaxonomyService::new(store)
+                        .create_taxonomy(&admin, t)
+                        .await
+                        .map(|_| ())
+                }
+            })
+        };
+        let a = spawn(store.clone(), true);
+        let b = spawn(other.clone(), both_types);
+        let results = [a.await.unwrap(), b.await.unwrap()];
+        let wins = results.iter().filter(|r| r.is_ok()).count();
+        assert_eq!(wins, 1, "round {round}: {results:?}");
+        let lost = results.into_iter().find_map(Result::err).unwrap();
+        match (&lost, both_types) {
+            (CoreError::Store(ferrite_store::StoreError::UniqueViolation { constraint }), true) => {
+                assert_eq!(constraint, "content_types_pkey");
+            }
+            (CoreError::InvalidField { field: "name", .. }, false) => {}
+            other => panic!("round {round}: unexpected loser {other:?}"),
+        }
+        let rows = usize::from(store.read().types().get(&name).await.unwrap().is_some())
+            + usize::from(
+                store
+                    .read()
+                    .taxonomies()
+                    .get(&name)
+                    .await
+                    .unwrap()
+                    .is_some(),
+            );
+        assert_eq!(rows, 1, "round {round}: one registration persists");
+    }
+}
+
+backend_tests_spawning!(concurrent_registration_one_wins);
+
 backend_tests!(
+    stored_permalink_errors_are_not_field_errors,
     field_values_validated_on_write,
     type_names_and_permalink_conflicts,
     type_delete_rules,

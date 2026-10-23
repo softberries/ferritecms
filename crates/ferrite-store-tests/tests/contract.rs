@@ -82,6 +82,7 @@ backend_tests!(
 backend_tests!(
     taxonomies_seeded_and_upsert,
     taxonomy_delete,
+    type_and_taxonomy_insert,
     terms_crud_and_hierarchy,
     deleting_term_with_children_is_foreign_key,
     term_links_replace_and_order,

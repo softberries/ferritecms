@@ -68,6 +68,16 @@ pub const UNIQUE_FIELDS: &[(&str, &str, &str)] = &[
         "slug",
         "the slug was taken by concurrent saves; retry",
     ),
+    (
+        "content_types_pkey",
+        "name",
+        "a content type with this name exists",
+    ),
+    (
+        "taxonomies_pkey",
+        "name",
+        "a taxonomy with this name exists",
+    ),
 ];
 
 /// One entry of `errors`: what is wrong with one input (`field` = the JSON path or

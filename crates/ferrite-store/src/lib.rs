@@ -14,7 +14,8 @@ mod text;
 pub use error::StoreError;
 pub use json::validate_json;
 pub use lock::{
-    LOCK_EXTENSIONS, LOCK_IMPORT, LOCK_MIGRATE, LOCK_POLL, LockGuard, check_lock_name, lock,
+    LOCK_EXTENSIONS, LOCK_IMPORT, LOCK_MIGRATE, LOCK_POLL, LOCK_TYPES, LockGuard, check_lock_name,
+    lock,
 };
 pub use menu::{check_redirect_code, insertion_order, tree_order};
 pub use migrate::{

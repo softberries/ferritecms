@@ -7,23 +7,34 @@
 //! `invalidate [all]` and appends an audit row (`type.create`, `type.update`,
 //! `type.delete`). Reads need `require_read(Content)` (F16).
 //!
-//! **Names** (types and taxonomies alike, [`check_name`]): `[a-z][a-z0-9_-]{0,31}`, not a
-//! [`slug::RESERVED`] or [`slug::ROUTE_WORDS`] word, not four digits, not the name of an
-//! existing type or taxonomy, and not the slug of an existing top-level post or page
-//! (their paths start with `/<slug>/`, which the new `/<name>/` prefix would shadow, F26).
+//! **Names** (types and taxonomies alike, [`check_type_name`]): `[a-z][a-z0-9_-]{0,31}`,
+//! not a [`slug::RESERVED`] or [`slug::ROUTE_WORDS`] word, not four digits, not the name
+//! of an existing type or taxonomy, and not the slug of an existing top-level post or
+//! page (their paths start with `/<slug>/`, which the new `/<name>/` prefix would
+//! shadow, F26). A name its own registry already holds is a conflict
+//! (`Store(UniqueViolation { "content_types_pkey" | "taxonomies_pkey" })`, `409` with
+//! `errors[0].field = name`); one the other registry holds, or a post/page slug, is
+//! `InvalidField { field: "name", .. }`.
 //!
-//! **Concurrency** (M1c-1 P2): these checks read committed rows inside the transaction.
-//! On SQLite writes are serialised; on Postgres two concurrent creates of the same name
-//! both pass and the later upsert wins (it then behaves like an update), and a type and
-//! a taxonomy created with the same name at the same moment can both succeed. Type
-//! registration is a rare admin action, so this is accepted and documented rather than
-//! locked; the outbox events and audit rows show what happened. A content write racing
-//! a type delete fails on the foreign key (`409`).
+//! **Concurrency.** Every type and taxonomy create, update and delete runs under the
+//! named store lock [`LOCK_TYPES`] (Postgres: the advisory lock `ferrite:<schema>:types`,
+//! cluster-wide; SQLite: in process), taken before the transaction and released after
+//! it ends, waiting at most [`TYPES_LOCK_WAIT`] (then `Store(Busy)`, `503`). So the name
+//! checks above, which span two tables no constraint links, see every earlier
+//! registration, and a create is a plain insert: the primary key backs the conflict
+//! check up. A content write racing a type delete fails on the foreign key (`409`).
+//!
+//! **Permalink check errors.** The structures are first parsed from the stored options;
+//! a stored option that no longer parses is not the request's fault and is plain
+//! `Invalid` naming the option. A first segment that shadows a name is
+//! `InvalidField { field: "name", .. }` on create (the new name causes it) and plain
+//! `Invalid` on update and delete (the body changes no name, so the stored state already
+//! clashed).
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use ferrite_domain::{ContentQuery, ContentType, NewAudit, Timestamp, UserId};
-use ferrite_store::{Repos, Store};
+use ferrite_store::{LOCK_TYPES, LockGuard, Repos, Store, StoreError, Tx, lock};
 use serde_json::{Value, json};
 
 use crate::{
@@ -35,6 +46,8 @@ use crate::{
     tx::finish,
 };
 
+/// How long a type or taxonomy write waits for the [`LOCK_TYPES`] lock.
+pub const TYPES_LOCK_WAIT: Duration = Duration::from_secs(30);
 /// Longest type or taxonomy name.
 pub const MAX_TYPE_NAME: usize = 32;
 /// Longest type or taxonomy label (characters).
@@ -52,7 +65,9 @@ pub struct NewType {
     pub label: String,
     pub hierarchical: bool,
     pub has_archive: bool,
-    pub fields: Vec<FieldDef>,
+    /// The schema items are validated against; `None` registers the type without one
+    /// (any `fields` object, like the built-in types).
+    pub fields: Option<Vec<FieldDef>>,
 }
 
 /// A change to a content type; `None` keeps the stored value. The name and
@@ -61,9 +76,10 @@ pub struct NewType {
 pub struct TypePatch {
     pub label: Option<String>,
     pub has_archive: Option<bool>,
-    /// Replaces the schema. Stored items are not re-validated; each is checked against
-    /// the new schema on its next save.
-    pub fields: Option<Vec<FieldDef>>,
+    /// `Some(Some(defs))` replaces the schema (`Some(vec![])`: items take `{}` only),
+    /// `Some(None)` removes it (any object). Stored items are not re-validated; each is
+    /// checked on its next save.
+    pub fields: Option<Option<Vec<FieldDef>>>,
 }
 
 /// Registers and manages content types (see the module docs).
@@ -94,34 +110,35 @@ impl ContentTypeService {
     }
 
     /// Registers a type (needs `manage_settings`). The name follows the rules in the
-    /// module docs (`InvalidField { field: "name", .. }`), the label is 1..=100
-    /// characters after trimming, and the schema the rules of [`fields`]. The stored
-    /// schema is `{"fields": [ … ]}`, also when empty, so items of a registered type are
-    /// always validated.
+    /// module docs, the label is 1..=100 characters after trimming, and the schema the
+    /// rules of [`fields`]. The stored schema is `{"fields": [ … ]}` (also when empty),
+    /// or `{}` for a type without one.
     pub async fn create(&self, actor: &Actor, new: NewType) -> Result<ContentType, CoreError> {
         require(actor, Capability::ManageSettings)?;
         check_type_name(&new.name)?;
         let label = check_label(&new.label)?;
-        fields::check_schema(&new.fields)?;
+        if let Some(defs) = &new.fields {
+            fields::check_schema(defs)?;
+        }
         let ty = ContentType {
             name: new.name,
             label,
             hierarchical: new.hierarchical,
             has_archive: new.has_archive,
-            fields: fields::schema_value(&new.fields),
+            fields: stored_schema(new.fields.as_deref()),
             built_in: false,
             created_at: Timestamp::now(),
         };
-        let tx = self.store.begin().await?;
+        let (guard, tx) = begin_locked(self.store.as_ref()).await?;
         let done = async {
-            check_name_free(tx.as_ref(), &ty.name).await?;
-            tx.types().upsert(&ty).await?;
-            check_permalinks(tx.as_ref()).await?;
+            check_name_free(tx.as_ref(), &ty.name, Change::Type).await?;
+            tx.types().insert(&ty).await?;
+            check_permalinks(tx.as_ref(), true).await?;
             let details = json!({
                 "label": ty.label,
                 "hierarchical": ty.hierarchical,
                 "has_archive": ty.has_archive,
-                "fields": new.fields.len(),
+                "fields": new.fields.as_ref().map(Vec::len),
             });
             announce(
                 tx.as_ref(),
@@ -135,7 +152,7 @@ impl ContentTypeService {
             Ok(ty)
         }
         .await;
-        finish(tx, done).await
+        finish_locked(guard, tx, done).await
     }
 
     /// Changes the label, `has_archive` or schema of type `name` (needs
@@ -149,10 +166,10 @@ impl ContentTypeService {
     ) -> Result<ContentType, CoreError> {
         require(actor, Capability::ManageSettings)?;
         let label = patch.label.as_deref().map(check_label).transpose()?;
-        if let Some(defs) = &patch.fields {
+        if let Some(Some(defs)) = &patch.fields {
             fields::check_schema(defs)?;
         }
-        let tx = self.store.begin().await?;
+        let (guard, tx) = begin_locked(self.store.as_ref()).await?;
         let done = async {
             let mut ty = tx.types().get(name).await?.ok_or(CoreError::NotFound)?;
             if let Some(label) = label {
@@ -162,14 +179,14 @@ impl ContentTypeService {
                 ty.has_archive = has_archive;
             }
             if let Some(defs) = &patch.fields {
-                ty.fields = fields::schema_value(defs);
+                ty.fields = stored_schema(defs.as_deref());
             }
             tx.types().upsert(&ty).await?;
-            check_permalinks(tx.as_ref()).await?;
+            check_permalinks(tx.as_ref(), false).await?;
             let details = json!({
                 "label": patch.label.is_some(),
                 "has_archive": patch.has_archive,
-                "fields": patch.fields.as_ref().map(Vec::len),
+                "fields": patch.fields.as_ref().map(|f| f.as_ref().map(Vec::len)),
             });
             announce(
                 tx.as_ref(),
@@ -183,7 +200,7 @@ impl ContentTypeService {
             Ok(ty)
         }
         .await;
-        finish(tx, done).await
+        finish_locked(guard, tx, done).await
     }
 
     /// Removes type `name` (needs `manage_settings`). Built-in types are
@@ -192,7 +209,7 @@ impl ContentTypeService {
     /// taxonomy. Missing: `NotFound`.
     pub async fn delete(&self, actor: &Actor, name: &str) -> Result<(), CoreError> {
         require(actor, Capability::ManageSettings)?;
-        let tx = self.store.begin().await?;
+        let (guard, tx) = begin_locked(self.store.as_ref()).await?;
         let done = async {
             let ty = tx.types().get(name).await?.ok_or(CoreError::NotFound)?;
             if ty.built_in {
@@ -233,7 +250,49 @@ impl ContentTypeService {
             .await
         }
         .await;
-        finish(tx, done).await
+        finish_locked(guard, tx, done).await
+    }
+}
+
+/// `{"fields": [ … ]}` for a schema, `{}` for none.
+fn stored_schema(defs: Option<&[FieldDef]>) -> Value {
+    match defs {
+        Some(defs) => fields::schema_value(defs),
+        None => json!({}),
+    }
+}
+
+/// Takes the [`LOCK_TYPES`] lock (bounded by [`TYPES_LOCK_WAIT`]), then opens the write
+/// transaction. [`finish_locked`] ends both, the transaction first, so the next holder
+/// sees the committed rows.
+pub(crate) async fn begin_locked(
+    store: &dyn Store,
+) -> Result<(Box<dyn LockGuard>, Box<dyn Tx>), CoreError> {
+    let guard = lock(store, LOCK_TYPES, TYPES_LOCK_WAIT).await?;
+    match store.begin().await {
+        Ok(tx) => Ok((guard, tx)),
+        Err(e) => {
+            release(guard).await;
+            Err(e.into())
+        }
+    }
+}
+
+/// Commits `tx` on `Ok` (rolls back on `Err`), then releases the lock.
+pub(crate) async fn finish_locked<T>(
+    guard: Box<dyn LockGuard>,
+    tx: Box<dyn Tx>,
+    result: Result<T, CoreError>,
+) -> Result<T, CoreError> {
+    let done = finish(tx, result).await;
+    release(guard).await;
+    done
+}
+
+/// Releases the lock; a failure is logged (the lock goes away with its connection).
+async fn release(guard: Box<dyn LockGuard>) {
+    if let Err(e) = guard.release().await {
+        tracing::warn!(error = %e, lock = LOCK_TYPES, "releasing the lock failed");
     }
 }
 
@@ -249,6 +308,14 @@ impl Change {
         match self {
             Change::Type => "type",
             Change::Taxonomy => "taxonomy",
+        }
+    }
+
+    /// The primary key of the registry's table.
+    fn pkey(self) -> &'static str {
+        match self {
+            Change::Type => "content_types_pkey",
+            Change::Taxonomy => "taxonomies_pkey",
         }
     }
 }
@@ -288,12 +355,28 @@ pub(crate) fn check_label(label: &str) -> Result<String, CoreError> {
 }
 
 /// `name` is not a type, a taxonomy or the slug of a top-level post or page (read
-/// inside the write's transaction).
-pub(crate) async fn check_name_free(repos: &dyn Repos, name: &str) -> Result<(), CoreError> {
-    if repos.types().get(name).await?.is_some() {
+/// inside the write's transaction, under [`LOCK_TYPES`]). Taken in `own` registry: the
+/// unique violation its insert would raise; elsewhere: `InvalidField("name")`.
+pub(crate) async fn check_name_free(
+    repos: &dyn Repos,
+    name: &str,
+    own: Change,
+) -> Result<(), CoreError> {
+    let is_type = repos.types().get(name).await?.is_some();
+    let is_taxonomy = repos.taxonomies().get(name).await?.is_some();
+    let taken_here = match own {
+        Change::Type => is_type,
+        Change::Taxonomy => is_taxonomy,
+    };
+    if taken_here {
+        return Err(CoreError::Store(StoreError::UniqueViolation {
+            constraint: own.pkey().to_owned(),
+        }));
+    }
+    if is_type {
         return Err(CoreError::invalid_field(NAME, "name is a content type"));
     }
-    if repos.taxonomies().get(name).await?.is_some() {
+    if is_taxonomy {
         return Err(CoreError::invalid_field(NAME, "name is a taxonomy"));
     }
     for kind in ROOT_TYPES {
@@ -312,16 +395,24 @@ pub(crate) async fn check_name_free(repos: &dyn Repos, name: &str) -> Result<(),
     Ok(())
 }
 
-/// The permalink rules still hold with the names `repos` lists now (P18/P19); a clash
-/// is reported on `name`.
-pub(crate) async fn check_permalinks(repos: &dyn Repos) -> Result<(), CoreError> {
-    match permalink::rules_from(repos, &[]).await {
-        Ok(_) => Ok(()),
-        Err(CoreError::Invalid(message)) => Err(CoreError::InvalidField {
+/// The permalink rules still hold with the names `repos` lists now (P18/P19). See
+/// "Permalink check errors" in the module docs: `blame_name` (a create) reports a clash
+/// on `name`; stored options that do not parse are plain `Invalid`.
+pub(crate) async fn check_permalinks(repos: &dyn Repos, blame_name: bool) -> Result<(), CoreError> {
+    let rules = permalink::stored_rules(repos, &[])
+        .await
+        .map_err(|e| match e {
+            CoreError::Invalid(m) => CoreError::Invalid(format!(
+                "the stored permalink options are invalid, fix them first: {m}"
+            )),
+            e => e,
+        })?;
+    match permalink::check_registered(repos, &rules).await {
+        Err(CoreError::Invalid(message)) if blame_name => Err(CoreError::InvalidField {
             field: NAME,
             message,
         }),
-        Err(e) => Err(e),
+        other => other,
     }
 }
 

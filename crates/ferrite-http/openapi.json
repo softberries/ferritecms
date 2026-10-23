@@ -2217,6 +2217,16 @@
               }
             }
           },
+          "409": {
+            "description": "`conflict`: a taxonomy with this name exists (`errors[0].field` = `name`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
           "422": {
             "description": "`validation` (`errors[0].field`: `name`, `label` or `content_types`)",
             "content": {
@@ -3019,6 +3029,16 @@
               }
             }
           },
+          "409": {
+            "description": "`conflict`: a content type with this name exists (`errors[0].field` = `name`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
           "422": {
             "description": "`validation` (`errors[0].field`: `name`, `label` or `fields`)",
             "content": {
@@ -3601,8 +3621,7 @@
           "label",
           "hierarchical",
           "has_archive",
-          "built_in",
-          "fields"
+          "built_in"
         ],
         "properties": {
           "built_in": {
@@ -3610,11 +3629,14 @@
             "description": "`post`, `page` and `media`: cannot be removed."
           },
           "fields": {
-            "type": "array",
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "$ref": "#/components/schemas/FieldDefDto"
             },
-            "description": "The field schema items are validated against. Empty for a type without a schema\n(the built-in types until one is set), whose items take any `fields` object."
+            "description": "The field schema items are validated against; `[]` means items take `{}` only\n(plus `featured_image`). `null`: the type has no schema and its items take any\n`fields` object (the built-in types until one is set)."
           },
           "has_archive": {
             "type": "boolean",
@@ -3641,10 +3663,14 @@
         ],
         "properties": {
           "fields": {
-            "type": "array",
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "$ref": "#/components/schemas/FieldDefDto"
-            }
+            },
+            "description": "The schema; absent is `[]` (items take `{}` only), `null` registers the type\nwithout a schema (items take any object)."
           },
           "has_archive": {
             "type": "boolean"
@@ -3689,11 +3715,14 @@
         "description": "`PATCH /types/{name}`: `name` and `hierarchical` cannot change.",
         "properties": {
           "fields": {
-            "type": "array",
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "$ref": "#/components/schemas/FieldDefDto"
             },
-            "description": "Replaces the schema; stored items are validated against it on their next save."
+            "description": "Absent keeps the schema, a list replaces it (`[]`: items take `{}` only), `null`\nremoves it (items take any object). Stored items are validated on their next save."
           },
           "has_archive": {
             "type": "boolean"
