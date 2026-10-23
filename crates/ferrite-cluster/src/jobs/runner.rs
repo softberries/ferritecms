@@ -2,7 +2,7 @@
 //! registered kinds, runs each on its own task, renews every in-flight lease and records
 //! the outcome under the lease token, so a node that lost its lease writes nothing (P6).
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 
 use ferrite_domain::{Job, JobLease, NodeId};
 use ferrite_store::{
@@ -41,6 +41,8 @@ pub struct RunnerConfig {
     /// Renewal interval. A job whose lease was not renewed for
     /// `lease - extend_every / 2` is cancelled locally (R4), so keep it under
     /// `2 / 3 × lease` (default 20 s of 60 s) or jobs are cancelled before any renewal.
+    /// Half of it is also the client-side timeout of every store call the runner makes
+    /// (the store-call timeout, 10 s by default).
     pub extend_every: Duration,
     /// Poll interval while idle.
     pub idle_poll: Duration,
@@ -142,8 +144,6 @@ impl JobRunner {
     }
 }
 
-/// Longest one lease renewal may take; a slower one counts as failed.
-pub const RENEW_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long shutdown waits for aborted handlers to stop before releasing their jobs.
 pub const ABORT_WAIT: Duration = Duration::from_millis(500);
 /// How long shutdown spends on the final release and outcome writes, all together.
@@ -187,6 +187,30 @@ impl State {
         self.runner.store.read().jobs()
     }
 
+    /// The client-side bound on every store call the runner awaits (the store-call
+    /// timeout, `extend_every / 2`: 10 s with the defaults). Server-side limits such as
+    /// Postgres `statement_timeout` do not help against a black-holed connection; this
+    /// does, and because it equals the fence's safety margin a stuck call can delay the
+    /// fence ([`Self::enforce_fence`], checked after every call) by at most that margin,
+    /// so a job is still dropped before its lease ends.
+    fn call_timeout(&self) -> Duration {
+        self.runner.config.extend_every / 2
+    }
+
+    /// Runs one store call under [`Self::call_timeout`]; running out is an error
+    /// (`Database`), handled like any failed call.
+    async fn bounded<T>(
+        &self,
+        call: impl Future<Output = Result<T, StoreError>>,
+    ) -> Result<T, StoreError> {
+        let limit = self.call_timeout();
+        tokio::time::timeout(limit, call).await.unwrap_or_else(|_| {
+            Err(StoreError::Database(format!(
+                "store call timed out after {limit:?} (client side)"
+            )))
+        })
+    }
+
     /// Local lease fencing (R4): how long after `renewed_at` a job is cancelled when no
     /// renewal succeeded since; half a renewal interval before the lease itself ends.
     fn fence(&self) -> Duration {
@@ -227,6 +251,8 @@ impl State {
         tokio::pin!(poll);
         let mut claim_now = true;
         loop {
+            // Every inline store call is bounded; check the fence after each one.
+            self.enforce_fence();
             if claim_now && !self.runner.kinds.is_empty() && self.in_flight.len() < self.workers {
                 claim_now = self.claim().await;
                 poll.as_mut().reset(Instant::now() + idle_poll);
@@ -269,20 +295,22 @@ impl State {
         let free = self.workers - self.in_flight.len();
         let limit = u32::try_from(free).unwrap_or(MAX_CLAIM).min(MAX_CLAIM);
         let sent = Instant::now();
+        // A timed-out claim returns nothing; jobs it may have claimed in the database
+        // run again once their lease expires.
         let claimed = self
-            .jobs()
-            .claim(
+            .bounded(self.jobs().claim(
                 self.runner.config.node,
                 &self.runner.kinds,
                 limit,
                 self.runner.config.lease,
-            )
+            ))
             .await;
         match claimed {
             Ok(jobs) => {
                 let full = jobs.len() == limit as usize;
                 for job in jobs {
                     self.start(job, sent).await;
+                    self.enforce_fence();
                 }
                 full && self.in_flight.len() < self.workers
             }
@@ -365,7 +393,7 @@ impl State {
 
     async fn record(&self, job: &InFlight, outcome: Result<(), JobError>) {
         match outcome {
-            Ok(()) => match self.jobs().complete(&job.lease).await {
+            Ok(()) => match self.bounded(self.jobs().complete(&job.lease)).await {
                 Ok(true) => tracing::debug!(parent: &job.span, "job done"),
                 Ok(false) => {
                     tracing::warn!(parent: &job.span, "lease lost before completion; result dropped");
@@ -381,7 +409,10 @@ impl State {
     }
 
     async fn fail(&self, lease: &JobLease, error: &str, permanent: bool, span: &Span) {
-        match self.jobs().fail(lease, error, permanent).await {
+        match self
+            .bounded(self.jobs().fail(lease, error, permanent))
+            .await
+        {
             Ok(Some(status)) => {
                 tracing::warn!(parent: span, error, %status, "job attempt failed");
             }
@@ -397,7 +428,7 @@ impl State {
 
     /// Puts the job back with the attempt refunded.
     async fn release(&self, lease: &JobLease, delay: Duration, span: &Span) {
-        match self.jobs().release(lease, delay, false).await {
+        match self.bounded(self.jobs().release(lease, delay, false)).await {
             Ok(true) => {}
             Ok(false) => tracing::debug!(parent: span, "lease lost before release"),
             Err(e) => tracing::warn!(
@@ -407,7 +438,7 @@ impl State {
         }
     }
 
-    /// Renews every running lease at once, each bounded by [`RENEW_TIMEOUT`]. A lease
+    /// Renews every running lease at once, each bounded by [`Self::call_timeout`]. A lease
     /// that is gone cancels its handler; a failed renewal leaves the job to the local
     /// fence ([`Self::enforce_fence`]).
     async fn extend_all(&mut self) {
@@ -419,9 +450,10 @@ impl State {
             .map(|(id, job)| (*id, job.lease))
             .collect();
         let jobs = self.jobs();
+        let limit = self.call_timeout();
         let results = futures::future::join_all(targets.iter().map(|(id, lease)| async move {
             let sent = Instant::now();
-            let renewed = tokio::time::timeout(RENEW_TIMEOUT, jobs.extend(lease, lease_len)).await;
+            let renewed = tokio::time::timeout(limit, jobs.extend(lease, lease_len)).await;
             (*id, sent, renewed)
         }))
         .await;
@@ -437,7 +469,7 @@ impl State {
                     "lease renewal failed; retrying at the next renewal"
                 ),
                 Err(_) => tracing::warn!(
-                    parent: &job.span, timeout = ?RENEW_TIMEOUT,
+                    parent: &job.span, timeout = ?limit,
                     "lease renewal timed out; retrying at the next renewal"
                 ),
             }

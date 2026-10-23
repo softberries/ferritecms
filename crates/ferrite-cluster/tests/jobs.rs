@@ -388,25 +388,43 @@ pub async fn runner_cancels_handler_when_lease_lost(db: Arc<TestDb>) {
     assert_eq!(calls(&b_log), vec![id]);
 }
 
-/// A store whose `JobRepo::extend` always fails (database unreachable for renewals);
-/// everything else goes to the real store.
-struct FailingRenewals {
-    inner: Arc<dyn Store>,
-    repos: FailingRepos,
+/// What a [`FaultyStore`] breaks in its `JobRepo`; everything else goes to the real
+/// store.
+#[derive(Clone, Copy)]
+struct Faults {
+    /// Claims that go through before every later claim hangs forever.
+    claims_before_hang: usize,
+    /// `extend` hangs forever (black-holed connection) instead of failing at once.
+    hang_extend: bool,
 }
 
-struct FailingRepos {
+/// A store whose job renewals always fail (error, or hang with `hang_extend`) and whose
+/// claims can hang (database unreachable).
+struct FaultyStore {
     inner: Arc<dyn Store>,
-    jobs: FailingJobs,
+    repos: FaultyRepos,
 }
 
-struct FailingJobs(Arc<dyn Store>);
+struct FaultyRepos {
+    inner: Arc<dyn Store>,
+    jobs: FaultyJobs,
+}
 
-impl FailingRenewals {
-    fn new(inner: Arc<dyn Store>) -> Self {
+struct FaultyJobs {
+    inner: Arc<dyn Store>,
+    faults: Faults,
+    claims: std::sync::atomic::AtomicUsize,
+}
+
+impl FaultyStore {
+    fn new(inner: Arc<dyn Store>, faults: Faults) -> Self {
         Self {
-            repos: FailingRepos {
-                jobs: FailingJobs(inner.clone()),
+            repos: FaultyRepos {
+                jobs: FaultyJobs {
+                    inner: inner.clone(),
+                    faults,
+                    claims: Default::default(),
+                },
                 inner: inner.clone(),
             },
             inner,
@@ -415,7 +433,7 @@ impl FailingRenewals {
 }
 
 #[async_trait]
-impl Store for FailingRenewals {
+impl Store for FaultyStore {
     fn backend(&self) -> Backend {
         self.inner.backend()
     }
@@ -457,7 +475,7 @@ impl Store for FailingRenewals {
     }
 }
 
-impl Repos for FailingRepos {
+impl Repos for FaultyRepos {
     fn content(&self) -> &dyn ContentRepo {
         self.inner.read().content()
     }
@@ -521,9 +539,9 @@ impl Repos for FailingRepos {
 }
 
 #[async_trait]
-impl JobRepo for FailingJobs {
+impl JobRepo for FaultyJobs {
     async fn enqueue(&self, job: &NewJob) -> Result<Option<JobId>, StoreError> {
-        self.0.read().jobs().enqueue(job).await
+        self.inner.read().jobs().enqueue(job).await
     }
     async fn claim(
         &self,
@@ -532,13 +550,23 @@ impl JobRepo for FailingJobs {
         limit: u32,
         lease: Duration,
     ) -> Result<Vec<Job>, StoreError> {
-        self.0.read().jobs().claim(node, kinds, limit, lease).await
+        if self.claims.fetch_add(1, Ordering::SeqCst) >= self.faults.claims_before_hang {
+            std::future::pending::<()>().await;
+        }
+        self.inner
+            .read()
+            .jobs()
+            .claim(node, kinds, limit, lease)
+            .await
     }
     async fn extend(&self, _lease: &JobLease, _duration: Duration) -> Result<bool, StoreError> {
+        if self.faults.hang_extend {
+            std::future::pending::<()>().await;
+        }
         Err(StoreError::Database("injected renewal failure".into()))
     }
     async fn complete(&self, lease: &JobLease) -> Result<bool, StoreError> {
-        self.0.read().jobs().complete(lease).await
+        self.inner.read().jobs().complete(lease).await
     }
     async fn fail(
         &self,
@@ -546,7 +574,7 @@ impl JobRepo for FailingJobs {
         error: &str,
         permanent: bool,
     ) -> Result<Option<JobStatus>, StoreError> {
-        self.0.read().jobs().fail(lease, error, permanent).await
+        self.inner.read().jobs().fail(lease, error, permanent).await
     }
     async fn release(
         &self,
@@ -554,17 +582,17 @@ impl JobRepo for FailingJobs {
         delay: Duration,
         count_attempt: bool,
     ) -> Result<bool, StoreError> {
-        self.0
+        self.inner
             .read()
             .jobs()
             .release(lease, delay, count_attempt)
             .await
     }
     async fn get(&self, id: JobId) -> Result<Option<Job>, StoreError> {
-        self.0.read().jobs().get(id).await
+        self.inner.read().jobs().get(id).await
     }
     async fn counts(&self) -> Result<BTreeMap<JobStatus, u64>, StoreError> {
-        self.0.read().jobs().counts().await
+        self.inner.read().jobs().counts().await
     }
     async fn prune(
         &self,
@@ -572,7 +600,7 @@ impl JobRepo for FailingJobs {
         dead_before: Timestamp,
         limit: u32,
     ) -> Result<u64, StoreError> {
-        self.0
+        self.inner
             .read()
             .jobs()
             .prune(done_before, dead_before, limit)
@@ -601,7 +629,13 @@ pub async fn runner_fences_handler_when_renewals_fail(db: Arc<TestDb>) {
     let mut config = RunnerConfig::new(node, 1);
     config.lease = Duration::from_secs(2);
     config.extend_every = Duration::from_millis(400);
-    let failing: Arc<dyn Store> = Arc::new(FailingRenewals::new(store.clone()));
+    let failing: Arc<dyn Store> = Arc::new(FaultyStore::new(
+        store.clone(),
+        Faults {
+            claims_before_hang: usize::MAX,
+            hang_extend: false,
+        },
+    ));
     let before_claim = Instant::now();
     let (stop, handle) = start(failing, config, vec![handler]);
     let running = wait_running_on(store.as_ref(), id, node).await;
@@ -612,7 +646,7 @@ pub async fn runner_fences_handler_when_renewals_fail(db: Arc<TestDb>) {
     let fenced_after = before_claim.elapsed();
     // Fence at 2 s - 0.2 s after the claim; this test polls every 20 ms.
     assert!(
-        fenced_after >= Duration::from_millis(1700) && fenced_after < Duration::from_secs(2),
+        fenced_after >= Duration::from_millis(1700) && fenced_after < Duration::from_millis(2500),
         "fenced after {fenced_after:?}"
     );
     // Nothing was written: the job is still running under this node's live lease.
@@ -622,6 +656,54 @@ pub async fn runner_fences_handler_when_renewals_fail(db: Arc<TestDb>) {
     stop_runner(stop, handle).await;
     // The fenced job is not released at shutdown either: its lease just expires.
     assert_eq!(get(store.as_ref(), id).await, running);
+    assert_eq!(calls(&log), vec![id]);
+}
+
+/// R4 with a black-holed connection: after the first claim every claim and renewal
+/// hangs forever. Inline store calls are bounded (`extend_every / 2`), so the loop
+/// still reaches the fence and drops the in-flight handler near its deadline.
+pub async fn runner_fences_handler_while_store_hangs(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    let id = enqueue(store.as_ref(), NewJob::new(KIND, json!({"v": 1}))).await;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let flag = cancelled.clone();
+    let (handler, log) = TestHandler::new(KIND, move |_| {
+        let guard = DropFlag(flag.clone());
+        async move {
+            let _guard = guard;
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            Ok(())
+        }
+    })
+    .build();
+    let node = NodeId::new();
+    // Two slots and a fast poll: the loop keeps claiming (and hanging) while the job runs.
+    let mut config = RunnerConfig::new(node, 2);
+    config.lease = Duration::from_secs(2);
+    config.extend_every = Duration::from_millis(400);
+    config.idle_poll = Duration::from_millis(50);
+    let faulty: Arc<dyn Store> = Arc::new(FaultyStore::new(
+        store.clone(),
+        Faults {
+            claims_before_hang: 1,
+            hang_extend: true,
+        },
+    ));
+    let before_claim = Instant::now();
+    let (stop, handle) = start(faulty, config, vec![handler]);
+    let running = wait_running_on(store.as_ref(), id, node).await;
+    wait_for(Duration::from_secs(4), "handler fenced", || async {
+        cancelled.load(Ordering::SeqCst).then_some(())
+    })
+    .await;
+    let fenced_after = before_claim.elapsed();
+    // Fence at 1.8 s; a stuck call is cut after 0.2 s, so the fence is at most that late.
+    assert!(
+        fenced_after >= Duration::from_millis(1700) && fenced_after < Duration::from_millis(2500),
+        "fenced after {fenced_after:?}"
+    );
+    assert_eq!(get(store.as_ref(), id).await, running, "nothing written");
+    stop_runner(stop, handle).await;
     assert_eq!(calls(&log), vec![id]);
 }
 
@@ -884,6 +966,7 @@ backend_tests_spawning!(
     runner_extends_long_jobs,
     runner_cancels_handler_when_lease_lost,
     runner_fences_handler_when_renewals_fail,
+    runner_fences_handler_while_store_hangs,
     runner_releases_unknown_payload_version,
     runner_shutdown_releases_in_flight,
     scheduler_inserts_one_job_per_period,

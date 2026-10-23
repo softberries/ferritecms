@@ -9,6 +9,6 @@ pub mod jobs;
 pub use error::ClusterError;
 pub use jobs::{
     ABORT_WAIT, EXTEND_EVERY, HANDLER_TIMEOUT, IDLE_POLL, JOB_DRAIN, JobError, JobHandler,
-    JobRunner, LEASE, Periodic, RELEASE_BUDGET, RENEW_TIMEOUT, RESUBSCRIBE_MAX, RESUBSCRIBE_MIN,
-    RunnerConfig, SCHEDULER_TICK, Scheduler, period_key,
+    JobRunner, LEASE, Periodic, RELEASE_BUDGET, RESUBSCRIBE_MAX, RESUBSCRIBE_MIN, RunnerConfig,
+    SCHEDULER_TICK, Scheduler, period_key,
 };
