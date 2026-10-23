@@ -325,7 +325,7 @@ pub async fn api_tokens_prune_expired(db: &TestDb) {
 
 /// Sleeps until 50 ms past the next `window` boundary of the database clock when fewer
 /// than `need` remain in the current window, so a test's hits share one window (F10).
-async fn align_to_window(store: &dyn Store, window: Duration, need: Duration) {
+pub async fn align_to_window(store: &dyn Store, window: Duration, need: Duration) {
     let w = i64::try_from(window.as_micros()).unwrap();
     let now = store.read().nodes().db_now().await.unwrap().as_micros();
     let left = w - now.rem_euclid(w);

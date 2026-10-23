@@ -28,7 +28,9 @@ use ferrite_store::{
     RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription,
     TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
-use ferrite_store_tests::{TestDb, backend_tests_spawning, fixtures::fixture_user};
+use ferrite_store_tests::{
+    TestDb, auth::align_to_window, backend_tests_spawning, fixtures::fixture_user,
+};
 use serde_json::json;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -1084,6 +1086,8 @@ pub async fn sessions_prune_job_deletes_expired_and_idle(db: Arc<TestDb>) {
 
     let limits = repos.rate_limits();
     let minute = Duration::from_secs(60);
+    // Both fresh hits must share one window (F10): at least 30 s of it left.
+    align_to_window(store.as_ref(), minute, Duration::from_secs(30)).await;
     limits.hit("login:ip:old", minute).await.unwrap();
     limits.hit("login:ip:fresh", minute).await.unwrap();
     backdate_bucket(&db, "login:ip:old", 2).await;

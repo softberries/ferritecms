@@ -8,6 +8,7 @@ use std::{future::Future, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use ferrite_domain::{Job, SESSION_IDLE, Timestamp};
 use ferrite_store::{MAX_PRUNE_BATCH, Store, StoreError};
+use futures::future::BoxFuture;
 use serde_json::json;
 use tokio::time::Instant;
 
@@ -40,18 +41,22 @@ pub const RATE_LIMIT_RETENTION: Duration = Duration::from_secs(3600);
 /// timeout (300 s), so a large backlog ends the run cleanly and the next hour goes on.
 pub const PRUNE_BUDGET: Duration = Duration::from_secs(240);
 
-/// Calls `batch` until it deletes fewer than [`MAX_PRUNE_BATCH`] rows or
-/// [`PRUNE_BUDGET`], counted from `started` (the start of the run, so a job pruning
-/// several tables shares one budget), is used up; returns the total.
+/// The share of [`PRUNE_BUDGET`] each of the three tables of `sessions.prune` gets, so a
+/// backlog in one never starves the others.
+pub const SESSIONS_PRUNE_SLICE: Duration = Duration::from_secs(80);
+
+/// Calls `batch` until it deletes fewer than [`MAX_PRUNE_BATCH`] rows or `budget` (from
+/// the first call) is used up; returns the total. A call always runs at least one batch.
 async fn prune_batches<F, Fut>(
     what: &'static str,
-    started: Instant,
+    budget: Duration,
     mut batch: F,
 ) -> Result<u64, JobError>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<u64, StoreError>>,
 {
+    let started = Instant::now();
     let mut total = 0;
     loop {
         let n = batch().await.map_err(retry)?;
@@ -59,7 +64,7 @@ where
         if n < u64::from(MAX_PRUNE_BATCH) {
             break;
         }
-        if started.elapsed() >= PRUNE_BUDGET {
+        if started.elapsed() >= budget {
             tracing::info!(
                 what,
                 deleted = total,
@@ -70,6 +75,21 @@ where
     }
     tracing::info!(what, deleted = total, "pruned");
     Ok(total)
+}
+
+/// One table's batch for [`prune_each`].
+type Batch<'a> = Box<dyn FnMut() -> BoxFuture<'a, Result<u64, StoreError>> + Send + 'a>;
+
+/// Prunes each table in turn, each within its own `slice`, so a table whose backlog
+/// uses up its slice still leaves every later table a full one.
+async fn prune_each(
+    slice: Duration,
+    tables: Vec<(&'static str, Batch<'_>)>,
+) -> Result<(), JobError> {
+    for (what, mut batch) in tables {
+        prune_batches(what, slice, &mut batch).await?;
+    }
+    Ok(())
 }
 
 /// The database clock minus `age`.
@@ -101,7 +121,7 @@ impl JobHandler for EventsPrune {
     async fn run(&self, _job: &Job) -> Result<(), JobError> {
         let before = db_now_minus(self.0.as_ref(), EVENT_RETENTION).await?;
         let events = self.0.read().events();
-        prune_batches("events", Instant::now(), || {
+        prune_batches("events", PRUNE_BUDGET, || {
             events.prune(before, MAX_PRUNE_BATCH)
         })
         .await?;
@@ -123,7 +143,7 @@ impl JobHandler for JobsPrune {
         let done = db_now_minus(self.0.as_ref(), DONE_JOB_RETENTION).await?;
         let dead = db_now_minus(self.0.as_ref(), DEAD_JOB_RETENTION).await?;
         let jobs = self.0.read().jobs();
-        prune_batches("jobs", Instant::now(), || {
+        prune_batches("jobs", PRUNE_BUDGET, || {
             jobs.prune(done, dead, MAX_PRUNE_BATCH)
         })
         .await?;
@@ -143,7 +163,7 @@ impl JobHandler for NodesPrune {
     async fn run(&self, _job: &Job) -> Result<(), JobError> {
         let before = db_now_minus(self.0.as_ref(), crate::node::NODE_EXPIRY).await?;
         let nodes = self.0.read().nodes();
-        prune_batches("nodes", Instant::now(), || {
+        prune_batches("nodes", PRUNE_BUDGET, || {
             nodes.prune(before, MAX_PRUNE_BATCH)
         })
         .await?;
@@ -167,7 +187,7 @@ impl JobHandler for PluginFailuresPrune {
     async fn run(&self, _job: &Job) -> Result<(), JobError> {
         let before = db_now_minus(self.store.as_ref(), self.retention).await?;
         let failures = self.store.read().plugin_failures();
-        prune_batches("plugin_failures", Instant::now(), || {
+        prune_batches("plugin_failures", PRUNE_BUDGET, || {
             failures.prune(before, MAX_PRUNE_BATCH)
         })
         .await?;
@@ -178,7 +198,8 @@ impl JobHandler for PluginFailuresPrune {
 /// `sessions.prune` (P23): deletes sessions past their absolute end or idle longer than
 /// [`SESSION_IDLE`], API tokens past their `expires_at`, and rate-limit rows whose window
 /// started more than [`RATE_LIMIT_RETENTION`] ago — all against one reading of the
-/// database clock.
+/// database clock, each table within [`SESSIONS_PRUNE_SLICE`] (three slices fit in
+/// [`PRUNE_BUDGET`]).
 pub struct SessionsPrune(pub Arc<dyn Store>);
 
 #[async_trait]
@@ -188,24 +209,27 @@ impl JobHandler for SessionsPrune {
     }
 
     async fn run(&self, _job: &Job) -> Result<(), JobError> {
-        let started = Instant::now();
         let repos = self.0.read();
         let now = repos.nodes().db_now().await.map_err(retry)?;
         let idle_before = minus(now, SESSION_IDLE)?;
         let window_before = minus(now, RATE_LIMIT_RETENTION)?;
-        let sessions = repos.sessions();
-        prune_batches("sessions", started, || {
-            sessions.prune(now, idle_before, MAX_PRUNE_BATCH)
-        })
-        .await?;
-        let tokens = repos.api_tokens();
-        prune_batches("api_tokens", started, || tokens.prune(now, MAX_PRUNE_BATCH)).await?;
-        let limits = repos.rate_limits();
-        prune_batches("rate_limits", started, || {
-            limits.prune(window_before, MAX_PRUNE_BATCH)
-        })
-        .await?;
-        Ok(())
+        let (sessions, tokens, limits) =
+            (repos.sessions(), repos.api_tokens(), repos.rate_limits());
+        let tables: Vec<(&'static str, Batch<'_>)> = vec![
+            (
+                "sessions",
+                Box::new(move || sessions.prune(now, idle_before, MAX_PRUNE_BATCH)),
+            ),
+            (
+                "api_tokens",
+                Box::new(move || tokens.prune(now, MAX_PRUNE_BATCH)),
+            ),
+            (
+                "rate_limits",
+                Box::new(move || limits.prune(window_before, MAX_PRUNE_BATCH)),
+            ),
+        ];
+        prune_each(SESSIONS_PRUNE_SLICE, tables).await
     }
 }
 
@@ -244,6 +268,8 @@ pub fn periodics() -> Vec<Periodic> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
     use super::*;
 
     #[test]
@@ -256,6 +282,62 @@ mod tests {
             Duration::from_secs(40 * 3600)
         );
         assert_eq!(failure_retention(Duration::MAX), Duration::MAX);
+    }
+
+    /// A table that always returns a full batch (an endless backlog) and counts calls.
+    fn table(calls: &Arc<AtomicU32>, n: u32) -> Batch<'static> {
+        let calls = calls.clone();
+        Box::new(move || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { Ok(u64::from(n)) })
+        })
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_slice_leaves_later_tables_their_pass() {
+        let counts: Vec<Arc<AtomicU32>> = (0..3).map(|_| Arc::default()).collect();
+        // The first table never runs short: with a zero slice it gets one batch, and
+        // the others still each get theirs.
+        let tables = vec![
+            ("endless", table(&counts[0], MAX_PRUNE_BATCH)),
+            ("second", table(&counts[1], 0)),
+            ("third", table(&counts[2], 0)),
+        ];
+        prune_each(Duration::ZERO, tables).await.unwrap();
+        let calls: Vec<u32> = counts.iter().map(|c| c.load(Ordering::SeqCst)).collect();
+        assert_eq!(calls, [1, 1, 1]);
+
+        // A full slice in an earlier table does not shorten a later one: the later
+        // table keeps deleting until its own slice is spent.
+        let counts: Vec<Arc<AtomicU32>> = (0..2).map(|_| Arc::default()).collect();
+        let slow = counts[0].clone();
+        let first: Batch<'static> = Box::new(move || {
+            slow.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(120)).await;
+                Ok(u64::from(MAX_PRUNE_BATCH))
+            })
+        });
+        let later = counts[1].clone();
+        let second: Batch<'static> = Box::new(move || {
+            let n = later.fetch_add(1, Ordering::SeqCst);
+            // Three full batches, then short.
+            Box::pin(async move { Ok(if n < 3 { u64::from(MAX_PRUNE_BATCH) } else { 0 }) })
+        });
+        prune_each(
+            Duration::from_millis(200),
+            vec![("slow", first), ("later", second)],
+        )
+        .await
+        .unwrap();
+        // 120 ms batches in a 200 ms slice: one or two batches, never three.
+        let slow = counts[0].load(Ordering::SeqCst);
+        assert!(matches!(slow, 1 | 2), "{slow} batches");
+        assert_eq!(
+            counts[1].load(Ordering::SeqCst),
+            4,
+            "the later table ran to the end"
+        );
     }
 
     #[test]

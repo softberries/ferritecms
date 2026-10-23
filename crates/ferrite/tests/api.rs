@@ -27,6 +27,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_ferrite");
 const SITE_URL: &str = "http://127.0.0.1:8080";
 const ADMIN_PASSWORD: &str = "correct horse battery staple";
 const EDITOR_PASSWORD: &str = "editor passphrase 2026";
+const ME: &str = "/api/v1/auth/me";
 /// Tokens a user can hold (constraints: at most 50).
 const MAX_TOKENS: usize = 50;
 
@@ -180,11 +181,17 @@ impl Drop for Profile {
             return;
         };
         let sql = format!("DROP SCHEMA IF EXISTS \"{schema}\" CASCADE");
+        // Bounded, so an unreachable Postgres cannot hang the test at cleanup.
         let done = std::thread::spawn(move || {
             rt().block_on(async move {
-                let mut conn = PgConnection::connect(&url).await?;
-                sqlx::raw_sql(AssertSqlSafe(sql)).execute(&mut conn).await?;
-                conn.close().await
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    let mut conn = PgConnection::connect(&url).await?;
+                    sqlx::raw_sql(AssertSqlSafe(sql)).execute(&mut conn).await?;
+                    conn.close().await
+                })
+                .await
+                .map_err(|_| "timed out".to_owned())?
+                .map_err(|e| e.to_string())
             })
         })
         .join();
@@ -341,9 +348,11 @@ fn request(
     headers: &[(&str, String)],
     body: Option<&Value>,
 ) -> Resp {
-    let mut s = TcpStream::connect(addr).expect("connect");
-    s.set_read_timeout(Some(Duration::from_secs(30)))
-        .expect("timeout");
+    let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).expect("connect");
+    s.set_read_timeout(Some(Duration::from_secs(15)))
+        .expect("read timeout");
+    s.set_write_timeout(Some(Duration::from_secs(5)))
+        .expect("write timeout");
     let mut head = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n");
     for (name, value) in headers {
         head.push_str(&format!("{name}: {value}\r\n"));
@@ -359,15 +368,14 @@ fn request(
     s.write_all(head.as_bytes()).expect("write head");
     s.write_all(body.as_bytes()).expect("write body");
     let mut raw = Vec::new();
-    // A refusal sent before the request body is read (the origin check of login) ends
-    // in a reset once the response is out; what arrived is the whole response, which
-    // the Content-Length check below confirms.
-    if let Err(e) = s.read_to_end(&mut raw) {
-        assert!(
-            e.kind() == std::io::ErrorKind::ConnectionReset && !raw.is_empty(),
-            "{method} {path}: read: {e}"
-        );
-    }
+    // A refusal sent before the request body is read (the origin check of login) can end
+    // in a reset once the response is out. That is accepted only for a response with a
+    // Content-Length whose whole body arrived (checked below).
+    let reset = match s.read_to_end(&mut raw) {
+        Ok(_) => false,
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => true,
+        Err(e) => panic!("{method} {path}: read: {e}"),
+    };
     let split = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -387,13 +395,18 @@ fn request(
     let chunked = headers
         .iter()
         .any(|(n, v)| n.eq_ignore_ascii_case("transfer-encoding") && v.contains("chunked"));
-    if chunked {
-        body = dechunk(&body);
-    } else if let Some((_, len)) = headers
+    let length = headers
         .iter()
         .find(|(n, _)| n.eq_ignore_ascii_case("content-length"))
-    {
-        assert_eq!(body.len(), len.parse::<usize>().unwrap(), "{method} {path}");
+        .map(|(_, v)| v.parse::<usize>().expect("content-length"));
+    assert!(
+        !reset || (!chunked && length.is_some()),
+        "{method} {path}: connection reset without a Content-Length response"
+    );
+    if chunked {
+        body = dechunk(&body);
+    } else if let Some(len) = length {
+        assert_eq!(body.len(), len, "{method} {path}: truncated body");
     }
     Resp {
         status,
@@ -402,12 +415,14 @@ fn request(
     }
 }
 
-/// Every response of the run, for the secret checks at the end; `issued` is the token
-/// a response legitimately shows (its creation).
+/// Every response of the run, for the secret checks at the end, with the secrets that
+/// response legitimately shows: a token in its creation response, a session's CSRF
+/// token in its login and `me` responses.
 #[derive(Default)]
 struct Seen {
-    responses: Vec<(Resp, Option<String>)>,
+    responses: Vec<(Resp, Vec<String>)>,
     tokens: Vec<String>,
+    csrf: Vec<String>,
     cookies: Vec<String>,
 }
 
@@ -465,7 +480,11 @@ impl Site {
             headers: r.headers.clone(),
             body: r.body.clone(),
         };
-        self.seen.lock().unwrap().responses.push((copy, None));
+        let shown = match auth {
+            Auth::Browser(b) if path == ME => b.csrf.iter().cloned().collect(),
+            _ => Vec::new(),
+        };
+        self.seen.lock().unwrap().responses.push((copy, shown));
         r
     }
 
@@ -489,10 +508,16 @@ impl Site {
                 .and_then(|kv| kv.strip_prefix("ferrite_session="))
                 .expect("ferrite_session")
                 .to_owned();
-            self.seen.lock().unwrap().cookies.push(value.clone());
+            let csrf = r.json()["csrf_token"]
+                .as_str()
+                .expect("csrf_token")
+                .to_owned();
+            let mut seen = self.seen.lock().unwrap();
+            seen.cookies.push(value.clone());
+            seen.csrf.push(csrf.clone());
+            seen.responses.last_mut().unwrap().1.push(csrf.clone());
             b.cookie = Some(value);
-            b.csrf = r.json()["csrf_token"].as_str().map(str::to_owned);
-            assert!(b.csrf.is_some(), "{r:?}");
+            b.csrf = Some(csrf);
         }
         (r, b)
     }
@@ -509,13 +534,14 @@ impl Site {
             let secret = r.json()["token"].as_str().unwrap().to_owned();
             let mut seen = self.seen.lock().unwrap();
             seen.tokens.push(secret.clone());
-            seen.responses.last_mut().unwrap().1 = Some(secret);
+            seen.responses.last_mut().unwrap().1.push(secret);
         }
         r
     }
 
     /// No response — refusals included — carries a password, hash, TOTP or CSRF secret,
-    /// a session cookie value, or a token secret other than in its creation response.
+    /// a session cookie value, a token secret other than in its creation response, or a
+    /// CSRF token other than in its own session's login and `me` responses.
     fn assert_no_secrets(&self) {
         let seen = self.seen.lock().unwrap();
         assert!(
@@ -523,7 +549,7 @@ impl Site {
             "{} responses",
             seen.responses.len()
         );
-        for (r, issued) in &seen.responses {
+        for (r, shown) in &seen.responses {
             for needle in [
                 "password_hash",
                 "totp_secret",
@@ -539,12 +565,25 @@ impl Site {
             for cookie in &seen.cookies {
                 assert!(!r.body.contains(cookie.as_str()), "cookie in {r:?}");
             }
-            for token in seen.tokens.iter().filter(|t| Some(*t) != issued.as_ref()) {
+            for token in seen.tokens.iter().filter(|t| !shown.contains(t)) {
                 assert!(!r.body.contains(token.as_str()), "token in {r:?}");
                 assert!(!r.body.contains(&token[4..]), "token in {r:?}");
             }
+            for csrf in seen.csrf.iter().filter(|t| !shown.contains(t)) {
+                assert!(!r.body.contains(csrf.as_str()), "CSRF token in {r:?}");
+            }
         }
     }
+}
+
+/// The `unauthenticated` problem with its `WWW-Authenticate: Bearer` challenge (R14).
+fn unauthenticated(r: Resp) {
+    r.problem(401, "unauthenticated");
+    assert!(
+        r.header("www-authenticate")
+            .is_some_and(|v| v.starts_with("Bearer")),
+        "{r:?}"
+    );
 }
 
 fn api_end_to_end_on_real_binary(p: Profile) {
@@ -555,11 +594,10 @@ fn api_end_to_end_on_real_binary(p: Profile) {
         addr: server.addr,
         seen: Mutex::default(),
     };
-    let me = "/api/v1/auth/me";
+    let me = ME;
 
     // Anonymous: 401; a login from a foreign origin is refused before the password.
-    site.send(Auth::None, "GET", me, None)
-        .problem(401, "unauthenticated");
+    unauthenticated(site.send(Auth::None, "GET", me, None));
     let r = site.send_with(
         Auth::None,
         "POST",
@@ -569,6 +607,16 @@ fn api_end_to_end_on_real_binary(p: Profile) {
     );
     assert_eq!(r.status, 403, "{r:?}");
     assert!(r.header("set-cookie").is_none(), "{r:?}");
+
+    // A wrong password and an unknown login get the same uniform 401, and no cookie.
+    let (wrong, _) = site.login("admin", "not the admin password");
+    let (unknown, _) = site.login("nobody", "not the admin password");
+    for r in [&wrong, &unknown] {
+        r.problem(401, "invalid-credentials");
+        assert!(r.header("set-cookie").is_none(), "{r:?}");
+        assert!(r.header("www-authenticate").is_some(), "{r:?}");
+    }
+    assert_eq!(wrong.body, unknown.body);
 
     // Login: the cookie and the CSRF token.
     let (r, admin) = site.login("admin", ADMIN_PASSWORD);
@@ -693,8 +741,7 @@ fn api_end_to_end_on_real_binary(p: Profile) {
         None,
     );
     assert_eq!(r.status, 204, "{r:?}");
-    site.send(Auth::Bearer(&first_secret), "GET", me, None)
-        .problem(401, "unauthenticated");
+    unauthenticated(site.send(Auth::Bearer(&first_secret), "GET", me, None));
     let r = site.send(Auth::Browser(&admin), "GET", &tokens, None);
     assert_eq!(r.json()["items"], json!([]));
 
@@ -724,10 +771,8 @@ fn api_end_to_end_on_real_binary(p: Profile) {
     );
     assert_eq!(r.status, 200, "{r:?}");
     assert_eq!(r.json()["status"], "disabled");
-    site.send(Auth::Browser(&editor), "GET", me, None)
-        .problem(401, "unauthenticated");
-    site.send(Auth::Bearer(&last_secret), "GET", me, None)
-        .problem(401, "unauthenticated");
+    unauthenticated(site.send(Auth::Browser(&editor), "GET", me, None));
+    unauthenticated(site.send(Auth::Bearer(&last_secret), "GET", me, None));
     let (r, _) = site.login("eddie", EDITOR_PASSWORD);
     assert_ne!(r.status, 200, "a disabled account cannot log in: {r:?}");
     assert!(r.header("set-cookie").is_none(), "{r:?}");
@@ -737,8 +782,7 @@ fn api_end_to_end_on_real_binary(p: Profile) {
     assert_eq!(r.status, 204, "{r:?}");
     let cleared = r.header("set-cookie").expect("cookie cleared");
     assert!(cleared.contains("Max-Age=0"), "{cleared}");
-    site.send(Auth::Browser(&admin), "GET", me, None)
-        .problem(401, "unauthenticated");
+    unauthenticated(site.send(Auth::Browser(&admin), "GET", me, None));
 
     site.assert_no_secrets();
     let status = server.terminate();
