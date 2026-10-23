@@ -14,20 +14,29 @@ Read before doing anything substantial:
 
 ## Current status
 
-M0 (plugin host spike), M1a (storage), M1b (media) and M1c-1 (config, CLI `init`/`migrate`,
-core services) are done; next is M1c-2 (`serve`, themes, cache, plugin wiring). Work top-down
-in `docs/ROADMAP.md`.
+M0 (plugin host spike), M1a (storage), M1b (media), M1c-1 (config, CLI `init`/`migrate`,
+core services) and M1c-2 (router, themes, page cache, plugin wiring, `serve`, `seed demo`) are
+done, and the M1 exit criterion is verified (`docs/superpowers/m1-exit.md`). Open M1
+follow-ups (deferred minors) stay listed under M1 in the roadmap. Next is M1.5 (cluster mode). Work top-down in
+`docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/`.
 
-Crate map (`crates/`): `ferrite` (bin: CLI) -> `ferrite-config`, `ferrite-store` and both store crates
-(it does not use `ferrite-core` yet); `ferrite-core` (services) -> `ferrite-store` (traits) <- `ferrite-store-sqlite` / `ferrite-store-postgres` (+
-`ferrite-store-tests` contract suite), `ferrite-domain` (types), `ferrite-media`,
-`ferrite-plugin-host`, `ferrite-sdk`. Not built yet: cluster, cache, theme, http, import-wp
+Crate map (`crates/`): `ferrite` (bin: CLI) -> `ferrite-http` (public site, router, head,
+plugin wiring) -> `ferrite-cache` (page cache + outbox invalidation loop), `ferrite-theme`
+(themes, hierarchy, MiniJinja renderer), `ferrite-core` (services, permalinks, `SiteReader`),
+`ferrite-media`, `ferrite-plugin-host`; `ferrite-core` -> `ferrite-store` (traits) <-
+`ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite);
+`ferrite-domain` (types), `ferrite-config`, `ferrite-sdk` (guest SDK). Starter theme:
+`themes/blog` (embedded). Not built yet: cluster, import-wp, REST API/admin
 (`docs/design/01-architecture.md` §1).
 
-Run the CLI locally (no `serve` yet):
-`cargo run -p ferrite -- init --data /tmp/site --url http://localhost:8080` then
-`cargo run -p ferrite -- migrate status --data /tmp/site` (exit 0 ok, 2 pending, 3 incompatible,
-1 error). `FERRITE_LOG=debug` sets log verbosity; `FERRITE_<SECTION>__<KEY>` overrides config.
+Run a site locally:
+`cargo run -p ferrite -- init --data /tmp/site --url http://localhost:8080`, then
+`cargo run -p ferrite -- seed demo --data /tmp/site` (optional sample content), then
+`cargo run -p ferrite -- serve --data /tmp/site` (prints `Listening on http://…`; stop with
+Ctrl-C/SIGTERM). `cargo run -p ferrite -- migrate status --data /tmp/site` exits 0 ok,
+2 pending, 3 incompatible, 1 error; with SQLite it (and `seed`) fails while `serve` holds the
+data-folder lock. `FERRITE_LOG=debug` sets log verbosity; `FERRITE_<SECTION>__<KEY>` overrides
+config (e.g. `FERRITE_SERVER__LISTEN=127.0.0.1:0` for a free port).
 
 Two deployment profiles must both work: **solo** (SQLite + local media, one node) and
 **cluster** (Postgres + S3-compatible media, N nodes). See `docs/design/00-overview.md`.

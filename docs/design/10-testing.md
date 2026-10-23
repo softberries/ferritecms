@@ -9,7 +9,7 @@
 | Migration | `ferrite-store-tests` | up/down/up roundtrip per migration with seeded data; schema snapshot equality; same version sets on both backends; expand-lint | every CI run |
 | Plugin host | `crates/ferrite-plugin-host/tests` | capability linking, limits, hostile plugins ([05 §12](05-plugin-host.md#12-hostile-test-plugins-required-by-claudemd)) | every CI run (test plugins built first) |
 | Cluster | `tests/cluster_*.rs` | 2–3 in-process nodes against one Postgres: invalidation propagation, job exclusivity, lease expiry after a "crashed" node, periodic job single-run, rolling version coexistence | every CI run |
-| HTTP integration | `tests/http_*.rs` | spawn `serve` on a random port with temp data; public pages, API CRUD, auth/CSRF, cache invalidation | every CI run, both backends |
+| HTTP integration | as built (M1c-2): `crates/ferrite-http/tests/app` (in-process app; `app_tests!` runs each test on solo = SQLite + local media and cluster = Postgres + in-process S3), `crates/ferrite-http/tests/plugins`, `crates/ferrite/tests/serve.rs` (the real binary on a random port with temp data, both profiles); theme renderer and `blog` theme in `crates/ferrite-theme/tests`, cache review-focus tests in `crates/ferrite-cache/tests` | public pages, routing, cache invalidation, media, feeds, plugins, shutdown; API CRUD and auth/CSRF from M2 | every CI run, both backends |
 | Media | `ferrite-media` tests | local folder + in-process S3 server (`s3s-fs`), no Docker | every `cargo test` |
 | Import | `ferrite-import-wp` tests | fixture WXRs → golden JSON of resulting content | CI |
 | Admin | `admin/` | Vitest unit/component tests; Playwright E2E against a real binary | CI |

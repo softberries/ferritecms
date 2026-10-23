@@ -27,10 +27,11 @@ upload .wasm + manifest ──► validate manifest ──► inspect component 
      ──► every node: fetch artifact → compile (cached) → InstancePre per world → registry swap
 ```
 
-- **M0 status**: only the in-process part exists: `inspect` + manifest validation +
-  `PluginHost::install(manifest, wasm)` (compile, capability check, registry swap). Upload,
-  admin approval/permission display, artifact storage, plugins row/events, per-node
-  fetch, the update-needs-approval flow and uninstall/KV retention are M1/M2.
+- **Status (M1c-2)**: `inspect` + manifest validation + `PluginHost::install(manifest, wasm)`
+  (compile, capability check, registry swap) exist, and `serve` installs the enabled
+  `plugins` rows from their artifacts at startup (§7a, "Loading"). Upload, admin
+  approval/permission display, writing the artifact and row, events, per-node fetch on
+  change, the update-needs-approval flow and uninstall/KV retention are M1.5/M2.
 - **Install-time check (P2)**: walk the component type's imports. Allowed:
   - `ferrite:plugin/*` interfaces that the manifest's capabilities map to (§4),
   - the WASI subset in §5.
@@ -314,7 +315,7 @@ in a `PluginError`.
   optional pooling instance allocator (`HostConfig.pooling`, default **off**, see
   Measured below). `Config::async_support` is not needed in wasmtime 50.
 - An epoch ticker thread calls `engine.increment_epoch()` every **5 ms**.
-- **M0 status: not implemented (M1)** — compiled components are compiled in `install` each time. Planned: cached on disk keyed by
+- **Status: not implemented yet (unchanged in M1c-2)** — compiled components are compiled in `install` each time (at `serve` startup). Planned: cached on disk keyed by
   `(artifact hash, wasmtime version, engine config hash)` via
   `Component::serialize` / `deserialize` (deserialize is `unsafe` — only for files we
   wrote; cache dir is ours).
@@ -390,37 +391,88 @@ under real concurrent load in M1.
 
 ## 7. Output validation
 
-- **M0 status (ruling R4)**: the host validates the output *variant* and *size* only
-  (head ≤ 64 KiB of serialised strings plus 64 B per meta/link/script, and at most 256
-  metas, 64 links, 16 scripts; html/text ≤ max(4 × input, 64 KiB), never above
-  2 MiB). `ammonia` sanitising of `html` and head→HTML rendering (escaping, `script-tag`
-  checks) are deferred to the M1 render pipeline (ROADMAP M1).
-- `head` is structured: the host renders tags itself with proper escaping. Plugins can't
-  inject arbitrary HTML into `<head>`. `script-tag.src` must be https or same-origin;
-  `json-ld` is checked to be valid JSON and embedded with `</` escaped.
-- `html` results (`content.body`, `render.footer`) are sanitised with `ammonia` using a
-  policy that allows typical content markup but **no `<script>`, inline handlers or
-  `javascript:` URLs** by default. Raw HTML requires `render.html = "raw"` (shown as a
-  high-risk permission at install).
+As built (M1c-2; M0 ruling R4 closed). The host validates every filter result
+(`crates/ferrite-plugin-host/src/validate.rs`); a result that fails is dropped, the previous
+value is passed on and the call counts as a failure (§8).
+
+- **Variant and size.** The result must be the variant the hook works on. `head` ≤ 64 KiB
+  of serialised strings plus 64 B per meta/link/script, and at most 256 metas, 64 links,
+  16 scripts; `html`/`text` ≤ max(4 × input, 64 KiB), never above 2 MiB.
+- **`html` sanitising (ruling R22).** `html` results (`content.body`; `render.footer` is in
+  the catalogue but not wired into rendering yet) are sanitised with `ammonia` unless the
+  plugin declares `render.html = "raw"`: ammonia's defaults (no `<script>`, `<style>`,
+  `<iframe>`, `<form>`, `<svg>`, `<math>`, no `on*` handlers, no `javascript:`/`data:` or other
+  non-allow-listed URL schemes), `rel="noopener noreferrer"` on every link, plus `a[target]`
+  and `code[class]` restricted to `language-*` classes. Each non-raw plugin's whole output is
+  re-sanitised after it runs, so markup a `raw` plugin added earlier in the chain survives
+  only if no non-raw plugin runs after it. Raw HTML is meant to be shown as a high-risk
+  permission at install (M2 admin).
+- **`head` is structured.** The host never accepts HTML for `<head>`: the HTTP layer renders
+  the tags itself (`crates/ferrite-http/src/head.rs`). Every attribute value and the title are
+  escaped (`& < > " '`). A meta needs a `name` or a `property`. A link needs an `http(s)://` or
+  root-relative (`/…`, not `//…`) `href`, and `https://` or root-relative when its `rel` loads a
+  resource (stylesheet, preload, modulepreload, prefetch, icon, apple-touch-icon, manifest).
+  `script-tag.src` must be `https://…`, on the site's own origin, or root-relative, with no
+  backslashes, whitespace or control characters. `script-tag.json-ld` must parse as JSON; it
+  is re-serialised compactly with every `<`, `>` and `&` written as `\u00XX`, so neither
+  `</script>` nor `<!--` can occur inside the element. Anything else is dropped and logged.
+- **Core head first.** Plugins receive the core SEO head (title, description, canonical, Open
+  Graph; [06 §5](06-themes-rendering.md#5-rendering-pipeline-as-built)) as the input of the
+  `render.head` chain, so a plugin can extend or replace tags but its output still goes
+  through the rules above.
 
 ## 7a. Data visibility and caching
 
-- **M0 status (ruling R6)**: `content.read` is scoped by *type* (types not in the
-  manifest list return nothing). Published-only and preview visibility need post status
-  in `HostServices` and land in M1.
-- **What `content.read` sees**: published, publicly visible items of the granted types —
-  never drafts, pending, private, scheduled or trashed items, and never user e-mails or
-  auth data. Exception: during an authenticated **preview** of a draft, `request-info.post`
-  and `get-post` on *that one item* return it, so plugins render previews faithfully.
-  Preview responses are never cached.
-- **M0 status: dependency recording and volatile marking below are not implemented (M1, with the page cache).**
-- **Dependency recording**: every `content`, `meta` and `options` import call made during
-  a render filter records the matching dependency key (`post:<id>`, `option:<key>`,
-  `archive:<type>` for listings) into the request's `DependencySet`, so cached pages that
-  used plugin-read data are invalidated correctly.
-- **Volatile output**: if a render-filter call uses `kv`, `http`, or wall-clock time, the
-  host marks the page *volatile* and caps its cache TTL at `plugins.volatile_ttl`
-  (default 60 s). No WIT change needed; it's inferred from host-import usage.
+As built (M1c-2), in `crates/ferrite-http/src/plugins/` over the store-backed
+`StoreHostServices` (plan ruling P3).
+
+- **What `content.read` sees**: published items with `published_at <= now`, not media, read
+  through `SiteReader` (`get-post`, `get-post-by-slug` with a page path such as
+  `"parent/child"` for hierarchical types, `list-posts`), restricted by the host to the types
+  the manifest lists (M0 ruling R6). Never drafts, pending, private, scheduled or trashed
+  items, and never user e-mails or auth data: `Post.author` is the author's display name and
+  `Post.url` is absolute. `meta.get` works only on items `content` could return.
+  `options.get` never returns `plugin.*` keys, whatever the manifest grants (a plugin reads its
+  own settings through `settings.get`, option `plugin.<name>.settings.<key>`).
+- **Preview scoping.** Per-request state travels in a tokio task-local set around each filter
+  chain (`run_filter`). During an authenticated preview, `get-post` and `meta.get` on *that one
+  item* return it, so plugins render previews faithfully. The preview item can only come from
+  `SiteReader::preview` (its `can_edit` check), so a public request cannot put a draft in
+  scope. No route serves previews yet (authentication is M2); preview responses are never
+  cached.
+- **No writes on the render path (ruling R20).** `meta.set` during a render-class filter
+  (`render.head`, `content.body`, `content.excerpt`, `render.footer`) returns
+  `"meta.set is not allowed during render filters"`, is logged and does not use budget.
+  Writes are allowed in actions and routes; `meta.set` there emits `invalidate` with
+  `post:<id>` in the same transaction.
+- **Dependency recording.** The host records inside the import implementations, so a plugin
+  cannot under-report (`crates/ferrite-plugin-host/src/trace.rs`): `get-post` records
+  `post:<id>` of the requested id, found or not; `get-post-by-slug` `archive:<kind>` plus the
+  returned post; `list-posts` `archive:<kind>` plus each returned post; `meta.get` `post:<id>`;
+  `options.get` `option:<key>`. The HTTP layer adds the keys `SiteReader` reports beyond those
+  (`user:<id>`, `term:<id>`, ancestors). Only calls that pass their capability and budget
+  checks are recorded. The page's keys are merged with the plugin trace
+  (`PluginHost::apply_filter_traced`), and every page also records `plugins`. (The finer
+  `plugin:<name>` key of §4c is not recorded; plugin changes flush through `plugins`.)
+- **Volatile output (ruling R19).** A filter call that uses `kv` or `http`, reads the wall
+  clock (`wasi:clocks/wall-clock.now`; the monotonic clock is not volatile), **or fails** marks
+  the page volatile, and it is cached for at most 60 s (`SHORT_TTL` in
+  `crates/ferrite-http/src/app/state.rs`; the planned `plugins.volatile_ttl` setting does not
+  exist yet). No WIT change needed.
+- **Render deadline (ruling R18).** Render-class hooks get a 200 ms epoch deadline by default
+  (`plugins.render_deadline_ms`), with the tokio hard timeout at 1.5 × that. The epoch
+  deadline includes time a call spends awaiting host imports, which on Postgres in debug builds
+  measured about 80 ms for a plugin making a dozen reads.
+- **Loading (plan ruling P3, ruling R21).** At startup `serve` installs every enabled
+  `plugins` row from its artifact in the media store: the bytes must match the row's hash, the
+  `manifest` column (the `ferrite-plugin.toml` table as JSON) is converted back to TOML and
+  validated with `Manifest::parse`, and its `plugin.name` must equal the row's name. A
+  non-null `granted` column must be a superset of the manifest's capabilities or the plugin is
+  skipped (so `granted = {}` skips every plugin that asks for any capability); a null
+  `granted` means the manifest is honoured as written (M1c-2 rows are written by operators and
+  tests; the M2 install flow always sets it). A row that fails any step is logged and skipped;
+  it never stops the site. Hot reload on `plugins.changed` is M1.5; plugin install CLI/API is
+  M2.
 
 ## 8. Failure isolation (P5, P6)
 
@@ -433,10 +485,11 @@ under real concurrent load in M1.
 | Wrong variant / oversize output | host validation | same |
 | Instantiation failure (missing import) | `Err` at instantiate | plugin marked broken on this node |
 
-**M0 status**: failures are classified and counted in memory per host
+**M0 status (unchanged in M1c-2)**: failures are classified and counted in memory per host
 (`PluginHost::failures`, `is_enabled`, `disabled_reason`; threshold and window from
 `HostConfig`). The `plugin_failures` table, metrics, the `plugins.enabled` update,
-`plugin.disabled` event and cluster-wide counting are M1/M1.5. "Plugin marked broken on
+`plugin.disabled` event and cluster-wide counting are M1.5 (ROADMAP). A plugin disabled
+by the in-memory counter stays disabled until the process restarts. "Plugin marked broken on
 this node" for instantiation failures is likewise not separate in M0: it counts as a
 failure like any other.
 

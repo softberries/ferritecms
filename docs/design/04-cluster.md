@@ -56,20 +56,42 @@ an optimisation only; correctness comes from the table.
 
 ### Read path (every node)
 
-- A dedicated listener connection runs `LISTEN ferrite_events`.
-- Each node keeps `last_seq` in memory. On notification **or** every
-  `cluster.poll_interval` (default 1 s) it runs
-  `SELECT seq, kind, keys FROM events WHERE seq > $last_seq ORDER BY seq LIMIT 1000`
-  and applies them.
+**As built in M1c-2** (`crates/ferrite-cache/src/invalidation.rs`, both backends, used by
+`ferrite serve` in every mode): polling only, no `LISTEN/NOTIFY` yet.
+
+- Every `cache.poll_interval_ms` (default 250 ms) the loop reads
+  `events.since(last_seq, 1000)`, continuing while batches come back full (at most 10
+  batches per tick, shared with the late probe below), and applies each event to the page
+  cache.
+- **Sequence gaps.** `bigserial` values are allocated at insert time but committed out of
+  order, so a reader can see seq 11 before 10 commits. Every event read is applied at once
+  (invalidation is idempotent), but `last_seq` advances only up to the first gap, so the next
+  poll re-reads from there and sees the late commit. Events already applied past a gap are
+  remembered and not re-applied. A gap still open after 5 s (`GAP_TIMEOUT`) is skipped,
+  because a rolled-back transaction leaves a permanent hole.
+- **Skipping a gap (ruling R24, superseding R23)** flushes the whole page cache, and every
+  skipped seq goes into a *late set* watched for 10 minutes (`LATE_HORIZON`): each tick probes
+  once with `since(min_late - 1, 1000)`, resuming where the last probe stopped, applies any
+  late seq that has appeared and drops it from the set. A seq not seen within the horizon is
+  dropped with a warning. At most 10 000 seqs are watched (`MAX_LATE`); beyond that a skip
+  only flushes (warned). So a writer whose transaction stayed open longer than the gap timeout
+  still invalidates when it commits.
+- **Boot.** `last_seq` starts at `max(seq)`, except that the last 1000 events are inspected
+  first: a hole below the maximum may be a transaction that allocated its seq before boot and
+  commits after it, so the cursor starts at the first such hole. The loop is created before
+  the server binds, so no page is cached before the cursor is set; the cache starts empty.
+- Store errors are logged and retried on the next tick.
+
+**Planned (M1.5, cluster mode):**
+
+- A dedicated listener connection runs `LISTEN ferrite_events`; the writer sends
+  `NOTIFY ferrite_events, '<seq>'` after commit. Notify is an optimisation only; polling stays
+  the source of truth.
 - On (re)connect of the listener: catch up from `last_seq`. If the gap is larger than
   retained history (events pruned), the node **flushes its whole page cache**.
-- On startup a node sets `last_seq = max(seq)` and starts with an empty cache.
-
-> **Sequence gaps:** `bigserial` values are allocated at insert time but committed
-> out of order, so a reader can see seq 11 before 10 commits. Mitigation: the reader
-> only advances `last_seq` up to the first gap, and re-reads gaps for up to 5 s
-> before skipping them (a rolled-back transaction leaves a permanent gap). This is a
-> known pattern; implement and test with concurrent writers in the contract suite.
+- On Postgres, `idle_in_transaction_session_timeout` must be shorter than the 10-minute late
+  horizon, so no writer can hold a seq uncommitted past it (not set yet).
+- Contract tests with concurrent writers across nodes.
 
 ### Event kinds
 
@@ -82,7 +104,15 @@ an optimisation only; correctness comes from the table.
 | `plugin.disabled` | plugin name, reason | stop calling it immediately |
 | `node.drain` | node id | admin-requested drain (optional) |
 
-Events older than 24 h are pruned by a periodic job.
+Events older than 24 h are pruned by a periodic job (planned, M1.5; nothing prunes the
+outbox yet).
+
+As built in M1c-2, the invalidation loop only touches the page cache: `invalidate` and
+`options.changed` drop the pages under their keys (`all` flushes); `theme.changed`,
+`plugins.changed` and `plugin.disabled` flush everything; `node.drain` does nothing; an
+unknown kind is logged and its keys are dropped. Nothing reloads the theme, the plugin
+registry or the permalink rules on an event yet (they are read at startup; hot swap is
+M1.5), and no core write path emits `theme.changed` or `plugins.changed` yet.
 
 ## 5. Sessions
 

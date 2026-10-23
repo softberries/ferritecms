@@ -93,8 +93,14 @@ Backups are verified: after writing, the snapshot is opened read-only and
 
 ## 5. TLS
 
-- Default: run behind a reverse proxy (Caddy/nginx/Traefik/LB). Honour
-  `X-Forwarded-*` only from `trusted_proxies`.
+- Default: run behind a reverse proxy (Caddy/nginx/Traefik/LB). As built (M1c-2, ruling
+  R31): only `X-Forwarded-For` is honoured, and only when the TCP peer is inside
+  `server.trusted_proxies` (CIDRs or bare IPs; default none). The client address is the
+  right-most entry that is not itself a trusted proxy and is used for logging (`client_ip`
+  on the request span). `X-Forwarded-Proto` and `X-Forwarded-Host` are ignored from every
+  peer: absolute URLs come from `site.url`, and the page-cache host is pinned to it (R25),
+  so a TLS-terminating proxy cannot change the scheme (not needed while `site.url` is set to
+  the public `https://` URL). `crates/ferrite-http/src/app/client.rs`.
 - Built-in ACME (solo only in v1): rustls + an ACME client crate (`instant-acme` or
   `rustls-acme` — choose in M4), HTTP-01 on :80 or TLS-ALPN-01. Certificates stored in
   `data/tls/`. In cluster mode ACME would need shared challenge state — out of scope;
@@ -120,7 +126,7 @@ monitoring.)
 
 ## 8. CLI summary
 
-### Implemented (M1c-1: `crates/ferrite`)
+### Implemented (M1c-1 and M1c-2: `crates/ferrite`)
 
 ```
 ferrite init --data DIR --url URL [--title T] [--db URL] [--schema NAME] [--media s3://bucket/prefix]
@@ -128,6 +134,8 @@ ferrite migrate status --data DIR
 ferrite migrate up     --data DIR [--to VERSION]
 ferrite migrate down   --data DIR --to VERSION [--allow-lossy] [--yes]
 ferrite migrate verify --data DIR
+ferrite serve          --data DIR                      # M1c-2
+ferrite seed demo      --data DIR [--force]            # M1c-2
 ```
 
 **Logging.** Logs go to stderr. `FERRITE_LOG` is an `EnvFilter` expression (for example
@@ -179,16 +187,65 @@ also installs the `ring` rustls default crypto provider at start.
   "database not found at <path>; run `ferrite init` first" when the file is missing, without
   creating the folder, lock file or database. Only `init` and `up` may create one.
 - SQLite caveat: opening the database takes the exclusive data-folder lock
-  (`ferrite.lock`), so **every `migrate` subcommand, `status` included, fails while another
-  process holds the lock** (there is no server yet; once `serve` exists, that includes it, so
-  stop it first). There is no read-only open yet; the roadmap lists it under M1c-2.
+  (`ferrite.lock`), so **every `migrate` subcommand, `status` included, and `seed demo` fail
+  while another process holds the lock, and a running `ferrite serve` holds it**: stop the
+  server first. There is no read-only open. Postgres has no folder lock, so
+  these commands work next to a running server.
 - Postgres caveat: `status`, `down` and `verify` do not create tables, but connecting with
   a configured `database.schema` that does not exist creates that empty schema.
+
+**`ferrite serve`** (`crates/ferrite/src/serve.rs`):
+
+- **Startup**, in order; any failure exits 1: load the config; open the database (created if
+  missing); the migration check (pending migrations are applied when `database.auto_migrate`
+  is on; on Postgres a pending contract migration also needs `database.allow_contract`; an
+  incompatible schema is refused; 02 §8); open the media store and run a write/read/delete
+  probe; build the permalink rules from the `permalink.post`/`permalink.page` options and
+  check them against the registered types and taxonomies; load the active theme (a broken one
+  falls back to the embedded `blog`, 06 §7); install the enabled plugins (a broken row is
+  skipped, 05 §7a); start the cache invalidation loop and the scheduled-publishing ticker
+  (`publish_due` every 30 s); bind `server.listen` (default `127.0.0.1:8080`; override with
+  `FERRITE_SERVER__LISTEN`, port `0` picks a free one) and print `Listening on http://<addr>`
+  on stdout.
+- **Read once at startup:** permalink options, the theme and the plugins. Changing them needs
+  a restart (hot swap is M1.5).
+- **Shutdown** on SIGINT or SIGTERM: stop accepting connections, let open requests finish for
+  up to 10 s, stop the background tasks (up to 1 s), close the database pools (up to 2 s);
+  `main` then shuts the runtime down with a 1 s grace, dropping connection tasks still
+  running. A clean shutdown exits 0; the process is gone at most about 14 s after the first
+  signal. A second SIGINT/SIGTERM during the drain exits at once with 130 (SIGINT) or 143
+  (SIGTERM).
+- **Health:** `/healthz` is `200 ok`; `/readyz` is `200` when a store read succeeds within
+  2 s and the startup migration check passed, else `503`.
+- **Settings it uses** (`[server]`, `[cache]`, `[plugins]`, 01 §4): `server.listen`,
+  `server.trusted_proxies` (§5), `cache.max_bytes` (default 256 MB), `cache.poll_interval_ms`
+  (default 250; how often the invalidation loop reads the event outbox),
+  `plugins.render_deadline_ms` (default 200, ruling R18; the hard timeout is 1.5 × it),
+  `plugins.action_deadline_ms`, `plugins.default_memory`, `plugins.default_fuel`,
+  `plugins.disable_after_failures`, `plugins.failure_window`. `cache.logged_in` is parsed but
+  unused until logins exist (M2). Render concurrency (2 × available parallelism, 5 s wait,
+  then 503) and the 60 s short TTL are constants.
+
+**`ferrite seed demo`** (`crates/ferrite/src/seed.rs`):
+
+- Writes demo content through the core services where they exist: an `admin` user (no
+  password, `must_reset`; login arrives in M2), categories News and Guides, tags rust and cms,
+  12 published posts with block bodies dated over the past months, three pages (About,
+  About/Team, Contact), a `primary` and a `footer` menu, one generated sample PNG with its
+  variants (the core sizes plus the active theme's `[images]`) used as the featured image of
+  some posts, and the `site.title` / `site.description` options.
+- Refuses (exit 1) when the site already has content, unless `--force`, which adds another
+  batch (user, terms and image file reused; posts and pages get fresh `-2`, `-3`, … slugs;
+  both menus and the two options are replaced to point at the new batch).
+- **Not atomic:** each step is its own transaction, so a run that fails part-way leaves what
+  it wrote; `--force` then adds a whole new batch, it does not resume (ROADMAP M2: seed
+  atomicity).
+- Requires an initialised site (with SQLite it fails when `ferrite.db` is missing instead of
+  creating it) and runs the same migration check as `serve`.
 
 ### Planned (later milestones)
 
 ```
-ferrite serve --data DIR                                        # M1c-2
 ferrite backup / restore                                        # M4
 ferrite export / import-site / db copy                          # M4
 ferrite media sync / media gc                                   # M4

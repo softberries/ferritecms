@@ -56,6 +56,7 @@ pub trait Store: Send + Sync + 'static {
     async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError>;
     async fn verify_migrations(&self) -> Result<(), StoreError>;
     async fn snapshot(&self, dest: &Path) -> Result<(), StoreError>; // SQLite only; Postgres => Unsupported
+    async fn close(&self); // M1c-2: waits for checked-out connections, closes the pools; later calls fail
 }
 
 #[async_trait]
@@ -104,7 +105,8 @@ but have no repository yet.
 - **R3: an empty `ids` (or `exclude`) means no filter, not "match nothing".** A caller that
   computed an empty id set must short-circuit instead of calling `list`/`count`, or it lists
   everything. No core service builds an `ids` query yet; the rule is stated in the
-  `ContentRepo::list` and `ContentQuery::ids` doc comments for the callers that will (M1c-2).
+  `ContentRepo::list` and `ContentQuery::ids` doc comments. `SiteReader::related` (M1c-2)
+  uses `exclude`, which always holds at least the item itself.
 - **`ContentRepo::count(&query)`** uses the same WHERE clause as `list` and ignores `limit`,
   `cursor` and `order`.
 - **`get_many(ids)`** on content, users and media: at most 200 ids, one query, result in
@@ -137,6 +139,20 @@ but have no repository yet.
   short and touch several plugins in a consistent order to avoid a deadlock that would
   poison the `Tx`). Plain `set` bypasses quotas; mixing the two for one plugin voids the
   guarantee.
+- **`MediaRepo::find_by_artifact(hash, limit)`** (M1c-2) returns up to `limit` (1 through
+  200) media rows whose original (`artifact_hash`) or any variant (`variants.<name>.hash`) is
+  `hash`, ordered by item id; the `/_media` handler uses it to decide whether a file may be
+  served ([03 §5](03-media.md#5-serving)). It is indexed throughout (ruling R29): nothing is
+  read from `media` unless the `artifacts` row of `hash` (primary key) exists with kind
+  `media` or `variant`; then the original matches through `media_artifact_idx` and variants
+  through `media_variants_hash_idx`. A contract test checks the query plans on both
+  backends.
+- **`RedirectRepo::get(id)`** (M1c-2) fetches one redirect row; `RedirectService::delete`
+  needs its source path for the `redirect:<source>` event.
+- **`Store::close()`** (M1c-2) waits until every checked-out connection is back (so a dropped
+  `Tx` finishes its rollback), then closes the pools; every later call fails. SQLite closes
+  the readers first so the writer's close checkpoints the WAL. Idempotent. `ferrite serve`
+  calls it at shutdown with a 2 s bound.
 - **`RedirectRepo::list_by_target(target)`**: redirects whose `target` equals `target`
   exactly (case-sensitive), ordered by `source_path` in binary order, at most
   `MAX_REDIRECTS_BY_TARGET` (1000). Core uses it to re-target redirects when a
@@ -256,7 +272,8 @@ Notes:
 
 Same logical schema on both backends. Physical type mapping is in §5.
 Tables marked *not yet created* are planned; the milestone in the mark adds them in a
-new migration. Everything else exists in `0001_init` / `0002_search` on both backends.
+new migration. Everything else exists in `0001_init` / `0002_search` / `0003_media_variants`
+on both backends.
 
 ### Content
 
@@ -270,7 +287,8 @@ new migration. Everything else exists in `0001_init` / `0002_search` on both bac
 | `terms` | `id` PK, `taxonomy` FK, `slug`, `name`, `description`, `parent_id`, `UNIQUE(taxonomy, slug)` | |
 | `term_links` | `item_id` FK, `term_id` FK, `position`, PK(`item_id`,`term_id`) | |
 | `menus` / `menu_items` | menu: `name` PK, `label`; item: `id`, `menu`, `parent_id`, `position`, `kind` (`item`/`term`/`url`), `target_id`, `url`, `label` | |
-| `media` | `item_id` PK/FK → `content_items` (type `media`), `artifact_hash` FK, `mime`, `bytes`, `width`, `height`, `alt`, `original_name`, `variants` (json: name → hash, w, h) | |
+| `media` | `item_id` PK/FK → `content_items` (type `media`), `artifact_hash` FK, `mime`, `bytes`, `width`, `height`, `alt`, `original_name`, `variants` (json: name → hash, w, h, mime) | |
+| `media_variants` | `hash`, `item_id` FK → `media` (`ON DELETE CASCADE`), `name`, PK(`item_id`,`name`), index on `hash` | Added by `0003_media_variants` (ruling R29). Derived from `media.variants` (one row per entry whose value is an object with a string `hash`), backfilled by the migration and kept in sync by `MediaRepo::insert`/`update` in the same transaction; `media.variants` stays the source of truth |
 | `comments` | `id`, `item_id`, `parent_id`, `user_id` null, `author_name`, `author_email`, `author_url`, `body`, `status`, `ip_hash`, `created_at` | |
 | `redirects` | `id`, `source_path` UNIQUE, `target`, `code` (301/302/307/308/410), `hits`, `origin` (`manual`/`import`/`slug-change`), `created_at`, `last_hit_at` | Auto-created on slug change of a published item |
 
@@ -395,11 +413,15 @@ crates/ferrite-store-sqlite/migrations/
     0001_init.down.sql
     0002_search.up.sql
     0002_search.down.sql
+    0003_media_variants.up.sql      # M1c-2, phase expand (R29)
+    0003_media_variants.down.sql    # drops the derived table; not lossy
 crates/ferrite-store-postgres/migrations/
     0001_init.up.sql
     0001_init.down.sql
     0002_search.up.sql
     0002_search.down.sql
+    0003_media_variants.up.sql
+    0003_media_variants.down.sql
 ```
 
 - sqlx reversible migrations, embedded with `sqlx::migrate!()`; sqlx's
@@ -418,7 +440,7 @@ crates/ferrite-store-postgres/migrations/
 The first lines of an `.up.sql` may contain ferrite directives, parsed by
 `ferrite_store::parse_directives` (sqlx ignores comments). The compatibility verdict
 (§8), the SQLite pre-migration snapshot and the expand lint exist in M1a; the
-`ferrite migrate` CLI is M1c:
+`ferrite migrate` CLI arrived in M1c-1:
 
 ```sql
 -- ferrite:phase expand            -- expand | contract (default: expand)
@@ -453,8 +475,8 @@ ferrite migrate verify            # checksums of applied migrations match embedd
 Implemented in M1c-1 (`crates/ferrite/src/migrate.rs`; flags, exit codes and the "never
 creates a database" rules are in [09 §8](09-operations.md#8-cli-summary)). The startup
 check described above exists as `ferrite::startup_check` / `decide`
-(`crates/ferrite/src/open.rs`, unit- and integration-tested in `tests/startup.rs`), but
-nothing calls it until `ferrite serve` exists (M1c-2).
+(`crates/ferrite/src/open.rs`, unit- and integration-tested in `tests/startup.rs`); since
+M1c-2 `ferrite serve` and `ferrite seed demo` call it before doing anything else.
 
 `down` runs inside one transaction per migration (both backends support transactional
 DDL for what we use). It refuses lossy steps without `--allow-lossy` and prints which

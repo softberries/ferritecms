@@ -46,7 +46,7 @@ pub struct ReadStream { pub size: u64 /* total object size */, pub range: Range<
 
 - **Reads.** `get` and `get_range` return buffered `Bytes` and are for small reads only
   (metadata, manifests, variants being processed). **Serving uses `open_read`**, which streams the
-  body without buffering it (see Range semantics below). The `/_media` handler (M1c) must serve
+  body without buffering it (see Range semantics below). The `/_media` handler (M1c-2, §5) serves
   through `open_read`.
 - `head` returns the object size (`Option<u64>`), `None` when missing.
 - `delete` succeeds when the artifact is already missing.
@@ -151,9 +151,11 @@ stall).
 `public_url(hash, filename)`:
 
 - `ServeViaApp { path_prefix }` -> `<path_prefix without trailing />/<hash>/<filename>`. The
-  filename is percent-encoded as one path segment (everything but RFC 3986 unreserved characters
-  is escaped, including `/`). The empty string, `.` and `..` are replaced by `file`, because
-  clients normalise those segments away and would drop the hash.
+  filename first goes through `sanitize_filename` (M1c-2, shared with the `/_media` handler):
+  `/`, `\` and control characters become `_`, and the empty string, `.` and `..` become
+  `file`, because clients normalise those segments away and would drop the hash. It is then
+  percent-encoded as one path segment (everything but RFC 3986 unreserved characters is
+  escaped).
 - `Direct { base_url }` -> `<base_url without trailing />/<prefix>artifacts/ab/<hash>`. The
   filename is not part of the URL. The `Content-Disposition` filename idea from the first draft
   is **not implemented**.
@@ -169,7 +171,7 @@ HTML or XML file), and SVG is not detected at all: it comes back as `text/xml` o
 `application/octet-stream`. The sniffed type must therefore never be echoed as `Content-Type`
 blindly. `inline_safe(mime)` is an exact-match allowlist: `image/jpeg`, `image/png`, `image/gif`,
 `image/webp`, `audio/mpeg`, `audio/ogg`, `audio/wav` (and `audio/x-wav`, which is what `infer`
-reports for WAV), `video/mp4`, `video/webm`, `application/pdf`. The serving layer (M1c) must send
+reports for WAV), `video/mp4`, `video/webm`, `application/pdf`. The serving layer (M1c-2, §5) sends
 those inline with their type, and everything else as `application/octet-stream` with
 `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`.
 
@@ -228,27 +230,67 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
 - **Defaults** (`default_variants()`): `thumbnail` 150x150 crop, `medium` 768 wide, `large` 1600 wide.
 - **Memory**: peak is roughly 3 x w x h x 4 bytes (decoded buffer, oriented/converted copy,
   resized output); at the 100 MP cap that is on the order of 1.2 GB for one image. The function
-  does not limit concurrency. The caller must, and the M1c job runner will do so with a semaphore
-  (M1b decision). The 100 MP cap is kept as designed.
+  does not limit concurrency. The caller must, and the `media.variants` job runner will do so with a
+  semaphore (M1b decision; not built yet, see below). The 100 MP cap is kept as designed.
 
-### Still to build (M1c)
+### Variants as built, and what is still to build
 
-- On upload of an image a **job** `media.variants` is enqueued ([04](04-cluster.md#job-queue));
-  uploads return immediately. Variant specs come from the theme (`theme.toml` `[images]`) plus
-  the core defaults above.
-- Variants are artifacts too (stored with `put_artifact`); `media.variants` json maps
-  name -> `{hash, w, h, mime}`. Until variants exist, templates fall back to the original.
+- `media.variants` maps name -> `{hash, w, h, mime}`; each variant is an artifact (kind
+  `variant`) stored with `put_artifact`. Since migration `0003_media_variants` the store also
+  keeps a derived `media_variants(hash, item_id, name)` table, indexed by hash and kept in sync
+  by the media repository in the same transaction (ruling R29, [02 §4](02-storage.md#4-logical-schema)).
+- Templates get variants through `image(media, size)` and `post.featured.variants`
+  ([06 §4](06-themes-rendering.md#4-minijinja-environment)); an unknown size falls back to the
+  original, and `srcset` lists one candidate per width.
+- The only writer of media rows in M1 is `ferrite seed demo`, which runs `process_image`
+  in-process with the core sizes plus the active theme's `[images]` and writes the `media`
+  and `artifacts` rows in one transaction that also emits `post:<media id>`
+  (`crates/ferrite/src/seed.rs`).
+- **Still to build (M2, with the media service and uploads; needs the M1.5 job queue):** on
+  upload of an image a **job** `media.variants` is enqueued ([04](04-cluster.md#job-queue)) so
+  uploads return immediately, with an image-processing concurrency semaphore (M1b ruling R4).
 
 ## 5. Serving
 
-- **App-served** (`/_media/<hash>/<name>`): streams from MediaStore (`open_read`, never the buffered `get`) with
-  `Cache-Control: public, max-age=31536000, immutable`, `ETag: "<hash>"`, range
-  requests, `X-Content-Type-Options: nosniff`. Small in-memory LRU for hot small files
-  (configurable, default 64 MB).
-- **Direct**: templates and API return `public_base_url` URLs; the app never proxies.
-  The operator configures the bucket/CDN for public read of `artifacts/` only.
-- SVG: served with `Content-Security-Policy: sandbox` and
-  `Content-Disposition: inline` only if it passed sanitisation; otherwise `attachment`.
+**App-served** (`/_media/<hash>/<name>`), as built in `crates/ferrite-http/src/app/media.rs`:
+
+- **Published only.** A file is served only when `hash` is the original or a variant of a
+  public media item (published, `published_at <= now`): `SiteReader::media_file` calls
+  `MediaRepo::find_by_artifact`, which returns nothing without reading `media` unless the
+  `artifacts` row of the hash exists with kind `media` or `variant`, then matches the original
+  by `media.artifact_hash` and variants through `media_variants` (both indexed; R29), at most
+  100 rows, whose status is checked with one `get_many`. Anything else is a plain-text `404`
+  (no theme render, `Cache-Control: no-store`).
+- **Name.** The last segment must be the item's `original_name` after `sanitize_filename`
+  (`crates/ferrite-media/src/name.rs`: `/`, `\` and control characters become `_`; an empty,
+  `.` or `..` name becomes `file`), the same function `MediaStore::public_url` uses. Another
+  name is a `301` to the canonical one.
+- **Streaming** through `MediaStore::open_read` (never the buffered `get`); never in the page
+  cache and never compressed.
+- **Headers:** `ETag: "<hash>"` (strong: the bytes never change), `If-None-Match` → `304`,
+  `Cache-Control: public, max-age=31536000, immutable`, `Accept-Ranges: bytes`,
+  `X-Content-Type-Options: nosniff`, `Content-Length`.
+- **Types:** `inline_safe(mime)` types are served inline with their type (`Content-Disposition:
+  inline`); `application/pdf` additionally gets `Content-Security-Policy: sandbox`. Everything
+  else, **SVG included**, is `application/octet-stream` with `Content-Disposition: attachment;
+  filename="<ASCII fallback>"; filename*=UTF-8''<encoded>`.
+- **Ranges:** one range only. `bytes=a-b`, `bytes=a-` and the suffix `bytes=-n` give `206`
+  with `Content-Range`; a start at or past the end, or `bytes=-0`, is `416` with
+  `Content-Range: bytes */<size>`. Several ranges, a malformed or non-`bytes` range, an
+  inverted range, and a range whose `If-Range` does not equal the ETag are answered with
+  `200` and the full body (no multipart responses).
+- **HEAD** ignores `Range` and answers with the full-size headers from one metadata request,
+  without opening a stream.
+- **Deferred:** the small in-memory LRU for hot small files (default 64 MB in the first
+  draft) is not built (ROADMAP M4).
+
+**Direct** (`[media.s3] public_base_url` set): `public_url` returns `<base>/<prefix>artifacts/…`
+URLs and templates link there; the app does not proxy. The operator configures the
+bucket/CDN for public read of `artifacts/` only. Without `public_base_url`, S3 media is
+app-served like local media (`crates/ferrite/src/site.rs`, `media_config`).
+
+**SVG:** served inline (with `Content-Security-Policy: sandbox`) only once sanitisation on
+upload exists (ROADMAP M2); M1 stores no sanitised marker, so every SVG is an attachment.
 
 ## 6. Garbage collection
 

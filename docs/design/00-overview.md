@@ -94,6 +94,14 @@ Decisions taken during design discussion. "User" = decided by the project owner;
 | D21 | Plugin routes (`/_p/<plugin>/…`), declarative plugin settings, `mail` (admins only) and batched `request.served` are in plugin API v0.1 | User | 05 |
 | D19 | No WP password-hash verification in v1 (WXR has no hashes) — imported users reset passwords | Design | 07, 08 |
 
+Implementation-level rulings taken while building each milestone (smaller than these
+decisions, each with its reason and cost) are recorded per milestone in
+[`docs/superpowers/rulings/`](../superpowers/rulings/): `m1a.md`, `m1b.md`, `m1c1.md`,
+`m1c2.md`. Two M1c-2 rulings narrow decisions above for M1: themes load from the embedded
+starter themes and `data/themes/` folders, with artifact distribution (D11) moved to M1.5
+(plan ruling P1); plugins load from the `plugins` table and their artifacts at startup only,
+with hot reload in M1.5 (plan ruling P3).
+
 ## Verified facts this design relies on
 
 Per project rules, claims about third-party libraries were checked on 2026-10-22.

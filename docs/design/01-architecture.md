@@ -5,7 +5,7 @@
 The brief's layout (§7) is extended with storage, media and cluster crates. Dependencies
 point downwards only; no cycles.
 
-Status after M1c-1: crates marked **(built)** exist in `crates/` and are workspace members
+Status after M1c-2: crates marked **(built)** exist in `crates/` and are workspace members
 (`Cargo.toml`); the others are planned and carry their milestone.
 
 ```
@@ -13,34 +13,40 @@ ferritecms/
 ├── Cargo.toml                    # workspace, shared [workspace.dependencies], lints
 ├── rust-toolchain.toml           # stable, edition 2024
 ├── crates/
-│   ├── ferrite/                  # (built) BIN: clap CLI (`init`, `migrate`), logging, startup
-│   │                             #   check; anyhow at the top level. No `serve` yet (M1c-2)
+│   ├── ferrite/                  # (built) BIN: clap CLI (`init`, `migrate`, `serve`, `seed demo`),
+│   │                             #   logging, startup check, shutdown; anyhow at the top level
 │   ├── ferrite-config/           # (built) ferrite.toml + env parsing, validation, init template
 │   ├── ferrite-domain/           # (built) pure types: ids, Post, Term, User, Role, Block, errors
 │   ├── ferrite-store/            # (built) repository traits + Store facade (no SQL)
-│   ├── ferrite-store-sqlite/     # (built) SQLite impl + migrations/sqlite/
-│   ├── ferrite-store-postgres/   # (built) Postgres impl + migrations/postgres/
+│   ├── ferrite-store-sqlite/     # (built) SQLite impl + migrations/
+│   ├── ferrite-store-postgres/   # (built) Postgres impl + migrations/
 │   ├── ferrite-store-tests/      # (built) contract test suite run against both backends;
-│   │                             #   ferrite-core reuses its harness as a dev-dependency
+│   │                             #   other crates reuse its harness as a dev-dependency
 │   ├── ferrite-media/            # (built) MediaStore over object_store, sniffing, image variants
 │   ├── ferrite-cluster/          # (M1.5) node registry, event bus, job queue, locks
 │   ├── ferrite-core/             # (built) services: content (+ lifecycle, revisions, redirects on
 │   │                             #   permalink change, search indexing), taxonomy, menus, options,
-│   │                             #   redirects; blocks rendering, slugs, events, roles/capabilities.
-│   │                             #   Depends on domain + store only; users/auth services (M2),
-│   │                             #   media wiring (M1c-2) are not there yet
-│   ├── ferrite-cache/            # (M1c-2) page cache + dependency index
-│   ├── ferrite-theme/            # (M1c-2) theme loading, hierarchy resolution, minijinja env
-│   ├── ferrite-plugin-host/      # (built, M0) wasmtime engine, capability linker, limits, registry
-│   ├── ferrite-http/             # (M1c-2 public site; M2 REST API v1, auth, admin assets)
+│   │                             #   redirects; permalinks; the published-only read facade
+│   │                             #   `SiteReader` (+ preview); blocks rendering, slugs, events and
+│   │                             #   the dependency-key contract, roles/capabilities. Depends on
+│   │                             #   domain + store only; users/auth and media services are M2
+│   ├── ferrite-cache/            # (built, M1c-2) page cache (moka) + dependency index + outbox
+│   │                             #   invalidation loop
+│   ├── ferrite-theme/            # (built, M1c-2) theme packages, hierarchy resolution, sandboxed
+│   │                             #   MiniJinja renderer and helpers
+│   ├── ferrite-plugin-host/      # (built) wasmtime engine, capability linker, limits, registry,
+│   │                             #   output validation + ammonia sanitising, call tracing
+│   ├── ferrite-http/             # (built, M1c-2: public site, router, head, plugin wiring;
+│   │                             #   M2: REST API v1, auth, admin assets)
 │   ├── ferrite-import-wp/        # (M3) WXR importer
 │   └── ferrite-sdk/              # (built, M0) guest SDK for Rust plugins (`export_plugin!` macro
 │                                 #   lives in the crate; there is no separate macros crate)
 ├── wit/                          # WIT packages (source of truth for plugin API)
 │   └── ferrite-plugin@0.1.0/
 ├── admin/                        # (M2) React SPA (pnpm workspace), built into dist/
-├── themes/                       # (M1c-2) starter themes (blog first)
-├── plugins/examples/             # (built) hello, order-a, order-b, hostile/*; seo, analytics,
+├── themes/                       # (built) starter themes embedded in the binary: `blog`
+├── plugins/examples/             # (built) hello, order-a, order-b, clock, html-inject,
+│                                 #   meta-writer, reader, hostile/*; seo, analytics,
 │                                 #   contact-form are M4
 ├── tests/                        # cross-crate integration tests (planned; per-crate tests/ exist)
 └── docs/
@@ -51,83 +57,109 @@ ferritecms/
 
 ### Dependency graph
 
-Target graph (crates not yet built are marked with their milestone):
+As built after M1c-2 (normal dependencies, from each crate's `Cargo.toml`; crates not yet
+built are marked with their milestone):
 
 ```
-ferrite (bin)
- ├─ ferrite-http (M1c-2/M2) ─┬─ ferrite-core ─┬─ ferrite-store (traits) ◄── ferrite-store-{sqlite,postgres}
- │                           │                ├─ ferrite-media
- │                           │                ├─ ferrite-cluster (M1.5) ─── ferrite-store (traits)
- │                           │                └─ ferrite-domain
- │                           ├─ ferrite-cache (M1c-2)
- │                           ├─ ferrite-theme (M1c-2)
- │                           └─ ferrite-plugin-host (built; no ferrite-* dependencies yet)
- ├─ ferrite-import-wp (M3) ─── ferrite-core
- └─ ferrite-config
+ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-theme, ferrite-core, ferrite-plugin-host,
+ │               ferrite-media, ferrite-config, ferrite-store, ferrite-store-{sqlite,postgres},
+ │               ferrite-domain
+ ├─ ferrite-http ─┬─ ferrite-cache ─── ferrite-store, ferrite-domain
+ │                ├─ ferrite-theme ─── ferrite-core, ferrite-domain
+ │                ├─ ferrite-core ──── ferrite-store (traits) ◄── ferrite-store-{sqlite,postgres}
+ │                │                    └─ ferrite-domain
+ │                ├─ ferrite-media ─── ferrite-domain
+ │                ├─ ferrite-plugin-host (no ferrite-* dependencies)
+ │                └─ ferrite-store, ferrite-domain
+ ├─ ferrite-config ─── ferrite-domain
+ ├─ ferrite-cluster (M1.5) ─── ferrite-store (traits)
+ └─ ferrite-import-wp (M3) ─── ferrite-core
 ```
 
-As built today: `ferrite` depends on `ferrite-config`, `ferrite-domain`, `ferrite-store`
-and both store crates (`crates/ferrite/Cargo.toml`); `ferrite-core` depends on
-`ferrite-domain` and `ferrite-store`; `ferrite-config` and `ferrite-media` depend on
-`ferrite-domain`; `ferrite-plugin-host` depends on no other `ferrite-*` crate and the
-binary does not use it yet. `ferrite-core` does not yet use `ferrite-media`.
+`ferrite-core` does not use `ferrite-media` (media URLs reach `SiteReader` as a closure built
+by the binary from `MediaStore::public_url`). `ferrite-plugin-host` keeps no dependency on
+core; `ferrite-http` adapts between them (`StoreHostServices`). `ferrite-cache` uses
+`ferrite-core` only in its tests.
 
 Only the binary crate depends on concrete store crates; everything else sees
-`Arc<dyn Store>` (see [02](02-storage.md#repository-layer)). Both store crates are
-compiled in by default; Cargo features `sqlite` and `postgres` (both default-on) allow
-slimmer builds.
+`Arc<dyn Store>` (see [02](02-storage.md#repository-layer)). Both store crates are always
+compiled in; Cargo features to leave one out (`sqlite`, `postgres`) are planned but do not
+exist yet (no `[features]` section in any crate).
 
 ## 2. Runtime components
 
-One `ferrite serve` process contains:
+One `ferrite serve` process contains (as built after M1c-2; planned parts marked):
 
 | Component | Responsibility | Crate |
 |---|---|---|
 | Config | Load `ferrite.toml`, env overrides (`FERRITE_*`), validate profile | ferrite-config |
 | Store | Pooled DB access, transactions, migrations | ferrite-store-* |
 | MediaStore | Blob get/put/list/delete, public URLs | ferrite-media |
-| Cluster | Node heartbeat, event bus, job queue, distributed locks | ferrite-cluster |
-| Core services | Business rules, permission checks, revisions, emitting events | ferrite-core |
+| Cluster *(M1.5)* | Node heartbeat, `LISTEN/NOTIFY` event bus, job queue, distributed locks | ferrite-cluster |
+| Core services | Business rules, permission checks, revisions, emitting events; `SiteReader` for public reads | ferrite-core |
 | Plugin host | Load components, run filters/actions under limits | ferrite-plugin-host |
 | Theme engine | Resolve template, render with MiniJinja | ferrite-theme |
 | Page cache | URL → rendered response, dependency-based invalidation | ferrite-cache |
-| HTTP | Public routes, `/api/v1`, `/admin`, `/_media`, `/_p/<plugin>` (later), `/metrics`, `/healthz`, `/readyz` | ferrite-http |
-| Workers | Job queue consumers (scheduled publish, actions, variants, imports) | ferrite-cluster + core |
+| Invalidation loop | Polls the `events` outbox every `cache.poll_interval_ms` (default 250) and applies events to the page cache | ferrite-cache |
+| Scheduled publishing | `publish_due` every 30 s (a tokio task; the job queue replaces it in M1.5) | ferrite (bin) + core |
+| HTTP | Public routes, `/_media`, `/_theme`, `/healthz`, `/readyz`; later `/api/v1`, `/admin`, `/_p/<plugin>`, `/metrics` | ferrite-http |
+| Workers *(M1.5)* | Job queue consumers (actions, variants, imports) | ferrite-cluster + core |
 
-Startup order: config → store connect → migration check/run → cluster register →
-media check → load active theme + plugins (from artifacts) → start workers → start event
-listener → bind HTTP → mark ready.
+Startup order as built (`crates/ferrite/src/serve.rs`; any failure exits 1): config → open
+the database → migration check (pending migrations applied when allowed, an incompatible
+schema refused) → media store write/read/delete probe → permalink rules from options,
+checked against types and taxonomies → active theme (falls back to the embedded `blog`) →
+plugins from the `plugins` table + artifacts (a broken row is skipped) → route table →
+invalidation loop (cursor set before any page is cached) → scheduled-publish ticker →
+signal handlers → bind `server.listen` and print `Listening on http://<addr>`. Planned
+additions: cluster register (M1.5), workers (M1.5).
 
-Shutdown (SIGTERM): stop accepting → drain in-flight requests (configurable, default 10s)
-→ stop workers after current job (leases expire otherwise) → deregister node → close pool.
+Shutdown on SIGINT or SIGTERM, as built: stop accepting → drain open requests for up to 10 s
+→ stop the background tasks (up to 1 s) → close the database pools (up to 2 s) → the
+runtime gets a 1 s grace, then remaining connection tasks are dropped. The process is gone
+about 14 s after the first signal at most; a second signal during the drain exits at once
+(130 for SIGINT, 143 for SIGTERM). Planned: stop workers after the current job, deregister
+the node (M1.5).
 
 ## 3. Request lifecycle (public page)
 
+As built (`crates/ferrite-http/src/app/handler.rs`, `pipeline.rs`):
+
 ```
-request ─► router ─► redirect table? ──yes──► 301/302
-                │no
-                ▼
-          page cache lookup (key: host+path+query-allowlist+variant)
-                │hit ──► respond (ETag/304 support)
-                │miss
-                ▼
-          resolve route → content query (core) ─► DependencySet records keys
-                ▼
-          filter hooks (plugin host): content.body, render.head, render.footer …
-                ▼
-          theme: resolve template by hierarchy → render (MiniJinja)
-                ▼
-          store in cache with DependencySet → respond
+request ─► GET/HEAD? ──no──► 405
+              │
+              ▼
+          router (pure) ─► /healthz, /readyz, /_media, /_theme ──► answered directly
+              │
+              ▼
+          redirect table? ──yes──► 301/302/307/308 (410: shared gone page)
+              │no
+              ▼
+          non-canonical path? ──yes──► 301 to the canonical path
+              │no
+              ▼
+          page cache lookup (key: site host + path + allowlisted query + variant)
+              │hit ──► respond (weak ETag, 304 support)
+              │miss (single flight)
+              ▼
+          SiteReader (published-only) ─► dependency keys recorded
+              ▼
+          plugin filters: content.body, content.excerpt, render.head (traced)
+              ▼
+          theme: resolve template by hierarchy → render (MiniJinja, blocking thread)
+              ▼
+          store in cache with the dependency keys (unless an error status) → respond
 ```
 
-- **Cache variant**: anonymous vs. logged-in. Logged-in requests bypass the cache by
-  default (configurable).
+- **Cache variant**: anonymous only in M1. There is no login yet, so every request is
+  anonymous; logged-in bypass or per-user variants arrive with auth (M2).
 - **Single-flight**: concurrent misses for the same key wait on one render
   (per-node; cross-node duplication is acceptable).
-- **Failure**: a plugin hook failure skips that hook ([05](05-plugin-host.md#failure-isolation)).
-  A theme render error returns a 500 rendered via the theme's `500.html` if present,
-  otherwise a built-in minimal page. The admin can always be reached even if the theme
-  is broken.
+- **Failure**: a plugin hook failure skips that hook ([05](05-plugin-host.md#8-failure-isolation-p5-p6))
+  and gives the page a short TTL. A theme render error returns a 500 rendered via the theme's
+  `500.html` if present, otherwise a built-in minimal page; the server keeps serving. Admin
+  reachability with a broken theme applies once the admin exists (M2).
+- Details: [06 §3](06-themes-rendering.md#3-routing) (routing), §5 (pipeline), §6 (cache).
 
 ## 4. Configuration
 
