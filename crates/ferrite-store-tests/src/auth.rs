@@ -279,6 +279,50 @@ pub async fn api_tokens_unique_hash_and_owner_scoped_delete(db: &TestDb) {
     assert_eq!(tokens.get_by_hash("h-theirs").await.unwrap(), None);
 }
 
+/// `prune` deletes tokens whose `expires_at` passed (`<`, so `now` itself stays), never
+/// those without an expiry, in batches of `limit` (R5).
+pub async fn api_tokens_prune_expired(db: &TestDb) {
+    let store = db.store();
+    let tokens = store.read().api_tokens();
+    let user = fixture_user(store).await;
+    let now = Timestamp::now();
+
+    for i in 0..3 {
+        let mut t = token(&user, &format!("expired-{i}"), plus(now, -10 * DAY));
+        t.expires_at = Some(plus(now, -1));
+        tokens.insert(&t).await.unwrap();
+    }
+    let mut boundary = token(&user, "boundary", plus(now, -DAY));
+    boundary.expires_at = Some(now);
+    tokens.insert(&boundary).await.unwrap();
+    let mut forever = token(&user, "forever", plus(now, -400 * DAY));
+    forever.expires_at = None;
+    tokens.insert(&forever).await.unwrap();
+    let ahead = token(&user, "ahead", now);
+    tokens.insert(&ahead).await.unwrap();
+
+    for bad in [0, MAX_PRUNE_BATCH + 1] {
+        assert!(is_invalid(tokens.prune(now, bad).await));
+    }
+    assert_eq!(tokens.prune(now, 2).await.unwrap(), 2);
+    assert_eq!(tokens.prune(now, 10).await.unwrap(), 1);
+    assert_eq!(tokens.prune(now, 10).await.unwrap(), 0);
+    let left: BTreeSet<String> = tokens
+        .list_for_user(user.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| t.token_hash)
+        .collect();
+    assert_eq!(
+        left,
+        ["ahead", "boundary", "forever"]
+            .map(String::from)
+            .into_iter()
+            .collect()
+    );
+}
+
 /// Sleeps until 50 ms past the next `window` boundary of the database clock when fewer
 /// than `need` remain in the current window, so a test's hits share one window (F10).
 async fn align_to_window(store: &dyn Store, window: Duration, need: Duration) {

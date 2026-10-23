@@ -221,6 +221,18 @@ impl ApiTokenRepo for PgRepos {
         .execute(e))?;
         Ok(done.rows_affected())
     }
+
+    async fn prune(&self, now: Timestamp, limit: u32) -> Result<u64, StoreError> {
+        let limit = check_prune_limit(limit)?;
+        let done = run!(&self.exec, |e| sqlx::query(
+            "DELETE FROM api_tokens WHERE id IN \
+             (SELECT id FROM api_tokens WHERE expires_at < $1 LIMIT $2)"
+        )
+        .bind(pg_ts(now))
+        .bind(limit)
+        .execute(e))?;
+        Ok(done.rows_affected())
+    }
 }
 
 #[async_trait]

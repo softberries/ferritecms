@@ -1,11 +1,12 @@
-//! Built-in maintenance jobs (P11, P14, P20): hourly pruning of the events outbox,
-//! finished jobs, stale node rows and old plugin failure buckets. Ages are measured on the database clock; rows go in
+//! Built-in maintenance jobs (P11, P14, P20, P23): hourly pruning of the events outbox,
+//! finished jobs, stale node rows, old plugin failure buckets and ended sessions, expired
+//! API tokens and past rate-limit windows. Ages are measured on the database clock; rows go in
 //! batches of [`MAX_PRUNE_BATCH`] (R5) so no single statement holds locks for long.
 
 use std::{future::Future, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use ferrite_domain::{Job, Timestamp};
+use ferrite_domain::{Job, SESSION_IDLE, Timestamp};
 use ferrite_store::{MAX_PRUNE_BATCH, Store, StoreError};
 use serde_json::json;
 use tokio::time::Instant;
@@ -31,18 +32,26 @@ pub fn failure_retention(window: Duration) -> Duration {
     MIN_FAILURE_RETENTION.max(window.saturating_mul(2))
 }
 
+/// Rate-limit rows whose window started longer ago than this are deleted. Every limit
+/// core sets uses a one-minute window, so no current window is cut short.
+pub const RATE_LIMIT_RETENTION: Duration = Duration::from_secs(3600);
+
 /// How long one prune run keeps deleting batches; well inside the default handler
 /// timeout (300 s), so a large backlog ends the run cleanly and the next hour goes on.
 pub const PRUNE_BUDGET: Duration = Duration::from_secs(240);
 
 /// Calls `batch` until it deletes fewer than [`MAX_PRUNE_BATCH`] rows or
-/// [`PRUNE_BUDGET`] is used up; returns the total.
-async fn prune_batches<F, Fut>(what: &'static str, mut batch: F) -> Result<u64, JobError>
+/// [`PRUNE_BUDGET`], counted from `started` (the start of the run, so a job pruning
+/// several tables shares one budget), is used up; returns the total.
+async fn prune_batches<F, Fut>(
+    what: &'static str,
+    started: Instant,
+    mut batch: F,
+) -> Result<u64, JobError>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<u64, StoreError>>,
 {
-    let started = Instant::now();
     let mut total = 0;
     loop {
         let n = batch().await.map_err(retry)?;
@@ -66,8 +75,13 @@ where
 /// The database clock minus `age`.
 async fn db_now_minus(store: &dyn Store, age: Duration) -> Result<Timestamp, JobError> {
     let now = store.read().nodes().db_now().await.map_err(retry)?;
+    minus(now, age)
+}
+
+/// `t` minus `age`.
+fn minus(t: Timestamp, age: Duration) -> Result<Timestamp, JobError> {
     let age = i64::try_from(age.as_micros()).unwrap_or(i64::MAX);
-    Timestamp::from_micros(now.as_micros().saturating_sub(age))
+    Timestamp::from_micros(t.as_micros().saturating_sub(age))
         .map_err(|e| JobError::Permanent(e.to_string()))
 }
 
@@ -87,7 +101,10 @@ impl JobHandler for EventsPrune {
     async fn run(&self, _job: &Job) -> Result<(), JobError> {
         let before = db_now_minus(self.0.as_ref(), EVENT_RETENTION).await?;
         let events = self.0.read().events();
-        prune_batches("events", || events.prune(before, MAX_PRUNE_BATCH)).await?;
+        prune_batches("events", Instant::now(), || {
+            events.prune(before, MAX_PRUNE_BATCH)
+        })
+        .await?;
         Ok(())
     }
 }
@@ -106,7 +123,10 @@ impl JobHandler for JobsPrune {
         let done = db_now_minus(self.0.as_ref(), DONE_JOB_RETENTION).await?;
         let dead = db_now_minus(self.0.as_ref(), DEAD_JOB_RETENTION).await?;
         let jobs = self.0.read().jobs();
-        prune_batches("jobs", || jobs.prune(done, dead, MAX_PRUNE_BATCH)).await?;
+        prune_batches("jobs", Instant::now(), || {
+            jobs.prune(done, dead, MAX_PRUNE_BATCH)
+        })
+        .await?;
         Ok(())
     }
 }
@@ -123,7 +143,10 @@ impl JobHandler for NodesPrune {
     async fn run(&self, _job: &Job) -> Result<(), JobError> {
         let before = db_now_minus(self.0.as_ref(), crate::node::NODE_EXPIRY).await?;
         let nodes = self.0.read().nodes();
-        prune_batches("nodes", || nodes.prune(before, MAX_PRUNE_BATCH)).await?;
+        prune_batches("nodes", Instant::now(), || {
+            nodes.prune(before, MAX_PRUNE_BATCH)
+        })
+        .await?;
         Ok(())
     }
 }
@@ -144,8 +167,42 @@ impl JobHandler for PluginFailuresPrune {
     async fn run(&self, _job: &Job) -> Result<(), JobError> {
         let before = db_now_minus(self.store.as_ref(), self.retention).await?;
         let failures = self.store.read().plugin_failures();
-        prune_batches("plugin_failures", || {
+        prune_batches("plugin_failures", Instant::now(), || {
             failures.prune(before, MAX_PRUNE_BATCH)
+        })
+        .await?;
+        Ok(())
+    }
+}
+
+/// `sessions.prune` (P23): deletes sessions past their absolute end or idle longer than
+/// [`SESSION_IDLE`], API tokens past their `expires_at`, and rate-limit rows whose window
+/// started more than [`RATE_LIMIT_RETENTION`] ago — all against one reading of the
+/// database clock.
+pub struct SessionsPrune(pub Arc<dyn Store>);
+
+#[async_trait]
+impl JobHandler for SessionsPrune {
+    fn kind(&self) -> &'static str {
+        "sessions.prune"
+    }
+
+    async fn run(&self, _job: &Job) -> Result<(), JobError> {
+        let started = Instant::now();
+        let repos = self.0.read();
+        let now = repos.nodes().db_now().await.map_err(retry)?;
+        let idle_before = minus(now, SESSION_IDLE)?;
+        let window_before = minus(now, RATE_LIMIT_RETENTION)?;
+        let sessions = repos.sessions();
+        prune_batches("sessions", started, || {
+            sessions.prune(now, idle_before, MAX_PRUNE_BATCH)
+        })
+        .await?;
+        let tokens = repos.api_tokens();
+        prune_batches("api_tokens", started, || tokens.prune(now, MAX_PRUNE_BATCH)).await?;
+        let limits = repos.rate_limits();
+        prune_batches("rate_limits", started, || {
+            limits.prune(window_before, MAX_PRUNE_BATCH)
         })
         .await?;
         Ok(())
@@ -160,9 +217,10 @@ pub fn handlers(store: Arc<dyn Store>, failure_retention: Duration) -> Vec<Arc<d
         Arc::new(JobsPrune(store.clone())),
         Arc::new(NodesPrune(store.clone())),
         Arc::new(PluginFailuresPrune {
-            store,
+            store: store.clone(),
             retention: failure_retention,
         }),
+        Arc::new(SessionsPrune(store)),
     ]
 }
 
@@ -173,6 +231,7 @@ pub fn periodics() -> Vec<Periodic> {
         "jobs.prune",
         "nodes.prune",
         "plugin_failures.prune",
+        "sessions.prune",
     ]
     .into_iter()
     .map(|kind| Periodic {
@@ -207,6 +266,7 @@ mod tests {
             "jobs.prune",
             "nodes.prune",
             "plugin_failures.prune",
+            "sessions.prune",
         ]
         .into();
         assert_eq!(periodic, expected);

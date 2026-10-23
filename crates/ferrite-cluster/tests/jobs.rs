@@ -18,7 +18,8 @@ use ferrite_cluster::{
     ClusterError, JobError, JobHandler, JobRunner, Periodic, RunnerConfig, Scheduler, builtin,
 };
 use ferrite_domain::{
-    Job, JobId, JobLease, JobStatus, NewEvent, NewJob, NewNode, NodeId, Timestamp,
+    ApiToken, ApiTokenId, Job, JobId, JobLease, JobStatus, NewEvent, NewJob, NewNode, NodeId,
+    Secret, Session, Timestamp,
 };
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, Backend, Channel, ContentRepo, ContentTypeRepo,
@@ -27,7 +28,7 @@ use ferrite_store::{
     RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription,
     TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
-use ferrite_store_tests::{TestDb, backend_tests_spawning};
+use ferrite_store_tests::{TestDb, backend_tests_spawning, fixtures::fixture_user};
 use serde_json::json;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -943,12 +944,12 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
     .unwrap()
     .spawn(stop.clone());
     let jobs = store.read().jobs();
-    wait_for(Duration::from_secs(5), "four prune jobs done", || async {
+    wait_for(Duration::from_secs(5), "five prune jobs done", || async {
         let counts = jobs.counts().await.unwrap();
-        // Once the old fixture job is pruned: the fresh one plus the four prune jobs.
+        // Once the old fixture job is pruned: the fresh one plus the five prune jobs.
         let gone = jobs.get(old_job).await.unwrap().is_none()
             && jobs.get(old_dead).await.unwrap().is_none();
-        (gone && counts[&JobStatus::Done] == 5).then_some(())
+        (gone && counts[&JobStatus::Done] == 6).then_some(())
     })
     .await;
     stop.cancel();
@@ -984,10 +985,160 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
     let counts = jobs.counts().await.unwrap();
     assert_eq!(
         counts[&JobStatus::Done],
-        5,
-        "fresh fixture + four prune jobs"
+        6,
+        "fresh fixture + five prune jobs"
     );
     assert_eq!(counts[&JobStatus::Dead], 1, "the 10-day-old dead job");
+}
+
+/// Moves the rate-limit bucket's window start back by `hours` (raw SQL per backend).
+async fn backdate_bucket(db: &TestDb, bucket: &str, hours: i64) {
+    let sql = if db.store().backend() == Backend::Sqlite {
+        format!(
+            "UPDATE rate_limits SET window_start = window_start - {} WHERE bucket = '{bucket}'",
+            hours * 3600 * 1_000_000
+        )
+    } else {
+        format!(
+            "UPDATE rate_limits SET window_start = window_start - interval '{hours} hours' \
+             WHERE bucket = '{bucket}'"
+        )
+    };
+    db.exec_raw(&sql).await;
+}
+
+/// P23: `sessions.prune` deletes sessions past their absolute end or idle for longer
+/// than `SESSION_IDLE`, tokens past `expires_at` and rate-limit rows whose window
+/// started over an hour ago; fresh rows of each stay.
+pub async fn sessions_prune_job_deletes_expired_and_idle(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    let repos = store.read();
+    let user = fixture_user(store.as_ref()).await;
+    let now = repos.nodes().db_now().await.unwrap();
+    let ago = |d: Duration| {
+        Timestamp::from_micros(now.as_micros() - i64::try_from(d.as_micros()).unwrap()).unwrap()
+    };
+    let day = Duration::from_secs(24 * 3600);
+    let session = |id: &str, created: Timestamp, seen: Timestamp, expires: Timestamp| Session {
+        id_hash: id.into(),
+        user_id: user.id,
+        csrf_secret: Secret::new(format!("csrf-{id}")),
+        created_at: created,
+        last_seen_at: seen,
+        expires_at: expires,
+        ip_hash: None,
+        user_agent: None,
+    };
+    let sessions = repos.sessions();
+    // Past the absolute end, though seen a minute ago.
+    sessions
+        .insert(&session(
+            "expired",
+            ago(31 * day),
+            ago(Duration::from_secs(60)),
+            ago(day),
+        ))
+        .await
+        .unwrap();
+    // Idle for 8 days, absolute end ahead.
+    sessions
+        .insert(&session(
+            "idle",
+            ago(10 * day),
+            ago(8 * day),
+            plus(now, 20 * day),
+        ))
+        .await
+        .unwrap();
+    // Seen 6 days ago, absolute end ahead.
+    sessions
+        .insert(&session(
+            "fresh",
+            ago(6 * day),
+            ago(6 * day),
+            plus(now, 24 * day),
+        ))
+        .await
+        .unwrap();
+
+    let token = |hash: &str, expires_at: Option<Timestamp>| ApiToken {
+        id: ApiTokenId::new(),
+        user_id: user.id,
+        name: hash.into(),
+        token_hash: hash.into(),
+        scopes: vec!["content:read".into()],
+        created_at: ago(40 * day),
+        last_used_at: None,
+        expires_at,
+    };
+    let tokens = repos.api_tokens();
+    tokens
+        .insert(&token("expired", Some(ago(Duration::from_secs(1)))))
+        .await
+        .unwrap();
+    tokens.insert(&token("forever", None)).await.unwrap();
+    tokens
+        .insert(&token("ahead", Some(plus(now, day))))
+        .await
+        .unwrap();
+
+    let limits = repos.rate_limits();
+    let minute = Duration::from_secs(60);
+    limits.hit("login:ip:old", minute).await.unwrap();
+    limits.hit("login:ip:fresh", minute).await.unwrap();
+    backdate_bucket(&db, "login:ip:old", 2).await;
+
+    let handler = builtin::handlers(store.clone(), builtin::MIN_FAILURE_RETENTION)
+        .into_iter()
+        .find(|h| h.kind() == "sessions.prune")
+        .expect("sessions.prune is a built-in handler");
+    assert!(
+        builtin::periodics()
+            .iter()
+            .any(|p| p.kind == "sessions.prune" && p.every == builtin::PRUNE_EVERY),
+        "sessions.prune runs hourly"
+    );
+    let id = enqueue(
+        store.as_ref(),
+        NewJob::new("sessions.prune", json!({"v": 1})),
+    )
+    .await;
+    handler.run(&get(store.as_ref(), id).await).await.unwrap();
+
+    let ids: Vec<String> = sessions
+        .list_for_user(user.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| s.id_hash)
+        .collect();
+    assert_eq!(ids, ["fresh"]);
+    let mut hashes: Vec<String> = tokens
+        .list_for_user(user.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| t.token_hash)
+        .collect();
+    hashes.sort();
+    assert_eq!(hashes, ["ahead", "forever"]);
+    assert_eq!(
+        limits.hit("login:ip:fresh", minute).await.unwrap().count,
+        2,
+        "the current window survived"
+    );
+    // The old row is gone: nothing older than the cut remains to prune.
+    assert_eq!(
+        limits
+            .prune(ago(builtin::RATE_LIMIT_RETENTION), 10)
+            .await
+            .unwrap(),
+        0
+    );
+
+    // A second run finds nothing more.
+    handler.run(&get(store.as_ref(), id).await).await.unwrap();
+    assert_eq!(sessions.list_for_user(user.id).await.unwrap().len(), 1);
 }
 
 backend_tests_spawning!(
@@ -1005,6 +1156,7 @@ backend_tests_spawning!(
     runner_shutdown_releases_in_flight,
     scheduler_inserts_one_job_per_period,
     builtin_prune_jobs_delete_by_age,
+    sessions_prune_job_deletes_expired_and_idle,
 );
 
 /// Postgres only: with `listen`, a job enqueued while the runner idles (30 s poll)

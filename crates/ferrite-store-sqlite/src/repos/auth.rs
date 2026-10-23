@@ -216,6 +216,18 @@ impl ApiTokenRepo for SqliteRepos {
         .execute(e))?;
         Ok(done.rows_affected())
     }
+
+    async fn prune(&self, now: Timestamp, limit: u32) -> Result<u64, StoreError> {
+        let limit = check_prune_limit(limit)?;
+        let done = run!(&self.writer, |e| sqlx::query(
+            "DELETE FROM api_tokens WHERE rowid IN \
+             (SELECT rowid FROM api_tokens WHERE expires_at < ? LIMIT ?)"
+        )
+        .bind(now.as_micros())
+        .bind(limit)
+        .execute(e))?;
+        Ok(done.rows_affected())
+    }
 }
 
 #[async_trait]

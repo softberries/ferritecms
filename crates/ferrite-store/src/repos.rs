@@ -761,6 +761,10 @@ pub trait ApiTokenRepo: Send + Sync {
     async fn delete(&self, user: UserId, id: ApiTokenId) -> Result<bool, StoreError>;
     /// Deletes every token of `user`; returns the count.
     async fn delete_for_user(&self, user: UserId) -> Result<u64, StoreError>;
+    /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) tokens with
+    /// `expires_at < now` (tokens without an expiry stay); returns the count. Callers
+    /// loop until a batch comes back short (R5).
+    async fn prune(&self, now: Timestamp, limit: u32) -> Result<u64, StoreError>;
 }
 
 /// Fixed-window rate-limit counters shared by every node (P5).
