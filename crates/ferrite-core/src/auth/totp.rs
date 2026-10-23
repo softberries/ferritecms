@@ -3,12 +3,18 @@
 //! `:`).
 
 use ferrite_domain::Timestamp;
-use totp_rs::{Builder, Totp};
+use totp_rs::{Algorithm, Builder, Totp};
 
 use crate::CoreError;
 
 /// Secret length in bytes (160 bits, the RFC 4226 recommendation).
 pub(crate) const SECRET_LEN: usize = 20;
+/// Code length.
+const DIGITS: u8 = 6;
+/// Step length in seconds.
+const STEP_SECS: u64 = 30;
+/// Steps accepted either side of the current one.
+const SKEW: u16 = 1;
 /// The issuer shown in authenticator apps when no site title is set.
 pub(crate) const DEFAULT_ISSUER: &str = "FerriteCMS";
 
@@ -27,6 +33,10 @@ pub(crate) fn issuer_name(title: &str) -> String {
 /// A TOTP for `secret`; `issuer` and `account` only matter for the `otpauth://` URL.
 pub(crate) fn build(secret: &[u8], issuer: &str, account: &str) -> Result<Totp, CoreError> {
     Builder::new()
+        .with_algorithm(Algorithm::SHA1)
+        .with_digits(DIGITS)
+        .with_step_duration(STEP_SECS)
+        .with_skew(SKEW)
         .with_secret(secret.to_vec())
         .with_issuer(Some(issuer))
         .with_account_name(account)
@@ -70,11 +80,13 @@ mod tests {
             check(&totp, &format!(" {code} "), now),
             Some(1_700_000_000 / 30)
         );
-        // One step of skew either way, not two.
-        let later = Timestamp::from_micros(1_700_000_030_000_000).unwrap();
-        assert!(check(&totp, &code, later).is_some());
-        let much_later = Timestamp::from_micros(1_700_000_090_000_000).unwrap();
-        assert_eq!(check(&totp, &code, much_later), None);
+        // One step of skew either way, not two (1_700_000_000 is 20 s into its step).
+        let at = |secs: i64| Timestamp::from_micros(secs * 1_000_000).unwrap();
+        assert!(check(&totp, &code, at(1_700_000_030)).is_some());
+        assert!(check(&totp, &code, at(1_699_999_970)).is_some());
+        assert_eq!(check(&totp, &code, at(1_700_000_060)), None);
+        assert_eq!(check(&totp, &code, at(1_699_999_940)), None);
+        assert_eq!(check(&totp, &code, at(1_700_000_090)), None);
         assert_eq!(check(&totp, "12345", now), None);
         assert_eq!(check(&totp, "abcdef", now), None);
     }

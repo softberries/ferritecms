@@ -30,7 +30,7 @@ use hmac::Mac;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
-use super::key::{SiteKey, hex, ip_hash, keyed_mac, random_bytes, sha256_hex};
+use super::key::{SiteKey, hex, ip_hash, keyed_id, keyed_mac, random_bytes, sha256_hex};
 use super::password::{self, Verified};
 use super::seal::{open, seal};
 use super::{limits, totp};
@@ -62,6 +62,8 @@ const CHALLENGE_TTL: Duration = Duration::from_secs(5 * 60);
 const ENROLL_TTL: Duration = Duration::from_secs(10 * 60);
 /// `last_used_at` of an API token is written at most this often.
 const TOKEN_TOUCH_EVERY: Duration = Duration::from_secs(5 * 60);
+/// Subkey label for the password-hash fingerprint in login challenges.
+const CHALLENGE_PW_LABEL: &str = "ferrite:challenge-pw:v1";
 /// The CSRF MAC's message prefix (the session's `id_hash` follows).
 const CSRF_CONTEXT: &str = "ferrite-csrf:v1:";
 
@@ -89,18 +91,26 @@ impl fmt::Debug for LoginAttempt<'_> {
     }
 }
 
-/// What a correct password leads to.
-#[derive(Debug)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "one short-lived value per login; the brief's shape is matched by Task 7"
-)]
+/// What a correct password leads to. `Debug` redacts the challenge.
 pub enum LoginOutcome {
     /// Logged in.
-    Session(IssuedSession),
+    Session(Box<IssuedSession>),
     /// The account has TOTP: send the code with this challenge to
-    /// [`AuthService::login_totp`] within 5 minutes.
+    /// [`AuthService::login_totp`] within 5 minutes. The challenge proves the password
+    /// was right; treat it like a credential.
     TotpRequired { challenge: String },
+}
+
+impl fmt::Debug for LoginOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Session(issued) => f.debug_tuple("Session").field(issued).finish(),
+            Self::TotpRequired { .. } => f
+                .debug_struct("TotpRequired")
+                .field("challenge", &"[redacted]")
+                .finish(),
+        }
+    }
 }
 
 /// A new session: `token` is the cookie value (shown once, never stored).
@@ -145,6 +155,9 @@ struct Challenge {
     user: UserId,
     /// Expiry, microseconds since the epoch.
     exp: i64,
+    /// Keyed fingerprint of the password hash the password was checked against: a
+    /// password change or reset invalidates outstanding challenges.
+    pw: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -249,23 +262,40 @@ impl AuthService {
         } else {
             None
         };
-        let user = self.record_login(&user, new_hash).await?;
+        // A failed or abandoned second factor is not a login (R12): `last_login_at` is
+        // written here only without TOTP, else by `login_totp`.
+        let full = user.totp_secret.is_none();
+        let user = if full || new_hash.is_some() {
+            self.record_login(&user, new_hash, full).await?
+        } else {
+            user
+        };
 
-        if user.totp_secret.is_some() {
+        if !full {
             let exp = plus(self.now(), CHALLENGE_TTL)?.as_micros();
-            let challenge = self.seal_json(CHALLENGE_PURPOSE, &Challenge { user: user.id, exp })?;
+            let challenge = self.seal_json(
+                CHALLENGE_PURPOSE,
+                &Challenge {
+                    user: user.id,
+                    exp,
+                    pw: self.password_fingerprint(&user),
+                },
+            )?;
             return Ok(LoginOutcome::TotpRequired { challenge });
         }
         let issued = self
             .issue_session(&user, attempt.ip, attempt.user_agent)
             .await?;
-        Ok(LoginOutcome::Session(issued))
+        Ok(LoginOutcome::Session(Box::new(issued)))
     }
 
-    /// The second login step: the challenge from [`login`](Self::login) must be valid and
-    /// unexpired, `totp:user:<id>` allows 5 codes a minute, the code must match (± one
-    /// step) and its step must be newer than the last one accepted (no replay). Every
-    /// failure but the rate limit is `Unauthenticated`.
+    /// The second login step: the challenge from [`login`](Self::login) must be valid,
+    /// unexpired and made against the current password hash; `totp:user:<id>` allows 5
+    /// codes a minute; the code must match (± one step) and its step must be newer than
+    /// the last one accepted (no replay). Then `last_login_at` is set under the row lock
+    /// (status and password hash re-checked). Every failure but the rate limit is
+    /// `Unauthenticated`. A challenge may be used again within its 5 minutes; each use
+    /// needs a fresh code.
     pub async fn login_totp(
         &self,
         challenge: &str,
@@ -294,6 +324,9 @@ impl AuthService {
             .await?
             .filter(|u| u.status == UserStatus::Active)
             .ok_or(CoreError::Unauthenticated)?;
+        if self.password_fingerprint(&user) != challenge.pw {
+            return Err(CoreError::Unauthenticated);
+        }
         let secret = self.totp_secret_of(&user)?;
         let totp = totp::build(&secret, &self.issuer, &user.login)?;
         let step = totp::check(&totp, code, now).ok_or(CoreError::Unauthenticated)?;
@@ -306,6 +339,7 @@ impl AuthService {
         {
             return Err(CoreError::Unauthenticated);
         }
+        let user = self.record_login(&user, None, true).await?;
         self.issue_session(&user, ip, user_agent).await
     }
 
@@ -610,7 +644,8 @@ impl AuthService {
     /// Finishes enrollment with a code from the authenticator: the secret is stored
     /// sealed under `totp-secret:<user id>`, the code's step is recorded (it cannot log
     /// in again) and `totp.enable` is audited. A bad or expired enrollment, someone
-    /// else's, or a wrong code is `Invalid`.
+    /// else's, or a wrong code is `Invalid`. Each checked code counts on `totp:user:<id>`
+    /// (5/min, shared with `login_totp`; exceeded → `RateLimited`).
     pub async fn totp_confirm(
         &self,
         actor: &Actor,
@@ -639,6 +674,12 @@ impl AuthService {
             .get(actor.user)
             .await?
             .ok_or(CoreError::NotFound)?;
+        limits::hit(
+            self.store.as_ref(),
+            &limits::totp_user(user.id),
+            limits::TOTP_PER_USER,
+        )
+        .await?;
         let otp = totp::build(&secret, &self.issuer, &user.login)?;
         let wrong = || CoreError::Invalid("wrong code".into());
         let step = totp::check(&otp, code, now).ok_or_else(wrong)?;
@@ -665,7 +706,8 @@ impl AuthService {
 
     /// Turns TOTP off for the actor (`users:write`) after re-checking the password
     /// (wrong → `Forbidden("current password")`); audits `totp.disable`. Not enabled →
-    /// `Invalid`.
+    /// `Invalid`. The re-check counts on the login's `login:user` bucket (5/min,
+    /// exceeded → `RateLimited`) before any password work.
     pub async fn totp_disable(&self, actor: &Actor, password: &str) -> Result<(), CoreError> {
         require_scope(actor, Some(Scope::write(Area::Users)))?;
         let user = self
@@ -678,6 +720,13 @@ impl AuthService {
         if user.totp_secret.is_none() {
             return Err(CoreError::Invalid("TOTP is not enabled".into()));
         }
+        // The re-check is a password guess like a login: same per-login bucket (R12).
+        limits::hit(
+            self.store.as_ref(),
+            &limits::login_user(&self.key, &user.login),
+            limits::LOGIN_PER_USER,
+        )
+        .await?;
         if password::verify(password, user.password_hash.as_ref()).await == Verified::Mismatch {
             return Err(CoreError::Forbidden("current password"));
         }
@@ -721,10 +770,15 @@ impl AuthService {
         }
     }
 
-    /// Login bookkeeping in one short `Tx` on the locked row: `last_login_at` and an
-    /// upgraded hash. A concurrent password, status or deletion change since the verify
-    /// makes the login fail.
-    async fn record_login(&self, user: &User, new_hash: Option<Secret>) -> Result<User, CoreError> {
+    /// Login bookkeeping in one short `Tx` on the locked row: an upgraded hash and, when
+    /// `logged_in`, `last_login_at`. A password, status or deletion change since `user`
+    /// was read makes the login fail.
+    async fn record_login(
+        &self,
+        user: &User,
+        new_hash: Option<Secret>,
+        logged_in: bool,
+    ) -> Result<User, CoreError> {
         let now = self.now();
         let tx = self.store.begin().await?;
         let done = async {
@@ -736,7 +790,9 @@ impl AuthService {
             if row.status != UserStatus::Active || row.password_hash != user.password_hash {
                 return Err(CoreError::Unauthenticated);
             }
-            row.last_login_at = Some(now);
+            if logged_in {
+                row.last_login_at = Some(now);
+            }
             if let Some(hash) = new_hash {
                 row.password_hash = Some(hash);
             }
@@ -745,6 +801,12 @@ impl AuthService {
         }
         .await;
         finish(tx, done).await
+    }
+
+    /// Keyed fingerprint of the user's stored password hash (login challenges).
+    fn password_fingerprint(&self, user: &User) -> String {
+        let hash = user.password_hash.as_ref().map_or("", |h| h.expose());
+        keyed_id(&self.key, CHALLENGE_PW_LABEL, hash.as_bytes())
     }
 
     fn totp_secret_of(&self, user: &User) -> Result<Vec<u8>, CoreError> {

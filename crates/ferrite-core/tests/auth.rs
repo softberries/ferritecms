@@ -88,7 +88,7 @@ async fn make_user(db: &TestDb, login: &str, role: Role) -> User {
 
 async fn session(auth: &AuthService, login: &str) -> IssuedSession {
     match auth.login(attempt(login, PASSWORD, None)).await.unwrap() {
-        LoginOutcome::Session(s) => s,
+        LoginOutcome::Session(s) => *s,
         other => panic!("expected a session, got {other:?}"),
     }
 }
@@ -219,6 +219,18 @@ async fn login_issues_session_and_resolves(db: &TestDb) {
         .unwrap();
     assert_eq!(resolved.user.id, root.id);
     assert_eq!(fresh.session.user_agent.as_deref(), Some("curl"));
+
+    // A disabled user's session resolves to nothing (status set on the row directly;
+    // the service path also deletes the sessions).
+    let mut row = stored(db.store(), &root).await;
+    row.status = UserStatus::Disabled;
+    db.store().read().users().update(&row).await.unwrap();
+    assert!(
+        auth.resolve_session(fresh.token.expose())
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 async fn unknown_user_wrong_password_and_disabled_look_the_same(db: &TestDb) {
@@ -546,18 +558,12 @@ async fn totp_enroll_login_and_replay(db: &TestDb) {
     assert!(unauthenticated(
         auth.login_totp(&challenge, &code, None, None).await
     ));
-    // A forged challenge, a wrong code.
+    // A forged challenge is refused.
     assert!(unauthenticated(
         auth.login_totp("v1.AAAA", &code, None, None).await
     ));
 
-    // An expired challenge (5 min) is refused even with a fresh code.
-    clock.advance(Duration::from_secs(30));
-    let LoginOutcome::TotpRequired { challenge } =
-        auth.login(attempt("tia", PASSWORD, None)).await.unwrap()
-    else {
-        panic!("expected a TOTP challenge");
-    };
+    // The same challenge, expired (5 min), is refused even with a fresh code.
     clock.advance(Duration::from_secs(6 * 60));
     let code = totp.generate(clock.secs()).to_string();
     assert!(unauthenticated(
@@ -578,6 +584,152 @@ async fn totp_enroll_login_and_replay(db: &TestDb) {
     let actions = audit_actions(db.store()).await;
     assert!(actions.contains(&"totp.enable".to_owned()), "{actions:?}");
     assert!(actions.contains(&"totp.disable".to_owned()), "{actions:?}");
+}
+
+/// Enrols `user` through setup + confirm and returns its authenticator.
+async fn enrol(auth: &AuthService, clock: &Clock, user: &User) -> totp_rs::Totp {
+    let actor = Actor::new(user.id, user.role);
+    let setup = auth.totp_setup(&actor).await.unwrap();
+    let totp = authenticator(&setup);
+    let code = totp.generate(clock.secs()).to_string();
+    auth.totp_confirm(&actor, &setup.enrollment, &code)
+        .await
+        .unwrap();
+    totp
+}
+
+/// A code that is not valid around `secs` (± one step).
+fn wrong_code(totp: &totp_rs::Totp, secs: u64) -> String {
+    let valid: Vec<String> = [secs - 30, secs, secs + 30]
+        .iter()
+        .map(|&t| totp.generate(t).to_string())
+        .collect();
+    (0..1_000_000u32)
+        .map(|n| format!("{n:06}"))
+        .find(|c| !valid.contains(c))
+        .unwrap()
+}
+
+async fn challenge(auth: &AuthService, login: &str, password: &str) -> String {
+    match auth.login(attempt(login, password, None)).await.unwrap() {
+        LoginOutcome::TotpRequired { challenge } => challenge,
+        other => panic!("expected a TOTP challenge, got {other:?}"),
+    }
+}
+
+async fn totp_login_needs_both_factors(db: &TestDb) {
+    let clock = Clock::new();
+    let auth = auth_on(db.shared_store(), &clock);
+    let user = make_user(db, "lee", Role::Author).await;
+    let totp = enrol(&auth, &clock, &user).await;
+    clock.advance(Duration::from_secs(30));
+
+    // Password right, second factor missing, wrong or expired: not a login (R12).
+    let first = challenge(&auth, "lee", PASSWORD).await;
+    let outcome = auth.login(attempt("lee", PASSWORD, None)).await.unwrap();
+    assert!(
+        !format!("{outcome:?}").contains("v1."),
+        "challenge redacted"
+    );
+    assert_eq!(stored(db.store(), &user).await.last_login_at, None);
+    let wrong = wrong_code(&totp, clock.secs());
+    assert!(unauthenticated(
+        auth.login_totp(&first, &wrong, None, None).await
+    ));
+    assert_eq!(stored(db.store(), &user).await.last_login_at, None);
+    clock.advance(Duration::from_secs(6 * 60));
+    let code = totp.generate(clock.secs()).to_string();
+    assert!(unauthenticated(
+        auth.login_totp(&first, &code, None, None).await
+    ));
+    assert_eq!(stored(db.store(), &user).await.last_login_at, None);
+
+    // Both factors: last_login_at is set.
+    let second = challenge(&auth, "lee", PASSWORD).await;
+    auth.login_totp(&second, &code, None, None).await.unwrap();
+    assert_eq!(
+        stored(db.store(), &user).await.last_login_at,
+        Some(clock.now())
+    );
+
+    // A password change invalidates outstanding challenges, and the refused code is
+    // not used up.
+    clock.advance(Duration::from_secs(30));
+    let stale = challenge(&auth, "lee", PASSWORD).await;
+    UserService::new(db.shared_store())
+        .operator()
+        .set_password("lee", "a brand new password", false)
+        .await
+        .unwrap();
+    let code = totp.generate(clock.secs()).to_string();
+    assert!(unauthenticated(
+        auth.login_totp(&stale, &code, None, None).await
+    ));
+    let fresh = challenge(&auth, "lee", "a brand new password").await;
+    auth.login_totp(&fresh, &code, None, None).await.unwrap();
+}
+
+async fn totp_attempts_are_rate_limited(db: &TestDb) {
+    let clock = Clock::new();
+    let auth = auth_on(db.shared_store(), &clock);
+    let ann = make_user(db, "ann", Role::Author).await;
+    let ben = make_user(db, "ben", Role::Author).await;
+    align_to_window(db.store(), MINUTE, Duration::from_secs(30)).await;
+
+    // totp_confirm: 5 codes a minute; the 6th is refused even when right.
+    let ann_actor = Actor::new(ann.id, ann.role);
+    let setup = auth.totp_setup(&ann_actor).await.unwrap();
+    let totp = authenticator(&setup);
+    let wrong = wrong_code(&totp, clock.secs());
+    for i in 0..5 {
+        assert!(
+            matches!(
+                auth.totp_confirm(&ann_actor, &setup.enrollment, &wrong)
+                    .await,
+                Err(CoreError::Invalid(_))
+            ),
+            "attempt {}",
+            i + 1
+        );
+    }
+    let code = totp.generate(clock.secs()).to_string();
+    assert!(rate_limited(
+        auth.totp_confirm(&ann_actor, &setup.enrollment, &code)
+            .await
+    ));
+    assert!(stored(db.store(), &ann).await.totp_secret.is_none());
+
+    // login_totp: the confirm used one hit; 4 wrong codes, then the right one is refused.
+    let totp = enrol(&auth, &clock, &ben).await;
+    clock.advance(Duration::from_secs(30));
+    let ch = challenge(&auth, "ben", PASSWORD).await;
+    let wrong = wrong_code(&totp, clock.secs());
+    for i in 0..4 {
+        assert!(
+            unauthenticated(auth.login_totp(&ch, &wrong, None, None).await),
+            "attempt {}",
+            i + 1
+        );
+    }
+    let code = totp.generate(clock.secs()).to_string();
+    assert!(rate_limited(auth.login_totp(&ch, &code, None, None).await));
+    assert_eq!(stored(db.store(), &ben).await.last_login_at, None);
+
+    // totp_disable's password re-check shares the login bucket: one login so far, 4
+    // wrong passwords, then the right one is refused.
+    let ben_actor = Actor::new(ben.id, ben.role);
+    for i in 0..4 {
+        assert!(
+            matches!(
+                auth.totp_disable(&ben_actor, "wrong password!").await,
+                Err(CoreError::Forbidden(_))
+            ),
+            "attempt {}",
+            i + 1
+        );
+    }
+    assert!(rate_limited(auth.totp_disable(&ben_actor, PASSWORD).await));
+    assert!(stored(db.store(), &ben).await.totp_secret.is_some());
 }
 
 async fn csrf_token_is_bound_to_the_session(db: &TestDb) {
@@ -795,6 +947,8 @@ backend_tests!(
     touch_is_throttled,
     revocation_is_immediate_on_peer,
     totp_enroll_login_and_replay,
+    totp_login_needs_both_factors,
+    totp_attempts_are_rate_limited,
     csrf_token_is_bound_to_the_session,
     tokens_scoped_counted_and_rate_limited,
     rehash_on_login_when_params_change,
