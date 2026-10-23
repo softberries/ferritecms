@@ -208,3 +208,68 @@ pub async fn events_min_seq(db: &TestDb) {
     assert_eq!(events.prune(future).await.unwrap(), 2);
     assert_eq!(events.min_seq().await.unwrap(), 0);
 }
+
+/// Channels are per schema (P2): writes in another site's schema on the same database
+/// wake nobody here.
+pub async fn notify_is_isolated_per_schema(db: &TestDb) {
+    let Some(mut events) = subscribe(db, Channel::Events).await else {
+        return;
+    };
+    let Some(mut jobs) = subscribe(db, Channel::Jobs).await else {
+        return;
+    };
+    let other = TestDb::postgres().await.expect("second postgres schema");
+    let mut other_events = other
+        .store()
+        .subscribe(Channel::Events)
+        .await
+        .unwrap()
+        .expect("postgres subscription");
+
+    other
+        .store()
+        .read()
+        .events()
+        .append(&event("post:other"))
+        .await
+        .unwrap();
+    other
+        .store()
+        .read()
+        .jobs()
+        .enqueue(&NewJob::new("test.notify", serde_json::json!({"v": 1})))
+        .await
+        .unwrap()
+        .unwrap();
+    // The other site hears its own write; this one hears nothing.
+    assert_eq!(
+        next_notice(&mut other_events, Duration::from_secs(1)).await,
+        Some(Notice::Notified)
+    );
+    assert_eq!(
+        next_notice(&mut events, Duration::from_millis(500)).await,
+        None
+    );
+    assert_eq!(
+        next_notice(&mut jobs, Duration::from_millis(200)).await,
+        None
+    );
+
+    // Positive control: a write here is heard here, not there.
+    db.store()
+        .read()
+        .events()
+        .append(&event("post:here"))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_notice(&mut events, Duration::from_secs(1)).await,
+        Some(Notice::Notified)
+    );
+    assert_eq!(
+        next_notice(&mut other_events, Duration::from_millis(300)).await,
+        None
+    );
+    drop(other_events);
+    other.teardown().await;
+}

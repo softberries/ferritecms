@@ -135,6 +135,7 @@ backend_tests!(
     notify_events_only_after_commit,
     notify_jobs_on_enqueue,
     subscribe_reports_reconnect,
+    notify_is_isolated_per_schema,
 );
 
 backend_tests!(

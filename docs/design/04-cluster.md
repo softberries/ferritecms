@@ -95,6 +95,11 @@ P1). Notify is an optimisation only; correctness comes from the table.
   (`<application_name>:listen`); `recv` gives `Notified`, or `Reconnected` after the
   connection was lost and re-established (notifications in between are lost). SQLite
   returns `None` and keeps polling. `EventRepo::min_seq` is the history check for P3.
+  An error from `recv` is followed, once the next `recv` rebuilds the listener, by
+  `Reconnected`, so every possible gap shows up as `Reconnected`.
+- Consumers must drain a subscription continuously or drop it: a listener that stops
+  reading holds back Postgres' NOTIFY queue, and when that queue is full every committing
+  transaction that notifies fails.
 - App connections run `idle_in_transaction_session_timeout = 60s`.
 
 **Planned (M1.5, cluster mode):**

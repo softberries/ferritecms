@@ -318,8 +318,10 @@ fn parse_database(cx: &mut Cx, root: &mut Table) -> DatabaseConfig {
     {
         cx.push(
             "database.schema",
-            "at most 48 characters, so the notification channel name fits Postgres' 63-byte \
-             limit",
+            format!(
+                "at most {MAX_SCHEMA_LEN} characters, so the notification channel name fits \
+                 Postgres' 63-byte limit"
+            ),
         );
     }
     if schema.is_some() && is_sqlite(url.expose()) {
