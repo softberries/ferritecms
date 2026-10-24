@@ -166,9 +166,22 @@ impl CallDeadline {
         }
     }
 
-    /// Whether `failure` is the budget's doing, not the plugin's (R20(4)): an epoch
-    /// interrupt when the budget shortened the epoch deadline, or a hard timeout when
-    /// it shortened the hard deadline. Such a call is skipped, not counted.
+    /// [`full`](Self::full) measured from when the call began waiting for its slot
+    /// (final review M5): with `waited` zero, the full deadlines; otherwise both are
+    /// capped at the hard deadline less `waited`, so wait plus call never exceed it.
+    /// The caller waits at most `deadline`, so at least half of it is left.
+    pub(crate) fn after_wait(deadline: Duration, waited: Duration) -> Self {
+        if waited.is_zero() {
+            return Self::full(deadline);
+        }
+        let full = Self::full(deadline);
+        Self::within(deadline, full.hard.saturating_sub(waited))
+    }
+
+    /// Whether `failure` is the budget's (or the slot wait's, M5) doing, not the
+    /// plugin's (R20(4)): an epoch interrupt when the budget shortened the epoch
+    /// deadline, or a hard timeout when it shortened the hard deadline. Such a call is
+    /// skipped, not counted.
     pub(crate) fn ended_by_budget(self, failure: &CallFailure) -> bool {
         match failure {
             CallFailure::Trap(Trap::Interrupt) => self.soft_cut,
@@ -293,6 +306,26 @@ mod tests {
             assert!(!shown.contains(['\n', '\u{1b}']), "unescaped control char");
             assert!(shown.ends_with("…[truncated]"));
         }
+    }
+
+    /// Final review M5: the slot wait counts toward the deadline.
+    #[test]
+    fn slot_wait_shortens_the_deadlines() {
+        let ms = Duration::from_millis;
+        assert_eq!(
+            CallDeadline::after_wait(ms(2000), Duration::ZERO),
+            CallDeadline::full(ms(2000))
+        );
+        // A short wait: the hard deadline is cut (a timeout is the wait's doing), the
+        // plugin keeps its full soft deadline (an epoch interrupt is its own).
+        let w = CallDeadline::after_wait(ms(2000), ms(400));
+        assert_eq!((w.soft, w.hard), (ms(2000), ms(2600)));
+        assert!(w.ended_by_budget(&CallFailure::Timeout));
+        assert!(!w.ended_by_budget(&CallFailure::Trap(Trap::Interrupt)));
+        // The longest wait (the deadline): half of it is left, for both.
+        let w = CallDeadline::after_wait(ms(2000), ms(2000));
+        assert_eq!((w.soft, w.hard), (ms(1000), ms(1000)));
+        assert!(w.ended_by_budget(&CallFailure::Trap(Trap::Interrupt)));
     }
 
     #[test]

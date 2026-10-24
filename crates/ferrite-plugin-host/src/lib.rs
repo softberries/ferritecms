@@ -371,11 +371,16 @@ impl PluginHost {
         self.record_failure(plugin, hook, failure.kind(), &failure.to_string(), started);
     }
 
-    /// A call slot, waiting at most `wait` (P22); `None` when none freed up. The permit
-    /// is released when dropped, also when the call's future is dropped mid-call.
-    async fn permit(&self, wait: Duration) -> Option<SemaphorePermit<'_>> {
+    /// A call slot, waiting at most `wait` (P22), and how long it waited (zero when one
+    /// was free at once); `None` when none freed up. The permit is released when
+    /// dropped, also when the call's future is dropped mid-call.
+    async fn permit(&self, wait: Duration) -> Option<(SemaphorePermit<'_>, Duration)> {
+        if let Ok(permit) = self.calls.try_acquire() {
+            return Some((permit, Duration::ZERO));
+        }
+        let start = Instant::now();
         match tokio::time::timeout(wait, self.calls.acquire()).await {
-            Ok(Ok(permit)) => Some(permit),
+            Ok(Ok(permit)) => Some((permit, start.elapsed())),
             // Timed out; the semaphore is never closed.
             Ok(Err(_)) | Err(_) => None,
         }
@@ -526,7 +531,7 @@ impl PluginHost {
                 break;
             }
             let wait = until.map_or(deadline, |u| deadline.min(left(u)));
-            let Some(_permit) = self.permit(wait).await else {
+            let Some((_permit, _)) = self.permit(wait).await else {
                 self.log_busy(&plugin.name, hook);
                 volatile = true;
                 continue;
@@ -593,7 +598,10 @@ impl PluginHost {
     /// this host disabled it, `NotSubscribed` when `hook` is not an action or not in its
     /// `[hooks]`, `Busy` (not a failure) when no call slot freed up within the action
     /// deadline, `CallFailed` (recorded towards auto-disable) when the call failed. The
-    /// call then gets its full deadline.
+    /// wait for the slot counts toward the deadline (final review M5): soft and hard
+    /// deadlines run from when the call began waiting, so wait and call together take at
+    /// most the hard deadline (1.5 × the action deadline). A call whose deadline the wait
+    /// shortened and that then ran out of time is `Busy` too, not a failure.
     pub async fn dispatch_action(
         &self,
         plugin: &str,
@@ -610,14 +618,18 @@ impl PluginHost {
                 hook: hook.to_string(),
             })?;
         let deadline = self.deadline(spec.deadline);
-        let _permit = self
+        let (_permit, waited) = self
             .permit(deadline)
             .await
             .ok_or_else(|| self.busy(plugin, hook))?;
+        let limit = CallDeadline::after_wait(deadline, waited);
         let started = Instant::now();
-        call_action(&loaded, hook, ev, CallDeadline::full(deadline))
+        call_action(&loaded, hook, ev, limit)
             .await
             .map_err(|failure| {
+                if limit.ended_by_budget(&failure) {
+                    return self.busy(plugin, hook);
+                }
                 self.record_call_failure(&loaded, hook, &failure, started);
                 PluginError::CallFailed {
                     plugin: plugin.to_string(),
@@ -647,6 +659,9 @@ impl PluginHost {
     /// The call is bounded like every other (fuel, memory, the route deadline) and takes
     /// a call slot like every other (Task 8 m7: a flood of route requests cannot exhaust
     /// instances); `Busy`, not a failure, when none freed up within the route deadline.
+    /// The wait counts toward the deadline as for actions (final review M5): wait and
+    /// call together take at most the hard deadline (1.5 × the route deadline), and a
+    /// call the wait shortened that then ran out of time is `Busy`.
     /// A response outside the route checks (status 200..=599, at most
     /// [`MAX_ROUTE_HEADERS`] headers whose names and values are valid header text of at
     /// most [`MAX_ROUTE_HEADER_BYTES`], a body of at most [`MAX_ROUTE_BODY_BYTES`]) is a
@@ -668,21 +683,23 @@ impl PluginHost {
         }
         let hook = format!("route {} {}", req.method, req.path);
         let deadline = self.deadline(DeadlineClass::Route);
-        let _permit = self
+        let (_permit, waited) = self
             .permit(deadline)
             .await
             .ok_or_else(|| self.busy(plugin, &hook))?;
+        let limit = CallDeadline::after_wait(deadline, waited);
         let started = Instant::now();
         let failed = |reason: String| PluginError::CallFailed {
             plugin: plugin.to_string(),
             reason,
         };
-        let res = call_route(&loaded, req, CallDeadline::full(deadline))
-            .await
-            .map_err(|failure| {
-                self.record_call_failure(&loaded, &hook, &failure, started);
-                failed(failure.to_string())
-            })?;
+        let res = call_route(&loaded, req, limit).await.map_err(|failure| {
+            if limit.ended_by_budget(&failure) {
+                return self.busy(plugin, &hook);
+            }
+            self.record_call_failure(&loaded, &hook, &failure, started);
+            failed(failure.to_string())
+        })?;
         if let Err(reason) = validate_route_response(&res) {
             self.record_failure(&loaded, &hook, FailureKind::InvalidOutput, &reason, started);
             return Err(failed(format!("invalid response: {reason}")));

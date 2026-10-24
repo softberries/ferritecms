@@ -417,6 +417,113 @@ async fn route_calls_share_the_cap() -> TestResult {
     Ok(())
 }
 
+/// Final review M5: the wait for a call slot counts toward an action's deadline. The
+/// call waits ~400 ms, then hangs in a host import: it is cut at the hard deadline
+/// (1.5 s) measured from when it began waiting, not 400 ms later, and the cut is the
+/// wait's doing, so it is `Busy`, not a failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn slot_wait_counts_toward_the_action_deadline() -> TestResult {
+    let cfg = HostConfig {
+        max_concurrent_calls: 1,
+        action_deadline: Duration::from_secs(1),
+        ..HostConfig::default()
+    };
+    let (host, services) = held_host(cfg, &["slow-import"], &[])?;
+    let dispatch = |host: Arc<PluginHost>| {
+        tokio::spawn(async move {
+            let start = Instant::now();
+            let r = host
+                .dispatch_action("slow-import", "post.saved", saved("p1"))
+                .await;
+            (r, start.elapsed())
+        })
+    };
+    let holder = dispatch(host.clone());
+    services.wait_entered(1).await;
+    let waiting = dispatch(host.clone());
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    holder.abort();
+    let (result, took) = waiting.await?;
+    assert!(
+        matches!(&result, Err(PluginError::Busy { plugin }) if plugin == "slow-import"),
+        "{result:?}"
+    );
+    assert_eq!(services.entered(), 2, "the waiting call ran");
+    assert!(took >= Duration::from_millis(1_400), "took {took:?}");
+    assert!(
+        took < Duration::from_millis(1_800),
+        "wait + full hard deadline: {took:?}"
+    );
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
+    services.open();
+    Ok(())
+}
+
+/// Final review M5, for routes: a looping route that waited ~700 ms for its slot (more
+/// than half the 1 s route deadline) is interrupted 800 ms later, at the 1.5 s hard
+/// deadline from when it began waiting; `Busy`, not a failure. Without a wait the same
+/// loop is a failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn slot_wait_counts_toward_the_route_deadline() -> TestResult {
+    let cfg = HostConfig {
+        max_concurrent_calls: 1,
+        route_deadline: Duration::from_secs(1),
+        // Enough fuel that the epoch deadline, not fuel, stops the loop.
+        fuel: u64::MAX / 2,
+        ..HostConfig::default()
+    };
+    let (host, services) = held_host(cfg, &["slow-import"], &["route-xss"])?;
+    let looping = || RouteRequest {
+        method: "GET".into(),
+        path: "/loop".into(),
+        query: Vec::new(),
+        headers: Vec::new(),
+        body: Vec::new(),
+        client_ip_hash: "ab".repeat(16),
+        user: None,
+    };
+    let holder = tokio::spawn({
+        let host = host.clone();
+        async move {
+            host.dispatch_action("slow-import", "post.saved", saved("p1"))
+                .await
+        }
+    });
+    services.wait_entered(1).await;
+    let waiting = tokio::spawn({
+        let host = host.clone();
+        async move {
+            let start = Instant::now();
+            let r = host.handle_route("route-xss", looping()).await;
+            (r, start.elapsed())
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    holder.abort();
+    let (result, took) = waiting.await?;
+    assert!(
+        matches!(&result, Err(PluginError::Busy { plugin }) if plugin == "route-xss"),
+        "{result:?}"
+    );
+    assert!(took >= Duration::from_millis(1_400), "took {took:?}");
+    assert!(
+        took < Duration::from_millis(1_650),
+        "wait + full deadline: {took:?}"
+    );
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
+    // No wait: the loop gets its full deadline and is the plugin's failure.
+    let start = Instant::now();
+    let result = host.handle_route("route-xss", looping()).await;
+    assert!(
+        matches!(&result, Err(PluginError::CallFailed { .. })),
+        "{result:?}"
+    );
+    assert!(start.elapsed() >= Duration::from_millis(950));
+    assert_eq!(last_kind(&host), Some(FailureKind::Deadline));
+    services.open();
+    Ok(())
+}
+
 /// P22 / F37: filters stop once the render budget is spent, a call never outlives the
 /// budget (its hard deadline is capped at it), and the outcome is volatile.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
