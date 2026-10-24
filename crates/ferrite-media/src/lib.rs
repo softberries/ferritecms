@@ -7,6 +7,7 @@ mod keys;
 mod name;
 mod sniff;
 mod store;
+pub mod svg;
 
 pub use config::{Backend, MediaConfig, PublicUrlMode, S3Config};
 pub use error::MediaError;

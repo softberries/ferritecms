@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Generator: hand-written test icon -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24" version="1.1">
+  <title>Icon &amp; label</title>
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0" stop-color="#ff0000" stop-opacity="1"/>
+      <stop offset="1" stop-color="#0000ff"/>
+    </linearGradient>
+    <path id="shape" d="M2 2h20v20H2z"/>
+  </defs>
+  <path d="M12 2L2 22h20L12 2z" fill="url(#g1)" stroke="#000" stroke-width="1.5" style="fill-opacity: 0.8; stroke-linecap: round"/>
+  <use xlink:href="#shape" transform="translate(1 1)" fill="none"/>
+  <text x="2" y="20" font-family="'Open Sans', sans-serif" xml:space="preserve">Hi <tspan font-weight="bold">there</tspan></text>
+</svg>

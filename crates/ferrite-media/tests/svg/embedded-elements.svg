@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <iframe src="https://evil/"/>
+  <embed src="https://evil/x.swf"/>
+  <object data="https://evil/x"/>
+  <handler type="application/ecmascript">alert(1)</handler>
+  <listener event="load" handler="#h"/>
+  <feImage href="https://evil/i.png"/>
+  <circle r="1"/>
+</svg>

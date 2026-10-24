@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <style>@import url(https://evil/x.css); rect { fill: url(https://evil/p); }</style>
+  <style type="text/css"><![CDATA[ * { behavior: url(https://evil/h.htc) } ]]></style>
+  <rect width="1" height="1"/>
+</svg>

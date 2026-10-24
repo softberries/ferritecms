@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <use id="u" href="#x"><animate attributeName="href" values="javascript:alert(1)"/></use>
+  <animate xlink:href="#u" attributeName="xlink:href" to="javascript:alert(2)" begin="0s"/>
+  <animateTransform attributeName="transform" type="rotate" from="0" to="360"/>
+  <animateMotion path="M0 0"/>
+  <rect width="1" height="1"><animate attributeName="onclick" to="alert(3)"/></rect>
+</svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <rect width="1" height="1" style="fill:url(https://evil/)"/>
+  <rect width="1" height="1" style="fill: URL( 'https://evil/a' )"/>
+  <rect width="1" height="1" fill="url(https://evil/b)"/>
+  <rect width="1" height="1" filter="url( &quot;//evil/c&quot; )"/>
+  <rect width="1" height="1" style="fill:red; background-image: url(https://evil/d)"/>
+</svg>

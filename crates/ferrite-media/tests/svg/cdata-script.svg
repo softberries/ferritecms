@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <script><![CDATA[ alert(1) ]]></script>
+  <text x="1" y="1"><![CDATA[<script>alert(2)</script>]]></text>
+  <![CDATA[<script>alert(3)</script>]]>
+</svg>

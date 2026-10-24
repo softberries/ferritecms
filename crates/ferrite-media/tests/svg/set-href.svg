@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <use id="u" href="#x"><set attributeName="href" to="javascript:alert(1)"/></use>
+  <set href="#u" attributeName="onmouseover" to="alert(2)"/>
+</svg>

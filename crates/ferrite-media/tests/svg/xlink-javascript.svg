@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <use xlink:href="javascript:alert(1)"/>
+  <use href="  JavaScript:alert(2)"/>
+  <image xlink:href="javascript:alert(3)" width="1" height="1"/>
+</svg>

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <use xlink:href="java&#x73;cript:alert(1)"/>
+  <use href="&#106;avascript:alert(2)"/>
+  <rect width="1" height="1" fill="url(&#x6A;avascript:alert(3))" style="fill:url(java&#115;cript:x)"/>
+</svg>

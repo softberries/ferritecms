@@ -175,6 +175,14 @@ reports for WAV), `video/mp4`, `video/webm`, `application/pdf`. The serving laye
 those inline with their type, and everything else as `application/octet-stream` with
 `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`.
 
+**SVG detection** (`crates/ferrite-media/src/svg.rs`, M2a-2b P4/P7). `sniff_mime` never reports
+SVG, so uploads check `looks_like_svg(head)` first: after an optional UTF-8 BOM and XML
+whitespace the head starts with `<?xml`, `<!--` or `<svg`, and `<svg` occurs within the first
+8 KiB. Such an upload is never stored as sent: it goes through `sanitize_svg` (§5 "SVG") and the
+sanitised bytes are stored as `image/svg+xml` (`SVG_MIME`) with `media.sanitized = true`; a
+refused SVG is not stored. Bytes that are not detected as SVG follow `sniff_mime`, so a PNG
+named `.svg` is a PNG.
+
 ### Local backend
 
 - Root: `data/media/` (configurable) via `LocalFileSystem::new_with_prefix`, same key layout.
@@ -305,8 +313,50 @@ None of the app-served rules above apply in Direct mode:
 Use app-served mode when unpublishing must revoke access. Signed or scoped direct media URLs
 (short-lived signatures, or published files only) are planned for M4 (ROADMAP).
 
-**SVG:** served inline (with `Content-Security-Policy: sandbox`) only once sanitisation on
-upload exists (ROADMAP M2); M1 stores no sanitised marker, so every SVG is an attachment.
+**SVG.** Uploaded SVG is sanitised by our own allowlist over quick-xml 0.41's namespace-aware
+reader (`sanitize_svg`, M2a-2b P7; no maintained sanitiser crate exists). Only rows marked
+`media.sanitized` with `mime = image/svg+xml` may be served inline, and then with
+`Content-Security-Policy: sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'`
+and `nosniff`; every other SVG stays an attachment (the inline rule lands in `/_media` with the
+M2a-2b serving change). The sanitiser:
+
+- **Refuses** (`SvgError`): input over 2 MiB (`TooLarge`); anything that is not UTF-8, including
+  UTF-16 with or without a BOM and an XML declaration naming another encoding (`NotUtf8`; a
+  UTF-8 BOM is accepted); malformed XML, characters XML 1.0 forbids (also as `&#…;`), text or
+  elements outside the single root, or an XML version other than 1.0 (`NotXml`); a root other
+  than `svg` in `http://www.w3.org/2000/svg` (`NotSvg`); any DOCTYPE, so entity declarations,
+  billion laughs, external (XXE) and parameter entities never reach a parser (`Doctype`); a
+  reference other than `lt gt amp apos quot` or a numeric one, in text or attribute values,
+  kept or dropped (`UnknownEntity`); depth over 64 (`TooDeep`), more than 50 000 elements
+  (`TooManyElements`), more than 64 attributes on an element (`TooManyAttributes`) or a value
+  over 256 KiB (`ValueTooLong`). Limits count dropped elements too.
+- **Keeps** elements in the SVG namespace by exact local name: `svg g defs symbol use title desc
+  path rect circle ellipse line polyline polygon text tspan textPath linearGradient
+  radialGradient stop pattern clipPath mask marker filter feBlend feColorMatrix
+  feComponentTransfer feComposite feFlood feGaussianBlur feMerge feMergeNode feOffset feFuncR
+  feFuncG feFuncB feFuncA image`. Every other element (`script`, `foreignObject`, `style`, `a`,
+  `animate*`, `set`, `iframe`, `embed`, `object`, `feImage`, unknown, wrong-case or
+  wrong-namespace elements, e.g. an XHTML `script`) is dropped with its whole subtree.
+- **Keeps** unprefixed geometry and presentation attributes from one allowlist (see
+  `ATTRIBUTES` in `svg.rs`), `xml:space` (`default`/`preserve`), and `href` / `xlink:href`
+  (XLink resolved by namespace, whatever the prefix) only as a local `#id`, or on `image` as a
+  `data:image/(png|jpeg|gif|webp);base64,…` URI. Every `on*` attribute, every other prefixed
+  attribute and input namespace declarations are dropped. Values are read through
+  `normalized_value`, so entity-encoded `javascript:` is caught; a value is dropped when it
+  contains `\`, `javascript:`, `vbscript:`, `expression(`, `@import` or `src(` (ignoring case,
+  whitespace and control characters) or a `url(` that is not `url(#…)`. A `style` value is also
+  dropped when it contains `{ } < > /* @`; otherwise only declarations whose property is a
+  presentation property (fill, stroke…, font-*, opacity, display, visibility, transform, the
+  marker/clip/mask/filter properties) and whose quotes balance are kept.
+- **Drops** comments, processing instructions and CDATA; text is kept only inside `title desc
+  text tspan textPath`.
+- **Writes** a canonical document: `<?xml version="1.0" encoding="UTF-8"?>`, unprefixed element
+  names, the root declaring `xmlns="http://www.w3.org/2000/svg"` (plus
+  `xmlns:xlink="http://www.w3.org/1999/xlink"` when an `xlink:href` is kept), hrefs written as
+  `href` or `xlink:href`, the first of duplicate output names kept, values and text escaped.
+  Sanitising the output again yields the same bytes.
+
+Cost: `<style>` sheets, animation, links, external fonts and images are stripped.
 
 ## 6. Garbage collection
 

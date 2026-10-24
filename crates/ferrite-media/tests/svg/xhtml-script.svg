@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">
+  <h:script>alert(1)</h:script>
+  <script xmlns="http://www.w3.org/1999/xhtml">alert(2)</script>
+  <g xmlns="http://www.w3.org/1999/xhtml"><svg xmlns="http://www.w3.org/2000/svg"><circle r="1"/></svg><script>alert(3)</script></g>
+  <x:script xmlns:x="http://www.w3.org/2000/svg">alert(4)</x:script>
+  <SCRIPT>alert(5)</SCRIPT>
+  <rect width="1" height="1"/>
+</svg>
