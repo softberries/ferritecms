@@ -11,7 +11,13 @@
 //!   apple-touch-icon, manifest). Others are dropped (logged at `debug`).
 //! * `script-tag.src` must be `https://…`, a URL on the site's own origin, or
 //!   root-relative (`/…`, not `//…`); no backslashes, whitespace or control characters.
-//!   Others are dropped and logged (`warn`).
+//!   A root-relative src, or one on the site's host (any scheme or port), may not point
+//!   under `/_p/` (plugin routes) or `/_media/` (uploads): both serve bytes a plugin or
+//!   an author controls, and a head script runs with the site's origin (ruling R22).
+//!   The path is checked after percent-decoding (repeatedly), lowercasing, collapsing
+//!   `//` and resolving `.`/`..`, from the root and from the site URL's base path.
+//!   `/_theme/…` and external `https://` hosts stay allowed. Others are dropped and
+//!   logged (`warn`).
 //! * `script-tag.json-ld` must parse as JSON. It is re-serialised compactly and every
 //!   `<`, `>` and `&` is written as a `\u00XX` escape, so neither `</script>` nor
 //!   `<!--` can occur inside the element. Invalid JSON is dropped and logged.
@@ -282,14 +288,93 @@ fn clean_url(url: &str) -> bool {
         .any(|c| c == '\\' || c.is_whitespace() || c.is_control())
 }
 
-/// `https://…`, the site's own origin, or root-relative.
+/// `https://…`, the site's own origin, or root-relative, and never a same-site path
+/// under [`SCRIPT_REFUSED_PREFIXES`].
 fn script_src_allowed(src: &str, site_url: &str) -> bool {
     let origin = site_url.trim_end_matches('/');
     let same_origin = !origin.is_empty()
         && src
             .strip_prefix(origin)
             .is_some_and(|rest| rest.starts_with('/'));
-    clean_url(src) && (src.starts_with("https://") || same_origin || is_root_relative(src))
+    let shape_ok =
+        clean_url(src) && (src.starts_with("https://") || same_origin || is_root_relative(src));
+    if !shape_ok {
+        return false;
+    }
+    let path = if is_root_relative(src) {
+        Some(src)
+    } else {
+        match (split_url(src), split_url(site_url)) {
+            (Some((host, path)), Some((site_host, _))) if host == site_host => Some(path),
+            _ => None,
+        }
+    };
+    let base = split_url(site_url).map_or("/", |(_, p)| p);
+    !path.is_some_and(|p| refused_script_path(p, base))
+}
+
+/// First path segments a same-site head script may not load from (ruling R22): plugin
+/// routes and uploaded media serve bytes that plugins and authors control.
+const SCRIPT_REFUSED_PREFIXES: [&str; 2] = ["_p", "_media"];
+
+/// The host (lowercase, percent-decoded, without userinfo, port or a trailing dot) and
+/// the rest (path, query, fragment; `/` when empty) of an absolute `scheme://` URL.
+fn split_url(url: &str) -> Option<(String, &str)> {
+    let (_, rest) = url.split_once("://")?;
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, path) = rest.split_at(end);
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = match host_port.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or_default(),
+        None => host_port.split(':').next().unwrap_or_default(),
+    };
+    let host = decode(host).to_ascii_lowercase();
+    let host = host.trim_end_matches('.').to_owned();
+    Some((host, if path.is_empty() { "/" } else { path }))
+}
+
+/// Percent-decodes until nothing changes (at most 8 rounds; a value still changing
+/// after that is returned as is, and checked as is).
+fn decode(s: &str) -> String {
+    let mut cur = s.to_owned();
+    for _ in 0..8 {
+        let next = percent_encoding::percent_decode_str(&cur)
+            .decode_utf8_lossy()
+            .into_owned();
+        if next == cur {
+            break;
+        }
+        cur = next;
+    }
+    cur
+}
+
+/// The segments of `path` (query and fragment cut) after decoding, lowercasing,
+/// treating `\` as `/`, dropping empty and `.` segments and resolving `..`.
+fn normalised_segments(path: &str) -> Vec<String> {
+    let path = path.split(['?', '#']).next().unwrap_or_default();
+    let decoded = decode(path).to_lowercase().replace('\\', "/");
+    let mut out: Vec<String> = Vec::new();
+    for seg in decoded.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            s => out.push(s.to_owned()),
+        }
+    }
+    out
+}
+
+/// Whether `path` (as normalised) starts with a refused prefix, from the root or from
+/// the site's base path `base`.
+fn refused_script_path(path: &str, base: &str) -> bool {
+    let segs = normalised_segments(path);
+    let base = normalised_segments(base);
+    let refused =
+        |s: Option<&String>| s.is_some_and(|s| SCRIPT_REFUSED_PREFIXES.contains(&s.as_str()));
+    refused(segs.first()) || (segs.starts_with(&base) && refused(segs.get(base.len())))
 }
 
 /// Valid JSON re-serialised with `<`, `>` and `&` escaped (still valid JSON).

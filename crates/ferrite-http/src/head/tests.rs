@@ -233,6 +233,86 @@ fn script_src_must_be_https_or_same_origin() {
     }
 }
 
+/// Ruling R22: a head script may not load plugin-route or media bytes from the site,
+/// however the path is spelled; `/_theme/` and external hosts stay allowed.
+#[test]
+fn script_src_refuses_same_site_plugin_and_media_paths() {
+    let kept = |site: HeadSite<'_>, s: &str| {
+        render_head(
+            &Head {
+                scripts: vec![src(s)],
+                ..Head::default()
+            },
+            site,
+        )
+        .contains("<script src=")
+    };
+    for bad in [
+        "/_p/seo/x.js",
+        "/_p/seo/",
+        "/_p",
+        "/_media/abc/x.js",
+        "/_media",
+        // Percent-encoding, once and twice, of the underscore, the letters and the slash.
+        "/%5Fp/seo/x.js",
+        "/%5fp/seo/x.js",
+        "/%255Fp/seo/x.js",
+        "/_%70/seo/x.js",
+        "/_p%2Fseo/x.js",
+        "/%5F%6D%65%64%69%61/abc/x.js",
+        // Case, doubled slashes, dot segments and an encoded backslash.
+        "/_P/seo/x.js",
+        "/_MEDIA/abc/x.js",
+        "/_p//seo/x.js",
+        "/./_p/seo/x.js",
+        "/x/../_p/seo/x.js",
+        "/_theme/../_p/seo/x.js",
+        "/_theme/%2e%2e/_media/abc/x.js",
+        "/x/..%2F_p/seo/x.js",
+        "/x%5C..%5C_p/seo/x.js",
+        // The site's own origin, spelled differently.
+        "https://example.com/_p/seo/x.js",
+        "https://EXAMPLE.com/_p/seo/x.js",
+        "https://example.com:443/_p/seo/x.js",
+        "https://example.com./_media/abc/x.js",
+        "https://user@example.com/_p/seo/x.js",
+        "https://%65xample.com/_p/seo/x.js",
+        "https://example.com//_p/seo/x.js",
+        "https://example.com/%5Fp/seo/x.js",
+        "http://example.com/_p/seo/x.js",
+    ] {
+        assert!(!kept(SITE, bad), "{bad:?} kept");
+    }
+    for ok in [
+        "/_theme/abc/a.js",
+        "/_theme/abc/_p.js",
+        "/assets/_p/x.js",
+        "https://cdn.example.org/_p/x.js",
+        "https://example.com.evil.org/_p/x.js",
+        "https://example.com/assets/a.js",
+        "/_preview.js",
+        "/_pages/a.js",
+    ] {
+        assert!(kept(SITE, ok), "{ok:?} dropped");
+    }
+    // A site under a base path: the prefixes count from the root and from the base.
+    let based = HeadSite {
+        url: "http://localhost:8080/blog/",
+        ..SITE
+    };
+    for bad in [
+        "/blog/_p/seo/x.js",
+        "/BLOG/%5Fmedia/abc/x.js",
+        "/_p/seo/x.js",
+        "http://localhost:8080/blog/_p/seo/x.js",
+        "https://localhost/_media/abc/x.js",
+    ] {
+        assert!(!kept(based, bad), "{bad:?} kept under a base path");
+    }
+    assert!(kept(based, "/blog/_theme/abc/a.js"));
+    assert!(kept(based, "http://localhost:8080/blog/a.js"));
+}
+
 #[test]
 fn json_ld_is_validated_and_escaped() {
     let ld = |s: &str| ScriptTag {
