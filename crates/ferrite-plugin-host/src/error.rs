@@ -94,6 +94,10 @@ pub enum PluginError {
     /// The plugin was disabled (automatically after repeated failures).
     #[error("plugin `{plugin}` is disabled: {reason}")]
     Disabled { plugin: String, reason: String },
+    /// No call slot freed up within the call's deadline (P22): load, not misbehaviour,
+    /// so it never counts as a plugin failure. Callers retry later (an action job: `Retry`; a route: `503`).
+    #[error("plugin `{plugin}` was not called: the host is busy")]
+    Busy { plugin: String },
 }
 
 /// Why a component was rejected at install time.

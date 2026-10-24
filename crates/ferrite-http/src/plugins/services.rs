@@ -22,6 +22,8 @@ pub const KV_MAX_BYTES: u64 = 10 * 1024 * 1024;
 pub const KV_MAX_KEYS: u64 = 10_000;
 /// Error text for any storage failure; details go to the log, not to the guest.
 const STORAGE_ERROR: &str = "storage error";
+/// `meta.set` on an item that is missing or that the plugin cannot see.
+const NO_SUCH_POST: &str = "no such post";
 /// Option keys under this prefix (plugin settings, possibly secrets) are not readable
 /// through `options.get`, whatever a manifest grants; a plugin reads its own settings
 /// through `settings.get`.
@@ -43,8 +45,14 @@ pub const MAIL_TITLE_PREFIX_CHARS: usize = 100;
 ///   [`SiteReader`]. During a preview the previewed item is also returned by `get_post`
 ///   on its id (see [`super::PluginRequest`]). `get_post_by_slug` takes a page path for
 ///   hierarchical types (`"parent/child"`).
-/// * `meta.get`: only on items `content` could return. `meta.set` writes any existing
-///   item and emits `invalidate` with `post:<id>` in the same transaction.
+/// * `post_kind`: the type of any item, whatever its status (the host's P23 type check
+///   for `meta`); the previewed item's from the request scope.
+/// * `meta.get` and `meta.set`: only on items `content` could return (`meta.set` is
+///   refused on the render path, so in practice: public items; Task 11 carry, an action
+///   cannot annotate a draft). The visibility check is a read before the write's `Tx`
+///   (M1c-1 P1): an item unpublished in between still gets the value. `meta.set` is one
+///   short `Tx` (item exists, set, `invalidate` with `post:<id>`), so a call dropped
+///   mid-write leaves nothing half-done.
 /// * `options.get`: JSON text of the option; never `plugin.*` keys.
 /// * `kv`: per plugin, quota [`KV_MAX_BYTES`] / [`KV_MAX_KEYS`] via `set_with_quota`.
 /// * `settings.get`: option `plugin.<name>.settings.<key>` of the calling plugin (the
@@ -197,6 +205,21 @@ impl HostServices for StoreHostServices {
         Some(self.public_post(&item))
     }
 
+    async fn post_kind(&self, id: &str) -> Option<String> {
+        let id: ContentId = id.parse().ok()?;
+        if let Some(p) = scoped_preview(id) {
+            return Some(p.item().item.kind.clone());
+        }
+        match self.store.read().content().get(id).await {
+            Ok(item) => item.map(|i| i.kind),
+            Err(e) => {
+                tracing::warn!(error = %e, "plugin item type lookup failed");
+                mark_degraded();
+                None
+            }
+        }
+    }
+
     async fn get_post_by_slug(&self, kind: &str, slug: &str) -> Option<Post> {
         let parts: Vec<String> = slug.split('/').map(str::to_owned).collect();
         let item = take("get_post_by_slug", self.reader.single(kind, &parts).await)??;
@@ -230,6 +253,9 @@ impl HostServices for StoreHostServices {
         let id: ContentId = post.parse().map_err(|_| "invalid post id".to_owned())?;
         let value: serde_json::Value =
             serde_json::from_str(value).map_err(|_| "value is not valid JSON".to_owned())?;
+        if !self.readable(id).await {
+            return Err(NO_SUCH_POST.to_owned());
+        }
         let write = async {
             let tx = self.store.begin().await?;
             if tx.content().get(id).await?.is_none() {
@@ -243,7 +269,7 @@ impl HostServices for StoreHostServices {
         };
         match write.await {
             Ok(true) => Ok(()),
-            Ok(false) => Err("no such post".to_owned()),
+            Ok(false) => Err(NO_SUCH_POST.to_owned()),
             Err(e) => {
                 tracing::warn!(error = %e, key, "plugin meta write failed");
                 mark_degraded();

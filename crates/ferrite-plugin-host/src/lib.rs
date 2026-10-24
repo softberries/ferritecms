@@ -28,6 +28,7 @@ use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
+use tokio::sync::{Semaphore, SemaphorePermit};
 use wasmtime::Engine;
 
 pub use capability::{
@@ -57,7 +58,7 @@ pub use types::{
 pub use validate::{MAX_ROUTE_BODY_BYTES, MAX_ROUTE_HEADER_BYTES, MAX_ROUTE_HEADERS};
 
 use bindings::v0_1::PluginPre;
-use call::{CallFailure, call_action, call_filter, call_route};
+use call::{CallDeadline, CallFailure, call_action, call_filter, call_route};
 use engine::{EpochTicker, build_engine};
 use failure::FailureTracker;
 use grant::LimitBounds;
@@ -74,6 +75,8 @@ pub struct PluginHost {
     failures: FailureTracker,
     /// Also told about every failure (P20); see [`PluginHost::set_failure_sink`].
     failure_sink: RwLock<Option<Arc<dyn FailureSink>>>,
+    /// One permit per running call, [`HostConfig::max_concurrent_calls`] in all (P22).
+    calls: Semaphore,
     /// Advances the engine epoch; joined when the host is dropped.
     _ticker: EpochTicker,
 }
@@ -119,11 +122,24 @@ fn validate_config(cfg: &HostConfig) -> Result<(), PluginError> {
         ("action_deadline", cfg.action_deadline.is_zero()),
         ("route_deadline", cfg.route_deadline.is_zero()),
         ("disable_after_failures", cfg.disable_after_failures == 0),
+        ("max_concurrent_calls", cfg.max_concurrent_calls == 0),
     ];
-    match zero.iter().find(|(_, is_zero)| *is_zero) {
-        Some((name, _)) => Err(PluginError::InvalidConfig(format!("{name} must be > 0"))),
-        None => Ok(()),
+    if let Some((name, _)) = zero.iter().find(|(_, is_zero)| *is_zero) {
+        return Err(PluginError::InvalidConfig(format!("{name} must be > 0")));
     }
+    // A pooling engine has slots for this many instances; more calls at once would
+    // fail to instantiate (and count as failures).
+    let most = if cfg.pooling {
+        usize::try_from(engine::POOL_SLOTS).unwrap_or(usize::MAX)
+    } else {
+        Semaphore::MAX_PERMITS
+    };
+    if cfg.max_concurrent_calls > most {
+        return Err(PluginError::InvalidConfig(format!(
+            "max_concurrent_calls must be at most {most}"
+        )));
+    }
+    Ok(())
 }
 
 impl PluginHost {
@@ -133,6 +149,7 @@ impl PluginHost {
         let engine = build_engine(&cfg)?;
         let ticker = EpochTicker::start(engine.clone(), cfg.epoch_tick)?;
         let failures = FailureTracker::new(cfg.disable_after_failures, cfg.failure_window);
+        let calls = Semaphore::new(cfg.max_concurrent_calls);
         Ok(Self {
             cfg,
             engine,
@@ -140,6 +157,7 @@ impl PluginHost {
             registry: ArcSwap::from_pointee(Registry::default()),
             failures,
             failure_sink: RwLock::new(None),
+            calls,
             _ticker: ticker,
         })
     }
@@ -348,6 +366,34 @@ impl PluginHost {
         self.record_failure(plugin, hook, failure.kind(), &failure.to_string(), started);
     }
 
+    /// A call slot, waiting at most `wait` (P22); `None` when none freed up. The permit
+    /// is released when dropped, also when the call's future is dropped mid-call.
+    async fn permit(&self, wait: Duration) -> Option<SemaphorePermit<'_>> {
+        match tokio::time::timeout(wait, self.calls.acquire()).await {
+            Ok(Ok(permit)) => Some(permit),
+            // Timed out; the semaphore is never closed.
+            Ok(Err(_)) | Err(_) => None,
+        }
+    }
+
+    /// Log a call skipped for want of a call slot. Not a failure.
+    fn log_busy(&self, plugin: &str, hook: &str) {
+        tracing::warn!(
+            plugin,
+            hook,
+            max_concurrent_calls = self.cfg.max_concurrent_calls,
+            "no plugin call slot free; call skipped"
+        );
+    }
+
+    /// `Busy` for `plugin`, logged.
+    fn busy(&self, plugin: &str, hook: &str) -> PluginError {
+        self.log_busy(plugin, hook);
+        PluginError::Busy {
+            plugin: plugin.to_owned(),
+        }
+    }
+
     /// Enabled plugin `name`, or the error a caller should see.
     fn enabled_plugin(&self, name: &str) -> Result<Arc<LoadedPlugin>, PluginError> {
         let loaded = self.plugin(name)?;
@@ -387,11 +433,41 @@ impl PluginHost {
     /// `render.html = "raw"` (design 05 §7). The outcome also carries the dependency
     /// keys and volatility of every call made (design 05 §7a; see the `trace` module):
     /// a failed call counts as volatile.
+    ///
+    /// [`apply_filter_until`](Self::apply_filter_until) without a time budget: each
+    /// call waits at most its deadline for a call slot, then gets its full deadline.
     pub async fn apply_filter_traced(
         &self,
         hook: &str,
         value: FilterValue,
         req: &RequestInfo,
+    ) -> FilterOutcome {
+        self.run_filters(hook, value, req, None).await
+    }
+
+    /// [`apply_filter_traced`](Self::apply_filter_traced) within a time budget that
+    /// ends at `until` (P22, the page's render budget). Each call's deadline is
+    /// `min(hook deadline, until − now)` and its hard deadline `min(1.5 × hook
+    /// deadline, until − now)` (F37); waiting for a call slot counts against it. Once
+    /// `until` has passed, the remaining plugins are skipped. A skip (budget spent, no
+    /// slot in time) and a deadline failure of a call the budget cut short are not
+    /// plugin failures; each makes the outcome volatile.
+    pub async fn apply_filter_until(
+        &self,
+        hook: &str,
+        value: FilterValue,
+        req: &RequestInfo,
+        until: Instant,
+    ) -> FilterOutcome {
+        self.run_filters(hook, value, req, Some(until)).await
+    }
+
+    async fn run_filters(
+        &self,
+        hook: &str,
+        value: FilterValue,
+        req: &RequestInfo,
+        until: Option<Instant>,
     ) -> FilterOutcome {
         let mut deps = BTreeSet::new();
         let mut volatile = false;
@@ -402,6 +478,7 @@ impl PluginHost {
             return outcome(value, deps, volatile);
         };
         let deadline = self.deadline(spec.deadline);
+        let left = |until: Instant| until.saturating_duration_since(Instant::now());
         let registry = self.registry.load_full();
         let mut current = value;
         for plugin in registry.subscribers(hook) {
@@ -412,11 +489,30 @@ impl PluginHost {
                 tracing::debug!(plugin = %plugin.name, hook, "filter value of wrong type; skipped");
                 continue;
             }
+            if until.is_some_and(|u| left(u).is_zero()) {
+                tracing::debug!(hook, "render budget spent; remaining plugins skipped");
+                volatile = true;
+                break;
+            }
+            let wait = until.map_or(deadline, |u| deadline.min(left(u)));
+            let Some(_permit) = self.permit(wait).await else {
+                self.log_busy(&plugin.name, hook);
+                volatile = true;
+                continue;
+            };
+            let limit = match until {
+                None => CallDeadline::full(deadline),
+                Some(u) if left(u).is_zero() => {
+                    volatile = true;
+                    break;
+                }
+                Some(u) => CallDeadline::within(deadline, left(u)),
+            };
             let started = Instant::now();
             let trace = CallTrace::default();
             let render_path = spec.deadline == DeadlineClass::Render;
             let result =
-                call_filter(&plugin, hook, &current, req, deadline, &trace, render_path).await;
+                call_filter(&plugin, hook, &current, req, limit, &trace, render_path).await;
             let html_mode = plugin.manifest.capabilities.render_html;
             match result {
                 Ok(out) => match validate_output(ty, &current, out, html_mode) {
@@ -432,6 +528,14 @@ impl PluginHost {
                         );
                     }
                 },
+                Err(failure) if limit.cut() && failure.kind() == FailureKind::Deadline => {
+                    trace.volatile();
+                    tracing::debug!(
+                        plugin = %plugin.name,
+                        hook,
+                        "call ended by the render budget; not counted as a failure"
+                    );
+                }
                 Err(failure) => {
                     trace.volatile();
                     self.record_call_failure(&plugin, hook, &failure, started);
@@ -458,7 +562,9 @@ impl PluginHost {
     /// up once and that instance serves the whole call, so a reload committed meanwhile
     /// does not affect it (R13). `UnknownPlugin` when it is not loaded, `Disabled` when
     /// this host disabled it, `NotSubscribed` when `hook` is not an action or not in its
-    /// `[hooks]`, `CallFailed` (recorded towards auto-disable) when the call failed.
+    /// `[hooks]`, `Busy` (not a failure) when no call slot freed up within the action
+    /// deadline, `CallFailed` (recorded towards auto-disable) when the call failed. The
+    /// call then gets its full deadline.
     pub async fn dispatch_action(
         &self,
         plugin: &str,
@@ -474,8 +580,13 @@ impl PluginHost {
                 plugin: plugin.to_string(),
                 hook: hook.to_string(),
             })?;
+        let deadline = self.deadline(spec.deadline);
+        let _permit = self
+            .permit(deadline)
+            .await
+            .ok_or_else(|| self.busy(plugin, hook))?;
         let started = Instant::now();
-        call_action(&loaded, hook, ev, self.deadline(spec.deadline))
+        call_action(&loaded, hook, ev, CallDeadline::full(deadline))
             .await
             .map_err(|failure| {
                 self.record_call_failure(&loaded, hook, &failure, started);
@@ -504,8 +615,10 @@ impl PluginHost {
 
     /// Serve a request under `/_p/<plugin>/`; `req.path` is relative to that prefix and
     /// must match a `[routes]` entry (path and method) of a plugin with `routes = true`.
-    /// The call is bounded like every other (fuel, memory, the route deadline). A
-    /// response outside the route checks (status 200..=599, at most
+    /// The call is bounded like every other (fuel, memory, the route deadline) and takes
+    /// a call slot like every other (Task 8 m7: a flood of route requests cannot exhaust
+    /// instances); `Busy`, not a failure, when none freed up within the route deadline.
+    /// A response outside the route checks (status 200..=599, at most
     /// [`MAX_ROUTE_HEADERS`] headers whose names and values are valid header text of at
     /// most [`MAX_ROUTE_HEADER_BYTES`], a body of at most [`MAX_ROUTE_BODY_BYTES`]) is a
     /// `CallFailed`, recorded as `InvalidOutput`.
@@ -525,12 +638,17 @@ impl PluginHost {
             });
         }
         let hook = format!("route {} {}", req.method, req.path);
+        let deadline = self.deadline(DeadlineClass::Route);
+        let _permit = self
+            .permit(deadline)
+            .await
+            .ok_or_else(|| self.busy(plugin, &hook))?;
         let started = Instant::now();
         let failed = |reason: String| PluginError::CallFailed {
             plugin: plugin.to_string(),
             reason,
         };
-        let res = call_route(&loaded, req, self.deadline(DeadlineClass::Route))
+        let res = call_route(&loaded, req, CallDeadline::full(deadline))
             .await
             .map_err(|failure| {
                 self.record_call_failure(&loaded, &hook, &failure, started);
@@ -616,6 +734,19 @@ mod tests {
                 epoch_tick: Duration::ZERO,
                 ..base()
             },
+            HostConfig {
+                max_concurrent_calls: 0,
+                ..base()
+            },
+            HostConfig {
+                max_concurrent_calls: Semaphore::MAX_PERMITS + 1,
+                ..base()
+            },
+            HostConfig {
+                pooling: true,
+                max_concurrent_calls: 257,
+                ..base()
+            },
         ];
         for cfg in bad {
             let shown = format!("{cfg:?}");
@@ -625,5 +756,11 @@ mod tests {
             );
         }
         assert!(new_host(base()).is_ok());
+        let pooled = HostConfig {
+            pooling: true,
+            max_concurrent_calls: 256,
+            ..base()
+        };
+        assert!(new_host(pooled).is_ok());
     }
 }

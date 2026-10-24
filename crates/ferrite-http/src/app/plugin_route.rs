@@ -38,7 +38,10 @@
 //! account that must reset its password, or per check 3).
 //!
 //! The call is bounded by the plugin host (fuel, memory, the 2 s route deadline, the
-//! response checks of `validate_route_response`); any failure is `502`. The visitor
+//! response checks of `validate_route_response`); any failure is `502`. It takes one of
+//! the host's call slots (`plugins.max_concurrent_calls`, P22, Task 8 m7): with none
+//! free within the route deadline the answer is `503` with `Retry-After: 1`, which is
+//! not a plugin failure (a flood cannot auto-disable a healthy plugin). The visitor
 //! gets the plugin's status and only its `Content-Type`, `Content-Language` and, on a
 //! 3xx, a root-relative `Location` (`/…` in visible ASCII, not `//…` or `/\…`; any other
 //! `Location` on a 3xx makes the answer `502`). Every handler answer carries
@@ -99,6 +102,14 @@ fn bad_gateway() -> Response<Body> {
 
 fn unavailable() -> Response<Body> {
     text(StatusCode::SERVICE_UNAVAILABLE, "service unavailable\n")
+}
+
+/// No plugin call slot was free in time (P22): `503`, `Retry-After: 1`.
+fn busy() -> Response<Body> {
+    let mut res = text(StatusCode::SERVICE_UNAVAILABLE, "busy\n");
+    res.headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+    res
 }
 
 /// Whether `name` can be a plugin name (`[a-z0-9-]{2,48}`, the manifest rule).
@@ -265,6 +276,8 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
             | PluginError::Disabled { .. }
             | PluginError::RouteNotFound { .. },
         ) => not_found(),
+        // Load, not a plugin failure (nothing was recorded).
+        Err(PluginError::Busy { .. }) => busy(),
         // The host logged and recorded the failure.
         Err(_) => bad_gateway(),
     }

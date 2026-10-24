@@ -29,6 +29,8 @@ const MEDIA_KIND: &str = "media";
 pub const SHORT_TTL: Duration = Duration::from_secs(60);
 /// How long a render waits for a free render slot before the request gets a 503.
 pub const RENDER_WAIT: Duration = Duration::from_secs(5);
+/// Default [`HttpConfig::render_budget`] (`plugins.render_budget_ms`, P22).
+pub const RENDER_BUDGET: Duration = Duration::from_millis(1000);
 
 /// Option holding the site title; falls back to [`HttpConfig::site_title`].
 pub const TITLE_OPTION: &str = "site.title";
@@ -80,6 +82,10 @@ pub struct HttpConfig {
     pub max_concurrent_renders: usize,
     /// How long a render waits for a slot before answering 503 with `Retry-After`.
     pub render_wait: Duration,
+    /// Time all plugin filters of one page may take together, counted from when its
+    /// render slot is taken (P22, `plugins.render_budget_ms`); past it the remaining
+    /// plugins are skipped and the page is volatile. Default [`RENDER_BUDGET`].
+    pub render_budget: Duration,
     /// Peers whose `X-Forwarded-For` is honoured for the logged client address
     /// (`server.trusted_proxies`; see [`client`](super::client)). Default: none.
     pub trusted_proxies: Vec<ipnet::IpNet>,
@@ -109,6 +115,7 @@ impl HttpConfig {
                 .map_or(1, std::num::NonZeroUsize::get)
                 .saturating_mul(2),
             render_wait: RENDER_WAIT,
+            render_budget: RENDER_BUDGET,
             trusted_proxies: Vec::new(),
             logged_in: LoggedIn::Bypass,
         }

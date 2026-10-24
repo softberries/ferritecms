@@ -1,10 +1,14 @@
 mod common;
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use common::{plugin_manifest, plugin_wasm};
 use ferrite_plugin_host::engine::build_engine;
-use ferrite_plugin_host::{HostConfig, Iface, InspectError, Manifest, inspect};
+use ferrite_plugin_host::{
+    ActionEvent, HostConfig, HostServices, Iface, InMemoryServices, InspectError, Manifest,
+    PluginError, PluginHost, Post, inspect,
+};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -71,5 +75,55 @@ fn garbage_bytes_rejected() -> TestResult {
             "{err:?}"
         );
     }
+    Ok(())
+}
+
+fn item(id: &str, kind: &str, status: &str) -> Post {
+    Post {
+        id: id.into(),
+        kind: kind.into(),
+        slug: id.into(),
+        title: id.into(),
+        excerpt: String::new(),
+        status: status.into(),
+        published: None,
+        url: String::new(),
+        author: String::new(),
+        terms: Vec::new(),
+    }
+}
+
+/// P23: `meta.set` only reaches items of the types `content.read` grants (meta-writer:
+/// `["post"]`); the item's type is looked up whatever its status.
+#[tokio::test]
+async fn meta_set_scoped_to_read_types() -> TestResult {
+    let services = Arc::new(InMemoryServices::new());
+    services.insert_post(item("p1", "post", "publish"));
+    services.insert_post(item("g1", "page", "publish"));
+    let host = PluginHost::new(HostConfig::default(), services.clone())?;
+    host.install(manifest("meta-writer")?, &plugin_wasm("meta-writer"))?;
+    let saved = |id: &str| ActionEvent {
+        subject: Some(id.into()),
+        payload: serde_json::json!({}),
+    };
+    let refused = host
+        .dispatch_action("meta-writer", "post.saved", saved("g1"))
+        .await;
+    assert!(
+        matches!(&refused, Err(PluginError::CallFailed { reason, .. }) if reason.contains("no such post")),
+        "{refused:?}"
+    );
+    assert_eq!(services.meta_get("g1", "seo.seen").await, None);
+    // A missing item answers the same.
+    let missing = host
+        .dispatch_action("meta-writer", "post.saved", saved("nope"))
+        .await;
+    assert!(missing.is_err(), "{missing:?}");
+    host.dispatch_action("meta-writer", "post.saved", saved("p1"))
+        .await?;
+    assert_eq!(
+        services.meta_get("p1", "seo.seen").await.as_deref(),
+        Some("\"action\"")
+    );
     Ok(())
 }

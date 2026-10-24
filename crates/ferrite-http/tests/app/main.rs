@@ -10,6 +10,7 @@ mod common;
 mod harness;
 
 mod assets;
+mod budget;
 mod content;
 mod cost;
 mod errors;

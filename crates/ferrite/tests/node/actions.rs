@@ -6,7 +6,8 @@
 use ferrite::jobs::PluginActionHandler;
 use ferrite_core::jobs::{PLUGIN_ACTION_VERSION, PluginAction, plugin_action_job};
 use ferrite_plugin_host::{
-    HostConfig, HostServices, InMemoryServices, KindOk, Manifest, PluginHost, Post, SettingSpec,
+    FilterValue, Head, HostConfig, HostServices, InMemoryServices, KindOk, Manifest, PluginHost,
+    Post, RequestInfo, SettingSpec,
 };
 use tokio::sync::Notify;
 
@@ -77,7 +78,9 @@ async fn seen(store: &dyn Store, id: ferrite_domain::ContentId) -> Option<Value>
 }
 
 /// A save enqueues `post.saved` in its `Tx`; the node's runner claims it and
-/// meta-writer writes `seo.seen = "action"` on the item.
+/// meta-writer writes `seo.seen = "action"` on the item. The item is published before
+/// the plugin is installed: `meta.set` reaches only items the plugin can see (Task 13,
+/// so an action cannot annotate a draft).
 async fn post_saved_runs_meta_writer(db: Arc<TestDb>) {
     let site = Site::new(&db);
     let opts = NodeOptions {
@@ -86,6 +89,11 @@ async fn post_saved_runs_meta_writer(db: Arc<TestDb>) {
     };
     let node = site.start(&db, opts).await;
     let store = db.shared_store();
+    let user = fixture_user(store.as_ref()).await;
+    let actor = Actor::new(user.id, Role::Admin);
+    let svc = ContentService::new(store.clone(), Arc::new(PermalinkRules::default()));
+    let item = svc.create(&actor, draft("acted")).await.unwrap();
+    let item = svc.publish(&actor, item.id, item.version).await.unwrap();
     install_plugin_file(
         &store,
         &node.state.media,
@@ -100,10 +108,10 @@ async fn post_saved_runs_meta_writer(db: Arc<TestDb>) {
         node.state.plugins.is_enabled("meta-writer")
     })
     .await;
-    let user = fixture_user(store.as_ref()).await;
-    let actor = Actor::new(user.id, Role::Admin);
-    let svc = ContentService::new(store.clone(), Arc::new(PermalinkRules::default()));
-    let item = svc.create(&actor, draft("acted")).await.unwrap();
+    let item = svc
+        .update(&actor, item.id, item.version, draft("acted"))
+        .await
+        .unwrap();
     eventually(Duration::from_secs(5), "seo.seen written", || {
         let store = store.clone();
         async move { seen(store.as_ref(), item.id).await == Some(json!("action")) }
@@ -278,6 +286,9 @@ impl HostServices for GatedServices {
             terms: Vec::new(),
         })
     }
+    async fn post_kind(&self, id: &str) -> Option<String> {
+        self.rest.post_kind(id).await
+    }
     async fn get_post_by_slug(&self, kind: &str, slug: &str) -> Option<Post> {
         self.rest.get_post_by_slug(kind, slug).await
     }
@@ -335,10 +346,7 @@ async fn action_survives_hot_swap(db: Arc<TestDb>) {
     let host = Arc::new(PluginHost::new(cfg, services.clone()).unwrap());
     host.install(slow_manifest(), &test_support::plugin_wasm("slow-import"))
         .unwrap();
-    let handler = Arc::new(PluginActionHandler {
-        store: store.clone(),
-        host: host.clone(),
-    });
+    let handler = Arc::new(PluginActionHandler::new(store.clone(), host.clone(), 2));
     let job = action_job(&store, "slow-import", "post.saved", "p1").await;
 
     let in_flight = tokio::spawn({
@@ -368,6 +376,88 @@ async fn action_survives_hot_swap(db: Arc<TestDb>) {
     assert_eq!(host.failures().len(), 1, "{:?}", host.failures());
 }
 
+/// Task 11 carry: at most `slots` (`cluster.workers - 1`) actions run at once on a
+/// node, so a slow plugin cannot hold every job worker; the next one is retried at once
+/// instead of waiting, and nothing counts against the plugin.
+async fn action_slots_leave_a_worker_free(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    plugin_row(&store, "slow-import", 0x71, &["post.saved"], true).await;
+    let services = Arc::new(GatedServices::default());
+    let host = Arc::new(PluginHost::new(HostConfig::default(), services.clone()).unwrap());
+    host.install(slow_manifest(), &test_support::plugin_wasm("slow-import"))
+        .unwrap();
+    let handler = Arc::new(PluginActionHandler::new(store.clone(), host.clone(), 1));
+    let job = action_job(&store, "slow-import", "post.saved", "p1").await;
+    let in_flight = tokio::spawn({
+        let handler = handler.clone();
+        let job = job.clone();
+        async move { handler.run(&job).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), services.entered.notified())
+        .await
+        .unwrap();
+    let start = std::time::Instant::now();
+    match handler.run(&job).await {
+        Err(JobError::Retry(e)) => assert!(e.contains("busy"), "{e}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(start.elapsed() < Duration::from_millis(500), "did not wait");
+    services.release.notify_one();
+    let first = tokio::time::timeout(Duration::from_secs(10), in_flight)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(first.is_ok(), "{first:?}");
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
+}
+
+/// F35: a host with no call slot free within the action deadline answers `Busy`,
+/// which the handler retries; it is not a plugin failure.
+async fn busy_host_is_retried_without_failure(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    plugin_row(&store, "slow-import", 0x72, &["post.saved"], true).await;
+    let services = Arc::new(GatedServices::default());
+    let cfg = HostConfig {
+        max_concurrent_calls: 1,
+        render_deadline: Duration::from_secs(10),
+        action_deadline: Duration::from_millis(200),
+        ..HostConfig::default()
+    };
+    let host = Arc::new(PluginHost::new(cfg, services.clone()).unwrap());
+    host.install(slow_manifest(), &test_support::plugin_wasm("slow-import"))
+        .unwrap();
+    let handler = PluginActionHandler::new(store.clone(), host.clone(), 4);
+    let job = action_job(&store, "slow-import", "post.saved", "p1").await;
+    // A page's `render.head` call holds the host's only call slot.
+    let in_flight = tokio::spawn({
+        let host = host.clone();
+        async move {
+            let req = RequestInfo {
+                path: "/".into(),
+                locale: "en".into(),
+                is_logged_in: false,
+                post: Some("p1".into()),
+            };
+            host.apply_filter_traced("render.head", FilterValue::Head(Head::default()), &req)
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(10), services.entered.notified())
+        .await
+        .unwrap();
+    match handler.run(&job).await {
+        Err(JobError::Retry(e)) => assert!(e.contains("busy"), "{e}"),
+        other => panic!("{other:?}"),
+    }
+    services.release.notify_one();
+    let page = tokio::time::timeout(Duration::from_secs(10), in_flight)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!page.volatile, "the filter call completed: {page:?}");
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
+}
+
 /// The handler's outcomes (P29, F35, review m4): done for success, a hook neither the
 /// row nor the loaded plugin handles, and a missing or disabled row; retried for a
 /// plugin not loaded on this node yet, a loaded version without a hook the row lists,
@@ -386,16 +476,26 @@ async fn action_outcomes(db: Arc<TestDb>) {
     .await;
     plugin_row(&store, "elsewhere", 0x62, &["post.saved"], true).await;
     let services = Arc::new(InMemoryServices::new());
+    // A `post`: meta-writer's `content.read` type (P23).
+    services.insert_post(Post {
+        id: "p1".into(),
+        kind: "post".into(),
+        slug: "p1".into(),
+        title: String::new(),
+        excerpt: String::new(),
+        status: "publish".into(),
+        published: None,
+        url: String::new(),
+        author: String::new(),
+        terms: Vec::new(),
+    });
     let host = Arc::new(PluginHost::new(HostConfig::default(), services.clone()).unwrap());
     host.install(
         Manifest::parse(&manifest("meta-writer")).unwrap(),
         &test_support::plugin_wasm("meta-writer"),
     )
     .unwrap();
-    let handler = PluginActionHandler {
-        store: store.clone(),
-        host: host.clone(),
-    };
+    let handler = PluginActionHandler::new(store.clone(), host.clone(), 2);
     let run = |plugin: &'static str, hook: &'static str| {
         let store = store.clone();
         let handler = &handler;
@@ -461,6 +561,8 @@ async fn action_outcomes(db: Arc<TestDb>) {
 
 backend_tests_spawning!(
     post_saved_runs_meta_writer,
+    action_slots_leave_a_worker_free,
+    busy_host_is_retried_without_failure,
     action_for_removed_plugin_is_dropped,
     action_sees_only_public_items,
     action_survives_hot_swap,

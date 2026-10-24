@@ -463,6 +463,37 @@ to instantiate), so **pooling defaults to off**; `HostConfig.pooling = true` ena
 under real concurrent load in M1.
 - `hard_deadline` (tokio timeout, = deadline + 50%) is the backstop for time spent in
   host imports (DB, HTTP), which epochs don't interrupt.
+- **Call concurrency cap (P22, M2a-2a).** One semaphore per host, `plugins.max_concurrent_calls`
+  permits (`HostConfig.max_concurrent_calls`, default `max(8, 4 × available_parallelism)`, > 0;
+  with pooling at most `POOL_SLOTS` = 256). Every filter, action and route call takes a permit
+  before it instantiates and holds it for the whole call; it waits at most its deadline for one.
+  No permit in time → the call is skipped: a filter is skipped and the page volatile, an action
+  or route gets `PluginError::Busy` (route → `503` + `Retry-After: 1`, action job → `Retry`). A
+  `Busy` skip is **never** counted as a plugin failure: it is load, not misbehaviour, so a flood
+  of route requests cannot auto-disable a healthy plugin (Task 8 m7). After the permit an action
+  or route gets its full deadline.
+- **Plugin actions and job workers (Task 11 carry).** At most `min(cluster.workers − 1,
+  max_concurrent_calls)` (at least 1) `plugin.action` jobs call plugins at once per node
+  (`ferrite::jobs::action_slots`, a slot in `PluginActionHandler`); one over that is retried at
+  once instead of waiting, so slow plugins never hold every job worker and core jobs (scheduled
+  publishing, purges) always find one. Cost: such a retry, like a `Busy` one, uses one of the
+  job's attempts. With `cluster.workers = 1` the only worker can still be held (logged at boot).
+- **Per-render budget (P22, F37).** A page's filters share `plugins.render_budget_ms` (default
+  1 000, `HttpConfig.render_budget`), counted from when the page takes its render slot
+  (`PluginRequest::until`, `run_filter` → `PluginHost::apply_filter_until`). Each call's epoch
+  deadline is `min(hook deadline, until − now)` and its hard deadline `min(1.5 × hook deadline,
+  until − now)`, so no call outlives the budget; waiting for a permit counts against it. Once
+  the budget is spent the remaining plugins are skipped and the page is volatile. A deadline
+  failure of a call whose epoch deadline the budget shortened is not counted (the budget ended
+  it, not the plugin); a call that ran out of its own deadline still is.
+- **Cancel-safety.** A call's future can be dropped at any await: at the hard deadline, when an
+  HTTP client disconnects, when a job loses its lease. The store (and its instance) and the
+  permit are dropped with it, and nothing is recorded as a failure (failures are recorded only
+  when a call returns). `HostServices` implementations must not hold a `Tx` across an await they
+  cannot finish (a dropped `Tx` rolls back) and keep each write to one statement or one short
+  `Tx`; `StoreHostServices::meta_set` is one `Tx` (value + `invalidate` event, all or nothing).
+  Tested by dropping calls mid-import (`limits.rs` `dropped_call_frees_its_slot_and_instance`,
+  `ferrite-http` `dropped_meta_write_is_all_or_nothing`).
 - Host-import budgets per call: `content` ≤ 100 calls, `kv` ≤ 100 ops / 1 MB, `meta.set`
   ≤ 1 MiB written (post id + key + value) with each value ≤ 64 KiB, `http` ≤ 3
   requests, each ≤ 5 s / 2 MB response; exceeding → the import returns an error, the
@@ -540,7 +571,16 @@ As built (M1c-2), in `crates/ferrite-http/src/plugins/` over the store-backed
   `"parent/child"` for hierarchical types, `list-posts`), restricted by the host to the types
   the manifest lists (M0 ruling R6). Never drafts, pending, private, scheduled or trashed
   items, and never user e-mails or auth data: `Post.author` is the author's display name and
-  `Post.url` is absolute. `meta.get` works only on items `content` could return.
+  `Post.url` is absolute. `meta.get` and `meta.set` work only on items `content` could return
+  (so an action cannot annotate a draft; the visibility check is a read just before the write's
+  `Tx`).
+- **Meta is type-scoped (P23, M2a-2a).** `meta.get` and `meta.set` also act only on items of
+  the plugin's `content.read` types: the host looks the item's type up through
+  `HostServices::post_kind` (any status) and refuses others (`meta.set` → `"no such post"`, the
+  same answer as a missing or hidden item). A meta-only plugin must therefore declare the types
+  it annotates (`meta-writer`: `content.read = ["post"]`). A `"*"` (or `plugin.*`) meta pattern
+  never matches another plugin's `plugin.<other>.*` keys; only a pattern naming that namespace
+  does, and a plugin's own `plugin.<name>.*` keys need no grant.
   `options.get` never returns `plugin.*` keys, whatever the manifest grants (a plugin reads its
   own settings through `settings.get`, option `plugin.<name>.settings.<key>`).
 - **Preview scoping.** Per-request state travels in a tokio task-local set around each filter
@@ -664,6 +704,13 @@ can re-enable.
 `install(Manifest, &[u8])`, `apply_filter(&str, FilterValue, &RequestInfo) -> FilterValue`
 (never fails), `dispatch_action`, `subscribers` (M2a-2), `handle_route`, `is_enabled`,
 `disabled_reason`, `failures`; `inspect` is a free function. Hooks are `&str`, not a `HookName` type.
+
+M2a-2a adds `apply_filter_until(hook, value, req, until: Instant) -> FilterOutcome` (the render
+budget; `apply_filter_traced` is the same without one), `PluginError::Busy { plugin }` from
+`dispatch_action` / `handle_route` (no call slot in time; not a failure),
+`HostConfig.max_concurrent_calls`, and `HostServices::post_kind(id) -> Option<String>` (the
+item's type whatever its status, for the `meta` type check). `HostServices` futures are dropped
+at the hard deadline: see Cancel-safety in §6.
 
 Target shape (the `reload`, DB-backed `InstalledPlugin` and http client parts are M1):
 

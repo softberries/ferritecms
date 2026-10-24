@@ -14,7 +14,7 @@ use crate::state::{MAX_INSTANCES, MAX_MEMORIES, MAX_TABLE_ELEMENTS, MAX_TABLES};
 /// Concurrent component instances the pooling allocator reserves slots for. Calls beyond
 /// this fail to instantiate (counted as a plugin failure), so it is sized well above
 /// realistic request concurrency.
-const POOL_SLOTS: u32 = 256;
+pub(crate) const POOL_SLOTS: u32 = 256;
 
 /// Build an engine with fuel metering and epoch interruption enabled; with
 /// `cfg.pooling` the pooling allocator, sized to match the per-store limits.

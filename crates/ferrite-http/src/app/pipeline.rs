@@ -1,7 +1,10 @@
 //! The render pipeline for content routes and previews (06 §5): load through
 //! [`SiteReader`], plugin content filters, head, template, dependency keys.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use bytes::Bytes;
 use ferrite_cache::{CachedPage, etag_for};
@@ -101,6 +104,9 @@ struct Target<'a> {
     route: &'a Route,
     path: &'a str,
     query: NormalQuery,
+    /// End of the page's plugin render budget (P22): the slot time plus
+    /// `HttpConfig::render_budget`.
+    until: Instant,
 }
 
 /// Who a page is rendered for, as plugins and templates see it.
@@ -125,11 +131,17 @@ async fn render_route(
     // One slot for the whole pipeline (R32): data load, plugin filters, head and
     // template, so plugin calls are bounded by the same limit as renders.
     let slot = acquire_slot(state).await?;
+    let until = budget_end(state);
     let mut deps = DepKeys::default();
     let Some(shown) = load(state, route, path, &mut deps).await? else {
         return Ok(None);
     };
-    let target = Target { route, path, query };
+    let target = Target {
+        route,
+        path,
+        query,
+        until,
+    };
     let viewer = Viewer::Public { logged_in };
     finish(state, slot, target, shown, deps, viewer)
         .await
@@ -144,6 +156,7 @@ async fn preview_route(
     id: ContentId,
 ) -> Result<Option<CachedPage>, RenderError> {
     let slot = acquire_slot(state).await?;
+    let until = budget_end(state);
     let read = match state.reader.preview(actor, id).await {
         Ok(read) => read,
         Err(CoreError::NotFound | CoreError::Forbidden(_)) => return Ok(None),
@@ -158,6 +171,7 @@ async fn preview_route(
         route,
         path,
         query: NormalQuery::default(),
+        until,
     };
     finish(
         state,
@@ -181,7 +195,12 @@ async fn finish(
     mut deps: DepKeys,
     viewer: Viewer,
 ) -> Result<CachedPage, RenderError> {
-    let Target { route, path, query } = target;
+    let Target {
+        route,
+        path,
+        query,
+        until,
+    } = target;
     let theme = state.theme.load_full();
     let site = state.site_info(&theme, &mut deps).await?;
     let (mut item, mut listing, key, archive) = match shown {
@@ -196,7 +215,8 @@ async fn finish(
                 .logged_in(logged_in)
         }
         Viewer::Preview(previewed) => PluginRequest::preview(path, &site.locale, *previewed),
-    };
+    }
+    .until(until);
     let mut trace = RenderTrace::default();
     if let Some(item) = item.as_mut() {
         filter_item(&state.plugins, item, &req, &mut trace).await;
@@ -258,6 +278,12 @@ async fn finish(
         ttl = Some(ttl.map_or(state.config.search_ttl, |t| t.min(state.config.search_ttl)));
     }
     Ok(html_page(200, out.html, deps.into_vec(), ttl))
+}
+
+/// When the plugin render budget of a page whose slot was just taken ends (P22).
+fn budget_end(state: &AppState) -> Instant {
+    let now = Instant::now();
+    now.checked_add(state.config.render_budget).unwrap_or(now)
 }
 
 /// One of [`HttpConfig::max_concurrent_renders`](super::HttpConfig) render slots

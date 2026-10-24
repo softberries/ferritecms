@@ -443,11 +443,20 @@ async fn boot(
     );
     let mut handlers = builtin::handlers(store.clone(), builtin::failure_retention(failure_window));
     let extensions = Arc::new(ExtensionService::new(store.clone()));
+    let action_slots =
+        jobs::action_slots(config.cluster.workers, config.plugins.max_concurrent_calls);
+    if config.cluster.workers < 2 {
+        tracing::warn!(
+            workers = config.cluster.workers,
+            "cluster.workers = 1: plugin actions can hold the only job worker"
+        );
+    }
     handlers.extend(jobs::handlers(
         store.clone(),
         content,
         extensions,
         host.clone(),
+        action_slots,
     ));
     handlers.extend(opts.extra_handlers);
     let mut runner_config = RunnerConfig::new(registry.id(), config.cluster.workers);
@@ -746,6 +755,7 @@ fn http_config(config: &Config) -> HttpConfig {
         &config.site.locale,
     );
     http.trusted_proxies = config.server.trusted_proxies.clone();
+    http.render_budget = Duration::from_millis(config.plugins.render_budget_ms);
     http.logged_in = match config.cache.logged_in {
         LoggedInCache::Bypass => LoggedIn::Bypass,
         LoggedInCache::PerUser => LoggedIn::PerUser,
@@ -767,6 +777,7 @@ pub(crate) fn host_config(p: &PluginsConfig) -> HostConfig {
         action_deadline: Duration::from_millis(p.action_deadline_ms),
         disable_after_failures: p.disable_after_failures,
         failure_window: Duration::from_secs(p.failure_window_secs),
+        max_concurrent_calls: p.max_concurrent_calls,
         ..HostConfig::default()
     }
 }
@@ -867,6 +878,17 @@ mod tests {
             let config = ferrite_config::load(dir.path(), env(value)).unwrap();
             assert_eq!(http_config(&config).logged_in, want, "{value:?}");
         }
+        // P22: the render budget reaches the pipeline.
+        let mut e = env(None);
+        e.push((
+            "FERRITE_PLUGINS__RENDER_BUDGET_MS".to_owned(),
+            "250".to_owned(),
+        ));
+        let config = ferrite_config::load(dir.path(), e).unwrap();
+        assert_eq!(
+            http_config(&config).render_budget,
+            Duration::from_millis(250)
+        );
     }
 
     #[test]
@@ -878,8 +900,11 @@ mod tests {
             action_deadline_ms: 900,
             disable_after_failures: 3,
             failure_window_secs: 60,
+            max_concurrent_calls: 5,
+            render_budget_ms: 300,
         };
         let h = host_config(&p);
+        assert_eq!(h.max_concurrent_calls, 5);
         assert_eq!(h.memory_bytes, 16 << 20);
         assert_eq!(h.fuel, 1000);
         assert_eq!(h.render_deadline, Duration::from_millis(150));

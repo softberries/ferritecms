@@ -840,3 +840,46 @@ fn mail_credentials_need_tls() {
     assert_eq!(check_smtp_url("smtp://u:p@h.example?tls=required"), Ok(()));
     assert!(check_smtp_url("smtp://u:p@h.example").is_err());
 }
+
+/// P22: `plugins.max_concurrent_calls` (default `max(8, 4 × available_parallelism)`) and
+/// `plugins.render_budget_ms` (default 1 000), both > 0.
+#[test]
+fn plugins_limits_rules() {
+    let (_d, r) = run(Some(MIN), &[]);
+    let c = r.unwrap();
+    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+    assert_eq!(c.plugins.max_concurrent_calls, (4 * cpus).max(8));
+    assert!(c.plugins.max_concurrent_calls >= 8);
+    assert_eq!(c.plugins.render_budget_ms, 1000);
+
+    for key in ["max_concurrent_calls", "render_budget_ms"] {
+        for bad in ["0", "-1", "\"4\"", "1.5"] {
+            let (_d, r) = run(Some(&format!("{MIN}[plugins]\n{key} = {bad}\n")), &[]);
+            let e = r.unwrap_err();
+            assert_eq!(
+                paths(&e),
+                [format!("plugins.{key}").as_str()],
+                "{key} = {bad}"
+            );
+        }
+    }
+    let (_d, r) = run(
+        Some(&format!(
+            "{MIN}[plugins]\nmax_concurrent_calls = 1\nrender_budget_ms = 300\n"
+        )),
+        &[],
+    );
+    let c = r.unwrap();
+    assert_eq!(c.plugins.max_concurrent_calls, 1);
+    assert_eq!(c.plugins.render_budget_ms, 300);
+    let (_d, r) = run(
+        Some(MIN),
+        &[
+            ("FERRITE_PLUGINS__MAX_CONCURRENT_CALLS", "3"),
+            ("FERRITE_PLUGINS__RENDER_BUDGET_MS", "250"),
+        ],
+    );
+    let c = r.unwrap();
+    assert_eq!(c.plugins.max_concurrent_calls, 3);
+    assert_eq!(c.plugins.render_budget_ms, 250);
+}

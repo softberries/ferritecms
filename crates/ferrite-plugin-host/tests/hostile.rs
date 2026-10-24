@@ -409,6 +409,9 @@ impl HostServices for GatedServices {
             terms: Vec::new(),
         })
     }
+    async fn post_kind(&self, id: &str) -> Option<String> {
+        self.rest.post_kind(id).await
+    }
     async fn get_post_by_slug(&self, kind: &str, slug: &str) -> Option<Post> {
         self.rest.get_post_by_slug(kind, slug).await
     }

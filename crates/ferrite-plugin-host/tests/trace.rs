@@ -211,6 +211,8 @@ async fn text_output_is_not_html_sanitised() -> TestResult {
 async fn meta_writes_are_refused_in_render_filters() -> TestResult {
     use ferrite_plugin_host::{ActionEvent, HostServices};
     let services = Arc::new(InMemoryServices::new());
+    // A `post`: meta-writer's `content.read` type (P23).
+    services.insert_post(post("p1", "p1"));
     let host = host_with(services.clone(), &["meta-writer"])?;
     let out = head_outcome(&host, Some("p1")).await;
     // The guest got an error for each try and still returned its head.

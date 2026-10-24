@@ -19,6 +19,7 @@ use ferrite_domain::Job;
 use ferrite_plugin_host::{ActionEvent, PluginError, PluginHost};
 use ferrite_store::Store;
 use serde_json::json;
+use tokio::sync::Semaphore;
 
 /// Period of the [`PUBLISH_DUE_KIND`] safety net.
 pub const PUBLISH_DUE_EVERY: Duration = Duration::from_secs(30);
@@ -178,13 +179,38 @@ impl JobHandler for PluginPurgeSweepHandler {
 /// - not loaded on this node, or loaded without the hook while the stored row lists it
 ///   (the reload has not caught up), or disabled on this host only (the shared disable
 ///   follows, F35): retried;
-/// - the call failed: retried (backoff, then dead after the job's attempts).
+/// - the call failed: retried (backoff, then dead after the job's attempts);
+/// - busy (P22, never a plugin failure): no action slot free on this node, or no host
+///   call slot within the action deadline (F35): retried. Like any retry this uses one
+///   of the job's attempts.
 ///
-/// How many run at once on a node is bounded by the runner's workers
-/// (`cluster.workers`).
+/// At most `slots` actions run at once on a node ([`action_slots`]: one below
+/// `cluster.workers`, Task 11 carry), so slow plugins cannot hold every job worker and
+/// core jobs (scheduled publishing, purges) always find one. An action over that is
+/// retried at once rather than waiting for a slot, which would hold a worker too.
 pub struct PluginActionHandler {
-    pub store: Arc<dyn Store>,
-    pub host: Arc<PluginHost>,
+    store: Arc<dyn Store>,
+    host: Arc<PluginHost>,
+    slots: Semaphore,
+}
+
+impl PluginActionHandler {
+    /// A handler running at most `slots` (at least 1) actions at once.
+    pub fn new(store: Arc<dyn Store>, host: Arc<PluginHost>, slots: usize) -> Self {
+        Self {
+            store,
+            host,
+            slots: Semaphore::new(slots.clamp(1, Semaphore::MAX_PERMITS)),
+        }
+    }
+}
+
+/// Actions that may run at once on a node with `workers` job workers and a plugin host
+/// of `max_calls` call slots: `min(workers - 1, max_calls)`, at least 1. With
+/// `cluster.workers = 1` that is the only worker (documented: give a node with plugin
+/// actions at least 2).
+pub fn action_slots(workers: usize, max_calls: usize) -> usize {
+    workers.saturating_sub(1).min(max_calls).max(1)
 }
 
 #[async_trait]
@@ -216,6 +242,11 @@ impl JobHandler for PluginActionHandler {
             subject: action.subject,
             payload: action.payload,
         };
+        let Ok(_slot) = self.slots.try_acquire() else {
+            return Err(JobError::Retry(
+                "busy: every plugin action slot of this node is in use".to_owned(),
+            ));
+        };
         match self.host.dispatch_action(plugin, hook, ev).await {
             Ok(()) => Ok(()),
             // The stored version subscribes but the loaded one does not: this node has
@@ -230,9 +261,11 @@ impl JobHandler for PluginActionHandler {
             Err(PluginError::UnknownPlugin(_)) => {
                 Err(JobError::Retry("not loaded on this node yet".to_owned()))
             }
-            Err(e @ (PluginError::Disabled { .. } | PluginError::CallFailed { .. })) => {
-                Err(JobError::Retry(e.to_string()))
-            }
+            Err(
+                e @ (PluginError::Disabled { .. }
+                | PluginError::CallFailed { .. }
+                | PluginError::Busy { .. }),
+            ) => Err(JobError::Retry(e.to_string())),
             // `dispatch_action` returns none of these; retrying is the safe answer.
             Err(
                 e @ (PluginError::Engine(_)
@@ -256,12 +289,14 @@ fn manifest_lists(manifest: &serde_json::Value, hook: &str) -> bool {
 }
 
 /// The core handlers: scheduled publishing on `content`, the plugin purge and its
-/// sweep on `extensions`, plugin actions on `host`.
+/// sweep on `extensions`, plugin actions on `host` (at most `action_slots` at once,
+/// [`action_slots`]).
 pub fn handlers(
     store: Arc<dyn Store>,
     content: Arc<ContentService>,
     extensions: Arc<ExtensionService>,
     host: Arc<PluginHost>,
+    action_slots: usize,
 ) -> Vec<Arc<dyn JobHandler>> {
     vec![
         Arc::new(PublishScheduledHandler {
@@ -278,7 +313,7 @@ pub fn handlers(
             store: store.clone(),
             extensions,
         }),
-        Arc::new(PluginActionHandler { store, host }),
+        Arc::new(PluginActionHandler::new(store, host, action_slots)),
     ]
 }
 
@@ -297,5 +332,22 @@ pub fn plugin_purge_sweep_periodic() -> Periodic {
         kind: PLUGIN_PURGE_SWEEP_KIND,
         every: PLUGIN_PURGE_SWEEP_EVERY,
         payload: json!({"v": 1}),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Task 11 carry: plugin actions leave one job worker free, never exceed the host's
+    /// call slots, and always have at least one slot.
+    #[test]
+    fn action_slots_stay_below_the_workers() {
+        assert_eq!(action_slots(2, 32), 1);
+        assert_eq!(action_slots(8, 32), 7);
+        assert_eq!(action_slots(8, 3), 3);
+        assert_eq!(action_slots(1, 32), 1);
+        assert_eq!(action_slots(0, 32), 1);
+        assert_eq!(action_slots(256, 1), 1);
     }
 }

@@ -552,6 +552,17 @@ fn parse_plugins(cx: &mut Cx, root: &mut Table) -> PluginsConfig {
         .positive_u32(&mut t, b, "disable_after_failures")
         .unwrap_or(20);
     let failure_window_secs = cx.duration_secs(&mut t, b, "failure_window").unwrap_or(600);
+    let max_concurrent_calls = cx
+        .positive(&mut t, b, "max_concurrent_calls")
+        .and_then(|n| match usize::try_from(n) {
+            Ok(n) => Some(n),
+            Err(_) => {
+                cx.push("plugins.max_concurrent_calls", "value is too large");
+                None
+            }
+        })
+        .unwrap_or_else(default_max_concurrent_calls);
+    let render_budget_ms = cx.positive(&mut t, b, "render_budget_ms").unwrap_or(1000);
     cx.unknown(t, b);
     PluginsConfig {
         default_memory,
@@ -560,7 +571,18 @@ fn parse_plugins(cx: &mut Cx, root: &mut Table) -> PluginsConfig {
         action_deadline_ms,
         disable_after_failures,
         failure_window_secs,
+        max_concurrent_calls,
+        render_budget_ms,
     }
+}
+
+/// `max(8, 4 × available_parallelism)` (P22; the plugin host's
+/// `default_max_concurrent_calls`, which this crate does not depend on).
+fn default_max_concurrent_calls() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .saturating_mul(4)
+        .max(8)
 }
 
 /// Site key length in bytes; written as twice as many hex characters (P4).
@@ -832,8 +854,14 @@ pub fn render_default_toml(
     out.push_str("# it here (the same key on every node), e.g. from `openssl rand -hex 32`.\n");
     out.push_str("# secret_key_file = \"/run/secrets/ferrite_site_key\"\n\n");
     out.push_str(
-        "[plugins]\ndefault_memory = \"32MB\"\ndefault_fuel = 50000000\nrender_deadline_ms = 200\naction_deadline_ms = 5000\ndisable_after_failures = 20\nfailure_window = \"10m\"\n\n",
+        "[plugins]\ndefault_memory = \"32MB\"\ndefault_fuel = 50000000\nrender_deadline_ms = 200\naction_deadline_ms = 5000\ndisable_after_failures = 20\nfailure_window = \"10m\"\n",
     );
+    out.push_str("# All plugin filters of one page together; past it the rest are skipped.\n");
+    out.push_str("render_budget_ms = 1000\n");
+    out.push_str(
+        "# Plugin calls at once per node (filters, actions, routes); default\n# max(8, 4 x CPU count). Plugin action jobs use at most cluster.workers - 1 of them.\n",
+    );
+    out.push_str("# max_concurrent_calls = 32\n\n");
     out.push_str("# [mail]\n");
     out.push_str("# Outgoing mail (password resets, plugin notices to admins). Unset: no mail.\n");
     out.push_str(

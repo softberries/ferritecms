@@ -15,6 +15,19 @@ pub struct HostConfig {
     pub failure_window: Duration,
     /// Use wasmtime's pooling instance allocator (design 05 §6).
     pub pooling: bool,
+    /// Most plugin calls (filters, actions and routes together) running at once on this
+    /// host (P22, `plugins.max_concurrent_calls`). A call waits at most its deadline for
+    /// a slot, then is skipped without counting as a plugin failure.
+    pub max_concurrent_calls: usize,
+}
+
+/// `max(8, 4 × available_parallelism)`: the default of
+/// [`HostConfig::max_concurrent_calls`] (and of `plugins.max_concurrent_calls`).
+fn default_max_concurrent_calls() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .saturating_mul(4)
+        .max(8)
 }
 
 impl Default for HostConfig {
@@ -31,6 +44,7 @@ impl Default for HostConfig {
             disable_after_failures: 20,
             failure_window: Duration::from_secs(10 * 60),
             pooling: false,
+            max_concurrent_calls: default_max_concurrent_calls(),
         }
     }
 }

@@ -105,6 +105,12 @@ pub struct PluginsConfig {
     pub action_deadline_ms: u64,
     pub disable_after_failures: u32,
     pub failure_window_secs: u64,
+    /// Most plugin calls running at once per node (`plugins.max_concurrent_calls`,
+    /// P22): default `max(8, 4 × available_parallelism)`, explicit values > 0.
+    pub max_concurrent_calls: usize,
+    /// Time all plugin filters of one page may take together, from the render slot on
+    /// (`plugins.render_budget_ms`, P22): default 1 000, > 0.
+    pub render_budget_ms: u64,
 }
 
 /// `[auth]` (P4). `secret_key` is the site key as 64 hex characters; `None` means solo

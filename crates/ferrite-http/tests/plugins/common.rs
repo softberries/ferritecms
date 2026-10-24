@@ -11,7 +11,7 @@ use ferrite_domain::{
 };
 use ferrite_http::{LoadSummary, PluginReloader, StoreHostServices};
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode, S3Config};
-use ferrite_plugin_host::{HostConfig, PluginHost};
+use ferrite_plugin_host::{HostConfig, HostServices, KindOk, PluginHost, Post, SettingSpec};
 use ferrite_store::Store;
 use ferrite_store_tests::TestDb;
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -333,4 +333,86 @@ macro_rules! profile_tests {
             }
         }
     )*};
+}
+
+/// [`StoreHostServices`] whose `get_post` first sleeps `delay` (and counts its callers):
+/// makes `slow-import` slow (F34) on a real site.
+pub struct SlowPosts {
+    inner: Arc<StoreHostServices>,
+    delay: std::time::Duration,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl SlowPosts {
+    pub fn new(inner: Arc<StoreHostServices>, delay: std::time::Duration) -> Self {
+        Self {
+            inner,
+            delay,
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// `get_post` calls so far.
+    pub fn calls(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// A host over these services with `slow-import` installed under each of `names`
+    /// (one component, several manifests).
+    pub fn host(self: &Arc<Self>, cfg: HostConfig, names: &[&str]) -> Arc<PluginHost> {
+        let host = PluginHost::new(cfg, self.clone()).expect("host");
+        for name in names {
+            let manifest = plugin_manifest("slow-import")
+                .replace("name      = \"slow-import\"", &format!("name = \"{name}\""));
+            let manifest = ferrite_plugin_host::Manifest::parse(&manifest).expect("manifest");
+            host.install(manifest, &plugin_wasm("slow-import"))
+                .expect("install");
+        }
+        Arc::new(host)
+    }
+}
+
+#[async_trait::async_trait]
+impl HostServices for SlowPosts {
+    async fn get_post(&self, id: &str, kind_ok: &KindOk) -> Option<Post> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(self.delay).await;
+        self.inner.get_post(id, kind_ok).await
+    }
+    async fn post_kind(&self, id: &str) -> Option<String> {
+        self.inner.post_kind(id).await
+    }
+    async fn get_post_by_slug(&self, kind: &str, slug: &str) -> Option<Post> {
+        self.inner.get_post_by_slug(kind, slug).await
+    }
+    async fn list_posts(&self, kind: &str, limit: u32, offset: u32) -> Vec<Post> {
+        self.inner.list_posts(kind, limit, offset).await
+    }
+    async fn meta_get(&self, post: &str, key: &str) -> Option<String> {
+        self.inner.meta_get(post, key).await
+    }
+    async fn meta_set(&self, post: &str, key: &str, value: &str) -> Result<(), String> {
+        self.inner.meta_set(post, key, value).await
+    }
+    async fn option_get(&self, key: &str) -> Option<String> {
+        self.inner.option_get(key).await
+    }
+    async fn kv_get(&self, plugin: &str, key: &str) -> Option<Vec<u8>> {
+        self.inner.kv_get(plugin, key).await
+    }
+    async fn kv_set(&self, plugin: &str, key: &str, value: Vec<u8>) -> Result<(), String> {
+        self.inner.kv_set(plugin, key, value).await
+    }
+    async fn kv_delete(&self, plugin: &str, key: &str) {
+        self.inner.kv_delete(plugin, key).await;
+    }
+    async fn kv_list(&self, plugin: &str, prefix: &str, limit: u32) -> Vec<String> {
+        self.inner.kv_list(plugin, prefix, limit).await
+    }
+    async fn setting_get(&self, plugin: &str, key: &str, spec: &SettingSpec) -> Option<String> {
+        self.inner.setting_get(plugin, key, spec).await
+    }
+    async fn notify_admins(&self, plugin: &str, subject: &str, text: &str) -> Result<(), String> {
+        self.inner.notify_admins(plugin, subject, text).await
+    }
 }

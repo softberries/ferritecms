@@ -3,18 +3,22 @@
 //! hostile handlers that must not take the site down.
 
 use std::net::IpAddr;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::{
     body::Body,
     http::{Method, Request, StatusCode, header},
 };
 use ferrite_core::Scopes;
-use ferrite_http::ClientIp;
+use ferrite_http::{ClientIp, HttpConfig};
+use ferrite_plugin_host::HostConfig;
 use serde_json::Value;
 
 use crate::app_tests;
-use crate::common::SITE_URL;
-use crate::harness::{App, Resp};
+use crate::budget::with_host;
+use crate::common::{SITE_URL, SlowPosts};
+use crate::harness::{App, Resp, SITE_TITLE};
 
 /// The client address of requests that name none (`serve` always knows one).
 const DEFAULT_IP: &str = "192.0.2.10";
@@ -83,6 +87,7 @@ fn plain(r: &Resp, status: StatusCode) {
 }
 
 app_tests!(
+    busy_route_is_503,
     route_success_and_user_id,
     route_xss_is_contained,
     undeclared_path_and_method,
@@ -518,5 +523,65 @@ async fn bad_requests_and_responses(app: App) -> App {
         [ferrite_plugin_host::FailureKind::InvalidOutput; 3],
         "{kinds:?}"
     );
+    app
+}
+
+/// Task 8 m7 / P22: plugin routes take call slots like every other call; with none
+/// free within the route deadline the visitor gets `503` with `Retry-After: 1`, and
+/// the plugin is not charged a failure.
+async fn busy_route_is_503(app: App) -> App {
+    let slow = Arc::new(SlowPosts::new(
+        app.site.services.clone(),
+        Duration::from_secs(5),
+    ));
+    let cfg = HostConfig {
+        max_concurrent_calls: 1,
+        action_deadline: Duration::from_secs(1),
+        route_deadline: Duration::from_millis(100),
+        ..HostConfig::default()
+    };
+    let host = slow.host(cfg, &[]);
+    let app = with_host(
+        app,
+        host.clone(),
+        HttpConfig::new(SITE_URL, SITE_TITLE, "en"),
+    )
+    .await;
+    for name in ["router", "slow-import"] {
+        app.site.install(name).await;
+    }
+    let loaded = app.site.load().await;
+    assert_eq!(loaded.loaded, ["router", "slow-import"], "{loaded:?}");
+    let ok = get(&app, "/_p/router/hello").await;
+    assert_eq!(ok.status, StatusCode::OK, "{ok:?}");
+    // slow-import's action holds the only slot (its `get_post` sleeps).
+    let held = tokio::spawn({
+        let host = host.clone();
+        async move {
+            let ev = ferrite_plugin_host::ActionEvent {
+                subject: Some("x".into()),
+                payload: serde_json::json!({}),
+            };
+            host.dispatch_action("slow-import", "post.saved", ev).await
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while slow.calls() == 0 {
+        assert!(Instant::now() < deadline, "action never started");
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    let r = get(&app, "/_p/router/hello").await;
+    assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE, "{r:?}");
+    assert_eq!(r.header("retry-after"), Some("1"), "{r:?}");
+    assert_eq!(r.body, "busy\n");
+    let _ = held.await.expect("action task");
+    let charged: Vec<String> = host
+        .failures()
+        .into_iter()
+        .map(|f| f.plugin)
+        .filter(|p| p == "router")
+        .collect();
+    assert!(charged.is_empty(), "{charged:?}");
+    assert!(host.is_enabled("router"));
     app
 }

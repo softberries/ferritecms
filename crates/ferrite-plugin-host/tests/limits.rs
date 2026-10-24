@@ -3,13 +3,15 @@
 mod common;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use common::{plugin_manifest, plugin_wasm};
 use ferrite_plugin_host::{
-    FailureKind, FilterValue, Head, HostConfig, HostServices, InMemoryServices, KindOk, Manifest,
-    PluginHost, Post, RequestInfo,
+    ActionEvent, FailureKind, FilterValue, Head, HostConfig, HostServices, InMemoryServices,
+    KindOk, Manifest, PluginError, PluginHost, Post, RequestInfo, RouteRequest,
 };
+use tokio::sync::Notify;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -136,6 +138,9 @@ impl HostServices for SlowServices {
             terms: Vec::new(),
         })
     }
+    async fn post_kind(&self, _: &str) -> Option<String> {
+        None
+    }
     async fn get_post_by_slug(&self, _: &str, _: &str) -> Option<Post> {
         None
     }
@@ -206,5 +211,315 @@ async fn slow_host_import_is_cut_by_hard_deadline() -> TestResult {
     assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
     // Well under the 2 s the host import sleeps, so the hard deadline must have fired.
     assert!(elapsed < Duration::from_millis(1500), "took {elapsed:?}");
+    Ok(())
+}
+
+/// Services whose `get_post` counts its callers and parks until [`open`](Self::open);
+/// everything else is the in-memory services.
+#[derive(Default)]
+struct HeldServices {
+    entered: AtomicUsize,
+    open: AtomicBool,
+    opened: Notify,
+    rest: InMemoryServices,
+}
+
+impl HeldServices {
+    fn entered(&self) -> usize {
+        self.entered.load(Ordering::SeqCst)
+    }
+
+    /// Wait (at most 10 s) until `n` calls are parked in `get_post`.
+    async fn wait_entered(&self, n: usize) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while self.entered() < n {
+            assert!(Instant::now() < deadline, "only {} entered", self.entered());
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+
+    fn open(&self) {
+        self.open.store(true, Ordering::SeqCst);
+        self.opened.notify_waiters();
+    }
+}
+
+#[async_trait::async_trait]
+impl HostServices for HeldServices {
+    async fn get_post(&self, id: &str, _kind_ok: &KindOk) -> Option<Post> {
+        self.entered.fetch_add(1, Ordering::SeqCst);
+        loop {
+            let opened = self.opened.notified();
+            if self.open.load(Ordering::SeqCst) {
+                break;
+            }
+            opened.await;
+        }
+        Some(Post {
+            id: id.into(),
+            kind: "post".into(),
+            slug: id.into(),
+            title: String::new(),
+            excerpt: String::new(),
+            status: "publish".into(),
+            published: None,
+            url: String::new(),
+            author: String::new(),
+            terms: Vec::new(),
+        })
+    }
+    async fn post_kind(&self, id: &str) -> Option<String> {
+        self.rest.post_kind(id).await
+    }
+    async fn get_post_by_slug(&self, kind: &str, slug: &str) -> Option<Post> {
+        self.rest.get_post_by_slug(kind, slug).await
+    }
+    async fn list_posts(&self, kind: &str, limit: u32, offset: u32) -> Vec<Post> {
+        self.rest.list_posts(kind, limit, offset).await
+    }
+    async fn meta_get(&self, post: &str, key: &str) -> Option<String> {
+        self.rest.meta_get(post, key).await
+    }
+    async fn meta_set(&self, post: &str, key: &str, value: &str) -> Result<(), String> {
+        self.rest.meta_set(post, key, value).await
+    }
+    async fn option_get(&self, key: &str) -> Option<String> {
+        self.rest.option_get(key).await
+    }
+    async fn kv_get(&self, plugin: &str, key: &str) -> Option<Vec<u8>> {
+        self.rest.kv_get(plugin, key).await
+    }
+    async fn kv_set(&self, plugin: &str, key: &str, value: Vec<u8>) -> Result<(), String> {
+        self.rest.kv_set(plugin, key, value).await
+    }
+    async fn kv_delete(&self, plugin: &str, key: &str) {
+        self.rest.kv_delete(plugin, key).await;
+    }
+    async fn kv_list(&self, plugin: &str, prefix: &str, limit: u32) -> Vec<String> {
+        self.rest.kv_list(plugin, prefix, limit).await
+    }
+    async fn setting_get(
+        &self,
+        plugin: &str,
+        key: &str,
+        spec: &ferrite_plugin_host::SettingSpec,
+    ) -> Option<String> {
+        self.rest.setting_get(plugin, key, spec).await
+    }
+}
+
+/// A host over [`HeldServices`] with `slow-import` installed under each of `names`
+/// (F34: one component, several manifests), plus the plugins in `extra`.
+fn held_host(
+    cfg: HostConfig,
+    names: &[&str],
+    extra: &[&str],
+) -> TestResult<(Arc<PluginHost>, Arc<HeldServices>)> {
+    let services = Arc::new(HeldServices::default());
+    let host = Arc::new(PluginHost::new(cfg, services.clone())?);
+    for name in names {
+        let manifest = plugin_manifest("slow-import")
+            .replace("name      = \"slow-import\"", &format!("name = \"{name}\""));
+        host.install(Manifest::parse(&manifest)?, &plugin_wasm("slow-import"))?;
+    }
+    for name in extra {
+        host.install(Manifest::parse(&plugin_manifest(name))?, &plugin_wasm(name))?;
+    }
+    Ok((host, services))
+}
+
+fn saved(id: &str) -> ActionEvent {
+    ActionEvent {
+        subject: Some(id.into()),
+        payload: serde_json::json!({}),
+    }
+}
+
+/// P22: with every call slot taken, a call waits at most its deadline for one, then is
+/// skipped as `Busy`; nothing counts as a plugin failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrency_cap_skips_without_failure() -> TestResult {
+    let cfg = HostConfig {
+        max_concurrent_calls: 2,
+        action_deadline: Duration::from_secs(1),
+        ..HostConfig::default()
+    };
+    let (host, services) = held_host(cfg, &["slow-import"], &[])?;
+    let call = |host: Arc<PluginHost>| {
+        tokio::spawn(async move {
+            host.dispatch_action("slow-import", "post.saved", saved("p1"))
+                .await
+        })
+    };
+    let (a, b) = (call(host.clone()), call(host.clone()));
+    services.wait_entered(2).await;
+    let start = Instant::now();
+    let third = host
+        .dispatch_action("slow-import", "post.saved", saved("p1"))
+        .await;
+    let waited = start.elapsed();
+    assert!(
+        matches!(&third, Err(PluginError::Busy { plugin }) if plugin == "slow-import"),
+        "{third:?}"
+    );
+    assert!(waited >= Duration::from_millis(900), "waited {waited:?}");
+    assert_eq!(services.entered(), 2, "the busy call never ran");
+    services.open();
+    a.await??;
+    b.await??;
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
+    assert!(host.is_enabled("slow-import"));
+    Ok(())
+}
+
+/// Task 8 m7: plugin routes take the same call slots, so a flood of route requests
+/// cannot exhaust instances, and a busy route is not a plugin failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn route_calls_share_the_cap() -> TestResult {
+    let cfg = HostConfig {
+        max_concurrent_calls: 1,
+        route_deadline: Duration::from_millis(100),
+        ..HostConfig::default()
+    };
+    let (host, services) = held_host(cfg, &["slow-import"], &["router"])?;
+    let held = tokio::spawn({
+        let host = host.clone();
+        async move {
+            host.dispatch_action("slow-import", "post.saved", saved("p1"))
+                .await
+        }
+    });
+    services.wait_entered(1).await;
+    let route = || RouteRequest {
+        method: "GET".into(),
+        path: "/hello".into(),
+        query: Vec::new(),
+        headers: Vec::new(),
+        body: Vec::new(),
+        client_ip_hash: "ab".repeat(16),
+        user: None,
+    };
+    let start = Instant::now();
+    let busy = host.handle_route("router", route()).await;
+    assert!(
+        matches!(&busy, Err(PluginError::Busy { plugin }) if plugin == "router"),
+        "{busy:?}"
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        start.elapsed()
+    );
+    services.open();
+    held.await??;
+    assert_eq!(host.handle_route("router", route()).await?.status, 200);
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
+    Ok(())
+}
+
+/// P22 / F37: filters stop once the render budget is spent, a call never outlives the
+/// budget (its hard deadline is capped at it), and the outcome is volatile.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn render_budget_bounds_a_filter_chain() -> TestResult {
+    let (host, services) = held_host(HostConfig::default(), &["slow-a", "slow-b", "slow-c"], &[])?;
+    let req = RequestInfo {
+        post: Some("p1".into()),
+        ..req()
+    };
+    let start = Instant::now();
+    let until = start + Duration::from_millis(250);
+    let out = host
+        .apply_filter_until("render.head", input(), &req, until)
+        .await;
+    let elapsed = start.elapsed();
+    assert_eq!(out.value, input());
+    assert!(out.volatile);
+    assert!(elapsed >= Duration::from_millis(240), "took {elapsed:?}");
+    assert!(elapsed < Duration::from_millis(450), "took {elapsed:?}");
+    assert_eq!(services.entered(), 1, "slow-b and slow-c were skipped");
+    // slow-a ran into its own deadline window (cut by the budget at 250 ms, under its
+    // 300 ms hard deadline but past its 200 ms epoch deadline): counted; the skipped
+    // plugins are not.
+    let failed: Vec<String> = host.failures().into_iter().map(|f| f.plugin).collect();
+    assert!(failed.iter().all(|p| p == "slow-a"), "{failed:?}");
+    services.open();
+    Ok(())
+}
+
+/// A call cut short by the budget before its own deadline is skipped, not counted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn budget_cut_is_not_a_failure() -> TestResult {
+    let (host, services) = held_host(HostConfig::default(), &["slow-a"], &[])?;
+    let req = RequestInfo {
+        post: Some("p1".into()),
+        ..req()
+    };
+    let start = Instant::now();
+    let out = host
+        .apply_filter_until(
+            "render.head",
+            input(),
+            &req,
+            start + Duration::from_millis(80),
+        )
+        .await;
+    assert!(
+        start.elapsed() < Duration::from_millis(250),
+        "{:?}",
+        start.elapsed()
+    );
+    assert!(out.volatile);
+    assert_eq!(out.value, input());
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
+    // A spent budget calls nothing.
+    let out = host
+        .apply_filter_until("render.head", input(), &req, Instant::now())
+        .await;
+    assert!(out.volatile);
+    assert_eq!(services.entered(), 1);
+    services.open();
+    Ok(())
+}
+
+/// Cancel-safety: a call whose future is dropped mid-call (a client disconnect) frees
+/// its instance and its call slot and counts no failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropped_call_frees_its_slot_and_instance() -> TestResult {
+    let cfg = HostConfig {
+        max_concurrent_calls: 1,
+        action_deadline: Duration::from_secs(1),
+        ..HostConfig::default()
+    };
+    let (host, services) = held_host(cfg, &["slow-import"], &[])?;
+    let idle = Arc::strong_count(&services);
+    let call = tokio::spawn({
+        let host = host.clone();
+        async move {
+            host.dispatch_action("slow-import", "post.saved", saved("p1"))
+                .await
+        }
+    });
+    services.wait_entered(1).await;
+    assert_eq!(
+        Arc::strong_count(&services),
+        idle + 1,
+        "the call's store holds one"
+    );
+    call.abort();
+    assert!(call.await.is_err_and(|e| e.is_cancelled()));
+    assert_eq!(
+        Arc::strong_count(&services),
+        idle,
+        "instance dropped with the future"
+    );
+    services.open();
+    let start = Instant::now();
+    host.dispatch_action("slow-import", "post.saved", saved("p1"))
+        .await?;
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "slot was free"
+    );
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
     Ok(())
 }

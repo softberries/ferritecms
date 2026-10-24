@@ -47,6 +47,9 @@ const BUDGET_EXCEEDED: &str = "budget exceeded";
 const UNAVAILABLE: &str = "unavailable in this build";
 const RENDER_WRITE: &str = "meta.set is not allowed during render filters";
 const RENDER_MAIL: &str = "mail is not allowed during render filters";
+/// `meta.set` on an item that is missing, hidden from the plugin or of a type its
+/// `content.read` does not grant (P23): one answer for all three.
+const NO_SUCH_POST: &str = "no such post";
 /// Longest `mail.notify-admins` subject, in characters (P18).
 pub const MAX_MAIL_SUBJECT_CHARS: usize = 200;
 /// Largest `mail.notify-admins` body, in bytes (P18).
@@ -171,6 +174,26 @@ impl ResourceLimiter for CallLimits {
     }
 }
 
+/// `plugin.<name>.` when `key` lies in the namespace of a plugin other than `own`.
+fn foreign_namespace<'k>(key: &'k str, own: &str) -> Option<&'k str> {
+    let rest = key.strip_prefix("plugin.")?;
+    let (name, _) = rest.split_once('.')?;
+    (name != own).then(|| &key[.."plugin.".len() + name.len() + 1])
+}
+
+/// [`matches_any`] for meta keys (P23): a key in another plugin's `plugin.<other>.`
+/// namespace matches only patterns naming that namespace, so `"*"` (or `plugin.*`)
+/// never reaches it.
+fn meta_key_matches(patterns: &[String], key: &str, own: &str) -> bool {
+    match foreign_namespace(key, own) {
+        None => matches_any(patterns, key),
+        Some(ns) => patterns
+            .iter()
+            .filter(|p| p.starts_with(ns))
+            .any(|p| matches_any(std::slice::from_ref(p), key)),
+    }
+}
+
 /// State of one store, i.e. one plugin call.
 pub(crate) struct HostState {
     plugin: Arc<str>,
@@ -250,6 +273,21 @@ impl HostState {
         key.strip_prefix("plugin.")
             .and_then(|rest| rest.strip_prefix(&*self.plugin))
             .is_some_and(|rest| rest.starts_with('.'))
+    }
+
+    /// Whether item `post` is of a type `content.read` grants (P23), looked up through
+    /// the services whatever its status; `false` when it does not exist. (Owned handles:
+    /// the future must not borrow `self`, which is not `Sync`.)
+    fn meta_item_granted(&self, post: &str) -> impl Future<Output = bool> + Send + use<> {
+        let services = Arc::clone(&self.services);
+        let grants = Arc::clone(&self.grants);
+        let post = post.to_owned();
+        async move {
+            services
+                .post_kind(&post)
+                .await
+                .is_some_and(|kind| matches_any(&grants.content_read, &kind))
+        }
     }
 }
 
@@ -339,14 +377,19 @@ impl content::Host for HostState {
 }
 
 impl meta::Host for HostState {
+    /// Keys the read or write patterns grant, or the plugin's own `plugin.<name>.*`, on
+    /// items of the `content.read` types (P23); the services add visibility.
     async fn get(&mut self, post: String, key: String) -> Option<String> {
-        let readable = matches_any(&self.grants.content_meta_read, &key)
-            || matches_any(&self.grants.content_meta_write, &key)
+        let readable = meta_key_matches(&self.grants.content_meta_read, &key, &self.plugin)
+            || meta_key_matches(&self.grants.content_meta_write, &key, &self.plugin)
             || self.own_meta_key(&key);
         if !take(&mut self.budget.content) || !readable {
             return None;
         }
         self.trace.post(&post);
+        if !self.meta_item_granted(&post).await {
+            return None;
+        }
         self.services.meta_get(&post, &key).await
     }
 
@@ -361,7 +404,9 @@ impl meta::Host for HostState {
         if !take(&mut self.budget.content) {
             return Err(BUDGET_EXCEEDED.into());
         }
-        if !(matches_any(&self.grants.content_meta_write, &key) || self.own_meta_key(&key)) {
+        if !(meta_key_matches(&self.grants.content_meta_write, &key, &self.plugin)
+            || self.own_meta_key(&key))
+        {
             return Err(format!("meta key `{key}` is not writable by this plugin"));
         }
         if value.len() > MAX_META_VALUE {
@@ -371,10 +416,13 @@ impl meta::Host for HostState {
             ));
         }
         let size = post.len() + key.len() + value.len();
-        match self.budget.meta_bytes.checked_sub(size) {
-            Some(left) => self.budget.meta_bytes = left,
-            None => return Err(BUDGET_EXCEEDED.into()),
+        let Some(left) = self.budget.meta_bytes.checked_sub(size) else {
+            return Err(BUDGET_EXCEEDED.into());
+        };
+        if !self.meta_item_granted(&post).await {
+            return Err(NO_SUCH_POST.into());
         }
+        self.budget.meta_bytes = left;
         self.services.meta_set(&post, &key, &value).await
     }
 }
@@ -562,9 +610,21 @@ mod tests {
         );
     }
 
+    /// Grants reading `post` items, with item `p` (a post) in the services.
+    fn post_reader() -> (Capabilities, Arc<InMemoryServices>) {
+        let services = Arc::new(InMemoryServices::new());
+        services.insert_post(post("p", "post"));
+        let caps = Capabilities {
+            content_read: vec!["post".into()],
+            ..Capabilities::default()
+        };
+        (caps, services)
+    }
+
     #[tokio::test]
     async fn meta_value_cap() {
-        let mut s = state(Capabilities::default(), Arc::new(InMemoryServices::new()));
+        let (caps, services) = post_reader();
+        let mut s = state(caps, services);
         let key = || "plugin.tester.k".to_string();
         assert_eq!(
             meta::Host::set(&mut s, "p".into(), key(), "v".repeat(64 * 1024)).await,
@@ -579,8 +639,8 @@ mod tests {
 
     #[tokio::test]
     async fn meta_bytes_budget() {
-        let services = Arc::new(InMemoryServices::new());
-        let mut s = state(Capabilities::default(), services.clone());
+        let (caps, services) = post_reader();
+        let mut s = state(caps, services.clone());
         let value = "v".repeat(64 * 1024);
         // 15 x (64 KiB + post + key) fits in 1 MiB; a 16th full value does not.
         for i in 0..15 {
@@ -905,6 +965,9 @@ mod tests {
             async fn get_post(&self, _: &str, _: &crate::services::KindOk) -> Option<Post> {
                 None
             }
+            async fn post_kind(&self, _: &str) -> Option<String> {
+                None
+            }
             async fn get_post_by_slug(&self, _: &str, _: &str) -> Option<Post> {
                 None
             }
@@ -943,6 +1006,100 @@ mod tests {
         assert_eq!(
             s.notify_admins("Hi".into(), "b".into()).await,
             Err(crate::services::MAIL_NOT_CONFIGURED.into())
+        );
+    }
+
+    /// P23: `meta.get` and `meta.set` act only on items of the `content.read` types
+    /// (looked up whatever their status); a missing item is refused like a hidden one.
+    #[tokio::test]
+    async fn meta_is_scoped_to_read_types() {
+        let services = Arc::new(InMemoryServices::new());
+        services.insert_post(post("p1", "post"));
+        let mut draft = post("d1", "post");
+        draft.status = "draft".into();
+        services.insert_post(draft);
+        services.insert_post(post("g1", "page"));
+        for id in ["p1", "d1", "g1"] {
+            services.meta_set(id, "seo.k", "\"v\"").await.expect("seed");
+        }
+        let caps = Capabilities {
+            content_read: vec!["post".into()],
+            content_meta_write: vec!["seo.*".into()],
+            ..Capabilities::default()
+        };
+        let mut s = state(caps, services.clone());
+        let set = |id: &str| (id.to_string(), "seo.k".to_string(), "\"w\"".to_string());
+        for id in ["p1", "d1"] {
+            let (p, k, v) = set(id);
+            assert_eq!(meta::Host::set(&mut s, p, k, v).await, Ok(()), "{id}");
+            assert_eq!(
+                meta::Host::get(&mut s, id.into(), "seo.k".into())
+                    .await
+                    .as_deref(),
+                Some("\"w\""),
+                "{id}"
+            );
+        }
+        for id in ["g1", "missing"] {
+            let (p, k, v) = set(id);
+            assert_eq!(
+                meta::Host::set(&mut s, p, k, v).await,
+                Err(NO_SUCH_POST.into()),
+                "{id}"
+            );
+            assert_eq!(
+                meta::Host::get(&mut s, id.into(), "seo.k".into()).await,
+                None
+            );
+        }
+        assert_eq!(
+            services.meta_get("g1", "seo.k").await.as_deref(),
+            Some("\"v\"")
+        );
+    }
+
+    /// P23: a `"*"` (or `plugin.*`) meta grant never reaches another plugin's
+    /// `plugin.<other>.*` keys; the plugin's own namespace and an explicit grant of the
+    /// other namespace do.
+    #[tokio::test]
+    async fn star_meta_grant_excludes_other_plugins_namespace() {
+        let (mut caps, services) = post_reader();
+        for key in ["plugin.other.secret", "plugin.tester.mine", "seo.title"] {
+            services.meta_set("p", key, "1").await.expect("seed");
+        }
+        caps.content_meta_read = vec!["*".into()];
+        caps.content_meta_write = vec!["*".into(), "plugin.*".into()];
+        let mut s = state(caps.clone(), services.clone());
+        let get =
+            async |s: &mut HostState, key: &str| meta::Host::get(s, "p".into(), key.into()).await;
+        assert_eq!(get(&mut s, "plugin.other.secret").await, None);
+        assert_eq!(
+            get(&mut s, "plugin.tester.mine").await.as_deref(),
+            Some("1")
+        );
+        assert_eq!(get(&mut s, "seo.title").await.as_deref(), Some("1"));
+        assert!(
+            meta::Host::set(&mut s, "p".into(), "plugin.other.secret".into(), "2".into())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            services
+                .meta_get("p", "plugin.other.secret")
+                .await
+                .as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            meta::Host::set(&mut s, "p".into(), "plugin.tester.mine".into(), "2".into()).await,
+            Ok(())
+        );
+        // An explicit grant of the other plugin's namespace is honoured.
+        caps.content_meta_read = vec!["plugin.other.*".into()];
+        let mut s = state(caps, services);
+        assert_eq!(
+            get(&mut s, "plugin.other.secret").await.as_deref(),
+            Some("1")
         );
     }
 

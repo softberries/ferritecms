@@ -3,6 +3,13 @@
 //! The plugin host never touches the database itself: every `content`, `meta`, `options`,
 //! `kv`, `settings` and `mail` import is answered through [`HostServices`]. Capability checks and
 //! budgets are applied by the host before these methods are called.
+//!
+//! **Cancel-safety.** Every method runs inside a plugin call, and the host drops the
+//! call's future at the hard deadline; a caller drops it too when its request goes away
+//! (a client disconnect) or its job loses the lease. So any await may be the last one:
+//! implementations must not hold a `Tx` across an await they cannot finish (a dropped
+//! `Tx` rolls back), and each write is a single statement or one short `Tx`, never a
+//! sequence of writes that is wrong when cut in the middle.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -21,6 +28,11 @@ pub trait HostServices: Send + Sync + 'static {
     /// Implementations should check the type before any expensive loading, so refused
     /// reads cost little; the host re-checks the returned post's type.
     async fn get_post(&self, id: &str, kind_ok: &KindOk) -> Option<Post>;
+    /// The type of item `id`, whatever its status (P23): the host lets `meta.get` and
+    /// `meta.set` act only on items of the plugin's `content.read` types. Visibility
+    /// (which items a plugin may see at all) stays the implementation's, in
+    /// [`meta_get`](Self::meta_get) and [`meta_set`](Self::meta_set).
+    async fn post_kind(&self, id: &str) -> Option<String>;
     async fn get_post_by_slug(&self, kind: &str, slug: &str) -> Option<Post>;
     async fn list_posts(&self, kind: &str, limit: u32, offset: u32) -> Vec<Post>;
     async fn meta_get(&self, post: &str, key: &str) -> Option<String>;
@@ -117,6 +129,10 @@ impl HostServices for InMemoryServices {
     async fn get_post(&self, id: &str, kind_ok: &KindOk) -> Option<Post> {
         let post = self.lock().posts.get(id).cloned()?;
         kind_ok(&post.kind).then_some(post)
+    }
+
+    async fn post_kind(&self, id: &str) -> Option<String> {
+        self.lock().posts.get(id).map(|p| p.kind.clone())
     }
 
     async fn get_post_by_slug(&self, kind: &str, slug: &str) -> Option<Post> {

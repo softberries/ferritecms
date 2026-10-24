@@ -573,6 +573,163 @@ async fn services_kv_settings_options_meta(site: Site) -> Site {
     site
 }
 
+/// P23 + Task 11 carry: `post_kind` answers the type of any item whatever its status
+/// (the host's type check), while `meta.set`, like `meta.get`, reaches only items the
+/// plugin could see (published), so an action cannot annotate a draft.
+async fn meta_writes_reach_visible_items_only(site: Site) -> Site {
+    let s = site.services.as_ref();
+    let author = site.user("ada", Role::Author).await;
+    let public = site
+        .post(&author, "pub", "Pub", ContentStatus::Published, Some(-HOUR))
+        .await;
+    let draft = site
+        .post(&author, "draft", "Draft", ContentStatus::Draft, None)
+        .await;
+    assert_eq!(
+        s.post_kind(&public.to_string()).await.as_deref(),
+        Some("post")
+    );
+    assert_eq!(
+        s.post_kind(&draft.to_string()).await.as_deref(),
+        Some("post")
+    );
+    assert_eq!(s.post_kind(&ContentId::new().to_string()).await, None);
+    assert_eq!(s.post_kind("not-a-uuid").await, None);
+
+    let before = site.store.read().events().max_seq().await.unwrap();
+    assert_eq!(
+        s.meta_set(&draft.to_string(), "seo.title", "\"T\"").await,
+        Err("no such post".to_owned())
+    );
+    assert_eq!(
+        site.store
+            .read()
+            .meta()
+            .get(draft, "seo.title")
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        site.store
+            .read()
+            .events()
+            .since(before, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        s.meta_set(&public.to_string(), "seo.title", "\"T\"").await,
+        Ok(())
+    );
+    site
+}
+
+/// Cancel-safety: a `meta.set` whose future is dropped at any point (the host's hard
+/// deadline, a client disconnect) either wrote the value and its `invalidate` event
+/// or neither (one short `Tx`; a dropped `Tx` rolls back).
+async fn dropped_meta_write_is_all_or_nothing(site: Site) -> Site {
+    let s = site.services.clone();
+    let author = site.user("ada", Role::Author).await;
+    let id = site
+        .post(
+            &author,
+            "hello",
+            "Hello",
+            ContentStatus::Published,
+            Some(-HOUR),
+        )
+        .await;
+    let (mut completed, mut dropped) = (false, 0);
+    for step in 0..400u64 {
+        let key = format!("seo.k{step}");
+        let before = site.store.read().events().max_seq().await.unwrap();
+        let write = tokio::time::timeout(
+            std::time::Duration::from_micros(step * 25),
+            s.meta_set(&id.to_string(), &key, "1"),
+        )
+        .await;
+        // Let a dropped `Tx` finish its rollback before reading.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let stored = site.store.read().meta().get(id, &key).await.unwrap();
+        let events = site.store.read().events().since(before, 10).await.unwrap();
+        match &write {
+            Ok(result) => {
+                assert_eq!(result, &Ok(()), "step {step}");
+                assert_eq!(stored, Some(json!(1)), "step {step}");
+                assert_eq!(events.len(), 1, "step {step}");
+                completed = true;
+                break;
+            }
+            // Dropped: the value and its event both landed (the commit had gone out),
+            // or neither did.
+            Err(_) => {
+                dropped += 1;
+                assert_eq!(
+                    usize::from(stored.is_some()),
+                    events.len(),
+                    "step {step}: half-done write"
+                );
+            }
+        }
+    }
+    assert!(completed, "the write never finished within the steps");
+    assert!(dropped > 0, "no write was dropped mid-way");
+    site
+}
+
+/// P22: the head filters of a page share its render budget: once it is spent the
+/// remaining plugins are skipped and the head is volatile.
+async fn render_budget_bounds_the_head(site: Site) -> Site {
+    let author = site.user("ada", Role::Author).await;
+    let id = site
+        .post(
+            &author,
+            "hello",
+            "Hello",
+            ContentStatus::Published,
+            Some(-HOUR),
+        )
+        .await;
+    let slow = std::sync::Arc::new(common::SlowPosts::new(
+        site.services.clone(),
+        std::time::Duration::from_secs(5),
+    ));
+    let host = slow.host(
+        ferrite_plugin_host::HostConfig::default(),
+        &["slow-a", "slow-b", "slow-c"],
+    );
+    let item = public_item(&site, id).await;
+    let start = std::time::Instant::now();
+    let req = req_for(&item).until(start + std::time::Duration::from_millis(300));
+    let mut trace = RenderTrace::default();
+    let html = page_head(
+        &host,
+        site.store.as_ref(),
+        SITE,
+        HeadPage {
+            item: Some(&item),
+            path: &item.url,
+        },
+        &req,
+        &mut trace,
+    )
+    .await;
+    let took = start.elapsed();
+    assert!(
+        html.starts_with("<title>Hello – Test &amp; Site</title>"),
+        "{html}"
+    );
+    assert!(trace.volatile);
+    assert!(
+        took < std::time::Duration::from_millis(500),
+        "took {took:?}"
+    );
+    assert_eq!(slow.calls(), 1, "slow-b and slow-c were skipped");
+    site
+}
+
 /// A store error that a plugin read swallows (the plugin still succeeds) marks the
 /// page volatile, so a transient failure is not cached for long (final review I2).
 async fn plugin_read_errors_are_volatile(site: Site) -> Site {
@@ -640,6 +797,9 @@ profile_tests!(
     services_kv_settings_options_meta,
     plugin_read_errors_are_volatile,
     seo_read_error_is_volatile,
+    meta_writes_reach_visible_items_only,
+    dropped_meta_write_is_all_or_nothing,
+    render_budget_bounds_the_head,
 );
 
 #[test]

@@ -1,8 +1,11 @@
 //! Running render filters for one request, with the request scope and the trace.
 
-use std::sync::{
-    Arc, Mutex, MutexGuard, PoisonError,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    sync::{
+        Arc, Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
 };
 
 use ferrite_core::{DepKeys, PageItem, Previewed};
@@ -34,6 +37,10 @@ pub struct PluginRequest {
     /// `SiteReader::preview` (its `can_read` check passed, R17), so a public request
     /// cannot smuggle a draft into the scope.
     preview: Option<Arc<Previewed>>,
+    /// End of the page's render budget (P22), set when the render slot is taken: the
+    /// filters of the whole page share it. `None`: no budget (each call still has its
+    /// deadline).
+    until: Option<Instant>,
 }
 
 impl PluginRequest {
@@ -47,7 +54,15 @@ impl PluginRequest {
                 post: item.map(|id| id.to_string()),
             },
             preview: None,
+            until: None,
         }
+    }
+
+    /// The page's render budget ends at `until` (`HttpConfig::render_budget` after the
+    /// render slot was taken).
+    pub fn until(mut self, until: Instant) -> Self {
+        self.until = Some(until);
+        self
     }
 
     /// Marks the request as made by a logged-in user (`RequestInfo.is_logged_in`, P21).
@@ -110,7 +125,9 @@ pub(crate) fn mark_degraded() {
 
 /// Apply filter `hook` for `req`, adding the dependency keys and volatility of every
 /// plugin call to `trace`; a store error swallowed by a service also makes it
-/// volatile. Never fails: a failing plugin is skipped by the host.
+/// volatile. Never fails: a failing plugin is skipped by the host. Within the request's
+/// render budget ([`PluginRequest::until`]) when it has one: past it the remaining
+/// plugins are skipped and the page is volatile.
 pub async fn run_filter(
     host: &PluginHost,
     hook: &str,
@@ -125,9 +142,21 @@ pub async fn run_filter(
         deps: Arc::clone(&deps),
         degraded: Arc::clone(&degraded),
     };
-    let outcome = SCOPE
-        .scope(scope, host.apply_filter_traced(hook, value, &req.info))
-        .await;
+    let outcome = match req.until {
+        Some(until) => {
+            SCOPE
+                .scope(
+                    scope,
+                    host.apply_filter_until(hook, value, &req.info, until),
+                )
+                .await
+        }
+        None => {
+            SCOPE
+                .scope(scope, host.apply_filter_traced(hook, value, &req.info))
+                .await
+        }
+    };
     for key in outcome.deps {
         trace.deps.insert(key);
     }

@@ -27,7 +27,8 @@ pub(crate) enum CallFailure {
     Trap(Trap),
     /// The guest trapped after the host refused a memory or table grow.
     Memory,
-    /// Hard deadline (`deadline × 1.5`) elapsed, e.g. inside a slow host import.
+    /// Hard deadline (`deadline × 1.5`, or the end of the render budget) elapsed, e.g.
+    /// inside a slow host import.
     Timeout,
     /// The instance could not be created. Text is capped and escaped.
     Instantiate(String),
@@ -129,14 +130,53 @@ async fn instantiate(
     Ok((store, plugin))
 }
 
-/// Run `call` under the hard deadline (`deadline × 1.5`), the backstop for time spent
-/// in host imports, which epochs do not interrupt.
+/// The time one call may take: `soft` is the epoch deadline (guest code), `hard` the
+/// tokio timeout, the backstop for time spent in host imports, which epochs do not
+/// interrupt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CallDeadline {
+    soft: Duration,
+    hard: Duration,
+    /// The soft deadline is shorter than the hook's (a render budget ends first).
+    cut: bool,
+}
+
+impl CallDeadline {
+    /// The hook's deadline, with the hard deadline at `deadline × 1.5`.
+    pub(crate) fn full(deadline: Duration) -> Self {
+        Self {
+            soft: deadline,
+            hard: deadline.saturating_mul(3) / 2,
+            cut: false,
+        }
+    }
+
+    /// [`full`](Self::full), with both deadlines capped at `left` (F37: a call never
+    /// outlives the render budget).
+    pub(crate) fn within(deadline: Duration, left: Duration) -> Self {
+        let full = Self::full(deadline);
+        Self {
+            soft: full.soft.min(left),
+            hard: full.hard.min(left),
+            cut: left < deadline,
+        }
+    }
+
+    /// Whether the budget, not the hook's own deadline, set the soft deadline: a
+    /// deadline failure of such a call is not the plugin's fault.
+    pub(crate) fn cut(self) -> bool {
+        self.cut
+    }
+}
+
+/// Run `call` under the hard deadline. When the future is dropped (here, or by a
+/// caller whose request went away) the store and its instance are dropped with it:
+/// nothing of the call outlives it (cancel-safety, `HostServices` docs).
 async fn bounded<T>(
-    deadline: Duration,
+    limit: CallDeadline,
     call: impl Future<Output = Result<T, CallFailure>>,
 ) -> Result<T, CallFailure> {
-    let hard = deadline.saturating_mul(3) / 2;
-    tokio::time::timeout(hard, call)
+    tokio::time::timeout(limit.hard, call)
         .await
         .unwrap_or(Err(CallFailure::Timeout))
 }
@@ -148,14 +188,15 @@ pub(crate) async fn call_filter(
     hook: &str,
     value: &FilterValue,
     req: &RequestInfo,
-    deadline: Duration,
+    limit: CallDeadline,
     trace: &CallTrace,
     render_path: bool,
 ) -> Result<FilterValue, CallFailure> {
     let value = value.clone().into();
     let req = req.clone().into();
-    bounded(deadline, async {
-        let (mut store, plugin) = instantiate(loaded, deadline, trace.clone(), render_path).await?;
+    bounded(limit, async {
+        let (mut store, plugin) =
+            instantiate(loaded, limit.soft, trace.clone(), render_path).await?;
         plugin
             .ferrite_plugin_guest()
             .call_apply_filter(&mut store, hook, &value, &req)
@@ -171,12 +212,12 @@ pub(crate) async fn call_action(
     loaded: &LoadedPlugin,
     hook: &str,
     event: ActionEvent,
-    deadline: Duration,
+    limit: CallDeadline,
 ) -> Result<(), CallFailure> {
     let event = event.into();
-    bounded(deadline, async {
+    bounded(limit, async {
         let (mut store, plugin) =
-            instantiate(loaded, deadline, CallTrace::default(), false).await?;
+            instantiate(loaded, limit.soft, CallTrace::default(), false).await?;
         plugin
             .ferrite_plugin_guest()
             .call_on_action(&mut store, hook, &event)
@@ -190,12 +231,12 @@ pub(crate) async fn call_action(
 pub(crate) async fn call_route(
     loaded: &LoadedPlugin,
     req: RouteRequest,
-    deadline: Duration,
+    limit: CallDeadline,
 ) -> Result<RouteResponse, CallFailure> {
     let req = req.into();
-    bounded(deadline, async {
+    bounded(limit, async {
         let (mut store, plugin) =
-            instantiate(loaded, deadline, CallTrace::default(), false).await?;
+            instantiate(loaded, limit.soft, CallTrace::default(), false).await?;
         plugin
             .ferrite_plugin_guest()
             .call_handle_request(&mut store, &req)
@@ -243,6 +284,23 @@ mod tests {
             assert!(!shown.contains(['\n', '\u{1b}']), "unescaped control char");
             assert!(shown.ends_with("…[truncated]"));
         }
+    }
+
+    #[test]
+    fn deadlines_are_capped_by_the_budget() {
+        let ms = Duration::from_millis;
+        let full = CallDeadline::full(ms(200));
+        assert_eq!(
+            (full.soft, full.hard, full.cut()),
+            (ms(200), ms(300), false)
+        );
+        // Room for the whole call: unchanged.
+        assert_eq!(CallDeadline::within(ms(200), ms(1000)), full);
+        // The hard deadline is capped first (F37); the soft one is not cut yet.
+        let w = CallDeadline::within(ms(200), ms(250));
+        assert_eq!((w.soft, w.hard, w.cut()), (ms(200), ms(250), false));
+        let w = CallDeadline::within(ms(200), ms(80));
+        assert_eq!((w.soft, w.hard, w.cut()), (ms(80), ms(80), true));
     }
 
     #[test]
