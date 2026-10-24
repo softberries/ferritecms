@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <rect width="1" height="1" mask="image-set('https://evil/leak-attr-imageset.png' 1x)"/>
+  <rect width="1" height="1" mask="-webkit-image-set('https://evil/leak-attr-webkit.png' 1x)"/>
+  <rect width="1" height="1" mask="image('https://evil/leak-attr-image.png')"/>
+  <rect width="1" height="1" mask="cross-fade('https://evil/a.png', 'https://evil/b.png', 50%)"/>
+  <rect width="1" height="1" mask="-webkit-cross-fade('https://evil/a.png', 'https://evil/b.png', 50%)"/>
+  <rect width="1" height="1" mask="element(#x)"/>
+  <rect width="1" height="1" mask="IMAGE - SET ( 'https://evil/c.png' 1x )"/>
+  <rect width="1" height="1" mask="linear-gradient(red, blue)"/>
+  <rect width="1" height="1" clip-path="image-set('https://evil/d.png' 1x)"/>
+  <rect width="1" height="1" filter="image('https://evil/e.png')"/>
+  <rect width="1" height="1" fill="image-set('https://evil/f.png' 1x)"/>
+  <rect width="1" height="1" stroke="cross-fade('https://evil/g.png', 'https://evil/h.png', 50%)"/>
+  <path d="M0 0L1 1" marker-start="image-set('https://evil/i.png' 1x)" marker-mid="image('https://evil/j.png')" marker-end="element(#k)"/>
+</svg>

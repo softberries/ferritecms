@@ -323,13 +323,21 @@ M2a-2b serving change). The sanitiser:
 - **Refuses** (`SvgError`): input over 2 MiB (`TooLarge`); anything that is not UTF-8, including
   UTF-16 with or without a BOM and an XML declaration naming another encoding (`NotUtf8`; a
   UTF-8 BOM is accepted); malformed XML, characters XML 1.0 forbids (also as `&#…;`), text or
-  elements outside the single root, or an XML version other than 1.0 (`NotXml`); a root other
-  than `svg` in `http://www.w3.org/2000/svg` (`NotSvg`); any DOCTYPE, so entity declarations,
-  billion laughs, external (XXE) and parameter entities never reach a parser (`Doctype`); a
-  reference other than `lt gt amp apos quot` or a numeric one, in text or attribute values,
-  kept or dropped (`UnknownEntity`); depth over 64 (`TooDeep`), more than 50 000 elements
-  (`TooManyElements`), more than 64 attributes on an element (`TooManyAttributes`) or a value
-  over 256 KiB (`ValueTooLong`). Limits count dropped elements too.
+  elements outside the single root, or an XML version other than 1.0 (`NotXml`, whose message
+  is a fixed description plus a byte offset and never echoes input); a root other than `svg` in
+  `http://www.w3.org/2000/svg` (`NotSvg`); every DOCTYPE except one standard SVG DOCTYPE before
+  the root (`svg PUBLIC` with one of the SVG 1.0/1.1 public ids, as Illustrator writes, and no
+  internal subset), which is accepted and not written out, so entity declarations, billion
+  laughs, external (XXE) and parameter entities never reach a parser and no DTD is ever fetched
+  (`Doctype`, R6); a reference other than `lt gt amp apos quot` or a numeric one, in text or
+  attribute values, kept or dropped (`UnknownEntity`, the name capped at 64 characters); depth
+  over 64 (`TooDeep`), more than 50 000 elements (`TooManyElements`), more than 64 attributes on
+  an element (`TooManyAttributes`), a value over 256 KiB (`ValueTooLong`), more than 128 kept
+  `<use>` elements, or a `<use>` whose `#id` names a `<use>` or an element containing one,
+  including its own ancestor (`TooManyUses`, R6). Limits count dropped elements too. Without
+  use chains every `<use>` instantiates a use-free subtree, so instancing is bounded by
+  128 × the document; markers, patterns and filters can still be costly to render (residual,
+  client-side only).
 - **Keeps** elements in the SVG namespace by exact local name: `svg g defs symbol use title desc
   path rect circle ellipse line polyline polygon text tspan textPath linearGradient
   radialGradient stop pattern clipPath mask marker filter feBlend feColorMatrix
@@ -343,8 +351,12 @@ M2a-2b serving change). The sanitiser:
   `data:image/(png|jpeg|gif|webp);base64,…` URI. Every `on*` attribute, every other prefixed
   attribute and input namespace declarations are dropped. Values are read through
   `normalized_value`, so entity-encoded `javascript:` is caught; a value is dropped when it
-  contains `\`, `javascript:`, `vbscript:`, `expression(`, `@import` or `src(` (ignoring case,
-  whitespace and control characters) or a `url(` that is not `url(#…)`. A `style` value is also
+  contains `\`, `javascript:`, `vbscript:`, `expression(`, `@import`, `src(`, or the CSS image
+  functions `image-set(`, `image(`, `cross-fade(`, `element(` (ignoring case, whitespace and
+  control characters, so `-webkit-` forms match too) or a `url(` that is not `url(#…)`. `mask`,
+  `clip-path`, `filter` and `marker-start/mid/end`, as attributes or `style` declarations, keep
+  only `none` or exactly one `url(#id)` (R6); `fill` and `stroke` keep colours, and any `url(` in
+  them must be local. A `style` value is also
   dropped when it contains `{ } < > /* @`; otherwise only declarations whose property is a
   presentation property (fill, stroke…, font-*, opacity, display, visibility, transform, the
   marker/clip/mask/filter properties) and whose quotes balance are kept.

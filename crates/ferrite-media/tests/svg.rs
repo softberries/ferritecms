@@ -4,6 +4,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use ferrite_media::svg::{MAX_SVG_BYTES, SVG_MIME, SvgError, looks_like_svg, sanitize_svg};
+use quick_xml::XmlVersion;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
@@ -74,6 +75,41 @@ fn has_event_attribute(out: &str) -> bool {
     }
 }
 
+/// True when an attribute value could make the renderer load something: a CSS image function or
+/// a `url(` that does not point into the document.
+fn has_external_reference(out: &str) -> bool {
+    let mut reader = Reader::from_str(out);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
+                for attr in e.attributes() {
+                    let attr = attr.expect("well-formed attribute");
+                    let value = attr
+                        .normalized_value(XmlVersion::Implicit1_0)
+                        .expect("escaped value")
+                        .to_lowercase();
+                    let squashed: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+                    if ["image-set(", "image(", "cross-fade(", "element("]
+                        .iter()
+                        .any(|t| squashed.contains(t))
+                    {
+                        return true;
+                    }
+                    let mut rest = squashed.as_str();
+                    while let Some(at) = rest.find("url(") {
+                        rest = &rest[at + 4..];
+                        if !rest.trim_start_matches(['"', '\'']).starts_with('#') {
+                            return true;
+                        }
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => return false,
+            Ok(_) => {}
+        }
+    }
+}
+
 const FORBIDDEN: &[&str] = &[
     "script",
     "foreignobject",
@@ -100,6 +136,10 @@ const FORBIDDEN: &[&str] = &[
     "<?xml-stylesheet",
     "<?php",
     "cdata",
+    "image-set(",
+    "image(",
+    "cross-fade(",
+    "element(",
 ];
 
 fn assert_neutral(name: &str, out: &str) {
@@ -166,6 +206,8 @@ fn hostile_svgs_are_neutralised() {
         "embedded-elements.svg",
         "xhtml-script.svg",
         "processing-instruction.svg",
+        "image-functions-attr.svg",
+        "image-functions-style.svg",
     ] {
         let out = clean(&fixture(name));
         assert_neutral(name, &out);
@@ -193,6 +235,27 @@ fn safe_parts_of_hostile_svgs_remain() {
     ));
     assert!(
         out.contains(r#"<rect style="fill:red;mask:url(#m)"/>"#),
+        "{out}"
+    );
+    assert_idempotent(&out);
+    // Reference properties keep only `none` or one local `url(#id)`; the element stays.
+    for name in ["image-functions-attr.svg", "image-functions-style.svg"] {
+        let out = clean(&fixture(name));
+        assert_eq!(
+            out.matches(r#"<rect width="1" height="1"/>"#).count(),
+            12,
+            "{name}: {out}"
+        );
+        assert!(out.contains(r#"<path d="M0 0L1 1"/>"#), "{name}: {out}");
+    }
+    // A style holding a refused token is dropped whole, even next to a safe declaration.
+    let out = clean(&fixture("image-functions-style.svg"));
+    assert!(!out.contains("style="), "{out}");
+    let out = clean_str(&format!(
+        r##"{SVG_OPEN}<rect mask="none" clip-path=" url( '#c' ) " filter="url(#f) url(#g)" marker-end="url(#m)" fill="url(#p) red" stroke="none"/></svg>"##
+    ));
+    assert!(
+        out.contains(r##"<rect mask="none" clip-path=" url( &apos;#c&apos; ) " marker-end="url(#m)" fill="url(#p) red" stroke="none"/>"##),
         "{out}"
     );
     assert_idempotent(&out);
@@ -234,6 +297,41 @@ fn doctype_and_entities_are_refused() {
             "{name}"
         );
     }
+    // Illustrator's standard SVG 1.1 DOCTYPE is accepted and not written out (nothing is fetched).
+    let out = clean(&fixture("illustrator-doctype.svg"));
+    assert!(!out.to_ascii_lowercase().contains("doctype"), "{out}");
+    assert!(out.contains(r#"<path d="M2 2h20v20H2z"/>"#), "{out}");
+    assert_well_formed(&out);
+    assert_idempotent(&out);
+    const ILLUSTRATOR: &str = r#"<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">"#;
+    for input in [
+        // A standard public id with an internal subset.
+        format!(
+            r#"<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [<!ENTITY a "b">]>{SVG_OPEN}</svg>"#
+        ),
+        // Twice, or inside / after the root.
+        format!("{ILLUSTRATOR}{ILLUSTRATOR}{SVG_OPEN}</svg>"),
+        format!("{SVG_OPEN}{ILLUSTRATOR}</svg>"),
+        // SYSTEM only, another public id, another root name.
+        format!(
+            r#"<!DOCTYPE svg SYSTEM "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">{SVG_OPEN}</svg>"#
+        ),
+        format!(
+            r#"<!DOCTYPE svg PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "x.dtd">{SVG_OPEN}</svg>"#
+        ),
+        format!(r#"<!DOCTYPE html PUBLIC "-//W3C//DTD SVG 1.1//EN" "x.dtd">{SVG_OPEN}</svg>"#),
+    ] {
+        assert!(
+            matches!(sanitize_svg(input.as_bytes()), Err(SvgError::Doctype)),
+            "{input}: {:?}",
+            sanitize_svg(input.as_bytes())
+        );
+    }
+    // An accepted DOCTYPE declares no entities: `&nbsp;` is still unknown.
+    assert!(matches!(
+        sanitize_svg(format!("{ILLUSTRATOR}{SVG_OPEN}<title>&nbsp;</title></svg>").as_bytes()),
+        Err(SvgError::UnknownEntity(_))
+    ));
     // A DOCTYPE without an internal subset, or after the root, is refused too.
     let late = format!("{SVG_OPEN}</svg><!DOCTYPE svg>");
     assert!(matches!(
@@ -386,6 +484,30 @@ fn malformed_documents_are_not_xml() {
         );
     }
     assert!(matches!(sanitize_svg(b""), Err(SvgError::NotSvg)));
+
+    // `NotXml` never echoes input: a fixed description plus a byte offset, at most 200 chars.
+    let long = "q".repeat(500);
+    for input in [
+        format!("{SVG_OPEN}<g{long}></g></svg>"),
+        format!("{SVG_OPEN}<{long}></{long}x></svg>"),
+        format!("{SVG_OPEN}<rect {long}=1/></svg>"),
+        format!("{SVG_OPEN}<title>&#x{long};</title></svg>"),
+        format!("{SVG_OPEN}</svg>{long}"),
+        format!(r#"<?xml version="{long}"?>{SVG_OPEN}</svg>"#),
+    ] {
+        match sanitize_svg(input.as_bytes()) {
+            Err(SvgError::NotXml(msg)) => {
+                assert!(msg.len() <= 200 && !msg.contains("qq"), "{msg}");
+                assert!(msg.contains(" at byte "), "{msg}");
+            }
+            other => panic!("expected NotXml, got {other:?}"),
+        }
+    }
+    // An unknown entity's name is capped too.
+    match sanitize_svg(format!("{SVG_OPEN}<title>&{long};</title></svg>").as_bytes()) {
+        Err(SvgError::UnknownEntity(name)) => assert_eq!(name.len(), 64),
+        other => panic!("expected UnknownEntity, got {other:?}"),
+    }
 }
 
 #[test]
@@ -439,6 +561,53 @@ fn bombs_are_bounded() {
         sanitize_svg(value(256 * 1024 + 1).as_bytes()),
         Err(SvgError::ValueTooLong)
     ));
+}
+
+#[test]
+fn use_fan_out_is_bounded() {
+    // The review's bomb: 9 levels of 10 uses of the level below (~10^9 instances).
+    assert!(matches!(
+        sanitize_svg(&fixture("use-fanout.svg")),
+        Err(SvgError::TooManyUses)
+    ));
+    let uses = |count: usize| {
+        format!(
+            r##"{SVG_OPEN}<defs><rect id="r" width="1" height="1"/></defs>{}</svg>"##,
+            r##"<use href="#r"/>"##.repeat(count)
+        )
+    };
+    clean_str(&uses(128));
+    assert!(matches!(
+        sanitize_svg(uses(129).as_bytes()),
+        Err(SvgError::TooManyUses)
+    ));
+    // Uses inside a dropped subtree are not kept and not counted.
+    clean_str(&format!(
+        r##"{SVG_OPEN}<rect id="r"/><x>{}</x></svg>"##,
+        r##"<use href="#r"/>"##.repeat(200)
+    ));
+    for input in [
+        // A use of a use.
+        format!(r##"{SVG_OPEN}<rect id="r"/><use id="u" href="#r"/><use href="#u"/></svg>"##),
+        // A use of a symbol (or group) containing a use, xlink spelling included.
+        r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><rect id="r"/><symbol id="s"><use href="#r"/></symbol><use xlink:href="#s"/></svg>"##.to_owned(),
+        // A use of its own ancestor.
+        format!(r##"{SVG_OPEN}<g id="g"><use href="#g"/></g></svg>"##),
+        // Duplicate ids: any element carrying the id counts.
+        format!(
+            r##"{SVG_OPEN}<rect id="d"/><g id="d"><use href="#x"/></g><use href="#d"/></svg>"##
+        ),
+    ] {
+        assert!(
+            matches!(sanitize_svg(input.as_bytes()), Err(SvgError::TooManyUses)),
+            "{input}"
+        );
+    }
+    // A use of a use-free subtree, or of an unknown id, is fine.
+    let out = clean_str(&format!(
+        r##"{SVG_OPEN}<g id="g"><rect/><circle r="1"/></g><use href="#g"/><use href="#missing"/></svg>"##
+    ));
+    assert!(out.contains(r##"<use href="#g"/>"##), "{out}");
 }
 
 #[test]
@@ -501,6 +670,15 @@ fn payload_corpus_never_yields_active_content() {
         r#"<svg xmlns="http://www.w3.org/2000/svg"><g on load="x"/><g onload ="alert(1)"/></svg>"#,
         r#"<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:red;/**/background:url(https://evil/)"/></svg>"#,
         r#"<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:&quot;}&lt;/style&gt;&lt;script&gt;alert(1)&lt;/script&gt;"/></svg>"#,
+        // Review I1: payloads that made Chromium fetch, and their relatives.
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><rect style="mask:image-set('https://evil/leak-style-imageset.png' 1x)"/></svg>"#,
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><rect mask="image-set('https://evil/leak-attr-imageset.png' 1x)"/></svg>"#,
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><rect style="mask:-webkit-image-set('https://evil/leak-webkit-imageset.png' 1x)"/></svg>"#,
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><rect style="mask:image('https://evil/x.png')"/></svg>"#,
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><rect style="mask:cross-fade('https://evil/a.png','https://evil/b.png',50%)"/></svg>"#,
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><rect mask="-webkit-cross-fade('https://evil/a.png','https://evil/b.png',50%)"/></svg>"#,
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><rect fill="image-set('https://evil/f.png' 1x)" stroke="element(#x)"/></svg>"#,
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><rect style="filter:image('https://evil/e.png');clip-path:image-set('https://evil/d.png' 1x)"/></svg>"#,
     ];
     let mut corpus: Vec<Vec<u8>> = payloads.iter().map(|p| p.as_bytes().to_vec()).collect();
     let dir = format!("{}/tests/svg", env!("CARGO_MANIFEST_DIR"));
@@ -571,6 +749,10 @@ fn payload_corpus_never_yields_active_content() {
         assert!(
             !has_event_attribute(&out),
             "event attribute in output: {out}"
+        );
+        assert!(
+            !has_external_reference(&out),
+            "external reference in output: {out}"
         );
         assert_well_formed(&out);
         assert_idempotent(&out);

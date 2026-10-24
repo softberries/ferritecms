@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <rect width="1" height="1" style="mask:image-set('https://evil/leak-style-imageset.png' 1x)"/>
+  <rect width="1" height="1" style="mask:-webkit-image-set('https://evil/leak-webkit-imageset.png' 1x)"/>
+  <rect width="1" height="1" style="mask:image('https://evil/leak-style-image.png')"/>
+  <rect width="1" height="1" style="mask:cross-fade('https://evil/a.png','https://evil/b.png',50%)"/>
+  <rect width="1" height="1" style="-webkit-mask:-webkit-cross-fade('https://evil/a.png','https://evil/b.png',50%)"/>
+  <rect width="1" height="1" style="mask:element(#x)"/>
+  <rect width="1" height="1" style="fill:red;mask:image-set(&quot;https://evil/c.png&quot; 1x)"/>
+  <rect width="1" height="1" style="mask:linear-gradient(red, blue)"/>
+  <rect width="1" height="1" style="clip-path:image-set('https://evil/d.png' 1x)"/>
+  <rect width="1" height="1" style="filter:image('https://evil/e.png')"/>
+  <rect width="1" height="1" style="fill:image-set('https://evil/f.png' 1x)"/>
+  <rect width="1" height="1" style="stroke:cross-fade('https://evil/g.png','https://evil/h.png',50%)"/>
+  <path d="M0 0L1 1" style="marker-start:image-set('https://evil/i.png' 1x);marker-end:image('https://evil/j.png')"/>
+</svg>
