@@ -437,6 +437,9 @@ impl MediaRepo for Counted {
     async fn get(&self, id: ContentId) -> Result<Option<Media>, StoreError> {
         self.0.read().media().get(id).await
     }
+    async fn get_for_update(&self, id: ContentId) -> Result<Option<Media>, StoreError> {
+        self.0.read().media().get_for_update(id).await
+    }
     async fn update(&self, media: &Media) -> Result<(), StoreError> {
         self.0.read().media().update(media).await
     }

@@ -1,5 +1,5 @@
 //! Background jobs core enqueues and their payloads (design 04 §6, ruling P12; plugin
-//! purge M2a-2 P9; plugin actions P20).
+//! purge M2a-2 P9; plugin actions P20; media variants M2a-2b P8).
 //!
 //! The handlers live with the job runner wiring (`ferrite`); this module fixes the kinds,
 //! keys and payload shapes both sides agree on. Payloads carry a version `v` (04 §9).
@@ -148,6 +148,40 @@ pub fn plugin_action_job(action: &PluginAction) -> NewJob {
     job
 }
 
+/// Makes the size variants of one raster upload (M2a-2b P8); payload [`MediaVariants`].
+/// Enqueued by [`MediaService::record_upload`](crate::MediaService::record_upload) in
+/// the upload's `Tx`; the handler records its result through
+/// [`MediaService::record_variants`](crate::MediaService::record_variants).
+pub const MEDIA_VARIANTS_KIND: &str = "media.variants";
+
+/// Current version of the [`MediaVariants`] payload.
+pub const MEDIA_VARIANTS_VERSION: u32 = 1;
+
+/// Payload of a [`MEDIA_VARIANTS_KIND`] job: `{"v":1,"item":"<uuid>","artifact":"<hash>"}`.
+/// `artifact` is the original's hash at upload time: the result is recorded only while
+/// the media row still holds it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaVariants {
+    pub v: u32,
+    pub item: ContentId,
+    pub artifact: String,
+}
+
+/// The job for `variants`: due now, unique key `media.variants:<item>:<artifact>` (one
+/// per item and original), default priority and attempts.
+pub fn media_variants_job(variants: &MediaVariants) -> NewJob {
+    let mut payload = Map::new();
+    payload.insert("v".into(), Value::from(variants.v));
+    payload.insert("item".into(), Value::String(variants.item.to_string()));
+    payload.insert("artifact".into(), Value::String(variants.artifact.clone()));
+    let mut job = NewJob::new(MEDIA_VARIANTS_KIND, Value::Object(payload));
+    job.unique_key = Some(format!(
+        "{MEDIA_VARIANTS_KIND}:{}:{}",
+        variants.item, variants.artifact
+    ));
+    job
+}
+
 /// `at + d`; `at` itself if that overflowed (unreachable for the durations used here,
 /// it only avoids a panic path).
 pub(crate) fn after(at: Timestamp, d: Duration) -> Timestamp {
@@ -211,6 +245,29 @@ mod tests {
             ..typed
         });
         assert_eq!(none.payload["subject"], Value::Null);
+    }
+
+    #[test]
+    fn media_variants_job_shape() {
+        let item = ContentId::new();
+        let typed = MediaVariants {
+            v: MEDIA_VARIANTS_VERSION,
+            item,
+            artifact: "ab".repeat(32),
+        };
+        let job = media_variants_job(&typed);
+        assert_eq!(job.kind, "media.variants");
+        assert_eq!(
+            job.unique_key,
+            Some(format!("media.variants:{item}:{}", "ab".repeat(32)))
+        );
+        assert!(job.unique_key.as_ref().unwrap().len() <= 200);
+        assert_eq!(job.run_at, None);
+        assert_eq!(job.priority, 0);
+        assert_eq!(job.max_attempts, ferrite_domain::DEFAULT_MAX_ATTEMPTS);
+        assert_eq!(job.payload, serde_json::to_value(&typed).unwrap());
+        let back: MediaVariants = serde_json::from_value(job.payload).unwrap();
+        assert_eq!(back, typed);
     }
 
     #[test]

@@ -37,7 +37,7 @@ pub(crate) const EXCERPT_CHARS: usize = 160;
 /// Most descendants walked (any non-trash status) when an item moves.
 const MAX_DESCENDANTS: usize = 1000;
 /// Statuses walked by [`move_descendants`]: everything but trash.
-const WALKED: [ContentStatus; 5] = [
+pub(crate) const WALKED: [ContentStatus; 5] = [
     ContentStatus::Draft,
     ContentStatus::Pending,
     ContentStatus::Scheduled,
@@ -122,54 +122,67 @@ impl ContentService {
         draft: ContentDraft,
     ) -> Result<ContentItem, CoreError> {
         require(actor, Capability::EditOwn)?;
+        // One set of rules for the whole write (R10).
+        let rules = self.permalinks.pin();
+        let tx = self.store.begin().await?;
+        let done = self
+            .create_in(tx.as_ref(), rules.as_ref(), actor, draft)
+            .await;
+        finish(tx, done).await
+    }
+
+    /// [`create`](Self::create) inside the caller's `tx` with the caller's pinned
+    /// `rules`: the same validation, rows and event, and the `post.saved` action jobs.
+    /// It checks **no** capability: the caller has (`create` needs `edit_own`; a media
+    /// upload `upload_media`).
+    pub(crate) async fn create_in(
+        &self,
+        tx: &dyn Tx,
+        rules: &dyn Permalinks,
+        actor: &Actor,
+        draft: ContentDraft,
+    ) -> Result<ContentItem, CoreError> {
         let base = base_slug(draft.slug.as_deref(), draft.parent_id, || {
             slug::slugify(&draft.title)
         })?;
         let terms = dedup(&draft.terms);
-        // One set of rules for the whole write (R10).
-        let rules = self.permalinks.pin();
-        let tx = self.store.begin().await?;
-        let done = async {
-            let ty = content_type(tx.as_ref(), &draft.kind).await?;
-            fields::validate_item(&ty.fields, &draft.fields)?;
-            if let Some(parent) = draft.parent_id {
-                check_parent(tx.as_ref(), &ty, None, parent).await?;
-            }
-            let root = self
-                .root_namespace(
-                    tx.as_ref(),
-                    rules.as_ref(),
-                    &draft.kind,
-                    draft.parent_id,
-                    draft.slug.is_some(),
-                    &base,
-                )
-                .await?;
-            let excerpt = excerpt_of(&draft);
-            let row = Row::New(NewContent {
-                id: ContentId::new(),
-                kind: draft.kind,
-                status: ContentStatus::Draft,
-                slug: String::new(),
-                parent_id: draft.parent_id,
-                author_id: actor.user,
-                title: draft.title,
-                excerpt,
-                body: draft.body,
-                body_html: None,
-                fields: draft.fields,
-                menu_order: draft.menu_order,
-                published_at: None,
-                scheduled_at: None,
-            });
-            let saved = save_with_free_slug(tx.as_ref(), row, &base, None, &root).await?;
-            set_terms(tx.as_ref(), saved.id, &terms).await?;
-            let keys = invalidation_keys(&saved, &[], &terms, None, &[]);
-            after_save(tx.as_ref(), actor, &saved, keys, None).await?;
-            Ok(saved)
+        let ty = content_type(tx, &draft.kind).await?;
+        fields::validate_item(&ty.fields, &draft.fields)?;
+        if let Some(parent) = draft.parent_id {
+            check_parent(tx, &ty, None, parent).await?;
         }
-        .await;
-        finish(tx, done).await
+        let root = self
+            .root_namespace(
+                tx,
+                rules,
+                &draft.kind,
+                draft.parent_id,
+                draft.slug.is_some(),
+                &base,
+            )
+            .await?;
+        let excerpt = excerpt_of(&draft);
+        let row = Row::New(NewContent {
+            id: ContentId::new(),
+            kind: draft.kind,
+            status: ContentStatus::Draft,
+            slug: String::new(),
+            parent_id: draft.parent_id,
+            author_id: actor.user,
+            title: draft.title,
+            excerpt,
+            body: draft.body,
+            body_html: None,
+            fields: draft.fields,
+            menu_order: draft.menu_order,
+            published_at: None,
+            scheduled_at: None,
+        });
+        let saved = save_with_free_slug(tx, row, &base, None, &root).await?;
+        set_terms(tx, saved.id, &terms).await?;
+        let keys = invalidation_keys(&saved, &[], &terms, None, &[]);
+        after_save(tx, actor, &saved, keys, None).await?;
+        Ok(saved)
     }
 
     /// Replaces the editable fields of item `id`, which must still be at
@@ -217,7 +230,7 @@ impl ContentService {
     }
 
     /// [`update`](Self::update) inside `tx`; the revision it writes carries `edit.note`.
-    async fn update_in(
+    pub(crate) async fn update_in(
         &self,
         tx: &dyn Tx,
         permalinks: &dyn Permalinks,
@@ -334,11 +347,11 @@ impl ContentService {
 
 /// One [`ContentService::update_in`] call: item `id`, expected at `expected_version`,
 /// gets `draft`; its revision carries `note`.
-struct Edit {
-    id: ContentId,
-    expected_version: i64,
-    draft: ContentDraft,
-    note: Option<String>,
+pub(crate) struct Edit {
+    pub(crate) id: ContentId,
+    pub(crate) expected_version: i64,
+    pub(crate) draft: ContentDraft,
+    pub(crate) note: Option<String>,
 }
 
 /// The validated caller slug, or `fallback()` when there is none. A caller slug that is

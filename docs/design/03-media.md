@@ -250,13 +250,30 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
 - Templates get variants through `image(media, size)` and `post.featured.variants`
   ([06 §4](06-themes-rendering.md#4-minijinja-environment)); an unknown size falls back to the
   original, and `srcset` lists one candidate per width.
-- The only writer of media rows in M1 is `ferrite seed demo`, which runs `process_image`
-  in-process with the core sizes plus the active theme's `[images]` and writes the `media`
-  and `artifacts` rows in one transaction that also emits `post:<media id>`
-  (`crates/ferrite/src/seed.rs`).
-- **Still to build (M2, with the media service and uploads; needs the M1.5 job queue):** on
-  upload of an image a **job** `media.variants` is enqueued ([04](04-cluster.md#job-queue)) so
-  uploads return immediately, with an image-processing concurrency semaphore (M1b ruling R4).
+- **Recording uploads (M2a-2b, `ferrite_core::MediaService`).** The bytes are staged
+  outside any transaction by `ferrite-http`'s uploader, which also decides the type from the
+  content (P3/P4). `record_upload` then writes, in one transaction: the `artifacts` row (unless
+  the hash exists), the media item (kind `media`, title = the given title or the file name
+  without its extension, empty body), its publish (uploads are published at once, P5), the
+  `media` row (no dimensions, `variants` `{}`, `sanitized` only for sanitiser output) and, for
+  a raster original, one `media.variants` job (payload `{"v":1,"item":"<id>","artifact":"<hash>"}`,
+  unique key `media.variants:<item>:<artifact>`, P8). Every one of these writes emits
+  `post:<media id>` in that transaction (M1c-2 R11). Documents (PDF and the R1 classes) get no
+  job. The client's file name keeps only its last `/` or `\` segment (1–255 bytes, no control
+  characters) and is stored as text, never used as a path; a failed or refused upload leaves
+  no row, event or job, and its blob for M4's GC (M1b R2).
+- **Recording variants.** The `media.variants` handler (M2a-2b Task 6) processes the original
+  outside any transaction, stores each variant with `put_artifact` (kind `variant`) and calls
+  `record_variants(item, artifact, width, height, variants, artifacts)`: in one transaction, and
+  only while the `media` row still holds that original (else `false`, nothing written), the
+  variant `artifacts` rows, the row's dimensions and `variants`, and `post:<item>`. The row is
+  read with `MediaRepo::get_for_update` (Postgres `FOR UPDATE`), as is the alt-text edit, so the
+  two read-modify-writes of the unversioned row cannot lose each other's change.
+- `ferrite seed demo` still runs `process_image` in-process with the core sizes plus the active
+  theme's `[images]` and writes the `media` and `artifacts` rows in one transaction that also
+  emits `post:<media id>` (`crates/ferrite/src/seed.rs`).
+- **Still to build (M2a-2b Task 6):** the `media.variants` handler with the image-processing
+  concurrency semaphore (M1b ruling R4, `media.image_workers`).
 
 ## 5. Serving
 
@@ -306,6 +323,8 @@ None of the app-served rules above apply in Direct mode:
 - **No attachment, `nosniff` or PDF CSP headers from the app.** Whatever the bucket or CDN
   sends is what the browser gets: the object's stored `Content-Type` and the CDN's header
   rules. An SVG or HTML upload served inline from the media origin is the operator's risk.
+  In particular the download-only rule for documents (M2a-2b R1: `attachment` + `nosniff`)
+  and the sandbox CSP of sanitised SVG (P7) hold for app-served media only (F15).
 - **The operator must restrict the bucket**: public read of `artifacts/` only (never
   `tmp/` or the prefix root), the security headers set at the CDN, and ideally a separate
   origin for media so inline content cannot reach the site's cookies.

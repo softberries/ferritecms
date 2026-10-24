@@ -46,10 +46,13 @@
 //!   and route table on `types.changed`; an older node treats the unknown kind as
 //!   "invalidate its keys" (M1.5 P28) and still flushes on the `all` event.
 //! * Media rows: a media item is a content item, so lifecycle transitions already emit
-//!   `post:<id>`. Writes to the `media` row itself (alt text, variants, replacing the
-//!   file) must emit `post:<media id>` in the same transaction. No code path writes
-//!   media rows yet (`ferrite-media` only stores blobs; the ingest/admin path arrives
-//!   with M2), so that is an obligation of the media service.
+//!   `post:<id>`. Every write of the `media` row itself emits `post:<media id>` in the
+//!   same transaction (M1c-2 R11), through [`MediaService`](crate::MediaService):
+//!   `record_upload` (the item's create and publish events name it), `update` (alt
+//!   text; the item's versioned update names it), `record_variants` (dimensions and
+//!   variants; its own `invalidate` event). Delete removes the row with the item
+//!   (cascade) and the delete transition names it. `ferrite seed demo` writes its sample
+//!   image's row the same way. Replacing the file is not built yet (M4).
 //! * Redirect writes (manual upsert/delete, and the 301s recorded when a published item
 //!   moves): kind `invalidate`, keys `redirect:<source>` for each source touched and its
 //!   trailing-slash variant. **Informational**: the router checks redirects before the

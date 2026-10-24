@@ -103,6 +103,15 @@ impl MediaRepo for PgRepos {
         row.as_ref().map(codec::media).transpose()
     }
 
+    async fn get_for_update(&self, id: ContentId) -> Result<Option<Media>, StoreError> {
+        let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {MEDIA_COLUMNS} FROM media WHERE item_id = $1 FOR UPDATE"
+        )))
+        .bind(id.as_uuid())
+        .fetch_optional(e))?;
+        row.as_ref().map(codec::media).transpose()
+    }
+
     async fn update(&self, media: &Media) -> Result<(), StoreError> {
         validate_text("media mime", &media.mime)?;
         validate_text("media alt", &media.alt)?;

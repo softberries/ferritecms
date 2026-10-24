@@ -228,6 +228,7 @@ backend_tests_spawning!(
     jobs_concurrent_enqueue_same_key,
     plugin_auto_disable_concurrent_single_transition,
     plugin_get_for_update_locks_the_row,
+    media_get_for_update_locks_the_row,
     rate_limit_is_atomic_under_concurrency,
     totp_step_only_moves_forward,
     user_get_for_update_locks_the_row,

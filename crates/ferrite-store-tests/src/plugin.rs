@@ -306,6 +306,80 @@ pub async fn media_find_by_artifact(db: &TestDb) {
 
 /// `media.sanitized` (0006): a row written without it reads `false`; `true` is stored
 /// by `insert` and `update` and comes back from every read path.
+/// `media().get_for_update` reads like `get`; inside a `Tx` the row stays locked until
+/// the `Tx` ends. Postgres: a peer's locking read waits for the commit, so two
+/// read-modify-writes of the row (alt text, variants) never lose each other's change.
+/// SQLite: the `Tx` holds the single writer, so the equivalent is the plain read.
+pub async fn media_get_for_update_locks_the_row(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    let author = fixture_user(store.as_ref()).await;
+    let mut item = new_post(&author, "locked-media");
+    item.kind = "media".into();
+    store.read().content().insert(&item).await.unwrap();
+    put_artifact(store.as_ref(), &artifact('a', ArtifactKind::Media)).await;
+    let media = Media {
+        item_id: item.id,
+        artifact_hash: hash('a'),
+        mime: "image/png".into(),
+        bytes: 1234,
+        width: None,
+        height: None,
+        alt: "before".into(),
+        original_name: "a.png".into(),
+        variants: json!({}),
+        sanitized: false,
+    };
+    store.read().media().insert(&media).await.unwrap();
+    let repo = store.read().media();
+    assert_eq!(
+        repo.get_for_update(item.id).await.unwrap().as_ref(),
+        Some(&media),
+        "outside a Tx it is `get`"
+    );
+    assert!(
+        repo.get_for_update(ContentId::new())
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let tx = store.begin().await.unwrap();
+    let mut row = tx.media().get_for_update(item.id).await.unwrap().unwrap();
+    assert_eq!(row, media);
+    let Some(peer) = db.peer().await else {
+        // SQLite: one writer; the Tx's own writes still work.
+        row.alt = "in tx".into();
+        tx.media().update(&row).await.unwrap();
+        tx.rollback().await.unwrap();
+        return;
+    };
+    let id = item.id;
+    let write = tokio::spawn(async move {
+        let ptx = peer.begin().await.unwrap();
+        let mut theirs = ptx.media().get_for_update(id).await.unwrap().unwrap();
+        theirs.width = Some(10);
+        theirs.height = Some(20);
+        ptx.media().update(&theirs).await.unwrap();
+        ptx.commit().await.unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        !write.is_finished(),
+        "the peer's locking read waits for the row lock"
+    );
+    row.alt = "in tx".into();
+    tx.media().update(&row).await.unwrap();
+    tx.commit().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), write)
+        .await
+        .unwrap()
+        .unwrap();
+    // The peer read the row after the commit, so neither change is lost.
+    let got = store.read().media().get(item.id).await.unwrap().unwrap();
+    assert_eq!(got.alt, "in tx");
+    assert_eq!((got.width, got.height), (Some(10), Some(20)));
+}
+
 pub async fn media_sanitized_roundtrip(db: &TestDb) {
     let store = db.store();
     let author = fixture_user(store).await;

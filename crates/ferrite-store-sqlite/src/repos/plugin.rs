@@ -97,6 +97,12 @@ impl MediaRepo for SqliteRepos {
         row.as_ref().map(codec::media).transpose()
     }
 
+    async fn get_for_update(&self, id: ContentId) -> Result<Option<Media>, StoreError> {
+        // Inside a Tx the reader is the Tx's connection, which holds the single writer:
+        // no other write can touch the row until the Tx ends.
+        MediaRepo::get(self, id).await
+    }
+
     async fn update(&self, media: &Media) -> Result<(), StoreError> {
         validate_text("media mime", &media.mime)?;
         validate_text("media alt", &media.alt)?;

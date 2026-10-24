@@ -239,6 +239,20 @@ impl ContentService {
         Ok(false)
     }
 
+    /// [`publish`](Self::publish) of `item` (as read or written in the caller's `Tx`,
+    /// at its current version) inside the caller's `repos` with the caller's pinned
+    /// `rules`: the same checks, redirect cleanup, `invalidate` keys and `post.published`
+    /// action jobs.
+    pub(crate) async fn publish_in(
+        repos: &dyn Repos,
+        rules: &dyn Permalinks,
+        actor: &Actor,
+        item: ContentItem,
+    ) -> Result<ContentItem, CoreError> {
+        let version = item.version;
+        transition_item(repos, rules, actor, item, version, Action::Publish).await
+    }
+
     async fn transition(
         &self,
         actor: &Actor,
@@ -271,6 +285,19 @@ async fn transition_in(
     action: Action,
 ) -> Result<ContentItem, CoreError> {
     let current = repos.content().get(id).await?.ok_or(CoreError::NotFound)?;
+    transition_item(repos, permalinks, actor, current, expected_version, action).await
+}
+
+/// [`transition_in`] for `current`, the item as read in this `Tx`.
+async fn transition_item(
+    repos: &dyn Repos,
+    permalinks: &dyn Permalinks,
+    actor: &Actor,
+    current: ContentItem,
+    expected_version: i64,
+    action: Action,
+) -> Result<ContentItem, CoreError> {
+    let id = current.id;
     authorize(actor, &current, action)?;
     if current.version != expected_version {
         return Err(CoreError::Conflict {

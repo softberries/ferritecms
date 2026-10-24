@@ -158,6 +158,11 @@ impl Scopes {
     /// No scope at all.
     pub const NONE: Scopes = Scopes(0);
 
+    /// The set holding `scope` alone.
+    pub(crate) fn only(scope: Scope) -> Scopes {
+        Scopes(1 << scope.bit())
+    }
+
     /// Parses a list of scope names; any unknown name is `Invalid`.
     pub fn from_strs(names: &[String]) -> Result<Scopes, CoreError> {
         names.iter().try_fold(Scopes::NONE, |acc, name| {

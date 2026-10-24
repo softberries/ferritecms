@@ -419,6 +419,13 @@ pub trait MediaRepo: Send + Sync {
     async fn insert(&self, media: &Media) -> Result<(), StoreError>;
     /// Fetches media metadata by content id.
     async fn get(&self, id: ContentId) -> Result<Option<Media>, StoreError>;
+    /// Fetches media metadata and, inside a `Tx`, locks its row until the `Tx` ends:
+    /// Postgres `SELECT … FOR UPDATE` (other writers of the row wait), SQLite a plain
+    /// read (the `Tx` already holds the single writer). Outside a `Tx` it is
+    /// [`get`](Self::get). Every read-modify-write of a media row (alt text, variants)
+    /// reads it with this inside the `Tx` that writes it, because
+    /// [`update`](Self::update) is unversioned.
+    async fn get_for_update(&self, id: ContentId) -> Result<Option<Media>, StoreError>;
     /// Updates media metadata (`mime`, `bytes`, `width`, `height`, `alt`, `variants`,
     /// `sanitized`; the artifact and `original_name` stay); missing metadata is
     /// `NotFound`.
