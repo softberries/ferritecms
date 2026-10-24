@@ -1,0 +1,392 @@
+//! `/plugins` (07 §1; M2a-2 P3, P4, P8, P9, P10, P11, R1, R2).
+//!
+//! Handlers translate; `ExtensionAdmin` checks `manage_plugins` with
+//! `extensions:write` for writes and `manage_plugins` with `extensions:read` for reads
+//! (editors see no plugin list), records the rows under the `extensions` lock and
+//! audits every write. The node's one [`Installer`](crate::extensions::Installer)
+//! checks and compiles uploads (at most two at once per node). No `If-Match` (P11).
+//!
+//! * `POST /plugins/inspect` takes `manifest` and `component` and answers the
+//!   permission report: what the upload asks for, what is new against the installed
+//!   version's grant (`added`), the limits, and the `fingerprint`. Nothing is stored.
+//! * `POST /plugins` takes the same parts plus `approve`, that fingerprint. The upload
+//!   is inspected again and installed only if `approve` is the fingerprint of *this*
+//!   upload (plugin, version, component and grant); otherwise `422 validation` with
+//!   `errors[0].field = "approve"` and the upload's `report`, and nothing changes: an
+//!   installed version keeps running (R1). A new plugin is installed disabled; a
+//!   replaced one keeps its enabled state and gets the new grant.
+//! * `DELETE /plugins/{name}` keeps the plugin's KV and settings for 30 days (a
+//!   reinstall in that time finds them); `?purge=true` deletes them at once (P9, R2).
+//!
+//! Uploads are `multipart/form-data` ([`multipart`](super::multipart)); the caller is
+//! authorized before any of the body is read. Responses never carry the component's
+//! bytes or a secret.
+
+use std::{sync::Arc, time::Duration};
+
+use axum::{
+    Json,
+    extract::{Request, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use bytes::Bytes;
+use ferrite_domain::{InstalledPlugin, Node};
+use ferrite_plugin_host::MAX_MANIFEST_BYTES;
+use serde::Deserialize;
+use utoipa::IntoParams;
+
+use super::{
+    ApiState, Authed, BASE,
+    dto::extensions::{
+        PermissionReportDto, PluginDto, PluginInspectUpload, PluginList, PluginNodeState,
+        PluginUpload,
+    },
+    extract::{ApiPath, ApiQuery, created_at},
+    multipart::{open, read_parts},
+    problem::{Problem, ProblemDocument},
+};
+use crate::extensions::{ExtensionError, MAX_PLUGIN_BYTES};
+
+/// Largest `approve` part.
+pub const MAX_APPROVE_BYTES: usize = 128;
+
+/// The body limit of the upload routes: the component's 32 MiB plus 1 MiB for the
+/// manifest, the approval and the multipart framing.
+pub const MAX_UPLOAD_BODY: usize = MAX_PLUGIN_BYTES as usize + 1024 * 1024;
+
+/// A node whose heartbeat is older than this is not listed in `nodes` (pre-flight F20;
+/// the value of `ferrite_cluster::STALE_AFTER`, which this crate does not depend on).
+pub const NODE_STALE_AFTER: Duration = Duration::from_secs(30);
+
+const COMPONENT_PART: (&str, usize) = ("component", MAX_PLUGIN_BYTES as usize);
+const MANIFEST_PART: (&str, usize) = ("manifest", MAX_MANIFEST_BYTES);
+
+#[utoipa::path(
+    get,
+    path = "/plugins",
+    tag = "plugins",
+    operation_id = "list_plugins",
+    security(("session" = []), ("bearer" = [])),
+    responses(
+        (status = 200, description = "Every installed plugin, by name", body = PluginList),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn list_plugins(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+) -> Result<Json<PluginList>, Problem> {
+    let rows = api.extensions.list_plugins(&who.actor).await?;
+    let nodes = live_nodes(&api).await?;
+    Ok(Json(PluginList {
+        items: rows.into_iter().map(|r| dto(&api, r, &nodes)).collect(),
+        next_cursor: None,
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/plugins/{name}",
+    tag = "plugins",
+    operation_id = "get_plugin",
+    security(("session" = []), ("bearer" = [])),
+    params(("name" = String, Path, description = "Plugin")),
+    responses(
+        (status = 200, description = "The plugin", body = PluginDto),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn get_plugin(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(name): ApiPath<String>,
+) -> Result<Json<PluginDto>, Problem> {
+    let row = api.extensions.get_plugin(&who.actor, &name).await?;
+    Ok(Json(dto(&api, row, &live_nodes(&api).await?)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/plugins/inspect",
+    tag = "plugins",
+    operation_id = "inspect_plugin",
+    security(("session" = []), ("bearer" = [])),
+    request_body(content = PluginInspectUpload, content_type = "multipart/form-data", description = "Parts `manifest` (at most 64 KiB) and `component` (at most 32 MiB); body at most 33 MiB"),
+    responses(
+        (status = 200, description = "The permission report; nothing is stored", body = PermissionReportDto),
+        (status = 400, description = "`malformed-body`: an unknown, unnamed or repeated part, or a malformed body", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 413, description = "`too-large`: a part or the body over its limit", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 415, description = "`unsupported-media-type`: not `multipart/form-data`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: a missing part (`errors[0].field` = its name), a manifest that is not valid (`errors[].field` = the manifest path, or `manifest`), a component that does not load or a limit above its ceiling (`component`)", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn inspect_plugin(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    req: Request,
+) -> Result<Json<PermissionReportDto>, Problem> {
+    api.extensions.authorize_plugins(&who.actor)?;
+    let mut parts = read_parts(
+        open(req, MAX_UPLOAD_BODY).await?,
+        &[MANIFEST_PART, COMPONENT_PART],
+    )
+    .await?;
+    let manifest = manifest_text(&parts)?;
+    let component = parts.remove("component").unwrap_or_default();
+    let inspected = api.installer.inspect_plugin(&manifest, component).await?;
+    Ok(Json(PermissionReportDto::new(
+        inspected.report(),
+        inspected.is_update(),
+    )))
+}
+
+#[utoipa::path(
+    post,
+    path = "/plugins",
+    tag = "plugins",
+    operation_id = "install_plugin",
+    security(("session" = []), ("bearer" = [])),
+    request_body(content = PluginUpload, content_type = "multipart/form-data", description = "Parts `manifest` (at most 64 KiB), `component` (at most 32 MiB) and `approve` (the inspection's `fingerprint`, at most 128 bytes); body at most 33 MiB"),
+    responses(
+        (status = 201, description = "Installed (`Location`): a new plugin disabled, a replaced one keeping its enabled state, with the approved grant", body = PluginDto),
+        (status = 400, description = "`malformed-body`: an unknown, unnamed or repeated part, or a malformed body", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 413, description = "`too-large`: a part or the body over its limit", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 415, description = "`unsupported-media-type`: not `multipart/form-data`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: as for the inspection; or `errors[0].field` = `approve` when `approve` is missing or is not the fingerprint of this upload (the body's `report` is this upload's report; nothing is stored and an installed version keeps running)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 503, description = "`busy`: another extension change holds the lock (`Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn install_plugin(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    req: Request,
+) -> Result<Response, Problem> {
+    let actor = &who.actor;
+    api.extensions.authorize_plugins(actor)?;
+    let mut parts = read_parts(
+        open(req, MAX_UPLOAD_BODY).await?,
+        &[
+            MANIFEST_PART,
+            COMPONENT_PART,
+            ("approve", MAX_APPROVE_BYTES),
+        ],
+    )
+    .await?;
+    let manifest = manifest_text(&parts)?;
+    // Not UTF-8 cannot be a fingerprint: it simply does not match.
+    let approve =
+        String::from_utf8(parts.remove("approve").unwrap_or_default().to_vec()).unwrap_or_default();
+    let component = parts.remove("component").unwrap_or_default();
+    let inspected = api.installer.inspect_plugin(&manifest, component).await?;
+    let report = PermissionReportDto::new(inspected.report(), inspected.is_update());
+    let (artifact, row) = match api.installer.stage_plugin(inspected, &approve).await {
+        Ok(staged) => staged,
+        Err(e @ ExtensionError::Approval(_)) => {
+            let report = serde_json::to_value(&report).map_err(|e| {
+                tracing::error!(error = %e, "cannot serialize a permission report");
+                Problem::internal()
+            })?;
+            return Err(Problem::from(e).with_report(report));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    api.extensions
+        .install_plugin(actor, &artifact, &row)
+        .await?;
+    let stored = api.extensions.get_plugin(actor, &row.name).await?;
+    let (status, headers) = created_at(&format!("{BASE}/plugins/{}", stored.name));
+    let body = dto(&api, stored, &live_nodes(&api).await?);
+    Ok((status, headers, Json(body)).into_response())
+}
+
+#[utoipa::path(
+    post,
+    path = "/plugins/{name}/enable",
+    tag = "plugins",
+    operation_id = "enable_plugin",
+    security(("session" = []), ("bearer" = [])),
+    params(("name" = String, Path, description = "Plugin")),
+    responses(
+        (status = 200, description = "Enabled (its failure counters and any automatic disable reason cleared); nodes load it on `plugins.changed`", body = PluginDto),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 503, description = "`busy`: another extension change holds the lock (`Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn enable_plugin(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(name): ApiPath<String>,
+) -> Result<Json<PluginDto>, Problem> {
+    set_enabled(&api, &who.actor, &name, true).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/plugins/{name}/disable",
+    tag = "plugins",
+    operation_id = "disable_plugin",
+    security(("session" = []), ("bearer" = [])),
+    params(("name" = String, Path, description = "Plugin")),
+    responses(
+        (status = 200, description = "Disabled; nodes unload it on `plugins.changed`", body = PluginDto),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 503, description = "`busy`: another extension change holds the lock (`Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn disable_plugin(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(name): ApiPath<String>,
+) -> Result<Json<PluginDto>, Problem> {
+    set_enabled(&api, &who.actor, &name, false).await
+}
+
+/// `DELETE /plugins/{name}` query.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct DeleteParams {
+    /// `true`: delete the plugin's KV and settings now; `false` (default): keep them
+    /// for 30 days, so a reinstall in that time finds them.
+    pub purge: Option<bool>,
+}
+
+#[utoipa::path(
+    delete,
+    path = "/plugins/{name}",
+    tag = "plugins",
+    operation_id = "delete_plugin",
+    security(("session" = []), ("bearer" = [])),
+    params(("name" = String, Path, description = "Plugin"), DeleteParams),
+    responses(
+        (status = 204, description = "Deleted; its data kept for 30 days unless `purge=true`"),
+        (status = 400, description = "`malformed-query`: `purge` is not `true` or `false`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 503, description = "`busy`: another extension change holds the lock (`Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn delete_plugin(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(name): ApiPath<String>,
+    ApiQuery(params): ApiQuery<DeleteParams>,
+) -> Result<StatusCode, Problem> {
+    api.extensions
+        .delete_plugin(&who.actor, &name, params.purge.unwrap_or(false))
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_enabled(
+    api: &ApiState,
+    actor: &ferrite_core::Actor,
+    name: &str,
+    enabled: bool,
+) -> Result<Json<PluginDto>, Problem> {
+    api.extensions
+        .set_plugin_enabled(actor, name, enabled)
+        .await?;
+    let row = api.extensions.get_plugin(actor, name).await?;
+    Ok(Json(dto(api, row, &live_nodes(api).await?)))
+}
+
+/// The `manifest` part as text (`422`, `field = "manifest"`, when not UTF-8).
+fn manifest_text(
+    parts: &std::collections::BTreeMap<&'static str, Bytes>,
+) -> Result<String, Problem> {
+    let bytes = parts.get("manifest").cloned().unwrap_or_default();
+    String::from_utf8(bytes.to_vec()).map_err(|_| {
+        Problem::validation("the manifest is not UTF-8").with_error(Some("manifest"), "not UTF-8")
+    })
+}
+
+fn dto(api: &ApiState, row: InstalledPlugin, nodes: &[Node]) -> PluginDto {
+    let report = api
+        .installer
+        .row_report(&row)
+        .map(|r| PermissionReportDto::new(&r, true));
+    let states = nodes
+        .iter()
+        .filter_map(|n| PluginNodeState::of(n, &row.name))
+        .collect();
+    PluginDto::new(row, report, states)
+}
+
+/// The registered nodes with a heartbeat within [`NODE_STALE_AFTER`] of the database
+/// clock, by node id.
+async fn live_nodes(api: &ApiState) -> Result<Vec<Node>, Problem> {
+    let read = api.store.read();
+    let nodes = read.nodes().list().await?;
+    let now = read.nodes().db_now().await?;
+    Ok(live(nodes, now.as_micros()))
+}
+
+fn live(mut nodes: Vec<Node>, now_micros: i64) -> Vec<Node> {
+    let stale = i64::try_from(NODE_STALE_AFTER.as_micros()).unwrap_or(i64::MAX);
+    let cutoff = now_micros.saturating_sub(stale);
+    nodes.retain(|n| n.heartbeat_at.as_micros() >= cutoff);
+    nodes.sort_by_key(|n| n.id.as_uuid());
+    nodes
+}
+
+#[cfg(test)]
+mod tests {
+    use ferrite_domain::{NodeId, Timestamp};
+    use serde_json::json;
+
+    use super::*;
+
+    fn node(heartbeat_micros: i64) -> Node {
+        let at = Timestamp::from_micros(heartbeat_micros).unwrap();
+        Node {
+            id: NodeId::new(),
+            name: "n".into(),
+            version: "0".into(),
+            schema_version: 1,
+            started_at: at,
+            heartbeat_at: at,
+            meta: json!({}),
+        }
+    }
+
+    #[test]
+    fn stale_nodes_are_not_listed() {
+        let now = 1_000_000_000_000;
+        let stale = i64::try_from(NODE_STALE_AFTER.as_micros()).unwrap();
+        let fresh = node(now - stale);
+        let old = node(now - stale - 1);
+        let ahead = node(now + 1_000);
+        let kept = live(vec![old, fresh.clone(), ahead.clone()], now);
+        let mut want = vec![fresh.id, ahead.id];
+        want.sort_by_key(|id| id.as_uuid());
+        assert_eq!(kept.iter().map(|n| n.id).collect::<Vec<_>>(), want);
+    }
+
+    #[test]
+    fn node_state_reads_meta() {
+        let mut n = node(0);
+        n.meta =
+            json!({"plugins": {"seo": {"version": "1.0.0", "status": "loaded", "error": null}}});
+        let s = PluginNodeState::of(&n, "seo").unwrap();
+        assert_eq!(
+            (s.status.as_str(), s.version.as_deref(), s.error),
+            ("loaded", Some("1.0.0"), None)
+        );
+        assert!(PluginNodeState::of(&n, "other").is_none());
+        n.meta = json!({"plugins": {"seo": {"version": "1.0.0"}}});
+        assert!(PluginNodeState::of(&n, "seo").is_none(), "no status");
+    }
+}

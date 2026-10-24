@@ -138,13 +138,37 @@ impl From<ExtensionError> for Problem {
 }
 
 /// An inspected plugin upload: what [`Installer::stage_plugin`] stores once approved.
+/// Its fields are private, so what is staged is what was inspected: the manifest, its
+/// stored JSON form and the component cannot be changed after the report was made.
 #[derive(Debug, Clone)]
 pub struct Inspected {
-    pub manifest: Manifest,
+    manifest: Manifest,
     /// The `ferrite-plugin.toml` table in JSON form (the `plugins.manifest` column).
-    pub manifest_json: Value,
-    pub report: PermissionReport,
-    pub wasm: Bytes,
+    manifest_json: Value,
+    report: PermissionReport,
+    wasm: Bytes,
+    update: bool,
+}
+
+impl Inspected {
+    pub fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    /// The manifest as the row will store it.
+    pub fn manifest_json(&self) -> &Value {
+        &self.manifest_json
+    }
+
+    pub fn report(&self) -> &PermissionReport {
+        &self.report
+    }
+
+    /// Whether a plugin of this name was installed when it was inspected (the report's
+    /// `added` is then against that version's grant).
+    pub fn is_update(&self) -> bool {
+        self.update
+    }
 }
 
 type PrepareFn = Arc<
@@ -215,7 +239,7 @@ impl Installer {
         }
         let manifest = Manifest::parse(manifest_toml)?;
         let manifest_json = manifest_json(manifest_toml)?;
-        let current = self.current_grant(&manifest.plugin.name).await?;
+        let (update, current) = self.current_grant(&manifest.plugin.name).await?;
         let permit = self.slot().await?;
         let host = self.host.clone();
         let prepare = self.prepare.clone();
@@ -237,15 +261,15 @@ impl Installer {
             manifest_json,
             report,
             wasm,
+            update,
         })
     }
 
     /// Uploads an inspected plugin approved with `approve` (its report's fingerprint)
     /// and returns the artifact and the row to record (disabled, `granted` =
     /// [`Grant::of`] the manifest). Nothing is uploaded without the fingerprint. The
-    /// fingerprint is recomputed here from `inspected.manifest` and the hash of
-    /// `inspected.wasm`, so an approval binds what is stored even if the caller changed
-    /// the [`Inspected`] it got.
+    /// fingerprint is recomputed here from the inspected manifest and the hash of the
+    /// component (defence in depth: [`Inspected`] cannot be changed after inspection).
     pub async fn stage_plugin(
         &self,
         inspected: Inspected,
@@ -348,9 +372,32 @@ impl Installer {
         load_theme_artifact(&self.media, row).await
     }
 
-    /// The grant of the installed plugin `name`, if any. A row whose manifest or grant
-    /// no longer parses has no usable grant: the report then lists everything as new.
-    async fn current_grant(&self, name: &str) -> Result<Option<Grant>, ExtensionError> {
+    /// The permission report of an installed row: its manifest and component against
+    /// its own stored grant ([`Grant::legacy`] for a null `granted`), so `added` lists
+    /// what the grant does not cover (nothing for a row installed with approval) and
+    /// `fingerprint` is the one its install was approved with. `None` (logged) when
+    /// the stored manifest or grant no longer parses. No component is read.
+    pub fn row_report(&self, row: &InstalledPlugin) -> Option<PermissionReport> {
+        let built = Manifest::from_json(&row.manifest)
+            .map_err(|e| e.to_string())
+            .and_then(|m| {
+                let grant = row_grant(&m, row)?;
+                m.permission_report(row.artifact_hash.as_str(), Some(&grant), self.host.config())
+                    .map_err(|e| e.to_string())
+            });
+        match built {
+            Ok(report) => Some(report),
+            Err(error) => {
+                tracing::warn!(plugin = %row.name, %error, "installed plugin row has no usable report");
+                None
+            }
+        }
+    }
+
+    /// Whether the plugin `name` is installed, and its grant. A row whose manifest or
+    /// grant no longer parses has no usable grant: the report then lists everything as
+    /// new.
+    async fn current_grant(&self, name: &str) -> Result<(bool, Option<Grant>), ExtensionError> {
         let Some(row) = self
             .store
             .read()
@@ -359,24 +406,20 @@ impl Installer {
             .await
             .map_err(CoreError::from)?
         else {
-            return Ok(None);
+            return Ok((false, None));
         };
-        let grant = if row.granted.is_null() {
-            Manifest::from_json(&row.manifest)
-                .map(|m| Grant::legacy(&m))
-                .map_err(|e| e.to_string())
-        } else {
-            Grant::from_json(&row.manifest["plugin"], &row.granted)
-        };
+        let grant = Manifest::from_json(&row.manifest)
+            .map_err(|e| e.to_string())
+            .and_then(|m| row_grant(&m, &row));
         match grant {
-            Ok(grant) => Ok(Some(grant)),
+            Ok(grant) => Ok((true, Some(grant))),
             Err(error) => {
                 tracing::warn!(
                     plugin = %name,
                     %error,
                     "installed plugin row has no usable grant; reporting every capability as new"
                 );
-                Ok(None)
+                Ok((true, None))
             }
         }
     }
@@ -387,6 +430,16 @@ impl Installer {
             .acquire_owned()
             .await
             .map_err(|e| ExtensionError::Task(e.to_string()))
+    }
+}
+
+/// The grant a row stores: [`Grant::from_json`], or [`Grant::legacy`] of its manifest
+/// for a null `granted` (pre-flight F9, R7).
+fn row_grant(manifest: &Manifest, row: &InstalledPlugin) -> Result<Grant, String> {
+    if row.granted.is_null() {
+        Ok(Grant::legacy(manifest))
+    } else {
+        Grant::from_json(&row.manifest["plugin"], &row.granted)
     }
 }
 

@@ -1,0 +1,15 @@
+# Manifest-only fixture (pre-flight F19): version 0.2.0 of `hello` that also asks for
+# `kv`, a widening update. Tests install it with `hello`'s component; it is not a
+# workspace member and has no crate of its own.
+[plugin]
+name      = "hello"
+version   = "0.2.0"
+publisher = "ferritecms.dev"
+world     = "ferrite:plugin/plugin@0.1.0"
+
+[capabilities]
+render.head = true
+kv          = true
+
+[hooks]
+"render.head" = 10

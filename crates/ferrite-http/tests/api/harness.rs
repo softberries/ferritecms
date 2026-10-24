@@ -5,7 +5,15 @@
 //! Its own small fixture rather than `tests/plugins/common.rs`: this crate needs none
 //! of the plugin helpers, and including them would leave them unused here.
 
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use axum::{
     Extension, Router,
@@ -16,15 +24,17 @@ use axum::{
 use ferrite_cache::InvalidationLoop;
 use ferrite_cache::PageCache;
 use ferrite_core::{
-    Actor, AuthService, ContentService, ContentTypeService, MenuService, NewAccount, OptionService,
-    PermalinkRules, RedirectService, Scopes, SiteReader, TaxonomyService, UserService,
-    auth::SiteKey,
+    Actor, AuthService, ContentService, ContentTypeService, ExtensionAdmin, MenuService,
+    NewAccount, OptionService, PermalinkRules, RedirectService, Scopes, SiteReader,
+    TaxonomyService, UserService, auth::SiteKey,
 };
 use ferrite_domain::{ArtifactHash, Role, Secret, Timestamp, User};
 use ferrite_http::{
-    AppParts, AppState, HttpConfig, StoreHostServices,
+    AppParts, AppState, HttpConfig, PluginReloader, StoreHostServices,
     api::{ApiParts, ApiState},
-    build_site, load_route_table,
+    build_site,
+    extensions::Installer,
+    load_route_table,
 };
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode, S3Config};
 use ferrite_plugin_host::{HostConfig, PluginHost};
@@ -40,6 +50,11 @@ use s3s::{auth::SimpleAuth, service::S3ServiceBuilder};
 use serde_json::Value;
 use tokio::{net::TcpListener, task::JoinHandle};
 use tower::ServiceExt;
+
+#[path = "../../../ferrite-plugin-host/src/test_support.rs"]
+mod test_support;
+
+pub use test_support::plugin_wasm;
 
 pub const SITE_URL: &str = "https://example.com";
 pub const SITE_TITLE: &str = "Test Site";
@@ -132,6 +147,11 @@ pub struct Api {
     pub app: Arc<AppState>,
     pub api: Arc<ApiState>,
     pub router: Router,
+    /// Component compiles the API's installer has started (inspections and installs).
+    pub compiles: Arc<AtomicUsize>,
+    /// Reloads [`Api::app`]'s plugin host from the rows, as a node's reload task does
+    /// on `plugins.changed` (pre-flight F18: the harness has no reload task).
+    pub reloader: PluginReloader,
 }
 
 /// A response with its body read.
@@ -186,6 +206,17 @@ impl Api {
             SITE_URL,
         ));
         let host = Arc::new(PluginHost::new(HostConfig::default(), services).expect("host"));
+        let reloader = PluginReloader::new(store.clone(), media_store.clone(), host.clone());
+        let compiles = Arc::new(AtomicUsize::new(0));
+        let counter = compiles.clone();
+        let installer = Arc::new(
+            Installer::new(store.clone(), media_store.clone(), HostConfig::default())
+                .expect("installer")
+                .with_prepare(move |host, manifest, wasm, approved| {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    host.prepare_with(manifest, wasm, approved)
+                }),
+        );
         let theme = Arc::new(
             Theme::load(&ThemeSource::Dir(
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/app-theme"),
@@ -199,7 +230,7 @@ impl Api {
             store: store.clone(),
             reader,
             plugins: host,
-            media: media_store,
+            media: media_store.clone(),
             theme,
             cache: Arc::new(PageCache::new(64 * 1024 * 1024)),
             routes,
@@ -223,6 +254,9 @@ impl Api {
                 menus: Arc::new(MenuService::new(store.clone())),
                 options: Arc::new(OptionService::new(store.clone())),
                 redirects: Arc::new(RedirectService::new(store.clone())),
+                extensions: Arc::new(ExtensionAdmin::new(store.clone())),
+                installer,
+                media: media_store,
                 site_url: SITE_URL.into(),
             })
             .expect("api state"),
@@ -235,6 +269,8 @@ impl Api {
             app,
             api,
             router,
+            compiles,
+            reloader,
         }
     }
 
@@ -246,8 +282,10 @@ impl Api {
             app,
             api,
             router,
+            compiles: _,
+            reloader,
         } = self;
-        drop((router, app, api, store, _media));
+        drop((router, reloader, app, api, store, _media));
         db.teardown().await;
     }
 
@@ -274,6 +312,9 @@ impl Api {
                 menus: a.menus.clone(),
                 options: a.options.clone(),
                 redirects: a.redirects.clone(),
+                extensions: a.extensions.clone(),
+                installer: a.installer.clone(),
+                media: a.media.clone(),
                 site_url: site_url.into(),
             })
             .expect("api state"),
@@ -302,6 +343,12 @@ impl Api {
                 menus: Arc::new(MenuService::new(store.clone())),
                 options: Arc::new(OptionService::new(store.clone())),
                 redirects: Arc::new(RedirectService::new(store.clone())),
+                extensions: Arc::new(ExtensionAdmin::new(store.clone())),
+                installer: Arc::new(
+                    Installer::new(store.clone(), self.api.media.clone(), HostConfig::default())
+                        .expect("installer"),
+                ),
+                media: self.api.media.clone(),
                 site_url: SITE_URL.into(),
             })
             .expect("api state"),
@@ -565,6 +612,17 @@ impl Client {
         self.send_on(&api.router, req).await
     }
 
+    /// `POST path` with a `multipart/form-data` body of `parts` (name, bytes), in order.
+    pub async fn multipart(&mut self, api: &Api, path: &str, parts: &[(&str, &[u8])]) -> Resp {
+        let (content_type, body) = multipart_body(parts);
+        let req = self
+            .builder(Method::POST, path)
+            .header(header::CONTENT_TYPE, content_type)
+            .body(Body::from(body))
+            .unwrap();
+        self.send_on(&api.router, req).await
+    }
+
     /// `POST /api/v1/auth/login`.
     pub async fn login(&mut self, api: &Api, login: &str, password: &str) -> Resp {
         self.post(
@@ -574,6 +632,38 @@ impl Client {
         )
         .await
     }
+}
+
+/// The boundary [`multipart_body`] uses (never inside the test payloads).
+pub const BOUNDARY: &str = "ferrite-test-boundary-7d1f";
+
+/// A `multipart/form-data` body of `parts` (name, bytes) and its `Content-Type`.
+pub fn multipart_body(parts: &[(&str, &[u8])]) -> (String, Vec<u8>) {
+    let mut body = Vec::new();
+    for (name, bytes) in parts {
+        body.extend_from_slice(
+            format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\"; \
+                 filename=\"{name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={BOUNDARY}"), body)
+}
+
+/// The `ferrite-plugin.toml` of the example plugin `name` (`plugins/examples/<name>`,
+/// or `…/hostile/<name>`).
+pub fn plugin_manifest(name: &str) -> String {
+    let examples = test_support::repo_root().join("plugins/examples");
+    let dir = [examples.join(name), examples.join("hostile").join(name)]
+        .into_iter()
+        .find(|d| d.join("ferrite-plugin.toml").is_file())
+        .unwrap_or_else(|| panic!("no ferrite-plugin.toml for plugin {name}"));
+    std::fs::read_to_string(dir.join("ferrite-plugin.toml")).expect("read manifest")
 }
 
 pub fn request(method: Method, path: &str) -> Request<Body> {

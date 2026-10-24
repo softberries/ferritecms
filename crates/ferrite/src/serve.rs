@@ -57,15 +57,18 @@ use ferrite_cluster::{
 };
 use ferrite_config::{Config, LoggedInCache, PluginsConfig};
 use ferrite_core::{
-    AuthService, ContentService, ContentTypeService, ExtensionService, MenuService, OptionService,
-    Permalinks, RedirectService, SiteReader, SwappablePermalinks, TaxonomyService, UserService,
+    AuthService, ContentService, ContentTypeService, ExtensionAdmin, ExtensionService, MenuService,
+    OptionService, Permalinks, RedirectService, SiteReader, SwappablePermalinks, TaxonomyService,
+    UserService,
 };
 use ferrite_domain::{NodeId, Timestamp};
 use ferrite_http::{
     AppParts, AppState, FLUSH_EVERY, HttpConfig, LoadSummary, LoggedIn, PluginReloader,
     SharedFailures, StoreHostServices,
     api::{ApiParts, ApiState},
-    build_site, load_route_table,
+    build_site,
+    extensions::Installer,
+    load_route_table,
 };
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::{HostConfig, PluginHost};
@@ -385,6 +388,11 @@ async fn boot(
 
     // The API's services; `content` also runs the scheduled-publishing jobs.
     let content = Arc::new(ContentService::new(store.clone(), dyn_permalinks));
+    // One install pipeline per node: its compile slots bound the node (P8).
+    let installer = Arc::new(
+        Installer::new(store.clone(), media.clone(), host_config(&config.plugins))
+            .context("cannot start the plugin installer")?,
+    );
     let api = Arc::new(
         ApiState::new(ApiParts {
             store: store.clone(),
@@ -396,6 +404,9 @@ async fn boot(
             menus: Arc::new(MenuService::new(store.clone())),
             options: Arc::new(OptionService::new(store.clone())),
             redirects: Arc::new(RedirectService::new(store.clone())),
+            extensions: Arc::new(ExtensionAdmin::new(store.clone())),
+            installer,
+            media: media.clone(),
             site_url: state.config.site_url.clone(),
         })
         .context("site.url")?,

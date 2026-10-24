@@ -10,7 +10,8 @@
 //! * A panicking handler: `500 internal` (the public site's HTML 500 never shows for
 //!   the API).
 //! * `Cache-Control: no-store` on every API response, and request bodies of at most
-//!   [`MAX_JSON_BODY`] ([`body_limit`]).
+//!   [`MAX_JSON_BODY`] ([`body_limit`]), except the plugin upload routes
+//!   ([`plugins::MAX_UPLOAD_BODY`], a route-level limit).
 //!
 //! The API never touches the page cache. [`build_site`](crate::build_site) merges this
 //! router in front of the public fallback, inside the shared layers (security headers,
@@ -28,7 +29,9 @@ pub mod extract;
 pub mod list;
 pub mod menus;
 pub mod meta;
+pub mod multipart;
 pub mod openapi;
+pub mod plugins;
 pub mod problem;
 pub mod redirects;
 pub mod settings;
@@ -138,6 +141,24 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(users::set_user_password))
         .routes(routes!(users::list_tokens, users::create_token))
         .routes(routes!(users::revoke_token))
+        .merge(uploads(routes!(
+            plugins::list_plugins,
+            plugins::install_plugin
+        )))
+        .merge(uploads(routes!(plugins::inspect_plugin)))
+        .routes(routes!(plugins::get_plugin, plugins::delete_plugin))
+        .routes(routes!(plugins::enable_plugin))
+        .routes(routes!(plugins::disable_plugin))
+}
+
+/// `routes` with the plugin upload body limit ([`plugins::MAX_UPLOAD_BODY`]) instead of
+/// [`MAX_JSON_BODY`]: the route's `DefaultBodyLimit` wins over the router's.
+fn uploads(
+    routes: utoipa_axum::router::UtoipaMethodRouter<Arc<ApiState>>,
+) -> OpenApiRouter<Arc<ApiState>> {
+    OpenApiRouter::new()
+        .routes(routes)
+        .layer(DefaultBodyLimit::max(plugins::MAX_UPLOAD_BODY))
 }
 
 /// The spec and routes, before the state and layers.

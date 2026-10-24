@@ -5,10 +5,13 @@ use std::sync::Arc;
 
 use axum::http::Uri;
 use ferrite_core::{
-    AuthService, ContentService, ContentTypeService, MenuService, OptionService, RedirectService,
-    TaxonomyService, UserService,
+    AuthService, ContentService, ContentTypeService, ExtensionAdmin, MenuService, OptionService,
+    RedirectService, TaxonomyService, UserService,
 };
+use ferrite_media::MediaStore;
 use ferrite_store::Store;
+
+use crate::extensions::Installer;
 
 /// The inputs of [`ApiState::new`].
 pub struct ApiParts {
@@ -21,6 +24,10 @@ pub struct ApiParts {
     pub menus: Arc<MenuService>,
     pub options: Arc<OptionService>,
     pub redirects: Arc<RedirectService>,
+    pub extensions: Arc<ExtensionAdmin>,
+    /// The node's one install pipeline: its compile slots bound the node (P8).
+    pub installer: Arc<Installer>,
+    pub media: Arc<MediaStore>,
     /// The site's URL (`site.url`).
     pub site_url: String,
 }
@@ -36,6 +43,12 @@ pub struct ApiState {
     pub menus: Arc<MenuService>,
     pub options: Arc<OptionService>,
     pub redirects: Arc<RedirectService>,
+    pub extensions: Arc<ExtensionAdmin>,
+    /// Shared by every request on this node, so [`COMPILE_SLOTS`] bound the node.
+    ///
+    /// [`COMPILE_SLOTS`]: crate::extensions::COMPILE_SLOTS
+    pub installer: Arc<Installer>,
+    pub media: Arc<MediaStore>,
     /// `site.url` without a trailing slash.
     pub site_url: String,
     /// `scheme://host[:port]` of `site_url` (lowercase, default port left out): what a
@@ -62,6 +75,9 @@ impl ApiState {
             menus,
             options,
             redirects,
+            extensions,
+            installer,
+            media,
             site_url,
         } = parts;
         let (origin, cookie_secure) = origin_of(&site_url)?;
@@ -75,6 +91,9 @@ impl ApiState {
             menus,
             options,
             redirects,
+            extensions,
+            installer,
+            media,
             site_url: site_url.trim_end_matches('/').to_owned(),
             origin,
             cookie_secure,

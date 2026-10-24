@@ -4,6 +4,7 @@
 
 pub mod auth;
 pub mod content;
+pub mod extensions;
 pub mod site;
 pub mod types;
 pub mod users;

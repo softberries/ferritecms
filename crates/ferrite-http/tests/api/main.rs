@@ -7,6 +7,7 @@ mod harness;
 mod auth;
 mod content;
 mod foundation;
+mod plugins;
 mod site;
 mod sweep;
 mod types;

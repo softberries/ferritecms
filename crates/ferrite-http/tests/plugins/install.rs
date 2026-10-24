@@ -66,14 +66,15 @@ async fn inspect_writes_nothing(site: Site) -> Site {
         .inspect_plugin(&manifest, wasm.clone())
         .await
         .unwrap();
-    let report = &inspected.report;
+    let report = inspected.report();
     assert_eq!(report.plugin, "hello");
     assert_eq!(report.version, "0.1.0");
     assert_eq!(report.artifact, sha256(&wasm));
     assert_eq!(report.fingerprint.len(), 64);
     assert_eq!(report.added, report.items, "new plugin: everything is new");
-    assert_eq!(inspected.manifest.plugin.name, "hello");
-    assert_eq!(inspected.manifest_json["plugin"]["name"], "hello");
+    assert_eq!(inspected.manifest().plugin.name, "hello");
+    assert!(!inspected.is_update());
+    assert_eq!(inspected.manifest_json()["plugin"]["name"], "hello");
     nothing_written(&site, &report.artifact).await;
     site
 }
@@ -98,8 +99,8 @@ async fn stage_requires_the_fingerprint(site: Site) -> Site {
         )
         .await
         .unwrap();
-    assert_ne!(other.report.fingerprint, inspected.report.fingerprint);
-    for wrong in ["", "nope", other.report.fingerprint.as_str()] {
+    assert_ne!(other.report().fingerprint, inspected.report().fingerprint);
+    for wrong in ["", "nope", other.report().fingerprint.as_str()] {
         let err = installer
             .stage_plugin(inspected.clone(), wrong)
             .await
@@ -110,24 +111,11 @@ async fn stage_requires_the_fingerprint(site: Site) -> Site {
         assert_eq!(problem.slug, "validation");
         assert_eq!(problem.errors[0].field.as_deref(), Some("approve"));
     }
-    // The fingerprint is recomputed at staging: other bytes or another manifest under
-    // the same report are not approved by it.
-    let mut swapped = inspected.clone();
-    swapped.wasm = Bytes::from(plugin_wasm("clock"));
-    let mut widened = inspected.clone();
-    widened.manifest.capabilities.kv = true;
-    for changed in [swapped, widened] {
-        let fingerprint = changed.report.fingerprint.clone();
-        let err = installer
-            .stage_plugin(changed, &fingerprint)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ExtensionError::Approval(_)), "{err:?}");
-    }
-    nothing_written(&site, &inspected.report.artifact).await;
-    nothing_written(&site, &sha256(&plugin_wasm("clock"))).await;
+    // `Inspected` has private fields: what is staged is what was inspected (other
+    // bytes or another manifest under the same report cannot be built).
+    nothing_written(&site, &inspected.report().artifact).await;
 
-    let fingerprint = inspected.report.fingerprint.clone();
+    let fingerprint = inspected.report().fingerprint.clone();
     let (artifact, row) = installer
         .stage_plugin(inspected, &fingerprint)
         .await
@@ -165,12 +153,17 @@ async fn stage_requires_the_fingerprint(site: Site) -> Site {
         .inspect_plugin(&manifest, wasm.clone())
         .await
         .unwrap();
-    assert!(again.report.added.is_empty(), "{:?}", again.report.added);
+    assert!(again.is_update());
+    assert!(
+        again.report().added.is_empty(),
+        "{:?}",
+        again.report().added
+    );
     let more = installer
         .inspect_plugin(&manifest.replace("64MiB", "128MiB"), wasm)
         .await
         .unwrap();
-    let keys: Vec<&str> = more.report.added.iter().map(|i| i.key).collect();
+    let keys: Vec<&str> = more.report().added.iter().map(|i| i.key).collect();
     assert_eq!(keys, ["limits.memory"]);
     site
 }
@@ -185,13 +178,13 @@ async fn legacy_row_is_the_current_grant(site: Site) -> Site {
         .inspect_plugin(&plugin_manifest("clock"), wasm.clone())
         .await
         .unwrap();
-    assert!(same.report.added.is_empty(), "{:?}", same.report.added);
+    assert!(same.report().added.is_empty(), "{:?}", same.report().added);
     let manifest = format!(
         "{}\n[limits]\nmemory = \"64MiB\"\n",
         plugin_manifest("clock")
     );
     let more = installer.inspect_plugin(&manifest, wasm).await.unwrap();
-    let keys: Vec<&str> = more.report.added.iter().map(|i| i.key).collect();
+    let keys: Vec<&str> = more.report().added.iter().map(|i| i.key).collect();
     assert_eq!(keys, ["limits.memory"]);
     site
 }
@@ -394,4 +387,90 @@ profile_tests!(
     broken_component_refused_at_inspect,
     compile_slots_bound_concurrency,
     themes_stage_and_load_from_artifacts,
+    hostile_theme_bundles_are_refused,
 );
+
+/// Appends one ustar entry (`kind` is the type flag, `link` the link name).
+fn tar_entry(out: &mut Vec<u8>, path: &[u8], kind: u8, link: &[u8], data: &[u8]) {
+    let mut h = tar::Header::new_ustar();
+    {
+        let old = h.as_old_mut();
+        old.name[..path.len()].copy_from_slice(path);
+        old.linkname[..link.len()].copy_from_slice(link);
+    }
+    h.set_size(data.len() as u64);
+    h.set_mode(0o644);
+    h.set_entry_type(tar::EntryType::new(kind));
+    h.set_cksum();
+    out.extend_from_slice(h.as_bytes());
+    out.extend_from_slice(data);
+    out.extend(std::iter::repeat_n(0u8, (512 - data.len() % 512) % 512));
+}
+
+/// Hostile uploads through the installer (Task 3 carry d): a symlink or a `..` path in
+/// a bundle that is otherwise a valid theme is refused with `422`, and nothing is
+/// uploaded or recorded.
+async fn hostile_theme_bundles_are_refused(site: Site) -> Site {
+    let installer = installer(&site);
+    let base = || {
+        let mut out = Vec::new();
+        tar_entry(&mut out, b"templates/index.html", b'0', b"", b"index");
+        tar_entry(
+            &mut out,
+            b"theme.toml",
+            b'0',
+            b"",
+            b"[theme]\nname = \"t\"\nversion = \"0.1.0\"\n",
+        );
+        out
+    };
+    let end = |mut tar: Vec<u8>| {
+        tar.extend_from_slice(&[0u8; 1024]);
+        Bytes::from(tar)
+    };
+    // The base bundle itself loads (so the refusals below are about the entry added).
+    let (artifact, _) = installer.stage_theme(end(base())).await.unwrap();
+    let good = artifact.hash;
+
+    let hostile: [(&[u8], u8, &[u8]); 4] = [
+        (b"assets/link", b'2', b"../../../etc/passwd"),
+        (b"assets/hl", b'1', b"theme.toml"),
+        (b"../x", b'0', b""),
+        (b"assets/../../x", b'0', b""),
+    ];
+    for (path, kind, link) in hostile {
+        let mut tar = base();
+        tar_entry(
+            &mut tar,
+            path,
+            kind,
+            link,
+            if kind == b'0' { b"x" } else { b"" },
+        );
+        let bundle = end(tar);
+        let hash = sha256(&bundle);
+        let err = installer.stage_theme(bundle).await.unwrap_err();
+        assert!(matches!(err, ExtensionError::Theme(_)), "{err:?}");
+        let msg = err.to_string();
+        assert!(msg.contains(&*String::from_utf8_lossy(path)), "{msg}");
+        let problem = Problem::from(err);
+        assert_eq!(
+            (problem.status, problem.slug),
+            (StatusCode::UNPROCESSABLE_ENTITY, "validation")
+        );
+        let hash = ArtifactHash::parse(&hash).unwrap();
+        assert_eq!(site.media.head(&hash).await.unwrap(), None, "no blob");
+        assert!(
+            site.store
+                .read()
+                .artifacts()
+                .get(&hash)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert!(site.store.read().themes().list().await.unwrap().is_empty());
+    assert!(site.media.head(&good).await.unwrap().is_some());
+    site
+}

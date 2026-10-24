@@ -30,6 +30,7 @@ pub const SESSION_COOKIE: &str = "ferrite_session";
         (name = "redirects", description = "Redirects, with CSV import and export"),
         (name = "settings", description = "Site settings"),
         (name = "users", description = "User accounts and their API tokens"),
+        (name = "plugins", description = "Plugins: inspection, approval, install, enable/disable, delete"),
     ),
 )]
 pub struct ApiDoc;

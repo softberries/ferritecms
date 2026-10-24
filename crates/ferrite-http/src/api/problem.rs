@@ -108,6 +108,9 @@ pub struct Problem {
     /// The current resource (412 only). Boxed: keeps `Result<_, Problem>` small (clippy
     /// `result_large_err`).
     pub current: Option<Box<serde_json::Value>>,
+    /// The permission report of the upload (an approval mismatch of `POST /plugins`
+    /// only). Boxed like `current`.
+    pub report: Option<Box<serde_json::Value>>,
     /// Seconds for the `Retry-After` header.
     pub retry_after: Option<u64>,
     /// The `WWW-Authenticate` value of a 401 ([`Challenge::Bearer`] when `None`).
@@ -150,6 +153,11 @@ pub struct ProblemDocument {
     /// The current resource; only on `precondition-failed` (412).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current: Option<serde_json::Value>,
+    /// The permission report (`PermissionReportDto`) of the refused upload; only on a
+    /// `validation` (422) of `POST /plugins` whose `approve` does not match, so the
+    /// admin can review what this upload asks for and approve it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<serde_json::Value>,
 }
 
 impl Problem {
@@ -166,6 +174,7 @@ impl Problem {
             detail: detail.into(),
             errors: Vec::new(),
             current: None,
+            report: None,
             retry_after: None,
             challenge: None,
         }
@@ -183,6 +192,12 @@ impl Problem {
     /// Sets `current` (the resource as stored, for a 412).
     pub fn with_current(mut self, current: serde_json::Value) -> Self {
         self.current = Some(Box::new(current));
+        self
+    }
+
+    /// Sets `report` (a plugin upload's permission report).
+    pub fn with_report(mut self, report: serde_json::Value) -> Self {
+        self.report = Some(Box::new(report));
         self
     }
 
@@ -280,6 +295,7 @@ impl Problem {
             detail: self.detail.clone(),
             errors: self.errors.clone(),
             current: self.current.as_deref().cloned(),
+            report: self.report.as_deref().cloned(),
         }
     }
 }

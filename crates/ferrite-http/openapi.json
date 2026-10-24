@@ -2388,6 +2388,576 @@
         }
       }
     },
+    "/api/v1/plugins": {
+      "get": {
+        "tags": [
+          "plugins"
+        ],
+        "operationId": "list_plugins",
+        "responses": {
+          "200": {
+            "description": "Every installed plugin, by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "plugins"
+        ],
+        "operationId": "install_plugin",
+        "requestBody": {
+          "description": "Parts `manifest` (at most 64 KiB), `component` (at most 32 MiB) and `approve` (the inspection's `fingerprint`, at most 128 bytes); body at most 33 MiB",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Installed (`Location`): a new plugin disabled, a replaced one keeping its enabled state, with the approved grant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-body`: an unknown, unnamed or repeated part, or a malformed body",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`too-large`: a part or the body over its limit",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported-media-type`: not `multipart/form-data`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: as for the inspection; or `errors[0].field` = `approve` when `approve` is missing or is not the fingerprint of this upload (the body's `report` is this upload's report; nothing is stored and an installed version keeps running)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`busy`: another extension change holds the lock (`Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/plugins/inspect": {
+      "post": {
+        "tags": [
+          "plugins"
+        ],
+        "operationId": "inspect_plugin",
+        "requestBody": {
+          "description": "Parts `manifest` (at most 64 KiB) and `component` (at most 32 MiB); body at most 33 MiB",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginInspectUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The permission report; nothing is stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionReportDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-body`: an unknown, unnamed or repeated part, or a malformed body",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`too-large`: a part or the body over its limit",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported-media-type`: not `multipart/form-data`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: a missing part (`errors[0].field` = its name), a manifest that is not valid (`errors[].field` = the manifest path, or `manifest`), a component that does not load or a limit above its ceiling (`component`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/plugins/{name}": {
+      "get": {
+        "tags": [
+          "plugins"
+        ],
+        "operationId": "get_plugin",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Plugin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plugin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "plugins"
+        ],
+        "operationId": "delete_plugin",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Plugin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "purge",
+            "in": "query",
+            "description": "`true`: delete the plugin's KV and settings now; `false` (default): keep them\nfor 30 days, so a reinstall in that time finds them.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted; its data kept for 30 days unless `purge=true`"
+          },
+          "400": {
+            "description": "`malformed-query`: `purge` is not `true` or `false`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`busy`: another extension change holds the lock (`Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/plugins/{name}/disable": {
+      "post": {
+        "tags": [
+          "plugins"
+        ],
+        "operationId": "disable_plugin",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Plugin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Disabled; nodes unload it on `plugins.changed`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`busy`: another extension change holds the lock (`Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/plugins/{name}/enable": {
+      "post": {
+        "tags": [
+          "plugins"
+        ],
+        "operationId": "enable_plugin",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Plugin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Enabled (its failure counters and any automatic disable reason cleared); nodes load it on `plugins.changed`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`busy`: another extension change holds the lock (`Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/redirects": {
       "get": {
         "tags": [
@@ -5550,6 +6120,41 @@
           }
         }
       },
+      "LimitItemDto": {
+        "type": "object",
+        "description": "One `[limits]` request against the host default and the approval ceiling.",
+        "required": [
+          "name",
+          "requested",
+          "default",
+          "ceiling",
+          "above_default"
+        ],
+        "properties": {
+          "above_default": {
+            "type": "boolean"
+          },
+          "ceiling": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "default": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "`memory` (bytes) or `fuel`."
+          },
+          "requested": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "LoginRequest": {
         "type": "object",
         "description": "`POST /auth/login`.",
@@ -5885,6 +6490,249 @@
           }
         }
       },
+      "PermissionItemDto": {
+        "type": "object",
+        "description": "One capability a manifest asks for, in plain language.",
+        "required": [
+          "key",
+          "text",
+          "detail",
+          "high_risk"
+        ],
+        "properties": {
+          "detail": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The patterns, types, host or methods the item covers."
+          },
+          "high_risk": {
+            "type": "boolean"
+          },
+          "key": {
+            "type": "string",
+            "description": "`content.read`, `content.meta.read`, `content.meta.write`, `options.read`, `kv`,\n`http` (one item per host), `render.head`, `render.text`, `render.html`,\n`routes` (one item per route), `mail`, `limits.memory`, `limits.fuel` (only when\nabove the default)."
+          },
+          "text": {
+            "type": "string",
+            "description": "e.g. \"read published posts and pages\"."
+          }
+        }
+      },
+      "PermissionReportDto": {
+        "type": "object",
+        "description": "What a plugin upload asks for, as the admin approves it (P3, P6).",
+        "required": [
+          "plugin",
+          "version",
+          "artifact",
+          "items",
+          "added",
+          "limits",
+          "fingerprint",
+          "update"
+        ],
+        "properties": {
+          "added": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PermissionItemDto"
+            },
+            "description": "What the installed version's grant does not cover; all of `items` for a new\nplugin. An update with a non-empty `added` widens the grant (R1)."
+          },
+          "artifact": {
+            "type": "string",
+            "description": "The component's SHA-256 (64 lowercase hex)."
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "What `POST /plugins` must carry as `approve` to install exactly this upload\n(SHA-256 over plugin, version, artifact and grant)."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PermissionItemDto"
+            },
+            "description": "Every capability asked for."
+          },
+          "limits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LimitItemDto"
+            },
+            "description": "Every limit the manifest sets."
+          },
+          "plugin": {
+            "type": "string"
+          },
+          "update": {
+            "type": "boolean",
+            "description": "Whether `added` was computed against an installed version's grant."
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "PluginDto": {
+        "type": "object",
+        "description": "An installed plugin.",
+        "required": [
+          "name",
+          "version",
+          "enabled",
+          "installed_at",
+          "updated_at",
+          "nodes"
+        ],
+        "properties": {
+          "disabled_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it was disabled automatically (failures), if it was."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "installed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PluginNodeState"
+            },
+            "description": "What each live node (heartbeat within 30 s) reports about it, by node; a node\nthat has not loaded the plugin yet is not listed."
+          },
+          "report": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PermissionReportDto",
+                "description": "The report of the stored grant: `added` is what it does not cover (empty for a\nplugin installed with approval), `fingerprint` the approved one. `null` when\nthe stored manifest or grant no longer parses (the plugin does not load)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "PluginInspectUpload": {
+        "type": "object",
+        "description": "`POST /plugins/inspect` (`multipart/form-data`; the schema only, the handler reads\nthe parts itself). Every part is required; an unknown or repeated one is refused.",
+        "required": [
+          "manifest",
+          "component"
+        ],
+        "properties": {
+          "component": {
+            "type": "string",
+            "format": "binary",
+            "description": "The component (`.wasm`, at most 32 MiB)."
+          },
+          "manifest": {
+            "type": "string",
+            "description": "`ferrite-plugin.toml` (UTF-8, at most 64 KiB)."
+          }
+        }
+      },
+      "PluginList": {
+        "type": "object",
+        "description": "`GET /plugins`: every installed plugin, by name.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PluginDto"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Always `null`: one page holds every plugin."
+          }
+        }
+      },
+      "PluginNodeState": {
+        "type": "object",
+        "description": "What one live node reports about a plugin (`nodes.meta.plugins.<name>`).",
+        "required": [
+          "node",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "The node's name (`cluster.node_name` or the host name)."
+          },
+          "node": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The node's id."
+          },
+          "status": {
+            "type": "string",
+            "description": "`loaded`, `failed` or `disabled`."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The version the node last loaded the row as."
+          }
+        }
+      },
+      "PluginUpload": {
+        "type": "object",
+        "description": "`POST /plugins` (`multipart/form-data`; the schema only). Every part is required;\nan unknown or repeated one is refused.",
+        "required": [
+          "manifest",
+          "component",
+          "approve"
+        ],
+        "properties": {
+          "approve": {
+            "type": "string",
+            "description": "The `fingerprint` of the report `POST /plugins/inspect` gave for this upload (at\nmost 128 bytes)."
+          },
+          "component": {
+            "type": "string",
+            "format": "binary",
+            "description": "The component (`.wasm`, at most 32 MiB)."
+          },
+          "manifest": {
+            "type": "string",
+            "description": "`ferrite-plugin.toml` (UTF-8, at most 64 KiB)."
+          }
+        }
+      },
       "ProblemDocument": {
         "type": "object",
         "description": "The body of a problem response (the OpenAPI schema `ProblemDocument`).",
@@ -5907,6 +6755,9 @@
               "$ref": "#/components/schemas/FieldError"
             },
             "description": "Omitted when empty."
+          },
+          "report": {
+            "description": "The permission report (`PermissionReportDto`) of the refused upload; only on a\n`validation` (422) of `POST /plugins` whose `approve` does not match, so the\nadmin can review what this upload asks for and approve it."
           },
           "status": {
             "type": "integer",
@@ -6803,6 +7654,10 @@
     {
       "name": "users",
       "description": "User accounts and their API tokens"
+    },
+    {
+      "name": "plugins",
+      "description": "Plugins: inspection, approval, install, enable/disable, delete"
     }
   ]
 }

@@ -46,6 +46,7 @@ quick-xml.workspace = true
 s3s.workspace = true
 s3s-fs.workspace = true
 semver.workspace = true
+tar.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["net"] }
 totp-rs.workspace = true

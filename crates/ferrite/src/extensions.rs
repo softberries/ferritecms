@@ -45,8 +45,8 @@ pub async fn install_plugin_file(
         .inspect_plugin(manifest_toml, Bytes::copy_from_slice(wasm))
         .await
         .context("cannot install the plugin")?;
-    let name = inspected.manifest.plugin.name.clone();
-    let fingerprint = inspected.report.fingerprint.clone();
+    let name = inspected.manifest().plugin.name.clone();
+    let fingerprint = inspected.report().fingerprint.clone();
     let (artifact, row) = installer
         .stage_plugin(inspected, &fingerprint)
         .await
