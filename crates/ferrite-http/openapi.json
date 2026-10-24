@@ -2268,6 +2268,17 @@
           "media"
         ],
         "operationId": "upload_media",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional; 1 to 255 visible ASCII characters (`0x21`-`0x7E`), scoped to the caller and kept 24 h. A retry with a finished key replays the first `201` (`Idempotent-Replayed: true`) without reading the body; the key must be reused with the same method and path (query included)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "description": "Parts `file` (required, at most `media.max_upload`), `title` (at most 200 characters) and `alt` (at most 1 000 characters), in any order; the body at most `media.max_upload` + 1 MiB",
           "content": {
@@ -2281,7 +2292,7 @@
         },
         "responses": {
           "201": {
-            "description": "Uploaded and published (`Location`, `ETag`)",
+            "description": "Uploaded and published (`Location`, `ETag`); with a finished `Idempotency-Key`, the first response replayed (`Idempotent-Replayed: true`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2291,7 +2302,7 @@
             }
           },
           "400": {
-            "description": "`malformed-body`: an unknown, unnamed or repeated part, a malformed body, or no bytes for `media.upload_idle_timeout` (`errors[0].field` = `file`; the upload is aborted)",
+            "description": "`malformed-body`: an unknown, unnamed or repeated part, a malformed body, or no bytes for `media.upload_idle_timeout` (`errors[0].field` = `file`; the upload is aborted); `malformed-header`: `Idempotency-Key` sent twice, empty, over 255 bytes or not visible ASCII",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2312,6 +2323,16 @@
           },
           "403": {
             "description": "`forbidden` (`upload_media`, `media:write`), `csrf` or `password-reset-required`; checked before the body is read",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`conflict`: a request with this `Idempotency-Key` is in progress (`Retry-After: 5`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2341,7 +2362,7 @@
             }
           },
           "422": {
-            "description": "`validation`: no `file` part, a file name that is empty, over 255 bytes or holds control or format characters (checked before the file is read), an SVG that cannot be made safe (`file`), `title`/`alt` too long or not UTF-8",
+            "description": "`validation`: no `file` part, a file name that is empty, over 255 bytes or holds control or format characters (checked before the file is read), an SVG that cannot be made safe (`file`), `title`/`alt` too long or not UTF-8; the `Idempotency-Key` was used for another method or path (`errors[0].field` = `Idempotency-Key`)",
             "content": {
               "application/problem+json": {
                 "schema": {

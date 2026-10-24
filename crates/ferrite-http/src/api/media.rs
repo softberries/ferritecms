@@ -13,7 +13,8 @@
 //!   streams (F12; the route's own limit is the config ceiling,
 //!   [`MEDIA_ROUTE_LIMIT`]). The type comes from the content (see
 //!   [`crate::media`]). The item is published at once (P5): `201` with `Location`
-//!   and `ETag`.
+//!   and `ETag`. An optional `Idempotency-Key` makes a retry replay the first `201`
+//!   (see [`idempotency`](super::idempotency)).
 //! * Writes to an item (`PATCH`, `DELETE`) need `If-Match: "<version>"` (`428`
 //!   without it; a stale one is `412` with `current`). `DELETE` trashes;
 //!   `DELETE ?force=true` deletes a trashed item for good. Both answer `204`.
@@ -25,7 +26,7 @@ use std::sync::Arc;
 use axum::{
     Json,
     extract::{Request, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use ferrite_core::{
@@ -33,6 +34,7 @@ use ferrite_core::{
 };
 use ferrite_domain::{ContentId, ContentOrder, MAX_PAGE, UserId};
 use serde::Deserialize;
+use serde_json::Value;
 use utoipa::IntoParams;
 use uuid::Uuid;
 
@@ -44,6 +46,7 @@ use super::{
         ApiJson, ApiPath, ApiQuery, DEFAULT_LIMIT, IfMatch, check_limit, created, etag,
         invalid_cursor,
     },
+    idempotency,
     multipart::{body_error, malformed, open, read_field},
     problem::{Problem, ProblemDocument},
 };
@@ -152,15 +155,17 @@ pub async fn list_media(
     tag = "media",
     operation_id = "upload_media",
     security(("session" = []), ("bearer" = [])),
+    params(("Idempotency-Key" = Option<String>, Header, nullable = false, description = "Optional; 1 to 255 visible ASCII characters (`0x21`-`0x7E`), scoped to the caller and kept 24 h. A retry with a finished key replays the first `201` (`Idempotent-Replayed: true`) without reading the body; the key must be reused with the same method and path (query included)")),
     request_body(content = MediaUpload, content_type = "multipart/form-data", description = "Parts `file` (required, at most `media.max_upload`), `title` (at most 200 characters) and `alt` (at most 1 000 characters), in any order; the body at most `media.max_upload` + 1 MiB"),
     responses(
-        (status = 201, description = "Uploaded and published (`Location`, `ETag`)", body = MediaDto),
-        (status = 400, description = "`malformed-body`: an unknown, unnamed or repeated part, a malformed body, or no bytes for `media.upload_idle_timeout` (`errors[0].field` = `file`; the upload is aborted)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 201, description = "Uploaded and published (`Location`, `ETag`); with a finished `Idempotency-Key`, the first response replayed (`Idempotent-Replayed: true`)", body = MediaDto),
+        (status = 400, description = "`malformed-body`: an unknown, unnamed or repeated part, a malformed body, or no bytes for `media.upload_idle_timeout` (`errors[0].field` = `file`; the upload is aborted); `malformed-header`: `Idempotency-Key` sent twice, empty, over 255 bytes or not visible ASCII", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (`upload_media`, `media:write`), `csrf` or `password-reset-required`; checked before the body is read", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 409, description = "`conflict`: a request with this `Idempotency-Key` is in progress (`Retry-After: 5`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 413, description = "`too-large`: the declared body, the file (`errors[0].field` = `file`; an SVG at most 2 MiB) or a small part over its limit", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 415, description = "`unsupported-media-type`: not `multipart/form-data`, or a file of no accepted type (`errors[0].field` = `file`)", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 422, description = "`validation`: no `file` part, a file name that is empty, over 255 bytes or holds control or format characters (checked before the file is read), an SVG that cannot be made safe (`file`), `title`/`alt` too long or not UTF-8", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: no `file` part, a file name that is empty, over 255 bytes or holds control or format characters (checked before the file is read), an SVG that cannot be made safe (`file`), `title`/`alt` too long or not UTF-8; the `Idempotency-Key` was used for another method or path (`errors[0].field` = `Idempotency-Key`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 503, description = "`busy`: every upload slot of this node is taken (`Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
@@ -168,9 +173,61 @@ pub async fn upload_media(
     State(api): State<Arc<ApiState>>,
     Authed(who): Authed,
     req: Request,
-) -> Result<Response, Problem> {
+) -> Response {
     let actor = &who.actor;
-    api.media_service.authorize_upload(actor)?;
+    if let Err(p) = api.media_service.authorize_upload(actor) {
+        return Problem::from(p).into_response();
+    }
+    // The key is claimed after the caller is authorized and before a byte of the body
+    // is read (P10): a replay, `409` and `422` never read it.
+    let key = match idempotency::parse_key(req.headers()) {
+        Ok(key) => key,
+        Err(p) => return p.into_response(),
+    };
+    let guard = match key {
+        Some(key) => {
+            let path = request_path(&req);
+            match idempotency::begin(&api, actor.user, &key, req.method(), &path).await {
+                Ok(guard) => Some(guard),
+                Err(res) => return *res,
+            }
+        }
+        None => None,
+    };
+    let result = upload(&api, actor, req).await;
+    match (guard, result) {
+        (Some(guard), Ok((status, headers, body))) => {
+            guard.finish(status, &headers, &body).await;
+            (status, headers, Json(body)).into_response()
+        }
+        (Some(guard), Err(p)) => {
+            guard.release().await;
+            p.into_response()
+        }
+        (None, Ok((status, headers, body))) => (status, headers, Json(body)).into_response(),
+        (None, Err(p)) => p.into_response(),
+    }
+}
+
+/// The request's path with its query, as the client sent it (under [`BASE`]; the
+/// nested router hands the handler the part after it).
+fn request_path(req: &Request) -> String {
+    let uri = req.uri();
+    let tail = uri.path_and_query().map_or(uri.path(), |pq| pq.as_str());
+    if tail.starts_with(BASE) {
+        tail.to_owned()
+    } else {
+        format!("{BASE}{tail}")
+    }
+}
+
+/// The upload itself: reads the parts, stages the file and records the item; the
+/// `201`'s status, headers and body.
+async fn upload(
+    api: &ApiState,
+    actor: &Actor,
+    req: Request,
+) -> Result<(StatusCode, HeaderMap, Value), Problem> {
     let max_body = usize::try_from(api.max_upload)
         .unwrap_or(usize::MAX)
         .saturating_add(FRAMING);
@@ -237,7 +294,11 @@ pub async fn upload_media(
     drop(staged);
     let location = format!("{BASE}/media/{}", item.item.id);
     let (status, headers) = created(&location, etag(item.item.version));
-    Ok((status, headers, Json(dto(&api, item))).into_response())
+    let body = serde_json::to_value(dto(api, item)).map_err(|e| {
+        tracing::error!(error = %e, "cannot serialize an uploaded media item");
+        Problem::internal()
+    })?;
+    Ok((status, headers, body))
 }
 
 #[utoipa::path(

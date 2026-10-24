@@ -1,12 +1,13 @@
 //! Built-in maintenance jobs (P11, P14, P20, P23): hourly pruning of the events outbox,
 //! finished jobs, stale node rows, old plugin failure buckets and ended sessions, expired
-//! API tokens and past rate-limit windows. Ages are measured on the database clock; rows go in
-//! batches of [`MAX_PRUNE_BATCH`] (R5) so no single statement holds locks for long.
+//! API tokens, past rate-limit windows and old idempotency keys. Ages are measured on the
+//! database clock; rows go in batches of [`MAX_PRUNE_BATCH`] (R5) so no single statement
+//! holds locks for long.
 
 use std::{future::Future, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use ferrite_domain::{Job, SESSION_IDLE, Timestamp};
+use ferrite_domain::{IDEMPOTENCY_RETENTION, Job, SESSION_IDLE, Timestamp};
 use ferrite_store::{MAX_PRUNE_BATCH, Store, StoreError};
 use futures::future::BoxFuture;
 use serde_json::json;
@@ -41,9 +42,9 @@ pub const RATE_LIMIT_RETENTION: Duration = Duration::from_secs(3600);
 /// timeout (300 s), so a large backlog ends the run cleanly and the next hour goes on.
 pub const PRUNE_BUDGET: Duration = Duration::from_secs(240);
 
-/// The share of [`PRUNE_BUDGET`] each of the three tables of `sessions.prune` gets, so a
+/// The share of [`PRUNE_BUDGET`] each of the four tables of `sessions.prune` gets, so a
 /// backlog in one never starves the others.
-pub const SESSIONS_PRUNE_SLICE: Duration = Duration::from_secs(80);
+pub const SESSIONS_PRUNE_SLICE: Duration = Duration::from_secs(60);
 
 /// Calls `batch` until it deletes fewer than [`MAX_PRUNE_BATCH`] rows or `budget` (from
 /// the first call) is used up; returns the total. A call always runs at least one batch.
@@ -197,9 +198,10 @@ impl JobHandler for PluginFailuresPrune {
 
 /// `sessions.prune` (P23): deletes sessions past their absolute end or idle longer than
 /// [`SESSION_IDLE`], API tokens past their `expires_at`, and rate-limit rows whose window
-/// started more than [`RATE_LIMIT_RETENTION`] ago — all against one reading of the
-/// database clock, each table within [`SESSIONS_PRUNE_SLICE`] (three slices fit in
-/// [`PRUNE_BUDGET`]).
+/// started more than [`RATE_LIMIT_RETENTION`] ago, and `Idempotency-Key` rows (finished
+/// or pending) created more than [`IDEMPOTENCY_RETENTION`] ago (M2a-2b P10) — all against
+/// one reading of the database clock, each table within [`SESSIONS_PRUNE_SLICE`] (four
+/// slices fit in [`PRUNE_BUDGET`]).
 pub struct SessionsPrune(pub Arc<dyn Store>);
 
 #[async_trait]
@@ -213,8 +215,13 @@ impl JobHandler for SessionsPrune {
         let now = repos.nodes().db_now().await.map_err(retry)?;
         let idle_before = minus(now, SESSION_IDLE)?;
         let window_before = minus(now, RATE_LIMIT_RETENTION)?;
-        let (sessions, tokens, limits) =
-            (repos.sessions(), repos.api_tokens(), repos.rate_limits());
+        let keys_before = minus(now, IDEMPOTENCY_RETENTION)?;
+        let (sessions, tokens, limits, keys) = (
+            repos.sessions(),
+            repos.api_tokens(),
+            repos.rate_limits(),
+            repos.idempotency(),
+        );
         let tables: Vec<(&'static str, Batch<'_>)> = vec![
             (
                 "sessions",
@@ -227,6 +234,10 @@ impl JobHandler for SessionsPrune {
             (
                 "rate_limits",
                 Box::new(move || limits.prune(window_before, MAX_PRUNE_BATCH)),
+            ),
+            (
+                "idempotency_keys",
+                Box::new(move || keys.prune(keys_before, MAX_PRUNE_BATCH)),
             ),
         ];
         prune_each(SESSIONS_PRUNE_SLICE, tables).await

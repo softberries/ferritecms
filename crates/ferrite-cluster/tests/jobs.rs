@@ -18,8 +18,8 @@ use ferrite_cluster::{
     ClusterError, JobError, JobHandler, JobRunner, Periodic, RunnerConfig, Scheduler, builtin,
 };
 use ferrite_domain::{
-    ApiToken, ApiTokenId, Job, JobId, JobLease, JobStatus, NewEvent, NewJob, NewNode, NodeId,
-    Secret, Session, Timestamp,
+    ApiToken, ApiTokenId, IDEMPOTENCY_RETENTION, IDEMPOTENCY_STALE, IdemBegin, IdempotencyKey, Job,
+    JobId, JobLease, JobStatus, NewEvent, NewJob, NewNode, NodeId, Secret, Session, Timestamp,
 };
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, Backend, Channel, CommentRepo, ContentRepo,
@@ -1215,6 +1215,98 @@ pub async fn sessions_prune_job_deletes_expired_and_idle(db: Arc<TestDb>) {
     assert_eq!(sessions.list_for_user(user.id).await.unwrap().len(), 1);
 }
 
+/// P10: `sessions.prune` deletes idempotency keys older than `IDEMPOTENCY_RETENTION`
+/// (24 h), finished or pending; younger keys stay.
+pub async fn prune_removes_old_keys(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    let repo = store.read().idempotency();
+    let user = fixture_user(store.as_ref()).await;
+    let key = |c: char| IdempotencyKey {
+        user: user.id,
+        key_hash: c.to_string().repeat(64),
+        method: "POST".into(),
+        path: "/api/v1/media".into(),
+    };
+    let start = |c: char| {
+        let k = key(c);
+        async move {
+            match repo.begin(&k, IDEMPOTENCY_STALE).await.unwrap() {
+                IdemBegin::Started { token } => token,
+                other => panic!("{other:?}"),
+            }
+        }
+    };
+    // `a` finished and `b` pending, both 25 h old; `c` finished 23 h ago.
+    let a = start('a').await;
+    assert!(
+        repo.finish(user.id, &"a".repeat(64), a, 201, &json!({"n": 1}))
+            .await
+            .unwrap()
+    );
+    start('b').await;
+    let sql = if db.store().backend() == Backend::Sqlite {
+        format!(
+            "UPDATE idempotency_keys SET created_at = created_at - {}",
+            25 * 3_600_000_000_i64
+        )
+    } else {
+        "UPDATE idempotency_keys SET created_at = created_at - interval '25 hours'".to_owned()
+    };
+    db.exec_raw(&sql).await;
+    let c = start('c').await;
+    assert!(
+        repo.finish(user.id, &"c".repeat(64), c, 201, &json!({"n": 3}))
+            .await
+            .unwrap()
+    );
+    let sql = if db.store().backend() == Backend::Sqlite {
+        format!(
+            "UPDATE idempotency_keys SET created_at = created_at - {} WHERE key_hash = '{}'",
+            23 * 3_600_000_000_i64,
+            "c".repeat(64)
+        )
+    } else {
+        format!(
+            "UPDATE idempotency_keys SET created_at = created_at - interval '23 hours' \
+             WHERE key_hash = '{}'",
+            "c".repeat(64)
+        )
+    };
+    db.exec_raw(&sql).await;
+
+    let handler = builtin::handlers(store.clone(), builtin::MIN_FAILURE_RETENTION)
+        .into_iter()
+        .find(|h| h.kind() == "sessions.prune")
+        .unwrap();
+    let id = enqueue(
+        store.as_ref(),
+        NewJob::new("sessions.prune", json!({"v": 1})),
+    )
+    .await;
+    handler.run(&get(store.as_ref(), id).await).await.unwrap();
+
+    // Nothing older than the retention is left; the 23 h key still replays.
+    let now = store.read().nodes().db_now().await.unwrap();
+    let cut = Timestamp::from_micros(
+        now.as_micros() - i64::try_from(IDEMPOTENCY_RETENTION.as_micros()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(repo.prune(cut, 10).await.unwrap(), 0);
+    assert!(matches!(
+        repo.begin(&key('c'), IDEMPOTENCY_STALE).await.unwrap(),
+        IdemBegin::Replay { status: 201, .. }
+    ));
+    for c in ['a', 'b'] {
+        assert!(
+            matches!(
+                repo.begin(&key(c), IDEMPOTENCY_STALE).await.unwrap(),
+                IdemBegin::Started { .. }
+            ),
+            "{c} was pruned"
+        );
+    }
+}
+
 backend_tests_spawning!(
     runner_runs_and_completes,
     runner_retries_then_dead,
@@ -1232,6 +1324,7 @@ backend_tests_spawning!(
     scheduler_inserts_one_job_per_period,
     builtin_prune_jobs_delete_by_age,
     sessions_prune_job_deletes_expired_and_idle,
+    prune_removes_old_keys,
 );
 
 /// Postgres only: with `listen`, a job enqueued while the runner idles (30 s poll)

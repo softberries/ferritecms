@@ -7,6 +7,7 @@ mod harness;
 mod auth;
 mod content;
 mod foundation;
+mod idempotency;
 mod media;
 mod plugins;
 mod reset;

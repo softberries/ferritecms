@@ -28,6 +28,7 @@ pub mod cookie;
 pub mod csv;
 pub mod dto;
 pub mod extract;
+pub mod idempotency;
 pub mod list;
 pub mod media;
 pub mod menus;

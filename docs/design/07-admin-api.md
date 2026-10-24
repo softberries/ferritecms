@@ -17,9 +17,22 @@ surface).
 - Optimistic concurrency: content carries `version`; writes require
   `If-Match: "<version>"` → `412` on conflict with the current resource in the body
   (other resources are last-write-wins, P11; see "Resources").
-- Idempotency (M2a-2b, with media uploads): `POST` accepts an `Idempotency-Key` header
-  (stored 24 h) for imports/uploads. Not built yet; extension uploads do not take it
-  (M2a-2 P11: an install is a primary-key upsert, so a retry creates no second row).
+- Idempotency (M2a-2b P10, built): `POST /media` accepts an `Idempotency-Key` header
+  (1–255 bytes of `0x21..=0x7E`; empty, longer, other bytes or the header twice are
+  `400 malformed-header`). The key is scoped to (user, key): the store keeps the SHA-256
+  hex of `user id || 0x00 || key` with the request's method and path (query included),
+  so one user cannot replay or probe another's key. It is claimed after the caller is
+  authorized and before the body is read. A finished key replays the stored status,
+  JSON body, `Location` and `ETag` with `Idempotent-Replayed: true` without reading the
+  body (a retry with another file is not detected); a key whose request is still running
+  is `409 conflict` with `Retry-After: 5`, and one pending for more than 1 h (database
+  clock) is taken over — the original request's late finish or release then changes
+  nothing (F5, an ownership token); a key reused for another method or path is
+  `422 validation` (`errors[0].field` = `Idempotency-Key`). Only a `2xx` outcome is
+  stored (≤ 64 KiB); any failure, and a request dropped mid-upload, frees the key so a
+  retry runs. Keys are deleted 24 h after the claim by `sessions.prune` (04 §6). Imports
+  take the header in M3 (P26); extension uploads do not (M2a-2 P11: an install is a
+  primary-key upsert, so a retry creates no second row).
 - OpenAPI 3.1 generated from code with `utoipa` (6.x) at `/api/v1/openapi.json`; the
   admin's TypeScript client will be generated from it (`openapi-typescript` +
   `openapi-fetch`) and checked in CI for drift (M2b).
