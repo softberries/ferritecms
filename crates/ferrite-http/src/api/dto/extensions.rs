@@ -231,6 +231,10 @@ pub enum ThemeOrigin {
 pub struct ThemeNodeState {
     /// The node's id.
     pub node: Uuid,
+    /// The node's name (`cluster.node_name` or the host name).
+    pub node_name: String,
+    /// The binary version the node runs.
+    pub node_version: String,
     /// The theme the node serves.
     pub name: String,
     /// The served files' content hash (as in `/_theme/<hash>/` asset URLs).
@@ -258,6 +262,8 @@ impl ThemeNodeState {
         };
         Some(Self {
             node: node.id.as_uuid(),
+            node_name: node.name.clone(),
+            node_version: node.version.clone(),
             name: text("name")?,
             hash: text("hash").unwrap_or_default(),
             origin,
@@ -277,8 +283,10 @@ pub struct ThemeDto {
     pub version: String,
     pub description: Option<String>,
     pub origin: ThemeOrigin,
-    /// The theme nodes should serve: the active row, or with no active row the embedded
-    /// default (`blog`).
+    /// The theme nodes should serve: the active row, or with no row active the embedded
+    /// default (`blog`) while it has no row. With no row active and an inactive `blog`
+    /// row (uploaded without `activate`), no entry is active: nodes then serve the
+    /// embedded `blog` files, which no entry describes; activating a theme ends that.
     pub active: bool,
     /// When the row was written; `null` for an embedded theme without a row.
     pub installed_at: Option<DateTime<Utc>>,

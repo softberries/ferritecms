@@ -255,7 +255,7 @@ async fn boot_race_change_during_startup_is_applied(db: Arc<TestDb>) {
     install_theme_dir(&store, &media, &site.theme_dir("a", "MARK-A"), true)
         .await
         .unwrap();
-    install_theme_dir(&store, &media, &site.theme_dir("b", "MARK-B"), false)
+    let b = install_theme_dir(&store, &media, &site.theme_dir("b", "MARK-B"), false)
         .await
         .unwrap();
     let (barrier, mut gate) = BootBarrier::new();
@@ -266,7 +266,7 @@ async fn boot_race_change_during_startup_is_applied(db: Arc<TestDb>) {
     let race = async {
         gate.reached().await;
         ExtensionService::new(store.clone())
-            .activate_theme("b")
+            .activate_theme("b", &b.artifact_hash)
             .await
             .unwrap();
         gate.resume();
@@ -330,7 +330,7 @@ async fn failed_theme_reload_is_retried(db: Arc<TestDb>) {
     let good = std::fs::read(site.blob(&b.artifact_hash)).unwrap();
     site.tamper(&b.artifact_hash, b"temporarily unreadable");
     ExtensionService::new(store.clone())
-        .activate_theme("b")
+        .activate_theme("b", &b.artifact_hash)
         .await
         .unwrap();
     eventually(Duration::from_secs(3), "theme error reported", || {
@@ -407,7 +407,7 @@ async fn bad_theme_activation_keeps_previous_theme(db: Arc<TestDb>) {
         .unwrap();
     site.tamper(&bad.artifact_hash, b"garbage, not a tar");
     ExtensionService::new(store.clone())
-        .activate_theme("bad")
+        .activate_theme("bad", &bad.artifact_hash)
         .await
         .unwrap();
     eventually(Duration::from_secs(3), "theme error in nodes.meta", || {

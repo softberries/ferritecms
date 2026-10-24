@@ -116,19 +116,29 @@ impl ExtensionService {
         finish_locked(guard, tx, done).await
     }
 
-    /// Makes `name` the only active theme; a missing theme is `NotFound` and the active
-    /// theme stays. Emits `theme.changed` unless `name` was already active.
-    pub async fn activate_theme(&self, name: &str) -> Result<(), CoreError> {
-        self.activate_theme_with(name, None).await
+    /// Makes `name` the only active theme, if its row still names the artifact
+    /// `expected` (the bundle the caller loaded and checked, M2a-2 P12, R10). A missing
+    /// theme is `NotFound`; a row naming another artifact (replaced since it was
+    /// checked) is [`CoreError::Changed`]; either way the active theme stays. The check
+    /// runs under the `extensions` lock, in the write's `Tx`, so no install can replace
+    /// the row between it and the activation. Emits `theme.changed` unless `name` was
+    /// already active.
+    pub async fn activate_theme(
+        &self,
+        name: &str,
+        expected: &ferrite_domain::ArtifactHash,
+    ) -> Result<(), CoreError> {
+        self.activate_theme_with(name, expected, None).await
     }
 
     pub(crate) async fn activate_theme_with(
         &self,
         name: &str,
+        expected: &ferrite_domain::ArtifactHash,
         audit: Option<NewAudit>,
     ) -> Result<(), CoreError> {
         let (guard, tx) = self.begin_locked().await?;
-        let done = write_activate_theme(tx.as_ref(), name, audit).await;
+        let done = write_activate_theme(tx.as_ref(), name, expected, audit).await;
         finish_locked(guard, tx, done).await
     }
 
@@ -389,8 +399,15 @@ async fn write_install_theme(
 async fn write_activate_theme(
     repos: &dyn Repos,
     name: &str,
+    expected: &ferrite_domain::ArtifactHash,
     audit: Option<NewAudit>,
 ) -> Result<(), CoreError> {
+    let row = repos.themes().get(name).await?.ok_or(CoreError::NotFound)?;
+    if &row.artifact_hash != expected {
+        return Err(CoreError::Changed(
+            "the theme was replaced after it was checked",
+        ));
+    }
     let before = active_theme(repos).await?;
     repos.themes().activate(name).await?;
     emit_if_active_changed(repos, before).await?;

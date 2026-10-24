@@ -30,6 +30,11 @@ pub enum CoreError {
     InvalidRows(Vec<RowError>),
     #[error("version conflict (current version {current_version})")]
     Conflict { current_version: i64 },
+    /// What the caller checked changed before its write (no version to compare): for
+    /// example a theme row replaced between loading its files and activating it. The
+    /// message says what changed; retrying re-checks.
+    #[error("changed concurrently: {0}")]
+    Changed(&'static str),
     /// The operating system's random number generator failed (keys, nonces, tokens).
     #[error("system random number generator failed")]
     Random,

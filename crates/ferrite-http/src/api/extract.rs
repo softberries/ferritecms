@@ -144,17 +144,23 @@ where
     type Rejection = Problem;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Problem> {
-        Query::<T>::try_from_uri(&parts.uri)
-            .map(|Query(q)| Self(q))
-            .map_err(|r| {
-                Problem::new(
-                    StatusCode::BAD_REQUEST,
-                    "malformed-query",
-                    "Malformed query string",
-                    r.body_text(),
-                )
-            })
+        parse_query(&parts.uri).map(Self)
     }
+}
+
+/// The query string of `uri` as `T` (`400 malformed-query`), as [`ApiQuery`] reads it;
+/// for handlers that authorize before they look at the query.
+pub fn parse_query<T: DeserializeOwned>(uri: &axum::http::Uri) -> Result<T, Problem> {
+    Query::<T>::try_from_uri(uri)
+        .map(|Query(q)| q)
+        .map_err(|r| {
+            Problem::new(
+                StatusCode::BAD_REQUEST,
+                "malformed-query",
+                "Malformed query string",
+                r.body_text(),
+            )
+        })
 }
 
 /// The path parameters as `T`; see the module docs.

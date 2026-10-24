@@ -14,6 +14,7 @@
 //! | `InvalidField { field, message }` | 422 | `validation` (detail = message, `errors[0] = { field, detail: message }`) |
 //! | `InvalidRows(rows)` | 422 | `validation` (one `errors` entry per row, `field` = `row <index>`; the CSV import names lines instead) |
 //! | `Conflict { .. }` | 412 | `precondition-failed` (+ `current`, set by the handler) |
+//! | `Changed(what)` | 409 | `conflict` (detail = what changed; retry) |
 //! | `Store(UniqueViolation)` | 409 | `conflict` (a known constraint adds an `errors` entry for its field, see [`UNIQUE_FIELDS`]; the constraint name is never sent) |
 //! | `Store(ForeignKey)` | 409 | `conflict` ("a related record changed; retry", F15) |
 //! | `Store(Busy)` | 503 | `busy` + `Retry-After: 5` |
@@ -364,6 +365,12 @@ impl From<CoreError> for Problem {
                 "Version mismatch",
                 format!("the resource was changed (current version {current_version})"),
             ),
+            CoreError::Changed(what) => Self::new(
+                StatusCode::CONFLICT,
+                "conflict",
+                "Conflict",
+                format!("{what}; retry"),
+            ),
             CoreError::Random | CoreError::Hashing => {
                 tracing::error!(error = %e, "request failed");
                 Self::internal()
@@ -435,6 +442,13 @@ mod tests {
         );
         let table: Vec<Row> = vec![
             (CoreError::NotFound, 404, "not-found", None, None),
+            (
+                CoreError::Changed("the theme changed"),
+                409,
+                "conflict",
+                Some("the theme changed; retry"),
+                None,
+            ),
             (
                 CoreError::Forbidden("manage_users"),
                 403,

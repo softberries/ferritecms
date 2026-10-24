@@ -28,7 +28,7 @@ use ferrite_core::{
     NewAccount, OptionService, PermalinkRules, RedirectService, Scopes, SiteReader,
     TaxonomyService, UserService, auth::SiteKey,
 };
-use ferrite_domain::{ArtifactHash, Role, Secret, Timestamp, User};
+use ferrite_domain::{ArtifactHash, InstalledTheme, Role, Secret, Timestamp, User};
 use ferrite_http::{
     AppParts, AppState, HttpConfig, PluginReloader, StoreHostServices,
     api::{ApiParts, ApiState},
@@ -156,6 +156,9 @@ pub struct Api {
     /// Reloads [`Api::app`]'s plugin host from the rows, as a node's reload task does
     /// on `plugins.changed` (pre-flight F18: the harness has no reload task).
     pub reloader: PluginReloader,
+    /// A theme row the installer writes straight to the store right after its next
+    /// `theme_from_artifact` loaded (a concurrent replacement, R10).
+    pub replace_after_theme_load: Arc<std::sync::Mutex<Option<InstalledTheme>>>,
 }
 
 /// A response with its body read.
@@ -213,12 +216,23 @@ impl Api {
         let reloader = PluginReloader::new(store.clone(), media_store.clone(), host.clone());
         let compiles = Arc::new(AtomicUsize::new(0));
         let counter = compiles.clone();
+        let replace_after_theme_load = Arc::new(std::sync::Mutex::new(None::<InstalledTheme>));
+        let (pending, hook_store) = (replace_after_theme_load.clone(), store.clone());
         let installer = Arc::new(
             Installer::new(store.clone(), media_store.clone(), HostConfig::default())
                 .expect("installer")
                 .with_prepare(move |host, manifest, wasm, approved| {
                     counter.fetch_add(1, Ordering::SeqCst);
                     host.prepare_with(manifest, wasm, approved)
+                })
+                .with_theme_loaded(move |_| {
+                    let row = pending.lock().unwrap().take();
+                    let store = hook_store.clone();
+                    Box::pin(async move {
+                        if let Some(row) = row {
+                            store.read().themes().upsert(&row).await.unwrap();
+                        }
+                    })
                 }),
         );
         let theme = Arc::new(
@@ -278,6 +292,7 @@ impl Api {
             router,
             compiles,
             reloader,
+            replace_after_theme_load,
         }
     }
 
@@ -291,6 +306,7 @@ impl Api {
             router,
             compiles: _,
             reloader,
+            replace_after_theme_load: _,
         } = self;
         drop((router, reloader, app, api, store, backing));
         db.teardown().await;

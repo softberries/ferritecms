@@ -47,7 +47,7 @@ async fn extension_service_futures_are_send() {
         updated_at: Timestamp::now(),
     };
     assert_send(svc.install_theme(&artifact, &theme, true));
-    assert_send(svc.activate_theme("t"));
+    assert_send(svc.activate_theme("t", &artifact.hash));
     assert_send(svc.install_plugin(&artifact, &plugin));
     assert_send(svc.set_plugin_enabled("p", true));
     assert_send(svc.delete_plugin("p"));
@@ -61,6 +61,6 @@ async fn extension_service_futures_are_send() {
     assert_send(admin.set_plugin_enabled(&actor, "p", true));
     assert_send(admin.delete_plugin(&actor, "p", true));
     assert_send(admin.install_theme(&actor, &artifact, &theme, true));
-    assert_send(admin.activate_theme(&actor, "t"));
+    assert_send(admin.activate_theme(&actor, "t", &artifact.hash));
     db.teardown().await;
 }

@@ -8,7 +8,9 @@
 //!
 //! * `GET /themes` lists every installed theme and every embedded theme without a row.
 //!   The active one is the active row or, with none, the embedded default (`blog`,
-//!   pre-flight F21); only it carries `nodes`, what each live node serves.
+//!   pre-flight F21) while it has no row; only it carries `nodes`, what each live node
+//!   serves. (With no row active and an inactive `blog` row, no entry is active and no
+//!   node states are shown: nodes serve the embedded files, which no entry describes.)
 //! * `POST /themes` takes a raw ustar bundle (`application/x-tar`, at most
 //!   [`MAX_BUNDLE_BYTES`]; P11). It is unpacked (regular files only; no links, absolute
 //!   paths or `..`) and every template compiled before anything is stored; a theme
@@ -19,7 +21,9 @@
 //!   activates it in the same write.
 //! * `POST /themes/{name}/activate` loads the row's artifact first (fetched, hash-checked,
 //!   unpacked, compiled); one that does not load is `422` and the active theme, and
-//!   what nodes serve, stay as they are, with no `theme.changed` (P12). An embedded
+//!   what nodes serve, stay as they are, with no `theme.changed` (P12). The activation
+//!   then records only if the row still names the artifact just loaded (checked under
+//!   the `extensions` lock): a row replaced in between is `409 conflict` (R10). An embedded
 //!   theme without a row is installed from the embedded files and activated. Nodes swap
 //!   on `theme.changed` through their reload task; a node that cannot load it keeps
 //!   serving its current theme and reports `fallback` (pre-flight F12).
@@ -43,8 +47,8 @@ use utoipa::IntoParams;
 
 use super::{
     ApiState, Authed,
-    dto::extensions::{ThemeBundle, ThemeDto, ThemeList, ThemeNodeState},
-    extract::{ApiPath, ApiQuery},
+    dto::extensions::{ThemeBundle, ThemeDto, ThemeList, ThemeNodeState, ThemeOrigin},
+    extract::{ApiPath, parse_query},
     plugins::{live_nodes, upload_slot},
     problem::{Problem, ProblemDocument},
 };
@@ -109,17 +113,17 @@ pub struct UploadParams {
 pub async fn install_theme(
     State(api): State<Arc<ApiState>>,
     Authed(who): Authed,
-    ApiQuery(params): ApiQuery<UploadParams>,
     req: Request,
 ) -> Result<Response, Problem> {
     let actor = &who.actor;
     api.extensions.authorize_themes(actor)?;
+    let params: UploadParams = parse_query(req.uri())?;
     let _upload = upload_slot(&api)?;
     let bundle = read_bundle(req).await?;
     let (artifact, row) = api.installer.stage_theme(bundle).await?;
     let activate = params.activate.unwrap_or(false);
     record(&api, actor, &artifact, &row, activate).await?;
-    let dto = entry(&api, actor, &row.name).await?;
+    let dto = written(&api, actor, &row, activate).await;
     Ok((StatusCode::CREATED, Json(dto)).into_response())
 }
 
@@ -135,6 +139,7 @@ pub async fn install_theme(
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (`manage_themes`, `extensions:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 404, description = "`not-found`: no installed or embedded theme of that name", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 409, description = "`conflict`: the theme was replaced while it was being checked; the active theme is unchanged (retry)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation`: the theme does not load (its artifact is missing, tampered with or does not compile); the active theme is unchanged", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 503, description = "`busy`: another extension change holds the lock (`Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
@@ -149,15 +154,18 @@ pub async fn activate_theme(
     if !valid_name(&name) {
         return Err(CoreError::NotFound.into());
     }
-    match api.extensions.get_theme(actor, &name).await? {
+    let row = match api.extensions.get_theme(actor, &name).await? {
         Some(row) => {
-            // P12: the row changes only once its files load. A concurrent upload may
-            // replace the row in between; its bundle was checked the same way.
+            // P12: the row changes only once its files load, and only if it still names
+            // the bundle just loaded (R10: a row replaced in between is `409 conflict`).
             api.installer
                 .theme_from_artifact(&row)
                 .await
                 .map_err(does_not_load)?;
-            api.extensions.activate_theme(actor, &name).await?;
+            api.extensions
+                .activate_theme(actor, &name, &row.artifact_hash)
+                .await?;
+            row
         }
         None if embedded().contains_key(name.as_str()) => {
             let (artifact, row) = api
@@ -166,10 +174,11 @@ pub async fn activate_theme(
                 .await
                 .map_err(does_not_load)?;
             record(&api, actor, &artifact, &row, true).await?;
+            row
         }
         None => return Err(CoreError::NotFound.into()),
-    }
-    Ok(Json(entry(&api, actor, &name).await?))
+    };
+    Ok(Json(written(&api, actor, &row, true).await))
 }
 
 /// Records a staged theme; when that fails, drops the staged blob unless another row
@@ -284,13 +293,25 @@ fn embedded() -> &'static BTreeMap<String, Embedded> {
     })
 }
 
-/// The list entry of `name` (`NotFound` if it has none).
-async fn entry(api: &ApiState, actor: &Actor, name: &str) -> Result<ThemeDto, Problem> {
-    entries(api, actor)
-        .await?
-        .into_iter()
-        .find(|t| t.name == name)
-        .ok_or_else(|| CoreError::NotFound.into())
+/// The response after a committed write of `row`: its list entry (with what nodes
+/// serve and the state another write may have given it since). The write succeeded, so
+/// a failing re-read does not fail the request: the entry is then built from `row`
+/// (`active` as written, no node states) and the failure logged.
+async fn written(api: &ApiState, actor: &Actor, row: &InstalledTheme, active: bool) -> ThemeDto {
+    match entries(api, actor).await {
+        Ok(items) => {
+            if let Some(dto) = items.into_iter().find(|t| t.name == row.name) {
+                return dto;
+            }
+            tracing::warn!(theme = %row.name, "a written theme is not listed");
+        }
+        Err(p) => {
+            tracing::warn!(theme = %row.name, detail = %p.detail, "cannot list the themes after a write");
+        }
+    }
+    let mut dto = ThemeDto::installed(row);
+    dto.active = dto.active || active;
+    dto
 }
 
 async fn entries(api: &ApiState, actor: &Actor) -> Result<Vec<ThemeDto>, Problem> {
@@ -317,8 +338,11 @@ fn list(
     for row in rows {
         items.insert(row.name.clone(), ThemeDto::installed(row));
     }
+    // No row active: nodes serve the embedded default, which is that entry while it has
+    // no row (an inactive `blog` row is not what they serve, so it stays inactive).
     if !rows.iter().any(|r| r.active)
         && let Some(default) = items.get_mut(DEFAULT_THEME)
+        && default.origin == ThemeOrigin::Embedded
     {
         default.active = true;
     }
@@ -334,7 +358,6 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::api::dto::extensions::ThemeOrigin;
 
     fn row(name: &str, active: bool) -> InstalledTheme {
         InstalledTheme {
@@ -396,6 +419,15 @@ mod tests {
         assert_eq!(items[0].origin, ThemeOrigin::Installed);
         assert!(!items[0].active && items[0].nodes.is_empty());
         assert!(items[1].active && items[1].nodes.len() == 1);
+
+        // No row active and an inactive `blog` row: that row is not what nodes serve.
+        let n = node(json!({"theme": {"name": "blog", "hash": "h", "origin": "embedded"}}));
+        let items = list(
+            &[row("blog", false), row("dark", false)],
+            &embedded_blog(),
+            &[n],
+        );
+        assert!(items.iter().all(|t| !t.active && t.nodes.is_empty()));
     }
 
     #[test]
@@ -403,6 +435,7 @@ mod tests {
         let n = node(json!({"theme": {"name": "dark", "hash": "h",
             "origin": {"artifact": "ab"}, "error": "e", "fallback": true}}));
         let s = ThemeNodeState::of(&n).unwrap();
+        assert_eq!((s.node_name.as_str(), s.node_version.as_str()), ("n", "0"));
         assert_eq!(
             (
                 s.name.as_str(),

@@ -122,6 +122,13 @@ impl From<ExtensionError> for Problem {
                 let detail = e.to_string();
                 Self::validation(detail.clone()).with_error(Some("component"), detail)
             }
+            // Only a theme folder (`ThemeSource::Dir`, CLI and startup) reads files, so
+            // no upload or artifact reaches this; its text holds a local path, which is
+            // never sent.
+            ExtensionError::Theme(ThemeError::Io { .. }) => {
+                tracing::error!(error = %e, "theme files cannot be read");
+                Self::validation("the theme does not load: its files cannot be read")
+            }
             // One `errors[]` entry per problem the package or its templates have
             // (`templates/<file>:<line>: …`), as the admin fixes them one by one.
             ExtensionError::Theme(ThemeError::Invalid(ref problems))
@@ -190,6 +197,10 @@ impl Inspected {
     }
 }
 
+/// Test seam: runs after [`Installer::theme_from_artifact`] loaded a row's theme.
+type ThemeLoadedFn =
+    Arc<dyn Fn(&InstalledTheme) -> futures::future::BoxFuture<'static, ()> + Send + Sync>;
+
 type PrepareFn = Arc<
     dyn Fn(&PluginHost, Manifest, &[u8], ApprovedLimits) -> Result<PreparedPlugin, PluginError>
         + Send
@@ -204,6 +215,7 @@ pub struct Installer {
     slots: Arc<Semaphore>,
     uploads: Arc<Semaphore>,
     prepare: PrepareFn,
+    theme_loaded: Option<ThemeLoadedFn>,
 }
 
 impl Installer {
@@ -224,7 +236,22 @@ impl Installer {
             prepare: Arc::new(|host, manifest, wasm, approved| {
                 host.prepare_with(manifest, wasm, approved)
             }),
+            theme_loaded: None,
         })
+    }
+
+    /// Test seam: await `hook` after each [`theme_from_artifact`](Self::theme_from_artifact)
+    /// that loaded (for example to change the row before the caller records anything).
+    #[doc(hidden)]
+    pub fn with_theme_loaded(
+        mut self,
+        hook: impl Fn(&InstalledTheme) -> futures::future::BoxFuture<'static, ()>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.theme_loaded = Some(Arc::new(hook));
+        self
     }
 
     /// Test seam: compile through `prepare` instead of [`PluginHost::prepare_with`] (for
@@ -390,7 +417,11 @@ impl Installer {
 
     /// [`load_theme_artifact`] from this installer's media store.
     pub async fn theme_from_artifact(&self, row: &InstalledTheme) -> Result<Theme, ExtensionError> {
-        load_theme_artifact(&self.media, row).await
+        let theme = load_theme_artifact(&self.media, row).await?;
+        if let Some(hook) = &self.theme_loaded {
+            hook(row).await;
+        }
+        Ok(theme)
     }
 
     /// One of the node's [`UPLOAD_SLOTS`], if one is free: handlers hold it while they
@@ -677,6 +708,12 @@ mod tests {
         let details: Vec<&str> = p.errors.iter().map(|e| e.detail.as_str()).collect();
         assert_eq!(details, ["templates/a.html:1: x", "templates/b.html:2: y"]);
         assert!(p.errors.iter().all(|e| e.field.is_none()));
+        let p = Problem::from(ExtensionError::Theme(ThemeError::Io {
+            path: "/srv/secret/themes/x".into(),
+            source: std::io::Error::other("denied"),
+        }));
+        assert_eq!(p.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(!p.detail.contains("/srv"), "{}", p.detail);
         let p = Problem::from(ExtensionError::Theme(ThemeError::NotFound("x".into())));
         assert_eq!(
             (p.status, p.errors.len()),

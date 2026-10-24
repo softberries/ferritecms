@@ -3,7 +3,9 @@
 
 use std::{sync::Arc, time::Duration};
 
-use ferrite_domain::{Artifact, InstalledPlugin, InstalledTheme, NewAudit, Timestamp};
+use ferrite_domain::{
+    Artifact, ArtifactHash, InstalledPlugin, InstalledTheme, NewAudit, Timestamp,
+};
 use ferrite_store::Store;
 use serde_json::{Value, json};
 
@@ -187,17 +189,25 @@ impl ExtensionAdmin {
             .await
     }
 
-    /// [`ExtensionService::activate_theme`] with audit `theme.activate {name}`.
-    pub async fn activate_theme(&self, actor: &Actor, name: &str) -> Result<(), CoreError> {
+    /// [`ExtensionService::activate_theme`] (only if the row still names `expected`)
+    /// with audit `theme.activate {name, artifact}`.
+    pub async fn activate_theme(
+        &self,
+        actor: &Actor,
+        name: &str,
+        expected: &ArtifactHash,
+    ) -> Result<(), CoreError> {
         require(actor, Capability::ManageThemes)?;
         let audit = audit(
             actor,
             "theme.activate",
             "theme",
             name,
-            json!({ "name": name }),
+            json!({ "name": name, "artifact": expected.as_str() }),
         );
-        self.service.activate_theme_with(name, Some(audit)).await
+        self.service
+            .activate_theme_with(name, expected, Some(audit))
+            .await
     }
 }
 

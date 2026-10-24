@@ -197,7 +197,7 @@ pub async fn activate_theme_emits_theme_changed(db: &TestDb) {
         .unwrap();
 
     let seq = max_seq(store).await;
-    svc.activate_theme("two").await.unwrap();
+    svc.activate_theme("two", &b.hash).await.unwrap();
     assert_eq!(active_name(store).await.as_deref(), Some("two"));
     assert_eq!(
         events_after(store, seq).await,
@@ -206,12 +206,19 @@ pub async fn activate_theme_emits_theme_changed(db: &TestDb) {
 
     // Activating the active theme changes nothing.
     let seq = max_seq(store).await;
-    svc.activate_theme("two").await.unwrap();
+    svc.activate_theme("two", &b.hash).await.unwrap();
     assert!(events_after(store, seq).await.is_empty());
 
     // A missing theme is NotFound and keeps the active one.
-    let r = svc.activate_theme("missing").await;
+    let r = svc.activate_theme("missing", &b.hash).await;
     assert!(matches!(r, Err(CoreError::NotFound)), "{r:?}");
+    assert_eq!(active_name(store).await.as_deref(), Some("two"));
+    assert!(events_after(store, seq).await.is_empty());
+
+    // R10: a row that no longer names the checked artifact (replaced since) is
+    // `Changed`, and nothing is written.
+    let r = svc.activate_theme("one", &b.hash).await;
+    assert!(matches!(r, Err(CoreError::Changed(_))), "{r:?}");
     assert_eq!(active_name(store).await.as_deref(), Some("two"));
     assert!(events_after(store, seq).await.is_empty());
 
@@ -383,7 +390,7 @@ pub async fn extensions_writes_take_the_lock(db: &TestDb) {
     let started = Instant::now();
     busy(svc.install_theme(&a, &theme("t", &a), true).await);
     assert!(started.elapsed() >= Duration::from_millis(300));
-    busy(svc.activate_theme("t").await);
+    busy(svc.activate_theme("t", &a.hash).await);
     busy(svc.install_plugin(&p, &plugin("p", &p, true)).await);
     busy(svc.set_plugin_enabled("p", false).await);
     busy(svc.delete_plugin("p").await.map(|_| ()));

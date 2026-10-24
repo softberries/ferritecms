@@ -383,6 +383,16 @@ async fn editor_cannot_manage_plugins(api: Api) -> Api {
     c.send(&api, Method::DELETE, "/api/v1/plugins/hello", None, None)
         .await
         .assert_problem(403, "forbidden");
+    // Authorized before the query is read.
+    c.send(
+        &api,
+        Method::DELETE,
+        "/api/v1/plugins/hello?purge=yes",
+        None,
+        None,
+    )
+    .await
+    .assert_problem(403, "forbidden");
 
     // A bearer token of an admin without `extensions:write` cannot install either.
     let admin = api.user("admin", Role::Admin, false).await;

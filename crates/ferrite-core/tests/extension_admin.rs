@@ -161,7 +161,7 @@ pub async fn extension_writes_need_capabilities(db: &TestDb) {
         "manage_themes",
     );
     forbidden(
-        admin_svc.activate_theme(&editor, "dark").await,
+        admin_svc.activate_theme(&editor, "dark", &t.hash).await,
         "manage_themes",
     );
     forbidden(admin_svc.list_plugins(&editor).await, "manage_plugins");
@@ -227,7 +227,7 @@ pub async fn extension_writes_need_capabilities(db: &TestDb) {
         "extensions:write",
     );
     forbidden(
-        admin_svc.activate_theme(&reader, "dark").await,
+        admin_svc.activate_theme(&reader, "dark", &t.hash).await,
         "extensions:write",
     );
     // A token without any extensions scope reads nothing.
@@ -303,7 +303,7 @@ pub async fn writes_are_audited(db: &TestDb) {
     svc.install_theme(&admin, &t, &theme("dark", &t), false)
         .await
         .unwrap();
-    svc.activate_theme(&admin, "dark").await.unwrap();
+    svc.activate_theme(&admin, "dark", &t.hash).await.unwrap();
     // A secret setting value stored before the delete never reaches the audit row.
     store
         .read()
@@ -361,7 +361,7 @@ pub async fn writes_are_audited(db: &TestDb) {
     let before = rows.len();
     assert!(svc.set_plugin_enabled(&admin, "gone", true).await.is_err());
     assert!(svc.delete_plugin(&admin, "gone", false).await.is_err());
-    assert!(svc.activate_theme(&admin, "gone").await.is_err());
+    assert!(svc.activate_theme(&admin, "gone", &t.hash).await.is_err());
     assert_eq!(audit_actions(store).await.len(), before);
 }
 

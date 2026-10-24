@@ -4658,6 +4658,16 @@
               }
             }
           },
+          "409": {
+            "description": "`conflict`: the theme was replaced while it was being checked; the active theme is unchanged (retry)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
           "422": {
             "description": "`validation`: the theme does not load (its artifact is missing, tampered with or does not compile); the active theme is unchanged",
             "content": {
@@ -7589,7 +7599,7 @@
         "properties": {
           "active": {
             "type": "boolean",
-            "description": "The theme nodes should serve: the active row, or with no active row the embedded\ndefault (`blog`)."
+            "description": "The theme nodes should serve: the active row, or with no row active the embedded\ndefault (`blog`) while it has no row. With no row active and an inactive `blog`\nrow (uploaded without `activate`), no entry is active: nodes then serve the\nembedded `blog` files, which no entry describes; activating a theme ends that."
           },
           "description": {
             "type": [
@@ -7650,6 +7660,8 @@
         "description": "What one live node serves (`nodes.meta.theme`).",
         "required": [
           "node",
+          "node_name",
+          "node_version",
           "name",
           "hash",
           "origin",
@@ -7679,6 +7691,14 @@
             "type": "string",
             "format": "uuid",
             "description": "The node's id."
+          },
+          "node_name": {
+            "type": "string",
+            "description": "The node's name (`cluster.node_name` or the host name)."
+          },
+          "node_version": {
+            "type": "string",
+            "description": "The binary version the node runs."
           },
           "origin": {
             "type": "string",

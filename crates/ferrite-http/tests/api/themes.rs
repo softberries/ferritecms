@@ -28,6 +28,8 @@ api_tests!(
     editor_cannot_manage_themes,
     theme_uploads_are_bounded_per_node,
     failed_theme_install_discards_unreferenced_blob,
+    activation_race_is_a_conflict,
+    hostile_bundles_are_refused,
 );
 
 const THEMES: &str = "/api/v1/themes";
@@ -469,6 +471,8 @@ async fn theme_list_shows_node_state(api: Api) -> Api {
     let list = c.get(&api, THEMES).await.json();
     let want = json!([{
         "node": id.as_uuid().to_string(),
+        "node_name": "web-1",
+        "node_version": "0.0.0",
         "name": "blog",
         "hash": "0123456789abcdef",
         "origin": "embedded",
@@ -538,10 +542,18 @@ async fn editor_cannot_manage_themes(api: Api) -> Api {
         "{p}"
     );
     nothing_stored(&api, &hash).await;
-    // Not even the content type is looked at first.
+    // Not even the content type or the query is looked at first.
     c.post(&api, THEMES, json!({}))
         .await
         .assert_problem(403, "forbidden");
+    upload(
+        &mut c,
+        &api,
+        &format!("{THEMES}?activate=yes"),
+        bytes.clone(),
+    )
+    .await
+    .assert_problem(403, "forbidden");
     c.get(&api, THEMES).await.assert_problem(403, "forbidden");
     activate(&mut c, &api, "blog")
         .await
@@ -625,5 +637,135 @@ async fn failed_theme_install_discards_unreferenced_blob(api: Api) -> Api {
         releaser.await.unwrap();
         nothing_stored(&api, &hash).await;
     }
+    api
+}
+
+/// R10: a row replaced between loading its bundle and activating it is not activated
+/// (`409 conflict`): only the bundle just checked can become active.
+async fn activation_race_is_a_conflict(api: Api) -> Api {
+    let mut c = admin(&api).await;
+    let r = activate(&mut c, &api, "blog").await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let blog = api
+        .store
+        .read()
+        .themes()
+        .get("blog")
+        .await
+        .unwrap()
+        .unwrap();
+    let r = upload(&mut c, &api, THEMES, bundle("upload-theme")).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
+    let checked = api
+        .store
+        .read()
+        .themes()
+        .get("uploaded")
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Right after the handler loaded `uploaded`, its row is replaced by another version
+    // (as a concurrent upload would): the row now names a bundle this request did not
+    // check.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("templates")).unwrap();
+    std::fs::write(
+        dir.path().join("theme.toml"),
+        "[theme]\nname = \"uploaded\"\nversion = \"1.3.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("templates/index.html"), "v2").unwrap();
+    let v2 = pack(&ThemeSource::Dir(dir.path().to_owned())).unwrap();
+    let (artifact, v2_row) = api.api.installer.stage_theme(v2.into()).await.unwrap();
+    api.store
+        .read()
+        .artifacts()
+        .insert_if_absent(&artifact)
+        .await
+        .unwrap();
+    assert_ne!(v2_row.artifact_hash, checked.artifact_hash);
+    assert_ne!(v2_row.artifact_hash, blog.artifact_hash);
+    *api.replace_after_theme_load.lock().unwrap() = Some(v2_row.clone());
+    let seq = max_seq(&api).await;
+    let p = activate(&mut c, &api, "uploaded")
+        .await
+        .assert_problem(409, "conflict");
+    assert!(p["detail"].as_str().unwrap().contains("replaced"), "{p}");
+    assert_eq!(events_after(&api, seq).await, []);
+    assert_eq!(active_row(&api).await.as_deref(), Some("blog"));
+    assert!(
+        api.replace_after_theme_load.lock().unwrap().is_none(),
+        "hook ran"
+    );
+
+    // A retry checks the row as it is now (v2), and activates that.
+    let r = activate(&mut c, &api, "uploaded").await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert_eq!(r.json()["version"], "1.3.0", "{r:?}");
+    let active = api.store.read().themes().active().await.unwrap().unwrap();
+    assert_eq!(active.artifact_hash, v2_row.artifact_hash);
+    api
+}
+
+/// Appends one ustar entry with raw `path` bytes, type flag `kind`, `link` and a
+/// declared `size` (the data written is `data`).
+fn tar_entry(out: &mut Vec<u8>, path: &[u8], kind: u8, link: &[u8], size: u64, data: &[u8]) {
+    let mut h = tar::Header::new_ustar();
+    {
+        let old = h.as_old_mut();
+        old.name[..path.len()].copy_from_slice(path);
+        old.linkname[..link.len()].copy_from_slice(link);
+    }
+    h.set_size(size);
+    h.set_mode(0o644);
+    h.set_entry_type(tar::EntryType::new(kind));
+    h.set_cksum();
+    out.extend_from_slice(h.as_bytes());
+    out.extend_from_slice(data);
+    out.extend(std::iter::repeat_n(0u8, (512 - data.len() % 512) % 512));
+}
+
+/// Hostile bundles over HTTP: a valid theme plus a symlink, a hard link, a `..` path,
+/// an absolute path or an entry declaring more than the bundle may hold is `422`, the
+/// problem naming the entry, and nothing is stored.
+async fn hostile_bundles_are_refused(api: Api) -> Api {
+    let mut c = admin(&api).await;
+    let base = || {
+        let mut out = Vec::new();
+        tar_entry(&mut out, b"templates/index.html", b'0', b"", 5, b"index");
+        let toml = b"[theme]\nname = \"t\"\nversion = \"0.1.0\"\n";
+        tar_entry(&mut out, b"theme.toml", b'0', b"", toml.len() as u64, toml);
+        out
+    };
+    let end = |mut tar: Vec<u8>| {
+        tar.extend_from_slice(&[0u8; 1024]);
+        tar
+    };
+    let oversize = ferrite_theme::MAX_TOTAL_BYTES + 1;
+    let hostile: [(&[u8], u8, &[u8], u64); 6] = [
+        (b"assets/link", b'2', b"../../../etc/passwd", 0),
+        (b"assets/hl", b'1', b"theme.toml", 0),
+        (b"../x", b'0', b"", 1),
+        (b"assets/../../x", b'0', b"", 1),
+        (b"/etc/x", b'0', b"", 1),
+        (b"assets/big.css", b'0', b"", oversize),
+    ];
+    for (path, kind, link, size) in hostile {
+        let mut tar = base();
+        let data: &[u8] = if size == 1 { b"x" } else { b"" };
+        tar_entry(&mut tar, path, kind, link, size, data);
+        let bytes = end(tar);
+        let hash = sha256(&bytes);
+        let p = upload(&mut c, &api, THEMES, bytes)
+            .await
+            .assert_problem(422, "validation");
+        let name = String::from_utf8_lossy(path);
+        assert!(p.to_string().contains(&*name), "{name}: {p}");
+        nothing_stored(&api, &hash).await;
+    }
+    // The base bundle itself is a theme (the refusals are about the added entry).
+    let r = upload(&mut c, &api, THEMES, end(base())).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
     api
 }

@@ -42,7 +42,7 @@ use super::{
         GrantReportDto, PermissionReportDto, PluginDto, PluginInspectUpload, PluginList,
         PluginNodeState, PluginUpload,
     },
-    extract::{ApiPath, ApiQuery, created_at},
+    extract::{ApiPath, created_at, parse_query},
     multipart::{open, read_parts},
     problem::{Problem, ProblemDocument},
 };
@@ -290,8 +290,11 @@ pub async fn delete_plugin(
     State(api): State<Arc<ApiState>>,
     Authed(who): Authed,
     ApiPath(name): ApiPath<String>,
-    ApiQuery(params): ApiQuery<DeleteParams>,
+    uri: axum::http::Uri,
 ) -> Result<StatusCode, Problem> {
+    // Authorized before the query is read, as every extension write (core checks again).
+    api.extensions.authorize_plugins(&who.actor)?;
+    let params: DeleteParams = parse_query(&uri)?;
     api.extensions
         .delete_plugin(&who.actor, &name, params.purge.unwrap_or(false))
         .await?;

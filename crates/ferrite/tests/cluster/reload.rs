@@ -74,7 +74,10 @@ async fn theme_and_plugin_reload_reach_every_node() {
     })
     .await;
     let saved = Instant::now();
-    extensions.activate_theme("b").await.unwrap();
+    extensions
+        .activate_theme("b", &b.artifact_hash)
+        .await
+        .unwrap();
     wait_until(SETUP, "theme b everywhere", || {
         all_home(&c, |body| body.contains("MARK-B"))
     })
