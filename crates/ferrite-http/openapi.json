@@ -2523,7 +2523,7 @@
             }
           },
           "503": {
-            "description": "`busy`: another extension change holds the lock (`Retry-After`)",
+            "description": "`busy`: every upload slot of this node is taken, or another extension change holds the lock (`Retry-After`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2623,6 +2623,16 @@
           },
           "422": {
             "description": "`validation`: a missing part (`errors[0].field` = its name), a manifest that is not valid (`errors[].field` = the manifest path, or `manifest`), a component that does not load or a limit above its ceiling (`component`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`busy`: every upload slot of this node is taken (`Retry-After`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6098,6 +6108,56 @@
           "repeater"
         ]
       },
+      "GrantReportDto": {
+        "type": "object",
+        "description": "A permission report: what a manifest asks for in plain language, against a grant\n(P3, P6).",
+        "required": [
+          "plugin",
+          "version",
+          "artifact",
+          "items",
+          "added",
+          "limits",
+          "fingerprint"
+        ],
+        "properties": {
+          "added": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PermissionItemDto"
+            },
+            "description": "What the grant compared against does not cover: for an upload, the installed\nversion's grant (all of `items` for a new plugin; a non-empty `added` on an\nupdate widens the grant, R1); for an installed plugin, its own stored grant\n(empty when it was installed with approval)."
+          },
+          "artifact": {
+            "type": "string",
+            "description": "The component's SHA-256 (64 lowercase hex)."
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "For an upload: what `POST /plugins` must carry as `approve` to install exactly\nit (SHA-256 over plugin, version, artifact and grant). For an installed plugin:\nthe fingerprint it was approved with."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PermissionItemDto"
+            },
+            "description": "Every capability asked for."
+          },
+          "limits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LimitItemDto"
+            },
+            "description": "Every limit the manifest sets."
+          },
+          "plugin": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "ImportReportDto": {
         "type": "object",
         "description": "`POST /redirects/import`: what the import did.",
@@ -6521,59 +6581,24 @@
         }
       },
       "PermissionReportDto": {
-        "type": "object",
-        "description": "What a plugin upload asks for, as the admin approves it (P3, P6).",
-        "required": [
-          "plugin",
-          "version",
-          "artifact",
-          "items",
-          "added",
-          "limits",
-          "fingerprint",
-          "update"
-        ],
-        "properties": {
-          "added": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PermissionItemDto"
-            },
-            "description": "What the installed version's grant does not cover; all of `items` for a new\nplugin. An update with a non-empty `added` widens the grant (R1)."
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/GrantReportDto"
           },
-          "artifact": {
-            "type": "string",
-            "description": "The component's SHA-256 (64 lowercase hex)."
-          },
-          "fingerprint": {
-            "type": "string",
-            "description": "What `POST /plugins` must carry as `approve` to install exactly this upload\n(SHA-256 over plugin, version, artifact and grant)."
-          },
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PermissionItemDto"
-            },
-            "description": "Every capability asked for."
-          },
-          "limits": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/LimitItemDto"
-            },
-            "description": "Every limit the manifest sets."
-          },
-          "plugin": {
-            "type": "string"
-          },
-          "update": {
-            "type": "boolean",
-            "description": "Whether `added` was computed against an installed version's grant."
-          },
-          "version": {
-            "type": "string"
+          {
+            "type": "object",
+            "required": [
+              "update"
+            ],
+            "properties": {
+              "update": {
+                "type": "boolean",
+                "description": "Whether a plugin of this name is installed: `added` is then against its grant."
+              }
+            }
           }
-        }
+        ],
+        "description": "The report of a plugin upload, as the admin approves it (`POST /plugins/inspect`,\nand the `report` of an approval refusal)."
       },
       "PluginDto": {
         "type": "object",
@@ -6614,8 +6639,8 @@
           "report": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/PermissionReportDto",
-                "description": "The report of the stored grant: `added` is what it does not cover (empty for a\nplugin installed with approval), `fingerprint` the approved one. `null` when\nthe stored manifest or grant no longer parses (the plugin does not load)."
+                "$ref": "#/components/schemas/GrantReportDto",
+                "description": "The report of the stored grant: `added` is what it does not cover (empty for a\nplugin installed with approval), `fingerprint` the approved one. It has no\n`update`: rows keep no previous version. `null` when the stored manifest or\ngrant no longer parses (the plugin does not load)."
               },
               {
                 "type": "null"

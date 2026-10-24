@@ -7,12 +7,18 @@ use axum::{
     body::Body,
     http::{Method, StatusCode, header},
 };
-use ferrite_domain::{Event, NewNode, NodeId, Role};
+use ferrite_domain::{
+    Artifact, ArtifactHash, ArtifactKind, Event, NewNode, NodeId, Role, Timestamp,
+};
+use ferrite_http::extensions::UPLOAD_SLOTS;
+use ferrite_store::{LOCK_EXTENSIONS, lock};
 use serde_json::{Value, json};
 
 use crate::{
     api_tests,
-    harness::{Api, Client, Resp, multipart_body, plugin_manifest, plugin_wasm},
+    harness::{
+        Api, Client, EXTENSIONS_LOCK_WAIT, Resp, multipart_body, plugin_manifest, plugin_wasm,
+    },
 };
 
 api_tests!(
@@ -23,6 +29,10 @@ api_tests!(
     multipart_limits,
     delete_with_purge,
     plugin_list_shows_node_state,
+    broken_components_are_refused,
+    reserved_name_is_refused,
+    uploads_are_bounded_per_node,
+    failed_install_discards_unreferenced_blob,
 );
 
 const PLUGINS: &str = "/api/v1/plugins";
@@ -162,19 +172,32 @@ async fn plugin_install_flow(api: Api) -> Api {
     let r = api.get("/").await;
     assert!(hello_meta(&r.body), "{}", r.body);
 
-    // Disable.
+    // Disable: `plugins.changed`.
+    let seq = max_seq(&api).await;
     let r = c.post_empty(&api, "/api/v1/plugins/hello/disable").await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
     assert_eq!(r.json()["enabled"], false);
+    assert_eq!(
+        kinds_after(&api, seq).await,
+        [("plugins.changed".to_owned(), vec!["hello".to_owned()])]
+    );
     api.reloader.reload().await.unwrap();
     poller.poll_once().await.unwrap();
     assert!(!hello_meta(&api.get("/").await.body));
 
-    // Delete: 204, the row is gone; again: 404.
+    // Delete: 204, `plugins.changed`, the row is gone; again: 404.
+    let seq = max_seq(&api).await;
     let r = c
         .send(&api, Method::DELETE, "/api/v1/plugins/hello", None, None)
         .await;
     assert_eq!(r.status, StatusCode::NO_CONTENT, "{r:?}");
+    assert!(
+        kinds_after(&api, seq)
+            .await
+            .contains(&("plugins.changed".to_owned(), vec!["hello".to_owned()])),
+        "{:?}",
+        kinds_after(&api, seq).await
+    );
     assert_eq!(api.store.read().plugins().get("hello").await.unwrap(), None);
     c.get(&api, "/api/v1/plugins/hello")
         .await
@@ -221,6 +244,19 @@ async fn install_needs_matching_approval(api: Api) -> Api {
         assert_eq!(p["report"]["artifact"], artifact.as_str(), "{p}");
         nothing_stored(&api, &artifact).await;
     }
+
+    // `hello`'s fingerprint with another component under `hello`'s manifest: the
+    // fingerprint binds the artifact, so nothing is stored.
+    let fingerprint = inspect(&mut c, &api, &manifest, &wasm).await.json()["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let r = install(&mut c, &api, &manifest, &clock, &fingerprint).await;
+    let p = r.assert_problem(422, "validation");
+    assert_eq!(p["errors"][0]["field"], "approve", "{p}");
+    assert_ne!(p["report"]["fingerprint"], fingerprint.as_str(), "{p}");
+    nothing_stored(&api, p["report"]["artifact"].as_str().unwrap()).await;
+    nothing_stored(&api, &artifact).await;
     api
 }
 
@@ -563,6 +599,137 @@ async fn plugin_list_shows_node_state(api: Api) -> Api {
             "error": "link error"
         }]),
         "{dto}"
+    );
+    api
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// A component that is not wasm, or that imports what the host does not provide, is
+/// `422` with `field = component` at inspection and at install; nothing is stored.
+async fn broken_components_are_refused(api: Api) -> Api {
+    let mut c = admin(&api).await;
+    let hostile = plugin_wasm("undeclared-import");
+    let cases: [(String, Vec<u8>); 2] = [
+        (plugin_manifest("hello"), b"not wasm at all".to_vec()),
+        (plugin_manifest("undeclared-import"), hostile),
+    ];
+    for (manifest, component) in cases {
+        for r in [
+            inspect(&mut c, &api, &manifest, &component).await,
+            install(&mut c, &api, &manifest, &component, &"0".repeat(64)).await,
+        ] {
+            let p = r.assert_problem(422, "validation");
+            assert_eq!(p["errors"][0]["field"], "component", "{p}");
+            assert!(p.get("report").is_none(), "{p}");
+        }
+        nothing_stored(&api, &sha256(&component)).await;
+    }
+    api
+}
+
+/// R9: `inspect` is a static path under `/plugins/`, so no plugin may be named so.
+async fn reserved_name_is_refused(api: Api) -> Api {
+    let mut c = admin(&api).await;
+    let manifest = plugin_manifest("hello").replace("\"hello\"", "\"inspect\"");
+    let wasm = plugin_wasm("hello");
+    let p = inspect(&mut c, &api, &manifest, &wasm)
+        .await
+        .assert_problem(422, "validation");
+    assert_eq!(p["errors"][0]["field"], "plugin.name", "{p}");
+    let p = install(&mut c, &api, &manifest, &wasm, &"0".repeat(64))
+        .await
+        .assert_problem(422, "validation");
+    assert_eq!(p["errors"][0]["field"], "plugin.name", "{p}");
+    nothing_stored(&api, &sha256(&wasm)).await;
+    api
+}
+
+/// At most `UPLOAD_SLOTS` uploads at once per node: one more is `503 busy` before its
+/// body is read.
+async fn uploads_are_bounded_per_node(api: Api) -> Api {
+    let mut c = admin(&api).await;
+    let (manifest, wasm) = (plugin_manifest("hello"), plugin_wasm("hello"));
+    let held: Vec<_> = (0..UPLOAD_SLOTS)
+        .map(|_| api.api.installer.try_upload_slot().expect("free slot"))
+        .collect();
+    let before = api.compiles.load(Ordering::SeqCst);
+    for r in [
+        inspect(&mut c, &api, &manifest, &wasm).await,
+        install(&mut c, &api, &manifest, &wasm, "x").await,
+    ] {
+        r.assert_problem(503, "busy");
+        assert_eq!(r.header("retry-after"), Some("5"), "{r:?}");
+    }
+    assert_eq!(
+        api.compiles.load(Ordering::SeqCst),
+        before,
+        "nothing compiled"
+    );
+    drop(held);
+    let r = inspect(&mut c, &api, &manifest, &wasm).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    api
+}
+
+/// A staged component whose rows are not recorded is deleted again, unless an artifact
+/// row names the same bytes.
+async fn failed_install_discards_unreferenced_blob(api: Api) -> Api {
+    let mut c = admin(&api).await;
+    let (manifest, wasm) = (plugin_manifest("hello"), plugin_wasm("hello"));
+    let fingerprint = inspect(&mut c, &api, &manifest, &wasm).await.json()["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let hash = ArtifactHash::parse(&sha256(&wasm)).unwrap();
+
+    // The `extensions` lock is held while the install records: `busy`. The test frees
+    // the lock once the blob is staged and the install's lock wait is over, so the
+    // cleanup gets it and deletes the blob nothing names.
+    let guard = lock(api.store.as_ref(), LOCK_EXTENSIONS, EXTENSIONS_LOCK_WAIT)
+        .await
+        .unwrap();
+    let media = api.api.media.clone();
+    let watched = hash.clone();
+    let releaser = tokio::spawn(async move {
+        while media.head(&watched).await.unwrap().is_none() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(EXTENSIONS_LOCK_WAIT * 2).await;
+        guard.release().await.unwrap();
+    });
+    let r = install(&mut c, &api, &manifest, &wasm, &fingerprint).await;
+    r.assert_problem(503, "busy");
+    releaser.await.unwrap();
+    nothing_stored(&api, hash.as_str()).await;
+
+    // An artifact row names the same bytes (here with another kind, so the install
+    // is refused): the blob stays.
+    let other = Artifact {
+        hash: hash.clone(),
+        kind: ArtifactKind::Theme,
+        bytes: wasm.len() as i64,
+        mime: "application/x-tar".into(),
+        created_at: Timestamp::now(),
+    };
+    api.store
+        .read()
+        .artifacts()
+        .insert_if_absent(&other)
+        .await
+        .unwrap();
+    let r = install(&mut c, &api, &manifest, &wasm, &fingerprint).await;
+    r.assert_problem(422, "validation");
+    assert!(api.store.read().plugins().list().await.unwrap().is_empty());
+    assert_eq!(
+        api.api.media.head(&hash).await.unwrap(),
+        Some(wasm.len() as u64)
     );
     api
 }

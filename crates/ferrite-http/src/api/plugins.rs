@@ -39,8 +39,8 @@ use utoipa::IntoParams;
 use super::{
     ApiState, Authed, BASE,
     dto::extensions::{
-        PermissionReportDto, PluginDto, PluginInspectUpload, PluginList, PluginNodeState,
-        PluginUpload,
+        GrantReportDto, PermissionReportDto, PluginDto, PluginInspectUpload, PluginList,
+        PluginNodeState, PluginUpload,
     },
     extract::{ApiPath, ApiQuery, created_at},
     multipart::{open, read_parts},
@@ -124,6 +124,7 @@ pub async fn get_plugin(
         (status = 413, description = "`too-large`: a part or the body over its limit", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 415, description = "`unsupported-media-type`: not `multipart/form-data`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation`: a missing part (`errors[0].field` = its name), a manifest that is not valid (`errors[].field` = the manifest path, or `manifest`), a component that does not load or a limit above its ceiling (`component`)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 503, description = "`busy`: every upload slot of this node is taken (`Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn inspect_plugin(
@@ -132,6 +133,7 @@ pub async fn inspect_plugin(
     req: Request,
 ) -> Result<Json<PermissionReportDto>, Problem> {
     api.extensions.authorize_plugins(&who.actor)?;
+    let _upload = upload_slot(&api)?;
     let mut parts = read_parts(
         open(req, MAX_UPLOAD_BODY).await?,
         &[MANIFEST_PART, COMPONENT_PART],
@@ -161,7 +163,7 @@ pub async fn inspect_plugin(
         (status = 413, description = "`too-large`: a part or the body over its limit", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 415, description = "`unsupported-media-type`: not `multipart/form-data`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation`: as for the inspection; or `errors[0].field` = `approve` when `approve` is missing or is not the fingerprint of this upload (the body's `report` is this upload's report; nothing is stored and an installed version keeps running)", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 503, description = "`busy`: another extension change holds the lock (`Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 503, description = "`busy`: every upload slot of this node is taken, or another extension change holds the lock (`Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn install_plugin(
@@ -171,6 +173,7 @@ pub async fn install_plugin(
 ) -> Result<Response, Problem> {
     let actor = &who.actor;
     api.extensions.authorize_plugins(actor)?;
+    let _upload = upload_slot(&api)?;
     let mut parts = read_parts(
         open(req, MAX_UPLOAD_BODY).await?,
         &[
@@ -198,9 +201,14 @@ pub async fn install_plugin(
         }
         Err(e) => return Err(e.into()),
     };
-    api.extensions
-        .install_plugin(actor, &artifact, &row)
-        .await?;
+    if let Err(e) = api.extensions.install_plugin(actor, &artifact, &row).await {
+        // No row this request wrote names the staged blob; drop it unless another row
+        // names the same bytes.
+        if let Err(cleanup) = api.installer.discard_staged(&artifact.hash).await {
+            tracing::warn!(artifact = %artifact.hash, error = %cleanup, "cannot discard a staged plugin component");
+        }
+        return Err(e.into());
+    }
     let stored = api.extensions.get_plugin(actor, &row.name).await?;
     let (status, headers) = created_at(&format!("{BASE}/plugins/{}", stored.name));
     let body = dto(&api, stored, &live_nodes(&api).await?);
@@ -303,6 +311,15 @@ async fn set_enabled(
     Ok(Json(dto(api, row, &live_nodes(api).await?)))
 }
 
+/// One of the node's upload slots, or `503 busy` (`Retry-After`) when all are taken.
+fn upload_slot(api: &ApiState) -> Result<tokio::sync::OwnedSemaphorePermit, Problem> {
+    api.installer.try_upload_slot().ok_or_else(|| {
+        let mut p = Problem::busy();
+        p.detail = "too many plugin uploads on this node; retry".to_owned();
+        p
+    })
+}
+
 /// The `manifest` part as text (`422`, `field = "manifest"`, when not UTF-8).
 fn manifest_text(
     parts: &std::collections::BTreeMap<&'static str, Bytes>,
@@ -317,7 +334,7 @@ fn dto(api: &ApiState, row: InstalledPlugin, nodes: &[Node]) -> PluginDto {
     let report = api
         .installer
         .row_report(&row)
-        .map(|r| PermissionReportDto::new(&r, true));
+        .map(|r| GrantReportDto::from(&r));
     let states = nodes
         .iter()
         .filter_map(|n| PluginNodeState::of(n, &row.name))

@@ -58,29 +58,31 @@ impl From<&LimitItem> for LimitItemDto {
     }
 }
 
-/// What a plugin upload asks for, as the admin approves it (P3, P6).
+/// A permission report: what a manifest asks for in plain language, against a grant
+/// (P3, P6).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
-pub struct PermissionReportDto {
+pub struct GrantReportDto {
     pub plugin: String,
     pub version: String,
     /// The component's SHA-256 (64 lowercase hex).
     pub artifact: String,
     /// Every capability asked for.
     pub items: Vec<PermissionItemDto>,
-    /// What the installed version's grant does not cover; all of `items` for a new
-    /// plugin. An update with a non-empty `added` widens the grant (R1).
+    /// What the grant compared against does not cover: for an upload, the installed
+    /// version's grant (all of `items` for a new plugin; a non-empty `added` on an
+    /// update widens the grant, R1); for an installed plugin, its own stored grant
+    /// (empty when it was installed with approval).
     pub added: Vec<PermissionItemDto>,
     /// Every limit the manifest sets.
     pub limits: Vec<LimitItemDto>,
-    /// What `POST /plugins` must carry as `approve` to install exactly this upload
-    /// (SHA-256 over plugin, version, artifact and grant).
+    /// For an upload: what `POST /plugins` must carry as `approve` to install exactly
+    /// it (SHA-256 over plugin, version, artifact and grant). For an installed plugin:
+    /// the fingerprint it was approved with.
     pub fingerprint: String,
-    /// Whether `added` was computed against an installed version's grant.
-    pub update: bool,
 }
 
-impl PermissionReportDto {
-    pub fn new(r: &PermissionReport, update: bool) -> Self {
+impl From<&PermissionReport> for GrantReportDto {
+    fn from(r: &PermissionReport) -> Self {
         Self {
             plugin: r.plugin.clone(),
             version: r.version.clone(),
@@ -89,6 +91,24 @@ impl PermissionReportDto {
             added: r.added.iter().map(PermissionItemDto::from).collect(),
             limits: r.limits.iter().map(LimitItemDto::from).collect(),
             fingerprint: r.fingerprint.clone(),
+        }
+    }
+}
+
+/// The report of a plugin upload, as the admin approves it (`POST /plugins/inspect`,
+/// and the `report` of an approval refusal).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct PermissionReportDto {
+    #[serde(flatten)]
+    pub report: GrantReportDto,
+    /// Whether a plugin of this name is installed: `added` is then against its grant.
+    pub update: bool,
+}
+
+impl PermissionReportDto {
+    pub fn new(r: &PermissionReport, update: bool) -> Self {
+        Self {
+            report: r.into(),
             update,
         }
     }
@@ -134,9 +154,10 @@ pub struct PluginDto {
     pub installed_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     /// The report of the stored grant: `added` is what it does not cover (empty for a
-    /// plugin installed with approval), `fingerprint` the approved one. `null` when
-    /// the stored manifest or grant no longer parses (the plugin does not load).
-    pub report: Option<PermissionReportDto>,
+    /// plugin installed with approval), `fingerprint` the approved one. It has no
+    /// `update`: rows keep no previous version. `null` when the stored manifest or
+    /// grant no longer parses (the plugin does not load).
+    pub report: Option<GrantReportDto>,
     /// What each live node (heartbeat within 30 s) reports about it, by node; a node
     /// that has not loaded the plugin yet is not listed.
     pub nodes: Vec<PluginNodeState>,
@@ -145,7 +166,7 @@ pub struct PluginDto {
 impl PluginDto {
     pub fn new(
         row: InstalledPlugin,
-        report: Option<PermissionReportDto>,
+        report: Option<GrantReportDto>,
         nodes: Vec<PluginNodeState>,
     ) -> Self {
         Self {

@@ -10,6 +10,11 @@ use crate::error::{ManifestError, ManifestProblem};
 /// Largest `ferrite-plugin.toml` accepted (plan "Exact values": manifest part <= 64 KiB).
 pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 
+/// Plugin names that are refused because a static admin API path takes them
+/// (`/api/v1/plugins/<name>` would hit that route instead; ruling R9). A new static
+/// segment under `/plugins/` goes here.
+pub const RESERVED_PLUGIN_NAMES: &[&str] = &["inspect"];
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Manifest {
     pub plugin: PluginMeta,
@@ -445,10 +450,12 @@ fn parse_plugin(cx: &mut Cx, t: &mut toml::Table) -> Option<PluginMeta> {
     require(cx, &publisher, "publisher");
     require(cx, &world, "world");
 
-    if let Some(n) = &name
-        && !valid_name(n)
-    {
-        cx.push("plugin.name", "must match [a-z0-9-]{2,48}");
+    if let Some(n) = &name {
+        if !valid_name(n) {
+            cx.push("plugin.name", "must match [a-z0-9-]{2,48}");
+        } else if RESERVED_PLUGIN_NAMES.contains(&n.as_str()) {
+            cx.push("plugin.name", format!("`{n}` is reserved"));
+        }
     }
     let version = version.and_then(|v| match semver::Version::parse(&v) {
         Ok(v) => Some(v),
@@ -968,6 +975,20 @@ world = "ferrite:plugin/plugin@0.1.0"
             let src = MINIMAL.replace("\"mini\"", &format!("\"{bad}\""));
             assert_eq!(paths(Manifest::parse(&src)), ["plugin.name"], "{bad}");
         }
+    }
+
+    #[test]
+    fn rejects_reserved_names() {
+        for reserved in RESERVED_PLUGIN_NAMES {
+            let src = MINIMAL.replace("\"mini\"", &format!("\"{reserved}\""));
+            let err = Manifest::parse(&src).unwrap_err();
+            assert_eq!(err.problems.len(), 1, "{err}");
+            assert_eq!(err.problems[0].path, "plugin.name");
+            assert!(err.problems[0].message.contains("reserved"), "{err}");
+        }
+        // A name that only contains a reserved word is fine.
+        let src = MINIMAL.replace("\"mini\"", "\"inspector\"");
+        assert!(Manifest::parse(&src).is_ok());
     }
 
     #[test]

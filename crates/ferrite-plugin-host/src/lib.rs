@@ -43,7 +43,7 @@ pub use grant::{
 pub use inspect::{ComponentReport, inspect};
 pub use manifest::{
     Capabilities, HtmlMode, LimitRequest, MAX_MANIFEST_BYTES, MailScope, Manifest, PluginMeta,
-    RouteSpec, SettingKind, SettingSpec,
+    RESERVED_PLUGIN_NAMES, RouteSpec, SettingKind, SettingSpec,
 };
 pub use report::{LimitItem, PermissionItem, PermissionReport};
 pub use services::{HostServices, InMemoryServices, KindOk};

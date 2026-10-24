@@ -254,7 +254,10 @@ impl Api {
                 menus: Arc::new(MenuService::new(store.clone())),
                 options: Arc::new(OptionService::new(store.clone())),
                 redirects: Arc::new(RedirectService::new(store.clone())),
-                extensions: Arc::new(ExtensionAdmin::new(store.clone())),
+                // Short: tests that hold the lock see `busy` quickly.
+                extensions: Arc::new(
+                    ExtensionAdmin::new(store.clone()).with_lock_wait(EXTENSIONS_LOCK_WAIT),
+                ),
                 installer,
                 media: media_store,
                 site_url: SITE_URL.into(),
@@ -481,6 +484,9 @@ impl Bearer {
 fn with_client(router: Router) -> Router {
     router.layer(Extension(ConnectInfo(CLIENT)))
 }
+
+/// The `extensions` lock wait of the harness's `ExtensionAdmin`.
+pub const EXTENSIONS_LOCK_WAIT: Duration = Duration::from_millis(300);
 
 /// The rate-limit window of every auth limit.
 pub const WINDOW: Duration = Duration::from_secs(60);

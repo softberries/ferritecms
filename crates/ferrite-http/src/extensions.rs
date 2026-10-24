@@ -29,25 +29,27 @@
 //! harmless (nothing names them) and stay until the artifact GC (M4); they are not
 //! deleted here, because another row may name the same bytes.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::http::StatusCode;
 use bytes::Bytes;
 use ferrite_core::CoreError;
-use ferrite_domain::{Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, Timestamp};
+use ferrite_domain::{
+    Artifact, ArtifactHash, ArtifactKind, InstalledPlugin, InstalledTheme, Timestamp,
+};
 use ferrite_media::{MediaError, MediaStore};
 use ferrite_plugin_host::{
     ApprovedLimits, Grant, HostConfig, InMemoryServices, Manifest, ManifestError, ManifestProblem,
     PermissionReport, PluginError, PluginHost, PreparedPlugin,
 };
-use ferrite_store::Store;
+use ferrite_store::{LOCK_EXTENSIONS, Store, lock};
 use ferrite_theme::{
     MAX_BUNDLE_BYTES, Theme, ThemeError, ThemeManifest, ThemeSource, pack_embedded,
 };
 use futures::StreamExt;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::api::Problem;
 
@@ -56,6 +58,13 @@ pub const MAX_PLUGIN_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Component compiles (and theme loads of uploads) at once per installer (P8).
 pub const COMPILE_SLOTS: usize = 2;
+
+/// Uploads a node buffers at once (each up to its route's body limit); a request
+/// beyond them is refused `busy` before its body is read (Task 4 review).
+pub const UPLOAD_SLOTS: usize = 4;
+
+/// How long [`Installer::discard_staged`] waits for the `extensions` lock.
+pub const DISCARD_LOCK_WAIT: Duration = Duration::from_secs(5);
 
 /// MIME type recorded for theme bundle artifacts (M1.5 P17).
 pub const THEME_MIME: &str = "application/x-tar";
@@ -183,6 +192,7 @@ pub struct Installer {
     media: Arc<MediaStore>,
     host: Arc<PluginHost>,
     slots: Arc<Semaphore>,
+    uploads: Arc<Semaphore>,
     prepare: PrepareFn,
 }
 
@@ -200,6 +210,7 @@ impl Installer {
             media,
             host: Arc::new(host),
             slots: Arc::new(Semaphore::new(COMPILE_SLOTS)),
+            uploads: Arc::new(Semaphore::new(UPLOAD_SLOTS)),
             prepare: Arc::new(|host, manifest, wasm, approved| {
                 host.prepare_with(manifest, wasm, approved)
             }),
@@ -370,6 +381,46 @@ impl Installer {
     /// [`load_theme_artifact`] from this installer's media store.
     pub async fn theme_from_artifact(&self, row: &InstalledTheme) -> Result<Theme, ExtensionError> {
         load_theme_artifact(&self.media, row).await
+    }
+
+    /// One of the node's [`UPLOAD_SLOTS`], if one is free: handlers hold it while they
+    /// read and process an upload, and answer `busy` without one.
+    pub fn try_upload_slot(&self) -> Option<OwnedSemaphorePermit> {
+        self.uploads.clone().try_acquire_owned().ok()
+    }
+
+    /// Deletes the blob of a staged artifact whose rows were then not recorded, unless
+    /// an artifact row names it (another plugin, theme or media item uses the same
+    /// bytes). Runs under the `extensions` lock (waiting at most
+    /// [`DISCARD_LOCK_WAIT`]), so an extension install recording the same artifact
+    /// cannot commit between the check and the delete; returns whether the blob was
+    /// deleted. Residual race: an install of the same bytes that uploaded them but has
+    /// not yet taken the lock to record them loses its blob (its plugin then fails to
+    /// load and is reinstalled); without a GC grace period this cannot be closed.
+    pub async fn discard_staged(&self, hash: &ArtifactHash) -> Result<bool, ExtensionError> {
+        let guard = lock(self.store.as_ref(), LOCK_EXTENSIONS, DISCARD_LOCK_WAIT)
+            .await
+            .map_err(CoreError::from)?;
+        let done = async {
+            let referenced = self
+                .store
+                .read()
+                .artifacts()
+                .get(hash)
+                .await
+                .map_err(CoreError::from)?
+                .is_some();
+            if referenced {
+                return Ok(false);
+            }
+            self.media.delete(hash).await?;
+            Ok(true)
+        }
+        .await;
+        if let Err(e) = guard.release().await {
+            tracing::warn!(error = %e, "cannot release the extensions lock");
+        }
+        done
     }
 
     /// The permission report of an installed row: its manifest and component against
