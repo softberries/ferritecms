@@ -41,6 +41,9 @@ app_tests!(
     form_on_closed_or_draft_item_is_404,
     theme_renders_threads_escaped,
     pending_comments_never_render,
+    attribute_breaking_input_is_inert,
+    redirects_stay_on_the_post,
+    reply_forms_follow_the_stored_depth,
 );
 
 const FORM: &str = "application/x-www-form-urlencoded";
@@ -438,8 +441,22 @@ async fn form_errors_are_html_pages(app: App) -> App {
     assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE, "{r:?}");
     assert_no_store(&r);
     // Only POST.
-    let r = app.send(request(Method::GET, "/_comment")).await;
-    assert_eq!(r.status, StatusCode::METHOD_NOT_ALLOWED, "{r:?}");
+    for method in [Method::GET, Method::PUT, Method::DELETE] {
+        let r = app.send(request(method.clone(), "/_comment")).await;
+        assert_eq!(r.status, StatusCode::METHOD_NOT_ALLOWED, "{method}: {r:?}");
+        assert_eq!(r.header("allow"), Some("POST"));
+        assert_no_store(&r);
+    }
+    // A body that breaks off (client abort) is a bad request, not "too large".
+    let chunks: Vec<Result<bytes::Bytes, std::io::Error>> = vec![
+        Ok(bytes::Bytes::from(fields.clone())),
+        Err(std::io::Error::other("client went away")),
+    ];
+    let mut req = form(String::new());
+    *req.body_mut() = Body::from_stream(futures::stream::iter(chunks));
+    let r = app.send(req).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{r:?}");
+    assert_no_store(&r);
 
     // Flood from one address: 3 a minute, then 429 with Retry-After.
     align_to_window(&app, Duration::from_secs(20)).await;
@@ -631,5 +648,117 @@ async fn pending_comments_never_render(app: App) -> App {
     poller.poll_once().await.unwrap();
     let page = app.get("/hello/").await;
     assert!(!page.body.contains("Approved text"), "{}", page.body);
+    app
+}
+
+/// Review Focus 3: a stored name and body that try to break out of an attribute or a
+/// tag (quotes, `"><img onerror>`, `'`) render as inert text.
+async fn attribute_breaking_input_is_inert(app: App) -> App {
+    let app = blog(app).await;
+    let post = app.post("Hello", "hello", &[]).await;
+    let name = "\"><img src=x onerror=alert(1)> O'Neil";
+    let text = "'\"><img src=x onerror=alert(2)></textarea><svg onload=alert(3)>";
+    approved(&app, post.id, None, name, "https://ann.example/", text).await;
+    let html = app.get("/hello/").await.body;
+    for live in ["<img src=x", "<svg", "onerror=alert(1)>", "</textarea><svg"] {
+        assert!(!html.contains(live), "{live}: {html}");
+    }
+    assert!(
+        html.contains("&quot;&gt;&lt;img src=x onerror=alert(1)&gt; O&#x27;Neil</a>"),
+        "{html}"
+    );
+    assert!(
+        // Body text is element content only (core escapes `<`, `>` and `&`; quotes
+        // cannot end an attribute there).
+        html.contains("<p>'\"&gt;&lt;img src=x onerror=alert(2)&gt;&lt;/textarea&gt;&lt;svg onload=alert(3)&gt;</p>"),
+        "{html}"
+    );
+    // The same input through the form is stored as typed and renders the same way.
+    let mut fields = guest(post.id, text);
+    fields[1].1 = name.into();
+    let r = app.send(form(pairs(&fields))).await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER, "{r:?}");
+    assert_eq!(r.header("location"), Some("/hello/#comment-pending"));
+    app
+}
+
+/// No open redirect: a foreign `Referer` next to the site's `Origin`, and stray
+/// `redirect`, `redirect_to` and `next` fields, never change where the 303 goes.
+async fn redirects_stay_on_the_post(app: App) -> App {
+    let post = app.post("Hello", "hello", &[]).await;
+    let mut fields = guest(post.id, "Where do I go?");
+    fields.push(("redirect", "https://evil.example/".into()));
+    fields.push(("redirect_to", "//evil.example/".into()));
+    fields.push(("next", "/\\evil.example".into()));
+    let r = app
+        .send(form_from(
+            pairs(&fields),
+            Some(SITE_URL),
+            Some("https://evil.example/landing"),
+            Some(peer()),
+        ))
+        .await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER, "{r:?}");
+    assert_eq!(r.header("location"), Some("/hello/#comment-pending"));
+    // Error pages link back to the post too, not to the Referer.
+    fields[4].1 = String::new();
+    let r = app
+        .send(form_from(
+            pairs(&fields),
+            Some(SITE_URL),
+            Some("https://evil.example/landing"),
+            Some(peer()),
+        ))
+        .await;
+    assert_error_page(&r, 422, "the comment must be", "/hello/");
+    assert!(!r.body.contains("evil.example"), "{}", r.body);
+    app
+}
+
+/// A reply form shows only where core would accept the reply, by the stored chain:
+/// under a trashed root the chain is shown one level shallower, and the deepest
+/// comment still gets no form (and a reply to it is refused).
+async fn reply_forms_follow_the_stored_depth(app: App) -> App {
+    let app = blog(app).await;
+    let post = app.post("Hello", "hello", &[]).await;
+    // a (0) - b (1) - c (2) - d (3) - e (4) - f (5)
+    let mut chain = Vec::new();
+    let mut parent = None;
+    for name in ["A", "B", "C", "D", "E", "F"] {
+        let id = approved(&app, post.id, parent, name, "", &format!("Text {name}")).await;
+        chain.push(id);
+        parent = Some(id);
+    }
+    let form_for = |id: CommentId| format!("name=\"parent\" value=\"{id}\"");
+    let html = app.get("/hello/").await.body;
+    for id in &chain[..5] {
+        assert!(html.contains(&form_for(*id)), "{id}: {html}");
+    }
+    assert!(!html.contains(&form_for(chain[5])), "{html}");
+
+    // Trash the root: B..F are shown at depths 0..4, F still takes no reply.
+    let mut poller = app.poller().await;
+    service(&app)
+        .moderate(&app.admin, chain[0], CommentStatus::Trash)
+        .await
+        .unwrap();
+    poller.poll_once().await.unwrap();
+    let html = app.get("/hello/").await.body;
+    assert!(!html.contains("Text A"), "{html}");
+    let f_at = html.find(&format!("id=\"comment-{}\"", chain[5])).unwrap();
+    let open = html[..f_at].rfind("<li").unwrap();
+    assert!(
+        html[open..f_at].contains("comment--depth-4"),
+        "{}",
+        &html[open..f_at]
+    );
+    for id in &chain[1..5] {
+        assert!(html.contains(&form_for(*id)), "{id}");
+    }
+    assert!(!html.contains(&form_for(chain[5])), "{html}");
+    let mut fields = guest(post.id, "Too deep");
+    fields.push(("parent", chain[5].to_string()));
+    let r = app.send(form(pairs(&fields))).await;
+    assert_error_page(&r, 422, "replies nest at most 5 deep", "/hello/");
     app
 }

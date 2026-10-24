@@ -238,6 +238,7 @@ Outline in the M2a-2 plan ("Next plan: M2a-2b"); it gets its own plan.
 - [ ] Themes + plugins screens incl. permission report and per-plugin metrics.
 - [ ] The password-reset page (`/admin/reset-password#token=…`, M2a-2a F33): read the token from the fragment, then strip it from the URL and history (`history.replaceState`) and never put it in a URL the page builds; send `Referrer-Policy: no-referrer` (Task 10 review).
 - [ ] Admin "Nodes" and "Jobs" screens reading `nodes` (incl. `nodes.meta` theme/plugin state) and `jobs` (deferred from M1.5).
+- [ ] Comment pagination (M2a-2b Task 8 review): a public thread shows the oldest 500 approved comments (`MAX_THREAD`), so later ones never appear, their `303 #comment-<id>` lands on a missing anchor and `count` reads 500; page the thread (WordPress `comment-page-N`) and give the real total.
 - [ ] Playwright E2E against a real binary on both backends; Vitest component tests; a CI admin job (`pnpm install --frozen-lockfile`, lint, test, build).
 
 ### Done from the earlier M2 deferred lists

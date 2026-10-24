@@ -872,6 +872,7 @@ fn comments_section_form_and_states() {
         author_url: None,
         html: "<p>Nice</p>".into(),
         date: Timestamp::from_micros(1_709_634_030_000_000).unwrap(),
+        can_reply: true,
     };
     let thread = |open: bool, items: Vec<CommentPublic>| {
         Arc::new(ThreadBridge(Some(CommentThread { open, items })))
@@ -915,6 +916,15 @@ fn comments_section_form_and_states() {
     assert!(html.contains("1 comment</h2>"), "{html}");
     assert!(html.contains("<summary>Reply</summary>"));
     assert!(html.contains(&format!("name=\"parent\" value=\"{}\"", one.id)));
+
+    // No reply form where core would refuse the reply.
+    let full = CommentPublic {
+        can_reply: false,
+        ..one.clone()
+    };
+    let html = single(thread(true, vec![full]), "post");
+    assert!(!html.contains("<summary>Reply</summary>"), "{html}");
+    assert!(html.contains("<button type=\"submit\">Post comment</button>"));
 
     let html = single(thread(false, vec![one.clone()]), "post");
     assert!(html.contains("<p>Nice</p>"), "{html}");

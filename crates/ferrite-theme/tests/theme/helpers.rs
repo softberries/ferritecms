@@ -248,6 +248,7 @@ fn comments_helper_shape() {
         author_url: url.map(Into::into),
         html: html.into(),
         date: ts,
+        can_reply: depth == 0,
     };
     let bridge = Arc::new(FakeBridge {
         comments: Some(CommentThread {
@@ -282,7 +283,7 @@ fn comments_helper_shape() {
     let out = render_with(
         "{% set t = comments(post.id) %}{{ t.open }}|{{ t.count }}|{{ t.action }}|{{ t.honeypot }}\
          {% for i in t.items %}|{{ i.id }},{{ i.parent_id }},{{ i.depth }},{{ i.author_name }},\
-         {{ i.author_url }},{{ i.html }},{{ i.date | date('%Y') }}{% endfor %}",
+         {{ i.author_url }},{{ i.html }},{{ i.date | date('%Y') }},{{ i.can_reply }}{% endfor %}",
         c.clone(),
         bridge.clone(),
     );
@@ -290,8 +291,8 @@ fn comments_helper_shape() {
         out.html,
         format!(
             "True|2|&#x2f;_comment|website\
-             |{a},None,0,&lt;b&gt;Ann&lt;&#x2f;b&gt;,https:&#x2f;&#x2f;a.example&#x2f;?x=1&amp;y,<p>Hi &amp; bye</p>,2024\
-             |{b},{a},1,Bea,None,<p>Re</p>,2024"
+             |{a},None,0,&lt;b&gt;Ann&lt;&#x2f;b&gt;,https:&#x2f;&#x2f;a.example&#x2f;?x=1&amp;y,<p>Hi &amp; bye</p>,2024,True\
+             |{b},{a},1,Bea,None,<p>Re</p>,2024,False"
         )
     );
     assert_eq!(*bridge.comment_args.lock().unwrap(), vec![id]);

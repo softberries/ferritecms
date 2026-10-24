@@ -47,7 +47,7 @@
 //! route's URL, `/_p/<name><path>`), `comments(post)` (the public thread of a post or
 //! none: `open`, `count`, `items`, `action` = `/_comment`, `honeypot` = `website`; each
 //! item `id`, `parent_id`, `depth`, `author_name`, `author_url`, `html` (core-rendered,
-//! safe), `date`). Custom filters: `date(fmt)`,
+//! safe), `date`, `can_reply`). Custom filters: `date(fmt)`,
 //! `excerpt(n)`, `slugify`, `json`.
 //!
 //! MiniJinja builtins that remain: the globals `range` (≤ 100 000 items), `dict`,
@@ -645,7 +645,7 @@ fn comments(scope: &Scope, item: &Value) -> Value {
 }
 
 /// The template shape of a thread: `{ open, count, items, action, honeypot }`, each
-/// item `{ id, parent_id, depth, author_name, author_url, html, date }`. `html` is the
+/// item `{ id, parent_id, depth, author_name, author_url, html, date, can_reply }`. `html` is the
 /// core-rendered body (escaped plain text in `<p>`/`<br>`), marked safe; everything else
 /// is plain data, so auto-escaping applies. `author_url` is handed on only when it is
 /// an `http(s)://` URL (core refuses anything else on submit; this guards rows that
@@ -667,6 +667,7 @@ fn thread_value(t: CommentThread) -> Value {
                 author_url => url,
                 html => Value::from_safe_string(c.html),
                 date => c.date.to_rfc3339(),
+                can_reply => c.can_reply,
             }
         })
         .collect();

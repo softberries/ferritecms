@@ -1,6 +1,7 @@
 {#- The comment thread and form of a post (06 §4). Expects `post`. No script: the
     "awaiting moderation" notice shows under `:target` after the form's redirect to
-    `#comment-pending`, and replies use a form inside `<details>`. -#}
+    `#comment-pending`, and replies use a form inside `<details>`, offered where core
+    would accept the reply (`can_reply`, its stored depth rule). -#}
 {%- macro comment_form(thread, parent, form_id) %}
 <form class="comment-form" method="post" action="{{ thread.action }}">
   <input type="hidden" name="post" value="{{ post.id }}">
@@ -59,7 +60,7 @@
           <a class="comment__date" href="#comment-{{ c.id }}"><time datetime="{{ c.date }}">{{ c.date | date("%-d %B %Y, %H:%M") }}</time></a>
         </p>
         <div class="comment__text prose">{{ c.html }}</div>
-        {%- if thread.open and c.depth < 5 %}
+        {%- if thread.open and c.can_reply %}
         <details class="comment__reply">
           <summary>Reply</summary>
           {{ comment_form(thread, c.id, "reply-" ~ c.id) }}

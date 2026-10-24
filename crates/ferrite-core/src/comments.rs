@@ -37,7 +37,12 @@
 //! comment that is no longer approved (or delete a trashed parent's approved replies).
 //! Moderation is not audited (P14).
 
-use std::{collections::HashMap, net::IpAddr, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    net::IpAddr,
+    sync::Arc,
+    time::Duration,
+};
 
 use ferrite_domain::{Comment, CommentId, CommentQuery, CommentStatus, ContentId, Page, Timestamp};
 use ferrite_store::{MAX_ITEM_COMMENTS, Repos, Store, StoreError};
@@ -149,6 +154,10 @@ pub struct CommentPublic {
     /// The body rendered by [`render_body`] (safe HTML).
     pub html: String,
     pub date: Timestamp,
+    /// Whether a reply to it would be accepted: the stored chain (any status, as
+    /// [`CommentService::submit`] walks it) leaves room below [`MAX_COMMENT_DEPTH`].
+    /// For a reply shown at depth 0 because its parent is hidden this is not `depth`.
+    pub can_reply: bool,
 }
 
 /// A post's public thread ([`SiteReader::comments`](crate::SiteReader::comments)).
@@ -525,16 +534,10 @@ impl CommentService {
                 "the reply must be to an approved comment of the same post",
             ));
         };
-        let mut depth: u8 = 0;
-        let mut up = found.parent_id;
-        while let Some(id) = up {
-            depth += 1;
-            if depth >= MAX_COMMENT_DEPTH {
-                return Err(refused(&format!(
-                    "replies nest at most {MAX_COMMENT_DEPTH} deep"
-                )));
-            }
-            up = repos.comments().get(id).await?.and_then(|c| c.parent_id);
+        if !reply_allowed(repos, found.parent_id, &HashMap::new()).await? {
+            return Err(refused(&format!(
+                "replies nest at most {MAX_COMMENT_DEPTH} deep"
+            )));
         }
         Ok(())
     }
@@ -614,12 +617,56 @@ impl CommentService {
             .comments()
             .approved_for_item(item, MAX_THREAD)
             .await?;
-        Ok(thread_of(rows))
+        public_thread(self.store.read(), rows).await
     }
 }
 
-/// `rows` (oldest first) in thread order with depths.
-pub(crate) fn thread_of(rows: Vec<Comment>) -> Vec<CommentPublic> {
+/// Whether a reply to a comment whose parent is `up` is within [`MAX_COMMENT_DEPTH`]:
+/// the one depth rule of submits and of [`CommentPublic::can_reply`]. Walks the stored
+/// chain (any status; a missing ancestor ends it), looking ids up in `known`
+/// (id → parent) before the store; at most [`MAX_COMMENT_DEPTH`] steps, so a cycle
+/// ends too.
+async fn reply_allowed(
+    repos: &dyn Repos,
+    mut up: Option<CommentId>,
+    known: &HashMap<CommentId, Option<CommentId>>,
+) -> Result<bool, CoreError> {
+    let mut depth: u8 = 0;
+    while let Some(id) = up {
+        depth += 1;
+        if depth >= MAX_COMMENT_DEPTH {
+            return Ok(false);
+        }
+        up = match known.get(&id) {
+            Some(parent) => *parent,
+            None => repos.comments().get(id).await?.and_then(|c| c.parent_id),
+        };
+    }
+    Ok(true)
+}
+
+/// Approved `rows` (oldest first) as the public thread, with
+/// [`can_reply`](CommentPublic::can_reply) from the stored chains. Chains inside
+/// `rows` cost no store call; a reply whose ancestors are not shown (trashed, spam,
+/// past the cap) costs at most [`MAX_COMMENT_DEPTH`] lookups.
+pub(crate) async fn public_thread(
+    repos: &dyn Repos,
+    rows: Vec<Comment>,
+) -> Result<Vec<CommentPublic>, CoreError> {
+    let known: HashMap<CommentId, Option<CommentId>> =
+        rows.iter().map(|c| (c.id, c.parent_id)).collect();
+    let mut replyable = HashSet::new();
+    for c in &rows {
+        if reply_allowed(repos, c.parent_id, &known).await? {
+            replyable.insert(c.id);
+        }
+    }
+    Ok(thread_of(rows, &replyable))
+}
+
+/// `rows` (oldest first) in thread order with depths; `replyable` holds the ids a reply
+/// may go to.
+fn thread_of(rows: Vec<Comment>, replyable: &HashSet<CommentId>) -> Vec<CommentPublic> {
     let index: HashMap<CommentId, usize> =
         rows.iter().enumerate().map(|(i, c)| (c.id, i)).collect();
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); rows.len()];
@@ -652,6 +699,7 @@ pub(crate) fn thread_of(rows: Vec<Comment>) -> Vec<CommentPublic> {
                 author_url: (!c.author_url.is_empty()).then_some(c.author_url),
                 author_name: c.author_name,
                 date: c.created_at,
+                can_reply: replyable.contains(&c.id),
             })
         })
         .collect()
@@ -768,11 +816,10 @@ mod tests {
         };
         let (a, b) = (CommentId::new(), CommentId::new());
         let selfish = CommentId::new();
-        let t = thread_of(vec![
-            mk(a, Some(b)),
-            mk(b, Some(a)),
-            mk(selfish, Some(selfish)),
-        ]);
+        let t = thread_of(
+            vec![mk(a, Some(b)), mk(b, Some(a)), mk(selfish, Some(selfish))],
+            &HashSet::new(),
+        );
         // The cycle has no root and is not shown; the self-parent is a root.
         assert_eq!(t.len(), 1);
         assert_eq!((t[0].id, t[0].depth), (selfish, 0));

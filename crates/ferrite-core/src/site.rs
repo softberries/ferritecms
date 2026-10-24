@@ -837,7 +837,8 @@ impl SiteReader {
     /// an e-mail or address hash) and `open` = `comments.enabled`. A closed thread is
     /// still listed. Records `post:<id>` and `option:comments.enabled` either way, so a
     /// moderation (which invalidates `post:<item>`) or opening and closing comments
-    /// refreshes the page. Store calls: the item, the option, the approved rows.
+    /// refreshes the page. Store calls: the item, the option, the approved rows, and for a
+    /// reply whose ancestors are hidden at most `MAX_COMMENT_DEPTH` lookups (`can_reply`).
     pub async fn comments(
         &self,
         id: ContentId,
@@ -865,13 +866,8 @@ impl SiteReader {
             .comments()
             .approved_for_item(id, comments::MAX_THREAD)
             .await?;
-        Ok(public(
-            Some(CommentThread {
-                open,
-                items: comments::thread_of(rows),
-            }),
-            deps,
-        ))
+        let items = comments::public_thread(repos, rows).await?;
+        Ok(public(Some(CommentThread { open, items }), deps))
     }
 
     /// Whether item `id` is public (and not media): one store call, no hydration. For

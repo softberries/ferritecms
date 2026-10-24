@@ -129,12 +129,13 @@ pub fn build_site(state: Arc<AppState>, api: Arc<ApiState>) -> Router {
 
 /// Plugin routes ([`plugin_route`]; `/_p/{plugin}/` too, since the wildcard does not
 /// match an empty rest, F25) and the theme comment form ([`comment_form`], POST only;
-/// other methods get axum's `405` with `Allow`) in front of the public fallback.
+/// other methods get a `no-store` `405` with `Allow: POST`) in front of the public
+/// fallback.
 fn public(state: &Arc<AppState>) -> Router {
     Router::new()
         .route(
             ferrite_core::comments::COMMENT_FORM_PATH,
-            post(comment_form::handle),
+            post(comment_form::handle).fallback(comment_form::method_not_allowed),
         )
         .route("/_p/{plugin}/", any(plugin_route::handle))
         .route("/_p/{plugin}/{*path}", any(plugin_route::handle))

@@ -13,7 +13,9 @@
 //!    a forged post gains no account's rights anyway.
 //! 2. `Content-Type` must be `application/x-www-form-urlencoded` (parameters allowed),
 //!    else `415`; a declared `Content-Length` over [`MAX_FORM_BODY`] (64 KiB) is `413`
-//!    before anything is read, and so is a streamed body that grows past it.
+//!    before anything is read, and so is a streamed body that grows past it; a body
+//!    that breaks off (client abort, read error) is `400`. Other methods than POST get
+//!    `405` with `Allow: POST`.
 //! 3. No [`CommentService`] (an app built without
 //!    [`with_comments`](super::AppState::with_comments)) or no client address
 //!    ([`ClientIp`]): `503`, since the per-IP limit could only count one shared bucket
@@ -47,6 +49,7 @@ use ferrite_core::{
     comments::{COMMENT_KIND, CommentInput, CommentService, Commenter, HONEYPOT_FIELD, Submitted},
 };
 use ferrite_domain::{CommentId, CommentStatus, ContentId};
+use futures::StreamExt;
 use html_escape::{encode_double_quoted_attribute, encode_text};
 use percent_encoding::percent_decode_str;
 
@@ -191,15 +194,51 @@ fn see_other(location: &str) -> Response<Body> {
 }
 
 /// The public URL of `post` (root-relative, from the permalinks), else `/`: where
-/// redirects and "back" links go. Never anything the request named.
+/// redirects and "back" links go. Never anything the request named. One link lookup
+/// ([`SiteReader::links`](ferrite_core::SiteReader::links): title and URL only, no
+/// hydration).
 async fn permalink(state: &AppState, post: ContentId) -> String {
-    match state.reader.by_id(post).await {
-        Ok(read) => read.value.map_or_else(|| "/".to_owned(), |p| p.url),
+    match state.reader.links(&[post]).await {
+        Ok(mut read) => read
+            .value
+            .remove(&post)
+            .map_or_else(|| "/".to_owned(), |l| l.url),
         Err(e) => {
             tracing::warn!(error = %e, "comment form permalink lookup failed");
             "/".to_owned()
         }
     }
+}
+
+/// Why the body could not be read.
+#[derive(Debug, PartialEq, Eq)]
+enum BodyError {
+    /// More than [`MAX_FORM_BODY`] bytes (`413`).
+    TooLarge,
+    /// The client aborted or the stream failed (`400`).
+    Broken,
+}
+
+/// The body, at most [`MAX_FORM_BODY`] bytes; reading stops at the first byte over.
+async fn read_body(body: Body) -> Result<Vec<u8>, BodyError> {
+    let mut stream = body.into_data_stream();
+    let mut out = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| BodyError::Broken)?;
+        if out.len() + chunk.len() > MAX_FORM_BODY {
+            return Err(BodyError::TooLarge);
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
+}
+
+/// Every method but POST on `/_comment`: `405` with `Allow: POST`, `no-store`.
+pub(crate) async fn method_not_allowed() -> Response<Body> {
+    let mut res = text(StatusCode::METHOD_NOT_ALLOWED, "method not allowed\n");
+    res.headers_mut()
+        .insert(header::ALLOW, HeaderValue::from_static("POST"));
+    res
 }
 
 /// The handler behind `POST /_comment`; see the module docs.
@@ -234,9 +273,10 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
         tracing::warn!("comment form without a client address; refused");
         return text(StatusCode::SERVICE_UNAVAILABLE, "service unavailable\n");
     };
-    // Over the limit, or a body that broke off: nothing is read further.
-    let Ok(body) = axum::body::to_bytes(req.into_body(), MAX_FORM_BODY).await else {
-        return too_large();
+    let body = match read_body(req.into_body()).await {
+        Ok(b) => b,
+        Err(BodyError::TooLarge) => return too_large(),
+        Err(BodyError::Broken) => return text(StatusCode::BAD_REQUEST, "bad request\n"),
     };
     let form = match parse_form(&body) {
         Ok(f) => f,
@@ -330,6 +370,20 @@ async fn pending(state: &AppState, post: ContentId) -> Response<Body> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn bodies_are_capped_and_breaks_are_bad_requests() {
+        let exact = Body::from(vec![b'a'; MAX_FORM_BODY]);
+        assert_eq!(read_body(exact).await.unwrap().len(), MAX_FORM_BODY);
+        let over = Body::from(vec![b'a'; MAX_FORM_BODY + 1]);
+        assert_eq!(read_body(over).await, Err(BodyError::TooLarge));
+        let chunks: Vec<Result<bytes::Bytes, std::io::Error>> = vec![
+            Ok(bytes::Bytes::from_static(b"post=")),
+            Err(std::io::Error::other("client went away")),
+        ];
+        let broken = Body::from_stream(futures::stream::iter(chunks));
+        assert_eq!(read_body(broken).await, Err(BodyError::Broken));
+    }
 
     #[test]
     fn forms_are_parsed_strictly() {
