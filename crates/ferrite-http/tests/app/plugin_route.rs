@@ -16,7 +16,11 @@ use crate::app_tests;
 use crate::common::SITE_URL;
 use crate::harness::{App, Resp};
 
-/// `method path` with `headers`, `body` and (when given) the client address.
+/// The client address of requests that name none (`serve` always knows one).
+const DEFAULT_IP: &str = "192.0.2.10";
+
+/// `method path` with `headers`, `body` and the client address `ip` (else
+/// [`DEFAULT_IP`]).
 fn route_request(
     method: Method,
     path: &str,
@@ -32,10 +36,8 @@ fn route_request(
         b = b.header(*k, *v);
     }
     let mut req = b.body(Body::from(body)).expect("request");
-    if let Some(ip) = ip {
-        let ip: IpAddr = ip.parse().expect("ip");
-        req.extensions_mut().insert(ClientIp(ip));
-    }
+    let ip: IpAddr = ip.unwrap_or(DEFAULT_IP).parse().expect("ip");
+    req.extensions_mut().insert(ClientIp(ip));
     req
 }
 
@@ -62,7 +64,7 @@ async fn with_plugins(app: &App, names: &[&str]) {
 fn assert_contained(r: &Resp) {
     assert_eq!(
         r.header("content-security-policy"),
-        Some("sandbox allow-forms"),
+        Some("sandbox allow-forms; form-action 'self'"),
         "{r:?}"
     );
     assert_eq!(r.header("x-content-type-options"), Some("nosniff"));
@@ -92,6 +94,9 @@ app_tests!(
     disabled_or_deleted_plugin_is_404_at_once,
     hostile_handlers_do_not_break_the_site,
     paths_stay_inside_the_plugin,
+    no_client_address_is_503,
+    cross_origin_requests_are_anonymous,
+    bad_requests_and_responses,
 );
 
 async fn route_success_and_user_id(app: App) -> App {
@@ -449,5 +454,69 @@ async fn paths_stay_inside_the_plugin(app: App) -> App {
     }
     // An encoded character of a declared path is the same path.
     assert_eq!(get(&app, "/_p/router/hell%6F").await.status, StatusCode::OK);
+    app
+}
+
+async fn no_client_address_is_503(app: App) -> App {
+    with_plugins(&app, &["router"]).await;
+    let mut req = route_request(Method::GET, "/_p/router/hello", &[], Vec::new(), None);
+    req.extensions_mut().remove::<ClientIp>();
+    plain(&app.send(req).await, StatusCode::SERVICE_UNAVAILABLE);
+    // Unknown routes stay 404 (no limit is counted for them).
+    let mut req = route_request(Method::GET, "/_p/router/nope", &[], Vec::new(), None);
+    req.extensions_mut().remove::<ClientIp>();
+    plain(&app.send(req).await, StatusCode::NOT_FOUND);
+    app
+}
+
+async fn cross_origin_requests_are_anonymous(app: App) -> App {
+    with_plugins(&app, &["router"]).await;
+    let cookie = app.session(&app.ada_user).await;
+    let whoami = |origin: &'static str, cookie: &str| {
+        route_request(
+            Method::POST,
+            "/_p/router/whoami",
+            &[("origin", origin), ("cookie", cookie)],
+            Vec::new(),
+            None,
+        )
+    };
+    let user = |r: &Resp| -> Value {
+        assert_eq!(r.status, StatusCode::OK, "{r:?}");
+        serde_json::from_str::<Value>(&r.body).expect("json")["user"].clone()
+    };
+    // From the site: the visitor. From another origin (a same-site sender would carry
+    // the cookie): anonymous, though `cross_origin` lets the request through.
+    let r = app.send(whoami(SITE_URL, &cookie)).await;
+    assert_eq!(user(&r), app.ada_user.id.to_string());
+    let r = app.send(whoami("https://blog.example.com", &cookie)).await;
+    assert_eq!(user(&r), Value::Null);
+    app
+}
+
+async fn bad_requests_and_responses(app: App) -> App {
+    with_plugins(&app, &["router", "route-xss"]).await;
+    // More than 100 query pairs: 400; exactly 100 pass.
+    let q = |n: usize| vec!["k=v"; n].join("&");
+    let r = get(&app, &format!("/_p/router/hello?{}", q(101))).await;
+    plain(&r, StatusCode::BAD_REQUEST);
+    let r = get(&app, &format!("/_p/router/hello?{}", q(100))).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    // Responses the host refuses: status 600, a CRLF header value, 40 headers.
+    for path in [
+        "/_p/route-xss/status",
+        "/_p/route-xss/crlf",
+        "/_p/route-xss/headers",
+    ] {
+        let r = get(&app, path).await;
+        plain(&r, StatusCode::BAD_GATEWAY);
+        assert!(r.header("set-cookie").is_none(), "{path}: {r:?}");
+    }
+    let kinds: Vec<_> = app.site.host.failures().iter().map(|f| f.kind).collect();
+    assert_eq!(
+        kinds,
+        [ferrite_plugin_host::FailureKind::InvalidOutput; 3],
+        "{kinds:?}"
+    );
     app
 }

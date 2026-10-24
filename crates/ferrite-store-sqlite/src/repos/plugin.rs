@@ -11,7 +11,7 @@ use ferrite_store::{
     check_len, check_limit, check_prune_limit, validate_json, validate_text,
 };
 
-use sqlx::{QueryBuilder, Sqlite};
+use sqlx::{QueryBuilder, Row, Sqlite};
 
 use super::SqliteRepos;
 use crate::{
@@ -235,6 +235,17 @@ impl PluginRepo for SqliteRepos {
         .bind(id)
         .fetch_optional(e))?;
         row.as_ref().map(codec::plugin).transpose()
+    }
+
+    async fn is_enabled(&self, id: &str) -> Result<Option<bool>, StoreError> {
+        validate_text("plugin name", id)?;
+        let row = run!(&self.reader, |e| sqlx::query(
+            "SELECT enabled FROM plugins WHERE name = ?"
+        )
+        .bind(id)
+        .fetch_optional(e))?;
+        row.map(|r| r.try_get::<bool, _>("enabled").map_err(crate::map_db_err))
+            .transpose()
     }
 
     async fn get_for_update(&self, id: &str) -> Result<Option<InstalledPlugin>, StoreError> {

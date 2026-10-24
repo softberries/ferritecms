@@ -11,3 +11,6 @@ routes = true
 "/x"     = { methods = ["GET"] }
 "/panic" = { methods = ["GET"] }
 "/loop"  = { methods = ["GET"] }
+"/status"  = { methods = ["GET"] }
+"/crlf"    = { methods = ["GET"] }
+"/headers" = { methods = ["GET"] }

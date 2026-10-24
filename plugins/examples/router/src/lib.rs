@@ -1,5 +1,5 @@
 //! Example plugin routes under `/_p/router/` (M2a-2 Task 8): a JSON answer with the
-//! visitor's user id and per-plugin IP hash, an echo, a same-site redirect, and two
+//! visitor's user id and per-plugin IP hash, a cross-origin `whoami`, an echo, a same-site redirect, and two
 //! responses the host must refuse (a cross-site redirect and a 2 MiB body).
 use ferrite_sdk::{Ctx, Result, RouteRequest, RouteResponse};
 
@@ -42,6 +42,15 @@ fn hello(req: RouteRequest, _ctx: &Ctx) -> Result<RouteResponse> {
     ))
 }
 
+fn whoami(req: RouteRequest, _ctx: &Ctx) -> Result<RouteResponse> {
+    let user = req.user.as_deref().map_or("null".to_owned(), json_string);
+    Ok(respond(
+        200,
+        &[("Content-Type", "application/json")],
+        format!("{{\"user\":{user}}}").into_bytes(),
+    ))
+}
+
 fn echo(req: RouteRequest, _ctx: &Ctx) -> Result<RouteResponse> {
     Ok(respond(200, &[("Content-Type", "text/plain")], req.body))
 }
@@ -70,5 +79,6 @@ ferrite_sdk::export_plugin! {
         "/go" => go,
         "/away" => away,
         "/big" => big,
+        "/whoami" => whoami,
     },
 }

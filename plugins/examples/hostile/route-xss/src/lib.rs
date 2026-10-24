@@ -2,7 +2,8 @@
 //! session (M2a-2 Review Focus 2). `GET /x` answers HTML reading `document.cookie`,
 //! with `Set-Cookie`, `Authorization`, a permissive CSP, HSTS and CORS headers, and
 //! lists the request header names it received in an HTML comment (pre-flight F26).
-//! `GET /panic` panics; `GET /loop` never returns.
+//! `GET /panic` panics; `GET /loop` never returns. `GET /status` answers status 600,
+//! `GET /crlf` a header value with CRLF (response splitting), `GET /headers` 40 headers.
 use ferrite_sdk::{Ctx, Result, RouteRequest, RouteResponse};
 
 fn x(req: RouteRequest, _ctx: &Ctx) -> Result<RouteResponse> {
@@ -34,6 +35,35 @@ fn x(req: RouteRequest, _ctx: &Ctx) -> Result<RouteResponse> {
     })
 }
 
+fn raw(status: u16, headers: Vec<(String, String)>) -> RouteResponse {
+    RouteResponse {
+        status,
+        headers,
+        body: b"x".to_vec(),
+    }
+}
+
+fn bad_status(_req: RouteRequest, _ctx: &Ctx) -> Result<RouteResponse> {
+    Ok(raw(600, Vec::new()))
+}
+
+fn crlf(_req: RouteRequest, _ctx: &Ctx) -> Result<RouteResponse> {
+    Ok(raw(
+        200,
+        vec![(
+            "Content-Type".to_owned(),
+            "text/plain\r\nSet-Cookie: ferrite_session=stolen".to_owned(),
+        )],
+    ))
+}
+
+fn many_headers(_req: RouteRequest, _ctx: &Ctx) -> Result<RouteResponse> {
+    Ok(raw(
+        200,
+        (0..40).map(|i| (format!("x-h{i}"), "v".to_owned())).collect(),
+    ))
+}
+
 fn boom(_req: RouteRequest, _ctx: &Ctx) -> Result<RouteResponse> {
     panic!("boom")
 }
@@ -50,5 +80,8 @@ ferrite_sdk::export_plugin! {
         "/x" => x,
         "/panic" => boom,
         "/loop" => spin,
+        "/status" => bad_status,
+        "/crlf" => crlf,
+        "/headers" => many_headers,
     },
 }

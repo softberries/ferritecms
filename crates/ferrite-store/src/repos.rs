@@ -441,6 +441,9 @@ pub trait PluginRepo: Send + Sync {
     async fn upsert(&self, plugin: &InstalledPlugin) -> Result<(), StoreError>;
     /// Fetches an installed plugin.
     async fn get(&self, id: &str) -> Result<Option<InstalledPlugin>, StoreError>;
+    /// Whether an installed plugin is enabled (`enabled` only, no JSON decoded): `None`
+    /// when no row exists. The per-request check of plugin routes (05 §4b).
+    async fn is_enabled(&self, id: &str) -> Result<Option<bool>, StoreError>;
     /// Lists installed plugins.
     async fn list(&self) -> Result<Vec<InstalledPlugin>, StoreError>;
     /// Fetches an installed plugin and, inside a `Tx`, locks its row until the `Tx`

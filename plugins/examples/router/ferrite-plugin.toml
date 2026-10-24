@@ -7,10 +7,13 @@ world     = "ferrite:plugin/plugin@0.1.0"
 [capabilities]
 routes = true
 
-# Every route gets the default rate limit (10/min per client) and the site-origin rule.
+# Every route gets the default rate limit (10/min per client); all but /whoami the
+# site-origin rule.
 [routes]
 "/hello" = { methods = ["GET"] }
 "/echo"  = { methods = ["POST"] }
 "/go"    = { methods = ["GET"] }
 "/away"  = { methods = ["GET"] }
 "/big"   = { methods = ["GET"] }
+# Reports the user it was given; other sites may post (the host withholds the user then).
+"/whoami" = { methods = ["POST"], cross_origin = true }

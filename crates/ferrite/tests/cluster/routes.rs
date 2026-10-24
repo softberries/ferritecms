@@ -93,7 +93,7 @@ async fn route_flood_is_limited_across_nodes() {
             i % 2
         );
         assert!(
-            head.contains("content-security-policy: sandbox allow-forms"),
+            head.contains("content-security-policy: sandbox allow-forms; form-action 'self'"),
             "{head}"
         );
     }

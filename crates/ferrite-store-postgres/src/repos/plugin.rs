@@ -12,7 +12,7 @@ use ferrite_store::{
     check_len, check_limit, check_prune_limit, validate_json, validate_text,
 };
 
-use sqlx::{Postgres, QueryBuilder, types::Json};
+use sqlx::{Postgres, QueryBuilder, Row, types::Json};
 
 use super::PgRepos;
 use crate::{
@@ -239,6 +239,17 @@ impl PluginRepo for PgRepos {
         .bind(id)
         .fetch_optional(e))?;
         row.as_ref().map(codec::plugin).transpose()
+    }
+
+    async fn is_enabled(&self, id: &str) -> Result<Option<bool>, StoreError> {
+        validate_text("plugin name", id)?;
+        let row = run!(&self.exec, |e| sqlx::query(
+            "SELECT enabled FROM plugins WHERE name = $1"
+        )
+        .bind(id)
+        .fetch_optional(e))?;
+        row.map(|r| r.try_get::<bool, _>("enabled").map_err(map_db_err))
+            .transpose()
     }
 
     async fn get_for_update(&self, id: &str) -> Result<Option<InstalledPlugin>, StoreError> {

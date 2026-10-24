@@ -10,34 +10,41 @@
 //!    path. Dot segments and `%2F` are not resolved, so a path can only ever name a
 //!    route of that one plugin, never another plugin's or a core route.
 //! 2. `404` when the plugin is not loaded on this node, is disabled on this node
-//!    (after repeated failures), lacks the `routes` grant, or has no such path; also
-//!    when its `plugins` row is missing or disabled (read per request, so a disable or
-//!    delete on any node answers `404` everywhere at once, before the reload). A path
+//!    (after repeated failures), lacks the `routes` grant, or has no such path. A path
 //!    whose route lacks the method: `405` with `Allow`.
 //! 3. Methods other than GET and HEAD need the site's origin (`Origin`, else the
 //!    `Referer`'s origin, as the API's rule) unless the route has `cross_origin =
-//!    true`: else `403`.
-//! 4. The route's rate limit (`rate_limit`, default `10/min`) per client address (/64
+//!    true`: else `403`. A `cross_origin` request that fails the rule is served
+//!    anonymously (`user = None`): the cookie of a same-site sender never identifies
+//!    the visitor on a request another origin made.
+//! 4. No client address ([`ClientIp`], present whenever `serve` knows the peer):
+//!    `503`, since the limit could only be counted in one shared bucket.
+//! 5. The route's rate limit (`rate_limit`, default `10/min`) per client address (/64
 //!    for IPv6) through [`AuthService::hit_limit`](ferrite_core::AuthService::hit_limit)
 //!    on bucket `route:<plugin>:<32 hex of SHA-256(path)>` (F24), counted in the
 //!    database so it holds across nodes: `429` with `Retry-After`.
-//! 5. The body: at most [`MAX_ROUTE_BODY_BYTES`] (1 MiB), else `413`; at most
-//!    [`MAX_QUERY_PAIRS`] query pairs, else `400`.
+//! 6. The `plugins` row (`PluginRepo::is_enabled`, one column): missing or disabled →
+//!    `404`, so a disable or delete on any node answers `404` everywhere at once,
+//!    before the reload. Read after the origin and rate-limit checks, so refused
+//!    requests cost no read.
+//! 7. At most [`MAX_QUERY_PAIRS`] query pairs, else `400`; the body at most
+//!    [`MAX_ROUTE_BODY_BYTES`] (1 MiB), else `413`.
 //!
 //! The plugin then gets a `route-request` with only the `content-type`, `accept`,
 //! `accept-language`, `user-agent` and `referer` request headers (never `Cookie` or
 //! `Authorization`), its own client-address hash
-//! ([`AuthService::plugin_ip_hash`](ferrite_core::AuthService::plugin_ip_hash); empty
-//! when the address is unknown), and `user` = the id behind the `ferrite_session`
-//! cookie (no bearer tokens; none for an account that must reset its password).
+//! ([`AuthService::plugin_ip_hash`](ferrite_core::AuthService::plugin_ip_hash)), and
+//! `user` = the id behind the `ferrite_session` cookie (no bearer tokens; none for an
+//! account that must reset its password, or per check 3).
 //!
 //! The call is bounded by the plugin host (fuel, memory, the 2 s route deadline, the
 //! response checks of `validate_route_response`); any failure is `502`. The visitor
 //! gets the plugin's status and only its `Content-Type`, `Content-Language` and, on a
 //! 3xx, a root-relative `Location` (`/…` in visible ASCII, not `//…` or `/\…`; any other
 //! `Location` on a 3xx makes the answer `502`). Every handler answer carries
-//! `Content-Security-Policy: sandbox allow-forms` (an opaque origin: script in it
-//! cannot read the site's cookies or call the API as the visitor),
+//! `Content-Security-Policy: sandbox allow-forms; form-action 'self'` (an opaque
+//! origin: script in it cannot read the site's cookies or call the API as the
+//! visitor; forms may only post back to the site, ruling R14),
 //! `X-Content-Type-Options: nosniff`, `Cache-Control: no-store` and
 //! `X-Robots-Tag: noindex`; never `Set-Cookie`.
 //!
@@ -73,7 +80,10 @@ const PASSED_HEADERS: [HeaderName; 5] = [
 
 /// What every answer from a plugin's handler carries.
 const CONTAINMENT: [(HeaderName, &str); 4] = [
-    (header::CONTENT_SECURITY_POLICY, "sandbox allow-forms"),
+    (
+        header::CONTENT_SECURITY_POLICY,
+        "sandbox allow-forms; form-action 'self'",
+    ),
     (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
     (header::CACHE_CONTROL, "no-store"),
     (HeaderName::from_static("x-robots-tag"), "noindex"),
@@ -162,14 +172,6 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
     let Ok(spec) = state.plugins.route(&plugin, &path) else {
         return not_found();
     };
-    match state.store.read().plugins().get(&plugin).await {
-        Ok(Some(row)) if row.enabled => {}
-        Ok(_) => return not_found(),
-        Err(e) => {
-            tracing::error!(plugin, error = %e, "plugin row lookup failed");
-            return unavailable();
-        }
-    }
     let method = req.method().clone();
     if !spec.methods.iter().any(|m| m == method.as_str()) {
         let mut res = text(StatusCode::METHOD_NOT_ALLOWED, "method not allowed\n");
@@ -179,23 +181,25 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
         return res;
     }
     let safe = method == Method::GET || method == Method::HEAD;
-    if !safe && !spec.cross_origin {
-        let ok = state
+    let site_origin = safe
+        || state
             .origin
             .as_deref()
             .is_some_and(|origin| same_origin(req.headers(), origin));
-        if !ok {
-            return text(StatusCode::FORBIDDEN, "forbidden\n");
-        }
+    if !site_origin && !spec.cross_origin {
+        return text(StatusCode::FORBIDDEN, "forbidden\n");
     }
     let Some(auth) = state.auth.clone() else {
         tracing::warn!(plugin, "plugin route without an auth service; refused");
         return unavailable();
     };
-    let ip = req.extensions().get::<ClientIp>().map(|c| c.0);
+    let Some(ip) = req.extensions().get::<ClientIp>().map(|c| c.0) else {
+        tracing::warn!(plugin, "plugin route without a client address; refused");
+        return unavailable();
+    };
     let (max, window) = spec.rate();
     match auth
-        .hit_limit(&limit_scope(&plugin, &path), ip, max, window)
+        .hit_limit(&limit_scope(&plugin, &path), Some(ip), max, window)
         .await
     {
         Ok(()) => {}
@@ -207,6 +211,14 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
         }
         Err(e) => {
             tracing::error!(plugin, error = %e, "plugin route rate limit failed");
+            return unavailable();
+        }
+    }
+    match state.store.read().plugins().is_enabled(&plugin).await {
+        Ok(Some(true)) => {}
+        Ok(_) => return not_found(),
+        Err(e) => {
+            tracing::error!(plugin, error = %e, "plugin row lookup failed");
             return unavailable();
         }
     }
@@ -223,10 +235,14 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
         return too_large();
     }
     let headers = passed_headers(req.headers());
-    let user = handler::session(&state, req.headers())
-        .await
-        .filter(|who| !who.user.must_reset)
-        .map(|who| who.user.id.to_string());
+    let user = if site_origin {
+        handler::session(&state, req.headers())
+            .await
+            .filter(|who| !who.user.must_reset)
+            .map(|who| who.user.id.to_string())
+    } else {
+        None
+    };
     let body = match axum::body::to_bytes(req.into_body(), MAX_ROUTE_BODY_BYTES).await {
         Ok(b) => b.to_vec(),
         // Over the limit (or a body that broke off): never passed on.
@@ -238,7 +254,7 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
         query,
         headers,
         body,
-        client_ip_hash: ip.map_or_else(String::new, |ip| auth.plugin_ip_hash(&plugin, ip)),
+        client_ip_hash: auth.plugin_ip_hash(&plugin, ip),
         user,
     };
     match state.plugins.handle_route(&plugin, route_req).await {
@@ -378,7 +394,8 @@ mod tests {
 
     #[test]
     fn only_root_relative_locations() {
-        for ok in ["/", "/thanks/", "/a?b=//c", "/a#x"] {
+        // `/%2F%2Fevil` stays on the site: browsers do not decode `%2F` when resolving.
+        for ok in ["/", "/thanks/", "/a?b=//c", "/a#x", "/%2F%2Fevil", "/@evil"] {
             assert!(root_relative(ok), "{ok}");
         }
         for bad in [
@@ -388,6 +405,8 @@ mod tests {
             "/a\\b",
             "/\t/evil.example",
             "/ /evil.example",
+            "\\\\evil",
+            "http:evil",
             "evil",
             "",
             "javascript:alert(1)",
@@ -426,7 +445,7 @@ mod tests {
         );
         assert_eq!(
             out.headers()[header::CONTENT_SECURITY_POLICY],
-            "sandbox allow-forms"
+            "sandbox allow-forms; form-action 'self'"
         );
         // A cross-site Location on a redirect: 502, not followed.
         let redirect = |loc: &str| RouteResponse {

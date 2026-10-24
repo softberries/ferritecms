@@ -379,6 +379,12 @@ pub async fn plugins_upsert_list_enable(db: &TestDb) {
     }
     assert_eq!(plugins.get("Zed").await.unwrap().unwrap(), zed);
     assert!(plugins.get("nope").await.unwrap().is_none());
+    assert_eq!(plugins.is_enabled("Zed").await.unwrap(), Some(true));
+    assert_eq!(plugins.is_enabled("nope").await.unwrap(), None);
+    assert!(matches!(
+        plugins.is_enabled("a\0b").await,
+        Err(StoreError::Invalid(_))
+    ));
     // Binary order: uppercase sorts before lowercase.
     let names: Vec<_> = plugins
         .list()
@@ -413,6 +419,7 @@ pub async fn plugins_upsert_list_enable(db: &TestDb) {
     let got = plugins.get("beta").await.unwrap().unwrap();
     assert!(!got.enabled);
     assert_eq!(got.disabled_reason.as_deref(), Some("auto: 20 failures"));
+    assert_eq!(plugins.is_enabled("beta").await.unwrap(), Some(false));
     assert!(got.updated_at > beta.updated_at);
     plugins.set_enabled("beta", true, None).await.unwrap();
     let got = plugins.get("beta").await.unwrap().unwrap();
@@ -448,6 +455,7 @@ pub async fn plugins_upsert_list_enable(db: &TestDb) {
     plugins.delete("beta").await.unwrap();
     assert!(plugins.get("beta").await.unwrap().is_none());
     assert_eq!(plugins.list().await.unwrap().len(), 2);
+    assert_eq!(plugins.is_enabled("beta").await.unwrap(), None);
 }
 
 pub async fn plugin_kv_crud_and_usage(db: &TestDb) {
