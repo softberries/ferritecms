@@ -304,8 +304,6 @@ pub async fn media_find_by_artifact(db: &TestDb) {
     );
 }
 
-/// `media.sanitized` (0006): a row written without it reads `false`; `true` is stored
-/// by `insert` and `update` and comes back from every read path.
 /// `media().get_for_update` reads like `get`; inside a `Tx` the row stays locked until
 /// the `Tx` ends. Postgres: a peer's locking read waits for the commit, so two
 /// read-modify-writes of the row (alt text, variants) never lose each other's change.
@@ -380,6 +378,8 @@ pub async fn media_get_for_update_locks_the_row(db: Arc<TestDb>) {
     assert_eq!((got.width, got.height), (Some(10), Some(20)));
 }
 
+/// `media.sanitized` (0006): a row written without it reads `false`; `true` is stored
+/// by `insert` and `update` and comes back from every read path.
 pub async fn media_sanitized_roundtrip(db: &TestDb) {
     let store = db.store();
     let author = fixture_user(store).await;

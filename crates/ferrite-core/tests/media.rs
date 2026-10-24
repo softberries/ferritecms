@@ -255,16 +255,22 @@ async fn upload_records_item_row_event_and_job_in_one_tx(db: &TestDb) {
     let mut bad = png(5);
     bad.alt = "bell\u{7}".into();
     invalid_field(media.record_upload(&author, bad).await, "alt");
-    for name in ["", "dir/", "x\u{0}.png", "tab\t.png", "\u{202e}gnp.exe"] {
+    // Control and format characters (bidi overrides disguise the extension:
+    // `report\u{202e}fdp.zip` shows as `reportpiz.pdf`; zero-width chars, the BOM).
+    for name in [
+        "",
+        "dir/",
+        "x\u{0}.png",
+        "tab\t.png",
+        "\u{202e}gnp.exe",
+        "report\u{202e}fdp.zip",
+        "a\u{200b}.png",
+        "\u{feff}a.png",
+        "a\u{2067}b.png",
+    ] {
         let mut bad = png(5);
         bad.original_name = name.into();
-        let r = media.record_upload(&author, bad).await;
-        if name == "\u{202e}gnp.exe" {
-            // U+202E is a format character, not a control character: allowed.
-            r.unwrap();
-            continue;
-        }
-        invalid_field(r, "file");
+        invalid_field(media.record_upload(&author, bad).await, "file");
     }
     let mut bad = png(5);
     bad.original_name = format!("{}.png", "n".repeat(252));
@@ -272,13 +278,33 @@ async fn upload_records_item_row_event_and_job_in_one_tx(db: &TestDb) {
     let mut ok = png(6);
     ok.original_name = format!("{}.png", "n".repeat(251));
     media.record_upload(&author, ok).await.unwrap();
-    // Only an SVG can carry the sanitised marker.
+    // Backstops: only an SVG carries the sanitised marker and an SVG must carry it;
+    // variants only for raster types; type and size must match the artifact.
+    let invalid = |r: Result<MediaItem, CoreError>| {
+        assert!(matches!(r, Err(CoreError::Invalid(_))), "{r:?}");
+    };
     let mut bad = png(5);
     bad.sanitized = true;
-    assert!(matches!(
-        media.record_upload(&author, bad).await,
-        Err(CoreError::Invalid(_))
-    ));
+    invalid(media.record_upload(&author, bad).await);
+    invalid(
+        media
+            .record_upload(&author, upload(5, "image/svg+xml", "raw.svg", false))
+            .await,
+    );
+    invalid(
+        media
+            .record_upload(&author, upload(5, "application/pdf", "x.pdf", true))
+            .await,
+    );
+    let mut bad = png(5);
+    bad.mime = "image/jpeg".into();
+    invalid(media.record_upload(&author, bad).await);
+    let mut bad = png(5);
+    bad.bytes = 1235;
+    invalid(media.record_upload(&author, bad).await);
+    let mut bad = png(5);
+    bad.artifact.kind = ArtifactKind::Variant;
+    invalid(media.record_upload(&author, bad).await);
     let mut svg = upload(7, "image/svg+xml", "logo.svg", false);
     svg.sanitized = true;
     assert!(
@@ -289,13 +315,13 @@ async fn upload_records_item_row_event_and_job_in_one_tx(db: &TestDb) {
             .media
             .sanitized
     );
-    assert_eq!(media_items(db.store()).await, count + 3);
+    assert_eq!(media_items(db.store()).await, count + 2);
     assert!(max_seq(db.store()).await > seq);
     // Claimed here, so the check below sees only new jobs.
     assert_eq!(
         variant_jobs(db.store()).await.len(),
-        3,
-        "the three PNGs since"
+        2,
+        "the two PNGs since"
     );
 
     // A failing write inside the Tx (the variants job, the last one) leaves nothing.

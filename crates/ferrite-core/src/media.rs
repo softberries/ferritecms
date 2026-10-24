@@ -45,6 +45,8 @@ pub const MAX_MEDIA_ALT: usize = 1_000;
 pub const MAX_ORIGINAL_NAME: usize = 255;
 /// The only type whose bytes can carry the sanitiser's marker.
 const SVG_MIME: &str = "image/svg+xml";
+/// The types `process_image` reads (`ferrite_media::is_raster_image`).
+const RASTER_MIMES: [&str; 4] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
 /// A staged upload to record ([`MediaService::record_upload`]).
 #[derive(Debug, Clone, PartialEq)]
@@ -147,13 +149,27 @@ impl MediaService {
                 "an upload's artifact must be of kind media".into(),
             ));
         }
-        if upload.sanitized && upload.mime != SVG_MIME {
+        // Backstops for the uploader's decisions (P4/P7): only sanitiser output is
+        // stored as SVG, variants only for raster types, and the row describes the
+        // artifact it points to.
+        if upload.sanitized != (upload.mime == SVG_MIME) {
             return Err(CoreError::Invalid(
-                "only an SVG can be marked sanitised".into(),
+                "an SVG must be sanitised, and only an SVG can be marked sanitised".into(),
             ));
+        }
+        if upload.raster && !RASTER_MIMES.contains(&upload.mime.as_str()) {
+            return Err(CoreError::Invalid(format!(
+                "{} is not a raster image type",
+                upload.mime
+            )));
         }
         let bytes = i64::try_from(upload.bytes)
             .map_err(|_| CoreError::Invalid("upload size out of range".into()))?;
+        if upload.mime != upload.artifact.mime || bytes != upload.artifact.bytes {
+            return Err(CoreError::Invalid(
+                "the upload's type and size must match its artifact".into(),
+            ));
+        }
         let writer = content_writer(actor);
         let draft = ContentDraft {
             kind: MEDIA_KIND.into(),
@@ -313,11 +329,6 @@ impl MediaService {
                 .await?
                 .filter(|i| i.kind == MEDIA_KIND)
                 .ok_or(CoreError::NotFound)?;
-            let mut media = tx
-                .media()
-                .get_for_update(id)
-                .await?
-                .ok_or(CoreError::NotFound)?;
             let terms = tx
                 .terms()
                 .for_item(id)
@@ -351,6 +362,14 @@ impl MediaService {
                     },
                 )
                 .await?;
+            // Locked after the content row, in the order delete takes them (content,
+            // then media through the cascade), so the two cannot deadlock. A missing
+            // row rolls back the content update with the rest of the Tx.
+            let mut media = tx
+                .media()
+                .get_for_update(id)
+                .await?
+                .ok_or(CoreError::NotFound)?;
             if let Some(alt) = alt {
                 media.alt = alt;
                 tx.media().update(&media).await?;
@@ -459,23 +478,55 @@ fn content_writer(actor: &Actor) -> Actor {
 }
 
 /// The last `/` or `\` segment of `raw`: 1..=[`MAX_ORIGINAL_NAME`] bytes, not `.` or
-/// `..`, no control characters.
+/// `..`, no control or format characters ([`is_format`]).
 fn check_file_name(raw: &str) -> Result<String, CoreError> {
     let name = raw.rsplit(['/', '\\']).next().unwrap_or(raw);
     if name.is_empty()
         || name.len() > MAX_ORIGINAL_NAME
         || name == "."
         || name == ".."
-        || name.chars().any(char::is_control)
+        || name.chars().any(|c| c.is_control() || is_format(c))
     {
         return Err(CoreError::invalid_field(
             "file",
             format!(
-                "the file name must be 1 to {MAX_ORIGINAL_NAME} bytes without control characters"
+                "the file name must be 1 to {MAX_ORIGINAL_NAME} bytes without control or format characters"
             ),
         ));
     }
     Ok(name.to_owned())
+}
+
+/// Whether `c` is a Unicode format character (General_Category `Cf`, Unicode 16): bidi
+/// controls and marks, zero-width characters, the BOM, and the like. Refused in file
+/// names, where a bidi override disguises the extension (`report\u{202E}fdp.zip` shows
+/// as `reportpiz.pdf`). Not refused in titles or alt text, where joiners (U+200D in
+/// emoji sequences) are legitimate.
+fn is_format(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x00AD
+            | 0x0600..=0x0605
+            | 0x061C
+            | 0x06DD
+            | 0x070F
+            | 0x0890..=0x0891
+            | 0x08E2
+            | 0x180E
+            | 0x200B..=0x200F
+            | 0x202A..=0x202E
+            | 0x2060..=0x2064
+            | 0x2066..=0x206F
+            | 0xFEFF
+            | 0xFFF9..=0xFFFB
+            | 0x110BD
+            | 0x110CD
+            | 0x13430..=0x1343F
+            | 0x1BCA0..=0x1BCA3
+            | 0x1D173..=0x1D17A
+            | 0xE0001
+            | 0xE0020..=0xE007F
+    )
 }
 
 /// A title of at most [`MAX_MEDIA_TITLE`] characters without control characters.
@@ -533,6 +584,25 @@ mod tests {
                 "{bad:?}"
             );
         }
+        for spoof in [
+            "report\u{202e}fdp.zip",
+            "a\u{200b}.png",
+            "\u{feff}a.png",
+            "a\u{2066}b.png",
+            "a\u{200e}.png",
+            "soft\u{ad}hyphen.png",
+            "tag\u{e0041}.png",
+        ] {
+            assert!(check_file_name(spoof).is_err(), "{spoof:?}");
+        }
+        assert!(
+            check_file_name("snow\u{2603}man.png").is_ok(),
+            "symbols are not Cf"
+        );
+        assert!(
+            check_title("👩\u{200d}💻").is_ok(),
+            "joiners stay allowed in titles"
+        );
         assert!(check_file_name(&"é".repeat(127)).is_ok(), "254 bytes");
         assert!(check_file_name(&"é".repeat(128)).is_err(), "256 bytes");
     }
