@@ -24,8 +24,8 @@ use axum::{
 use ferrite_cache::InvalidationLoop;
 use ferrite_cache::PageCache;
 use ferrite_core::{
-    Actor, AuthService, ContentService, ContentTypeService, ExtensionAdmin, MenuService,
-    NewAccount, OptionService, PermalinkRules, RedirectService, Scopes, SiteReader,
+    Actor, AuthService, ContentService, ContentTypeService, ExtensionAdmin, MediaService,
+    MenuService, NewAccount, OptionService, PermalinkRules, RedirectService, Scopes, SiteReader,
     TaxonomyService, UserService,
     auth::SiteKey,
     mail::{MailQueue, MemoryMailer},
@@ -37,6 +37,7 @@ use ferrite_http::{
     build_site,
     extensions::Installer,
     load_route_table,
+    media::Uploader,
 };
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode, S3Config};
 use ferrite_plugin_host::{HostConfig, PluginHost};
@@ -60,6 +61,8 @@ pub use test_support::plugin_wasm;
 
 pub const SITE_URL: &str = "https://example.com";
 pub const SITE_TITLE: &str = "Test Site";
+/// `media.max_upload` of the harness API (1 MiB, so limit tests stay small).
+pub const MAX_UPLOAD: u64 = 1 << 20;
 
 /// The temp dir (and S3 server) behind the media store; aborts the server on drop.
 pub struct Media {
@@ -261,6 +264,10 @@ impl Api {
             migrations_ok: true,
         }));
         let mailer = Arc::new(MemoryMailer::new());
+        let content = Arc::new(ContentService::new(
+            store.clone(),
+            Arc::new(PermalinkRules::default()),
+        ));
         let api = Arc::new(
             ApiState::new(ApiParts {
                 store: store.clone(),
@@ -269,10 +276,14 @@ impl Api {
                         .with_issuer_name(SITE_TITLE.into()),
                 ),
                 users: Arc::new(UserService::new(store.clone())),
-                content: Arc::new(ContentService::new(
+                media_service: Arc::new(MediaService::new(
                     store.clone(),
+                    content.clone(),
                     Arc::new(PermalinkRules::default()),
                 )),
+                uploader: Arc::new(Uploader::new(media_store.clone(), MAX_UPLOAD)),
+                max_upload: MAX_UPLOAD,
+                content,
                 types: Arc::new(ContentTypeService::new(store.clone())),
                 taxonomy: Arc::new(TaxonomyService::new(store.clone())),
                 menus: Arc::new(MenuService::new(store.clone())),
@@ -359,6 +370,39 @@ impl Api {
         })
     }
 
+    /// The whole site again, with the same store and services but `media.max_upload`
+    /// = `max` and a fresh uploader (returned, for its slot counters).
+    pub fn router_with_max_upload(&self, max: u64) -> (Router, Arc<Uploader>) {
+        let uploader = Arc::new(Uploader::new(self.api.media.clone(), max));
+        let router = self.router_with(ApiParts {
+            uploader: uploader.clone(),
+            max_upload: max,
+            ..self.same_parts()
+        });
+        (router, uploader)
+    }
+
+    /// Every file under the media store's root (artifacts and staging objects alike).
+    pub fn stored_files(&self) -> Vec<PathBuf> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for e in entries.flatten() {
+                let path = e.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else {
+                    out.push(path);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.backing.objects_root, &mut out);
+        out.sort();
+        out
+    }
+
     fn router_with(&self, parts: ApiParts) -> Router {
         let api = Arc::new(ApiState::new(parts).expect("api state"));
         with_client(build_site(self.app.clone(), api))
@@ -380,6 +424,9 @@ impl Api {
             extensions: a.extensions.clone(),
             installer: a.installer.clone(),
             media: a.media.clone(),
+            media_service: a.media_service.clone(),
+            uploader: a.uploader.clone(),
+            max_upload: a.max_upload,
             mailer: a.mailer.clone(),
             site_url: a.site_url.clone(),
             site_title: a.site_title.clone(),
@@ -391,6 +438,10 @@ impl Api {
     /// tests use it for API requests only.
     pub async fn router_on(&self, store: Arc<dyn Store>) -> Router {
         let key = SiteKey::generate().expect("site key");
+        let content = Arc::new(ContentService::new(
+            store.clone(),
+            Arc::new(PermalinkRules::default()),
+        ));
         let api = Arc::new(
             ApiState::new(ApiParts {
                 store: store.clone(),
@@ -399,10 +450,14 @@ impl Api {
                         .with_issuer_name(SITE_TITLE.into()),
                 ),
                 users: Arc::new(UserService::new(store.clone())),
-                content: Arc::new(ContentService::new(
+                media_service: Arc::new(MediaService::new(
                     store.clone(),
+                    content.clone(),
                     Arc::new(PermalinkRules::default()),
                 )),
+                uploader: Arc::new(Uploader::new(self.api.media.clone(), MAX_UPLOAD)),
+                max_upload: MAX_UPLOAD,
+                content,
                 types: Arc::new(ContentTypeService::new(store.clone())),
                 taxonomy: Arc::new(TaxonomyService::new(store.clone())),
                 menus: Arc::new(MenuService::new(store.clone())),
@@ -511,6 +566,20 @@ impl Api {
 pub struct Bearer(pub String);
 
 impl Bearer {
+    /// `POST /api/v1/media` with a `multipart/form-data` body of `parts`.
+    pub async fn upload(&self, api: &Api, parts: &[Part<'_>]) -> Resp {
+        api.send(self.upload_request(parts)).await
+    }
+
+    /// The request of [`Bearer::upload`].
+    pub fn upload_request(&self, parts: &[Part<'_>]) -> Request<Body> {
+        let (content_type, body) = upload_body(parts);
+        self.builder(Method::POST, "/api/v1/media")
+            .header(header::CONTENT_TYPE, content_type)
+            .body(Body::from(body))
+            .unwrap()
+    }
+
     /// A request carrying the token.
     pub fn builder(&self, method: Method, path: &str) -> request::Builder {
         builder(method, path).header(header::AUTHORIZATION, format!("Bearer {}", self.0))
@@ -733,6 +802,111 @@ pub fn multipart_body(parts: &[(&str, &[u8])]) -> (String, Vec<u8>) {
     }
     body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
     (format!("multipart/form-data; boundary={BOUNDARY}"), body)
+}
+
+/// One part of an upload body: its name, file name and `Content-Type` (each left out
+/// when `None`) and bytes.
+#[derive(Debug, Clone, Copy)]
+pub struct Part<'a> {
+    pub name: &'a str,
+    pub filename: Option<&'a str>,
+    pub content_type: Option<&'a str>,
+    pub bytes: &'a [u8],
+}
+
+impl<'a> Part<'a> {
+    /// The `file` part: `bytes` named `filename`, sent as `content_type`.
+    pub fn file(filename: &'a str, content_type: &'a str, bytes: &'a [u8]) -> Self {
+        Self {
+            name: "file",
+            filename: Some(filename),
+            content_type: Some(content_type),
+            bytes,
+        }
+    }
+
+    /// A plain text part (no file name, no type).
+    pub fn text(name: &'a str, value: &'a str) -> Self {
+        Self {
+            name,
+            filename: None,
+            content_type: None,
+            bytes: value.as_bytes(),
+        }
+    }
+}
+
+/// The headers of one part of [`upload_body`] (from its leading boundary on).
+pub fn part_head(part: &Part<'_>) -> Vec<u8> {
+    let mut head = format!(
+        "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{}\"",
+        part.name
+    );
+    if let Some(f) = part.filename {
+        head.push_str(&format!("; filename=\"{f}\""));
+    }
+    head.push_str("\r\n");
+    if let Some(t) = part.content_type {
+        head.push_str(&format!("Content-Type: {t}\r\n"));
+    }
+    head.push_str("\r\n");
+    head.into_bytes()
+}
+
+/// The closing boundary of [`upload_body`].
+pub fn body_end() -> Vec<u8> {
+    format!("--{BOUNDARY}--\r\n").into_bytes()
+}
+
+/// A `multipart/form-data` body of `parts`, in order, and its `Content-Type`.
+pub fn upload_body(parts: &[Part<'_>]) -> (String, Vec<u8>) {
+    let mut body = Vec::new();
+    for part in parts {
+        body.extend_from_slice(&part_head(part));
+        body.extend_from_slice(part.bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(&body_end());
+    (upload_content_type(), body)
+}
+
+/// The `Content-Type` of every upload body built here.
+pub fn upload_content_type() -> String {
+    format!("multipart/form-data; boundary={BOUNDARY}")
+}
+
+/// A streamed body: `first`, then `rest` once the returned sender fires (or is
+/// dropped). A request with it holds the server inside its body until then.
+pub fn gated_body(first: Vec<u8>, rest: Vec<u8>) -> (Body, tokio::sync::oneshot::Sender<()>) {
+    use futures::StreamExt as _;
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let head =
+        futures::stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(first)) });
+    let tail = futures::stream::once(async move {
+        let _ = rx.await;
+        Ok::<_, std::io::Error>(bytes::Bytes::from(rest))
+    });
+    (Body::from_stream(head.chain(tail)), tx)
+}
+
+/// A streamed body that sends `first` in 256 KiB chunks and then fails, as a client
+/// that goes away mid-upload.
+pub fn broken_body(first: Vec<u8>) -> Body {
+    let mut items: Vec<Result<bytes::Bytes, std::io::Error>> = first
+        .chunks(256 * 1024)
+        .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
+        .collect();
+    items.push(Err(std::io::Error::other("client went away")));
+    Body::from_stream(futures::stream::iter(items))
+}
+
+/// A streamed body of `bytes` in 256 KiB chunks, without a declared length.
+pub fn chunked_body(bytes: Vec<u8>) -> Body {
+    let items: Vec<Result<bytes::Bytes, std::io::Error>> = bytes
+        .chunks(256 * 1024)
+        .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
+        .collect();
+    Body::from_stream(futures::stream::iter(items))
 }
 
 /// The `ferrite-plugin.toml` of the example plugin `name` (`plugins/examples/<name>`,

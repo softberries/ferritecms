@@ -61,9 +61,9 @@ use ferrite_cluster::{
 use ferrite_config::{Config, LoggedInCache, PluginsConfig};
 use ferrite_core::mail::MailQueue;
 use ferrite_core::{
-    AuthService, ContentService, ContentTypeService, ExtensionAdmin, ExtensionService, MenuService,
-    OptionService, Permalinks, RedirectService, SiteReader, SwappablePermalinks, TaxonomyService,
-    UserService,
+    AuthService, ContentService, ContentTypeService, ExtensionAdmin, ExtensionService,
+    MediaService, MenuService, OptionService, Permalinks, RedirectService, SiteReader,
+    SwappablePermalinks, TaxonomyService, UserService,
 };
 use ferrite_domain::{NodeId, Timestamp};
 use ferrite_http::{
@@ -74,6 +74,7 @@ use ferrite_http::{
     extensions::Installer,
     load_route_table,
     mail::SmtpMailer,
+    media::Uploader,
 };
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::{HostConfig, PluginHost};
@@ -415,7 +416,15 @@ async fn boot(
     status.set_plugins(&report);
 
     // The API's services; `content` also runs the scheduled-publishing jobs.
-    let content = Arc::new(ContentService::new(store.clone(), dyn_permalinks));
+    let content = Arc::new(ContentService::new(store.clone(), dyn_permalinks.clone()));
+    let media_service = Arc::new(MediaService::new(
+        store.clone(),
+        content.clone(),
+        dyn_permalinks,
+    ));
+    // One upload pipeline per node: its slots bound the node (M2a-2b P9).
+    let max_upload = config.uploads.max_upload;
+    let uploader = Arc::new(Uploader::new(media.clone(), max_upload));
     // One install pipeline per node: its compile slots bound the node (P8).
     let installer = Arc::new(
         Installer::new(store.clone(), media.clone(), host_config(&config.plugins))
@@ -435,6 +444,9 @@ async fn boot(
             extensions: Arc::new(ExtensionAdmin::new(store.clone(), site_key)),
             installer,
             media: media.clone(),
+            media_service,
+            uploader,
+            max_upload,
             mailer: mail.clone(),
             site_url: state.config.site_url.clone(),
             site_title: config.site.title.clone(),

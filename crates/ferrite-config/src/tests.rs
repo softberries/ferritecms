@@ -378,6 +378,7 @@ fn render_default_toml_roundtrips() {
     assert_eq!(c2.server, c3.server);
     assert_eq!(c2.cluster, c3.cluster);
     assert_eq!(c2.auth, c3.auth);
+    assert_eq!(c2.uploads, c3.uploads);
     assert!(matches!(c2.media, MediaSection::Local { .. }));
 }
 
@@ -909,5 +910,63 @@ fn plugins_limits_rules() {
     ] {
         let (_d, r) = run(Some(&format!("{MIN}[plugins]\n{ok}")), &[]);
         assert!(r.is_ok(), "{ok}: {r:?}");
+    }
+}
+
+#[test]
+fn media_upload_rules() {
+    // Defaults: 256 MiB, one image worker.
+    let (_d, r) = run(Some(MIN), &[]);
+    let c = r.unwrap();
+    assert_eq!(c.uploads.max_upload, 256 << 20);
+    assert_eq!(c.uploads.image_workers, 1);
+    assert_eq!(DEFAULT_MAX_UPLOAD, 256 << 20);
+    assert_eq!(MAX_UPLOAD_CEILING, 1 << 30);
+
+    // Both backends' [media] sections accept the keys.
+    for backend in [
+        "backend = \"local\"\n",
+        "backend = \"s3\"\n[media.s3]\nbucket = \"b\"\nregion = \"r\"\n",
+    ] {
+        let (_d, r) = run(
+            Some(&format!(
+                "{MIN}[media]\nmax_upload = \"1GiB\"\nimage_workers = 16\n{backend}"
+            )),
+            &[],
+        );
+        let c = r.unwrap_or_else(|e| panic!("{backend}: {e:?}"));
+        assert_eq!(c.uploads.max_upload, 1 << 30, "{backend}");
+        assert_eq!(c.uploads.image_workers, 16, "{backend}");
+    }
+    let (_d, r) = run(Some(&format!("{MIN}[media]\nmax_upload = 1\n")), &[]);
+    assert_eq!(r.unwrap().uploads.max_upload, 1);
+    let (_d, r) = run(Some(MIN), &[("FERRITE_MEDIA__MAX_UPLOAD", "8MB")]);
+    assert_eq!(r.unwrap().uploads.max_upload, 8 << 20);
+
+    let problem = |toml: &str| {
+        let (_d, r) = run(Some(&format!("{MIN}[media]\n{toml}")), &[]);
+        let e = r.unwrap_err();
+        assert_eq!(e.problems.len(), 1, "{toml}: {e:?}");
+        (e.problems[0].path.clone(), e.problems[0].message.clone())
+    };
+    let (path, _) = problem("max_upload = 0\n");
+    assert_eq!(path, "media.max_upload");
+    assert_eq!(
+        problem(&format!("max_upload = {}\n", (1u64 << 30) + 1)),
+        ("media.max_upload".into(), "must be at most 1GiB".into())
+    );
+    assert_eq!(
+        problem("max_upload = \"2GB\"\n"),
+        ("media.max_upload".into(), "must be at most 1GiB".into())
+    );
+    for bad in ["image_workers = 0\n", "image_workers = 17\n"] {
+        assert_eq!(
+            problem(bad),
+            (
+                "media.image_workers".into(),
+                "must be between 1 and 16".into()
+            ),
+            "{bad}"
+        );
     }
 }

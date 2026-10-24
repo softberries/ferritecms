@@ -11,6 +11,8 @@ pub struct Config {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub media: MediaSection,
+    /// `[media] max_upload` and `image_workers` (M2a-2b P8/P9; either backend).
+    pub uploads: UploadConfig,
     pub cluster: ClusterConfig,
     pub cache: CacheConfig,
     pub plugins: PluginsConfig,
@@ -65,6 +67,33 @@ pub enum MediaSection {
         prefix: String,
         public_base_url: Option<url::Url>,
     },
+}
+
+/// Default `media.max_upload`: 256 MiB.
+pub const DEFAULT_MAX_UPLOAD: u64 = 256 << 20;
+/// Largest `media.max_upload`: 1 GiB (below the store's 5 GB copy ceiling, 03 §3).
+pub const MAX_UPLOAD_CEILING: u64 = 1 << 30;
+/// Largest `media.image_workers`.
+pub const MAX_IMAGE_WORKERS: usize = 16;
+
+/// The upload settings of `[media]` (M2a-2b P8/P9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UploadConfig {
+    /// Largest uploaded file in bytes (`media.max_upload`): 1..=[`MAX_UPLOAD_CEILING`],
+    /// default [`DEFAULT_MAX_UPLOAD`].
+    pub max_upload: u64,
+    /// Image variant jobs at once per node (`media.image_workers`):
+    /// 1..=[`MAX_IMAGE_WORKERS`], default 1.
+    pub image_workers: usize,
+}
+
+impl Default for UploadConfig {
+    fn default() -> Self {
+        Self {
+            max_upload: DEFAULT_MAX_UPLOAD,
+            image_workers: 1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

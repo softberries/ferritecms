@@ -53,7 +53,7 @@ pub fn load(
     let site = parse_site(&mut cx, &mut table);
     let server = parse_server(&mut cx, &mut table);
     let database = parse_database(&mut cx, &mut table);
-    let media = parse_media(&mut cx, &mut table);
+    let (media, uploads) = parse_media(&mut cx, &mut table);
     let cluster = parse_cluster(&mut cx, &mut table);
     let cache = parse_cache(&mut cx, &mut table);
     let plugins = parse_plugins(&mut cx, &mut table);
@@ -79,6 +79,7 @@ pub fn load(
             server,
             database,
             media,
+            uploads,
             cluster,
             cache,
             plugins,
@@ -354,7 +355,7 @@ fn parse_database(cx: &mut Cx, root: &mut Table) -> DatabaseConfig {
 /// identifier limit for the notification channel.
 const MAX_SCHEMA_LEN: usize = 48;
 
-fn parse_media(cx: &mut Cx, root: &mut Table) -> MediaSection {
+fn parse_media(cx: &mut Cx, root: &mut Table) -> (MediaSection, UploadConfig) {
     let mut t = section(cx, root, "media");
     let backend = cx
         .string(&mut t, "media", "backend")
@@ -362,8 +363,48 @@ fn parse_media(cx: &mut Cx, root: &mut Table) -> MediaSection {
     let local_shared = cx.boolean(&mut t, "media", "local_shared");
     let media_root = cx.string(&mut t, "media", "root");
     let s3 = cx.section(&mut t, "media", "s3");
+    let uploads = parse_uploads(cx, &mut t);
     cx.unknown(t, "media");
+    (
+        media_backend(cx, backend, local_shared, media_root, s3),
+        uploads,
+    )
+}
 
+/// `media.max_upload` (1 B..=1 GiB) and `media.image_workers` (1..=16), for either
+/// backend.
+fn parse_uploads(cx: &mut Cx, t: &mut Table) -> UploadConfig {
+    let defaults = UploadConfig::default();
+    let max_upload = match cx.size(t, "media", "max_upload", false) {
+        None => defaults.max_upload,
+        Some(n) if n > MAX_UPLOAD_CEILING => {
+            cx.push("media.max_upload", "must be at most 1GiB");
+            defaults.max_upload
+        }
+        Some(n) => n,
+    };
+    const MAX_WORKERS: u64 = MAX_IMAGE_WORKERS as u64;
+    let image_workers = match cx.uint(t, "media", "image_workers") {
+        None => defaults.image_workers,
+        Some(n @ 1..=MAX_WORKERS) => n as usize,
+        Some(_) => {
+            cx.push("media.image_workers", "must be between 1 and 16");
+            defaults.image_workers
+        }
+    };
+    UploadConfig {
+        max_upload,
+        image_workers,
+    }
+}
+
+fn media_backend(
+    cx: &mut Cx,
+    backend: String,
+    local_shared: Option<bool>,
+    media_root: Option<String>,
+    s3: Option<Table>,
+) -> MediaSection {
     let data_dir = cx.data_dir.clone();
     let default_local = |root: Option<String>, shared| MediaSection::Local {
         root: resolve(&data_dir, root.as_deref().unwrap_or("media")),
@@ -819,6 +860,9 @@ impl InitMedia {
     }
 }
 
+/// The upload keys of `[media]` in the `ferrite init` template (commented defaults).
+const UPLOAD_TEMPLATE: &str = "# Largest uploaded file (1 byte to 1GiB).\n# max_upload = \"256MB\"\n# Image variant jobs at once per node (1..=16).\n# image_workers = 1\n";
+
 /// Template for `ferrite init`. For S3 the bucket and prefix are concrete and region
 /// defaults to `us-east-1`; the operator must still set credentials/endpoint.
 pub fn render_default_toml(
@@ -846,7 +890,9 @@ pub fn render_default_toml(
     out.push_str("max_connections = 16\n# url_file = \"/run/secrets/db_url\"\n\n");
     match media {
         InitMedia::S3 { bucket, prefix } => {
-            out.push_str("[media]\nbackend = \"s3\"\n\n[media.s3]\n");
+            out.push_str("[media]\nbackend = \"s3\"\n");
+            out.push_str(UPLOAD_TEMPLATE);
+            out.push_str("\n[media.s3]\n");
             out.push_str(&format!("bucket = {}\n", q(bucket)));
             if !prefix.is_empty() {
                 out.push_str(&format!("prefix = {}\n", q(prefix)));
@@ -859,7 +905,9 @@ pub fn render_default_toml(
             out.push_str("# public_base_url = \"https://cdn.example.com\"\n\n");
         }
         InitMedia::Local => {
-            out.push_str("[media]\nbackend = \"local\"\nroot = \"media\"\n\n");
+            out.push_str("[media]\nbackend = \"local\"\nroot = \"media\"\n");
+            out.push_str(UPLOAD_TEMPLATE);
+            out.push('\n');
         }
     }
     out.push_str("[cluster]\nmode = \"auto\"\n");

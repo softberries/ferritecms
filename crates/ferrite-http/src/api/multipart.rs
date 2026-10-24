@@ -16,7 +16,10 @@
 use std::collections::BTreeMap;
 
 use axum::{
-    extract::{FromRequest, Multipart, Request, multipart::MultipartError},
+    extract::{
+        FromRequest, Multipart, Request,
+        multipart::{Field, MultipartError},
+    },
     http::{StatusCode, header},
 };
 use bytes::{Bytes, BytesMut};
@@ -70,16 +73,8 @@ pub async fn read_parts(
         if parts.contains_key(name) {
             return Err(malformed(format!("part {name:?} is sent more than once")));
         }
-        let mut buf = BytesMut::new();
-        while let Some(chunk) = field.chunk().await.map_err(body_error)? {
-            if buf.len() + chunk.len() > max {
-                return Err(too_large(format!(
-                    "part {name:?} is larger than {max} bytes"
-                )));
-            }
-            buf.extend_from_slice(&chunk);
-        }
-        parts.insert(name, buf.freeze());
+        let buf = read_field(&mut field, name, max).await?;
+        parts.insert(name, buf);
     }
     if let Some((missing, _)) = spec.iter().find(|(n, _)| !parts.contains_key(n)) {
         return Err(Problem::validation(format!("part {missing:?} is required"))
@@ -88,7 +83,28 @@ pub async fn read_parts(
     Ok(parts)
 }
 
-fn body_error(e: MultipartError) -> Problem {
+/// The bytes of part `field` (named `name` in problems), refused `413` as soon as they
+/// pass `max`.
+pub(crate) async fn read_field(
+    field: &mut Field<'_>,
+    name: &str,
+    max: usize,
+) -> Result<Bytes, Problem> {
+    let mut buf = BytesMut::new();
+    while let Some(chunk) = field.chunk().await.map_err(body_error)? {
+        if buf.len() + chunk.len() > max {
+            return Err(too_large(format!(
+                "part {name:?} is larger than {max} bytes"
+            )));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf.freeze())
+}
+
+/// The problem of a body that failed while it was read: `413` over the route limit,
+/// else `400 malformed-body`.
+pub(crate) fn body_error(e: MultipartError) -> Problem {
     if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
         too_large("the body is larger than this endpoint accepts".to_owned())
     } else {
@@ -114,7 +130,7 @@ fn too_large(detail: String) -> Problem {
     )
 }
 
-fn malformed(detail: String) -> Problem {
+pub(crate) fn malformed(detail: String) -> Problem {
     Problem::new(
         StatusCode::BAD_REQUEST,
         "malformed-body",

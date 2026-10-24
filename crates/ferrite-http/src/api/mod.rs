@@ -12,7 +12,8 @@
 //! * `Cache-Control: no-store` on every API response, and request bodies of at most
 //!   [`MAX_JSON_BODY`] ([`body_limit`]), except the upload routes, which have a
 //!   route-level limit: plugins [`plugins::MAX_UPLOAD_BODY`], themes
-//!   [`themes::MAX_THEME_UPLOAD_BODY`].
+//!   [`themes::MAX_THEME_UPLOAD_BODY`], media [`media::MEDIA_ROUTE_LIMIT`] (the
+//!   handler enforces `media.max_upload` itself, F12).
 //!
 //! The API never touches the page cache. [`build_site`](crate::build_site) merges this
 //! router in front of the public fallback, inside the shared layers (security headers,
@@ -28,6 +29,7 @@ pub mod csv;
 pub mod dto;
 pub mod extract;
 pub mod list;
+pub mod media;
 pub mod menus;
 pub mod meta;
 pub mod multipart;
@@ -146,6 +148,15 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(users::set_user_password))
         .routes(routes!(users::list_tokens, users::create_token))
         .routes(routes!(users::revoke_token))
+        .merge(uploads(
+            routes!(media::list_media, media::upload_media),
+            media::MEDIA_ROUTE_LIMIT,
+        ))
+        .routes(routes!(
+            media::get_media,
+            media::update_media,
+            media::delete_media
+        ))
         .merge(uploads(
             routes!(plugins::list_plugins, plugins::install_plugin),
             plugins::MAX_UPLOAD_BODY,

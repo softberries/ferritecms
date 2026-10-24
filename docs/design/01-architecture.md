@@ -255,6 +255,9 @@ backend    = "local"                   # "local" | "s3"
 # local:
 root         = "media"                 # default; relative to the data folder
 # local_shared = false                 # operator asserts the folder is a shared volume
+# either backend:
+# max_upload = "256MB"                 # M2a-2b: largest uploaded file, 1 byte..=1GiB; default 256MB
+# image_workers = 1                    # M2a-2b: image variant jobs at once per node, 1..=16; default 1
 # s3 (required when backend = "s3"):
 # [media.s3]
 # bucket = "my-site"                   # required
@@ -327,6 +330,16 @@ filters of one page share, from the render slot on; it must lie between
 
 `media.root` / `media.local_shared` are rejected with `backend = "s3"`, and `media.s3` with
 `backend = "local"`.
+
+**Uploads** (`[media] max_upload`, `image_workers`; M2a-2b P8/P9, `Config.uploads:
+UploadConfig`). Both keys are valid with either backend. `max_upload` is a size (0 is
+refused, above 1 GiB is refused: the S3 copy ceiling of 5 GB stays out of reach). `POST
+/api/v1/media` refuses a declared `Content-Length` above `max_upload` + 1 MiB before
+reading the body and cuts the file at `max_upload` while it streams (`413 too-large`);
+the route's own body limit is the ceiling, 1 GiB + 1 MiB (pre-flight F12). At most 8
+uploads stream at once per node (`ferrite_http::media::MEDIA_UPLOAD_SLOTS`), more are
+`503 busy`. `image_workers` bounds the `media.variants` jobs a node runs at once (Task 6);
+variants are made only for raster originals of at most 64 MiB.
 
 **Cluster mode** (`Config::effective_cluster_mode`, `validate_cluster`): `auto` resolves to
 `cluster` only when the database is Postgres **and** media is shareable between nodes (S3,

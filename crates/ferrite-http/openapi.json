@@ -2174,6 +2174,516 @@
         ]
       }
     },
+    "/api/v1/media": {
+      "get": {
+        "tags": [
+          "media"
+        ],
+        "operationId": "list_media",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1..=200; default 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "author",
+            "in": "query",
+            "description": "Only items uploaded by this user.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of media items (every status but trash), newest change first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation` (`limit`, `cursor`) or `malformed-query`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (needs `media:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "media"
+        ],
+        "operationId": "upload_media",
+        "requestBody": {
+          "description": "Parts `file` (required, at most `media.max_upload`), `title` (at most 200 characters) and `alt` (at most 1 000 characters), in any order; the body at most `media.max_upload` + 1 MiB",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Uploaded and published (`Location`, `ETag`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-body`: an unknown, unnamed or repeated part, or a malformed body",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`upload_media`, `media:write`), `csrf` or `password-reset-required`; checked before the body is read",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`too-large`: the declared body, the file (`errors[0].field` = `file`; an SVG at most 2 MiB) or a small part over its limit",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported-media-type`: not `multipart/form-data`, or a file of no accepted type (`errors[0].field` = `file`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: no `file` part or no file name, an SVG that cannot be made safe (`file`), `title`/`alt` too long or not UTF-8",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`busy`: every upload slot of this node is taken (`Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/media/{id}": {
+      "get": {
+        "tags": [
+          "media"
+        ],
+        "operationId": "get_media",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The media item (`ETag`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (needs `media:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "media"
+        ],
+        "operationId": "delete_media",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "`\"<version>\"`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "description": "`true`: delete a trashed item for good instead of trashing.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Trashed, or (`force=true`, trashed items only) deleted for good; the stored file stays until garbage collection"
+          },
+          "400": {
+            "description": "`malformed-header` (`If-Match`) or `malformed-query`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (capability or `media:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`precondition-failed`: stale version (`current`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: not trashed (`force`) or already trashed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`precondition-required`: no `If-Match`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "media"
+        ],
+        "operationId": "update_media",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "`\"<version>\"`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaPatchInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved (`ETag`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json` or `malformed-header` (`If-Match`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (capability or `media:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`precondition-failed`: stale version (`current`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: `title` or `alt` too long or with control characters, or the item is trashed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`precondition-required`: no `If-Match`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/menus": {
       "get": {
         "tags": [
@@ -7067,6 +7577,205 @@
           }
         }
       },
+      "MediaDto": {
+        "type": "object",
+        "description": "A media item (`GET`, and every write's result).",
+        "required": [
+          "id",
+          "title",
+          "alt",
+          "mime",
+          "bytes",
+          "original_name",
+          "url",
+          "variants",
+          "sanitized",
+          "status",
+          "author_id",
+          "created_at",
+          "updated_at",
+          "version"
+        ],
+        "properties": {
+          "alt": {
+            "type": "string",
+            "description": "Alternative text."
+          },
+          "author_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mime": {
+            "type": "string",
+            "description": "Decided from the content at upload, never from the client's claim."
+          },
+          "original_name": {
+            "type": "string",
+            "description": "The uploaded file's name (last path segment only)."
+          },
+          "sanitized": {
+            "type": "boolean",
+            "description": "The stored bytes are the SVG sanitiser's output."
+          },
+          "status": {
+            "type": "string",
+            "description": "`published` from the upload on; `trash` once trashed."
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "url": {
+            "type": "string",
+            "description": "Where the original is served."
+          },
+          "variants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MediaVariantDto"
+            },
+            "description": "The resized copies, by name (empty until they are made)."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What `ETag` carries and `If-Match` must send back."
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Set once the variants are made (raster images only)."
+          }
+        }
+      },
+      "MediaList": {
+        "type": "object",
+        "description": "`GET /media`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MediaDto"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last page."
+          }
+        }
+      },
+      "MediaPatchInput": {
+        "type": "object",
+        "description": "`PATCH /media/{id}`: the members sent are changed, the others kept. Unknown members\nare ignored.",
+        "properties": {
+          "alt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 1 000 characters."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 200 characters; blank keeps an empty title."
+          }
+        }
+      },
+      "MediaUpload": {
+        "type": "object",
+        "description": "`POST /media` (`multipart/form-data`; the schema only). Parts in any order; an\nunknown or repeated one is refused.",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "alt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 1 000 characters."
+          },
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "The file, streamed (at most `media.max_upload`; its part's file name is kept as\n`original_name`). Its type is decided from its content."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 200 characters; absent or blank: the file name without its extension."
+          }
+        }
+      },
+      "MediaVariantDto": {
+        "type": "object",
+        "description": "One resized copy of a media item.",
+        "required": [
+          "name",
+          "url",
+          "width",
+          "height",
+          "mime"
+        ],
+        "properties": {
+          "height": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "mime": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "The size's name (`thumbnail`, `medium`, `large`, or a theme's size)."
+          },
+          "url": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "MenuDto": {
         "type": "object",
         "description": "A menu with its entries in tree order (roots first, each followed by its children).",
@@ -8652,6 +9361,10 @@
     {
       "name": "content",
       "description": "Content items, their lifecycle and revisions"
+    },
+    {
+      "name": "media",
+      "description": "Media uploads and items"
     },
     {
       "name": "types",

@@ -31,6 +31,17 @@
 //! | 403 | `password-reset-required` | the account must change its password first |
 //! | 503 | `mail-unavailable` | the request needs outgoing mail and the site has no `[mail]` |
 //!
+//! A media upload's staging errors ([`UploadError`], `POST /media`):
+//!
+//! | Upload error | Status | Slug |
+//! |---|---|---|
+//! | `TooLarge { limit }` | 413 | `too-large` (`errors[0].field` = `file`) |
+//! | `Unsupported { mime }` | 415 | `unsupported-media-type` (`errors[0].field` = `file`) |
+//! | `Svg(_)` | 422 | `validation` (`errors[0].field` = `file`; fixed text per kind, never the SVG's own text) |
+//! | `Busy` | 503 | `busy` + `Retry-After: 5` |
+//! | `Body(_)` | 413 / 400 | `too-large` (over the route limit) / `malformed-body` |
+//! | `Media(_)`, `Task(_)` | 500 | `internal` |
+//!
 //! **Every 401 carries `WWW-Authenticate`** (RFC 9110 §11.6.1): `Bearer` unless the
 //! problem names another challenge ([`Problem::with_challenge`], e.g. `Bearer
 //! error="invalid_token"`). Bearer is the API's only HTTP authentication scheme; the
@@ -48,7 +59,11 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use ferrite_core::CoreError;
+use ferrite_media::svg::SvgError;
 use ferrite_store::StoreError;
+
+use super::multipart::body_error;
+use crate::media::UploadError;
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -392,6 +407,64 @@ impl From<CoreError> for Problem {
             }
             CoreError::Store(s) => Self::from(s),
         }
+    }
+}
+
+impl From<UploadError> for Problem {
+    fn from(e: UploadError) -> Self {
+        match e {
+            UploadError::TooLarge { limit } => {
+                let detail = format!("the file is larger than {limit} bytes");
+                Self::new(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "too-large",
+                    "Request too large",
+                    detail.clone(),
+                )
+                .with_error(Some("file"), detail)
+            }
+            UploadError::Unsupported { mime } => {
+                // `mime` is `sniff_mime`'s answer: a fixed type name, never input text.
+                let detail = format!("files of type {mime} are not accepted");
+                Self::new(
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "unsupported-media-type",
+                    "Unsupported media type",
+                    detail.clone(),
+                )
+                .with_error(Some("file"), detail)
+            }
+            UploadError::Svg(svg) => {
+                let detail = format!("the SVG could not be made safe: {}", svg_reason(&svg));
+                Self::validation(detail.clone()).with_error(Some("file"), detail)
+            }
+            UploadError::Busy => Self::busy(),
+            UploadError::Body(body) => body_error(body),
+            UploadError::Media(_) | UploadError::Task(_) => {
+                tracing::error!(error = %e, "media upload failed");
+                Self::internal()
+            }
+        }
+    }
+}
+
+/// Why an SVG was refused, as fixed text: never an entity name, offset or other part
+/// of the upload (Task 2 carry).
+fn svg_reason(e: &SvgError) -> &'static str {
+    match e {
+        SvgError::TooLarge => "it is larger than 2 MiB",
+        SvgError::NotUtf8 => "it is not UTF-8",
+        SvgError::NotXml(_) => "it is not well-formed XML",
+        SvgError::NotSvg => "its root is not an <svg> element in the SVG namespace",
+        SvgError::Doctype => {
+            "it has a DOCTYPE other than a standard SVG 1.0/1.1 one without an internal subset"
+        }
+        SvgError::UnknownEntity(_) => "it references an unknown entity",
+        SvgError::TooDeep => "it nests elements too deeply",
+        SvgError::TooManyElements => "it has too many elements",
+        SvgError::TooManyAttributes => "an element has too many attributes",
+        SvgError::ValueTooLong => "an attribute value is too long",
+        SvgError::TooManyUses => "it has too many or chained <use> elements",
     }
 }
 

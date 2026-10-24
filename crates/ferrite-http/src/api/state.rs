@@ -5,13 +5,13 @@ use std::sync::Arc;
 
 use axum::http::Uri;
 use ferrite_core::{
-    AuthService, ContentService, ContentTypeService, ExtensionAdmin, MenuService, OptionService,
-    RedirectService, TaxonomyService, UserService, mail::MailQueue,
+    AuthService, ContentService, ContentTypeService, ExtensionAdmin, MediaService, MenuService,
+    OptionService, RedirectService, TaxonomyService, UserService, mail::MailQueue,
 };
 use ferrite_media::MediaStore;
 use ferrite_store::Store;
 
-use crate::extensions::Installer;
+use crate::{extensions::Installer, media::Uploader};
 
 /// The inputs of [`ApiState::new`].
 pub struct ApiParts {
@@ -28,6 +28,11 @@ pub struct ApiParts {
     /// The node's one install pipeline: its compile slots bound the node (P8).
     pub installer: Arc<Installer>,
     pub media: Arc<MediaStore>,
+    pub media_service: Arc<MediaService>,
+    /// The node's one upload pipeline: its slots bound the node (M2a-2b P9).
+    pub uploader: Arc<Uploader>,
+    /// `media.max_upload`.
+    pub max_upload: u64,
     /// The node's mail queue (`[mail]` set), shared with the plugin host.
     pub mailer: Option<Arc<MailQueue>>,
     /// The site's URL (`site.url`).
@@ -53,6 +58,13 @@ pub struct ApiState {
     /// [`COMPILE_SLOTS`]: crate::extensions::COMPILE_SLOTS
     pub installer: Arc<Installer>,
     pub media: Arc<MediaStore>,
+    pub media_service: Arc<MediaService>,
+    /// Shared by every request on this node, so
+    /// [`MEDIA_UPLOAD_SLOTS`](crate::media::MEDIA_UPLOAD_SLOTS) bound the node.
+    pub uploader: Arc<Uploader>,
+    /// `media.max_upload`: the largest file `POST /media` takes (the body may be 1 MiB
+    /// more).
+    pub max_upload: u64,
     /// The node's mail queue: sends run in the background (`None`: no `[mail]`, the
     /// password reset is `503 mail-unavailable`).
     pub mailer: Option<Arc<MailQueue>>,
@@ -87,6 +99,9 @@ impl ApiState {
             extensions,
             installer,
             media,
+            media_service,
+            uploader,
+            max_upload,
             mailer,
             site_url,
             site_title,
@@ -105,6 +120,9 @@ impl ApiState {
             extensions,
             installer,
             media,
+            media_service,
+            uploader,
+            max_upload,
             mailer,
             site_url: site_url.trim_end_matches('/').to_owned(),
             site_title,
