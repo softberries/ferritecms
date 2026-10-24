@@ -1481,6 +1481,13 @@ fn plugin_widening_update_needs_approval() {
         let row = store.read().plugins().get("hello").await.unwrap().unwrap();
         assert_eq!(row.granted, granted_before);
     });
+    // `check` prints the same fingerprint for the same folder.
+    let checked = stdout(plugin_cmd(&site, &["check", "--dir", dir_arg(&v2)]));
+    let expected = checked
+        .lines()
+        .find_map(|l| l.strip_prefix("fingerprint: "))
+        .expect("fingerprint line")
+        .to_owned();
     // --yes approves exactly the report it printed.
     let out = stdout(plugin_cmd(
         &site,
@@ -1493,6 +1500,10 @@ fn plugin_widening_update_needs_approval() {
         .expect("fingerprint line")
         .to_owned();
     assert_eq!(fingerprint.len(), 64, "{fingerprint}");
+    assert_eq!(
+        fingerprint, expected,
+        "the printed report is the approved one"
+    );
     assert_eq!(
         stdout(plugin_cmd(&site, &["list"])),
         "hello  0.2.0  enabled\n"
@@ -1549,6 +1560,14 @@ fn plugin_remove_keeps_data_without_purge() {
         store.read().jobs().counts().await.unwrap()[&ferrite_domain::JobStatus::Queued]
     });
     assert_eq!(queued, 1, "the 30-day purge job");
+    let day = 24 * 3600;
+    let jobs = purge_jobs(&site);
+    assert_eq!(jobs.len(), 1, "{jobs:?}");
+    let ahead = jobs[0] - now_micros();
+    assert!(
+        (29 * day * 1_000_000..=31 * day * 1_000_000).contains(&ahead),
+        "due at the retention date: {ahead}"
+    );
 
     // A reinstall finds the data (and clears the marker); --purge deletes it at once.
     stdout(plugin_cmd(
@@ -1559,6 +1578,15 @@ fn plugin_remove_keeps_data_without_purge() {
     let out = stdout(plugin_cmd(&site, &["remove", "settings-probe", "--purge"]));
     assert!(out.contains("purged"), "{out}");
     assert!(!has(title) && !has(secret));
+    // R5: the marker stays, and the delete's own job runs again after the grace.
+    assert!(has(marker), "the deletion marker stays after --purge");
+    let jobs = purge_jobs(&site);
+    assert_eq!(jobs.len(), 2, "{jobs:?}");
+    assert!(
+        jobs.iter()
+            .any(|at| (60_000_000..=180_000_000).contains(&(at - now_micros()))),
+        "a second purge about 2 minutes out: {jobs:?}"
+    );
     // Setting values are never printed.
     assert!(!out.contains("SEKRET-VALUE"), "{out}");
 }
@@ -1702,4 +1730,64 @@ fn extension_commands_fail_while_the_lock_is_held() {
     });
     // Nothing was written while locked out; the commands work again afterwards.
     assert_eq!(stdout(plugin_cmd(&site, &["list"])), "");
+}
+
+fn now_micros() -> i64 {
+    let d = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    i64::try_from(d.as_micros()).unwrap()
+}
+
+/// `run_at` (unix micros) of every `plugin.purge` job, read from the SQLite file.
+fn purge_jobs(site: &Path) -> Vec<i64> {
+    tokio_rt().expect("runtime").block_on(async {
+        let mut conn =
+            SqliteConnection::connect(&format!("sqlite://{}", site.join("ferrite.db").display()))
+                .await
+                .unwrap();
+        let rows: Vec<(i64,)> =
+            sqlx::query_as("SELECT run_at FROM jobs WHERE kind = 'plugin.purge' ORDER BY run_at")
+                .fetch_all(&mut conn)
+                .await
+                .unwrap();
+        rows.into_iter().map(|r| r.0).collect()
+    })
+}
+
+#[test]
+fn plugin_install_refuses_bad_packages() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let site = tmp.path().join("site");
+    init_sqlite(&site);
+    let install = |dir: &Path| {
+        stderr_code(
+            plugin_cmd(&site, &["install", "--dir", dir_arg(dir), "--yes"]),
+            1,
+        )
+    };
+    // Two components.
+    let two = plugin_dir(tmp.path(), "two", "hello", "hello");
+    std::fs::write(two.join("other.wasm"), b"x").unwrap();
+    assert!(install(&two).contains("more than one"));
+    // An oversize component is refused before it is read.
+    let big = tmp.path().join("big");
+    std::fs::create_dir_all(&big).unwrap();
+    std::fs::copy(
+        two.join("ferrite-plugin.toml"),
+        big.join("ferrite-plugin.toml"),
+    )
+    .unwrap();
+    let f = std::fs::File::create(big.join("big.wasm")).unwrap();
+    f.set_len(ferrite_http::extensions::MAX_PLUGIN_BYTES + 1)
+        .unwrap();
+    assert!(install(&big).contains("larger than"));
+    // A component importing more than the manifest declares.
+    let mismatch = plugin_dir(tmp.path(), "mismatch", "hello", "reader");
+    install(&mismatch);
+    // A directory that does not exist.
+    assert!(install(&tmp.path().join("missing")).contains("cannot read"));
+    // Nothing was stored by any of them.
+    assert_eq!(stdout(plugin_cmd(&site, &["list"])), "");
+    assert!(!site.join("media/artifacts").exists());
 }

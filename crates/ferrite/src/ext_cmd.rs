@@ -354,7 +354,9 @@ fn read_package(dir: &Path) -> anyhow::Result<Package> {
         .with_context(|| format!("cannot read {}", manifest_path.display()))?;
     let mut components = Vec::new();
     for entry in std::fs::read_dir(dir).with_context(|| format!("cannot read {}", dir.display()))? {
-        let path = entry?.path();
+        let path = entry
+            .with_context(|| format!("cannot read {}", dir.display()))?
+            .path();
         if path.extension().and_then(|e| e.to_str()) == Some(WASM_EXT) && path.is_file() {
             components.push(path);
         }
