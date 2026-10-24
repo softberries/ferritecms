@@ -341,6 +341,11 @@ the public site sees (a draft's `post.saved` subject is not readable). The binar
 `PluginHost::dispatch_action`, which holds one loaded instance for the whole call
 (R13), bounded by fuel, memory and the action deadline; outcomes in 04 §6.
 `PluginHost::subscribers(hook)` lists the enabled loaded subscribers in priority order.
+**Actions are delivered at least once:** a job whose lease lapses (a stalled node) runs
+again on another node, and a call that failed after a side effect (a `meta.set`, a KV
+write) is retried, so an action handler must be idempotent (e.g. set a value rather than
+append, or key KV writes by the event's subject). Action jobs run at priority -1, below
+core jobs, so slow actions never hold up scheduled publishing.
 
 ## 5. WASI policy
 

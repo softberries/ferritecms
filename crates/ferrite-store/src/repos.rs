@@ -450,6 +450,11 @@ pub trait PluginRepo: Send + Sync {
     async fn is_enabled(&self, id: &str) -> Result<Option<bool>, StoreError>;
     /// Lists installed plugins.
     async fn list(&self) -> Result<Vec<InstalledPlugin>, StoreError>;
+    /// Names of the enabled plugins whose stored manifest has `hook` as a key of its
+    /// `hooks` object, in binary name order: who gets an action hook's job (M2a-2 P20).
+    /// Reads only `name`, `enabled` and the manifest's `hooks`; inside a `Tx` it reads
+    /// through it. A `hooks` value that is not an object subscribes to nothing.
+    async fn action_subscribers(&self, hook: &str) -> Result<Vec<String>, StoreError>;
     /// Fetches an installed plugin and, inside a `Tx`, locks its row until the `Tx`
     /// ends: Postgres `SELECT … FOR UPDATE` (other writers of the row wait), SQLite a
     /// plain read (the `Tx` already holds the single writer). Outside a `Tx` it is

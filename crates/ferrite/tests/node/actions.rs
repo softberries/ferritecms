@@ -152,12 +152,22 @@ async fn action_sees_only_public_items(db: Arc<TestDb>) {
             ferrite_domain::NodeId::new(),
             &[ferrite_core::jobs::PLUGIN_ACTION_KIND.to_owned()],
             10,
-            Duration::from_millis(1),
+            Duration::from_secs(60),
         )
         .await
         .unwrap();
-    // Claimed with a lease that lapses at once: the node reclaims them.
+    // Claimed only to learn the ids: released at once with the attempt refunded.
     assert_eq!(jobs.len(), 2, "{jobs:?}");
+    for job in &jobs {
+        let lease = job.lease().unwrap();
+        let released = store
+            .read()
+            .jobs()
+            .release(&lease, Duration::ZERO, false)
+            .await
+            .unwrap();
+        assert!(released);
+    }
     let job_of = |id: ferrite_domain::ContentId| {
         jobs.iter()
             .find(|j| j.payload["subject"] == id.to_string())
@@ -165,7 +175,6 @@ async fn action_sees_only_public_items(db: Arc<TestDb>) {
             .id
     };
     let (public_job, hidden_job) = (job_of(public.id), job_of(hidden.id));
-    tokio::time::sleep(Duration::from_millis(20)).await;
 
     let opts = NodeOptions {
         periodics: Some(Vec::new()),
@@ -184,6 +193,7 @@ async fn action_sees_only_public_items(db: Arc<TestDb>) {
     .await;
     let hidden = store.read().jobs().get(hidden_job).await.unwrap().unwrap();
     assert_eq!(hidden.status, JobStatus::Queued, "retried: {hidden:?}");
+    assert_eq!(hidden.attempts, 1, "one real attempt: {hidden:?}");
     let error = hidden.last_error.unwrap();
     assert!(error.contains("no post"), "{error}");
     node.shutdown().await.unwrap();
@@ -358,13 +368,22 @@ async fn action_survives_hot_swap(db: Arc<TestDb>) {
     assert_eq!(host.failures().len(), 1, "{:?}", host.failures());
 }
 
-/// The handler's outcomes (P29, F35): done for success, a hook the plugin does not
-/// handle (any more), and a missing or disabled row; retried for a plugin not loaded on
-/// this node yet, one disabled on this host only, and a failed call; an unreadable
-/// payload is permanent.
+/// The handler's outcomes (P29, F35, review m4): done for success, a hook neither the
+/// row nor the loaded plugin handles, and a missing or disabled row; retried for a
+/// plugin not loaded on this node yet, a loaded version without a hook the row lists,
+/// one disabled on this host only, and a failed call; an unreadable payload is
+/// permanent.
 async fn action_outcomes(db: Arc<TestDb>) {
     let store = db.shared_store();
-    plugin_row(&store, "meta-writer", 0x61, &["post.saved"], true).await;
+    // The row also lists `user.created`, which the loaded version does not handle.
+    plugin_row(
+        &store,
+        "meta-writer",
+        0x61,
+        &["post.saved", "user.created"],
+        true,
+    )
+    .await;
     plugin_row(&store, "elsewhere", 0x62, &["post.saved"], true).await;
     let services = Arc::new(InMemoryServices::new());
     let host = Arc::new(PluginHost::new(HostConfig::default(), services.clone()).unwrap());
@@ -391,8 +410,15 @@ async fn action_outcomes(db: Arc<TestDb>) {
         services.meta_get("p1", "seo.seen").await.as_deref(),
         Some("\"action\"")
     );
-    // An update dropped the hook: done (F35), nothing called.
-    assert!(run("meta-writer", "user.created").await.is_ok());
+    // Neither the row nor the loaded version handles the hook (an update dropped it):
+    // done (F35), nothing called.
+    assert!(run("meta-writer", "post.published").await.is_ok());
+    // The stored row lists the hook but this node still runs a version without it (the
+    // reload has not caught up): retried, not lost (review round 1, m4).
+    match run("meta-writer", "user.created").await {
+        Err(JobError::Retry(e)) => assert!(e.contains("not reloaded on this node yet"), "{e}"),
+        other => panic!("{other:?}"),
+    }
     // Not installed: dropped.
     assert!(run("gone", "post.saved").await.is_ok());
     // Enabled, but not (yet) loaded on this node: retried.

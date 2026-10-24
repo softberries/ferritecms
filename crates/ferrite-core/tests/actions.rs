@@ -8,11 +8,14 @@ use std::{sync::Arc, time::Duration};
 use ferrite_core::{
     Actor, ContentDraft, ContentService, CoreError, ExtensionService, NewAccount, PermalinkRules,
     UserService, actions,
-    jobs::{PLUGIN_ACTION_KIND, PLUGIN_ACTION_VERSION, PluginAction},
+    jobs::{
+        PLUGIN_ACTION_KIND, PLUGIN_ACTION_PRIORITY, PLUGIN_ACTION_VERSION, PUBLISH_DUE_KIND,
+        PluginAction,
+    },
 };
 use ferrite_domain::{
-    Artifact, ArtifactHash, ArtifactKind, DEFAULT_MAX_ATTEMPTS, InstalledPlugin, Job, NodeId, Role,
-    Timestamp,
+    Artifact, ArtifactHash, ArtifactKind, DEFAULT_MAX_ATTEMPTS, InstalledPlugin, Job, NewJob,
+    NodeId, Role, Timestamp,
 };
 use ferrite_store::Store;
 use ferrite_store_tests::{TestDb, backend_tests, fixtures::fixture_user};
@@ -115,6 +118,7 @@ pub async fn actions_enqueued_in_the_write_tx(db: &TestDb) {
     let job = &jobs[0];
     assert_eq!(job.max_attempts, DEFAULT_MAX_ATTEMPTS);
     assert_eq!(job.unique_key, None);
+    assert_eq!(job.priority, PLUGIN_ACTION_PRIORITY);
     let id = item.id.to_string();
     assert_eq!(
         job.payload,
@@ -244,4 +248,40 @@ pub async fn user_created_enqueued(db: &TestDb) {
     assert!(take_actions(store.as_ref()).await.is_empty());
 }
 
-backend_tests!(actions_enqueued_in_the_write_tx, user_created_enqueued);
+/// Review round 1 (m2): action jobs rank below core jobs, so a claim takes a core job
+/// first even when it was enqueued later (claims order by priority, then `run_at`).
+pub async fn action_jobs_claim_after_core_jobs(db: &TestDb) {
+    let store = db.shared_store();
+    install(store.clone(), "sub", 6, &["post.saved"], true).await;
+    let user = fixture_user(store.as_ref()).await;
+    let actor = Actor::new(user.id, Role::Admin);
+    let svc = ContentService::new(store.clone(), Arc::new(PermalinkRules::default()));
+    svc.create(&actor, draft("first")).await.unwrap();
+    let core = store
+        .read()
+        .jobs()
+        .enqueue(&NewJob::new(PUBLISH_DUE_KIND, json!({"v": 1})))
+        .await
+        .unwrap()
+        .unwrap();
+    let kinds = [PLUGIN_ACTION_KIND.to_owned(), PUBLISH_DUE_KIND.to_owned()];
+    let claim = || async {
+        store
+            .read()
+            .jobs()
+            .claim(NodeId::new(), &kinds, 1, Duration::from_secs(60))
+            .await
+            .unwrap()
+    };
+    let first = claim().await;
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].id, core, "{first:?}");
+    let second = claim().await;
+    assert_eq!(second[0].kind, PLUGIN_ACTION_KIND, "{second:?}");
+}
+
+backend_tests!(
+    actions_enqueued_in_the_write_tx,
+    user_created_enqueued,
+    action_jobs_claim_after_core_jobs
+);

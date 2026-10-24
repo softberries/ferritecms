@@ -175,8 +175,9 @@ impl JobHandler for PluginPurgeSweepHandler {
 ///
 /// - success, or the plugin no longer handles the hook (an update dropped it, F35):
 ///   done;
-/// - not loaded on this node (the reload has not caught up) or disabled on this host
-///   only (the shared disable follows, F35): retried;
+/// - not loaded on this node, or loaded without the hook while the stored row lists it
+///   (the reload has not caught up), or disabled on this host only (the shared disable
+///   follows, F35): retried;
 /// - the call failed: retried (backoff, then dead after the job's attempts).
 ///
 /// How many run at once on a node is bounded by the runner's workers
@@ -200,23 +201,28 @@ impl JobHandler for PluginActionHandler {
         let action: PluginAction = serde_json::from_value(job.payload.clone())
             .map_err(|e| JobError::Permanent(format!("invalid payload: {e}")))?;
         let (plugin, hook) = (action.plugin.as_str(), action.hook.as_str());
-        let enabled = self
+        let row = self
             .store
             .read()
             .plugins()
-            .is_enabled(plugin)
+            .get(plugin)
             .await
             .map_err(|e| JobError::Retry(e.to_string()))?;
-        if enabled != Some(true) {
+        let Some(row) = row.filter(|r| r.enabled) else {
             tracing::info!(plugin, hook, "plugin removed or disabled; action dropped");
             return Ok(());
-        }
+        };
         let ev = ActionEvent {
             subject: action.subject,
             payload: action.payload,
         };
         match self.host.dispatch_action(plugin, hook, ev).await {
             Ok(()) => Ok(()),
+            // The stored version subscribes but the loaded one does not: this node has
+            // not reloaded the update yet (review round 1, m4).
+            Err(PluginError::NotSubscribed { .. }) if manifest_lists(&row.manifest, hook) => {
+                Err(JobError::Retry("not reloaded on this node yet".to_owned()))
+            }
             Err(PluginError::NotSubscribed { .. }) => {
                 tracing::info!(plugin, hook, "plugin does not handle the action; dropped");
                 Ok(())
@@ -239,6 +245,14 @@ impl JobHandler for PluginActionHandler {
             ) => Err(JobError::Retry(e.to_string())),
         }
     }
+}
+
+/// Whether a stored manifest (the TOML table as JSON) has `hook` in its `hooks` table.
+fn manifest_lists(manifest: &serde_json::Value, hook: &str) -> bool {
+    manifest
+        .get("hooks")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|hooks| hooks.contains_key(hook))
 }
 
 /// The core handlers: scheduled publishing on `content`, the plugin purge and its

@@ -126,8 +126,13 @@ pub struct PluginAction {
     pub payload: Value,
 }
 
+/// Priority of [`PLUGIN_ACTION_KIND`] jobs: below the default (0) of the core and
+/// built-in jobs, so a burst of slow actions does not delay scheduled publishing or the
+/// prune jobs on a busy runner (claims take higher priorities first).
+pub const PLUGIN_ACTION_PRIORITY: i32 = -1;
+
 /// The job for `action`: due now, no unique key (one job per plugin and event),
-/// default attempts.
+/// [`PLUGIN_ACTION_PRIORITY`], default attempts.
 pub fn plugin_action_job(action: &PluginAction) -> NewJob {
     let mut payload = Map::new();
     payload.insert("v".into(), Value::from(action.v));
@@ -138,7 +143,9 @@ pub fn plugin_action_job(action: &PluginAction) -> NewJob {
         action.subject.clone().map_or(Value::Null, Value::String),
     );
     payload.insert("payload".into(), action.payload.clone());
-    NewJob::new(PLUGIN_ACTION_KIND, Value::Object(payload))
+    let mut job = NewJob::new(PLUGIN_ACTION_KIND, Value::Object(payload));
+    job.priority = PLUGIN_ACTION_PRIORITY;
+    job
 }
 
 /// `at + d`; `at` itself if that overflowed (unreachable for the durations used here,
@@ -194,7 +201,7 @@ mod tests {
         assert_eq!(job.kind, "plugin.action");
         assert_eq!(job.unique_key, None);
         assert_eq!(job.run_at, None);
-        assert_eq!(job.priority, 0);
+        assert_eq!(job.priority, -1);
         assert_eq!(job.max_attempts, ferrite_domain::DEFAULT_MAX_ATTEMPTS);
         assert_eq!(job.payload, serde_json::to_value(&typed).unwrap());
         let back: PluginAction = serde_json::from_value(job.payload).unwrap();

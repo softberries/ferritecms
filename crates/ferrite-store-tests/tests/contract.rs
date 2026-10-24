@@ -127,6 +127,7 @@ backend_tests!(
     media_variants_backfill,
     media_lookup_uses_indexes,
     plugins_upsert_list_enable,
+    plugins_action_subscribers,
     plugin_kv_crud_and_usage,
     plugin_kv_delete_all_in_batches,
     themes_single_active,

@@ -458,6 +458,73 @@ pub async fn plugins_upsert_list_enable(db: &TestDb) {
     assert_eq!(plugins.is_enabled("beta").await.unwrap(), None);
 }
 
+/// `action_subscribers`: enabled rows whose manifest `hooks` object has the hook as a
+/// key (dotted names matched whole, never as a JSON path), binary name order; read
+/// through a `Tx` it sees the `Tx`'s own writes.
+pub async fn plugins_action_subscribers(db: &TestDb) {
+    let store = db.store();
+    put_artifact(store, &artifact('a', ArtifactKind::Plugin)).await;
+    let with_hooks = |name: &str, hooks: serde_json::Value, enabled: bool| InstalledPlugin {
+        manifest: json!({"plugin": {"name": name}, "hooks": hooks}),
+        enabled,
+        ..plugin(name, 'a')
+    };
+    let plugins = store.read().plugins();
+    for p in [
+        with_hooks("b-sub", json!({"post.saved": 10, "render.head": 5}), true),
+        with_hooks("A-sub", json!({"post.saved": 1}), true),
+        with_hooks("off", json!({"post.saved": 10}), false),
+        // A nested `post` object must not match `post.saved` as a path.
+        with_hooks("nested", json!({"post": {"saved": 1}}), true),
+        // Not an object: subscribes to nothing.
+        with_hooks("array", json!(["post.saved"]), true),
+        with_hooks("quoted", json!({"we\"ird.hook": 1}), true),
+        plugin("plain", 'a'),
+    ] {
+        plugins.upsert(&p).await.unwrap();
+    }
+    assert_eq!(
+        plugins.action_subscribers("post.saved").await.unwrap(),
+        ["A-sub", "b-sub"]
+    );
+    assert_eq!(
+        plugins.action_subscribers("render.head").await.unwrap(),
+        ["b-sub"]
+    );
+    assert_eq!(
+        plugins.action_subscribers("we\"ird.hook").await.unwrap(),
+        ["quoted"]
+    );
+    // `nested` has the key `post` itself (not `post.saved`, checked above).
+    assert_eq!(
+        plugins.action_subscribers("post").await.unwrap(),
+        ["nested"]
+    );
+    assert!(
+        plugins
+            .action_subscribers("user.created")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        plugins.action_subscribers("a\0b").await,
+        Err(StoreError::Invalid(_))
+    ));
+
+    let tx = store.begin().await.unwrap();
+    tx.plugins().set_enabled("off", true, None).await.unwrap();
+    assert_eq!(
+        tx.plugins().action_subscribers("post.saved").await.unwrap(),
+        ["A-sub", "b-sub", "off"]
+    );
+    tx.rollback().await.unwrap();
+    assert_eq!(
+        plugins.action_subscribers("post.saved").await.unwrap(),
+        ["A-sub", "b-sub"]
+    );
+}
+
 pub async fn plugin_kv_crud_and_usage(db: &TestDb) {
     let kv = db.store().read().plugin_kv();
     assert!(kv.get("p", "k").await.unwrap().is_none());

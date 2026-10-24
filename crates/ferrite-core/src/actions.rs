@@ -27,8 +27,9 @@ pub const POST_PUBLISHED: &str = "post.published";
 /// A user account was created.
 pub const USER_CREATED: &str = "user.created";
 
-/// Enqueues `hook` for every enabled plugin row whose `manifest.hooks` names it, in
-/// name order, with `repos` (the write's `Tx`); returns how many jobs were enqueued.
+/// Enqueues `hook` for every enabled plugin whose stored manifest subscribes to it
+/// ([`PluginRepo::action_subscribers`](ferrite_store::PluginRepo::action_subscribers)),
+/// in name order, with `repos` (the write's `Tx`); returns how many jobs were enqueued.
 /// Rows are read in the same `Tx`, so a plugin enabled or disabled concurrently is
 /// either seen or not; the handler re-checks the row when the job runs (P29).
 pub async fn enqueue(
@@ -38,13 +39,10 @@ pub async fn enqueue(
     payload: Value,
 ) -> Result<u32, CoreError> {
     let mut enqueued = 0;
-    for plugin in repos.plugins().list().await? {
-        if !plugin.enabled || !subscribes(&plugin.manifest, hook) {
-            continue;
-        }
+    for plugin in repos.plugins().action_subscribers(hook).await? {
         let action = PluginAction {
             v: PLUGIN_ACTION_VERSION,
-            plugin: plugin.name,
+            plugin,
             hook: hook.to_owned(),
             subject: subject.clone(),
             payload: payload.clone(),
@@ -53,27 +51,4 @@ pub async fn enqueue(
         enqueued += 1;
     }
     Ok(enqueued)
-}
-
-/// Whether the stored manifest JSON (the TOML table as JSON) has `hook` in `[hooks]`.
-fn subscribes(manifest: &Value, hook: &str) -> bool {
-    manifest
-        .get("hooks")
-        .and_then(Value::as_object)
-        .is_some_and(|hooks| hooks.contains_key(hook))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn subscribes_reads_the_hooks_table() {
-        let m = json!({"plugin": {"name": "x"}, "hooks": {"post.saved": 10}});
-        assert!(subscribes(&m, POST_SAVED));
-        assert!(!subscribes(&m, POST_PUBLISHED));
-        assert!(!subscribes(&json!({"name": "x"}), POST_SAVED));
-        assert!(!subscribes(&json!({"hooks": ["post.saved"]}), POST_SAVED));
-    }
 }

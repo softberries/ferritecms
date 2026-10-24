@@ -262,6 +262,22 @@ impl PluginRepo for SqliteRepos {
         rows.iter().map(codec::plugin).collect()
     }
 
+    async fn action_subscribers(&self, hook: &str) -> Result<Vec<String>, StoreError> {
+        validate_text("hook", hook)?;
+        // `json_each` compares the key as text, so hook names with dots need no quoting.
+        let rows = run!(&self.reader, |e| sqlx::query(
+            "SELECT name FROM plugins WHERE enabled = 1 \
+             AND json_type(manifest, '$.hooks') = 'object' \
+             AND EXISTS (SELECT 1 FROM json_each(manifest, '$.hooks') WHERE key = ?) \
+             ORDER BY name"
+        )
+        .bind(hook)
+        .fetch_all(e))?;
+        rows.iter()
+            .map(|r| r.try_get::<String, _>("name").map_err(crate::map_db_err))
+            .collect()
+    }
+
     async fn set_enabled(
         &self,
         id: &str,

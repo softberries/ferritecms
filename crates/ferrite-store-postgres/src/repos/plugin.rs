@@ -270,6 +270,21 @@ impl PluginRepo for PgRepos {
         rows.iter().map(codec::plugin).collect()
     }
 
+    async fn action_subscribers(&self, hook: &str) -> Result<Vec<String>, StoreError> {
+        validate_text("hook", hook)?;
+        let rows = run!(&self.exec, |e| sqlx::query(
+            "SELECT name FROM plugins WHERE enabled \
+             AND jsonb_typeof(manifest -> 'hooks') = 'object' \
+             AND jsonb_exists(manifest -> 'hooks', $1) \
+             ORDER BY name COLLATE \"C\""
+        )
+        .bind(hook)
+        .fetch_all(e))?;
+        rows.iter()
+            .map(|r| r.try_get::<String, _>("name").map_err(map_db_err))
+            .collect()
+    }
+
     async fn set_enabled(
         &self,
         id: &str,
