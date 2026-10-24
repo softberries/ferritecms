@@ -45,6 +45,21 @@ async fn head(site: &Site, item: Option<&PageItem>, req: &PluginRequest) -> (Str
     (html, trace)
 }
 
+/// `site` with a host whose render deadline is 5 s, for tests that are not about
+/// deadlines but assert a call's success (or its trace): a slow first store read under
+/// a loaded full test run must not turn into a deadline failure (final review I3).
+/// Call it before installing or loading plugins.
+fn with_generous_deadlines(mut site: Site) -> Site {
+    let config = ferrite_plugin_host::HostConfig {
+        render_deadline: std::time::Duration::from_secs(5),
+        ..ferrite_plugin_host::HostConfig::default()
+    };
+    site.host = std::sync::Arc::new(
+        ferrite_plugin_host::PluginHost::new(config, site.services.clone()).expect("host"),
+    );
+    site
+}
+
 fn req_for(item: &PageItem) -> PluginRequest {
     PluginRequest::public(&item.url, "en", Some(item.item.id))
 }
@@ -387,6 +402,7 @@ async fn preview_shows_only_the_previewed_item(site: Site) -> Site {
 }
 
 async fn plugin_reads_reach_the_trace(site: Site) -> Site {
+    let site = with_generous_deadlines(site);
     let author = site.user("ada", Role::Author).await;
     let id = site
         .post(
@@ -414,6 +430,11 @@ async fn plugin_reads_reach_the_trace(site: Site) -> Site {
 
     let item = public_item(&site, id).await;
     let (html, trace) = head(&site, Some(&item), &req_for(&item)).await;
+    assert!(
+        site.host.failures().is_empty(),
+        "{:?}",
+        site.host.failures()
+    );
     assert_eq!(meta_value(&html, "reader-current"), Some("Hello"));
     assert_eq!(
         meta_value(&html, "reader-meta"),
@@ -629,7 +650,15 @@ async fn meta_writes_reach_visible_items_only(site: Site) -> Site {
 /// Cancel-safety: a `meta.set` whose future is dropped at any point (the host's hard
 /// deadline, a client disconnect) either wrote the value and its `invalidate` event
 /// or neither (one short `Tx`; a dropped `Tx` rolls back).
+///
+/// Deterministic (final review I2): attempt `k` polls the write by hand at most `k`
+/// times and then drops it, for `k = 1, 2, …` until a write completes, so every await
+/// point is a drop point once. Between polls the test sleeps briefly so the store's
+/// worker can make progress; that only decides how far a poll gets, never whether the
+/// write is dropped.
 async fn dropped_meta_write_is_all_or_nothing(site: Site) -> Site {
+    use std::{future::Future, task::Poll};
+
     let s = site.services.clone();
     let author = site.user("ada", Role::Author).await;
     let id = site
@@ -641,40 +670,51 @@ async fn dropped_meta_write_is_all_or_nothing(site: Site) -> Site {
             Some(-HOUR),
         )
         .await;
+    let subject = id.to_string();
     let (mut completed, mut dropped) = (false, 0);
-    for step in 0..400u64 {
-        let key = format!("seo.k{step}");
+    for k in 1..=1_000usize {
+        let key = format!("seo.k{k}");
         let before = site.store.read().events().max_seq().await.unwrap();
-        let write = tokio::time::timeout(
-            std::time::Duration::from_micros(step * 25),
-            s.meta_set(&id.to_string(), &key, "1"),
-        )
-        .await;
-        // Let a dropped `Tx` finish its rollback before reading.
+        let mut write = Box::pin(s.meta_set(&subject, &key, "1"));
+        let mut result = None;
+        for _ in 0..k {
+            match std::future::poll_fn(|cx| Poll::Ready(write.as_mut().poll(cx))).await {
+                Poll::Ready(r) => {
+                    result = Some(r);
+                    break;
+                }
+                Poll::Pending => tokio::time::sleep(std::time::Duration::from_millis(1)).await,
+            }
+        }
+        drop(write);
+        // A dropped `Tx` rolls back (or its commit lands) before the writer serves the
+        // next transaction (SQLite has one writer); on Postgres the pause covers it.
+        site.store.begin().await.unwrap().rollback().await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         let stored = site.store.read().meta().get(id, &key).await.unwrap();
         let events = site.store.read().events().since(before, 10).await.unwrap();
-        match &write {
-            Ok(result) => {
-                assert_eq!(result, &Ok(()), "step {step}");
-                assert_eq!(stored, Some(json!(1)), "step {step}");
-                assert_eq!(events.len(), 1, "step {step}");
+        match result {
+            Some(result) => {
+                assert_eq!(result, Ok(()), "k {k}");
+                assert_eq!(stored, Some(json!(1)), "k {k}");
+                assert_eq!(events.len(), 1, "k {k}");
                 completed = true;
                 break;
             }
             // Dropped: the value and its event both landed (the commit had gone out),
             // or neither did.
-            Err(_) => {
+            None => {
                 dropped += 1;
                 assert_eq!(
                     usize::from(stored.is_some()),
                     events.len(),
-                    "step {step}: half-done write"
+                    "k {k}: half-done write"
                 );
             }
         }
     }
-    assert!(completed, "the write never finished within the steps");
+    assert!(completed, "the write never finished within 1000 polls");
+    // The write awaits the store, so its first poll is always pending.
     assert!(dropped > 0, "no write was dropped mid-way");
     site
 }
@@ -733,6 +773,9 @@ async fn render_budget_bounds_the_head(site: Site) -> Site {
 /// A store error that a plugin read swallows (the plugin still succeeds) marks the
 /// page volatile, so a transient failure is not cached for long (final review I2).
 async fn plugin_read_errors_are_volatile(site: Site) -> Site {
+    // Final review I3: the assertions need the reader's call to succeed, so a slow
+    // first read must not be a deadline failure; a failure names its real cause.
+    let site = with_generous_deadlines(site);
     let author = site.user("ada", Role::Author).await;
     site.post(
         &author,
@@ -746,11 +789,21 @@ async fn plugin_read_errors_are_volatile(site: Site) -> Site {
     site.load().await;
     let req = PluginRequest::public("/", "en", None);
     let (_, trace) = head(&site, None, &req).await;
+    assert!(
+        site.host.failures().is_empty(),
+        "{:?}",
+        site.host.failures()
+    );
     assert!(!trace.volatile);
 
     site.store.close().await;
     // No item: only the plugin's `list_posts` and `options.get` touch the store.
     let (html, trace) = head(&site, None, &req).await;
+    assert!(
+        site.host.failures().is_empty(),
+        "{:?}",
+        site.host.failures()
+    );
     assert_eq!(meta_value(&html, "reader-list"), Some(""), "{html}");
     assert!(trace.volatile);
     site
@@ -759,6 +812,7 @@ async fn plugin_read_errors_are_volatile(site: Site) -> Site {
 /// A failed `seo.description` read falls back to the excerpt and marks the page
 /// volatile (final review I2).
 async fn seo_read_error_is_volatile(site: Site) -> Site {
+    let site = with_generous_deadlines(site);
     let author = site.user("ada", Role::Author).await;
     let id = site
         .post(
@@ -773,6 +827,11 @@ async fn seo_read_error_is_volatile(site: Site) -> Site {
     site.load().await;
     let item = public_item(&site, id).await;
     let (_, trace) = head(&site, Some(&item), &req_for(&item)).await;
+    assert!(
+        site.host.failures().is_empty(),
+        "{:?}",
+        site.host.failures()
+    );
     assert!(!trace.volatile);
 
     site.store.close().await;
