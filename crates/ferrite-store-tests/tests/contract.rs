@@ -177,6 +177,7 @@ backend_tests!(
     jobs_unique_key_dedupes_in_any_status,
     jobs_claim_respects_run_at_priority_and_kinds,
     jobs_expired_lease_is_reclaimed,
+    jobs_claim_orders_queued_and_expired_leases_together,
     jobs_expired_lease_at_max_attempts_goes_dead,
     jobs_stale_lease_holder_cannot_write,
     jobs_fail_backoff_then_dead,

@@ -699,3 +699,73 @@ pub async fn jobs_prune_in_batches(db: &TestDb) {
     let counts = jobs.counts().await.unwrap();
     assert_eq!(counts.values().sum::<u64>(), 0);
 }
+
+/// Due queued jobs and expired leases compete in one ordering (`priority DESC, run_at,
+/// id`) under one LIMIT across both branches, never per branch: limits 1, 2 and 3 claim
+/// a prefix of `[queued p9 (older run_at), expired lease p9, queued p1]`; a job not yet
+/// due is never claimed.
+pub async fn jobs_claim_orders_queued_and_expired_leases_together(db: &TestDb) {
+    let jobs = db.store().read().jobs();
+    let (a, b) = (NodeId::new(), NodeId::new());
+    let now = Timestamp::now();
+    let hour = Duration::from_secs(3600);
+    let past = Timestamp::from_micros(now.as_micros() - 3_600_000_000).unwrap();
+    let mut leases = Vec::new();
+    for limit in 1..=3u32 {
+        let kind = format!("race{limit}");
+        let mut lease = job(&kind);
+        lease.priority = 9;
+        let id = enqueue(jobs, &lease).await;
+        let got = jobs
+            .claim(a, &kinds(&[&kind]), 1, Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert_eq!(got.iter().map(|j| j.id).collect::<Vec<_>>(), [id]);
+        leases.push(id);
+    }
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    for (limit, lease) in (1..=3u32).zip(leases) {
+        let kind = format!("race{limit}");
+        let mut older = job(&kind);
+        older.priority = 9;
+        older.run_at = Some(past);
+        let older = enqueue(jobs, &older).await;
+        let mut low = job(&kind);
+        low.priority = 1;
+        let low = enqueue(jobs, &low).await;
+        let mut future = job(&kind);
+        future.priority = 99;
+        future.run_at = Some(plus(now, hour));
+        let future = enqueue(jobs, &future).await;
+
+        let claimed = jobs.claim(b, &kinds(&[&kind]), limit, LEASE).await.unwrap();
+        let order = [older, lease, low];
+        assert_eq!(
+            claimed.iter().map(|j| j.id).collect::<Vec<_>>(),
+            order[..limit as usize],
+            "limit {limit}"
+        );
+        assert!(claimed.iter().all(|j| j.locked_by == Some(b)));
+        for id in &order[limit as usize..] {
+            let left = get(jobs, *id).await;
+            let expected = if *id == lease {
+                JobStatus::Running
+            } else {
+                JobStatus::Queued
+            };
+            assert_eq!(left.status, expected, "limit {limit}");
+            assert_ne!(left.locked_by, Some(b));
+        }
+        if limit >= 2 {
+            assert_eq!(get(jobs, lease).await.attempts, 2);
+        }
+        assert_eq!(get(jobs, future).await.status, JobStatus::Queued);
+        assert!(
+            jobs.claim(b, &kinds(&[&kind]), 10, LEASE)
+                .await
+                .unwrap()
+                .iter()
+                .all(|j| j.id != future)
+        );
+    }
+}

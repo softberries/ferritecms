@@ -62,6 +62,15 @@ pub(crate) fn claim_sql() -> String {
     )
 }
 
+/// Prune of finished jobs: a range on `jobs_finished_idx` (pinned as in
+/// [`PRECHECK_SQL`]; without statistics `jobs_status_created_idx` would win and walk every
+/// done row) bounded by the later cut-off, then the per-status cut-offs. Binds
+/// done_before, dead_before, limit.
+pub(crate) const PRUNE_SQL: &str = "DELETE FROM jobs WHERE rowid IN (SELECT rowid FROM jobs \
+     INDEXED BY jobs_finished_idx WHERE finished_at < max(?1, ?2) \
+     AND ((status = 'done' AND finished_at < ?1) OR (status = 'dead' AND finished_at < ?2)) \
+     LIMIT ?3)";
+
 fn micros(now: Timestamp, d: Duration, what: &str, positive: bool) -> Result<i64, StoreError> {
     let d = check_job_duration(what, d, positive)?;
     Ok(now.as_micros().saturating_add(d))
@@ -262,15 +271,11 @@ impl JobRepo for SqliteRepos {
         limit: u32,
     ) -> Result<u64, StoreError> {
         let limit = check_prune_limit(limit)?;
-        run!(&self.writer, |e| sqlx::query(
-            "DELETE FROM jobs WHERE rowid IN (SELECT rowid FROM jobs \
-             WHERE (status = 'done' AND finished_at < ?) \
-             OR (status = 'dead' AND finished_at < ?) LIMIT ?)"
-        )
-        .bind(done_before.as_micros())
-        .bind(dead_before.as_micros())
-        .bind(limit)
-        .execute(e))
+        run!(&self.writer, |e| sqlx::query(PRUNE_SQL)
+            .bind(done_before.as_micros())
+            .bind(dead_before.as_micros())
+            .bind(limit)
+            .execute(e))
         .map(|done| done.rows_affected())
     }
 }
@@ -333,6 +338,7 @@ mod tests {
             }
             let pre = plan(&store, PRECHECK_SQL, &["now", "kinds", "now", "kinds"]).await;
             let reaper = plan(&store, REAPER_SQL, &["now", "now", "kinds"]).await;
+            let prune = plan(&store, PRUNE_SQL, &["now", "now", "now"]).await;
             let claim = plan(
                 &store,
                 &claim,
@@ -340,14 +346,15 @@ mod tests {
             )
             .await;
             eprintln!(
-                "analyzed={analyzed}\n-- precheck\n{pre}\n-- reaper\n{reaper}\n-- claim\n{claim}"
+                "analyzed={analyzed}\n-- precheck\n{pre}\n-- reaper\n{reaper}\n-- claim\n{claim}\n-- prune\n{prune}"
             );
             for (name, plan) in [("precheck", &pre), ("claim", &claim)] {
                 assert!(plan.contains("jobs_due_idx"), "{name}: {plan}");
                 assert!(plan.contains("jobs_lease_idx"), "{name}: {plan}");
             }
             assert!(reaper.contains("jobs_lease_idx"), "reaper: {reaper}");
-            for plan in [&pre, &reaper, &claim] {
+            assert!(prune.contains("jobs_finished_idx"), "prune: {prune}");
+            for plan in [&pre, &reaper, &claim, &prune] {
                 assert!(!plan.contains("SCAN jobs"), "{plan}");
             }
         }

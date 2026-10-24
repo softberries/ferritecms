@@ -6,7 +6,7 @@ use ferrite_domain::{
     Comment, CommentId, CommentQuery, CommentStatus, ContentId, NewUser, Role, Timestamp, User,
     UserId, UserStatus,
 };
-use ferrite_store::{AUDIT_CURSOR_TAG, Store, StoreError, encode_audit_cursor};
+use ferrite_store::{AUDIT_CURSOR_TAG, COMMENT_CURSOR_TAG, Store, StoreError, encode_audit_cursor};
 use uuid::Uuid;
 
 use crate::{
@@ -263,6 +263,19 @@ pub async fn comment_list_filters_and_pages(db: &TestDb) {
         "garbage!".to_string(),
         encode_audit_cursor(Timestamp::now(), Uuid::now_v7()),
         ferrite_domain::Cursor::encode(AUDIT_CURSOR_TAG, &serde_json::json!(1), Uuid::now_v7()),
+        // The comment tag with a key that is not a timestamp.
+        ferrite_domain::Cursor::encode(COMMENT_CURSOR_TAG, &serde_json::json!("x"), Uuid::now_v7()),
+        ferrite_domain::Cursor::encode(COMMENT_CURSOR_TAG, &serde_json::json!(1.5), Uuid::now_v7()),
+        ferrite_domain::Cursor::encode(
+            COMMENT_CURSOR_TAG,
+            &serde_json::json!(i64::MIN),
+            Uuid::now_v7(),
+        ),
+        ferrite_domain::Cursor::encode(
+            COMMENT_CURSOR_TAG,
+            &serde_json::Value::Null,
+            Uuid::now_v7(),
+        ),
     ] {
         assert!(
             is_invalid(
