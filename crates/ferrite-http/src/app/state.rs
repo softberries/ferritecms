@@ -12,7 +12,7 @@ use arc_swap::{ArcSwap, ArcSwapOption};
 use ferrite_cache::PageCache;
 use ferrite_core::{
     AuthService, CoreError, DepKeys, PermalinkRules, RedirectService, SiteReader,
-    events::option_key,
+    comments::CommentService, events::option_key,
 };
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::PluginHost;
@@ -177,6 +177,9 @@ pub struct AppState {
     /// Where page responses are recorded as `request.served` events (P21); `None`
     /// (no [`with_served`](Self::with_served)): nothing is recorded.
     pub(crate) served: Option<Arc<ServedBuffer>>,
+    /// Takes theme-form comments (`POST /_comment`, P12); `None` (no
+    /// [`with_comments`](Self::with_comments)): the form answers `503`.
+    pub(crate) comments: Option<Arc<CommentService>>,
     renders: AtomicU64,
 }
 
@@ -186,6 +189,7 @@ impl AppState {
             redirects: Arc::new(RedirectService::new(parts.store.clone())),
             auth: None,
             served: None,
+            comments: None,
             renderer: Renderer::new(),
             render_slots: Arc::new(Semaphore::new(
                 parts
@@ -220,6 +224,13 @@ impl AppState {
     /// Every public page response is recorded into `served` (`request.served`, P21).
     pub fn with_served(mut self, served: Arc<ServedBuffer>) -> Self {
         self.served = Some(served);
+        self
+    }
+
+    /// Theme-form comments (`POST /_comment`) go to `comments`, the node's one
+    /// service (shared with the API's submit, P12).
+    pub fn with_comments(mut self, comments: Arc<CommentService>) -> Self {
+        self.comments = Some(comments);
         self
     }
 

@@ -14,6 +14,7 @@ pub const RESERVED: &[&str] = &[
     "_theme",
     "_preview",
     "_p",
+    "_comment",
     "sitemap.xml",
     "robots.txt",
     "healthz",

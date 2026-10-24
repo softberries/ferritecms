@@ -401,6 +401,9 @@ async fn boot(
     );
     // `request.served` events of this node's page responses (P21).
     let served = Arc::new(ServedBuffer::new(store.clone(), host.clone()));
+    // One comment service per node: the API submit and moderation, and the theme form
+    // (`POST /_comment`, P12).
+    let comments = Arc::new(CommentService::new(store.clone(), auth.clone()));
     let state = Arc::new(
         AppState::new(AppParts {
             store: store.clone(),
@@ -414,7 +417,8 @@ async fn boot(
             migrations_ok: true,
         })
         .with_auth(auth.clone())
-        .with_served(served.clone()),
+        .with_served(served.clone())
+        .with_comments(comments.clone()),
     );
 
     let status = Arc::new(NodeStatus::default());
@@ -439,8 +443,6 @@ async fn boot(
         Installer::new(store.clone(), media.clone(), host_config(&config.plugins))
             .context("cannot start the plugin installer")?,
     );
-    // One comment service per node: the API submit and moderation (Task 8 adds the form).
-    let comments = Arc::new(CommentService::new(store.clone(), auth.clone()));
     let api = Arc::new(
         ApiState::new(ApiParts {
             store: store.clone(),

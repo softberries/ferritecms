@@ -80,6 +80,10 @@ pub const MAX_KNOWN_LINKS: usize = 2;
 pub const MAX_THREAD: u32 = MAX_ITEM_COMMENTS;
 /// The only content type that takes comments (P11; others later, P29).
 pub const COMMENT_KIND: &str = "post";
+/// Where the theme form posts (`POST /_comment`, P12).
+pub const COMMENT_FORM_PATH: &str = "/_comment";
+/// The theme form's honeypot field: a bot that fills it is discarded (P13).
+pub const HONEYPOT_FIELD: &str = "website";
 
 /// Rate-limit bucket of the per-minute limit.
 pub const COMMENT_MINUTE_SCOPE: &str = "comment";
@@ -145,6 +149,16 @@ pub struct CommentPublic {
     /// The body rendered by [`render_body`] (safe HTML).
     pub html: String,
     pub date: Timestamp,
+}
+
+/// A post's public thread ([`SiteReader::comments`](crate::SiteReader::comments)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentThread {
+    /// `comments.enabled`: whether the form is shown. A closed thread still lists its
+    /// approved comments (as WordPress does).
+    pub open: bool,
+    /// The approved comments in thread order (at most [`MAX_THREAD`]).
+    pub items: Vec<CommentPublic>,
 }
 
 /// How comments are moderated.
@@ -605,7 +619,7 @@ impl CommentService {
 }
 
 /// `rows` (oldest first) in thread order with depths.
-fn thread_of(rows: Vec<Comment>) -> Vec<CommentPublic> {
+pub(crate) fn thread_of(rows: Vec<Comment>) -> Vec<CommentPublic> {
     let index: HashMap<CommentId, usize> =
         rows.iter().enumerate().map(|(i, c)| (c.id, i)).collect();
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); rows.len()];

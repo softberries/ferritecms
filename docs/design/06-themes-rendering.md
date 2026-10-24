@@ -178,7 +178,7 @@ rejects a structure whose first literal is a type or taxonomy name, a router wor
 **Root namespace** (R3, R13). Posts under `/%slug%/` and top-level pages share `/<slug>/`;
 core allocates slugs so they do not collide (`about-2`), and the router tries a page before a
 post as a safety net. Top-level slugs may not be reserved words (`admin`, `api`, `feed`,
-`_media`, `_theme`, `_preview`, `_p`, …), type or taxonomy names, `author`, `page`, `search`, or four
+`_media`, `_theme`, `_preview`, `_p`, `_comment`, …), type or taxonomy names, `author`, `page`, `search`, or four
 digits, so static routes never hide content.
 
 **Canonical form.** Each segment is percent-decoded once and re-encoded, so a request
@@ -294,8 +294,27 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 | `asset(path)` | `/_theme/<theme hash>/<path>`, each segment percent-encoded | `theme` |
 | `image(media, size)` | the `size` variant of a public media item (the original for an unknown size) with `width`, `height` and a `srcset` of one candidate per width | `post:<media id>` |
 | `head()` | the pre-rendered `<head>` HTML (core SEO + `render.head` plugin filters, §5) | — |
+| `comments(post)` | the public thread of a **public post** (other kinds, drafts, unknown ids: `none`), through `SiteReader::comments`: `open` (`comments.enabled`, default on; a closed thread still lists its comments, as WordPress does, and the theme hides the form), `count` (approved comments shown, ≤ 500), `items` in thread order (oldest first, each reply right after its parent), `action` (`/_comment`), `honeypot` (`website`). Each item: `id`, `parent_id`, `depth` (0 at the top level), `author_name` (plain text), `author_url` (`http(s)` only, else `none`), `html` (the plain-text body escaped by core into `<p>`/`<br>`, marked safe), `date` (RFC 3339). Approved comments only; never an e-mail or address hash. One bridge call | `post:<id>`, `option:comments.enabled` |
 | `plugin_route(name, path)` | `/_p/<name><path>` (05 §4b), each path segment percent-encoded; `""` unless `name` is a plugin name (`[a-z0-9-]{2,48}`) and `path` starts with `/` and has no `.`/`..` segment | — |
 | filters | `date(fmt)` (chrono strftime, UTC), `excerpt(n=55)` (plain text), `slugify` (core's slug function), `json` (safe in `<script>` and in **single-quoted** attributes only), MiniJinja's `urlencode`; `t` (i18n) is not built | — |
+
+**The comment form (M2a-2b P12, P13).** Themes post a plain HTML form (no script) to
+`POST /_comment` (`crates/ferrite-http/src/app/comment_form.rs`), form-encoded, with the
+fields `post`, `parent` (a reply), `author`, `email`, `url`, `comment` and the honeypot
+`website`, which the theme hides from people (off screen, `aria-hidden`, `tabindex="-1"`,
+`autocomplete="off"`). The form carries no per-visitor token, so cached pages stay shared;
+what protects it is the origin check (`Origin`, else `Referer`, must be `site.url`'s origin,
+else `403`) and that every form comment is **anonymous** (the session cookie is ignored).
+The body is at most 64 KiB (`413`), must be `application/x-www-form-urlencoded` (`415`),
+and the same per-IP limits as the API submit apply (3 a minute, 20 an hour, `429` with
+`Retry-After`; no client address `503`). Success is a `303` to the post's permalink (never a
+client-supplied URL) with `#comment-<id>` when approved, or `#comment-pending` when held or
+dropped by the honeypot (the same answer, so a bot cannot tell); the `blog` theme shows its
+"awaiting moderation" notice under `:target`. Validation errors are a `422` and the limit a
+`429`, each a small built-in HTML page with the escaped message and a link back; an unknown,
+non-public or closed item is `404`. Every answer is `Cache-Control: no-store`. A pending
+comment is never shown, not even to its author (later); an approval, moderation or delete
+invalidates `post:<item>`, so cached pages show the change after the next poll.
 
 MiniJinja builtins that remain: `range` (≤ 100 000 items), `dict`, `namespace`, the standard
 filters and tests. `debug()` is removed. `site` exposes only the four whitelisted options and

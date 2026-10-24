@@ -12,6 +12,7 @@ use std::{
 
 use ferrite_core::{
     CoreError, DepKeys, MenuService, PageItem, SiteReader,
+    comments::CommentThread,
     events::{archive_key, menu_key},
 };
 use ferrite_domain::{ContentId, MenuItem, MenuItemId, MenuItemKind, TermId};
@@ -245,6 +246,23 @@ impl HelperBridge for BlockingBridge {
     fn image(&self, media: ContentId, size: &str) -> Option<ImageRef> {
         let read = self.run("image", self.reader.media(media))?;
         read.value.map(|m| ImageRef::from_media(&m, size))
+    }
+
+    /// [`SiteReader::comments`]: public posts only, approved comments only.
+    fn comments(&self, item: ContentId) -> Bridged<Option<CommentThread>> {
+        match self.run("comments", self.reader.comments(item)) {
+            Some(read) => (read.value, read.deps),
+            None => {
+                // The keys the read would have recorded, so the short-lived page still
+                // refreshes on the next moderation.
+                let mut deps = DepKeys::default();
+                deps.insert(ferrite_core::events::post_key(item));
+                deps.insert(ferrite_core::events::option_key(
+                    ferrite_core::comments::ENABLED_OPTION,
+                ));
+                (None, deps)
+            }
+        }
     }
 }
 

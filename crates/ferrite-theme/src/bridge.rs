@@ -1,6 +1,6 @@
 //! The data-backed template helpers (plan ruling P2).
 
-use ferrite_core::{DepKeys, MediaPublic, PageItem};
+use ferrite_core::{DepKeys, MediaPublic, PageItem, comments::CommentThread};
 use ferrite_domain::ContentId;
 use serde::Serialize;
 
@@ -41,6 +41,13 @@ pub trait HelperBridge: Send + Sync {
     /// The `size` variant of a public media item (the original for an unknown size).
     /// The renderer records `post:<media>`.
     fn image(&self, media: ContentId, size: &str) -> Option<ImageRef>;
+    /// The public comment thread of `item` (`SiteReader::comments`): `None` unless
+    /// `item` is a public post. Approved comments only, never an e-mail or address
+    /// hash. Keys: `post:<item>` and `option:comments.enabled`. The default has no data
+    /// (bridges without comments, such as error pages and tests).
+    fn comments(&self, _item: ContentId) -> Bridged<Option<CommentThread>> {
+        (None, DepKeys::default())
+    }
 }
 
 /// A bridge with no data: every helper returns nothing. For error pages and tests.

@@ -19,7 +19,7 @@
 //!   size guards (`range()` over 100 000 items, string/sequence repetition over 100 M)
 //!   are [`ThemeError::Limit`]. Each render has its own state, so the next one is
 //!   unaffected.
-//! * Data-backed helpers (`related`, `query`, `menu`, `image`) go through the
+//! * Data-backed helpers (`related`, `query`, `menu`, `image`, `comments`) go through the
 //!   [`HelperBridge`], at most [`MAX_BRIDGE_CALLS`] times per render; after that they
 //!   return nothing and one warning is logged. Same-name `menu()` calls are memoised,
 //!   and `image()` of media already in the context (featured images) needs no call.
@@ -44,7 +44,10 @@
 //! `s` = the search query, `page`, `status`, `preview`) and the
 //! helpers `menu(name)`, `related(post, n=3)`, `query(type=…, term=…, limit=10)`,
 //! `asset(path)`, `image(media, size)`, `head()`, `plugin_route(name, path)` (a plugin
-//! route's URL, `/_p/<name><path>`). Custom filters: `date(fmt)`,
+//! route's URL, `/_p/<name><path>`), `comments(post)` (the public thread of a post or
+//! none: `open`, `count`, `items`, `action` = `/_comment`, `honeypot` = `website`; each
+//! item `id`, `parent_id`, `depth`, `author_name`, `author_url`, `html` (core-rendered,
+//! safe), `date`). Custom filters: `date(fmt)`,
 //! `excerpt(n)`, `slugify`, `json`.
 //!
 //! MiniJinja builtins that remain: the globals `range` (≤ 100 000 items), `dict`,
@@ -63,8 +66,9 @@
 //! returned by a helper `post:<id>`, `user:<author>`, `term:<id>` per term and
 //! `post:<featured media>`; `term:<id>`/`user:<id>` for `archive.term`/`archive.author`;
 //! `archive:<kind>` for `related`/`query`; `menu:<name>` for
-//! menus; `post:<media>` for `image()`; plus every key the [`HelperBridge`] reports
-//! for `related`, `query` and `menu` (menu targets, hidden ones included). The keys
+//! menus; `post:<media>` for `image()`; `post:<id>` for `comments()`; plus every key the
+//! [`HelperBridge`] reports for `related`, `query`, `menu` (menu targets, hidden ones
+//! included) and `comments` (`option:comments.enabled`). The keys
 //! of the `SiteRead` that produced the context (ancestors, listings, options) are the
 //! caller's to merge, as are `plugins` and the theme-settings option.
 
@@ -76,6 +80,7 @@ use std::{
 
 use ferrite_core::{
     DepKeys, Listing, MediaPublic, PageItem, TermPublic, UserPublic,
+    comments::{COMMENT_FORM_PATH, CommentThread, HONEYPOT_FIELD},
     events::{THEME_KEY, archive_key, menu_key, option_key, post_key, term_key, user_key},
 };
 use ferrite_domain::ContentId;
@@ -522,6 +527,11 @@ fn root_value(ctx: RenderContext, scope: &Arc<Scope>) -> Value {
         "image",
         Value::from_function(move |media: &Value, size: Option<&str>| image(&s, media, size)),
     );
+    let s = scope.clone();
+    root.insert(
+        "comments",
+        Value::from_function(move |item: &Value| comments(&s, item)),
+    );
     Value::from(root)
 }
 
@@ -616,6 +626,57 @@ fn image(scope: &Scope, media: &Value, size: Option<&str>) -> Value {
         None => None,
     };
     found.map_or(Value::from(()), |r| Value::from(Serde(&r)))
+}
+
+/// `comments(post)`: the post's public thread, or none (not a public post, an unknown
+/// id, the call budget spent). Records `post:<id>`; the bridge adds
+/// `option:comments.enabled`.
+fn comments(scope: &Scope, item: &Value) -> Value {
+    let Some(id) = content_id(item) else {
+        return Value::from(());
+    };
+    scope.record(post_key(id));
+    if !scope.take_call("comments") {
+        return Value::from(());
+    }
+    let (thread, deps) = scope.bridge.comments(id);
+    scope.merge(deps);
+    thread.map_or(Value::from(()), thread_value)
+}
+
+/// The template shape of a thread: `{ open, count, items, action, honeypot }`, each
+/// item `{ id, parent_id, depth, author_name, author_url, html, date }`. `html` is the
+/// core-rendered body (escaped plain text in `<p>`/`<br>`), marked safe; everything else
+/// is plain data, so auto-escaping applies. `author_url` is handed on only when it is
+/// an `http(s)://` URL (core refuses anything else on submit; this guards rows that
+/// reach the store another way).
+fn thread_value(t: CommentThread) -> Value {
+    let items: Vec<Value> = t
+        .items
+        .into_iter()
+        .map(|c| {
+            let url = c.author_url.filter(|u| {
+                let lower = u.to_ascii_lowercase();
+                lower.starts_with("https://") || lower.starts_with("http://")
+            });
+            minijinja::context! {
+                id => c.id.to_string(),
+                parent_id => c.parent_id.map(|p| p.to_string()),
+                depth => c.depth,
+                author_name => c.author_name,
+                author_url => url,
+                html => Value::from_safe_string(c.html),
+                date => c.date.to_rfc3339(),
+            }
+        })
+        .collect();
+    minijinja::context! {
+        open => t.open,
+        count => items.len(),
+        items => items,
+        action => COMMENT_FORM_PATH,
+        honeypot => HONEYPOT_FIELD,
+    }
 }
 
 #[cfg(test)]

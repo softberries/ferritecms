@@ -27,6 +27,7 @@
   </footer>
   {%- endif %}
 </article>
+{%- if post.kind == "post" %}{% include "partials/comments.html" %}{% endif %}
 {%- set rel = related(post, 3) %}
 {%- if rel %}
 <section class="related wrap" aria-labelledby="related-title">

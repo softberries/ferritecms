@@ -833,3 +833,100 @@ fn archive_term_and_author_are_recorded() {
     assert!(out.deps.contains(&ferrite_core::events::term_key(news.id)));
     assert!(out.deps.contains(&ferrite_core::events::user_key(ana.id)));
 }
+
+/// A bridge with one comment thread.
+struct ThreadBridge(Option<ferrite_core::comments::CommentThread>);
+
+impl HelperBridge for ThreadBridge {
+    fn related(&self, _: ContentId, _: u32) -> Bridged<Vec<PageItem>> {
+        (Vec::new(), DepKeys::default())
+    }
+    fn query(&self, _: &str, _: Option<&str>, _: u32) -> Bridged<Vec<PageItem>> {
+        (Vec::new(), DepKeys::default())
+    }
+    fn menu(&self, _: &str) -> Bridged<Option<MenuTree>> {
+        (None, DepKeys::default())
+    }
+    fn image(&self, _: ContentId, _: &str) -> Option<ImageRef> {
+        None
+    }
+    fn comments(&self, _: ContentId) -> Bridged<Option<ferrite_core::comments::CommentThread>> {
+        (self.0.clone(), DepKeys::default())
+    }
+}
+
+/// The comment section: the pending notice, labelled fields, the honeypot out of reach
+/// of people and assistive technology; closed threads keep their comments and lose the
+/// form; pages never get one.
+#[test]
+fn comments_section_form_and_states() {
+    use ferrite_core::comments::{CommentPublic, CommentThread};
+    use ferrite_domain::CommentId;
+
+    let t = blog();
+    let one = CommentPublic {
+        id: CommentId::new(),
+        parent_id: None,
+        depth: 0,
+        author_name: "Ann".into(),
+        author_url: None,
+        html: "<p>Nice</p>".into(),
+        date: Timestamp::from_micros(1_709_634_030_000_000).unwrap(),
+    };
+    let thread = |open: bool, items: Vec<CommentPublic>| {
+        Arc::new(ThreadBridge(Some(CommentThread { open, items })))
+    };
+    let single = |bridge: Arc<ThreadBridge>, kind: &str| {
+        let mut c = ctx(&t, "/hello/");
+        c.item = Some(item(kind, "hello", "Hello"));
+        render_with(
+            &t,
+            if kind == "page" {
+                "page.html"
+            } else {
+                "single.html"
+            },
+            c,
+            bridge,
+        )
+    };
+
+    let html = single(thread(true, Vec::new()), "post");
+    for needle in [
+        "<h2 id=\"comments-title\" class=\"section-title\">No comments yet</h2>",
+        "<p id=\"comment-pending\" class=\"comment-notice\" role=\"status\">",
+        "awaiting moderation",
+        "method=\"post\" action=\"&#x2f;_comment\"",
+        "<div class=\"comment-form__trap\" aria-hidden=\"true\">",
+        "name=\"website\" tabindex=\"-1\" autocomplete=\"off\"",
+        "<button type=\"submit\">Post comment</button>",
+    ] {
+        assert!(html.contains(needle), "missing {needle:?} in:\n{html}");
+    }
+    // Every visible field has its label.
+    for field in ["author", "email", "url", "trap", "comment"] {
+        let id = format!("comment-form-{field}");
+        assert!(html.contains(&format!("<label for=\"{id}\"")), "{field}");
+        assert!(html.contains(&format!("id=\"{id}\"")), "{field}");
+    }
+    assert!(!html.contains("<script"), "{html}");
+
+    let html = single(thread(true, vec![one.clone()]), "post");
+    assert!(html.contains("1 comment</h2>"), "{html}");
+    assert!(html.contains("<summary>Reply</summary>"));
+    assert!(html.contains(&format!("name=\"parent\" value=\"{}\"", one.id)));
+
+    let html = single(thread(false, vec![one.clone()]), "post");
+    assert!(html.contains("<p>Nice</p>"), "{html}");
+    assert!(html.contains("Comments are closed."));
+    for gone in [
+        "<form class=\"comment-form\"",
+        "comment-pending",
+        "<summary>Reply",
+    ] {
+        assert!(!html.contains(gone), "{gone}: {html}");
+    }
+
+    let html = single(thread(true, vec![one]), "page");
+    assert!(!html.contains("class=\"comments"), "{html}");
+}

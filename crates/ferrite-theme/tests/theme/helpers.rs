@@ -232,3 +232,82 @@ fn bridge_calls_are_capped_per_render() {
     let out = render_with("{{ query(type='post') | length }}", ctx(), bridge.clone());
     assert_eq!(out.html, "1");
 }
+
+#[test]
+fn comments_helper_shape() {
+    use ferrite_core::comments::{CommentPublic, CommentThread};
+    use ferrite_domain::{CommentId, Timestamp};
+
+    let (a, b) = (CommentId::new(), CommentId::new());
+    let ts = Timestamp::from_micros(1_709_634_030_000_000).unwrap();
+    let comment = |id, parent, depth, name: &str, url: Option<&str>, html: &str| CommentPublic {
+        id,
+        parent_id: parent,
+        depth,
+        author_name: name.into(),
+        author_url: url.map(Into::into),
+        html: html.into(),
+        date: ts,
+    };
+    let bridge = Arc::new(FakeBridge {
+        comments: Some(CommentThread {
+            open: true,
+            items: vec![
+                comment(
+                    a,
+                    None,
+                    0,
+                    "<b>Ann</b>",
+                    Some("https://a.example/?x=1&y"),
+                    "<p>Hi &amp; bye</p>",
+                ),
+                // Not http(s): never handed to the template.
+                comment(
+                    b,
+                    Some(a),
+                    1,
+                    "Bea",
+                    Some("javascript:alert(1)"),
+                    "<p>Re</p>",
+                ),
+            ],
+        }),
+        deps: keys(&["option:comments.enabled".into()]),
+        ..FakeBridge::default()
+    });
+    let mut c = ctx();
+    let post = item("post", "Hello");
+    let id = post.item.id;
+    c.item = Some(post);
+    let out = render_with(
+        "{% set t = comments(post.id) %}{{ t.open }}|{{ t.count }}|{{ t.action }}|{{ t.honeypot }}\
+         {% for i in t.items %}|{{ i.id }},{{ i.parent_id }},{{ i.depth }},{{ i.author_name }},\
+         {{ i.author_url }},{{ i.html }},{{ i.date | date('%Y') }}{% endfor %}",
+        c.clone(),
+        bridge.clone(),
+    );
+    assert_eq!(
+        out.html,
+        format!(
+            "True|2|&#x2f;_comment|website\
+             |{a},None,0,&lt;b&gt;Ann&lt;&#x2f;b&gt;,https:&#x2f;&#x2f;a.example&#x2f;?x=1&amp;y,<p>Hi &amp; bye</p>,2024\
+             |{b},{a},1,Bea,None,<p>Re</p>,2024"
+        )
+    );
+    assert_eq!(*bridge.comment_args.lock().unwrap(), vec![id]);
+    assert!(out.deps.contains(&post_key(id)));
+    assert!(out.deps.contains("option:comments.enabled"));
+
+    // By id string too; nothing (not a public post) is none.
+    let out = render_with(
+        &format!("{{{{ comments('{id}') is none }}}}|{{{{ comments('nope') is none }}}}"),
+        ctx(),
+        Arc::new(FakeBridge::default()),
+    );
+    assert_eq!(out.html, "True|True");
+    let t = crate::common::theme(&[("templates/t.html", "{{ comments(post.id) is none }}")]);
+    let out = Renderer::new()
+        .render(&t, "t.html", c, Arc::new(ferrite_theme::NoBridge))
+        .unwrap();
+    assert_eq!(out.html, "True");
+}

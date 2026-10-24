@@ -206,7 +206,9 @@ pub enum Route {
 }
 
 /// Fixed words that are never content and never redirected.
-const EXACT_ONLY: &[&str] = &["_media", "_theme", "_preview", "healthz", "readyz"];
+const EXACT_ONLY: &[&str] = &[
+    "_media", "_theme", "_preview", "_comment", "healthz", "readyz",
+];
 
 /// Resolves `raw_path` (as received, still percent-encoded) and `raw_query` (without
 /// `?`). Pure.

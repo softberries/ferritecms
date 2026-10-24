@@ -8,6 +8,7 @@ use std::{
 
 use ferrite_core::{
     DepKeys, Listing, MediaPublic, MediaVariant, PageItem, PublicItem, TermPublic, UserPublic,
+    comments::CommentThread,
 };
 use ferrite_domain::{ContentId, TermId, Timestamp, UserId};
 use ferrite_theme::{
@@ -132,6 +133,9 @@ pub struct FakeBridge {
     pub image: Option<ImageRef>,
     /// Keys reported with every related/query/menu result.
     pub deps: DepKeys,
+    /// What `comments()` returns, and the ids it was asked for.
+    pub comments: Option<CommentThread>,
+    pub comment_args: Mutex<Vec<ContentId>>,
 }
 
 impl HelperBridge for FakeBridge {
@@ -155,6 +159,11 @@ impl HelperBridge for FakeBridge {
     fn image(&self, _: ContentId, _: &str) -> Option<ImageRef> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.image.clone()
+    }
+    fn comments(&self, item: ContentId) -> Bridged<Option<CommentThread>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.comment_args.lock().unwrap().push(item);
+        (self.comments.clone(), self.deps.clone())
     }
 }
 

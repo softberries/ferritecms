@@ -11,7 +11,7 @@ use axum::{
 use ferrite_cache::{InvalidationLoop, PageCache};
 use ferrite_core::{
     Actor, AuthService, ContentDraft, ContentService, PermalinkRules, RedirectService,
-    TaxonomyService,
+    TaxonomyService, comments::CommentService,
 };
 use ferrite_domain::{ContentId, ContentItem, Role, TermId, User};
 use ferrite_http::{AppParts, AppState, HttpConfig, ServedBuffer, build_app, load_route_table};
@@ -155,6 +155,10 @@ impl App {
             migrations_ok,
         })
         .with_auth(Self::auth(site))
+        .with_comments(Arc::new(CommentService::new(
+            site.store.clone(),
+            Self::auth(site),
+        )))
     }
 
     /// This app with a fresh state (empty cache) that records `request.served` events

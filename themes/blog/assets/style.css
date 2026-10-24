@@ -711,6 +711,112 @@ button:hover {
 
 /* ---------- Motion and print ---------- */
 
+/* ---------- Comments ---------- */
+
+.comments {
+  margin-top: var(--space-xl);
+  padding-top: var(--space-l);
+  border-top: 1px solid var(--border);
+}
+
+.comment-list,
+.comment-replies {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.comment-replies {
+  margin-left: var(--space-m);
+  padding-left: var(--space-s);
+  border-left: 2px solid var(--border);
+}
+
+.comment__body {
+  margin-block: var(--space-m);
+}
+
+.comment__meta {
+  margin: 0 0 0.35rem;
+  font-size: var(--step--1);
+  color: var(--muted);
+}
+
+.comment__author {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.comment__date {
+  margin-left: var(--space-xs);
+  color: var(--muted);
+}
+
+.comment__text > :first-child {
+  margin-top: 0;
+}
+
+.comment__reply summary {
+  cursor: pointer;
+  font-size: var(--step--1);
+  color: var(--link);
+}
+
+/* Shown only right after a held comment's redirect to #comment-pending. */
+.comment-notice {
+  display: none;
+  padding: var(--space-xs) var(--space-s);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-weight: 600;
+}
+
+.comment-notice:target {
+  display: block;
+}
+
+.comment-form {
+  max-width: 40rem;
+}
+
+.comment-form__field label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+}
+
+.comment-form__hint {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.comment-form input[type="text"],
+.comment-form input[type="email"],
+.comment-form input[type="url"],
+.comment-form textarea {
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+/* The honeypot: off screen and out of the tab order; people never fill it. */
+.comment-form__trap {
+  position: absolute !important;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.comments-closed {
+  color: var(--muted);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -746,7 +852,9 @@ button:hover {
   .skip-link,
   .pagination,
   .search-form,
-  .related {
+  .related,
+  .comment-form,
+  .comment__reply {
     display: none;
   }
 }

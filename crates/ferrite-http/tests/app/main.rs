@@ -11,6 +11,7 @@ mod harness;
 
 mod assets;
 mod budget;
+mod comments;
 mod content;
 mod cost;
 mod errors;

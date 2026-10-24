@@ -2,7 +2,8 @@
 //!
 //! [`build_app`] returns a [`Router`] with a single fallback handler; every public URL
 //! goes through it, except plugin routes under `/_p/<plugin>/` (see `app/plugin_route.rs`:
-//! own checks, never cached), mounted in front of it. [`build_site`] (what `serve` runs) puts the API's `/api/v1` routes
+//! own checks, never cached) and the theme comment form `POST /_comment` (see
+//! `app/comment_form.rs`: same-origin, anonymous, never cached), mounted in front of it. [`build_site`] (what `serve` runs) puts the API's `/api/v1` routes
 //! ([`crate::api`]) in front of the same fallback, inside the same layers:
 //!
 //! 1. Methods other than GET and HEAD: `405` with `Allow: GET, HEAD`. HEAD is answered
@@ -79,6 +80,7 @@
 
 mod bridge;
 pub mod client;
+mod comment_form;
 mod error_page;
 pub mod feeds;
 mod handler;
@@ -91,7 +93,11 @@ pub mod theme_asset;
 
 use std::sync::Arc;
 
-use axum::{Router, http::HeaderValue, routing::any};
+use axum::{
+    Router,
+    http::HeaderValue,
+    routing::{any, post},
+};
 use tower_http::{
     catch_panic::CatchPanicLayer,
     compression::{CompressionLayer, DefaultPredicate, Predicate},
@@ -122,9 +128,14 @@ pub fn build_site(state: Arc<AppState>, api: Arc<ApiState>) -> Router {
 }
 
 /// Plugin routes ([`plugin_route`]; `/_p/{plugin}/` too, since the wildcard does not
-/// match an empty rest, F25) in front of the public fallback.
+/// match an empty rest, F25) and the theme comment form ([`comment_form`], POST only;
+/// other methods get axum's `405` with `Allow`) in front of the public fallback.
 fn public(state: &Arc<AppState>) -> Router {
     Router::new()
+        .route(
+            ferrite_core::comments::COMMENT_FORM_PATH,
+            post(comment_form::handle),
+        )
         .route("/_p/{plugin}/", any(plugin_route::handle))
         .route("/_p/{plugin}/{*path}", any(plugin_route::handle))
         .fallback(handler::handle)

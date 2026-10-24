@@ -58,6 +58,7 @@ use ferrite_store::{MAX_ID_FILTER, MAX_SEARCH_KINDS, Repos, Store};
 use crate::{
     Actor, Capability, CoreError, MAX_PARENT_DEPTH,
     actor::can_read,
+    comments::{self, CommentThread},
     events::{archive_key, option_key, post_key, term_key, user_key},
     permalink::{PermalinkInput, Permalinks, primary_term},
 };
@@ -827,6 +828,50 @@ impl SiteReader {
             name: row.original_name.clone(),
             sanitized: false,
         }))
+    }
+
+    /// The public comment thread of item `id`, for the `comments()` template helper:
+    /// `None` unless `id` is a `post` that is public now (published,
+    /// `published_at <= now`); else its approved comments in thread order (at most
+    /// [`MAX_THREAD`](crate::comments::MAX_THREAD); never pending, spam or trash, never
+    /// an e-mail or address hash) and `open` = `comments.enabled`. A closed thread is
+    /// still listed. Records `post:<id>` and `option:comments.enabled` either way, so a
+    /// moderation (which invalidates `post:<item>`) or opening and closing comments
+    /// refreshes the page. Store calls: the item, the option, the approved rows.
+    pub async fn comments(
+        &self,
+        id: ContentId,
+    ) -> Result<SiteRead<Option<CommentThread>>, CoreError> {
+        let now = (self.clock)();
+        let repos = self.store.read();
+        let mut deps = DepKeys::default();
+        deps.insert(post_key(id));
+        deps.insert(option_key(comments::ENABLED_OPTION));
+        let open_post = repos
+            .content()
+            .get(id)
+            .await?
+            .is_some_and(|i| i.kind == comments::COMMENT_KIND && is_public(&i, now));
+        if !open_post {
+            return Ok(public(None, deps));
+        }
+        let enabled = repos
+            .options()
+            .get(comments::ENABLED_OPTION)
+            .await?
+            .map(|e| e.value);
+        let open = comments::settings_from(enabled.as_ref(), None).enabled;
+        let rows = repos
+            .comments()
+            .approved_for_item(id, comments::MAX_THREAD)
+            .await?;
+        Ok(public(
+            Some(CommentThread {
+                open,
+                items: comments::thread_of(rows),
+            }),
+            deps,
+        ))
     }
 
     /// Whether item `id` is public (and not media): one store call, no hydration. For
