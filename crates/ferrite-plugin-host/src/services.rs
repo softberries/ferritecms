@@ -1,8 +1,9 @@
 //! Data the host exposes to plugins, abstracted from storage (design 05 §9).
 //!
-//! The plugin host never touches the database itself: every `content`, `meta`, `options`,
-//! `kv`, `settings` and `mail` import is answered through [`HostServices`]. Capability checks and
-//! budgets are applied by the host before these methods are called.
+//! The plugin host never touches the database (or the network) itself: every `content`,
+//! `meta`, `options`, `kv`, `settings`, `mail` and `http` import is answered through
+//! [`HostServices`]. Capability checks and budgets are applied by the host before these
+//! methods are called.
 //!
 //! **Cancel-safety.** Every method runs inside a plugin call, and the host drops the
 //! call's future at the hard deadline; a caller drops it too when its request goes away
@@ -55,6 +56,46 @@ pub trait HostServices: Send + Sync + 'static {
         let _ = (plugin, subject, text);
         Err(MAIL_NOT_CONFIGURED.to_owned())
     }
+    /// An outbound request of plugin `plugin`, whose manifest lists `hosts` (canonical:
+    /// lowercase, no trailing dot). The host has already checked the per-call budget,
+    /// the method, `https` on port 443 without userinfo, that `req.url`'s host (made
+    /// canonical) is in `hosts`, the request headers and the body size (05 §6 "HTTP
+    /// capability details"); implementations resolve, check the addresses and follow
+    /// redirects within `hosts`. Errors go to the guest as they are, so they must not
+    /// carry internal details (resolved addresses). The default: http is not
+    /// configured.
+    async fn http_fetch(
+        &self,
+        plugin: &str,
+        hosts: &[String],
+        req: HttpRequest,
+    ) -> Result<HttpResponse, String> {
+        let _ = (plugin, hosts, req);
+        Err(HTTP_NOT_CONFIGURED.to_owned())
+    }
+}
+
+/// What a plugin's `http.fetch` gets when the services have no egress.
+pub const HTTP_NOT_CONFIGURED: &str = "http is not configured";
+
+/// An outbound request that passed the host's checks ([`HostServices::http_fetch`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpRequest {
+    /// One of `GET HEAD POST PUT PATCH DELETE`.
+    pub method: String,
+    /// An `https` URL on port 443 without userinfo, its host canonical and listed.
+    pub url: url::Url,
+    /// Names as the guest gave them (at most 32, none of the refused ones).
+    pub headers: Vec<(String, String)>,
+    pub body: Option<Vec<u8>>,
+}
+
+/// The answer to an [`HttpRequest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
 }
 
 /// What a plugin's `mail.notify-admins` gets on a site without `[mail]`.
@@ -80,6 +121,8 @@ struct Data {
     /// Keyed by (plugin, key).
     settings: HashMap<(String, String), String>,
     mails: Vec<SentMail>,
+    /// Every `http_fetch` call: (plugin, hosts, request).
+    fetches: Vec<(String, Vec<String>, HttpRequest)>,
 }
 
 /// In-memory [`HostServices`] for tests and the spike.
@@ -112,6 +155,11 @@ impl InMemoryServices {
     /// Every `notify_admins` call so far, in order.
     pub fn mails(&self) -> Vec<SentMail> {
         self.lock().mails.clone()
+    }
+
+    /// Every `http_fetch` call so far, in order: (plugin, listed hosts, request).
+    pub fn http_fetches(&self) -> Vec<(String, Vec<String>, HttpRequest)> {
+        self.lock().fetches.clone()
     }
 
     fn lock(&self) -> MutexGuard<'_, Data> {
@@ -201,5 +249,22 @@ impl HostServices for InMemoryServices {
             text: text.to_owned(),
         });
         Ok(())
+    }
+
+    /// Records the request and answers `200` with the body `in-memory`.
+    async fn http_fetch(
+        &self,
+        plugin: &str,
+        hosts: &[String],
+        req: HttpRequest,
+    ) -> Result<HttpResponse, String> {
+        self.lock()
+            .fetches
+            .push((plugin.to_owned(), hosts.to_vec(), req));
+        Ok(HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: b"in-memory".to_vec(),
+        })
     }
 }

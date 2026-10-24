@@ -204,9 +204,9 @@ As built (M2a-2a), `Manifest::parse` also enforces:
   parses as an IPv4 address, a name without a dot (single labels resolve through search
   domains), a last label that is all digits (`127.1`, `0177.0.0.1`), a label starting
   `0x`, a label `localhost`, and a first label starting `localhost`
-  (`localhost4.localdomain4`); IPv6 literals already fail the hostname rule. This is a
-  manifest rule only: the resolved-address (SSRF, DNS rebinding) check comes with the
-  real `http` import (M2a-2b, §6 "HTTP capability details").
+  (`localhost4.localdomain4`); IPv6 literals already fail the hostname rule. The
+  resolved-address (SSRF, DNS rebinding) check is the `http` import's (M2a-2b, §6 "HTTP
+  capability details").
 - **`[routes]`.** Keys start with `/`; `methods` a non-empty list of uppercase HTTP
   methods (default `["GET"]`); `rate_limit` is
   `N/s`, `N/min` or `N/h` with `N > 0` (default `10/min`, `DEFAULT_ROUTE_RATE_LIMIT`);
@@ -658,8 +658,8 @@ under real concurrent load in M1.
   `ferrite-http` `dropped_meta_write_is_all_or_nothing`).
 - Host-import budgets per call: `content` ≤ 100 calls, `kv` ≤ 100 ops / 1 MiB, `meta.set`
   ≤ 1 MiB written (post id + key + value) with each value ≤ 64 KiB, `http` ≤ 3
-  requests (the import is still a stub, so the per-request 5 s / 2 MB bounds are design
-  only, M2a-2b; see "HTTP capability details"), `mail` 1 per call; exceeding → the import
+  requests (each bounded to 5 s, 1 MiB out, 2 MiB in; see "HTTP capability details"),
+  `mail` 1 per call; exceeding → the import
   returns an error, the guest decides. In M0, `meta`, `options` and `settings` calls also
   count against the `content` budget (conservative; spec named only content/kv/http). Guest-supplied list
   limits (`list-posts`, `kv.list-keys`) are clamped to 100.
@@ -692,16 +692,57 @@ under real concurrent load in M1.
 
 ### HTTP capability details
 
-*Status (M2a-2a): the `http` import is still a stub answering `unavailable in this build`;
-the rules below are its design (real `http` import: M2a-2b). Only the per-call request
-budget (3) and the manifest's host rules (§3: plain hostnames, no bare IPs or `localhost`)
-are enforced.*
+*As built (M2a-2b Task 11, P16/P17).* `http` is linked only when the manifest lists hosts
+(§3); every `http.fetch` call makes the page volatile (§7a).
 
-- HTTPS only; host must exactly match the manifest list; redirects followed only to
-  allow-listed hosts (max 3).
-- Resolved IPs in private/loopback/link-local/metadata ranges are refused (SSRF / DNS
-  rebinding protection) — check after resolution, connect to the checked IP.
-- `User-Agent: ferrite/<ver> plugin/<name>`; no cookies, no ambient credentials.
+**Host checks** (`state.rs`, in this order; each refusal is an error string to the guest,
+never a plugin failure): the per-call budget (3 fetches); the method, exactly one of `GET
+HEAD POST PUT PATCH DELETE`; the URL parses; scheme `https`; no userinfo; port absent or
+443; the host, lowercased with one trailing dot dropped, exactly in the manifest's `http`
+list (an IP literal never is); at most 32 request headers, each name + value ≤ 4 KiB, none
+of `host cookie connection proxy-authorization proxy-connection transfer-encoding
+content-length te trailer upgrade keep-alive expect` nor any `proxy-*` (ignoring case);
+a body ≤ 1 MiB. The request then goes to `HostServices::http_fetch(plugin, hosts, req)`
+with the canonical URL and the plugin's list (default: "http is not configured");
+`StoreHostServices` hands it to the node's `Egress` (`ferrite-http`
+`plugins/egress.rs`, built once in `serve`).
+
+**Egress** (one reqwest 0.13 client per node, rustls with the platform verifier):
+
+- *Resolved addresses (SSRF, DNS rebinding).* The client's resolver looks the name up once
+  (`tokio::net::lookup_host`, port 0 so the URL's 443 applies) and refuses the whole
+  answer when **any** address is not public; reqwest connects only to the addresses it
+  returned (no second lookup), and the connected peer address is checked again. Refused
+  (`is_public_ip`): IPv4 `0/8 10/8 100.64/10 127/8 169.254/16 172.16/12 192.0.0/24
+  192.0.2/24 192.88.99/24 192.168/16 198.18/15 198.51.100/24 203.0.113/24 224/4 240/4`;
+  IPv6 `::/96` (unspecified, loopback, IPv4-compatible), `64:ff9b:1::/48`, `100::/64`,
+  `2001::/32`, `2001:2::/48`, `2001:db8::/32`, `3fff::/20`, `fc00::/7`, `fe80::/10`,
+  `fec0::/10`, `ff00::/8`; IPv4-mapped `::ffff:0:0/96`, NAT64 `64:ff9b::/96` and 6to4
+  `2002::/16` are judged by the IPv4 address they embed. An IP-literal URL host is refused
+  before any lookup.
+- *Redirects.* reqwest follows none (its redirect policy cannot see the calling plugin's
+  list, pre-flight F27); `Egress::fetch` follows at most 3, each `Location` joined to the
+  current URL and checked like the first URL (listed host, `https`, port 443, no
+  userinfo, no IP literal), else "redirect not allowed" (also for a 4th hop). 301/302/303
+  continue as `GET` without a body (`HEAD` stays `HEAD`), 307/308 keep method and body;
+  `Authorization` is dropped when the host changes. A `Location` is never followed
+  outside this loop.
+- *Bounds.* 5 s for the whole fetch (connects, hops and body); the response body is read
+  in chunks up to 2 MiB (one byte more, or a larger `Content-Length`: "response body over
+  2 MiB"); at most 64 response headers, `Set-Cookie` dropped. The plugin call's own
+  deadline still applies: on the render path (200 ms) a slow fetch ends the call (a
+  timeout, counted toward auto-disable like any other, §8).
+- *No ambient state.* No proxy (`HTTP_PROXY` and the like are ignored), no cookie store,
+  no `Referer`, no decompression; `User-Agent: ferrite/<version> plugin/<name>`, which
+  the guest cannot replace.
+- *Errors* name the class only ("address not allowed", "redirect not allowed", "timed
+  out", "TLS error", "connection failed", "request failed", …), never a resolved
+  address; details go to the debug log.
+
+Tests: `ferrite-plugin-host` `tests/capabilities.rs` `fetch_preflight_refusals`;
+`ferrite-http` `plugins/egress.rs` (unit `public_ip_table`) and `tests/plugins/egress.rs`
+(an in-test TLS server for `api.example.test`/`evil.example.test` behind the
+`Egress::for_tests` resolver and roots seam).
 
 ### Mail capability details (as built, M2a-2a P17, P18)
 
@@ -1038,6 +1079,7 @@ renders and the failure is recorded (M0, plus the M2a-2a rows at the end):
 | `route-xss` | `GET /x`: HTML with `<script>` reading `document.cookie`, plus `Set-Cookie`, `Authorization`, CSP, HSTS, CORS and caching headers; echoes the request header names it got. `GET /panic` panics, `GET /loop` never returns; `/status` (600), `/crlf` (CRLF in a header value), `/headers` (40 headers) | served only inside `sandbox allow-forms; form-action 'self'` with `nosniff`/`no-store`, every other header dropped, no cookie/`Authorization` seen; panic, loop and the invalid responses are `502` and the site keeps serving (`ferrite-http` `tests/app/plugin_route.rs`, `plugin-host` `tests/hostile.rs`) |
 | `route-flood` | `POST /submit` (`rate_limit = "5/min"`, `cross_origin = true`) flooded from one client across two nodes | 6th POST is `429` on either node, another client still passes (`crates/ferrite/tests/cluster/routes.rs`) |
 | `mail-flood` | `post.saved`: 50 `notify-admins` in one call; `post.published`: a subject with CR/LF and `Bcc:` header injection, and one over 200 characters; `render.head`: a send from a render filter | one mail per call, at most 10 per plugin per hour across nodes, injection and oversize refused, the render-path send refused; admins only, in `Bcc`; refusals reach the guest as errors, never as failures (`ferrite-http` `tests/plugins/mail.rs`) |
+| `ssrf` | `http = ["api.example.test"]`; `GET /get?u=<url>` fetches any URL; `render.head` fetches `https://169.254.169.254/latest/meta-data/` on every page | the metadata URL is refused by the host check (not listed), the page renders, the head is volatile and nothing counts as a failure; with the listed host resolving to loopback, private, link-local, CGNAT, IPv4-mapped, NAT64, 6to4 or IPv6 internal addresses, or to an answer mixing a public and an internal one, the fetch is "address not allowed" and no connection is made (`ferrite-http` `tests/plugins/egress.rs`) |
 
 Test plugins added in M2a-2a (not hostile, `plugins/examples/`): `router` (routes `/hello`,
 `/echo`, `/go`, `/away`, `/big`, `/whoami`), `notifier` (`mail` on `post.published`),
@@ -1045,3 +1087,6 @@ Test plugins added in M2a-2a (not hostile, `plugins/examples/`): `router` (route
 `settings.get` and `options.get` answers, secrets included), and `hello-v2` (a manifest-only
 `0.2.0` of `hello` asking for `kv`, used with `hello`'s component for widening updates).
 `meta-writer` now declares `content.read = ["post"]` (P23).
+M2a-2b adds `fetcher` (`http = ["api.example.test"]`, route `GET /get?u=<url>` answering
+`ok <status> <body>` or `err <message>`; optional `m`, `h`, `b` and `n` parameters set the
+method, headers, a body and several fetches per call).

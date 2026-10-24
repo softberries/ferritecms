@@ -12,6 +12,8 @@
 //!   `content.read` sees public items only, through [`SiteReader`](ferrite_core::SiteReader).
 //! * [`run_filter`] / [`filter_item`]: apply render filters for one request and collect
 //!   what they touched into a [`RenderTrace`] for the page cache.
+//! * [`egress::Egress`]: the node's outbound HTTPS client behind the plugin `http`
+//!   import (resolved-address SSRF checks, allowlisted redirects, P16).
 //! * [`ServedBuffer`]: the node's bounded `request.served` buffer, flushed in batches
 //!   into `plugin.action` jobs (P21).
 //!
@@ -25,6 +27,7 @@
 //! a scope (action hooks, routes) there is no preview and the extra keys are dropped.
 
 mod apply;
+pub mod egress;
 mod failures;
 mod load;
 mod reload;

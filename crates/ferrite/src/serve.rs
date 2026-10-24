@@ -76,6 +76,7 @@ use ferrite_http::{
     load_route_table,
     mail::SmtpMailer,
     media::{Uploader, variant_specs},
+    plugins::egress::Egress,
 };
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::{HostConfig, PluginHost};
@@ -368,7 +369,11 @@ async fn boot(
     if let Some(queue) = &mail {
         services = services.with_mailer(queue.clone(), config.site.title.clone());
     }
-    let services = Arc::new(services);
+    // The plugin `http` import (P16): one outbound client per node.
+    let egress = Egress::new(env!("CARGO_PKG_VERSION"))
+        .map_err(anyhow::Error::msg)
+        .context("cannot start the plugin http client")?;
+    let services = Arc::new(services.with_egress(Arc::new(egress)));
     let host = Arc::new(
         PluginHost::new(host_config(&config.plugins), services)
             .context("cannot start the plugin host")?,

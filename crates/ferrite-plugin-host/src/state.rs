@@ -13,7 +13,7 @@ use crate::bindings::v0_1::ferrite::plugin::{
 use crate::manifest::Capabilities;
 use crate::output::{GuestOutput, sanitize_log_message};
 use crate::registry::SettingDefaults;
-use crate::services::HostServices;
+use crate::services::{HostServices, HttpRequest};
 use crate::trace::{CallTrace, TracingWallClock};
 
 /// Per-store instance/table/memory caps: the measured minimum for components built with
@@ -44,7 +44,6 @@ const MAX_META_VALUE: usize = 64 * 1024;
 /// Upper bound on `limit` for list imports, whatever the guest asks for.
 const MAX_LIST: u32 = 100;
 const BUDGET_EXCEEDED: &str = "budget exceeded";
-const UNAVAILABLE: &str = "unavailable in this build";
 const RENDER_WRITE: &str = "meta.set is not allowed during render filters";
 const RENDER_MAIL: &str = "mail is not allowed during render filters";
 /// `meta.set` on an item that is missing, hidden from the plugin or of a type its
@@ -499,15 +498,121 @@ impl settings::Host for HostState {
     }
 }
 
+/// Methods a plugin may use for `http.fetch` (exact, ASCII uppercase).
+pub const HTTP_METHODS: [&str; 6] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"];
+/// Most request headers one `http.fetch` may send.
+const MAX_HTTP_REQUEST_HEADERS: usize = 32;
+/// Largest request header (name + value bytes).
+const MAX_HTTP_HEADER_BYTES: usize = 4 * 1024;
+/// Largest request body.
+const MAX_HTTP_REQUEST_BODY: usize = 1024 * 1024;
+/// Request headers a plugin may not set (compared ignoring case): the host and the
+/// connection are the egress's, cookies are not sent. Any `proxy-*` name is refused
+/// too.
+const REFUSED_HEADERS: [&str; 12] = [
+    "host",
+    "cookie",
+    "connection",
+    "proxy-authorization",
+    "proxy-connection",
+    "transfer-encoding",
+    "content-length",
+    "te",
+    "trailer",
+    "upgrade",
+    "keep-alive",
+    "expect",
+];
+
+/// Whether a plugin may not send request header `name` (ignoring case): the
+/// connection-level and host headers, cookies and any `proxy-*` header.
+pub fn http_header_refused(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    REFUSED_HEADERS.contains(&lower.as_str()) || lower.starts_with("proxy-")
+}
+
+/// Lowercase with one trailing dot dropped: the manifest's canonical host form.
+fn canonical_host(host: &str) -> String {
+    let host = host.to_ascii_lowercase();
+    match host.strip_suffix('.') {
+        Some(h) => h.to_owned(),
+        None => host,
+    }
+}
+
+/// M2a-2b Task 11 (P16, 05 §6 "HTTP capability details"), in this order: the per-call
+/// budget, the method, the URL (parses; `https`; no userinfo; port absent or 443; its
+/// host, made canonical, exactly in the manifest's `http` list), the headers and the
+/// body. A refusal is an error to the guest, never a plugin failure. Then the services
+/// fetch with the canonical URL (resolved-address checks and redirects are theirs).
+/// Every call is volatile (05 §7a): the answer can change at any time.
 impl http::Host for HostState {
-    async fn fetch(&mut self, _req: http::Request) -> Result<http::Response, String> {
+    async fn fetch(&mut self, req: http::Request) -> Result<http::Response, String> {
         self.trace.volatile();
         if !take(&mut self.budget.http) {
             return Err(BUDGET_EXCEEDED.into());
         }
-        // Real implementation (allow-list, SSRF checks) lands in M1.
-        Err(UNAVAILABLE.into())
+        let req = check_http_request(req, &self.grants.http)?;
+        let res = self
+            .services
+            .http_fetch(&self.plugin, &self.grants.http, req)
+            .await?;
+        Ok(http::Response {
+            status: res.status,
+            headers: res.headers,
+            body: res.body,
+        })
     }
+}
+
+fn check_http_request(req: http::Request, hosts: &[String]) -> Result<HttpRequest, String> {
+    if !HTTP_METHODS.contains(&req.method.as_str()) {
+        return Err("method not allowed".into());
+    }
+    let mut url = url::Url::parse(&req.url).map_err(|_| "invalid URL".to_owned())?;
+    if url.scheme() != "https" {
+        return Err("only https URLs are allowed".into());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("URLs with credentials are not allowed".into());
+    }
+    // `url` drops the default port, so any port left is not 443.
+    if url.port().is_some() {
+        return Err("only port 443 is allowed".into());
+    }
+    let host = match url.host() {
+        Some(url::Host::Domain(d)) => canonical_host(d),
+        _ => return Err("host not allowed".into()),
+    };
+    if !hosts.contains(&host) {
+        return Err("host not allowed".into());
+    }
+    url.set_host(Some(&host))
+        .map_err(|_| "invalid URL".to_owned())?;
+    if req.headers.len() > MAX_HTTP_REQUEST_HEADERS {
+        return Err("too many request headers".into());
+    }
+    for (name, value) in &req.headers {
+        if name.len() + value.len() > MAX_HTTP_HEADER_BYTES {
+            return Err("request header over 4 KiB".into());
+        }
+        if http_header_refused(name) {
+            return Err("request header not allowed".into());
+        }
+    }
+    if req
+        .body
+        .as_ref()
+        .is_some_and(|b| b.len() > MAX_HTTP_REQUEST_BODY)
+    {
+        return Err("request body over 1 MiB".into());
+    }
+    Ok(HttpRequest {
+        method: req.method,
+        url,
+        headers: req.headers,
+        body: req.body,
+    })
 }
 
 /// P18 / F29, in this order: refused during render filters (R20); one mail per call

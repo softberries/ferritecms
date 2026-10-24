@@ -56,6 +56,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fetcher"
+version = "0.1.0"
+dependencies = [
+ "ferrite-sdk",
+]
+
+[[package]]
 name = "flapper"
 version = "0.1.0"
 dependencies = [
@@ -369,6 +376,13 @@ dependencies = [
 
 [[package]]
 name = "spin-host-fuel"
+version = "0.1.0"
+dependencies = [
+ "ferrite-sdk",
+]
+
+[[package]]
+name = "ssrf"
 version = "0.1.0"
 dependencies = [
  "ferrite-sdk",

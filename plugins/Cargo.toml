@@ -12,6 +12,7 @@ members = [
     "examples/router",
     "examples/notifier",
     "examples/counter",
+    "examples/fetcher",
     "examples/hostile/undeclared-import",
     "examples/hostile/sockets",
     "examples/hostile/loop",
@@ -31,4 +32,5 @@ members = [
     "examples/hostile/route-xss",
     "examples/hostile/route-flood",
     "examples/hostile/mail-flood",
+    "examples/hostile/ssrf",
 ]

@@ -5,6 +5,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+mod egress;
 mod install;
 mod mail;
 mod reload;

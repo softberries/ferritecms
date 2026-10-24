@@ -36,6 +36,10 @@ moka = { version = "0.12", features = ["future"] }
 minijinja = { version = "=3.0.2", default-features = false, features = ["builtins", "macros", "multi_template", "adjacent_loop_items", "std_collections", "serde", "json", "fuel", "urlencode"] }
 percent-encoding = "2"
 quick-xml = "=0.41.0"
+# Plugin `http` (M2a-2b P17): rustls with the platform verifier; no proxy, cookie or
+# decompression features.
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }
 rust-embed = { version = "8.13", features = ["debug-embed"] }
 object_store = { version = "0.14", features = ["aws"] }
 s3s = "0.17"
@@ -52,6 +56,7 @@ tar = { version = "0.4.46", default-features = false }
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring"] }
 tokio-util = "0.7"
 totp-rs = { version = "=6.0.0", features = ["otpauth"] }
 tower = "0.5.3"

@@ -1,0 +1,19 @@
+[plugin]
+name      = "ssrf"
+version   = "0.1.0"
+publisher = "ferritecms.dev"
+world     = "ferrite:plugin/plugin@0.1.0"
+
+# Hostile (M2a-2b Review Focus 4): reaches for internal addresses. `GET /get?u=<url>`
+# as in `fetcher` (the tests point the listed host at internal addresses), and a
+# `render.head` filter fetching the cloud metadata address on every page.
+[capabilities]
+routes      = true
+render.head = true
+http        = ["api.example.test"]
+
+[hooks]
+"render.head" = 10
+
+[routes]
+"/get" = { methods = ["GET"], rate_limit = "1000/min" }

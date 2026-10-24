@@ -127,3 +127,161 @@ async fn meta_set_scoped_to_read_types() -> TestResult {
     );
     Ok(())
 }
+
+fn fetch_route(query: &[(&str, &str)]) -> ferrite_plugin_host::RouteRequest {
+    ferrite_plugin_host::RouteRequest {
+        method: "GET".into(),
+        path: "/get".into(),
+        query: query
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect(),
+        headers: Vec::new(),
+        body: Vec::new(),
+        client_ip_hash: "h".into(),
+        user: None,
+    }
+}
+
+/// M2a-2b Task 11: the host's `http.fetch` checks (budget, method, URL, scheme,
+/// userinfo, port, listed host, headers, body) answer the guest with an error before any
+/// service call, and never count as a plugin failure. `fetcher` lists `api.example.test`.
+#[tokio::test]
+async fn fetch_preflight_refusals() -> TestResult {
+    let services = Arc::new(InMemoryServices::new());
+    let host = PluginHost::new(HostConfig::default(), services.clone())?;
+    host.install(manifest("fetcher")?, &plugin_wasm("fetcher"))?;
+    let big = (1024 * 1024 + 1).to_string();
+    let long_value = format!("x:{}", "v".repeat(4096));
+    let cases: Vec<(Vec<(&str, &str)>, &str)> = vec![
+        (
+            vec![("u", "http://api.example.test/")],
+            "err only https URLs are allowed",
+        ),
+        (
+            vec![("u", "https://api.example.test:8443/")],
+            "err only port 443 is allowed",
+        ),
+        (
+            vec![("u", "https://user:pw@api.example.test/")],
+            "err URLs with credentials are not allowed",
+        ),
+        (
+            vec![("u", "https://user@api.example.test/")],
+            "err URLs with credentials are not allowed",
+        ),
+        (
+            vec![("u", "https://other.example.test/")],
+            "err host not allowed",
+        ),
+        (
+            vec![("u", "https://api.example.test.evil.test/")],
+            "err host not allowed",
+        ),
+        (
+            vec![("u", "https://169.254.169.254/")],
+            "err host not allowed",
+        ),
+        (vec![("u", "https://[::1]/")], "err host not allowed"),
+        (vec![("u", "not a url")], "err invalid URL"),
+        (
+            vec![("u", "ftp://api.example.test/")],
+            "err only https URLs are allowed",
+        ),
+        (
+            vec![("u", "https://api.example.test/"), ("m", "TRACE")],
+            "err method not allowed",
+        ),
+        (
+            vec![("u", "https://api.example.test/"), ("m", "get")],
+            "err method not allowed",
+        ),
+        (
+            vec![("u", "https://api.example.test/"), ("h", "Host:evil.test")],
+            "err request header not allowed",
+        ),
+        (
+            vec![("u", "https://api.example.test/"), ("h", "cookie:a=b")],
+            "err request header not allowed",
+        ),
+        (
+            vec![
+                ("u", "https://api.example.test/"),
+                ("h", "Proxy-Authorization:x"),
+            ],
+            "err request header not allowed",
+        ),
+        (
+            vec![
+                ("u", "https://api.example.test/"),
+                ("h", "Transfer-Encoding:chunked"),
+            ],
+            "err request header not allowed",
+        ),
+        (
+            vec![
+                ("u", "https://api.example.test/"),
+                ("h", long_value.as_str()),
+            ],
+            "err request header over 4 KiB",
+        ),
+        (
+            vec![
+                ("u", "https://api.example.test/"),
+                ("m", "POST"),
+                ("b", big.as_str()),
+            ],
+            "err request body over 1 MiB",
+        ),
+    ];
+    for (query, expected) in &cases {
+        let res = host.handle_route("fetcher", fetch_route(query)).await?;
+        assert_eq!(String::from_utf8_lossy(&res.body), *expected, "{query:?}");
+    }
+    let mut many: Vec<(&str, &str)> = vec![("u", "https://api.example.test/")];
+    many.extend(std::iter::repeat_n(("h", "x-a:1"), 33));
+    let res = host.handle_route("fetcher", fetch_route(&many)).await?;
+    assert_eq!(
+        String::from_utf8_lossy(&res.body),
+        "err too many request headers"
+    );
+    assert!(
+        services.http_fetches().is_empty(),
+        "no refusal reached the services"
+    );
+
+    // The listed host in another spelling is the listed host; the service gets the
+    // canonical URL, the plugin's name and its list.
+    let res = host
+        .handle_route(
+            "fetcher",
+            fetch_route(&[("u", "https://API.EXAMPLE.TEST./x?q=1"), ("h", "x-a:1")]),
+        )
+        .await?;
+    assert_eq!(String::from_utf8_lossy(&res.body), "ok 200 in-memory");
+    let fetches = services.http_fetches();
+    assert_eq!(fetches.len(), 1);
+    let (plugin, hosts, req) = &fetches[0];
+    assert_eq!(plugin, "fetcher");
+    assert_eq!(hosts, &["api.example.test"]);
+    assert_eq!(req.method, "GET");
+    assert_eq!(req.url.as_str(), "https://api.example.test/x?q=1");
+    assert_eq!(req.headers, [("x-a".to_owned(), "1".to_owned())]);
+    assert_eq!(req.body, None);
+
+    // At most 3 fetches per call: the 4th is refused.
+    let res = host
+        .handle_route(
+            "fetcher",
+            fetch_route(&[("u", "https://api.example.test/"), ("n", "4")]),
+        )
+        .await?;
+    assert_eq!(
+        String::from_utf8_lossy(&res.body),
+        "ok 200 in-memory\nok 200 in-memory\nok 200 in-memory\nerr budget exceeded"
+    );
+    assert_eq!(services.http_fetches().len(), 4);
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
+    assert!(host.is_enabled("fetcher"));
+    Ok(())
+}

@@ -11,10 +11,13 @@ use ferrite_core::{
     mail::{MailQueue, Mailer, OutgoingMail, check_address, header_safe},
 };
 use ferrite_domain::{ContentId, ContentStatus};
-use ferrite_plugin_host::{HostServices, KindOk, Post, SettingSpec, TermRef};
+use ferrite_plugin_host::{
+    HostServices, HttpRequest, HttpResponse, KindOk, Post, SettingSpec, TermRef,
+};
 use ferrite_store::Store;
 
 use super::apply::{mark_degraded, record, scoped_preview};
+use super::egress::Egress;
 
 /// Most value bytes one plugin may keep in `kv` (design 05 §3).
 pub const KV_MAX_BYTES: u64 = 10 * 1024 * 1024;
@@ -78,6 +81,11 @@ pub const MAIL_TITLE_PREFIX_CHARS: usize = 100;
 ///   a flood): "no active admin has a usable e-mail address", "mail is shutting down"
 ///   and a full queue ("too many mails are being sent").
 ///
+/// * `http.fetch` (with [`with_egress`](Self::with_egress); without it the guest gets
+///   "http is not configured"): the host has checked the request against the manifest;
+///   the node's [`Egress`] resolves and checks the addresses, follows redirects within
+///   the plugin's hosts and bounds the response (P16). Never inside a `Tx`.
+///
 /// A store error is logged and the guest gets "not found" (reads) or a storage error
 /// (writes); inside a request scope it also marks the page volatile, so the degraded
 /// result gets the short TTL instead of staying cached.
@@ -94,6 +102,8 @@ pub struct StoreHostServices {
     /// The node's mail queue and the subject prefix (`"[<site title>] "` or empty);
     /// `None`: no `[mail]`.
     mail: Option<(Arc<MailQueue>, String)>,
+    /// The node's outbound HTTPS client; `None`: `http.fetch` is not configured.
+    egress: Option<Arc<Egress>>,
 }
 
 impl StoreHostServices {
@@ -104,6 +114,7 @@ impl StoreHostServices {
             site_url: site_url.trim_end_matches('/').to_owned(),
             site_key: None,
             mail: None,
+            egress: None,
         }
     }
 
@@ -124,6 +135,12 @@ impl StoreHostServices {
     /// seals them with).
     pub fn with_site_key(mut self, key: SiteKey) -> Self {
         self.site_key = Some(key);
+        self
+    }
+
+    /// The node's [`Egress`] for `http.fetch`.
+    pub fn with_egress(mut self, egress: Arc<Egress>) -> Self {
+        self.egress = Some(egress);
         self
     }
 
@@ -373,6 +390,18 @@ impl HostServices for StoreHostServices {
             );
         }
         resolved.value.as_ref().map(json_text)
+    }
+
+    async fn http_fetch(
+        &self,
+        plugin: &str,
+        hosts: &[String],
+        req: HttpRequest,
+    ) -> Result<HttpResponse, String> {
+        match &self.egress {
+            Some(egress) => egress.fetch(plugin, hosts, req).await,
+            None => Err(ferrite_plugin_host::HTTP_NOT_CONFIGURED.to_owned()),
+        }
     }
 
     async fn notify_admins(&self, plugin: &str, subject: &str, text: &str) -> Result<(), String> {

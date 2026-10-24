@@ -1,0 +1,16 @@
+[plugin]
+name      = "fetcher"
+version   = "0.1.0"
+publisher = "ferritecms.dev"
+world     = "ferrite:plugin/plugin@0.1.0"
+
+# The real `http` import (M2a-2b Task 11): `GET /get?u=<url>` fetches `u` and answers
+# `ok <status> <body>` or `err <message>`. Optional: `m=<method>`, `h=<name>:<value>`
+# (repeatable), `b=<n>` (a body of n bytes `x`), `n=<k>` (k fetches in one call, one
+# answer line each).
+[capabilities]
+routes = true
+http   = ["api.example.test"]
+
+[routes]
+"/get" = { methods = ["GET"], rate_limit = "1000/min" }
