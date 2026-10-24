@@ -9,9 +9,9 @@ mod node;
 
 pub use error::ClusterError;
 pub use jobs::{
-    ABORT_WAIT, EXTEND_EVERY, HANDLER_TIMEOUT, IDLE_POLL, JOB_DRAIN, JobError, JobHandler,
-    JobRunner, LEASE, Periodic, RELEASE_BUDGET, RESUBSCRIBE_MAX, RESUBSCRIBE_MIN, RunnerConfig,
-    SCHEDULER_TICK, Scheduler, period_key,
+    ABORT_WAIT, BUSY_RETRY_JITTER, BUSY_RETRY_MIN, EXTEND_EVERY, HANDLER_TIMEOUT, IDLE_POLL,
+    JOB_DRAIN, JobError, JobHandler, JobRunner, LEASE, Periodic, RELEASE_BUDGET, RESUBSCRIBE_MAX,
+    RESUBSCRIBE_MIN, RunnerConfig, SCHEDULER_TICK, Scheduler, busy_delay, period_key,
 };
 pub use node::{
     CLOCK_SKEW_RECOVERED, ClusterMode, HEARTBEAT_EVERY, JOIN_LOCK_WAIT, JoinTimings, LOCK_JOIN,

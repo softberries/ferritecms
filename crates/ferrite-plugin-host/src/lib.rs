@@ -16,6 +16,7 @@ mod registry;
 mod report;
 mod services;
 mod sink;
+mod skips;
 mod state;
 #[cfg(test)]
 mod test_support;
@@ -63,6 +64,7 @@ use engine::{EpochTicker, build_engine};
 use failure::FailureTracker;
 use grant::LimitBounds;
 use registry::{LoadedPlugin, Registry};
+use skips::{SKIP_WARN_EVERY, Skip, SkipLog};
 use trace::CallTrace;
 use validate::{matches_type, validate_output, validate_route_response};
 
@@ -77,6 +79,8 @@ pub struct PluginHost {
     failure_sink: RwLock<Option<Arc<dyn FailureSink>>>,
     /// One permit per running call, [`HostConfig::max_concurrent_calls`] in all (P22).
     calls: Semaphore,
+    /// Rate limit for the skip warnings (review m7).
+    skips: SkipLog,
     /// Advances the engine epoch; joined when the host is dropped.
     _ticker: EpochTicker,
 }
@@ -158,6 +162,7 @@ impl PluginHost {
             failures,
             failure_sink: RwLock::new(None),
             calls,
+            skips: SkipLog::new(SKIP_WARN_EVERY),
             _ticker: ticker,
         })
     }
@@ -376,14 +381,38 @@ impl PluginHost {
         }
     }
 
-    /// Log a call skipped for want of a call slot. Not a failure.
+    /// Log a call skipped for want of a call slot. Not a failure. Warned at most once
+    /// per plugin per [`SKIP_WARN_EVERY`] (with the skips since), else debug.
     fn log_busy(&self, plugin: &str, hook: &str) {
-        tracing::warn!(
-            plugin,
-            hook,
-            max_concurrent_calls = self.cfg.max_concurrent_calls,
-            "no plugin call slot free; call skipped"
-        );
+        let max = self.cfg.max_concurrent_calls;
+        match self.skips.admit(Skip::Busy, plugin, Instant::now()) {
+            Some(suppressed) => tracing::warn!(
+                plugin,
+                hook,
+                max_concurrent_calls = max,
+                skipped_since_last_warning = suppressed,
+                "no plugin call slot free; call skipped"
+            ),
+            None => tracing::debug!(plugin, hook, "no plugin call slot free; call skipped"),
+        }
+    }
+
+    /// Log that the render budget ended a filter chain (or one call of it, `cut`):
+    /// names `spent_by`, the plugin called last before it ran out (the most recent
+    /// caller, not necessarily the slowest; review m4). Warned at most once per hook per
+    /// [`SKIP_WARN_EVERY`], else debug.
+    fn log_budget(&self, hook: &str, spent_by: Option<&str>, cut: Option<&str>) {
+        let spent_by = spent_by.unwrap_or("an earlier filter of the page");
+        match self.skips.admit(Skip::Budget, hook, Instant::now()) {
+            Some(suppressed) => tracing::warn!(
+                hook,
+                spent_by,
+                cut,
+                skipped_since_last_warning = suppressed,
+                "render budget spent; remaining plugins skipped (not counted as failures)"
+            ),
+            None => tracing::debug!(hook, spent_by, cut, "render budget spent; plugins skipped"),
+        }
     }
 
     /// `Busy` for `plugin`, logged.
@@ -481,6 +510,8 @@ impl PluginHost {
         let left = |until: Instant| until.saturating_duration_since(Instant::now());
         let registry = self.registry.load_full();
         let mut current = value;
+        // The plugin called last in this chain: named when the budget runs out.
+        let mut last_called: Option<Arc<str>> = None;
         for plugin in registry.subscribers(hook) {
             if plugin.disabled.get().is_some() {
                 continue;
@@ -490,7 +521,7 @@ impl PluginHost {
                 continue;
             }
             if until.is_some_and(|u| left(u).is_zero()) {
-                tracing::debug!(hook, "render budget spent; remaining plugins skipped");
+                self.log_budget(hook, last_called.as_deref(), None);
                 volatile = true;
                 break;
             }
@@ -503,12 +534,14 @@ impl PluginHost {
             let limit = match until {
                 None => CallDeadline::full(deadline),
                 Some(u) if left(u).is_zero() => {
+                    self.log_budget(hook, last_called.as_deref(), None);
                     volatile = true;
                     break;
                 }
                 Some(u) => CallDeadline::within(deadline, left(u)),
             };
             let started = Instant::now();
+            last_called = Some(plugin.name.clone());
             let trace = CallTrace::default();
             let render_path = spec.deadline == DeadlineClass::Render;
             let result =
@@ -528,13 +561,9 @@ impl PluginHost {
                         );
                     }
                 },
-                Err(failure) if limit.cut() && failure.kind() == FailureKind::Deadline => {
+                Err(failure) if limit.ended_by_budget(&failure) => {
                     trace.volatile();
-                    tracing::debug!(
-                        plugin = %plugin.name,
-                        hook,
-                        "call ended by the render budget; not counted as a failure"
-                    );
+                    self.log_budget(hook, Some(&plugin.name), Some(&plugin.name));
                 }
                 Err(failure) => {
                     trace.volatile();

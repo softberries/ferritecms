@@ -468,24 +468,40 @@ under real concurrent load in M1.
   with pooling at most `POOL_SLOTS` = 256). Every filter, action and route call takes a permit
   before it instantiates and holds it for the whole call; it waits at most its deadline for one.
   No permit in time → the call is skipped: a filter is skipped and the page volatile, an action
-  or route gets `PluginError::Busy` (route → `503` + `Retry-After: 1`, action job → `Retry`). A
+  or route gets `PluginError::Busy` (route → `503` + `Retry-After: 1`, action job →
+  `JobError::Busy`: released with the attempt refunded, due again in 1–5 s, R20(3)). A
   `Busy` skip is **never** counted as a plugin failure: it is load, not misbehaviour, so a flood
   of route requests cannot auto-disable a healthy plugin (Task 8 m7). After the permit an action
   or route gets its full deadline.
 - **Plugin actions and job workers (Task 11 carry).** At most `min(cluster.workers − 1,
   max_concurrent_calls)` (at least 1) `plugin.action` jobs call plugins at once per node
-  (`ferrite::jobs::action_slots`, a slot in `PluginActionHandler`); one over that is retried at
-  once instead of waiting, so slow plugins never hold every job worker and core jobs (scheduled
-  publishing, purges) always find one. Cost: such a retry, like a `Busy` one, uses one of the
-  job's attempts. With `cluster.workers = 1` the only worker can still be held (logged at boot).
+  (`ferrite::jobs::action_slots`, a slot in `PluginActionHandler`); one over that is released at
+  once (`JobError::Busy`) instead of waiting, so slow plugins never hold every job worker and core
+  jobs (scheduled publishing, purges) always find one. A busy release refunds the attempt
+  (`JobRepo::release(…, count_attempt = false)`, delay `BUSY_RETRY_MIN` 1 s + up to
+  `BUSY_RETRY_JITTER` 4 s), so a burst of saves never pushes actions to `dead`; the cost is
+  re-claims every few seconds while the node stays saturated. With `cluster.workers = 1` the
+  only worker can still be held (logged at boot).
 - **Per-render budget (P22, F37).** A page's filters share `plugins.render_budget_ms` (default
   1 000, `HttpConfig.render_budget`), counted from when the page takes its render slot
   (`PluginRequest::until`, `run_filter` → `PluginHost::apply_filter_until`). Each call's epoch
   deadline is `min(hook deadline, until − now)` and its hard deadline `min(1.5 × hook deadline,
   until − now)`, so no call outlives the budget; waiting for a permit counts against it. Once
-  the budget is spent the remaining plugins are skipped and the page is volatile. A deadline
-  failure of a call whose epoch deadline the budget shortened is not counted (the budget ended
-  it, not the plugin); a call that ran out of its own deadline still is.
+  the budget is spent the remaining plugins are skipped and the page is volatile. A call the
+  budget ended is not counted (R20(4)): an epoch interrupt when the budget shortened the epoch
+  deadline, a hard timeout when it shortened the hard deadline (`CallDeadline::ended_by_budget`);
+  a call that ran out of its own deadline still is. `plugins.render_budget_ms` must be at most
+  60 000 and at least `plugins.render_deadline_ms` (else every render call would be cut, and a
+  looping plugin never counted); an end that does not fit an `Instant` means no budget.
+- **Skip logging.** Busy and budget skips are warned at most once per plugin (busy) or hook
+  (budget) per minute, with the number of skips since (`skipped_since_last_warning`), and logged
+  at debug otherwise. A budget warning names `spent_by`, the plugin called last before the budget
+  ran out in that filter chain (or "an earlier filter of the page").
+- **Known limit: no fairness inside the budget.** Plugins run in priority order and the first ones
+  may use the whole budget; a plugin that stays just under its deadline is never a failure, so a
+  slow high-priority plugin can starve later ones (head and SEO plugins included) on every page,
+  and on listings it runs per item. Renders, actions and routes also share one semaphore with no
+  reservation for renders. `spent_by` is the only signal; per-plugin shares are a later item.
 - **Cancel-safety.** A call's future can be dropped at any await: at the hard deadline, when an
   HTTP client disconnects, when a job loses its lease. The store (and its instance) and the
   permit are dropped with it, and nothing is recorded as a failure (failures are recorded only
@@ -578,7 +594,9 @@ As built (M1c-2), in `crates/ferrite-http/src/plugins/` over the store-backed
   the plugin's `content.read` types: the host looks the item's type up through
   `HostServices::post_kind` (any status) and refuses others (`meta.set` → `"no such post"`, the
   same answer as a missing or hidden item). A meta-only plugin must therefore declare the types
-  it annotates (`meta-writer`: `content.read = ["post"]`). A `"*"` (or `plugin.*`) meta pattern
+  it annotates (`meta-writer`: `content.read = ["post"]`). Cost (review m5, accepted): over
+  `StoreHostServices` one `meta.get` is three store reads (`post_kind`, the visibility check, the
+  meta row) for one unit of the call's `content` budget, on the render path too. A `"*"` (or `plugin.*`) meta pattern
   never matches another plugin's `plugin.<other>.*` keys; only a pattern naming that namespace
   does, and a plugin's own `plugin.<name>.*` keys need no grant.
   `options.get` never returns `plugin.*` keys, whatever the manifest grants (a plugin reads its

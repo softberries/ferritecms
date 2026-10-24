@@ -437,11 +437,10 @@ async fn render_budget_bounds_a_filter_chain() -> TestResult {
     assert!(elapsed >= Duration::from_millis(240), "took {elapsed:?}");
     assert!(elapsed < Duration::from_millis(450), "took {elapsed:?}");
     assert_eq!(services.entered(), 1, "slow-b and slow-c were skipped");
-    // slow-a ran into its own deadline window (cut by the budget at 250 ms, under its
-    // 300 ms hard deadline but past its 200 ms epoch deadline): counted; the skipped
-    // plugins are not.
-    let failed: Vec<String> = host.failures().into_iter().map(|f| f.plugin).collect();
-    assert!(failed.iter().all(|p| p == "slow-a"), "{failed:?}");
+    // slow-a's hard deadline was cut from 300 ms to the 250 ms left (review m1): its
+    // timeout is the budget's, so nothing is recorded, and the skipped plugins are not
+    // either.
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
     services.open();
     Ok(())
 }
@@ -521,5 +520,39 @@ async fn dropped_call_frees_its_slot_and_instance() -> TestResult {
         "slot was free"
     );
     assert!(host.failures().is_empty(), "{:?}", host.failures());
+    Ok(())
+}
+
+/// Review m6: a looping plugin is trapped by its epoch deadline, which the budget
+/// shortened (80 ms of budget, a 200 ms render deadline): skipped, not counted. With
+/// its full deadline the same loop is a failure.
+#[tokio::test]
+async fn budget_cut_epoch_trap_is_not_a_failure() -> TestResult {
+    // Fuel far beyond what the loop burns in a second: only the epoch can stop it.
+    let cfg = HostConfig {
+        fuel: 1_000_000_000_000,
+        ..HostConfig::default()
+    };
+    let host = host_with(cfg, &["loop"])?;
+    let start = Instant::now();
+    let out = host
+        .apply_filter_until(
+            "render.head",
+            input(),
+            &req(),
+            start + Duration::from_millis(80),
+        )
+        .await;
+    let elapsed = start.elapsed();
+    assert_eq!(out.value, input());
+    assert!(out.volatile);
+    assert!(elapsed < Duration::from_millis(180), "took {elapsed:?}");
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
+    // Control: no budget, the loop runs into its own 200 ms deadline and is counted.
+    let (out, elapsed) = timed(&host).await;
+    assert_eq!(out, input());
+    assert!(elapsed >= Duration::from_millis(190), "took {elapsed:?}");
+    assert_eq!(last_kind(&host), Some(FailureKind::Deadline));
+    assert_eq!(host.failures().len(), 1);
     Ok(())
 }

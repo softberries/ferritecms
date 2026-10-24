@@ -137,8 +137,10 @@ async fn instantiate(
 pub(crate) struct CallDeadline {
     soft: Duration,
     hard: Duration,
-    /// The soft deadline is shorter than the hook's (a render budget ends first).
-    cut: bool,
+    /// The budget shortened the soft (epoch) deadline.
+    soft_cut: bool,
+    /// The budget shortened the hard deadline (`left < 1.5 × deadline`).
+    hard_cut: bool,
 }
 
 impl CallDeadline {
@@ -147,7 +149,8 @@ impl CallDeadline {
         Self {
             soft: deadline,
             hard: deadline.saturating_mul(3) / 2,
-            cut: false,
+            soft_cut: false,
+            hard_cut: false,
         }
     }
 
@@ -158,14 +161,20 @@ impl CallDeadline {
         Self {
             soft: full.soft.min(left),
             hard: full.hard.min(left),
-            cut: left < deadline,
+            soft_cut: left < full.soft,
+            hard_cut: left < full.hard,
         }
     }
 
-    /// Whether the budget, not the hook's own deadline, set the soft deadline: a
-    /// deadline failure of such a call is not the plugin's fault.
-    pub(crate) fn cut(self) -> bool {
-        self.cut
+    /// Whether `failure` is the budget's doing, not the plugin's (R20(4)): an epoch
+    /// interrupt when the budget shortened the epoch deadline, or a hard timeout when
+    /// it shortened the hard deadline. Such a call is skipped, not counted.
+    pub(crate) fn ended_by_budget(self, failure: &CallFailure) -> bool {
+        match failure {
+            CallFailure::Trap(Trap::Interrupt) => self.soft_cut,
+            CallFailure::Timeout => self.hard_cut,
+            _ => false,
+        }
     }
 }
 
@@ -289,18 +298,25 @@ mod tests {
     #[test]
     fn deadlines_are_capped_by_the_budget() {
         let ms = Duration::from_millis;
+        let interrupt = CallFailure::Trap(Trap::Interrupt);
+        let timeout = CallFailure::Timeout;
         let full = CallDeadline::full(ms(200));
-        assert_eq!(
-            (full.soft, full.hard, full.cut()),
-            (ms(200), ms(300), false)
-        );
+        assert_eq!((full.soft, full.hard), (ms(200), ms(300)));
+        assert!(!full.ended_by_budget(&interrupt) && !full.ended_by_budget(&timeout));
         // Room for the whole call: unchanged.
         assert_eq!(CallDeadline::within(ms(200), ms(1000)), full);
-        // The hard deadline is capped first (F37); the soft one is not cut yet.
+        assert_eq!(CallDeadline::within(ms(200), ms(300)), full);
+        // The hard deadline is capped first (F37): a timeout is the budget's, an epoch
+        // interrupt (the plugin's own 200 ms) is not.
         let w = CallDeadline::within(ms(200), ms(250));
-        assert_eq!((w.soft, w.hard, w.cut()), (ms(200), ms(250), false));
+        assert_eq!((w.soft, w.hard), (ms(200), ms(250)));
+        assert!(w.ended_by_budget(&timeout) && !w.ended_by_budget(&interrupt));
         let w = CallDeadline::within(ms(200), ms(80));
-        assert_eq!((w.soft, w.hard, w.cut()), (ms(80), ms(80), true));
+        assert_eq!((w.soft, w.hard), (ms(80), ms(80)));
+        assert!(w.ended_by_budget(&timeout) && w.ended_by_budget(&interrupt));
+        // Other failures are always the plugin's.
+        assert!(!w.ended_by_budget(&CallFailure::Trap(Trap::OutOfFuel)));
+        assert!(!w.ended_by_budget(&CallFailure::Memory));
     }
 
     #[test]

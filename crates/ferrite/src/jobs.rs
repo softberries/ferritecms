@@ -181,13 +181,15 @@ impl JobHandler for PluginPurgeSweepHandler {
 ///   follows, F35): retried;
 /// - the call failed: retried (backoff, then dead after the job's attempts);
 /// - busy (P22, never a plugin failure): no action slot free on this node, or no host
-///   call slot within the action deadline (F35): retried. Like any retry this uses one
-///   of the job's attempts.
+///   call slot within the action deadline (F35): [`JobError::Busy`], put back with the
+///   attempt refunded and due again after 1–5 s (R20(3)), so a burst never pushes an
+///   action to `dead`.
 ///
 /// At most `slots` actions run at once on a node ([`action_slots`]: one below
 /// `cluster.workers`, Task 11 carry), so slow plugins cannot hold every job worker and
 /// core jobs (scheduled publishing, purges) always find one. An action over that is
-/// retried at once rather than waiting for a slot, which would hold a worker too.
+/// released at once (`Busy`) rather than waiting for a slot, which would hold a worker
+/// too.
 pub struct PluginActionHandler {
     store: Arc<dyn Store>,
     host: Arc<PluginHost>,
@@ -243,7 +245,7 @@ impl JobHandler for PluginActionHandler {
             payload: action.payload,
         };
         let Ok(_slot) = self.slots.try_acquire() else {
-            return Err(JobError::Retry(
+            return Err(JobError::Busy(
                 "busy: every plugin action slot of this node is in use".to_owned(),
             ));
         };
@@ -261,11 +263,10 @@ impl JobHandler for PluginActionHandler {
             Err(PluginError::UnknownPlugin(_)) => {
                 Err(JobError::Retry("not loaded on this node yet".to_owned()))
             }
-            Err(
-                e @ (PluginError::Disabled { .. }
-                | PluginError::CallFailed { .. }
-                | PluginError::Busy { .. }),
-            ) => Err(JobError::Retry(e.to_string())),
+            Err(e @ (PluginError::Disabled { .. } | PluginError::CallFailed { .. })) => {
+                Err(JobError::Retry(e.to_string()))
+            }
+            Err(e @ PluginError::Busy { .. }) => Err(JobError::Busy(e.to_string())),
             // `dispatch_action` returns none of these; retrying is the safe answer.
             Err(
                 e @ (PluginError::Engine(_)

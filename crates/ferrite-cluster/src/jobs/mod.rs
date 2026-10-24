@@ -21,6 +21,24 @@ pub const RESUBSCRIBE_MIN: Duration = Duration::from_secs(1);
 /// The re-subscribe delay doubles up to this.
 pub const RESUBSCRIBE_MAX: Duration = Duration::from_secs(30);
 
+/// Shortest delay before a [`JobError::Busy`] job is due again.
+pub const BUSY_RETRY_MIN: Duration = Duration::from_secs(1);
+/// Most random delay added to [`BUSY_RETRY_MIN`] (spreads a burst of busy retries).
+pub const BUSY_RETRY_JITTER: Duration = Duration::from_secs(4);
+
+/// The delay of one [`JobError::Busy`] release: [`BUSY_RETRY_MIN`] plus a random part
+/// below [`BUSY_RETRY_JITTER`].
+pub fn busy_delay() -> Duration {
+    use std::hash::{BuildHasher, Hasher};
+    // `RandomState` is seeded randomly per instance: enough jitter, no new dependency.
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u64(0);
+    let millis = u64::try_from(BUSY_RETRY_JITTER.as_millis())
+        .unwrap_or(u64::MAX)
+        .max(1);
+    BUSY_RETRY_MIN + Duration::from_millis(h.finish() % millis)
+}
+
 /// A failed job run.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum JobError {
@@ -28,6 +46,12 @@ pub enum JobError {
     /// used up, then `dead`.
     #[error("{0}")]
     Retry(String),
+    /// Not run for want of capacity (a full slot, a busy plugin host: M2a-2 P22, R20(3)):
+    /// the job goes back to `queued` with the attempt refunded, due again after
+    /// [`busy_delay`] ([`BUSY_RETRY_MIN`] plus up to [`BUSY_RETRY_JITTER`]), so a burst
+    /// of busy retries can never push a job to `dead`.
+    #[error("{0}")]
+    Busy(String),
     /// Retrying cannot help: the job goes `dead` at once.
     #[error("{0}")]
     Permanent(String),

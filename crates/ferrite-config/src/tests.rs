@@ -882,4 +882,32 @@ fn plugins_limits_rules() {
     let c = r.unwrap();
     assert_eq!(c.plugins.max_concurrent_calls, 3);
     assert_eq!(c.plugins.render_budget_ms, 250);
+
+    // Review m2/m3: at most one minute, and never below the render deadline.
+    let problem = |toml: &str| {
+        let (_d, r) = run(Some(&format!("{MIN}[plugins]\n{toml}")), &[]);
+        let e = r.unwrap_err();
+        assert_eq!(paths(&e), ["plugins.render_budget_ms"], "{toml}");
+        e.problems[0].message.clone()
+    };
+    assert_eq!(
+        problem("render_budget_ms = 60001\n"),
+        "must be at most 60000"
+    );
+    assert_eq!(
+        problem("render_budget_ms = 199\n"),
+        "must be at least plugins.render_deadline_ms (200)"
+    );
+    assert_eq!(
+        problem("render_deadline_ms = 500\nrender_budget_ms = 400\n"),
+        "must be at least plugins.render_deadline_ms (500)"
+    );
+    for ok in [
+        "render_budget_ms = 60000\n",
+        "render_budget_ms = 200\n",
+        "render_deadline_ms = 100\nrender_budget_ms = 150\n",
+    ] {
+        let (_d, r) = run(Some(&format!("{MIN}[plugins]\n{ok}")), &[]);
+        assert!(r.is_ok(), "{ok}: {r:?}");
+    }
 }

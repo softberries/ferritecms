@@ -229,6 +229,70 @@ pub async fn runner_retries_then_dead(db: Arc<TestDb>) {
     assert_eq!(calls(&log), vec![id, id]);
 }
 
+/// R20(3): `Busy` puts the job back with the attempt refunded, due again after the
+/// short busy delay, so a burst of busy runs never uses up `max_attempts`.
+pub async fn runner_busy_refunds_the_attempt(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    let mut new = NewJob::new(KIND, json!({"v": 1}));
+    new.max_attempts = 2;
+    let id = enqueue(store.as_ref(), new).await;
+    const BUSY_RUNS: usize = 5;
+    let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (handler, log) = TestHandler::new(KIND, {
+        let runs = runs.clone();
+        move |_| {
+            let n = runs.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if n < BUSY_RUNS {
+                    Err(JobError::Busy("no slot".into()))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    })
+    .build();
+    let (stop, handle) = start(
+        store.clone(),
+        RunnerConfig::new(NodeId::new(), 2),
+        vec![handler],
+    );
+    for n in 1..=BUSY_RUNS {
+        let job = wait_for(Duration::from_secs(5), "busy release", || async {
+            let job = get(store.as_ref(), id).await;
+            (calls(&log).len() == n && job.status == JobStatus::Queued).then_some(job)
+        })
+        .await;
+        assert_eq!(job.attempts, 0, "run {n}: attempt refunded");
+        assert_eq!(job.last_error, None, "run {n}");
+        let due_in = job.run_at.as_micros() - Timestamp::now().as_micros();
+        assert!(
+            due_in > 0 && due_in <= 5_000_000,
+            "run {n}: due in {due_in} µs"
+        );
+        db.force_job_due(id).await;
+    }
+    let job = wait_status(store.as_ref(), id, JobStatus::Done, Duration::from_secs(5)).await;
+    stop_runner(stop, handle).await;
+    assert_eq!(job.attempts, 1, "only the run that did the work counted");
+    assert_eq!(calls(&log).len(), BUSY_RUNS + 1);
+}
+
+#[test]
+fn busy_delay_is_short_and_jittered() {
+    let delays: Vec<Duration> = (0..50).map(|_| ferrite_cluster::busy_delay()).collect();
+    assert!(
+        delays
+            .iter()
+            .all(|d| *d >= Duration::from_secs(1) && *d < Duration::from_secs(5)),
+        "{delays:?}"
+    );
+    assert!(
+        delays.iter().any(|d| *d != delays[0]),
+        "jittered: {delays:?}"
+    );
+}
+
 pub async fn runner_permanent_error_is_dead_at_once(db: Arc<TestDb>) {
     let store = db.shared_store();
     let id = enqueue(store.as_ref(), NewJob::new(KIND, json!({"v": 1}))).await;
@@ -1148,6 +1212,7 @@ pub async fn sessions_prune_job_deletes_expired_and_idle(db: Arc<TestDb>) {
 backend_tests_spawning!(
     runner_runs_and_completes,
     runner_retries_then_dead,
+    runner_busy_refunds_the_attempt,
     runner_permanent_error_is_dead_at_once,
     runner_handler_timeout_counts_as_failure,
     runner_handler_panic_is_a_failure,

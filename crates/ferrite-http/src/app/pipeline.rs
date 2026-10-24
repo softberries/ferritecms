@@ -105,8 +105,9 @@ struct Target<'a> {
     path: &'a str,
     query: NormalQuery,
     /// End of the page's plugin render budget (P22): the slot time plus
-    /// `HttpConfig::render_budget`.
-    until: Instant,
+    /// `HttpConfig::render_budget`; `None` when that is past what an `Instant` holds
+    /// (no budget then, each call still has its deadline).
+    until: Option<Instant>,
 }
 
 /// Who a page is rendered for, as plugins and templates see it.
@@ -131,7 +132,7 @@ async fn render_route(
     // One slot for the whole pipeline (R32): data load, plugin filters, head and
     // template, so plugin calls are bounded by the same limit as renders.
     let slot = acquire_slot(state).await?;
-    let until = budget_end(state);
+    let until = budget_end(state.config.render_budget);
     let mut deps = DepKeys::default();
     let Some(shown) = load(state, route, path, &mut deps).await? else {
         return Ok(None);
@@ -156,7 +157,7 @@ async fn preview_route(
     id: ContentId,
 ) -> Result<Option<CachedPage>, RenderError> {
     let slot = acquire_slot(state).await?;
-    let until = budget_end(state);
+    let until = budget_end(state.config.render_budget);
     let read = match state.reader.preview(actor, id).await {
         Ok(read) => read,
         Err(CoreError::NotFound | CoreError::Forbidden(_)) => return Ok(None),
@@ -215,8 +216,11 @@ async fn finish(
                 .logged_in(logged_in)
         }
         Viewer::Preview(previewed) => PluginRequest::preview(path, &site.locale, *previewed),
-    }
-    .until(until);
+    };
+    let req = match until {
+        Some(until) => req.until(until),
+        None => req,
+    };
     let mut trace = RenderTrace::default();
     if let Some(item) = item.as_mut() {
         filter_item(&state.plugins, item, &req, &mut trace).await;
@@ -280,10 +284,11 @@ async fn finish(
     Ok(html_page(200, out.html, deps.into_vec(), ttl))
 }
 
-/// When the plugin render budget of a page whose slot was just taken ends (P22).
-fn budget_end(state: &AppState) -> Instant {
-    let now = Instant::now();
-    now.checked_add(state.config.render_budget).unwrap_or(now)
+/// When the plugin render budget of a page whose slot was just taken ends (P22);
+/// `None` (no budget, never a zero one: review m2) when the end does not fit an
+/// `Instant`.
+fn budget_end(budget: Duration) -> Option<Instant> {
+    Instant::now().checked_add(budget)
 }
 
 /// One of [`HttpConfig::max_concurrent_renders`](super::HttpConfig) render slots
@@ -549,5 +554,19 @@ fn item_template(item: &PageItem) -> TemplateKey {
             kind: item.item.kind.clone(),
             slug: item.item.slug.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Review m2: an end past what an `Instant` holds means no budget, not a zero one.
+    #[test]
+    fn budget_end_never_collapses_to_now() {
+        let before = Instant::now();
+        let end = budget_end(Duration::from_secs(1)).expect("fits");
+        assert!(end >= before + Duration::from_secs(1));
+        assert_eq!(budget_end(Duration::MAX), None);
     }
 }

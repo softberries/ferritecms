@@ -562,7 +562,26 @@ fn parse_plugins(cx: &mut Cx, root: &mut Table) -> PluginsConfig {
             }
         })
         .unwrap_or_else(default_max_concurrent_calls);
-    let render_budget_ms = cx.positive(&mut t, b, "render_budget_ms").unwrap_or(1000);
+    let render_budget_ms = match cx.positive(&mut t, b, "render_budget_ms") {
+        None => 1000,
+        Some(n) if n > MAX_RENDER_BUDGET_MS => {
+            cx.push(
+                "plugins.render_budget_ms",
+                format!("must be at most {MAX_RENDER_BUDGET_MS}"),
+            );
+            1000
+        }
+        // Below the render deadline every render call would be cut by the budget, and
+        // a cut call is never counted, so a looping plugin would never be disabled.
+        Some(n) if n < render_deadline_ms => {
+            cx.push(
+                "plugins.render_budget_ms",
+                format!("must be at least plugins.render_deadline_ms ({render_deadline_ms})"),
+            );
+            1000
+        }
+        Some(n) => n,
+    };
     cx.unknown(t, b);
     PluginsConfig {
         default_memory,
@@ -575,6 +594,9 @@ fn parse_plugins(cx: &mut Cx, root: &mut Table) -> PluginsConfig {
         render_budget_ms,
     }
 }
+
+/// Largest `plugins.render_budget_ms` (one minute: a page is not worth waiting longer).
+const MAX_RENDER_BUDGET_MS: u64 = 60_000;
 
 /// `max(8, 4 × available_parallelism)` (P22; the plugin host's
 /// `default_max_concurrent_calls`, which this crate does not depend on).

@@ -377,8 +377,9 @@ async fn action_survives_hot_swap(db: Arc<TestDb>) {
 }
 
 /// Task 11 carry: at most `slots` (`cluster.workers - 1`) actions run at once on a
-/// node, so a slow plugin cannot hold every job worker; the next one is retried at once
-/// instead of waiting, and nothing counts against the plugin.
+/// node, so a slow plugin cannot hold every job worker; the next one is released at
+/// once (`Busy`: attempt refunded, R20(3)) instead of waiting, and nothing counts
+/// against the plugin.
 async fn action_slots_leave_a_worker_free(db: Arc<TestDb>) {
     let store = db.shared_store();
     plugin_row(&store, "slow-import", 0x71, &["post.saved"], true).await;
@@ -398,7 +399,7 @@ async fn action_slots_leave_a_worker_free(db: Arc<TestDb>) {
         .unwrap();
     let start = std::time::Instant::now();
     match handler.run(&job).await {
-        Err(JobError::Retry(e)) => assert!(e.contains("busy"), "{e}"),
+        Err(JobError::Busy(e)) => assert!(e.contains("busy"), "{e}"),
         other => panic!("{other:?}"),
     }
     assert!(start.elapsed() < Duration::from_millis(500), "did not wait");
@@ -411,8 +412,9 @@ async fn action_slots_leave_a_worker_free(db: Arc<TestDb>) {
     assert!(host.failures().is_empty(), "{:?}", host.failures());
 }
 
-/// F35: a host with no call slot free within the action deadline answers `Busy`,
-/// which the handler retries; it is not a plugin failure.
+/// F35 / R20(3): a host with no call slot free within the action deadline answers
+/// `Busy`, which the handler passes on as `JobError::Busy` (released with the attempt
+/// refunded); it is not a plugin failure.
 async fn busy_host_is_retried_without_failure(db: Arc<TestDb>) {
     let store = db.shared_store();
     plugin_row(&store, "slow-import", 0x72, &["post.saved"], true).await;
@@ -446,7 +448,7 @@ async fn busy_host_is_retried_without_failure(db: Arc<TestDb>) {
         .await
         .unwrap();
     match handler.run(&job).await {
-        Err(JobError::Retry(e)) => assert!(e.contains("busy"), "{e}"),
+        Err(JobError::Busy(e)) => assert!(e.contains("busy"), "{e}"),
         other => panic!("{other:?}"),
     }
     services.release.notify_one();

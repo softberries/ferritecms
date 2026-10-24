@@ -404,6 +404,11 @@ impl State {
                 ),
             },
             Err(JobError::Retry(e)) => self.fail(&job.lease, &e, false, &job.span).await,
+            Err(JobError::Busy(e)) => {
+                tracing::debug!(parent: &job.span, error = %e, "job busy; released, attempt refunded");
+                self.release(&job.lease, super::busy_delay(), &job.span)
+                    .await;
+            }
             Err(JobError::Permanent(e)) => self.fail(&job.lease, &e, true, &job.span).await,
         }
     }
