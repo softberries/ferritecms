@@ -55,6 +55,11 @@ pub trait Mailer: Send + Sync {
 
 /// Whether `s` is safe inside a header: no control character (CR, LF, NUL, DEL, C1)
 /// and no Unicode line or paragraph separator. Unsafe text is refused, never folded.
+///
+/// Header-safety copy 1 of 3 (keep in step): the plugin-host `mail` import checks the
+/// subject the same way (`ferrite-plugin-host/src/state.rs`, 2), and
+/// `ferrite-config`'s `valid_mailbox` checks `mail.from` (3); neither crate depends on
+/// core.
 pub fn header_safe(s: &str) -> bool {
     !s.chars()
         .any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}')
@@ -178,7 +183,8 @@ impl Mailer for MemoryMailer {
 /// task sends through the wrapped mailer, bounded by [`MAIL_SEND_TIMEOUT`]. The
 /// outcome of the send is logged (recipient count and error, never the body or the
 /// addresses). [`shutdown`](Self::shutdown) refuses new mail, cancels sends still
-/// running and waits for their tasks.
+/// running and waits for their tasks; dropping the queue cancels nothing (each send
+/// still ends within its timeout).
 pub struct MailQueue {
     mailer: Arc<dyn Mailer>,
     slots: Arc<Semaphore>,
@@ -236,8 +242,15 @@ impl Mailer for MailQueue {
         let recipients = mail.to.len() + mail.bcc.len();
         tokio::spawn(async move {
             let _slot = slot;
+            // Only an explicit `shutdown` cancels: a dropped queue (its sender gone)
+            // lets the send run to its timeout.
+            let stopped = async {
+                if stop.wait_for(|stopped| *stopped).await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            };
             tokio::select! {
-                _ = stop.wait_for(|stopped| *stopped) => {
+                () = stopped => {
                     tracing::warn!(recipients, "mail send cancelled by shutdown");
                 }
                 sent = tokio::time::timeout(timeout, mailer.send(mail)) => match sent {
@@ -355,6 +368,29 @@ mod tests {
         // The send timeout frees the slots.
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(queue.send(mail("4")).await, Ok(()));
+    }
+
+    /// Takes a while, then hands the mail to a [`MemoryMailer`].
+    struct Slow(Arc<MemoryMailer>);
+
+    #[async_trait::async_trait]
+    impl Mailer for Slow {
+        async fn send(&self, mail: OutgoingMail) -> Result<(), MailError> {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            self.0.send(mail).await
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_the_queue_does_not_cancel_sends() {
+        let memory = Arc::new(MemoryMailer::new());
+        let queue = MailQueue::new(Arc::new(Slow(memory.clone())));
+        assert_eq!(queue.send(mail("Kept")).await, Ok(()));
+        drop(queue);
+        assert_eq!(
+            memory.wait_for(1, Duration::from_secs(5)).await,
+            [mail("Kept")]
+        );
     }
 
     #[tokio::test]

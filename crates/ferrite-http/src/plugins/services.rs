@@ -8,7 +8,7 @@ use ferrite_core::{
     auth::SiteKey,
     events::{invalidate, option_key, post_key},
     ext_settings::{SettingDef, open_secret, plugin_option, resolve_plugin_value},
-    mail::{MailQueue, Mailer, OutgoingMail, check_address},
+    mail::{MailQueue, Mailer, OutgoingMail, check_address, header_safe},
 };
 use ferrite_domain::{ContentId, ContentStatus};
 use ferrite_plugin_host::{HostServices, KindOk, Post, SettingSpec, TermRef};
@@ -31,6 +31,10 @@ pub const MAIL_PER_PLUGIN_HOUR: u32 = 10;
 /// Most admins one plugin mail goes to (P18).
 pub const MAIL_MAX_ADMINS: u32 = 50;
 const MAIL_WINDOW: Duration = Duration::from_secs(3600);
+/// Longest site title used as the plugin-mail subject prefix, in characters: with the
+/// brackets and a 200-char plugin subject the subject stays below
+/// `ferrite_core::mail::MAX_SUBJECT_CHARS` (400).
+pub const MAIL_TITLE_PREFIX_CHARS: usize = 100;
 
 /// Store-backed services for the plugin imports. Capability and key-scope checks are
 /// the host's (`ferrite-plugin-host`); this layer adds visibility:
@@ -58,10 +62,13 @@ const MAIL_WINDOW: Duration = Duration::from_secs(3600);
 ///   the fixed-hour bucket `mail:plugin:<name>` (over [`MAIL_PER_PLUGIN_HOUR`]:
 ///   refused), then up to [`MAIL_MAX_ADMINS`] active admins by login (an address that
 ///   fails `check_address` is skipped and logged), then one mail with every admin in
-///   Bcc, subject `[<site title>] <subject>` (no prefix for an empty title) and body +
-///   `"\n\n-- \nSent by plugin <name>"`, handed to the node's [`MailQueue`], which
-///   sends in the background (F28): the guest learns about refusals, not about SMTP
-///   failures.
+///   Bcc, subject `[<site title>] <subject>` (the prefix as fixed by
+///   [`with_mailer`](Self::with_mailer)) and body + `"\n\n-- \nSent by plugin <name>"`,
+///   handed to the node's [`MailQueue`], which sends in the background (F28): the
+///   guest learns about refusals, not about SMTP failures. Refusals that come after the
+///   hourly hit still use the slot, by design (the hit is the first, cheap guard against
+///   a flood): "no active admin has a usable e-mail address", "mail is shutting down"
+///   and a full queue ("too many mails are being sent").
 ///
 /// A store error is logged and the guest gets "not found" (reads) or a storage error
 /// (writes); inside a request scope it also marks the page volatile, so the degraded
@@ -76,7 +83,8 @@ pub struct StoreHostServices {
     site_url: String,
     /// Opens sealed plugin secrets; `None`: secrets read as unset.
     site_key: Option<SiteKey>,
-    /// The node's mail queue and the site title for subjects; `None`: no `[mail]`.
+    /// The node's mail queue and the subject prefix (`"[<site title>] "` or empty);
+    /// `None`: no `[mail]`.
     mail: Option<(Arc<MailQueue>, String)>,
 }
 
@@ -94,8 +102,13 @@ impl StoreHostServices {
     /// Mail for `mail.notify-admins` through the node's queue (never a transport
     /// directly: SMTP must not run inside a plugin call, F28), with `site_title` (the
     /// configured one, fixed at boot) as the subject prefix.
+    ///
+    /// The title is checked here, once, so it cannot break every plugin mail (review
+    /// M3): one that is not header-safe (control characters, line separators) is not
+    /// used (no prefix, logged), and a longer one is cut to
+    /// [`MAIL_TITLE_PREFIX_CHARS`]. An empty title gives no prefix.
     pub fn with_mailer(mut self, queue: Arc<MailQueue>, site_title: String) -> Self {
-        self.mail = Some((queue, site_title));
+        self.mail = Some((queue, mail_prefix(&site_title)));
         self
     }
 
@@ -337,7 +350,7 @@ impl HostServices for StoreHostServices {
     }
 
     async fn notify_admins(&self, plugin: &str, subject: &str, text: &str) -> Result<(), String> {
-        let Some((queue, site_title)) = &self.mail else {
+        let Some((queue, prefix)) = &self.mail else {
             return Err(ferrite_plugin_host::MAIL_NOT_CONFIGURED.to_owned());
         };
         let bucket = format!("mail:plugin:{plugin}");
@@ -381,11 +394,7 @@ impl HostServices for StoreHostServices {
         if bcc.is_empty() {
             return Err("no active admin has a usable e-mail address".to_owned());
         }
-        let subject = if site_title.trim().is_empty() {
-            subject.to_owned()
-        } else {
-            format!("[{site_title}] {subject}")
-        };
+        let subject = format!("{prefix}{subject}");
         let mail = OutgoingMail {
             to: Vec::new(),
             bcc,
@@ -394,6 +403,23 @@ impl HostServices for StoreHostServices {
         };
         queue.send(mail).await.map_err(|e| e.0)
     }
+}
+
+/// `"[<title>] "` for plugin-mail subjects: nothing for an empty or header-unsafe
+/// title, at most [`MAIL_TITLE_PREFIX_CHARS`] characters of it otherwise.
+fn mail_prefix(site_title: &str) -> String {
+    let title = site_title.trim();
+    if title.is_empty() {
+        return String::new();
+    }
+    if !header_safe(title) {
+        tracing::warn!(
+            "site.title contains control characters; plugin mail subjects get no site prefix"
+        );
+        return String::new();
+    }
+    let cut: String = title.chars().take(MAIL_TITLE_PREFIX_CHARS).collect();
+    format!("[{}] ", cut.trim_end())
 }
 
 /// The core definition of a loaded manifest's setting (the value rules are shared,

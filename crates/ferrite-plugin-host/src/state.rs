@@ -485,6 +485,9 @@ impl mail::Host for HostState {
                 "the subject must be 1 to {MAX_MAIL_SUBJECT_CHARS} characters"
             ));
         }
+        // Header-safety copy 2 of 3 (keep in step): `ferrite_core::mail::header_safe`
+        // (1, applied again by every mailer) and `ferrite-config`'s `valid_mailbox` (3);
+        // this crate does not depend on core.
         if subject
             .chars()
             .any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}')

@@ -114,9 +114,9 @@ pub struct AuthConfig {
     pub secret_key: Option<Secret>,
 }
 
-/// `[mail]` (M2a-2 P17). `smtp_url` is `smtp://` (plain, or STARTTLS with
-/// `?tls=required` / `?tls=opportunistic`) or `smtps://` (implicit TLS), credentials in
-/// the URL; `from` is the sender mailbox (`a@example.com` or `Name <a@example.com>`).
+/// `[mail]` (M2a-2 P17). `smtp_url` is `smtps://` (implicit TLS), `smtp://…?tls=required`
+/// (STARTTLS) or plain `smtp://`, credentials in the URL only over TLS or to a loopback
+/// relay ([`check_smtp_url`](crate::check_smtp_url), R16); `from` is the sender mailbox (`a@example.com` or `Name <a@example.com>`).
 /// Both are shape-checked here; the SMTP mailer parses them again at boot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailConfig {

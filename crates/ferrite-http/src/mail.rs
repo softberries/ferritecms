@@ -1,6 +1,7 @@
 //! The SMTP [`Mailer`] (M2a-2 P17) over lettre's async transport: `smtp://` (plain, or
-//! STARTTLS with `?tls=required`), `smtps://` (implicit TLS, rustls + webpki roots),
-//! credentials in the URL, a 10 s timeout per SMTP command.
+//! STARTTLS with `?tls=required`, which never falls back to plaintext), `smtps://`
+//! (implicit TLS, rustls + webpki roots), credentials in the URL only over TLS or to a
+//! loopback relay (R16), a 10 s timeout per SMTP command.
 //!
 //! Errors never contain the URL, the password, the body or the addresses. Every mail
 //! passes [`OutgoingMail::check`] first, so header-unsafe text is refused before a
@@ -28,11 +29,15 @@ pub struct SmtpMailer {
 impl SmtpMailer {
     /// Parses `mail.smtp_url` and `mail.from` with lettre (at `serve` boot, F30).
     pub fn new(config: &MailConfig) -> Result<Self, MailError> {
+        // The config rule again (R16: credentials only over TLS or to loopback), for a
+        // `MailConfig` not built by `ferrite_config::load`.
+        ferrite_config::check_smtp_url(config.smtp_url.expose())
+            .map_err(|why| MailError(format!("mail.smtp_url {why}")))?;
         let transport = AsyncSmtpTransport::<Tokio1Executor>::from_url(config.smtp_url.expose())
             .map_err(|_| {
                 MailError(
-                    "mail.smtp_url is not a usable SMTP URL (smtp://host[:port][?tls=required] \
-                     or smtps://host[:port])"
+                    "mail.smtp_url is not a usable SMTP URL (smtps://host[:port] or \
+                     smtp://host[:port][?tls=required])"
                         .to_owned(),
                 )
             })?

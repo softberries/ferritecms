@@ -10,5 +10,5 @@ mod model;
 mod tests;
 
 pub use error::{ConfigError, ConfigProblem};
-pub use load::{InitMedia, load, render_default_toml};
+pub use load::{InitMedia, check_smtp_url, load, render_default_toml};
 pub use model::*;

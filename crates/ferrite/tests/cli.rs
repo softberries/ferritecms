@@ -765,7 +765,7 @@ fn config_check_reports_effective_settings() {
     });
     assert_eq!(
         out.trim(),
-        "ok: mode=solo database=sqlite media=local workers=3"
+        "ok: mode=solo database=sqlite media=local workers=3 mail=off"
     );
     // Never touches the database or media folder.
     assert!(!tmp.path().join("ferrite.db").exists());
@@ -795,7 +795,7 @@ fn config_check_applies_env_like_serve() {
     // auto + Postgres + S3 resolves to cluster.
     assert_eq!(
         out.trim(),
-        "ok: mode=cluster database=postgres media=s3 workers=2"
+        "ok: mode=cluster database=postgres media=s3 workers=2 mail=off"
     );
 }
 

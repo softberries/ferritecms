@@ -601,17 +601,15 @@ fn parse_mail(cx: &mut Cx, root: &mut Table) -> Option<MailConfig> {
     let smtp_url = cx.secret(&mut t, "mail", "smtp_url");
     let from = cx.string(&mut t, "mail", "from");
     cx.unknown(t, "mail");
-    let url_ok = smtp_url.as_ref().is_some_and(|u| {
-        let ok = valid_smtp_url(u.expose());
-        if !ok {
-            cx.push(
-                url_path,
-                "must be smtp://host[:port] (optionally ?tls=required or ?tls=opportunistic) \
-                 or smtps://host[:port], with any credentials in the URL",
-            );
-        }
-        ok
-    });
+    let url_ok = smtp_url
+        .as_ref()
+        .is_some_and(|u| match check_smtp_url(u.expose()) {
+            Ok(()) => true,
+            Err(message) => {
+                cx.push(url_path, message);
+                false
+            }
+        });
     match (smtp_url, from) {
         (None, None) => None,
         // Already a problem (both forms, or an unreadable or empty file).
@@ -638,18 +636,60 @@ fn parse_mail(cx: &mut Cx, root: &mut Table) -> Option<MailConfig> {
     }
 }
 
-/// `smtp://` or `smtps://` with a host; `tls` only `required` or `opportunistic`.
-fn valid_smtp_url(s: &str) -> bool {
-    let Ok(u) = url::Url::parse(s) else {
-        return false;
-    };
-    let tls_ok = u.query_pairs().all(|(k, v)| {
-        k != "tls" || (u.scheme() == "smtp" && matches!(&*v, "required" | "opportunistic"))
-    });
-    matches!(u.scheme(), "smtp" | "smtps") && u.host_str().is_some_and(|h| !h.is_empty()) && tls_ok
+const SMTP_URL_SHAPE: &str = "must be smtps://host[:port] (implicit TLS), \
+     smtp://host[:port]?tls=required (STARTTLS) or plain smtp://host[:port], with any \
+     credentials in the URL";
+
+/// `smtps://` or `smtp://` with a host; `tls` only `required`, only on `smtp` (R16:
+/// no opportunistic mode, which falls back to plaintext). Credentials (URL userinfo)
+/// only over TLS (`smtps`, `tls=required`) or to a loopback relay (`localhost`,
+/// `127.0.0.0/8`, `::1`), since lettre authenticates on whatever connection it has.
+/// The messages never contain the URL.
+pub fn check_smtp_url(s: &str) -> Result<(), &'static str> {
+    let u = url::Url::parse(s).map_err(|_| SMTP_URL_SHAPE)?;
+    if !matches!(u.scheme(), "smtp" | "smtps") || u.host_str().is_none_or(str::is_empty) {
+        return Err(SMTP_URL_SHAPE);
+    }
+    let mut required = false;
+    for (k, v) in u.query_pairs() {
+        if k == "tls" {
+            if u.scheme() != "smtp" || v != "required" {
+                return Err("`tls` may only be `required`, and only on smtp:// \
+                     (smtps:// is always TLS; plaintext fallback is not supported)");
+            }
+            required = true;
+        }
+    }
+    let credentials = !u.username().is_empty() || u.password().is_some();
+    let encrypted = u.scheme() == "smtps" || required;
+    if credentials && !encrypted && !is_loopback(&u) {
+        return Err(
+            "credentials need TLS: use smtps:// or smtp://…?tls=required \
+             (plain smtp:// with credentials is allowed only to a loopback relay)",
+        );
+    }
+    Ok(())
+}
+
+/// `localhost`, `127.0.0.0/8` or `::1`. `smtp` is not a "special" URL scheme, so the
+/// `url` crate keeps an IPv4 host as an opaque domain: parse it here.
+fn is_loopback(u: &url::Url) -> bool {
+    match u.host() {
+        Some(url::Host::Domain(d)) => {
+            d.eq_ignore_ascii_case("localhost")
+                || d.parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        }
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
 }
 
 /// `local@domain` or `Display Name <local@domain>`, without control characters.
+/// Header-safety copy 3 of 3 (keep in step): `ferrite_core::mail::{header_safe,
+/// check_address}` (1) and the plugin-host `mail` import's subject check (2); this crate
+/// cannot depend on core.
 fn valid_mailbox(s: &str) -> bool {
     if s.chars().any(char::is_control) {
         return false;
@@ -796,7 +836,10 @@ pub fn render_default_toml(
     );
     out.push_str("# [mail]\n");
     out.push_str("# Outgoing mail (password resets, plugin notices to admins). Unset: no mail.\n");
-    out.push_str("# smtp:// (?tls=required for STARTTLS) or smtps://; credentials in the URL.\n");
+    out.push_str(
+        "# smtps:// or smtp://…?tls=required (STARTTLS); credentials in the URL need TLS\n",
+    );
+    out.push_str("# (plain smtp:// with credentials only to a loopback relay).\n");
     out.push_str(
         "# smtp_url_file = \"/run/secrets/smtp_url\"  # or smtp_url = \"smtps://user:pass@host\"\n",
     );

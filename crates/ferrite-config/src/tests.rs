@@ -674,7 +674,6 @@ fn mail_section_rules() {
     for url in [
         "smtp://127.0.0.1:2525",
         "smtp://mail.example.com?tls=required",
-        "smtp://mail.example.com?tls=opportunistic",
     ] {
         let (_d, r) = run(
             Some(&format!(
@@ -692,6 +691,10 @@ fn mail_section_rules() {
         "smtp://user:topsecretpw@/",
         "not a url topsecretpw",
         "smtp://user:topsecretpw@mail.example.com?tls=sometimes",
+        // R16: no opportunistic mode (it falls back to plaintext).
+        "smtp://user:topsecretpw@mail.example.com?tls=opportunistic",
+        "smtp://mail.example.com?tls=opportunistic topsecretpw",
+        "smtps://user:topsecretpw@mail.example.com?tls=required",
     ] {
         let (_d, r) = run(
             Some(&format!(
@@ -785,4 +788,55 @@ fn mail_section_rules() {
         &[],
     );
     assert_eq!(paths(&r.unwrap_err()), ["mail.port"]);
+}
+
+/// R16: credentials in the SMTP URL only over TLS (`smtps`, `tls=required`) or on plain
+/// `smtp` to a loopback relay; `config check` names the reason, never the URL.
+#[test]
+fn mail_credentials_need_tls() {
+    let check = |url: &str| {
+        let (_d, r) = run(
+            Some(&format!(
+                "{MIN}[mail]\nsmtp_url = \"{url}\"\nfrom = \"a@example.com\"\n"
+            )),
+            &[],
+        );
+        r
+    };
+    for url in [
+        "smtps://user:topsecretpw@mail.example.com",
+        "smtp://user:topsecretpw@mail.example.com:587?tls=required",
+        "smtp://user:topsecretpw@localhost:25",
+        "smtp://user:topsecretpw@LOCALHOST",
+        "smtp://user:topsecretpw@127.0.0.1:2525",
+        "smtp://user:topsecretpw@127.1.2.3",
+        "smtp://user:topsecretpw@[::1]:25",
+        "smtp://mail.example.com:25",
+    ] {
+        assert!(check(url).is_ok(), "{url}");
+    }
+    for url in [
+        "smtp://user:topsecretpw@mail.example.com:25",
+        "smtp://user@mail.example.com",
+        "smtp://:topsecretpw@mail.example.com",
+        "smtp://user:topsecretpw@10.0.0.1",
+        "smtp://user:topsecretpw@localhost.example.com",
+        "smtp://user:topsecretpw@[::2]",
+    ] {
+        let e = check(url).unwrap_err();
+        assert_eq!(paths(&e), ["mail.smtp_url"], "{url}");
+        let text = e.to_string();
+        assert!(text.contains("credentials need TLS"), "{url}: {text}");
+        assert!(
+            !text.contains("topsecretpw") && !text.contains("example.com:"),
+            "{text}"
+        );
+    }
+    let e = check("smtp://user:topsecretpw@mail.example.com?tls=opportunistic").unwrap_err();
+    assert!(
+        e.to_string().contains("`tls` may only be `required`"),
+        "{e}"
+    );
+    assert_eq!(check_smtp_url("smtp://u:p@h.example?tls=required"), Ok(()));
+    assert!(check_smtp_url("smtp://u:p@h.example").is_err());
 }

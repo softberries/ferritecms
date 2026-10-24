@@ -277,20 +277,26 @@ failure_window = "10m"
 
 [mail]                                 # optional; unset: no outgoing mail
 # smtp_url = "smtps://user:pass@mail.example.com"   # or smtp_url_file; a secret
-#   smtp://host[:port] plain, ?tls=required (STARTTLS) or ?tls=opportunistic; smtps:// implicit TLS
+#   smtps:// implicit TLS; smtp://…?tls=required STARTTLS; plain smtp:// (credentials only to a loopback relay)
 # from = "Site <noreply@example.com>"  # required with smtp_url; "a@b" or "Name <a@b>"
 ```
 
 **Mail** (`[mail]`, M2a-2 P17). The SMTP password lives only in the URL, so only in the
 config file, a `smtp_url_file` or `FERRITE_MAIL__SMTP_URL`, never in the database. `load`
-checks the shape (scheme `smtp`/`smtps`, a host, `tls` only `required`/`opportunistic` on
-`smtp`; `from` a plain address or `Name <address>` without control characters, required
+checks the shape (scheme `smtp`/`smtps`, a host, `tls` only `required` and only on
+`smtp` — there is no opportunistic mode, which would fall back to plaintext; credentials
+in the URL only with `smtps` or `tls=required`, or on plain `smtp` to a loopback relay
+(`localhost`, `127.0.0.0/8`, `::1`), since lettre authenticates on whatever connection it
+has, R16; `from` a plain address or `Name <address>` without control characters, required
 with `smtp_url`, refused without it) without echoing the URL; `serve` then parses both
 with lettre (`ferrite_http::mail::SmtpMailer`, 10 s per SMTP step), so a value lettre
 refuses stops startup. Mail leaves through the node's `ferrite_core::mail::MailQueue`: at
 most 16 sends in flight (more are refused), each bounded by 10 s, run in background tasks
 so no plugin call or request waits for SMTP, and cancelled at shutdown inside the
-background-stop second. Every mailer refuses (never folds) control characters, CR/LF and
+background-stop second (only an explicit shutdown cancels; a dropped queue lets its sends
+finish). Plugin mail subjects are prefixed with `[<site.title>] `, the title cut to 100
+characters, and left out when it is empty or contains control characters (checked once
+when `serve` builds the services). Every mailer refuses (never folds) control characters, CR/LF and
 Unicode line separators in subjects and addresses. Without `[mail]` the plugin
 `mail.notify-admins` import answers "mail is not configured".
 
@@ -332,7 +338,7 @@ secrets.
 
 `ferrite config check --data DIR` runs exactly this `load` (file + `FERRITE_*` environment)
 without opening the database or media, and prints
-`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n>` (exit 0)
+`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off>` (exit 0)
 or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
 
 `ferrite-config` also renders the template that `ferrite init` writes

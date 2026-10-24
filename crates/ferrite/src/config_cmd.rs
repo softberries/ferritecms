@@ -13,7 +13,7 @@ pub enum ConfigCommand {
     /// Load ferrite.toml and FERRITE_* variables exactly as `serve` does, without
     /// touching the database or media.
     ///
-    /// Prints `ok: mode=… database=… media=… workers=…` and exits 0, or prints every
+    /// Prints `ok: mode=… database=… media=… workers=… mail=…` and exits 0, or prints every
     /// problem to stderr and exits 1.
     Check(DataArg),
 }
@@ -47,8 +47,13 @@ fn summary(config: &Config) -> String {
         MediaSection::Local { .. } => "local",
         MediaSection::S3 { .. } => "s3",
     };
+    let mail = if config.mail.is_some() {
+        "configured"
+    } else {
+        "off"
+    };
     format!(
-        "ok: mode={mode} database={database} media={media} workers={}",
+        "ok: mode={mode} database={database} media={media} workers={} mail={mail}",
         config.cluster.workers
     )
 }

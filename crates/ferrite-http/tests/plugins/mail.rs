@@ -21,6 +21,8 @@ use crate::profile_tests;
 
 profile_tests!(
     notify_admins_reaches_admins_only,
+    notifier_cuts_long_titles,
+    site_title_prefix_is_bounded,
     mail_flood_is_capped,
     mail_header_injection_is_refused,
     mail_refused_on_render_path,
@@ -38,12 +40,15 @@ struct Mail {
 
 /// Installs example plugin `name` and loads it into a mail-enabled host.
 async fn mail_host(site: &Site, name: &str) -> Mail {
+    mail_host_titled(site, name, MAIL_SITE_TITLE).await
+}
+
+/// [`mail_host`] with `title` as the configured site title.
+async fn mail_host_titled(site: &Site, name: &str, title: &str) -> Mail {
     let mailer = Arc::new(MemoryMailer::new());
     let services = Arc::new(
-        StoreHostServices::new(site.store.clone(), site.reader.clone(), SITE_URL).with_mailer(
-            Arc::new(MailQueue::new(mailer.clone())),
-            MAIL_SITE_TITLE.to_owned(),
-        ),
+        StoreHostServices::new(site.store.clone(), site.reader.clone(), SITE_URL)
+            .with_mailer(Arc::new(MailQueue::new(mailer.clone())), title.to_owned()),
     );
     let host = Arc::new(PluginHost::new(HostConfig::default(), services).unwrap());
     site.install(name).await;
@@ -121,6 +126,59 @@ async fn notify_admins_reaches_admins_only(site: Site) -> Site {
         format!("The post \"Hello\" was published.\nPost id: {id}\n\n-- \nSent by plugin notifier")
     );
     assert_eq!(m.mailer.wait_for(2, GRACE).await.len(), 1);
+    site
+}
+
+/// Review M4: the example cuts a long post title so its subject stays within 200.
+async fn notifier_cuts_long_titles(site: Site) -> Site {
+    site.user("root", Role::Admin).await;
+    let author = site.user("ada", Role::Author).await;
+    let title = "Ü".repeat(250);
+    let id = site
+        .post(
+            &author,
+            "long",
+            &title,
+            ContentStatus::Published,
+            Some(-HOUR),
+        )
+        .await;
+    let m = mail_host(&site, "notifier").await;
+    m.host
+        .dispatch_action("notifier", "post.published", event(&id.to_string()))
+        .await
+        .unwrap();
+    let sent = m.mailer.wait_for(1, WAIT).await;
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        sent[0].subject,
+        format!("[{MAIL_SITE_TITLE}] Published: {}…", "Ü".repeat(180))
+    );
+    site
+}
+
+/// Review M3: a header-unsafe site title gives no prefix (instead of breaking every
+/// plugin mail); a long one is cut to 100 characters.
+async fn site_title_prefix_is_bounded(site: Site) -> Site {
+    site.user("root", Role::Admin).await;
+    let bad = mail_host_titled(&site, "mail-flood", "Bad\r\nBcc: victim@evil.test").await;
+    bad.host
+        .dispatch_action("mail-flood", "post.published", event("Hello"))
+        .await
+        .unwrap();
+    assert_eq!(kv(&site, "inject").await, "ok");
+    let sent = bad.mailer.wait_for(1, WAIT).await;
+    assert_eq!(sent[0].subject, "Hello");
+
+    let long = mail_host_titled(&site, "mail-flood", &"T".repeat(300)).await;
+    let max = "x".repeat(200);
+    long.host
+        .dispatch_action("mail-flood", "post.published", event(&max))
+        .await
+        .unwrap();
+    assert_eq!(kv(&site, "inject").await, "ok");
+    let sent = long.mailer.wait_for(1, WAIT).await;
+    assert_eq!(sent[0].subject, format!("[{}] {max}", "T".repeat(100)));
     site
 }
 
@@ -404,6 +462,43 @@ async fn smtp_mailer_sends_to_a_fake_server() {
     assert!(got.data.contains("Line one"), "{}", got.data);
 }
 
+/// Review M2: a non-ASCII subject and `from` name go out as RFC 2047 encoded words; a
+/// hostile body (bare LF, lone dots, fake SMTP commands) is CRLF-normalised and
+/// dot-stuffed, so it cannot end DATA or start another transaction.
+#[tokio::test]
+async fn smtp_mailer_encodes_subjects_and_stuffs_hostile_bodies() {
+    let (port, sink) = smtp_sink().await;
+    let mut config = mail_config(port);
+    config.from = "Sïte <noreply@example.com>".into();
+    let mailer = SmtpMailer::new(&config).unwrap();
+    let body =
+        "line one\n.\nMAIL FROM:<evil@evil.test>\r\n.\r\nRCPT TO:<victim@evil.test>\n..two\nend";
+    mailer
+        .send(OutgoingMail {
+            to: Vec::new(),
+            bcc: vec!["amy@example.com".into()],
+            subject: "[Tést] Héllo ✓".into(),
+            text: body.into(),
+        })
+        .await
+        .unwrap();
+    let got = tokio::time::timeout(WAIT, sink).await.unwrap().unwrap();
+    assert_eq!(got.mail_from, "<noreply@example.com>");
+    assert_eq!(got.rcpt_to, ["<amy@example.com>"], "no injected recipient");
+    let data = &got.data;
+    assert!(data.contains("Subject: =?utf-8?"), "{data}");
+    assert!(!data.contains("Héllo"), "encoded, not raw: {data}");
+    assert!(data.contains("From: =?utf-8?"), "{data}");
+    // Every line ends in CRLF (no bare LF), and body lines starting with "." are
+    // stuffed: the sink (which ends DATA at a lone ".") received the whole body.
+    assert!(!data.replace("\r\n", "").contains('\n'), "{data:?}");
+    assert!(
+        data.contains("\r\n..\r\nMAIL FROM:<evil@evil.test>\r\n..\r\n"),
+        "{data:?}"
+    );
+    assert!(data.contains("\r\n...two\r\nend"), "{data:?}");
+}
+
 #[tokio::test]
 async fn smtp_mailer_refuses_injection_before_connecting() {
     // Nothing listens on the port: a refused mail never gets as far as connecting.
@@ -432,6 +527,7 @@ async fn smtp_mailer_refuses_injection_before_connecting() {
 
 #[test]
 fn smtp_mailer_rejects_bad_config_without_echoing_it() {
+    // R16 holds for a `MailConfig` built by hand, too.
     let cfg = |url: &str, from: &str| MailConfig {
         smtp_url: Secret::new(url),
         from: from.into(),
@@ -439,7 +535,9 @@ fn smtp_mailer_rejects_bad_config_without_echoing_it() {
     for (url, from) in [
         ("ftp://u:topsecretpw@h", "a@example.com"),
         ("smtp://u:topsecretpw@h?tls=sometimes", "a@example.com"),
-        ("smtp://u:topsecretpw@h", "not a mailbox"),
+        ("smtp://u:topsecretpw@127.0.0.1", "not a mailbox"),
+        ("smtp://u:topsecretpw@mail.example.com", "a@example.com"),
+        ("smtp://u:topsecretpw@h?tls=opportunistic", "a@example.com"),
     ] {
         let e = SmtpMailer::new(&cfg(url, from)).err().expect(url);
         assert!(!e.0.contains("topsecretpw"), "{e}");
