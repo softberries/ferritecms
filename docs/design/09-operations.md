@@ -161,12 +161,19 @@ retry `system:write`) have:
   addresses and credentials (the node log has the full text); `handled` says whether
   some live node lists the kind in its `nodes.meta.job_kinds` (each node publishes the
   kinds its runner handles). A queued job with `handled = false` waits for a node that
-  knows the kind (a newer version in a rolling deploy, say).
+  knows the kind (a newer version in a rolling deploy, say). Each filter combination reads one index
+  (`jobs_status_created_idx`, `jobs_kind_created_idx`, `jobs_created_idx`; 0006).
 - `POST /api/v1/system/jobs/{id}/retry`: a `dead` job back to `queued`, due now with
   `attempts = 0`, `last_error` and `unique_key` kept, in one conditional statement;
   audited `job.retry` (`{id, kind}`). Any other status is `422` (field `status`); the
   retry does not check `handled` (the answer says it). A done job is never re-run; run
-  it again by its own trigger.
+  it again by its own trigger. The hourly job prune re-checks status and age in its outer
+  `WHERE`, so a job retried while a prune batch waits on its row lock is kept. If the
+  node list cannot be read after a committed retry, the answer is still `200` with
+  `handled: null`.
+- Both summary endpoints count jobs with a `GROUP BY status` over the table and run the
+  page cache's pending maintenance on each call: fine for an admin page, not for a
+  tight polling loop.
 
 **Planned (M4).** A node-local metrics registry and `/metrics` (Prometheus); in cluster
 mode each node writes a 1-minute summary row (`node_metrics`, retained 7 days) so the

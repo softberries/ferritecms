@@ -139,9 +139,12 @@ impl IdempotencyRepo for SqliteRepos {
 
     async fn prune(&self, created_before: Timestamp, limit: u32) -> Result<u64, StoreError> {
         let limit = check_prune_limit(limit)?;
+        // As on Postgres the outer predicate repeats the subquery's (moot under the single
+        // writer); `NOT INDEXED` keeps the outer delete on rowid lookups.
         let done = run!(&self.writer, |e| sqlx::query(
-            "DELETE FROM idempotency_keys WHERE rowid IN \
-             (SELECT rowid FROM idempotency_keys WHERE created_at < ? LIMIT ?)"
+            "DELETE FROM idempotency_keys NOT INDEXED WHERE rowid IN \
+             (SELECT rowid FROM idempotency_keys WHERE created_at < ?1 LIMIT ?2) \
+             AND created_at < ?1"
         )
         .bind(created_before.as_micros())
         .bind(limit)

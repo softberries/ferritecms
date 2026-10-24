@@ -68,9 +68,12 @@ impl NodeRepo for PgRepos {
 
     async fn prune(&self, heartbeat_before: Timestamp, limit: u32) -> Result<u64, StoreError> {
         let limit = check_prune_limit(limit)?;
+        // The outer predicate repeats the subquery's: a row picked here and touched
+        // meanwhile (READ COMMITTED re-checks only the outer `WHERE`) is kept.
         let done = run!(&self.exec, |e| sqlx::query(
             "DELETE FROM nodes WHERE id IN \
-             (SELECT id FROM nodes WHERE heartbeat_at < $1 LIMIT $2)"
+             (SELECT id FROM nodes WHERE heartbeat_at < $1 LIMIT $2) \
+             AND heartbeat_at < $1"
         )
         .bind(DateTime::<Utc>::from(heartbeat_before))
         .bind(limit)

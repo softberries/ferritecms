@@ -128,10 +128,13 @@ impl SessionRepo for PgRepos {
         limit: u32,
     ) -> Result<u64, StoreError> {
         let limit = check_prune_limit(limit)?;
+        // The outer predicate repeats the subquery's: a row picked here and touched
+        // meanwhile (READ COMMITTED re-checks only the outer `WHERE`) is kept.
         let done = run!(&self.exec, |e| sqlx::query(
             "DELETE FROM sessions WHERE id_hash IN \
              (SELECT id_hash FROM sessions WHERE expires_at < $1 OR last_seen_at < $2 \
-              LIMIT $3)"
+              LIMIT $3) \
+             AND (expires_at < $1 OR last_seen_at < $2)"
         )
         .bind(pg_ts(now))
         .bind(pg_ts(idle_before))
@@ -263,9 +266,12 @@ impl RateLimitRepo for PgRepos {
 
     async fn prune(&self, window_before: Timestamp, limit: u32) -> Result<u64, StoreError> {
         let limit = check_prune_limit(limit)?;
+        // The outer predicate repeats the subquery's: a row picked here and touched
+        // meanwhile (READ COMMITTED re-checks only the outer `WHERE`) is kept.
         let done = run!(&self.exec, |e| sqlx::query(
             "DELETE FROM rate_limits WHERE bucket IN \
-             (SELECT bucket FROM rate_limits WHERE window_start < $1 LIMIT $2)"
+             (SELECT bucket FROM rate_limits WHERE window_start < $1 LIMIT $2) \
+             AND window_start < $1"
         )
         .bind(pg_ts(window_before))
         .bind(limit)

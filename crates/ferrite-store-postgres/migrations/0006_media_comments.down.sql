@@ -3,6 +3,7 @@
 -- runner reads it): idempotency keys are lost, every sanitised SVG loses its marker (it
 -- is served as an attachment again), and comments lose the mark of having been written
 -- by an account.
+DROP INDEX jobs_kind_created_idx;
 DROP INDEX jobs_created_idx;
 DROP INDEX jobs_status_created_idx;
 DROP INDEX comments_user_idx;

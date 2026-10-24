@@ -229,6 +229,7 @@ backend_tests_spawning!(
     kv_quota_never_exceeded,
     jobs_claim_is_exclusive_under_concurrency,
     jobs_concurrent_enqueue_same_key,
+    prune_spares_a_retried_job,
     plugin_auto_disable_concurrent_single_transition,
     plugin_get_for_update_locks_the_row,
     media_get_for_update_locks_the_row,

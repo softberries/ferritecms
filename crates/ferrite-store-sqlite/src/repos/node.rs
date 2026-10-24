@@ -72,9 +72,12 @@ impl NodeRepo for SqliteRepos {
 
     async fn prune(&self, heartbeat_before: Timestamp, limit: u32) -> Result<u64, StoreError> {
         let limit = check_prune_limit(limit)?;
+        // As on Postgres the outer predicate repeats the subquery's (moot under the single
+        // writer); `NOT INDEXED` keeps the outer delete on rowid lookups.
         let done = run!(&self.writer, |e| sqlx::query(
-            "DELETE FROM nodes WHERE rowid IN \
-             (SELECT rowid FROM nodes WHERE heartbeat_at < ? LIMIT ?)"
+            "DELETE FROM nodes NOT INDEXED WHERE rowid IN \
+             (SELECT rowid FROM nodes WHERE heartbeat_at < ?1 LIMIT ?2) \
+             AND heartbeat_at < ?1"
         )
         .bind(heartbeat_before.as_micros())
         .bind(limit)

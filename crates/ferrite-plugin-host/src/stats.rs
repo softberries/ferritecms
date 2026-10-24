@@ -57,10 +57,15 @@ pub(crate) enum Outcome {
     Busy,
 }
 
-/// The host's counters.
+/// One plugin's counters, by hook name.
+type PluginHooks = HashMap<Box<str>, HookStats>;
+
+/// The host's counters: per plugin, per hook. A call allocates nothing once its
+/// plugin and hook have an entry (two `&str` lookups under the lock); the first call
+/// of a new plugin or hook allocates its entry.
 #[derive(Debug, Default)]
 pub(crate) struct CallStats {
-    hooks: Mutex<HashMap<(String, String), HookStats>>,
+    plugins: Mutex<HashMap<Box<str>, PluginHooks>>,
     calls: AtomicU64,
     failures: AtomicU64,
 }
@@ -77,18 +82,26 @@ impl CallStats {
         if matches!(outcome, Outcome::Failure(_)) {
             self.failures.fetch_add(1, Ordering::Relaxed);
         }
-        let mut hooks = self.hooks.lock().unwrap_or_else(PoisonError::into_inner);
-        let key = (plugin.to_owned(), hook.to_owned());
-        if !hooks.contains_key(&key) {
-            let tracked = hooks.keys().filter(|(p, _)| p == plugin).count();
-            if tracked >= MAX_STATS_HOOKS {
+        let mut plugins = self.plugins.lock().unwrap_or_else(PoisonError::into_inner);
+        if !plugins.contains_key(plugin) {
+            plugins.insert(plugin.into(), HashMap::new());
+        }
+        let Some(hooks) = plugins.get_mut(plugin) else {
+            return;
+        };
+        if !hooks.contains_key(hook) {
+            if hooks.len() >= MAX_STATS_HOOKS {
                 return;
             }
+            let stats = HookStats {
+                hook: hook.to_owned(),
+                ..HookStats::default()
+            };
+            hooks.insert(hook.into(), stats);
         }
-        let stats = hooks.entry(key).or_insert_with(|| HookStats {
-            hook: hook.to_owned(),
-            ..HookStats::default()
-        });
+        let Some(stats) = hooks.get_mut(hook) else {
+            return;
+        };
         match outcome {
             Outcome::Success(_) => {}
             Outcome::Failure(_) => stats.failures += 1,
@@ -106,14 +119,20 @@ impl CallStats {
 
     /// `plugin`'s hooks, by name.
     pub(crate) fn of(&self, plugin: &str) -> Vec<HookStats> {
-        let hooks = self.hooks.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut out: Vec<HookStats> = hooks
-            .iter()
-            .filter(|((p, _), _)| p == plugin)
-            .map(|(_, s)| s.clone())
-            .collect();
+        let plugins = self.plugins.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut out: Vec<HookStats> = plugins
+            .get(plugin)
+            .map(|hooks| hooks.values().cloned().collect())
+            .unwrap_or_default();
         out.sort_by(|a, b| a.hook.cmp(&b.hook));
         out
+    }
+
+    /// Drops the counters of every plugin `loaded` rejects (uninstalled from the host).
+    /// The totals keep counting their calls.
+    pub(crate) fn retain(&self, loaded: impl Fn(&str) -> bool) {
+        let mut plugins = self.plugins.lock().unwrap_or_else(PoisonError::into_inner);
+        plugins.retain(|name, _| loaded(name));
     }
 
     /// Calls that ran and failures, every plugin and hook.
@@ -210,5 +229,20 @@ mod tests {
             .find(|s| s.hook == "route GET /0")
             .unwrap();
         assert_eq!(first.calls, 2);
+    }
+
+    #[test]
+    fn retain_drops_uninstalled_plugins() {
+        let stats = CallStats::default();
+        stats.record("p", "render.head", Outcome::Success(Duration::ZERO));
+        stats.record("q", "render.head", Outcome::Failure(Duration::ZERO));
+        stats.retain(|name| name == "q");
+        assert!(stats.of("p").is_empty());
+        assert_eq!(stats.of("q").len(), 1);
+        assert_eq!(
+            stats.totals(),
+            (2, 1),
+            "totals are since the host was built"
+        );
     }
 }

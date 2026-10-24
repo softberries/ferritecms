@@ -269,6 +269,10 @@ impl PluginHost {
             self.failures.reset(&p.name);
         }
         self.registry.rcu(|r| r.rebuilt(&prepared, &keep));
+        // An uninstalled plugin's call statistics go with it (a later install of the
+        // same name starts at zero); a replaced or kept one keeps counting.
+        let registry = self.registry.load();
+        self.stats.retain(|name| registry.get(name).is_some());
         for p in &prepared {
             tracing::info!(
                 plugin = %p.name,

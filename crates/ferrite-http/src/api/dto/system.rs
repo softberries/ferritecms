@@ -221,12 +221,13 @@ pub struct JobDto {
     pub locked_by: Option<Uuid>,
     /// Some live node runs jobs of this kind (its `meta.job_kinds`). `false`: the job
     /// waits until a node that knows the kind joins (e.g. one running a newer
-    /// version, or with the plugin's handler).
-    pub handled: bool,
+    /// version, or with the plugin's handler). `null`: unknown; only a retry answers
+    /// it, when the node list could not be read after the retry committed.
+    pub handled: Option<bool>,
 }
 
 impl JobDto {
-    pub fn new(job: Job, handled: bool) -> Self {
+    pub fn new(job: Job, handled: Option<bool>) -> Self {
         Self {
             id: job.id.as_uuid(),
             kind: job.kind,

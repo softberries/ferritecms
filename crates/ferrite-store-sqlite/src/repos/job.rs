@@ -10,7 +10,7 @@ use ferrite_store::{
     JobRepo, StoreError, check_claim, check_job_duration, check_job_query, check_new_job,
     check_prune_limit, encode_job_cursor, job_backoff, sanitize_job_error, sort_claimed,
 };
-use sqlx::{AssertSqlSafe, QueryBuilder, Sqlite};
+use sqlx::AssertSqlSafe;
 
 use super::SqliteRepos;
 use crate::{
@@ -64,12 +64,36 @@ pub(crate) fn claim_sql() -> String {
 
 /// Prune of finished jobs: a range on `jobs_finished_idx` (pinned as in
 /// [`PRECHECK_SQL`]; without statistics `jobs_status_created_idx` would win and walk every
-/// done row) bounded by the later cut-off, then the per-status cut-offs. Binds
-/// done_before, dead_before, limit.
-pub(crate) const PRUNE_SQL: &str = "DELETE FROM jobs WHERE rowid IN (SELECT rowid FROM jobs \
+/// done row) bounded by the later cut-off, then the per-status cut-offs. The outer
+/// `WHERE` repeats them (as on Postgres, where a concurrent `retry_dead` can change a
+/// picked row; the single writer rules that out here) and `NOT INDEXED` keeps the outer
+/// delete on rowid lookups (otherwise the repeated `status` terms walk
+/// `jobs_status_created_idx`). Binds done_before, dead_before, limit.
+pub(crate) const PRUNE_SQL: &str = "DELETE FROM jobs NOT INDEXED WHERE rowid IN (SELECT rowid FROM jobs \
      INDEXED BY jobs_finished_idx WHERE finished_at < max(?1, ?2) \
      AND ((status = 'done' AND finished_at < ?1) OR (status = 'dead' AND finished_at < ?2)) \
-     LIMIT ?3)";
+     LIMIT ?3) \
+     AND ((status = 'done' AND finished_at < ?1) OR (status = 'dead' AND finished_at < ?2))";
+
+/// The job list (newest first) with only the given filters, so the planner picks the
+/// matching index: `jobs_status_created_idx` with `status`, `jobs_kind_created_idx` with
+/// only `kind`, `jobs_created_idx` without either (0006, F26; pinned by
+/// `claim_statements_use_indexes`). Binds status, kind, cursor at and id (each when
+/// present), then the row limit.
+pub(crate) fn list_sql(status: bool, kind: bool, cursor: bool) -> String {
+    let mut sql = format!("SELECT {JOB_COLUMNS} FROM jobs WHERE 1 = 1");
+    if status {
+        sql.push_str(" AND status = ?");
+    }
+    if kind {
+        sql.push_str(" AND kind = ?");
+    }
+    if cursor {
+        sql.push_str(" AND (created_at, id) < (?, ?)");
+    }
+    sql.push_str(" ORDER BY created_at DESC, id DESC LIMIT ?");
+    sql
+}
 
 fn micros(now: Timestamp, d: Duration, what: &str, positive: bool) -> Result<i64, StoreError> {
     let d = check_job_duration(what, d, positive)?;
@@ -254,26 +278,23 @@ impl JobRepo for SqliteRepos {
 
     async fn list(&self, query: &JobQuery) -> Result<Page<Job>, StoreError> {
         let (limit, after) = check_job_query(query)?;
-        // Only the filters given are in the SQL: with `status` the planner walks
-        // `jobs_status_created_idx`, without it `jobs_created_idx` (0006, F26).
-        let mut qb =
-            QueryBuilder::<Sqlite>::new(format!("SELECT {JOB_COLUMNS} FROM jobs WHERE 1 = 1"));
+        let sql = list_sql(
+            query.status.is_some(),
+            query.kind.is_some(),
+            after.is_some(),
+        );
+        let mut q = sqlx::query(AssertSqlSafe(sql));
         if let Some(status) = query.status {
-            qb.push(" AND status = ").push_bind(status.as_str());
+            q = q.bind(status.as_str());
         }
         if let Some(kind) = &query.kind {
-            qb.push(" AND kind = ").push_bind(kind);
+            q = q.bind(kind.as_str());
         }
         if let Some((at, id)) = after {
-            qb.push(" AND (created_at, id) < (")
-                .push_bind(at)
-                .push(", ")
-                .push_bind(id)
-                .push(")");
+            q = q.bind(at).bind(id);
         }
-        qb.push(" ORDER BY created_at DESC, id DESC LIMIT ")
-            .push_bind(i64::from(limit) + 1);
-        let rows = run!(&self.reader, |e| qb.build().fetch_all(e))?;
+        let q = q.bind(i64::from(limit) + 1);
+        let rows = run!(&self.reader, |e| q.fetch_all(e))?;
         let mut items = rows.iter().map(codec::job).collect::<Result<Vec<_>, _>>()?;
         let next_cursor = if items.len() > limit as usize {
             items.truncate(limit as usize);
@@ -342,6 +363,9 @@ mod tests {
             q = match *b {
                 "kinds" => q.bind(r#"["a","b"]"#),
                 "node" => q.bind("n"),
+                "status" => q.bind("dead"),
+                "kind" => q.bind("a"),
+                "id" => q.bind(uuid::Uuid::nil()),
                 _ => q.bind(2_000_000_i64),
             };
         }
@@ -398,8 +422,49 @@ mod tests {
                 assert!(plan.contains("jobs_due_idx"), "{name}: {plan}");
                 assert!(plan.contains("jobs_lease_idx"), "{name}: {plan}");
             }
+            // The job list: each filter combination on its index, never a table scan
+            // or a sort of the whole table.
+            for (status, kind, cursor, index) in [
+                (false, false, false, "jobs_created_idx"),
+                (false, false, true, "jobs_created_idx"),
+                (true, false, false, "jobs_status_created_idx"),
+                (true, false, true, "jobs_status_created_idx"),
+                (false, true, false, "jobs_kind_created_idx"),
+                (false, true, true, "jobs_kind_created_idx"),
+            ] {
+                let mut binds = Vec::new();
+                if status {
+                    binds.push("status");
+                }
+                if kind {
+                    binds.push("kind");
+                }
+                if cursor {
+                    binds.extend(["now", "id"]);
+                }
+                binds.push("now");
+                let p = plan(&store, &list_sql(status, kind, cursor), &binds).await;
+                eprintln!("-- list status={status} kind={kind} cursor={cursor}\n{p}");
+                assert!(p.contains(index), "list {status} {kind} {cursor}: {p}");
+                assert!(
+                    !p.contains("SCAN jobs\n") && !p.ends_with("SCAN jobs"),
+                    "{p}"
+                );
+                assert!(!p.contains("TEMP B-TREE"), "list sorts: {p}");
+            }
+            let both = plan(
+                &store,
+                &list_sql(true, true, false),
+                &["status", "kind", "now"],
+            )
+            .await;
+            assert!(both.contains("INDEX jobs_"), "status+kind: {both}");
+            assert!(!both.contains("TEMP B-TREE"), "status+kind sorts: {both}");
+
             assert!(reaper.contains("jobs_lease_idx"), "reaper: {reaper}");
             assert!(prune.contains("jobs_finished_idx"), "prune: {prune}");
+            assert!(prune.contains("INTEGER PRIMARY KEY"), "prune: {prune}");
+            assert!(!prune.contains("jobs_status_created_idx"), "prune: {prune}");
             for plan in [&pre, &reaper, &claim, &prune] {
                 assert!(!plan.contains("SCAN jobs"), "{plan}");
             }

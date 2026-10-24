@@ -39,3 +39,4 @@ CREATE INDEX comments_user_idx ON comments (user_id, status);
 
 CREATE INDEX jobs_status_created_idx ON jobs (status, created_at, id);
 CREATE INDEX jobs_created_idx ON jobs (created_at, id);
+CREATE INDEX jobs_kind_created_idx ON jobs (kind, created_at, id);

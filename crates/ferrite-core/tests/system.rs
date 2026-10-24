@@ -6,7 +6,9 @@
 use ferrite_core::{Actor, CoreError, Scopes, SystemService};
 use ferrite_domain::{JobStatus, NewJob, NewNode, NewUser, NodeId, Role, UserId, UserStatus};
 use ferrite_store::{Compat, Store};
-use ferrite_store_tests::{TestDb, backend_tests};
+use std::{sync::Arc, time::Duration};
+
+use ferrite_store_tests::{TestDb, backend_tests, backend_tests_spawning};
 use serde_json::json;
 
 async fn actor(store: &dyn Store, role: Role) -> Actor {
@@ -142,3 +144,76 @@ backend_tests!(
     system_reads_need_manage_system,
     node_meta_errors_are_scrubbed_on_read,
 );
+
+/// Review M1: two nodes (Postgres `peer()`; SQLite one store, whose writes are
+/// serialised) retry the same dead job at once. Exactly one wins; the other sees a
+/// queued job (`status`); one `job.retry` audit row.
+pub async fn concurrent_retry_one_wins(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    let other = db.peer().await.unwrap_or_else(|| db.shared_store());
+    let admin = actor(store.as_ref(), Role::Admin).await;
+    for round in 0..4 {
+        let kind = format!("race.k{round}");
+        let mut new = NewJob::new(kind.clone(), json!({"v": 1}));
+        new.max_attempts = 1;
+        let jobs = store.read().jobs();
+        let id = jobs.enqueue(&new).await.unwrap().unwrap();
+        let lease = jobs
+            .claim(
+                NodeId::new(),
+                std::slice::from_ref(&kind),
+                1,
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap()[0]
+            .lease()
+            .unwrap();
+        jobs.fail(&lease, "boom", true).await.unwrap();
+        let audits_before = store
+            .read()
+            .audit()
+            .list(200, None)
+            .await
+            .unwrap()
+            .items
+            .len();
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let spawn = |store: Arc<dyn Store>| {
+            let barrier = barrier.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                SystemService::new(store).retry_job(&admin, id).await
+            })
+        };
+        let (a, b) = (spawn(store.clone()), spawn(other.clone()));
+        let results = [a.await.unwrap(), b.await.unwrap()];
+        let wins: Vec<_> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+        assert_eq!(wins.len(), 1, "round {round}: {results:?}");
+        assert_eq!(wins[0].status, JobStatus::Queued);
+        let lost = results.iter().find_map(|r| r.as_ref().err()).unwrap();
+        assert!(
+            matches!(
+                lost,
+                CoreError::InvalidField {
+                    field: "status",
+                    ..
+                }
+            ),
+            "round {round}: {lost:?}"
+        );
+        let audits = store.read().audit().list(200, None).await.unwrap().items;
+        assert_eq!(
+            audits.len(),
+            audits_before + 1,
+            "round {round}: one audit row"
+        );
+        assert_eq!(audits[0].action, "job.retry");
+        assert_eq!(
+            audits[0].target_id.as_deref(),
+            Some(id.to_string().as_str())
+        );
+    }
+}
+
+backend_tests_spawning!(concurrent_retry_one_wins);

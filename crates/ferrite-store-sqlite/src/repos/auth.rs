@@ -123,9 +123,12 @@ impl SessionRepo for SqliteRepos {
         limit: u32,
     ) -> Result<u64, StoreError> {
         let limit = check_prune_limit(limit)?;
+        // As on Postgres the outer predicate repeats the subquery's (moot under the single
+        // writer); `NOT INDEXED` keeps the outer delete on rowid lookups.
         let done = run!(&self.writer, |e| sqlx::query(
-            "DELETE FROM sessions WHERE rowid IN \
-             (SELECT rowid FROM sessions WHERE expires_at < ? OR last_seen_at < ? LIMIT ?)"
+            "DELETE FROM sessions NOT INDEXED WHERE rowid IN \
+             (SELECT rowid FROM sessions WHERE expires_at < ?1 OR last_seen_at < ?2 LIMIT ?3) \
+             AND (expires_at < ?1 OR last_seen_at < ?2)"
         )
         .bind(now.as_micros())
         .bind(idle_before.as_micros())
@@ -255,9 +258,12 @@ impl RateLimitRepo for SqliteRepos {
 
     async fn prune(&self, window_before: Timestamp, limit: u32) -> Result<u64, StoreError> {
         let limit = check_prune_limit(limit)?;
+        // As on Postgres the outer predicate repeats the subquery's (moot under the single
+        // writer); `NOT INDEXED` keeps the outer delete on rowid lookups.
         let done = run!(&self.writer, |e| sqlx::query(
-            "DELETE FROM rate_limits WHERE rowid IN \
-             (SELECT rowid FROM rate_limits WHERE window_start < ? LIMIT ?)"
+            "DELETE FROM rate_limits NOT INDEXED WHERE rowid IN \
+             (SELECT rowid FROM rate_limits WHERE window_start < ?1 LIMIT ?2) \
+             AND window_start < ?1"
         )
         .bind(window_before.as_micros())
         .bind(limit)

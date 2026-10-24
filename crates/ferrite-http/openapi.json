@@ -5108,7 +5108,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The job, `queued` and due now with its attempts reset (`last_error` kept); audited `job.retry`",
+            "description": "The job, `queued` and due now with its attempts reset (`last_error` kept); audited `job.retry`. `handled` is `null` when the nodes could not be read after the retry",
             "content": {
               "application/json": {
                 "schema": {
@@ -8778,8 +8778,7 @@
           "max_attempts",
           "priority",
           "run_at",
-          "created_at",
-          "handled"
+          "created_at"
         ],
         "properties": {
           "attempts": {
@@ -8799,8 +8798,11 @@
             "format": "date-time"
           },
           "handled": {
-            "type": "boolean",
-            "description": "Some live node runs jobs of this kind (its `meta.job_kinds`). `false`: the job\nwaits until a node that knows the kind joins (e.g. one running a newer\nversion, or with the plugin's handler)."
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Some live node runs jobs of this kind (its `meta.job_kinds`). `false`: the job\nwaits until a node that knows the kind joins (e.g. one running a newer\nversion, or with the plugin's handler). `null`: unknown; only a retry answers\nit, when the node list could not be read after the retry committed."
           },
           "id": {
             "type": "string",

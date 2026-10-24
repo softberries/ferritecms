@@ -921,9 +921,14 @@ re-enables and clears the counters.
   render budget or a slot wait cut short, or one skipped because the page's budget was
   spent; R24 N2 makes a wait-shortened cut a failure from Task 12 on), `total_micros`,
   `max_micros` and `buckets` (calls that ran by duration: ≤ 1, ≤ 5, ≤ 25, ≤ 100,
-  ≤ 500 ms, longer). The counters live in one mutex-guarded map per host, at most 64
-  hooks per plugin (route hooks are named by the manifest); each node counts its own,
-  so a load balancer answers with whichever node it picked. `PluginHost::totals` (calls
+  ≤ 500 ms, longer). The counters live in one mutex-guarded map per host (plugin →
+  hook → counters; a call allocates only for a plugin or hook not seen before), at
+  most 64 hooks per plugin (route hooks are named by the manifest); each node counts
+  its own, so a load balancer answers with whichever node it picked. A plugin's
+  counters survive an update or a re-enable (the same name stays loaded) and are
+  dropped when a commit removes it from the host (uninstall, or a reload without its
+  row), so a later install of the same name starts at zero; a call still running on
+  the old instance at that moment can add one last entry. `PluginHost::totals` (calls
   that ran, failures; every plugin) feeds `GET /system/metrics/summary`.
 
 Plugin names and hook names in the answer come from validated manifests and the host;

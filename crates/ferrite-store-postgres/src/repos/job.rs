@@ -261,10 +261,14 @@ impl JobRepo for PgRepos {
         limit: u32,
     ) -> Result<u64, StoreError> {
         let limit = check_prune_limit(limit)?;
+        // The outer predicate repeats the subquery's: under READ COMMITTED a row picked
+        // here and changed meanwhile (a dead job retried, `retry_dead`) is re-checked
+        // against the outer `WHERE` only, and must then be kept.
         run!(&self.exec, |e| sqlx::query(
             "DELETE FROM jobs WHERE id IN (SELECT id FROM jobs \
              WHERE (status = 'done' AND finished_at < $1) \
-             OR (status = 'dead' AND finished_at < $2) LIMIT $3)"
+             OR (status = 'dead' AND finished_at < $2) LIMIT $3) \
+             AND ((status = 'done' AND finished_at < $1) OR (status = 'dead' AND finished_at < $2))"
         )
         .bind(DateTime::<Utc>::from(done_before))
         .bind(DateTime::<Utc>::from(dead_before))

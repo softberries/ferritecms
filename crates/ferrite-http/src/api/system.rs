@@ -287,7 +287,7 @@ pub async fn list_jobs(
             .into_iter()
             .map(|j| {
                 let known = handled.contains(&j.kind);
-                JobDto::new(j, known)
+                JobDto::new(j, Some(known))
             })
             .collect(),
         next_cursor: page.next_cursor,
@@ -302,7 +302,7 @@ pub async fn list_jobs(
     security(("session" = []), ("bearer" = [])),
     params(("id" = Uuid, Path)),
     responses(
-        (status = 200, description = "The job, `queued` and due now with its attempts reset (`last_error` kept); audited `job.retry`", body = JobDto),
+        (status = 200, description = "The job, `queued` and due now with its attempts reset (`last_error` kept); audited `job.retry`. `handled` is `null` when the nodes could not be read after the retry", body = JobDto),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (`manage_system`, `system:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
@@ -318,7 +318,15 @@ pub async fn retry_job(
         .system
         .retry_job(&who.actor, JobId::from_uuid(id))
         .await?;
-    let handled = handled_kinds(&api).await?.contains(&job.kind);
+    // The retry has committed: a failed node read must not turn it into an error
+    // (a repeat would then be `422`), so `handled` is unknown instead.
+    let handled = match handled_kinds(&api).await {
+        Ok(kinds) => Some(kinds.contains(&job.kind)),
+        Err(e) => {
+            tracing::warn!(job = %id, error = ?e, "job retried; cannot read the nodes for `handled`");
+            None
+        }
+    };
     Ok(Json(JobDto::new(job, handled)))
 }
 

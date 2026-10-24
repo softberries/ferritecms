@@ -1,7 +1,7 @@
 //! Contract tests for the job listing and the dead-job retry (M2a-2b P19), and the
 //! hourly failure buckets of the plugin metrics (P20, F26).
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use ferrite_domain::{Job, JobId, JobQuery, JobStatus, NewJob, NodeId, Timestamp};
 use ferrite_store::{JobRepo, MAX_PRUNE_BATCH, StoreError, encode_audit_cursor};
@@ -321,4 +321,52 @@ pub async fn failure_buckets_since_newest_first(db: &TestDb) {
         f.buckets("p\0", at(0), 10).await,
         Err(StoreError::Invalid(_))
     ));
+}
+
+/// Review I1: a prune that picked a dead job and a retry of that job run together. On
+/// Postgres the retry holds the row lock while the prune (on a peer) waits on it; once
+/// the retry commits, the prune must re-check the job's status and keep it. SQLite's
+/// single writer serialises the two; the job survives either way.
+pub async fn prune_spares_a_retried_job(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    let jobs = store.read().jobs();
+    let id = enqueue(jobs, "race.kind", 1).await;
+    kill(jobs, "race.kind", "boom").await;
+    // A cut-off in the future: the dead job is due for pruning.
+    let later = at(Timestamp::now().as_micros() + 3_600_000_000);
+    let Some(peer) = db.peer().await else {
+        let tx = store.begin().await.unwrap();
+        assert!(tx.jobs().retry_dead(id).await.unwrap().is_some());
+        tx.commit().await.unwrap();
+        assert_eq!(jobs.prune(later, later, 100).await.unwrap(), 0);
+        assert_eq!(
+            jobs.get(id).await.unwrap().unwrap().status,
+            JobStatus::Queued
+        );
+        return;
+    };
+    let tx = store.begin().await.unwrap();
+    assert!(tx.jobs().retry_dead(id).await.unwrap().is_some());
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let prune = tokio::spawn({
+        let barrier = barrier.clone();
+        async move {
+            barrier.wait().await;
+            peer.read().jobs().prune(later, later, 100).await.unwrap()
+        }
+    });
+    barrier.wait().await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !prune.is_finished(),
+        "the prune waits for the retry's row lock"
+    );
+    tx.commit().await.unwrap();
+    let pruned = tokio::time::timeout(Duration::from_secs(5), prune)
+        .await
+        .expect("prune finishes")
+        .unwrap();
+    assert_eq!(pruned, 0, "the retried job is not pruned");
+    let row = jobs.get(id).await.unwrap().expect("retried job survives");
+    assert_eq!(row.status, JobStatus::Queued);
 }

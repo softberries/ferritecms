@@ -769,5 +769,11 @@ async fn call_stats_count_outcomes() -> TestResult {
     assert_eq!(one("router").calls, 1);
     // hello, panic, slow-import (cut), the action and the route ran; panic failed.
     assert_eq!(host.totals(), (5, 1));
+    // Uninstalling `router` (a commit without it) drops its statistics; the kept
+    // plugins keep theirs, and the totals stay since the host was built.
+    host.commit(Vec::new(), &["hello", "panic", "slow-import"]);
+    assert!(host.call_stats("router").is_empty());
+    assert_eq!(one("hello").calls, 1);
+    assert_eq!(host.totals(), (5, 1));
     Ok(())
 }
