@@ -1,5 +1,5 @@
 //! Background jobs core enqueues and their payloads (design 04 §6, ruling P12; plugin
-//! purge M2a-2 P9).
+//! purge M2a-2 P9; plugin actions P20).
 //!
 //! The handlers live with the job runner wiring (`ferrite`); this module fixes the kinds,
 //! keys and payload shapes both sides agree on. Payloads carry a version `v` (04 §9).
@@ -106,6 +106,41 @@ pub fn plugin_purge_job(purge: &PluginPurge) -> NewJob {
     job
 }
 
+/// Delivers one action hook to one plugin (M2a-2 P20); payload [`PluginAction`].
+/// Enqueued by [`actions::enqueue`](crate::actions::enqueue) in the write `Tx`.
+pub const PLUGIN_ACTION_KIND: &str = "plugin.action";
+
+/// Current version of the [`PluginAction`] payload.
+pub const PLUGIN_ACTION_VERSION: u32 = 1;
+
+/// Payload of a [`PLUGIN_ACTION_KIND`] job:
+/// `{"v":1,"plugin":"<name>","hook":"<action hook>","subject":"<id>"|null,"payload":{…}}`.
+/// `subject` and `payload` are the guest's `action-event`; they carry ids only (never
+/// content bodies or secrets): the plugin reads what it may see through its imports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginAction {
+    pub v: u32,
+    pub plugin: String,
+    pub hook: String,
+    pub subject: Option<String>,
+    pub payload: Value,
+}
+
+/// The job for `action`: due now, no unique key (one job per plugin and event),
+/// default attempts.
+pub fn plugin_action_job(action: &PluginAction) -> NewJob {
+    let mut payload = Map::new();
+    payload.insert("v".into(), Value::from(action.v));
+    payload.insert("plugin".into(), Value::String(action.plugin.clone()));
+    payload.insert("hook".into(), Value::String(action.hook.clone()));
+    payload.insert(
+        "subject".into(),
+        action.subject.clone().map_or(Value::Null, Value::String),
+    );
+    payload.insert("payload".into(), action.payload.clone());
+    NewJob::new(PLUGIN_ACTION_KIND, Value::Object(payload))
+}
+
 /// `at + d`; `at` itself if that overflowed (unreachable for the durations used here,
 /// it only avoids a panic path).
 pub(crate) fn after(at: Timestamp, d: Duration) -> Timestamp {
@@ -144,6 +179,31 @@ mod tests {
         assert_eq!(job.payload["at"], "2026-01-01T00:00:00.123456Z");
         let back: PublishScheduled = serde_json::from_value(job.payload).unwrap();
         assert_eq!(back, typed);
+    }
+
+    #[test]
+    fn plugin_action_job_shape() {
+        let typed = PluginAction {
+            v: PLUGIN_ACTION_VERSION,
+            plugin: "seo".into(),
+            hook: "post.saved".into(),
+            subject: Some("abc".into()),
+            payload: serde_json::json!({"post": "abc"}),
+        };
+        let job = plugin_action_job(&typed);
+        assert_eq!(job.kind, "plugin.action");
+        assert_eq!(job.unique_key, None);
+        assert_eq!(job.run_at, None);
+        assert_eq!(job.priority, 0);
+        assert_eq!(job.max_attempts, ferrite_domain::DEFAULT_MAX_ATTEMPTS);
+        assert_eq!(job.payload, serde_json::to_value(&typed).unwrap());
+        let back: PluginAction = serde_json::from_value(job.payload).unwrap();
+        assert_eq!(back, typed);
+        let none = plugin_action_job(&PluginAction {
+            subject: None,
+            ..typed
+        });
+        assert_eq!(none.payload["subject"], Value::Null);
     }
 
     #[test]

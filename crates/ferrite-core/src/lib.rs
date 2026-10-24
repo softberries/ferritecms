@@ -1,6 +1,7 @@
 //! FerriteCMS core: business rules on top of the store. Pure modules (slugs, block
 //! rendering) have no I/O; services compose store transactions.
 
+pub mod actions;
 mod actor;
 pub mod auth;
 pub mod blocks;

@@ -10,3 +10,4 @@ content.read = ["post"]
 
 [hooks]
 "render.head" = 10
+"post.saved"  = 10

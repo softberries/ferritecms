@@ -3,9 +3,10 @@ mod common;
 use std::sync::Arc;
 
 use common::{plugin_manifest, plugin_wasm};
+use ferrite_plugin_host::HostServices as _;
 use ferrite_plugin_host::{
     ActionEvent, FilterValue, Head, HostConfig, InMemoryServices, Manifest, MetaTag, PluginError,
-    PluginHost, RequestInfo, RouteRequest,
+    PluginHost, Post, RequestInfo, RouteRequest,
 };
 use wasmtime::Engine;
 use wasmtime::component::Component;
@@ -167,6 +168,63 @@ async fn actions_and_routes_are_gated() -> TestResult {
         host.handle_route("hello", req).await,
         Err(PluginError::RouteNotFound { .. })
     ));
+    Ok(())
+}
+
+/// Task 11: meta-writer's `post.saved` action writes `seo.seen = "action"` on the
+/// subject through the services (actions may write, unlike the render path).
+#[tokio::test]
+async fn dispatch_action_success_path() -> TestResult {
+    let services = Arc::new(InMemoryServices::new());
+    services.insert_post(Post {
+        id: "p1".into(),
+        kind: "post".into(),
+        slug: "p1".into(),
+        title: "P1".into(),
+        excerpt: String::new(),
+        status: "draft".into(),
+        published: None,
+        url: String::new(),
+        author: String::new(),
+        terms: Vec::new(),
+    });
+    let host = PluginHost::new(HostConfig::default(), services.clone())?;
+    host.install(
+        Manifest::parse(&plugin_manifest("meta-writer"))?,
+        &plugin_wasm("meta-writer"),
+    )?;
+    let ev = ActionEvent {
+        subject: Some("p1".into()),
+        payload: serde_json::json!({"post": "p1"}),
+    };
+    host.dispatch_action("meta-writer", "post.saved", ev)
+        .await?;
+    assert_eq!(
+        services.meta_get("p1", "seo.seen").await.as_deref(),
+        Some("\"action\"")
+    );
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
+    Ok(())
+}
+
+/// `subscribers` lists the enabled loaded plugins of an action hook, by priority then
+/// name; a disabled plugin and a filter-only plugin are left out.
+#[tokio::test]
+async fn subscribers_are_enabled_plugins_in_priority_order() -> TestResult {
+    let host = PluginHost::new(HostConfig::default(), Arc::new(InMemoryServices::new()))?;
+    let slow = plugin_manifest("slow-import").replace("\"post.saved\"  = 10", "\"post.saved\" = 5");
+    assert_ne!(slow, plugin_manifest("slow-import"), "priority replaced");
+    host.install(Manifest::parse(&slow)?, &plugin_wasm("slow-import"))?;
+    for name in ["meta-writer", "hello"] {
+        host.install(Manifest::parse(&plugin_manifest(name))?, &plugin_wasm(name))?;
+    }
+    assert_eq!(
+        host.subscribers("post.saved"),
+        ["slow-import", "meta-writer"]
+    );
+    assert!(host.subscribers("user.created").is_empty());
+    assert!(host.disable("slow-import", "operator"));
+    assert_eq!(host.subscribers("post.saved"), ["meta-writer"]);
     Ok(())
 }
 

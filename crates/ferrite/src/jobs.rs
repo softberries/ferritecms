@@ -1,7 +1,7 @@
-//! Core job handlers run by every node (ruling P12): scheduled publishing and the plugin
-//! data purge (M2a-2 P9). The kinds and payloads are fixed in [`ferrite_core::jobs`];
-//! the per-node 30 s ticker of M1c-2 is the periodic [`PUBLISH_DUE_KIND`] job now, so
-//! one node runs it per period.
+//! Core job handlers run by every node (ruling P12): scheduled publishing, the plugin
+//! data purge (M2a-2 P9) and plugin actions (P20). The kinds and payloads are fixed in
+//! [`ferrite_core::jobs`]; the per-node 30 s ticker of M1c-2 is the periodic
+//! [`PUBLISH_DUE_KIND`] job now, so one node runs it per period.
 
 use std::{sync::Arc, time::Duration};
 
@@ -10,12 +10,13 @@ use ferrite_cluster::{JobError, JobHandler, Periodic};
 use ferrite_core::{
     ContentService, CoreError, ExtensionService,
     jobs::{
-        PLUGIN_PURGE_KIND, PLUGIN_PURGE_SWEEP_EVERY, PLUGIN_PURGE_SWEEP_KIND, PLUGIN_PURGE_VERSION,
-        PUBLISH_DUE_KIND, PUBLISH_SCHEDULED_KIND, PUBLISH_SCHEDULED_VERSION, PluginPurge,
-        PublishScheduled,
+        PLUGIN_ACTION_KIND, PLUGIN_ACTION_VERSION, PLUGIN_PURGE_KIND, PLUGIN_PURGE_SWEEP_EVERY,
+        PLUGIN_PURGE_SWEEP_KIND, PLUGIN_PURGE_VERSION, PUBLISH_DUE_KIND, PUBLISH_SCHEDULED_KIND,
+        PUBLISH_SCHEDULED_VERSION, PluginAction, PluginPurge, PublishScheduled,
     },
 };
 use ferrite_domain::Job;
+use ferrite_plugin_host::{ActionEvent, PluginError, PluginHost};
 use ferrite_store::Store;
 use serde_json::json;
 
@@ -165,12 +166,88 @@ impl JobHandler for PluginPurgeSweepHandler {
     }
 }
 
+/// `plugin.action`: delivers one action hook to one plugin on this node's host
+/// (M2a-2 P20). The plugin's row is read first: a missing or disabled row drops the
+/// action (done, P29), so a plugin disabled or deleted after the enqueue never runs
+/// it. Then [`PluginHost::dispatch_action`] looks the plugin up once and holds that
+/// instance for the whole call (R13); the call is bounded by the host's fuel, memory
+/// and action deadline, and a failure counts towards auto-disable (R12). Outcomes:
+///
+/// - success, or the plugin no longer handles the hook (an update dropped it, F35):
+///   done;
+/// - not loaded on this node (the reload has not caught up) or disabled on this host
+///   only (the shared disable follows, F35): retried;
+/// - the call failed: retried (backoff, then dead after the job's attempts).
+///
+/// How many run at once on a node is bounded by the runner's workers
+/// (`cluster.workers`).
+pub struct PluginActionHandler {
+    pub store: Arc<dyn Store>,
+    pub host: Arc<PluginHost>,
+}
+
+#[async_trait]
+impl JobHandler for PluginActionHandler {
+    fn kind(&self) -> &'static str {
+        PLUGIN_ACTION_KIND
+    }
+
+    fn versions(&self) -> &'static [u32] {
+        &[PLUGIN_ACTION_VERSION]
+    }
+
+    async fn run(&self, job: &Job) -> Result<(), JobError> {
+        let action: PluginAction = serde_json::from_value(job.payload.clone())
+            .map_err(|e| JobError::Permanent(format!("invalid payload: {e}")))?;
+        let (plugin, hook) = (action.plugin.as_str(), action.hook.as_str());
+        let enabled = self
+            .store
+            .read()
+            .plugins()
+            .is_enabled(plugin)
+            .await
+            .map_err(|e| JobError::Retry(e.to_string()))?;
+        if enabled != Some(true) {
+            tracing::info!(plugin, hook, "plugin removed or disabled; action dropped");
+            return Ok(());
+        }
+        let ev = ActionEvent {
+            subject: action.subject,
+            payload: action.payload,
+        };
+        match self.host.dispatch_action(plugin, hook, ev).await {
+            Ok(()) => Ok(()),
+            Err(PluginError::NotSubscribed { .. }) => {
+                tracing::info!(plugin, hook, "plugin does not handle the action; dropped");
+                Ok(())
+            }
+            Err(PluginError::UnknownPlugin(_)) => {
+                Err(JobError::Retry("not loaded on this node yet".to_owned()))
+            }
+            Err(e @ (PluginError::Disabled { .. } | PluginError::CallFailed { .. })) => {
+                Err(JobError::Retry(e.to_string()))
+            }
+            // `dispatch_action` returns none of these; retrying is the safe answer.
+            Err(
+                e @ (PluginError::Engine(_)
+                | PluginError::InvalidConfig(_)
+                | PluginError::Inspect(_)
+                | PluginError::LimitAboveDefault { .. }
+                | PluginError::LimitAboveCeiling { .. }
+                | PluginError::Link { .. }
+                | PluginError::RouteNotFound { .. }),
+            ) => Err(JobError::Retry(e.to_string())),
+        }
+    }
+}
+
 /// The core handlers: scheduled publishing on `content`, the plugin purge and its
-/// sweep on `extensions`.
+/// sweep on `extensions`, plugin actions on `host`.
 pub fn handlers(
     store: Arc<dyn Store>,
     content: Arc<ContentService>,
     extensions: Arc<ExtensionService>,
+    host: Arc<PluginHost>,
 ) -> Vec<Arc<dyn JobHandler>> {
     vec![
         Arc::new(PublishScheduledHandler {
@@ -183,7 +260,11 @@ pub fn handlers(
         Arc::new(PluginPurgeHandler {
             extensions: extensions.clone(),
         }),
-        Arc::new(PluginPurgeSweepHandler { store, extensions }),
+        Arc::new(PluginPurgeSweepHandler {
+            store: store.clone(),
+            extensions,
+        }),
+        Arc::new(PluginActionHandler { store, host }),
     ]
 }
 

@@ -329,6 +329,19 @@ Filters run in priority order (ties: plugin name), each receiving the previous o
 Actions run as `plugin.action` jobs ([04](04-cluster.md#job-queue)), never on the request
 path.
 
+*As built (M2a-2 P20):* `ferrite_core::actions::enqueue` runs inside the write's `Tx`
+(content `after_save` → `post.saved`; publish and the scheduler's publish →
+`post.published`; `UserService::create` / `OperatorUsers::create` → `user.created`), so
+a rolled-back write enqueues nothing. It reads the `plugins` rows in that `Tx` and
+enqueues one job per enabled row whose stored manifest lists the hook, in name order;
+the subject is the item or user id and the payload is the catalogue's id object, never
+content or secrets. A plugin reading the item through `content.get-post` sees what
+the public site sees (a draft's `post.saved` subject is not readable). The binary's
+`PluginActionHandler` re-reads the row (missing or disabled: dropped, P29), then calls
+`PluginHost::dispatch_action`, which holds one loaded instance for the whole call
+(R13), bounded by fuel, memory and the action deadline; outcomes in 04 §6.
+`PluginHost::subscribers(hook)` lists the enabled loaded subscribers in priority order.
+
 ## 5. WASI policy
 
 Rust's `wasm32-wasip2` std imports some WASI interfaces even for simple code. Policy:
@@ -611,8 +624,8 @@ can re-enable.
 
 **M0 API** (`crates/ferrite-plugin-host`): `PluginHost::new(HostConfig, Arc<dyn HostServices>)`,
 `install(Manifest, &[u8])`, `apply_filter(&str, FilterValue, &RequestInfo) -> FilterValue`
-(never fails), `dispatch_action`, `handle_route`, `is_enabled`, `disabled_reason`,
-`failures`; `inspect` is a free function. Hooks are `&str`, not a `HookName` type.
+(never fails), `dispatch_action`, `subscribers` (M2a-2), `handle_route`, `is_enabled`,
+`disabled_reason`, `failures`; `inspect` is a free function. Hooks are `&str`, not a `HookName` type.
 
 Target shape (the `reload`, DB-backed `InstalledPlugin` and http client parts are M1):
 

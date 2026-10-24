@@ -13,14 +13,16 @@
 //!
 //! `schedule` also enqueues a [`content.publish_scheduled`](crate::jobs) job in the same
 //! transaction (ruling P12); its handler calls
-//! [`publish_scheduled`](ContentService::publish_scheduled).
+//! [`publish_scheduled`](ContentService::publish_scheduled). Every transition to
+//! `published` (publish, and the scheduler's publish) enqueues the `post.published`
+//! action jobs in its transaction ([`actions`](crate::actions), M2a-2 P20).
 
 use ferrite_domain::{ContentId, ContentItem, ContentStatus, Role, Term, Timestamp};
 use ferrite_store::{Repos, StoreError};
 
 use super::{ContentService, clear_redirects_from};
 use crate::{
-    Actor, CoreError,
+    Actor, CoreError, actions,
     actor::{Capability, can_edit, require},
     blocks, events, jobs,
     permalink::{Permalinks, load_input},
@@ -278,7 +280,10 @@ async fn transition_in(
     let next = apply(&current, action, Timestamp::now())?;
     let saved = repos.content().update(&next).await?;
     match action {
-        Action::Publish => reclaim_path(repos, permalinks, &saved).await?,
+        Action::Publish => {
+            reclaim_path(repos, permalinks, &saved).await?;
+            enqueue_published(repos, &saved).await?;
+        }
         Action::Schedule(at) => {
             // `None`: the same (item, instant) was scheduled before and that job row
             // still exists; if it already finished, `publish_due` covers the item.
@@ -362,8 +367,22 @@ async fn publish_one(
     // Conflicts with a concurrent publisher surface as `Conflict` from the version check.
     let saved = repos.content().update(&next).await?;
     reclaim_path(repos, permalinks, &saved).await?;
+    enqueue_published(repos, &saved).await?;
     emit(repos, &saved).await?;
     Ok(true)
+}
+
+/// The `post.published` action jobs for `item` (P20), in the transition's `Tx`.
+async fn enqueue_published(repos: &dyn Repos, item: &ContentItem) -> Result<(), CoreError> {
+    let id = item.id.to_string();
+    actions::enqueue(
+        repos,
+        actions::POST_PUBLISHED,
+        Some(id.clone()),
+        serde_json::json!({ "post": id }),
+    )
+    .await?;
+    Ok(())
 }
 
 /// Deletes the redirects that start at `item`'s permalink: it is live now.

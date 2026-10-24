@@ -13,7 +13,7 @@ use ferrite_domain::{
 use ferrite_store::{MAX_REDIRECTS_BY_TARGET, Repos, Store, StoreError, Tx};
 
 use crate::{
-    Actor, CoreError, MAX_PARENT_DEPTH,
+    Actor, CoreError, MAX_PARENT_DEPTH, actions,
     actor::{Capability, can_edit, require},
     blocks, events, fields,
     permalink::{PermalinkInput, Permalinks, ancestors, load_input, primary_term},
@@ -505,8 +505,8 @@ async fn save_with_free_slug(
     }
 }
 
-/// Revision snapshot (with `note`), prune, search index and the outbox event for a
-/// saved item.
+/// Revision snapshot (with `note`), prune, search index, the outbox event and the
+/// `post.saved` action jobs (P20) for a saved item.
 async fn after_save(
     repos: &dyn Repos,
     actor: &Actor,
@@ -537,6 +537,14 @@ async fn after_save(
         .index(item.id, &item.title, &blocks::extract_text(&item.body))
         .await?;
     repos.events().append(&events::invalidate(keys)).await?;
+    let id = item.id.to_string();
+    actions::enqueue(
+        repos,
+        actions::POST_SAVED,
+        Some(id.clone()),
+        serde_json::json!({ "post": id }),
+    )
+    .await?;
     Ok(())
 }
 

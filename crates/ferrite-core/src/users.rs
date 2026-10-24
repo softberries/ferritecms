@@ -16,9 +16,10 @@
 //!   request on any node is refused.
 //! * Every write appends an audit row (`user.create`, `user.update`, `user.password`,
 //!   `user.password_reset`, `user.delete`, `user.totp_disable`) in the same `Tx`,
-//!   without secrets. A display-name or status change and a delete emit
-//!   `invalidate [user:<id>]` (a delete with `reassign_to` also names the new author,
-//!   whose pages now list the items).
+//!   without secrets. A create also enqueues the `user.created` action jobs there
+//!   ([`actions`](crate::actions), M2a-2 P20). A display-name or status change and a
+//!   delete emit `invalidate [user:<id>]` (a delete with `reassign_to` also names the
+//!   new author, whose pages now list the items).
 //! * Passwords are hashed before the `Tx` opens (argon2 must not run inside one,
 //!   M1c-1 P1); every read-modify-write reads the row with `get_for_update` inside the
 //!   `Tx` that writes it, because `UserRepo::update` is unversioned (F5).
@@ -30,7 +31,7 @@ use ferrite_store::{Repos, Store, StoreError};
 use serde_json::{Value, json};
 
 use crate::{
-    Actor, CoreError,
+    Actor, CoreError, actions,
     actor::{Area, Capability, Scope, can, require, require_scope},
     auth::password::{self, Verified},
     events,
@@ -427,6 +428,14 @@ impl UserService {
                 "password": has_password,
             });
             audit(tx.as_ref(), actor, "user.create", user.id, details).await?;
+            let id = user.id.to_string();
+            actions::enqueue(
+                tx.as_ref(),
+                actions::USER_CREATED,
+                Some(id.clone()),
+                json!({ "user": id }),
+            )
+            .await?;
             Ok(user)
         }
         .await;

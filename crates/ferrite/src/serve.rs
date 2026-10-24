@@ -433,7 +433,12 @@ async fn boot(
     );
     let mut handlers = builtin::handlers(store.clone(), builtin::failure_retention(failure_window));
     let extensions = Arc::new(ExtensionService::new(store.clone()));
-    handlers.extend(jobs::handlers(store.clone(), content, extensions));
+    handlers.extend(jobs::handlers(
+        store.clone(),
+        content,
+        extensions,
+        host.clone(),
+    ));
     handlers.extend(opts.extra_handlers);
     let mut runner_config = RunnerConfig::new(registry.id(), config.cluster.workers);
     let o = &opts.runner;

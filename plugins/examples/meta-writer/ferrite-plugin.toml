@@ -6,6 +6,7 @@ world     = "ferrite:plugin/plugin@0.1.0"
 
 [capabilities]
 render.head        = true
+content.read       = ["post"]
 content.meta.write = ["seo.*"]
 
 [hooks]

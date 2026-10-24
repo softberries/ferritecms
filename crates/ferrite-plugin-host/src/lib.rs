@@ -442,7 +442,23 @@ impl PluginHost {
         outcome(current, deps, volatile)
     }
 
-    /// Deliver action `hook` to one plugin that subscribes to it.
+    /// Names of the enabled loaded plugins whose manifest subscribes to `hook`, by
+    /// ascending priority, ties by name (the order filters run in).
+    pub fn subscribers(&self, hook: &str) -> Vec<String> {
+        self.registry
+            .load()
+            .subscribers(hook)
+            .iter()
+            .filter(|p| p.disabled.get().is_none())
+            .map(|p| p.name.to_string())
+            .collect()
+    }
+
+    /// Deliver action `hook` to one plugin that subscribes to it. The plugin is looked
+    /// up once and that instance serves the whole call, so a reload committed meanwhile
+    /// does not affect it (R13). `UnknownPlugin` when it is not loaded, `Disabled` when
+    /// this host disabled it, `NotSubscribed` when `hook` is not an action or not in its
+    /// `[hooks]`, `CallFailed` (recorded towards auto-disable) when the call failed.
     pub async fn dispatch_action(
         &self,
         plugin: &str,
