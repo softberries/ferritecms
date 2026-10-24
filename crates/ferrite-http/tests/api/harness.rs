@@ -373,10 +373,16 @@ impl Api {
     /// The whole site again, with the same store and services but `media.max_upload`
     /// = `max` and a fresh uploader (returned, for its slot counters).
     pub fn router_with_max_upload(&self, max: u64) -> (Router, Arc<Uploader>) {
-        let uploader = Arc::new(Uploader::new(self.api.media.clone(), max));
+        self.router_with_uploader(Uploader::new(self.api.media.clone(), max))
+    }
+
+    /// The whole site again, with the same store and services but `uploader` (over
+    /// this site's media store) and its `max_upload`.
+    pub fn router_with_uploader(&self, uploader: Uploader) -> (Router, Arc<Uploader>) {
+        let uploader = Arc::new(uploader);
         let router = self.router_with(ApiParts {
             uploader: uploader.clone(),
-            max_upload: max,
+            max_upload: uploader.max_upload(),
             ..self.same_parts()
         });
         (router, uploader)

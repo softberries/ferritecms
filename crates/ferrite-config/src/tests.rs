@@ -920,6 +920,7 @@ fn media_upload_rules() {
     let c = r.unwrap();
     assert_eq!(c.uploads.max_upload, 256 << 20);
     assert_eq!(c.uploads.image_workers, 1);
+    assert_eq!(c.uploads.idle_timeout_secs, 30);
     assert_eq!(DEFAULT_MAX_UPLOAD, 256 << 20);
     assert_eq!(MAX_UPLOAD_CEILING, 1 << 30);
 
@@ -930,13 +931,14 @@ fn media_upload_rules() {
     ] {
         let (_d, r) = run(
             Some(&format!(
-                "{MIN}[media]\nmax_upload = \"1GiB\"\nimage_workers = 16\n{backend}"
+                "{MIN}[media]\nmax_upload = \"1GiB\"\nimage_workers = 16\nupload_idle_timeout = \"2m\"\n{backend}"
             )),
             &[],
         );
         let c = r.unwrap_or_else(|e| panic!("{backend}: {e:?}"));
         assert_eq!(c.uploads.max_upload, 1 << 30, "{backend}");
         assert_eq!(c.uploads.image_workers, 16, "{backend}");
+        assert_eq!(c.uploads.idle_timeout_secs, 120, "{backend}");
     }
     let (_d, r) = run(Some(&format!("{MIN}[media]\nmax_upload = 1\n")), &[]);
     assert_eq!(r.unwrap().uploads.max_upload, 1);
@@ -959,6 +961,8 @@ fn media_upload_rules() {
         problem("max_upload = \"2GB\"\n"),
         ("media.max_upload".into(), "must be at most 1GiB".into())
     );
+    let (path, _) = problem("upload_idle_timeout = 0\n");
+    assert_eq!(path, "media.upload_idle_timeout");
     for bad in ["image_workers = 0\n", "image_workers = 17\n"] {
         assert_eq!(
             problem(bad),

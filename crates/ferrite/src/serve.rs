@@ -424,7 +424,10 @@ async fn boot(
     ));
     // One upload pipeline per node: its slots bound the node (M2a-2b P9).
     let max_upload = config.uploads.max_upload;
-    let uploader = Arc::new(Uploader::new(media.clone(), max_upload));
+    let uploader = Arc::new(
+        Uploader::new(media.clone(), max_upload)
+            .with_idle_timeout(Duration::from_secs(config.uploads.idle_timeout_secs)),
+    );
     // One install pipeline per node: its compile slots bound the node (P8).
     let installer = Arc::new(
         Installer::new(store.clone(), media.clone(), host_config(&config.plugins))

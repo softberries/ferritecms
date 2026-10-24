@@ -75,6 +75,8 @@ pub const DEFAULT_MAX_UPLOAD: u64 = 256 << 20;
 pub const MAX_UPLOAD_CEILING: u64 = 1 << 30;
 /// Largest `media.image_workers`.
 pub const MAX_IMAGE_WORKERS: usize = 16;
+/// Default `media.upload_idle_timeout`: 30 s.
+pub const DEFAULT_UPLOAD_IDLE_SECS: u64 = 30;
 
 /// The upload settings of `[media]` (M2a-2b P8/P9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +87,9 @@ pub struct UploadConfig {
     /// Image variant jobs at once per node (`media.image_workers`):
     /// 1..=[`MAX_IMAGE_WORKERS`], default 1.
     pub image_workers: usize,
+    /// An upload that receives no bytes for this long is aborted and its slot freed
+    /// (`media.upload_idle_timeout`, seconds > 0, default [`DEFAULT_UPLOAD_IDLE_SECS`]).
+    pub idle_timeout_secs: u64,
 }
 
 impl Default for UploadConfig {
@@ -92,6 +97,7 @@ impl Default for UploadConfig {
         Self {
             max_upload: DEFAULT_MAX_UPLOAD,
             image_workers: 1,
+            idle_timeout_secs: DEFAULT_UPLOAD_IDLE_SECS,
         }
     }
 }

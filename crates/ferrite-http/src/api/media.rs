@@ -28,7 +28,9 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use ferrite_core::{Actor, CoreError, MediaItem, MediaPatch, MediaQuery, NewUpload};
+use ferrite_core::{
+    Actor, CoreError, MediaItem, MediaPatch, MediaQuery, NewUpload, check_file_name,
+};
 use ferrite_domain::{ContentId, ContentOrder, MAX_PAGE, UserId};
 use serde::Deserialize;
 use utoipa::IntoParams;
@@ -153,12 +155,12 @@ pub async fn list_media(
     request_body(content = MediaUpload, content_type = "multipart/form-data", description = "Parts `file` (required, at most `media.max_upload`), `title` (at most 200 characters) and `alt` (at most 1 000 characters), in any order; the body at most `media.max_upload` + 1 MiB"),
     responses(
         (status = 201, description = "Uploaded and published (`Location`, `ETag`)", body = MediaDto),
-        (status = 400, description = "`malformed-body`: an unknown, unnamed or repeated part, or a malformed body", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 400, description = "`malformed-body`: an unknown, unnamed or repeated part, a malformed body, or no bytes for `media.upload_idle_timeout` (`errors[0].field` = `file`; the upload is aborted)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (`upload_media`, `media:write`), `csrf` or `password-reset-required`; checked before the body is read", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 413, description = "`too-large`: the declared body, the file (`errors[0].field` = `file`; an SVG at most 2 MiB) or a small part over its limit", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 415, description = "`unsupported-media-type`: not `multipart/form-data`, or a file of no accepted type (`errors[0].field` = `file`)", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 422, description = "`validation`: no `file` part or no file name, an SVG that cannot be made safe (`file`), `title`/`alt` too long or not UTF-8", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: no `file` part, a file name that is empty, over 255 bytes or holds control or format characters (checked before the file is read), an SVG that cannot be made safe (`file`), `title`/`alt` too long or not UTF-8", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 503, description = "`busy`: every upload slot of this node is taken (`Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
@@ -185,10 +187,9 @@ pub async fn upload_media(
                 if staged.is_some() {
                     return Err(repeated());
                 }
-                if field.file_name().is_none_or(str::is_empty) {
-                    return Err(Problem::validation("the file part needs a file name")
-                        .with_error(Some("file"), "a file name is required"));
-                }
+                // Core's own rule (length, `.`/`..`, control and format characters),
+                // before a byte of the file is stored; `record_upload` checks it again.
+                check_file_name(field.file_name().unwrap_or_default())?;
                 staged = Some(api.uploader.stage(field).await?);
             }
             "title" | "alt" => {

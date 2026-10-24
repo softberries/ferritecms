@@ -478,8 +478,10 @@ fn content_writer(actor: &Actor) -> Actor {
 }
 
 /// The last `/` or `\` segment of `raw`: 1..=[`MAX_ORIGINAL_NAME`] bytes, not `.` or
-/// `..`, no control or format characters ([`is_format`]).
-fn check_file_name(raw: &str) -> Result<String, CoreError> {
+/// `..`, no control or format (Unicode `Cf`) characters; else `InvalidField("file")`.
+/// Pure, so the HTTP layer checks it before a byte of the file is stored;
+/// [`MediaService::record_upload`] checks it again.
+pub fn check_file_name(raw: &str) -> Result<String, CoreError> {
     let name = raw.rsplit(['/', '\\']).next().unwrap_or(raw);
     if name.is_empty()
         || name.len() > MAX_ORIGINAL_NAME

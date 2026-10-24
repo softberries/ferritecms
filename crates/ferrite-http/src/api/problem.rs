@@ -39,6 +39,7 @@
 //! | `Unsupported { mime }` | 415 | `unsupported-media-type` (`errors[0].field` = `file`) |
 //! | `Svg(_)` | 422 | `validation` (`errors[0].field` = `file`; fixed text per kind, never the SVG's own text) |
 //! | `Busy` | 503 | `busy` + `Retry-After: 5` |
+//! | `Idle { secs }` | 400 | `malformed-body` (`errors[0].field` = `file`; no bytes for `media.upload_idle_timeout`) |
 //! | `Body(_)` | 413 / 400 | `too-large` (over the route limit) / `malformed-body` |
 //! | `Media(_)`, `Task(_)` | 500 | `internal` |
 //!
@@ -439,6 +440,16 @@ impl From<UploadError> for Problem {
                 Self::validation(detail.clone()).with_error(Some("file"), detail)
             }
             UploadError::Busy => Self::busy(),
+            UploadError::Idle { secs } => {
+                let detail = format!("no bytes arrived for {secs} s; the upload was aborted");
+                Self::new(
+                    StatusCode::BAD_REQUEST,
+                    "malformed-body",
+                    "Malformed request body",
+                    detail.clone(),
+                )
+                .with_error(Some("file"), detail)
+            }
             UploadError::Body(body) => body_error(body),
             UploadError::Media(_) | UploadError::Task(_) => {
                 tracing::error!(error = %e, "media upload failed");

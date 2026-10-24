@@ -258,6 +258,7 @@ root         = "media"                 # default; relative to the data folder
 # either backend:
 # max_upload = "256MB"                 # M2a-2b: largest uploaded file, 1 byte..=1GiB; default 256MB
 # image_workers = 1                    # M2a-2b: image variant jobs at once per node, 1..=16; default 1
+# upload_idle_timeout = "30s"          # M2a-2b: an upload receiving nothing this long is aborted
 # s3 (required when backend = "s3"):
 # [media.s3]
 # bucket = "my-site"                   # required
@@ -338,7 +339,13 @@ refused, above 1 GiB is refused: the S3 copy ceiling of 5 GB stays out of reach)
 reading the body and cuts the file at `max_upload` while it streams (`413 too-large`);
 the route's own body limit is the ceiling, 1 GiB + 1 MiB (pre-flight F12). At most 8
 uploads stream at once per node (`ferrite_http::media::MEDIA_UPLOAD_SLOTS`), more are
-`503 busy`. `image_workers` bounds the `media.variants` jobs a node runs at once (Task 6);
+`503 busy`. An upload that receives no bytes for `upload_idle_timeout` (a duration > 0,
+default 30 s) is aborted with `400 malformed-body` and frees its slot, so slow clients
+cannot hold the slots. **Memory per node:** an upload holds at most 8 MiB in memory
+before the store switches to a staging object (2 MiB for an SVG, which is read whole to
+be sanitised), so uploads use at most about 64 MiB per node (8 slots × 8 MiB) besides
+the 8 KiB head each; size small VMs for it. The file name is checked (1..=255 bytes, no
+control or format characters) before the file is read. `image_workers` bounds the `media.variants` jobs a node runs at once (Task 6);
 variants are made only for raster originals of at most 64 MiB.
 
 **Cluster mode** (`Config::effective_cluster_mode`, `validate_cluster`): `auto` resolves to

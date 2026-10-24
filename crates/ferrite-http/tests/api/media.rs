@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use axum::http::{Method, header};
 use ferrite_domain::Role;
-use ferrite_http::media::MEDIA_UPLOAD_SLOTS;
+use ferrite_http::media::{MEDIA_UPLOAD_SLOTS, Uploader};
 use serde_json::{Value, json};
 
 use crate::{
@@ -28,6 +28,7 @@ api_tests!(
     media_list_pages,
     upload_parts_are_checked,
     aborted_uploads_leave_nothing_staged,
+    idle_upload_is_aborted_and_frees_its_slot,
 );
 
 const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -373,7 +374,26 @@ async fn type_confusion_is_refused(api: Api) -> Api {
     exe.resize(0x80, 0);
     exe.extend_from_slice(b"PE\0\0");
     exe.resize(512, 0);
-    let refused: [(&str, &str, &[u8]); 10] = [
+    // ISO-BMFF images infer names but that are not served inline (review m4).
+    let isobmff = |brand: &[u8; 4]| {
+        let mut v = vec![0, 0, 0, 0x1c];
+        v.extend_from_slice(b"ftyp");
+        v.extend_from_slice(brand);
+        v.extend_from_slice(&[0, 0, 0, 0]);
+        v.extend_from_slice(brand);
+        v.extend_from_slice(b"mif1miaf");
+        v.resize(256, 0);
+        v
+    };
+    let avif = isobmff(b"avif");
+    let heic = isobmff(b"heic");
+    // A gzip-compressed SVG: never decompressed, so not an SVG.
+    let mut svgz = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03".to_vec();
+    svgz.resize(64, 0x55);
+    let refused: [(&str, &str, &[u8]); 13] = [
+        ("x.avif", "image/avif", &avif),
+        ("x.heic", "image/heic", &heic),
+        ("x.svgz", "image/svg+xml", &svgz),
         // HTML claiming to be a PNG, by type and by name.
         ("x.png", "image/png", html),
         ("x.html", "text/html", html),
@@ -406,6 +426,26 @@ async fn type_confusion_is_refused(api: Api) -> Api {
         assert_eq!(field(&p), "file", "{name}: {p}");
         assert!(!r.body.contains("alert"), "{name}: {p}");
     }
+    // A bidi override in the file name is refused before the file is read (review m2).
+    let r = admin
+        .upload(
+            &api,
+            &[Part::file(
+                "report\u{202E}fdp.zip",
+                "application/zip",
+                &zip(b"x"),
+            )],
+        )
+        .await;
+    assert_eq!(field(&r.assert_problem(422, "validation")), "file");
+    let long_name = format!("{}.png", "n".repeat(252));
+    let r = admin
+        .upload(
+            &api,
+            &[Part::file(&long_name, "image/png", &png(64, "long"))],
+        )
+        .await;
+    assert_eq!(field(&r.assert_problem(422, "validation")), "file");
     // Decided before any byte is stored (P4).
     assert!(api.stored_files().is_empty(), "{:?}", api.stored_files());
     assert_eq!(media_count(&api, &admin).await, 0);
@@ -448,6 +488,44 @@ async fn type_confusion_is_refused(api: Api) -> Api {
         assert_eq!(file.header("content-type"), Some(mime), "{file:?}");
         assert_eq!(file.header("x-content-type-options"), Some("nosniff"));
     }
+
+    // Media and images followed by HTML: the magic decides, served as that type with
+    // nosniff, so the browser never renders the HTML (review m4).
+    let mut mp4 = vec![0, 0, 0, 0x18];
+    mp4.extend_from_slice(b"ftypisom\x00\x00\x02\x00isomiso2");
+    mp4.extend_from_slice(html);
+    let mut jpeg = b"\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00".to_vec();
+    jpeg.extend_from_slice(b"\xFF\xD9");
+    jpeg.extend_from_slice(html);
+    let mut png_late_html = png(9000, "late");
+    png_late_html.extend_from_slice(html);
+    for (name, bytes, mime) in [
+        ("clip.mp4", &mp4, "video/mp4"),
+        ("photo.jpg", &jpeg, "image/jpeg"),
+        ("late.png", &png_late_html, "image/png"),
+    ] {
+        let body = created(
+            &admin
+                .upload(&api, &[Part::file(name, "text/html", bytes)])
+                .await,
+        );
+        assert_eq!(body["mime"], mime, "{name}");
+        let file = api.get(body["url"].as_str().unwrap()).await;
+        assert_eq!(file.header("content-type"), Some(mime), "{name}: {file:?}");
+        assert_eq!(file.header("x-content-type-options"), Some("nosniff"));
+    }
+
+    // An SVG with a UTF-8 BOM is still an SVG, and sanitised.
+    let bom_svg = b"\xEF\xBB\xBF<svg xmlns=\"http://www.w3.org/2000/svg\"><script>x()</script><rect width=\"1\" height=\"1\"/></svg>";
+    let body = created(
+        &admin
+            .upload(&api, &[Part::file("bom.svg", "image/svg+xml", bom_svg)])
+            .await,
+    );
+    assert_eq!(body["mime"], "image/svg+xml");
+    assert_eq!(body["sanitized"], true);
+    let stored = api.get(body["url"].as_str().unwrap()).await;
+    assert!(!stored.body.contains("script"), "{}", stored.body);
 
     // A PDF with JavaScript is a PDF, served inline only under `sandbox` (F14).
     let pdf_js =
@@ -519,6 +597,8 @@ async fn document_classes_are_download_only(api: Api) -> Api {
     cases.push(("bom.txt", "text/plain", "\u{feff}Byte order mark".into()));
     cases.push(("data.csv", "text/csv", b"a,b\n1,2\n".to_vec()));
     cases.push(("empty.txt", "text/plain", Vec::new()));
+    // infer's 3-byte MP3 match does not win over a text name with a text head (review m5).
+    cases.push(("id3.txt", "text/plain", b"ID3 tags, explained\n".to_vec()));
     // A character split by the 8 KiB head is still text.
     let long = format!("{}é{}", "a".repeat(8191), "b".repeat(800));
     cases.push(("long.txt", "text/plain", long.into_bytes()));
@@ -795,6 +875,12 @@ async fn upload_parts_are_checked(api: Api) -> Api {
 async fn aborted_uploads_leave_nothing_staged(api: Api) -> Api {
     let admin = admin(&api).await;
     // Larger than the store keeps in memory (8 MiB), so these stream through staging.
+    //
+    // On the cluster profile `stored_files` walks only `<bucket>/<prefix>`: s3s-fs may keep
+    // in-progress multipart parts elsewhere, so there this proves only that no object
+    // landed under the prefix, not that the multipart upload was aborted. The abort
+    // itself is `put_stream`'s staging guard, covered by ferrite-media's store tests
+    // (`cancelled_upload_cleans_staging`); on local media the check is complete.
     let (router, uploader) = api.router_with_max_upload(16 << 20);
 
     // The client goes away after 10 MiB.
@@ -838,5 +924,51 @@ async fn aborted_uploads_leave_nothing_staged(api: Api) -> Api {
     let len = (9u64 << 20).to_string();
     assert_eq!(file.header("content-length"), Some(len.as_str()));
     assert_eq!(uploader.in_flight(), 0);
+    api
+}
+
+async fn idle_upload_is_aborted_and_frees_its_slot(api: Api) -> Api {
+    let admin = admin(&api).await;
+    // `media.upload_idle_timeout` shortened for the test; 16 MiB so the second case
+    // stalls after the store has switched to a staging object.
+    let (router, uploader) = api.router_with_uploader(
+        Uploader::new(api.api.media.clone(), 16 << 20)
+            .with_idle_timeout(Duration::from_millis(300)),
+    );
+    // A stream that pauses inside the head, and one that pauses after 9 MiB. The gates
+    // are never opened while the requests run.
+    for (case, sent) in [("head", 100usize), ("staging", 9 << 20)] {
+        let bytes = png(sent + 1000, case);
+        let mut first = part_head(&Part::file("slow.png", "image/png", &[]));
+        first.extend_from_slice(&bytes[..sent]);
+        let mut rest = bytes[sent..].to_vec();
+        rest.extend_from_slice(b"\r\n");
+        rest.extend_from_slice(&body_end());
+        let (body, gate) = gated_body(first, rest);
+        let req = admin
+            .builder(Method::POST, "/api/v1/media")
+            .header(header::CONTENT_TYPE, upload_content_type())
+            .body(body)
+            .unwrap();
+        let r = tokio::time::timeout(Duration::from_secs(10), send(&router, req))
+            .await
+            .unwrap_or_else(|_| panic!("{case}: the paused upload was not aborted"));
+        let p = r.assert_problem(400, "malformed-body");
+        assert_eq!(field(&p), "file", "{case}: {p}");
+        assert_eq!(uploader.in_flight(), 0, "{case}");
+        wait_until("staging cleaned up", || api.stored_files().is_empty()).await;
+        drop(gate);
+    }
+    assert_eq!(uploader.started(), 2);
+    assert_eq!(media_count(&api, &admin).await, 0);
+    assert_eq!(job_count(&api).await, 0);
+    // The freed slots take uploads again.
+    let (_, body) = upload_body(&[Part::file("ok.png", "image/png", &png(64, "ok"))]);
+    let req = admin
+        .builder(Method::POST, "/api/v1/media")
+        .header(header::CONTENT_TYPE, upload_content_type())
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    created(&send(&router, req).await);
     api
 }

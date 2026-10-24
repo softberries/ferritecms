@@ -9,6 +9,7 @@
 //! | Head | Stored as |
 //! |---|---|
 //! | looks like SVG ([`looks_like_svg`]) | the sanitiser's output, `image/svg+xml`, marked sanitised (at most [`MAX_SVG_BYTES`] read) |
+//! | sniffs as `audio/mpeg`, named `.txt`/`.csv`, and the head passes the text rule below | `text/plain` / `text/csv` (infer's MP3 matcher reads only `ID3` or `FF Fx`; a note starting "ID3" is text) |
 //! | sniffs as an [`inline_safe`] type (JPEG, PNG, GIF, WebP, MP3/Ogg/WAV, MP4/WebM, PDF) | that type |
 //! | a ZIP (`PK\x03\x04`) named `.docx .xlsx .pptx .odt .ods .odp .zip` | the type of that extension |
 //! | no known magic, named `.txt`/`.csv`, UTF-8 (BOM allowed) without NUL, first non-space character not `<` | `text/plain` / `text/csv` |
@@ -19,12 +20,18 @@
 //! once per node; one more is refused `Busy` before any of its file is read. A body
 //! over `max_upload` is cut while it streams; a cut, a client that goes away and a
 //! refused type leave nothing stored (the store aborts and removes its staging object).
+//! An upload that receives no bytes for the idle timeout (`media.upload_idle_timeout`,
+//! default [`DEFAULT_IDLE_TIMEOUT`]) is aborted the same way and frees its slot, so slow
+//! clients cannot hold the node's slots.
 //! A failure after a blob was stored never deletes it (M1b R2: another upload may share
 //! it); orphans wait for M4's GC. File contents are never logged.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
 };
 
 use axum::extract::multipart::{Field, MultipartError};
@@ -45,6 +52,10 @@ pub const MAX_PROCESS_BYTES: u64 = 64 * 1024 * 1024;
 
 /// How much of the file decides its type (P4): 8 KiB.
 pub const HEAD_BYTES: usize = 8 * 1024;
+
+/// Default for how long an upload may receive nothing before it is aborted
+/// (`media.upload_idle_timeout`).
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The ZIP-based document classes by extension (R1/F13).
 const ZIP_TYPES: [(&str, &str); 7] = [
@@ -71,6 +82,8 @@ const TEXT_TYPES: [(&str, &str); 2] = [("txt", "text/plain"), ("csv", "text/csv"
 
 const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
+/// What `sniff_mime` answers for MP3 (a weak, 2–3 byte match).
+const MP3: &str = "audio/mpeg";
 /// What `sniff_mime` answers for content without known magic.
 const UNKNOWN: &str = "application/octet-stream";
 
@@ -94,6 +107,9 @@ pub enum UploadError {
     /// limit, or the client went away); nothing was stored.
     #[error("the request body failed: {0}")]
     Body(MultipartError),
+    /// No bytes arrived for `secs` seconds; the upload was aborted, nothing was stored.
+    #[error("no bytes arrived for {secs} s")]
+    Idle { secs: u64 },
     #[error("media storage: {0}")]
     Media(MediaError),
     /// The sanitiser's blocking task panicked or was cancelled.
@@ -123,24 +139,53 @@ pub struct StagedUpload {
 pub struct Uploader {
     media: Arc<MediaStore>,
     max_upload: u64,
+    idle: Duration,
     slots: Arc<Semaphore>,
     started: AtomicU64,
 }
 
+/// Why the file stream given to the store ended early.
+enum Failure {
+    Body(MultipartError),
+    Idle,
+}
+
 impl Uploader {
-    /// An uploader storing into `media`, refusing files over `max_upload` bytes.
+    /// An uploader storing into `media`, refusing files over `max_upload` bytes, with
+    /// the [`DEFAULT_IDLE_TIMEOUT`].
     pub fn new(media: Arc<MediaStore>, max_upload: u64) -> Self {
         Self {
             media,
             max_upload,
+            idle: DEFAULT_IDLE_TIMEOUT,
             slots: Arc::new(Semaphore::new(MEDIA_UPLOAD_SLOTS)),
             started: AtomicU64::new(0),
         }
     }
 
+    /// Aborts an upload that receives nothing for `idle` (`media.upload_idle_timeout`).
+    pub fn with_idle_timeout(mut self, idle: Duration) -> Self {
+        self.idle = idle;
+        self
+    }
+
     /// `media.max_upload`.
     pub fn max_upload(&self) -> u64 {
         self.max_upload
+    }
+
+    /// The next chunk of `field`, or `Idle` when none arrives within the idle timeout.
+    async fn chunk(&self, field: &mut Field<'_>) -> Result<Option<Bytes>, UploadError> {
+        match tokio::time::timeout(self.idle, field.chunk()).await {
+            Ok(chunk) => chunk.map_err(UploadError::Body),
+            Err(_) => Err(self.idle_error()),
+        }
+    }
+
+    fn idle_error(&self) -> UploadError {
+        UploadError::Idle {
+            secs: self.idle.as_secs().max(1),
+        }
     }
 
     /// Uploads holding a slot now.
@@ -170,7 +215,7 @@ impl Uploader {
         let mut head = BytesMut::new();
         let mut ended = false;
         while head.len() < HEAD_BYTES {
-            match field.chunk().await.map_err(UploadError::Body)? {
+            match self.chunk(&mut field).await? {
                 Some(chunk) => {
                     if (head.len() + chunk.len()) as u64 > self.max_upload {
                         return Err(UploadError::TooLarge {
@@ -190,7 +235,7 @@ impl Uploader {
         if looks_like_svg(sniff) {
             let mut all = head;
             while !ended {
-                match field.chunk().await.map_err(UploadError::Body)? {
+                match self.chunk(&mut field).await? {
                     Some(chunk) => {
                         if (all.len() + chunk.len()) as u64 > svg_limit {
                             return Err(UploadError::TooLarge { limit: svg_limit });
@@ -225,15 +270,24 @@ impl Uploader {
         // The head decides; it is cut when the file goes on past it.
         let cut = !ended || head.len() > HEAD_BYTES;
         let mime = classify(sniff, cut, &original_name)?;
-        let mut failure: Option<MultipartError> = None;
-        let rest = field.map(|r| {
-            r.map_err(|e| {
-                // The store sees an I/O error; the multipart one is kept for the answer.
+        // The store sees an I/O error and aborts; why the stream failed is kept for the
+        // answer.
+        let mut failure: Option<Failure> = None;
+        let idle = self.idle;
+        let rest = futures::stream::unfold(
+            (field, &mut failure),
+            move |(mut field, failure)| async move {
+                let failed = match tokio::time::timeout(idle, field.chunk()).await {
+                    Ok(Ok(Some(chunk))) => return Some((Ok(chunk), (field, failure))),
+                    Ok(Ok(None)) => return None,
+                    Ok(Err(e)) => Failure::Body(e),
+                    Err(_) => Failure::Idle,
+                };
+                *failure = Some(failed);
                 let io = std::io::Error::other("the request body failed");
-                failure = Some(e);
-                io
-            })
-        });
+                Some((Err(io), (field, failure)))
+            },
+        );
         let stream = futures::stream::once(async move { Ok(head.freeze()) }).chain(rest);
         let stored = self
             .media
@@ -244,7 +298,8 @@ impl Uploader {
             Err(MediaError::TooLarge { limit }) => return Err(UploadError::TooLarge { limit }),
             Err(e) => {
                 return Err(match failure {
-                    Some(body) => UploadError::Body(body),
+                    Some(Failure::Body(body)) => UploadError::Body(body),
+                    Some(Failure::Idle) => self.idle_error(),
                     None => UploadError::Media(e),
                 });
             }
@@ -282,15 +337,24 @@ fn staged(
 /// the file goes on) and, within the ZIP and text classes, its file name's extension.
 fn classify(head: &[u8], cut: bool, file_name: &str) -> Result<String, UploadError> {
     let sniffed = sniff_mime(head);
-    if inline_safe(&sniffed) {
-        return Ok(sniffed);
-    }
     let ext = extension(file_name);
     let by_ext = |table: &[(&str, &str)]| {
         ext.as_deref()
             .and_then(|e| table.iter().find(|(x, _)| *x == e))
             .map(|(_, mime)| (*mime).to_owned())
     };
+    if inline_safe(&sniffed) {
+        // infer's MP3 matcher is 2–3 bytes (`ID3`, `FF FB/F3/F2`): a `.txt`/`.csv` whose
+        // head is plain text is text. `FF` is never UTF-8, so only an `ID3`-led note
+        // qualifies; a real MP3 head has NULs or invalid UTF-8 and stays audio.
+        if sniffed == MP3
+            && is_plain_text(head, cut)
+            && let Some(mime) = by_ext(&TEXT_TYPES)
+        {
+            return Ok(mime);
+        }
+        return Ok(sniffed);
+    }
     if head.starts_with(ZIP_MAGIC)
         && let Some(mime) = by_ext(&ZIP_TYPES)
     {
@@ -369,6 +433,20 @@ mod tests {
         assert_eq!(ok(b"\xEF\xBB\xBF<p>", "x.txt"), None);
         assert_eq!(ok(b"\xFF\xFEh\0i\0", "x.txt"), None);
         assert_eq!(ok(b"bad \xC3\x28 utf8", "x.txt"), None);
+        // The weak MP3 match yields to text only for a text name and a text head.
+        assert_eq!(
+            ok(b"ID3 tags, explained", "n.txt").as_deref(),
+            Some("text/plain")
+        );
+        assert_eq!(
+            ok(b"ID3 tags, explained", "n.mp3").as_deref(),
+            Some("audio/mpeg")
+        );
+        assert_eq!(
+            ok(b"ID3\x04\0\0\0\0", "n.txt").as_deref(),
+            Some("audio/mpeg")
+        );
+        assert_eq!(ok(b"\xFF\xFBrest", "n.txt").as_deref(), Some("audio/mpeg"));
         assert!(matches!(
             classify(b"\x7fELF\x02\x01\x01\0", false, "x.txt"),
             Err(UploadError::Unsupported { .. })

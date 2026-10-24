@@ -39,7 +39,7 @@ pub use error::{CoreError, RowError};
 pub use extensions::{EXTENSIONS_LOCK_WAIT, ExtensionAdmin, ExtensionService};
 pub use media::{
     MAX_MEDIA_ALT, MAX_MEDIA_TITLE, MAX_ORIGINAL_NAME, MediaItem, MediaPatch, MediaQuery,
-    MediaService, NewUpload,
+    MediaService, NewUpload, check_file_name,
 };
 pub use menu::{MAX_MENU_ITEMS, MenuService};
 pub use options::OptionService;
