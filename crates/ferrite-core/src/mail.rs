@@ -25,13 +25,28 @@ pub const MAIL_SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// One plain-text mail. Every address in `to` sees the others; `bcc` recipients get the
 /// mail without appearing in it (with an empty `to`, the SMTP mailer shows its own
-/// `from` address as `To`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `from` address as `To`). `Debug` shows the recipient counts, the subject and the
+/// body's length only: a body can hold a live password-reset link (final review M2).
+#[derive(Clone, PartialEq, Eq)]
 pub struct OutgoingMail {
     pub to: Vec<String>,
     pub bcc: Vec<String>,
     pub subject: String,
     pub text: String,
+}
+
+impl std::fmt::Debug for OutgoingMail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutgoingMail")
+            .field("to", &format_args!("{} recipient(s)", self.to.len()))
+            .field("bcc", &format_args!("{} recipient(s)", self.bcc.len()))
+            .field("subject", &self.subject)
+            .field(
+                "text",
+                &format_args!("<{} bytes redacted>", self.text.len()),
+            )
+            .finish()
+    }
 }
 
 /// A refused or failed send. The text never contains a body, a password or the SMTP
@@ -267,6 +282,22 @@ impl Mailer for MailQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_redacts_the_body_and_addresses() {
+        let mail = OutgoingMail {
+            to: vec!["ada@example.com".into()],
+            bcc: vec!["b@example.com".into(), "c@example.com".into()],
+            subject: "Reset your password".into(),
+            text: "https://example.com/reset#token=SECRET".into(),
+        };
+        let shown = format!("{mail:?}");
+        assert!(!shown.contains("SECRET"), "{shown}");
+        assert!(!shown.contains("@example.com"), "{shown}");
+        assert!(shown.contains("Reset your password"), "{shown}");
+        assert!(shown.contains("1 recipient(s)") && shown.contains("2 recipient(s)"));
+        assert!(shown.contains("<38 bytes redacted>"), "{shown}");
+    }
 
     fn mail(subject: &str) -> OutgoingMail {
         OutgoingMail {
