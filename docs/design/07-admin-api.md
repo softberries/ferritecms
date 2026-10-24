@@ -271,14 +271,19 @@ the version, the mode or the migration state); the unauthenticated liveness prob
   node puts in `nodes.meta` (`theme.error`, `plugins.<name>.error`, `plugins_error`,
   `permalinks_error`) is scrubbed where it is written (`NodeStatus`) and again where it is
   read (`GET /plugins`, `GET /themes`, `GET /system/nodes`), so a row written by an older
-  node in a rolling deploy leaks nothing either. Per whitespace-separated token: a URL
-  (`<scheme>://…`) or `user:password@host` becomes `<url>`; an absolute path (`/a/b…`,
-  `./`, `../`, `~/`, `X:\…`, `\\server\…`), also after a prefix such as `path=`, becomes
-  `<path>`; an IPv4 address (optionally `:port`) or IPv6 address (bracketed or not) becomes
-  `<addr>`; the value of a credential key (`password=`, `secret_access_key:`,
-  `X-Amz-Signature=`, `<AWSAccessKeyId>…`) becomes `<secret>`; the result is cut to 1 KiB
-  on a character boundary. Manifest and template problems stay readable. The full text is
-  in the node's log only.
+  node in a rolling deploy leaks nothing either. Over-scrubbing is accepted, a leak is
+  not (R16). Per whitespace-separated token: a URL (`<scheme>://…`) or `user:password@host`
+  becomes `<url>`; the value of a credential key (`password`, `secret_key`, `access_key`,
+  `token`, `key`, `bucket`, `X-Amz-Signature`, `Authorization` with the credential after
+  `Bearer`/`Basic`, XML such as `<AWSAccessKeyId>`/`<BucketName>`), a bare AWS key id
+  (`AKIA…`/`ASIA…`) and a quoted name after `bucket`/`NoSuchBucket` become `<secret>`; a
+  path (`/a/b…` in any script, `//server/…`, `./`, `../`, `~/`, `X:\…`, `\\server\…`), also
+  after a prefix such as `path=` or an ANSI escape, becomes `<path>` and runs on across
+  spaces up to a quote, `)`, a line break, `: `, `, ` or the end; an IPv4 address (with
+  `/prefix` or `:port`), an IPv6 address (bracketed or not) or `host:port` becomes `<addr>`
+  (`file.html:3`-style template lines are kept); the result is cut to 1 KiB on a character
+  boundary, in linear time over at most 16 KiB of input. Manifest and template problems
+  stay readable. The full text is in the node's log only.
 
 **Token scopes (P6).** A scope is `<area>:<read|write>` for the areas `content`, `media`,
 `terms`, `menus`, `comments`, `users`, `settings`, `redirects`, `extensions`, `import`,

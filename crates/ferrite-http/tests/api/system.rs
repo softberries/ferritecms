@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::{
     api_tests,
-    harness::{Api, Client, SITE_URL},
+    harness::{Api, Client, SITE_URL, plugin_manifest, plugin_wasm},
 };
 
 api_tests!(
@@ -219,8 +219,8 @@ async fn audit_lists_newest_first_with_actor(api: Api) -> Api {
 }
 
 /// Review Focus 5: a node row heartbeated with unscrubbed texts (an older node) shows
-/// none of its URL, path, address or credentials in `GET /system/nodes` or
-/// `GET /themes`.
+/// none of its URL, path, address or credentials in `GET /system/nodes`,
+/// `GET /themes` or `GET /plugins`.
 async fn old_node_meta_is_scrubbed_on_read(api: Api) -> Api {
     let mut c = admin(&api).await;
     let leak = "theme \"x\": storage backend error: Unable to open file \
@@ -232,7 +232,7 @@ async fn old_node_meta_is_scrubbed_on_read(api: Api) -> Api {
     let meta = json!({
         "site_url": SITE_URL,
         "theme": {"name": "blog", "hash": "0123", "origin": "embedded", "error": leak, "fallback": true},
-        "plugins": {"seo": {"version": "1.0.0", "status": "failed", "error": leak}},
+        "plugins": {"hello": {"version": "0.1.0", "status": "failed", "error": leak}},
         "plugins_error": leak,
         "permalinks_error": leak,
     });
@@ -254,7 +254,7 @@ async fn old_node_meta_is_scrubbed_on_read(api: Api) -> Api {
     assert_eq!(node["live"], true, "{node}");
     assert!(node["started_at"].is_string() && node["heartbeat_at"].is_string());
     assert_eq!(node["meta"]["theme"]["error"], want, "{node}");
-    assert_eq!(node["meta"]["plugins"]["seo"]["error"], want, "{node}");
+    assert_eq!(node["meta"]["plugins"]["hello"]["error"], want, "{node}");
     assert_eq!(node["meta"]["plugins_error"], want, "{node}");
     assert_eq!(node["meta"]["permalinks_error"], want, "{node}");
     assert_eq!(node["meta"]["site_url"], SITE_URL, "{node}");
@@ -270,7 +270,50 @@ async fn old_node_meta_is_scrubbed_on_read(api: Api) -> Api {
         .unwrap();
     assert_eq!(blog["nodes"][0]["error"], want, "{blog}");
 
-    for body in [&r.body, &themes.body] {
+    // `GET /plugins` and `GET /plugins/{name}` (the plugin is installed, so its node
+    // states are listed).
+    let (manifest, wasm) = (plugin_manifest("hello"), plugin_wasm("hello"));
+    let inspected = c
+        .multipart(
+            &api,
+            "/api/v1/plugins/inspect",
+            &[("manifest", manifest.as_bytes()), ("component", &wasm)],
+        )
+        .await;
+    let fp = inspected.json()["fingerprint"].as_str().unwrap().to_owned();
+    let installed = c
+        .multipart(
+            &api,
+            "/api/v1/plugins",
+            &[
+                ("manifest", manifest.as_bytes()),
+                ("component", &wasm),
+                ("approve", fp.as_bytes()),
+            ],
+        )
+        .await;
+    assert_eq!(installed.status, StatusCode::CREATED, "{installed:?}");
+    let plugins = c.get(&api, "/api/v1/plugins").await;
+    assert_eq!(plugins.status, StatusCode::OK, "{plugins:?}");
+    let hello = plugins.json()["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "hello")
+        .cloned()
+        .unwrap();
+    let state = hello["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["node"] == id.as_uuid().to_string())
+        .cloned()
+        .unwrap_or_else(|| panic!("{hello}"));
+    assert_eq!(state["error"], want, "{hello}");
+    let one = c.get(&api, "/api/v1/plugins/hello").await;
+    assert_eq!(one.status, StatusCode::OK, "{one:?}");
+
+    for body in [&r.body, &themes.body, &plugins.body, &one.body] {
         for secret in [
             "/var/lib",
             "AKIAKEY",

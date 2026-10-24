@@ -79,9 +79,10 @@ heartbeat comparison uses the database clock.
 
 Error texts a node reports in `nodes.meta` (`theme.error`, `plugins.<name>.error`,
 `plugins_error`, `permalinks_error`) are scrubbed before the heartbeat writes them
-(`ferrite_core::diagnostics::scrub`, M2a-2b P18): URLs, absolute paths, IP addresses and
-credential values are replaced by `<url>`, `<path>`, `<addr>` and `<secret>`, and the text
-is cut to 1 KiB. Readers (`GET /plugins`, `GET /themes`, `GET /system/nodes`) scrub them
+(`ferrite_core::diagnostics::scrub`, M2a-2b P18, R16): URLs, paths (also with spaces),
+IP addresses and `host:port`, credential values, AWS key ids and bucket names are
+replaced by `<url>`, `<path>`, `<addr>` and `<secret>` (over-scrubbing is accepted, a leak
+is not), and the text is cut to 1 KiB (07 §1 lists the rules). Readers (`GET /plugins`, `GET /themes`, `GET /system/nodes`) scrub them
 again, so rows written by an older binary during a rolling deploy show no storage paths
 or endpoints either. The full text is logged by the node that produced it.
 
