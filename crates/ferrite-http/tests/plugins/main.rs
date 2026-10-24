@@ -7,6 +7,7 @@
 mod common;
 mod install;
 mod reload;
+mod settings;
 
 use common::{HOUR, SITE_URL, Site};
 use ferrite_core::{

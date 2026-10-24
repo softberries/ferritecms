@@ -12,6 +12,7 @@
 //! | `RateLimited { retry_after_secs }` | 429 | `rate-limited` + `Retry-After` |
 //! | `Invalid(msg)` | 422 | `validation` (detail = msg) |
 //! | `InvalidField { field, message }` | 422 | `validation` (detail = message, `errors[0] = { field, detail: message }`) |
+//! | `InvalidKey { key, message }` | 422 | `validation` (as `InvalidField`, `field` = the setting key) |
 //! | `InvalidRows(rows)` | 422 | `validation` (one `errors` entry per row, `field` = `row <index>`; the CSV import names lines instead) |
 //! | `Conflict { .. }` | 412 | `precondition-failed` (+ `current`, set by the handler) |
 //! | `Changed(what)` | 409 | `conflict` (detail = what changed; retry) |
@@ -352,6 +353,9 @@ impl From<CoreError> for Problem {
             CoreError::InvalidField { field, message } => {
                 Self::validation(message.clone()).with_error(Some(field), message)
             }
+            CoreError::InvalidKey { key, message } => {
+                Self::validation(message.clone()).with_error(Some(&key), message)
+            }
             CoreError::InvalidRows(rows) => {
                 let mut p = Self::validation("some rows are invalid; nothing was written");
                 for row in rows {
@@ -494,6 +498,13 @@ mod tests {
                 None,
             ),
             (
+                CoreError::invalid_key("accent_color", "must be a colour"),
+                422,
+                "validation",
+                Some("must be a colour"),
+                None,
+            ),
+            (
                 CoreError::InvalidRows(vec![ferrite_core::RowError {
                     row: 2,
                     message: "redirect loop".into(),
@@ -600,6 +611,22 @@ mod tests {
             [FieldError {
                 field: Some("terms".into()),
                 detail: "unknown term".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn invalid_key_names_the_setting() {
+        let p = Problem::from(CoreError::invalid_key(
+            "api_key",
+            "must be 1-4096 characters",
+        ));
+        assert_eq!(p.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            p.errors,
+            [FieldError {
+                field: Some("api_key".into()),
+                detail: "must be 1-4096 characters".into()
             }]
         );
     }

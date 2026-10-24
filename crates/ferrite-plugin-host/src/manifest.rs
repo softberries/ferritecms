@@ -744,6 +744,15 @@ fn parse_settings(cx: &mut Cx, t: toml::Table) -> BTreeMap<String, SettingSpec> 
     for (key, value) in t {
         let path = join("settings", &key);
         let before = cx.problems.len();
+        // Pre-flight F23: the key becomes an option name, a seal purpose and an API
+        // field, so it follows the theme rule.
+        if !valid_setting_key(&key) {
+            cx.push(
+                &path,
+                format!("setting keys must be 1-{MAX_SETTING_KEY} of [a-z0-9_-]"),
+            );
+            continue;
+        }
         let toml::Value::Table(mut st) = value else {
             cx.push(
                 &path,
@@ -786,7 +795,7 @@ fn parse_settings(cx: &mut Cx, t: toml::Table) -> BTreeMap<String, SettingSpec> 
         if let (Some(kind), Some(d)) = (kind, &default) {
             let ok = match kind {
                 SettingKind::Bool => d.is_bool(),
-                SettingKind::Number => d.is_integer() || d.is_float(),
+                SettingKind::Number => d.is_integer() || d.as_float().is_some_and(f64::is_finite),
                 SettingKind::Text
                 | SettingKind::Textarea
                 | SettingKind::Select
@@ -819,6 +828,18 @@ fn parse_settings(cx: &mut Cx, t: toml::Table) -> BTreeMap<String, SettingSpec> 
         }
     }
     out
+}
+
+/// Longest `[settings]` key.
+const MAX_SETTING_KEY: usize = 64;
+
+/// `[a-z0-9_-]{1,64}` (the `theme.toml` settings rule).
+fn valid_setting_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= MAX_SETTING_KEY
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
 }
 
 /// `"16MB"`, `"32MiB"`, `"512KB"`, `"4KiB"`; MB = MiB = 1024 * 1024, KB = KiB = 1024.
@@ -1165,6 +1186,20 @@ world = "ferrite:plugin/plugin@0.1.0"
                 "settings.a.extra",
             ),
             ("a = 1", "settings.a"),
+            // Pre-flight F23: keys are option names and seal purposes.
+            ("Ab = { type = \"text\", label = \"A\" }", "settings.Ab"),
+            (
+                "\"a.b\" = { type = \"text\", label = \"A\" }",
+                "settings.a.b",
+            ),
+            (
+                "\"a:b\" = { type = \"text\", label = \"A\" }",
+                "settings.a:b",
+            ),
+            (
+                "n = { type = \"number\", label = \"N\", default = nan }",
+                "settings.n.default",
+            ),
         ];
         for (line, path) in cases {
             let src = with(&format!("[settings]\n{line}\n"));
@@ -1175,6 +1210,16 @@ world = "ferrite:plugin/plugin@0.1.0"
         );
         let m = Manifest::parse(&ok).expect("ok");
         assert_eq!(m.settings["a"].options, ["x", "y"]);
+        let long = "k".repeat(65);
+        let src = with(&format!(
+            "[settings]\n{long} = {{ type = \"text\", label = \"A\" }}\n"
+        ));
+        assert_eq!(paths(Manifest::parse(&src)), [format!("settings.{long}")]);
+        let ok = with(&format!(
+            "[settings]\n{} = {{ type = \"text\", label = \"A\" }}\nmy_key-2 = {{ type = \"bool\", label = \"B\" }}\n",
+            "k".repeat(64)
+        ));
+        assert_eq!(Manifest::parse(&ok).expect("ok").settings.len(), 2);
     }
 
     #[test]

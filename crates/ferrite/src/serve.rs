@@ -330,11 +330,13 @@ async fn boot(
         media_url(media.clone()),
         Arc::new(Timestamp::now),
     ));
-    let services = Arc::new(StoreHostServices::new(
-        store.clone(),
-        reader.clone(),
-        &http.site_url,
-    ));
+    // One site key: sessions and tokens, sealed plugin secrets (sealed by the API's
+    // `ExtensionAdmin`, opened by the owning plugin's `settings.get`).
+    let site_key = keys::site_key(config)?;
+    let services = Arc::new(
+        StoreHostServices::new(store.clone(), reader.clone(), &http.site_url)
+            .with_site_key(site_key.clone()),
+    );
     let host = Arc::new(
         PluginHost::new(host_config(&config.plugins), services)
             .context("cannot start the plugin host")?,
@@ -364,7 +366,7 @@ async fn boot(
         .context("cannot load content types and taxonomies")?;
     // One auth service for the API and the public site (previews, logged-in requests).
     let auth = Arc::new(
-        AuthService::new(store.clone(), keys::site_key(config)?)
+        AuthService::new(store.clone(), site_key.clone())
             .with_issuer_name(config.site.title.clone()),
     );
     let state = Arc::new(
@@ -404,7 +406,7 @@ async fn boot(
             menus: Arc::new(MenuService::new(store.clone())),
             options: Arc::new(OptionService::new(store.clone())),
             redirects: Arc::new(RedirectService::new(store.clone())),
-            extensions: Arc::new(ExtensionAdmin::new(store.clone())),
+            extensions: Arc::new(ExtensionAdmin::new(store.clone(), site_key)),
             installer,
             media: media.clone(),
             site_url: state.config.site_url.clone(),

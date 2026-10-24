@@ -65,6 +65,13 @@ impl InMemoryServices {
         self.lock().options.insert(k.to_string(), v.to_string());
     }
 
+    /// Plugin `plugin`'s setting `key`; `v` is JSON text, as returned by `settings.get`.
+    pub fn set_setting(&self, plugin: &str, key: &str, v: &str) {
+        self.lock()
+            .settings
+            .insert(pair(plugin, key), v.to_string());
+    }
+
     fn lock(&self) -> MutexGuard<'_, Data> {
         // The data stays consistent even if a holder panicked: every update is one insert.
         self.data.lock().unwrap_or_else(PoisonError::into_inner)

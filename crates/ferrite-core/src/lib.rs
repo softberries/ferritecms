@@ -7,6 +7,7 @@ pub mod blocks;
 mod content;
 mod error;
 pub mod events;
+pub mod ext_settings;
 mod extensions;
 pub mod fields;
 pub mod jobs;

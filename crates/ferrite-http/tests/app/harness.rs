@@ -11,7 +11,7 @@ use axum::{
 use ferrite_cache::{InvalidationLoop, PageCache};
 use ferrite_core::{
     Actor, AuthService, ContentDraft, ContentService, PermalinkRules, RedirectService,
-    TaxonomyService, auth::SiteKey,
+    TaxonomyService,
 };
 use ferrite_domain::{ContentId, ContentItem, Role, TermId, User};
 use ferrite_http::{AppParts, AppState, HttpConfig, build_app, load_route_table};
@@ -147,13 +147,10 @@ impl App {
         )
     }
 
-    /// An auth service over `site`'s store (sessions live in the database, so any
-    /// instance resolves the cookies another one issued).
+    /// An auth service over `site`'s store with the site's key (sessions live in the
+    /// database, so any instance resolves the cookies another one issued).
     pub fn auth(site: &Site) -> Arc<AuthService> {
-        Arc::new(AuthService::new(
-            site.store.clone(),
-            SiteKey::generate().expect("site key"),
-        ))
+        Arc::new(AuthService::new(site.store.clone(), site.key.clone()))
     }
 
     /// A `Cookie` header value holding a new session of `user`.

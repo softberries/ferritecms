@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use ferrite_core::{
     DepKeys, PageItem, SiteRead, SiteReader,
+    auth::SiteKey,
     events::{invalidate, option_key, post_key},
+    ext_settings::{open_secret, plugin_option, sealed_text},
 };
 use ferrite_domain::{ContentId, ContentStatus};
 use ferrite_plugin_host::{HostServices, KindOk, Post, TermRef};
@@ -34,7 +36,12 @@ const PLUGIN_OPTION_PREFIX: &str = "plugin.";
 ///   item and emits `invalidate` with `post:<id>` in the same transaction.
 /// * `options.get`: JSON text of the option; never `plugin.*` keys.
 /// * `kv`: per plugin, quota [`KV_MAX_BYTES`] / [`KV_MAX_KEYS`] via `set_with_quota`.
-/// * `settings.get`: option `plugin.<name>.settings.<key>`.
+/// * `settings.get`: option `plugin.<name>.settings.<key>` of the calling plugin (the
+///   host passes its name and answers declared keys only). A sealed secret
+///   (`{"sealed": …}`) is opened with the site key ([`with_site_key`](Self::with_site_key))
+///   under that plugin's and key's purpose and returned as a JSON string; without the
+///   key, or when it does not open (sealed for another plugin or key, or under another
+///   site key), the read is logged (never the value) and answers `None`.
 ///
 /// A store error is logged and the guest gets "not found" (reads) or a storage error
 /// (writes); inside a request scope it also marks the page volatile, so the degraded
@@ -47,6 +54,8 @@ pub struct StoreHostServices {
     reader: Arc<SiteReader>,
     /// Site URL without a trailing slash.
     site_url: String,
+    /// Opens sealed plugin secrets; `None`: secrets read as unset.
+    site_key: Option<SiteKey>,
 }
 
 impl StoreHostServices {
@@ -55,7 +64,15 @@ impl StoreHostServices {
             store,
             reader,
             site_url: site_url.trim_end_matches('/').to_owned(),
+            site_key: None,
         }
+    }
+
+    /// The site key `settings.get` opens sealed secrets with (the one `ExtensionAdmin`
+    /// seals them with).
+    pub fn with_site_key(mut self, key: SiteKey) -> Self {
+        self.site_key = Some(key);
+        self
     }
 
     fn post(&self, p: &PageItem, status: ContentStatus) -> Post {
@@ -252,12 +269,41 @@ impl HostServices for StoreHostServices {
     }
 
     async fn setting_get(&self, plugin: &str, key: &str) -> Option<String> {
-        let option = format!("{PLUGIN_OPTION_PREFIX}{plugin}.settings.{key}");
+        let option = plugin_option(plugin, key);
         // The host records nothing for settings; a settings change is an option write.
         let mut deps = DepKeys::default();
         deps.insert(option_key(&option));
         record(deps);
-        option_text(self.store.as_ref(), &option).await
+        let value = match self.store.read().options().get(&option).await {
+            Ok(entry) => entry?.value,
+            Err(e) => {
+                tracing::warn!(key = option, error = %e, "plugin setting read failed");
+                mark_degraded();
+                return None;
+            }
+        };
+        let Some(sealed) = sealed_text(&value) else {
+            return Some(json_text(&value));
+        };
+        let Some(site_key) = &self.site_key else {
+            tracing::warn!(
+                plugin,
+                setting = key,
+                "no site key to open a sealed plugin setting"
+            );
+            return None;
+        };
+        match open_secret(site_key, plugin, key, sealed) {
+            Ok(plaintext) => Some(json_text(&serde_json::Value::String(plaintext))),
+            Err(_) => {
+                tracing::warn!(
+                    plugin,
+                    setting = key,
+                    "a sealed plugin setting does not open (another plugin's or key's, or another site key)"
+                );
+                None
+            }
+        }
     }
 }
 

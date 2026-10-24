@@ -24,6 +24,12 @@ pub enum CoreError {
         field: &'static str,
         message: String,
     },
+    /// Invalid input attributable to one member whose name is data, not a fixed field: a
+    /// theme or plugin setting key (M2a-2 P13). Mapped like
+    /// [`InvalidField`](Self::InvalidField), with `key` as the field. The message never
+    /// holds the value (it may be a secret).
+    #[error("invalid {key}: {message}")]
+    InvalidKey { key: String, message: String },
     /// Several rows of a batch (a redirect import) are invalid; nothing was written.
     /// Each entry names the row's index in the input and what is wrong with it.
     #[error("invalid input in {} rows", .0.len())]
@@ -58,6 +64,16 @@ impl CoreError {
     pub fn invalid_field(field: &'static str, message: impl Into<String>) -> Self {
         Self::InvalidField {
             field,
+            message: message.into(),
+        }
+    }
+}
+
+impl CoreError {
+    /// `InvalidKey { key, message }`.
+    pub fn invalid_key(key: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::InvalidKey {
+            key: key.into(),
             message: message.into(),
         }
     }

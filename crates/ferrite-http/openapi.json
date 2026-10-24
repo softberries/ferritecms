@@ -2968,6 +2968,183 @@
         ]
       }
     },
+    "/api/v1/plugins/{name}/settings": {
+      "get": {
+        "tags": [
+          "plugins"
+        ],
+        "operationId": "get_plugin_settings",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Plugin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The settings schema, the non-secret values, and whether each secret is set (never its value)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginSettingsDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "plugins"
+        ],
+        "operationId": "update_plugin_settings",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Plugin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Declared keys and their new values; `null` deletes a key's value (the plugin then reads the default). A `secret` is stored sealed and never returned",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved; the schema, the non-secret values and whether each secret is set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginSettingsDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json` (the body must be an object)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: an undeclared key, or a bad value (`errors[0].field` = the key; the value is never echoed); nothing is written",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`busy`: another extension change holds the lock (`Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/redirects": {
       "get": {
         "tags": [
@@ -4670,6 +4847,193 @@
           },
           "422": {
             "description": "`validation`: the theme does not load (its artifact is missing, tampered with or does not compile); the active theme is unchanged",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`busy`: another extension change holds the lock (`Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/themes/{name}/settings": {
+      "get": {
+        "tags": [
+          "themes"
+        ],
+        "operationId": "get_theme_settings",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Theme (installed or embedded)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The settings schema and every setting's value as templates see it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThemeSettingsDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_themes`, `extensions:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no installed or embedded theme of that name",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: the row stores no schema and its artifact does not load",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "themes"
+        ],
+        "operationId": "update_theme_settings",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Theme (installed or embedded)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Declared keys and their new values; `null` resets a key to its default",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved; the schema and every value as templates see it. Pages showing the theme are flushed on every node (`options.changed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThemeSettingsDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json` (the body must be an object)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_themes`, `extensions:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no installed or embedded theme of that name",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: an undeclared key, or a bad value (`errors[0].field` = the key: type, length, option, colour or media id); nothing is written",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6999,6 +7363,40 @@
           }
         }
       },
+      "PluginSettingsDto": {
+        "type": "object",
+        "description": "`GET /plugins/{name}/settings`: the plugin's schema, the value of every non-secret\nsetting as the plugin reads it (the stored value, else the default, else `null`),\nand for each `secret` only whether it is set. A secret's value is never returned.",
+        "required": [
+          "schema",
+          "values",
+          "secrets"
+        ],
+        "properties": {
+          "schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettingDefDto"
+            }
+          },
+          "secrets": {
+            "type": "object",
+            "description": "Secret key -> whether a value is set.",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "values": {
+            "type": "object",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "PluginUpload": {
         "type": "object",
         "description": "`POST /plugins` (`multipart/form-data`; the schema only). Every part is required;\nan unknown or repeated one is refused.",
@@ -7304,6 +7702,39 @@
           }
         }
       },
+      "SettingDefDto": {
+        "type": "object",
+        "description": "One declared setting: what the admin renders a form field from (05 §4c, 06 §1).",
+        "required": [
+          "key",
+          "type",
+          "label",
+          "options"
+        ],
+        "properties": {
+          "default": {
+            "description": "The declared default; `null` for none (always for `media` and `secret`)."
+          },
+          "key": {
+            "type": "string",
+            "description": "`[a-z0-9_-]`, at most 64 characters."
+          },
+          "label": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The choices of a `select`; empty otherwise."
+          },
+          "type": {
+            "type": "string",
+            "description": "`text` (at most 1 000 characters), `textarea` (65 536), `bool`, `number`,\n`select` (one of `options`), `color` (`#rgb` / `#rrggbb`), `media` (a media item\nid) or `secret` (plugins only: 1–4 096 characters, write-only)."
+          }
+        }
+      },
       "SettingsDto": {
         "type": "object",
         "description": "The site settings (`GET /settings`, and the result of `PATCH /settings`): every key,\n`null` when unset (the default applies). A `PATCH` body is an object with any of\nthese keys (`null` resets one to its default); an unknown key is `422`.",
@@ -7367,6 +7798,10 @@
             "description": "At most 200 characters."
           }
         }
+      },
+      "SettingsPatch": {
+        "type": "object",
+        "description": "`PATCH /themes/{name}/settings` and `PATCH /plugins/{name}/settings` (the schema\nonly): an object of declared keys to their new values; `null` resets a key to its\ndefault (for a secret: deletes it). Keys not in the body stay as they are."
       },
       "TaxonomyDto": {
         "type": "object",
@@ -7713,6 +8148,29 @@
           "installed",
           "embedded"
         ]
+      },
+      "ThemeSettingsDto": {
+        "type": "object",
+        "description": "`GET /themes/{name}/settings`: the theme's schema and every declared setting's value\nas its templates see it (the stored value, else the default, else the type's empty\nvalue).",
+        "required": [
+          "schema",
+          "values"
+        ],
+        "properties": {
+          "schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettingDefDto"
+            }
+          },
+          "values": {
+            "type": "object",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
       },
       "TokenDto": {
         "type": "object",

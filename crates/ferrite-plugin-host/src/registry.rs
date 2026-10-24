@@ -11,12 +11,34 @@ use crate::manifest::{Capabilities, Manifest};
 use crate::services::HostServices;
 use crate::state::HostState;
 
+/// The settings a manifest declares, each with its default as JSON text (`None`: no
+/// default). `settings.get` answers these keys only (M2a-2 P13).
+pub(crate) type SettingDefaults = BTreeMap<String, Option<String>>;
+
+/// The declared settings of `manifest` with their defaults as JSON text. A default
+/// that cannot be written as JSON (none passes manifest validation) counts as none.
+pub(crate) fn setting_defaults(manifest: &Manifest) -> SettingDefaults {
+    manifest
+        .settings
+        .iter()
+        .map(|(key, spec)| {
+            let default = spec
+                .default
+                .as_ref()
+                .and_then(|d| serde_json::to_string(d).ok());
+            (key.clone(), default)
+        })
+        .collect()
+}
+
 /// A compiled, linked plugin plus everything a call needs to build its store.
 pub(crate) struct LoadedPlugin {
     pub(crate) name: Arc<str>,
     pub(crate) manifest: Manifest,
     pub(crate) pre: PluginPre<HostState>,
     pub(crate) grants: Arc<Capabilities>,
+    /// [`setting_defaults`] of `manifest`.
+    pub(crate) settings: Arc<SettingDefaults>,
     pub(crate) services: Arc<dyn HostServices>,
     /// Effective limits (plan ruling P5; see `PluginHost::prepare_with`).
     pub(crate) memory_bytes: usize,

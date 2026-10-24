@@ -207,11 +207,12 @@ impl Api {
             Arc::new(|hash: &ArtifactHash, name: &str| format!("/_media/{hash}/{name}")),
             Arc::new(Timestamp::now),
         ));
-        let services = Arc::new(StoreHostServices::new(
-            store.clone(),
-            reader.clone(),
-            SITE_URL,
-        ));
+        // One site key for sessions, sealed plugin settings and the host that opens them.
+        let key = SiteKey::generate().expect("site key");
+        let services = Arc::new(
+            StoreHostServices::new(store.clone(), reader.clone(), SITE_URL)
+                .with_site_key(key.clone()),
+        );
         let host = Arc::new(PluginHost::new(HostConfig::default(), services).expect("host"));
         let reloader = PluginReloader::new(store.clone(), media_store.clone(), host.clone());
         let compiles = Arc::new(AtomicUsize::new(0));
@@ -259,7 +260,7 @@ impl Api {
             ApiState::new(ApiParts {
                 store: store.clone(),
                 auth: Arc::new(
-                    AuthService::new(store.clone(), SiteKey::generate().expect("site key"))
+                    AuthService::new(store.clone(), key.clone())
                         .with_issuer_name(SITE_TITLE.into()),
                 ),
                 users: Arc::new(UserService::new(store.clone())),
@@ -274,7 +275,8 @@ impl Api {
                 redirects: Arc::new(RedirectService::new(store.clone())),
                 // Short: tests that hold the lock see `busy` quickly.
                 extensions: Arc::new(
-                    ExtensionAdmin::new(store.clone()).with_lock_wait(EXTENSIONS_LOCK_WAIT),
+                    ExtensionAdmin::new(store.clone(), key.clone())
+                        .with_lock_wait(EXTENSIONS_LOCK_WAIT),
                 ),
                 installer,
                 media: media_store,
@@ -360,11 +362,12 @@ impl Api {
     /// site key over that store, the same `site.url`. The public side stays this node's;
     /// tests use it for API requests only.
     pub async fn router_on(&self, store: Arc<dyn Store>) -> Router {
+        let key = SiteKey::generate().expect("site key");
         let api = Arc::new(
             ApiState::new(ApiParts {
                 store: store.clone(),
                 auth: Arc::new(
-                    AuthService::new(store.clone(), SiteKey::generate().expect("site key"))
+                    AuthService::new(store.clone(), key.clone())
                         .with_issuer_name(SITE_TITLE.into()),
                 ),
                 users: Arc::new(UserService::new(store.clone())),
@@ -377,7 +380,7 @@ impl Api {
                 menus: Arc::new(MenuService::new(store.clone())),
                 options: Arc::new(OptionService::new(store.clone())),
                 redirects: Arc::new(RedirectService::new(store.clone())),
-                extensions: Arc::new(ExtensionAdmin::new(store.clone())),
+                extensions: Arc::new(ExtensionAdmin::new(store.clone(), key)),
                 installer: Arc::new(
                     Installer::new(store.clone(), self.api.media.clone(), HostConfig::default())
                         .expect("installer"),

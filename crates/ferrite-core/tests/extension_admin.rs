@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use ferrite_core::{
     Actor, CoreError, ExtensionAdmin, ExtensionService, Scopes,
+    auth::SiteKey,
     jobs::{PLUGIN_PURGE_GRACE, PLUGIN_PURGE_KIND, PluginPurge, plugin_purge_job},
 };
 use ferrite_domain::{
@@ -131,7 +132,7 @@ async fn setting(store: &dyn Store, name: &str, key: &str) -> Option<Value> {
 
 pub async fn extension_writes_need_capabilities(db: &TestDb) {
     let store = db.store();
-    let admin_svc = ExtensionAdmin::new(db.shared_store());
+    let admin_svc = ExtensionAdmin::new(db.shared_store(), SiteKey::generate().unwrap());
     let admin = actor(store, Role::Admin).await;
     let editor = actor(store, Role::Editor).await;
     let author = actor(store, Role::Author).await;
@@ -250,7 +251,7 @@ pub async fn extension_writes_need_capabilities(db: &TestDb) {
 
 pub async fn install_requires_a_grant(db: &TestDb) {
     let store = db.store();
-    let svc = ExtensionAdmin::new(db.shared_store());
+    let svc = ExtensionAdmin::new(db.shared_store(), SiteKey::generate().unwrap());
     let admin = actor(store, Role::Admin).await;
     let p = artifact(ArtifactKind::Plugin, 1);
     let seq = store.read().events().max_seq().await.unwrap();
@@ -289,7 +290,7 @@ pub async fn install_requires_a_grant(db: &TestDb) {
 
 pub async fn writes_are_audited(db: &TestDb) {
     let store = db.store();
-    let svc = ExtensionAdmin::new(db.shared_store());
+    let svc = ExtensionAdmin::new(db.shared_store(), SiteKey::generate().unwrap());
     let admin = actor(store, Role::Admin).await;
     let p = artifact(ArtifactKind::Plugin, 1);
     let t = artifact(ArtifactKind::Theme, 2);
@@ -369,7 +370,7 @@ pub async fn writes_are_audited(db: &TestDb) {
 /// reinstall keeps them; `purge = true` removes them at once.
 pub async fn delete_keeps_data_until_purge(db: &TestDb) {
     let store = db.store();
-    let svc = ExtensionAdmin::new(db.shared_store());
+    let svc = ExtensionAdmin::new(db.shared_store(), SiteKey::generate().unwrap());
     let system = ExtensionService::new(db.shared_store());
     let admin = actor(store, Role::Admin).await;
     let p = artifact(ArtifactKind::Plugin, 1);
@@ -524,7 +525,7 @@ pub async fn delete_keeps_data_until_purge(db: &TestDb) {
 /// keys, no prefix match).
 pub async fn purge_spares_name_prefix_neighbours(db: &TestDb) {
     let store = db.store();
-    let svc = ExtensionAdmin::new(db.shared_store());
+    let svc = ExtensionAdmin::new(db.shared_store(), SiteKey::generate().unwrap());
     let admin = actor(store, Role::Admin).await;
     let kv = store.read().plugin_kv();
     for (seed, name) in [(1, "foo"), (2, "foo-bar"), (3, "foobar")] {

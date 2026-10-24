@@ -199,12 +199,14 @@ impl PluginHost {
             fuel,
             "plugin prepared"
         );
+        let settings = Arc::new(registry::setting_defaults(&manifest));
         Ok(PreparedPlugin {
             loaded: Arc::new(LoadedPlugin {
                 name: Arc::from(name.as_str()),
                 manifest,
                 pre,
                 grants: Arc::new(grants),
+                settings,
                 services: Arc::clone(&self.services),
                 memory_bytes,
                 fuel,

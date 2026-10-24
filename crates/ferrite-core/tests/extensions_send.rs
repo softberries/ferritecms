@@ -6,7 +6,7 @@
 
 use std::future::Future;
 
-use ferrite_core::{Actor, ExtensionAdmin, ExtensionService};
+use ferrite_core::{Actor, ExtensionAdmin, ExtensionService, auth::SiteKey};
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, InstalledPlugin, InstalledTheme, Role, Timestamp, UserId,
 };
@@ -52,7 +52,7 @@ async fn extension_service_futures_are_send() {
     assert_send(svc.set_plugin_enabled("p", true));
     assert_send(svc.delete_plugin("p"));
     assert_send(svc.purge_plugin_data("p", Timestamp::now(), &[]));
-    let admin = ExtensionAdmin::new(db.shared_store());
+    let admin = ExtensionAdmin::new(db.shared_store(), SiteKey::generate().unwrap());
     let actor = Actor::new(UserId::new(), Role::Admin);
     assert_send(admin.list_plugins(&actor));
     assert_send(admin.get_plugin(&actor, "p"));

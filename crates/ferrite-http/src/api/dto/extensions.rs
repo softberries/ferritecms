@@ -1,12 +1,17 @@
 //! Bodies of the `/plugins` and `/themes` endpoints. Responses never carry artifact
 //! bytes or secrets: a plugin is described by its row (name, version, state, times), the
 //! permission report of its stored grant, and what live nodes report about it; a theme
-//! by its row or embedded manifest and what live nodes serve.
+//! by its row or embedded manifest and what live nodes serve. Settings carry the
+//! schema and the values, and for a plugin `secret` only whether it is set.
+
+use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
+use ferrite_core::ext_settings::{PluginSettingsView, SettingDef, SettingsSchema};
 use ferrite_domain::{InstalledPlugin, InstalledTheme, Node};
 use ferrite_plugin_host::{LimitItem, PermissionItem, PermissionReport};
 use serde::Serialize;
+use serde_json::{Map, Value};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -342,3 +347,82 @@ pub struct ThemeList {
 #[derive(ToSchema)]
 #[schema(value_type = String, format = Binary)]
 pub struct ThemeBundle(pub Vec<u8>);
+
+/// One declared setting: what the admin renders a form field from (05 §4c, 06 §1).
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+pub struct SettingDefDto {
+    /// `[a-z0-9_-]`, at most 64 characters.
+    pub key: String,
+    /// `text` (at most 1 000 characters), `textarea` (65 536), `bool`, `number`,
+    /// `select` (one of `options`), `color` (`#rgb` / `#rrggbb`), `media` (a media item
+    /// id) or `secret` (plugins only: 1–4 096 characters, write-only).
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub label: String,
+    /// The declared default; `null` for none (always for `media` and `secret`).
+    pub default: Option<Value>,
+    /// The choices of a `select`; empty otherwise.
+    pub options: Vec<String>,
+}
+
+impl From<&SettingDef> for SettingDefDto {
+    fn from(d: &SettingDef) -> Self {
+        Self {
+            key: d.key.clone(),
+            kind: d.kind.as_str().to_owned(),
+            label: d.label.clone(),
+            default: d.default.clone(),
+            options: d.options.clone(),
+        }
+    }
+}
+
+fn schema_dto(schema: &SettingsSchema) -> Vec<SettingDefDto> {
+    schema.0.iter().map(SettingDefDto::from).collect()
+}
+
+/// `GET /themes/{name}/settings`: the theme's schema and every declared setting's value
+/// as its templates see it (the stored value, else the default, else the type's empty
+/// value).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ThemeSettingsDto {
+    pub schema: Vec<SettingDefDto>,
+    pub values: Map<String, Value>,
+}
+
+impl ThemeSettingsDto {
+    pub fn new(schema: &SettingsSchema, values: Map<String, Value>) -> Self {
+        Self {
+            schema: schema_dto(schema),
+            values,
+        }
+    }
+}
+
+/// `GET /plugins/{name}/settings`: the plugin's schema, the value of every non-secret
+/// setting as the plugin reads it (the stored value, else the default, else `null`),
+/// and for each `secret` only whether it is set. A secret's value is never returned.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PluginSettingsDto {
+    pub schema: Vec<SettingDefDto>,
+    pub values: Map<String, Value>,
+    /// Secret key -> whether a value is set.
+    pub secrets: BTreeMap<String, bool>,
+}
+
+impl From<PluginSettingsView> for PluginSettingsDto {
+    fn from(v: PluginSettingsView) -> Self {
+        Self {
+            schema: schema_dto(&v.schema),
+            values: v.values,
+            secrets: v.secrets,
+        }
+    }
+}
+
+/// `PATCH /themes/{name}/settings` and `PATCH /plugins/{name}/settings` (the schema
+/// only): an object of declared keys to their new values; `null` resets a key to its
+/// default (for a secret: deletes it). Keys not in the body stay as they are.
+#[derive(ToSchema)]
+#[schema(value_type = Object)]
+pub struct SettingsPatch(pub Map<String, Value>);

@@ -18,6 +18,13 @@
 //! * `DELETE /plugins/{name}` keeps the plugin's KV and settings for 30 days (a
 //!   reinstall in that time finds them); `?purge=true` deletes them at once (P9, R2).
 //!
+//! * `GET /plugins/{name}/settings` answers the schema of the manifest's `[settings]`,
+//!   the non-secret values as the plugin reads them, and for each `secret` only whether
+//!   it is set; `PATCH` writes the keys of its body (`null` deletes one) and answers the
+//!   same. Secrets are sealed with the site key for that plugin and key and never
+//!   returned (P13, Review Focus 3); plugins read settings per call (P14), and pages
+//!   whose plugin calls read a changed key are flushed through `options.changed`.
+//!
 //! Uploads are `multipart/form-data` ([`multipart`](super::multipart)); the caller is
 //! authorized before any of the body is read. Responses never carry the component's
 //! bytes or a secret.
@@ -34,15 +41,16 @@ use bytes::Bytes;
 use ferrite_domain::{InstalledPlugin, Node};
 use ferrite_plugin_host::MAX_MANIFEST_BYTES;
 use serde::Deserialize;
+use serde_json::{Map, Value};
 use utoipa::IntoParams;
 
 use super::{
     ApiState, Authed, BASE,
     dto::extensions::{
         GrantReportDto, PermissionReportDto, PluginDto, PluginInspectUpload, PluginList,
-        PluginNodeState, PluginUpload,
+        PluginNodeState, PluginSettingsDto, PluginUpload, SettingsPatch,
     },
-    extract::{ApiPath, created_at, parse_query},
+    extract::{ApiJson, ApiPath, created_at, parse_query},
     multipart::{open, read_parts},
     problem::{Problem, ProblemDocument},
 };
@@ -299,6 +307,60 @@ pub async fn delete_plugin(
         .delete_plugin(&who.actor, &name, params.purge.unwrap_or(false))
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/plugins/{name}/settings",
+    tag = "plugins",
+    operation_id = "get_plugin_settings",
+    security(("session" = []), ("bearer" = [])),
+    params(("name" = String, Path, description = "Plugin")),
+    responses(
+        (status = 200, description = "The settings schema, the non-secret values, and whether each secret is set (never its value)", body = PluginSettingsDto),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn get_plugin_settings(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(name): ApiPath<String>,
+) -> Result<Json<PluginSettingsDto>, Problem> {
+    let view = api.extensions.plugin_settings(&who.actor, &name).await?;
+    Ok(Json(view.into()))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/plugins/{name}/settings",
+    tag = "plugins",
+    operation_id = "update_plugin_settings",
+    security(("session" = []), ("bearer" = [])),
+    params(("name" = String, Path, description = "Plugin")),
+    request_body(content = SettingsPatch, description = "Declared keys and their new values; `null` deletes a key's value (the plugin then reads the default). A `secret` is stored sealed and never returned"),
+    responses(
+        (status = 200, description = "Saved; the schema, the non-secret values and whether each secret is set", body = PluginSettingsDto),
+        (status = 400, description = "`malformed-json` (the body must be an object)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: an undeclared key, or a bad value (`errors[0].field` = the key; the value is never echoed); nothing is written", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 503, description = "`busy`: another extension change holds the lock (`Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn update_plugin_settings(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(name): ApiPath<String>,
+    ApiJson(patch): ApiJson<Map<String, Value>>,
+) -> Result<Json<PluginSettingsDto>, Problem> {
+    let view = api
+        .extensions
+        .set_plugin_settings(&who.actor, &name, patch)
+        .await?;
+    Ok(Json(view.into()))
 }
 
 async fn set_enabled(

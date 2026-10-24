@@ -324,8 +324,16 @@ async fn themes_stage_and_load_from_artifacts(site: Site) -> Site {
     assert_eq!(artifact.hash.as_str(), sha256(&bundle));
     assert_eq!(row.name, "blog");
     assert!(!row.active);
-    // F10: an array, the form T6's schema uses.
-    assert_eq!(row.manifest["settings"], json!([]));
+    // F10: the settings schema, an array of definitions.
+    let keys: Vec<&str> = row.manifest["settings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["accent_color", "show_author", "show_excerpts"]);
+    assert_eq!(row.manifest["settings"][0]["type"], "color");
+    assert_eq!(row.manifest["settings"][0]["default"], "#c2410c");
     assert!(row.manifest["images"].is_object(), "{}", row.manifest);
     assert_eq!(row.manifest["name"], "blog");
     assert!(site.store.read().themes().list().await.unwrap().is_empty());

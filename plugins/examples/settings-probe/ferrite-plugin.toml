@@ -1,0 +1,19 @@
+[plugin]
+name      = "settings-probe"
+version   = "0.1.0"
+publisher = "ferritecms.dev"
+world     = "ferrite:plugin/plugin@0.1.0"
+
+# `options.read = ["*"]` on purpose: plugin settings (and sealed secrets) must stay
+# unreadable through `options.get` whatever is granted (M2a-2 Review Focus 3).
+[capabilities]
+options.read = ["*"]
+render.head  = true
+
+[hooks]
+"render.head" = 30
+
+[settings]
+title   = { type = "text", label = "Title", default = "Probe" }
+limit   = { type = "number", label = "Limit" }
+api_key = { type = "secret", label = "API key" }

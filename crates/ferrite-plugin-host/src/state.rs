@@ -12,6 +12,7 @@ use crate::bindings::v0_1::ferrite::plugin::{
 };
 use crate::manifest::Capabilities;
 use crate::output::{GuestOutput, sanitize_log_message};
+use crate::registry::SettingDefaults;
 use crate::services::HostServices;
 use crate::trace::{CallTrace, TracingWallClock};
 
@@ -166,6 +167,8 @@ impl ResourceLimiter for CallLimits {
 pub(crate) struct HostState {
     plugin: Arc<str>,
     grants: Arc<Capabilities>,
+    /// The manifest's `[settings]` keys and defaults: `settings.get` answers these only.
+    settings: Arc<SettingDefaults>,
     services: Arc<dyn HostServices>,
     pub(crate) limits: CallLimits,
     budget: Budget,
@@ -187,6 +190,7 @@ impl HostState {
     pub(crate) fn new(
         plugin: Arc<str>,
         grants: Arc<Capabilities>,
+        settings: Arc<SettingDefaults>,
         services: Arc<dyn HostServices>,
         memory_bytes: usize,
         trace: CallTrace,
@@ -217,6 +221,7 @@ impl HostState {
         Self {
             plugin,
             grants,
+            settings,
             services,
             limits,
             budget: Budget::per_call(),
@@ -416,12 +421,19 @@ impl kv::Host for HostState {
     }
 }
 
+/// Only keys the manifest declares (P13), read in the calling plugin's own namespace
+/// (the services key the read by plugin name); with nothing stored, the declared
+/// default. An undeclared key costs no budget.
 impl settings::Host for HostState {
     async fn get(&mut self, key: String) -> Option<String> {
+        let default = self.settings.get(&key)?.clone();
         if !take(&mut self.budget.content) {
             return None;
         }
-        self.services.setting_get(&self.plugin, &key).await
+        match self.services.setting_get(&self.plugin, &key).await {
+            Some(value) => Some(value),
+            None => default,
+        }
     }
 }
 
@@ -454,6 +466,7 @@ mod tests {
         HostState::new(
             "tester".into(),
             Arc::new(grants),
+            Arc::default(),
             services,
             1024 * 1024,
             CallTrace::default(),
@@ -696,6 +709,81 @@ mod tests {
                 .await
                 .len(),
             100
+        );
+    }
+
+    /// P13: `settings.get` answers only keys the manifest declares, with the declared
+    /// default (JSON text) when nothing is stored, else the stored value; it reads the
+    /// calling plugin's namespace only.
+    #[tokio::test]
+    async fn settings_get_defaults_and_undeclared() {
+        let manifest = crate::Manifest::parse(
+            "[plugin]\nname = \"tester\"\nversion = \"0.1.0\"\npublisher = \"x.dev\"\n\
+             world = \"ferrite:plugin/plugin@0.1.0\"\n[settings]\n\
+             title = { type = \"text\", label = \"T\", default = \"Hi \\\"you\\\"\" }\n\
+             limit = { type = \"number\", label = \"L\", default = 2.5 }\n\
+             on = { type = \"bool\", label = \"O\", default = true }\n\
+             api_key = { type = \"secret\", label = \"K\" }\n",
+        )
+        .expect("manifest");
+        let defaults = crate::registry::setting_defaults(&manifest);
+        let services = Arc::new(InMemoryServices::new());
+        // Stored for undeclared keys and for other plugins: never answered.
+        services.set_setting("tester", "undeclared", "\"x\"");
+        services.set_setting("other", "title", "\"theirs\"");
+        services.set_setting("other", "api_key", "\"their-secret\"");
+        let mut s = HostState::new(
+            "tester".into(),
+            Arc::new(Capabilities::default()),
+            Arc::new(defaults),
+            services.clone(),
+            1024 * 1024,
+            CallTrace::default(),
+            false,
+        );
+        assert_eq!(
+            settings::Host::get(&mut s, "title".into()).await.as_deref(),
+            Some("\"Hi \\\"you\\\"\"")
+        );
+        assert_eq!(
+            settings::Host::get(&mut s, "limit".into()).await.as_deref(),
+            Some("2.5")
+        );
+        assert_eq!(
+            settings::Host::get(&mut s, "on".into()).await.as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            settings::Host::get(&mut s, "api_key".into()).await,
+            None,
+            "no default, nothing stored"
+        );
+        assert_eq!(settings::Host::get(&mut s, "undeclared".into()).await, None);
+        assert_eq!(settings::Host::get(&mut s, "".into()).await, None);
+        // Stored values win over the default.
+        services.set_setting("tester", "title", "\"Stored\"");
+        services.set_setting("tester", "api_key", "\"mine\"");
+        assert_eq!(
+            settings::Host::get(&mut s, "title".into()).await.as_deref(),
+            Some("\"Stored\"")
+        );
+        assert_eq!(
+            settings::Host::get(&mut s, "api_key".into())
+                .await
+                .as_deref(),
+            Some("\"mine\"")
+        );
+        // Undeclared keys cost no budget; declared ones do.
+        let left = s.budget.content;
+        assert_eq!(settings::Host::get(&mut s, "undeclared".into()).await, None);
+        assert_eq!(s.budget.content, left);
+        while s.budget.content > 0 {
+            settings::Host::get(&mut s, "title".into()).await;
+        }
+        assert_eq!(
+            settings::Host::get(&mut s, "title".into()).await,
+            None,
+            "budget exhausted"
         );
     }
 

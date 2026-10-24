@@ -28,7 +28,16 @@
 //!   on `theme.changed` through their reload task; a node that cannot load it keeps
 //!   serving its current theme and reports `fallback` (pre-flight F12).
 //!
-//! The caller is authorized before any of an upload's body is read.
+//! * `GET /themes/{name}/settings` answers the theme's settings schema and every
+//!   setting's value as its templates see it; `PATCH` writes the keys of its body
+//!   (`null` resets one) and answers the same. The schema is the one the row stores,
+//!   else the row's artifact's (a row stored before rows carried it), else the
+//!   embedded theme's when there is no row (pre-flight F22). A changed value reaches
+//!   the public site through `options.changed` with `option:theme.<name>.settings`,
+//!   which every page of the theme records (P14: read per cache miss).
+//!
+//! The caller is authorized before any of an upload's body is read, and before a
+//! theme's files are loaded for its schema.
 
 use std::{collections::BTreeMap, sync::Arc, sync::OnceLock};
 
@@ -39,20 +48,24 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use bytes::Bytes;
-use ferrite_core::{Actor, CoreError};
+use ferrite_core::{Actor, CoreError, ext_settings::SettingsSchema};
 use ferrite_domain::{InstalledTheme, Node};
 use ferrite_theme::{DEFAULT_THEME, MAX_BUNDLE_BYTES, Theme};
 use serde::Deserialize;
+use serde_json::{Map, Value};
 use utoipa::IntoParams;
 
 use super::{
     ApiState, Authed,
-    dto::extensions::{ThemeBundle, ThemeDto, ThemeList, ThemeNodeState, ThemeOrigin},
-    extract::{ApiPath, parse_query},
+    dto::extensions::{
+        SettingsPatch, ThemeBundle, ThemeDto, ThemeList, ThemeNodeState, ThemeOrigin,
+        ThemeSettingsDto,
+    },
+    extract::{ApiJson, ApiPath, parse_query},
     plugins::{live_nodes, upload_slot},
     problem::{Problem, ProblemDocument},
 };
-use crate::extensions::{ExtensionError, THEME_MIME};
+use crate::extensions::{ExtensionError, THEME_MIME, theme_schema};
 
 /// The body limit of `POST /themes` (P11): a theme bundle's limit.
 pub const MAX_THEME_UPLOAD_BODY: usize = MAX_BUNDLE_BYTES as usize;
@@ -181,6 +194,87 @@ pub async fn activate_theme(
     Ok(Json(written(&api, actor, &row, true).await))
 }
 
+#[utoipa::path(
+    get,
+    path = "/themes/{name}/settings",
+    tag = "themes",
+    operation_id = "get_theme_settings",
+    security(("session" = []), ("bearer" = [])),
+    params(("name" = String, Path, description = "Theme (installed or embedded)")),
+    responses(
+        (status = 200, description = "The settings schema and every setting's value as templates see it", body = ThemeSettingsDto),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_themes`, `extensions:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`: no installed or embedded theme of that name", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: the row stores no schema and its artifact does not load", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn get_theme_settings(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(name): ApiPath<String>,
+) -> Result<Json<ThemeSettingsDto>, Problem> {
+    let actor = &who.actor;
+    let schema = theme_settings_schema(&api, actor, &name).await?;
+    let values = api.extensions.theme_settings(actor, &name, &schema).await?;
+    Ok(Json(ThemeSettingsDto::new(&schema, values)))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/themes/{name}/settings",
+    tag = "themes",
+    operation_id = "update_theme_settings",
+    security(("session" = []), ("bearer" = [])),
+    params(("name" = String, Path, description = "Theme (installed or embedded)")),
+    request_body(content = SettingsPatch, description = "Declared keys and their new values; `null` resets a key to its default"),
+    responses(
+        (status = 200, description = "Saved; the schema and every value as templates see it. Pages showing the theme are flushed on every node (`options.changed`)", body = ThemeSettingsDto),
+        (status = 400, description = "`malformed-json` (the body must be an object)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_themes`, `extensions:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`: no installed or embedded theme of that name", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: an undeclared key, or a bad value (`errors[0].field` = the key: type, length, option, colour or media id); nothing is written", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 503, description = "`busy`: another extension change holds the lock (`Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn update_theme_settings(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(name): ApiPath<String>,
+    ApiJson(patch): ApiJson<Map<String, Value>>,
+) -> Result<Json<ThemeSettingsDto>, Problem> {
+    let actor = &who.actor;
+    api.extensions.authorize_themes(actor)?;
+    let schema = theme_settings_schema(&api, actor, &name).await?;
+    let values = api
+        .extensions
+        .set_theme_settings(actor, &name, &schema, patch)
+        .await?;
+    Ok(Json(ThemeSettingsDto::new(&schema, values)))
+}
+
+/// The settings schema of theme `name` (pre-flight F22): the row's (stored, else from
+/// its artifact), else the embedded theme's when there is no row; no theme of that name
+/// is `404`. `actor` must read themes (checked by `get_theme` before anything loads).
+async fn theme_settings_schema(
+    api: &ApiState,
+    actor: &Actor,
+    name: &str,
+) -> Result<SettingsSchema, Problem> {
+    match api.extensions.get_theme(actor, name).await? {
+        Some(row) => api
+            .installer
+            .theme_row_schema(&row)
+            .await
+            .map_err(does_not_load),
+        None => embedded()
+            .get(name)
+            .map(|e| e.schema.clone())
+            .ok_or_else(|| CoreError::NotFound.into()),
+    }
+}
+
 /// Records a staged theme; when that fails, drops the staged blob unless another row
 /// names the same bytes.
 async fn record(
@@ -266,6 +360,7 @@ fn valid_name(name: &str) -> bool {
 struct Embedded {
     version: String,
     description: Option<String>,
+    schema: SettingsSchema,
 }
 
 /// The embedded starter themes, by name (loaded once; one that does not load is logged
@@ -281,6 +376,7 @@ fn embedded() -> &'static BTreeMap<String, Embedded> {
                     let summary = Embedded {
                         version: m.version.to_string(),
                         description: m.description.clone(),
+                        schema: theme_schema(m),
                     };
                     Some((name, summary))
                 }
@@ -389,6 +485,7 @@ mod tests {
             Embedded {
                 version: "0.1.0".into(),
                 description: None,
+                schema: SettingsSchema::default(),
             },
         )])
     }

@@ -305,6 +305,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "settings-probe"
+version = "0.1.0"
+dependencies = [
+ "ferrite-sdk",
+]
+
+[[package]]
 name = "slow-import"
 version = "0.1.0"
 dependencies = [

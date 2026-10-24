@@ -519,11 +519,7 @@ async fn delete_options(
     keep_marker: bool,
 ) -> Result<(), CoreError> {
     for key in settings {
-        delete_option(
-            repos,
-            &format!("{PLUGIN_OPTION_PREFIX}{name}.settings.{key}"),
-        )
-        .await?;
+        delete_option(repos, &crate::ext_settings::plugin_option(name, key)).await?;
     }
     if keep_marker {
         return Ok(());

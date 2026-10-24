@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use ferrite_core::{Actor, PermalinkRules, SiteReader};
+use ferrite_core::{Actor, PermalinkRules, SiteReader, auth::SiteKey};
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ContentId, ContentStatus, InstalledPlugin, NewContent,
     NewUser, Role, Secret, Timestamp, User, UserId, UserStatus,
@@ -118,6 +118,8 @@ pub struct Site {
     pub reader: Arc<SiteReader>,
     pub services: Arc<StoreHostServices>,
     pub host: Arc<PluginHost>,
+    /// The site key the services open sealed settings with.
+    pub key: SiteKey,
 }
 
 impl Site {
@@ -130,11 +132,11 @@ impl Site {
             Arc::new(|hash: &ArtifactHash, name: &str| format!("/_media/{hash}/{name}")),
             Arc::new(Timestamp::now),
         ));
-        let services = Arc::new(StoreHostServices::new(
-            store.clone(),
-            reader.clone(),
-            SITE_URL,
-        ));
+        let key = SiteKey::generate().expect("site key");
+        let services = Arc::new(
+            StoreHostServices::new(store.clone(), reader.clone(), SITE_URL)
+                .with_site_key(key.clone()),
+        );
         // The production default (200 ms render deadline, R18): stable on both profiles.
         let host =
             Arc::new(PluginHost::new(HostConfig::default(), services.clone()).expect("host"));
@@ -146,6 +148,7 @@ impl Site {
             reader,
             services,
             host,
+            key,
         }
     }
 

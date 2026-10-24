@@ -8,6 +8,7 @@ mod auth;
 mod content;
 mod foundation;
 mod plugins;
+mod settings_ext;
 mod site;
 mod sweep;
 mod themes;

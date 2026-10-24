@@ -1,34 +1,48 @@
 //! The admin API's extension service: capability checks and audit over the
 //! [`ExtensionService`] writes (M2a-2 P8, P10; closes M1.5 R11).
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use ferrite_domain::{
     Artifact, ArtifactHash, InstalledPlugin, InstalledTheme, NewAudit, Timestamp,
 };
-use ferrite_store::Store;
-use serde_json::{Value, json};
+use ferrite_store::{Repos, Store};
+use serde_json::{Map, Value, json};
 
-use super::{ExtensionService, setting_keys};
+use super::{ExtensionService, append_audit, finish_locked, setting_keys};
 use crate::{
     Actor, CoreError,
     actor::{Capability, require, require_reader},
+    auth::SiteKey,
+    events,
+    ext_settings::{
+        PluginSettingsView, SettingType, SettingsSchema, plugin_option, seal_secret, sealed_text,
+        theme_option, validate_value,
+    },
 };
 
 /// Installs, activates, lists and deletes themes and plugins for an actor. Writes need
 /// `manage_themes` / `manage_plugins` and `extensions:write` ([`require`]); reads need
 /// the same role capability and `extensions:read` ([`require_reader`]), so editors see
 /// no plugin list. Every write appends one audit row in its transaction (P22).
+///
+/// Settings (M2a-2 P13; see [`ext_settings`](crate::ext_settings)) are extension
+/// writes too: under the `extensions` lock, one transaction with its `options.changed`
+/// events and one audit row listing the keys, never the values. Plugin secrets are
+/// sealed with `key`.
 pub struct ExtensionAdmin {
     store: Arc<dyn Store>,
     service: ExtensionService,
+    key: SiteKey,
 }
 
 impl ExtensionAdmin {
-    pub fn new(store: Arc<dyn Store>) -> Self {
+    /// `key` is the site key: plugin `secret` settings are sealed with it.
+    pub fn new(store: Arc<dyn Store>, key: SiteKey) -> Self {
         Self {
             service: ExtensionService::new(store.clone()),
             store,
+            key,
         }
     }
 
@@ -209,6 +223,235 @@ impl ExtensionAdmin {
             .activate_theme_with(name, expected, Some(audit))
             .await
     }
+}
+
+impl ExtensionAdmin {
+    /// The settings of theme `name` as its templates see them
+    /// ([`SettingsSchema::values`] of the stored `theme.<name>.settings` object).
+    /// `schema` is the theme's, derived by the caller from its row or files.
+    pub async fn theme_settings(
+        &self,
+        actor: &Actor,
+        name: &str,
+        schema: &SettingsSchema,
+    ) -> Result<Map<String, Value>, CoreError> {
+        require_reader(actor, Capability::ManageThemes)?;
+        let stored = stored_object(self.store.read(), &theme_option(name)).await?;
+        Ok(schema.values(&stored))
+    }
+
+    /// Applies `patch` (`key: value`, `null` resets a key to its default) to theme
+    /// `name`'s settings and returns them as [`theme_settings`](Self::theme_settings)
+    /// does. Every entry is checked first: an undeclared key is `Invalid`, a bad value
+    /// [`CoreError::InvalidKey`], and a schema declaring a `secret` is refused (themes
+    /// have none). Then, under the `extensions` lock in one transaction: the option
+    /// `theme.<name>.settings` (one object of the set keys), `options.changed` (its
+    /// `option:` key is what every page of the theme records, so every node's cache
+    /// drops them), and audit `theme.settings {name, keys}`. An empty patch writes
+    /// nothing.
+    pub async fn set_theme_settings(
+        &self,
+        actor: &Actor,
+        name: &str,
+        schema: &SettingsSchema,
+        patch: Map<String, Value>,
+    ) -> Result<Map<String, Value>, CoreError> {
+        require(actor, Capability::ManageThemes)?;
+        if schema.0.iter().any(|d| d.kind == SettingType::Secret) {
+            return Err(CoreError::Invalid(
+                "themes cannot have secret settings".into(),
+            ));
+        }
+        check_patch(schema, &patch)?;
+        if patch.is_empty() {
+            return self.theme_settings(actor, name, schema).await;
+        }
+        let keys: Vec<&String> = patch.keys().collect();
+        let entry = audit(
+            actor,
+            "theme.settings",
+            "theme",
+            name,
+            json!({ "name": name, "keys": keys }),
+        );
+        let (guard, tx) = self.service.begin_locked().await?;
+        let done = write_theme_settings(tx.as_ref(), name, &patch, entry).await;
+        let stored = finish_locked(guard, tx, done).await?;
+        Ok(schema.values(&stored))
+    }
+
+    /// The settings of plugin `name` (missing: `NotFound`), its schema read from the
+    /// row's manifest `[settings]` table: non-secret values as its `settings.get`
+    /// answers them, and for each secret only whether it is set.
+    pub async fn plugin_settings(
+        &self,
+        actor: &Actor,
+        name: &str,
+    ) -> Result<PluginSettingsView, CoreError> {
+        require_reader(actor, Capability::ManagePlugins)?;
+        let repos = self.store.read();
+        let row = repos
+            .plugins()
+            .get(name)
+            .await?
+            .ok_or(CoreError::NotFound)?;
+        plugin_view(repos, name, plugin_schema(&row)?).await
+    }
+
+    /// Applies `patch` (`key: value`, `null` deletes the key's option) to plugin
+    /// `name`'s settings (missing: `NotFound`) and returns the new view. Every entry is
+    /// checked against the row's schema first (undeclared key `Invalid`, bad value
+    /// [`CoreError::InvalidKey`]). Then, under the `extensions` lock in one transaction:
+    /// one option `plugin.<name>.settings.<key>` per entry (a secret sealed with the
+    /// site key for this plugin and key), `options.changed` per key (pages whose plugin
+    /// calls read it record that key; plugins read settings per call, P14), and audit
+    /// `plugin.settings {name, keys}`. An empty patch writes nothing.
+    pub async fn set_plugin_settings(
+        &self,
+        actor: &Actor,
+        name: &str,
+        patch: Map<String, Value>,
+    ) -> Result<PluginSettingsView, CoreError> {
+        require(actor, Capability::ManagePlugins)?;
+        if !patch.is_empty() {
+            let keys: Vec<&String> = patch.keys().collect();
+            let entry = audit(
+                actor,
+                "plugin.settings",
+                "plugin",
+                name,
+                json!({ "name": name, "keys": keys }),
+            );
+            let (guard, tx) = self.service.begin_locked().await?;
+            let done = self
+                .write_plugin_settings(tx.as_ref(), name, &patch, entry)
+                .await;
+            finish_locked(guard, tx, done).await?;
+        }
+        self.plugin_settings(actor, name).await
+    }
+
+    async fn write_plugin_settings(
+        &self,
+        repos: &dyn Repos,
+        name: &str,
+        patch: &Map<String, Value>,
+        entry: NewAudit,
+    ) -> Result<(), CoreError> {
+        let row = repos
+            .plugins()
+            .get(name)
+            .await?
+            .ok_or(CoreError::NotFound)?;
+        let schema = plugin_schema(&row)?;
+        check_patch(&schema, patch)?;
+        for (key, value) in patch {
+            let option = plugin_option(name, key);
+            if value.is_null() {
+                repos.options().delete(&option).await?;
+            } else {
+                let secret = schema
+                    .get(key)
+                    .is_some_and(|d| d.kind == SettingType::Secret);
+                let stored = match value.as_str() {
+                    Some(plaintext) if secret => seal_secret(&self.key, name, key, plaintext)?,
+                    _ => value.clone(),
+                };
+                repos.options().set(&option, &stored, false).await?;
+            }
+            repos
+                .events()
+                .append(&events::options_changed(&option))
+                .await?;
+        }
+        append_audit(repos, Some(entry)).await
+    }
+}
+
+/// `Invalid` for a key `schema` does not declare; each non-null value validated.
+fn check_patch(schema: &SettingsSchema, patch: &Map<String, Value>) -> Result<(), CoreError> {
+    for (key, value) in patch {
+        let Some(def) = schema.get(key) else {
+            return Err(CoreError::Invalid(format!("unknown setting {key:?}")));
+        };
+        if !value.is_null() {
+            validate_value(def, value)?;
+        }
+    }
+    Ok(())
+}
+
+fn plugin_schema(row: &InstalledPlugin) -> Result<SettingsSchema, CoreError> {
+    SettingsSchema::from_plugin_table(row.manifest.get("settings"))
+}
+
+/// The option `key` as an object (unset or not an object: empty).
+async fn stored_object(repos: &dyn Repos, key: &str) -> Result<Map<String, Value>, CoreError> {
+    Ok(repos
+        .options()
+        .get(key)
+        .await?
+        .and_then(|e| match e.value {
+            Value::Object(map) => Some(map),
+            _ => None,
+        })
+        .unwrap_or_default())
+}
+
+async fn write_theme_settings(
+    repos: &dyn Repos,
+    name: &str,
+    patch: &Map<String, Value>,
+    entry: NewAudit,
+) -> Result<Map<String, Value>, CoreError> {
+    let option = theme_option(name);
+    let mut stored = stored_object(repos, &option).await?;
+    for (key, value) in patch {
+        if value.is_null() {
+            stored.remove(key);
+        } else {
+            stored.insert(key.clone(), value.clone());
+        }
+    }
+    repos
+        .options()
+        .set(&option, &Value::Object(stored.clone()), false)
+        .await?;
+    repos
+        .events()
+        .append(&events::options_changed(&option))
+        .await?;
+    append_audit(repos, Some(entry)).await?;
+    Ok(stored)
+}
+
+async fn plugin_view(
+    repos: &dyn Repos,
+    name: &str,
+    schema: SettingsSchema,
+) -> Result<PluginSettingsView, CoreError> {
+    let mut values = Map::new();
+    let mut secrets = BTreeMap::new();
+    for def in &schema.0 {
+        let stored = repos.options().get(&plugin_option(name, &def.key)).await?;
+        if def.kind == SettingType::Secret {
+            secrets.insert(def.key.clone(), stored.is_some());
+        } else {
+            // A sealed value under a key that is no longer a secret (the plugin's schema
+            // changed) is never shown, not even as ciphertext.
+            let value = stored
+                .map(|e| e.value)
+                .filter(|v| sealed_text(v).is_none())
+                .or_else(|| def.default.clone())
+                .unwrap_or(Value::Null);
+            values.insert(def.key.clone(), value);
+        }
+    }
+    Ok(PluginSettingsView {
+        schema,
+        values,
+        secrets,
+    })
 }
 
 fn audit(actor: &Actor, action: &str, kind: &str, name: &str, details: Value) -> NewAudit {

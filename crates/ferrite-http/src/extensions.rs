@@ -33,7 +33,10 @@ use std::{sync::Arc, time::Duration};
 
 use axum::http::StatusCode;
 use bytes::Bytes;
-use ferrite_core::CoreError;
+use ferrite_core::{
+    CoreError,
+    ext_settings::{SettingDef, SettingType, SettingsSchema},
+};
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, InstalledPlugin, InstalledTheme, Timestamp,
 };
@@ -44,7 +47,7 @@ use ferrite_plugin_host::{
 };
 use ferrite_store::{LOCK_EXTENSIONS, Store, lock};
 use ferrite_theme::{
-    MAX_BUNDLE_BYTES, Theme, ThemeError, ThemeManifest, ThemeSource, pack_embedded,
+    MAX_BUNDLE_BYTES, SettingKind, Theme, ThemeError, ThemeManifest, ThemeSource, pack_embedded,
 };
 use futures::StreamExt;
 use serde_json::{Map, Value, json};
@@ -424,6 +427,20 @@ impl Installer {
         Ok(theme)
     }
 
+    /// The settings schema of an installed theme (pre-flight F22): the one its row
+    /// stores, else (a row stored before rows carried it, F10) the manifest of the
+    /// row's artifact, fetched and checked like an activation.
+    pub async fn theme_row_schema(
+        &self,
+        row: &InstalledTheme,
+    ) -> Result<SettingsSchema, ExtensionError> {
+        if let Some(schema) = SettingsSchema::from_theme_row(&row.manifest) {
+            return Ok(schema);
+        }
+        let theme = load_theme_artifact(&self.media, row).await?;
+        Ok(theme_schema(theme.manifest()))
+    }
+
     /// One of the node's [`UPLOAD_SLOTS`], if one is free: handlers hold it while they
     /// read and process an upload, and answer `busy` without one.
     pub fn try_upload_slot(&self) -> Option<OwnedSemaphorePermit> {
@@ -590,8 +607,32 @@ pub async fn load_theme_artifact(
     Ok(theme)
 }
 
-/// The `themes.manifest` column: the M1.5 object plus `images` and `settings` (an
-/// array, the form of the settings schema; pre-flight F10).
+/// The settings schema `theme.toml` declares, in key order.
+pub fn theme_schema(m: &ThemeManifest) -> SettingsSchema {
+    SettingsSchema(
+        m.settings
+            .iter()
+            .map(|(key, spec)| SettingDef {
+                key: key.clone(),
+                kind: match spec.kind {
+                    SettingKind::Text => SettingType::Text,
+                    SettingKind::Textarea => SettingType::Textarea,
+                    SettingKind::Bool => SettingType::Bool,
+                    SettingKind::Number => SettingType::Number,
+                    SettingKind::Select => SettingType::Select,
+                    SettingKind::Color => SettingType::Color,
+                    SettingKind::Media => SettingType::Media,
+                },
+                label: spec.label.clone(),
+                default: spec.default.clone(),
+                options: spec.options.clone(),
+            })
+            .collect(),
+    )
+}
+
+/// The `themes.manifest` column: the M1.5 object plus `images` and `settings` (the
+/// settings schema, an array of definitions; pre-flight F10).
 fn theme_row_manifest(m: &ThemeManifest) -> Value {
     let images: Map<String, Value> = m
         .images
@@ -611,7 +652,7 @@ fn theme_row_manifest(m: &ThemeManifest) -> Value {
         "description": m.description,
         "menus": m.menus,
         "images": images,
-        "settings": [],
+        "settings": theme_schema(m),
     })
 }
 

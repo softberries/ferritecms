@@ -36,9 +36,11 @@ pub const DESCRIPTION_OPTION: &str = "site.description";
 /// Option holding the locale; falls back to [`HttpConfig::locale`].
 pub const LOCALE_OPTION: &str = "site.locale";
 
-/// Option holding the active theme's settings: a JSON object, key = setting name.
+/// Option holding the active theme's settings: a JSON object, key = setting name
+/// ([`ferrite_core::ext_settings::theme_option`], what `PATCH /themes/{name}/settings`
+/// writes).
 pub fn theme_settings_option(theme: &str) -> String {
-    format!("theme.{theme}.settings")
+    ferrite_core::ext_settings::theme_option(theme)
 }
 
 /// How the public site treats requests of logged-in users (`cache.logged_in`, P21).

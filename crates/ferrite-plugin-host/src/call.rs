@@ -106,6 +106,7 @@ async fn instantiate(
     let state = HostState::new(
         loaded.name.clone(),
         loaded.grants.clone(),
+        loaded.settings.clone(),
         loaded.services.clone(),
         loaded.memory_bytes,
         trace,
