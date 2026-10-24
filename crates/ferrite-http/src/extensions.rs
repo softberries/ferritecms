@@ -26,8 +26,10 @@
 //!
 //! **Failures leave nothing behind.** Every check runs before the upload. Artifacts are
 //! content-addressed: bytes uploaded for a stage whose rows are then not recorded are
-//! harmless (nothing names them) and stay until the artifact GC (M4); they are not
-//! deleted here, because another row may name the same bytes.
+//! harmless (nothing names them). The API handlers delete them again with
+//! [`Installer::discard_staged`], which keeps them when an artifact row names the same
+//! bytes; anything else left behind (the CLI path, a failed cleanup) stays until the
+//! artifact GC (M4).
 
 use std::{sync::Arc, time::Duration};
 

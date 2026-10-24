@@ -414,7 +414,8 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
 - `plugin check --dir PATH`: `PATH` holds `ferrite-plugin.toml` and exactly one `*.wasm`.
   Loads both on a scratch host, prints the permission report and stores nothing; exit 1 when
   the manifest or component is refused. `plugin install --dir PATH [--enable] [--yes]` prints
-  the same report (one line per capability, `!` in front of high-risk ones; an update also
+  the same report (one line per capability or action hook, `!` in front of high-risk ones and
+  `~` in front of medium-risk ones (`request.served`); an update also
   lists what it adds to the installed grant under `this update WIDENS the installed grant`,
   and the limits and `fingerprint:`), then asks `install? [y/N]` on a terminal. Without a
   terminal it exits 1 unless `--yes` is given, installing nothing. What is approved is

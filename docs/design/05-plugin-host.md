@@ -67,15 +67,23 @@ upload .wasm + manifest ──► POST /plugins/inspect: validate manifest, insp
   one transaction. When the API's record step fails (for example `503 busy`), the handler
   deletes the uploaded bytes again unless an artifact row names them
   (`Installer::discard_staged`, under the `extensions` lock); anything else left behind
-  waits for the artifact GC (M4) Residual race (accepted): a concurrent install of the same bytes
+  waits for the artifact GC (M4). Residual race (accepted): a concurrent install of the same bytes
   that uploaded them but has not yet recorded its rows loses its blob, and that plugin
   fails to load until it is reinstalled; closing it needs a GC grace period (M4).
 - **Permission report and approval (P3, P6).** `Manifest::permission_report` lists every
-  capability as a plain-language line (`key`, `text`, `detail`, `high_risk`): high risk are
-  `content.read`, `content.meta.read` and `options.read` with `"*"`, `content.meta.write`
-  outside the plugin's own `plugin.<name>.*` keys, every `http` host, `render.html =
-  "raw"`, every route, `mail`, and every limit above its default. `added` lists what the
-  manifest asks for beyond the installed version's grant (a first install: everything).
+  capability as a plain-language line (`key`, `text`, `detail`, `risk`: `low`, `medium` or
+  `high`; the API also sends `high_risk` = `risk == "high"`): high risk are `content.read`,
+  `content.meta.read` and `options.read` with `"*"`, `content.meta.write` outside the
+  plugin's own `plugin.<name>.*` keys, every `http` host, `render.head` (a head script, from
+  any `https://` host, runs with the site's origin on every page, as a WordPress plugin's
+  would, so it can act as a logged-in admin who views the site; ruling R22), `render.html =
+  "raw"`, every route, `mail`, and every limit above its default. Each action hook in
+  `[hooks]` is an item too (`key = "hooks"`, `detail` = the hook name; R22): `request.served`
+  is medium risk (it receives every page view: path, status, time, referrer host, browser
+  class, cache outcome), `post.saved`, `post.published` and `user.created` are low (an item
+  or user id). `added` lists what the manifest asks for beyond the installed version's
+  grant (a first install: everything). Hooks are not part of the grant, so on an update they
+  are never in `added` and they do not change the fingerprint.
   The `fingerprint` is the lowercase hex SHA-256 of the compact JSON `{"artifact",
   "grant", "plugin", "version"}` (`grant` = `Grant::of(manifest).to_json()`; serde_json
   maps are sorted and a unit test pins one value). `POST /plugins` and `ferrite plugin
@@ -126,6 +134,13 @@ upload .wasm + manifest ──► POST /plugins/inspect: validate manifest, insp
   re-enqueues the purge of every marker past the retention, so a purge job that went dead
   is retried. Setting keys a later version dropped from its schema are purged by that
   sweep only.
+- **Plugin data is bound to the plugin name only (R22).** KV, settings and sealed secrets
+  (sealed under `plugin-setting:<plugin>:<key>`) belong to the name in `plugin.name`; the
+  manifest's `publisher` is unverified text, and nothing compares it on an update or a
+  reinstall. A component from another publisher installed under the same name (an update,
+  or a reinstall within the 30 days) reads the earlier plugin's data and secrets, and the
+  report shows no publisher change. Approve an update or a reinstall only from the source
+  you installed from; signed plugins with a publisher identity are an M4 item (ROADMAP).
 
 ## 3. Manifest (`ferrite-plugin.toml`)
 
@@ -422,7 +437,8 @@ As built:
   see check 2). `client-ip-hash` is per plugin: 32 hex of HMAC(subkey
   `ferrite:plugin-ip:v1`, `plugin ‖ 0x00 ‖ ip`), so plugins cannot join visitors
   across each other or with session rows.
-- **Call**: route deadline 2 s (hard 3 s), fuel and memory as for every call. The
+- **Call**: route deadline 2 s (hard 3 s), fuel and memory as for every call. The wait for
+  a call slot (§6) counts toward it: wait and call together take at most 3 s. The
   response must have status 200..=599, ≤ 32 headers, each name and value ≤ 4 KiB and
   valid header text, body ≤ 1 MiB (`validate_route_response`), else the call failed
   (`InvalidOutput`). Any failure (trap, timeout, invalid response) → `502`.
@@ -433,7 +449,12 @@ As built:
   scripts — if any — can't read site cookies or call the API as the user; forms may
   only post back to the site, so a plugin page on the site's URL cannot collect
   credentials for another host — ruling R14 of M2a-2a; CSP3 matches `'self'` against
-  the response URL's origin, not the sandboxed document's opaque one), `X-Content-Type-Options:
+  the response URL's origin, not the sandboxed document's opaque one). Because the document's
+  origin is opaque, a browser sends `Origin: null` with its form posts, so check 2 refuses
+  a post to a route without `cross_origin = true` (`403`); a form on a plugin page can only
+  post to a `cross_origin` route, which is then served anonymously. This is deliberate:
+  accepting `Origin: null` would let a sandboxed document on any other site post as the
+  visitor. `X-Content-Type-Options:
   nosniff`, `Cache-Control: no-store`, `X-Robots-Tag: noindex`. Plugins can't set
   cookies, CSP, HSTS, CORS or caching headers. JSON and redirects (`303` to same-site
   paths) are the intended response types; HTML is allowed but sandboxed.
@@ -589,8 +610,11 @@ under real concurrent load in M1.
   or route gets `PluginError::Busy` (route → `503` + `Retry-After: 1`, action job →
   `JobError::Busy`: released with the attempt refunded, due again in 1–5 s, R20(3)). A
   `Busy` skip is **never** counted as a plugin failure: it is load, not misbehaviour, so a flood
-  of route requests cannot auto-disable a healthy plugin (Task 8 m7). After the permit an action
-  or route gets its full deadline.
+  of route requests cannot auto-disable a healthy plugin (Task 8 m7). The wait counts toward an
+  action's or route's deadline (R22): its epoch and hard deadlines run from when it began
+  waiting (`CallDeadline::after_wait`), so wait and call together take at most the hard deadline
+  (1.5 × the deadline; a slot free at once gives the full deadlines). A call the wait shortened
+  that then runs out of time is `Busy`, not a failure (`ended_by_budget`), like a budget cut.
 - **Plugin actions and job workers (Task 11 carry).** At most `min(cluster.workers − 1,
   max_concurrent_calls)` (at least 1) `plugin.action` jobs call plugins at once per node
   (`ferrite::jobs::action_slots`, a slot in `PluginActionHandler`); one over that is released at
@@ -628,11 +652,12 @@ under real concurrent load in M1.
   `Tx`; `StoreHostServices::meta_set` is one `Tx` (value + `invalidate` event, all or nothing).
   Tested by dropping calls mid-import (`limits.rs` `dropped_call_frees_its_slot_and_instance`,
   `ferrite-http` `dropped_meta_write_is_all_or_nothing`).
-- Host-import budgets per call: `content` ≤ 100 calls, `kv` ≤ 100 ops / 1 MB, `meta.set`
+- Host-import budgets per call: `content` ≤ 100 calls, `kv` ≤ 100 ops / 1 MiB, `meta.set`
   ≤ 1 MiB written (post id + key + value) with each value ≤ 64 KiB, `http` ≤ 3
-  requests, each ≤ 5 s / 2 MB response; exceeding → the import returns an error, the
-  guest decides. In M0, `meta`, `options` and `settings` calls also count against the
-  `content` budget (conservative; spec named only content/kv/http). Guest-supplied list
+  requests (the import is still a stub, so the per-request 5 s / 2 MB bounds are design
+  only, M2a-2b; see "HTTP capability details"), `mail` 1 per call; exceeding → the import
+  returns an error, the guest decides. In M0, `meta`, `options` and `settings` calls also
+  count against the `content` budget (conservative; spec named only content/kv/http). Guest-supplied list
   limits (`list-posts`, `kv.list-keys`) are clamped to 100.
 - **StoreLimits (measured in M0)**: `instances = 3`, `tables = 2`, `memories = 1`,
   `table_elements = 10_000`. A `wasm32-wasip2` component built by Rust instantiates
@@ -716,9 +741,15 @@ value is passed on and the call counts as a failure (§8).
   root-relative (`/…`, not `//…`) `href`, and `https://` or root-relative when its `rel` loads a
   resource (stylesheet, preload, modulepreload, prefetch, icon, apple-touch-icon, manifest).
   `script-tag.src` must be `https://…`, on the site's own origin, or root-relative, with no
-  backslashes, whitespace or control characters. `script-tag.json-ld` must parse as JSON; it
-  is re-serialised compactly with every `<`, `>` and `&` written as `\u00XX`, so neither
-  `</script>` nor `<!--` can occur inside the element. Anything else is dropped and logged.
+  backslashes, whitespace or control characters. A root-relative src, or one on the site's
+  host (any scheme or port), may not point under `/_p/` or `/_media/` (bytes a plugin route or
+  an upload serves), counted from the root and from `site.url`'s base path, after
+  percent-decoding (repeatedly), lowercasing, collapsing `//` and resolving `.`/`..` (ruling
+  R22); `/_theme/…` and external `https://` hosts stay allowed. A head script runs with the
+  site's origin, which is why `render.head` is high risk (§2). `script-tag.json-ld` must
+  parse as JSON; it is re-serialised compactly with every `<`, `>` and `&` written as
+  `\u00XX`, so neither `</script>` nor `<!--` can occur inside the element. Anything else is
+  dropped and logged.
 - **Core head first.** Plugins receive the core SEO head (title, description, canonical, Open
   Graph; [06 §5](06-themes-rendering.md#5-rendering-pipeline-as-built)) as the input of the
   `render.head` chain, so a plugin can extend or replace tags but its output still goes

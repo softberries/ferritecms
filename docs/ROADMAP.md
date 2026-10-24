@@ -227,6 +227,9 @@ Outline in the M2a-2 plan ("Next plan: M2a-2b"); it gets its own plan.
   - [ ] A legacy item holding a reserved slug is renamed on update; every top-level write does an extra `types().list()`.
   - [ ] Wire the `render.footer` filter into rendering (in the hook catalogue, not called yet).
   - [ ] Make the 60 s short TTL configurable (search TTL with `0` disabling it, 06 §6; `plugins.volatile_ttl`, 05 §7a).
+- [ ] Deferred from the M2a-2a final review (ruling R22):
+  - [ ] `meta.get` makes up to three primary-key reads per budget unit (`post_kind`, then `is_visible` and the meta read): charge 2 units, or fold the type check into the services read (M6).
+  - [ ] Test seams (`Installer::with_theme_loaded`, `Installer::with_prepare`, `PluginReloader::with_prepare`, `NodeOptions::{served_flush, listen, boot_barrier}`, `SharedFailures::with_before_disable`) are `#[doc(hidden)] pub` runtime hooks: move all of them behind one dev-only cargo feature in one chore (M11).
 
 ### M2b — admin SPA
 
@@ -292,6 +295,7 @@ Design: [09](design/09-operations.md).
   - [ ] A GC grace period for staged artifacts with the artifacts GC, which closes the same-bytes concurrent-install race (`Installer::discard_staged`; Task 4 review round 1).
   - [ ] A compile-size or function-count guard (or a compile deadline) for uploaded components: inspecting a component of up to 32 MiB has no time bound today; two compile slots per node bound only the count (05 §6).
   - [ ] Fairness inside the per-render plugin budget (per-plugin shares, or a reservation for renders in the call semaphore; 05 §6 "Known limit").
+  - [ ] Signed plugins / publisher identity: plugin data and sealed secrets follow the plugin name only, and the manifest's `publisher` is unverified, so a component from another publisher installed under the same name reads the earlier plugin's data (05 §2; M2a-2a final review M3, ruling R22). Verify a publisher signature on install and update, and show a publisher change in the permission report.
 - [ ] Deferred from M1.5:
   - [ ] Template memory bound via a render worker process with an OS memory limit (P23, M1c-2 R14); until then an operator-installed hostile theme can OOM every node at once (hot swap).
   - [ ] On-disk artifact / precompiled-component cache keyed by hash + wasmtime version + CPU features (P19; restarts re-fetch and recompile today).
