@@ -61,6 +61,10 @@ surface).
   | store busy | 503 | `busy` + `Retry-After: 5` |
   | randomness, hashing, other store errors | 500 | `internal` |
 
+  The API layer adds its own problems (login `invalid-credentials`, `csrf`,
+  `password-reset-required`, request-shape slugs) and `503 mail-unavailable` (M2a-2): a
+  password-reset request on a site without `[mail]`.
+
   Store, randomness and hashing errors are logged with their text; the body says only
   "internal error" or "busy, retry".
 - **Request rules.** JSON bodies need `Content-Type: application/json` (`415
@@ -84,7 +88,7 @@ importer. The admin SPA that uses them is M2b.
 |---|---|---|---|
 | Meta | `GET /meta`, `GET /openapi.json` (no auth) | M2a-1 | none |
 | Auth | `POST /auth/login`, `POST /auth/login/totp`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/password`, `POST /auth/totp/setup`, `POST /auth/totp/confirm`, `POST /auth/totp/disable` | M2a-1 | own account |
-| Auth: password reset by e-mail | `POST /auth/password-reset`, `POST /auth/password-reset/confirm` | M2a-2 (needs `mail`) | — |
+| Auth: password reset by e-mail | `POST /auth/password-reset`, `POST /auth/password-reset/confirm` (no credentials; origin-checked like login) | M2a-2a (needs `[mail]`) | none (the sealed token is the credential) |
 | Content | `GET/POST /content/{type}`, `GET/PATCH/DELETE /content/{type}/{id}` (`DELETE` trashes; `?force=true` deletes a trashed item), `POST /content/{type}/{id}/publish`, `…/unpublish`, `…/submit`, `…/schedule`, `…/restore` (from trash); type `media` is 404 here (uploads are `/media`) | M2a-1 | `read_admin` + `content:read` and `can_read`; writes `edit_own`/`edit_others`/`publish_*` + `content:write` |
 | Revisions | `GET /content/{type}/{id}/revisions`, `GET …/revisions/{rid}`, `POST …/revisions/{rid}/restore` | M2a-1 | reads as content plus a role that may edit the item (R26, §1 "Reading revisions"); restore as a content update |
 | Content types | `GET/POST /types`, `GET/PATCH/DELETE /types/{name}` | M2a-1 | reads `content:read`; writes `manage_settings` + `settings:write` |
@@ -225,8 +229,10 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   `"ferrite-csrf:v1:" + id_hash`)) and an `Origin` equal to the `site.url` origin (without
   `Origin`, a same-origin `Referer`; neither: refused; `Origin: null` never matches), else
   `403 csrf` before the body is read. The token comes with the login response
-  (`csrf_token`), `GET /auth/me` and a password change. `POST /auth/login` and
-  `/auth/login/totp` check the origin too (login CSRF). Bearer requests are exempt.
+  (`csrf_token`), `GET /auth/me` and a password change. `POST /auth/login`,
+  `/auth/login/totp` and the two password-reset endpoints check the origin too (login
+  CSRF); they are the only unsafe operations open without credentials, which the route
+  sweep test enforces (M2a-2 P28). Bearer requests are exempt.
   There are no CORS headers: the admin is same-origin and headless clients use tokens.
 - **API tokens**: `Authorization: Bearer fer_<43 base64url characters>` (32 random bytes),
   stored as SHA-256 hex, shown once at creation, scoped (§1 "Token scopes"), optional
@@ -254,7 +260,9 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   e-mail address are **separate budgets**, so one account takes at most 2 × 5 = 10
   password guesses a minute (keying on the resolved user id would reveal whether the
   account exists). The current-password checks of `POST /auth/password` and TOTP
-  confirm/disable go through the same per-login bucket (R11, R15). Fixed windows allow up
+  confirm/disable go through the same per-login bucket (R11, R15). Password-reset requests
+  (M2a-2 P19): 5/min per IP hash, then 3 **per hour** per input (keyed like the login
+  buckets, own label `ferrite:reset-bucket:v1`), before any lookup. Fixed windows allow up
   to 2× the limit across a window edge. On
   SQLite the clock is the process clock: if it jumps back, a bucket stays in its (now
   future) window until time catches up and keeps counting meanwhile; `Retry-After` stays
@@ -275,19 +283,45 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   disable-totp --login <login>`.
 - **Site key** (P4, R1; [01 §4](01-architecture.md#4-configuration), §8):
   `auth.secret_key[_file]`, or in solo mode `<data>/secret.key`; cluster mode refuses to
-  start without a configured key. It seals TOTP secrets and login/enrollment challenges and
-  keys the IP and login-bucket hashes. Sessions and CSRF tokens use per-session secrets, so
-  a lost or changed key logs nobody out but makes stored TOTP secrets unreadable: users
-  then re-enroll after `ferrite user disable-totp`.
+  start without a configured key. It seals TOTP secrets, login/enrollment challenges and
+  password-reset tokens and keys the IP and login/reset-bucket hashes. Sessions and CSRF
+  tokens use per-session secrets, so a lost or changed key logs nobody out but makes
+  stored TOTP secrets unreadable (users then re-enroll after `ferrite user disable-totp`)
+  and outstanding reset links invalid.
 - **Passkeys** (`webauthn-rs`): deferred past M2 (P3; the newest `webauthn-rs` is a
   pre-release, and the ceremony needs the SPA). There is no `passkeys` table.
 - **Audit log** (P22): user, token, TOTP, type/taxonomy and settings writes append a row to
   `audit_log` in the same `Tx` (no secrets in `details`); failed logins are not audited.
   There is no retention job and no read endpoint yet (`GET /system/audit` is M2a-2).
-- **Password reset by e-mail** needs SMTP (`[mail]`, `lettre`) and is M2a-2. Until then an
-  operator resets a password with the CLI: `ferrite user reset-password --data DIR --login
-  <login> [--password-stdin]` ([09 §8](09-operations.md#8-cli-summary)); it ends the user's
-  sessions and keeps their API tokens.
+- **Password reset by e-mail** (M2a-2a, P19; `auth/reset.rs`), needs `[mail]`:
+  - `POST /auth/password-reset { login }` (login or e-mail) answers `202` with no body
+    whether the input names an active account, a disabled one or none, after the rate
+    limits above (`429`); without `[mail]` it is `503 mail-unavailable`. Only an active
+    account gets a mail, to its own address, queued on the node's mail queue (16 sends
+    in flight, 10 s each), so the response never waits for SMTP; a queue or SMTP failure
+    is logged, never returned. Requests are not audited.
+  - The mail links to `<site.url>/admin/reset-password#token=<token>`: the token is in the
+    **fragment**, which browsers send to no server and leave out of `Referer`. That page
+    is the admin SPA's (M2b); until then the link is a `404` and the token is posted to
+    the confirm endpoint directly (F33, accepted).
+  - The token is stateless: `seal(site key, "password-reset", { user, exp: now + 1 h, fp
+    })`, `fp` = 32 hex of HMAC(subkey `ferrite:reset-pw:v1`, the current password hash),
+    compared in constant time. Any password change (the reset itself included) changes
+    `fp`, so a token works once and dies with a change made another way.
+  - `POST /auth/password-reset/confirm { token, password }` → `204`: the password policy
+    first (`422`, `errors[0].field = "password"`), then the token (`422`,
+    `errors[0].field = "token"`, "the reset link is invalid or has expired": bad, expired,
+    used, or of a disabled or deleted account). The new password is hashed outside any
+    `Tx`; then one `Tx` locks the user row, re-checks status and `fp` there (two
+    concurrent confirms with one token cannot both pass, F31), writes the hash, clears
+    `must_reset`, deletes every session and appends one `user.password_reset` audit row
+    without an actor or the token. No session is issued.
+  - API tokens are kept (R22) and **TOTP is kept**: a reset never bypasses or disables the
+    second factor; a lost authenticator still needs `ferrite user disable-totp`.
+
+  An operator can also reset a password with the CLI: `ferrite user reset-password --data
+  DIR --login <login> [--password-stdin]` ([09 §8](09-operations.md#8-cli-summary)); it
+  ends the user's sessions and keeps their API tokens.
 
 ## 3. Admin SPA (D6, D12)
 

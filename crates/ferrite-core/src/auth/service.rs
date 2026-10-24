@@ -49,7 +49,7 @@ use crate::{
 pub type Clock = Arc<dyn Fn() -> Timestamp + Send + Sync>;
 
 /// Longest login or e-mail input accepted at login, in bytes (F7).
-const MAX_LOGIN_INPUT: usize = 254;
+pub(super) const MAX_LOGIN_INPUT: usize = 254;
 /// Longest bearer value looked up (ours are 47 characters; cookies must be exactly
 /// [`SESSION_TOKEN_LEN`]).
 const MAX_TOKEN_INPUT: usize = 256;
@@ -177,8 +177,8 @@ struct Enrollment {
 
 /// Logins, sessions, API tokens and TOTP.
 pub struct AuthService {
-    store: Arc<dyn Store>,
-    key: SiteKey,
+    pub(super) store: Arc<dyn Store>,
+    pub(super) key: SiteKey,
     clock: Clock,
     issuer: String,
 }
@@ -863,13 +863,13 @@ impl AuthService {
         .await
     }
 
-    fn now(&self) -> Timestamp {
+    pub(super) fn now(&self) -> Timestamp {
         (self.clock)()
     }
 
     /// The account a login input names: an e-mail when it contains `@`, else a login.
     /// Inputs that cannot name an account are `None` (never an error).
-    async fn find_user(&self, input: &str) -> Result<Option<User>, CoreError> {
+    pub(super) async fn find_user(&self, input: &str) -> Result<Option<User>, CoreError> {
         let input = input.trim();
         if input.is_empty() || input.contains('\0') {
             return Ok(None);
@@ -934,13 +934,17 @@ impl AuthService {
         })
     }
 
-    fn seal_json<T: Serialize>(&self, purpose: &str, value: &T) -> Result<String, CoreError> {
+    pub(super) fn seal_json<T: Serialize>(
+        &self,
+        purpose: &str,
+        value: &T,
+    ) -> Result<String, CoreError> {
         let bytes = serde_json::to_vec(value)
             .map_err(|e| CoreError::Invalid(format!("cannot encode {purpose}: {e}")))?;
         seal(&self.key, purpose, &bytes)
     }
 
-    fn open_json<T: DeserializeOwned>(&self, purpose: &str, sealed: &str) -> Option<T> {
+    pub(super) fn open_json<T: DeserializeOwned>(&self, purpose: &str, sealed: &str) -> Option<T> {
         let bytes = open(&self.key, purpose, sealed).ok()?;
         serde_json::from_slice(&bytes).ok()
     }
@@ -986,7 +990,7 @@ fn micros(d: Duration) -> i64 {
     i64::try_from(d.as_micros()).unwrap_or(i64::MAX)
 }
 
-fn plus(at: Timestamp, d: Duration) -> Result<Timestamp, CoreError> {
+pub(super) fn plus(at: Timestamp, d: Duration) -> Result<Timestamp, CoreError> {
     Timestamp::from_micros(at.as_micros().saturating_add(micros(d)))
         .map_err(|_| CoreError::Invalid("timestamp out of range".into()))
 }
@@ -1036,7 +1040,7 @@ async fn user_audit(
 }
 
 /// Compares two byte strings in time independent of where they differ.
-fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+pub(super) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 

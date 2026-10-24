@@ -21,8 +21,14 @@ use crate::{
 api_tests!(unsafe_operations_need_auth_and_csrf);
 
 /// The operations that are reachable without credentials by design: they check the
-/// origin instead (`SameOrigin`, login CSRF).
-const UNAUTHENTICATED: [&str; 2] = ["POST /api/v1/auth/login", "POST /api/v1/auth/login/totp"];
+/// origin instead (`SameOrigin`, login CSRF), in OpenAPI path order. Only login and the
+/// two password-reset steps (M2a-2 P28).
+const UNAUTHENTICATED: [&str; 4] = [
+    "POST /api/v1/auth/login",
+    "POST /api/v1/auth/login/totp",
+    "POST /api/v1/auth/password-reset",
+    "POST /api/v1/auth/password-reset/confirm",
+];
 
 /// Every `(method, path template)` with an unsafe method in the OpenAPI document.
 fn unsafe_operations() -> Vec<(Method, String)> {

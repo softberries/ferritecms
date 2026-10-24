@@ -1,13 +1,15 @@
-//! Login, TOTP and bad-token rate limits (P5), and the caller-scoped limits of
+//! Login, TOTP and bad-token rate limits (P5), the password-reset limits (M2a-2 P19:
+//! 5/min per IP, 3/h per account input), and the caller-scoped limits of
 //! [`AuthService::hit_limit`](super::AuthService::hit_limit) (plugin routes, M2a-2 P16):
-//! fixed windows (one minute for the auth limits) counted in the database by
-//! [`RateLimitRepo::hit`](ferrite_store::RateLimitRepo::hit), so every node shares one
-//! count.
+//! fixed windows (one minute for the auth limits, except the hourly reset one) counted
+//! in the database by [`RateLimitRepo::hit`](ferrite_store::RateLimitRepo::hit), so
+//! every node shares one count.
 //!
 //! * Buckets never hold caller text: IP buckets carry the keyed IP hash (IPv6 masked to
 //!   its /64, F8, because one client usually holds a whole /64), login buckets a keyed
-//!   HMAC of the trimmed, ASCII-lowercased input (F7). A login and its e-mail address are
-//!   two distinct buckets, so one account takes at most 2 × 5 guesses a minute.
+//!   HMAC of the trimmed, ASCII-lowercased input (F7; reset buckets the same under
+//!   their own label). A login and its e-mail address are two distinct buckets, so one
+//!   account takes at most 2 × 5 guesses a minute.
 //! * Hits run outside any `Tx` (R6): the counter commits whatever happens next.
 //! * `Retry-After` is `ceil(reset_at - now)` on the database clock the hit used (F6),
 //!   clamped to 1 s..=the window. The stored window only moves forward (R7). On SQLite
@@ -35,8 +37,17 @@ pub(crate) const TOTP_PER_USER: u32 = 5;
 /// Unknown or expired bearer tokens per IP and minute.
 pub(crate) const BAD_TOKEN_PER_IP: u32 = 10;
 
+/// Password-reset requests per IP and [`WINDOW`] (M2a-2 P19).
+pub(crate) const RESET_PER_IP: u32 = 5;
+/// Password-reset requests per account input and [`RESET_USER_WINDOW`].
+pub(crate) const RESET_PER_USER: u32 = 3;
+/// The window of [`RESET_PER_USER`].
+pub(crate) const RESET_USER_WINDOW: Duration = Duration::from_secs(3600);
+
 /// Subkey label for the login bucket ids.
 const LOGIN_BUCKET_LABEL: &str = "ferrite:login-bucket:v1";
+/// Subkey label for the password-reset bucket ids.
+const RESET_BUCKET_LABEL: &str = "ferrite:reset-bucket:v1";
 
 /// `login:ip:<hash>`.
 pub(crate) fn login_ip(key: &SiteKey, ip: IpAddr) -> String {
@@ -49,6 +60,20 @@ pub(crate) fn login_user(key: &SiteKey, input: &str) -> String {
     format!(
         "login:user:{}",
         keyed_id(key, LOGIN_BUCKET_LABEL, normalised.as_bytes())
+    )
+}
+
+/// `reset:ip:<hash>`.
+pub(crate) fn reset_ip(key: &SiteKey, ip: IpAddr) -> String {
+    format!("reset:ip:{}", limit_ip_hash(key, ip))
+}
+
+/// `reset:user:<keyed id of the trimmed, ASCII-lowercased input>`.
+pub(crate) fn reset_user(key: &SiteKey, input: &str) -> String {
+    let normalised = input.trim().to_ascii_lowercase();
+    format!(
+        "reset:user:{}",
+        keyed_id(key, RESET_BUCKET_LABEL, normalised.as_bytes())
     )
 }
 
@@ -155,6 +180,25 @@ mod tests {
         assert_eq!(long.len(), bucket.len());
         let other = SiteKey::from_hex(&"cd".repeat(32)).unwrap();
         assert_ne!(bucket, login_user(&other, "alice@example.com"));
+    }
+
+    #[test]
+    fn reset_buckets_are_keyed_and_apart_from_login() {
+        let key = key();
+        let bucket = reset_user(&key, " Alice@Example.COM ");
+        assert_eq!(bucket, reset_user(&key, "alice@example.com"));
+        assert!(!bucket.contains("alice"));
+        assert_eq!(bucket.len(), "reset:user:".len() + 32);
+        // Another label: the ids do not match the login bucket's.
+        assert_ne!(
+            bucket.strip_prefix("reset:user:"),
+            login_user(&key, "alice@example.com").strip_prefix("login:user:")
+        );
+        let v4 = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1));
+        assert_eq!(
+            reset_ip(&key, v4),
+            format!("reset:ip:{}", limit_ip_hash(&key, v4))
+        );
     }
 
     fn retry_after_min(hit: &RateHit) -> u64 {

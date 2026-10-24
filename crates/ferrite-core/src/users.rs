@@ -15,16 +15,17 @@
 //!   also remove their API tokens (delete through the `ON DELETE CASCADE`), so the next
 //!   request on any node is refused.
 //! * Every write appends an audit row (`user.create`, `user.update`, `user.password`,
-//!   `user.delete`, `user.totp_disable`) in the same `Tx`, without secrets. A display-name
-//!   or status change and a delete emit `invalidate [user:<id>]` (a delete with
-//!   `reassign_to` also names the new author, whose pages now list the items).
+//!   `user.password_reset`, `user.delete`, `user.totp_disable`) in the same `Tx`,
+//!   without secrets. A display-name or status change and a delete emit
+//!   `invalidate [user:<id>]` (a delete with `reassign_to` also names the new author,
+//!   whose pages now list the items).
 //! * Passwords are hashed before the `Tx` opens (argon2 must not run inside one,
 //!   M1c-1 P1); every read-modify-write reads the row with `get_for_update` inside the
 //!   `Tx` that writes it, because `UserRepo::update` is unversioned (F5).
 
 use std::sync::Arc;
 
-use ferrite_domain::{NewAudit, NewUser, Page, Role, User, UserId, UserStatus};
+use ferrite_domain::{NewAudit, NewUser, Page, Role, Secret, User, UserId, UserStatus};
 use ferrite_store::{Repos, Store, StoreError};
 use serde_json::{Value, json};
 
@@ -350,6 +351,34 @@ impl UserService {
         OperatorUsers { users: self }
     }
 
+    /// The system path's password write (CLI `reset-password`, e-mail reset): in one
+    /// `Tx`, locks the row (missing: `NotFound`), runs `guard` on it (its error aborts),
+    /// stores the already-computed `hashed`, sets `must_reset`, deletes every session of
+    /// the user and appends one audit row `action` with no actor. API tokens and TOTP
+    /// are left alone.
+    pub(crate) async fn write_password(
+        &self,
+        id: UserId,
+        hashed: Secret,
+        must_reset: bool,
+        guard: &(dyn Fn(&User) -> Result<(), CoreError> + Send + Sync),
+        action: &str,
+        details: Value,
+    ) -> Result<(), CoreError> {
+        let tx = self.store.begin().await?;
+        let done = async {
+            let mut user = locked(tx.as_ref(), id).await?;
+            guard(&user)?;
+            user.password_hash = Some(hashed);
+            user.must_reset = must_reset;
+            tx.users().update(&user).await?;
+            tx.sessions().delete_for_user(id, None).await?;
+            audit(tx.as_ref(), None, action, id, details).await
+        }
+        .await;
+        finish(tx, done).await
+    }
+
     async fn create_as(
         &self,
         actor: Option<UserId>,
@@ -427,18 +456,17 @@ impl OperatorUsers<'_> {
         password::check_policy(new)?;
         let id = self.id_of(login).await?;
         let hashed = password::hash(new).await?;
-        let tx = self.users.store.begin().await?;
-        let done = async {
-            let mut user = locked(tx.as_ref(), id).await?;
-            user.password_hash = Some(hashed);
-            user.must_reset = must_reset;
-            tx.users().update(&user).await?;
-            tx.sessions().delete_for_user(id, None).await?;
-            let details = json!({ "must_reset": must_reset, "self": false });
-            audit(tx.as_ref(), None, "user.password", id, details).await
-        }
-        .await;
-        finish(tx, done).await
+        let details = json!({ "must_reset": must_reset, "self": false });
+        self.users
+            .write_password(
+                id,
+                hashed,
+                must_reset,
+                &|_| Ok(()),
+                "user.password",
+                details,
+            )
+            .await
     }
 
     /// Turns TOTP off for `login` (clears the secret and the replay step), the recovery

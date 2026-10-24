@@ -13,6 +13,7 @@ use argon2::{Algorithm, Argon2, Params, PasswordHasher, Version};
 use ferrite_core::{
     Actor, CoreError, NewAccount, Scopes, UserPatch, UserService,
     auth::{AuthService, IssuedSession, LoginAttempt, LoginOutcome, SiteKey, TotpSetup, Via, open},
+    mail::{MailQueue, MemoryMailer, OutgoingMail},
 };
 use ferrite_domain::{Role, Secret, Timestamp, User, UserStatus};
 use ferrite_store::Store;
@@ -1079,6 +1080,415 @@ async fn hit_limit_counts_per_scope_and_client(db: &TestDb) {
     );
 }
 
+// ---- password reset (M2a-2 Task 10, P19) -------------------------------------------
+
+const RESET_BASE: &str = "https://example.com/admin/reset-password";
+const SITE_TITLE: &str = "Test Site";
+const NEW_PASSWORD: &str = "a brand new password";
+const HOUR: Duration = Duration::from_secs(3600);
+/// How long a test waits for a mail the queue sends in the background.
+const MAIL_WAIT: Duration = Duration::from_secs(5);
+/// How long a test waits to be sure no further mail comes.
+const NO_MAIL_GRACE: Duration = Duration::from_millis(200);
+
+/// A memory mailer behind the node's queue, as `serve` wires it.
+fn mail_queue() -> (Arc<MemoryMailer>, MailQueue) {
+    let memory = Arc::new(MemoryMailer::new());
+    let queue = MailQueue::new(memory.clone());
+    (memory, queue)
+}
+
+async fn request_reset(
+    auth: &AuthService,
+    queue: &MailQueue,
+    input: &str,
+    ip: Option<IpAddr>,
+) -> Result<(), CoreError> {
+    auth.request_password_reset(queue, input, ip, RESET_BASE, SITE_TITLE)
+        .await
+}
+
+/// The token in a reset mail's link (`<base>#token=<token>`).
+fn token_of(mail: &OutgoingMail) -> String {
+    let link = mail
+        .text
+        .split_whitespace()
+        .find(|w| w.starts_with(RESET_BASE))
+        .unwrap_or_else(|| panic!("no reset link in {:?}", mail.text));
+    let token = link
+        .strip_prefix(&format!("{RESET_BASE}#token="))
+        .unwrap_or_else(|| panic!("the token is not in the fragment: {link}"));
+    assert!(!token.is_empty());
+    token.to_owned()
+}
+
+/// Requests a reset for `input` and returns the token of the `n`-th mail (1-based).
+async fn reset_token(
+    auth: &AuthService,
+    queue: &MailQueue,
+    memory: &MemoryMailer,
+    input: &str,
+    n: usize,
+) -> String {
+    request_reset(auth, queue, input, None).await.unwrap();
+    let sent = memory.wait_for(n, MAIL_WAIT).await;
+    assert_eq!(sent.len(), n, "{sent:?}");
+    token_of(&sent[n - 1])
+}
+
+fn invalid_token<T: std::fmt::Debug>(r: Result<T, CoreError>) -> bool {
+    match r {
+        Err(CoreError::InvalidField { field, message }) => {
+            assert_eq!(field, "token");
+            assert_eq!(message, "the reset link is invalid or has expired");
+            true
+        }
+        other => panic!("expected InvalidField(token), got {other:?}"),
+    }
+}
+
+/// Review Focus 4: known, unknown and disabled inputs all answer `Ok`; only a known
+/// active account gets mail, to its own address, with the token in the link's fragment.
+async fn reset_does_not_enumerate(db: &TestDb) {
+    let clock = Clock::new();
+    let auth = auth_on(db.shared_store(), &clock);
+    let (memory, queue) = mail_queue();
+    let root = make_user(db, "root", Role::Admin).await;
+    let off = make_user(db, "off", Role::Author).await;
+    UserService::new(db.shared_store())
+        .update(
+            &Actor::new(root.id, root.role),
+            off.id,
+            UserPatch {
+                status: Some(UserStatus::Disabled),
+                ..UserPatch::default()
+            },
+        )
+        .await
+        .unwrap();
+    make_user(db, "kim", Role::Author).await;
+
+    let long = "x".repeat(10_000);
+    // One address each: the per-IP limit (5/min) is not what this test is about.
+    for (last, input) in (1..).zip([
+        "ghost",
+        "ghost@example.com",
+        "off",
+        "off@example.com",
+        "bad login!",
+        "",
+        "nul\0",
+        long.as_str(),
+    ]) {
+        let r = request_reset(&auth, &queue, input, ip(last)).await;
+        assert!(r.is_ok(), "{input:?}: {r:?}");
+    }
+    request_reset(&auth, &queue, " KIM@Example.com ", ip(100))
+        .await
+        .unwrap();
+    let sent = memory.wait_for(1, MAIL_WAIT).await;
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    // Nothing else arrives: the earlier inputs queued nothing.
+    let sent = memory.wait_for(2, NO_MAIL_GRACE).await;
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let mail = &sent[0];
+    assert_eq!(mail.to, ["kim@example.com"]);
+    assert!(mail.bcc.is_empty());
+    assert_eq!(mail.subject, "[Test Site] Password reset");
+    assert!(mail.text.contains("kim"), "{}", mail.text);
+    let token = token_of(mail);
+    assert!(!mail.text.contains("?token"), "{}", mail.text);
+    assert!(token.starts_with("v1."), "a sealed value: {token}");
+    // Nothing about the request is audited (an audit row per request would leak which
+    // inputs are accounts to anyone reading it, and the token must never be there).
+    let actions = audit_actions(db.store()).await;
+    assert!(!actions.iter().any(|a| a.contains("reset")), "{actions:?}");
+}
+
+/// A token works once, expires after 1 h and dies with any password change; the new
+/// password goes through the policy before the token is looked at.
+async fn reset_token_single_use_and_expiry(db: &TestDb) {
+    let clock = Clock::new();
+    let auth = auth_on(db.shared_store(), &clock);
+    let users = UserService::new(db.shared_store());
+    let (memory, queue) = mail_queue();
+    make_user(db, "kim", Role::Author).await;
+
+    // The policy first: even a junk token gets the password error.
+    let short = auth.confirm_password_reset(&users, "junk", "short").await;
+    assert!(
+        matches!(
+            &short,
+            Err(CoreError::InvalidField {
+                field: "password",
+                ..
+            })
+        ),
+        "{short:?}"
+    );
+    for junk in ["", "junk", "v1.AAAA", &"v1.".repeat(400)] {
+        assert!(invalid_token(
+            auth.confirm_password_reset(&users, junk, NEW_PASSWORD)
+                .await
+        ));
+    }
+
+    let token = reset_token(&auth, &queue, &memory, "kim", 1).await;
+    auth.confirm_password_reset(&users, &token, NEW_PASSWORD)
+        .await
+        .unwrap();
+    assert!(matches!(
+        auth.login(attempt("kim", NEW_PASSWORD, None))
+            .await
+            .unwrap(),
+        LoginOutcome::Session(_)
+    ));
+    assert!(unauthenticated(
+        auth.login(attempt("kim", PASSWORD, None)).await
+    ));
+    // Used: the same token again, even with another password, is refused.
+    assert!(invalid_token(
+        auth.confirm_password_reset(&users, &token, "yet another password")
+            .await
+    ));
+    assert!(matches!(
+        auth.login(attempt("kim@example.com", NEW_PASSWORD, None))
+            .await
+            .unwrap(),
+        LoginOutcome::Session(_)
+    ));
+
+    // Expired: valid 1 h, refused a minute after.
+    let token = reset_token(&auth, &queue, &memory, "kim", 2).await;
+    clock.advance(Duration::from_secs(61 * 60));
+    assert!(invalid_token(
+        auth.confirm_password_reset(&users, &token, "yet another password")
+            .await
+    ));
+
+    // A password change before use kills it.
+    let token = reset_token(&auth, &queue, &memory, "kim", 3).await;
+    let LoginOutcome::Session(issued) = auth
+        .login(attempt("kim@example.com", NEW_PASSWORD, None))
+        .await
+        .unwrap()
+    else {
+        panic!("expected a session");
+    };
+    let who = auth
+        .resolve_session(issued.token.expose())
+        .await
+        .unwrap()
+        .unwrap();
+    auth.change_password(
+        &users,
+        &who,
+        NEW_PASSWORD,
+        "changed by the owner",
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(invalid_token(
+        auth.confirm_password_reset(&users, &token, "yet another password")
+            .await
+    ));
+    assert!(matches!(
+        auth.login(attempt("kim", "changed by the owner", None))
+            .await
+            .unwrap(),
+        LoginOutcome::Session(_)
+    ));
+    // A token of a user who was deleted (or disabled) since is refused the same way.
+    let gone = make_user(db, "gone", Role::Author).await;
+    let token = reset_token(&auth, &queue, &memory, "gone", 4).await;
+    let root = make_user(db, "root", Role::Admin).await;
+    users
+        .update(
+            &Actor::new(root.id, root.role),
+            gone.id,
+            UserPatch {
+                status: Some(UserStatus::Disabled),
+                ..UserPatch::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(invalid_token(
+        auth.confirm_password_reset(&users, &token, NEW_PASSWORD)
+            .await
+    ));
+}
+
+/// F31: two concurrent confirms with one token: exactly one succeeds (the fingerprint
+/// is checked on the locked row in the writing `Tx`), and one audit row is written.
+async fn reset_confirm_is_single_use_under_concurrency(db: &TestDb) {
+    let clock = Clock::new();
+    let auth = auth_on(db.shared_store(), &clock);
+    let users = UserService::new(db.shared_store());
+    let (memory, queue) = mail_queue();
+    make_user(db, "kim", Role::Author).await;
+    let token = reset_token(&auth, &queue, &memory, "kim", 1).await;
+    let (a, b) = tokio::join!(
+        auth.confirm_password_reset(&users, &token, "first new password"),
+        auth.confirm_password_reset(&users, &token, "second new password"),
+    );
+    let oks = [&a, &b].iter().filter(|r| r.is_ok()).count();
+    assert_eq!(oks, 1, "{a:?} {b:?}");
+    let failed = if a.is_ok() { b } else { a };
+    assert!(invalid_token(failed));
+    let actions = audit_actions(db.store()).await;
+    let resets = actions
+        .iter()
+        .filter(|a| *a == "user.password_reset")
+        .count();
+    assert_eq!(resets, 1, "{actions:?}");
+}
+
+/// A reset ends every session of the user, clears `must_reset`, keeps the user's API
+/// tokens (R22) and other users' sessions, and writes one `user.password_reset` audit
+/// row without the token.
+async fn reset_ends_sessions_keeps_tokens(db: &TestDb) {
+    let clock = Clock::new();
+    let auth = auth_on(db.shared_store(), &clock);
+    let users = UserService::new(db.shared_store());
+    let (memory, queue) = mail_queue();
+    let kim = make_user(db, "kim", Role::Author).await;
+    make_user(db, "bo", Role::Author).await;
+    users
+        .operator()
+        .set_password("kim", PASSWORD, true)
+        .await
+        .unwrap();
+    assert!(stored(db.store(), &kim).await.must_reset);
+    let one = session(&auth, "kim").await;
+    let two = session(&auth, "kim@example.com").await;
+    let theirs = session(&auth, "bo").await;
+    let (bearer, _) = auth
+        .create_token(
+            &Actor::new(kim.id, kim.role),
+            kim.id,
+            "deploy",
+            Scopes::ALL,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let token = reset_token(&auth, &queue, &memory, "kim", 1).await;
+    let before = audit_actions(db.store()).await.len();
+    auth.confirm_password_reset(&users, &token, NEW_PASSWORD)
+        .await
+        .unwrap();
+    for s in [&one, &two] {
+        assert!(
+            auth.resolve_session(s.token.expose())
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert!(
+        auth.resolve_session(theirs.token.expose())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        auth.resolve_token(bearer.expose(), None)
+            .await
+            .unwrap()
+            .is_some(),
+        "API tokens survive a reset (R22)"
+    );
+    let row = stored(db.store(), &kim).await;
+    assert!(!row.must_reset);
+    let page = db.store().read().audit().list(200, None).await.unwrap();
+    assert_eq!(page.items.len(), before + 1, "one audit row");
+    let entry = page
+        .items
+        .iter()
+        .find(|a| a.action == "user.password_reset")
+        .expect("audited");
+    assert_eq!(entry.actor_id, None);
+    assert_eq!(
+        entry.target_id.as_deref(),
+        Some(kim.id.to_string().as_str())
+    );
+    let details = entry.details.to_string();
+    assert!(
+        !details.contains(&token) && !details.contains("v1."),
+        "{details}"
+    );
+}
+
+/// A reset sets the password only: TOTP stays on, so the new password still needs the
+/// second factor (Review Focus 4).
+async fn reset_keeps_totp(db: &TestDb) {
+    let clock = Clock::new();
+    let auth = auth_on(db.shared_store(), &clock);
+    let users = UserService::new(db.shared_store());
+    let (memory, queue) = mail_queue();
+    let lee = make_user(db, "lee", Role::Author).await;
+    let totp = enrol(&auth, &clock, &lee).await;
+    clock.advance(Duration::from_secs(30));
+
+    let token = reset_token(&auth, &queue, &memory, "lee", 1).await;
+    auth.confirm_password_reset(&users, &token, NEW_PASSWORD)
+        .await
+        .unwrap();
+    assert!(stored(db.store(), &lee).await.totp_secret.is_some());
+    let challenge = challenge(&auth, "lee", NEW_PASSWORD).await;
+    let code = totp.generate(clock.secs()).to_string();
+    auth.login_totp(&challenge, &code, None, None)
+        .await
+        .unwrap();
+}
+
+/// 5 requests a minute per IP (whatever the input), 3 an hour per account input
+/// (whatever the IP); a limited request sends nothing.
+async fn reset_rate_limits(db: &TestDb) {
+    let clock = Clock::new();
+    let auth = auth_on(db.shared_store(), &clock);
+    let (memory, queue) = mail_queue();
+    make_user(db, "kim", Role::Author).await;
+    align_to_window(db.store(), MINUTE, Duration::from_secs(20)).await;
+    align_to_window(db.store(), HOUR, Duration::from_secs(20)).await;
+
+    for i in 0..5 {
+        request_reset(&auth, &queue, &format!("ghost{i}"), ip(1))
+            .await
+            .unwrap();
+    }
+    assert!(rate_limited(
+        request_reset(&auth, &queue, "kim", ip(1)).await
+    ));
+    // Another address is another bucket.
+    request_reset(&auth, &queue, "ghost9", ip(2)).await.unwrap();
+
+    // Per account input, across addresses (and case), within the hour.
+    for (n, (input, last)) in [("kim", 10), (" KIM ", 11), ("kim", 12)]
+        .into_iter()
+        .enumerate()
+    {
+        request_reset(&auth, &queue, input, ip(last)).await.unwrap();
+        assert_eq!(memory.wait_for(n + 1, MAIL_WAIT).await.len(), n + 1);
+    }
+    match request_reset(&auth, &queue, "kim", ip(13)).await {
+        Err(CoreError::RateLimited { retry_after_secs }) => {
+            assert!((1..=3600).contains(&retry_after_secs), "{retry_after_secs}");
+        }
+        other => panic!("expected RateLimited, got {other:?}"),
+    }
+    assert_eq!(memory.wait_for(4, NO_MAIL_GRACE).await.len(), 3);
+    // The e-mail address is its own input bucket.
+    request_reset(&auth, &queue, "kim@example.com", ip(14))
+        .await
+        .unwrap();
+    assert_eq!(memory.wait_for(4, MAIL_WAIT).await.len(), 4);
+}
+
 backend_tests!(
     login_issues_session_and_resolves,
     unknown_user_wrong_password_and_disabled_look_the_same,
@@ -1094,4 +1504,10 @@ backend_tests!(
     tokens_scoped_counted_and_rate_limited,
     rehash_on_login_when_params_change,
     hit_limit_counts_per_scope_and_client,
+    reset_does_not_enumerate,
+    reset_token_single_use_and_expiry,
+    reset_confirm_is_single_use_under_concurrency,
+    reset_ends_sessions_keeps_tokens,
+    reset_keeps_totp,
+    reset_rate_limits,
 );

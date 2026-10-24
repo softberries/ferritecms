@@ -425,7 +425,9 @@ async fn boot(
             extensions: Arc::new(ExtensionAdmin::new(store.clone(), site_key)),
             installer,
             media: media.clone(),
+            mailer: mail.clone(),
             site_url: state.config.site_url.clone(),
+            site_title: config.site.title.clone(),
         })
         .context("site.url")?,
     );

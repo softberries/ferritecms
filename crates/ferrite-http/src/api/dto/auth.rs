@@ -29,6 +29,23 @@ pub struct PasswordChange {
     pub new: String,
 }
 
+/// `POST /auth/password-reset`.
+#[derive(Deserialize, ToSchema)]
+pub struct PasswordResetRequest {
+    /// Login or e-mail address.
+    pub login: String,
+}
+
+/// `POST /auth/password-reset/confirm`.
+#[derive(Deserialize, ToSchema)]
+pub struct PasswordResetConfirm {
+    /// The `token` from the fragment of the mailed link (`…#token=<token>`), valid
+    /// 1 hour and once.
+    pub token: String,
+    /// The new password: 12 to 1024 bytes, at least 12 characters.
+    pub password: String,
+}
+
 /// `POST /auth/totp/confirm`.
 #[derive(Deserialize, ToSchema)]
 pub struct TotpConfirm {

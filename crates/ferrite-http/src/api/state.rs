@@ -6,7 +6,7 @@ use std::sync::Arc;
 use axum::http::Uri;
 use ferrite_core::{
     AuthService, ContentService, ContentTypeService, ExtensionAdmin, MenuService, OptionService,
-    RedirectService, TaxonomyService, UserService,
+    RedirectService, TaxonomyService, UserService, mail::MailQueue,
 };
 use ferrite_media::MediaStore;
 use ferrite_store::Store;
@@ -28,8 +28,12 @@ pub struct ApiParts {
     /// The node's one install pipeline: its compile slots bound the node (P8).
     pub installer: Arc<Installer>,
     pub media: Arc<MediaStore>,
+    /// The node's mail queue (`[mail]` set), shared with the plugin host.
+    pub mailer: Option<Arc<MailQueue>>,
     /// The site's URL (`site.url`).
     pub site_url: String,
+    /// `site.title` (names the site in the password-reset mail).
+    pub site_title: String,
 }
 
 /// The API's shared state (see [`ApiParts`] for the services).
@@ -49,8 +53,13 @@ pub struct ApiState {
     /// [`COMPILE_SLOTS`]: crate::extensions::COMPILE_SLOTS
     pub installer: Arc<Installer>,
     pub media: Arc<MediaStore>,
+    /// The node's mail queue: sends run in the background (`None`: no `[mail]`, the
+    /// password reset is `503 mail-unavailable`).
+    pub mailer: Option<Arc<MailQueue>>,
     /// `site.url` without a trailing slash.
     pub site_url: String,
+    /// `site.title`.
+    pub site_title: String,
     /// `scheme://host[:port]` of `site_url` (lowercase, default port left out): what a
     /// browser sends as `Origin` for the site's own pages (P8).
     pub origin: String,
@@ -78,7 +87,9 @@ impl ApiState {
             extensions,
             installer,
             media,
+            mailer,
             site_url,
+            site_title,
         } = parts;
         let (origin, cookie_secure) = origin_of(&site_url)?;
         Ok(Self {
@@ -94,7 +105,9 @@ impl ApiState {
             extensions,
             installer,
             media,
+            mailer,
             site_url: site_url.trim_end_matches('/').to_owned(),
+            site_title,
             origin,
             cookie_secure,
         })

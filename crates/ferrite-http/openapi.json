@@ -290,6 +290,102 @@
         ]
       }
     },
+    "/api/v1/auth/password-reset": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "request_password_reset",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted, whether or not `login` names an account: an active account gets a mail with a link to `/admin/reset-password#token=<token>` (valid 1 hour, once). No body"
+          },
+          "403": {
+            "description": "`csrf`: not from the site's origin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate-limited`: 5 requests a minute per client, 3 an hour per login or e-mail (see `Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`mail-unavailable`: the site has no `[mail]` section",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/password-reset/confirm": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "confirm_password_reset",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordResetConfirm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Password set: every session of the account ended and `must_reset` cleared; API tokens and TOTP are kept. No session is issued"
+          },
+          "403": {
+            "description": "`csrf`: not from the site's origin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: `errors[0].field` is `password` (breaks the policy) or `token` (invalid, expired or used link)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/totp/confirm": {
       "post": {
         "tags": [
@@ -7163,6 +7259,37 @@
               "null"
             ],
             "description": "The new session's `X-CSRF-Token` (its cookie is set with this response); `null`\nfor a bearer request, which gets no session."
+          }
+        }
+      },
+      "PasswordResetConfirm": {
+        "type": "object",
+        "description": "`POST /auth/password-reset/confirm`.",
+        "required": [
+          "token",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The new password: 12 to 1024 bytes, at least 12 characters."
+          },
+          "token": {
+            "type": "string",
+            "description": "The `token` from the fragment of the mailed link (`…#token=<token>`), valid\n1 hour and once."
+          }
+        }
+      },
+      "PasswordResetRequest": {
+        "type": "object",
+        "description": "`POST /auth/password-reset`.",
+        "required": [
+          "login"
+        ],
+        "properties": {
+          "login": {
+            "type": "string",
+            "description": "Login or e-mail address."
           }
         }
       },

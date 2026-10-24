@@ -36,6 +36,15 @@
 //! invalid-credentials`. A successful login replaces the browser's previous session: a
 //! `ferrite_session` cookie sent with the login is deleted server-side.
 //!
+//! **Password reset** (`POST /auth/password-reset`, `POST /auth/password-reset/confirm`,
+//! M2a-2 P19) has no credentials either and checks the origin the same way. The request
+//! answers `202` with no body whether or not the input names an account (the mail goes
+//! out from the node's queue in the background); without `[mail]` it is `503
+//! mail-unavailable`. The mailed link points at `/admin/reset-password#token=<token>`,
+//! which the admin SPA serves from M2b (F33: until then it is `404` and the token is
+//! posted to the confirm endpoint directly). A confirm issues no session: the user
+//! logs in with the new password (and TOTP, which a reset keeps).
+//!
 //! Nothing here logs a password, code, token, cookie or challenge.
 
 use std::{net::IpAddr, sync::Arc};
@@ -52,8 +61,8 @@ use super::{
     ApiState,
     cookie::{clear_cookie, read_session_cookie, session_cookie},
     dto::auth::{
-        LoginRequest, LoginResponse, MeDto, PasswordChange, PasswordChanged, TotpConfirm,
-        TotpDisable, TotpLoginRequest, TotpSetupDto,
+        LoginRequest, LoginResponse, MeDto, PasswordChange, PasswordChanged, PasswordResetConfirm,
+        PasswordResetRequest, TotpConfirm, TotpDisable, TotpLoginRequest, TotpSetupDto,
     },
     extract::ApiJson,
     problem::{Challenge, Problem, ProblemDocument},
@@ -63,6 +72,8 @@ use crate::ClientIp;
 
 /// The CSRF header (P8).
 pub const CSRF_HEADER: &str = "x-csrf-token";
+/// Where the mailed reset link points, under `site.url` (the admin SPA's page, M2b).
+pub const RESET_PAGE: &str = "/admin/reset-password";
 
 /// An authenticated request, refused when it uses a session of an account that must
 /// change its password (`must_reset`); bearer requests pass.
@@ -415,6 +426,56 @@ pub async fn change_password(
         }
         None => Json(PasswordChanged { csrf_token: None }).into_response(),
     })
+}
+
+#[utoipa::path(
+    post,
+    path = "/auth/password-reset",
+    tag = "auth",
+    operation_id = "request_password_reset",
+    request_body = PasswordResetRequest,
+    responses(
+        (status = 202, description = "Accepted, whether or not `login` names an account: an active account gets a mail with a link to `/admin/reset-password#token=<token>` (valid 1 hour, once). No body"),
+        (status = 403, description = "`csrf`: not from the site's origin", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 429, description = "`rate-limited`: 5 requests a minute per client, 3 an hour per login or e-mail (see `Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 503, description = "`mail-unavailable`: the site has no `[mail]` section", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn request_password_reset(
+    State(api): State<Arc<ApiState>>,
+    _origin: SameOrigin,
+    client: ClientInfo,
+    ApiJson(req): ApiJson<PasswordResetRequest>,
+) -> Result<StatusCode, Problem> {
+    let mailer = api.mailer.as_ref().ok_or_else(Problem::mail_unavailable)?;
+    let reset_base = format!("{}{RESET_PAGE}", api.site_url);
+    api.auth
+        .request_password_reset(mailer, &req.login, client.ip, &reset_base, &api.site_title)
+        .await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+#[utoipa::path(
+    post,
+    path = "/auth/password-reset/confirm",
+    tag = "auth",
+    operation_id = "confirm_password_reset",
+    request_body = PasswordResetConfirm,
+    responses(
+        (status = 204, description = "Password set: every session of the account ended and `must_reset` cleared; API tokens and TOTP are kept. No session is issued"),
+        (status = 403, description = "`csrf`: not from the site's origin", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: `errors[0].field` is `password` (breaks the policy) or `token` (invalid, expired or used link)", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn confirm_password_reset(
+    State(api): State<Arc<ApiState>>,
+    _origin: SameOrigin,
+    ApiJson(req): ApiJson<PasswordResetConfirm>,
+) -> Result<StatusCode, Problem> {
+    api.auth
+        .confirm_password_reset(&api.users, &req.token, &req.password)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[utoipa::path(

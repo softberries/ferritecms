@@ -26,7 +26,9 @@ use ferrite_cache::PageCache;
 use ferrite_core::{
     Actor, AuthService, ContentService, ContentTypeService, ExtensionAdmin, MenuService,
     NewAccount, OptionService, PermalinkRules, RedirectService, Scopes, SiteReader,
-    TaxonomyService, UserService, auth::SiteKey,
+    TaxonomyService, UserService,
+    auth::SiteKey,
+    mail::{MailQueue, MemoryMailer},
 };
 use ferrite_domain::{ArtifactHash, InstalledTheme, Role, Secret, Timestamp, User};
 use ferrite_http::{
@@ -159,6 +161,8 @@ pub struct Api {
     /// A theme row the installer writes straight to the store right after its next
     /// `theme_from_artifact` loaded (a concurrent replacement, R10).
     pub replace_after_theme_load: Arc<std::sync::Mutex<Option<InstalledTheme>>>,
+    /// Every mail the API sent (through a [`MailQueue`], as `serve` wires it).
+    pub mailer: Arc<MemoryMailer>,
 }
 
 /// A response with its body read.
@@ -256,6 +260,7 @@ impl Api {
             config: HttpConfig::new(SITE_URL, SITE_TITLE, "en"),
             migrations_ok: true,
         }));
+        let mailer = Arc::new(MemoryMailer::new());
         let api = Arc::new(
             ApiState::new(ApiParts {
                 store: store.clone(),
@@ -280,7 +285,9 @@ impl Api {
                 ),
                 installer,
                 media: media_store,
+                mailer: Some(Arc::new(MailQueue::new(mailer.clone()))),
                 site_url: SITE_URL.into(),
+                site_title: SITE_TITLE.into(),
             })
             .expect("api state"),
         );
@@ -295,6 +302,7 @@ impl Api {
             compiles,
             reloader,
             replace_after_theme_load,
+            mailer,
         }
     }
 
@@ -309,6 +317,7 @@ impl Api {
             compiles: _,
             reloader,
             replace_after_theme_load: _,
+            mailer: _,
         } = self;
         drop((router, reloader, app, api, store, backing));
         db.teardown().await;
@@ -336,26 +345,45 @@ impl Api {
     /// The whole site again, with the same store and services but another `site.url`
     /// for the API (origin and the cookie's `Secure` follow it).
     pub fn router_for_site(&self, site_url: &str) -> Router {
-        let a = &self.api;
-        let api = Arc::new(
-            ApiState::new(ApiParts {
-                store: a.store.clone(),
-                auth: a.auth.clone(),
-                users: a.users.clone(),
-                content: a.content.clone(),
-                types: a.types.clone(),
-                taxonomy: a.taxonomy.clone(),
-                menus: a.menus.clone(),
-                options: a.options.clone(),
-                redirects: a.redirects.clone(),
-                extensions: a.extensions.clone(),
-                installer: a.installer.clone(),
-                media: a.media.clone(),
-                site_url: site_url.into(),
-            })
-            .expect("api state"),
-        );
+        self.router_with(ApiParts {
+            site_url: site_url.into(),
+            ..self.same_parts()
+        })
+    }
+
+    /// The whole site again, with the same store and services but no `[mail]`.
+    pub fn router_without_mail(&self) -> Router {
+        self.router_with(ApiParts {
+            mailer: None,
+            ..self.same_parts()
+        })
+    }
+
+    fn router_with(&self, parts: ApiParts) -> Router {
+        let api = Arc::new(ApiState::new(parts).expect("api state"));
         with_client(build_site(self.app.clone(), api))
+    }
+
+    /// The parts of [`Api::api`].
+    fn same_parts(&self) -> ApiParts {
+        let a = &self.api;
+        ApiParts {
+            store: a.store.clone(),
+            auth: a.auth.clone(),
+            users: a.users.clone(),
+            content: a.content.clone(),
+            types: a.types.clone(),
+            taxonomy: a.taxonomy.clone(),
+            menus: a.menus.clone(),
+            options: a.options.clone(),
+            redirects: a.redirects.clone(),
+            extensions: a.extensions.clone(),
+            installer: a.installer.clone(),
+            media: a.media.clone(),
+            mailer: a.mailer.clone(),
+            site_url: a.site_url.clone(),
+            site_title: a.site_title.clone(),
+        }
     }
 
     /// The API of another node on `store` (a [`TestDb::peer`]): fresh core services and
@@ -386,7 +414,9 @@ impl Api {
                         .expect("installer"),
                 ),
                 media: self.api.media.clone(),
+                mailer: self.api.mailer.clone(),
                 site_url: SITE_URL.into(),
+                site_title: SITE_TITLE.into(),
             })
             .expect("api state"),
         );

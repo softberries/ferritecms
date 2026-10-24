@@ -29,6 +29,7 @@
 //! | 401 | `invalid-credentials` | a login or TOTP login step failed |
 //! | 403 | `csrf` | a cookie request without a valid `X-CSRF-Token`, or from another origin |
 //! | 403 | `password-reset-required` | the account must change its password first |
+//! | 503 | `mail-unavailable` | the request needs outgoing mail and the site has no `[mail]` |
 //!
 //! **Every 401 carries `WWW-Authenticate`** (RFC 9110 §11.6.1): `Bearer` unless the
 //! problem names another challenge ([`Problem::with_challenge`], e.g. `Bearer
@@ -246,6 +247,16 @@ impl Problem {
             "password-reset-required",
             "Password change required",
             "change your password first (POST /api/v1/auth/password)",
+        )
+    }
+
+    /// `503 mail-unavailable`: the site has no `[mail]` section.
+    pub fn mail_unavailable() -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "mail-unavailable",
+            "Mail unavailable",
+            "this site cannot send mail (no [mail] section); ask an administrator",
         )
     }
 
@@ -682,6 +693,13 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["current"], serde_json::json!({"version": 2}));
         assert!(body.get("errors").is_none(), "empty errors are omitted");
+
+        let res = Problem::mail_unavailable().into_response();
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(res.headers().get(header::RETRY_AFTER).is_none());
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["type"], "/api/v1/problems/mail-unavailable");
 
         let res = Problem::busy().into_response();
         assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);

@@ -79,6 +79,8 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(auth::logout))
         .routes(routes!(auth::me))
         .routes(routes!(auth::change_password))
+        .routes(routes!(auth::request_password_reset))
+        .routes(routes!(auth::confirm_password_reset))
         .routes(routes!(auth::totp_setup))
         .routes(routes!(auth::totp_confirm))
         .routes(routes!(auth::totp_disable))
