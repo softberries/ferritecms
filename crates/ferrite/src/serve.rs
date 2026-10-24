@@ -27,8 +27,9 @@
 //!    `LISTEN` wake-ups in cluster mode) with the [`Reloader`] hook (hot swap of theme,
 //!    plugins and permalinks, P18), the shared plugin-failure flusher (P20), the
 //!    `request.served` flusher (every 10 s or 1 000 events, P21), the job
-//!    runner (`cluster.workers`; built-in prune jobs, scheduled publishing and the
-//!    caller's handlers), the periodic scheduler (prune jobs hourly,
+//!    runner (`cluster.workers`; built-in prune jobs, scheduled publishing, plugin
+//!    actions, `media.variants` bounded by `media.image_workers`, and the caller's
+//!    handlers), the periodic scheduler (prune jobs hourly,
 //!    `content.publish_due` every 30 s) and the heartbeat (`nodes.meta` carries the
 //!    theme, plugin and permalink state; the reloader beats after every reload);
 //! 10. serve the public site and the API under `/api/v1` (`build_site`; the API's
@@ -74,14 +75,14 @@ use ferrite_http::{
     extensions::Installer,
     load_route_table,
     mail::SmtpMailer,
-    media::Uploader,
+    media::{Uploader, variant_specs},
 };
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::{HostConfig, PluginHost};
 use ferrite_store::{Backend, Store};
 use tokio::{
     net::TcpListener,
-    sync::oneshot,
+    sync::{Semaphore, oneshot},
     task::{JoinError, JoinHandle},
     time::Instant,
 };
@@ -90,7 +91,8 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     binary_version,
     cli::DataArg,
-    jobs, keys, load_config,
+    jobs::{self, ImageProcessor, MediaVariantsHandler},
+    keys, load_config,
     node::{NodeStatus, node_mode},
     open::{OpenMode, open_store, startup_check},
     reload::{ReloadContext, Reloader},
@@ -149,6 +151,10 @@ pub struct NodeOptions {
     /// Test seam: [`start`] pauses right after the invalidation cursor is set.
     #[doc(hidden)]
     pub boot_barrier: Option<BootBarrier>,
+    /// Test seam: what the `media.variants` handler decodes with (default
+    /// `ferrite_media::process_image`).
+    #[doc(hidden)]
+    pub image_processor: Option<ImageProcessor>,
 }
 
 /// The node side of a boot pause (test seam; see [`NodeOptions::boot_barrier`]).
@@ -447,7 +453,7 @@ async fn boot(
             extensions: Arc::new(ExtensionAdmin::new(store.clone(), site_key)),
             installer,
             media: media.clone(),
-            media_service,
+            media_service: media_service.clone(),
             uploader,
             max_upload,
             mailer: mail.clone(),
@@ -473,6 +479,20 @@ async fn boot(
         host.clone(),
         action_slots,
     ));
+    // At most `media.image_workers` images decode at once on this node (M1b R4, P8),
+    // with the sizes of the theme active when the job runs.
+    let theme_state = state.clone();
+    let mut variants = MediaVariantsHandler::new(
+        store.clone(),
+        media.clone(),
+        media_service.clone(),
+        Arc::new(Semaphore::new(config.uploads.image_workers)),
+        Arc::new(move || variant_specs(&theme_state.theme.load())),
+    );
+    if let Some(processor) = opts.image_processor {
+        variants = variants.with_processor(processor);
+    }
+    handlers.push(Arc::new(variants));
     handlers.extend(opts.extra_handlers);
     let mut runner_config = RunnerConfig::new(registry.id(), config.cluster.workers);
     let o = &opts.runner;

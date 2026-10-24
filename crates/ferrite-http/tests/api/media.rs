@@ -244,6 +244,14 @@ async fn upload_svg_is_sanitised(api: Api) -> Api {
         assert!(!stored.body.contains("onclick"), "{}", stored.body);
         assert!(stored.body.contains("<rect"), "{}", stored.body);
         assert_eq!(body["bytes"], stored.body.len(), "{name}");
+        // Uploaded and marked: inline under the SVG policy (Task 6, P7).
+        assert_eq!(stored.header("content-type"), Some("image/svg+xml"));
+        assert_eq!(stored.header("content-disposition"), Some("inline"));
+        assert_eq!(
+            stored.header("content-security-policy"),
+            Some("sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'")
+        );
+        assert_eq!(stored.header("x-content-type-options"), Some("nosniff"));
     }
     // SVGs get no variants job.
     assert_eq!(job_count(&api).await, 0);

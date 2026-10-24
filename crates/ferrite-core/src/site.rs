@@ -809,6 +809,7 @@ impl SiteReader {
                 variant: None,
                 mime: row.mime,
                 name: row.original_name,
+                sanitized: row.sanitized,
             }));
         }
         let variant = row.variants.as_object().and_then(|vs| {
@@ -824,6 +825,7 @@ impl SiteReader {
             variant: Some(name),
             mime: mime.unwrap_or_else(|| row.mime.clone()),
             name: row.original_name.clone(),
+            sanitized: false,
         }))
     }
 

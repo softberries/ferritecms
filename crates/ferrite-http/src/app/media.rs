@@ -12,10 +12,17 @@
 //!   in-memory LRU of 03 §5 is deferred.
 //! * **Headers:** `ETag: "<hash>"` (strong: the bytes never change), `If-None-Match` →
 //!   `304`, `Cache-Control: public, max-age=31536000, immutable`, `Accept-Ranges: bytes`,
-//!   `X-Content-Type-Options: nosniff`. Types that are [`inline_safe`] are served inline
-//!   with their type, PDF additionally with `Content-Security-Policy: sandbox`;
-//!   everything else (SVG included: M1b stores no sanitised marker) as
-//!   `application/octet-stream` with `Content-Disposition: attachment`. Not compressed.
+//!   `X-Content-Type-Options: nosniff` on every response. Types that are [`inline_safe`]
+//!   are served inline with their type, PDF additionally with
+//!   `Content-Security-Policy: sandbox` (F14). An SVG whose row is marked sanitised
+//!   (`media.sanitized`, only ever set for the sanitiser's output, M2a-2b P7) is served
+//!   inline as `image/svg+xml` under `SVG_CSP` (`sandbox; default-src 'none';
+//!   img-src data:; style-src 'unsafe-inline'`): no script, no loads, an opaque origin
+//!   even if a sanitiser gap let something through. Everything else (an unmarked SVG,
+//!   the documents of R1, any other type) is `application/octet-stream` with
+//!   `Content-Disposition: attachment`. Not compressed. These headers exist only for
+//!   app-served media: in Direct mode (`[media.s3] public_base_url`) the bucket or CDN
+//!   answers and sends none of them (03 §5, F15).
 //! * **Ranges:** one range only. `bytes=a-b`, `bytes=a-` and the suffix `bytes=-n` give
 //!   `206` with `Content-Range`; a start at or past the end, or `bytes=-0`, is `416`
 //!   with `Content-Range: bytes */<size>`. A request for **several ranges is answered
@@ -31,7 +38,7 @@ use axum::{
 };
 use ferrite_core::{MediaFile, permalink::encode_segment};
 use ferrite_domain::ArtifactHash;
-use ferrite_media::{MediaError, inline_safe, sanitize_filename};
+use ferrite_media::{MediaError, inline_safe, sanitize_filename, svg::SVG_MIME};
 use futures::TryStreamExt;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 
@@ -40,6 +47,8 @@ use super::{AppState, response::NoCompress};
 /// `Cache-Control` of every media file.
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 const PDF: &str = "application/pdf";
+/// `Content-Security-Policy` of an inline sanitised SVG (M2a-2b P7).
+const SVG_CSP: &str = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'";
 
 /// What a `Range` header asks for, against a file of `size` bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -274,7 +283,11 @@ fn file_headers(res: &mut Response<Body>, etag: &str) {
 }
 
 fn content_headers(res: &mut Response<Body>, file: &MediaFile) {
-    if inline_safe(&file.mime) {
+    if file.mime == SVG_MIME && file.sanitized {
+        set(res, header::CONTENT_TYPE, SVG_MIME);
+        set(res, header::CONTENT_DISPOSITION, "inline");
+        set(res, header::CONTENT_SECURITY_POLICY, SVG_CSP);
+    } else if inline_safe(&file.mime) {
         set(res, header::CONTENT_TYPE, &file.mime);
         set(res, header::CONTENT_DISPOSITION, "inline");
         if file.mime == PDF {

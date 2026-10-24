@@ -176,6 +176,9 @@ pub struct MediaFile {
     /// The item's `original_name`: the file name in every URL of the item, variants
     /// included.
     pub name: String,
+    /// The original is the SVG sanitiser's output (`media.sanitized`); always `false`
+    /// for a variant (variants are raster images).
+    pub sanitized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

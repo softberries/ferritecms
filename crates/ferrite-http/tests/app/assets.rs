@@ -60,7 +60,35 @@ pub async fn upload(
     future: bool,
     variants: &[(&str, &[u8])],
 ) -> Uploaded {
-    let (hash, mime) = artifact(app, data, ArtifactKind::Media).await;
+    upload_row(app, data, name, status, future, variants, None).await
+}
+
+/// A published media item whose row records `mime` and the sanitiser marker as given
+/// (written through the store, whatever the bytes sniff as).
+async fn upload_as(app: &App, data: &[u8], name: &str, mime: &str, sanitized: bool) -> Uploaded {
+    upload_row(
+        app,
+        data,
+        name,
+        ContentStatus::Published,
+        false,
+        &[],
+        Some((mime, sanitized)),
+    )
+    .await
+}
+
+async fn upload_row(
+    app: &App,
+    data: &[u8],
+    name: &str,
+    status: ContentStatus,
+    future: bool,
+    variants: &[(&str, &[u8])],
+    typed: Option<(&str, bool)>,
+) -> Uploaded {
+    let (hash, sniffed) = artifact(app, data, ArtifactKind::Media).await;
+    let (mime, sanitized) = typed.map_or((sniffed, false), |(m, s)| (m.to_owned(), s));
     let mut vjson = Map::new();
     let mut vhashes = Vec::new();
     for (vname, vdata) in variants {
@@ -105,7 +133,7 @@ pub async fn upload(
             alt: String::new(),
             original_name: name.into(),
             variants: vjson.into(),
-            sanitized: false,
+            sanitized,
         })
         .await
         .unwrap();
@@ -384,6 +412,127 @@ async fn media_dispositions(app: App) -> App {
     app
 }
 
+/// The exact policy of an inline SVG (Review Focus 1, P7).
+const SVG_CSP: &str = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'";
+
+/// Review Focus 1: a row marked sanitised is served inline as `image/svg+xml` under
+/// the exact `sandbox` policy, never sniffed. HEAD and a range carry the same headers.
+async fn sanitised_svg_is_inline_with_sandbox(app: App) -> App {
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/></svg>"#;
+    let up = upload_as(&app, svg, "logo.svg", "image/svg+xml", true).await;
+    let url = format!("/_media/{}/logo.svg", up.hash);
+    let r = app.get(&url).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert_eq!(r.header("content-type"), Some("image/svg+xml"));
+    assert_eq!(r.header("content-disposition"), Some("inline"));
+    assert_eq!(r.header("content-security-policy"), Some(SVG_CSP));
+    assert_eq!(r.header("x-content-type-options"), Some("nosniff"));
+    assert_eq!(r.raw.as_slice(), svg.as_slice());
+    let head = app.send(request(Method::HEAD, &url)).await;
+    assert_eq!(head.header("content-security-policy"), Some(SVG_CSP));
+    assert_eq!(head.header("content-type"), Some("image/svg+xml"));
+    let part = app
+        .send(get_with(&url, &[(header::RANGE, "bytes=0-3")]))
+        .await;
+    assert_eq!(part.status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(part.header("content-security-policy"), Some(SVG_CSP));
+    assert_eq!(part.header("content-disposition"), Some("inline"));
+    app
+}
+
+/// Review Focus 1: an SVG row without the marker (written through the store, as an
+/// older binary or a hand edit would) is a download, whatever its recorded type.
+async fn unmarked_svg_stays_an_attachment(app: App) -> App {
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#;
+    let up = upload_as(&app, svg, "raw.svg", "image/svg+xml", false).await;
+    let r = app.get(&format!("/_media/{}/raw.svg", up.hash)).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert_eq!(r.header("content-type"), Some("application/octet-stream"));
+    assert_eq!(
+        r.header("content-disposition"),
+        Some("attachment; filename=\"raw.svg\"; filename*=UTF-8''raw%2Esvg")
+    );
+    assert_eq!(r.header("x-content-type-options"), Some("nosniff"));
+    assert_eq!(r.header("content-security-policy"), None);
+    // The marker on another type does not make it inline either.
+    let html = b"<!doctype html><script>alert(1)</script>";
+    let up = upload_as(&app, html, "page.html", "text/html", true).await;
+    let r = app.get(&format!("/_media/{}/page.html", up.hash)).await;
+    assert_eq!(r.header("content-type"), Some("application/octet-stream"));
+    assert!(
+        r.header("content-disposition")
+            .unwrap()
+            .starts_with("attachment;")
+    );
+    app
+}
+
+/// Every media class's headers (R1, F14, P7): inline-safe images, audio and video
+/// inline with their type and `nosniff`, no policy; PDF inline under `sandbox`;
+/// sanitised SVG under its policy; documents, unmarked SVG and anything else as
+/// `application/octet-stream` attachments. Every response carries `nosniff`.
+async fn every_media_class_has_its_headers(app: App) -> App {
+    let inline = [
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+        "audio/mpeg",
+        "audio/ogg",
+        "audio/wav",
+        "audio/x-wav",
+        "video/mp4",
+        "video/webm",
+    ];
+    let attachments = [
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.oasis.opendocument.text",
+        "application/vnd.oasis.opendocument.spreadsheet",
+        "application/vnd.oasis.opendocument.presentation",
+        "application/zip",
+        "text/plain",
+        "text/csv",
+        "text/html",
+        "application/octet-stream",
+    ];
+    let mut cases: Vec<(&str, bool, Option<&str>, &str)> = Vec::new();
+    for mime in inline {
+        cases.push((mime, false, None, mime));
+    }
+    cases.push(("application/pdf", false, Some("sandbox"), "application/pdf"));
+    cases.push(("image/svg+xml", true, Some(SVG_CSP), "image/svg+xml"));
+    for mime in attachments {
+        cases.push((mime, false, None, "application/octet-stream"));
+    }
+    cases.push(("image/svg+xml", false, None, "application/octet-stream"));
+    for (i, (mime, sanitized, csp, served)) in cases.into_iter().enumerate() {
+        // Distinct bytes per case: one artifact per row.
+        let data = format!("case {i} {mime}");
+        let up = upload_as(&app, data.as_bytes(), "f.bin", mime, sanitized).await;
+        let r = app.get(&format!("/_media/{}/f.bin", up.hash)).await;
+        assert_eq!(r.status, StatusCode::OK, "{mime}: {r:?}");
+        assert_eq!(r.header("content-type"), Some(served), "{mime}");
+        assert_eq!(
+            r.header("x-content-type-options"),
+            Some("nosniff"),
+            "{mime}"
+        );
+        assert_eq!(r.header("content-security-policy"), csp, "{mime}");
+        let disposition = r.header("content-disposition").unwrap();
+        if served == "application/octet-stream" {
+            assert!(
+                disposition.starts_with("attachment;"),
+                "{mime}: {disposition}"
+            );
+        } else {
+            assert_eq!(disposition, "inline", "{mime}");
+        }
+    }
+    app
+}
+
 async fn theme_assets(app: App) -> App {
     let hash = app.state.theme.load().hash().to_owned();
     let url = format!("/_theme/{hash}/css/site.css");
@@ -502,5 +651,8 @@ app_tests!(
     media_ranges_and_headers,
     media_rule_published_only,
     media_dispositions,
+    sanitised_svg_is_inline_with_sandbox,
+    unmarked_svg_stays_an_attachment,
+    every_media_class_has_its_headers,
     theme_assets,
 );

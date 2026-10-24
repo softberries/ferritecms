@@ -38,9 +38,11 @@ use axum::extract::multipart::{Field, MultipartError};
 use bytes::{Bytes, BytesMut};
 use ferrite_domain::{Artifact, ArtifactKind, Timestamp};
 use ferrite_media::{
-    ArtifactRef, MediaError, MediaStore, inline_safe, is_raster_image, sniff_mime,
+    ArtifactRef, MediaError, MediaStore, VariantSpec, default_variants, inline_safe,
+    is_raster_image, sniff_mime,
     svg::{MAX_SVG_BYTES, SVG_MIME, SvgError, looks_like_svg, sanitize_svg},
 };
+use ferrite_theme::Theme;
 use futures::StreamExt as _;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -397,9 +399,52 @@ fn is_plain_text(head: &[u8], cut: bool) -> bool {
     !text.trim_start().starts_with('<')
 }
 
+/// The sizes a `media.variants` job makes on this node (M2a-2b P8): the core sizes
+/// ([`default_variants`]: `thumbnail`, `medium`, `large`) plus the `[images]` of
+/// `theme`, in name order. A theme size whose name is already taken, with a height but
+/// no crop (a bounding box, which the processor does not implement) or with a zero
+/// dimension is skipped, so a theme cannot make every job fail.
+pub fn variant_specs(theme: &Theme) -> Vec<VariantSpec> {
+    let mut specs = default_variants();
+    for (name, size) in &theme.manifest().images {
+        let unusable = (size.height.is_some() && !size.crop)
+            || size.width == 0
+            || size.height == Some(0)
+            || specs.iter().any(|s| &s.name == name);
+        if unusable {
+            tracing::debug!(theme = %theme.name(), size = %name, "theme image size skipped");
+            continue;
+        }
+        specs.push(VariantSpec {
+            name: name.clone(),
+            width: size.width,
+            height: size.height,
+            crop: size.crop,
+        });
+    }
+    specs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn variant_specs_add_the_theme_sizes() {
+        let blog = Theme::load_embedded("blog").expect("embedded blog theme");
+        let names: Vec<String> = variant_specs(&blog).into_iter().map(|s| s.name).collect();
+        assert_eq!(names, ["thumbnail", "medium", "large", "card", "hero"]);
+        let specs = variant_specs(&blog);
+        assert_eq!(
+            specs[3],
+            VariantSpec {
+                name: "card".into(),
+                width: 640,
+                height: Some(360),
+                crop: true,
+            }
+        );
+    }
 
     #[test]
     fn classes_follow_content_then_extension() {

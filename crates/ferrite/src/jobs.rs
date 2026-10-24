@@ -1,7 +1,10 @@
 //! Core job handlers run by every node (ruling P12): scheduled publishing, the plugin
-//! data purge (M2a-2 P9) and plugin actions (P20). The kinds and payloads are fixed in
+//! data purge (M2a-2 P9), plugin actions (P20) and media variants (M2a-2b P8,
+//! [`MediaVariantsHandler`]). The kinds and payloads are fixed in
 //! [`ferrite_core::jobs`]; the per-node 30 s ticker of M1c-2 is the periodic
 //! [`PUBLISH_DUE_KIND`] job now, so one node runs it per period.
+
+mod media;
 
 use std::{sync::Arc, time::Duration};
 
@@ -20,6 +23,8 @@ use ferrite_plugin_host::{ActionEvent, PluginError, PluginHost};
 use ferrite_store::Store;
 use serde_json::json;
 use tokio::sync::Semaphore;
+
+pub use media::{ImageProcessor, MediaVariantsHandler, VariantSpecs};
 
 /// Period of the [`PUBLISH_DUE_KIND`] safety net.
 pub const PUBLISH_DUE_EVERY: Duration = Duration::from_secs(30);

@@ -23,10 +23,11 @@
 //! slugs). It does not resume or clean up the partial batch: delete it by hand, or
 //! start from a fresh data folder, if it matters.
 //!
-//! There is no media service yet (M2), so the image's `media` row and its `artifacts`
-//! rows are written here, in one transaction that also emits `post:<media id>`
-//! (ruling R11); the media item itself is created and published through
-//! [`ContentService`].
+//! The image's variants are made here, in-process, with the sizes a `media.variants`
+//! job would use (`variant_specs`), not by a job: the seed runs without a node. Its
+//! `media` row and `artifacts` rows are written here, in one transaction that also
+//! emits `post:<media id>` (ruling R11); the media item itself is created and
+//! published through [`ContentService`].
 
 mod demo;
 
@@ -42,7 +43,8 @@ use ferrite_domain::{
     Artifact, ArtifactKind, ContentId, ContentItem, ContentQuery, Media, Menu, MenuItem,
     MenuItemId, MenuItemKind, NewUser, Role, Term, TermId, Timestamp, User, UserId, UserStatus,
 };
-use ferrite_media::{MediaStore, VariantSpec, default_variants, process_image};
+use ferrite_http::media::variant_specs;
+use ferrite_media::{MediaStore, VariantSpec, process_image};
 use ferrite_store::Store;
 use serde_json::{Value, json};
 
@@ -86,19 +88,8 @@ pub async fn run(cmd: SeedCommand) -> anyhow::Result<()> {
         )
         .await?
         .theme;
-        let mut specs = default_variants();
-        for (name, size) in &theme.manifest().images {
-            // A height without crop is a bounding box, which the processor rejects.
-            if (size.height.is_some() && !size.crop) || specs.iter().any(|s| &s.name == name) {
-                continue;
-            }
-            specs.push(VariantSpec {
-                name: name.clone(),
-                width: size.width,
-                height: size.height,
-                crop: size.crop,
-            });
-        }
+        // The sizes a `media.variants` job would make on a node with this theme.
+        let specs = variant_specs(&theme);
         seed_demo(store.clone(), &media, &specs, args.force).await
     }
     .await;

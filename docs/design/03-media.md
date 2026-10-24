@@ -238,10 +238,14 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
 - **Defaults** (`default_variants()`): `thumbnail` 150x150 crop, `medium` 768 wide, `large` 1600 wide.
 - **Memory**: peak is roughly 3 x w x h x 4 bytes (decoded buffer, oriented/converted copy,
   resized output); at the 100 MP cap that is on the order of 1.2 GB for one image. The function
-  does not limit concurrency. The caller must, and the `media.variants` job runner will do so with a
-  semaphore (M1b decision; not built yet, see below). The 100 MP cap is kept as designed.
+  does not limit concurrency. The caller must: the `media.variants` handler does so with a
+  per-node semaphore of `media.image_workers` slots (M1b R4, see below). The 100 MP cap is kept
+  as designed.
+- **Decode time** is not bounded: the `image` crate has no time limit. The dimension, pixel and
+  allocation limits bound the work per image, and the handler's slots bound how many run at
+  once.
 
-### Variants as built, and what is still to build
+### Variants as built
 
 - `media.variants` maps name -> `{hash, w, h, mime}`; each variant is an artifact (kind
   `variant`) stored with `put_artifact`. Since migration `0003_media_variants` the store also
@@ -262,18 +266,39 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
   job. The client's file name keeps only its last `/` or `\` segment (1–255 bytes, no control
   characters) and is stored as text, never used as a path; a failed or refused upload leaves
   no row, event or job, and its blob for M4's GC (M1b R2).
-- **Recording variants.** The `media.variants` handler (M2a-2b Task 6) processes the original
-  outside any transaction, stores each variant with `put_artifact` (kind `variant`) and calls
-  `record_variants(item, artifact, width, height, variants, artifacts)`: in one transaction, and
-  only while the `media` row still holds that original (else `false`, nothing written), the
-  variant `artifacts` rows, the row's dimensions and `variants`, and `post:<item>`. The row is
-  read with `MediaRepo::get_for_update` (Postgres `FOR UPDATE`), as is the alt-text edit, so the
-  two read-modify-writes of the unversioned row cannot lose each other's change.
-- `ferrite seed demo` still runs `process_image` in-process with the core sizes plus the active
-  theme's `[images]` and writes the `media` and `artifacts` rows in one transaction that also
-  emits `post:<media id>` (`crates/ferrite/src/seed.rs`).
-- **Still to build (M2a-2b Task 6):** the `media.variants` handler with the image-processing
-  concurrency semaphore (M1b ruling R4, `media.image_workers`).
+- **The `media.variants` handler** (`crates/ferrite/src/jobs/media.rs`, M2a-2b P8, F17), on
+  every node's job runner:
+  1. A payload that does not parse or names an invalid hash is `Permanent` (dead at once).
+  2. The `media` row is read; when it is gone or holds another original than the job's, the job
+     is done without decoding.
+  3. An original over 64 MiB (`MAX_PROCESS_BYTES`, by `head`) gets no variants: done, logged.
+     Templates fall back to the original.
+  4. One of the node's `media.image_workers` slots (default 1, 1–16) is taken **without
+     waiting**. With none free the job is `Busy`: put back with the attempt refunded and due
+     again after 1–5 s, so image jobs never hold every runner worker.
+  5. The original is read (`get`, at most 64 MiB) and decoded with `process_image` on the
+     blocking pool. The slot's permit moves into the blocking closure: the runner may drop the
+     handler at any await (lease loss, timeout, shutdown), but a blocking task cannot be
+     stopped. The slot therefore stays taken until the decode ends, and never more than
+     `image_workers` images decode at once on a node.
+  6. The sizes are `ferrite_http::media::variant_specs(theme)`: the core sizes plus the
+     `[images]` of the theme active on that node when the job runs. A theme size whose name is
+     taken, that has a height without crop, or that has a zero dimension is skipped. Each variant
+     is stored with `put_artifact` (kind `variant`), then `record_variants(item, artifact, width,
+     height, variants, artifacts)` runs. In one transaction, and only while the `media` row still
+     holds that original (else `false`, nothing written), it writes the variant `artifacts` rows,
+     the row's dimensions and `variants`, and `post:<item>`. The row is read with
+     `MediaRepo::get_for_update` (Postgres `FOR UPDATE`), as the alt-text edit reads it, so the
+     two read-modify-writes of the unversioned row cannot lose each other's change.
+
+  An image that is over the limits, does not decode or makes the decoder panic (the blocking
+  task's panic is caught as a `JoinError`) is `Permanent`. Its job goes `dead` at the first
+  attempt with the reason in `last_error`, the worker carries on, and the original stays
+  served. Store and media-backend errors are `Retry`. Variants are re-encoded, so EXIF (GPS
+  included) and XMP never reach them. Regenerating variants after a theme change is M4 (P8).
+- `ferrite seed demo` still runs `process_image` in-process, with the same
+  `variant_specs(theme)`. It writes the `media` and `artifacts` rows in one transaction that
+  also emits `post:<media id>` (`crates/ferrite/src/seed.rs`).
 
 ## 5. Serving
 
@@ -295,10 +320,15 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
 - **Headers:** `ETag: "<hash>"` (strong: the bytes never change), `If-None-Match` → `304`,
   `Cache-Control: public, max-age=31536000, immutable`, `Accept-Ranges: bytes`,
   `X-Content-Type-Options: nosniff`, `Content-Length`.
-- **Types:** `inline_safe(mime)` types are served inline with their type (`Content-Disposition:
-  inline`); `application/pdf` additionally gets `Content-Security-Policy: sandbox`. Everything
-  else, **SVG included**, is `application/octet-stream` with `Content-Disposition: attachment;
-  filename="<ASCII fallback>"; filename*=UTF-8''<encoded>`.
+- **Types:** `inline_safe(mime)` types (JPEG, PNG, GIF, WebP, MP3/Ogg/WAV, MP4/WebM, PDF) are
+  served inline with their type (`Content-Disposition: inline`). `application/pdf` also gets
+  `Content-Security-Policy: sandbox` (F14). An SVG whose row is marked `media.sanitized` is
+  served inline as `image/svg+xml` with `Content-Security-Policy: sandbox; default-src 'none';
+  img-src data:; style-src 'unsafe-inline'` (P7, below). Everything else is
+  `application/octet-stream` with `Content-Disposition: attachment; filename="<ASCII
+  fallback>"; filename*=UTF-8''<encoded>`. That covers an unmarked SVG, the R1 documents
+  (docx, xlsx, pptx, odt, ods, odp, zip, txt, csv) and any other type. Every response carries
+  `nosniff`.
 - **Ranges:** one range only. `bytes=a-b`, `bytes=a-` and the suffix `bytes=-n` give `206`
   with `Content-Range`; a start at or past the end, or `bytes=-0`, is `416` with
   `Content-Range: bytes */<size>`. Several ranges, a malformed or non-`bytes` range, an
@@ -336,8 +366,8 @@ Use app-served mode when unpublishing must revoke access. Signed or scoped direc
 reader (`sanitize_svg`, M2a-2b P7; no maintained sanitiser crate exists). Only rows marked
 `media.sanitized` with `mime = image/svg+xml` may be served inline, and then with
 `Content-Security-Policy: sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'`
-and `nosniff`; every other SVG stays an attachment (the inline rule lands in `/_media` with the
-M2a-2b serving change). The sanitiser:
+and `nosniff`. Every other SVG stays an attachment: an unmarked row (an older binary, a hand
+edit) is never trusted. The sanitiser:
 
 - **Refuses** (`SvgError`): input over 2 MiB (`TooLarge`); anything that is not UTF-8, including
   UTF-16 with or without a BOM and an XML declaration naming another encoding (`NotUtf8`; a
