@@ -42,6 +42,7 @@ pub mod problem;
 pub mod redirects;
 pub mod settings;
 mod state;
+pub mod system;
 pub mod taxonomies;
 pub mod themes;
 pub mod types;
@@ -68,6 +69,7 @@ pub use extract::{
 pub use problem::{FieldError, Problem};
 pub(crate) use state::origin_of;
 pub use state::{ApiParts, ApiState, InvalidSiteUrl};
+pub use system::NodeInfo;
 
 use self::{meta::SpecJson, openapi::ApiDoc};
 
@@ -193,6 +195,9 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
             themes::get_theme_settings,
             themes::update_theme_settings
         ))
+        .routes(routes!(system::system_status))
+        .routes(routes!(system::list_nodes))
+        .routes(routes!(system::list_audit))
 }
 
 /// `routes` with the body limit `max` instead of [`MAX_JSON_BODY`] (larger for uploads,

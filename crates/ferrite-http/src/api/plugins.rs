@@ -418,11 +418,16 @@ pub(super) async fn live_nodes(api: &ApiState) -> Result<Vec<Node>, Problem> {
 }
 
 fn live(mut nodes: Vec<Node>, now_micros: i64) -> Vec<Node> {
-    let stale = i64::try_from(NODE_STALE_AFTER.as_micros()).unwrap_or(i64::MAX);
-    let cutoff = now_micros.saturating_sub(stale);
-    nodes.retain(|n| n.heartbeat_at.as_micros() >= cutoff);
+    nodes.retain(|n| is_live(n, now_micros));
     nodes.sort_by_key(|n| n.id.as_uuid());
     nodes
+}
+
+/// Whether `node`'s heartbeat is within [`NODE_STALE_AFTER`] of `now_micros` (the
+/// database clock).
+pub(super) fn is_live(node: &Node, now_micros: i64) -> bool {
+    let stale = i64::try_from(NODE_STALE_AFTER.as_micros()).unwrap_or(i64::MAX);
+    node.heartbeat_at.as_micros() >= now_micros.saturating_sub(stale)
 }
 
 #[cfg(test)]

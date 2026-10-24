@@ -59,6 +59,14 @@ pub(crate) fn media_config(config: &Config) -> MediaConfig {
     }
 }
 
+/// The configured media backend's name, as `GET /system/status` reports it.
+pub(crate) fn media_backend_name(config: &Config) -> &'static str {
+    match &config.media {
+        MediaSection::Local { .. } => "local",
+        MediaSection::S3 { .. } => "s3",
+    }
+}
+
 /// Opens the configured media store (no probe; see [`MediaStore::check`]).
 pub(crate) fn open_media(config: &Config) -> anyhow::Result<MediaStore> {
     MediaStore::open(media_config(config)).context("cannot open the media store")

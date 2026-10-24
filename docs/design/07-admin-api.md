@@ -127,7 +127,7 @@ importer. The admin SPA that uses them is M2b.
 | Themes | `GET /themes`, `POST /themes` (raw ustar bundle, `?activate=true`), `POST /themes/{name}/activate`, `GET/PATCH /themes/{name}/settings` (no delete, M2a-2 P30) | M2a-2a | reads `manage_themes` + `extensions:read` (`require_reader`); writes `manage_themes` + `extensions:write` |
 | Plugins | `GET /plugins`, `GET /plugins/{name}`, `POST /plugins/inspect` (multipart upload → permission report, nothing installed), `POST /plugins` (install with `approve` = the report's fingerprint), `POST /plugins/{name}/enable`, `POST /plugins/{name}/disable`, `DELETE /plugins/{name}` (`?purge=true`), `GET/PATCH /plugins/{name}/settings` | M2a-2a | reads `manage_plugins` + `extensions:read` (`require_reader`, so editors see no plugin list); writes `manage_plugins` + `extensions:write` |
 | Plugin metrics | `GET /plugins/{name}/metrics` | M2a-2b | — |
-| System | `GET /system/status` (versions, schema, nodes, backends, the theme fallback flag), `GET /system/jobs`, `POST /system/jobs/{id}/retry`, `GET /system/metrics/summary` (for dashboard charts), `GET /system/audit` | M2a-2b | — |
+| System | `GET /system/status` (versions, mode, backends, schema, the active theme and the nodes serving a fallback, job counts, node counts), `GET /system/nodes`, `GET /system/audit?limit&cursor`; `GET /system/jobs`, `POST /system/jobs/{id}/retry`, `GET /system/metrics/summary` (for dashboard charts) next (see **System** below) | M2a-2b (status, nodes, audit built) | `manage_system` (admins) + `system:read`; retry `system:write` |
 | Import | `POST /import/wordpress` (upload WXR + optional uploads zip → job), `GET /import/{job}` | M3 | — |
 
 **Versions and `If-Match` (P11).** Only content has a `version`: `PATCH`, `DELETE`, the
@@ -225,8 +225,9 @@ appends an audit row (`plugin.install|enable|disable|delete|settings`,
   `updated_at`, `report` (the row's report against its own grant, so `added` is empty for
   a row installed with approval; `null` if the stored manifest or grant no longer parses)
   and `nodes` (each node with a heartbeat in the last 30 s: `node`, `name`, `version`,
-  `status` = `loaded|failed|disabled`, `error`: the node's diagnostic, verbatim up to 1 KiB,
-  which can name storage paths or endpoints; admins only).
+  `status` = `loaded|failed|disabled`, `error`: the node's diagnostic, scrubbed of paths,
+  endpoints, addresses and credentials and cut to 1 KiB (see **System** below); admins
+  only).
 - **Theme uploads** are the raw deterministic ustar bundle (`Content-Type:
   application/x-tar`, else `415`; at most `ferrite_theme::MAX_BUNDLE_BYTES`, else `413`),
   unpacked in memory and compiled before anything is stored; a theme that does not load is
@@ -239,12 +240,45 @@ appends an audit row (`plugin.install|enable|disable|delete|settings`,
   row, else the embedded `blog`) carries `nodes`: per live node `node`, `node_name`,
   `node_version`, the served `name` and `hash`, `origin`, `error` and `fallback` (`true`
   when the node does not serve the active row's artifact: a startup fallback or a failed
-  hot swap; 06 §1).
+  hot swap; 06 §1); `error` is scrubbed like a plugin's.
 - **Settings**: `GET/PATCH /themes/{name}/settings` and `/plugins/{name}/settings` answer
   `{ schema, values }` (plugins also `secrets` and `invalid`, 05 §4c); `PATCH` takes an
   object of keys (`null` resets or deletes one), checks every entry first (an undeclared
   key or a bad value is `422 validation` with `errors[0].field` naming the key) and writes them in one
   `Tx` with `options.changed`. Secrets are write-only.
+
+**System (M2a-2b P15, P18; Review Focus 5).** `SystemService` (`ferrite_core`) checks
+`manage_system` (a new admin-only capability, scope `system:write`) and `system:read`
+before it reads anything, so an editor or a token without the scope learns nothing (not
+the version, the mode or the migration state); the unauthenticated liveness probe stays
+`GET /healthz`, which reports none of it.
+- `GET /system/status` answers `version`, `site_url`, `mode` (`solo`/`cluster`),
+  `database` (`sqlite`/`postgres`), `media` (`local`/`s3`), `schema` (`db_version`,
+  `binary_version`, `pending` migration versions, `verdict` =
+  `up_to_date|needs_up|newer_schema_ok|incompatible`, 02 §8), `theme` (`active`: the active
+  row's name or `null`; `fallback_nodes`: names of live nodes with
+  `nodes.meta.theme.fallback`), `jobs` (counts per status), `nodes` (`live`, `stale`: by
+  heartbeat within 30 s of the database clock) and `node` (`id`, `started_at` of the node
+  that answered).
+- `GET /system/nodes` lists every registered node, live and stale (`live` flag), by id,
+  with its `meta`; unpaged (`next_cursor` always `null`, at most 1 000 rows).
+- `GET /system/audit` lists audit rows newest first with cursor paging (`limit` 1..=200,
+  default 50; a cursor of another list is `400`), each with `actor` = `{ id, login }`
+  (`null` for the operator path, unauthenticated flows and deleted users). `details` never
+  hold secrets or setting values (P22: setting writes list keys only; plugin installs list
+  the grant, never settings).
+- **Node diagnostics are scrubbed** (`ferrite_core::diagnostics::scrub`): every error text a
+  node puts in `nodes.meta` (`theme.error`, `plugins.<name>.error`, `plugins_error`,
+  `permalinks_error`) is scrubbed where it is written (`NodeStatus`) and again where it is
+  read (`GET /plugins`, `GET /themes`, `GET /system/nodes`), so a row written by an older
+  node in a rolling deploy leaks nothing either. Per whitespace-separated token: a URL
+  (`<scheme>://…`) or `user:password@host` becomes `<url>`; an absolute path (`/a/b…`,
+  `./`, `../`, `~/`, `X:\…`, `\\server\…`), also after a prefix such as `path=`, becomes
+  `<path>`; an IPv4 address (optionally `:port`) or IPv6 address (bracketed or not) becomes
+  `<addr>`; the value of a credential key (`password=`, `secret_access_key:`,
+  `X-Amz-Signature=`, `<AWSAccessKeyId>…`) becomes `<secret>`; the result is cut to 1 KiB
+  on a character boundary. Manifest and template problems stay readable. The full text is
+  in the node's log only.
 
 **Token scopes (P6).** A scope is `<area>:<read|write>` for the areas `content`, `media`,
 `terms`, `menus`, `comments`, `users`, `settings`, `redirects`, `extensions`, `import`,
@@ -269,7 +303,7 @@ services (not in HTTP handlers), so CLI and API enforce the same rules.
 | edit/publish others' content | ✓ | ✓ | — | — |
 | upload media | ✓ | ✓ | ✓ | — |
 | manage terms, menus, comments | ✓ | ✓ | — | — |
-| manage users, settings, themes, plugins, import, redirects | ✓ | — | — | — |
+| manage users, settings, themes, plugins, import, redirects, system | ✓ | — | — | — |
 
 As implemented in `ferrite-core` (`src/actor.rs`, `src/content/lifecycle.rs`; M1c-1, with
 the HTTP endpoints above since M2a-1):

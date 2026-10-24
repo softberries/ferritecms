@@ -650,6 +650,108 @@ async fn startup_load_failure_is_retried(db: Arc<TestDb>) {
     node.shutdown().await.unwrap();
 }
 
+/// Review Focus 5 (P18, pre-flight F24): a plugin whose stored blob cannot be opened
+/// fails with an error that names the absolute blob path; `nodes.meta`, `GET /plugins`
+/// and `GET /system/nodes` show it scrubbed, with no part of the data folder.
+async fn node_errors_are_scrubbed(db: Arc<TestDb>) {
+    let site = Site::new(&db);
+    let store = db.shared_store();
+    let plugin = install_plugin_file(
+        &store,
+        &site.media(),
+        &site.config.plugins,
+        &manifest("hello"),
+        &test_support::plugin_wasm("hello"),
+        true,
+    )
+    .await
+    .unwrap();
+    // The blob's prefix folder becomes a file: opening the blob fails with "Not a
+    // directory", which object_store reports with the path (a missing blob, or a folder
+    // in its place, is `NotFound`, which names nothing).
+    let prefix = site
+        .blob(&plugin.artifact_hash)
+        .parent()
+        .unwrap()
+        .to_owned();
+    std::fs::rename(&prefix, prefix.with_extension("aside")).unwrap();
+    std::fs::write(&prefix, b"not a folder").unwrap();
+
+    let node = site.start(&db, NodeOptions::default()).await;
+    eventually(
+        Duration::from_secs(5),
+        "plugin failure in nodes.meta",
+        || {
+            let db = db.clone();
+            let node = &node;
+            async move { meta(&db, node).await["plugins"]["hello"]["status"] == "failed" }
+        },
+    )
+    .await;
+    let data = site.data().to_str().unwrap().to_owned();
+    let canonical = std::fs::canonicalize(site.data())
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let leaks = |text: &str| {
+        for needle in [data.as_str(), canonical.as_str(), "/artifacts/"] {
+            assert!(!text.contains(needle), "{needle} in {text}");
+        }
+    };
+    let m = meta(&db, &node).await;
+    let error = m["plugins"]["hello"]["error"].as_str().unwrap().to_owned();
+    assert!(error.contains("<path>"), "the error named a path: {m}");
+    leaks(&m.to_string());
+
+    let user = fixture_user(store.as_ref()).await;
+    let (token, _) = AuthService::new(store.clone(), SiteKey::generate().unwrap())
+        .create_token(
+            &Actor::new(user.id, Role::Admin),
+            user.id,
+            "t",
+            Scopes::ALL,
+            None,
+        )
+        .await
+        .unwrap();
+    for path in ["/api/v1/plugins", "/api/v1/system/nodes"] {
+        let (status, body) = get_bearer(node.addr, path, token.expose()).await;
+        assert_eq!(status, 200, "{path}: {body}");
+        assert!(body.contains(&error), "{path}: {body}");
+        leaks(&body);
+    }
+    node.shutdown().await.unwrap();
+}
+
+/// `GET path` with `Authorization: Bearer <token>` (identity encoding, `Connection:
+/// close`): status and body.
+async fn get_bearer(addr: SocketAddr, path: &str, token: &str) -> (u16, String) {
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    s.write_all(
+        format!(
+            "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+             Authorization: Bearer {token}\r\n\r\n"
+        )
+        .as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut raw = Vec::new();
+    s.read_to_end(&mut raw).await.unwrap();
+    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let head = String::from_utf8_lossy(&raw[..split]).into_owned();
+    let status = head.split(' ').nth(1).and_then(|c| c.parse().ok()).unwrap();
+    let mut body = raw[split + 4..].to_vec();
+    if head
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
+        body = dechunk(&body);
+    }
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
 /// Long enough for the first reload retry (5 s after the failure) to have run.
 fn reload_retry_wait() -> Duration {
     ferrite::reload::RETRY_MIN + Duration::from_secs(1)
@@ -1139,6 +1241,7 @@ backend_tests_spawning!(
     boot_race_plugin_enable_is_applied,
     failed_theme_reload_is_retried,
     startup_load_failure_is_retried,
+    node_errors_are_scrubbed,
     theme_hot_swap_without_restart,
     bad_theme_activation_keeps_previous_theme,
     fallback_is_flagged_in_meta,

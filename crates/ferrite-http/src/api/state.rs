@@ -6,13 +6,14 @@ use std::sync::Arc;
 use axum::http::Uri;
 use ferrite_core::{
     AuthService, ContentService, ContentTypeService, ExtensionAdmin, MediaService, MenuService,
-    OptionService, RedirectService, TaxonomyService, UserService, comments::CommentService,
-    mail::MailQueue,
+    OptionService, RedirectService, SystemService, TaxonomyService, UserService,
+    comments::CommentService, mail::MailQueue,
 };
 use ferrite_media::MediaStore;
 use ferrite_store::Store;
 
-use crate::{extensions::Installer, media::Uploader};
+use super::NodeInfo;
+use crate::{AppState, extensions::Installer, media::Uploader};
 
 /// The inputs of [`ApiState::new`].
 pub struct ApiParts {
@@ -36,6 +37,12 @@ pub struct ApiParts {
     pub max_upload: u64,
     /// Comment submits and moderation (M2a-2b P11–P14).
     pub comments: Arc<CommentService>,
+    /// System status, nodes and audit reads (M2a-2b P15).
+    pub system: Arc<SystemService>,
+    /// The node's public site (its theme, page cache and render counters).
+    pub site: Arc<AppState>,
+    /// What this node is.
+    pub node: NodeInfo,
     /// The node's mail queue (`[mail]` set), shared with the plugin host.
     pub mailer: Option<Arc<MailQueue>>,
     /// The site's URL (`site.url`).
@@ -70,6 +77,12 @@ pub struct ApiState {
     pub max_upload: u64,
     /// Comment submits and moderation (M2a-2b P11–P14).
     pub comments: Arc<CommentService>,
+    /// System status, nodes and audit reads (M2a-2b P15).
+    pub system: Arc<SystemService>,
+    /// The node's public site (its theme, page cache and render counters).
+    pub site: Arc<AppState>,
+    /// What this node is (`GET /system/status`).
+    pub node: NodeInfo,
     /// The node's mail queue: sends run in the background (`None`: no `[mail]`, the
     /// password reset is `503 mail-unavailable`).
     pub mailer: Option<Arc<MailQueue>>,
@@ -108,6 +121,9 @@ impl ApiState {
             uploader,
             max_upload,
             comments,
+            system,
+            site,
+            node,
             mailer,
             site_url,
             site_title,
@@ -130,6 +146,9 @@ impl ApiState {
             uploader,
             max_upload,
             comments,
+            system,
+            site,
+            node,
             mailer,
             site_url: site_url.trim_end_matches('/').to_owned(),
             site_title,

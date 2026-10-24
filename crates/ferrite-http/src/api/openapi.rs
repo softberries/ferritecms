@@ -34,6 +34,7 @@ pub const SESSION_COOKIE: &str = "ferrite_session";
         (name = "users", description = "User accounts and their API tokens"),
         (name = "plugins", description = "Plugins: inspection, approval, install, enable/disable, delete"),
         (name = "themes", description = "Themes: list, upload, activation"),
+        (name = "system", description = "System status, nodes and the audit log (admins)"),
     ),
 )]
 pub struct ApiDoc;

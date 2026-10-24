@@ -1,0 +1,196 @@
+//! Bodies of the `/system` endpoints (M2a-2b P15, P18). Node error texts in `meta` are
+//! scrubbed (no paths, endpoints, addresses or credentials); audit `details` never hold
+//! secrets (M2a P22); job payloads are never returned (P19).
+
+use chrono::{DateTime, Utc};
+use ferrite_domain::{AuditEntry, Node};
+use ferrite_store::Compat;
+use serde::Serialize;
+use serde_json::Value;
+use utoipa::ToSchema;
+use uuid::Uuid;
+
+/// How the database's schema relates to this binary (02 §8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaVerdict {
+    /// Every migration this binary knows is applied, and no newer one.
+    UpToDate,
+    /// Migrations are pending (`ferrite migrate up`).
+    NeedsUp,
+    /// The database is newer, but its expand-only migrations let this binary run.
+    NewerSchemaOk,
+    /// The database needs a newer binary.
+    Incompatible,
+}
+
+impl From<&Compat> for SchemaVerdict {
+    fn from(c: &Compat) -> Self {
+        match c {
+            Compat::UpToDate => Self::UpToDate,
+            Compat::NeedsUp => Self::NeedsUp,
+            Compat::NewerSchemaOk => Self::NewerSchemaOk,
+            Compat::Incompatible { .. } => Self::Incompatible,
+        }
+    }
+}
+
+/// The schema part of [`SystemStatusDto`].
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SchemaStatusDto {
+    /// The highest applied migration.
+    pub db_version: i64,
+    /// The highest migration this binary embeds.
+    pub binary_version: i64,
+    /// Embedded migrations not applied yet, oldest first.
+    pub pending: Vec<i64>,
+    pub verdict: SchemaVerdict,
+}
+
+/// The theme part of [`SystemStatusDto`].
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ThemeStatusDto {
+    /// The active theme row; `null`: none is active and nodes serve the embedded
+    /// default.
+    pub active: Option<String>,
+    /// Names of the live nodes that do not serve the active row's artifact
+    /// (`nodes.meta.theme.fallback`, 06 §1).
+    pub fallback_nodes: Vec<String>,
+}
+
+/// Jobs per status.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct JobCountsDto {
+    pub queued: u64,
+    pub running: u64,
+    pub done: u64,
+    pub dead: u64,
+}
+
+/// Registered nodes by heartbeat age (live: within 30 s of the database clock).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct NodeCountsDto {
+    pub live: u32,
+    pub stale: u32,
+}
+
+/// The node that answered.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ThisNodeDto {
+    pub id: Uuid,
+    pub started_at: DateTime<Utc>,
+}
+
+/// `GET /system/status`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SystemStatusDto {
+    /// The FerriteCMS version of the node that answered.
+    pub version: String,
+    /// `site.url`.
+    pub site_url: String,
+    /// `solo` or `cluster`.
+    pub mode: String,
+    /// `sqlite` or `postgres`.
+    pub database: String,
+    /// `local` or `s3`.
+    pub media: String,
+    pub schema: SchemaStatusDto,
+    pub theme: ThemeStatusDto,
+    pub jobs: JobCountsDto,
+    pub nodes: NodeCountsDto,
+    pub node: ThisNodeDto,
+}
+
+/// A registered node (`nodes` row).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct NodeDto {
+    pub id: Uuid,
+    /// `cluster.node_name` or the host name.
+    pub name: String,
+    /// The binary version it runs.
+    pub version: String,
+    /// The highest migration its binary knows.
+    pub schema_version: i64,
+    pub started_at: DateTime<Utc>,
+    pub heartbeat_at: DateTime<Utc>,
+    /// The heartbeat is within 30 s of the database clock.
+    pub live: bool,
+    /// What the node reports (04 §8: `theme`, `plugins`, `plugins_error`,
+    /// `permalinks_error`, `site_id`, `site_url`, `mode`, `clock_skew_ms`); error texts
+    /// scrubbed of URLs, paths, addresses and credentials, at most 1 KiB each.
+    #[schema(value_type = Object)]
+    pub meta: Value,
+}
+
+impl NodeDto {
+    pub fn new(node: Node, live: bool) -> Self {
+        Self {
+            id: node.id.as_uuid(),
+            name: node.name,
+            version: node.version,
+            schema_version: node.schema_version,
+            started_at: node.started_at.as_datetime(),
+            heartbeat_at: node.heartbeat_at.as_datetime(),
+            live,
+            meta: node.meta,
+        }
+    }
+}
+
+/// `GET /system/nodes`: every registered node, live and stale, by id.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct NodeList {
+    pub items: Vec<NodeDto>,
+    /// Always `null`: one page holds every node.
+    pub next_cursor: Option<String>,
+}
+
+/// Who wrote an audit row.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AuditActorDto {
+    pub id: Uuid,
+    pub login: String,
+}
+
+/// An audit-log row.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AuditDto {
+    pub id: Uuid,
+    pub at: DateTime<Utc>,
+    /// `null`: the operator path (CLI), an unauthenticated flow (password reset), or a
+    /// deleted user.
+    pub actor: Option<AuditActorDto>,
+    /// `<target>.<verb>`, e.g. `settings.update`, `plugin.install`.
+    pub action: String,
+    pub target_kind: String,
+    pub target_id: Option<String>,
+    /// What changed (never secrets or setting values).
+    #[schema(value_type = Object)]
+    pub details: Value,
+}
+
+impl AuditDto {
+    /// `entry` with its actor's login (`login` = `None`: the user is gone).
+    pub fn new(entry: AuditEntry, login: Option<String>) -> Self {
+        let actor = entry.actor_id.zip(login).map(|(id, login)| AuditActorDto {
+            id: id.as_uuid(),
+            login,
+        });
+        Self {
+            id: entry.id.as_uuid(),
+            at: entry.at.as_datetime(),
+            actor,
+            action: entry.action,
+            target_kind: entry.target_kind,
+            target_id: entry.target_id,
+            details: entry.details,
+        }
+    }
+}
+
+/// `GET /system/audit`: one page, newest first.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AuditList {
+    pub items: Vec<AuditDto>,
+    pub next_cursor: Option<String>,
+}

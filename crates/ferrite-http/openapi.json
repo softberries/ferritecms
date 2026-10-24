@@ -4842,6 +4842,182 @@
         ]
       }
     },
+    "/api/v1/system/audit": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "operationId": "list_audit",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1..=200; default 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the audit log, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation`: `limit` or `cursor`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_system`, `system:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/system/nodes": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "operationId": "list_system_nodes",
+        "responses": {
+          "200": {
+            "description": "Every registered node (live and stale), by id, with its scrubbed `meta`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_system`, `system:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/system/status": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "operationId": "get_system_status",
+        "responses": {
+          "200": {
+            "description": "The site's versions, backends, schema, theme, jobs and nodes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemStatusDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_system`, `system:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/taxonomies": {
       "get": {
         "tags": [
@@ -7241,6 +7417,93 @@
   },
   "components": {
     "schemas": {
+      "AuditActorDto": {
+        "type": "object",
+        "description": "Who wrote an audit row.",
+        "required": [
+          "id",
+          "login"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "login": {
+            "type": "string"
+          }
+        }
+      },
+      "AuditDto": {
+        "type": "object",
+        "description": "An audit-log row.",
+        "required": [
+          "id",
+          "at",
+          "action",
+          "target_kind",
+          "details"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "`<target>.<verb>`, e.g. `settings.update`, `plugin.install`."
+          },
+          "actor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AuditActorDto",
+                "description": "`null`: the operator path (CLI), an unauthenticated flow (password reset), or a\ndeleted user."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "details": {
+            "type": "object",
+            "description": "What changed (never secrets or setting values)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_kind": {
+            "type": "string"
+          }
+        }
+      },
+      "AuditList": {
+        "type": "object",
+        "description": "`GET /system/audit`: one page, newest first.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditDto"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "CommentDto": {
         "type": "object",
         "description": "A comment as moderators see it (`GET /comments`, `PATCH /comments/{id}`).",
@@ -8053,6 +8316,38 @@
           }
         }
       },
+      "JobCountsDto": {
+        "type": "object",
+        "description": "Jobs per status.",
+        "required": [
+          "queued",
+          "running",
+          "done",
+          "dead"
+        ],
+        "properties": {
+          "dead": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "done": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "queued": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "running": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "LimitItemDto": {
         "type": "object",
         "description": "One `[limits]` request against the host default and the approval ceiling.",
@@ -8579,6 +8874,97 @@
           }
         }
       },
+      "NodeCountsDto": {
+        "type": "object",
+        "description": "Registered nodes by heartbeat age (live: within 30 s of the database clock).",
+        "required": [
+          "live",
+          "stale"
+        ],
+        "properties": {
+          "live": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "stale": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "NodeDto": {
+        "type": "object",
+        "description": "A registered node (`nodes` row).",
+        "required": [
+          "id",
+          "name",
+          "version",
+          "schema_version",
+          "started_at",
+          "heartbeat_at",
+          "live",
+          "meta"
+        ],
+        "properties": {
+          "heartbeat_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "live": {
+            "type": "boolean",
+            "description": "The heartbeat is within 30 s of the database clock."
+          },
+          "meta": {
+            "type": "object",
+            "description": "What the node reports (04 §8: `theme`, `plugins`, `plugins_error`,\n`permalinks_error`, `site_id`, `site_url`, `mode`, `clock_skew_ms`); error texts\nscrubbed of URLs, paths, addresses and credentials, at most 1 KiB each."
+          },
+          "name": {
+            "type": "string",
+            "description": "`cluster.node_name` or the host name."
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The highest migration its binary knows."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "string",
+            "description": "The binary version it runs."
+          }
+        }
+      },
+      "NodeList": {
+        "type": "object",
+        "description": "`GET /system/nodes`: every registered node, live and stale, by id.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeDto"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Always `null`: one page holds every node."
+          }
+        }
+      },
       "PasswordChange": {
         "type": "object",
         "description": "`POST /auth/password`.",
@@ -8819,7 +9205,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The node's diagnostic, scrubbed of URLs, paths, addresses and credentials (also\nwhen an older node stored it unscrubbed), at most 1 KiB."
           },
           "name": {
             "type": "string",
@@ -9190,6 +9577,49 @@
           }
         }
       },
+      "SchemaStatusDto": {
+        "type": "object",
+        "description": "The schema part of [`SystemStatusDto`].",
+        "required": [
+          "db_version",
+          "binary_version",
+          "pending",
+          "verdict"
+        ],
+        "properties": {
+          "binary_version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The highest migration this binary embeds."
+          },
+          "db_version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The highest applied migration."
+          },
+          "pending": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "Embedded migrations not applied yet, oldest first."
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/SchemaVerdict"
+          }
+        }
+      },
+      "SchemaVerdict": {
+        "type": "string",
+        "description": "How the database's schema relates to this binary (02 §8).",
+        "enum": [
+          "up_to_date",
+          "needs_up",
+          "newer_schema_ok",
+          "incompatible"
+        ]
+      },
       "SettingDefDto": {
         "type": "object",
         "description": "One declared setting: what the admin renders a form field from (05 §4c, 06 §1).",
@@ -9304,6 +9734,59 @@
       "SettingsPatch": {
         "type": "object",
         "description": "`PATCH /themes/{name}/settings` and `PATCH /plugins/{name}/settings` (the schema\nonly): an object of declared keys to their new values; `null` resets a key to its\ndefault (for a secret: deletes it). Keys not in the body stay as they are."
+      },
+      "SystemStatusDto": {
+        "type": "object",
+        "description": "`GET /system/status`.",
+        "required": [
+          "version",
+          "site_url",
+          "mode",
+          "database",
+          "media",
+          "schema",
+          "theme",
+          "jobs",
+          "nodes",
+          "node"
+        ],
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "`sqlite` or `postgres`."
+          },
+          "jobs": {
+            "$ref": "#/components/schemas/JobCountsDto"
+          },
+          "media": {
+            "type": "string",
+            "description": "`local` or `s3`."
+          },
+          "mode": {
+            "type": "string",
+            "description": "`solo` or `cluster`."
+          },
+          "node": {
+            "$ref": "#/components/schemas/ThisNodeDto"
+          },
+          "nodes": {
+            "$ref": "#/components/schemas/NodeCountsDto"
+          },
+          "schema": {
+            "$ref": "#/components/schemas/SchemaStatusDto"
+          },
+          "site_url": {
+            "type": "string",
+            "description": "`site.url`."
+          },
+          "theme": {
+            "$ref": "#/components/schemas/ThemeStatusDto"
+          },
+          "version": {
+            "type": "string",
+            "description": "The FerriteCMS version of the node that answered."
+          }
+        }
       },
       "TaxonomyDto": {
         "type": "object",
@@ -9610,7 +10093,7 @@
               "string",
               "null"
             ],
-            "description": "Why the node could not serve the active theme, if it could not."
+            "description": "Why the node could not serve the active theme, if it could not (scrubbed as\n[`PluginNodeState::error`])."
           },
           "fallback": {
             "type": "boolean",
@@ -9671,6 +10154,47 @@
             "propertyNames": {
               "type": "string"
             }
+          }
+        }
+      },
+      "ThemeStatusDto": {
+        "type": "object",
+        "description": "The theme part of [`SystemStatusDto`].",
+        "required": [
+          "fallback_nodes"
+        ],
+        "properties": {
+          "active": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The active theme row; `null`: none is active and nodes serve the embedded\ndefault."
+          },
+          "fallback_nodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Names of the live nodes that do not serve the active row's artifact\n(`nodes.meta.theme.fallback`, 06 §1)."
+          }
+        }
+      },
+      "ThisNodeDto": {
+        "type": "object",
+        "description": "The node that answered.",
+        "required": [
+          "id",
+          "started_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -10053,6 +10577,10 @@
     {
       "name": "themes",
       "description": "Themes: list, upload, activation"
+    },
+    {
+      "name": "system",
+      "description": "System status, nodes and the audit log (admins)"
     }
   ]
 }

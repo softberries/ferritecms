@@ -7,6 +7,7 @@ pub mod auth;
 pub mod blocks;
 pub mod comments;
 mod content;
+pub mod diagnostics;
 mod error;
 pub mod events;
 pub mod ext_settings;
@@ -22,6 +23,7 @@ mod redirects;
 pub mod settings;
 pub mod site;
 pub mod slug;
+mod system;
 mod taxonomy;
 mod tx;
 mod types;
@@ -51,6 +53,7 @@ pub use site::{
     PageItem, Previewed, PublicItem, SiteRead, SiteReader, SitemapEntry, SitemapPage, TermPublic,
     UserPublic,
 };
+pub use system::SystemService;
 pub use taxonomy::TaxonomyService;
 pub use types::{ContentTypeService, MAX_TYPE_LABEL, MAX_TYPE_NAME, NewType, TypePatch};
 pub use users::{

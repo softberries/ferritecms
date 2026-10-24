@@ -7,7 +7,10 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use ferrite_core::ext_settings::{PluginSettingsView, SettingDef, SettingsSchema};
+use ferrite_core::{
+    diagnostics::scrub,
+    ext_settings::{PluginSettingsView, SettingDef, SettingsSchema},
+};
 use ferrite_domain::{InstalledPlugin, InstalledTheme, Node};
 use ferrite_plugin_host::{LimitItem, PermissionItem, PermissionReport};
 use serde::Serialize;
@@ -135,6 +138,8 @@ pub struct PluginNodeState {
     pub version: Option<String>,
     /// `loaded`, `failed` or `disabled`.
     pub status: String,
+    /// The node's diagnostic, scrubbed of URLs, paths, addresses and credentials (also
+    /// when an older node stored it unscrubbed), at most 1 KiB.
     pub error: Option<String>,
 }
 
@@ -148,7 +153,7 @@ impl PluginNodeState {
             name: node.name.clone(),
             version: text("version"),
             status: text("status")?,
-            error: text("error"),
+            error: text("error").map(|e| scrub(&e)),
         })
     }
 }
@@ -251,7 +256,8 @@ pub struct ThemeNodeState {
     /// Where the node's files came from: `artifact` (the row's bundle), `folder`
     /// (`<data>/themes/<name>/`, solo only) or `embedded`.
     pub origin: String,
-    /// Why the node could not serve the active theme, if it could not.
+    /// Why the node could not serve the active theme, if it could not (scrubbed as
+    /// [`PluginNodeState::error`]).
     pub error: Option<String>,
     /// The node does not serve the active row's artifact: the startup fallback, or the
     /// previous theme after a failed swap (pre-flight F12). `false` when no theme is
@@ -276,7 +282,7 @@ impl ThemeNodeState {
             name: text("name")?,
             hash: text("hash").unwrap_or_default(),
             origin,
-            error: text("error"),
+            error: text("error").map(|e| scrub(&e)),
             fallback: theme
                 .get("fallback")
                 .and_then(serde_json::Value::as_bool)

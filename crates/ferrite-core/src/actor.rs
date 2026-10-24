@@ -209,11 +209,13 @@ pub enum Capability {
     ManagePlugins,
     Import,
     ManageRedirects,
+    /// System status, nodes, audit and jobs (M2a-2b P15).
+    ManageSystem,
 }
 
 impl Capability {
     /// Every capability, in the order of 07 §1.
-    pub const ALL: [Capability; 15] = [
+    pub const ALL: [Capability; 16] = [
         Self::ReadAdmin,
         Self::EditOwn,
         Self::PublishOwn,
@@ -229,6 +231,7 @@ impl Capability {
         Self::ManagePlugins,
         Self::Import,
         Self::ManageRedirects,
+        Self::ManageSystem,
     ];
 
     /// The capability's name as in 07 §1, e.g. `edit_own`.
@@ -249,6 +252,7 @@ impl Capability {
             Self::ManagePlugins => "manage_plugins",
             Self::Import => "import",
             Self::ManageRedirects => "manage_redirects",
+            Self::ManageSystem => "manage_system",
         }
     }
 
@@ -268,6 +272,7 @@ impl Capability {
             ManageThemes | ManagePlugins => Area::Extensions,
             Import => Area::Import,
             ManageRedirects => Area::Redirects,
+            ManageSystem => Area::System,
         };
         Some(Scope::write(area))
     }
@@ -283,9 +288,8 @@ pub fn can(role: Role, cap: Capability) -> bool {
         EditOthers | PublishOthers | ManageTerms | ManageMenus | ModerateComments => {
             matches!(role, Role::Admin | Role::Editor)
         }
-        ManageUsers | ManageSettings | ManageThemes | ManagePlugins | Import | ManageRedirects => {
-            role == Role::Admin
-        }
+        ManageUsers | ManageSettings | ManageThemes | ManagePlugins | Import | ManageRedirects
+        | ManageSystem => role == Role::Admin,
     }
 }
 
@@ -578,6 +582,7 @@ mod tests {
             (ManagePlugins, Some("extensions:write")),
             (Import, Some("import:write")),
             (ManageRedirects, Some("redirects:write")),
+            (ManageSystem, Some("system:write")),
         ];
         assert_eq!(expect.len(), Capability::ALL.len());
         for (cap, scope) in expect {

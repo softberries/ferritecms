@@ -64,13 +64,13 @@ use ferrite_core::mail::MailQueue;
 use ferrite_core::{
     AuthService, ContentService, ContentTypeService, ExtensionAdmin, ExtensionService,
     MediaService, MenuService, OptionService, Permalinks, RedirectService, SiteReader,
-    SwappablePermalinks, TaxonomyService, UserService, comments::CommentService,
+    SwappablePermalinks, SystemService, TaxonomyService, UserService, comments::CommentService,
 };
 use ferrite_domain::{NodeId, Timestamp};
 use ferrite_http::{
     AppParts, AppState, FLUSH_EVERY, HttpConfig, LoadSummary, LoggedIn, PluginReloader,
     SERVED_FLUSH_EVERY, ServedBuffer, SharedFailures, StoreHostServices,
-    api::{ApiParts, ApiState},
+    api::{ApiParts, ApiState, NodeInfo},
     build_site,
     extensions::Installer,
     load_route_table,
@@ -96,7 +96,7 @@ use crate::{
     node::{NodeStatus, node_mode},
     open::{OpenMode, open_store, startup_check},
     reload::{ReloadContext, Reloader},
-    site::{load_theme, open_media, permalink_rules},
+    site::{load_theme, media_backend_name, open_media, permalink_rules},
 };
 
 /// How long open requests may run after a shutdown signal.
@@ -316,6 +316,8 @@ async fn boot(
     http: HttpConfig,
     registry: Registry,
 ) -> anyhow::Result<RunningNode> {
+    // Close to the registry's `started_at` (database clock), which `boot` cannot see.
+    let started_at = Timestamp::now();
     let mode = config.effective_cluster_mode();
     let listen = opts.listen.unwrap_or(node_mode(mode) == NodeMode::Cluster);
     let media = Arc::new(open_media(config)?);
@@ -448,6 +450,14 @@ async fn boot(
             store: store.clone(),
             auth,
             comments,
+            system: Arc::new(SystemService::new(store.clone())),
+            site: state.clone(),
+            node: NodeInfo {
+                id: registry.id(),
+                started_at,
+                mode: node_mode(mode).as_str(),
+                media_backend: media_backend_name(config),
+            },
             users: Arc::new(UserService::new(store.clone())),
             content: content.clone(),
             types: Arc::new(ContentTypeService::new(store.clone())),

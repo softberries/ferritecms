@@ -15,6 +15,7 @@ mod reset;
 mod settings_ext;
 mod site;
 mod sweep;
+mod system;
 mod themes;
 mod types;
 mod users;

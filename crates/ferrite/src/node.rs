@@ -2,18 +2,21 @@
 //! and the permalink rules it runs, with the last reload error of each
 //! (`theme.error`, `plugins.<name>.error` / `plugins_error`, `permalinks_error`). The registry
 //! adds `site_id`, `site_url`, `mode` and `clock_skew_ms` itself.
+//!
+//! Error texts are scrubbed before they are stored ([`scrub`], M2a-2b P18): URLs,
+//! absolute paths, IP addresses and credentials are replaced and the text is cut to
+//! 1 KiB ([`MAX_DIAGNOSTIC`](ferrite_core::diagnostics::MAX_DIAGNOSTIC)); the full
+//! text is logged where the error is produced (the reloader and startup).
 
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ferrite_cluster::ClusterMode as NodeMode;
 use ferrite_config::ClusterMode as ConfigMode;
+use ferrite_core::diagnostics::scrub;
 use ferrite_http::{PluginStatus, ReloadReport};
 use serde_json::{Map, Value, json};
 
 use crate::site::{LoadedTheme, ThemeOrigin};
-
-/// Longest error text per entry in `nodes.meta` (bytes).
-pub const MAX_META_ERROR: usize = 1024;
 
 /// The node's mode for the registry. `mode` must be resolved
 /// ([`ferrite_config::Config::effective_cluster_mode`]); an unresolved `Auto` counts as
@@ -53,7 +56,7 @@ impl NodeStatus {
             "name": loaded.theme.name(),
             "hash": loaded.theme.hash(),
             "origin": origin,
-            "error": error.map(cap),
+            "error": error.map(scrub),
             "fallback": fallback,
         });
     }
@@ -64,8 +67,8 @@ impl NodeStatus {
         for (name, state) in &report.states {
             let (status, error) = match &state.status {
                 PluginStatus::Loaded => ("loaded", None),
-                PluginStatus::Failed(reason) => ("failed", Some(cap(reason))),
-                PluginStatus::Disabled(reason) => ("disabled", Some(cap(reason))),
+                PluginStatus::Failed(reason) => ("failed", Some(scrub(reason))),
+                PluginStatus::Disabled(reason) => ("disabled", Some(scrub(reason))),
             };
             map.insert(
                 name.clone(),
@@ -83,12 +86,12 @@ impl NodeStatus {
     /// `nodes.meta.plugins_error`: why the plugin rows could not be read at the last
     /// reload (the registry and `plugins` stay as they were).
     pub fn set_plugins_error(&self, error: Option<&str>) {
-        self.lock().plugins_error = error.map(cap);
+        self.lock().plugins_error = error.map(scrub);
     }
 
     /// `nodes.meta.permalinks_error`: why the current option values are not in effect.
     pub fn set_permalinks_error(&self, error: Option<&str>) {
-        self.lock().permalinks_error = error.map(cap);
+        self.lock().permalinks_error = error.map(scrub);
     }
 
     /// The node's part of `nodes.meta`.
@@ -113,19 +116,11 @@ impl NodeStatus {
     }
 }
 
-/// `s` cut to [`MAX_META_ERROR`] bytes on a character boundary.
-fn cap(s: &str) -> String {
-    let mut end = s.len().min(MAX_META_ERROR);
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    s[..end].to_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
+    use ferrite_core::diagnostics::MAX_DIAGNOSTIC;
     use ferrite_domain::ArtifactHash;
     use ferrite_http::PluginState;
 
@@ -136,6 +131,55 @@ mod tests {
         assert_eq!(node_mode(ConfigMode::Solo), NodeMode::Solo);
         assert_eq!(node_mode(ConfigMode::Cluster), NodeMode::Cluster);
         assert_eq!(node_mode(ConfigMode::Auto), NodeMode::Cluster);
+    }
+
+    /// Review Focus 5 (P18): every error text is scrubbed before it reaches
+    /// `nodes.meta`; the full text is only in the node's log.
+    #[test]
+    fn node_meta_errors_scrubbed_at_source() {
+        let status = NodeStatus::default();
+        let loaded = LoadedTheme {
+            theme: Arc::new(ferrite_theme::Theme::load_embedded("blog").unwrap()),
+            origin: ThemeOrigin::Embedded,
+            error: None,
+            fallback: true,
+        };
+        let leak = "storage backend error: Unable to open file \
+                    /srv/ferrite/data/media/artifacts/ab/abcd: Permission denied; \
+                    https://AKIAKEY:hunter2@minio.internal:9000/bucket 10.0.0.5:5432";
+        let want = "storage backend error: Unable to open file <path>: Permission denied; \
+                    <url> <addr>";
+        status.set_theme(&loaded, Some(leak), true);
+        let h = ArtifactHash::parse(&"a".repeat(64)).unwrap();
+        let mut states = BTreeMap::new();
+        states.insert(
+            "p".to_owned(),
+            PluginState {
+                version: "1.0.0".into(),
+                hash: h.clone(),
+                status: PluginStatus::Failed(leak.into()),
+            },
+        );
+        states.insert(
+            "q".to_owned(),
+            PluginState {
+                version: "1.0.0".into(),
+                hash: h,
+                status: PluginStatus::Disabled(leak.into()),
+            },
+        );
+        status.set_plugins(&ReloadReport { states });
+        status.set_plugins_error(Some(leak));
+        status.set_permalinks_error(Some(leak));
+        let meta = status.meta();
+        for secret in ["/srv/ferrite", "AKIAKEY", "hunter2", "minio", "10.0.0.5"] {
+            assert!(!meta.to_string().contains(secret), "{secret}: {meta}");
+        }
+        assert_eq!(meta["theme"]["error"], want);
+        assert_eq!(meta["plugins"]["p"]["error"], want);
+        assert_eq!(meta["plugins"]["q"]["error"], want);
+        assert_eq!(meta["plugins_error"], want);
+        assert_eq!(meta["permalinks_error"], want);
     }
 
     #[test]
@@ -149,7 +193,7 @@ mod tests {
             error: None,
             fallback: true,
         };
-        let long = "é".repeat(MAX_META_ERROR);
+        let long = "é".repeat(MAX_DIAGNOSTIC);
         status.set_theme(&loaded, Some(&long), loaded.fallback);
         let h = ArtifactHash::parse(&"a".repeat(64)).unwrap();
         let mut states = BTreeMap::new();
@@ -178,7 +222,7 @@ mod tests {
         assert_eq!(meta["theme"]["origin"], "embedded");
         assert_eq!(meta["theme"]["fallback"], true);
         let err = meta["theme"]["error"].as_str().unwrap();
-        assert!(err.len() <= MAX_META_ERROR && err.len() > MAX_META_ERROR - 2);
+        assert!(err.len() <= MAX_DIAGNOSTIC && err.len() > MAX_DIAGNOSTIC - 2);
         assert_eq!(meta["plugins"]["a"]["status"], "loaded");
         assert!(meta["plugins"]["a"]["error"].is_null());
         assert_eq!(meta["plugins"]["b"]["status"], "failed");

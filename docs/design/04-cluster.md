@@ -77,6 +77,14 @@ midpoint and logged when it goes above 2 s (and when it is back under 1.5 s); it
 reported as `nodes.meta.clock_skew_ms`. It is a warning only: every lease, `run_at` and
 heartbeat comparison uses the database clock.
 
+Error texts a node reports in `nodes.meta` (`theme.error`, `plugins.<name>.error`,
+`plugins_error`, `permalinks_error`) are scrubbed before the heartbeat writes them
+(`ferrite_core::diagnostics::scrub`, M2a-2b P18): URLs, absolute paths, IP addresses and
+credential values are replaced by `<url>`, `<path>`, `<addr>` and `<secret>`, and the text
+is cut to 1 KiB. Readers (`GET /plugins`, `GET /themes`, `GET /system/nodes`) scrub them
+again, so rows written by an older binary during a rolling deploy show no storage paths
+or endpoints either. The full text is logged by the node that produced it.
+
 ## 4. Event bus & cache invalidation
 
 ### Write path (transactional outbox)

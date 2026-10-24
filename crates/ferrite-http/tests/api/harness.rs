@@ -26,15 +26,15 @@ use ferrite_cache::PageCache;
 use ferrite_core::{
     Actor, AuthService, ContentService, ContentTypeService, ExtensionAdmin, MediaService,
     MenuService, NewAccount, OptionService, PermalinkRules, RedirectService, Scopes, SiteReader,
-    TaxonomyService, UserService,
+    SystemService, TaxonomyService, UserService,
     auth::SiteKey,
     comments::CommentService,
     mail::{MailQueue, MemoryMailer},
 };
-use ferrite_domain::{ArtifactHash, InstalledTheme, Role, Secret, Timestamp, User};
+use ferrite_domain::{ArtifactHash, InstalledTheme, NodeId, Role, Secret, Timestamp, User};
 use ferrite_http::{
     AppParts, AppState, HttpConfig, PluginReloader, StoreHostServices,
-    api::{ApiParts, ApiState},
+    api::{ApiParts, ApiState, NodeInfo},
     build_site,
     extensions::Installer,
     load_route_table,
@@ -141,6 +141,23 @@ pub async fn s3_media() -> Media {
         _dir: dir,
         server: Some(server),
         config,
+    }
+}
+
+/// What the harness node reports in `GET /system/status`: Postgres runs as a cluster,
+/// SQLite as solo.
+fn node_info(store: &dyn Store, media: &MediaConfig) -> NodeInfo {
+    NodeInfo {
+        id: NodeId::new(),
+        started_at: Timestamp::now(),
+        mode: match store.backend() {
+            ferrite_store::Backend::Sqlite => "solo",
+            ferrite_store::Backend::Postgres => "cluster",
+        },
+        media_backend: match media.backend {
+            Backend::Local { .. } => "local",
+            Backend::S3(_) => "s3",
+        },
     }
 }
 
@@ -276,6 +293,9 @@ impl Api {
             ApiState::new(ApiParts {
                 store: store.clone(),
                 comments: Arc::new(CommentService::new(store.clone(), auth.clone())),
+                system: Arc::new(SystemService::new(store.clone())),
+                site: app.clone(),
+                node: node_info(store.as_ref(), &media.config),
                 auth,
                 users: Arc::new(UserService::new(store.clone())),
                 media_service: Arc::new(MediaService::new(
@@ -436,6 +456,9 @@ impl Api {
             uploader: a.uploader.clone(),
             max_upload: a.max_upload,
             comments: a.comments.clone(),
+            system: a.system.clone(),
+            site: a.site.clone(),
+            node: a.node,
             mailer: a.mailer.clone(),
             site_url: a.site_url.clone(),
             site_title: a.site_title.clone(),
@@ -458,6 +481,12 @@ impl Api {
             ApiState::new(ApiParts {
                 store: store.clone(),
                 comments: Arc::new(CommentService::new(store.clone(), auth.clone())),
+                system: Arc::new(SystemService::new(store.clone())),
+                site: self.app.clone(),
+                node: NodeInfo {
+                    id: NodeId::new(),
+                    ..self.api.node
+                },
                 auth,
                 users: Arc::new(UserService::new(store.clone())),
                 media_service: Arc::new(MediaService::new(

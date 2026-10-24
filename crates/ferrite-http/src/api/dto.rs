@@ -8,5 +8,6 @@ pub mod content;
 pub mod extensions;
 pub mod media;
 pub mod site;
+pub mod system;
 pub mod types;
 pub mod users;
