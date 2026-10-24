@@ -1,7 +1,10 @@
 //! The permission report an admin approves before a plugin is installed or updated
 //! (plan rulings P3, P5, P6): every capability the manifest asks for as a plain-language
-//! line, high-risk ones flagged, what is new against the current grant, the limits, and
-//! the approval fingerprint.
+//! line with its [`Risk`], what is new against the current grant, the limits, and the
+//! approval fingerprint. Action-hook subscriptions are listed too (ruling R22, M1), but
+//! they are not part of the grant: they do not change the fingerprint, and against a
+//! current grant (an update, or an installed row) they are never in `added`, because the
+//! grant does not record which hooks were approved.
 //!
 //! **Fingerprint.** Lowercase hex SHA-256 of the compact JSON of
 //! `{"artifact":<hash>,"grant":<Grant::of(manifest).to_json()>,"plugin":<name>,
@@ -40,14 +43,41 @@ pub struct PermissionReport {
 pub struct PermissionItem {
     /// `content.read`, `content.meta.read`, `content.meta.write`, `options.read`, `kv`,
     /// `http` (one item per host), `render.head`, `render.text`, `render.html`,
-    /// `routes` (one item per route), `mail`, `limits.memory`, `limits.fuel` (only when
-    /// above the default).
+    /// `routes` (one item per route), `mail`, `hooks` (one item per action hook),
+    /// `limits.memory`, `limits.fuel` (only when above the default).
     pub key: &'static str,
     /// Plain language, e.g. "read published posts and pages".
     pub text: String,
-    /// The patterns, types, host or methods the item covers.
+    /// The patterns, types, host, methods or hook name the item covers.
     pub detail: Vec<String>,
-    pub high_risk: bool,
+    pub risk: Risk,
+}
+
+impl PermissionItem {
+    /// Whether the item is [`Risk::High`] (the CLI's `!` lines).
+    pub fn high_risk(&self) -> bool {
+        self.risk == Risk::High
+    }
+}
+
+/// How much an item can do to the site or its visitors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Risk {
+    Low,
+    /// Sees site-wide data no single page shows (`request.served`).
+    Medium,
+    High,
+}
+
+impl Risk {
+    /// `low`, `medium` or `high`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Risk::Low => "low",
+            Risk::Medium => "medium",
+            Risk::High => "high",
+        }
+    }
 }
 
 /// One `[limits]` request against the host default and the approval ceiling.
@@ -94,6 +124,7 @@ impl Manifest {
         }
         let name = &self.plugin.name;
         let mut items = capability_items(self, &self.capabilities, None);
+        items.extend(hook_items(self));
         items.extend(limits.iter().filter_map(limit_item));
         let added = match current {
             None => items.clone(),
@@ -186,8 +217,35 @@ fn item(
         key,
         text: text.into(),
         detail,
-        high_risk,
+        risk: if high_risk { Risk::High } else { Risk::Low },
     }
+}
+
+/// One item per action hook the manifest subscribes to, in hook-name order (filter
+/// hooks are covered by their `render.*` items). Payloads per design 05 §4.
+fn hook_items(m: &Manifest) -> Vec<PermissionItem> {
+    m.hooks
+        .keys()
+        .filter_map(|hook| {
+            let (text, risk) = match hook.as_str() {
+                "post.saved" => ("is told the id of every post or page saved", Risk::Low),
+                "post.published" => ("is told the id of every post or page published", Risk::Low),
+                "user.created" => ("is told the id of every new user", Risk::Low),
+                "request.served" => (
+                    "receives every page view of the site (path, status, time, referrer host, \
+                     browser class, cache outcome)",
+                    Risk::Medium,
+                ),
+                _ => return None,
+            };
+            Some(PermissionItem {
+                key: "hooks",
+                text: text.to_owned(),
+                detail: vec![hook.clone()],
+                risk,
+            })
+        })
+        .collect()
 }
 
 /// `a`, `a and b`, `a, b and c`.
@@ -306,12 +364,15 @@ fn capability_items(
             true,
         ));
     }
+    // High (ruling R22): a head script runs with the site's origin on every page, as a
+    // WordPress plugin's would, and can act as a logged-in admin who views the site.
     if c.render_head {
         out.push(item(
             "render.head",
-            "add tags to the head of pages",
+            "add tags to the head of every page, including scripts from any https:// host, \
+             which run with the site's origin (as a logged-in admin when one views the site)",
             Vec::new(),
-            false,
+            true,
         ));
     }
     if c.render_text {
@@ -428,7 +489,7 @@ mod tests {
     fn summary(items: &[PermissionItem]) -> Vec<(&'static str, Vec<String>, bool)> {
         items
             .iter()
-            .map(|i| (i.key, i.detail.clone(), i.high_risk))
+            .map(|i| (i.key, i.detail.clone(), i.high_risk()))
             .collect()
     }
 
@@ -455,10 +516,12 @@ mod tests {
                 ("options.read", v(&["site.title", "site.url"]), false),
                 ("kv", v(&[]), false),
                 ("http", v(&["api.indexnow.org"]), true),
-                ("render.head", v(&[]), false),
+                ("render.head", v(&[]), true),
                 ("render.text", v(&[]), false),
                 ("routes", v(&["POST"]), true),
                 ("mail", v(&[]), true),
+                ("hooks", v(&["post.published"]), false),
+                ("hooks", v(&["request.served"]), false),
             ]
         );
         let text = |key: &str| {
@@ -548,6 +611,53 @@ mod tests {
         assert_eq!(caps("render.html = \"off\""), []);
         // `routes = true` without a `[routes]` table still shows (and is high risk).
         assert_eq!(caps("routes = true"), [("routes", v(&[]), true)]);
+    }
+
+    /// Ruling R22 (M1): action hooks are listed with their risk; `request.served` is
+    /// medium. They are outside the grant: an update adding one is not `added`, and the
+    /// fingerprint does not depend on them.
+    #[test]
+    fn hook_subscriptions_are_listed_with_their_risk() {
+        let src = |hooks: &str| {
+            format!(
+                "[plugin]\nname = \"me\"\nversion = \"1.0.0\"\npublisher = \"x\"\n\
+                 world = \"ferrite:plugin/plugin@0.1.0\"\n[hooks]\n{hooks}\n"
+            )
+        };
+        let all = Manifest::parse(&src(
+            "\"post.saved\" = 1\n\"post.published\" = 1\n\"user.created\" = 1\n\
+             \"request.served\" = 1",
+        ))
+        .expect("manifest");
+        let r = all
+            .permission_report(ARTIFACT, None, &HostConfig::default())
+            .expect("report");
+        let got: Vec<_> = r
+            .items
+            .iter()
+            .map(|i| (i.key, i.detail.clone(), i.risk))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("hooks", v(&["post.published"]), Risk::Low),
+                ("hooks", v(&["post.saved"]), Risk::Low),
+                ("hooks", v(&["request.served"]), Risk::Medium),
+                ("hooks", v(&["user.created"]), Risk::Low),
+            ]
+        );
+        assert!(r.items[2].text.contains("every page view"));
+        assert_eq!(r.added, r.items, "a new plugin: everything is new");
+        let none = Manifest::parse(&src("")).expect("manifest");
+        let update = all
+            .permission_report(ARTIFACT, Some(&Grant::of(&none)), &HostConfig::default())
+            .expect("report");
+        assert!(update.added.is_empty(), "{:?}", update.added);
+        let base = none
+            .permission_report(ARTIFACT, None, &HostConfig::default())
+            .expect("report");
+        assert_eq!(update.fingerprint, base.fingerprint);
+        assert_eq!(Risk::Medium.as_str(), "medium");
     }
 
     /// Pre-flight F7: pins the fingerprint format. If this fails, a dependency changed

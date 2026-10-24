@@ -20,13 +20,16 @@ use uuid::Uuid;
 pub struct PermissionItemDto {
     /// `content.read`, `content.meta.read`, `content.meta.write`, `options.read`, `kv`,
     /// `http` (one item per host), `render.head`, `render.text`, `render.html`,
-    /// `routes` (one item per route), `mail`, `limits.memory`, `limits.fuel` (only when
-    /// above the default).
+    /// `routes` (one item per route), `mail`, `hooks` (one item per action hook),
+    /// `limits.memory`, `limits.fuel` (only when above the default).
     pub key: String,
     /// e.g. "read published posts and pages".
     pub text: String,
-    /// The patterns, types, host or methods the item covers.
+    /// The patterns, types, host, methods or hook name the item covers.
     pub detail: Vec<String>,
+    /// `low`, `medium` (site-wide traffic metadata: `request.served`) or `high`.
+    pub risk: String,
+    /// Whether `risk` is `high`.
     pub high_risk: bool,
 }
 
@@ -36,7 +39,8 @@ impl From<&PermissionItem> for PermissionItemDto {
             key: i.key.to_owned(),
             text: i.text.clone(),
             detail: i.detail.clone(),
-            high_risk: i.high_risk,
+            risk: i.risk.as_str().to_owned(),
+            high_risk: i.high_risk(),
         }
     }
 }

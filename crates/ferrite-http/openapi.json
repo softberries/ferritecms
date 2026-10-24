@@ -7313,6 +7313,7 @@
           "key",
           "text",
           "detail",
+          "risk",
           "high_risk"
         ],
         "properties": {
@@ -7321,14 +7322,19 @@
             "items": {
               "type": "string"
             },
-            "description": "The patterns, types, host or methods the item covers."
+            "description": "The patterns, types, host, methods or hook name the item covers."
           },
           "high_risk": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Whether `risk` is `high`."
           },
           "key": {
             "type": "string",
-            "description": "`content.read`, `content.meta.read`, `content.meta.write`, `options.read`, `kv`,\n`http` (one item per host), `render.head`, `render.text`, `render.html`,\n`routes` (one item per route), `mail`, `limits.memory`, `limits.fuel` (only when\nabove the default)."
+            "description": "`content.read`, `content.meta.read`, `content.meta.write`, `options.read`, `kv`,\n`http` (one item per host), `render.head`, `render.text`, `render.html`,\n`routes` (one item per route), `mail`, `hooks` (one item per action hook),\n`limits.memory`, `limits.fuel` (only when above the default)."
+          },
+          "risk": {
+            "type": "string",
+            "description": "`low`, `medium` (site-wide traffic metadata: `request.served`) or `high`."
           },
           "text": {
             "type": "string",

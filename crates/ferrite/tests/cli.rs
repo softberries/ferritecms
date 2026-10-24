@@ -1338,11 +1338,19 @@ fn plugin_check_prints_report() {
     assert!(out.contains("render.head"), "{out}");
     assert!(out.contains("fingerprint: "), "{out}");
     assert!(out.contains("nothing was stored"), "{out}");
-    assert!(!out.contains("\n! "), "hello has no high-risk line: {out}");
+    // `render.head` is high risk (ruling R22): a head script runs with the site's origin.
+    assert!(out.contains("\n! render.head: "), "{out}");
     // A wildcard read is high risk: its line starts with `!`.
     let probe = plugin_dir(tmp.path(), "probe", "settings-probe", "settings_probe");
     let out = stdout(plugin_cmd(&site, &["check", "--dir", dir_arg(&probe)]));
     assert!(out.contains("\n! options.read"), "{out}");
+    // `request.served` is medium risk (R22, M1): its line starts with `~`.
+    let counter = plugin_dir(tmp.path(), "counter", "counter", "counter");
+    let out = stdout(plugin_cmd(&site, &["check", "--dir", dir_arg(&counter)]));
+    assert!(
+        out.contains("\n~ hooks: receives every page view") && out.contains("[request.served]"),
+        "{out}"
+    );
     // Nothing was stored: no row, no artifact.
     assert_eq!(stdout(plugin_cmd(&site, &["list"])), "");
     assert!(!site.join("media/artifacts").exists());

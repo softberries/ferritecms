@@ -47,7 +47,7 @@ pub use manifest::{
     Capabilities, HtmlMode, LimitRequest, MAX_MANIFEST_BYTES, MailScope, Manifest, PluginMeta,
     RESERVED_PLUGIN_NAMES, RouteSpec, SettingKind, SettingSpec,
 };
-pub use report::{LimitItem, PermissionItem, PermissionReport};
+pub use report::{LimitItem, PermissionItem, PermissionReport, Risk};
 pub use services::{HostServices, InMemoryServices, KindOk, MAIL_NOT_CONFIGURED, SentMail};
 pub use sink::FailureSink;
 pub use state::{MAX_MAIL_BODY_BYTES, MAX_MAIL_SUBJECT_CHARS};

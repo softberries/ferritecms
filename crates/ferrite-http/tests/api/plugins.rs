@@ -112,10 +112,11 @@ fn assert_report(r: &Resp, version: &str, update: bool) -> Value {
     assert_eq!(report["update"], update, "{report}");
     let items = report["items"].as_array().unwrap();
     assert!(
-        items
-            .iter()
-            .any(|i| i["key"] == "render.head" && i["text"].is_string()),
-        "{report}"
+        items.iter().any(|i| i["key"] == "render.head"
+            && i["text"].is_string()
+            && i["risk"] == "high"
+            && i["high_risk"] == true),
+        "render.head is high risk (R22): {report}"
     );
     assert!(report["limits"].is_array(), "{report}");
     report

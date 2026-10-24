@@ -26,7 +26,7 @@ use ferrite_core::{CoreError, ExtensionService};
 use ferrite_domain::InstalledTheme;
 use ferrite_http::extensions::{Inspected, Installer, MAX_PLUGIN_BYTES};
 use ferrite_media::MediaStore;
-use ferrite_plugin_host::{HostConfig, PermissionItem, PermissionReport};
+use ferrite_plugin_host::{HostConfig, PermissionItem, PermissionReport, Risk};
 use ferrite_store::Store;
 use ferrite_theme::Theme;
 
@@ -421,7 +421,11 @@ fn print_report(inspected: &Inspected) {
 }
 
 fn item_line(item: &PermissionItem) -> String {
-    let mark = if item.high_risk { '!' } else { ' ' };
+    let mark = match item.risk {
+        Risk::High => '!',
+        Risk::Medium => '~',
+        Risk::Low => ' ',
+    };
     let detail = if item.detail.is_empty() {
         String::new()
     } else {

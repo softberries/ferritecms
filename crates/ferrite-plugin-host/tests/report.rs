@@ -61,7 +61,7 @@ fn report_diff_against_current_grant() -> TestResult {
     let added = &report.added[0];
     assert_eq!(added.key, "http");
     assert!(added.text.contains("ping.example.org"), "{}", added.text);
-    assert!(added.high_risk);
+    assert!(added.high_risk());
 
     // Same grant: nothing added. No current grant (a fresh install): everything is new.
     let same = v1.permission_report(ARTIFACT, Some(&current), &HostConfig::default())?;
@@ -337,7 +337,7 @@ fn limits_above_default_need_approval() -> TestResult {
         .collect();
     assert_eq!(limit_items.len(), 1, "{limit_items:?}");
     assert_eq!(limit_items[0].key, "limits.memory");
-    assert!(limit_items[0].high_risk);
+    assert!(limit_items[0].high_risk());
     Ok(())
 }
 
@@ -483,7 +483,7 @@ fn legacy_grant_caps_limits_at_the_defaults() -> TestResult {
     let report = m.permission_report(ARTIFACT, Some(&legacy), &HostConfig::default())?;
     let added: Vec<_> = report.added.iter().map(|i| i.key).collect();
     assert_eq!(added, ["limits.memory"]);
-    assert!(report.added[0].high_risk);
+    assert!(report.added[0].high_risk());
     let approved = m.permission_report(ARTIFACT, Some(&Grant::of(&m)), &HostConfig::default())?;
     assert!(approved.added.is_empty(), "{:?}", approved.added);
     Ok(())
