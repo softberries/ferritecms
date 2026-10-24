@@ -25,7 +25,8 @@
 //!    cleanly);
 //! 9. the background tasks: the invalidation loop (`cache.poll_interval_ms`; with
 //!    `LISTEN` wake-ups in cluster mode) with the [`Reloader`] hook (hot swap of theme,
-//!    plugins and permalinks, P18), the shared plugin-failure flusher (P20), the job
+//!    plugins and permalinks, P18), the shared plugin-failure flusher (P20), the
+//!    `request.served` flusher (every 10 s or 1 000 events, P21), the job
 //!    runner (`cluster.workers`; built-in prune jobs, scheduled publishing and the
 //!    caller's handlers), the periodic scheduler (prune jobs hourly,
 //!    `content.publish_due` every 30 s) and the heartbeat (`nodes.meta` carries the
@@ -38,7 +39,8 @@
 //! connections **and** stop the job runner at once; open requests get up to 10 s while
 //! running jobs get 9 s (P10) to finish, after which the runner releases the rest
 //! without using an attempt (the runner is abandoned after 12 s, R6). Then the
-//! background tasks stop (the failure flusher writes once more), mail sends still
+//! background tasks stop (the failure flusher writes once more, the `request.served`
+//! buffer is flushed into jobs once more, for the next runner to claim), mail sends still
 //! running (`[mail]`) are cancelled, and the node leaves the registry, together within
 //! 1 s; [`run`] closes the database pools (up to 2 s, cut so that the steps so far end
 //! within 13 s of the signal), and `main` shuts the runtime
@@ -66,7 +68,7 @@ use ferrite_core::{
 use ferrite_domain::{NodeId, Timestamp};
 use ferrite_http::{
     AppParts, AppState, FLUSH_EVERY, HttpConfig, LoadSummary, LoggedIn, PluginReloader,
-    SharedFailures, StoreHostServices,
+    SERVED_FLUSH_EVERY, ServedBuffer, SharedFailures, StoreHostServices,
     api::{ApiParts, ApiState},
     build_site,
     extensions::Installer,
@@ -135,6 +137,10 @@ pub struct NodeOptions {
     pub periodics: Option<Vec<Periodic>>,
     /// Scheduler tick (default `SCHEDULER_TICK`, 10 s).
     pub scheduler_tick: Option<Duration>,
+    /// Test seam: the `request.served` flush interval (default `SERVED_FLUSH_EVERY`,
+    /// 10 s).
+    #[doc(hidden)]
+    pub served_flush: Option<Duration>,
     /// Test seam: whether the invalidation loop and the job runner use `LISTEN`
     /// wake-ups (default: in cluster mode). `Some(false)` leaves the node on polling only.
     #[doc(hidden)]
@@ -210,7 +216,8 @@ pub struct RunningNode {
     runner_stop: CancellationToken,
     runner: JoinHandle<()>,
     background: CancellationToken,
-    /// Reloader, invalidation loop, failure flusher, scheduler, heartbeat.
+    /// Reloader, invalidation loop, failure flusher, `request.served` flusher, scheduler,
+    /// heartbeat.
     tasks: Vec<(&'static str, JoinHandle<()>)>,
     /// The outgoing-mail queue (`[mail]` set); its sends are cancelled at shutdown.
     mail: Option<Arc<MailQueue>>,
@@ -385,6 +392,8 @@ async fn boot(
         AuthService::new(store.clone(), site_key.clone())
             .with_issuer_name(config.site.title.clone()),
     );
+    // `request.served` events of this node's page responses (P21).
+    let served = Arc::new(ServedBuffer::new(store.clone(), host.clone()));
     let state = Arc::new(
         AppState::new(AppParts {
             store: store.clone(),
@@ -397,7 +406,8 @@ async fn boot(
             config: http,
             migrations_ok: true,
         })
-        .with_auth(auth.clone()),
+        .with_auth(auth.clone())
+        .with_served(served.clone()),
     );
 
     let status = Arc::new(NodeStatus::default());
@@ -491,6 +501,10 @@ async fn boot(
         background.clone(),
     );
     let flusher = failures.spawn_flusher(store.clone(), host, FLUSH_EVERY, background.clone());
+    let served_flusher = served.spawn_flusher(
+        opts.served_flush.unwrap_or(SERVED_FLUSH_EVERY),
+        background.clone(),
+    );
     let runner_stop = CancellationToken::new();
     let runner = runner.spawn(runner_stop.clone());
     let scheduler = scheduler.spawn(background.clone());
@@ -524,6 +538,7 @@ async fn boot(
             ("reloader", reload_task),
             ("invalidation loop", poller),
             ("plugin failure flusher", flusher),
+            ("request.served flusher", served_flusher),
             ("scheduler", scheduler),
             ("heartbeat", heartbeat),
         ],

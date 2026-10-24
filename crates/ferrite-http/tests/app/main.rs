@@ -19,3 +19,4 @@ mod plugin_route;
 mod preview;
 mod protocol;
 mod reload_race;
+mod served;

@@ -42,6 +42,9 @@ mod test_support;
 #[path = "node/actions.rs"]
 mod actions;
 
+#[path = "node/served.rs"]
+mod served;
+
 const SITE_URL: &str = "http://127.0.0.1:8080";
 /// How fast a change must reach the node (solo: 250 ms poll; cluster: a notice).
 const CONVERGE: Duration = Duration::from_secs(1);

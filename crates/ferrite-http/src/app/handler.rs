@@ -1,6 +1,12 @@
 //! The one handler behind every public URL.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use axum::{
     body::Body,
@@ -19,6 +25,7 @@ use super::{
     theme_asset,
 };
 use crate::api::cookie::read_session_cookie;
+use crate::plugins::{CacheOutcome, ServedEvent};
 use crate::route::{MAX_PATH_BYTES, NormalQuery, Route, resolve};
 
 /// Longest wait for the `/readyz` database ping.
@@ -34,6 +41,13 @@ const READY_TIMEOUT: Duration = Duration::from_secs(2);
 /// the response is `private, no-store`. A cookie that resolves to nothing (unknown,
 /// expired, disabled user) or a failed lookup is ignored: the request is anonymous.
 /// Without a cookie no session lookup happens.
+///
+/// Every response after the health, asset and preview branches is a page response
+/// (pages, archives, feeds, robots and sitemaps, redirects, 404/410 pages): it is
+/// recorded as a `request.served` event when the state has a
+/// [`ServedBuffer`](crate::plugins::ServedBuffer) (P21; a non-blocking push). Not
+/// recorded: non-GET/HEAD requests, health checks, `/_media` and `/_theme` assets,
+/// previews, and plugin routes and the API (separate axum routes, never this handler).
 pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Body> {
     if req.method() != Method::GET && req.method() != Method::HEAD {
         return method_not_allowed();
@@ -58,28 +72,52 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
         }
         _ => {}
     }
+    let (res, cache) = page(&state, req.headers(), route, path, raw_query).await;
+    if let Some(served) = &state.served {
+        served.record(ServedEvent::new(
+            req.uri().path(),
+            req.headers(),
+            res.status().as_u16(),
+            cache,
+        ));
+    }
+    res
+}
+
+/// A page response for `route` and how the cache answered it: redirects and logged-in
+/// bypass requests skip the cache; otherwise a hit is a request whose render closure
+/// did not run (another request's render, or the stored page, served it).
+async fn page(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    route: Route,
+    path: String,
+    raw_query: Option<String>,
+) -> (Response<Body>, CacheOutcome) {
     // Redirect rows, before the cache. Longer paths cannot match a row: sources are at
     // most 2048 characters (`RedirectService`), a raw path matches only an ASCII one,
     // and the lookup also tries the path with its trailing slash toggled (+1 byte).
     if path.len() <= MAX_PATH_BYTES + 1 {
         match state.redirects.resolve(&path).await {
-            Ok(Some(r)) => return follow(&state, r).await,
+            Ok(Some(r)) => return (follow(state, r).await, CacheOutcome::Bypass),
             Ok(None) => {}
             Err(e) => {
                 tracing::error!(error = %e, "redirect lookup failed");
-                return page_response(&error_page::server_error(&state).await, None);
+                let res = page_response(&error_page::server_error(state).await, None);
+                return (res, CacheOutcome::Bypass);
             }
         }
     }
     if let Route::Canonical(to) = &route {
-        return match HeaderValue::from_str(to) {
+        let res = match HeaderValue::from_str(to) {
             Ok(location) => redirect(StatusCode::MOVED_PERMANENTLY, location),
             // Unreachable: the router writes visible ASCII only.
-            Err(_) => missing(&state, Missing::NotFound).await,
+            Err(_) => missing(state, Missing::NotFound).await,
         };
+        return (res, CacheOutcome::Bypass);
     }
     let query = NormalQuery::parse(raw_query.as_deref());
-    let user = session(&state, req.headers()).await.map(|who| who.user.id);
+    let user = session(state, headers).await.map(|who| who.user.id);
     let host = state.config.default_host.clone();
     // Per-user variants are keyed by the user id alone, which is safe only because
     // nothing user-specific reaches the render: plugins get `is_logged_in` and nothing
@@ -97,8 +135,7 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
         (Some(_), LoggedIn::Bypass) => None,
     };
     let logged_in = user.is_some();
-    let if_none_match = req
-        .headers()
+    let if_none_match = headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
@@ -106,26 +143,40 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
     // flush guard: a route-table swap and its flush (a node reload) that land between
     // the lookup above and the render would otherwise let a page built from the old
     // table be stored after the flush, where no later event drops it.
+    let rendered = Arc::new(AtomicBool::new(false));
     let render = {
         let state = state.clone();
+        let rendered = rendered.clone();
         async move {
+            rendered.store(true, Ordering::Relaxed);
             let route = resolve(&path, raw_query.as_deref(), &state.routes.load());
             pipeline::render(state, route, path, query, logged_in).await
         }
     };
-    let page = match key {
-        Some(key) => state.cache.get_or_render(key, render).await.map_err(drop),
-        None => render.await.map(Arc::new).map_err(drop),
+    let (page, cache) = match key {
+        Some(key) => {
+            let page = state.cache.get_or_render(key, render).await.map_err(drop);
+            let cache = if rendered.load(Ordering::Relaxed) {
+                CacheOutcome::Miss
+            } else {
+                CacheOutcome::Hit
+            };
+            (page, cache)
+        }
+        None => (
+            render.await.map(Arc::new).map_err(drop),
+            CacheOutcome::Bypass,
+        ),
     };
     let mut res = match page {
         Ok(page) => page_response(&page, if_none_match.as_deref()),
         // Never cached under the path: the shared 404 body (R26).
-        Err(()) => missing(&state, Missing::NotFound).await,
+        Err(()) => missing(state, Missing::NotFound).await,
     };
     if logged_in {
         private_no_store(&mut res);
     }
-    res
+    (res, cache)
 }
 
 /// The session behind the request's `ferrite_session` cookie, if any. No cookie, no

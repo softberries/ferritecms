@@ -20,6 +20,7 @@ use ferrite_store::{Store, StoreError};
 use ferrite_theme::{Renderer, SiteInfo, Theme};
 use tokio::sync::Semaphore;
 
+use crate::plugins::ServedBuffer;
 use crate::route::{RouteTable, TypeInfo};
 
 /// Content type that is never routed (media items are only shown inside other items).
@@ -166,6 +167,9 @@ pub struct AppState {
     /// not an absolute http(s) URL; unsafe plugin routes without `cross_origin` are
     /// then refused.
     pub(crate) origin: Option<String>,
+    /// Where page responses are recorded as `request.served` events (P21); `None`
+    /// (no [`with_served`](Self::with_served)): nothing is recorded.
+    pub(crate) served: Option<Arc<ServedBuffer>>,
     renders: AtomicU64,
 }
 
@@ -174,6 +178,7 @@ impl AppState {
         Self {
             redirects: Arc::new(RedirectService::new(parts.store.clone())),
             auth: None,
+            served: None,
             renderer: Renderer::new(),
             render_slots: Arc::new(Semaphore::new(
                 parts
@@ -202,6 +207,12 @@ impl AppState {
     /// P21); without it the site is anonymous-only.
     pub fn with_auth(mut self, auth: Arc<AuthService>) -> Self {
         self.auth = Some(auth);
+        self
+    }
+
+    /// Every public page response is recorded into `served` (`request.served`, P21).
+    pub fn with_served(mut self, served: Arc<ServedBuffer>) -> Self {
+        self.served = Some(served);
         self
     }
 

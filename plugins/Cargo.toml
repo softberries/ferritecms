@@ -11,6 +11,7 @@ members = [
     "examples/settings-probe",
     "examples/router",
     "examples/notifier",
+    "examples/counter",
     "examples/hostile/undeclared-import",
     "examples/hostile/sockets",
     "examples/hostile/loop",

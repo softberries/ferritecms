@@ -249,7 +249,7 @@ undeclared import fails instantiation even if the install-time check were bypass
 
 ### 4a. `request.served` (analytics)
 
-*M0 status: not implemented (M2). M0 only has the `request.served` entry in the hook catalogue.*
+*Built in M2a-2 (P21, Task 12): `ferrite_http::ServedBuffer`, wired into `serve`.*
 
 Fired for every public page response **including cache hits**. Events are buffered in
 memory per node and flushed every 10 s (or 1 000 events) as **one** `plugin.action` job
@@ -257,6 +257,38 @@ per subscribed plugin — never one job per request. Payload contains no IP, coo
 full user agent: only path, status, timestamp, referrer host, a coarse UA class
 (`browser`/`bot`/`other`) and cache hit/miss. Lost on node crash (acceptable for
 analytics; documented).
+
+As built:
+
+- **Recorded:** every response of the public handler after its health, asset and
+  preview branches: content pages, archives, search, feeds, robots and sitemaps, 404
+  and 410 pages, canonical and redirect-row redirects. **Not recorded:** non-GET/HEAD
+  requests, `/healthz`, `/readyz`, `/_media` and `/_theme` assets, `/_preview`,
+  plugin routes (`/_p/`) and the API (separate axum routes).
+- **Event:** `{"path", "status", "ts", "referrer_host", "ua_class", "cache"}`. `path` is
+  the raw percent-encoded path without the query, cut to 512 bytes (F36; a decoded
+  path could hold a NUL and make the whole job payload invalid). `referrer_host` is the
+  lowercased ASCII host of a single absolute `Referer` (≤ 253 bytes), else `null`.
+  `ua_class`: `bot` if the user agent contains `bot`, `crawl`, `spider` or `slurp`
+  (ASCII case-insensitive), else `browser` if it starts with `Mozilla/`, else `other`.
+  `cache`: `hit` (this request did not run the render), `miss`, or `bypass` (logged-in
+  request under `cache.logged_in = "bypass"`, or a redirect answered before the cache).
+  No query string, IP or IP hash, cookie, header value, full user agent or user id.
+- **Buffer:** a push under a lock held for that push only; at 10 000 buffered events
+  new ones are dropped and counted. The request never waits for the store or a plugin.
+- **Flush:** a per-node task flushes every 10 s, as soon as 1 000 events are buffered,
+  and once more at shutdown (after the HTTP drain, inside the background-stop budget;
+  the jobs then wait for the next runner). One transaction enqueues one job per enabled
+  loaded subscriber on this node (`PluginHost::subscribers`) and per 1 000 events:
+  payload `{"events": […]}`, subject `null`, priority -1. Without subscribers the
+  events are discarded; without events nothing is enqueued. A failed enqueue loses the
+  batch (logged, counted as dropped).
+- **Delivery:** the `plugin.action` handler (04 §6) re-checks the row, calls the plugin
+  bounded like every action (fuel, memory, action deadline), counts a failure towards
+  auto-disable and retries; at least once, so a subscriber must tolerate a repeated
+  batch. The hook needs no capability; what the plugin does with the events is limited
+  by its own grant (`kv`, …), and the events name nothing of other plugins.
+- Example subscriber: `plugins/examples/counter` (adds each batch's size to a KV count).
 
 ### 4b. Plugin routes
 

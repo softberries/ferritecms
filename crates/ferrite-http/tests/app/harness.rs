@@ -14,7 +14,7 @@ use ferrite_core::{
     TaxonomyService,
 };
 use ferrite_domain::{ContentId, ContentItem, Role, TermId, User};
-use ferrite_http::{AppParts, AppState, HttpConfig, build_app, load_route_table};
+use ferrite_http::{AppParts, AppState, HttpConfig, ServedBuffer, build_app, load_route_table};
 use ferrite_theme::{Theme, ThemeSource};
 use http_body_util::BodyExt;
 use serde_json::json;
@@ -128,23 +128,54 @@ impl App {
         migrations_ok: bool,
         config: HttpConfig,
     ) -> Arc<AppState> {
+        Arc::new(Self::build_state(site, reader, theme, migrations_ok, config).await)
+    }
+
+    /// The state [`state_with_reader`](Self::state_with_reader) wraps, for callers that
+    /// add more (`with_served`).
+    pub async fn build_state(
+        site: &Site,
+        reader: Arc<ferrite_core::SiteReader>,
+        theme: Arc<Theme>,
+        migrations_ok: bool,
+        config: HttpConfig,
+    ) -> AppState {
         let routes = load_route_table(site.store.as_ref(), &PermalinkRules::default())
             .await
             .expect("route table");
-        Arc::new(
-            AppState::new(AppParts {
-                store: site.store.clone(),
-                reader,
-                plugins: site.host.clone(),
-                media: site.media.clone(),
-                theme,
-                cache: Arc::new(PageCache::new(64 * 1024 * 1024)),
-                routes,
-                config,
-                migrations_ok,
-            })
-            .with_auth(Self::auth(site)),
+        AppState::new(AppParts {
+            store: site.store.clone(),
+            reader,
+            plugins: site.host.clone(),
+            media: site.media.clone(),
+            theme,
+            cache: Arc::new(PageCache::new(64 * 1024 * 1024)),
+            routes,
+            config,
+            migrations_ok,
+        })
+        .with_auth(Self::auth(site))
+    }
+
+    /// This app with a fresh state (empty cache) that records `request.served` events
+    /// into the returned buffer.
+    pub async fn with_served(mut self) -> (Self, Arc<ServedBuffer>) {
+        let served = Arc::new(ServedBuffer::new(
+            self.site.store.clone(),
+            self.site.host.clone(),
+        ));
+        let state = Self::build_state(
+            &self.site,
+            self.site.reader.clone(),
+            load_theme(fixture("app-theme")),
+            true,
+            HttpConfig::new(SITE_URL, SITE_TITLE, "en"),
         )
+        .await
+        .with_served(served.clone());
+        self.state = Arc::new(state);
+        self.router = build_app(self.state.clone());
+        (self, served)
     }
 
     /// An auth service over `site`'s store with the site's key (sessions live in the

@@ -1,0 +1,12 @@
+[plugin]
+name      = "counter"
+version   = "0.1.0"
+publisher = "ferritecms.dev"
+world     = "ferrite:plugin/plugin@0.1.0"
+
+# Counts the public page responses it is told about (batched `request.served`, M2a-2 P21).
+[capabilities]
+kv = true
+
+[hooks]
+"request.served" = 10

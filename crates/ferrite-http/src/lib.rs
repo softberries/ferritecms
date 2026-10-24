@@ -17,7 +17,9 @@ pub use app::{
 };
 pub use head::{HeadPage, HeadSite, core_head, page_head, render_head};
 pub use plugins::{
-    FLUSH_EVERY, LoadSummary, PluginReloader, PluginRequest, PluginState, PluginStatus,
-    ReloadReport, RenderTrace, SharedFailures, StoreHostServices, filter_item, run_filter,
+    CacheOutcome, FLUSH_EVERY, LoadSummary, MAX_SERVED_PATH, PluginReloader, PluginRequest,
+    PluginState, PluginStatus, ReloadReport, RenderTrace, SERVED_BUFFER_CAP, SERVED_FLUSH_AT,
+    SERVED_FLUSH_EVERY, SERVED_HOOK, ServedBuffer, ServedEvent, SharedFailures, StoreHostServices,
+    UaClass, filter_item, run_filter, ua_class,
 };
 pub use route::{Candidate, NormalQuery, Route, RouteTable, SitemapPart, TypeInfo, resolve};
