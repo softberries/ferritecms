@@ -9,6 +9,7 @@ members = [
     "examples/html-inject",
     "examples/meta-writer",
     "examples/settings-probe",
+    "examples/router",
     "examples/hostile/undeclared-import",
     "examples/hostile/sockets",
     "examples/hostile/loop",
@@ -25,4 +26,6 @@ members = [
     "examples/hostile/kv-budget",
     "examples/hostile/long-error",
     "examples/hostile/resource-flood",
+    "examples/hostile/route-xss",
+    "examples/hostile/route-flood",
 ]

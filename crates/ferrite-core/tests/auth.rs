@@ -1020,6 +1020,65 @@ async fn totp_confirm_ends_other_sessions(db: &TestDb) {
     assert!(alive(&mine).await);
 }
 
+/// `hit_limit` (Task 8, P16): one count per scope and client (/64 for IPv6), shared by
+/// every node, a window of the caller's choice, `Retry-After` within that window.
+async fn hit_limit_counts_per_scope_and_client(db: &TestDb) {
+    let clock = Clock::new();
+    let peer = db.peer().await;
+    let a = auth_on(db.shared_store(), &clock);
+    let b = auth_on(peer.clone().unwrap_or_else(|| db.shared_store()), &clock);
+    let window = Duration::from_secs(5);
+    align_to_window(db.store(), window, Duration::from_secs(3)).await;
+    for i in 0..3 {
+        let node = if i % 2 == 0 { &a } else { &b };
+        node.hit_limit("route:x:1", ip(1), 3, window).await.unwrap();
+    }
+    match a.hit_limit("route:x:1", ip(1), 3, window).await {
+        Err(CoreError::RateLimited { retry_after_secs }) => {
+            assert!((1..=5).contains(&retry_after_secs), "{retry_after_secs}");
+        }
+        other => panic!("expected RateLimited, got {other:?}"),
+    }
+    // Another client, another scope, and no address at all are separate buckets.
+    b.hit_limit("route:x:1", ip(2), 3, window).await.unwrap();
+    b.hit_limit("route:x:2", ip(1), 3, window).await.unwrap();
+    for _ in 0..3 {
+        a.hit_limit("route:x:1", None, 3, window).await.unwrap();
+    }
+    assert!(a.hit_limit("route:x:1", None, 3, window).await.is_err());
+    // The per-plugin client hash: keyed, bounded, per plugin, not the session hash.
+    let v4: IpAddr = "198.51.100.1".parse().unwrap();
+    let mapped = IpAddr::V6(Ipv4Addr::new(198, 51, 100, 1).to_ipv6_mapped());
+    let h = a.plugin_ip_hash("router", v4);
+    assert_eq!(h.len(), 32);
+    assert!(
+        h.bytes()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    );
+    assert_eq!(h, b.plugin_ip_hash("router", mapped));
+    assert_ne!(h, a.plugin_ip_hash("route-xss", v4));
+    assert_ne!(h, a.ip_hash(v4));
+    assert_ne!(
+        h,
+        a.plugin_ip_hash("router", "198.51.100.2".parse().unwrap())
+    );
+    // `plugin || 0x00 || ip`: no name/address split collides.
+    assert_ne!(
+        a.plugin_ip_hash("a1", "1.2.3.4".parse().unwrap()),
+        a.plugin_ip_hash("a", "11.2.3.4".parse().unwrap())
+    );
+    // One IPv6 /64 is one client.
+    let v6 = |s: &str| Some(s.parse::<IpAddr>().unwrap());
+    a.hit_limit("route:y", v6("2001:db8::1"), 1, window)
+        .await
+        .unwrap();
+    assert!(
+        b.hit_limit("route:y", v6("2001:db8::ffff"), 1, window)
+            .await
+            .is_err()
+    );
+}
+
 backend_tests!(
     login_issues_session_and_resolves,
     unknown_user_wrong_password_and_disabled_look_the_same,
@@ -1034,4 +1093,5 @@ backend_tests!(
     csrf_token_is_bound_to_the_session,
     tokens_scoped_counted_and_rate_limited,
     rehash_on_login_when_params_change,
+    hit_limit_counts_per_scope_and_client,
 );

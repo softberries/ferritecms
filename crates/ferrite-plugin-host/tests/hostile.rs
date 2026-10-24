@@ -9,7 +9,7 @@ use std::time::Duration;
 use common::{plugin_manifest, plugin_wasm};
 use ferrite_plugin_host::{
     FailureKind, FailureSink, FilterValue, Head, HostConfig, HostServices, InMemoryServices,
-    KindOk, Manifest, PluginHost, Post, RequestInfo,
+    KindOk, Manifest, PluginError, PluginHost, Post, RequestInfo, RouteRequest,
 };
 use tokio::sync::Notify;
 
@@ -592,5 +592,64 @@ async fn failure_sink_receives_every_failure() -> TestResult {
         "one record per failed call, none for hello"
     );
     assert_eq!(host.failures().len(), 3);
+    Ok(())
+}
+
+fn route_req(path: &str) -> RouteRequest {
+    RouteRequest {
+        method: "GET".into(),
+        path: path.into(),
+        query: Vec::new(),
+        headers: Vec::new(),
+        body: Vec::new(),
+        client_ip_hash: String::new(),
+        user: None,
+    }
+}
+
+/// A panicking, a spinning and an oversized route handler each fail only their own
+/// call (classified and recorded); the plugin's other routes keep answering.
+#[tokio::test]
+async fn route_failures_are_contained() -> TestResult {
+    let host = host_with(HostConfig::default(), &["route-xss", "router"])?;
+    let failed = |r: Result<_, PluginError>| matches!(r, Err(PluginError::CallFailed { .. }));
+    assert!(failed(
+        host.handle_route("route-xss", route_req("/panic")).await
+    ));
+    assert_eq!(last_kind(&host), Some(FailureKind::Trap));
+    assert!(failed(
+        host.handle_route("route-xss", route_req("/loop")).await
+    ));
+    assert_eq!(last_kind(&host), Some(FailureKind::OutOfFuel));
+    // 2 MiB body: over the 1 MiB route response cap.
+    assert!(failed(host.handle_route("router", route_req("/big")).await));
+    assert_eq!(last_kind(&host), Some(FailureKind::InvalidOutput));
+    let ok = host.handle_route("route-xss", route_req("/x")).await?;
+    assert_eq!(ok.status, 200);
+    assert_eq!(host.failures().len(), 3);
+    Ok(())
+}
+
+/// With fuel to spare, only the route deadline stops a spinning handler.
+#[tokio::test]
+async fn route_deadline_stops_spinning_handler() -> TestResult {
+    let cfg = HostConfig {
+        fuel: u64::MAX / 2,
+        route_deadline: Duration::from_millis(50),
+        ..HostConfig::default()
+    };
+    let host = host_with(cfg, &["route-xss"])?;
+    let started = std::time::Instant::now();
+    let res = host.handle_route("route-xss", route_req("/loop")).await;
+    assert!(
+        matches!(res, Err(PluginError::CallFailed { .. })),
+        "{res:?}"
+    );
+    assert_eq!(last_kind(&host), Some(FailureKind::Deadline));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
     Ok(())
 }

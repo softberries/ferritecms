@@ -196,7 +196,7 @@ fn bearer_token(value: &HeaderValue) -> Option<&str> {
 }
 
 /// Whether the request's `Origin` (else its `Referer`'s origin) is `origin`.
-fn same_origin(headers: &HeaderMap, origin: &str) -> bool {
+pub(crate) fn same_origin(headers: &HeaderMap, origin: &str) -> bool {
     let one = |name| {
         let mut values = headers.get_all(name).iter();
         match (values.next(), values.next()) {

@@ -319,32 +319,49 @@ impl Drop for Cluster {
 
 /// `GET path` (identity encoding, `Connection: close`): status and body.
 pub async fn get(addr: SocketAddr, path: &str) -> (u16, String) {
+    let (status, _, body) = send(addr, "GET", path, &[], b"").await;
+    (status, body)
+}
+
+/// `method path` with extra `headers` and `body` (identity encoding,
+/// `Connection: close`): status, the response head (lowercased) and body.
+pub async fn send(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+) -> (u16, String, String) {
+    let mut head = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+         Content-Length: {}\r\n",
+        body.len()
+    );
+    for (k, v) in headers {
+        head.push_str(&format!("{k}: {v}\r\n"));
+    }
+    head.push_str("\r\n");
     let request = async {
         let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
-        s.write_all(
-            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-                .as_bytes(),
-        )
-        .await
-        .unwrap();
+        s.write_all(head.as_bytes()).await.unwrap();
+        s.write_all(body).await.unwrap();
         let mut raw = Vec::new();
         s.read_to_end(&mut raw).await.unwrap();
         raw
     };
     let raw = tokio::time::timeout(REQUEST_TIMEOUT, request)
         .await
-        .unwrap_or_else(|_| panic!("GET {path} on {addr}: no answer within {REQUEST_TIMEOUT:?}"));
+        .unwrap_or_else(|_| {
+            panic!("{method} {path} on {addr}: no answer within {REQUEST_TIMEOUT:?}")
+        });
     let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
-    let head = String::from_utf8_lossy(&raw[..split]).into_owned();
+    let head = String::from_utf8_lossy(&raw[..split]).to_ascii_lowercase();
     let status = head.split(' ').nth(1).and_then(|c| c.parse().ok()).unwrap();
     let mut body = raw[split + 4..].to_vec();
-    if head
-        .to_ascii_lowercase()
-        .contains("transfer-encoding: chunked")
-    {
+    if head.contains("transfer-encoding: chunked") {
         body = dechunk(&body);
     }
-    (status, String::from_utf8_lossy(&body).into_owned())
+    (status, head, String::from_utf8_lossy(&body).into_owned())
 }
 
 fn dechunk(mut data: &[u8]) -> Vec<u8> {

@@ -1,0 +1,12 @@
+[plugin]
+name      = "route-flood"
+version   = "0.1.0"
+publisher = "ferritecms.dev"
+world     = "ferrite:plugin/plugin@0.1.0"
+
+[capabilities]
+routes = true
+
+# A form endpoint other sites may post to, limited to 5 posts a minute per client.
+[routes]
+"/submit" = { methods = ["POST"], rate_limit = "5/min", cross_origin = true }

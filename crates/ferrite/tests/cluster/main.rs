@@ -16,6 +16,7 @@ mod invalidation;
 mod jobs;
 mod reload;
 mod rolling;
+mod routes;
 
 #[path = "../../../ferrite-plugin-host/src/test_support.rs"]
 mod test_support;

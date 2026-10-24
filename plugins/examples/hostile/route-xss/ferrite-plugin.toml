@@ -1,0 +1,13 @@
+[plugin]
+name      = "route-xss"
+version   = "0.1.0"
+publisher = "ferritecms.dev"
+world     = "ferrite:plugin/plugin@0.1.0"
+
+[capabilities]
+routes = true
+
+[routes]
+"/x"     = { methods = ["GET"] }
+"/panic" = { methods = ["GET"] }
+"/loop"  = { methods = ["GET"] }

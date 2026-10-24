@@ -161,6 +161,11 @@ pub struct AppState {
     pub(crate) renderer: Renderer,
     /// Render slots ([`HttpConfig::max_concurrent_renders`]).
     pub(crate) render_slots: Arc<Semaphore>,
+    /// `scheme://host[:port]` of [`HttpConfig::site_url`], derived once (pre-flight
+    /// F25): what plugin routes compare `Origin`/`Referer` with. `None` when the URL is
+    /// not an absolute http(s) URL; unsafe plugin routes without `cross_origin` are
+    /// then refused.
+    pub(crate) origin: Option<String>,
     renders: AtomicU64,
 }
 
@@ -177,6 +182,9 @@ impl AppState {
                     .min(Semaphore::MAX_PERMITS),
             )),
             renders: AtomicU64::new(0),
+            origin: crate::api::origin_of(&parts.config.site_url)
+                .ok()
+                .map(|(origin, _)| origin),
             store: parts.store,
             reader: parts.reader,
             plugins: parts.plugins,

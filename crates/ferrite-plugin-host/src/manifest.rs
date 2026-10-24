@@ -136,6 +136,33 @@ pub struct RouteSpec {
     pub cross_origin: bool,
 }
 
+impl RouteSpec {
+    /// The route's limit as (requests, window): its `rate_limit`, else
+    /// [`DEFAULT_ROUTE_RATE_LIMIT`](crate::DEFAULT_ROUTE_RATE_LIMIT) (`N/s`, `N/min`,
+    /// `N/h`; a manifest never holds another form).
+    pub fn rate(&self) -> (u32, std::time::Duration) {
+        self.rate_limit
+            .as_deref()
+            .and_then(parse_rate)
+            .or_else(|| parse_rate(crate::DEFAULT_ROUTE_RATE_LIMIT))
+            .unwrap_or((10, std::time::Duration::from_secs(60)))
+    }
+}
+
+/// `(N, window)` of a valid `N/s|N/min|N/h` rate limit.
+fn parse_rate(s: &str) -> Option<(u32, std::time::Duration)> {
+    if !valid_rate_limit(s) {
+        return None;
+    }
+    let (n, unit) = s.split_once('/')?;
+    let secs = match unit {
+        "s" => 1,
+        "min" => 60,
+        _ => 3600,
+    };
+    Some((n.parse().ok()?, std::time::Duration::from_secs(secs)))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingKind {
     Text,
@@ -977,6 +1004,10 @@ world = "ferrite:plugin/plugin@0.1.0"
         assert!(m.capabilities.routes && m.capabilities.kv);
         assert_eq!(m.routes["/submit"].methods, ["POST"]);
         assert_eq!(m.routes["/submit"].rate_limit.as_deref(), Some("10/min"));
+        assert_eq!(
+            m.routes["/submit"].rate(),
+            (10, std::time::Duration::from_secs(60))
+        );
         assert_eq!(m.settings["add_json_ld"].kind, SettingKind::Bool);
         assert_eq!(
             m.settings["add_json_ld"].default,
@@ -1149,6 +1180,11 @@ world = "ferrite:plugin/plugin@0.1.0"
         let m = Manifest::parse(&ok).expect("ok");
         assert_eq!(m.routes["/x"].methods, ["GET"]);
         assert!(!m.routes["/x"].cross_origin);
+        // No `rate_limit`: the default.
+        assert_eq!(
+            m.routes["/x"].rate(),
+            (10, std::time::Duration::from_secs(60))
+        );
     }
 
     #[test]
@@ -1183,6 +1219,10 @@ world = "ferrite:plugin/plugin@0.1.0"
         ));
         let m = Manifest::parse(&ok).expect("ok");
         assert!(m.routes["/a"].cross_origin);
+        assert_eq!(
+            m.routes["/a"].rate(),
+            (5, std::time::Duration::from_secs(1))
+        );
     }
 
     #[test]

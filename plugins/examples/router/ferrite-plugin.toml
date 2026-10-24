@@ -1,0 +1,16 @@
+[plugin]
+name      = "router"
+version   = "0.1.0"
+publisher = "ferritecms.dev"
+world     = "ferrite:plugin/plugin@0.1.0"
+
+[capabilities]
+routes = true
+
+# Every route gets the default rate limit (10/min per client) and the site-origin rule.
+[routes]
+"/hello" = { methods = ["GET"] }
+"/echo"  = { methods = ["POST"] }
+"/go"    = { methods = ["GET"] }
+"/away"  = { methods = ["GET"] }
+"/big"   = { methods = ["GET"] }

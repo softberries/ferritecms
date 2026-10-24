@@ -32,7 +32,9 @@ use hmac::Mac;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
-use super::key::{SiteKey, hex, ip_hash, keyed_id, keyed_mac, random_bytes, sha256_hex};
+use super::key::{
+    PLUGIN_IP_LABEL, SiteKey, hex, ip_hash, keyed_id, keyed_mac, random_bytes, sha256_hex,
+};
 use super::password::{self, Verified};
 use super::seal::{open, seal};
 use super::{limits, totp};
@@ -211,6 +213,37 @@ impl AuthService {
         ip_hash(&self.key, ip)
     }
 
+    /// The client-address hash a plugin route sees (`route-request.client-ip-hash`,
+    /// M2a-2 P15): the first 32 hex characters of HMAC-SHA256 under the
+    /// [`PLUGIN_IP_LABEL`] subkey over `plugin`, a zero byte and the canonical address,
+    /// so two plugins cannot join a visitor across each other, and neither can join it
+    /// with the session hash ([`ip_hash`](Self::ip_hash)).
+    pub fn plugin_ip_hash(&self, plugin: &str, ip: IpAddr) -> String {
+        let mut msg = Vec::with_capacity(plugin.len() + 48);
+        msg.extend_from_slice(plugin.as_bytes());
+        msg.push(0);
+        msg.extend_from_slice(ip.to_canonical().to_string().as_bytes());
+        keyed_id(&self.key, PLUGIN_IP_LABEL, &msg)
+    }
+
+    /// Counts one hit (outside any `Tx`, R6) on bucket `<scope>:ip:<limit hash>` (IPv6
+    /// per /64; `<scope>:ip:none` without an address) in fixed windows of `window`
+    /// shared by every node, and refuses it with `RateLimited` (`Retry-After` clamped to
+    /// 1 s..=`window`) once the window's count is over `max`. `scope` is the caller's
+    /// bucket prefix and must not hold caller text (M2a-1 F7); with the address part it
+    /// must fit [`MAX_RATE_BUCKET`](ferrite_store::MAX_RATE_BUCKET), else `Store`
+    /// (`Invalid`).
+    pub async fn hit_limit(
+        &self,
+        scope: &str,
+        ip: Option<IpAddr>,
+        max: u32,
+        window: Duration,
+    ) -> Result<(), CoreError> {
+        let bucket = limits::scoped(&self.key, scope, ip);
+        limits::hit(self.store.as_ref(), &bucket, max, window).await
+    }
+
     // ---- login ---------------------------------------------------------------------
 
     /// Checks a login or e-mail and password. Rate limits first (`login:ip:<hash>` 10/min
@@ -225,6 +258,7 @@ impl AuthService {
                 store,
                 &limits::login_ip(&self.key, ip),
                 limits::LOGIN_PER_IP,
+                limits::WINDOW,
             )
             .await?;
         }
@@ -235,6 +269,7 @@ impl AuthService {
             store,
             &limits::login_user(&self.key, attempt.login),
             limits::LOGIN_PER_USER,
+            limits::WINDOW,
         )
         .await?;
 
@@ -319,6 +354,7 @@ impl AuthService {
             self.store.as_ref(),
             &limits::totp_user(challenge.user),
             limits::TOTP_PER_USER,
+            limits::WINDOW,
         )
         .await?;
         let user = self
@@ -623,6 +659,7 @@ impl AuthService {
                     self.store.as_ref(),
                     &limits::token_ip(&self.key, ip),
                     limits::BAD_TOKEN_PER_IP,
+                    limits::WINDOW,
                 )
                 .await?;
             }
@@ -743,6 +780,7 @@ impl AuthService {
             self.store.as_ref(),
             &limits::totp_user(user.id),
             limits::TOTP_PER_USER,
+            limits::WINDOW,
         )
         .await?;
         let otp = totp::build(&secret, &self.issuer, &user.login)?;
@@ -820,6 +858,7 @@ impl AuthService {
             self.store.as_ref(),
             &limits::login_user(&self.key, login),
             limits::LOGIN_PER_USER,
+            limits::WINDOW,
         )
         .await
     }

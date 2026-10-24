@@ -170,6 +170,68 @@ async fn actions_and_routes_are_gated() -> TestResult {
     Ok(())
 }
 
+fn route_req(method: &str, path: &str) -> RouteRequest {
+    RouteRequest {
+        method: method.into(),
+        path: path.into(),
+        query: Vec::new(),
+        headers: Vec::new(),
+        body: Vec::new(),
+        client_ip_hash: "ab".repeat(16),
+        user: Some("u1".into()),
+    }
+}
+
+#[tokio::test]
+async fn handle_route_success_path() -> TestResult {
+    let host = PluginHost::new(HostConfig::default(), Arc::new(InMemoryServices::new()))?;
+    host.install(
+        Manifest::parse(&plugin_manifest("router"))?,
+        &plugin_wasm("router"),
+    )?;
+    let spec = host.route("router", "/hello")?;
+    assert_eq!(spec.methods, ["GET"]);
+    assert_eq!(spec.rate_limit, None);
+    assert!(!spec.cross_origin);
+    let res = host
+        .handle_route("router", route_req("GET", "/hello"))
+        .await?;
+    assert_eq!(res.status, 200);
+    assert_eq!(
+        res.headers,
+        [("Content-Type".to_owned(), "application/json".to_owned())]
+    );
+    let body: serde_json::Value = serde_json::from_slice(&res.body)?;
+    assert_eq!(
+        body,
+        serde_json::json!({"user": "u1", "ip": "ab".repeat(16)})
+    );
+    let res = host.handle_route("router", route_req("GET", "/go")).await?;
+    assert_eq!(res.status, 303);
+    // Unknown path, wrong method, unknown plugin.
+    assert!(matches!(
+        host.route("router", "/nope"),
+        Err(PluginError::RouteNotFound { .. })
+    ));
+    assert!(matches!(
+        host.handle_route("router", route_req("POST", "/hello"))
+            .await,
+        Err(PluginError::RouteNotFound { .. })
+    ));
+    assert!(matches!(
+        host.route("nope", "/hello"),
+        Err(PluginError::UnknownPlugin(_))
+    ));
+    // A disabled plugin has no routes.
+    host.disable("router", "test");
+    assert!(matches!(
+        host.route("router", "/hello"),
+        Err(PluginError::Disabled { .. })
+    ));
+    assert!(host.failures().is_empty(), "{:?}", host.failures());
+    Ok(())
+}
+
 #[tokio::test]
 async fn mismatched_or_unknown_hooks_return_input() -> TestResult {
     let host = hello_host()?;

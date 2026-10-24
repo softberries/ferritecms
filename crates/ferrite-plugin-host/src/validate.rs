@@ -1,13 +1,21 @@
 //! Output validation for filter results (design 05 §7): the variant, the size caps, and
 //! `ammonia` sanitising of `html` results (M0 ruling R4 closed in M1c-2). Head rendering
 //! (escaping, `script-tag` checks) is the HTTP layer's job: the head stays structured
-//! here.
+//! here. Route responses get their own checks ([`validate_route_response`], 05 §4b):
+//! what headers the visitor finally gets is the HTTP layer's choice.
 
 use std::sync::LazyLock;
 
 use crate::capability::FilterType;
 use crate::manifest::HtmlMode;
-use crate::types::{FilterValue, Head};
+use crate::types::{FilterValue, Head, RouteResponse};
+
+/// Most bytes of a route request body, and of a route response body (05 §4b).
+pub const MAX_ROUTE_BODY_BYTES: usize = 1024 * 1024;
+/// Most headers a route response may carry.
+pub const MAX_ROUTE_HEADERS: usize = 32;
+/// Most bytes of one route response header name, and of one value.
+pub const MAX_ROUTE_HEADER_BYTES: usize = 4 * 1024;
 
 /// Policy for `html` results of plugins without `render.html = "raw"` (ruling R22):
 /// ammonia's defaults (no `<script>`/`<style>`/`<iframe>`/`<form>`/`<svg>`/`<math>`, no
@@ -162,9 +170,91 @@ fn check_size(input: &FilterValue, output: &FilterValue) -> Result<(), String> {
     Ok(())
 }
 
+/// Accept a route response, or say why not: status 200..=599, at most
+/// [`MAX_ROUTE_HEADERS`] headers, each name a non-empty HTTP token and each value
+/// visible ASCII, space or tab, both at most [`MAX_ROUTE_HEADER_BYTES`], and a body of
+/// at most [`MAX_ROUTE_BODY_BYTES`]. The checks say nothing about which headers may
+/// reach the visitor.
+pub(crate) fn validate_route_response(res: &RouteResponse) -> Result<(), String> {
+    if !(200..=599).contains(&res.status) {
+        return Err(format!("status {} outside 200..=599", res.status));
+    }
+    if res.headers.len() > MAX_ROUTE_HEADERS {
+        return Err(format!(
+            "{} headers, limit {MAX_ROUTE_HEADERS}",
+            res.headers.len()
+        ));
+    }
+    for (i, (name, value)) in res.headers.iter().enumerate() {
+        if name.len() > MAX_ROUTE_HEADER_BYTES || value.len() > MAX_ROUTE_HEADER_BYTES {
+            return Err(format!("header {i} over {MAX_ROUTE_HEADER_BYTES} bytes"));
+        }
+        if name.is_empty() || !name.bytes().all(is_token_byte) {
+            return Err(format!("header {i}: invalid name"));
+        }
+        if !value
+            .bytes()
+            .all(|b| b == b'\t' || (b' '..=b'~').contains(&b))
+        {
+            return Err(format!("header {i}: invalid value"));
+        }
+    }
+    if res.body.len() > MAX_ROUTE_BODY_BYTES {
+        return Err(format!(
+            "body is {} bytes, limit {MAX_ROUTE_BODY_BYTES}",
+            res.body.len()
+        ));
+    }
+    Ok(())
+}
+
+/// An RFC 9110 `tchar`.
+fn is_token_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn route(status: u16, headers: &[(&str, &str)], body: usize) -> RouteResponse {
+        RouteResponse {
+            status,
+            headers: headers
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+            body: vec![b'x'; body],
+        }
+    }
+
+    #[test]
+    fn route_responses_are_bounded() {
+        let ok = |r: RouteResponse| validate_route_response(&r).is_ok();
+        assert!(ok(route(200, &[("Content-Type", "text/plain")], 0)));
+        assert!(ok(route(599, &[], MAX_ROUTE_BODY_BYTES)));
+        assert!(ok(route(303, &[("Location", "/a b\tc")], 0)));
+        for status in [0, 100, 101, 199, 600, u16::MAX] {
+            assert!(!ok(route(status, &[], 0)), "{status}");
+        }
+        assert!(!ok(route(200, &[], MAX_ROUTE_BODY_BYTES + 1)));
+        let many: Vec<(String, String)> = (0..=MAX_ROUTE_HEADERS)
+            .map(|i| (format!("x-{i}"), "v".to_owned()))
+            .collect();
+        let refs: Vec<(&str, &str)> = many.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        assert!(!ok(route(200, &refs, 0)));
+        assert!(ok(route(200, &refs[..MAX_ROUTE_HEADERS], 0)));
+        let long = "v".repeat(MAX_ROUTE_HEADER_BYTES + 1);
+        assert!(!ok(route(200, &[("x", &long)], 0)));
+        assert!(!ok(route(200, &[(&long, "v")], 0)));
+        assert!(ok(route(200, &[("x", &long[1..])], 0)));
+        for bad_name in ["", "a b", "a:b", "a\nb", "é", "a\0"] {
+            assert!(!ok(route(200, &[(bad_name, "v")], 0)), "{bad_name:?}");
+        }
+        for bad_value in ["a\r\nSet-Cookie: x=1", "a\nb", "\0", "é", "\u{7f}"] {
+            assert!(!ok(route(200, &[("x", bad_value)], 0)), "{bad_value:?}");
+        }
+    }
 
     fn html(n: usize) -> FilterValue {
         FilterValue::Html("a".repeat(n))

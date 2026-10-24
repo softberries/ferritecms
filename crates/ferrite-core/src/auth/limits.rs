@@ -1,6 +1,8 @@
-//! Login, TOTP and bad-token rate limits (P5): fixed one-minute windows counted in the
-//! database by [`RateLimitRepo::hit`](ferrite_store::RateLimitRepo::hit), so every node
-//! shares one count.
+//! Login, TOTP and bad-token rate limits (P5), and the caller-scoped limits of
+//! [`AuthService::hit_limit`](super::AuthService::hit_limit) (plugin routes, M2a-2 P16):
+//! fixed windows (one minute for the auth limits) counted in the database by
+//! [`RateLimitRepo::hit`](ferrite_store::RateLimitRepo::hit), so every node shares one
+//! count.
 //!
 //! * Buckets never hold caller text: IP buckets carry the keyed IP hash (IPv6 masked to
 //!   its /64, F8, because one client usually holds a whole /64), login buckets a keyed
@@ -8,10 +10,10 @@
 //!   two distinct buckets, so one account takes at most 2 × 5 guesses a minute.
 //! * Hits run outside any `Tx` (R6): the counter commits whatever happens next.
 //! * `Retry-After` is `ceil(reset_at - now)` on the database clock the hit used (F6),
-//!   clamped to 1..=60 s. The stored window only moves forward (R7). On SQLite the clock
-//!   is the process clock: if it jumps back, a bucket stays in its (now future) window
-//!   until time catches up, and its count keeps growing until then; the clamp keeps
-//!   `Retry-After` within one window regardless.
+//!   clamped to 1 s..=the window. The stored window only moves forward (R7). On SQLite
+//!   the clock is the process clock: if it jumps back, a bucket stays in its (now
+//!   future) window until time catches up, and its count keeps growing until then; the
+//!   clamp keeps `Retry-After` within one window regardless.
 
 use std::net::{IpAddr, Ipv6Addr};
 use std::time::Duration;
@@ -60,6 +62,14 @@ pub(crate) fn token_ip(key: &SiteKey, ip: IpAddr) -> String {
     format!("token:ip:{}", limit_ip_hash(key, ip))
 }
 
+/// `<scope>:ip:<hash>` ([`limit_ip_hash`]), or `<scope>:ip:none` without an address.
+pub(crate) fn scoped(key: &SiteKey, scope: &str, ip: Option<IpAddr>) -> String {
+    match ip {
+        Some(ip) => format!("{scope}:ip:{}", limit_ip_hash(key, ip)),
+        None => format!("{scope}:ip:none"),
+    }
+}
+
 /// The keyed hash of the address a limit applies to: IPv4 (and IPv4-mapped IPv6) as is,
 /// IPv6 masked to its /64.
 fn limit_ip_hash(key: &SiteKey, ip: IpAddr) -> String {
@@ -73,23 +83,30 @@ fn limit_ip_hash(key: &SiteKey, ip: IpAddr) -> String {
     ip_hash(key, ip)
 }
 
-/// Counts one hit on `bucket` (outside any `Tx`) and refuses it once the count is over
-/// `max` for the current window.
-pub(crate) async fn hit(store: &dyn Store, bucket: &str, max: u32) -> Result<(), CoreError> {
-    let hit = store.read().rate_limits().hit(bucket, WINDOW).await?;
+/// Counts one hit on `bucket` (outside any `Tx`) in fixed windows of `window` and
+/// refuses it once the count is over `max` for the current window.
+pub(crate) async fn hit(
+    store: &dyn Store,
+    bucket: &str,
+    max: u32,
+    window: Duration,
+) -> Result<(), CoreError> {
+    let hit = store.read().rate_limits().hit(bucket, window).await?;
     if hit.count > max {
         return Err(CoreError::RateLimited {
-            retry_after_secs: retry_after(&hit),
+            retry_after_secs: retry_after(&hit, window),
         });
     }
     Ok(())
 }
 
-/// Whole seconds until the window ends, rounded up and clamped to 1..=[`WINDOW`].
-fn retry_after(hit: &RateHit) -> u64 {
+/// Whole seconds until the window ends, rounded up and clamped to 1..=`window`.
+fn retry_after(hit: &RateHit, window: Duration) -> u64 {
     let micros = hit.reset_at.as_micros().saturating_sub(hit.now.as_micros());
     let secs = micros.saturating_add(999_999).div_euclid(1_000_000);
-    u64::try_from(secs).unwrap_or(0).clamp(1, WINDOW.as_secs())
+    u64::try_from(secs)
+        .unwrap_or(0)
+        .clamp(1, window.as_secs().max(1))
 }
 
 #[cfg(test)]
@@ -140,6 +157,10 @@ mod tests {
         assert_ne!(bucket, login_user(&other, "alice@example.com"));
     }
 
+    fn retry_after_min(hit: &RateHit) -> u64 {
+        retry_after(hit, WINDOW)
+    }
+
     #[test]
     fn retry_after_rounds_up_and_clamps() {
         let at = |s: i64| Timestamp::from_micros(s).unwrap();
@@ -148,13 +169,44 @@ mod tests {
             now: at(now),
             reset_at: at(reset),
         };
-        assert_eq!(retry_after(&hit(0, 60_000_000)), 60);
-        assert_eq!(retry_after(&hit(1, 60_000_000)), 60);
-        assert_eq!(retry_after(&hit(59_000_001, 60_000_000)), 1);
-        assert_eq!(retry_after(&hit(30_500_000, 60_000_000)), 30);
+        assert_eq!(retry_after_min(&hit(0, 60_000_000)), 60);
+        assert_eq!(retry_after_min(&hit(1, 60_000_000)), 60);
+        assert_eq!(retry_after_min(&hit(59_000_001, 60_000_000)), 1);
+        assert_eq!(retry_after_min(&hit(30_500_000, 60_000_000)), 30);
         // Clock skew or a future window: never 0, never over a window.
-        assert_eq!(retry_after(&hit(60_000_000, 60_000_000)), 1);
-        assert_eq!(retry_after(&hit(70_000_000, 60_000_000)), 1);
-        assert_eq!(retry_after(&hit(0, 600_000_000)), 60);
+        assert_eq!(retry_after_min(&hit(60_000_000, 60_000_000)), 1);
+        assert_eq!(retry_after_min(&hit(70_000_000, 60_000_000)), 1);
+        assert_eq!(retry_after_min(&hit(0, 600_000_000)), 60);
+    }
+
+    #[test]
+    fn retry_after_clamps_to_the_callers_window() {
+        let at = |s: i64| Timestamp::from_micros(s).unwrap();
+        let hit = RateHit {
+            count: 6,
+            now: at(0),
+            reset_at: at(3_600_000_000),
+        };
+        assert_eq!(retry_after(&hit, Duration::from_secs(3600)), 3600);
+        assert_eq!(retry_after(&hit, Duration::from_secs(5)), 5);
+        // A sub-second window still says "retry in 1 s".
+        assert_eq!(retry_after(&hit, Duration::from_millis(500)), 1);
+    }
+
+    #[test]
+    fn scoped_buckets_are_keyed() {
+        let key = key();
+        let v4 = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1));
+        let bucket = scoped(&key, "route:x:abc", Some(v4));
+        assert_eq!(
+            bucket,
+            format!("route:x:abc:ip:{}", limit_ip_hash(&key, v4))
+        );
+        assert!(!bucket.contains("198.51"));
+        assert_eq!(scoped(&key, "route:x:abc", None), "route:x:abc:ip:none");
+        // IPv6 per /64, as the login limits.
+        let a: IpAddr = "2001:db8:1:2::1".parse().unwrap();
+        let b: IpAddr = "2001:db8:1:2:ffff::9".parse().unwrap();
+        assert_eq!(scoped(&key, "s", Some(a)), scoped(&key, "s", Some(b)));
     }
 }

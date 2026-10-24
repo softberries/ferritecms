@@ -11,6 +11,8 @@ use crate::CoreError;
 
 /// Subkey label for [`ip_hash`].
 pub const IP_HASH_LABEL: &str = "ferrite:ip-hash:v1";
+/// Subkey label for [`AuthService::plugin_ip_hash`](super::AuthService::plugin_ip_hash).
+pub const PLUGIN_IP_LABEL: &str = "ferrite:plugin-ip:v1";
 /// Subkey label for [`seal`](super::seal) / [`open`](super::open).
 pub const SEAL_LABEL: &str = "ferrite:seal:v1";
 
@@ -178,6 +180,7 @@ mod tests {
     fn subkeys_differ_by_label() {
         let key = SiteKey::from_hex(HEX).unwrap();
         assert_ne!(key.subkey(IP_HASH_LABEL), key.subkey(SEAL_LABEL));
+        assert_ne!(key.subkey(IP_HASH_LABEL), key.subkey(PLUGIN_IP_LABEL));
         assert_eq!(key.subkey(SEAL_LABEL), key.subkey(SEAL_LABEL));
         assert_ne!(key.subkey(SEAL_LABEL), [0u8; 32]);
         let other = SiteKey::generate().unwrap();

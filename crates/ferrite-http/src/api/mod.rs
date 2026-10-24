@@ -61,6 +61,7 @@ pub use extract::{
     created, created_at, etag, invalid_cursor, invalid_param,
 };
 pub use problem::{FieldError, Problem};
+pub(crate) use state::origin_of;
 pub use state::{ApiParts, ApiState, InvalidSiteUrl};
 
 use self::{meta::SpecJson, openapi::ApiDoc};

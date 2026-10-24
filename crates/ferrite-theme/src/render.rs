@@ -43,7 +43,8 @@
 //! `pagination` (`page`, `pages`, `prev_url`, `next_url`), `request` (`path`,
 //! `s` = the search query, `page`, `status`, `preview`) and the
 //! helpers `menu(name)`, `related(post, n=3)`, `query(type=…, term=…, limit=10)`,
-//! `asset(path)`, `image(media, size)`, `head()`. Custom filters: `date(fmt)`,
+//! `asset(path)`, `image(media, size)`, `head()`, `plugin_route(name, path)` (a plugin
+//! route's URL, `/_p/<name><path>`). Custom filters: `date(fmt)`,
 //! `excerpt(n)`, `slugify`, `json`.
 //!
 //! MiniJinja builtins that remain: the globals `range` (≤ 100 000 items), `dict`,
@@ -88,7 +89,7 @@ use crate::{
     HelperBridge, ImageRef, Theme, ThemeError,
     bridge::{MAX_QUERY_LIMIT, MAX_RELATED},
     filters,
-    package::asset_url,
+    package::{SEGMENT, asset_url},
     view::ItemObject,
 };
 
@@ -277,6 +278,7 @@ pub(crate) fn build_env(
     env.add_filter("excerpt", filters::excerpt);
     env.add_filter("slugify", filters::slugify);
     env.add_filter("json", filters::json);
+    env.add_function("plugin_route", plugin_route);
     let mut errors = Vec::new();
     for (name, src) in sources {
         if let Err(e) = env.add_template_owned(name.clone(), src) {
@@ -288,6 +290,29 @@ pub(crate) fn build_env(
     } else {
         Err(errors)
     }
+}
+
+/// `plugin_route(name, path)`: the URL of a plugin's route, `/_p/<name><path>` (05
+/// §4b), each path segment percent-encoded. `name` must be a plugin name
+/// (`[a-z0-9-]{2,48}`) and `path` start with `/` and hold no `.`/`..` segment; anything
+/// else is `""` (a template typo yields an empty link, not a URL elsewhere).
+pub(crate) fn plugin_route(name: &str, path: &str) -> String {
+    let name_ok = (2..=48).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    let Some(rest) = path.strip_prefix('/') else {
+        return String::new();
+    };
+    if !name_ok || rest.split('/').any(|seg| seg == "." || seg == "..") {
+        return String::new();
+    }
+    let mut url = format!("/_p/{name}");
+    for seg in rest.split('/') {
+        url.push('/');
+        url.extend(percent_encoding::utf8_percent_encode(seg, SEGMENT));
+    }
+    url
 }
 
 /// The MiniJinja errors in `err`'s source chain, outermost first (errors inside an
@@ -599,6 +624,46 @@ fn image(scope: &Scope, media: &Value, size: Option<&str>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugin_route_helper() {
+        assert_eq!(
+            plugin_route("contact-form", "/submit"),
+            "/_p/contact-form/submit"
+        );
+        assert_eq!(plugin_route("router", "/"), "/_p/router/");
+        assert_eq!(plugin_route("router", "/a/b c"), "/_p/router/a/b%20c");
+        assert_eq!(
+            plugin_route("router", "/x?y=\"<z>#"),
+            "/_p/router/x%3Fy=%22%3Cz%3E%23"
+        );
+        for (name, path) in [
+            ("router", "submit"),
+            ("router", ""),
+            ("Router", "/x"),
+            ("r", "/x"),
+            ("router/../api", "/x"),
+            ("a b", "/x"),
+            ("router", "/../api/v1"),
+            ("router", "/a/./b"),
+            ("router", "/a/.."),
+        ] {
+            assert_eq!(plugin_route(name, path), "", "{name:?} {path:?}");
+        }
+        assert_eq!(plugin_route(&"a".repeat(49), "/x"), "");
+        // Usable from templates (a global function); auto-escaped like `asset()`, which
+        // browsers decode in attributes.
+        let env = build_env(BTreeMap::from([(
+            "t.html".to_owned(),
+            "<form action=\"{{ plugin_route('contact-form', '/submit') }}\">".to_owned(),
+        )]))
+        .unwrap();
+        let out = env.get_template("t.html").unwrap().render(()).unwrap();
+        assert_eq!(
+            out,
+            "<form action=\"&#x2f;_p&#x2f;contact-form&#x2f;submit\">"
+        );
+    }
 
     #[test]
     fn capped_sink_rejects_whole_write() {

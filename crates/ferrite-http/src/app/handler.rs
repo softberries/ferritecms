@@ -131,7 +131,7 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
 /// The session behind the request's `ferrite_session` cookie, if any. No cookie, no
 /// auth service: `None` without touching the store. A lookup error is logged and
 /// treated as no session (the request is served anonymously).
-async fn session(state: &AppState, headers: &HeaderMap) -> Option<Authenticated> {
+pub(crate) async fn session(state: &AppState, headers: &HeaderMap) -> Option<Authenticated> {
     let auth = state.auth.as_ref()?;
     let token = read_session_cookie(headers)?;
     match auth.resolve_session(token).await {

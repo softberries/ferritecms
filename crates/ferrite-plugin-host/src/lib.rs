@@ -53,6 +53,7 @@ pub use types::{
     ActionEvent, FilterValue, Head, LinkTag, MetaTag, Post, RequestInfo, RouteRequest,
     RouteResponse, ScriptTag, TermRef,
 };
+pub use validate::{MAX_ROUTE_BODY_BYTES, MAX_ROUTE_HEADER_BYTES, MAX_ROUTE_HEADERS};
 
 use bindings::v0_1::PluginPre;
 use call::{CallFailure, call_action, call_filter, call_route};
@@ -61,7 +62,7 @@ use failure::FailureTracker;
 use grant::LimitBounds;
 use registry::{LoadedPlugin, Registry};
 use trace::CallTrace;
-use validate::{matches_type, validate_output};
+use validate::{matches_type, validate_output, validate_route_response};
 
 /// Runs installed plugins with capability-scoped imports and per-call limits.
 pub struct PluginHost {
@@ -468,20 +469,37 @@ impl PluginHost {
             })
     }
 
+    /// The `[routes]` entry for `path` of the enabled plugin `plugin` (05 §4b): what the
+    /// HTTP layer checks (methods, origin rule, rate limit) before calling
+    /// [`handle_route`](Self::handle_route). `UnknownPlugin` / `Disabled` as for
+    /// actions; `RouteNotFound` (method `*`) when the plugin has no `routes` grant or no
+    /// such path.
+    pub fn route(&self, plugin: &str, path: &str) -> Result<RouteSpec, PluginError> {
+        let loaded = self.enabled_plugin(plugin)?;
+        route_spec(&loaded, path)
+            .cloned()
+            .ok_or_else(|| PluginError::RouteNotFound {
+                plugin: plugin.to_string(),
+                method: "*".to_owned(),
+                path: path.to_owned(),
+            })
+    }
+
     /// Serve a request under `/_p/<plugin>/`; `req.path` is relative to that prefix and
     /// must match a `[routes]` entry (path and method) of a plugin with `routes = true`.
+    /// The call is bounded like every other (fuel, memory, the route deadline). A
+    /// response outside the route checks (status 200..=599, at most
+    /// [`MAX_ROUTE_HEADERS`] headers whose names and values are valid header text of at
+    /// most [`MAX_ROUTE_HEADER_BYTES`], a body of at most [`MAX_ROUTE_BODY_BYTES`]) is a
+    /// `CallFailed`, recorded as `InvalidOutput`.
     pub async fn handle_route(
         &self,
         plugin: &str,
         req: RouteRequest,
     ) -> Result<RouteResponse, PluginError> {
         let loaded = self.enabled_plugin(plugin)?;
-        let routed = loaded.manifest.capabilities.routes
-            && loaded
-                .manifest
-                .routes
-                .get(&req.path)
-                .is_some_and(|r| r.methods.contains(&req.method));
+        let routed =
+            route_spec(&loaded, &req.path).is_some_and(|r| r.methods.contains(&req.method));
         if !routed {
             return Err(PluginError::RouteNotFound {
                 plugin: plugin.to_string(),
@@ -491,15 +509,21 @@ impl PluginHost {
         }
         let hook = format!("route {} {}", req.method, req.path);
         let started = Instant::now();
-        call_route(&loaded, req, self.deadline(DeadlineClass::Route))
+        let failed = |reason: String| PluginError::CallFailed {
+            plugin: plugin.to_string(),
+            reason,
+        };
+        let res = call_route(&loaded, req, self.deadline(DeadlineClass::Route))
             .await
             .map_err(|failure| {
                 self.record_call_failure(&loaded, &hook, &failure, started);
-                PluginError::CallFailed {
-                    plugin: plugin.to_string(),
-                    reason: failure.to_string(),
-                }
-            })
+                failed(failure.to_string())
+            })?;
+        if let Err(reason) = validate_route_response(&res) {
+            self.record_failure(&loaded, &hook, FailureKind::InvalidOutput, &reason, started);
+            return Err(failed(format!("invalid response: {reason}")));
+        }
+        Ok(res)
     }
 
     /// Whether `plugin` is installed and enabled.
@@ -525,6 +549,14 @@ impl PluginHost {
     pub fn failures(&self) -> Vec<FailureRecord> {
         self.failures.history()
     }
+}
+
+/// `path`'s `[routes]` entry when the plugin holds the `routes` grant.
+fn route_spec<'a>(loaded: &'a LoadedPlugin, path: &str) -> Option<&'a RouteSpec> {
+    if !loaded.manifest.capabilities.routes {
+        return None;
+    }
+    loaded.manifest.routes.get(path)
 }
 
 fn outcome(value: FilterValue, deps: BTreeSet<String>, volatile: bool) -> FilterOutcome {

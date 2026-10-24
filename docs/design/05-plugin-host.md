@@ -260,21 +260,50 @@ analytics; documented).
 
 ### 4b. Plugin routes
 
-*M0 status: the host can call a plugin's `handle-request` (`PluginHost::handle_route`, 2 s route deadline) but mounting under `/_p/`, rate limits, CSRF/origin checks, CSP and header stripping, and the theme helper are M2; no example plugin exports a route.*
+*Status (M2a-2a, as built): mounted under `/_p/` by `ferrite-http` (`app/plugin_route.rs`); example `router`, hostile `route-xss` and `route-flood` (§12).*
 
-- Mounted at `/_p/<plugin>/<path>`; only paths and methods listed in `[routes]`.
-- Limits: route deadline 2 s, body ≤ 1 MB, per-route rate limit (DB-backed, so it holds
-  across nodes), default `10/min` per client-IP hash.
-- **CSRF / origin**: non-GET requests require `Origin`/`Referer` matching `site.url`
-  unless the route declares `cross_origin = true`.
-- **XSS containment**: responses are served with
+- Mounted at `/_p/<plugin>/<path>` (and `/_p/<plugin>/` for a route `"/"`) for every
+  method, in front of the public fallback, so redirects and the page cache never see
+  them: plugin responses are **never cached**. Errors are plain text, not problem
+  documents.
+- Only paths and methods listed in `[routes]`, matched exactly: the raw `<plugin>`
+  segment must be a plugin name (never percent-decoded), the rest is percent-decoded
+  but dot segments and `%2F` are not resolved, so a URL can only name a route of that
+  one plugin. Check order: plugin not loaded on this node, disabled on this node, its
+  `plugins` row missing or disabled (read per request, so a disable or delete answers
+  `404` on every node at once), no `routes` grant, unknown path → `404`; known path,
+  other method → `405` with `Allow`.
+- **CSRF / origin**: methods other than GET/HEAD need `Origin` (else the `Referer`'s
+  origin) equal to `site.url`'s origin, the API's rule, unless the route declares
+  `cross_origin = true` → else `403`.
+- **Rate limit** (P16): the route's `rate_limit` (`N/s`, `N/min`, `N/h`; default
+  `10/min`) per client address (IPv6 per /64), fixed windows counted in the database
+  (`AuthService::hit_limit`, bucket `route:<plugin>:<32 hex SHA-256 of the
+  path>:ip:<keyed hash>`), so it holds across nodes → `429` with `Retry-After`.
+  `cross_origin` and `rate_limit` are part of the approved grant (ruling R7); the paths
+  are not (R6).
+- **Request**: body ≤ 1 MiB (`413`), ≤ 100 query pairs (`400`); headers passed are
+  only `content-type`, `accept`, `accept-language`, `user-agent`, `referer` — the
+  session cookie and `Authorization` are never passed. `user` is the id behind the
+  `ferrite_session` cookie (bearer tokens never identify a visitor to a plugin; an
+  account that must reset its password counts as anonymous). `client-ip-hash` is
+  per plugin: 32 hex of HMAC(subkey `ferrite:plugin-ip:v1`, `plugin ‖ 0x00 ‖ ip`), so
+  plugins cannot join visitors across each other or with session rows; empty when the
+  address is unknown.
+- **Call**: route deadline 2 s (hard 3 s), fuel and memory as for every call. The
+  response must have status 200..=599, ≤ 32 headers, each name and value ≤ 4 KiB and
+  valid header text, body ≤ 1 MiB (`validate_route_response`), else the call failed
+  (`InvalidOutput`). Any failure (trap, timeout, invalid response) → `502`.
+- **XSS containment**: the visitor gets the plugin's status and only its
+  `Content-Type`, `Content-Language` and, on a 3xx, a root-relative `Location` (`/…`,
+  visible ASCII; `//…`, `/\…`, a tab or an absolute URL makes the answer `502`). Always added:
   `Content-Security-Policy: sandbox allow-forms` (opaque origin, so scripts — if any —
-  can't read site cookies or call the API as the user), `X-Content-Type-Options: nosniff`.
-  Plugins can't set cookies. JSON and redirects (`303` to same-origin paths) are the
-  intended response types; HTML is allowed but sandboxed.
-- The session cookie and `Authorization` header are never passed to the plugin; it
-  only gets `user` (id) if the visitor is logged in.
-- Themes post forms to routes with a helper: `{{ plugin_route("contact-form", "/submit") }}`.
+  can't read site cookies or call the API as the user), `X-Content-Type-Options:
+  nosniff`, `Cache-Control: no-store`, `X-Robots-Tag: noindex`. Plugins can't set
+  cookies, CSP, HSTS, CORS or caching headers. JSON and redirects (`303` to same-site
+  paths) are the intended response types; HTML is allowed but sandboxed.
+- Themes post forms to routes with a helper: `{{ plugin_route("contact-form", "/submit") }}`
+  (06 §4).
 
 ### 4c. Plugin settings
 
@@ -659,5 +688,5 @@ renders and the failure is recorded (state as of M0):
 | `kv-budget` | `kv.set` 150 times | 101st+ operation refused (budget 100) |
 | `long-error` | fails with a 1 MiB `plugin-error` full of newlines and ANSI escapes | logged/recorded text cut to 1 KiB and escaped; page renders |
 | `resource-flood` | leaks 5 000 `wasi:cli/stdout` handles | resource cap (1 000) fails the call; host keeps serving |
-| `route-xss` | route returns HTML with `<script>` reading `document.cookie` | **M2 — not yet implemented** (needs mounted routes) |
-| `route-flood` | many POSTs to its route | **M2 — not yet implemented** (needs rate limiting across 2 nodes) |
+| `route-xss` | `GET /x`: HTML with `<script>` reading `document.cookie`, plus `Set-Cookie`, `Authorization`, CSP, HSTS, CORS and caching headers; echoes the request header names it got. `GET /panic` panics, `GET /loop` never returns | served only inside `sandbox allow-forms` with `nosniff`/`no-store`, every other header dropped, no cookie/`Authorization` seen; panic and loop are `502` and the site keeps serving (`ferrite-http` `tests/app/plugin_route.rs`, `plugin-host` `tests/hostile.rs`) |
+| `route-flood` | `POST /submit` (`rate_limit = "5/min"`, `cross_origin = true`) flooded from one client across two nodes | 6th POST is `429` on either node, another client still passes (`crates/ferrite/tests/cluster/routes.rs`) |

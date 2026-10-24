@@ -234,9 +234,9 @@ pub(crate) fn asset_url(hash: &str, path: &str) -> String {
     url
 }
 
-/// Bytes escaped in an asset URL path segment: controls, space and the characters
+/// Bytes escaped in an asset (or plugin route) URL path segment: controls, space and the characters
 /// that would end or restructure the path.
-const SEGMENT: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
+pub(crate) const SEGMENT: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
     .add(b' ')
     .add(b'"')
     .add(b'#')
