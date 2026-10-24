@@ -2,11 +2,18 @@
 //! bearer token, an optional session with CSRF or a token), the moderation queue,
 //! `PATCH` and `DELETE`, and what each response shows (Review Focus 3, F18, F22).
 //!
-//! Every test submits at most three comments from the harness's one client address:
-//! the per-IP limit is 3 a minute.
+//! Every submit comes from its own client address ([`fresh`], [`peer`]), so the per-IP
+//! limit (3 a minute) never interferes; the limit itself is tested in core and across
+//! nodes.
+
+use std::{
+    net::{Ipv4Addr, SocketAddr},
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use axum::{
     body::Body,
+    extract::ConnectInfo,
     http::{Method, header},
 };
 use ferrite_core::{Actor, ContentDraft};
@@ -16,7 +23,7 @@ use serde_json::{Value, json};
 
 use crate::{
     api_tests,
-    harness::{Api, Client, SITE_URL, builder, json_body, send},
+    harness::{Api, Bearer, Client, Resp, SITE_URL, builder, json_body, send},
 };
 
 api_tests!(
@@ -27,6 +34,27 @@ api_tests!(
     foreign_origin_api_submit_is_403,
     bearer_submit_uses_the_account,
 );
+
+/// A client address no other request of this binary uses.
+fn peer() -> SocketAddr {
+    static NEXT: AtomicU32 = AtomicU32::new(1);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    SocketAddr::new(Ipv4Addr::from(0xc612_0000 | n).into(), 40_000)
+}
+
+/// `c` with a fresh client address for its next request.
+fn fresh(c: &mut Client) -> &mut Client {
+    c.peer = Some(peer());
+    c
+}
+
+/// `POST path` with a JSON `body` as `token`, from a fresh client address.
+async fn bearer_submit(api: &Api, token: &Bearer, path: &str, body: &Value) -> Resp {
+    let req = token
+        .builder(Method::POST, path)
+        .extension(ConnectInfo(peer()));
+    api.send(json_body(req, body)).await
+}
 
 /// A published post or page by a fresh admin.
 async fn published(api: &Api, kind: &str, slug: &str) -> ContentId {
@@ -101,7 +129,7 @@ async fn comment_api_flow(api: Api) -> Api {
     let mut visitor = Client::new();
 
     // A guest's first comment is held (`known`, R2): 202 with the public shape.
-    let r = visitor
+    let r = fresh(&mut visitor)
         .post(&api, &path("post", post), guest("First!"))
         .await;
     assert_eq!(r.status.as_u16(), 202, "{r:?}");
@@ -214,7 +242,9 @@ async fn comment_api_flow(api: Api) -> Api {
     let mut reply = guest("Me again");
     reply["parent_id"] = json!(first_id);
     reply["author_url"] = json!("https://ann.example/");
-    let r = visitor.post(&api, &path("post", post), reply).await;
+    let r = fresh(&mut visitor)
+        .post(&api, &path("post", post), reply)
+        .await;
     assert_eq!(r.status.as_u16(), 201, "{r:?}");
     let second = r.json();
     assert_public(&second);
@@ -225,8 +255,27 @@ async fn comment_api_flow(api: Api) -> Api {
     // A bot that fills the honeypot gets the pending answer; nothing is stored (F18).
     let mut bot = guest("Buy now");
     bot["website"] = json!("http://spam.example");
-    let r = visitor.post(&api, &path("post", post), bot).await;
+    let r = fresh(&mut visitor)
+        .post(&api, &path("post", post), bot)
+        .await;
     assert_eq!(r.status.as_u16(), 202, "{r:?}");
+    // The same headers as a real pending comment's (M1).
+    let mut held = guest("Buy now");
+    held["author_name"] = json!("Bea");
+    let real = fresh(&mut visitor)
+        .post(&api, &path("post", post), held)
+        .await;
+    assert_eq!(real.status.as_u16(), 202, "{real:?}");
+    let names = |r: &Resp| {
+        let mut n: Vec<String> = r.headers.keys().map(|k| k.to_string()).collect();
+        n.sort();
+        n
+    };
+    assert_eq!(names(&r), names(&real));
+    for h in ["content-type", "cache-control"] {
+        assert_eq!(r.header(h), real.header(h), "{h}");
+    }
+    assert!(r.header("location").is_none());
     let dropped = r.json();
     assert_public(&dropped);
     assert_eq!(dropped["status"], "pending");
@@ -268,15 +317,15 @@ async fn comments_on_closed_items_are_404(api: Api) -> Api {
     let page = published(&api, "page", "a-page").await;
     let mut visitor = Client::new();
     // A malformed id is refused before any rate-limit hit.
-    visitor
+    fresh(&mut visitor)
         .post(&api, "/api/v1/content/post/not-a-uuid/comments", guest("x"))
         .await
         .assert_problem(404, "not-found");
-    visitor
+    fresh(&mut visitor)
         .post(&api, &path("page", page), guest("x"))
         .await
         .assert_problem(404, "not-found");
-    visitor
+    fresh(&mut visitor)
         .post(&api, &path("page", post), guest("x"))
         .await
         .assert_problem(404, "not-found");
@@ -286,7 +335,7 @@ async fn comments_on_closed_items_are_404(api: Api) -> Api {
         .set("comments.enabled", &json!(false), true)
         .await
         .unwrap();
-    visitor
+    fresh(&mut visitor)
         .post(&api, &path("post", post), guest("x"))
         .await
         .assert_problem(404, "not-found");
@@ -296,7 +345,7 @@ async fn comments_on_closed_items_are_404(api: Api) -> Api {
 async fn comment_xss_is_escaped(api: Api) -> Api {
     let post = published(&api, "post", "xss").await;
     let mut visitor = Client::new();
-    let r = visitor
+    let r = fresh(&mut visitor)
         .post(
             &api,
             &path("post", post),
@@ -322,13 +371,13 @@ async fn comment_xss_is_escaped(api: Api) -> Api {
     // `javascript:` (and any other non-http URL) is refused.
     let mut js = guest("hi");
     js["author_url"] = json!("javascript:alert(1)");
-    let p = visitor
+    let p = fresh(&mut visitor)
         .post(&api, &path("post", post), js)
         .await
         .assert_problem(422, "validation");
     assert_eq!(p["errors"][0]["field"], "author_url");
     // A control character is refused, as is a NUL anywhere in the document.
-    let p = visitor
+    let p = fresh(&mut visitor)
         .post(&api, &path("post", post), guest("bell \u{7}"))
         .await
         .assert_problem(422, "validation");
@@ -345,13 +394,13 @@ async fn cookie_without_csrf_is_403(api: Api) -> Api {
     // A resolved session without `X-CSRF-Token`, or with a wrong one: 403 csrf.
     let mut no_token = Client::new();
     no_token.cookie = Some(cookie.clone());
-    let p = no_token
+    let p = fresh(&mut no_token)
         .post(&api, &path("post", post), guest("x"))
         .await
         .assert_problem(403, "csrf");
     assert!(p["detail"].as_str().unwrap().contains("X-CSRF-Token"));
     no_token.csrf = Some("wrong".into());
-    no_token
+    fresh(&mut no_token)
         .post(&api, &path("post", post), guest("x"))
         .await
         .assert_problem(403, "csrf");
@@ -359,7 +408,7 @@ async fn cookie_without_csrf_is_403(api: Api) -> Api {
     // A cookie that does not resolve is a guest (F22).
     let mut stale = Client::new();
     stale.cookie = Some("A".repeat(43));
-    let r = stale
+    let r = fresh(&mut stale)
         .post(&api, &path("post", post), guest("as guest"))
         .await;
     assert_eq!(r.status.as_u16(), 202, "{r:?}");
@@ -371,7 +420,7 @@ async fn cookie_without_csrf_is_403(api: Api) -> Api {
 
     // With the token the session's account comments; its inputs are ignored.
     let mut carol = carol;
-    let r = carol
+    let r = fresh(&mut carol)
         .post(
             &api,
             &path("post", post),
@@ -391,12 +440,13 @@ async fn cookie_without_csrf_is_403(api: Api) -> Api {
 async fn foreign_origin_api_submit_is_403(api: Api) -> Api {
     let post = published(&api, "post", "origin").await;
     let mut evil = Client::with_origin("https://evil.example");
-    evil.post(&api, &path("post", post), guest("x"))
+    fresh(&mut evil)
+        .post(&api, &path("post", post), guest("x"))
         .await
         .assert_problem(403, "csrf");
     // No `Origin`: the `Referer` decides; neither header is refused too.
     let send_with = |headers: Vec<(&'static str, &'static str)>| {
-        let mut b = builder(Method::POST, &path("post", post));
+        let mut b = builder(Method::POST, &path("post", post)).extension(ConnectInfo(peer()));
         for (k, v) in headers {
             b = b.header(k, v);
         }
@@ -422,6 +472,7 @@ async fn foreign_origin_api_submit_is_403(api: Api) -> Api {
     let token = api.bearer(&user, &["comments:write"]).await;
     let req = token
         .builder(Method::POST, &path("post", post))
+        .extension(ConnectInfo(peer()))
         .header(header::ORIGIN, "https://evil.example");
     let r = api.send(json_body(req, &guest("by token"))).await;
     assert_eq!(r.status.as_u16(), 202, "{r:?}");
@@ -442,15 +493,13 @@ async fn bearer_submit_uses_the_account(api: Api) -> Api {
     let post = published(&api, "post", "bearer").await;
     let dana: User = api.user("dana", Role::Contributor, false).await;
     let token = api.bearer(&dana, &["comments:write"]).await;
-    let r = token
-        .send(
-            &api,
-            Method::POST,
-            &path("post", post),
-            Some(&json!({"body": "via token", "author_name": "Not Dana"})),
-            None,
-        )
-        .await;
+    let r = bearer_submit(
+        &api,
+        &token,
+        &path("post", post),
+        &json!({"body": "via token", "author_name": "Not Dana"}),
+    )
+    .await;
     assert_eq!(r.status.as_u16(), 202, "{r:?}");
     let got = r.json();
     assert_public(&got);
@@ -459,23 +508,34 @@ async fn bearer_submit_uses_the_account(api: Api) -> Api {
     assert_eq!(row.user_id, Some(dana.id));
     assert_eq!(row.author_email, "dana@example.com");
     assert_eq!(row.status, CommentStatus::Pending);
+    // A signed-in discard echoes the account's name, as a real comment would.
+    let r = bearer_submit(
+        &api,
+        &token,
+        &path("post", post),
+        &json!({"body": "spam", "author_name": "Not Dana", "website": "x"}),
+    )
+    .await;
+    assert_eq!(r.status.as_u16(), 202, "{r:?}");
+    let dropped = r.json();
+    assert_public(&dropped);
+    assert_eq!(dropped["author_name"], "dana");
+    assert!(
+        stored(&api, dropped["id"].as_str().unwrap())
+            .await
+            .is_none()
+    );
 
     // A token without `comments:write` cannot comment; a bad token is 401.
     let narrow = api.bearer(&dana, &["content:write"]).await;
-    let p = narrow
-        .send(
-            &api,
-            Method::POST,
-            &path("post", post),
-            Some(&json!({"body": "x"})),
-            None,
-        )
+    let p = bearer_submit(&api, &narrow, &path("post", post), &json!({"body": "x"}))
         .await
         .assert_problem(403, "forbidden");
     assert!(p["detail"].as_str().unwrap().contains("comments:write"));
     let r = api
         .send(
             builder(Method::POST, &path("post", post))
+                .extension(ConnectInfo(peer()))
                 .header(header::AUTHORIZATION, "Bearer nope")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(json!({"body": "x"}).to_string()))
@@ -487,15 +547,13 @@ async fn bearer_submit_uses_the_account(api: Api) -> Api {
     // A moderator's token: approved at once (201).
     let ed = api.user("eddie", Role::Editor, false).await;
     let token = api.bearer(&ed, &["comments:write"]).await;
-    let r = token
-        .send(
-            &api,
-            Method::POST,
-            &path("post", post),
-            Some(&json!({"body": "from the editor"})),
-            None,
-        )
-        .await;
+    let r = bearer_submit(
+        &api,
+        &token,
+        &path("post", post),
+        &json!({"body": "from the editor"}),
+    )
+    .await;
     assert_eq!(r.status.as_u16(), 201, "{r:?}");
     assert_eq!(r.json()["status"], "approved");
     // A token with only `comments:read` lists the queue, cannot moderate.

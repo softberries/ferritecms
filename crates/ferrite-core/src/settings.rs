@@ -13,7 +13,7 @@
 //! | `reading.discourage_indexing` | boolean |
 //! | `permalink.post`, `permalink.page` | a permalink structure ([`PermalinkRules::from_options`]); the pair is checked against the registered types and taxonomies inside the write's transaction |
 //! | `comments.enabled` | boolean (default `true`, [`COMMENTS_ENABLED_DEFAULT`](crate::comments::COMMENTS_ENABLED_DEFAULT)) |
-//! | `comments.moderation` | `"all"` (every guest comment is held) or `"known"` (default, [`COMMENTS_MODERATION_DEFAULT`](crate::comments::COMMENTS_MODERATION_DEFAULT): a commenter with an approved comment posts directly) |
+//! | `comments.moderation` | `"all"` (every guest comment is held) or `"known"` (default, [`COMMENTS_MODERATION_DEFAULT`](crate::comments::COMMENTS_MODERATION_DEFAULT): a commenter with an approved comment posts directly; anyone who knows a regular guest's exact name and e-mail posts unmoderated as them, which `"all"` prevents) |
 //!
 //! A `null` value (or a missing key in the store) means the default.
 

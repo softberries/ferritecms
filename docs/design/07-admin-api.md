@@ -172,16 +172,24 @@ to an approved comment of the same post, at most 5 deep (`parent_id`).
   resolves needs its `X-CSRF-Token` (`403 csrf`) — a cookie that does not resolve is a guest.
   With an account the name and e-mail are the account's. No client address is `503 busy`.
   Per client address (IPv6 /64) 3 a minute and 20 an hour, counted in the database first, so
-  the limit holds across nodes (`429` + `Retry-After`). `201` = approved, `202` = held; a
-  filled honeypot (`website`) also answers `202` in the same shape under an id that is never
-  stored (F18). The response (`CommentPublicDto`) never carries the e-mail or address hash.
+  the limit holds across nodes (`429` + `Retry-After`). Bidi controls (U+202A–U+202E,
+  U+2066–U+2069) are refused in names (R13; also in account display names). `201` =
+  approved, `202` = held; a filled honeypot (`website`) on input that passes every check
+  also answers `202`, with the same headers and body as a held comment under an id that is
+  never stored (F18); invalid input is `422` either way. A discard returns faster (no
+  lookups, no insert): timing can tell it apart, which is accepted, as the field is no
+  secret and only traps bots that fill every field. The response (`CommentPublicDto`) never carries the e-mail or address hash.
 - **Status**: a commenter whose role holds `moderate_comments` is approved. Under
   `comments.moderation = "known"` (default, R2) a comment with at most two links (`http://`,
   `https://`, `www.`) is approved when its author has an approved comment — a guest by the
   same e-mail (ASCII case folded) and trimmed name on an approved *guest* comment, never when
   the e-mail belongs to an account, and never through comments an account wrote before it was
   deleted (`comments.by_account`); a signed-in commenter by an approved comment of the account
-  (F19). `"all"` holds every comment but a moderator's.
+  (F19). `"all"` holds every comment but a moderator's. **Spoofing risk:** under `known`
+  anyone who knows a regular guest's exact name and e-mail posts unmoderated as them (the
+  e-mail is never shown publicly, but it is not a secret either); this is WordPress's
+  behaviour, and sites that cannot accept it set `"all"`. Account comments are not
+  affected (an account's e-mail never vouches for a guest).
 - **Moderation**: `GET /comments` (newest first, filters `status`, `item`) answers
   `CommentDto` with every column, the e-mail and the keyed `ip_hash` (HMAC under the site key,
   label `ferrite:comment-ip:v1`) included. `PATCH` sets the status; `DELETE` removes a spam or

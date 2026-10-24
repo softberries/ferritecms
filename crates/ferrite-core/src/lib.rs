@@ -55,5 +55,5 @@ pub use taxonomy::TaxonomyService;
 pub use types::{ContentTypeService, MAX_TYPE_LABEL, MAX_TYPE_NAME, NewType, TypePatch};
 pub use users::{
     MAX_DISPLAY_NAME, MAX_EMAIL, MAX_LOGIN, NewAccount, OperatorUsers, UserPatch, UserService,
-    normalize_display_name, normalize_email, normalize_login,
+    is_bidi_control, normalize_display_name, normalize_email, normalize_login,
 };

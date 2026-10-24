@@ -8,8 +8,10 @@
 //!   (`403 csrf`) with an optional session (which then needs `X-CSRF-Token`). The
 //!   request body is at most [`MAX_COMMENT_REQUEST`]. Without a client address the
 //!   per-IP limit cannot apply: `503 busy`. `201` when the comment is approved, `202`
-//!   when it is held, and also `202`, in the same shape under an id that is never
-//!   stored, when the honeypot member `website` is filled (F18). No `Location`: a
+//!   when it is held, and also `202`, with the same headers and body shape under an id
+//!   that is never stored, when the honeypot member `website` is filled on input that
+//!   passes every check (F18; invalid input is `422` either way). A discard answers
+//!   faster than a stored comment (accepted: the field is no secret). No `Location`: a
 //!   comment has no single-resource endpoint.
 //! * `GET /comments`, `PATCH /comments/{id}` and `DELETE /comments/{id}` are the
 //!   moderation endpoints (`moderate_comments`; reads `comments:read`, writes
@@ -203,39 +205,29 @@ pub async fn submit_comment(
     let Some(ip) = client.ip else {
         return Err(Problem::busy());
     };
-    let (commenter, account_name) = match &who {
-        MaybeAuthed::Anonymous => (Commenter::Anonymous, None),
-        MaybeAuthed::Authed(a) => (Commenter::User(a.actor), Some(a.user.display_name.clone())),
+    let commenter = match &who {
+        MaybeAuthed::Anonymous => Commenter::Anonymous,
+        MaybeAuthed::Authed(a) => Commenter::User(a.actor),
     };
-    let parent = req.parent_id.map(CommentId::from_uuid);
     let input = CommentInput {
         item: ContentId::from_uuid(id),
         kind,
-        parent,
+        parent: req.parent_id.map(CommentId::from_uuid),
         author_name: req.author_name.unwrap_or_default(),
         author_email: req.author_email.unwrap_or_default(),
         author_url: req.author_url.unwrap_or_default(),
         body: req.body,
         honeypot: req.website.unwrap_or_default(),
     };
-    let echo_name = account_name.unwrap_or_else(|| input.author_name.trim().to_owned());
-    let echo_url = Some(input.author_url.trim().to_owned()).filter(|u| !u.is_empty());
-    let echo_body = input.body.clone();
-    match api.comments.submit(input, commenter, ip).await? {
-        Submitted::Accepted(c) => {
-            let status = if c.status == CommentStatus::Approved {
-                StatusCode::CREATED
-            } else {
-                StatusCode::ACCEPTED
-            };
-            Ok((status, Json(CommentPublicDto::of(&c))).into_response())
-        }
-        Submitted::Discarded => Ok((
-            StatusCode::ACCEPTED,
-            Json(CommentPublicDto::discarded(
-                parent, echo_name, echo_url, &echo_body,
-            )),
-        )
-            .into_response()),
-    }
+    // A discard answers with the would-be pending comment through the same path as a
+    // real one: same status, headers and body shape (F18, M1).
+    let c = match api.comments.submit(input, commenter, ip).await? {
+        Submitted::Accepted(c) | Submitted::Discarded(c) => c,
+    };
+    let status = if c.status == CommentStatus::Approved {
+        StatusCode::CREATED
+    } else {
+        StatusCode::ACCEPTED
+    };
+    Ok((status, Json(CommentPublicDto::of(&c))).into_response())
 }

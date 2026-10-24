@@ -119,7 +119,7 @@ impl Site {
     async fn accepted(&self, input: CommentInput) -> Comment {
         match self.submit(input).await.unwrap() {
             Submitted::Accepted(c) => c,
-            Submitted::Discarded => panic!("discarded"),
+            Submitted::Discarded(_) => panic!("discarded"),
         }
     }
 
@@ -229,6 +229,23 @@ async fn submit_rules(db: &TestDb) {
         ("author_name", with(&|i| i.author_name = "  ".into())),
         ("author_name", with(&|i| i.author_name = "n".repeat(101))),
         ("author_name", with(&|i| i.author_name = "a\nb".into())),
+        // Bidi embedding, override and isolate controls (R13).
+        (
+            "author_name",
+            with(&|i| i.author_name = "Ann\u{202E}nimda".into()),
+        ),
+        (
+            "author_name",
+            with(&|i| i.author_name = "a\u{202A}b".into()),
+        ),
+        (
+            "author_name",
+            with(&|i| i.author_name = "a\u{2066}b".into()),
+        ),
+        (
+            "author_name",
+            with(&|i| i.author_name = "a\u{2069}b".into()),
+        ),
         ("author_email", with(&|i| i.author_email = String::new())),
         ("author_email", with(&|i| i.author_email = "nope".into())),
         (
@@ -287,6 +304,13 @@ async fn submit_rules(db: &TestDb) {
     let hash = ok.ip_hash.clone().unwrap();
     assert_eq!(hash.len(), 32);
     assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    // ZWJ (emoji sequences) stays allowed in names.
+    let zwj = s
+        .accepted(with(&|i| {
+            i.author_name = "Ann \u{1F469}\u{200D}\u{1F4BB}".into()
+        }))
+        .await;
+    assert_eq!(zwj.author_name, "Ann \u{1F469}\u{200D}\u{1F4BB}");
     let ipv6 = s
         .accepted(with(&|i| i.author_url = "http://[2001:db8::1]/".into()))
         .await;
@@ -315,6 +339,12 @@ async fn submit_rules(db: &TestDb) {
         .await
         .unwrap();
     not_found(s.submit(input(trashed.id)).await);
+    // Published but dated in the future (scheduled): not public yet.
+    let mut future = s.published("post", "future").await;
+    future.published_at =
+        Some(Timestamp::from_micros(Timestamp::now().as_micros() + 86_400_000_000).unwrap());
+    let future = s.store.read().content().update(&future).await.unwrap();
+    not_found(s.submit(input(future.id)).await);
 
     // Replies: the parent must be an approved comment of the same item.
     let pending = s.accepted(input(post.id)).await;
@@ -369,6 +399,37 @@ async fn submit_rules(db: &TestDb) {
     assert_eq!(got.author_name, account.display_name);
     assert_eq!(got.author_email, account.email.to_ascii_lowercase());
     assert_eq!(got.status, CommentStatus::Pending);
+    // A display name stored before R13 with bidi controls: they are dropped from the
+    // comment's author name.
+    let old = UserId::new();
+    s.store
+        .read()
+        .users()
+        .insert(&NewUser {
+            id: old,
+            login: format!("old-{old}"),
+            email: format!("old-{old}@example.com"),
+            display_name: "Eve\u{202E}lin\u{2066}".into(),
+            password_hash: None,
+            role: Role::Contributor,
+            status: UserStatus::Active,
+            must_reset: false,
+        })
+        .await
+        .unwrap();
+    let got = s
+        .comments
+        .submit(
+            input(post.id),
+            Commenter::User(Actor::new(old, Role::Contributor)),
+            next_ip(),
+        )
+        .await
+        .unwrap();
+    let Submitted::Accepted(got) = got else {
+        panic!("discarded")
+    };
+    assert_eq!(got.author_name, "Evelin");
     // A token without `comments:write` cannot comment as its user.
     let token = user.with_scopes(Scopes::from_strs(&["content:read".to_owned()]).unwrap());
     forbidden(
@@ -447,6 +508,12 @@ async fn moderation_decides_status(db: &TestDb) {
     guest.author_email = account.email.clone();
     let c = s.accepted(guest.clone()).await;
     s.approve(c.id).await;
+    assert_eq!(
+        s.accepted(guest.clone()).await.status,
+        CommentStatus::Pending
+    );
+    // Also with the account's address in another case.
+    guest.author_email = account.email.to_ascii_uppercase();
     assert_eq!(s.accepted(guest).await.status, CommentStatus::Pending);
 
     // A signed-in commenter is known by their own approved comments.
@@ -459,7 +526,7 @@ async fn moderation_decides_status(db: &TestDb) {
                 .unwrap()
             {
                 Submitted::Accepted(c) => c,
-                Submitted::Discarded => panic!("discarded"),
+                Submitted::Discarded(_) => panic!("discarded"),
             }
         }
     };
@@ -559,6 +626,7 @@ async fn approval_invalidates_the_post(db: &TestDb) {
             .await,
         "comments:write",
     );
+    forbidden(s.comments.delete(&read_only, c.id).await, "comments:write");
     not_found(
         s.comments
             .moderate(&s.admin, CommentId::new(), CommentStatus::Approved)
@@ -591,13 +659,30 @@ async fn honeypot_discards(db: &TestDb) {
     let before = s.max_seq().await;
     let mut bot = input(post.id);
     bot.honeypot = "http://spam.example".into();
-    assert!(matches!(
-        s.submit(bot.clone()).await,
-        Ok(Submitted::Discarded)
-    ));
-    // Even an otherwise invalid one is dropped silently.
+    bot.author_name = "  Bot  ".into();
+    bot.body = " Buy\r\nnow ".into();
+    let Ok(Submitted::Discarded(would_be)) = s.submit(bot.clone()).await else {
+        panic!("not discarded")
+    };
+    // The would-be pending comment, normalised as a real one, never stored.
+    assert_eq!(would_be.status, CommentStatus::Pending);
+    assert_eq!(would_be.author_name, "Bot");
+    assert_eq!(would_be.body, "Buy\nnow");
+    assert!(
+        s.store
+            .read()
+            .comments()
+            .get(would_be.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Invalid input is refused whether or not the honeypot is filled (M1).
     bot.body = String::new();
-    assert!(matches!(s.submit(bot).await, Ok(Submitted::Discarded)));
+    invalid_field(s.submit(bot.clone()).await, "body");
+    bot.body = "ok".into();
+    bot.parent = Some(CommentId::new());
+    invalid_field(s.submit(bot).await, "parent_id");
     assert_eq!(s.count().await, 0);
     assert!(s.keys_since(before).await.is_empty());
 }

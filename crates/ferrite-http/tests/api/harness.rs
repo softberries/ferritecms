@@ -16,7 +16,7 @@ use std::{
 };
 
 use axum::{
-    Extension, Router,
+    Router,
     body::Body,
     extract::ConnectInfo,
     http::{HeaderMap, Method, Request, StatusCode, header, request},
@@ -623,9 +623,18 @@ impl Bearer {
 
 /// `router` with every request coming from [`CLIENT`]. The `ConnectInfo` extension is
 /// inserted directly: `record_client` reads that extension, and axum's
-/// `MockConnectInfo` would only feed the `ConnectInfo` extractor (F9).
+/// `MockConnectInfo` would only feed the `ConnectInfo` extractor (F9). A request that
+/// already carries a `ConnectInfo` (a test playing another client, [`Client::peer`])
+/// keeps it.
 fn with_client(router: Router) -> Router {
-    router.layer(Extension(ConnectInfo(CLIENT)))
+    router.layer(axum::middleware::map_request(
+        |mut req: Request<Body>| async move {
+            if req.extensions().get::<ConnectInfo<SocketAddr>>().is_none() {
+                req.extensions_mut().insert(ConnectInfo(CLIENT));
+            }
+            req
+        },
+    ))
 }
 
 /// The `extensions` lock wait of the harness's `ExtensionAdmin`.
@@ -656,6 +665,8 @@ pub struct Client {
     pub origin: String,
     pub cookie: Option<String>,
     pub csrf: Option<String>,
+    /// The client address its requests come from (`None`: [`CLIENT`]).
+    pub peer: Option<SocketAddr>,
 }
 
 impl Default for Client {
@@ -675,6 +686,7 @@ impl Client {
             origin: origin.to_owned(),
             cookie: None,
             csrf: None,
+            peer: None,
         }
     }
 
@@ -688,6 +700,9 @@ impl Client {
         }
         if let (true, Some(t)) = (unsafe_method, &self.csrf) {
             b = b.header("x-csrf-token", t);
+        }
+        if let Some(peer) = self.peer {
+            b = b.extension(ConnectInfo(peer));
         }
         b
     }

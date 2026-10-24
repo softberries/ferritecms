@@ -9239,7 +9239,7 @@
               "string",
               "null"
             ],
-            "description": "`\"all\"` (every guest comment is held) or `\"known\"` (default: a commenter with an\napproved comment, by the same name and e-mail, posts directly)."
+            "description": "`\"all\"` (every guest comment is held) or `\"known\"` (default: a commenter with an\napproved comment, by the same name and e-mail, posts directly). Under `known`\nanyone who knows a regular guest's exact name and e-mail posts unmoderated as\nthem (as in WordPress); `\"all\"` closes that."
           },
           "permalink.page": {
             "type": [

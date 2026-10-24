@@ -292,7 +292,9 @@ pub struct SettingsDto {
     #[schema(value_type = Option<bool>)]
     pub comments_enabled: Value,
     /// `"all"` (every guest comment is held) or `"known"` (default: a commenter with an
-    /// approved comment, by the same name and e-mail, posts directly).
+    /// approved comment, by the same name and e-mail, posts directly). Under `known`
+    /// anyone who knows a regular guest's exact name and e-mail posts unmoderated as
+    /// them (as in WordPress); `"all"` closes that.
     #[serde(rename = "comments.moderation")]
     #[schema(value_type = Option<String>)]
     pub comments_moderation: Value,

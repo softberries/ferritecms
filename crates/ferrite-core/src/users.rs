@@ -612,11 +612,16 @@ pub fn normalize_email(email: &str) -> Result<String, CoreError> {
     Ok(email.to_owned())
 }
 
-/// Trims a display name and checks it is 1..=100 characters without control characters.
+/// Trims a display name and checks it is 1..=100 characters without control characters
+/// or bidi controls ([`is_bidi_control`]; display names become the author name of an
+/// account's comments, M2a-2b R13).
 pub fn normalize_display_name(name: &str) -> Result<String, CoreError> {
     let name = name.trim();
     let len = name.chars().count();
-    if len == 0 || len > MAX_DISPLAY_NAME || name.chars().any(char::is_control) {
+    if len == 0
+        || len > MAX_DISPLAY_NAME
+        || name.chars().any(|c| c.is_control() || is_bidi_control(c))
+    {
         return Err(CoreError::invalid_field(
             "display_name",
             format!(
@@ -625,6 +630,13 @@ pub fn normalize_display_name(name: &str) -> Result<String, CoreError> {
         ));
     }
     Ok(name.to_owned())
+}
+
+/// The bidi embedding, override and isolate controls U+202A–U+202E and U+2066–U+2069
+/// (M2a-2b R13): in a name they reorder the text around it on the page. Other format
+/// characters (the ZWJ in emoji sequences) stay allowed.
+pub fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
 #[cfg(test)]
@@ -672,9 +684,20 @@ mod tests {
     fn display_name_rules() {
         assert_eq!(normalize_display_name("  Ann  ").unwrap(), "Ann");
         assert!(normalize_display_name(&"é".repeat(100)).is_ok());
-        for bad in ["", "  ", "a\nb", &"n".repeat(101)] {
+        for bad in [
+            "",
+            "  ",
+            "a\nb",
+            &"n".repeat(101),
+            "Ann\u{202E}nimda",
+            "a\u{202A}b",
+            "a\u{2066}b",
+            "a\u{2069}b",
+        ] {
             assert!(normalize_display_name(bad).is_err(), "{bad:?}");
         }
+        // ZWJ (emoji sequences) and other format characters stay allowed.
+        assert!(normalize_display_name("Ann \u{1F469}\u{200D}\u{1F4BB}").is_ok());
     }
 
     #[test]

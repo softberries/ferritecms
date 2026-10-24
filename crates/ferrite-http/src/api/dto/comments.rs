@@ -5,7 +5,7 @@
 //! never carries either. Ids are UUID strings and times RFC 3339 UTC (`…Z`).
 
 use chrono::{DateTime, Utc};
-use ferrite_domain::{Comment, CommentId, Timestamp};
+use ferrite_domain::Comment;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -117,26 +117,6 @@ impl CommentPublicDto {
             html: ferrite_core::comments::render_body(&c.body),
             date: c.created_at.as_datetime(),
             status: c.status.as_str().to_owned(),
-        }
-    }
-
-    /// What a discarded (honeypot) comment is answered with: the pending shape, under
-    /// an id that is never stored (F18).
-    pub fn discarded(
-        parent: Option<CommentId>,
-        author_name: String,
-        author_url: Option<String>,
-        body: &str,
-    ) -> Self {
-        let body = ferrite_core::comments::normalize_body(body);
-        Self {
-            id: CommentId::new().as_uuid(),
-            parent_id: parent.map(|p| p.as_uuid()),
-            author_name,
-            author_url,
-            html: ferrite_core::comments::render_body(&body),
-            date: Timestamp::now().as_datetime(),
-            status: "pending".to_owned(),
         }
     }
 }

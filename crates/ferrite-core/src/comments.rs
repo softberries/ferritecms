@@ -5,7 +5,8 @@
 //! trimmed and checked here and stored as typed; [`render_body`] escapes the body on
 //! output (paragraphs and line breaks, no links). Limits: body 1..=[`MAX_COMMENT_BODY`]
 //! characters (`\r\n` and `\r` become `\n`; no control characters but `\n` and `\t`),
-//! name 1..=[`MAX_COMMENT_NAME`] characters, e-mail at most [`MAX_COMMENT_EMAIL`] bytes
+//! name 1..=[`MAX_COMMENT_NAME`] characters without control or bidi characters
+//! ([`is_bidi_control`](crate::is_bidi_control), R13), e-mail at most [`MAX_COMMENT_EMAIL`] bytes
 //! (required for guests), URL empty or at most [`MAX_COMMENT_URL`] characters of
 //! `http`/`https` with a host and no user info. Only `post` items take comments, while
 //! publicly visible and while `comments.enabled` holds (else `NotFound`, as for an
@@ -14,8 +15,11 @@
 //!
 //! **Spam (P13).** Per client address (IPv6 per /64) 3 a minute and 20 an hour, counted
 //! in the database before anything else (R6), so the limits hold across nodes. A filled
-//! honeypot is [`Submitted::Discarded`]: nothing is written, and the caller answers as
-//! for a pending comment (F18). The stored address is [`AuthService::comment_ip_hash`],
+//! honeypot on input that passes every check is [`Submitted::Discarded`]: nothing is
+//! written, and the caller answers exactly as for a pending comment (F18); invalid input
+//! is refused whether or not the honeypot is filled. A discard is faster than a real
+//! submit (no `known` lookups, no insert): timing can tell them apart, which is accepted
+//! (the field is no secret; it only traps bots that fill every field). The stored address is [`AuthService::comment_ip_hash`],
 //! keyed and not reversible.
 //!
 //! **Status (P11, R2, F19).** A signed-in commenter whose role holds
@@ -44,6 +48,7 @@ use crate::{
     Actor, AuthService, CoreError,
     actor::{Area, Capability, Scope, can, require, require_reader, require_scope},
     events::{self, post_key},
+    is_bidi_control,
     site::is_public,
     tx::finish,
 };
@@ -118,8 +123,10 @@ pub enum Commenter {
 pub enum Submitted {
     /// Stored, pending or approved.
     Accepted(Comment),
-    /// The honeypot was filled: nothing was stored. Answer as for a pending comment.
-    Discarded,
+    /// The honeypot was filled on otherwise valid input: nothing was stored. The comment
+    /// is what a pending one would have been (status `pending`, a fresh id that is
+    /// never stored), so the caller answers exactly as for a pending comment (F18).
+    Discarded(Comment),
 }
 
 /// An approved comment as the public site shows it: no e-mail, no address hash.
@@ -257,11 +264,14 @@ fn check_body(body: &str) -> Result<String, CoreError> {
 fn check_name(name: &str) -> Result<String, CoreError> {
     let name = name.trim();
     let len = name.chars().count();
-    if len == 0 || len > MAX_COMMENT_NAME || name.chars().any(char::is_control) {
+    if len == 0
+        || len > MAX_COMMENT_NAME
+        || name.chars().any(|c| c.is_control() || is_bidi_control(c))
+    {
         return Err(CoreError::invalid_field(
             "author_name",
             format!(
-                "the name must be 1 to {MAX_COMMENT_NAME} characters without control characters"
+                "the name must be 1 to {MAX_COMMENT_NAME} characters without control or bidi characters"
             ),
         ));
     }
@@ -362,10 +372,10 @@ impl CommentService {
     /// Submits a comment from `ip` (see the module docs), in this order: a signed-in
     /// commenter's `comments:write` scope (`Forbidden`); the per-IP limits
     /// (`RateLimited`, outside any `Tx`); `comments.enabled`, then the item (public now,
-    /// of kind `post` and of `input.kind`; else `NotFound`); the honeypot (`Discarded`,
-    /// nothing written); the fields (`InvalidField` `body`, `author_name`,
-    /// `author_email`, `author_url`, `parent_id`); the status; then one `Tx` with the
-    /// insert and, when approved, `invalidate([post:<item>])`.
+    /// of kind `post` and of `input.kind`; else `NotFound`); the fields (`InvalidField`
+    /// `body`, `author_name`, `author_email`, `author_url`, `parent_id`); the honeypot
+    /// (`Discarded` with the would-be pending comment, nothing written); the status;
+    /// then one `Tx` with the insert and, when approved, `invalidate([post:<item>])`.
     pub async fn submit(
         &self,
         input: CommentInput,
@@ -394,10 +404,6 @@ impl CommentService {
         if !open {
             return Err(CoreError::NotFound);
         }
-        if !input.honeypot.is_empty() {
-            return Ok(Submitted::Discarded);
-        }
-
         let body = check_body(&input.body)?;
         let author_url = check_url(&input.author_url)?;
         let (user, author_name, author_email) = match who {
@@ -417,6 +423,23 @@ impl CommentService {
         };
         if let Some(parent) = input.parent {
             self.check_parent(repos, input.item, parent).await?;
+        }
+        // The honeypot is checked after every input check (M1), so a filled one never
+        // changes whether input is refused; the would-be pending comment is returned.
+        if !input.honeypot.is_empty() {
+            return Ok(Submitted::Discarded(Comment {
+                id: CommentId::new(),
+                item_id: input.item,
+                parent_id: input.parent,
+                user_id: user.map(|a| a.user),
+                author_email: ferrite_store::email_key(&author_email),
+                author_name,
+                author_url,
+                body,
+                status: CommentStatus::Pending,
+                ip_hash: Some(self.auth.comment_ip_hash(ip)),
+                created_at: now,
+            }));
         }
 
         let links_ok = count_links(&body) <= MAX_KNOWN_LINKS;
@@ -493,7 +516,9 @@ impl CommentService {
         while let Some(id) = up {
             depth += 1;
             if depth >= MAX_COMMENT_DEPTH {
-                return Err(refused("replies nest at most 5 deep"));
+                return Err(refused(&format!(
+                    "replies nest at most {MAX_COMMENT_DEPTH} deep"
+                )));
             }
             up = repos.comments().get(id).await?.and_then(|c| c.parent_id);
         }
@@ -618,10 +643,16 @@ fn thread_of(rows: Vec<Comment>) -> Vec<CommentPublic> {
         .collect()
 }
 
-/// The name a signed-in commenter's comments carry: the display name, cut to
-/// [`MAX_COMMENT_NAME`] characters (the login if it is blank).
+/// The name a signed-in commenter's comments carry: the display name without bidi
+/// controls (one stored before R13 may hold them) or other control characters, cut to
+/// [`MAX_COMMENT_NAME`] characters (the login if that leaves it blank).
 fn account_name(user: &ferrite_domain::User) -> String {
-    let name = user.display_name.trim();
+    let clean: String = user
+        .display_name
+        .chars()
+        .filter(|&c| !c.is_control() && !is_bidi_control(c))
+        .collect();
+    let name = clean.trim();
     let name = if name.is_empty() { &user.login } else { name };
     name.chars().take(MAX_COMMENT_NAME).collect()
 }
