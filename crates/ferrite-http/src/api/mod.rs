@@ -186,6 +186,7 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
             plugins::get_plugin_settings,
             plugins::update_plugin_settings
         ))
+        .routes(routes!(plugins::plugin_metrics))
         .merge(uploads(
             routes!(themes::list_themes, themes::install_theme),
             themes::MAX_THEME_UPLOAD_BODY,
@@ -198,6 +199,9 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(system::system_status))
         .routes(routes!(system::list_nodes))
         .routes(routes!(system::list_audit))
+        .routes(routes!(system::list_jobs))
+        .routes(routes!(system::retry_job))
+        .routes(routes!(system::metrics_summary))
 }
 
 /// `routes` with the body limit `max` instead of [`MAX_JSON_BODY`] (larger for uploads,

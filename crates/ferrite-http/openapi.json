@@ -4011,6 +4011,75 @@
         ]
       }
     },
+    "/api/v1/plugins/{name}/metrics": {
+      "get": {
+        "tags": [
+          "plugins"
+        ],
+        "operationId": "get_plugin_metrics",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Plugin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Failures per hook and hour over 24 hours (every node's) and the answering node's call statistics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginMetricsDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/plugins/{name}/settings": {
       "get": {
         "tags": [
@@ -4887,6 +4956,231 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_system`, `system:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/system/jobs": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "operationId": "list_jobs",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "`queued`, `running`, `done` or `dead`; all when absent.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Only jobs of this kind (`[a-z0-9._-]{1,64}`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1..=200; default 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of jobs, newest first, without payloads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation` (`status`, `kind`, `limit`, `cursor`) or `malformed-query`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_system`, `system:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/system/jobs/{id}/retry": {
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "operationId": "retry_job",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The job, `queued` and due now with its attempts reset (`last_error` kept); audited `job.retry`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_system`, `system:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: the job is not `dead` (`errors[0].field` = `status`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/system/metrics/summary": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "operationId": "get_metrics_summary",
+        "responses": {
+          "200": {
+            "description": "A snapshot of the answering node (renders, page cache, plugin calls since it started) and the site's job counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsSummaryDto"
                 }
               }
             }
@@ -7504,6 +7798,42 @@
           }
         }
       },
+      "CacheStatsDto": {
+        "type": "object",
+        "description": "The page cache of the answering node.",
+        "required": [
+          "entries",
+          "bytes",
+          "hits",
+          "misses"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Their weight in bytes.",
+            "minimum": 0
+          },
+          "entries": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Pages held.",
+            "minimum": 0
+          },
+          "hits": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lookups that found a page since the node started.",
+            "minimum": 0
+          },
+          "misses": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lookups that did not.",
+            "minimum": 0
+          }
+        }
+      },
       "CommentDto": {
         "type": "object",
         "description": "A comment as moderators see it (`GET /comments`, `PATCH /comments/{id}`).",
@@ -8175,6 +8505,31 @@
           }
         }
       },
+      "FailureBucketDto": {
+        "type": "object",
+        "description": "Failures of one hook in one hour, every node's (the shared counters, P20).",
+        "required": [
+          "hook",
+          "bucket_start",
+          "count"
+        ],
+        "properties": {
+          "bucket_start": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The start of the hour (UTC)."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "hook": {
+            "type": "string",
+            "description": "`render.head`, `post.saved`, `route GET /path`, ..."
+          }
+        }
+      },
       "FieldDefDto": {
         "type": "object",
         "description": "One field of a content type's schema. Names match `[a-z][a-z0-9_]{0,63}` and are\nunique per level; at most 100 fields per level; `featured_image` is a core field that\nevery schema allows and none may define.",
@@ -8294,6 +8649,70 @@
           }
         }
       },
+      "HookStatsDto": {
+        "type": "object",
+        "description": "One hook's calls on the answering node since it started.",
+        "required": [
+          "hook",
+          "calls",
+          "failures",
+          "busy",
+          "budget_cut",
+          "total_micros",
+          "max_micros",
+          "buckets"
+        ],
+        "properties": {
+          "buckets": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "Calls that ran by duration: at most 1, 5, 25, 100 and 500 ms, and longer."
+          },
+          "budget_cut": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls cut short or skipped by the page's render budget (not failures).",
+            "minimum": 0
+          },
+          "busy": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls skipped for want of a call slot (not failures).",
+            "minimum": 0
+          },
+          "calls": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls that ran (successes, failures and budget cuts).",
+            "minimum": 0
+          },
+          "failures": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls that failed (counted toward auto-disable).",
+            "minimum": 0
+          },
+          "hook": {
+            "type": "string"
+          },
+          "max_micros": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The longest call, in microseconds.",
+            "minimum": 0
+          },
+          "total_micros": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Summed duration of the calls that ran, in microseconds.",
+            "minimum": 0
+          }
+        }
+      },
       "ImportReportDto": {
         "type": "object",
         "description": "`POST /redirects/import`: what the import did.",
@@ -8345,6 +8764,105 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "JobDto": {
+        "type": "object",
+        "description": "A job, without its payload (P19): a handler's input can hold anything, and an\noperator needs the state, not the data.",
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "attempts",
+          "max_attempts",
+          "priority",
+          "run_at",
+          "created_at",
+          "handled"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Claims so far (including the current one while `running`)."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "handled": {
+            "type": "boolean",
+            "description": "Some live node runs jobs of this kind (its `meta.job_kinds`). `false`: the job\nwaits until a node that knows the kind joins (e.g. one running a newer\nversion, or with the plugin's handler)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`[a-z0-9._-]{1,64}`, e.g. `media.variants`."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last attempt failed, scrubbed of URLs, paths, addresses and credentials\n(the node's log has the full text); kept by a retry."
+          },
+          "locked_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The node running it."
+          },
+          "max_attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Higher runs first."
+          },
+          "run_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it is due (the next attempt, while `queued`)."
+          },
+          "status": {
+            "type": "string",
+            "description": "`queued`, `running`, `done` or `dead`."
+          }
+        }
+      },
+      "JobList": {
+        "type": "object",
+        "description": "`GET /system/jobs`: one page, newest first.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobDto"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -8874,6 +9392,38 @@
           }
         }
       },
+      "MetricsSummaryDto": {
+        "type": "object",
+        "description": "`GET /system/metrics/summary`: a snapshot of the answering node (its counters since\nit started) plus the site's job counts; time series are M4 (P20).",
+        "required": [
+          "node",
+          "renders",
+          "page_cache",
+          "plugins",
+          "jobs"
+        ],
+        "properties": {
+          "jobs": {
+            "$ref": "#/components/schemas/JobCountsDto",
+            "description": "Jobs per status, every node's."
+          },
+          "node": {
+            "$ref": "#/components/schemas/ThisNodeDto"
+          },
+          "page_cache": {
+            "$ref": "#/components/schemas/CacheStatsDto"
+          },
+          "plugins": {
+            "$ref": "#/components/schemas/PluginTotalsDto"
+          },
+          "renders": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Template renders (pages and error pages) since the node started.",
+            "minimum": 0
+          }
+        }
+      },
       "NodeCountsDto": {
         "type": "object",
         "description": "Registered nodes by heartbeat age (live: within 30 s of the database clock).",
@@ -8940,6 +9490,33 @@
           "version": {
             "type": "string",
             "description": "The binary version it runs."
+          }
+        }
+      },
+      "NodeHookStatsDto": {
+        "type": "object",
+        "description": "The answering node's part of [`PluginMetricsDto`].",
+        "required": [
+          "id",
+          "since",
+          "hooks"
+        ],
+        "properties": {
+          "hooks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HookStatsDto"
+            },
+            "description": "By hook name; at most 64."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the node started counting."
           }
         }
       },
@@ -9192,6 +9769,34 @@
           }
         }
       },
+      "PluginMetricsDto": {
+        "type": "object",
+        "description": "`GET /plugins/{name}/metrics`.",
+        "required": [
+          "window_secs",
+          "failures",
+          "node"
+        ],
+        "properties": {
+          "failures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FailureBucketDto"
+            },
+            "description": "Failures per hook and hour in the window, every node's, newest hour first."
+          },
+          "node": {
+            "$ref": "#/components/schemas/NodeHookStatsDto",
+            "description": "The answering node's call statistics (each node counts its own)."
+          },
+          "window_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The window of `failures`: 86400 (24 hours).",
+            "minimum": 0
+          }
+        }
+      },
       "PluginNodeState": {
         "type": "object",
         "description": "What one live node reports about a plugin (`nodes.meta.plugins.<name>`).",
@@ -9269,6 +9874,28 @@
             "propertyNames": {
               "type": "string"
             }
+          }
+        }
+      },
+      "PluginTotalsDto": {
+        "type": "object",
+        "description": "Plugin calls on the answering node since it started.",
+        "required": [
+          "calls",
+          "failures"
+        ],
+        "properties": {
+          "calls": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls that ran.",
+            "minimum": 0
+          },
+          "failures": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls that failed (counted toward auto-disable).",
+            "minimum": 0
           }
         }
       },

@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use ferrite_domain::Timestamp;
+use ferrite_domain::{FailureBucket, Timestamp};
 use ferrite_store::{
     PluginFailureRepo, StoreError, check_failure_count, check_prune_limit, validate_text,
 };
@@ -45,6 +45,40 @@ impl PluginFailureRepo for PgRepos {
         .bind(DateTime::<Utc>::from(since))
         .fetch_one(e))?;
         u64::try_from(sum).map_err(|_| StoreError::Database(format!("corrupt failure sum {sum}")))
+    }
+
+    async fn buckets(
+        &self,
+        plugin: &str,
+        since: Timestamp,
+        limit: u32,
+    ) -> Result<Vec<FailureBucket>, StoreError> {
+        validate_text("plugin failure plugin", plugin)?;
+        let limit = check_prune_limit(limit)?;
+        // `date_bin` from the epoch: hours independent of the session time zone.
+        let rows: Vec<(String, DateTime<Utc>, i64)> = run!(&self.exec, |e| {
+            sqlx::query_as(
+            "SELECT hook, date_bin('1 hour', bucket_start, TIMESTAMPTZ '1970-01-01 00:00:00+00') \
+               AS hour, SUM(count)::bigint \
+             FROM plugin_failures WHERE plugin = $1 AND bucket_start >= $2 \
+             GROUP BY hook, hour ORDER BY hour DESC, hook LIMIT $3"
+        )
+        .bind(plugin)
+        .bind(DateTime::<Utc>::from(since))
+        .bind(limit)
+        .fetch_all(e)
+        })?;
+        rows.into_iter()
+            .map(|(hook, hour, count)| {
+                Ok(FailureBucket {
+                    hook,
+                    bucket_start: Timestamp::from(hour),
+                    count: u64::try_from(count).map_err(|_| {
+                        StoreError::Database(format!("corrupt failure sum {count}"))
+                    })?,
+                })
+            })
+            .collect()
     }
 
     async fn clear(&self, plugin: &str) -> Result<(), StoreError> {

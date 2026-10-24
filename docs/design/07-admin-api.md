@@ -126,8 +126,8 @@ importer. The admin SPA that uses them is M2b.
 | Comments | `GET /comments?status&item&limit&cursor`, `PATCH /comments/{id}` (`{ status }`), `DELETE /comments/{id}` (spam or trash only), public `POST /content/{type}/{id}/comments` (rate-limited, honeypot; see **Comments** below) | M2a-2b (built) | moderation `moderate_comments` + `comments:read`/`comments:write`; the submit: none, or a token with `comments:write` |
 | Themes | `GET /themes`, `POST /themes` (raw ustar bundle, `?activate=true`), `POST /themes/{name}/activate`, `GET/PATCH /themes/{name}/settings` (no delete, M2a-2 P30) | M2a-2a | reads `manage_themes` + `extensions:read` (`require_reader`); writes `manage_themes` + `extensions:write` |
 | Plugins | `GET /plugins`, `GET /plugins/{name}`, `POST /plugins/inspect` (multipart upload → permission report, nothing installed), `POST /plugins` (install with `approve` = the report's fingerprint), `POST /plugins/{name}/enable`, `POST /plugins/{name}/disable`, `DELETE /plugins/{name}` (`?purge=true`), `GET/PATCH /plugins/{name}/settings` | M2a-2a | reads `manage_plugins` + `extensions:read` (`require_reader`, so editors see no plugin list); writes `manage_plugins` + `extensions:write` |
-| Plugin metrics | `GET /plugins/{name}/metrics` | M2a-2b | — |
-| System | `GET /system/status` (versions, mode, backends, schema, the active theme and the nodes serving a fallback, job counts, node counts), `GET /system/nodes`, `GET /system/audit?limit&cursor`; `GET /system/jobs`, `POST /system/jobs/{id}/retry`, `GET /system/metrics/summary` (for dashboard charts) next (see **System** below) | M2a-2b (status, nodes, audit built) | `manage_system` (admins) + `system:read`; retry `system:write` |
+| Plugin metrics | `GET /plugins/{name}/metrics` (24 h of failures per hook and hour, every node's; the answering node's per-hook call stats; 05 §8) | M2a-2b (built) | `manage_plugins` + `extensions:read` |
+| System | `GET /system/status` (versions, mode, backends, schema, the active theme and the nodes serving a fallback, job counts, node counts), `GET /system/nodes`, `GET /system/audit?limit&cursor`, `GET /system/jobs?status&kind&limit&cursor`, `POST /system/jobs/{id}/retry`, `GET /system/metrics/summary` (see **System** below) | M2a-2b (built) | `manage_system` (admins) + `system:read`; retry `system:write` |
 | Import | `POST /import/wordpress` (upload WXR + optional uploads zip → job), `GET /import/{job}` | M3 | — |
 
 **Versions and `If-Match` (P11).** Only content has a `version`: `PATCH`, `DELETE`, the
@@ -267,6 +267,17 @@ the version, the mode or the migration state); the unauthenticated liveness prob
   (`null` for the operator path, unauthenticated flows and deleted users). `details` never
   hold secrets or setting values (P22: setting writes list keys only; plugin installs list
   the grant, never settings).
+- `GET /system/jobs?status&kind&limit&cursor` lists jobs newest first (`limit` 1..=200,
+  default 50; an unknown `status`, a malformed `kind` or a cursor of another list is
+  `400`) **without payloads** (P19), `last_error` scrubbed like node diagnostics (F16),
+  and `handled` = some live node lists the kind in `nodes.meta.job_kinds`.
+  `POST /system/jobs/{id}/retry` (`system:write`) puts a `dead` job back (`queued`, due
+  now, `attempts = 0`, `last_error` kept) and appends `job.retry` (`{id, kind}`) in the
+  same transaction; any other status is `422` (`errors[0].field = "status"`), a missing
+  job `404`. A job no node handles is retried too (`handled = false` in the answer).
+- `GET /system/metrics/summary`: the answering node's `renders`, `page_cache` (`entries`,
+  `bytes`, `hits`, `misses`), `plugins` (`calls`, `failures`) since it started, and the
+  site's `jobs` per status (P20; 09 §6).
 - **Node diagnostics are scrubbed** (`ferrite_core::diagnostics::scrub`): every error text a
   node puts in `nodes.meta` (`theme.error`, `plugins.<name>.error`, `plugins_error`,
   `permalinks_error`) is scrubbed where it is written (`NodeStatus`) and again where it is

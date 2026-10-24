@@ -12,8 +12,8 @@ use ferrite_core::{
     jobs::{MEDIA_VARIANTS_KIND, MediaVariants, media_variants_job},
 };
 use ferrite_domain::{
-    Artifact, ArtifactHash, ArtifactKind, ContentId, ContentStatus, Job, JobId, JobLease,
-    JobStatus, NewJob, NewUser, NodeId, Role, Timestamp, UserId, UserStatus,
+    Artifact, ArtifactHash, ArtifactKind, ContentId, ContentStatus, Job, JobId, JobLease, JobQuery,
+    JobStatus, NewJob, NewUser, NodeId, Page, Role, Timestamp, UserId, UserStatus,
 };
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, Backend, Channel, CommentRepo, ContentRepo,
@@ -910,6 +910,12 @@ impl JobRepo for FailingTx {
     }
     async fn get(&self, id: JobId) -> Result<Option<Job>, StoreError> {
         self.inner.jobs().get(id).await
+    }
+    async fn list(&self, query: &JobQuery) -> Result<Page<Job>, StoreError> {
+        self.inner.jobs().list(query).await
+    }
+    async fn retry_dead(&self, id: JobId) -> Result<Option<Job>, StoreError> {
+        self.inner.jobs().retry_dead(id).await
     }
     async fn counts(&self) -> Result<BTreeMap<JobStatus, u64>, StoreError> {
         self.inner.jobs().counts().await

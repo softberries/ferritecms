@@ -17,6 +17,7 @@ pub mod fixtures;
 pub mod harness;
 pub mod idempotency;
 pub mod job;
+pub mod job_list;
 pub mod lock;
 pub mod menu;
 pub mod migrations;

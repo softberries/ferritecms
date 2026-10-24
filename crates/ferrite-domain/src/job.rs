@@ -84,6 +84,18 @@ impl NewJob {
     }
 }
 
+/// A job listing (`GET /system/jobs`): newest first (`created_at DESC, id DESC`),
+/// optional filters.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JobQuery {
+    pub status: Option<JobStatus>,
+    /// A job kind (`[a-z0-9._-]{1,64}`).
+    pub kind: Option<String>,
+    /// 1..=[`MAX_PAGE`](crate::MAX_PAGE).
+    pub limit: u32,
+    pub cursor: Option<String>,
+}
+
 /// Lease token of one claim: job id, holding node and attempt number (ruling P6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct JobLease {

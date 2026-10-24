@@ -509,6 +509,8 @@ async fn boot(
     }
     handlers.push(Arc::new(variants));
     handlers.extend(opts.extra_handlers);
+    // What the job list's `handled` reads (P19).
+    status.set_job_kinds(handlers.iter().map(|h| h.kind().to_owned()).collect());
     let mut runner_config = RunnerConfig::new(registry.id(), config.cluster.workers);
     let o = &opts.runner;
     runner_config.lease = o.lease.unwrap_or(runner_config.lease);

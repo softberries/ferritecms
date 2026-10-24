@@ -1,6 +1,7 @@
 //! What this node reports in `nodes.meta` (ruling P14, 04 §8): the theme, the plugins
 //! and the permalink rules it runs, with the last reload error of each
-//! (`theme.error`, `plugins.<name>.error` / `plugins_error`, `permalinks_error`). The registry
+//! (`theme.error`, `plugins.<name>.error` / `plugins_error`, `permalinks_error`), and the
+//! job kinds its runner handles (`job_kinds`, sorted; M2a-2b P19). The registry
 //! adds `site_id`, `site_url`, `mode` and `clock_skew_ms` itself.
 //!
 //! Error texts are scrubbed before they are stored ([`scrub`], M2a-2b P18): URLs,
@@ -40,6 +41,7 @@ struct Status {
     plugins: Value,
     plugins_error: Option<String>,
     permalinks_error: Option<String>,
+    job_kinds: Vec<String>,
 }
 
 impl NodeStatus {
@@ -94,6 +96,14 @@ impl NodeStatus {
         self.lock().permalinks_error = error.map(scrub);
     }
 
+    /// `nodes.meta.job_kinds`: the kinds this node's job runner handles (stored sorted,
+    /// without duplicates), so the job list can tell a job no live node runs.
+    pub fn set_job_kinds(&self, mut kinds: Vec<String>) {
+        kinds.sort();
+        kinds.dedup();
+        self.lock().job_kinds = kinds;
+    }
+
     /// The node's part of `nodes.meta`.
     pub fn meta(&self) -> Value {
         let s = self.lock();
@@ -102,6 +112,7 @@ impl NodeStatus {
             "plugins": s.plugins,
             "plugins_error": s.plugins_error,
             "permalinks_error": s.permalinks_error,
+            "job_kinds": s.job_kinds,
         })
     }
 
@@ -232,5 +243,8 @@ mod tests {
         assert_eq!(meta["permalinks_error"], "bad");
         status.set_permalinks_error(None);
         assert!(status.meta()["permalinks_error"].is_null());
+        assert_eq!(meta["job_kinds"], json!([]));
+        status.set_job_kinds(vec!["b.x".into(), "a.y".into(), "b.x".into()]);
+        assert_eq!(status.meta()["job_kinds"], json!(["a.y", "b.x"]));
     }
 }

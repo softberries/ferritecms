@@ -326,6 +326,32 @@ pub fn comment_cursor(cursor: &str) -> Result<(i64, Uuid), StoreError> {
     micros_cursor(COMMENT_CURSOR_TAG, cursor)
 }
 
+/// Cursor tag of the job listing (see [`encode_job_cursor`]).
+pub const JOB_CURSOR_TAG: &str = "j:created";
+
+/// Encodes the job-listing cursor pointing just after the row (`created_at`, `id`).
+pub fn encode_job_cursor(created_at: Timestamp, id: Uuid) -> String {
+    Cursor::encode(JOB_CURSOR_TAG, &json!(created_at.as_micros()), id)
+}
+
+/// Decodes a cursor made by [`encode_job_cursor`] into (`created_at` micros, `id`).
+pub fn job_cursor(cursor: &str) -> Result<(i64, Uuid), StoreError> {
+    micros_cursor(JOB_CURSOR_TAG, cursor)
+}
+
+/// Validates a [`JobQuery`](ferrite_domain::JobQuery): `limit` 1..=200, `kind` like
+/// [`check_job_kind`]; returns the limit and the decoded cursor.
+pub fn check_job_query(
+    query: &ferrite_domain::JobQuery,
+) -> Result<(u32, Option<(i64, Uuid)>), StoreError> {
+    let limit = check_limit(query.limit)?;
+    if let Some(kind) = &query.kind {
+        check_job_kind(kind)?;
+    }
+    let after = query.cursor.as_deref().map(job_cursor).transpose()?;
+    Ok((limit, after))
+}
+
 /// Decodes a `tag` cursor whose sort key is a microsecond timestamp.
 fn micros_cursor(tag: &str, cursor: &str) -> Result<(i64, Uuid), StoreError> {
     let bad = || StoreError::Invalid("cursor does not match the query order".into());

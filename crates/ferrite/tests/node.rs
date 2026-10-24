@@ -446,6 +446,28 @@ async fn bad_theme_activation_keeps_previous_theme(db: Arc<TestDb>) {
     node.shutdown().await.unwrap();
 }
 
+/// M2a-2b P19: a node publishes the job kinds its runner handles, sorted, so the job
+/// list can tell which jobs no live node runs.
+async fn job_kinds_are_in_meta(db: Arc<TestDb>) {
+    let site = Site::new(&db);
+    let node = site.start(&db, NodeOptions::default()).await;
+    let m = meta(&db, &node).await;
+    let kinds: Vec<&str> = m["job_kinds"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{m}"))
+        .iter()
+        .map(|k| k.as_str().unwrap())
+        .collect();
+    let mut sorted = kinds.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(kinds, sorted, "{m}");
+    for kind in ["jobs.prune", "media.variants", "content.publish_scheduled"] {
+        assert!(kinds.contains(&kind), "{kind}: {m}");
+    }
+    node.shutdown().await.unwrap();
+}
+
 /// Pre-flight F12: a node serving a fallback instead of the active row's artifact says
 /// so in `nodes.meta.theme.fallback`; serving the active row's artifact clears it.
 async fn fallback_is_flagged_in_meta(db: Arc<TestDb>) {
@@ -1245,6 +1267,7 @@ backend_tests_spawning!(
     theme_hot_swap_without_restart,
     bad_theme_activation_keeps_previous_theme,
     fallback_is_flagged_in_meta,
+    job_kinds_are_in_meta,
     bad_plugin_update_keeps_previous_version,
     plugin_hot_reload_on_enable_and_disable,
     plugin_delete_stops_its_hook,

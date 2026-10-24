@@ -25,6 +25,11 @@
 //!   returned (P13, Review Focus 3); plugins read settings per call (P14), and pages
 //!   whose plugin calls read a changed key are flushed through `options.changed`.
 //!
+//! * `GET /plugins/{name}/metrics` (M2a-2b P20): the plugin's failures per hook and
+//!   hour over the last 24 hours, every node's (the shared counters), and the answering
+//!   node's call statistics per hook since it started (calls, failures, busy and
+//!   budget skips, durations). Each node counts its own; time series are M4.
+//!
 //! Uploads are `multipart/form-data` ([`multipart`](super::multipart)); the caller is
 //! authorized before any of the body is read. Responses never carry the component's
 //! bytes or a secret.
@@ -38,7 +43,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use bytes::Bytes;
-use ferrite_domain::{InstalledPlugin, Node};
+use ferrite_domain::{InstalledPlugin, Node, Timestamp};
 use ferrite_plugin_host::MAX_MANIFEST_BYTES;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -47,8 +52,9 @@ use utoipa::IntoParams;
 use super::{
     ApiState, Authed, BASE,
     dto::extensions::{
-        GrantReportDto, PermissionReportDto, PluginDto, PluginInspectUpload, PluginList,
-        PluginNodeState, PluginSettingsDto, PluginUpload, SettingsPatch,
+        FailureBucketDto, GrantReportDto, HookStatsDto, NodeHookStatsDto, PermissionReportDto,
+        PluginDto, PluginInspectUpload, PluginList, PluginMetricsDto, PluginNodeState,
+        PluginSettingsDto, PluginUpload, SettingsPatch,
     },
     extract::{ApiJson, ApiPath, created_at, parse_query},
     multipart::{open, read_parts},
@@ -66,6 +72,9 @@ pub const MAX_UPLOAD_BODY: usize = MAX_PLUGIN_BYTES as usize + 1024 * 1024;
 /// A node whose heartbeat is older than this is not listed in `nodes` (pre-flight F20;
 /// the value of `ferrite_cluster::STALE_AFTER`, which this crate does not depend on).
 pub const NODE_STALE_AFTER: Duration = Duration::from_secs(30);
+
+/// The window of `GET /plugins/{name}/metrics` failures: 24 hours.
+pub const PLUGIN_METRICS_WINDOW: Duration = Duration::from_secs(24 * 3600);
 
 const COMPONENT_PART: (&str, usize) = ("component", MAX_PLUGIN_BYTES as usize);
 const MANIFEST_PART: (&str, usize) = ("manifest", MAX_MANIFEST_BYTES);
@@ -361,6 +370,52 @@ pub async fn update_plugin_settings(
         .set_plugin_settings(&who.actor, &name, patch)
         .await?;
     Ok(Json(view.into()))
+}
+
+#[utoipa::path(
+    get,
+    path = "/plugins/{name}/metrics",
+    tag = "plugins",
+    operation_id = "get_plugin_metrics",
+    security(("session" = []), ("bearer" = [])),
+    params(("name" = String, Path, description = "Plugin")),
+    responses(
+        (status = 200, description = "Failures per hook and hour over 24 hours (every node's) and the answering node's call statistics", body = PluginMetricsDto),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn plugin_metrics(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(name): ApiPath<String>,
+) -> Result<Json<PluginMetricsDto>, Problem> {
+    // This node's clock (nothing is read before core's check); a few seconds of skew
+    // against the nodes that stamped the buckets do not matter over 24 hours.
+    let now = Timestamp::now();
+    let window = i64::try_from(PLUGIN_METRICS_WINDOW.as_micros()).unwrap_or(i64::MAX);
+    let since = Timestamp::from_micros(now.as_micros().saturating_sub(window))
+        .map_err(|_| Problem::internal())?;
+    let failures = api
+        .extensions
+        .failure_buckets(&who.actor, &name, since)
+        .await?;
+    Ok(Json(PluginMetricsDto {
+        window_secs: PLUGIN_METRICS_WINDOW.as_secs(),
+        failures: failures.into_iter().map(FailureBucketDto::from).collect(),
+        node: NodeHookStatsDto {
+            id: api.node.id.as_uuid(),
+            since: api.node.started_at.as_datetime(),
+            hooks: api
+                .site
+                .plugins
+                .call_stats(&name)
+                .into_iter()
+                .map(HookStatsDto::from)
+                .collect(),
+        },
+    }))
 }
 
 async fn set_enabled(

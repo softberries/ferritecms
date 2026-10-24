@@ -18,6 +18,7 @@ mod services;
 mod sink;
 mod skips;
 mod state;
+mod stats;
 #[cfg(test)]
 mod test_support;
 mod trace;
@@ -51,6 +52,7 @@ pub use report::{LimitItem, PermissionItem, PermissionReport, Risk};
 pub use services::{HostServices, InMemoryServices, KindOk, MAIL_NOT_CONFIGURED, SentMail};
 pub use sink::FailureSink;
 pub use state::{MAX_MAIL_BODY_BYTES, MAX_MAIL_SUBJECT_CHARS};
+pub use stats::{DURATION_BUCKETS_MS, HookStats, MAX_STATS_HOOKS};
 pub use trace::{FilterOutcome, dep_keys};
 pub use types::{
     ActionEvent, FilterValue, Head, LinkTag, MetaTag, Post, RequestInfo, RouteRequest,
@@ -65,6 +67,7 @@ use failure::FailureTracker;
 use grant::LimitBounds;
 use registry::{LoadedPlugin, Registry};
 use skips::{SKIP_WARN_EVERY, Skip, SkipLog};
+use stats::{CallStats, Outcome};
 use trace::CallTrace;
 use validate::{matches_type, validate_output, validate_route_response};
 
@@ -81,6 +84,8 @@ pub struct PluginHost {
     calls: Semaphore,
     /// Rate limit for the skip warnings (review m7).
     skips: SkipLog,
+    /// Call outcomes per plugin and hook since the host was built (M2a-2b P20).
+    stats: CallStats,
     /// Advances the engine epoch; joined when the host is dropped.
     _ticker: EpochTicker,
 }
@@ -163,6 +168,7 @@ impl PluginHost {
             failure_sink: RwLock::new(None),
             calls,
             skips: SkipLog::new(SKIP_WARN_EVERY),
+            stats: CallStats::default(),
             _ticker: ticker,
         })
     }
@@ -322,6 +328,8 @@ impl PluginHost {
         started: Instant,
     ) {
         let duration = started.elapsed();
+        self.stats
+            .record(&plugin.name, hook, Outcome::Failure(duration));
         tracing::warn!(
             plugin = %plugin.name,
             hook,
@@ -422,6 +430,7 @@ impl PluginHost {
 
     /// `Busy` for `plugin`, logged.
     fn busy(&self, plugin: &str, hook: &str) -> PluginError {
+        self.stats.record(plugin, hook, Outcome::Busy);
         self.log_busy(plugin, hook);
         PluginError::Busy {
             plugin: plugin.to_owned(),
@@ -517,7 +526,8 @@ impl PluginHost {
         let mut current = value;
         // The plugin called last in this chain: named when the budget runs out.
         let mut last_called: Option<Arc<str>> = None;
-        for plugin in registry.subscribers(hook) {
+        let subscribers = registry.subscribers(hook);
+        for (i, plugin) in subscribers.iter().enumerate() {
             if plugin.disabled.get().is_some() {
                 continue;
             }
@@ -527,11 +537,13 @@ impl PluginHost {
             }
             if until.is_some_and(|u| left(u).is_zero()) {
                 self.log_budget(hook, last_called.as_deref(), None);
+                self.count_skipped(&subscribers[i..], hook);
                 volatile = true;
                 break;
             }
             let wait = until.map_or(deadline, |u| deadline.min(left(u)));
             let Some((_permit, _)) = self.permit(wait).await else {
+                self.stats.record(&plugin.name, hook, Outcome::Busy);
                 self.log_busy(&plugin.name, hook);
                 volatile = true;
                 continue;
@@ -540,6 +552,7 @@ impl PluginHost {
                 None => CallDeadline::full(deadline),
                 Some(u) if left(u).is_zero() => {
                     self.log_budget(hook, last_called.as_deref(), None);
+                    self.count_skipped(&subscribers[i..], hook);
                     volatile = true;
                     break;
                 }
@@ -549,16 +562,19 @@ impl PluginHost {
             last_called = Some(plugin.name.clone());
             let trace = CallTrace::default();
             let render_path = spec.deadline == DeadlineClass::Render;
-            let result =
-                call_filter(&plugin, hook, &current, req, limit, &trace, render_path).await;
+            let result = call_filter(plugin, hook, &current, req, limit, &trace, render_path).await;
             let html_mode = plugin.manifest.capabilities.render_html;
             match result {
                 Ok(out) => match validate_output(ty, &current, out, html_mode) {
-                    Ok(valid) => current = valid,
+                    Ok(valid) => {
+                        self.stats
+                            .record(&plugin.name, hook, Outcome::Success(started.elapsed()));
+                        current = valid;
+                    }
                     Err(reason) => {
                         trace.volatile();
                         self.record_failure(
-                            &plugin,
+                            plugin,
                             hook,
                             FailureKind::InvalidOutput,
                             &reason,
@@ -568,11 +584,13 @@ impl PluginHost {
                 },
                 Err(failure) if limit.ended_by_budget(&failure) => {
                     trace.volatile();
+                    self.stats
+                        .record(&plugin.name, hook, Outcome::Cut(started.elapsed()));
                     self.log_budget(hook, Some(&plugin.name), Some(&plugin.name));
                 }
                 Err(failure) => {
                     trace.volatile();
-                    self.record_call_failure(&plugin, hook, &failure, started);
+                    self.record_call_failure(plugin, hook, &failure, started);
                 }
             }
             trace.drain_into(&mut deps, &mut volatile);
@@ -624,18 +642,25 @@ impl PluginHost {
             .ok_or_else(|| self.busy(plugin, hook))?;
         let limit = CallDeadline::after_wait(deadline, waited);
         let started = Instant::now();
-        call_action(&loaded, hook, ev, limit)
-            .await
-            .map_err(|failure| {
-                if limit.ended_by_budget(&failure) {
-                    return self.busy(plugin, hook);
-                }
-                self.record_call_failure(&loaded, hook, &failure, started);
-                PluginError::CallFailed {
-                    plugin: plugin.to_string(),
-                    reason: failure.to_string(),
-                }
-            })
+        let done = call_action(&loaded, hook, ev, limit).await;
+        let elapsed = started.elapsed();
+        if done.is_ok() {
+            self.stats.record(plugin, hook, Outcome::Success(elapsed));
+        }
+        done.map_err(|failure| {
+            if limit.ended_by_budget(&failure) {
+                self.stats.record(plugin, hook, Outcome::Cut(elapsed));
+                self.log_busy(plugin, hook);
+                return PluginError::Busy {
+                    plugin: plugin.to_owned(),
+                };
+            }
+            self.record_call_failure(&loaded, hook, &failure, started);
+            PluginError::CallFailed {
+                plugin: plugin.to_string(),
+                reason: failure.to_string(),
+            }
+        })
     }
 
     /// The `[routes]` entry for `path` of the enabled plugin `plugin` (05 §4b): what the
@@ -695,7 +720,12 @@ impl PluginHost {
         };
         let res = call_route(&loaded, req, limit).await.map_err(|failure| {
             if limit.ended_by_budget(&failure) {
-                return self.busy(plugin, &hook);
+                self.stats
+                    .record(plugin, &hook, Outcome::Cut(started.elapsed()));
+                self.log_busy(plugin, &hook);
+                return PluginError::Busy {
+                    plugin: plugin.to_owned(),
+                };
             }
             self.record_call_failure(&loaded, &hook, &failure, started);
             failed(failure.to_string())
@@ -704,6 +734,8 @@ impl PluginHost {
             self.record_failure(&loaded, &hook, FailureKind::InvalidOutput, &reason, started);
             return Err(failed(format!("invalid response: {reason}")));
         }
+        self.stats
+            .record(plugin, &hook, Outcome::Success(started.elapsed()));
         Ok(res)
     }
 
@@ -723,6 +755,26 @@ impl PluginHost {
             .load()
             .get(plugin)
             .and_then(|p| p.disabled.get().cloned())
+    }
+
+    /// `plugin`'s call statistics per hook (by hook name), counted on this host since
+    /// it was built: at most [`MAX_STATS_HOOKS`] hooks per plugin. Empty for a plugin
+    /// that was never called here.
+    pub fn call_stats(&self, plugin: &str) -> Vec<HookStats> {
+        self.stats.of(plugin)
+    }
+
+    /// Calls that ran and calls that failed on this host since it was built, every
+    /// plugin and hook.
+    pub fn totals(&self) -> (u64, u64) {
+        self.stats.totals()
+    }
+
+    /// Counts a budget skip for each enabled plugin of `rest` (the chain's remainder).
+    fn count_skipped(&self, rest: &[Arc<LoadedPlugin>], hook: &str) {
+        for p in rest.iter().filter(|p| p.disabled.get().is_none()) {
+            self.stats.record(&p.name, hook, Outcome::Skipped);
+        }
     }
 
     /// Recorded call failures, oldest first. Keeps the most recent 1_000 across all

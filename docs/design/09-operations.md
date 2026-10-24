@@ -144,11 +144,34 @@ includes `secret.key`.
 
 ## 6. Metrics & logs
 
-See [01 §7](01-architecture.md#7-observability). Admin dashboard charts read
-`/api/v1/system/metrics/summary`, which aggregates the node-local registry; in cluster
+See [01 §7](01-architecture.md#7-observability).
+
+**As built (M2a-2b P19, P20).** Admins (`manage_system`; tokens `system:read`, the
+retry `system:write`) have:
+
+- `GET /api/v1/system/metrics/summary`: a snapshot of the node that answered: `node`
+  (id, `started_at`), `renders` (template renders since it started), `page_cache`
+  (`entries`, `bytes`, `hits`, `misses` of its page cache), `plugins` (`calls` that ran,
+  `failures`, every plugin), and the site's `jobs` per status (from the database). Each
+  node answers for itself; there is no aggregation yet.
+- `GET /api/v1/plugins/{name}/metrics`: 24 hours of the plugin's failures per hook and
+  hour (every node's) and the answering node's per-hook call statistics (05 §8).
+- `GET /api/v1/system/jobs?status&kind&limit&cursor`: the jobs, newest first (limit
+  default 50, at most 200), **without payloads**; `last_error` scrubbed of URLs, paths,
+  addresses and credentials (the node log has the full text); `handled` says whether
+  some live node lists the kind in its `nodes.meta.job_kinds` (each node publishes the
+  kinds its runner handles). A queued job with `handled = false` waits for a node that
+  knows the kind (a newer version in a rolling deploy, say).
+- `POST /api/v1/system/jobs/{id}/retry`: a `dead` job back to `queued`, due now with
+  `attempts = 0`, `last_error` and `unique_key` kept, in one conditional statement;
+  audited `job.retry` (`{id, kind}`). Any other status is `422` (field `status`); the
+  retry does not check `handled` (the answer says it). A done job is never re-run; run
+  it again by its own trigger.
+
+**Planned (M4).** A node-local metrics registry and `/metrics` (Prometheus); in cluster
 mode each node writes a 1-minute summary row (`node_metrics`, retained 7 days) so the
-dashboard shows cluster-wide figures. (Prometheus remains the source of truth for real
-monitoring.)
+dashboard can show cluster-wide figures and time series. (Prometheus remains the source
+of truth for real monitoring.)
 
 ## 7. Packaging
 

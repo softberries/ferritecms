@@ -663,3 +663,111 @@ async fn budget_cut_epoch_trap_is_not_a_failure() -> TestResult {
     assert_eq!(host.failures().len(), 1);
     Ok(())
 }
+
+/// M2a-2b P20: every outcome lands in its counter of the plugin's hook: a success
+/// (`hello`), a failure (`panic`), a budget cut (`slow-import`, cut by the render
+/// budget), a `Busy` skip (a route with no free slot); calls that ran are bucketed by
+/// duration, and the totals count calls that ran and failures.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn call_stats_count_outcomes() -> TestResult {
+    let cfg = HostConfig {
+        max_concurrent_calls: 1,
+        action_deadline: Duration::from_secs(5),
+        route_deadline: Duration::from_millis(100),
+        ..HostConfig::default()
+    };
+    let (host, services) = held_host(cfg, &["slow-import"], &["hello", "panic", "router"])?;
+    assert!(host.call_stats("hello").is_empty());
+    assert_eq!(host.totals(), (0, 0));
+
+    // hello, panic, slow-import (name order at equal priority); slow-import parks in
+    // `get_post` until the budget cuts it.
+    let req = RequestInfo {
+        post: Some("p1".into()),
+        ..req()
+    };
+    let until = Instant::now() + Duration::from_millis(150);
+    let out = host
+        .apply_filter_until("render.head", input(), &req, until)
+        .await;
+    assert!(out.volatile);
+    let one = |plugin: &str| {
+        let mut stats = host.call_stats(plugin);
+        assert_eq!(stats.len(), 1, "{plugin}: {stats:?}");
+        stats.remove(0)
+    };
+    let hello = one("hello");
+    assert_eq!(hello.hook, "render.head");
+    assert_eq!(
+        (hello.calls, hello.failures, hello.busy, hello.budget_cut),
+        (1, 0, 0, 0)
+    );
+    assert_eq!(hello.buckets.iter().sum::<u64>(), 1);
+    assert!(hello.max_micros <= hello.total_micros);
+    let panic = one("panic");
+    assert_eq!(
+        (panic.calls, panic.failures, panic.busy, panic.budget_cut),
+        (1, 1, 0, 0)
+    );
+    let cut = one("slow-import");
+    assert_eq!(
+        (cut.calls, cut.failures, cut.busy, cut.budget_cut),
+        (1, 0, 0, 1)
+    );
+    assert!(cut.max_micros >= 50_000, "{cut:?}");
+    assert_eq!(host.failures().len(), 1, "only panic failed");
+
+    // A spent budget skips the whole chain: a budget cut for each, no call.
+    host.apply_filter_until("render.head", input(), &req, Instant::now())
+        .await;
+    for plugin in ["hello", "panic", "slow-import"] {
+        let s = one(plugin);
+        assert_eq!(
+            s.budget_cut,
+            u64::from(plugin == "slow-import") + 1,
+            "{s:?}"
+        );
+        assert_eq!(s.calls, 1, "{s:?}");
+    }
+
+    // The only slot is held by an action: the route is skipped as busy.
+    let held = tokio::spawn({
+        let host = host.clone();
+        async move {
+            host.dispatch_action("slow-import", "post.saved", saved("p1"))
+                .await
+        }
+    });
+    services.wait_entered(2).await;
+    let route = RouteRequest {
+        method: "GET".into(),
+        path: "/hello".into(),
+        query: Vec::new(),
+        headers: Vec::new(),
+        body: Vec::new(),
+        client_ip_hash: "ab".repeat(16),
+        user: None,
+    };
+    let busy = host.handle_route("router", route.clone()).await;
+    assert!(matches!(busy, Err(PluginError::Busy { .. })), "{busy:?}");
+    services.open();
+    held.await??;
+    let r = one("router");
+    assert_eq!(r.hook, "route GET /hello");
+    assert_eq!((r.calls, r.failures, r.busy, r.budget_cut), (0, 0, 1, 0));
+    assert_eq!(r.buckets, [0; 6]);
+    // The action ran for the 100 ms the route waited, and more.
+    let action = host
+        .call_stats("slow-import")
+        .into_iter()
+        .find(|s| s.hook == "post.saved")
+        .unwrap();
+    assert_eq!((action.calls, action.failures), (1, 0));
+    assert_eq!(action.buckets[..4], [0, 0, 0, 0], "{action:?}");
+    // Now the route runs.
+    assert_eq!(host.handle_route("router", route).await?.status, 200);
+    assert_eq!(one("router").calls, 1);
+    // hello, panic, slow-import (cut), the action and the route ran; panic failed.
+    assert_eq!(host.totals(), (5, 1));
+    Ok(())
+}

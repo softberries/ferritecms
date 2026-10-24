@@ -6,12 +6,12 @@ use std::{collections::BTreeMap, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use ferrite_domain::{Job, JobId, JobLease, JobStatus, NewJob, NodeId, Timestamp};
+use ferrite_domain::{Job, JobId, JobLease, JobQuery, JobStatus, NewJob, NodeId, Page, Timestamp};
 use ferrite_store::{
-    Channel, JobRepo, StoreError, check_claim, check_job_duration, check_new_job,
-    check_prune_limit, sanitize_job_error, sort_claimed,
+    Channel, JobRepo, StoreError, check_claim, check_job_duration, check_job_query, check_new_job,
+    check_prune_limit, encode_job_cursor, sanitize_job_error, sort_claimed,
 };
-use sqlx::{AssertSqlSafe, types::Json};
+use sqlx::{AssertSqlSafe, Postgres, QueryBuilder, types::Json};
 
 use super::PgRepos;
 use crate::{
@@ -191,6 +191,51 @@ impl JobRepo for PgRepos {
     async fn get(&self, id: JobId) -> Result<Option<Job>, StoreError> {
         let row = run!(&self.exec, |e| sqlx::query(AssertSqlSafe(format!(
             "SELECT {JOB_COLUMNS} FROM jobs WHERE id = $1"
+        )))
+        .bind(id.as_uuid())
+        .fetch_optional(e))?;
+        row.as_ref().map(codec::job).transpose()
+    }
+
+    async fn list(&self, query: &JobQuery) -> Result<Page<Job>, StoreError> {
+        let (limit, after) = check_job_query(query)?;
+        // Only the filters given are in the SQL: with `status` the planner walks
+        // `jobs_status_created_idx`, without it `jobs_created_idx` (0006, F26).
+        let mut qb =
+            QueryBuilder::<Postgres>::new(format!("SELECT {JOB_COLUMNS} FROM jobs WHERE true"));
+        if let Some(status) = query.status {
+            qb.push(" AND status = ").push_bind(status.as_str());
+        }
+        if let Some(kind) = &query.kind {
+            qb.push(" AND kind = ").push_bind(kind.as_str());
+        }
+        if let Some((at, id)) = after {
+            qb.push(" AND (created_at, id) < (")
+                .push_bind(DateTime::<Utc>::from(Timestamp::from_micros(at)?))
+                .push(", ")
+                .push_bind(id)
+                .push(")");
+        }
+        qb.push(" ORDER BY created_at DESC, id DESC LIMIT ")
+            .push_bind(i64::from(limit) + 1);
+        let rows = run!(&self.exec, |e| qb.build().fetch_all(e))?;
+        let mut items = rows.iter().map(codec::job).collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = if items.len() > limit as usize {
+            items.truncate(limit as usize);
+            items
+                .last()
+                .map(|j| encode_job_cursor(j.created_at, j.id.as_uuid()))
+        } else {
+            None
+        };
+        Ok(Page { items, next_cursor })
+    }
+
+    async fn retry_dead(&self, id: JobId) -> Result<Option<Job>, StoreError> {
+        let row = run!(&self.exec, |e| sqlx::query(AssertSqlSafe(format!(
+            "UPDATE jobs SET status = 'queued', attempts = 0, run_at = now(), \
+             finished_at = NULL, locked_by = NULL, locked_until = NULL \
+             WHERE id = $1 AND status = 'dead' RETURNING {JOB_COLUMNS}"
         )))
         .bind(id.as_uuid())
         .fetch_optional(e))?;

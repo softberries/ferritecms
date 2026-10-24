@@ -2,7 +2,10 @@
 
 use std::{
     future::Future,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -57,6 +60,19 @@ enum Flown {
     Lost,
 }
 
+/// A snapshot of [`PageCache`] counters (M2a-2b P20).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CacheStats {
+    /// Pages held.
+    pub entries: u64,
+    /// Their total weight (body plus key, headers, ETag and dependency keys).
+    pub bytes: u64,
+    /// Lookups that found a valid page, since the cache was built.
+    pub hits: u64,
+    /// Lookups that did not (absent or invalidated), since the cache was built.
+    pub misses: u64,
+}
+
 /// A size-bounded, per-node cache of rendered pages with a dependency index.
 ///
 /// Correctness over hit rate: a page is dropped as soon as any of its dependency keys
@@ -65,6 +81,8 @@ enum Flown {
 pub struct PageCache {
     cache: Cache<CacheKey, Arc<Entry>>,
     state: State,
+    hits: AtomicU64,
+    misses: AtomicU64,
 }
 
 impl PageCache {
@@ -83,17 +101,47 @@ impl PageCache {
                 },
             )
             .build();
-        Self { cache, state }
+        Self {
+            cache,
+            state,
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+        }
     }
 
     /// The cached page for `key`, if present and not invalidated.
+    /// Counted as a hit or a miss ([`stats`](Self::stats)).
     pub async fn get(&self, key: &CacheKey) -> Option<Arc<CachedPage>> {
+        let found = self.lookup(key).await;
+        let counter = if found.is_some() {
+            &self.hits
+        } else {
+            &self.misses
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        found
+    }
+
+    async fn lookup(&self, key: &CacheKey) -> Option<Arc<CachedPage>> {
         let entry = self.cache.get(key).await?;
         if entry.is_valid() {
             return Some(entry.page.clone());
         }
         self.remove_if_id(key, entry.id).await;
         None
+    }
+
+    /// Entries, bytes (after running moka's pending maintenance) and the hit and miss
+    /// counts of [`get`](Self::get) (every [`get_or_render`](Self::get_or_render) looks
+    /// up once).
+    pub async fn stats(&self) -> CacheStats {
+        self.cache.run_pending_tasks().await;
+        CacheStats {
+            entries: self.cache.entry_count(),
+            bytes: self.cache.weighted_size(),
+            hits: self.hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
+        }
     }
 
     /// Removes the entry under `key` only if it is still entry `id`, so a newer valid
@@ -333,6 +381,32 @@ mod tests {
         assert!(refs.is_subset(&keys), "dangling dep references");
         let in_moka: HashSet<CacheKey> = c.moka().iter().map(|(k, _)| (*k).clone()).collect();
         assert_eq!(keys, in_moka, "index and moka disagree");
+    }
+
+    /// M2a-2b P20: every lookup is a hit or a miss; entries and bytes follow the
+    /// pages held.
+    #[tokio::test]
+    async fn stats_count_hits_misses_and_size() {
+        let c = PageCache::new(1 << 20);
+        assert_eq!(c.stats().await, CacheStats::default());
+        let render = || async { Ok::<_, std::convert::Infallible>(page("body", &["post:1"])) };
+        c.get_or_render(key("/a/"), render()).await.unwrap();
+        c.get_or_render(key("/a/"), render()).await.unwrap();
+        c.get_or_render(key("/a/"), render()).await.unwrap();
+        assert!(c.get(&key("/b/")).await.is_none());
+        let s = c.stats().await;
+        assert_eq!((s.entries, s.hits, s.misses), (1, 2, 2), "{s:?}");
+        assert_eq!(s.bytes, c.weighted_size().await);
+        assert!(s.bytes > 4);
+        // An invalidated page is a miss.
+        c.invalidate(&["post:1".to_owned()]).await;
+        assert!(c.get(&key("/a/")).await.is_none());
+        let s = c.stats().await;
+        assert_eq!(
+            (s.entries, s.bytes, s.hits, s.misses),
+            (0, 0, 2, 3),
+            "{s:?}"
+        );
     }
 
     /// Per-user variants (P21): one entry per user next to the anonymous one, and

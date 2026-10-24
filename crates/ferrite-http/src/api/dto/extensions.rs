@@ -11,8 +11,8 @@ use ferrite_core::{
     diagnostics::scrub,
     ext_settings::{PluginSettingsView, SettingDef, SettingsSchema},
 };
-use ferrite_domain::{InstalledPlugin, InstalledTheme, Node};
-use ferrite_plugin_host::{LimitItem, PermissionItem, PermissionReport};
+use ferrite_domain::{FailureBucket, InstalledPlugin, InstalledTheme, Node};
+use ferrite_plugin_host::{HookStats, LimitItem, PermissionItem, PermissionReport};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use utoipa::ToSchema;
@@ -441,3 +441,79 @@ impl From<PluginSettingsView> for PluginSettingsDto {
 #[derive(ToSchema)]
 #[schema(value_type = Object)]
 pub struct SettingsPatch(pub Map<String, Value>);
+
+/// Failures of one hook in one hour, every node's (the shared counters, P20).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FailureBucketDto {
+    /// `render.head`, `post.saved`, `route GET /path`, ...
+    pub hook: String,
+    /// The start of the hour (UTC).
+    pub bucket_start: DateTime<Utc>,
+    pub count: u64,
+}
+
+impl From<FailureBucket> for FailureBucketDto {
+    fn from(b: FailureBucket) -> Self {
+        Self {
+            hook: b.hook,
+            bucket_start: b.bucket_start.as_datetime(),
+            count: b.count,
+        }
+    }
+}
+
+/// One hook's calls on the answering node since it started.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HookStatsDto {
+    pub hook: String,
+    /// Calls that ran (successes, failures and budget cuts).
+    pub calls: u64,
+    /// Calls that failed (counted toward auto-disable).
+    pub failures: u64,
+    /// Calls skipped for want of a call slot (not failures).
+    pub busy: u64,
+    /// Calls cut short or skipped by the page's render budget (not failures).
+    pub budget_cut: u64,
+    /// Summed duration of the calls that ran, in microseconds.
+    pub total_micros: u64,
+    /// The longest call, in microseconds.
+    pub max_micros: u64,
+    /// Calls that ran by duration: at most 1, 5, 25, 100 and 500 ms, and longer.
+    pub buckets: [u64; 6],
+}
+
+impl From<HookStats> for HookStatsDto {
+    fn from(s: HookStats) -> Self {
+        Self {
+            hook: s.hook,
+            calls: s.calls,
+            failures: s.failures,
+            busy: s.busy,
+            budget_cut: s.budget_cut,
+            total_micros: s.total_micros,
+            max_micros: s.max_micros,
+            buckets: s.buckets,
+        }
+    }
+}
+
+/// The answering node's part of [`PluginMetricsDto`].
+#[derive(Debug, Serialize, ToSchema)]
+pub struct NodeHookStatsDto {
+    pub id: Uuid,
+    /// When the node started counting.
+    pub since: DateTime<Utc>,
+    /// By hook name; at most 64.
+    pub hooks: Vec<HookStatsDto>,
+}
+
+/// `GET /plugins/{name}/metrics`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PluginMetricsDto {
+    /// The window of `failures`: 86400 (24 hours).
+    pub window_secs: u64,
+    /// Failures per hook and hour in the window, every node's, newest hour first.
+    pub failures: Vec<FailureBucketDto>,
+    /// The answering node's call statistics (each node counts its own).
+    pub node: NodeHookStatsDto,
+}

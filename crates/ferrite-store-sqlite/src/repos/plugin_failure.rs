@@ -1,7 +1,7 @@
 //! Shared plugin failure counters (P20) on SQLite.
 
 use async_trait::async_trait;
-use ferrite_domain::Timestamp;
+use ferrite_domain::{FailureBucket, Timestamp};
 use ferrite_store::{
     PluginFailureRepo, StoreError, check_failure_count, check_prune_limit, validate_text,
 };
@@ -44,6 +44,37 @@ impl PluginFailureRepo for SqliteRepos {
         .bind(since.as_micros())
         .fetch_one(e))?;
         u64::try_from(sum).map_err(|_| StoreError::Database(format!("corrupt failure sum {sum}")))
+    }
+
+    async fn buckets(
+        &self,
+        plugin: &str,
+        since: Timestamp,
+        limit: u32,
+    ) -> Result<Vec<FailureBucket>, StoreError> {
+        validate_text("plugin failure plugin", plugin)?;
+        let limit = check_prune_limit(limit)?;
+        // Hours aligned to the epoch; failure buckets are never before 1970.
+        let rows: Vec<(String, i64, i64)> = run!(&self.reader, |e| sqlx::query_as(
+            "SELECT hook, bucket_start / 3600000000 * 3600000000 AS hour, SUM(count) \
+             FROM plugin_failures WHERE plugin = ? AND bucket_start >= ? \
+             GROUP BY hook, hour ORDER BY hour DESC, hook LIMIT ?"
+        )
+        .bind(plugin)
+        .bind(since.as_micros())
+        .bind(limit)
+        .fetch_all(e))?;
+        rows.into_iter()
+            .map(|(hook, hour, count)| {
+                Ok(FailureBucket {
+                    hook,
+                    bucket_start: Timestamp::from_micros(hour)?,
+                    count: u64::try_from(count).map_err(|_| {
+                        StoreError::Database(format!("corrupt failure sum {count}"))
+                    })?,
+                })
+            })
+            .collect()
     }
 
     async fn clear(&self, plugin: &str) -> Result<(), StoreError> {

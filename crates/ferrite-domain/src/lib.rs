@@ -34,12 +34,12 @@ pub use ids::{
     ApiTokenId, ArtifactHash, AuditId, CommentId, ContentId, JobId, MenuItemId, NodeId, RedirectId,
     RevisionId, TermId, UserId,
 };
-pub use job::{DEFAULT_MAX_ATTEMPTS, Job, JobLease, JobStatus, NewJob};
+pub use job::{DEFAULT_MAX_ATTEMPTS, Job, JobLease, JobQuery, JobStatus, NewJob};
 pub use menu::{Menu, MenuItem, MenuItemKind};
 pub use node::{NewNode, Node};
 pub use page::{Cursor, Page};
 pub use plugin::{
-    Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, MAX_PLUGIN_NAME, Media,
+    Artifact, ArtifactKind, FailureBucket, InstalledPlugin, InstalledTheme, MAX_PLUGIN_NAME, Media,
     valid_plugin_name,
 };
 pub use search::SearchQuery;

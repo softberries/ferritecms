@@ -15,6 +15,16 @@ pub fn valid_plugin_name(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
+/// Failures of one plugin hook in one hour (`PluginFailureRepo::buckets`): the shared
+/// per-minute counters (P20) summed per hour, so the hours are aligned to the Unix epoch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailureBucket {
+    pub hook: String,
+    /// The start of the hour.
+    pub bucket_start: Timestamp,
+    pub count: u64,
+}
+
 string_enum!(
     ArtifactKind {
         Media => "media",

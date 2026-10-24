@@ -46,7 +46,7 @@ use crate::{
     tx::finish,
 };
 
-pub use admin::ExtensionAdmin;
+pub use admin::{ExtensionAdmin, MAX_FAILURE_BUCKETS};
 
 /// KV keys deleted per statement by a purge.
 const KV_PURGE_BATCH: u32 = 1_000;

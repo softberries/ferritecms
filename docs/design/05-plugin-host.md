@@ -906,8 +906,28 @@ the error), and a call that was dropped (cancel-safety, §6). **Admin view (M2a-
 /plugins` and `GET /plugins/{name}` show `enabled`, `disabled_reason` (`auto: <n> failures
 in <window>` after an automatic disable) and each live node's state (`loaded`, `failed`
 with its error, or `disabled`); `POST /plugins/{name}/enable` (or `ferrite plugin enable`)
-re-enables and clears the counters. Per-plugin metrics (`GET /plugins/{name}/metrics`)
-are M2a-2b.
+re-enables and clears the counters.
+
+**Per-plugin metrics (as built, M2a-2b P20).** `GET /plugins/{name}/metrics` (admins:
+`manage_plugins` + `extensions:read`; unknown plugin `404`) answers two parts:
+
+- `failures`: the plugin's shared `plugin_failures` buckets of the last 24 hours
+  (`window_secs = 86400`), summed per hook and hour (hours aligned to the Unix epoch,
+  `PluginFailureRepo::buckets`, newest hour first, at most 24 × 64 rows). Every node's
+  flushed failures are in it; the newest few seconds may not be flushed yet.
+- `node`: the answering node's call statistics since its host was built
+  (`PluginHost::call_stats`), per hook: `calls` that ran (successes, failures and budget
+  cuts), `failures` (as counted above), `busy` (no call slot), `budget_cut` (a call the
+  render budget or a slot wait cut short, or one skipped because the page's budget was
+  spent; R24 N2 makes a wait-shortened cut a failure from Task 12 on), `total_micros`,
+  `max_micros` and `buckets` (calls that ran by duration: ≤ 1, ≤ 5, ≤ 25, ≤ 100,
+  ≤ 500 ms, longer). The counters live in one mutex-guarded map per host, at most 64
+  hooks per plugin (route hooks are named by the manifest); each node counts its own,
+  so a load balancer answers with whichever node it picked. `PluginHost::totals` (calls
+  that ran, failures; every plugin) feeds `GET /system/metrics/summary`.
+
+Plugin names and hook names in the answer come from validated manifests and the host;
+error texts are not part of it. A metrics registry, `/metrics` and time series are M4.
 
 ## 9. Host-side API (Rust)
 

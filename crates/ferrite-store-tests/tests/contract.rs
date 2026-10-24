@@ -1,7 +1,7 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
     auth::*, backend_tests, backend_tests_spawning, batch::*, comment::*, constraints::*,
-    content::*, event::*, idempotency::*, job::*, lock::*, menu::*, migration_dirs,
+    content::*, event::*, idempotency::*, job::*, job_list::*, lock::*, menu::*, migration_dirs,
     migration_files, migrations::*, node::*, notify::*, plugin::*, plugin_failure::*, search::*,
     semantics::*, site::*, taxonomy::*, tx::*, user::*,
 };
@@ -188,6 +188,9 @@ backend_tests!(
     jobs_prune_by_status_age,
     jobs_prune_in_batches,
     jobs_tolerate_unknown_columns,
+    job_list_filters_and_pages,
+    retry_dead_only,
+    failure_buckets_since_newest_first,
 );
 
 backend_tests!(

@@ -7,10 +7,10 @@ use async_trait::async_trait;
 use ferrite_domain::{
     ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, Comment, CommentId,
     CommentQuery, CommentStatus, ContentId, ContentItem, ContentQuery, ContentType, Event,
-    IdemBegin, IdempotencyKey, InstalledPlugin, InstalledTheme, Job, JobId, JobLease, JobStatus,
-    Media, Menu, NewAudit, NewContent, NewEvent, NewJob, NewNode, NewUser, Node, NodeId,
-    OptionEntry, Page, RateHit, Redirect, RedirectId, Revision, RevisionId, SearchQuery, Secret,
-    Session, Taxonomy, Term, TermId, Timestamp, User, UserId,
+    FailureBucket, IdemBegin, IdempotencyKey, InstalledPlugin, InstalledTheme, Job, JobId,
+    JobLease, JobQuery, JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob, NewNode,
+    NewUser, Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId, Revision, RevisionId,
+    SearchQuery, Secret, Session, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 
 use crate::{Channel, LockGuard, StoreError, Subscription, migrate::MigrationStatus};
@@ -512,6 +512,16 @@ pub trait PluginFailureRepo: Send + Sync {
     ) -> Result<(), StoreError>;
     /// Total failures of `plugin`, all hooks, in buckets starting at or after `since`.
     async fn sum_since(&self, plugin: &str, since: Timestamp) -> Result<u64, StoreError>;
+    /// `plugin`'s failures per hook and hour (hours aligned to the Unix epoch), from
+    /// the buckets starting at or after `since`: newest hour first, then by hook, at
+    /// most `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) rows. A minute
+    /// bucket counts toward the hour it starts in, so the first hour may be partial.
+    async fn buckets(
+        &self,
+        plugin: &str,
+        since: Timestamp,
+        limit: u32,
+    ) -> Result<Vec<FailureBucket>, StoreError>;
     /// Deletes every bucket of `plugin` (when it is enabled again).
     async fn clear(&self, plugin: &str) -> Result<(), StoreError>;
     /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) buckets
@@ -667,6 +677,18 @@ pub trait JobRepo: Send + Sync {
     ) -> Result<bool, StoreError>;
     /// Fetches a job by id.
     async fn get(&self, id: JobId) -> Result<Option<Job>, StoreError>;
+    /// One page of jobs, newest first (`created_at DESC, id DESC`), filtered by
+    /// `status` and `kind` when given (the cursor tag is
+    /// [`JOB_CURSOR_TAG`](crate::JOB_CURSOR_TAG)). Invalid: `limit` outside 1..=200, a
+    /// kind not `[a-z0-9._-]{1,64}`, a cursor of another listing.
+    async fn list(&self, query: &JobQuery) -> Result<Page<Job>, StoreError>;
+    /// Puts a `dead` job back in the queue, in one conditional statement: `queued`, due
+    /// now, `attempts = 0`, `finished_at`, `locked_by` and `locked_until` cleared;
+    /// `last_error` is kept (the reason it died, until the next attempt overwrites it)
+    /// and so is `unique_key` (still the same job). Returns the job as it now is, or
+    /// `None` when there is no such job or it is not `dead` (a retry never touches a
+    /// queued, running or done job).
+    async fn retry_dead(&self, id: JobId) -> Result<Option<Job>, StoreError>;
     /// Number of jobs per status; every status is present (0 when none).
     async fn counts(&self) -> Result<BTreeMap<JobStatus, u64>, StoreError>;
     /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) of the

@@ -3,7 +3,8 @@
 //! secrets (M2a P22); job payloads are never returned (P19).
 
 use chrono::{DateTime, Utc};
-use ferrite_domain::{AuditEntry, Node};
+use ferrite_cache::CacheStats;
+use ferrite_domain::{AuditEntry, Job, Node};
 use ferrite_store::Compat;
 use serde::Serialize;
 use serde_json::Value;
@@ -193,4 +194,105 @@ impl AuditDto {
 pub struct AuditList {
     pub items: Vec<AuditDto>,
     pub next_cursor: Option<String>,
+}
+
+/// A job, without its payload (P19): a handler's input can hold anything, and an
+/// operator needs the state, not the data.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct JobDto {
+    pub id: Uuid,
+    /// `[a-z0-9._-]{1,64}`, e.g. `media.variants`.
+    pub kind: String,
+    /// `queued`, `running`, `done` or `dead`.
+    pub status: String,
+    /// Claims so far (including the current one while `running`).
+    pub attempts: i32,
+    pub max_attempts: i32,
+    /// Higher runs first.
+    pub priority: i32,
+    /// When it is due (the next attempt, while `queued`).
+    pub run_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    /// Why the last attempt failed, scrubbed of URLs, paths, addresses and credentials
+    /// (the node's log has the full text); kept by a retry.
+    pub last_error: Option<String>,
+    /// The node running it.
+    pub locked_by: Option<Uuid>,
+    /// Some live node runs jobs of this kind (its `meta.job_kinds`). `false`: the job
+    /// waits until a node that knows the kind joins (e.g. one running a newer
+    /// version, or with the plugin's handler).
+    pub handled: bool,
+}
+
+impl JobDto {
+    pub fn new(job: Job, handled: bool) -> Self {
+        Self {
+            id: job.id.as_uuid(),
+            kind: job.kind,
+            status: job.status.as_str().to_owned(),
+            attempts: job.attempts,
+            max_attempts: job.max_attempts,
+            priority: job.priority,
+            run_at: job.run_at.as_datetime(),
+            created_at: job.created_at.as_datetime(),
+            finished_at: job.finished_at.map(|t| t.as_datetime()),
+            last_error: job.last_error,
+            locked_by: job.locked_by.map(|n| n.as_uuid()),
+            handled,
+        }
+    }
+}
+
+/// `GET /system/jobs`: one page, newest first.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct JobList {
+    pub items: Vec<JobDto>,
+    pub next_cursor: Option<String>,
+}
+
+/// The page cache of the answering node.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CacheStatsDto {
+    /// Pages held.
+    pub entries: u64,
+    /// Their weight in bytes.
+    pub bytes: u64,
+    /// Lookups that found a page since the node started.
+    pub hits: u64,
+    /// Lookups that did not.
+    pub misses: u64,
+}
+
+impl From<CacheStats> for CacheStatsDto {
+    fn from(s: CacheStats) -> Self {
+        Self {
+            entries: s.entries,
+            bytes: s.bytes,
+            hits: s.hits,
+            misses: s.misses,
+        }
+    }
+}
+
+/// Plugin calls on the answering node since it started.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PluginTotalsDto {
+    /// Calls that ran.
+    pub calls: u64,
+    /// Calls that failed (counted toward auto-disable).
+    pub failures: u64,
+}
+
+/// `GET /system/metrics/summary`: a snapshot of the answering node (its counters since
+/// it started) plus the site's job counts; time series are M4 (P20).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MetricsSummaryDto {
+    pub node: ThisNodeDto,
+    /// Template renders (pages and error pages) since the node started.
+    pub renders: u64,
+    pub page_cache: CacheStatsDto,
+    pub plugins: PluginTotalsDto,
+    /// Jobs per status, every node's.
+    pub jobs: JobCountsDto,
 }

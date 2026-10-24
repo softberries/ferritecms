@@ -19,7 +19,8 @@ use ferrite_cluster::{
 };
 use ferrite_domain::{
     ApiToken, ApiTokenId, IDEMPOTENCY_RETENTION, IDEMPOTENCY_STALE, IdemBegin, IdempotencyKey, Job,
-    JobId, JobLease, JobStatus, NewEvent, NewJob, NewNode, NodeId, Secret, Session, Timestamp,
+    JobId, JobLease, JobQuery, JobStatus, NewEvent, NewJob, NewNode, NodeId, Page, Secret, Session,
+    Timestamp,
 };
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, Backend, Channel, CommentRepo, ContentRepo,
@@ -679,6 +680,12 @@ impl JobRepo for FaultyJobs {
     }
     async fn get(&self, id: JobId) -> Result<Option<Job>, StoreError> {
         self.inner.read().jobs().get(id).await
+    }
+    async fn list(&self, query: &JobQuery) -> Result<Page<Job>, StoreError> {
+        self.inner.read().jobs().list(query).await
+    }
+    async fn retry_dead(&self, id: JobId) -> Result<Option<Job>, StoreError> {
+        self.inner.read().jobs().retry_dead(id).await
     }
     async fn counts(&self) -> Result<BTreeMap<JobStatus, u64>, StoreError> {
         self.inner.read().jobs().counts().await

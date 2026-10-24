@@ -29,7 +29,7 @@ mod index;
 mod invalidation;
 mod page;
 
-pub use cache::PageCache;
+pub use cache::{CacheStats, PageCache};
 pub use http::{etag_for, if_none_match_matches};
 pub use index::ALL_KEY;
 pub use invalidation::{

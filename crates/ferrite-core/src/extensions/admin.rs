@@ -4,7 +4,7 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use ferrite_domain::{
-    Artifact, ArtifactHash, InstalledPlugin, InstalledTheme, NewAudit, Timestamp,
+    Artifact, ArtifactHash, FailureBucket, InstalledPlugin, InstalledTheme, NewAudit, Timestamp,
 };
 use ferrite_store::{Repos, Store};
 use serde_json::{Map, Value, json};
@@ -20,6 +20,10 @@ use crate::{
         resolve_plugin_value, seal_secret, theme_option, validate_value,
     },
 };
+
+/// Most rows [`ExtensionAdmin::failure_buckets`] returns: 24 hours of the 64 hooks a
+/// host tracks per plugin.
+pub const MAX_FAILURE_BUCKETS: u32 = 24 * 64;
 
 /// Installs, activates, lists and deletes themes and plugins for an actor. Writes need
 /// `manage_themes` / `manage_plugins` and `extensions:write` ([`require`]); reads need
@@ -83,6 +87,26 @@ impl ExtensionAdmin {
             .get(name)
             .await?
             .ok_or(CoreError::NotFound)
+    }
+
+    /// Plugin `name`'s failures per hook and hour from the shared counters (every
+    /// node's, P20), from `since` on, newest hour first: at most
+    /// [`MAX_FAILURE_BUCKETS`] rows. Unknown plugin: `NotFound`.
+    pub async fn failure_buckets(
+        &self,
+        actor: &Actor,
+        name: &str,
+        since: Timestamp,
+    ) -> Result<Vec<FailureBucket>, CoreError> {
+        require_reader(actor, Capability::ManagePlugins)?;
+        let read = self.store.read();
+        if read.plugins().get(name).await?.is_none() {
+            return Err(CoreError::NotFound);
+        }
+        Ok(read
+            .plugin_failures()
+            .buckets(name, since, MAX_FAILURE_BUCKETS)
+            .await?)
     }
 
     /// The installed themes.

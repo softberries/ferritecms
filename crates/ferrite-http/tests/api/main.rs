@@ -9,6 +9,7 @@ mod comments;
 mod content;
 mod foundation;
 mod idempotency;
+mod jobs;
 mod media;
 mod plugins;
 mod reset;
