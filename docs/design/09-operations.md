@@ -200,7 +200,7 @@ monitoring.)
 
 ## 8. CLI summary
 
-### Implemented (M1c-1, M1c-2, M1.5 and M2a: `crates/ferrite`)
+### Implemented (M1c-1, M1c-2, M1.5, M2a-1 and M2a-2a: `crates/ferrite`)
 
 ```
 ferrite init --data DIR --url URL [--title T] [--db URL] [--schema NAME] [--media s3://bucket/prefix]
@@ -217,12 +217,12 @@ ferrite user create    --data DIR --login L --email E [--role admin|editor|autho
 ferrite user reset-password --data DIR --login L [--password-stdin]              # M2a
 ferrite user list      --data DIR                                                # M2a
 ferrite user disable-totp --data DIR --login L                                   # M2a
-ferrite theme install  --data DIR --dir PATH [--activate]                        # M2a-2
-ferrite theme activate --data DIR NAME                                           # M2a-2
-ferrite theme list     --data DIR                                                # M2a-2
-ferrite plugin check   --data DIR --dir PATH                                     # M2a-2
-ferrite plugin install --data DIR --dir PATH [--enable] [--yes]                  # M2a-2
-ferrite plugin list|enable|disable|remove --data DIR [NAME] [--purge]            # M2a-2
+ferrite theme install  --data DIR --dir PATH [--activate]                        # M2a-2a
+ferrite theme activate --data DIR NAME                                           # M2a-2a
+ferrite theme list     --data DIR                                                # M2a-2a
+ferrite plugin check   --data DIR --dir PATH                                     # M2a-2a
+ferrite plugin install --data DIR --dir PATH [--enable] [--yes]                  # M2a-2a
+ferrite plugin list|enable|disable|remove --data DIR [NAME] [--purge]            # M2a-2a
 ```
 
 **`ferrite config check`** (`crates/ferrite/src/config_cmd.rs`): loads `<data>/ferrite.toml`
@@ -324,9 +324,11 @@ also installs the `ring` rustls default crypto provider at start.
   (a broken row is skipped, 05 §7a); build the route table; bind `server.listen` (default
   `127.0.0.1:8080`; override with `FERRITE_SERVER__LISTEN`, port `0` picks a free one); start
   the background tasks: the invalidation loop (with `LISTEN` wake-ups in cluster mode) and the
-  hot-reload task, the plugin-failure flusher (every 5 s), the job runner (`cluster.workers`
-  handlers; prune jobs, scheduled publishing), the periodic scheduler (every 10 s: the prune
-  jobs hourly and `content.publish_due` every 30 s) and the heartbeat (every 10 s); print
+  hot-reload task, the plugin-failure flusher (every 5 s), the `request.served` flusher
+  (every 10 s or 1 000 events, M2a-2a), the job runner (`cluster.workers` handlers; prune
+  jobs, scheduled publishing, `plugin.action`, `plugin.purge`), the periodic scheduler
+  (every 10 s: the prune jobs hourly, `content.publish_due` every 30 s,
+  `plugin.purge_sweep` daily) and the heartbeat (every 10 s); print
   `Listening on http://<addr>` on stdout. A failure after joining the registry removes the
   node's row again.
 - **Hot swap** (ruling P18, 04 §8): `theme.changed`, `plugins.changed`, `plugin.disabled`
@@ -336,20 +338,22 @@ also installs the `ring` rustls default crypto provider at start.
   reloads all three. The page cache is flushed after each swap. A theme, plugin version or
   permalink set that fails to load keeps the current one and is reported in `nodes.meta`
   (`theme.error`, `plugins.<name>.status = "failed"` with `error`, `permalinks_error`); there
-  is no runtime fallback to `blog`. A failed reload is retried per component after 5 s,
+  is no runtime fallback to `blog`, but such a node reports `theme.fallback = true`. A failed reload is retried per component after 5 s,
   doubling up to 5 min, until it succeeds (a newer event retries at once; ruling R14); a
   theme that fell back or a plugin row skipped at startup is retried the same way (R17). The
   replaced theme's `/_theme/<hash>/` assets stay served until the next swap.
 - **`nodes.meta`** (heartbeat, and at once after every reload): `site_id`, `site_url`
   (normalised, no trailing slash), `mode`, `clock_skew_ms`, `theme` (`name`, `hash`,
-  `origin`, `error`), `plugins` (per plugin row: `version`, `hash`, `status` =
+  `origin`, `error`, `fallback`: the node does not serve the active row's artifact, M2a-2a),
+  `plugins` (per plugin row: `version`, `hash`, `status` =
   `loaded`/`failed`/`disabled`, `error` up to 1 KiB), `plugins_error` (the plugin rows could
   not be read), `permalinks_error`.
 - **Shutdown** on SIGINT or SIGTERM: stop accepting connections and stop the job runner at
   once; open requests get up to 10 s while running jobs get 9 s, after which the runner
   releases the rest without using an attempt (another node takes them at once; the runner
   is abandoned after 12 s, ruling R6); then the background tasks stop (the failure flusher
-  writes once more) and the node deregisters, together within 1 s; the database pools close
+  writes once more, the `request.served` buffer is flushed into jobs once more, mail sends
+  still running are cancelled) and the node deregisters, together within 1 s; the database pools close
   (up to 2 s, cut so that shutdown so far ends within 13 s of the signal); `main` then shuts
   the runtime down with a 1 s grace, dropping connection tasks still running. A clean
   shutdown exits 0; the process is gone at most 14 s after the first signal. A signal
@@ -363,6 +367,8 @@ also installs the `ring` rustls default crypto provider at start.
   `plugins.render_deadline_ms` (default 200, ruling R18; the hard timeout is 1.5 × it),
   `plugins.action_deadline_ms`, `plugins.default_memory`, `plugins.default_fuel`,
   `plugins.disable_after_failures`, `plugins.failure_window` (counted cluster-wide, P20),
+  `plugins.max_concurrent_calls` and `plugins.render_budget_ms` (M2a-2a P22, 05 §6),
+  `[mail]` (`smtp_url[_file]`, `from`; password reset and plugin mail, 01 §4),
   `cluster.mode`, `cluster.node_name`, `cluster.workers`, `cache.logged_in` (`bypass` or
   `per-user`, 06 §3), `auth.secret_key[_file]` (else `<data>/secret.key` in solo mode, created
   on first start if missing). Render concurrency (2 × available parallelism, 5 s wait,
@@ -436,7 +442,7 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
   batch (user, terms and image file reused; posts and pages get fresh `-2`, `-3`, … slugs;
   both menus and the two options are replaced to point at the new batch).
 - **Not atomic:** each step is its own transaction, so a run that fails part-way leaves what
-  it wrote; `--force` then adds a whole new batch, it does not resume (ROADMAP M2a-2: seed
+  it wrote; `--force` then adds a whole new batch, it does not resume (ROADMAP M2a-2b: seed
   atomicity).
 - Requires an initialised site (with SQLite it fails when `ferrite.db` is missing instead of
   creating it) and runs the same migration check as `serve`.
@@ -448,8 +454,7 @@ ferrite backup / restore                                        # M4
 ferrite export / import-site / db copy                          # M4
 ferrite media sync / media gc                                   # M4
 ferrite import wordpress …                                      # M3
-ferrite plugin new|check|install|list|enable|disable|remove     # M2a-2 (new: later)
-ferrite theme install|activate|list                             # M2a-2
+ferrite plugin new <name>                                       # later (scaffold a plugin crate)
 ferrite self-update / rollback [--schema] [--restore-snapshot]  # M4
 ferrite doctor        # validates connectivity, permissions, clock skew, versions (config: `config check`)
 ```

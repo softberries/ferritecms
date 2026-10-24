@@ -20,27 +20,37 @@ M1.5 (cluster mode: node registry, LISTEN/NOTIFY event bus, job queue, locks, th
 artifacts, hot swap, shared plugin failure counters, compose example) and M2a-1 (REST API
 core under `/api/v1` with OpenAPI, auth: argon2id, DB sessions + CSRF, scoped API tokens,
 DB rate limits, TOTP, site key; users + `ferrite user`; content/types/taxonomies/menus/
-redirects/settings endpoints; previews; logged-in requests; `sessions.prune`) are done; the
-exits are written up in `docs/superpowers/m1-exit.md`, `m15-exit.md` and `m2a1-exit.md`
-(each lists what was not verified). Open follow-ups stay listed in the roadmap. Next is
-M2a-2 (extensions and plugin API extras, media, comments, system endpoints, hardening),
-then M2b (admin SPA). Work top-down in `docs/ROADMAP.md`; per-milestone rulings are in
-`docs/superpowers/rulings/`.
+redirects/settings endpoints; previews; logged-in requests; `sessions.prune`) and M2a-2a
+(extensions and the plugin platform: themes/plugins API + `ferrite theme|plugin` with an
+approval fingerprint per install, delete with 30-day data retention, plugin routes under
+`/_p/`, theme and plugin settings with sealed secrets, `[mail]` + `notify-admins` +
+password reset by e-mail, `plugin.action` jobs, batched `request.served`, the per-node call
+cap and per-render budget) are done; the exits are written up in
+`docs/superpowers/m1-exit.md`, `m15-exit.md`, `m2a1-exit.md` and `m2a2a-exit.md` (each lists
+what was not verified). Open follow-ups stay listed in the roadmap. Next is M2a-2b (media,
+comments, system API, hardening), then M2b (admin SPA). Work top-down in
+`docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/` (M2a-2a:
+`m2a2.md`).
 
 Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers)
 -> `ferrite-http` (public site, router, head, previews and logged-in requests, plugin
-wiring, plugin reloader, shared failure counters; the REST API in `src/api/` with its
-OpenAPI snapshot `openapi.json`) -> `ferrite-cache` (page cache + outbox invalidation
+wiring, plugin reloader, shared failure counters, plugin routes, `request.served` buffer,
+SMTP mailer, the extension install pipeline `extensions::Installer`; the REST API in
+`src/api/` with its OpenAPI snapshot `openapi.json`) -> `ferrite-cache` (page cache + outbox invalidation
 loop with LISTEN wake-ups), `ferrite-theme` (themes, bundles, hierarchy, MiniJinja
-renderer), `ferrite-core` (services, permalinks, `SiteReader`, `ExtensionService`;
-`AuthService`, `UserService`, content types, settings allowlist, roles + token scopes),
-`ferrite-media`, `ferrite-plugin-host`;
+renderer), `ferrite-core` (services, permalinks, `SiteReader`, `ExtensionService` +
+`ExtensionAdmin`, `ext_settings`, `mail` (`Mailer`, `MailQueue`), action jobs;
+`AuthService` (incl. password reset), `UserService`, content types, settings allowlist,
+roles + token scopes), `ferrite-media`, `ferrite-plugin-host` (grants, permission report;
+-> `ferrite-domain`);
 `ferrite` also -> `ferrite-cluster` (node registry, job runner, periodic scheduler, built-in
 prune jobs) -> `ferrite-store` (traits); `ferrite-core` -> `ferrite-store` (traits) <-
 `ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite);
 `ferrite-domain` (types), `ferrite-config`, `ferrite-sdk` (guest SDK). Starter theme:
-`themes/blog` (embedded). Not built yet: import-wp, the admin SPA, media uploads, plugin
-routes (`docs/design/01-architecture.md` §1; API status per endpoint in 07 §1).
+`themes/blog` (embedded). Test plugins: `plugins/examples/` (own workspace, built for
+`wasm32-wasip2`). Not built yet: media uploads, comments, the system API (M2a-2b), the
+admin SPA (M2b), import-wp (M3) (`docs/design/01-architecture.md` §1; API status per
+endpoint in 07 §1).
 
 Run a site locally:
 `cargo run -p ferrite -- init --data /tmp/site --url http://localhost:8080` (for a solo site
@@ -60,8 +70,13 @@ and `user`) fails while `serve` holds the data-folder lock. `FERRITE_LOG=debug` 
 verbosity; `FERRITE_<SECTION>__<KEY>` overrides config (e.g.
 `FERRITE_SERVER__LISTEN=127.0.0.1:0` for a free port).
 `cargo run -p ferrite -- config check --data /tmp/site` validates config + env without
-touching the database (exit 0 prints `ok: mode=… database=… media=… workers=…`, exit 1 lists
+touching the database (exit 0 prints `ok: mode=… database=… media=… workers=… mail=…`, exit 1 lists
 problems).
+Themes and plugins: `ferrite theme install|activate|list` and `ferrite plugin
+check|install|list|enable|disable|remove` (`--dir` holds `ferrite-plugin.toml` and one
+`*.wasm`; with SQLite `serve` must be stopped), or the API (`/api/v1/themes`,
+`/api/v1/plugins`: inspect, then install with the report's `fingerprint` as `approve`). Mail
+(password reset, plugin `notify-admins`) needs `[mail] smtp_url` + `from` (01 §4).
 
 Run two cluster nodes locally: two data folders whose `ferrite.toml` share `site.url`,
 `database.url` (Postgres) + `database.schema`, and `[media] root = "<shared dir>"` with

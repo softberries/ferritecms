@@ -60,7 +60,11 @@ fn go(_req: RouteRequest, _ctx: &Ctx) -> Result<RouteResponse> {
 }
 
 fn away(_req: RouteRequest, _ctx: &Ctx) -> Result<RouteResponse> {
-    Ok(respond(303, &[("Location", "https://evil.example/")], Vec::new()))
+    Ok(respond(
+        303,
+        &[("Location", "https://evil.example/")],
+        Vec::new(),
+    ))
 }
 
 fn big(_req: RouteRequest, _ctx: &Ctx) -> Result<RouteResponse> {

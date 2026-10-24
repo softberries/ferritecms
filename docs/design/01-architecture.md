@@ -35,16 +35,22 @@ ferritecms/
 │   │                             #   permalinks; the published-only read facade `SiteReader`
 │   │                             #   (+ preview); blocks rendering, slugs, events and the
 │   │                             #   dependency-key contract, roles/capabilities + token scopes.
-│   │                             #   Depends on domain + store only; the media service is M2a-2
+│   │                             #   M2a-2a: extension install/delete/purge (`ExtensionService`,
+│   │                             #   `ExtensionAdmin`), theme/plugin settings (`ext_settings`),
+│   │                             #   mail (`Mailer`, `MailQueue`), password reset, action jobs.
+│   │                             #   Depends on domain + store only; the media service is M2a-2b
 │   ├── ferrite-cache/            # (built, M1c-2) page cache (moka) + dependency index + outbox
 │   │                             #   invalidation loop
 │   ├── ferrite-theme/            # (built, M1c-2) theme packages, hierarchy resolution, sandboxed
 │   │                             #   MiniJinja renderer and helpers
 │   ├── ferrite-plugin-host/      # (built) wasmtime engine, capability linker, limits, registry,
-│   │                             #   output validation + ammonia sanitising, call tracing
+│   │                             #   output validation + ammonia sanitising, call tracing;
+│   │                             #   M2a-2a: grants, permission report, call cap, render budget
 │   ├── ferrite-http/             # (built, M1c-2: public site, router, head, plugin wiring;
 │   │                             #   M2a-1: REST API v1 in `src/api/`, previews, logged-in requests;
-│   │                             #   M2b: admin assets)
+│   │                             #   M2a-2a: extensions/settings/reset endpoints, the install
+│   │                             #   pipeline `extensions::Installer`, plugin routes `/_p/`,
+│   │                             #   SMTP mailer, `request.served` buffer; M2b: admin assets)
 │   ├── ferrite-import-wp/        # (M3) WXR importer
 │   └── ferrite-sdk/              # (built, M0) guest SDK for Rust plugins (`export_plugin!` macro
 │                                 #   lives in the crate; there is no separate macros crate)
@@ -52,8 +58,9 @@ ferritecms/
 │   └── ferrite-plugin@0.1.0/
 ├── admin/                        # (M2b) React SPA (pnpm workspace), built into dist/
 ├── themes/                       # (built) starter themes embedded in the binary: `blog`
-├── plugins/examples/             # (built) hello, order-a, order-b, clock, html-inject,
-│                                 #   meta-writer, reader, hostile/*; seo, analytics,
+├── plugins/examples/             # (built) hello, hello-v2 (manifest only), order-a, order-b,
+│                                 #   clock, html-inject, meta-writer, reader, router, notifier,
+│                                 #   counter, settings-probe, hostile/*; seo, analytics,
 │                                 #   contact-form are M4
 ├── tests/                        # cross-crate integration tests (planned; per-crate tests/ exist)
 └── docs/
@@ -64,7 +71,7 @@ ferritecms/
 
 ### Dependency graph
 
-As built in M2a-1, unchanged since M1.5 (normal dependencies, from each crate's `Cargo.toml`; crates not yet
+As built in M2a-2a (normal dependencies, from each crate's `Cargo.toml`; crates not yet
 built are marked with their milestone):
 
 ```
@@ -76,8 +83,8 @@ ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-cluster, ferrite-theme
  │                ├─ ferrite-core ──── ferrite-store (traits) ◄── ferrite-store-{sqlite,postgres}
  │                │                    └─ ferrite-domain
  │                ├─ ferrite-media ─── ferrite-domain
- │                ├─ ferrite-plugin-host (no ferrite-* dependencies)
- │                └─ ferrite-config (M2a-2: `MailConfig`), ferrite-store, ferrite-domain
+ │                ├─ ferrite-plugin-host ─── ferrite-domain (M2a-2a: the shared setting rules)
+ │                └─ ferrite-config (M2a-2a: `MailConfig`), ferrite-store, ferrite-domain
  ├─ ferrite-config ─── ferrite-domain
  ├─ ferrite-cluster ─── ferrite-store (traits), ferrite-domain
  └─ ferrite-import-wp (M3) ─── ferrite-core
@@ -85,7 +92,8 @@ ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-cluster, ferrite-theme
 
 `ferrite-core` does not use `ferrite-media` (media URLs reach `SiteReader` as a closure built
 by the binary from `MediaStore::public_url`). `ferrite-plugin-host` keeps no dependency on
-core; `ferrite-http` adapts between them (`StoreHostServices`). `ferrite-cache` uses
+core (its one domain dependency is `ferrite_domain::setting`, the value rules it shares
+with core and themes); `ferrite-http` adapts between them (`StoreHostServices`). `ferrite-cache` uses
 `ferrite-core` only in its tests.
 
 Only the binary crate depends on concrete store crates; everything else sees
@@ -95,7 +103,7 @@ exist yet (no `[features]` section in any crate).
 
 ## 2. Runtime components
 
-One `ferrite serve` process contains (as built after M2a-1; planned parts marked):
+One `ferrite serve` process contains (as built after M2a-2a; planned parts marked):
 
 | Component | Responsibility | Crate |
 |---|---|---|
@@ -104,26 +112,31 @@ One `ferrite serve` process contains (as built after M2a-1; planned parts marked
 | MediaStore | Blob get/put/list/delete, public URLs | ferrite-media |
 | Cluster | Node registry and heartbeat, job runner, periodic scheduler, built-in prune jobs (`LISTEN/NOTIFY`, locks and the job queue are in the store) | ferrite-cluster |
 | Core services | Business rules, permission checks (role + token scope), revisions, emitting events; users, sessions, tokens, rate limits, TOTP (`AuthService`, `UserService`); `SiteReader` for public reads and previews | ferrite-core |
-| Plugin host | Load components, run filters/actions under limits | ferrite-plugin-host |
+| Plugin host | Load components, run filters/actions/routes under limits, a per-node call cap and a per-render budget | ferrite-plugin-host |
+| Mail | `MailQueue` (16 sends in flight, 10 s each) over the SMTP mailer when `[mail]` is set: password reset and plugin `notify-admins` | ferrite-core + ferrite-http |
+| Served buffer | `request.served` events buffered per node, flushed as `plugin.action` jobs every 10 s or 1 000 events (05 §4a) | ferrite-http |
 | Theme engine | Resolve template, render with MiniJinja | ferrite-theme |
 | Page cache | URL → rendered response, dependency-based invalidation | ferrite-cache |
 | Invalidation loop | Polls the `events` outbox every `cache.poll_interval_ms` (default 250; woken by `LISTEN` in cluster mode) and applies events to the page cache; its hook drives the hot swap | ferrite-cache |
 | Reloader | Hot swap of theme, plugin registry and permalink rules/route table on events (P18) | ferrite (bin) |
 | Scheduled publishing | `content.publish_scheduled` job per scheduled item, `content.publish_due` periodic every 30 s (P12) | ferrite (bin) + core |
-| HTTP | Public routes, `/_media`, `/_theme`, `/_preview/<id>`, `/healthz`, `/readyz`, the REST API `/api/v1` (M2a-1, same process and layers, never cached); later `/_p/<plugin>` (M2a-2), `/admin` (M2b), `/metrics` (M4) | ferrite-http |
-| Workers | Job queue consumers (`cluster.workers` per node; prune jobs incl. `sessions.prune` and publishing now; actions, variants, imports later) | ferrite-cluster + core |
+| HTTP | Public routes, `/_media`, `/_theme`, `/_preview/<id>`, `/healthz`, `/readyz`, the REST API `/api/v1` (M2a-1, same process and layers, never cached), plugin routes `/_p/<plugin>/…` (M2a-2a, never cached); later `/admin` (M2b), `/metrics` (M4) | ferrite-http |
+| Workers | Job queue consumers (`cluster.workers` per node): prune jobs incl. `sessions.prune`, publishing, `plugin.action`, `plugin.purge` and `plugin.purge_sweep` (M2a-2a); variants and imports later | ferrite-cluster + core |
 
 Startup order as built (`crates/ferrite/src/serve.rs`, `ferrite::start`; any failure exits
 1; rulings P15, P22): config → open the database → migration check under the migrate lock
 (pending migrations applied when allowed, an incompatible schema refused) → join the node
 registry → media store write/read/delete probe → page cache + invalidation cursor (**set
 before any node state is read**) → permalink rules from options, checked against types and
-taxonomies → active theme (falls back to the embedded `blog` at startup only) → plugins from
-the `plugins` table + artifacts (a broken row is skipped) → route table → site key
-(`auth.secret_key[_file]`, else solo `<data>/secret.key`; a missing or bad key exits 1) and
-the API's services (`AuthService`, users, content types, options) → bind
+taxonomies → active theme (falls back to the embedded `blog` at startup only) → site key
+(`auth.secret_key[_file]`, else solo `<data>/secret.key`; a missing or bad key exits 1) and,
+with `[mail]`, the SMTP mailer and mail queue (a value lettre refuses exits 1) → plugins
+from the `plugins` table + artifacts (a broken row is skipped) → route table → the API's
+services (`AuthService`, users, content types, options, the node's extension
+`Installer`) → bind
 `server.listen` → background tasks: invalidation loop (`LISTEN` in cluster mode) with the
-reloader hook, plugin-failure flusher, job runner, periodic scheduler, heartbeat → serve the
+reloader hook, plugin-failure flusher, `request.served` flusher, job runner, periodic
+scheduler, heartbeat → serve the
 public site with the API merged in front of it (`build_site`) and print
 `Listening on http://<addr>`. Signal handlers are installed before all of this; a signal
 during startup exits at once (130/143), after deregistering the node (bounded at 1 s) if it
@@ -274,6 +287,10 @@ render_deadline_ms = 200               # > 0
 action_deadline_ms = 5_000             # > 0
 disable_after_failures = 20            # > 0, within failure_window
 failure_window = "10m"
+# max_concurrent_calls = 32            # M2a-2a: plugin calls at once per node, > 0;
+                                       #   unset: max(8, 4 × available parallelism)
+render_budget_ms = 1_000               # M2a-2a: all plugin filters of one page together;
+                                       #   render_deadline_ms ..= 60_000
 
 [mail]                                 # optional; unset: no outgoing mail
 # smtp_url = "smtps://user:pass@mail.example.com"   # or smtp_url_file; a secret
@@ -299,6 +316,14 @@ characters, and left out when it is empty or contains control characters (checke
 when `serve` builds the services). Every mailer refuses (never folds) control characters, CR/LF and
 Unicode line separators in subjects and addresses. Without `[mail]` the plugin
 `mail.notify-admins` import answers "mail is not configured".
+
+**Plugins** (`[plugins]`): `default_memory` and `default_fuel` are the per-call defaults a
+manifest may lower; above them it needs the admin's approval, up to 256 MiB and 10 ×
+`default_fuel` (05 §3). `max_concurrent_calls` (M2a-2a P22) bounds the filter, action and
+route calls running at once on a node; a call that gets no permit within its deadline is
+skipped, never counted as a failure. `render_budget_ms` (P22) is the time all plugin
+filters of one page share, from the render slot on; it must lie between
+`render_deadline_ms` and 60 000 (05 §6).
 
 `media.root` / `media.local_shared` are rejected with `backend = "s3"`, and `media.s3` with
 `backend = "local"`.
@@ -377,25 +402,39 @@ or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
 
 ## 8. Security baseline
 
-- Every API endpoint except `GET /api/v1/meta`, `GET /api/v1/openapi.json` and login needs a
-  session cookie or a bearer token; cookie-authenticated mutations also need the CSRF token
-  and a same-origin `Origin`/`Referer`, and login checks the origin (M2a-1, P8;
-  [07 §2](07-admin-api.md#2-auth)). API responses are `Cache-Control: no-store`.
+- Every API endpoint except `GET /api/v1/meta`, `GET /api/v1/openapi.json`, login (both
+  steps) and the two password-reset endpoints (M2a-2a) needs a session cookie or a bearer
+  token; cookie-authenticated mutations also need the CSRF token and a same-origin
+  `Origin`/`Referer`, and login and password reset check the origin (M2a-1, P8; M2a-2 P28;
+  [07 §2](07-admin-api.md#2-auth)); a route sweep test enforces the list. API responses
+  are `Cache-Control: no-store`. Extension endpoints check `manage_themes` /
+  `manage_plugins` with the `extensions` scope in core before reading an upload.
 - Strict security headers by default (CSP for admin, `X-Content-Type-Options`,
   `Referrer-Policy`, HSTS when TLS).
 - Uploaded files: content-type sniffed, SVG sanitised or served with
   `Content-Disposition: attachment` and a sandboxing CSP; never executed.
-- Plugins: see [05](05-plugin-host.md). Themes: no code execution.
-- Rate limiting on login, TOTP codes and unknown API tokens (DB-backed fixed windows, so it
-  works across nodes; P5, 07 §2).
+- Plugins: see [05](05-plugin-host.md): an install needs the admin's approval of the
+  exact upload (a fingerprint of the permission report); plugin routes under `/_p/` run
+  in a sandboxed opaque origin (`Content-Security-Policy: sandbox allow-forms; form-action
+  'self'`), never see the session cookie or `Authorization`, cannot set cookies, and are
+  rate-limited per client across nodes (05 §4b). Themes: no code execution; a theme that
+  does not compile is refused on upload and on activation.
+- Rate limiting on login, TOTP codes, unknown API tokens, password-reset requests, plugin
+  routes and plugin mail (DB-backed fixed windows, so it works across nodes; P5, 07 §2,
+  05 §4b, 05 §6 "Mail capability details").
 - One site key ([§4](#4-configuration)) outside the database. Every use gets its own
   subkey, HMAC-SHA256(site key, label) (`ferrite_core::auth`): `ferrite:seal:v1` for sealed
   values, `ferrite:ip-hash:v1` for client IP hashes, `ferrite:login-bucket:v1` for the
-  per-login rate-limit buckets and `ferrite:challenge-pw:v1` for the password fingerprint
-  inside a TOTP login challenge. A sealed value is
+  per-login rate-limit buckets, `ferrite:challenge-pw:v1` for the password fingerprint
+  inside a TOTP login challenge, and (M2a-2a) `ferrite:reset-bucket:v1` for the per-input
+  password-reset buckets, `ferrite:reset-pw:v1` for the password fingerprint inside a
+  reset token and `ferrite:plugin-ip:v1` for the per-plugin client hash passed to plugin
+  routes. A sealed value is
   `v1.` + base64url(no padding) of a random 24-byte nonce followed by the
   XChaCha20-Poly1305 ciphertext and tag, with the purpose as associated data, so it opens
-  only for the same purpose and key (TOTP secrets and stateless TOTP challenges in M2a-1,
-  plugin secrets in M2a-2). Client IPs are stored only as the first 32 hex characters of
+  only for the same purpose and key (TOTP secrets and stateless TOTP challenges in M2a-1;
+  password-reset tokens, purpose `password-reset`, and plugin `secret` settings, purpose
+  `plugin-setting:<plugin>:<key>`, in M2a-2a). Client IPs are stored only as the first 32 hex characters of
   an HMAC over the canonical address (an IPv4-mapped IPv6 address hashes like the IPv4
-  address). A lost or changed key makes sealed values unreadable (users re-enroll TOTP).
+  address). A lost or changed key makes sealed values unreadable (users re-enroll TOTP, admins
+  re-enter plugin secrets, outstanding reset links stop working).

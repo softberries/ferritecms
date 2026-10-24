@@ -55,13 +55,13 @@ Controller rulings: [m1a](superpowers/rulings/m1a.md), [m1b](superpowers/rulings
   - [x] Content types service (`ContentTypeService`: names checked against the router and permalinks, field schemas validated on every content write, `types.changed`; M2a-1, P18).
   - [x] Search query service for public search (`SiteReader::search`, published-only, capped at 200 matches, ruling R9). Admin search: `GET /api/v1/content/{type}?q=` (M2a-1).
   - [x] Users service (`UserService` with the operator path for the CLI; M2a-1, P14–P17).
-  - [ ] Media service (`media` rows, `media.variants`; M2a-2). `SiteReader` reads media rows (`media_file`, featured and inline images).
+  - [ ] Media service (`media` rows, `media.variants`; M2a-2b). `SiteReader` reads media rows (`media_file`, featured and inline images).
 - [x] Transactional outbox (`events`) written by every invalidating write:
   - [x] Written in the same transaction by content, lifecycle, term, menu and options writes in `ferrite-core` (`events.rs`).
   - [x] Redirect writes emit informational `redirect:<source>` events (M1c-2 Task 3); the dependency-key contract is documented in `events.rs`.
   - [x] `theme.changed`, `plugins.changed` and `plugin.disabled` are emitted by `ExtensionService` and the shared failure counters (M1.5; design 04 §4 "Event kinds").
   - [x] `user:<id>` is emitted by `UserService` on display-name and status changes and deletes (M2a-1).
-  - Not yet emitted because no write path exists: `post:<media id>` for media-row writes outside `seed` (M2a-2 media service).
+  - Not yet emitted because no write path exists: `post:<media id>` for media-row writes outside `seed` (M2a-2b media service).
 - [x] `ferrite serve`: router (pure, canonical paths, permalink matching), redirects before the cache, 404/410 shared pages, RSS feeds, sitemaps, `robots.txt`, `/healthz`, `/readyz`, bounded shutdown (M1c-2; design 06 §3, 09 §8).
 - [x] `ferrite seed demo` (posts, pages, terms, menus, sample image with variants; M1c-2).
 - [x] Theme engine: MiniJinja (fuel, output cap, no loader), hierarchy resolution (incl. front page, m1c2 R17), safe helpers, dependency recording; `blog` theme (M1c-2; design 06 §1–§4).
@@ -70,17 +70,18 @@ Controller rulings: [m1a](superpowers/rulings/m1a.md), [m1b](superpowers/rulings
 - [ ] Plugin host follow-ups from M0:
   - [x] `ammonia` sanitising of `html` output (R22) and head→HTML rendering with escaping and `script-tag` checks (05 §7).
   - [x] `content.read` published-only, preview visibility scoped to the previewed item (05 §7a); `options.get` never returns `plugin.*` keys.
-  - [ ] Reject bare IPs in the http allowlist (SSRF) and implement real `http`/`mail` services (M2a-2).
-  - [ ] Type-scope `meta` and stop `"*"` meta grants exposing other plugins' `plugin.<other>.*` meta (M2a-2).
-  - [ ] Admin approval flow for limits above host defaults (M2a-2, with the install flow; M2a P28).
+  - [x] Reject bare IPs and `localhost` in the http allowlist (manifest rule, M2a-2a P7, F5) and implement the real `mail` service (`notify-admins`, M2a-2a P17, P18).
+  - [ ] The real `http` import with the resolved-address SSRF / DNS-rebinding check (M2a-2b).
+  - [x] Type-scope `meta` and stop `"*"` meta grants exposing other plugins' `plugin.<other>.*` meta (M2a-2a P23).
+  - [x] Admin approval flow for limits above host defaults, up to ceilings (M2a-2a P5; M2a P28).
   - [ ] Revisit the pooling allocator under concurrent load (M4).
-- [ ] More plugin host follow-ups from the M0 review:
-  - [ ] `HostConfig` max-concurrent-calls semaphore (worst-case plugin memory = concurrency × per-call memory cap). (Public content pages are bounded by the render slots: a page holds its slot for the whole pipeline, data load, plugin filters, head and template (R28, R32), so at most `2 × parallelism` pages run plugin calls at once. Plugin calls outside page renders, such as action hooks and plugin routes, are not capped.)
-  - [ ] Per-render total plugin time budget (today each hook call has its own deadline; a page with many plugins can add them up).
-  - [ ] Size caps on route responses (body and headers).
-  - [ ] Success-path tests for `dispatch_action` / `handle_route` (M0 tests only cover rejection paths: unknown plugin, not subscribed, no matching route).
-  - [ ] Document `HostServices` cancel-safety: futures are dropped at the hard timeout.
-  - [ ] `install` compiles synchronously: run it under `spawn_blocking` when called from tokio (`serve` installs before it binds, so startup only).
+- [x] More plugin host follow-ups from the M0 review (all M2a-2a):
+  - [x] `HostConfig` max-concurrent-calls semaphore covering filters, actions and routes (`plugins.max_concurrent_calls`, P22); worst-case plugin memory = concurrency × per-call memory cap.
+  - [x] Per-render total plugin time budget (`plugins.render_budget_ms`, P22, F37).
+  - [x] Size caps on route responses (status, ≤ 32 headers of ≤ 4 KiB, body ≤ 1 MiB; 05 §4b).
+  - [x] Success-path tests for `dispatch_action` / `handle_route` (`plugin-host` `tests/hello.rs`).
+  - [x] Document `HostServices` cancel-safety (05 §6), with drop tests.
+  - [x] Compiles off the runtime: the install pipeline and the reloader prepare components on the blocking pool (`Installer`, at most two compiles per node).
 
 - [ ] M1c-2 notes carried over from the M1c-1 reviews (deferred minors):
   - [x] The router checks the redirect table before the page cache (`crates/ferrite-http/src/app/handler.rs`); redirect writes also emit informational events.
@@ -139,8 +140,10 @@ simulated in process, P25).
 
 Design: [07](design/07-admin-api.md). Split three ways (M2a P1), each with its own plan:
 **M2a-1** (REST API core and auth), **M2a-2** (extensions, plugin API extras, media,
-comments, system endpoints, hardening), **M2b** (admin SPA). Rulings:
-[`docs/superpowers/rulings/m2a.md`](superpowers/rulings/m2a.md).
+comments, system endpoints, hardening; itself split into **M2a-2a** and **M2a-2b**, M2a-2
+P1), **M2b** (admin SPA). Rulings:
+[`docs/superpowers/rulings/m2a.md`](superpowers/rulings/m2a.md) (M2a-1),
+[`docs/superpowers/rulings/m2a2.md`](superpowers/rulings/m2a2.md) (M2a-2a).
 
 ### M2a-1 — REST API core & auth (done)
 
@@ -171,21 +174,45 @@ across a window edge (P5); on SQLite a backwards clock jump keeps a rate-limit b
 future window until time catches up; users, terms, menus, redirects and settings are
 last-write-wins (P11); no recovery codes for TOTP (P9).
 
-### M2a-2 — extensions, plugin API extras, media, system (next)
+### M2a-2a — extensions and the plugin platform (done)
 
-Outline in the M2a-1 plan ("Next plan: M2a-2"); it gets its own plan.
+Plan: [`2026-10-24-m2a2-extensions.md`](superpowers/plans/2026-10-24-m2a2-extensions.md).
+Rulings: [`m2a2.md`](superpowers/rulings/m2a2.md).
 
-- [ ] Admin API calls `ExtensionService` (theme/plugin install, activation, enable/disable) only after `require(ManageThemes)` / `require(ManagePlugins)`: the service is an unauthenticated system path (M1.5 ruling R11). Plugin delete removes the row and keeps its KV 30 days unless `purge` (05 §2).
-- [ ] Plugin install flow with the permission report and grants; updates that widen capabilities need approval; the admin approval for limits above host defaults (P28). The install flow must always set `plugins.granted` (a non-null `{}` skips every plugin that needs a capability, M1c-2 R21).
-- [ ] Themes API + `ferrite theme install|activate|list`; refuse a broken theme on activation; theme settings `GET/PATCH /themes/{name}/settings` validated by `theme.toml [settings]`; flag a startup fallback to `blog` in the system status (06 §7).
-- [ ] `ferrite plugin check|install|list|enable|disable|remove` over the same core paths (M1.5 P21).
-- [ ] Plugin routes (`/_p/<plugin>/<path>`, 05 §4b): only manifest paths and methods, body ≤ 1 MiB, response size caps, DB-backed per-route rate limits on the client-IP hash, an `Origin` check unless `cross_origin`, `Content-Security-Policy: sandbox allow-forms`, `nosniff`, `Set-Cookie` and auth headers stripped, only the `user` id passed; hostile `route-xss` and `route-flood` (two nodes) plugins. Plugin settings (secrets sealed with the site key), `mail` + password reset by e-mail, batched `request.served` (D21).
-- [ ] `plugin.action` jobs (action hooks off the request path, 04 §6); each call must snapshot the plugin registry once (M1.5 R13, P26); success-path tests for `dispatch_action` / `handle_route`.
-- [ ] Media service and uploads: `POST /media`, `media` row writes emit `post:<media id>` in the same transaction (M1c-2 R11); the `media.variants` job and its concurrency semaphore (moved from M1); upload limits on `put_stream`; `Idempotency-Key`; SVG sanitising on upload (SVG is not processed by `ferrite-media`; design 03 §5 requires sanitisation before inline serving).
+- [x] Admin API calls the extension writes only through `ExtensionAdmin`, which checks `manage_themes` / `manage_plugins` with the `extensions` scope in core and audits every write (closes M1.5 ruling R11; P8, P10). Plugin delete removes the row and keeps its KV and settings 30 days unless `purge` (`plugin.purge` job, daily `plugin.purge_sweep`; 05 §2; P9, R2).
+- [x] Plugin install flow with the permission report and an approval fingerprint of the exact upload; updates that widen capabilities need the new approval in the same request, else nothing is stored and the old version keeps running (P3, P4, R1); limits above host defaults approved per plugin up to ceilings (P5). The install flow always sets `plugins.granted` to an object (closes the M1c-2 R21 item); a legacy null grant has its limits capped at the defaults (R7).
+- [x] Themes API (`GET/POST /themes`, `POST /themes/{name}/activate`, settings) + `ferrite theme install|activate|list`; activation refuses a theme that does not load (P12, R10); theme settings validated by `theme.toml [settings]` (P13); a node not serving the active row's artifact is flagged `nodes.meta.theme.fallback`, shown by `GET /themes` (F12).
+- [x] `ferrite plugin check|install|list|enable|disable|remove` over the same core paths (P26; `check` instead of a separate `inspect`).
+- [x] Plugin routes (`/_p/<plugin>/<path>`, 05 §4b): only manifest paths and methods, body ≤ 1 MiB, response caps, DB-backed per-route rate limits on the client address (across nodes), an `Origin` check unless `cross_origin`, `Content-Security-Policy: sandbox allow-forms; form-action 'self'` (R14), `nosniff`, only allowlisted headers back, only the `user` id passed; hostile `route-xss` and `route-flood` (two nodes) (P15, P16).
+- [x] Plugin settings with secrets sealed per plugin and key under the site key, write-only in the API, opened only by the owning plugin (P13, R11).
+- [x] `[mail]` (SMTP over lettre, TLS rules R16), the node's mail queue, `mail.notify-admins` (admins only, 1 per call, 10 per plugin per hour; hostile `mail-flood`) and password reset by e-mail with stateless single-use tokens (P17–P19, R15–R17).
+- [x] `plugin.action` jobs for `post.saved`, `post.published` and `user.created`, enqueued in the write `Tx`; one registry snapshot per call (M1.5 R13); success-path tests (P20, P29, R18).
+- [x] Batched `request.served` (D21, P21): per-node buffer flushed as `plugin.action` jobs.
+- [x] Plugin-host follow-ups: bare IPs, meta scoping, limits approval, the call cap and the render budget (P22, R20), cancel-safety docs, compiles off the runtime (see M1 "Plugin host follow-ups").
+
+**Exit:** extensions work against a real `ferrite serve`: inspect → install with the
+fingerprint → enable → a plugin route → settings with a secret → theme upload and
+activation → password reset through an SMTP server; workspace tests on both backends.
+
+**Exit verified (2026-10-24):** [`docs/superpowers/m2a2a-exit.md`](superpowers/m2a2a-exit.md).
+
+Known limits (accepted in M2a-2a, see the rulings): component compile time is unbounded
+(only two compiles per node run at once; 05 §6); no fairness inside the render budget (a
+slow early plugin can starve later ones; 05 §6); delivery of actions is at least once
+(plugins must be idempotent); `request.served` events are lost on a crash (up to 10 s);
+the reset link points at the M2b admin page, which does not exist yet (F33); a concurrent
+install of the same bytes can lose its blob (reinstall; M4 GC grace period); the route CSP's
+`form-action 'self'` was checked in Chrome only (R14).
+
+### M2a-2b — media, comments, system, hardening (next)
+
+Outline in the M2a-2 plan ("Next plan: M2a-2b"); it gets its own plan.
+
+- [ ] Media service and uploads: `POST /media`, `media` row writes emit `post:<media id>` in the same transaction (M1c-2 R11); the `media.variants` job and its concurrency semaphore (moved from M1); upload limits on `put_stream`; `Idempotency-Key`; SVG sanitising on upload (SVG is not processed by `ferrite-media`; design 03 §5 requires sanitisation before inline serving). Migration `0006` (idempotency keys, the sanitised-SVG marker).
 - [ ] Comments: moderation endpoints, public `POST` (rate-limited, honeypot), comment settings.
-- [ ] System API: status, jobs (queued kinds no node knows stay queued, M1.5 P5; dead jobs with `last_error`, retry), per-plugin metrics, metrics summary, audit log listing.
-- [ ] Hardening: sanitised `html` block nodes keep ammonia's default URL schemes, so `//evil` (scheme-relative), `ftp:` and `tel:` links pass (`ferrite-core/src/blocks`); decide an allowlist. Real `http` import (HTTPS only, allowlisted hosts, SSRF checks). `HostConfig` max-concurrent-calls semaphore, per-render plugin time budget, `HostServices` cancel-safety docs (plugin host follow-ups above).
-- [ ] Reintroduce the per-node option cache with its first reader (R13 refresh design in [rulings/m2a.md](superpowers/rulings/m2a.md)); theme and plugin settings are the likely first readers. The M2a-1 cache had no reader and was removed (R26), so options are read from the store today.
+- [ ] System API: status (incl. the theme fallback flag), nodes, jobs (queued kinds no node knows stay queued, M1.5 P5; dead jobs with `last_error`, retry), per-plugin metrics (`GET /plugins/{name}/metrics`), metrics summary, audit log listing.
+- [ ] Node-reported error text (`nodes.meta` plugin and theme `error`, shown to admins by `GET /plugins` and `GET /themes`, and next by the system API) is passed through verbatim, cut to 1 KiB; it can carry storage-backend error text (local paths, S3 endpoints). Sanitise it or document it as operator diagnostics with the system API (M2a-2a Task 4 review, minor 4).
+- [ ] Hardening: sanitised `html` block nodes keep ammonia's default URL schemes, so `//evil` (scheme-relative), `ftp:` and `tel:` links pass (`ferrite-core/src/blocks`); decide an allowlist. Real `http` import (HTTPS only, allowlisted hosts, resolved-address SSRF checks, redirects to allowlisted hosts).
 - [ ] Auth follow-ups from M2a-1:
   - [ ] `__Host-` prefix for the session cookie on `https` sites (defence against cookie tossing from a sibling subdomain; the cookie is `ferrite_session` today).
   - [ ] Zeroize key material and passwords in memory (`SiteKey` is `Clone`; subkeys, HMAC blocks and password `String` copies stay in memory after use); parked from the M2a-1 Task 3 and Task 4 reviews (logs and `Debug` already redact them).
@@ -206,6 +233,7 @@ Outline in the M2a-1 plan ("Next plan: M2a-2"); it gets its own plan.
 - [ ] Admin SPA scaffold: Vite + React + TS, shadcn/ui, TanStack Router/Query, Motion, API client generated from `crates/ferrite-http/openapi.json` (CI drift check), embedded via `rust-embed` (`/admin/*` with SPA fallback, hashed assets `immutable`, a placeholder page when `admin/dist` is missing, the admin CSP; 07 §3).
 - [ ] Screens: dashboard (Recharts), content list + TipTap editor + revisions + autosave + the 412 conflict UI, media library, content types/field builder, taxonomies, menus, users (roles, tokens, TOTP), comments, redirects, settings, import, system (nodes, jobs, backups).
 - [ ] Themes + plugins screens incl. permission report and per-plugin metrics.
+- [ ] The password-reset page (`/admin/reset-password#token=…`, M2a-2a F33): read the token from the fragment, then strip it from the URL and history (`history.replaceState`) and never put it in a URL the page builds; send `Referrer-Policy: no-referrer` (Task 10 review).
 - [ ] Admin "Nodes" and "Jobs" screens reading `nodes` (incl. `nodes.meta` theme/plugin state) and `jobs` (deferred from M1.5).
 - [ ] Playwright E2E against a real binary on both backends; Vitest component tests; a CI admin job (`pnpm install --frozen-lockfile`, lint, test, build).
 
@@ -259,6 +287,11 @@ Design: [09](design/09-operations.md).
   - [ ] `Cache-Control: public, max-age=0, s-maxage=<cfg>` on HTML for CDNs (06 §6; HTML pages send no `Cache-Control` today).
   - [ ] Automated accessibility checks (axe) in CI for the starter themes (06 §8).
   - [ ] Signed or scoped direct media: with `[media.s3] public_base_url` (Direct mode) the published-only check and the attachment/`nosniff`/CSP headers do not apply, and unpublished media and plugin artifacts stay readable by hash (03 §5). Short-lived signed URLs, or a published-only bucket path.
+- [ ] Deferred from M2a-2a:
+  - [ ] Per-node option cache, reintroduced only with a measured need (M2a-2 P14; theme settings and `site.*` are read per cache miss, plugin settings per call, each one primary-key read). It needs R13's refresh on `options.changed` on every node ([rulings/m2a.md](superpowers/rulings/m2a.md)).
+  - [ ] A GC grace period for staged artifacts with the artifacts GC, which closes the same-bytes concurrent-install race (`Installer::discard_staged`; Task 4 review round 1).
+  - [ ] A compile-size or function-count guard (or a compile deadline) for uploaded components: inspecting a component of up to 32 MiB has no time bound today; two compile slots per node bound only the count (05 §6).
+  - [ ] Fairness inside the per-render plugin budget (per-plugin shares, or a reservation for renders in the call semaphore; 05 §6 "Known limit").
 - [ ] Deferred from M1.5:
   - [ ] Template memory bound via a render worker process with an OS memory limit (P23, M1c-2 R14); until then an operator-installed hostile theme can OOM every node at once (hot swap).
   - [ ] On-disk artifact / precompiled-component cache keyed by hash + wasmtime version + CPU features (P19; restarts re-fetch and recompile today).
@@ -278,4 +311,5 @@ Design: [09](design/09-operations.md).
 - Built-in forms, i18n/multilingual content, full-text search UI.
 - WP database user import with legacy password-hash verification.
 - Managed hosting offering.
+- An atomic KV increment import (`kv.incr`) for counters such as the `counter` example's (whose read-modify-write can lose counts under at-least-once delivery): a WIT change, so it needs a new world version (M2a-2a ruling R19).
 - Passkeys (WebAuthn, `webauthn-rs`): deferred past M2 (M2a P3; the newest `webauthn-rs` was a pre-release and the ceremony needs the SPA). There is no `passkeys` table yet.

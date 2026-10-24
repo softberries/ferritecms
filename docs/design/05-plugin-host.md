@@ -21,10 +21,11 @@ writing).
 ## 2. Lifecycle
 
 ```
-upload .wasm + manifest ──► validate manifest ──► inspect component imports/exports
-     ──► compare against declared capabilities ──► show permissions to admin
-     ──► admin approves ──► store artifact + plugins row (enabled) + event
-     ──► every node: fetch artifact → compile (cached) → InstancePre per world → registry swap
+upload .wasm + manifest ──► POST /plugins/inspect: validate manifest, inspect imports/exports,
+     compile on a scratch host ──► permission report + fingerprint (nothing stored)
+     ──► admin approves: POST /plugins with approve = fingerprint ──► same checks again,
+     store artifact + plugins row (new: disabled) + plugins.changed in one Tx
+     ──► POST /plugins/{name}/enable ──► every node: fetch artifact → compile → registry swap
 ```
 
 - **Status (M1.5)**: `inspect` + manifest validation exist. The host API is split for hot
@@ -47,21 +48,84 @@ upload .wasm + manifest ──► validate manifest ──► inspect component 
   after lost event history, on the node's reload task (`crates/ferrite/src/reload.rs`,
   P18), never on the event loop; the page cache is flushed after each event-driven reload
   (R13), and a failed reload is retried after 5 s, doubling to 5 min, until it succeeds or
-  a newer event arrives (R14). Operators install with
-  `ferrite::extensions::install_plugin_file` (prepares on a scratch host first, uploads,
-  then `ExtensionService` writes artifact row + plugin row + `plugins.changed` in one
-  transaction; P21). Admin approval/permission display, the update-needs-approval flow
-  and uninstall/KV retention are M2.
+  a newer event arrives (R14).
+- **Install pipeline (as built, M2a-2a P3, P8).** `ferrite_http::extensions::Installer`
+  is shared by the admin API and the CLI (one per node in `serve`).
+  `Installer::inspect_plugin` refuses a component over 32 MiB (`MAX_PLUGIN_BYTES`) or a
+  manifest over 64 KiB (`MAX_MANIFEST_BYTES`) before parsing, parses the manifest with
+  `Manifest::parse`, builds the permission report against the installed version's grant,
+  and compiles the component on a scratch host (in-memory services, never committed) with
+  the requested limits treated as approved, so a component that cannot load is refused
+  now. Compiles run on the blocking pool, at most two at once per node (`COMPILE_SLOTS`),
+  and at most four uploads are read and processed at once per node (`UPLOAD_SLOTS`; a
+  fifth is `503 busy`). Nothing is written by an inspection. `Installer::stage_plugin`
+  needs the report's fingerprint, uploads the component and returns the rows; the row's
+  `granted` is always an object (`Grant::of(manifest)`, closing M1c-2 R21's open item).
+  The rows are recorded by `ExtensionAdmin::install_plugin` (API: `manage_plugins` +
+  `extensions:write`, audit row `plugin.install`) or `ExtensionService::install_plugin`
+  (CLI, operator path, no audit), under the `extensions` lock, with `plugins.changed`, in
+  one transaction. When the API's record step fails (for example `503 busy`), the handler
+  deletes the uploaded bytes again unless an artifact row names them
+  (`Installer::discard_staged`, under the `extensions` lock); anything else left behind
+  waits for the artifact GC (M4) Residual race (accepted): a concurrent install of the same bytes
+  that uploaded them but has not yet recorded its rows loses its blob, and that plugin
+  fails to load until it is reinstalled; closing it needs a GC grace period (M4).
+- **Permission report and approval (P3, P6).** `Manifest::permission_report` lists every
+  capability as a plain-language line (`key`, `text`, `detail`, `high_risk`): high risk are
+  `content.read`, `content.meta.read` and `options.read` with `"*"`, `content.meta.write`
+  outside the plugin's own `plugin.<name>.*` keys, every `http` host, `render.html =
+  "raw"`, every route, `mail`, and every limit above its default. `added` lists what the
+  manifest asks for beyond the installed version's grant (a first install: everything).
+  The `fingerprint` is the lowercase hex SHA-256 of the compact JSON `{"artifact",
+  "grant", "plugin", "version"}` (`grant` = `Grant::of(manifest).to_json()`; serde_json
+  maps are sorted and a unit test pins one value). `POST /plugins` and `ferrite plugin
+  install` install only when the approval is the fingerprint of *this* upload, so an
+  approval never covers other bytes or another grant; a mismatch is `422 validation`
+  with `errors[0].field = "approve"` and the upload's report, and nothing changes.
+- **Grant (stored form v1).** `plugins.granted` = `{"v":1,"capabilities":<[capabilities]
+  table, non-default members only>,"limits":{"memory":n|null,"fuel":n|null},"routes":
+  [{"cross_origin","rate_limit"}]}` (`ferrite_plugin_host::Grant`); the capabilities are
+  read back through `Manifest::parse`, so a grant obeys every manifest rule. Route
+  `cross_origin` and `rate_limit` are part of the grant (relaxing one is widening, ruling
+  R7); route paths are not, since every route lives under the plugin's own `/_p/<name>/`
+  (R6). The M1c-2 form (a bare `[capabilities]` table) is still read, with no approved
+  limits and no route policies, so a legacy row with routes fails closed. A **null**
+  `granted` (operator rows from before M2a-2a) counts as `Grant::legacy(manifest)`: the
+  manifest's capabilities, with `[limits]` capped at the host defaults (logged) until an
+  admin approves more; a reinstall writes a real grant.
 - **Install-time check (P2)**: walk the component type's imports. Allowed:
   - `ferrite:plugin/*` interfaces that the manifest's capabilities map to (§4),
   - the WASI subset in §5.
   Anything else → reject with the exact import name. Exports must include the
-  `ferrite:plugin/guest` interface of a supported world version.
-- **Update** (not in M0): if the new version declares capabilities beyond what was granted, it is
-  stored but **not activated** until an admin approves the diff. The old version keeps
-  running.
-- **Disable/enable/uninstall** via admin/CLI; uninstall keeps KV data for 30 days unless
-  `--purge`.
+  `ferrite:plugin/guest` interface of a supported world version. A manifest may declare
+  more than the component imports, not less.
+- **New install (F38).** A new plugin is installed **disabled**; `POST
+  /plugins/{name}/enable` (or `ferrite plugin enable`, or `install --enable`) enables it,
+  like WordPress's "activate". Enabling clears its shared failure counters.
+- **Update (as built, ruling R1).** An upload for an installed name is an update: the
+  report's `added` shows what it asks for beyond the installed grant (`update: true` in the
+  inspect response; on a stored row's report `update` is always `true`, since that report
+  is computed against the row's own grant). Like every install it needs the fingerprint
+  of its own report, so a widening update without that approval is refused, nothing is
+  stored and the installed version keeps running. There is no "stored but not activated"
+  version and no approve-later queue: the operator re-submits with the approval. A
+  replaced plugin keeps its enabled state and gets the new grant; a new artifact clears
+  its failure counters.
+- **Disable/enable/uninstall (as built, P9, R2).** `POST /plugins/{name}/enable|disable`,
+  `DELETE /plugins/{name}[?purge=true]`, `ferrite plugin enable|disable|remove [--purge]`.
+  Delete removes the row and keeps the plugin's KV and settings for 30 days
+  (`PLUGIN_DATA_RETENTION`): the delete `Tx` also clears the failure counters, writes the
+  marker option `plugin.<name>.deleted_at` (unix micros, hidden by the `plugin.` rule of
+  `options.get`), enqueues a `plugin.purge` job due 30 days later (unique key
+  `plugin.purge:<name>:<deleted_at micros>`) and emits `plugins.changed`. The purge runs
+  only when no row of that name exists and the marker still names that deletion, under
+  the `extensions` lock, so a reinstall within 30 days (which removes the marker) keeps
+  the data and only the latest deletion's job purges. With `purge` the data is deleted
+  right after the commit and the job, due 2 minutes later (`PLUGIN_PURGE_GRACE`), sweeps
+  KV a node wrote before it reloaded and deletes the marker. A daily `plugin.purge_sweep`
+  re-enqueues the purge of every marker past the retention, so a purge job that went dead
+  is retried. Setting keys a later version dropped from its schema are purged by that
+  sweep only.
 
 ## 3. Manifest (`ferrite-plugin.toml`)
 
@@ -102,13 +166,42 @@ indexnow_key = { type = "secret", label = "IndexNow API key" }
 default_og_image = { type = "media", label = "Default OG image" }
 add_json_ld = { type = "bool", default = true, label = "Emit JSON-LD" }
 
-[limits]                                    # may only lower the site defaults, or request
-memory = "16MB"                             # higher values that the admin must approve
+[limits]                                    # may lower the site defaults, or request higher
+memory = "16MB"                             # values the admin must approve (≤ the ceilings)
 fuel   = 20_000_000
 ```
 
 Validation: unknown keys are errors; hooks must exist in the declared world version and
 require their matching capability (e.g. `render.head` hook needs `render.head = true`).
+
+As built (M2a-2a), `Manifest::parse` also enforces:
+
+- **Size and name.** A manifest over 64 KiB (`MAX_MANIFEST_BYTES`) is refused unparsed.
+  The plugin name `inspect` is reserved (`RESERVED_PLUGIN_NAMES`; `/plugins/inspect` is an
+  API route, ruling R9).
+- **`http` hosts (P7, pre-flight F5).** Plain hostnames only (no scheme, port, path or
+  wildcard), stored lowercased with one trailing dot dropped and duplicates removed, so
+  grants and fingerprints do not depend on spelling. Refused as bare: anything that
+  parses as an IPv4 address, a name without a dot (single labels resolve through search
+  domains), a last label that is all digits (`127.1`, `0177.0.0.1`), a label starting
+  `0x`, a label `localhost`, and a first label starting `localhost`
+  (`localhost4.localdomain4`); IPv6 literals already fail the hostname rule. This is a
+  manifest rule only: the resolved-address (SSRF, DNS rebinding) check comes with the
+  real `http` import (M2a-2b, §6 "HTTP capability details").
+- **`[routes]`.** Keys start with `/`; `methods` a non-empty list of uppercase HTTP
+  methods (default `["GET"]`); `rate_limit` is
+  `N/s`, `N/min` or `N/h` with `N > 0` (default `10/min`, `DEFAULT_ROUTE_RATE_LIMIT`);
+  `cross_origin` a bool.
+- **`[settings]` keys** are `[a-z0-9_-]{1,64}` (the theme rule, F23), since they become
+  option names, seal purposes and `errors[].field`.
+- **`[limits]` (P5).** A request at most the host default always loads. Above the default
+  it needs the admin's approval (a high-risk report line; stored in `granted.limits` and
+  applied by `PluginHost::prepare_with`), up to the ceilings: memory 256 MiB
+  (`LIMIT_CEILING_MEMORY`, never below the default) and fuel 10 × `plugins.default_fuel`
+  (`LIMIT_CEILING_FUEL_FACTOR`). On a pooling host (`HostConfig.pooling`) the memory
+  ceiling is the default itself, because the pool's slots are that size, so a report never
+  offers what the node cannot load (review round 1 of Task 2). Above a ceiling is refused
+  at inspection, approved or not.
 
 ## 4. WIT world (draft for `ferrite:plugin@0.1.0`)
 
@@ -249,7 +342,7 @@ undeclared import fails instantiation even if the install-time check were bypass
 
 ### 4a. `request.served` (analytics)
 
-*Built in M2a-2 (P21, Task 12): `ferrite_http::ServedBuffer`, wired into `serve`.*
+*Built in M2a-2a (P21, Task 12): `ferrite_http::ServedBuffer`, wired into `serve`.*
 
 Fired for every public page response **including cache hits**. Events are buffered in
 memory per node and flushed every 10 s (or 1 000 events) as **one** `plugin.action` job
@@ -349,14 +442,39 @@ As built:
 
 ### 4c. Plugin settings
 
-*Status (M1c-2): the manifest `[settings]` schema is parsed; the `settings` import reads `plugin.<name>.settings.<key>` from `options` (`StoreHostServices::setting_get`) and records an `option:` dependency key, so a settings change already invalidates through `options.changed`. Settings writes, secret encryption and the admin form are M2.*
+*Status (M2a-2a, as built; P13, `ferrite_core::ext_settings`): the schema, the API, sealed
+secrets and declared-keys-only reads are built; the admin form is M2b.*
 
 - `[settings]` uses the same field schema as theme settings (`text`, `textarea`, `bool`,
-  `number`, `select`, `color`, `media`, `secret`) — one renderer in the admin.
-- Stored in `options` under `plugin.<name>.settings.<key>`; `secret` values are
-  encrypted at rest with the site key and never returned by the API after being set.
-- Changing settings emits `options.changed` + flushes pages that rendered that plugin's
-  filters (as built: through the `option:plugin.<name>.settings.<key>` keys recorded on read; the finer `plugin:<name>` key is not recorded, and plugin install/enable changes flush through `plugins`, see §7a).
+  `number`, `select`, `color`, `media`, `secret`) — one validator in core
+  (`ext_settings::validate_value`, over `ferrite_domain::setting`) and one renderer in the
+  admin. Keys are `[a-z0-9_-]{1,64}` (§3).
+- Stored in `options`, one option per set key: `plugin.<name>.settings.<key>`. `GET
+  /plugins/{name}/settings` answers the schema, every non-secret value as the plugin reads
+  it, for each `secret` only whether it is set (`secrets`), and the keys whose stored
+  value no longer fits the definition (`invalid`). `PATCH` checks every entry against the
+  row's schema first (an undeclared key or a bad value is `422`, nothing written), then
+  writes all of them under the `extensions` lock in one `Tx`, with `options.changed` per
+  key and one audit row `plugin.settings {name, keys}` (never values); `null` deletes a
+  key's option. Reads need `manage_plugins` + `extensions:read`, writes `extensions:write`.
+- **Secrets.** A `secret` value is stored sealed, `{"sealed": "v1.…"}`, under the site key
+  with the purpose `plugin-setting:<plugin>:<key>` as associated data, so a stored value
+  opens for that plugin and key only. The API never returns it after it is set, the audit
+  never holds it, `options.get` never reads any `plugin.*` option, and only the owning
+  plugin's `settings.get` opens it. A lost or changed site key makes stored secrets
+  unreadable (they read as unset; admins re-enter them).
+- **`settings.get`** (always linked) answers only keys the manifest declares (an
+  undeclared key is `none` and costs no budget): the stored value if it fits the declared
+  definition, else the declared default, else `none`. A stored value that no longer fits
+  (its type changed in an update) or a sealed one that does not open answers the default
+  and is logged, so it never reaches the guest. Values are read per call (no option
+  cache, P14).
+- Changing settings flushes pages through `options.changed`: the plugin's read records
+  `option:plugin.<name>.settings.<key>`, so exactly the pages whose plugin calls read the
+  key are dropped (the finer `plugin:<name>` key is not recorded, and plugin install/enable
+  changes flush through `plugins`, see §7a).
+- A deleted plugin's settings are kept 30 days with its KV (§2); keys a later version
+  dropped from its schema are deleted by the daily purge sweep only.
 
 Filters run in priority order (ties: plugin name), each receiving the previous output.
 Actions run as `plugin.action` jobs ([04](04-cluster.md#job-queue)), never on the request
@@ -424,7 +542,7 @@ in a `PluginError`.
   optional pooling instance allocator (`HostConfig.pooling`, default **off**, see
   Measured below). `Config::async_support` is not needed in wasmtime 50.
 - An epoch ticker thread calls `engine.increment_epoch()` every **5 ms**.
-- **Status: not implemented yet (unchanged in M1c-2)** — compiled components are compiled in `install` each time (at `serve` startup). Planned: cached on disk keyed by
+- **Status: not implemented yet (unchanged through M2a-2a)** — components are compiled on every load (`serve` startup and each reload that prepares a row). Planned: cached on disk keyed by
   `(artifact hash, wasmtime version, engine config hash)` via
   `Component::serialize` / `deserialize` (deserialize is `unsafe` — only for files we
   wrote; cache dir is ours).
@@ -529,21 +647,50 @@ under real concurrent load in M1.
   one-off measurement during Task 6 (no bench covers it) showed the yield bookkeeping slowing a busy-loop guest by about 3.5x, which broke the
   fuel-exhaustion test (< 200 ms). Wall-clock stays bounded by the epoch deadline
   regardless; the cost is coarser cooperative yielding under many CPU-bound plugins.
-- **Manifest limits (ruling R3)**: effective limit = min(manifest `[limits]`, host
-  default). A manifest requesting more than the default fails `install`; the admin
-  approval flow for higher values is post-M0 (M1 checklist).
+- **Manifest limits (M0 ruling R3, as built in M2a-2a P5)**: the effective limit is the
+  manifest's `[limits]` value when it is at most the host default (the default when none
+  is given); above the default only when the stored grant approves at least that value
+  (`granted.limits`) and it is within the ceiling (§3), else `prepare_with` refuses the
+  plugin (`LimitAboveDefault` / `LimitAboveCeiling`). A legacy null grant approves nothing
+  above the defaults: its limits are capped at them (§2). Approved limits raise the
+  worst-case plugin memory per node to `max_concurrent_calls` × the largest approved cap.
+- **Compile time is not bounded (known limit).** Inspecting an upload compiles a
+  component of up to 32 MiB with no time limit; only the two compile slots per node
+  (`COMPILE_SLOTS`, and four upload slots) bound how many run at once. Uploads are
+  admin-only; a wasmtime compile-size or function-count guard is a later item.
 - Data crossing the boundary is copied (Component Model canonical ABI). Strings/lists
   from the guest have size caps (e.g. `head` ≤ 64 KB total, `html` ≤ 4× input or 2 MB).
 
 ### HTTP capability details
 
-*M0 status: the `http` and `mail` host imports are stubs returning `unavailable`; the rules below are the M1 design. Only the per-call request budget (3) is enforced.*
+*Status (M2a-2a): the `http` import is still a stub answering `unavailable in this build`;
+the rules below are its design (real `http` import: M2a-2b). Only the per-call request
+budget (3) and the manifest's host rules (§3: plain hostnames, no bare IPs or `localhost`)
+are enforced.*
 
 - HTTPS only; host must exactly match the manifest list; redirects followed only to
   allow-listed hosts (max 3).
 - Resolved IPs in private/loopback/link-local/metadata ranges are refused (SSRF / DNS
   rebinding protection) — check after resolution, connect to the checked IP.
 - `User-Agent: ferrite/<ver> plugin/<name>`; no cookies, no ambient credentials.
+
+### Mail capability details (as built, M2a-2a P17, P18)
+
+`mail.notify-admins(subject, text-body)` (linked only for `mail = "admins"`) checks, in
+order, inside the call (`HostState`): refused during a render filter (R20: no side
+effects on the render path); at most one mail per call; a subject of 1 to 200 characters
+(`MAX_MAIL_SUBJECT_CHARS`) without control characters or Unicode line separators; a body
+of at most 64 KiB (`MAX_MAIL_BODY_BYTES`). Then `StoreHostServices::notify_admins`: without
+`[mail]` it answers `mail is not configured`; the per-plugin hourly limit, 10 mails
+(`MAIL_PER_PLUGIN_HOUR`, a DB-backed window on bucket `mail:plugin:<name>`, shared by every
+node; a refused second mail in one call uses no hourly slot); the recipients are the
+active admins (at most 50, `MAIL_MAX_ADMINS`; unusable addresses skipped, none left is an
+error), all in `Bcc`, so admins do not see each other's addresses and the plugin never
+learns them. The subject gets the site-title prefix `[<site.title>] ` (01 §4) and the body
+the footer `Sent by plugin <name>`. The mail is handed to the node's mail queue and the
+call returns: SMTP never runs inside the plugin call (F28); a full queue (16 in flight) is
+an error to the guest, an SMTP failure is only logged. Example: `plugins/examples/notifier`
+(mails the admins on `post.published`); hostile: `mail-flood` (§12).
 
 ## 7. Output validation
 
@@ -631,16 +778,17 @@ As built (M1c-2), in `crates/ferrite-http/src/plugins/` over the store-backed
   (`plugins.render_deadline_ms`), with the tokio hard timeout at 1.5 × that. The epoch
   deadline includes time a call spends awaiting host imports, which on Postgres in debug builds
   measured about 80 ms for a plugin making a dozen reads.
-- **Loading (plan ruling P3, ruling R21).** At startup `serve` installs every enabled
-  `plugins` row from its artifact in the media store: the bytes must match the row's hash, the
-  `manifest` column (the `ferrite-plugin.toml` table as JSON) is converted back to TOML and
-  validated with `Manifest::parse`, and its `plugin.name` must equal the row's name. A
-  non-null `granted` column must be a superset of the manifest's capabilities or the plugin is
-  skipped (so `granted = {}` skips every plugin that asks for any capability); a null
-  `granted` means the manifest is honoured as written (M1c-2 rows are written by operators and
-  tests; the M2 install flow always sets it). A row that fails any step is logged and skipped;
-  it never stops the site. Hot reload on `plugins.changed` is M1.5; plugin install CLI/API is
-  M2.
+- **Loading (plan ruling P3, ruling R21; grants as built in M2a-2a).** At startup and on
+  every reload `serve` installs every enabled `plugins` row from its artifact in the media
+  store: the bytes must match the row's hash, the `manifest` column (the
+  `ferrite-plugin.toml` table as JSON) is read back with `Manifest::from_json` (validated
+  by `Manifest::parse`), and its `plugin.name` must equal the row's name. The `granted`
+  column is read as a `Grant` (§2): its capabilities must cover the manifest's or the
+  plugin is skipped (so a bare `{}` skips every plugin that asks for any capability), and
+  its approved limits are applied by `prepare_with`. A null `granted` (legacy operator
+  rows) is `Grant::legacy`: the manifest's capabilities with `[limits]` capped at the host
+  defaults. A row that fails any step is logged, reported in `nodes.meta`, and skipped; it
+  never stops the site. Install, update and delete go through the API and CLI (§2).
 
 ## 8. Failure isolation (P5, P6)
 
@@ -713,17 +861,30 @@ transaction, and so does an install that changes an existing row's artifact.
 node" for instantiation failures is not separate: it counts as a failure like any other.
 
 Every failure (target design): `tracing::warn!(plugin, hook, kind, duration, fuel_used)`, metric
-increment (M4), and an upsert into `plugin_failures` as above. Admin sees the reason and
-can re-enable.
+increment (M4), and an upsert into `plugin_failures` as above.
+
+**What counts (as built through M2a-2a).** Filter, action (`plugin.action` jobs) and route
+calls count: a trap, a timeout, an invalid result or route response (a route answers
+`502`). Not counted: a call skipped for want of a call permit (`Busy`, P22) or cut by the
+per-render budget (R20(4)), refusals inside an import (the guest decides what to do with
+the error), and a call that was dropped (cancel-safety, §6). **Admin view (M2a-2a):** `GET
+/plugins` and `GET /plugins/{name}` show `enabled`, `disabled_reason` (`auto: <n> failures
+in <window>` after an automatic disable) and each live node's state (`loaded`, `failed`
+with its error, or `disabled`); `POST /plugins/{name}/enable` (or `ferrite plugin enable`)
+re-enables and clears the counters. Per-plugin metrics (`GET /plugins/{name}/metrics`)
+are M2a-2b.
 
 ## 9. Host-side API (Rust)
 
 **M0 API** (`crates/ferrite-plugin-host`): `PluginHost::new(HostConfig, Arc<dyn HostServices>)`,
 `install(Manifest, &[u8])`, `apply_filter(&str, FilterValue, &RequestInfo) -> FilterValue`
-(never fails), `dispatch_action`, `subscribers` (M2a-2), `handle_route`, `is_enabled`,
+(never fails), `dispatch_action`, `subscribers` (M2a-2a), `handle_route`, `is_enabled`,
 `disabled_reason`, `failures`; `inspect` is a free function. Hooks are `&str`, not a `HookName` type.
 
-M2a-2a adds `apply_filter_until(hook, value, req, until: Instant) -> FilterOutcome` (the render
+M2a-2a adds `prepare_with(manifest, wasm, approved: ApprovedLimits)` (limits above the
+defaults as approved, §3), `Grant` (`of`, `legacy`, `to_json`, `from_json`),
+`Manifest::{permission_report, from_json}` and `PermissionReport`, `config()`,
+`apply_filter_until(hook, value, req, until: Instant) -> FilterOutcome` (the render
 budget; `apply_filter_traced` is the same without one), `PluginError::Busy { plugin }` from
 `dispatch_action` / `handle_route` (no call slot in time; not a failure),
 `HostConfig.max_concurrent_calls`, and `HostServices::post_kind(id) -> Option<String>` (the
@@ -779,8 +940,9 @@ ferrite_sdk::export_plugin! {
 - Build (**settled in M0**, ruling R1): `cargo build --release --target wasm32-wasip2`
   with an explicit `--target` produces a component directly; `cargo component` is not
   needed. (`plugins/.cargo/config.toml` sets the target only for CWD inside `plugins/`.)
-- *(Not in M0: the `ferrite` CLI does not exist yet.)* `ferrite plugin new <name>` scaffolds a plugin crate + manifest;
-  `ferrite plugin check <dir>` runs the install-time validation locally.
+- `ferrite plugin check --data DIR --dir PATH` (M2a-2a) runs the install-time validation
+  and prints the permission report against that site's `[plugins]` limits, storing
+  nothing. `ferrite plugin new <name>` (scaffold a plugin crate + manifest) is later.
 
 ## 11. Versioning (P9)
 
@@ -793,7 +955,7 @@ ferrite_sdk::export_plugin! {
 ## 12. Hostile test plugins (required by CLAUDE.md)
 
 In `plugins/examples/hostile/`, each with an integration test asserting the page still
-renders and the failure is recorded (state as of M0):
+renders and the failure is recorded (M0, plus the M2a-2a rows at the end):
 
 | Plugin | Behaviour | Expected |
 |---|---|---|
@@ -804,7 +966,7 @@ renders and the failure is recorded (state as of M0):
 | `undeclared-import` | calls `http` without declaring it | install rejected; forced link fails to instantiate |
 | `sockets` | opens a TCP socket (`wasi:sockets`) | install rejected |
 | `big-output` | returns 3 MiB of HTML (fits the 32 MiB memory cap) | rejected by the 2 MiB output cap (`InvalidOutput`) |
-| `slow-import` | spends its call in a slow host import | hard timeout; page renders |
+| `slow-import` | spends its call in a slow host import (`render.head`; since M2a-2a also a `post.saved` action reading the subject) | hard timeout; page renders. M2a-2a: installed as `slow-a`/`slow-b`/`slow-c` behind gated services it fills the call cap (later calls skipped as `Busy`, not failures) and shares one render budget (`plugin-host` `tests/limits.rs`); dropped mid-import it frees its permit and instance |
 | `wrong-variant` | returns `text` for `render.head` | ignored, recorded |
 | `fs-escape` | reads `/etc/passwd` | no preopens → error inside guest; nothing leaks |
 | `flapper` | fails every call | auto-disabled after threshold |
@@ -815,3 +977,11 @@ renders and the failure is recorded (state as of M0):
 | `resource-flood` | leaks 5 000 `wasi:cli/stdout` handles | resource cap (1 000) fails the call; host keeps serving |
 | `route-xss` | `GET /x`: HTML with `<script>` reading `document.cookie`, plus `Set-Cookie`, `Authorization`, CSP, HSTS, CORS and caching headers; echoes the request header names it got. `GET /panic` panics, `GET /loop` never returns; `/status` (600), `/crlf` (CRLF in a header value), `/headers` (40 headers) | served only inside `sandbox allow-forms; form-action 'self'` with `nosniff`/`no-store`, every other header dropped, no cookie/`Authorization` seen; panic, loop and the invalid responses are `502` and the site keeps serving (`ferrite-http` `tests/app/plugin_route.rs`, `plugin-host` `tests/hostile.rs`) |
 | `route-flood` | `POST /submit` (`rate_limit = "5/min"`, `cross_origin = true`) flooded from one client across two nodes | 6th POST is `429` on either node, another client still passes (`crates/ferrite/tests/cluster/routes.rs`) |
+| `mail-flood` | `post.saved`: 50 `notify-admins` in one call; `post.published`: a subject with CR/LF and `Bcc:` header injection, and one over 200 characters; `render.head`: a send from a render filter | one mail per call, at most 10 per plugin per hour across nodes, injection and oversize refused, the render-path send refused; admins only, in `Bcc`; refusals reach the guest as errors, never as failures (`ferrite-http` `tests/plugins/mail.rs`) |
+
+Test plugins added in M2a-2a (not hostile, `plugins/examples/`): `router` (routes `/hello`,
+`/echo`, `/go`, `/away`, `/big`, `/whoami`), `notifier` (`mail` on `post.published`),
+`counter` (`request.served` subscriber counting events in KV), `settings-probe` (reports
+`settings.get` and `options.get` answers, secrets included), and `hello-v2` (a manifest-only
+`0.2.0` of `hello` asking for `kv`, used with `hello`'s component for widening updates).
+`meta-writer` now declares `content.read = ["post"]` (P23).

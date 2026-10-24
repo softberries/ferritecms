@@ -150,7 +150,7 @@ Other M2a-1 store additions, on both backends and contract-tested:
   user` on both backends, so admin lists, counts, cursors and search pages hold only items
   the reader may see. A NULL `published_at` never matches the first branch.
 
-The `comments` repository is still to come (M2a-2). `JobRepo` (`jobs()`) and
+The `comments` repository is still to come (M2a-2b). `JobRepo` (`jobs()`) and
 `NodeRepo` (`nodes()`) exist since M1.5 (migration `0004_cluster`); see the cluster table
 in §4. Named locks are `Store::try_lock` (Postgres advisory locks, SQLite in-process;
 [04 §7](04-cluster.md#7-distributed-locks)); `ferrite_store::lock(store, name, wait)`
@@ -161,7 +161,12 @@ M1.5 also added `EventRepo::min_seq` (lost-history check, P3), batched prunes (`
 limit)` with at most `MAX_PRUNE_BATCH` = 10 000 rows per call on events, jobs, nodes and
 plugin failures, R5), `PluginFailureRepo` (`plugin_failures()`: `add`/`sum_since`/`clear`/
 `prune`, P20), `PluginRepo::auto_disable` (conditional on `enabled` and the observed
-`updated_at`, R12) and `PluginRepo::get_for_update`.
+`updated_at`, R12) and `PluginRepo::get_for_update`. M2a-2a added (no migration, M2a-2
+P2; contract-tested on both backends) `OptionRepo::list_prefix(prefix, after, limit)`
+(literal prefix, paged by key), `UserRepo::list_active_admins(limit)`,
+`PluginRepo::is_enabled(name)` (one column, the per-request plugin-route check),
+`PluginRepo::action_subscribers(hook)` (enabled rows whose manifest `hooks` lists the
+hook, filtered in SQL) and `PluginKvRepo::delete_all(plugin, limit)` (batched purge).
 The `comments` and `user_meta` tables already exist in `0001_init` but have no
 repository yet.
 
@@ -380,9 +385,9 @@ new migration. Everything else exists in `0001_init` / `0002_search` / `0003_med
 
 | Table | Columns | Notes |
 |---|---|---|
-| `options` | `key` PK, `value` json, `autoload`, `updated_at` | Site settings; `autoload` marks the set every render reads (F23). No per-node cache yet: it was removed with no reader (M2a-1 R26) and comes back with its first reader (M2a-2) |
+| `options` | `key` PK, `value` json, `autoload`, `updated_at` | Site settings; `autoload` marks the set every render reads (F23). No per-node cache: it was removed with no reader (M2a-1 R26), and M2a-2a's readers (theme and plugin settings) read the store directly (M2a-2 P14; a cache is M4) |
 | `artifacts` | `hash` PK (sha256 hex), `kind` (`media`/`variant`/`plugin`/`theme`/`export`), `bytes`, `mime`, `created_at` | The blob lives in the MediaStore under `artifacts/<hash[0..2]>/<hash>` |
-| `plugins` | `name` PK, `version`, `artifact_hash` FK, `manifest` json, `granted` json (capabilities the admin approved), `enabled`, `disabled_reason`, `installed_at`, `updated_at` | |
+| `plugins` | `name` PK, `version`, `artifact_hash` FK, `manifest` json, `granted` json (the approved grant: since M2a-2a `{"v":1,"capabilities","limits","routes"}`, 05 §2; the M1c-2 bare `[capabilities]` table and `null` are still read), `enabled`, `disabled_reason`, `installed_at`, `updated_at` | |
 | `plugin_kv` | `plugin`, `key`, `value` bytes, `updated_at`, PK(`plugin`,`key`) | Quotas enforced in core (default 10 MB, 10k keys per plugin) |
 | `plugin_failures` | `plugin`, `hook`, `bucket_start`, `count`, PK(`plugin`,`hook`,`bucket_start`) | Shared failure counters → auto-disable cluster-wide (`PluginFailureRepo` since M1.5: 1-minute buckets from the database clock, pruned by `plugin_failures.prune` after `max(24 h, 2 × plugins.failure_window)`; 05 §8) |
 | `themes` | `name` PK, `version`, `artifact_hash`, `manifest` json, `active`, `installed_at` | Exactly one active (partial unique index / trigger) |

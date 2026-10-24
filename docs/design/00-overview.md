@@ -120,8 +120,8 @@ rulings at this level:
   taxonomies, menus, redirects, settings endpoints, previews, logged-in requests), M2a-2
   (extensions and plugin API extras, media, comments, system endpoints, hardening) and M2b
   (the admin SPA, D6/D12), each with its own plan.
-- **M2a P4 (refines D7):** the site key that seals secrets (TOTP now, plugin secrets in
-  M2a-2) is the one piece of shared state that is **not** in the database:
+- **M2a P4 (refines D7):** the site key that seals secrets (TOTP, then password-reset tokens and plugin
+  secrets in M2a-2a) is the one piece of shared state that is **not** in the database:
   `auth.secret_key[_file]`, required in cluster mode; a solo site generates
   `<data>/secret.key`. A database dump or export therefore never carries the key that
   opens the secrets in it.
@@ -129,6 +129,17 @@ rulings at this level:
   (`rate_limits`, one upsert on the database clock), not an in-process limiter such as
   `tower_governor`, so limits hold across nodes; a fixed window admits up to 2× the limit
   across its edge.
+
+M2a-2a (extensions and the plugin platform; [`m2a2.md`](../superpowers/rulings/m2a2.md))
+adds two at this level:
+
+- **M2a-2 P1:** M2a-2 is split into M2a-2a (extension APIs and CLI, install approval,
+  plugin routes, settings, mail, password reset, action jobs) and M2a-2b (media,
+  comments, system API, hardening).
+- **M2a-2 P3 (applies principle 2, "plugins are untrusted"):** an admin approves a plugin by the fingerprint
+  of the exact permission report it saw (plugin, version, artifact hash, grant), so an
+  approval never covers other bytes or a wider grant, and a widening update without a
+  new approval is refused while the old version keeps running.
 
 ## Verified facts this design relies on
 

@@ -60,7 +60,9 @@ fn crlf(_req: RouteRequest, _ctx: &Ctx) -> Result<RouteResponse> {
 fn many_headers(_req: RouteRequest, _ctx: &Ctx) -> Result<RouteResponse> {
     Ok(raw(
         200,
-        (0..40).map(|i| (format!("x-h{i}"), "v".to_owned())).collect(),
+        (0..40)
+            .map(|i| (format!("x-h{i}"), "v".to_owned()))
+            .collect(),
     ))
 }
 

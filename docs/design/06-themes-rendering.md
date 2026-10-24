@@ -41,14 +41,22 @@ footer  = "Footer"
 [images]                                  # variant sizes this theme wants (03 §4)
 card = { width = 640, height = 360, crop = true }
 
-[settings]                                # declarative; API M2a-2, admin form M2b
+[settings]                                # declarative; API M2a-2a, admin form M2b
 accent_color = { type = "color", default = "#c2410c", label = "Accent colour" }
 show_author  = { type = "bool", default = true }
 ```
 
 Setting kinds are the plugin manifest's minus `secret` (`text`, `textarea`, `bool`, `number`,
 `select`, `color`, `media`), because every setting value is visible to templates
-(`crates/ferrite-theme/src/manifest.rs`).
+(`crates/ferrite-theme/src/manifest.rs`). **Settings as built (M2a-2a P13):** one schema and
+validator for themes and plugins (`ferrite_core::ext_settings`, 05 §4c). The theme row
+stores the schema in `manifest.settings` (an array of definitions; a row stored before
+M2a-2a falls back to its artifact's `theme.toml`, an embedded theme without a row to its
+files). Values are one option `theme.<name>.settings`, an object of the set keys, written
+by `PATCH /themes/{name}/settings` (07 §1) under the `extensions` lock with
+`options.changed`; templates see every declared key (`site.settings`), the stored value or
+the default. Every page of the theme records `option:theme.<name>.settings`, so a change
+flushes them on every node; values are read per cache miss (no option cache, P14).
 
 **Loading (as built, plan ruling P1).** `Theme::load` reads every file into memory, validates
 `theme.toml`, requires `templates/index.html` and compiles every template; template errors are
@@ -94,6 +102,25 @@ when the active row names the artifact already running, an error (the caller kee
 current theme) when the new artifact fails, never a fallback to `blog` at runtime.
 Theme names are `[a-z0-9_-]{1,64}`.
 
+**Install, activation and the fallback flag (as built, M2a-2a P8, P12).** Uploads (`POST
+/themes`, a raw bundle) and `ferrite theme install --dir` go through
+`ferrite_http::extensions::Installer::stage_theme`: the bundle is bounded
+(`MAX_BUNDLE_BYTES`) before it is read, unpacked in memory with the bundle rules above and
+every template compiled before anything is stored. Activation (`POST
+/themes/{name}/activate`, `ferrite theme activate`) loads the stored artifact first
+(fetched, SHA-256 checked, unpacked, compiled, name checked); a theme that does not load
+is refused (`422`, CLI exit 1) and the active theme, and what nodes serve, stay as they
+are, with no `theme.changed`. The activation then records only if the row still names
+the artifact just loaded (checked under the `extensions` lock; else `409 conflict`, R10).
+An embedded theme without a row is installed from the embedded files when activated; an
+upload named like an embedded theme becomes that theme's row. Each node reports in
+`nodes.meta.theme` the theme it serves plus `fallback`: `true` when there is an active row
+and the node does not serve its artifact (a startup fallback, or a failed hot swap that
+keeps the previous theme), `false` otherwise (also when no row is active and the embedded
+`blog` serves). `GET /themes` shows it per live node on the active entry. A node's flag
+can lag a change by up to one heartbeat (10 s). There is no theme delete (P30): an unused
+theme row and its artifact stay until the artifact GC (M4).
+
 **Hot swap (as built, M1.5, P18).** On every node the reloader task
 (`crates/ferrite/src/reload.rs`) calls `reload_theme` after a `theme.changed` event (and
 after lost event history), off the invalidation loop. A new theme replaces the old one
@@ -103,8 +130,8 @@ already flushed on the event). The replaced theme is kept as `previous_theme`, s
 next swap. A theme that fails to load (missing or tampered artifact, template error)
 leaves the current theme serving, is reported in `nodes.meta.theme.error`, and is retried
 after 5 s, doubling to 5 min (R14). A startup fallback (to the folder, embedded or `blog`
-theme) after the active row's artifact failed is retried the same way (R17). Theme install/activate commands and the themes API are
-M2a-2 and the admin screens M2b (P21); today `install_theme_dir` and `ExtensionService` are library calls.
+theme) after the active row's artifact failed is retried the same way (R17). The themes API and the `ferrite theme` commands are built
+(M2a-2a, above); the admin screens are M2b.
 
 ## 2. Template hierarchy
 
@@ -206,7 +233,8 @@ only. `robots.txt` disallows everything when option `reading.discourage_indexing
 names the sitemap index. Feeds, sitemaps and `robots.txt` go through the page cache. Atom feeds
 are not built (deferred, ROADMAP M4).
 
-**Not built:** plugin routes `/_p/…` (M2a-2) and `/admin` (M2b). The REST API lives under
+**Plugin routes** `/_p/<plugin>/…` are axum routes in front of the public fallback (M2a-2a,
+05 §4b): never cached, never seen by redirects. **Not built:** `/admin` (M2b). The REST API lives under
 `/api/v1` in the same process (07 §1); `/api` itself and other `/api/…` paths are ordinary
 public paths (canonical slash, then the shared 404).
 
@@ -231,9 +259,10 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
   counting allocator cannot fail one allocation gracefully (a `GlobalAlloc` returning null
   aborts the process), and MiniJinja has no check point other than fuel where a budget
   could stop a render; the fix is rendering in a separate worker process with an OS memory
-  limit. M1.5 adds no untrusted install path (themes are installed only by an operator
-  calling `install_theme_dir`; the upload API is M2a-2). New risk: with hot swap a hostile
-  theme reaches every node at once.
+  limit. M1.5 added no untrusted install path; M2a-2a adds the upload API (`POST /themes`,
+  `manage_themes`, so admins only) and `ferrite theme install`. A theme is compiled, not
+  rendered, before it is stored or activated, so a template that only exhausts memory at
+  render time still passes. With hot swap a hostile theme reaches every node at once.
 - **Preloaded data (plan ruling P2).** MiniJinja is synchronous, so everything a template
   sees is loaded into the render context first, through `SiteReader` (published-only). The
   data-backed helpers go through a `HelperBridge` that calls the async store with
@@ -366,8 +395,10 @@ are never cached.
   with `request.status` 410.
 - A theme that fails to load at startup (bad manifest, template syntax error, unknown or
   invalid name) is logged and the embedded `blog` theme is used, so a broken theme never takes
-  the site down (`crates/ferrite/src/site.rs`). Flagging it in the system status and refusing a
-  broken theme on activation are M2a-2 (no activation flow yet), the admin view M2b.
+  the site down (`crates/ferrite/src/site.rs`). As built in M2a-2a (§1): activation refuses a
+  theme that does not load (`422`, nothing changes), and a node serving anything but the
+  active row's artifact reports `nodes.meta.theme.fallback = true`, shown per node by `GET
+  /themes`; `GET /system/status` (M2a-2b) will read the same key, the admin view is M2b.
 - Security headers on every response unless it sets them itself: `X-Content-Type-Options:
   nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: SAMEORIGIN`.
 

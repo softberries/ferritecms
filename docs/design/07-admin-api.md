@@ -17,8 +17,9 @@ surface).
 - Optimistic concurrency: content carries `version`; writes require
   `If-Match: "<version>"` → `412` on conflict with the current resource in the body
   (other resources are last-write-wins, P11; see "Resources").
-- Idempotency (M2a-2, with uploads): `POST` accepts an `Idempotency-Key` header (stored
-  24 h) for imports/uploads. Not built in M2a-1.
+- Idempotency (M2a-2b, with media uploads): `POST` accepts an `Idempotency-Key` header
+  (stored 24 h) for imports/uploads. Not built yet; extension uploads do not take it
+  (M2a-2 P11: an install is a primary-key upsert, so a retry creates no second row).
 - OpenAPI 3.1 generated from code with `utoipa` (6.x) at `/api/v1/openapi.json`; the
   admin's TypeScript client will be generated from it (`openapi-typescript` +
   `openapi-fetch`) and checked in CI for drift (M2b).
@@ -62,7 +63,7 @@ surface).
   | randomness, hashing, other store errors | 500 | `internal` |
 
   The API layer adds its own problems (login `invalid-credentials`, `csrf`,
-  `password-reset-required`, request-shape slugs) and `503 mail-unavailable` (M2a-2): a
+  `password-reset-required`, request-shape slugs) and `503 mail-unavailable` (M2a-2a): a
   password-reset request on a site without `[mail]`.
 
   Store, randomness and hashing errors are logged with their text; the body says only
@@ -80,8 +81,8 @@ surface).
 
 ### Resources
 
-Paths are relative to `/api/v1`. **Status:** M2a-1 = built (in
-`crates/ferrite-http/openapi.json`); M2a-2 = next backend plan; M3 = with the WordPress
+Paths are relative to `/api/v1`. **Status:** M2a-1 and M2a-2a = built (in
+`crates/ferrite-http/openapi.json`); M2a-2b = next backend plan; M3 = with the WordPress
 importer. The admin SPA that uses them is M2b.
 
 | Resource | Endpoints | Status | Core check (role capability, then token scope) |
@@ -97,11 +98,12 @@ importer. The admin SPA that uses them is M2b.
 | Users & tokens | `GET/POST /users`, `GET/PATCH/DELETE /users/{id}` (`DELETE ?reassign=<id>` moves the user's content), `POST /users/{id}/password`, `GET/POST /users/{id}/tokens`, `DELETE /users/{id}/tokens/{tid}` | M2a-1 | others: `manage_users` + `users:read`/`users:write`; oneself: own e-mail, display name and tokens (`users:read` to list tokens, `users:write` to change); own password via `POST /auth/password` |
 | Redirects | `GET/POST /redirects`, `GET/PATCH/DELETE /redirects/{id}`, `POST /redirects/import` (CSV), `GET /redirects/export` (CSV) | M2a-1 | `manage_redirects` (admins) + `redirects:read`/`redirects:write` |
 | Settings | `GET/PATCH /settings` (the allowlist `ferrite_core::settings::SETTINGS`) | M2a-1 | reads `settings:read`; writes `manage_settings` + `settings:write` |
-| Media | `POST /media` (multipart, streaming), `GET /media`, `GET/PATCH/DELETE /media/{id}` | M2a-2 | — |
-| Comments | `GET /comments`, `PATCH /comments/{id}` (moderate), public `POST /content/{type}/{id}/comments` (rate-limited, honeypot) | M2a-2 | — |
-| Themes | `GET /themes`, `POST /themes` (upload), `POST /themes/{name}/activate`, `GET/PATCH /themes/{name}/settings` | M2a-2 | — |
-| Plugins | `GET /plugins`, `POST /plugins/inspect` (upload → permission report, nothing installed), `POST /plugins` (install with approved grants), `POST /plugins/{name}/enable|disable`, `DELETE /plugins/{name}`, `GET/PATCH /plugins/{name}/settings`, `GET /plugins/{name}/metrics` | M2a-2 | — |
-| System | `GET /system/status` (versions, schema, nodes, backends), `GET /system/jobs`, `POST /system/jobs/{id}/retry`, `GET /system/metrics/summary` (for dashboard charts), `GET /system/audit` | M2a-2 | — |
+| Media | `POST /media` (multipart, streaming), `GET /media`, `GET/PATCH/DELETE /media/{id}` | M2a-2b | — |
+| Comments | `GET /comments`, `PATCH /comments/{id}` (moderate), public `POST /content/{type}/{id}/comments` (rate-limited, honeypot) | M2a-2b | — |
+| Themes | `GET /themes`, `POST /themes` (raw ustar bundle, `?activate=true`), `POST /themes/{name}/activate`, `GET/PATCH /themes/{name}/settings` (no delete, M2a-2 P30) | M2a-2a | reads `manage_themes` + `extensions:read` (`require_reader`); writes `manage_themes` + `extensions:write` |
+| Plugins | `GET /plugins`, `GET /plugins/{name}`, `POST /plugins/inspect` (multipart upload → permission report, nothing installed), `POST /plugins` (install with `approve` = the report's fingerprint), `POST /plugins/{name}/enable`, `POST /plugins/{name}/disable`, `DELETE /plugins/{name}` (`?purge=true`), `GET/PATCH /plugins/{name}/settings` | M2a-2a | reads `manage_plugins` + `extensions:read` (`require_reader`, so editors see no plugin list); writes `manage_plugins` + `extensions:write` |
+| Plugin metrics | `GET /plugins/{name}/metrics` | M2a-2b | — |
+| System | `GET /system/status` (versions, schema, nodes, backends, the theme fallback flag), `GET /system/jobs`, `POST /system/jobs/{id}/retry`, `GET /system/metrics/summary` (for dashboard charts), `GET /system/audit` | M2a-2b | — |
 | Import | `POST /import/wordpress` (upload WXR + optional uploads zip → job), `GET /import/{job}` | M3 | — |
 
 **Versions and `If-Match` (P11).** Only content has a `version`: `PATCH`, `DELETE`, the
@@ -130,6 +132,53 @@ is checked first and nothing is written if any fails (`422 validation`, one `err
 entry per bad line, at most 100). `GET /redirects/export` writes the same format; a
 field starting with `=`, `+`, `-`, `@`, a tab or CR gets a leading `'`, so a spreadsheet
 does not run it as a formula (R20).
+
+**Extensions (M2a-2a; rulings in [`m2a2.md`](../superpowers/rulings/m2a2.md)).** Handlers
+authorize through `ExtensionAdmin` (`authorize_plugins` / `authorize_themes`) before any of
+an upload's body is read, so the OpenAPI sweep's unauthenticated and CSRF cases hold for
+the upload routes too; the node's one `Installer` checks and compiles uploads (two
+compiles and four uploads at once per node; a fifth upload is `503 busy` with
+`Retry-After`). Every write takes the `extensions` lock (30 s, then `503 busy`) and
+appends an audit row (`plugin.install|enable|disable|delete|settings`,
+`theme.install|activate|settings`; never setting values). No `If-Match` (P11).
+
+- **Plugin uploads** are `multipart/form-data` with the parts `manifest` (UTF-8 TOML,
+  ≤ 64 KiB), `component` (≤ 32 MiB) and, for `POST /plugins`, `approve` (≤ 128 bytes);
+  the route body limit is 33 MiB, and a part over its own limit is `413 too-large` naming
+  it before more of it is buffered. An unknown or repeated part, or a bad boundary, is
+  `400`; a missing part `422` naming it; a refused manifest is `422 validation` with one
+  `errors[]` entry per problem, `field` = the manifest path (`capabilities.http`, …; a
+  manifest that is not UTF-8: `manifest`), a refused component `422` with `field =
+  component`; a limit above its ceiling is refused at inspection. `POST /plugins/inspect` answers
+  `{ plugin, version, artifact, items[], added[], limits[], fingerprint, update }` (05 §2;
+  `limits` lists only the limits the manifest requests); `POST /plugins` with an `approve` that is not that upload's
+  fingerprint is `422 validation`, `errors[0].field = "approve"`, with the upload's
+  `report` in the problem, and changes nothing (R1). Install answers `201` with `Location`
+  (an update too); a new plugin is installed disabled, a replaced one keeps its state.
+- **`PluginDto`**: `name`, `version`, `enabled`, `disabled_reason`, `installed_at`,
+  `updated_at`, `report` (the row's report against its own grant, so `added` is empty for
+  a row installed with approval; `null` if the stored manifest or grant no longer parses)
+  and `nodes` (each node with a heartbeat in the last 30 s: `node`, `name`, `version`,
+  `status` = `loaded|failed|disabled`, `error`: the node's diagnostic, verbatim up to 1 KiB,
+  which can name storage paths or endpoints; admins only).
+- **Theme uploads** are the raw deterministic ustar bundle (`Content-Type:
+  application/x-tar`, else `415`; at most `ferrite_theme::MAX_BUNDLE_BYTES`, else `413`),
+  unpacked in memory and compiled before anything is stored; a theme that does not load is
+  `422` with one `errors[]` entry per problem (`templates/<file>:<line>: …`).
+  `POST /themes/{name}/activate` loads the stored artifact first (fetched, hash-checked,
+  unpacked, compiled): one that does not load is `422` and nothing changes (no
+  `theme.changed`); a row replaced meanwhile is `409 conflict` (R10); an embedded theme
+  without a row is installed from the embedded files and activated. `GET /themes` lists
+  the installed themes and the embedded ones without a row; the active entry (the active
+  row, else the embedded `blog`) carries `nodes`: per live node `node`, `node_name`,
+  `node_version`, the served `name` and `hash`, `origin`, `error` and `fallback` (`true`
+  when the node does not serve the active row's artifact: a startup fallback or a failed
+  hot swap; 06 §1).
+- **Settings**: `GET/PATCH /themes/{name}/settings` and `/plugins/{name}/settings` answer
+  `{ schema, values }` (plugins also `secrets` and `invalid`, 05 §4c); `PATCH` takes an
+  object of keys (`null` resets or deletes one), checks every entry first (an undeclared
+  key is `422 validation`; a bad value `422` with `errors[0].field` naming the key) and writes them in one
+  `Tx` with `options.changed`. Secrets are write-only.
 
 **Token scopes (P6).** A scope is `<area>:<read|write>` for the areas `content`, `media`,
 `terms`, `menus`, `comments`, `users`, `settings`, `redirects`, `extensions`, `import`,
@@ -223,7 +272,7 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   new cookie for the caller), on a role change, disable and delete, by `ferrite user
   reset-password`, and when TOTP is enabled (all but the confirming session, R26). A
   cookie sent with a successful login is deleted server-side (no session fixation). The
-  cookie has no `__Host-` prefix yet (M2a-2).
+  cookie has no `__Host-` prefix yet (M2a-2b).
 - **CSRF and origin** (P8): a cookie-authenticated request with a method other than GET or
   HEAD needs `X-CSRF-Token` = base64url(HMAC-SHA256(session `csrf_secret`,
   `"ferrite-csrf:v1:" + id_hash`)) and an `Origin` equal to the `site.url` origin (without
@@ -290,9 +339,13 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   and outstanding reset links invalid.
 - **Passkeys** (`webauthn-rs`): deferred past M2 (P3; the newest `webauthn-rs` is a
   pre-release, and the ceremony needs the SPA). There is no `passkeys` table.
-- **Audit log** (P22): user, token, TOTP, type/taxonomy and settings writes append a row to
-  `audit_log` in the same `Tx` (no secrets in `details`); failed logins are not audited.
-  There is no retention job and no read endpoint yet (`GET /system/audit` is M2a-2).
+- **Audit log** (P22): user, token, TOTP, type/taxonomy and settings writes, extension
+  writes through the API (plugin install/enable/disable/delete/settings, theme
+  install/activate/settings; M2a-2a) and a completed password reset
+  (`user.password_reset`, no actor) append a row to `audit_log` in the same `Tx` (no
+  secrets or setting values in `details`); failed logins, reset requests and the operator
+  CLI's extension commands are not audited. There is no retention job and no read
+  endpoint yet (`GET /system/audit` is M2a-2b).
 - **Password reset by e-mail** (M2a-2a, P19; `auth/reset.rs`), needs `[mail]`:
   - `POST /auth/password-reset { login }` (login or e-mail) answers `202` with no body
     whether the input names an active account, a disabled one or none, after the rate
