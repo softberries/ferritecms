@@ -12,7 +12,9 @@ use std::{
 use argon2::{Algorithm, Argon2, Params, PasswordHasher, Version};
 use ferrite_core::{
     Actor, CoreError, NewAccount, Scopes, UserPatch, UserService,
-    auth::{AuthService, IssuedSession, LoginAttempt, LoginOutcome, SiteKey, TotpSetup, Via, open},
+    auth::{
+        AuthService, IssuedSession, LoginAttempt, LoginOutcome, SiteKey, TotpSetup, Via, open, seal,
+    },
     mail::{MailQueue, MemoryMailer, OutgoingMail},
 };
 use ferrite_domain::{Role, Secret, Timestamp, User, UserStatus};
@@ -1321,6 +1323,63 @@ async fn reset_token_single_use_and_expiry(db: &TestDb) {
     ));
 }
 
+/// A reset token with any byte flipped does not open, and a value sealed for another
+/// purpose (a login challenge, or the token's own claims sealed as one) is refused.
+async fn reset_token_tampered_or_other_purpose_fails(db: &TestDb) {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    let clock = Clock::new();
+    let auth = auth_on(db.shared_store(), &clock);
+    let users = UserService::new(db.shared_store());
+    let (memory, queue) = mail_queue();
+    let lee = make_user(db, "lee", Role::Author).await;
+    let token = reset_token(&auth, &queue, &memory, "lee", 1).await;
+
+    let raw = URL_SAFE_NO_PAD.decode(&token[3..]).unwrap();
+    for i in [0, 23, 24, raw.len() / 2, raw.len() - 1] {
+        let mut bad = raw.clone();
+        bad[i] ^= 0x01;
+        let bad = format!("v1.{}", URL_SAFE_NO_PAD.encode(&bad));
+        assert!(
+            invalid_token(
+                auth.confirm_password_reset(&users, &bad, NEW_PASSWORD)
+                    .await
+            ),
+            "byte {i}"
+        );
+    }
+    // The genuine claims, sealed under another purpose.
+    let claims = open(&key(), "password-reset", &token).unwrap();
+    for purpose in ["login-challenge", "totp-enroll", "password-reset:v2"] {
+        let other = seal(&key(), purpose, &claims).unwrap();
+        assert!(
+            invalid_token(
+                auth.confirm_password_reset(&users, &other, NEW_PASSWORD)
+                    .await
+            ),
+            "{purpose}"
+        );
+    }
+    // A real login challenge of the same user.
+    enrol(&auth, &clock, &lee).await;
+    let challenge = challenge(&auth, "lee", PASSWORD).await;
+    assert!(invalid_token(
+        auth.confirm_password_reset(&users, &challenge, NEW_PASSWORD)
+            .await
+    ));
+    // Under another site key.
+    let other_key = AuthService::new(db.shared_store(), SiteKey::generate().unwrap());
+    assert!(invalid_token(
+        other_key
+            .confirm_password_reset(&users, &token, NEW_PASSWORD)
+            .await
+    ));
+    // None of that used the token up; it still works (TOTP stays on).
+    auth.confirm_password_reset(&users, &token, NEW_PASSWORD)
+        .await
+        .unwrap();
+}
+
 /// F31: two concurrent confirms with one token: exactly one succeeds (the fingerprint
 /// is checked on the locked row in the writing `Tx`), and one audit row is written.
 async fn reset_confirm_is_single_use_under_concurrency(db: &TestDb) {
@@ -1506,6 +1565,7 @@ backend_tests!(
     hit_limit_counts_per_scope_and_client,
     reset_does_not_enumerate,
     reset_token_single_use_and_expiry,
+    reset_token_tampered_or_other_purpose_fails,
     reset_confirm_is_single_use_under_concurrency,
     reset_ends_sessions_keeps_tokens,
     reset_keeps_totp,

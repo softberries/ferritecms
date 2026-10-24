@@ -11,7 +11,6 @@ mod service;
 mod totp;
 
 pub use key::{IP_HASH_LABEL, PLUGIN_IP_LABEL, SEAL_LABEL, SiteKey, ip_hash, random_bytes};
-pub use reset::RESET_TTL;
 pub use seal::{open, seal};
 pub use service::{
     AuthService, Authenticated, Clock, IssuedSession, LoginAttempt, LoginOutcome, TotpSetup, Via,

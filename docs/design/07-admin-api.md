@@ -316,6 +316,13 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
     concurrent confirms with one token cannot both pass, F31), writes the hash, clears
     `must_reset`, deletes every session and appends one `user.password_reset` audit row
     without an actor or the token. No session is issued.
+  - `fp` covers the password hash, not the account status, which is checked when the
+    link is used: a link issued before the account was disabled works again if the
+    account is re-enabled within the link's hour (accepted; the password is unchanged
+    meanwhile, and a re-enabling admin can reset it to kill the link).
+  - Confirm has no rate limit on purpose: tokens are AEAD-sealed under the site key and
+    cannot be guessed, a bad, expired or used token is refused before any password work,
+    and argon2 runs only for a token that is valid for the current password hash.
   - API tokens are kept (R22) and **TOTP is kept**: a reset never bypasses or disables the
     second factor; a lost authenticator still needs `ferrite user disable-totp`.
 

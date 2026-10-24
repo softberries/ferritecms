@@ -37,7 +37,7 @@ use crate::{
 };
 
 /// How long a reset link works.
-pub const RESET_TTL: Duration = Duration::from_secs(3600);
+const RESET_TTL: Duration = Duration::from_secs(3600);
 /// Longest token looked at; ours are under 200 characters.
 const MAX_TOKEN_INPUT: usize = 512;
 /// Longest site title in the subject, in characters.

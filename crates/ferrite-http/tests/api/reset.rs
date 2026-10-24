@@ -8,7 +8,8 @@ use axum::{
     body::Body,
     http::{Method, StatusCode, header},
 };
-use ferrite_domain::Role;
+use ferrite_core::{Actor, UserPatch};
+use ferrite_domain::{Role, UserStatus};
 use serde_json::json;
 
 use crate::{
@@ -20,6 +21,7 @@ api_tests!(
     password_reset_over_http,
     reset_checks_origin,
     reset_without_mailer_is_503,
+    reset_link_ignores_host,
 );
 
 const RESET: &str = "/api/v1/auth/password-reset";
@@ -40,19 +42,37 @@ fn token_in(text: &str) -> String {
 
 async fn password_reset_over_http(api: Api) -> Api {
     api.user("kim", Role::Author, false).await;
+    let root = api.user("root", Role::Admin, false).await;
+    let off = api.user("off", Role::Author, false).await;
+    api.api
+        .users
+        .update(
+            &Actor::new(root.id, root.role),
+            off.id,
+            UserPatch {
+                status: Some(UserStatus::Disabled),
+                ..UserPatch::default()
+            },
+        )
+        .await
+        .unwrap();
     let mut c = Client::new();
-    // Known and unknown accounts get the same answer: 202, no body.
+    // Known, disabled and unknown accounts get the same answer: 202, no body, the same
+    // headers.
     let known = c
         .post(&api, RESET, json!({"login": "kim@example.com"}))
         .await;
+    let disabled = c
+        .post(&api, RESET, json!({"login": "off@example.com"}))
+        .await;
     let unknown = c.post(&api, RESET, json!({"login": "nobody"})).await;
-    for r in [&known, &unknown] {
+    for r in [&known, &disabled, &unknown] {
         assert_eq!(r.status, StatusCode::ACCEPTED, "{r:?}");
         assert_eq!(r.body, "", "{r:?}");
         assert!(r.header("set-cookie").is_none(), "{r:?}");
         assert_eq!(r.header("cache-control"), Some("no-store"), "{r:?}");
+        assert_eq!(r.headers, known.headers, "{r:?}");
     }
-    assert_eq!(known.header("content-type"), unknown.header("content-type"));
     let sent = api.mailer.wait_for(1, MAIL_WAIT).await;
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert_eq!(sent[0].to, ["kim@example.com"]);
@@ -147,5 +167,28 @@ async fn reset_without_mailer_is_503(api: Api) -> Api {
             .await
             .is_empty()
     );
+    api
+}
+
+/// The link is built from `site.url`, never from the request: a spoofed `Host` (or
+/// forwarding header) cannot point the mailed link at another site.
+async fn reset_link_ignores_host(api: Api) -> Api {
+    api.user("kim", Role::Author, false).await;
+    let req = axum::http::Request::builder()
+        .method(Method::POST)
+        .uri(RESET)
+        .header(header::HOST, "evil.example")
+        .header("x-forwarded-host", "evil.example")
+        .header("x-forwarded-proto", "http")
+        .header(header::ORIGIN, SITE_URL)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({"login": "kim"}).to_string()))
+        .unwrap();
+    let r = send(&api.router, req).await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{r:?}");
+    let sent = api.mailer.wait_for(1, MAIL_WAIT).await;
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(!sent[0].text.contains("evil"), "{}", sent[0].text);
+    assert!(!token_in(&sent[0].text).is_empty());
     api
 }
