@@ -1,9 +1,16 @@
 //! Migration contract tests (02 §7–§8).
 
+use ferrite_domain::{
+    Artifact, ArtifactHash, ArtifactKind, IDEMPOTENCY_STALE, IdemBegin, IdempotencyKey, Media,
+    Timestamp,
+};
 use ferrite_store::{Compat, Phase, SCHEMA_META_MIN_BINARY, StoreError};
 use semver::Version;
 
-use crate::TestDb;
+use crate::{
+    TestDb,
+    fixtures::{fixture_user, new_post},
+};
 
 fn binary() -> Version {
     Version::parse(env!("CARGO_PKG_VERSION")).expect("crate version is semver")
@@ -13,7 +20,7 @@ pub async fn fresh_db_is_up_to_date(db: &TestDb) {
     let store = db.store();
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::UpToDate);
-    assert_eq!((s.db_version, s.binary_version), (5, 5));
+    assert_eq!((s.db_version, s.binary_version), (6, 6));
     assert!(s.pending.is_empty() && s.unknown_applied.is_empty());
     assert_eq!(s.min_binary, None);
 
@@ -57,35 +64,38 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
         );
     }
 
-    // 0005's down loses sessions and the audit log: refused without allow_lossy, nothing
-    // reverted.
+    // 0006's down loses idempotency keys (0005's sessions and the audit log): refused
+    // without allow_lossy, nothing reverted.
     let err = store.migrate_down(0, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 5 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 6 has a lossy down")),
         "{err:?}"
     );
     assert_eq!(
         store.migration_status(&binary()).await.unwrap().db_version,
-        5
+        6
     );
-    // 0005 alone goes down and up again (the SQLite `DROP COLUMN` included).
-    assert_eq!(store.migrate_down(4, true).await.unwrap(), vec![5]);
+    // 0005 goes down and up again (the SQLite `DROP COLUMN` included).
+    assert_eq!(store.migrate_down(4, true).await.unwrap(), vec![6, 5]);
     assert!(
         !db.user_objects()
             .await
             .iter()
             .any(|o| o.contains("sessions") || o.contains("audit_log")),
     );
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![5]);
+    assert_eq!(store.migrate_up(None).await.unwrap(), vec![5, 6]);
     assert_eq!(
         store.migrate_down(0, true).await.unwrap(),
-        vec![5, 4, 3, 2, 1]
+        vec![6, 5, 4, 3, 2, 1]
     );
     assert_eq!(db.user_objects().await, Vec::<String>::new());
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!((s.db_version, s.verdict), (0, Compat::NeedsUp));
 
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![1, 2, 3, 4, 5]);
+    assert_eq!(
+        store.migrate_up(None).await.unwrap(),
+        vec![1, 2, 3, 4, 5, 6]
+    );
     assert_eq!(store.migrate_up(None).await.unwrap(), Vec::<i64>::new());
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::UpToDate);
@@ -102,14 +112,17 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
 
 pub async fn verdict_after_partial_down(db: &TestDb) {
     let store = db.store();
-    assert_eq!(store.migrate_down(1, true).await.unwrap(), vec![5, 4, 3, 2]);
+    assert_eq!(
+        store.migrate_down(1, true).await.unwrap(),
+        vec![6, 5, 4, 3, 2]
+    );
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::NeedsUp);
     assert_eq!(
         s.pending.iter().map(|p| p.version).collect::<Vec<_>>(),
-        vec![2, 3, 4, 5]
+        vec![2, 3, 4, 5, 6]
     );
-    assert_eq!((s.db_version, s.binary_version), (1, 5));
+    assert_eq!((s.db_version, s.binary_version), (1, 6));
     let objects = db.user_objects().await;
     assert!(objects.iter().any(|o| o.ends_with(":content_items")));
     assert!(!objects.iter().any(|o| o.contains("search")), "{objects:?}");
@@ -134,7 +147,7 @@ pub async fn verdict_after_partial_down(db: &TestDb) {
         store.migration_status(&binary()).await.unwrap().verdict,
         Compat::NeedsUp
     );
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![3, 4, 5]);
+    assert_eq!(store.migrate_up(None).await.unwrap(), vec![3, 4, 5, 6]);
     assert_eq!(
         store.migration_status(&binary()).await.unwrap().verdict,
         Compat::UpToDate
@@ -178,9 +191,9 @@ pub async fn min_binary_survives_older_binary(db: &TestDb) {
 /// Pending migrations carry their description and parsed directives.
 pub async fn status_reports_pending_directives(db: &TestDb) {
     let store = db.store();
-    assert_eq!(store.migrate_down(2, true).await.unwrap(), vec![5, 4, 3]);
+    assert_eq!(store.migrate_down(2, true).await.unwrap(), vec![6, 5, 4, 3]);
     let s = store.migration_status(&binary()).await.unwrap();
-    assert_eq!(s.pending.len(), 3);
+    assert_eq!(s.pending.len(), 4);
     let pending = &s.pending[0];
     assert_eq!(pending.version, 3);
     assert!(!pending.description.is_empty());
@@ -198,4 +211,118 @@ pub async fn status_reports_pending_directives(db: &TestDb) {
     assert_eq!((auth.version, auth.description.as_str()), (5, "auth"));
     assert_eq!(auth.directives.phase, Phase::Expand);
     assert!(auth.directives.lossy_down);
+    let media = &s.pending[3];
+    assert_eq!(
+        (media.version, media.description.as_str()),
+        (6, "media comments")
+    );
+    assert_eq!(media.directives.phase, Phase::Expand);
+    assert!(media.directives.lossy_down);
+}
+
+/// `0006_media_comments` (M2a-2b P2): its objects exist; the down is lossy (refused
+/// without `allow_lossy`) and drops idempotency keys and the sanitised marker; up again
+/// restores the schema with the marker back at its default.
+pub async fn migration_0006_roundtrip(db: &TestDb) {
+    let store = db.store();
+    const OBJECTS: [&str; 9] = [
+        "idempotency_keys",
+        "idempotency_keys_created_idx",
+        "comments_status_created_idx",
+        "comments_item_status_idx",
+        "comments_created_idx",
+        "comments_author_email_idx",
+        "comments_user_idx",
+        "jobs_status_created_idx",
+        "jobs_created_idx",
+    ];
+    let has =
+        |objects: &[String], name: &str| objects.iter().any(|o| o.ends_with(&format!(":{name}")));
+    let objects = db.user_objects().await;
+    for name in OBJECTS {
+        assert!(has(&objects, name), "{name}: {objects:?}");
+    }
+
+    // A marked media row and a pending key, to see what the down loses.
+    let author = fixture_user(store).await;
+    let mut item = new_post(&author, "marked");
+    item.kind = "media".into();
+    store.read().content().insert(&item).await.unwrap();
+    let artifact = Artifact {
+        hash: ArtifactHash::parse(&"a".repeat(64)).unwrap(),
+        kind: ArtifactKind::Media,
+        bytes: 5,
+        mime: "image/svg+xml".into(),
+        created_at: Timestamp::now(),
+    };
+    store
+        .read()
+        .artifacts()
+        .insert_if_absent(&artifact)
+        .await
+        .unwrap();
+    let media = Media {
+        item_id: item.id,
+        artifact_hash: artifact.hash.clone(),
+        mime: "image/svg+xml".into(),
+        bytes: 5,
+        width: None,
+        height: None,
+        alt: String::new(),
+        original_name: "a.svg".into(),
+        variants: serde_json::json!({}),
+        sanitized: true,
+    };
+    store.read().media().insert(&media).await.unwrap();
+    let key = IdempotencyKey {
+        user: author.id,
+        key_hash: "b".repeat(64),
+        method: "POST".into(),
+        path: "/api/v1/media".into(),
+    };
+    store
+        .read()
+        .idempotency()
+        .begin(&key, IDEMPOTENCY_STALE)
+        .await
+        .unwrap();
+
+    let err = store.migrate_down(5, false).await.unwrap_err();
+    assert!(
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 6 has a lossy down")),
+        "{err:?}"
+    );
+    assert_eq!(store.migrate_down(5, true).await.unwrap(), vec![6]);
+    let objects = db.user_objects().await;
+    for name in OBJECTS {
+        assert!(!has(&objects, name), "{name} left: {objects:?}");
+    }
+    let s = store.migration_status(&binary()).await.unwrap();
+    assert_eq!(s.pending.iter().map(|p| p.version).collect::<Vec<_>>(), [6]);
+    assert!(s.pending[0].directives.lossy_down);
+
+    // Up again re-adds the column (so the down really dropped it) at its default.
+    assert_eq!(store.migrate_up(None).await.unwrap(), vec![6]);
+    let got = store.read().media().get(item.id).await.unwrap().unwrap();
+    assert_eq!(
+        got,
+        Media {
+            sanitized: false,
+            ..media
+        }
+    );
+    // The key is gone: a new use starts.
+    assert!(matches!(
+        store
+            .read()
+            .idempotency()
+            .begin(&key, IDEMPOTENCY_STALE)
+            .await
+            .unwrap(),
+        IdemBegin::Started { .. }
+    ));
+    assert_eq!(
+        store.migration_status(&binary()).await.unwrap().verdict,
+        Compat::UpToDate
+    );
 }

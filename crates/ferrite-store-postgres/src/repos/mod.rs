@@ -1,8 +1,10 @@
 //! Repository implementations, all on [`PgRepos`].
 
 mod auth;
+mod comment;
 mod content;
 mod event;
+mod idempotency;
 mod job;
 mod menu;
 mod node;
@@ -19,10 +21,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use ferrite_store::{
-    ApiTokenRepo, ArtifactRepo, AuditRepo, ContentRepo, ContentTypeRepo, EventRepo, JobRepo,
-    MediaRepo, MenuRepo, MetaRepo, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo,
-    PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo,
-    SessionRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    ApiTokenRepo, ArtifactRepo, AuditRepo, CommentRepo, ContentRepo, ContentTypeRepo, EventRepo,
+    IdempotencyRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo, NodeRepo, OptionRepo,
+    PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo,
+    SchemaMetaRepo, SearchRepo, SessionRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx,
+    UserRepo,
 };
 use sqlx::PgPool;
 
@@ -123,6 +126,12 @@ impl Repos for PgRepos {
     fn audit(&self) -> &dyn AuditRepo {
         self
     }
+    fn comments(&self) -> &dyn CommentRepo {
+        self
+    }
+    fn idempotency(&self) -> &dyn IdempotencyRepo {
+        self
+    }
 }
 
 /// A write transaction (or a nested savepoint) on a pool connection; dropping it rolls
@@ -204,4 +213,6 @@ delegate_repos!(
     api_tokens: ApiTokenRepo,
     rate_limits: RateLimitRepo,
     audit: AuditRepo,
+    comments: CommentRepo,
+    idempotency: IdempotencyRepo,
 );

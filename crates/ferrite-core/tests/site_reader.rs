@@ -193,6 +193,7 @@ async fn media(store: &dyn Store, author: &User, status: ContentStatus) -> Conte
             alt: "a cat".into(),
             original_name: "cat.png".into(),
             variants: json!({"thumbnail": {"hash": thumb.as_str(), "w": 150, "h": 150, "mime": "image/png"}}),
+            sanitized: false,
         })
         .await
         .unwrap();

@@ -82,6 +82,7 @@ pub async fn media_insert_get_update_variants(db: &TestDb) {
         alt: "A ☃ photo".into(),
         original_name: "Ünï.png".into(),
         variants: json!({}),
+        sanitized: false,
     };
     let repo = store.read().media();
     repo.insert(&media).await.unwrap();
@@ -201,6 +202,7 @@ pub async fn media_find_by_artifact(db: &TestDb) {
                 alt: String::new(),
                 original_name: format!("m{i}.png"),
                 variants,
+                sanitized: false,
             })
             .await
             .unwrap();
@@ -302,6 +304,74 @@ pub async fn media_find_by_artifact(db: &TestDb) {
     );
 }
 
+/// `media.sanitized` (0006): a row written without it reads `false`; `true` is stored
+/// by `insert` and `update` and comes back from every read path.
+pub async fn media_sanitized_roundtrip(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    put_artifact(store, &artifact('a', ArtifactKind::Media)).await;
+    let mut items = Vec::new();
+    for slug in ["svg-raw", "svg-marked"] {
+        let mut item = new_post(&author, slug);
+        item.kind = "media".into();
+        store.read().content().insert(&item).await.unwrap();
+        items.push(item.id);
+    }
+    // A row inserted without the column (as before 0006) gets the default.
+    let id = items[0].as_uuid();
+    if db.is_sqlite() {
+        db.exec_raw(&format!(
+            "INSERT INTO media (item_id, artifact_hash, mime, bytes, alt, original_name, \
+             variants) VALUES (x'{}', '{}', 'image/svg+xml', 5, '', 'a.svg', '{{}}')",
+            id.simple(),
+            hash('a').as_str()
+        ))
+        .await;
+    } else {
+        db.exec_raw(&format!(
+            "INSERT INTO media (item_id, artifact_hash, mime, bytes, alt, original_name, \
+             variants) VALUES ('{id}', '{}', 'image/svg+xml', 5, '', 'a.svg', '{{}}')",
+            hash('a').as_str()
+        ))
+        .await;
+    }
+    let repo = store.read().media();
+    let mut raw = repo.get(items[0]).await.unwrap().unwrap();
+    assert!(!raw.sanitized);
+
+    // `update` writes the marker; `get`, `get_many` and `find_by_artifact` read it.
+    raw.sanitized = true;
+    repo.update(&raw).await.unwrap();
+    assert!(repo.get(items[0]).await.unwrap().unwrap().sanitized);
+    let marked = Media {
+        item_id: items[1],
+        sanitized: true,
+        original_name: "b.svg".into(),
+        ..raw.clone()
+    };
+    repo.insert(&marked).await.unwrap();
+    assert_eq!(repo.get(items[1]).await.unwrap().unwrap(), marked);
+    // A later update that keeps the marker keeps it.
+    let mut alt = marked.clone();
+    alt.alt = "described".into();
+    repo.update(&alt).await.unwrap();
+    assert_eq!(repo.get(items[1]).await.unwrap().unwrap(), alt);
+    assert!(
+        repo.get_many(&items)
+            .await
+            .unwrap()
+            .iter()
+            .all(|m| m.sanitized)
+    );
+    let found = repo.find_by_artifact(&hash('a'), 10).await.unwrap();
+    assert_eq!(found.len(), 2);
+    assert!(found.iter().all(|m| m.sanitized), "{found:?}");
+    // And it can be cleared again.
+    raw.sanitized = false;
+    repo.update(&raw).await.unwrap();
+    assert!(!repo.get(items[0]).await.unwrap().unwrap().sanitized);
+}
+
 /// Migration 0003 backfills `media_variants` from the existing `variants` JSON: after
 /// down to 2 (table dropped) and up again, variant lookups work for rows written
 /// before.
@@ -328,17 +398,18 @@ pub async fn media_variants_backfill(db: &TestDb) {
             alt: String::new(),
             original_name: "x.png".into(),
             variants: json!({"thumb": {"hash": hash('b').as_str()}, "junk": [1], "n": {"hash": 1}}),
+            sanitized: false,
         })
         .await
         .unwrap();
-    assert_eq!(store.migrate_down(2, true).await.unwrap(), vec![5, 4, 3]);
+    assert_eq!(store.migrate_down(2, true).await.unwrap(), vec![6, 5, 4, 3]);
     assert!(
         !db.user_objects()
             .await
             .iter()
             .any(|o| o.contains("media_variants"))
     );
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![3, 4, 5]);
+    assert_eq!(store.migrate_up(None).await.unwrap(), vec![3, 4, 5, 6]);
     let repo = store.read().media();
     let got = repo.find_by_artifact(&hash('b'), 10).await.unwrap();
     assert_eq!(got.iter().map(|m| m.item_id).collect::<Vec<_>>(), [item.id]);

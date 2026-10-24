@@ -75,7 +75,7 @@ impl MediaRepo for PgRepos {
         atomic!(&self.exec, |conn| async {
             sqlx::query(
                 "INSERT INTO media (item_id, artifact_hash, mime, bytes, width, height, alt, \
-                 original_name, variants) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                 original_name, variants, sanitized) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             )
             .bind(media.item_id.as_uuid())
             .bind(media.artifact_hash.as_str())
@@ -86,6 +86,7 @@ impl MediaRepo for PgRepos {
             .bind(&media.alt)
             .bind(&media.original_name)
             .bind(variants)
+            .bind(media.sanitized)
             .execute(&mut *conn)
             .await
             .map_err(crate::exec::map_db_err)?;
@@ -110,7 +111,7 @@ impl MediaRepo for PgRepos {
         atomic!(&self.exec, |conn| async {
             let done = sqlx::query(
                 "UPDATE media SET mime = $1, bytes = $2, width = $3, height = $4, \
-                 alt = $5, variants = $6 WHERE item_id = $7",
+                 alt = $5, variants = $6, sanitized = $7 WHERE item_id = $8",
             )
             .bind(&media.mime)
             .bind(media.bytes)
@@ -118,6 +119,7 @@ impl MediaRepo for PgRepos {
             .bind(media.height)
             .bind(&media.alt)
             .bind(variants)
+            .bind(media.sanitized)
             .bind(media.item_id.as_uuid())
             .execute(&mut *conn)
             .await
@@ -175,7 +177,7 @@ impl MediaRepo for PgRepos {
 /// (`media_artifact_idx`) and the indexed variant match (`media_variants_hash_idx`).
 /// Bind 1: the hash; bind 2: the limit. Public so the plan test can `EXPLAIN` it.
 pub const FIND_MEDIA_BY_ARTIFACT_SQL: &str = "SELECT item_id, artifact_hash, mime, bytes, width, height, alt, original_name, \
-variants FROM media \
+variants, sanitized FROM media \
 WHERE EXISTS (SELECT 1 FROM artifacts WHERE hash = $1 AND kind IN ('media', 'variant')) \
 AND item_id IN (SELECT item_id FROM media WHERE artifact_hash = $1 \
 UNION SELECT item_id FROM media_variants WHERE hash = $1) \

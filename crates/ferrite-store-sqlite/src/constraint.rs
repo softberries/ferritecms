@@ -20,6 +20,10 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
         "content_meta_pkey",
     ),
     ("content_types.name", "content_types_pkey"),
+    (
+        "idempotency_keys.user_id, idempotency_keys.key_hash",
+        "idempotency_keys_pkey",
+    ),
     ("jobs.id", "jobs_pkey"),
     ("jobs.unique_key", "jobs_unique_key_uq"),
     ("media.item_id", "media_pkey"),

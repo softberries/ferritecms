@@ -79,3 +79,36 @@ pub struct AuditEntry {
     pub details: Value,
     pub node: Option<NodeId>,
 }
+
+/// Idempotency rows are kept this long after the request started (M2a-2b P10, F7); the
+/// `sessions.prune` job deletes older ones.
+pub const IDEMPOTENCY_RETENTION: Duration = Duration::from_secs(24 * 3600);
+/// A pending idempotency key older than this may be taken over by a retry (P10, F5).
+pub const IDEMPOTENCY_STALE: Duration = Duration::from_secs(3600);
+
+/// One `Idempotency-Key` use: scoped to the user, stored as the SHA-256 hex of the key
+/// (`key_hash`), and bound to the request's method and path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdempotencyKey {
+    pub user: UserId,
+    /// 64 lowercase hex characters.
+    pub key_hash: String,
+    pub method: String,
+    pub path: String,
+}
+
+/// What `IdempotencyRepo::begin` found (P10, F5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdemBegin {
+    /// The caller owns the key now (a new row, or a stale pending one taken over).
+    /// `token` is the row's `created_at` (database clock); `finish` and `release` act
+    /// only while the row still carries it, so a taken-over original cannot touch the
+    /// new owner's row.
+    Started { token: Timestamp },
+    /// The first request finished: answer with its stored status and response.
+    Replay { status: u16, response: Value },
+    /// Another request holds the key and is not stale yet.
+    InProgress,
+    /// The key was used for another method or path.
+    Mismatch,
+}

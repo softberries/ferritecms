@@ -123,6 +123,7 @@ pub async fn batch_loaders_match_single_gets(db: &TestDb) {
                 alt: format!("alt {slug}"),
                 original_name: format!("{slug}.png"),
                 variants: json!({}),
+                sanitized: false,
             })
             .await
             .unwrap();

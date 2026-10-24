@@ -1,6 +1,7 @@
 //! Pure domain types shared by every FerriteCMS storage backend.
 
 mod auth;
+mod comment;
 mod content;
 mod event;
 mod hex;
@@ -19,9 +20,10 @@ mod time;
 mod user;
 
 pub use auth::{
-    ApiToken, AuditEntry, NewAudit, RateHit, SESSION_ABSOLUTE, SESSION_IDLE, SESSION_TOUCH_EVERY,
-    Session,
+    ApiToken, AuditEntry, IDEMPOTENCY_RETENTION, IDEMPOTENCY_STALE, IdemBegin, IdempotencyKey,
+    NewAudit, RateHit, SESSION_ABSOLUTE, SESSION_IDLE, SESSION_TOUCH_EVERY, Session,
 };
+pub use comment::{Comment, CommentQuery, CommentStatus};
 pub use content::{
     ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, NewContent, ParentFilter,
     ReadableBy, Revision,
@@ -29,7 +31,7 @@ pub use content::{
 pub use event::{Event, NewEvent};
 pub use hex::to_hex;
 pub use ids::{
-    ApiTokenId, ArtifactHash, AuditId, ContentId, JobId, MenuItemId, NodeId, RedirectId,
+    ApiTokenId, ArtifactHash, AuditId, CommentId, ContentId, JobId, MenuItemId, NodeId, RedirectId,
     RevisionId, TermId, UserId,
 };
 pub use job::{DEFAULT_MAX_ATTEMPTS, Job, JobLease, JobStatus, NewJob};
@@ -152,6 +154,14 @@ mod tests {
         for o in RedirectOrigin::ALL {
             assert_eq!(o.as_str().parse::<RedirectOrigin>().unwrap(), *o);
         }
+        let names: Vec<_> = CommentStatus::ALL.iter().map(|s| s.as_str()).collect();
+        assert_eq!(names, ["pending", "approved", "spam", "trash"]);
+        for s in CommentStatus::ALL {
+            assert_eq!(s.as_str().parse::<CommentStatus>().unwrap(), *s);
+        }
+        assert!("Approved".parse::<CommentStatus>().is_err());
+        assert_eq!(IDEMPOTENCY_RETENTION.as_secs(), 24 * 3600);
+        assert_eq!(IDEMPOTENCY_STALE.as_secs(), 3600);
     }
 
     #[test]

@@ -22,36 +22,42 @@ use crate::{
 /// attempt.
 const HELD: &str = "id = ? AND status = 'running' AND locked_by = ? AND attempts = ?";
 
-/// Jobs a claim may take; binds kinds (JSON array), now, now.
-const DUE: &str = "kind IN (SELECT value FROM json_each(?)) \
-     AND ((status = 'queued' AND run_at <= ?) \
-       OR (status = 'running' AND locked_until < ? AND attempts < max_attempts))";
-
 /// Claim pre-check on the reader: anything due or reapable? Two `EXISTS`, one per
-/// branch, so each is a search on its partial index (`jobs_due_idx`, `jobs_lease_idx`)
-/// whatever ANALYZE learns. Binds now, kinds, now, kinds.
-pub(crate) const PRECHECK_SQL: &str = "SELECT EXISTS (SELECT 1 FROM jobs \
+/// branch, each pinned to its partial index (`jobs_due_idx`, `jobs_lease_idx`) with
+/// `INDEXED BY`: without statistics the planner would otherwise prefer the equality on
+/// `jobs_status_created_idx` (0006) and walk every queued or running row. Binds now,
+/// kinds, now, kinds.
+pub(crate) const PRECHECK_SQL: &str = "SELECT EXISTS (SELECT 1 FROM jobs INDEXED BY jobs_due_idx \
        WHERE status = 'queued' AND run_at <= ? AND kind IN (SELECT value FROM json_each(?))) \
-     OR EXISTS (SELECT 1 FROM jobs \
+     OR EXISTS (SELECT 1 FROM jobs INDEXED BY jobs_lease_idx \
        WHERE status = 'running' AND locked_until < ? \
        AND kind IN (SELECT value FROM json_each(?)))";
 
-/// P7: an expired lease at max_attempts goes dead instead of being reclaimed. Binds
-/// now (finished_at), now, kinds.
-pub(crate) const REAPER_SQL: &str = "UPDATE jobs SET status = 'dead', \
+/// P7: an expired lease at max_attempts goes dead instead of being reclaimed (on
+/// `jobs_lease_idx`, pinned as in [`PRECHECK_SQL`]). Binds now (finished_at), now, kinds.
+pub(crate) const REAPER_SQL: &str = "UPDATE jobs INDEXED BY jobs_lease_idx SET status = 'dead', \
      last_error = 'lease expired after attempt ' || attempts || ' on node ' \
        || COALESCE(locked_by, '?'), \
      finished_at = ?, locked_by = NULL, locked_until = NULL \
      WHERE status = 'running' AND locked_until < ? AND attempts >= max_attempts \
      AND kind IN (SELECT value FROM json_each(?))";
 
-/// The claim; binds node, locked_until, kinds, now, now, limit.
+/// The claim: due queued jobs (`jobs_due_idx`) and expired leases with attempts left
+/// (`jobs_lease_idx`), each branch pinned to its partial index as in [`PRECHECK_SQL`],
+/// then the (few) due rows sorted. Binds node, locked_until, kinds, now, now, limit.
 pub(crate) fn claim_sql() -> String {
     format!(
-        "UPDATE jobs SET status = 'running', locked_by = ?, locked_until = ?, \
+        "UPDATE jobs SET status = 'running', locked_by = ?1, locked_until = ?2, \
          attempts = attempts + 1 \
-         WHERE id IN (SELECT id FROM jobs WHERE {DUE} \
-           ORDER BY priority DESC, run_at, id LIMIT ?) \
+         WHERE id IN (SELECT id FROM ( \
+           SELECT id, priority, run_at FROM jobs INDEXED BY jobs_due_idx \
+             WHERE status = 'queued' AND run_at <= ?4 \
+             AND kind IN (SELECT value FROM json_each(?3)) \
+           UNION ALL \
+           SELECT id, priority, run_at FROM jobs INDEXED BY jobs_lease_idx \
+             WHERE status = 'running' AND locked_until < ?5 AND attempts < max_attempts \
+             AND kind IN (SELECT value FROM json_each(?3))) \
+           ORDER BY priority DESC, run_at, id LIMIT ?6) \
          RETURNING {JOB_COLUMNS}"
     )
 }

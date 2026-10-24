@@ -94,6 +94,8 @@ pub trait Repos: Send + Sync {
     fn api_tokens(&self) -> &dyn ApiTokenRepo;
     fn rate_limits(&self) -> &dyn RateLimitRepo;
     fn audit(&self) -> &dyn AuditRepo;
+    fn comments(&self) -> &dyn CommentRepo;          // M2a-2b
+    fn idempotency(&self) -> &dyn IdempotencyRepo;   // M2a-2b
 }
 ```
 
@@ -150,7 +152,38 @@ Other M2a-1 store additions, on both backends and contract-tested:
   user` on both backends, so admin lists, counts, cursors and search pages hold only items
   the reader may see. A NULL `published_at` never matches the first branch.
 
-The `comments` repository is still to come (M2a-2b). `JobRepo` (`jobs()`) and
+M2a-2b added (migration `0006_media_comments`, contract-tested on both backends):
+
+- **`CommentRepo`** (`comments()`): `insert` (NUL refused; `author_email` stored through
+  `email_key`, ASCII-lowercased), `get`, `set_status(id, status) -> Option<Comment>` (one
+  `UPDATE … RETURNING`), `delete(id) -> bool` (replies cascade), `list(&CommentQuery {
+  status, item, limit, cursor })` newest first (`created_at DESC, id DESC`, cursor tag
+  `cm:created` = `COMMENT_CURSOR_TAG`; only the given filters are in the SQL, so each
+  shape has its index), `approved_for_item(item, limit ≤ MAX_ITEM_COMMENTS = 500)` oldest
+  first (`created_at, id`), and the R2 `known` checks (F19): `has_approved_from(email,
+  name)` (an approved anonymous row, `user_id IS NULL`, e-mail by `email_key`, name exact)
+  and `has_approved_from_user(user)`. No CHECK on `status` (P2); core validates.
+- **`IdempotencyRepo`** (`idempotency()`, P10, F5): `begin(&IdempotencyKey { user,
+  key_hash, method, path }, stale_after) -> IdemBegin` — one insert-if-absent; on conflict
+  another method or path is `Mismatch`, a finished row `Replay { status, response }`, a
+  pending row younger than `stale_after` `InProgress`, an older one is taken over by one
+  conditional `UPDATE … WHERE status_code IS NULL AND created_at = <read>` (a losing taker
+  re-reads, so concurrent takers on any node get `Started` once).
+  `Started { token }` carries the row's `created_at` (database clock); `finish(user,
+  key_hash, token, status, &response) -> bool` and `release(user, key_hash, token) -> bool`
+  act only on the pending row still carrying that token, so a taken-over original can
+  neither record a second result nor free the new owner's key. Stored responses are at most
+  `MAX_IDEMPOTENCY_RESPONSE` (64 KiB) of JSON (`Invalid` otherwise); `prune(created_before,
+  limit)` (R5 batches; `IDEMPOTENCY_RETENTION` 24 h and `IDEMPOTENCY_STALE` 1 h live in
+  `ferrite_domain`, F7).
+- **`MediaRepo`** reads and writes `media.sanitized` (`insert`, `update`, `get`,
+  `get_many`, `find_by_artifact`).
+- The SQLite claim statements (`PRECHECK_SQL`, `REAPER_SQL`, the claim) pin their partial
+  indexes with `INDEXED BY` (the claim as a `UNION ALL` of its two branches): without
+  statistics the planner otherwise prefers the equality on `jobs_status_created_idx` and
+  walks every queued or running row.
+
+`JobRepo` (`jobs()`) and
 `NodeRepo` (`nodes()`) exist since M1.5 (migration `0004_cluster`); see the cluster table
 in §4. Named locks are `Store::try_lock` (Postgres advisory locks, SQLite in-process;
 [04 §7](04-cluster.md#7-distributed-locks)); `ferrite_store::lock(store, name, wait)`
@@ -167,8 +200,7 @@ P2; contract-tested on both backends) `OptionRepo::list_prefix(prefix, after, li
 `PluginRepo::is_enabled(name)` (one column, the per-request plugin-route check),
 `PluginRepo::action_subscribers(hook)` (enabled rows whose manifest `hooks` lists the
 hook, filtered in SQL) and `PluginKvRepo::delete_all(plugin, limit)` (batched purge).
-The `comments` and `user_meta` tables already exist in `0001_init` but have no
-repository yet.
+The `user_meta` table already exists in `0001_init` but has no repository yet.
 
 **Query and batch API (M1c-1)**, on both backends and contract-tested
 (`ferrite-store-tests`). Limits are constants exported by `ferrite-store`
@@ -350,7 +382,7 @@ Notes:
 Same logical schema on both backends. Physical type mapping is in §5.
 Tables marked *not yet created* are planned; the milestone in the mark adds them in a
 new migration. Everything else exists in `0001_init` / `0002_search` / `0003_media_variants` /
-`0004_cluster` / `0005_auth` on both backends.
+`0004_cluster` / `0005_auth` / `0006_media_comments` on both backends.
 
 ### Content
 
@@ -364,9 +396,9 @@ new migration. Everything else exists in `0001_init` / `0002_search` / `0003_med
 | `terms` | `id` PK, `taxonomy` FK, `slug`, `name`, `description`, `parent_id`, `UNIQUE(taxonomy, slug)` | |
 | `term_links` | `item_id` FK, `term_id` FK, `position`, PK(`item_id`,`term_id`) | |
 | `menus` / `menu_items` | menu: `name` PK, `label`; item: `id`, `menu`, `parent_id`, `position`, `kind` (`item`/`term`/`url`), `target_id`, `url`, `label` | |
-| `media` | `item_id` PK/FK → `content_items` (type `media`), `artifact_hash` FK, `mime`, `bytes`, `width`, `height`, `alt`, `original_name`, `variants` (json: name → hash, w, h, mime) | |
+| `media` | `item_id` PK/FK → `content_items` (type `media`), `artifact_hash` FK, `mime`, `bytes`, `width`, `height`, `alt`, `original_name`, `variants` (json: name → hash, w, h, mime), `sanitized` boolean not null default false (since `0006_media_comments`; SQLite `INTEGER CHECK (sanitized IN (0, 1))`) | `sanitized`: the stored bytes are the SVG sanitiser's output, so the file may be served inline (M2a-2b P7); the `0006` down drops it (lossy) |
 | `media_variants` | `hash`, `item_id` FK → `media` (`ON DELETE CASCADE`), `name`, PK(`item_id`,`name`), index on `hash` | Added by `0003_media_variants` (ruling R29). Derived from `media.variants` (one row per entry whose value is an object with a string `hash`), backfilled by the migration and kept in sync by `MediaRepo::insert`/`update` in the same transaction; `media.variants` stays the source of truth |
-| `comments` | `id`, `item_id`, `parent_id`, `user_id` null, `author_name`, `author_email`, `author_url`, `body`, `status`, `ip_hash`, `created_at` | |
+| `comments` | `id`, `item_id` → `content_items` `CASCADE`, `parent_id` → `comments` `CASCADE`, `user_id` null → `users` `SET NULL`, `author_name`, `author_email` (ASCII-lowercased), `author_url` (`""` = none), `body` (plain text), `status` (`pending`/`approved`/`spam`/`trash`, no CHECK, P2), `ip_hash` null (keyed), `created_at`; indexes `comments_item_created_idx (item_id, created_at)` (`0001`) and since `0006`: `comments_status_created_idx (status, created_at, id)` and `comments_created_idx (created_at, id)` (moderation queue), `comments_item_status_idx (item_id, status, created_at, id)` (an item's approved thread), `comments_author_email_idx (author_email, status)` and `comments_user_idx (user_id, status)` (`known` checks, F19; also the users FK on delete) | `CommentRepo` since M2a-2b |
 | `redirects` | `id`, `source_path` UNIQUE, `target`, `code` (301/302/307/308/410), `hits`, `origin` (`manual`/`import`/`slug-change`), `created_at`, `last_hit_at` | Auto-created on slug change of a published item |
 
 ### Users & auth
@@ -379,6 +411,7 @@ new migration. Everything else exists in `0001_init` / `0002_search` / `0003_med
 | `api_tokens` *(since `0005_auth`)* | `id` PK (`api_tokens_pkey`), `user_id` → `users` `ON DELETE CASCADE` (`api_tokens_user_id_fk`), `name`, `token_hash` UNIQUE (`api_tokens_hash_uq`, SHA-256 hex), `scopes` json array, `created_at`, `last_used_at` null, `expires_at` null; index `api_tokens_user_idx` | |
 | `passkeys` *(not yet created: deferred past M2, P3)* | `id`, `user_id`, `credential` json, `created_at`, `last_used_at` | webauthn-rs has only a pre-release |
 | `rate_limits` *(since `0005_auth`)* | `bucket` PK (`rate_limits_pkey`), `window_start`, `count` int default 0; index `rate_limits_window_idx` | Fixed-window counters on the database clock; works across nodes (P5) |
+| `idempotency_keys` *(since `0006_media_comments`)* | `user_id` → `users` `ON DELETE CASCADE` (`idempotency_keys_user_id_fk`), `key_hash` (SHA-256 hex of the key), `method`, `path`, `status_code` int null (NULL = pending), `response` json null (Postgres `jsonb`, SQLite `TEXT CHECK (json_valid)`, F4), `created_at`; PK (`user_id`, `key_hash`) `idempotency_keys_pkey`; CHECK both-or-neither of `status_code` / `response`; index `idempotency_keys_created_idx (created_at)` | `Idempotency-Key` on `POST /media` (M2a-2b P10); pruned after 24 h by `sessions.prune`; the `0006` down drops it (lossy) |
 | `audit_log` *(since `0005_auth`)* | `id` PK (`audit_log_pkey`), `at`, `actor_id` null → `users` `ON DELETE SET NULL` (`audit_log_actor_id_fk`), `action`, `target_kind`, `target_id` null, `details` json object default `{}`, `node` null; indexes `audit_log_at_idx (at, id)`, `audit_log_actor_idx (actor_id)` (user delete, R5) | Admin actions, plugin installs, capability grants; no secrets (P22) |
 
 ### Site, plugins, themes, artifacts
@@ -398,7 +431,7 @@ new migration. Everything else exists in `0001_init` / `0002_search` / `0003_med
 |---|---|---|
 | `nodes` *(since `0004_cluster`)* | `id` PK (`nodes_pkey`), `name`, `version`, `schema_version` bigint, `started_at`, `heartbeat_at` (index `nodes_heartbeat_idx`), `meta` json object default `{}` | `NodeRepo`: `register`/`heartbeat`/`deregister`/`list` (≤ 1000, by `started_at`, `id`)/`db_now`/`prune`, times from the database clock. Stale after 3× heartbeat interval |
 | `events` | `seq` PK (autoincrement / bigserial), `kind`, `keys` json, `origin_node`, `created_at` | Transactional outbox for invalidation; pruned after 24 h by `events.prune`, except the newest row (R9). On Postgres `append` notifies `ferrite_events[_<schema>]` in the same statement (P2) |
-| `jobs` *(since `0004_cluster`)* | `id` PK (`jobs_pkey`), `kind`, `payload` json (an object), `unique_key` null (`jobs_unique_key_uq`, NULLs distinct), `run_at`, `priority` int default 0, `status` (`queued`/`running`/`done`/`dead`, CHECK; no `failed`, P8), `attempts` int default 0, `max_attempts` int default 5 (≥ 1), `locked_by` (node id text), `locked_until`, `last_error` (≤ 1024 bytes), `created_at`, `finished_at`; indexes `jobs_finished_idx (finished_at)`, `jobs_lease_idx (locked_until) WHERE status = 'running'` (expired leases: reaper, SQLite pre-check), and for due jobs Postgres `jobs_claim_idx (priority DESC, run_at, id) WHERE status IN ('queued','running')` (the claim's ORDER BY, scanned up to LIMIT; R1) / SQLite `jobs_due_idx (run_at) WHERE status = 'queued'` (SQLite's planner combines due + lease as a MULTI-INDEX OR and sorts the due rows; it does not use an ORDER BY index after ANALYZE) | `JobRepo`: claim by kind with lease (Postgres `FOR UPDATE SKIP LOCKED` in a `MATERIALIZED` CTE; SQLite on the single writer, reader-pool `EXISTS` pre-check), expired lease at `max_attempts` → `dead` (P7), lease-holder writes conditional on `(id, node, attempts)` (P6); a counted `release` of the final attempt goes `dead` ("released after final attempt"). See [04](04-cluster.md#job-queue) |
+| `jobs` *(since `0004_cluster`)* | `id` PK (`jobs_pkey`), `kind`, `payload` json (an object), `unique_key` null (`jobs_unique_key_uq`, NULLs distinct), `run_at`, `priority` int default 0, `status` (`queued`/`running`/`done`/`dead`, CHECK; no `failed`, P8), `attempts` int default 0, `max_attempts` int default 5 (≥ 1), `locked_by` (node id text), `locked_until`, `last_error` (≤ 1024 bytes), `created_at`, `finished_at`; indexes `jobs_finished_idx (finished_at)`, `jobs_lease_idx (locked_until) WHERE status = 'running'` (expired leases: reaper, SQLite pre-check), and for due jobs Postgres `jobs_claim_idx (priority DESC, run_at, id) WHERE status IN ('queued','running')` (the claim's ORDER BY, scanned up to LIMIT; R1) / SQLite `jobs_due_idx (run_at) WHERE status = 'queued'` (SQLite's planner combines due + lease as a MULTI-INDEX OR and sorts the due rows; it does not use an ORDER BY index after ANALYZE; since `0006` the SQLite claim statements name these indexes with `INDEXED BY`), and since `0006_media_comments` `jobs_status_created_idx (status, created_at, id)` and `jobs_created_idx (created_at, id)` (the admin jobs list by status or all, F26) | `JobRepo`: claim by kind with lease (Postgres `FOR UPDATE SKIP LOCKED` in a `MATERIALIZED` CTE; SQLite on the single writer, reader-pool `EXISTS` pre-check), expired lease at `max_attempts` → `dead` (P7), lease-holder writes conditional on `(id, node, attempts)` (P6); a counted `release` of the final attempt goes `dead` ("released after final attempt"). See [04](04-cluster.md#job-queue) |
 | `schema_meta` | `key` PK, `value` | `min_binary_version`, `created_by_version`, `site_id` |
 
 ### Search
@@ -500,6 +533,10 @@ crates/ferrite-store-sqlite/migrations/
     0003_media_variants.down.sql    # drops the derived table; not lossy
     0004_cluster.up.sql             # M1.5, phase expand, lossy-down: jobs + nodes (P27)
     0004_cluster.down.sql
+    0005_auth.up.sql                # M2a-1, phase expand, lossy-down: sessions, tokens, audit
+    0005_auth.down.sql
+    0006_media_comments.up.sql      # M2a-2b, phase expand, lossy-down: idempotency keys,
+    0006_media_comments.down.sql    #   media.sanitized; comment and job indexes (P2)
 crates/ferrite-store-postgres/migrations/
     0001_init.up.sql
     0001_init.down.sql
@@ -509,6 +546,10 @@ crates/ferrite-store-postgres/migrations/
     0003_media_variants.down.sql
     0004_cluster.up.sql
     0004_cluster.down.sql
+    0005_auth.up.sql
+    0005_auth.down.sql
+    0006_media_comments.up.sql
+    0006_media_comments.down.sql
 ```
 
 - sqlx reversible migrations, embedded with `sqlx::migrate!()`; sqlx's

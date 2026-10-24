@@ -66,6 +66,7 @@ pub async fn missing_rows_update_not_found_delete_ok(db: &TestDb) {
                 alt: String::new(),
                 original_name: "b.png".into(),
                 variants: serde_json::json!({}),
+                sanitized: false,
             })
             .await,
         "media.update",

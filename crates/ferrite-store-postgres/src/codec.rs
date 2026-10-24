@@ -2,10 +2,10 @@
 
 use chrono::{DateTime, Utc};
 use ferrite_domain::{
-    ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, ContentId, ContentItem,
-    ContentType, Event, InstalledPlugin, InstalledTheme, Job, JobId, Media, MenuItem, MenuItemId,
-    Node, NodeId, OptionEntry, Redirect, RedirectId, Revision, RevisionId, Secret, Session,
-    Taxonomy, Term, TermId, User, UserId,
+    ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, Comment, CommentId,
+    ContentId, ContentItem, ContentType, Event, InstalledPlugin, InstalledTheme, Job, JobId, Media,
+    MenuItem, MenuItemId, Node, NodeId, OptionEntry, Redirect, RedirectId, Revision, RevisionId,
+    Secret, Session, Taxonomy, Term, TermId, User, UserId,
 };
 use ferrite_store::StoreError;
 use sqlx::{Row, postgres::PgRow, types::Json};
@@ -228,7 +228,7 @@ pub(crate) fn artifact(row: &PgRow) -> Result<Artifact, StoreError> {
 }
 
 pub(crate) const MEDIA_COLUMNS: &str =
-    "item_id, artifact_hash, mime, bytes, width, height, alt, original_name, variants";
+    "item_id, artifact_hash, mime, bytes, width, height, alt, original_name, variants, sanitized";
 
 /// Maps a row selected with [`MEDIA_COLUMNS`].
 pub(crate) fn media(row: &PgRow) -> Result<Media, StoreError> {
@@ -245,6 +245,7 @@ pub(crate) fn media(row: &PgRow) -> Result<Media, StoreError> {
         alt: row.try_get("alt").map_err(map_db_err)?,
         original_name: row.try_get("original_name").map_err(map_db_err)?,
         variants: variants.0,
+        sanitized: row.try_get("sanitized").map_err(map_db_err)?,
     })
 }
 
@@ -442,5 +443,33 @@ pub(crate) fn audit_entry(row: &PgRow) -> Result<AuditEntry, StoreError> {
             .map(|n| n.parse::<NodeId>())
             .transpose()
             .map_err(|e| StoreError::Database(format!("corrupt audit node: {e}")))?,
+    })
+}
+
+pub(crate) const COMMENT_COLUMNS: &str = "id, item_id, parent_id, user_id, author_name, \
+     author_email, author_url, body, status, ip_hash, created_at";
+
+/// Maps a row selected with [`COMMENT_COLUMNS`].
+pub(crate) fn comment(row: &PgRow) -> Result<Comment, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let item: Uuid = row.try_get("item_id").map_err(map_db_err)?;
+    let parent: Option<Uuid> = row.try_get("parent_id").map_err(map_db_err)?;
+    let user: Option<Uuid> = row.try_get("user_id").map_err(map_db_err)?;
+    let status: String = row.try_get("status").map_err(map_db_err)?;
+    let created: DateTime<Utc> = row.try_get("created_at").map_err(map_db_err)?;
+    Ok(Comment {
+        id: CommentId::from_uuid(id),
+        item_id: ContentId::from_uuid(item),
+        parent_id: parent.map(CommentId::from_uuid),
+        user_id: user.map(UserId::from_uuid),
+        author_name: row.try_get("author_name").map_err(map_db_err)?,
+        author_email: row.try_get("author_email").map_err(map_db_err)?,
+        author_url: row.try_get("author_url").map_err(map_db_err)?,
+        body: row.try_get("body").map_err(map_db_err)?,
+        status: status
+            .parse()
+            .map_err(|e| StoreError::Database(format!("corrupt comment status: {e}")))?,
+        ip_hash: row.try_get("ip_hash").map_err(map_db_err)?,
+        created_at: created.into(),
     })
 }

@@ -406,6 +406,7 @@ async fn sample_image(
         alt: demo::IMAGE_ALT.into(),
         original_name: demo::IMAGE_NAME.into(),
         variants: Value::Object(variants),
+        sanitized: false,
     };
     // The media row and its artifacts in one transaction with `post:<media id>` (R11).
     let tx = store.begin().await?;

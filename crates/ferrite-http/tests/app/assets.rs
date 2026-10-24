@@ -105,6 +105,7 @@ pub async fn upload(
             alt: String::new(),
             original_name: name.into(),
             variants: vjson.into(),
+            sanitized: false,
         })
         .await
         .unwrap();

@@ -5,9 +5,10 @@ use std::{
 
 use async_trait::async_trait;
 use ferrite_domain::{
-    ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, ContentId, ContentItem,
-    ContentQuery, ContentType, Event, InstalledPlugin, InstalledTheme, Job, JobId, JobLease,
-    JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob, NewNode, NewUser, Node, NodeId,
+    ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, Comment, CommentId,
+    CommentQuery, CommentStatus, ContentId, ContentItem, ContentQuery, ContentType, Event,
+    IdemBegin, IdempotencyKey, InstalledPlugin, InstalledTheme, Job, JobId, JobLease, JobStatus,
+    Media, Menu, NewAudit, NewContent, NewEvent, NewJob, NewNode, NewUser, Node, NodeId,
     OptionEntry, Page, RateHit, Redirect, RedirectId, Revision, RevisionId, SearchQuery, Secret,
     Session, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
@@ -139,6 +140,8 @@ pub trait Repos: Send + Sync {
     fn api_tokens(&self) -> &dyn ApiTokenRepo;
     fn rate_limits(&self) -> &dyn RateLimitRepo;
     fn audit(&self) -> &dyn AuditRepo;
+    fn comments(&self) -> &dyn CommentRepo;
+    fn idempotency(&self) -> &dyn IdempotencyRepo;
 }
 
 #[async_trait]
@@ -412,11 +415,13 @@ pub trait ArtifactRepo: Send + Sync {
 
 #[async_trait]
 pub trait MediaRepo: Send + Sync {
-    /// Inserts media metadata.
+    /// Inserts media metadata (`sanitized` included).
     async fn insert(&self, media: &Media) -> Result<(), StoreError>;
     /// Fetches media metadata by content id.
     async fn get(&self, id: ContentId) -> Result<Option<Media>, StoreError>;
-    /// Updates media metadata; missing metadata is `NotFound`.
+    /// Updates media metadata (`mime`, `bytes`, `width`, `height`, `alt`, `variants`,
+    /// `sanitized`; the artifact and `original_name` stay); missing metadata is
+    /// `NotFound`.
     async fn update(&self, media: &Media) -> Result<(), StoreError>;
     /// Fetches up to [`MAX_ID_FILTER`](crate::MAX_ID_FILTER) media rows by content id in
     /// one query, returned in the order of `ids`; missing ids are skipped and a repeated
@@ -826,4 +831,88 @@ pub trait AuditRepo: Send + Sync {
     /// Lists rows newest first (`at DESC, id DESC`) with cursor pagination (tag
     /// [`AUDIT_CURSOR_TAG`](crate::AUDIT_CURSOR_TAG)); `limit` 1..=200.
     async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<AuditEntry>, StoreError>;
+}
+
+/// Comments (M2a-2b P11). Core validates lengths, URLs, depth and the parent's status;
+/// the store refuses NUL in every text (`Invalid`) and folds `author_email` with
+/// [`email_key`](crate::email_key) on insert and lookup. `status` has no CHECK (P2):
+/// rows decode only with a known [`CommentStatus`].
+#[async_trait]
+pub trait CommentRepo: Send + Sync {
+    /// Inserts a comment. An unknown item, parent or user is `ForeignKey`; a taken id
+    /// `UniqueViolation { constraint: "comments_pkey" }`.
+    async fn insert(&self, comment: &Comment) -> Result<(), StoreError>;
+    /// Fetches a comment by id.
+    async fn get(&self, id: CommentId) -> Result<Option<Comment>, StoreError>;
+    /// Sets the status in one `UPDATE … RETURNING` and returns the new row; `None` when
+    /// the comment is missing.
+    async fn set_status(
+        &self,
+        id: CommentId,
+        status: CommentStatus,
+    ) -> Result<Option<Comment>, StoreError>;
+    /// Deletes a comment and (cascade) its replies; `false` when it was missing.
+    async fn delete(&self, id: CommentId) -> Result<bool, StoreError>;
+    /// Lists comments newest first (`created_at DESC, id DESC`), filtered by status
+    /// and/or item, with cursor pagination (tag
+    /// [`COMMENT_CURSOR_TAG`](crate::COMMENT_CURSOR_TAG)); `limit` 1..=200.
+    async fn list(&self, query: &CommentQuery) -> Result<Page<Comment>, StoreError>;
+    /// Up to `limit` (1..=[`MAX_ITEM_COMMENTS`](crate::MAX_ITEM_COMMENTS)) approved
+    /// comments of `item`, oldest first (`created_at, id`).
+    async fn approved_for_item(
+        &self,
+        item: ContentId,
+        limit: u32,
+    ) -> Result<Vec<Comment>, StoreError>;
+    /// Whether an anonymous commenter has an approved comment (R2 `known`, F19): an
+    /// approved row without `user_id` whose `author_email` equals `email_key(email)` and
+    /// whose `author_name` equals `name` exactly (callers trim it).
+    async fn has_approved_from(&self, email: &str, name: &str) -> Result<bool, StoreError>;
+    /// Whether `user` has an approved comment (R2 `known` for signed-in commenters, F19).
+    async fn has_approved_from_user(&self, user: UserId) -> Result<bool, StoreError>;
+}
+
+/// `Idempotency-Key` records (M2a-2b P10, F5, F6), one per (user, key hash). Every time
+/// the store picks (`created_at`, the staleness check) is the database clock (Postgres
+/// `now()`, which inside a `Tx` is the transaction's start; SQLite the process clock).
+/// Call it outside a `Tx`.
+#[async_trait]
+pub trait IdempotencyRepo: Send + Sync {
+    /// Claims `key` with one insert-if-absent. On conflict it reads the row: another
+    /// `method` or `path` is [`IdemBegin::Mismatch`]; a finished row
+    /// [`IdemBegin::Replay`]; a pending row younger than `stale_after`
+    /// [`IdemBegin::InProgress`]; an older pending row is taken over by one conditional
+    /// `UPDATE` (new `created_at`, matched on the `created_at` read), so concurrent
+    /// takers on any node get `Started` at most once (a loser re-reads). Invalid:
+    /// `key_hash` not 64 lowercase hex, NUL in `method` or `path`, `stale_after` zero or
+    /// over a day.
+    async fn begin(
+        &self,
+        key: &IdempotencyKey,
+        stale_after: Duration,
+    ) -> Result<IdemBegin, StoreError>;
+    /// Records the outcome on the pending row still carrying `token`; `false` when the
+    /// row is gone, finished or taken over. Invalid: `status` outside 100..=599,
+    /// `response` with NUL or over
+    /// [`MAX_IDEMPOTENCY_RESPONSE`](crate::MAX_IDEMPOTENCY_RESPONSE) bytes as JSON.
+    async fn finish(
+        &self,
+        user: UserId,
+        key_hash: &str,
+        token: Timestamp,
+        status: u16,
+        response: &serde_json::Value,
+    ) -> Result<bool, StoreError>;
+    /// Deletes the pending row still carrying `token` (a failed request frees its key);
+    /// a finished or taken-over row stays. `true` when a row was deleted.
+    async fn release(
+        &self,
+        user: UserId,
+        key_hash: &str,
+        token: Timestamp,
+    ) -> Result<bool, StoreError>;
+    /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) rows
+    /// created before `created_before`, pending or finished; returns the count. Callers
+    /// loop until a batch comes back short (R5).
+    async fn prune(&self, created_before: Timestamp, limit: u32) -> Result<u64, StoreError>;
 }

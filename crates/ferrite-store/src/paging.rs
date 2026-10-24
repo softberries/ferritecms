@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use ferrite_domain::{
-    ContentId, ContentItem, ContentOrder, ContentQuery, Cursor, Job, MAX_PAGE, NewAudit, NewJob,
-    NewNode, RateHit, Timestamp,
+    Comment, ContentId, ContentItem, ContentOrder, ContentQuery, Cursor, IdempotencyKey, Job,
+    MAX_PAGE, NewAudit, NewJob, NewNode, RateHit, Timestamp,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -309,15 +309,124 @@ pub fn encode_audit_cursor(at: Timestamp, id: Uuid) -> String {
 
 /// Decodes a cursor made by [`encode_audit_cursor`] into (`at` micros, `id`).
 pub fn audit_cursor(cursor: &str) -> Result<(i64, Uuid), StoreError> {
-    match Cursor::decode(cursor, AUDIT_CURSOR_TAG)? {
+    micros_cursor(AUDIT_CURSOR_TAG, cursor)
+}
+
+/// Cursor tag of the comment listing (see [`encode_comment_cursor`]; `c:` belongs to
+/// content cursors, F4).
+pub const COMMENT_CURSOR_TAG: &str = "cm:created";
+
+/// Encodes the comment-listing cursor pointing just after the row (`created_at`, `id`).
+pub fn encode_comment_cursor(created_at: Timestamp, id: Uuid) -> String {
+    Cursor::encode(COMMENT_CURSOR_TAG, &json!(created_at.as_micros()), id)
+}
+
+/// Decodes a cursor made by [`encode_comment_cursor`] into (`created_at` micros, `id`).
+pub fn comment_cursor(cursor: &str) -> Result<(i64, Uuid), StoreError> {
+    micros_cursor(COMMENT_CURSOR_TAG, cursor)
+}
+
+/// Decodes a `tag` cursor whose sort key is a microsecond timestamp.
+fn micros_cursor(tag: &str, cursor: &str) -> Result<(i64, Uuid), StoreError> {
+    let bad = || StoreError::Invalid("cursor does not match the query order".into());
+    match Cursor::decode(cursor, tag)? {
         (Value::Number(n), id) => n
             .as_i64()
+            .filter(|at| Timestamp::from_micros(*at).is_ok())
             .map(|at| (at, id))
-            .ok_or_else(|| StoreError::Invalid("cursor does not match the query order".into())),
-        _ => Err(StoreError::Invalid(
-            "cursor does not match the query order".into(),
-        )),
+            .ok_or_else(bad),
+        _ => Err(bad()),
     }
+}
+
+/// Most approved comments `CommentRepo::approved_for_item` returns (M2a-2b: at most 500
+/// shown per item).
+pub const MAX_ITEM_COMMENTS: u32 = 500;
+
+/// Validates an `approved_for_item` limit: 1..=[`MAX_ITEM_COMMENTS`].
+pub fn check_item_comments_limit(limit: u32) -> Result<i64, StoreError> {
+    if limit == 0 || limit > MAX_ITEM_COMMENTS {
+        return Err(StoreError::Invalid(format!(
+            "limit must be between 1 and {MAX_ITEM_COMMENTS}"
+        )));
+    }
+    Ok(i64::from(limit))
+}
+
+/// Validates a comment before any SQL: no NUL in any text.
+pub fn check_comment(comment: &Comment) -> Result<(), StoreError> {
+    validate_text("comment author_name", &comment.author_name)?;
+    validate_text("comment author_email", &comment.author_email)?;
+    validate_text("comment author_url", &comment.author_url)?;
+    validate_text("comment body", &comment.body)?;
+    if let Some(ip) = &comment.ip_hash {
+        validate_text("comment ip_hash", ip)?;
+    }
+    Ok(())
+}
+
+/// Largest stored idempotent response, in bytes of its JSON text (M2a-2b: 64 KiB).
+pub const MAX_IDEMPOTENCY_RESPONSE: usize = 64 * 1024;
+
+/// Longest `stale_after` `IdempotencyRepo::begin` accepts.
+const MAX_IDEMPOTENCY_STALE: Duration = Duration::from_secs(24 * 3600);
+
+/// Validates an idempotency key hash: 64 lowercase hex characters.
+pub fn check_key_hash(key_hash: &str) -> Result<(), StoreError> {
+    let ok = key_hash.len() == 64
+        && key_hash
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    if ok {
+        Ok(())
+    } else {
+        Err(StoreError::Invalid(
+            "idempotency key_hash must be 64 lowercase hex characters".into(),
+        ))
+    }
+}
+
+/// Validates `IdempotencyRepo::begin` input and returns `stale_after` in microseconds.
+pub fn check_idempotency(key: &IdempotencyKey, stale_after: Duration) -> Result<i64, StoreError> {
+    check_key_hash(&key.key_hash)?;
+    validate_text("idempotency method", &key.method)?;
+    validate_text("idempotency path", &key.path)?;
+    if stale_after.is_zero() || stale_after > MAX_IDEMPOTENCY_STALE {
+        return Err(StoreError::Invalid(
+            "idempotency stale_after must be more than zero and at most one day".into(),
+        ));
+    }
+    i64::try_from(stale_after.as_micros())
+        .map_err(|_| StoreError::Invalid("idempotency stale_after out of range".into()))
+}
+
+/// Validates an `IdempotencyRepo::finish` outcome and returns the response as JSON text
+/// (at most [`MAX_IDEMPOTENCY_RESPONSE`] bytes, no NUL) and the status as `i32`.
+pub fn check_idempotency_outcome(
+    key_hash: &str,
+    status: u16,
+    response: &Value,
+) -> Result<(String, i32), StoreError> {
+    check_key_hash(key_hash)?;
+    if !(100..=599).contains(&status) {
+        return Err(StoreError::Invalid(
+            "idempotency status must be between 100 and 599".into(),
+        ));
+    }
+    validate_json(response)?;
+    let text = serde_json::to_string(response).map_err(|e| StoreError::Invalid(e.to_string()))?;
+    if text.len() > MAX_IDEMPOTENCY_RESPONSE {
+        return Err(StoreError::Invalid(format!(
+            "idempotency response is larger than {MAX_IDEMPOTENCY_RESPONSE} bytes"
+        )));
+    }
+    Ok((text, i32::from(status)))
+}
+
+/// Decodes a stored idempotency status code.
+pub fn idempotency_status(code: i64) -> Result<u16, StoreError> {
+    u16::try_from(code)
+        .map_err(|_| StoreError::Database(format!("corrupt idempotency status {code}")))
 }
 
 /// Most sessions or API tokens one `list_for_user` returns, and the largest
@@ -571,6 +680,38 @@ mod tests {
             0
         );
         assert!(check_job_duration("delay", MAX_JOB_DURATION * 2, false).is_err());
+    }
+
+    #[test]
+    fn comment_cursor_and_idempotency_checks() {
+        let id = Uuid::now_v7();
+        let at = Timestamp::from_micros(1_000).unwrap();
+        let c = encode_comment_cursor(at, id);
+        assert_eq!(comment_cursor(&c).unwrap(), (1_000, id));
+        assert!(audit_cursor(&c).is_err());
+        assert!(comment_cursor(&encode_audit_cursor(at, id)).is_err());
+        assert!(comment_cursor(&Cursor::encode(COMMENT_CURSOR_TAG, &json!(i64::MIN), id)).is_err());
+        assert!(check_item_comments_limit(0).is_err());
+        assert_eq!(check_item_comments_limit(500).unwrap(), 500);
+        assert!(check_item_comments_limit(501).is_err());
+
+        let hash = "a".repeat(64);
+        check_key_hash(&hash).unwrap();
+        for bad in [
+            "A".repeat(64),
+            "a".repeat(63),
+            "g".repeat(64),
+            String::new(),
+        ] {
+            assert!(check_key_hash(&bad).is_err(), "{bad}");
+        }
+        let fits = json!("x".repeat(MAX_IDEMPOTENCY_RESPONSE - 2));
+        assert!(check_idempotency_outcome(&hash, 201, &fits).is_ok());
+        let over = json!("x".repeat(MAX_IDEMPOTENCY_RESPONSE - 1));
+        assert!(check_idempotency_outcome(&hash, 201, &over).is_err());
+        assert!(check_idempotency_outcome(&hash, 99, &json!({})).is_err());
+        assert!(check_idempotency_outcome(&hash, 600, &json!({})).is_err());
+        assert!(check_idempotency_outcome(&hash, 200, &json!({"a": "\0"})).is_err());
     }
 
     #[test]

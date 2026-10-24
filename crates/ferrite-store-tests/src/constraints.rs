@@ -170,6 +170,7 @@ pub async fn unique_violations_name_the_constraint(db: &TestDb) {
         alt: String::new(),
         original_name: "a.png".into(),
         variants: json!({}),
+        sanitized: false,
     };
     r.media().insert(&media).await.unwrap();
     assert_unique(r.media().insert(&media).await, "media_pkey");

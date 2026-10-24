@@ -8,12 +8,14 @@
 
 pub mod auth;
 pub mod batch;
+pub mod comment;
 pub mod constraints;
 pub mod content;
 pub mod counting;
 pub mod event;
 pub mod fixtures;
 pub mod harness;
+pub mod idempotency;
 pub mod job;
 pub mod lock;
 pub mod menu;

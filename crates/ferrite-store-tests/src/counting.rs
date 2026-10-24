@@ -18,11 +18,11 @@ use ferrite_domain::{
     Page, SearchQuery, Secret, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 use ferrite_store::{
-    ApiTokenRepo, ArtifactRepo, AuditRepo, Backend, Channel, ContentRepo, ContentTypeRepo,
-    EventRepo, JobRepo, LockGuard, MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo,
-    OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos,
-    RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription,
-    TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    ApiTokenRepo, ArtifactRepo, AuditRepo, Backend, Channel, CommentRepo, ContentRepo,
+    ContentTypeRepo, EventRepo, IdempotencyRepo, JobRepo, LockGuard, MediaRepo, MenuRepo, MetaRepo,
+    MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
+    RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo,
+    Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use serde_json::Value;
 
@@ -151,6 +151,12 @@ impl Repos for CountingRepos {
     }
     fn audit(&self) -> &dyn AuditRepo {
         self.inner.read().audit()
+    }
+    fn comments(&self) -> &dyn CommentRepo {
+        self.inner.read().comments()
+    }
+    fn idempotency(&self) -> &dyn IdempotencyRepo {
+        self.inner.read().idempotency()
     }
 }
 

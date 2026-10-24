@@ -46,6 +46,10 @@ pub struct Media {
     pub original_name: String,
     /// name -> {hash, w, h, mime} (mime is needed for serving)
     pub variants: Value,
+    /// The stored bytes are the output of the SVG sanitiser (M2a-2b P7): only such an
+    /// SVG is ever served inline. `false` for every row written before `0006`.
+    #[serde(default)]
+    pub sanitized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

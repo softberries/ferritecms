@@ -521,6 +521,7 @@ pub async fn publishing_a_referenced_draft_is_a_dependency(db: &TestDb) {
             alt: String::new(),
             original_name: "pic.png".into(),
             variants: json!({}),
+            sanitized: false,
         })
         .await
         .unwrap();

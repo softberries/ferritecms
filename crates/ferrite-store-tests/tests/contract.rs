@@ -1,8 +1,9 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
-    auth::*, backend_tests, backend_tests_spawning, batch::*, constraints::*, content::*, event::*,
-    job::*, lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*, notify::*,
-    plugin::*, plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*,
+    auth::*, backend_tests, backend_tests_spawning, batch::*, comment::*, constraints::*,
+    content::*, event::*, idempotency::*, job::*, lock::*, menu::*, migration_dirs,
+    migration_files, migrations::*, node::*, notify::*, plugin::*, plugin_failure::*, search::*,
+    semantics::*, site::*, taxonomy::*, tx::*, user::*,
 };
 
 backend_tests!(
@@ -12,6 +13,7 @@ backend_tests!(
     verify_detects_tampered_checksum,
     min_binary_survives_older_binary,
     status_reports_pending_directives,
+    migration_0006_roundtrip,
 );
 
 backend_tests!(
@@ -126,6 +128,7 @@ backend_tests!(
     media_find_by_artifact,
     media_variants_backfill,
     media_lookup_uses_indexes,
+    media_sanitized_roundtrip,
     plugins_upsert_list_enable,
     plugins_action_subscribers,
     plugin_kv_crud_and_usage,
@@ -207,6 +210,14 @@ backend_tests!(
     auth_text_binds_reject_nul,
 );
 
+backend_tests!(
+    comment_crud_and_status,
+    comment_list_filters_and_pages,
+    approved_for_item_is_oldest_first_and_capped,
+    has_approved_from_matches_exact_lowercase,
+    idempotency_prune_in_batches,
+);
+
 backend_tests_spawning!(
     lock_waits_then_busy,
     concurrent_writers,
@@ -219,6 +230,7 @@ backend_tests_spawning!(
     rate_limit_is_atomic_under_concurrency,
     totp_step_only_moves_forward,
     user_get_for_update_locks_the_row,
+    idempotency_begin_states,
 );
 
 #[test]
