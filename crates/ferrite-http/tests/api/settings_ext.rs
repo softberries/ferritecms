@@ -159,9 +159,13 @@ async fn theme_settings_change_shows_on_page(api: Api) -> Api {
     .await
     .assert_problem(422, "validation");
     assert_eq!(p["errors"][0]["field"], "accent_color", "{p}");
-    patch(&mut c, &api, BLOG_SETTINGS, json!({"nope": true}))
+    let p = patch(&mut c, &api, BLOG_SETTINGS, json!({"nope": true}))
         .await
         .assert_problem(422, "validation");
+    assert_eq!(
+        p["errors"][0]["field"], "nope",
+        "undeclared key named (M7): {p}"
+    );
     patch(&mut c, &api, BLOG_SETTINGS, json!(["accent_color"]))
         .await
         .assert_problem(400, "malformed-json");

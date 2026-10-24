@@ -177,7 +177,7 @@ appends an audit row (`plugin.install|enable|disable|delete|settings`,
 - **Settings**: `GET/PATCH /themes/{name}/settings` and `/plugins/{name}/settings` answer
   `{ schema, values }` (plugins also `secrets` and `invalid`, 05 §4c); `PATCH` takes an
   object of keys (`null` resets or deletes one), checks every entry first (an undeclared
-  key is `422 validation`; a bad value `422` with `errors[0].field` naming the key) and writes them in one
+  key or a bad value is `422 validation` with `errors[0].field` naming the key) and writes them in one
   `Tx` with `options.changed`. Secrets are write-only.
 
 **Token scopes (P6).** A scope is `<area>:<read|write>` for the areas `content`, `media`,

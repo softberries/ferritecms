@@ -299,9 +299,11 @@ async fn theme_settings_roundtrip_and_reset(db: &TestDb) {
         max_seq(store).await,
         audit_count(store).await,
     );
-    invalid(
+    // An undeclared key names itself as the field (final review M7).
+    invalid_key(
         svc.set_theme_settings(&admin, "blog", &schema, patch(json!({"nope": 1})))
             .await,
+        "nope",
     );
     invalid_key(
         svc.set_theme_settings(
@@ -522,9 +524,10 @@ async fn secrets_are_write_only_and_owner_scoped(db: &TestDb) {
     // Refusals write nothing: unknown key, bad value (the key is named, never the
     // value), unknown plugin.
     let before = (max_seq(store).await, audit_count(store).await);
-    invalid(
+    invalid_key(
         svc.set_plugin_settings(&admin, "seo", patch(json!({"nope": "x"})))
             .await,
+        "nope",
     );
     match svc
         .set_plugin_settings(&admin, "seo", patch(json!({"api_key": "", "limit": 1})))

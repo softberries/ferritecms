@@ -360,11 +360,12 @@ impl ExtensionAdmin {
     }
 }
 
-/// `Invalid` for a key `schema` does not declare; each non-null value validated.
+/// `InvalidKey` (the key as the field) for a key `schema` does not declare; each
+/// non-null value validated.
 fn check_patch(schema: &SettingsSchema, patch: &Map<String, Value>) -> Result<(), CoreError> {
     for (key, value) in patch {
         let Some(def) = schema.get(key) else {
-            return Err(CoreError::Invalid(format!("unknown setting {key:?}")));
+            return Err(CoreError::invalid_key(key, "unknown setting"));
         };
         if !value.is_null() {
             validate_value(def, value)?;
