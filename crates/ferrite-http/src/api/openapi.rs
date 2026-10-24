@@ -25,6 +25,7 @@ pub const SESSION_COOKIE: &str = "ferrite_session";
         (name = "auth", description = "Login, session, password and TOTP"),
         (name = "content", description = "Content items, their lifecycle and revisions"),
         (name = "media", description = "Media uploads and items"),
+        (name = "comments", description = "Comments: the public submit and moderation"),
         (name = "types", description = "Content types and their field schemas"),
         (name = "taxonomies", description = "Taxonomies and their terms"),
         (name = "menus", description = "Navigation menus"),

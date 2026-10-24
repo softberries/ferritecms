@@ -123,7 +123,7 @@ importer. The admin SPA that uses them is M2b.
 | Redirects | `GET/POST /redirects`, `GET/PATCH/DELETE /redirects/{id}`, `POST /redirects/import` (CSV), `GET /redirects/export` (CSV) | M2a-1 | `manage_redirects` (admins) + `redirects:read`/`redirects:write` |
 | Settings | `GET/PATCH /settings` (the allowlist `ferrite_core::settings::SETTINGS`) | M2a-1 | reads `settings:read`; writes `manage_settings` + `settings:write` |
 | Media | `POST /media` (multipart, streaming), `GET /media`, `GET/PATCH/DELETE /media/{id}` | M2a-2b | — |
-| Comments | `GET /comments`, `PATCH /comments/{id}` (moderate), public `POST /content/{type}/{id}/comments` (rate-limited, honeypot) | M2a-2b | — |
+| Comments | `GET /comments?status&item&limit&cursor`, `PATCH /comments/{id}` (`{ status }`), `DELETE /comments/{id}` (spam or trash only), public `POST /content/{type}/{id}/comments` (rate-limited, honeypot; see **Comments** below) | M2a-2b (built) | moderation `moderate_comments` + `comments:read`/`comments:write`; the submit: none, or a token with `comments:write` |
 | Themes | `GET /themes`, `POST /themes` (raw ustar bundle, `?activate=true`), `POST /themes/{name}/activate`, `GET/PATCH /themes/{name}/settings` (no delete, M2a-2 P30) | M2a-2a | reads `manage_themes` + `extensions:read` (`require_reader`); writes `manage_themes` + `extensions:write` |
 | Plugins | `GET /plugins`, `GET /plugins/{name}`, `POST /plugins/inspect` (multipart upload → permission report, nothing installed), `POST /plugins` (install with `approve` = the report's fingerprint), `POST /plugins/{name}/enable`, `POST /plugins/{name}/disable`, `DELETE /plugins/{name}` (`?purge=true`), `GET/PATCH /plugins/{name}/settings` | M2a-2a | reads `manage_plugins` + `extensions:read` (`require_reader`, so editors see no plugin list); writes `manage_plugins` + `extensions:write` |
 | Plugin metrics | `GET /plugins/{name}/metrics` | M2a-2b | — |
@@ -156,6 +156,39 @@ is checked first and nothing is written if any fails (`422 validation`, one `err
 entry per bad line, at most 100). `GET /redirects/export` writes the same format; a
 field starting with `=`, `+`, `-`, `@`, a tab or CR gets a leading `'`, so a spreadsheet
 does not run it as a formula (R20).
+
+**Comments (M2a-2b P11–P14, R2; F18–F22).** `CommentService` (`ferrite_core::comments`)
+holds the rules for both submit paths (this endpoint and the theme form `POST /_comment`).
+Only public `post` items take comments, while `comments.enabled` is on (default `true`);
+anything else is `404`. Text is plain and stored as typed: body 1..=10 000 characters
+(`\r\n` folded to `\n`, no control characters but `\n`/`\t`), name 1..=100, e-mail ≤ 254
+bytes (required for guests), URL empty or `http`/`https` with a host and no user info, ≤ 200
+characters (`javascript:` and the like are `422`, `errors[0].field = author_url`); output is
+escaped by core (`render_body`: `<p>` paragraphs, `<br>` line breaks, no links). Replies go
+to an approved comment of the same post, at most 5 deep (`parent_id`).
+- **Submit** (`POST /content/{type}/{id}/comments`, JSON ≤ 64 KiB): credentials are optional
+  (`MaybeAuthed`): a bearer token needs no origin but `comments:write` (`401` if bad); without
+  one the request must come from the site's origin (`403 csrf`), and a session cookie that
+  resolves needs its `X-CSRF-Token` (`403 csrf`) — a cookie that does not resolve is a guest.
+  With an account the name and e-mail are the account's. No client address is `503 busy`.
+  Per client address (IPv6 /64) 3 a minute and 20 an hour, counted in the database first, so
+  the limit holds across nodes (`429` + `Retry-After`). `201` = approved, `202` = held; a
+  filled honeypot (`website`) also answers `202` in the same shape under an id that is never
+  stored (F18). The response (`CommentPublicDto`) never carries the e-mail or address hash.
+- **Status**: a commenter whose role holds `moderate_comments` is approved. Under
+  `comments.moderation = "known"` (default, R2) a comment with at most two links (`http://`,
+  `https://`, `www.`) is approved when its author has an approved comment — a guest by the
+  same e-mail (ASCII case folded) and trimmed name on an approved *guest* comment, never when
+  the e-mail belongs to an account, and never through comments an account wrote before it was
+  deleted (`comments.by_account`); a signed-in commenter by an approved comment of the account
+  (F19). `"all"` holds every comment but a moderator's.
+- **Moderation**: `GET /comments` (newest first, filters `status`, `item`) answers
+  `CommentDto` with every column, the e-mail and the keyed `ip_hash` (HMAC under the site key,
+  label `ferrite:comment-ip:v1`) included. `PATCH` sets the status; `DELETE` removes a spam or
+  trashed comment and its replies (else `422`, field `status`). An approved insert and every
+  `PATCH`/`DELETE` write `invalidate([post:<item>])` in the same `Tx`. Not audited (P14).
+  Settings `comments.enabled` and `comments.moderation` show `null` until set (defaults are
+  core constants, F21).
 
 **Extensions (M2a-2a; rulings in [`m2a2.md`](../superpowers/rulings/m2a2.md)).** Handlers
 authorize through `ExtensionAdmin` (`authorize_plugins` / `authorize_themes`) before any of

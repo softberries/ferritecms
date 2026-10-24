@@ -12,6 +12,8 @@
 //! | `reading.front_page` | the UUID string of an existing, non-trashed page (checked by `set_many`), or null |
 //! | `reading.discourage_indexing` | boolean |
 //! | `permalink.post`, `permalink.page` | a permalink structure ([`PermalinkRules::from_options`]); the pair is checked against the registered types and taxonomies inside the write's transaction |
+//! | `comments.enabled` | boolean (default `true`, [`COMMENTS_ENABLED_DEFAULT`](crate::comments::COMMENTS_ENABLED_DEFAULT)) |
+//! | `comments.moderation` | `"all"` (every guest comment is held) or `"known"` (default, [`COMMENTS_MODERATION_DEFAULT`](crate::comments::COMMENTS_MODERATION_DEFAULT): a commenter with an approved comment posts directly) |
 //!
 //! A `null` value (or a missing key in the store) means the default.
 
@@ -22,6 +24,7 @@ use serde_json::{Map, Value};
 use crate::{
     Actor, CoreError,
     actor::{Area, require_read},
+    comments::{ENABLED_OPTION, MODERATION_CHOICES, MODERATION_OPTION},
     permalink::{PAGE_OPTION, POST_OPTION, PermalinkRules},
 };
 
@@ -52,6 +55,8 @@ pub enum SettingKind {
     FrontPage,
     /// A permalink structure.
     Permalink,
+    /// One of the listed strings.
+    Choice(&'static [&'static str]),
 }
 
 /// One allowlisted setting.
@@ -100,6 +105,14 @@ pub const SETTINGS: &[SettingDef] = &[
     SettingDef {
         key: PAGE_OPTION,
         kind: SettingKind::Permalink,
+    },
+    SettingDef {
+        key: ENABLED_OPTION,
+        kind: SettingKind::Bool,
+    },
+    SettingDef {
+        key: MODERATION_OPTION,
+        kind: SettingKind::Choice(&MODERATION_CHOICES),
     },
 ];
 
@@ -153,6 +166,11 @@ pub fn validate(key: &str, value: &Value) -> Result<(), CoreError> {
         SettingKind::FrontPage => {
             if !value.is_null() && front_page_id(value).is_none() {
                 return bad(format!("{key} must be the id of a page, or null"));
+            }
+        }
+        SettingKind::Choice(choices) => {
+            if !value.as_str().is_some_and(|s| choices.contains(&s)) {
+                return bad(format!("{key} must be one of {}", choices.join(", ")));
             }
         }
         SettingKind::Permalink => {
@@ -228,5 +246,23 @@ mod tests {
             let null_ok = d.kind == SettingKind::FrontPage;
             assert_eq!(validate(d.key, &json!(null)).is_ok(), null_ok, "{}", d.key);
         }
+    }
+
+    #[test]
+    fn comment_settings_validate() {
+        validate("comments.enabled", &json!(false)).unwrap();
+        for ok in ["all", "known"] {
+            validate("comments.moderation", &json!(ok)).unwrap();
+        }
+        for bad in [json!("none"), json!("ALL"), json!(1), json!(true)] {
+            match validate("comments.moderation", &bad) {
+                Err(CoreError::InvalidField { field, message }) => {
+                    assert_eq!(field, "comments.moderation");
+                    assert!(message.contains("all, known"), "{message}");
+                }
+                other => panic!("{bad}: {other:?}"),
+            }
+        }
+        assert!(validate("comments.enabled", &json!("yes")).is_err());
     }
 }

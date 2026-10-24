@@ -11,6 +11,7 @@
 //! depend on how many clusters share the machine; observed latencies are printed on
 //! stderr (`--nocapture`).
 
+mod comments;
 mod harness;
 mod invalidation;
 mod jobs;

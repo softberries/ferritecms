@@ -20,8 +20,8 @@ impl CommentRepo for SqliteRepos {
         check_comment(comment)?;
         run!(&self.writer, |e| sqlx::query(
             "INSERT INTO comments (id, item_id, parent_id, user_id, author_name, author_email, \
-             author_url, body, status, ip_hash, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             author_url, body, status, ip_hash, created_at, by_account) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(comment.id.as_uuid())
         .bind(comment.item_id.as_uuid())
@@ -34,6 +34,7 @@ impl CommentRepo for SqliteRepos {
         .bind(comment.status.as_str())
         .bind(comment.ip_hash.as_deref())
         .bind(comment.created_at.as_micros())
+        .bind(comment.user_id.is_some())
         .execute(e))?;
         Ok(())
     }
@@ -132,7 +133,7 @@ impl CommentRepo for SqliteRepos {
         validate_text("comment author_name", name)?;
         let found: bool = run!(&self.reader, |e| sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM comments WHERE author_email = ? AND status = ? \
-             AND author_name = ? AND user_id IS NULL)"
+             AND author_name = ? AND user_id IS NULL AND by_account = 0)"
         )
         .bind(email_key(email))
         .bind(CommentStatus::Approved.as_str())

@@ -99,6 +99,8 @@ pub async fn settings_allowlist_and_validation(db: &TestDb) {
             "reading.discourage_indexing",
             "permalink.post",
             "permalink.page",
+            "comments.enabled",
+            "comments.moderation",
         ]
     );
 

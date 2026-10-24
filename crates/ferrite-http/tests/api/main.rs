@@ -5,6 +5,7 @@
 mod harness;
 
 mod auth;
+mod comments;
 mod content;
 mod foundation;
 mod idempotency;

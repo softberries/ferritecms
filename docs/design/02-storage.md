@@ -161,7 +161,8 @@ M2a-2b added (migration `0006_media_comments`, contract-tested on both backends)
   `cm:created` = `COMMENT_CURSOR_TAG`; only the given filters are in the SQL, so each
   shape has its index), `approved_for_item(item, limit ≤ MAX_ITEM_COMMENTS = 500)` oldest
   first (`created_at, id`), and the R2 `known` checks (F19): `has_approved_from(email,
-  name)` (an approved anonymous row, `user_id IS NULL`, e-mail by `email_key`, name exact)
+  name)` (an approved anonymous row, `user_id IS NULL` and not `by_account`, e-mail by
+  `email_key`, name exact)
   and `has_approved_from_user(user)`. No CHECK on `status` (P2); core validates.
 - **`IdempotencyRepo`** (`idempotency()`, P10, F5): `begin(&IdempotencyKey { user,
   key_hash, method, path }, stale_after) -> IdemBegin` — one insert-if-absent; on conflict
@@ -398,7 +399,7 @@ new migration. Everything else exists in `0001_init` / `0002_search` / `0003_med
 | `menus` / `menu_items` | menu: `name` PK, `label`; item: `id`, `menu`, `parent_id`, `position`, `kind` (`item`/`term`/`url`), `target_id`, `url`, `label` | |
 | `media` | `item_id` PK/FK → `content_items` (type `media`), `artifact_hash` FK, `mime`, `bytes`, `width`, `height`, `alt`, `original_name`, `variants` (json: name → hash, w, h, mime), `sanitized` boolean not null default false (since `0006_media_comments`; SQLite `INTEGER CHECK (sanitized IN (0, 1))`) | `sanitized`: the stored bytes are the SVG sanitiser's output, so the file may be served inline (M2a-2b P7); the `0006` down drops it (lossy) |
 | `media_variants` | `hash`, `item_id` FK → `media` (`ON DELETE CASCADE`), `name`, PK(`item_id`,`name`), index on `hash` | Added by `0003_media_variants` (ruling R29). Derived from `media.variants` (one row per entry whose value is an object with a string `hash`), backfilled by the migration and kept in sync by `MediaRepo::insert`/`update` in the same transaction; `media.variants` stays the source of truth |
-| `comments` | `id`, `item_id` → `content_items` `CASCADE`, `parent_id` → `comments` `CASCADE`, `user_id` null → `users` `SET NULL`, `author_name`, `author_email` (ASCII-lowercased), `author_url` (`""` = none), `body` (plain text), `status` (`pending`/`approved`/`spam`/`trash`, no CHECK, P2), `ip_hash` null (keyed), `created_at`; indexes `comments_item_created_idx (item_id, created_at)` (`0001`) and since `0006`: `comments_status_created_idx (status, created_at, id)` and `comments_created_idx (created_at, id)` (moderation queue), `comments_item_status_idx (item_id, status, created_at, id)` (an item's approved thread), `comments_author_email_idx (author_email, status)` and `comments_user_idx (user_id, status)` (`known` checks, F19; also the users FK on delete) | `CommentRepo` since M2a-2b |
+| `comments` | `id`, `item_id` → `content_items` `CASCADE`, `parent_id` → `comments` `CASCADE`, `user_id` null → `users` `SET NULL`, `author_name`, `author_email` (ASCII-lowercased), `author_url` (`""` = none), `body` (plain text), `status` (`pending`/`approved`/`spam`/`trash`, no CHECK, P2), `ip_hash` null (keyed), `created_at`, `by_account` boolean not null default false (since `0006`; SQLite `INTEGER CHECK (by_account IN (0, 1))`; set on insert when `user_id` is given and kept after the user is deleted, so such a comment never counts for a guest in `has_approved_from`; the `0006` down drops it, lossy); indexes `comments_item_created_idx (item_id, created_at)` (`0001`) and since `0006`: `comments_status_created_idx (status, created_at, id)` and `comments_created_idx (created_at, id)` (moderation queue), `comments_item_status_idx (item_id, status, created_at, id)` (an item's approved thread), `comments_author_email_idx (author_email, status)` and `comments_user_idx (user_id, status)` (`known` checks, F19; also the users FK on delete) | `CommentRepo` since M2a-2b |
 | `redirects` | `id`, `source_path` UNIQUE, `target`, `code` (301/302/307/308/410), `hits`, `origin` (`manual`/`import`/`slug-change`), `created_at`, `last_hit_at` | Auto-created on slug change of a published item |
 
 ### Users & auth
@@ -536,7 +537,7 @@ crates/ferrite-store-sqlite/migrations/
     0005_auth.up.sql                # M2a-1, phase expand, lossy-down: sessions, tokens, audit
     0005_auth.down.sql
     0006_media_comments.up.sql      # M2a-2b, phase expand, lossy-down: idempotency keys,
-    0006_media_comments.down.sql    #   media.sanitized; comment and job indexes (P2)
+    0006_media_comments.down.sql    #   media.sanitized, comments.by_account; comment and job indexes (P2)
 crates/ferrite-store-postgres/migrations/
     0001_init.up.sql
     0001_init.down.sql

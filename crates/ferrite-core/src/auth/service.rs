@@ -33,7 +33,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use super::key::{
-    PLUGIN_IP_LABEL, SiteKey, hex, ip_hash, keyed_id, keyed_mac, random_bytes, sha256_hex,
+    COMMENT_IP_LABEL, PLUGIN_IP_LABEL, SiteKey, hex, ip_hash, keyed_id, keyed_mac, random_bytes,
+    sha256_hex,
 };
 use super::password::{self, Verified};
 use super::seal::{open, seal};
@@ -224,6 +225,18 @@ impl AuthService {
         msg.push(0);
         msg.extend_from_slice(ip.to_canonical().to_string().as_bytes());
         keyed_id(&self.key, PLUGIN_IP_LABEL, &msg)
+    }
+
+    /// The client-address hash stored on a comment (M2a-2b P13): the first 32 hex
+    /// characters of HMAC-SHA256 under the [`COMMENT_IP_LABEL`] subkey over the
+    /// canonical address. Moderators see it to tell commenters apart; it cannot be
+    /// reversed without the site key, nor joined with the session or plugin hashes.
+    pub fn comment_ip_hash(&self, ip: IpAddr) -> String {
+        keyed_id(
+            &self.key,
+            COMMENT_IP_LABEL,
+            ip.to_canonical().to_string().as_bytes(),
+        )
     }
 
     /// Counts one hit (outside any `Tx`, R6) on bucket `<scope>:ip:<limit hash>` (IPv6

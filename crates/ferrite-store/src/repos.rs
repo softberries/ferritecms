@@ -846,7 +846,8 @@ pub trait AuditRepo: Send + Sync {
 /// rows decode only with a known [`CommentStatus`].
 #[async_trait]
 pub trait CommentRepo: Send + Sync {
-    /// Inserts a comment. An unknown item, parent or user is `ForeignKey`; a taken id
+    /// Inserts a comment (with a `user_id`: marked as written by an account, a mark it
+    /// keeps). An unknown item, parent or user is `ForeignKey`; a taken id
     /// `UniqueViolation { constraint: "comments_pkey" }`.
     async fn insert(&self, comment: &Comment) -> Result<(), StoreError>;
     /// Fetches a comment by id.
@@ -872,8 +873,10 @@ pub trait CommentRepo: Send + Sync {
         limit: u32,
     ) -> Result<Vec<Comment>, StoreError>;
     /// Whether an anonymous commenter has an approved comment (R2 `known`, F19): an
-    /// approved row without `user_id` whose `author_email` equals `email_key(email)` and
-    /// whose `author_name` equals `name` exactly (callers trim it).
+    /// approved row inserted without `user_id` whose `author_email` equals
+    /// `email_key(email)` and whose `author_name` equals `name` exactly (callers trim
+    /// it). A row inserted with a `user_id` never matches, also after the user is
+    /// deleted and its `user_id` became NULL (the store marks it `by_account`).
     async fn has_approved_from(&self, email: &str, name: &str) -> Result<bool, StoreError>;
     /// Whether `user` has an approved comment (R2 `known` for signed-in commenters, F19).
     async fn has_approved_from_user(&self, user: UserId) -> Result<bool, StoreError>;

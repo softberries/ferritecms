@@ -23,8 +23,8 @@ impl CommentRepo for PgRepos {
         check_comment(comment)?;
         run!(&self.exec, |e| sqlx::query(
             "INSERT INTO comments (id, item_id, parent_id, user_id, author_name, author_email, \
-             author_url, body, status, ip_hash, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"
+             author_url, body, status, ip_hash, created_at, by_account) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"
         )
         .bind(comment.id.as_uuid())
         .bind(comment.item_id.as_uuid())
@@ -37,6 +37,7 @@ impl CommentRepo for PgRepos {
         .bind(comment.status.as_str())
         .bind(comment.ip_hash.as_deref())
         .bind(DateTime::<Utc>::from(comment.created_at))
+        .bind(comment.user_id.is_some())
         .execute(e))?;
         Ok(())
     }
@@ -135,7 +136,7 @@ impl CommentRepo for PgRepos {
         validate_text("comment author_name", name)?;
         let found: bool = run!(&self.exec, |e| sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM comments WHERE author_email = $1 AND status = $2 \
-             AND author_name = $3 AND user_id IS NULL)"
+             AND author_name = $3 AND user_id IS NULL AND NOT by_account)"
         )
         .bind(email_key(email))
         .bind(CommentStatus::Approved.as_str())

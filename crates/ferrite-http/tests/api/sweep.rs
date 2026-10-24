@@ -21,13 +21,16 @@ use crate::{
 api_tests!(unsafe_operations_need_auth_and_csrf);
 
 /// The operations that are reachable without credentials by design: they check the
-/// origin instead (`SameOrigin`, login CSRF), in OpenAPI path order. Only login and the
-/// two password-reset steps (M2a-2 P28).
-const UNAUTHENTICATED: [&str; 4] = [
+/// origin instead (`SameOrigin`, login CSRF), in OpenAPI path order. Only login, the
+/// two password-reset steps (M2a-2 P28) and the public comment submit (M2a-2b P30,
+/// which also takes a bearer token or a session with its CSRF token; a session
+/// without it is checked below).
+const UNAUTHENTICATED: [&str; 5] = [
     "POST /api/v1/auth/login",
     "POST /api/v1/auth/login/totp",
     "POST /api/v1/auth/password-reset",
     "POST /api/v1/auth/password-reset/confirm",
+    "POST /api/v1/content/{type}/{id}/comments",
 ];
 
 /// Every `(method, path template)` with an unsafe method in the OpenAPI document.
@@ -118,6 +121,12 @@ async fn unsafe_operations_need_auth_and_csrf(api: Api) -> Api {
             let p = r.assert_problem(403, "csrf");
             assert!(p["detail"].is_string(), "{method} {path}: {p}");
         }
+    }
+    // The comment submit takes an optional session: one without `X-CSRF-Token` is
+    // refused before the body is read (P30), on well-formed and malformed paths alike.
+    for path in paths("/api/v1/content/{type}/{id}/comments") {
+        let r = send_raw(&api, &Method::POST, &path, Some(&cookie)).await;
+        r.assert_problem(403, "csrf");
     }
     // The session is still valid: nothing above reached a handler that could end it.
     let r = api

@@ -89,6 +89,21 @@ pub struct AuthedAllowReset(pub Authenticated);
 #[derive(Debug, Clone, Copy)]
 pub struct SameOrigin;
 
+/// Optional credentials (the public comment submit, M2a-2b P12, F22):
+///
+/// * An `Authorization` header is resolved as for [`Authed`] (`401` when bad); no
+///   origin check.
+/// * Else the request must come from the site's origin (`403 csrf`, as [`SameOrigin`]).
+///   A session cookie that resolves needs one valid `X-CSRF-Token` (`403 csrf`) and is
+///   refused for an account that must change its password (`403
+///   password-reset-required`); a cookie that does not resolve, and no cookie, are
+///   [`MaybeAuthed::Anonymous`].
+#[derive(Debug, Clone)]
+pub enum MaybeAuthed {
+    Anonymous,
+    Authed(Box<Authenticated>),
+}
+
 /// The client address (`ClientIp`, absent in-process without connect info) and the
 /// `User-Agent`.
 #[derive(Debug, Clone, Default)]
@@ -116,6 +131,32 @@ impl FromRequestParts<Arc<ApiState>> for Authed {
             return Err(Problem::password_reset_required());
         }
         Ok(Self(who))
+    }
+}
+
+impl FromRequestParts<Arc<ApiState>> for MaybeAuthed {
+    type Rejection = Problem;
+
+    async fn from_request_parts(parts: &mut Parts, api: &Arc<ApiState>) -> Result<Self, Problem> {
+        if let Some(who) = bearer(parts, api).await {
+            return who.map(|w| Self::Authed(Box::new(w)));
+        }
+        if !same_origin(&parts.headers, &api.origin) {
+            return Err(Problem::csrf(
+                "the request does not come from the site's origin",
+            ));
+        }
+        let Some(token) = read_session_cookie(&parts.headers) else {
+            return Ok(Self::Anonymous);
+        };
+        let Some(who) = api.auth.resolve_session(token).await? else {
+            return Ok(Self::Anonymous);
+        };
+        check_csrf(parts, api, &who)?;
+        if who.user.must_reset {
+            return Err(Problem::password_reset_required());
+        }
+        Ok(Self::Authed(Box::new(who)))
     }
 }
 
@@ -154,21 +195,8 @@ fn client_info(parts: &Parts) -> ClientInfo {
 
 /// Resolves the request's credentials; see the module docs.
 async fn authenticate(parts: &Parts, api: &ApiState) -> Result<Authenticated, Problem> {
-    let ip = client_info(parts).ip;
-    let mut authorization = parts.headers.get_all(header::AUTHORIZATION).iter();
-    if let Some(value) = authorization.next() {
-        let unauthenticated =
-            |challenge| Problem::from(CoreError::Unauthenticated).with_challenge(challenge);
-        if authorization.next().is_some() {
-            return Err(unauthenticated(Challenge::InvalidRequest));
-        }
-        let token =
-            bearer_token(value).ok_or_else(|| unauthenticated(Challenge::InvalidRequest))?;
-        return api
-            .auth
-            .resolve_token(token, ip)
-            .await?
-            .ok_or_else(|| unauthenticated(Challenge::InvalidToken));
+    if let Some(who) = bearer(parts, api).await {
+        return who;
     }
     let token = read_session_cookie(&parts.headers).ok_or(CoreError::Unauthenticated)?;
     let who = api
@@ -176,24 +204,54 @@ async fn authenticate(parts: &Parts, api: &ApiState) -> Result<Authenticated, Pr
         .resolve_session(token)
         .await?
         .ok_or(CoreError::Unauthenticated)?;
-    if let Via::Session(session) = &who.via
-        && !matches!(parts.method, Method::GET | Method::HEAD)
-    {
+    if !matches!(parts.method, Method::GET | Method::HEAD) {
         if !same_origin(&parts.headers, &api.origin) {
             return Err(Problem::csrf(
                 "the request does not come from the site's origin",
             ));
         }
-        let mut sent = parts.headers.get_all(CSRF_HEADER).iter();
-        let valid = match (sent.next(), sent.next()) {
-            (Some(v), None) => v.to_str().is_ok_and(|v| api.auth.check_csrf(session, v)),
-            _ => false,
-        };
-        if !valid {
-            return Err(Problem::csrf("missing or invalid X-CSRF-Token"));
-        }
+        check_csrf(parts, api, &who)?;
     }
     Ok(who)
+}
+
+/// The request's bearer credential, `None` without an `Authorization` header (see the
+/// module docs: a request with one never falls back to the cookie).
+async fn bearer(parts: &Parts, api: &ApiState) -> Option<Result<Authenticated, Problem>> {
+    let mut authorization = parts.headers.get_all(header::AUTHORIZATION).iter();
+    let value = authorization.next()?;
+    let unauthenticated =
+        |challenge| Problem::from(CoreError::Unauthenticated).with_challenge(challenge);
+    if authorization.next().is_some() {
+        return Some(Err(unauthenticated(Challenge::InvalidRequest)));
+    }
+    let Some(token) = bearer_token(value) else {
+        return Some(Err(unauthenticated(Challenge::InvalidRequest)));
+    };
+    let ip = client_info(parts).ip;
+    Some(match api.auth.resolve_token(token, ip).await {
+        Ok(Some(who)) => Ok(who),
+        Ok(None) => Err(unauthenticated(Challenge::InvalidToken)),
+        Err(e) => Err(e.into()),
+    })
+}
+
+/// `Ok` unless `who` is a session and the request lacks exactly one valid
+/// `X-CSRF-Token`.
+fn check_csrf(parts: &Parts, api: &ApiState, who: &Authenticated) -> Result<(), Problem> {
+    let Via::Session(session) = &who.via else {
+        return Ok(());
+    };
+    let mut sent = parts.headers.get_all(CSRF_HEADER).iter();
+    let valid = match (sent.next(), sent.next()) {
+        (Some(v), None) => v.to_str().is_ok_and(|v| api.auth.check_csrf(session, v)),
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(Problem::csrf("missing or invalid X-CSRF-Token"))
+    }
 }
 
 /// The token of `Authorization: Bearer <token>` (scheme case-insensitive).

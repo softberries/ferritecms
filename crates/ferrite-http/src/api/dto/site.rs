@@ -287,6 +287,15 @@ pub struct SettingsDto {
     #[serde(rename = "permalink.page")]
     #[schema(value_type = Option<String>)]
     pub permalink_page: Value,
+    /// Whether posts take comments (default `true`).
+    #[serde(rename = "comments.enabled")]
+    #[schema(value_type = Option<bool>)]
+    pub comments_enabled: Value,
+    /// `"all"` (every guest comment is held) or `"known"` (default: a commenter with an
+    /// approved comment, by the same name and e-mail, posts directly).
+    #[serde(rename = "comments.moderation")]
+    #[schema(value_type = Option<String>)]
+    pub comments_moderation: Value,
 }
 
 impl SettingsDto {
@@ -302,6 +311,8 @@ impl SettingsDto {
             reading_discourage_indexing: take("reading.discourage_indexing"),
             permalink_post: take("permalink.post"),
             permalink_page: take("permalink.page"),
+            comments_enabled: take("comments.enabled"),
+            comments_moderation: take("comments.moderation"),
         }
     }
 }

@@ -429,4 +429,23 @@ pub async fn has_approved_from_matches_exact_lowercase(db: &TestDb) {
         .await
         .unwrap();
     assert!(!repo.has_approved_from_user(user.id).await.unwrap());
+
+    // An account's approved comment keeps not vouching for a guest after the account is
+    // deleted (its `user_id` becomes NULL; Task 1 carry).
+    let gone = fixture_user(store).await;
+    let mut written = comment(item, CommentStatus::Approved, Timestamp::now());
+    written.user_id = Some(gone.id);
+    written.author_name = "Dora".into();
+    written.author_email = "dora@example.com".into();
+    repo.insert(&written).await.unwrap();
+    store.read().users().delete(gone.id).await.unwrap();
+    let orphan = repo.get(written.id).await.unwrap().unwrap();
+    assert_eq!(orphan.user_id, None);
+    assert_eq!(orphan.status, CommentStatus::Approved);
+    assert!(
+        !repo
+            .has_approved_from("dora@example.com", "Dora")
+            .await
+            .unwrap()
+    );
 }

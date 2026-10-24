@@ -64,7 +64,7 @@ use ferrite_core::mail::MailQueue;
 use ferrite_core::{
     AuthService, ContentService, ContentTypeService, ExtensionAdmin, ExtensionService,
     MediaService, MenuService, OptionService, Permalinks, RedirectService, SiteReader,
-    SwappablePermalinks, TaxonomyService, UserService,
+    SwappablePermalinks, TaxonomyService, UserService, comments::CommentService,
 };
 use ferrite_domain::{NodeId, Timestamp};
 use ferrite_http::{
@@ -439,10 +439,13 @@ async fn boot(
         Installer::new(store.clone(), media.clone(), host_config(&config.plugins))
             .context("cannot start the plugin installer")?,
     );
+    // One comment service per node: the API submit and moderation (Task 8 adds the form).
+    let comments = Arc::new(CommentService::new(store.clone(), auth.clone()));
     let api = Arc::new(
         ApiState::new(ApiParts {
             store: store.clone(),
             auth,
+            comments,
             users: Arc::new(UserService::new(store.clone())),
             content: content.clone(),
             types: Arc::new(ContentTypeService::new(store.clone())),

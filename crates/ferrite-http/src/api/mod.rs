@@ -13,7 +13,8 @@
 //!   [`MAX_JSON_BODY`] ([`body_limit`]), except the upload routes, which have a
 //!   route-level limit: plugins [`plugins::MAX_UPLOAD_BODY`], themes
 //!   [`themes::MAX_THEME_UPLOAD_BODY`], media [`media::MEDIA_ROUTE_LIMIT`] (the
-//!   handler enforces `media.max_upload` itself, F12).
+//!   handler enforces `media.max_upload` itself, F12); and the public comment submit,
+//!   whose limit is smaller ([`comments::MAX_COMMENT_REQUEST`]).
 //!
 //! The API never touches the page cache. [`build_site`](crate::build_site) merges this
 //! router in front of the public fallback, inside the shared layers (security headers,
@@ -23,6 +24,7 @@
 //! [`auth`] extractors; `GET /meta` and `GET /openapi.json` need none.
 
 pub mod auth;
+pub mod comments;
 pub mod content;
 pub mod cookie;
 pub mod csv;
@@ -58,7 +60,7 @@ use tower_http::{catch_panic::CatchPanicLayer, set_header::SetResponseHeaderLaye
 use utoipa::OpenApi as _;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-pub use auth::{Authed, AuthedAllowReset, CSRF_HEADER, ClientInfo, SameOrigin};
+pub use auth::{Authed, AuthedAllowReset, CSRF_HEADER, ClientInfo, MaybeAuthed, SameOrigin};
 pub use extract::{
     ApiJson, ApiPath, ApiQuery, DEFAULT_LIMIT, IfMatch, MAX_JSON_BODY, PageParams, check_limit,
     created, created_at, etag, invalid_cursor, invalid_param,
@@ -101,6 +103,15 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(content::list_revisions))
         .routes(routes!(content::get_revision))
         .routes(routes!(content::restore_revision))
+        .merge(uploads(
+            routes!(comments::submit_comment),
+            comments::MAX_COMMENT_REQUEST,
+        ))
+        .routes(routes!(comments::list_comments))
+        .routes(routes!(
+            comments::moderate_comment,
+            comments::delete_comment
+        ))
         .routes(routes!(types::list_types, types::create_type))
         .routes(routes!(
             types::get_type,
@@ -184,8 +195,9 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         ))
 }
 
-/// `routes` with the body limit `max` instead of [`MAX_JSON_BODY`]: the route's
-/// `DefaultBodyLimit` wins over the router's.
+/// `routes` with the body limit `max` instead of [`MAX_JSON_BODY`] (larger for uploads,
+/// smaller for the public comment submit): the route's `DefaultBodyLimit` wins over the
+/// router's.
 fn uploads(
     routes: utoipa_axum::router::UtoipaMethodRouter<Arc<ApiState>>,
     max: usize,

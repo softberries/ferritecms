@@ -445,7 +445,19 @@ async fn settings_patch_over_http(api: Api) -> Api {
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
     let all = r.json();
     let keys: Vec<&String> = all.as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 8, "{all}");
+    assert_eq!(keys.len(), 10, "{all}");
+    assert!(all.get("comments.enabled").is_some() && all.get("comments.moderation").is_some());
+    let p = b
+        .send(
+            &api,
+            Method::PATCH,
+            SETTINGS,
+            Some(&json!({"comments.moderation": "nobody"})),
+            None,
+        )
+        .await
+        .assert_problem(422, "validation");
+    assert_eq!(p["errors"][0]["field"], "comments.moderation");
     assert!(
         all.as_object().unwrap().values().all(Value::is_null),
         "{all}"

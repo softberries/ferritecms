@@ -28,6 +28,7 @@ use ferrite_core::{
     MenuService, NewAccount, OptionService, PermalinkRules, RedirectService, Scopes, SiteReader,
     TaxonomyService, UserService,
     auth::SiteKey,
+    comments::CommentService,
     mail::{MailQueue, MemoryMailer},
 };
 use ferrite_domain::{ArtifactHash, InstalledTheme, Role, Secret, Timestamp, User};
@@ -268,13 +269,14 @@ impl Api {
             store.clone(),
             Arc::new(PermalinkRules::default()),
         ));
+        let auth = Arc::new(
+            AuthService::new(store.clone(), key.clone()).with_issuer_name(SITE_TITLE.into()),
+        );
         let api = Arc::new(
             ApiState::new(ApiParts {
                 store: store.clone(),
-                auth: Arc::new(
-                    AuthService::new(store.clone(), key.clone())
-                        .with_issuer_name(SITE_TITLE.into()),
-                ),
+                comments: Arc::new(CommentService::new(store.clone(), auth.clone())),
+                auth,
                 users: Arc::new(UserService::new(store.clone())),
                 media_service: Arc::new(MediaService::new(
                     store.clone(),
@@ -433,6 +435,7 @@ impl Api {
             media_service: a.media_service.clone(),
             uploader: a.uploader.clone(),
             max_upload: a.max_upload,
+            comments: a.comments.clone(),
             mailer: a.mailer.clone(),
             site_url: a.site_url.clone(),
             site_title: a.site_title.clone(),
@@ -448,13 +451,14 @@ impl Api {
             store.clone(),
             Arc::new(PermalinkRules::default()),
         ));
+        let auth = Arc::new(
+            AuthService::new(store.clone(), key.clone()).with_issuer_name(SITE_TITLE.into()),
+        );
         let api = Arc::new(
             ApiState::new(ApiParts {
                 store: store.clone(),
-                auth: Arc::new(
-                    AuthService::new(store.clone(), key.clone())
-                        .with_issuer_name(SITE_TITLE.into()),
-                ),
+                comments: Arc::new(CommentService::new(store.clone(), auth.clone())),
+                auth,
                 users: Arc::new(UserService::new(store.clone())),
                 media_service: Arc::new(MediaService::new(
                     store.clone(),

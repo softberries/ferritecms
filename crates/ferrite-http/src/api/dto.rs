@@ -3,6 +3,7 @@
 //! utoipa (M1a R3). Bodies that carry passwords, codes or tokens derive no `Debug`.
 
 pub mod auth;
+pub mod comments;
 pub mod content;
 pub mod extensions;
 pub mod media;

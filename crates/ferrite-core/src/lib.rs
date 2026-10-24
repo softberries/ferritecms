@@ -5,6 +5,7 @@ pub mod actions;
 mod actor;
 pub mod auth;
 pub mod blocks;
+pub mod comments;
 mod content;
 mod error;
 pub mod events;

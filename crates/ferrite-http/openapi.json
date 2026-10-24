@@ -586,6 +586,274 @@
         ]
       }
     },
+    "/api/v1/comments": {
+      "get": {
+        "tags": [
+          "comments"
+        ],
+        "operationId": "list_comments",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "`pending`, `approved`, `spam` or `trash`; all when absent.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "item",
+            "in": "query",
+            "description": "Only comments on this content item.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1..=200; default 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of comments, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation` (`status`, `limit`, `cursor`) or `malformed-query`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`moderate_comments`, `comments:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/comments/{id}": {
+      "delete": {
+        "tags": [
+          "comments"
+        ],
+        "operationId": "delete_comment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted with its replies; its post's page is refreshed"
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`moderate_comments`, `comments:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`status`): only spam or trashed comments can be deleted",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "comments"
+        ],
+        "operationId": "moderate_comment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentModeration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The comment with its new status; its post's page is refreshed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`moderate_comments`, `comments:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: an unknown `status`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/content/{type}": {
       "get": {
         "tags": [
@@ -1206,6 +1474,154 @@
           }
         },
         "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/content/{type}/{id}/comments": {
+      "post": {
+        "tags": [
+          "comments"
+        ],
+        "operationId": "submit_comment",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentSubmit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Approved and shown on the post",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentPublicDto"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Held for moderation (also the answer when the honeypot `website` is filled; nothing is stored then)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentPublicDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`: a bad bearer token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`csrf` (not from the site's origin without a token, or a session without `X-CSRF-Token`), `forbidden` (a token without `comments:write`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no such public post, or comments are off",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`too-large`: the body is over 64 KiB",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`errors[0].field`: `body`, `author_name`, `author_email`, `author_url` or `parent_id`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate-limited`: 3 a minute or 20 an hour per client address (`Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`busy`: the client address is unknown",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
           {
             "session": []
           },
@@ -6825,6 +7241,207 @@
   },
   "components": {
     "schemas": {
+      "CommentDto": {
+        "type": "object",
+        "description": "A comment as moderators see it (`GET /comments`, `PATCH /comments/{id}`).",
+        "required": [
+          "id",
+          "item_id",
+          "author_name",
+          "author_email",
+          "author_url",
+          "body",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "author_email": {
+            "type": "string",
+            "description": "ASCII-lowercased."
+          },
+          "author_name": {
+            "type": "string"
+          },
+          "author_url": {
+            "type": "string",
+            "description": "`\"\"`: none."
+          },
+          "body": {
+            "type": "string",
+            "description": "Plain text as submitted (trimmed; escape it when showing it)."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ip_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Keyed hash of the client address (HMAC under the site key): tells commenters\napart, cannot be reversed without the key."
+          },
+          "item_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The content item commented on."
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The comment replied to."
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending`, `approved`, `spam` or `trash`."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The signed-in commenter; `null` for a guest (and after the account is deleted)."
+          }
+        }
+      },
+      "CommentList": {
+        "type": "object",
+        "description": "`GET /comments`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommentDto"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last page."
+          }
+        }
+      },
+      "CommentModeration": {
+        "type": "object",
+        "description": "`PATCH /comments/{id}`.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "`pending`, `approved`, `spam` or `trash`."
+          }
+        }
+      },
+      "CommentPublicDto": {
+        "type": "object",
+        "description": "A submitted comment as its author sees it: no e-mail, no address hash.",
+        "required": [
+          "id",
+          "author_name",
+          "html",
+          "date",
+          "status"
+        ],
+        "properties": {
+          "author_name": {
+            "type": "string",
+            "description": "Plain text (escape it)."
+          },
+          "author_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "date": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "html": {
+            "type": "string",
+            "description": "The body as the site shows it: escaped, `<p>` paragraphs, `<br>` line breaks."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "description": "`approved` (`201`) or `pending` (`202`)."
+          }
+        }
+      },
+      "CommentSubmit": {
+        "type": "object",
+        "description": "`POST /content/{type}/{id}/comments`. With a session or token the name and e-mail\ncome from the account and these members are ignored. Unknown members are ignored.",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "author_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 254 bytes; required without an account."
+          },
+          "author_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1 to 100 characters; required without an account."
+          },
+          "author_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An `http` or `https` address of at most 200 characters."
+          },
+          "body": {
+            "type": "string",
+            "description": "Plain text, 1 to 10 000 characters (no HTML; line breaks kept)."
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "An approved comment of the same post to reply to (at most 5 deep)."
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Leave empty (a field people never see; anything in it drops the comment)."
+          }
+        }
+      },
       "ContentDto": {
         "type": "object",
         "description": "A content item with its terms and public path (`GET`, and every write's result).",
@@ -8610,6 +9227,20 @@
         "type": "object",
         "description": "The site settings (`GET /settings`, and the result of `PATCH /settings`): every key,\n`null` when unset (the default applies). A `PATCH` body is an object with any of\nthese keys (`null` resets one to its default); an unknown key is `422`.",
         "properties": {
+          "comments.enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether posts take comments (default `true`)."
+          },
+          "comments.moderation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`\"all\"` (every guest comment is held) or `\"known\"` (default: a commenter with an\napproved comment, by the same name and e-mail, posts directly)."
+          },
           "permalink.page": {
             "type": [
               "string",
@@ -9386,6 +10017,10 @@
     {
       "name": "media",
       "description": "Media uploads and items"
+    },
+    {
+      "name": "comments",
+      "description": "Comments: the public submit and moderation"
     },
     {
       "name": "types",

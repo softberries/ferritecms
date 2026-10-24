@@ -6,7 +6,8 @@ use std::sync::Arc;
 use axum::http::Uri;
 use ferrite_core::{
     AuthService, ContentService, ContentTypeService, ExtensionAdmin, MediaService, MenuService,
-    OptionService, RedirectService, TaxonomyService, UserService, mail::MailQueue,
+    OptionService, RedirectService, TaxonomyService, UserService, comments::CommentService,
+    mail::MailQueue,
 };
 use ferrite_media::MediaStore;
 use ferrite_store::Store;
@@ -33,6 +34,8 @@ pub struct ApiParts {
     pub uploader: Arc<Uploader>,
     /// `media.max_upload`.
     pub max_upload: u64,
+    /// Comment submits and moderation (M2a-2b P11–P14).
+    pub comments: Arc<CommentService>,
     /// The node's mail queue (`[mail]` set), shared with the plugin host.
     pub mailer: Option<Arc<MailQueue>>,
     /// The site's URL (`site.url`).
@@ -65,6 +68,8 @@ pub struct ApiState {
     /// `media.max_upload`: the largest file `POST /media` takes (the body may be 1 MiB
     /// more).
     pub max_upload: u64,
+    /// Comment submits and moderation (M2a-2b P11–P14).
+    pub comments: Arc<CommentService>,
     /// The node's mail queue: sends run in the background (`None`: no `[mail]`, the
     /// password reset is `503 mail-unavailable`).
     pub mailer: Option<Arc<MailQueue>>,
@@ -102,6 +107,7 @@ impl ApiState {
             media_service,
             uploader,
             max_upload,
+            comments,
             mailer,
             site_url,
             site_title,
@@ -123,6 +129,7 @@ impl ApiState {
             media_service,
             uploader,
             max_upload,
+            comments,
             mailer,
             site_url: site_url.trim_end_matches('/').to_owned(),
             site_title,

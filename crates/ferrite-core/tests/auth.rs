@@ -1065,6 +1065,17 @@ async fn hit_limit_counts_per_scope_and_client(db: &TestDb) {
         h,
         a.plugin_ip_hash("router", "198.51.100.2".parse().unwrap())
     );
+    // The comment hash (M2a-2b P13): keyed, canonical, its own subkey.
+    let c = a.comment_ip_hash(v4);
+    assert_eq!(c.len(), 32);
+    assert!(
+        c.bytes()
+            .all(|x| x.is_ascii_hexdigit() && !x.is_ascii_uppercase())
+    );
+    assert_eq!(c, b.comment_ip_hash(mapped));
+    assert_ne!(c, a.ip_hash(v4));
+    assert_ne!(c, h);
+    assert_ne!(c, a.comment_ip_hash("198.51.100.2".parse().unwrap()));
     // `plugin || 0x00 || ip`: no name/address split collides.
     assert_ne!(
         a.plugin_ip_hash("a1", "1.2.3.4".parse().unwrap()),
