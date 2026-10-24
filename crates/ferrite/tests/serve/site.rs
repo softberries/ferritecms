@@ -400,6 +400,27 @@ fn sigint_shuts_down_cleanly() {
     assert!(status.success(), "{status:?}");
 }
 
+/// `[mail]` (P17): a node with an SMTP URL (from the environment, credentials inside)
+/// starts and shuts down cleanly, and the URL never reaches the log.
+#[test]
+fn serve_with_mail_starts_and_stops() {
+    let p = Profile::solo();
+    p.init();
+    let mut cmd = p.cmd(&["serve"]);
+    cmd.env(
+        "FERRITE_MAIL__SMTP_URL",
+        "smtp://user:topsecretpw@127.0.0.1:1",
+    )
+    .env("FERRITE_MAIL__FROM", "Site <noreply@example.com>")
+    .env("FERRITE_LOG", "debug");
+    let server = Server::spawn(cmd);
+    assert_eq!(server.get("/healthz").status, 200);
+    let log = server.log();
+    let status = server.stop_with("TERM");
+    assert!(status.success(), "{status:?}");
+    assert!(!log.contains("topsecretpw"), "{log}");
+}
+
 /// A second signal during the drain exits at once with 128 + the signal number.
 #[test]
 fn second_signal_during_drain_exits_immediately() {

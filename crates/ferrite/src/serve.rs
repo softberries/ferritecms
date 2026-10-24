@@ -38,9 +38,10 @@
 //! connections **and** stop the job runner at once; open requests get up to 10 s while
 //! running jobs get 9 s (P10) to finish, after which the runner releases the rest
 //! without using an attempt (the runner is abandoned after 12 s, R6). Then the
-//! background tasks stop (the failure flusher writes once more) and the node leaves the
-//! registry, together within 1 s; [`run`] closes the database pools (up to 2 s, cut so
-//! that the steps so far end within 13 s of the signal), and `main` shuts the runtime
+//! background tasks stop (the failure flusher writes once more), mail sends still
+//! running (`[mail]`) are cancelled, and the node leaves the registry, together within
+//! 1 s; [`run`] closes the database pools (up to 2 s, cut so that the steps so far end
+//! within 13 s of the signal), and `main` shuts the runtime
 //! down with a 1 s grace, which drops every connection task still running and abandons
 //! stuck blocking work. A clean shutdown exits 0 and the process is gone at most 14 s
 //! after the first signal. A signal during startup (after joining the registry the node
@@ -56,6 +57,7 @@ use ferrite_cluster::{
     SCHEDULER_TICK, Scheduler, builtin, node_name,
 };
 use ferrite_config::{Config, LoggedInCache, PluginsConfig};
+use ferrite_core::mail::MailQueue;
 use ferrite_core::{
     AuthService, ContentService, ContentTypeService, ExtensionAdmin, ExtensionService, MenuService,
     OptionService, Permalinks, RedirectService, SiteReader, SwappablePermalinks, TaxonomyService,
@@ -69,6 +71,7 @@ use ferrite_http::{
     build_site,
     extensions::Installer,
     load_route_table,
+    mail::SmtpMailer,
 };
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::{HostConfig, PluginHost};
@@ -209,6 +212,8 @@ pub struct RunningNode {
     background: CancellationToken,
     /// Reloader, invalidation loop, failure flusher, scheduler, heartbeat.
     tasks: Vec<(&'static str, JoinHandle<()>)>,
+    /// The outgoing-mail queue (`[mail]` set); its sends are cancelled at shutdown.
+    mail: Option<Arc<MailQueue>>,
     registry: Registry,
 }
 
@@ -333,10 +338,21 @@ async fn boot(
     // One site key: sessions and tokens, sealed plugin secrets (sealed by the API's
     // `ExtensionAdmin`, opened by the owning plugin's `settings.get`).
     let site_key = keys::site_key(config)?;
-    let services = Arc::new(
-        StoreHostServices::new(store.clone(), reader.clone(), &http.site_url)
-            .with_site_key(site_key.clone()),
-    );
+    // `[mail]`: one queue per node (bounded background sends, F28); lettre parses the
+    // URL and `from` here, so a value it refuses stops startup (F30).
+    let mail = match &config.mail {
+        Some(mail) => {
+            let smtp = SmtpMailer::new(mail).context("invalid [mail] section")?;
+            Some(Arc::new(MailQueue::new(Arc::new(smtp))))
+        }
+        None => None,
+    };
+    let mut services = StoreHostServices::new(store.clone(), reader.clone(), &http.site_url)
+        .with_site_key(site_key.clone());
+    if let Some(queue) = &mail {
+        services = services.with_mailer(queue.clone(), config.site.title.clone());
+    }
+    let services = Arc::new(services);
     let host = Arc::new(
         PluginHost::new(host_config(&config.plugins), services)
             .context("cannot start the plugin host")?,
@@ -504,6 +520,7 @@ async fn boot(
             ("scheduler", scheduler),
             ("heartbeat", heartbeat),
         ],
+        mail,
         registry,
     })
 }
@@ -522,6 +539,7 @@ impl RunningNode {
             runner,
             background,
             tasks,
+            mail,
             registry,
             ..
         } = self;
@@ -551,12 +569,19 @@ impl RunningNode {
         // abort grace) still ends shutdown within RUNNER_STOP + BACKGROUND_STOP.
         let deadline =
             (Instant::now() + BACKGROUND_STOP).min(started + RUNNER_STOP + BACKGROUND_STOP);
-        futures::future::join_all(
+        let stop_tasks = futures::future::join_all(
             tasks
                 .into_iter()
                 .map(|(name, task)| join_until(name, task, deadline - LEAVE_BUDGET)),
-        )
-        .await;
+        );
+        // Mail sends had the drain to finish; any still running are cancelled now.
+        let stop_mail = async {
+            if let Some(mail) = &mail {
+                let grace = (deadline - LEAVE_BUDGET).saturating_duration_since(Instant::now());
+                mail.shutdown(grace).await;
+            }
+        };
+        tokio::join!(stop_tasks, stop_mail);
         match tokio::time::timeout_at(deadline, registry.leave()).await {
             Ok(Ok(())) => tracing::info!(node = %registry.id(), "left the node registry"),
             Ok(Err(e)) => tracing::warn!(error = %e, "could not leave the node registry"),

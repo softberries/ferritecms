@@ -77,7 +77,7 @@ ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-cluster, ferrite-theme
  │                │                    └─ ferrite-domain
  │                ├─ ferrite-media ─── ferrite-domain
  │                ├─ ferrite-plugin-host (no ferrite-* dependencies)
- │                └─ ferrite-store, ferrite-domain
+ │                └─ ferrite-config (M2a-2: `MailConfig`), ferrite-store, ferrite-domain
  ├─ ferrite-config ─── ferrite-domain
  ├─ ferrite-cluster ─── ferrite-store (traits), ferrite-domain
  └─ ferrite-import-wp (M3) ─── ferrite-core
@@ -208,9 +208,9 @@ environment variables, which win.
 **Secrets** may be given inline or as `<key>_file` (path relative to the data folder unless
 absolute; one trailing newline is stripped; an empty or unreadable file is a problem; setting
 both the inline key and `_file` is a problem). This applies to `database.url`,
-`media.s3.access_key_id` / `media.s3.secret_access_key` and `auth.secret_key`. `Config`
-holds the database URL, the S3 secret key and the site key as `ferrite_domain::Secret`, and
-messages never contain secret values.
+`media.s3.access_key_id` / `media.s3.secret_access_key`, `auth.secret_key` and
+`mail.smtp_url`. `Config` holds the database URL, the S3 secret key, the site key and the
+SMTP URL as `ferrite_domain::Secret`, and messages never contain secret values.
 
 **Value formats.** Sizes: `"256MB"`, `"32MiB"`, `"512KB"`, `"1GB"` or bytes; KB/KiB = 1024,
 MB/MiB = 1024², GB/GiB = 1024³ (`cx.rs`, `parse_size`). Durations: seconds, `"90s"`,
@@ -274,7 +274,25 @@ render_deadline_ms = 200               # > 0
 action_deadline_ms = 5_000             # > 0
 disable_after_failures = 20            # > 0, within failure_window
 failure_window = "10m"
+
+[mail]                                 # optional; unset: no outgoing mail
+# smtp_url = "smtps://user:pass@mail.example.com"   # or smtp_url_file; a secret
+#   smtp://host[:port] plain, ?tls=required (STARTTLS) or ?tls=opportunistic; smtps:// implicit TLS
+# from = "Site <noreply@example.com>"  # required with smtp_url; "a@b" or "Name <a@b>"
 ```
+
+**Mail** (`[mail]`, M2a-2 P17). The SMTP password lives only in the URL, so only in the
+config file, a `smtp_url_file` or `FERRITE_MAIL__SMTP_URL`, never in the database. `load`
+checks the shape (scheme `smtp`/`smtps`, a host, `tls` only `required`/`opportunistic` on
+`smtp`; `from` a plain address or `Name <address>` without control characters, required
+with `smtp_url`, refused without it) without echoing the URL; `serve` then parses both
+with lettre (`ferrite_http::mail::SmtpMailer`, 10 s per SMTP step), so a value lettre
+refuses stops startup. Mail leaves through the node's `ferrite_core::mail::MailQueue`: at
+most 16 sends in flight (more are refused), each bounded by 10 s, run in background tasks
+so no plugin call or request waits for SMTP, and cancelled at shutdown inside the
+background-stop second. Every mailer refuses (never folds) control characters, CR/LF and
+Unicode line separators in subjects and addresses. Without `[mail]` the plugin
+`mail.notify-admins` import answers "mail is not configured".
 
 `media.root` / `media.local_shared` are rejected with `backend = "s3"`, and `media.s3` with
 `backend = "local"`.

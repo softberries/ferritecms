@@ -605,6 +605,56 @@ pub async fn count_active_admins_ignores_disabled_and_other_roles(db: &TestDb) {
     assert_eq!(users.count_active_admins().await.unwrap(), 0);
 }
 
+/// `list_active_admins`: role `admin` and status `active` only, by login, at most
+/// `limit` (1..=`MAX_AUTH_LIST`).
+pub async fn list_active_admins_filters(db: &TestDb) {
+    let store = db.store();
+    let users = store.read().users();
+    assert!(users.list_active_admins(10).await.unwrap().is_empty());
+    for (login, role, status) in [
+        ("zed-admin", Role::Admin, UserStatus::Active),
+        ("admin-off", Role::Admin, UserStatus::Disabled),
+        ("editor", Role::Editor, UserStatus::Active),
+        ("author", Role::Author, UserStatus::Active),
+        ("b-admin", Role::Admin, UserStatus::Active),
+        ("a-admin", Role::Admin, UserStatus::Active),
+    ] {
+        insert(store, &user_with(login, role, status))
+            .await
+            .unwrap();
+    }
+    let logins = |list: Vec<User>| list.into_iter().map(|u| u.login).collect::<Vec<_>>();
+    assert_eq!(
+        logins(users.list_active_admins(10).await.unwrap()),
+        ["a-admin", "b-admin", "zed-admin"]
+    );
+    assert_eq!(
+        logins(users.list_active_admins(2).await.unwrap()),
+        ["a-admin", "b-admin"]
+    );
+    let admin = users.get_by_login("a-admin").await.unwrap().unwrap();
+    assert_eq!(users.list_active_admins(1).await.unwrap(), [admin]);
+    assert_eq!(
+        logins(
+            users
+                .list_active_admins(ferrite_store::MAX_AUTH_LIST)
+                .await
+                .unwrap()
+        )
+        .len(),
+        3
+    );
+    for bad in [0, ferrite_store::MAX_AUTH_LIST + 1] {
+        assert!(
+            matches!(
+                users.list_active_admins(bad).await,
+                Err(StoreError::Invalid(_))
+            ),
+            "{bad}"
+        );
+    }
+}
+
 /// F5: `get_for_update` locks the user row for the rest of the `Tx` (Postgres), so a
 /// read-modify-write cannot lose a concurrent change.
 pub async fn user_get_for_update_locks_the_row(db: Arc<TestDb>) {

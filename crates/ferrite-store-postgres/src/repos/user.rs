@@ -8,8 +8,8 @@ use chrono::{DateTime, Utc};
 use ferrite_domain::Timestamp;
 use ferrite_domain::{NewUser, Page, Secret, User, UserId};
 use ferrite_store::{
-    MAX_ID_FILTER, StoreError, USER_CURSOR_TAG, UserRepo, check_len, check_limit, email_key,
-    encode_text_cursor, text_cursor, validate_text,
+    MAX_ID_FILTER, StoreError, USER_CURSOR_TAG, UserRepo, check_admin_limit, check_len,
+    check_limit, email_key, encode_text_cursor, text_cursor, validate_text,
 };
 
 use sqlx::{Postgres, QueryBuilder};
@@ -182,6 +182,18 @@ impl UserRepo for PgRepos {
         )
         .fetch_one(e))?;
         Ok(u64::try_from(n).unwrap_or(0))
+    }
+
+    async fn list_active_admins(&self, limit: u32) -> Result<Vec<User>, StoreError> {
+        let limit = check_admin_limit(limit)?;
+        let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {USER_COLUMNS} FROM users \
+             WHERE role = 'admin' AND status = 'active' \
+             ORDER BY login, id LIMIT $1"
+        )))
+        .bind(i64::from(limit))
+        .fetch_all(e))?;
+        rows.iter().map(codec::user).collect()
     }
 
     async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<User>, StoreError> {

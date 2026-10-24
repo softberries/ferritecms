@@ -7,6 +7,7 @@ pub mod api;
 pub mod app;
 pub mod extensions;
 pub mod head;
+pub mod mail;
 pub mod plugins;
 pub mod route;
 

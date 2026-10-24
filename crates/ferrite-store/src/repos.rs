@@ -388,6 +388,10 @@ pub trait UserRepo: Send + Sync {
     async fn delete(&self, id: UserId) -> Result<(), StoreError>;
     /// Number of users with role `admin` and status `active`.
     async fn count_active_admins(&self) -> Result<u64, StoreError>;
+    /// Up to `limit` users with role `admin` and status `active`, ordered by login
+    /// (then id); `limit` outside 1..=[`MAX_AUTH_LIST`](crate::MAX_AUTH_LIST) is
+    /// `Invalid`.
+    async fn list_active_admins(&self, limit: u32) -> Result<Vec<User>, StoreError>;
     /// Lists users with cursor pagination.
     async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<User>, StoreError>;
     /// Fetches up to [`MAX_ID_FILTER`](crate::MAX_ID_FILTER) users in one query, returned

@@ -1,0 +1,17 @@
+[plugin]
+name      = "mail-flood"
+version   = "0.1.0"
+publisher = "ferritecms.dev"
+world     = "ferrite:plugin/plugin@0.1.0"
+
+# Hostile (M2a-2 Review Focus 3): tries to spam the admins, inject headers and mail
+# from a render filter. Results are written to kv for the tests to read.
+[capabilities]
+mail        = "admins"
+kv          = true
+render.head = true
+
+[hooks]
+"render.head"    = 10
+"post.saved"     = 10
+"post.published" = 10

@@ -27,6 +27,7 @@ html-escape = "0.3.0"
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["server-auto", "tokio", "server"] }
 ipnet = "2"
+lettre = { version = "=0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "ring", "webpki-roots"] }
 libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 infer = "0.22"

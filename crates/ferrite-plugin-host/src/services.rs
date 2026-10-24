@@ -1,7 +1,7 @@
 //! Data the host exposes to plugins, abstracted from storage (design 05 §9).
 //!
 //! The plugin host never touches the database itself: every `content`, `meta`, `options`,
-//! `kv` and `settings` import is answered through [`HostServices`]. Capability checks and
+//! `kv`, `settings` and `mail` import is answered through [`HostServices`]. Capability checks and
 //! budgets are applied by the host before these methods are called.
 
 use std::collections::{BTreeMap, HashMap};
@@ -34,6 +34,26 @@ pub trait HostServices: Send + Sync + 'static {
     /// JSON text: the stored value if it fits `spec`, else (or when unset) the declared
     /// default or `None`; the host answers the declared default for `None`.
     async fn setting_get(&self, plugin: &str, key: &str, spec: &SettingSpec) -> Option<String>;
+    /// Mail from plugin `plugin` to the site's active admins (`mail = "admins"`, P18).
+    /// The host has already refused render-path calls, a second mail in one call and
+    /// a subject or body outside the limits; implementations add the hourly limit and
+    /// the recipients, and must not wait for delivery (F28). The default: mail is not
+    /// configured.
+    async fn notify_admins(&self, plugin: &str, subject: &str, text: &str) -> Result<(), String> {
+        let _ = (plugin, subject, text);
+        Err(MAIL_NOT_CONFIGURED.to_owned())
+    }
+}
+
+/// What a plugin's `mail.notify-admins` gets on a site without `[mail]`.
+pub const MAIL_NOT_CONFIGURED: &str = "mail is not configured";
+
+/// One mail recorded by [`InMemoryServices`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SentMail {
+    pub plugin: String,
+    pub subject: String,
+    pub text: String,
 }
 
 #[derive(Default)]
@@ -47,6 +67,7 @@ struct Data {
     kv: BTreeMap<(String, String), Vec<u8>>,
     /// Keyed by (plugin, key).
     settings: HashMap<(String, String), String>,
+    mails: Vec<SentMail>,
 }
 
 /// In-memory [`HostServices`] for tests and the spike.
@@ -74,6 +95,11 @@ impl InMemoryServices {
         self.lock()
             .settings
             .insert(pair(plugin, key), v.to_string());
+    }
+
+    /// Every `notify_admins` call so far, in order.
+    pub fn mails(&self) -> Vec<SentMail> {
+        self.lock().mails.clone()
     }
 
     fn lock(&self) -> MutexGuard<'_, Data> {
@@ -150,5 +176,14 @@ impl HostServices for InMemoryServices {
 
     async fn setting_get(&self, plugin: &str, key: &str, _spec: &SettingSpec) -> Option<String> {
         self.lock().settings.get(&pair(plugin, key)).cloned()
+    }
+
+    async fn notify_admins(&self, plugin: &str, subject: &str, text: &str) -> Result<(), String> {
+        self.lock().mails.push(SentMail {
+            plugin: plugin.to_owned(),
+            subject: subject.to_owned(),
+            text: text.to_owned(),
+        });
+        Ok(())
     }
 }

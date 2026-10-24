@@ -117,6 +117,7 @@ backend_tests!(
     update_keeps_totp_last_step,
     user_delete_restricted_by_content_then_ok_after_reassign,
     count_active_admins_ignores_disabled_and_other_roles,
+    list_active_admins_filters,
 );
 
 backend_tests!(

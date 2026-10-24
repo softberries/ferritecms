@@ -15,6 +15,8 @@ pub struct Config {
     pub cache: CacheConfig,
     pub plugins: PluginsConfig,
     pub auth: AuthConfig,
+    /// `[mail]`; `None` when `smtp_url` is not set (mail is then unavailable).
+    pub mail: Option<MailConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +112,16 @@ pub struct PluginsConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthConfig {
     pub secret_key: Option<Secret>,
+}
+
+/// `[mail]` (M2a-2 P17). `smtp_url` is `smtp://` (plain, or STARTTLS with
+/// `?tls=required` / `?tls=opportunistic`) or `smtps://` (implicit TLS), credentials in
+/// the URL; `from` is the sender mailbox (`a@example.com` or `Name <a@example.com>`).
+/// Both are shape-checked here; the SMTP mailer parses them again at boot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailConfig {
+    pub smtp_url: Secret,
+    pub from: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,12 +1,14 @@
 //! [`HostServices`] over the store: what plugin imports read and write.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use ferrite_core::{
     DepKeys, PageItem, SiteRead, SiteReader,
     auth::SiteKey,
     events::{invalidate, option_key, post_key},
     ext_settings::{SettingDef, open_secret, plugin_option, resolve_plugin_value},
+    mail::{MailQueue, Mailer, OutgoingMail, check_address},
 };
 use ferrite_domain::{ContentId, ContentStatus};
 use ferrite_plugin_host::{HostServices, KindOk, Post, SettingSpec, TermRef};
@@ -24,6 +26,11 @@ const STORAGE_ERROR: &str = "storage error";
 /// through `options.get`, whatever a manifest grants; a plugin reads its own settings
 /// through `settings.get`.
 const PLUGIN_OPTION_PREFIX: &str = "plugin.";
+/// Most mails one plugin may send per hour, on all nodes together (P18).
+pub const MAIL_PER_PLUGIN_HOUR: u32 = 10;
+/// Most admins one plugin mail goes to (P18).
+pub const MAIL_MAX_ADMINS: u32 = 50;
+const MAIL_WINDOW: Duration = Duration::from_secs(3600);
 
 /// Store-backed services for the plugin imports. Capability and key-scope checks are
 /// the host's (`ferrite-plugin-host`); this layer adds visibility:
@@ -45,6 +52,17 @@ const PLUGIN_OPTION_PREFIX: &str = "plugin.";
 ///   Anything else is logged (plugin and key, never the value) and answers `None`, so
 ///   the host falls back to the declared default.
 ///
+/// * `mail.notify-admins` (with [`with_mailer`](Self::with_mailer); without it the
+///   guest gets "mail is not configured"): the host has checked the render path, one
+///   mail per call and the subject and body; here, outside any `Tx` (R6), one hit on
+///   the fixed-hour bucket `mail:plugin:<name>` (over [`MAIL_PER_PLUGIN_HOUR`]:
+///   refused), then up to [`MAIL_MAX_ADMINS`] active admins by login (an address that
+///   fails `check_address` is skipped and logged), then one mail with every admin in
+///   Bcc, subject `[<site title>] <subject>` (no prefix for an empty title) and body +
+///   `"\n\n-- \nSent by plugin <name>"`, handed to the node's [`MailQueue`], which
+///   sends in the background (F28): the guest learns about refusals, not about SMTP
+///   failures.
+///
 /// A store error is logged and the guest gets "not found" (reads) or a storage error
 /// (writes); inside a request scope it also marks the page volatile, so the degraded
 /// result gets the short TTL instead of staying cached.
@@ -58,6 +76,8 @@ pub struct StoreHostServices {
     site_url: String,
     /// Opens sealed plugin secrets; `None`: secrets read as unset.
     site_key: Option<SiteKey>,
+    /// The node's mail queue and the site title for subjects; `None`: no `[mail]`.
+    mail: Option<(Arc<MailQueue>, String)>,
 }
 
 impl StoreHostServices {
@@ -67,7 +87,16 @@ impl StoreHostServices {
             reader,
             site_url: site_url.trim_end_matches('/').to_owned(),
             site_key: None,
+            mail: None,
         }
+    }
+
+    /// Mail for `mail.notify-admins` through the node's queue (never a transport
+    /// directly: SMTP must not run inside a plugin call, F28), with `site_title` (the
+    /// configured one, fixed at boot) as the subject prefix.
+    pub fn with_mailer(mut self, queue: Arc<MailQueue>, site_title: String) -> Self {
+        self.mail = Some((queue, site_title));
+        self
     }
 
     /// The site key `settings.get` opens sealed secrets with (the one `ExtensionAdmin`
@@ -305,6 +334,65 @@ impl HostServices for StoreHostServices {
             );
         }
         resolved.value.as_ref().map(json_text)
+    }
+
+    async fn notify_admins(&self, plugin: &str, subject: &str, text: &str) -> Result<(), String> {
+        let Some((queue, site_title)) = &self.mail else {
+            return Err(ferrite_plugin_host::MAIL_NOT_CONFIGURED.to_owned());
+        };
+        let bucket = format!("mail:plugin:{plugin}");
+        let hit = self
+            .store
+            .read()
+            .rate_limits()
+            .hit(&bucket, MAIL_WINDOW)
+            .await
+            .map_err(|e| {
+                tracing::warn!(plugin, error = %e, "plugin mail limit check failed");
+                STORAGE_ERROR.to_owned()
+            })?;
+        if hit.count > MAIL_PER_PLUGIN_HOUR {
+            tracing::warn!(plugin, "plugin mail refused: hourly limit reached");
+            return Err(format!(
+                "mail limit reached: {MAIL_PER_PLUGIN_HOUR} mails per plugin per hour"
+            ));
+        }
+        let admins = self
+            .store
+            .read()
+            .users()
+            .list_active_admins(MAIL_MAX_ADMINS)
+            .await
+            .map_err(|e| {
+                tracing::warn!(plugin, error = %e, "listing admins for plugin mail failed");
+                STORAGE_ERROR.to_owned()
+            })?;
+        let bcc: Vec<String> = admins
+            .into_iter()
+            .filter(|u| match check_address(&u.email) {
+                Ok(()) => true,
+                Err(_) => {
+                    tracing::warn!(plugin, user = %u.id, "admin skipped: unusable e-mail address");
+                    false
+                }
+            })
+            .map(|u| u.email)
+            .collect();
+        if bcc.is_empty() {
+            return Err("no active admin has a usable e-mail address".to_owned());
+        }
+        let subject = if site_title.trim().is_empty() {
+            subject.to_owned()
+        } else {
+            format!("[{site_title}] {subject}")
+        };
+        let mail = OutgoingMail {
+            to: Vec::new(),
+            bcc,
+            subject,
+            text: format!("{text}\n\n-- \nSent by plugin {plugin}"),
+        };
+        queue.send(mail).await.map_err(|e| e.0)
     }
 }
 

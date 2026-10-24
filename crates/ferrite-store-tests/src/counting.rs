@@ -397,6 +397,9 @@ impl UserRepo for Counted {
     async fn get_for_update(&self, id: UserId) -> Result<Option<User>, StoreError> {
         self.0.read().users().get_for_update(id).await
     }
+    async fn list_active_admins(&self, limit: u32) -> Result<Vec<User>, StoreError> {
+        self.0.read().users().list_active_admins(limit).await
+    }
     async fn update(&self, user: &User) -> Result<(), StoreError> {
         self.0.read().users().update(user).await
     }

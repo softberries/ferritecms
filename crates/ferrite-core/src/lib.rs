@@ -11,6 +11,7 @@ pub mod ext_settings;
 mod extensions;
 pub mod fields;
 pub mod jobs;
+pub mod mail;
 mod menu;
 mod options;
 pub mod permalink;

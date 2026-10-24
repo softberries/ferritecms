@@ -1,0 +1,13 @@
+[plugin]
+name      = "notifier"
+version   = "0.1.0"
+publisher = "ferritecms.dev"
+world     = "ferrite:plugin/plugin@0.1.0"
+
+# E-mails the site's admins when a post is published (M2a-2 P18).
+[capabilities]
+mail         = "admins"
+content.read = ["post"]
+
+[hooks]
+"post.published" = 10

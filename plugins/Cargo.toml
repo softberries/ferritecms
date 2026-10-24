@@ -10,6 +10,7 @@ members = [
     "examples/meta-writer",
     "examples/settings-probe",
     "examples/router",
+    "examples/notifier",
     "examples/hostile/undeclared-import",
     "examples/hostile/sockets",
     "examples/hostile/loop",
@@ -28,4 +29,5 @@ members = [
     "examples/hostile/resource-flood",
     "examples/hostile/route-xss",
     "examples/hostile/route-flood",
+    "examples/hostile/mail-flood",
 ]

@@ -58,6 +58,7 @@ pub fn load(
     let cache = parse_cache(&mut cx, &mut table);
     let plugins = parse_plugins(&mut cx, &mut table);
     let (auth, key_given) = parse_auth(&mut cx, &mut table);
+    let mail = parse_mail(&mut cx, &mut table);
     cx.unknown(table, "");
 
     validate_cluster(&mut cx, &cluster, &database, &media);
@@ -82,6 +83,7 @@ pub fn load(
             cache,
             plugins,
             auth,
+            mail,
         }),
         _ => Err(ConfigError {
             problems: cx.problems,
@@ -587,6 +589,90 @@ fn parse_auth(cx: &mut Cx, root: &mut Table) -> (AuthConfig, bool) {
     (AuthConfig { secret_key }, given)
 }
 
+/// The `[mail]` section (P17); `None` without `smtp_url`. Messages never echo the URL.
+fn parse_mail(cx: &mut Cx, root: &mut Table) -> Option<MailConfig> {
+    let mut t = section(cx, root, "mail");
+    let url_path = if t.contains_key("smtp_url_file") && !t.contains_key("smtp_url") {
+        "mail.smtp_url_file"
+    } else {
+        "mail.smtp_url"
+    };
+    let url_given = t.contains_key("smtp_url") || t.contains_key("smtp_url_file");
+    let smtp_url = cx.secret(&mut t, "mail", "smtp_url");
+    let from = cx.string(&mut t, "mail", "from");
+    cx.unknown(t, "mail");
+    let url_ok = smtp_url.as_ref().is_some_and(|u| {
+        let ok = valid_smtp_url(u.expose());
+        if !ok {
+            cx.push(
+                url_path,
+                "must be smtp://host[:port] (optionally ?tls=required or ?tls=opportunistic) \
+                 or smtps://host[:port], with any credentials in the URL",
+            );
+        }
+        ok
+    });
+    match (smtp_url, from) {
+        (None, None) => None,
+        // Already a problem (both forms, or an unreadable or empty file).
+        (None, Some(_)) if url_given => None,
+        (None, Some(_)) => {
+            cx.push("mail.from", "only valid together with mail.smtp_url");
+            None
+        }
+        (Some(_), None) => {
+            cx.push("mail.from", "required when mail.smtp_url is set");
+            None
+        }
+        (Some(smtp_url), Some(from)) => {
+            if !valid_mailbox(&from) {
+                cx.push(
+                    "mail.from",
+                    "must be an address such as \"noreply@example.com\" or \
+                     \"Site <noreply@example.com>\"",
+                );
+                return None;
+            }
+            url_ok.then_some(MailConfig { smtp_url, from })
+        }
+    }
+}
+
+/// `smtp://` or `smtps://` with a host; `tls` only `required` or `opportunistic`.
+fn valid_smtp_url(s: &str) -> bool {
+    let Ok(u) = url::Url::parse(s) else {
+        return false;
+    };
+    let tls_ok = u.query_pairs().all(|(k, v)| {
+        k != "tls" || (u.scheme() == "smtp" && matches!(&*v, "required" | "opportunistic"))
+    });
+    matches!(u.scheme(), "smtp" | "smtps") && u.host_str().is_some_and(|h| !h.is_empty()) && tls_ok
+}
+
+/// `local@domain` or `Display Name <local@domain>`, without control characters.
+fn valid_mailbox(s: &str) -> bool {
+    if s.chars().any(char::is_control) {
+        return false;
+    }
+    let addr = match s.strip_suffix('>') {
+        Some(rest) => match rest.rsplit_once('<') {
+            Some((_name, addr)) => addr,
+            None => return false,
+        },
+        None => s,
+    };
+    let forbidden = |c: char| c.is_whitespace() || "<>()[],;:\"\\".contains(c);
+    match addr.split_once('@') {
+        Some((local, domain)) => {
+            !local.is_empty()
+                && !domain.is_empty()
+                && !domain.contains('@')
+                && !addr.chars().any(forbidden)
+        }
+        None => false,
+    }
+}
+
 /// Startup validation per design 04 §3 (the checks that need only configuration).
 fn validate_cluster(
     cx: &mut Cx,
@@ -706,7 +792,14 @@ pub fn render_default_toml(
     out.push_str("# it here (the same key on every node), e.g. from `openssl rand -hex 32`.\n");
     out.push_str("# secret_key_file = \"/run/secrets/ferrite_site_key\"\n\n");
     out.push_str(
-        "[plugins]\ndefault_memory = \"32MB\"\ndefault_fuel = 50000000\nrender_deadline_ms = 200\naction_deadline_ms = 5000\ndisable_after_failures = 20\nfailure_window = \"10m\"\n",
+        "[plugins]\ndefault_memory = \"32MB\"\ndefault_fuel = 50000000\nrender_deadline_ms = 200\naction_deadline_ms = 5000\ndisable_after_failures = 20\nfailure_window = \"10m\"\n\n",
     );
+    out.push_str("# [mail]\n");
+    out.push_str("# Outgoing mail (password resets, plugin notices to admins). Unset: no mail.\n");
+    out.push_str("# smtp:// (?tls=required for STARTTLS) or smtps://; credentials in the URL.\n");
+    out.push_str(
+        "# smtp_url_file = \"/run/secrets/smtp_url\"  # or smtp_url = \"smtps://user:pass@host\"\n",
+    );
+    out.push_str("# from = \"Site <noreply@example.com>\"\n");
     out
 }

@@ -46,8 +46,9 @@ pub use manifest::{
     RESERVED_PLUGIN_NAMES, RouteSpec, SettingKind, SettingSpec,
 };
 pub use report::{LimitItem, PermissionItem, PermissionReport};
-pub use services::{HostServices, InMemoryServices, KindOk};
+pub use services::{HostServices, InMemoryServices, KindOk, MAIL_NOT_CONFIGURED, SentMail};
 pub use sink::FailureSink;
+pub use state::{MAX_MAIL_BODY_BYTES, MAX_MAIL_SUBJECT_CHARS};
 pub use trace::{FilterOutcome, dep_keys};
 pub use types::{
     ActionEvent, FilterValue, Head, LinkTag, MetaTag, Post, RequestInfo, RouteRequest,

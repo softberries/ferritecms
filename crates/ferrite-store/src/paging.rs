@@ -320,8 +320,19 @@ pub fn audit_cursor(cursor: &str) -> Result<(i64, Uuid), StoreError> {
     }
 }
 
-/// Most sessions or API tokens one `list_for_user` returns.
+/// Most sessions or API tokens one `list_for_user` returns, and the largest
+/// `UserRepo::list_active_admins` limit.
 pub const MAX_AUTH_LIST: u32 = 100;
+
+/// Validates a `UserRepo::list_active_admins` limit: 1..=[`MAX_AUTH_LIST`].
+pub fn check_admin_limit(limit: u32) -> Result<u32, StoreError> {
+    if limit == 0 || limit > MAX_AUTH_LIST {
+        return Err(StoreError::Invalid(format!(
+            "limit must be between 1 and {MAX_AUTH_LIST}"
+        )));
+    }
+    Ok(limit)
+}
 
 /// Longest rate-limit bucket name, in characters.
 pub const MAX_RATE_BUCKET: usize = 200;

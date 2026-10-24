@@ -653,3 +653,136 @@ fn auth_secret_key_rules() {
         assert_eq!(r.unwrap().effective_cluster_mode(), ClusterMode::Cluster);
     }
 }
+
+#[test]
+fn mail_section_rules() {
+    // Absent: no mail.
+    let (_d, r) = run(Some(MIN), &[]);
+    assert_eq!(r.unwrap().mail, None);
+
+    let ok = format!(
+        "{MIN}[mail]\nsmtp_url = \"smtps://user:topsecretpw@mail.example.com:465\"\nfrom = \"Site <noreply@example.com>\"\n"
+    );
+    let (_d, r) = run(Some(&ok), &[]);
+    let mail = r.unwrap().mail.unwrap();
+    assert_eq!(
+        mail.smtp_url.expose(),
+        "smtps://user:topsecretpw@mail.example.com:465"
+    );
+    assert_eq!(mail.from, "Site <noreply@example.com>");
+    assert!(!format!("{mail:?}").contains("topsecretpw"));
+    for url in [
+        "smtp://127.0.0.1:2525",
+        "smtp://mail.example.com?tls=required",
+        "smtp://mail.example.com?tls=opportunistic",
+    ] {
+        let (_d, r) = run(
+            Some(&format!(
+                "{MIN}[mail]\nsmtp_url = \"{url}\"\nfrom = \"a@example.com\"\n"
+            )),
+            &[],
+        );
+        assert!(r.is_ok(), "{url}: {r:?}");
+    }
+
+    // Bad schemes and shapes; the URL (and its password) is never echoed.
+    for url in [
+        "http://user:topsecretpw@mail.example.com",
+        "smtp:topsecretpw",
+        "smtp://user:topsecretpw@/",
+        "not a url topsecretpw",
+        "smtp://user:topsecretpw@mail.example.com?tls=sometimes",
+    ] {
+        let (_d, r) = run(
+            Some(&format!(
+                "{MIN}[mail]\nsmtp_url = \"{url}\"\nfrom = \"a@example.com\"\n"
+            )),
+            &[],
+        );
+        let e = r.unwrap_err();
+        assert_eq!(paths(&e), ["mail.smtp_url"], "{url}");
+        assert!(!e.to_string().contains("topsecretpw"), "{e}");
+        assert!(!e.to_string().contains("mail.example.com"), "{e}");
+    }
+
+    // `from` is required with a URL, must be a mailbox, and needs the URL.
+    let (_d, r) = run(
+        Some(&format!("{MIN}[mail]\nsmtp_url = \"smtp://h:25\"\n")),
+        &[],
+    );
+    assert_eq!(paths(&r.unwrap_err()), ["mail.from"]);
+    for from in [
+        "",
+        "nobody",
+        "a@b@c",
+        "Name <a@example.com",
+        "a@example.com\r\nBcc: x@evil.test",
+        "Na\nme <a@example.com>",
+        "<>",
+    ] {
+        let toml = format!(
+            "{MIN}[mail]\nsmtp_url = \"smtp://h:25\"\nfrom = {}\n",
+            toml::Value::String(from.into())
+        );
+        let (_d, r) = run(Some(&toml), &[]);
+        assert_eq!(paths(&r.unwrap_err()), ["mail.from"], "{from:?}");
+    }
+    let (_d, r) = run(
+        Some(&format!("{MIN}[mail]\nfrom = \"a@example.com\"\n")),
+        &[],
+    );
+    assert_eq!(paths(&r.unwrap_err()), ["mail.from"]);
+
+    // `_file` works (one trailing newline stripped); both at once is a problem.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("smtp.url"),
+        "smtp://u:topsecretpw@127.0.0.1:2525\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("ferrite.toml"),
+        format!("{MIN}[mail]\nsmtp_url_file = \"smtp.url\"\nfrom = \"a@example.com\"\n"),
+    )
+    .unwrap();
+    let c = load(dir.path(), env(&[])).unwrap();
+    assert_eq!(
+        c.mail.unwrap().smtp_url.expose(),
+        "smtp://u:topsecretpw@127.0.0.1:2525"
+    );
+    std::fs::write(dir.path().join("smtp.url"), "ftp://u:topsecretpw@h\n").unwrap();
+    let e = load(dir.path(), env(&[])).unwrap_err();
+    assert_eq!(paths(&e), ["mail.smtp_url_file"]);
+    assert!(!e.to_string().contains("topsecretpw"), "{e}");
+    std::fs::write(
+        dir.path().join("ferrite.toml"),
+        format!(
+            "{MIN}[mail]\nsmtp_url = \"smtp://h\"\nsmtp_url_file = \"smtp.url\"\nfrom = \"a@example.com\"\n"
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        paths(&load(dir.path(), env(&[])).unwrap_err()),
+        ["mail.smtp_url"]
+    );
+
+    // From the environment, problems name the variable.
+    let (_d, r) = run(
+        Some(MIN),
+        &[
+            ("FERRITE_MAIL__SMTP_URL", "pop3://u:topsecretpw@h"),
+            ("FERRITE_MAIL__FROM", "a@example.com"),
+        ],
+    );
+    let e = r.unwrap_err();
+    assert_eq!(paths(&e), ["env:FERRITE_MAIL__SMTP_URL"]);
+    assert!(!e.to_string().contains("topsecretpw"), "{e}");
+    // Unknown keys are refused.
+    let (_d, r) = run(
+        Some(&format!(
+            "{MIN}[mail]\nsmtp_url = \"smtp://h\"\nfrom = \"a@example.com\"\nport = 25\n"
+        )),
+        &[],
+    );
+    assert_eq!(paths(&r.unwrap_err()), ["mail.port"]);
+}

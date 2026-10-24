@@ -46,6 +46,11 @@ const MAX_LIST: u32 = 100;
 const BUDGET_EXCEEDED: &str = "budget exceeded";
 const UNAVAILABLE: &str = "unavailable in this build";
 const RENDER_WRITE: &str = "meta.set is not allowed during render filters";
+const RENDER_MAIL: &str = "mail is not allowed during render filters";
+/// Longest `mail.notify-admins` subject, in characters (P18).
+pub const MAX_MAIL_SUBJECT_CHARS: usize = 200;
+/// Largest `mail.notify-admins` body, in bytes (P18).
+pub const MAX_MAIL_BODY_BYTES: usize = 64 * 1024;
 
 /// Host-import budget for one call (design 05 §6).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +63,8 @@ pub(crate) struct Budget {
     /// Bytes (post id + key + value) `meta.set` may still write.
     meta_bytes: usize,
     http: u32,
+    /// `mail.notify-admins` calls (P18: one per call).
+    mail: u32,
 }
 
 impl Budget {
@@ -68,6 +75,7 @@ impl Budget {
             kv_bytes: 1024 * 1024,
             meta_bytes: 1024 * 1024,
             http: 3,
+            mail: 1,
         }
     }
 }
@@ -454,10 +462,44 @@ impl http::Host for HostState {
     }
 }
 
+/// P18 / F29, in this order: refused during render filters (R20); one mail per call
+/// (a refused second attempt reaches no service, so it uses no hourly slot); a subject
+/// of 1..=[`MAX_MAIL_SUBJECT_CHARS`] characters without control characters (refused,
+/// never folded: no header injection); a body of at most [`MAX_MAIL_BODY_BYTES`]. The
+/// services add the hourly limit and the recipients.
 impl mail::Host for HostState {
-    async fn notify_admins(&mut self, _subject: String, _text_body: String) -> Result<(), String> {
-        // Real implementation lands in M2.
-        Err(UNAVAILABLE.into())
+    async fn notify_admins(&mut self, subject: String, text_body: String) -> Result<(), String> {
+        if self.render_path {
+            if !self.refusal_logged {
+                self.refusal_logged = true;
+                tracing::warn!(plugin = %self.plugin, "mail refused during a render filter");
+            }
+            return Err(RENDER_MAIL.into());
+        }
+        if !take(&mut self.budget.mail) {
+            return Err("only one mail per call".into());
+        }
+        let chars = subject.chars().count();
+        if subject.trim().is_empty() || chars > MAX_MAIL_SUBJECT_CHARS {
+            return Err(format!(
+                "the subject must be 1 to {MAX_MAIL_SUBJECT_CHARS} characters"
+            ));
+        }
+        if subject
+            .chars()
+            .any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}')
+        {
+            return Err("the subject must not contain control characters".into());
+        }
+        if text_body.len() > MAX_MAIL_BODY_BYTES {
+            return Err(format!(
+                "the body is {} bytes, limit {MAX_MAIL_BODY_BYTES}",
+                text_body.len()
+            ));
+        }
+        self.services
+            .notify_admins(&self.plugin, &subject, &text_body)
+            .await
     }
 }
 
@@ -790,6 +832,114 @@ mod tests {
             settings::Host::get(&mut s, "title".into()).await,
             None,
             "budget exhausted"
+        );
+    }
+
+    fn render_state(services: Arc<dyn HostServices>, render_path: bool) -> HostState {
+        HostState::new(
+            "tester".into(),
+            Arc::new(Capabilities::default()),
+            Arc::default(),
+            services,
+            1024 * 1024,
+            CallTrace::default(),
+            render_path,
+        )
+    }
+
+    #[tokio::test]
+    async fn mail_rules() {
+        use mail::Host as _;
+        let services = Arc::new(InMemoryServices::new());
+        // Render path: refused, nothing reaches the services.
+        let mut s = render_state(services.clone(), true);
+        assert_eq!(
+            s.notify_admins("Hi".into(), "b".into()).await,
+            Err(RENDER_MAIL.into())
+        );
+        assert!(services.mails().is_empty());
+
+        // One per call; the second attempt never reaches the services.
+        let mut s = render_state(services.clone(), false);
+        assert_eq!(s.notify_admins("Hi".into(), "b".into()).await, Ok(()));
+        assert!(s.notify_admins("Again".into(), "b".into()).await.is_err());
+        assert_eq!(services.mails().len(), 1);
+        assert_eq!(services.mails()[0].subject, "Hi");
+
+        // Subject and body limits, checked after the per-call slot is taken.
+        let refused = [
+            (String::new(), String::new()),
+            ("  ".into(), String::new()),
+            ("é".repeat(MAX_MAIL_SUBJECT_CHARS + 1), String::new()),
+            ("Hi\r\nBcc: victim@evil.test".into(), String::new()),
+            ("Hi\nX".into(), String::new()),
+            ("nul\0".into(), String::new()),
+            ("c1\u{85}".into(), String::new()),
+            ("ls\u{2028}".into(), String::new()),
+            ("Hi".into(), "x".repeat(MAX_MAIL_BODY_BYTES + 1)),
+        ];
+        for (subject, body) in refused {
+            let mut s = render_state(services.clone(), false);
+            assert!(
+                s.notify_admins(subject.clone(), body).await.is_err(),
+                "{subject:?}"
+            );
+        }
+        assert_eq!(services.mails().len(), 1, "no refused mail was sent");
+        let mut s = render_state(services.clone(), false);
+        assert_eq!(
+            s.notify_admins(
+                "é".repeat(MAX_MAIL_SUBJECT_CHARS),
+                "x\n".repeat(MAX_MAIL_BODY_BYTES / 2)
+            )
+            .await,
+            Ok(())
+        );
+        // Without a mail service (the trait default).
+        struct NoMail;
+        #[async_trait::async_trait]
+        impl HostServices for NoMail {
+            async fn get_post(&self, _: &str, _: &crate::services::KindOk) -> Option<Post> {
+                None
+            }
+            async fn get_post_by_slug(&self, _: &str, _: &str) -> Option<Post> {
+                None
+            }
+            async fn list_posts(&self, _: &str, _: u32, _: u32) -> Vec<Post> {
+                Vec::new()
+            }
+            async fn meta_get(&self, _: &str, _: &str) -> Option<String> {
+                None
+            }
+            async fn meta_set(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+            async fn option_get(&self, _: &str) -> Option<String> {
+                None
+            }
+            async fn kv_get(&self, _: &str, _: &str) -> Option<Vec<u8>> {
+                None
+            }
+            async fn kv_set(&self, _: &str, _: &str, _: Vec<u8>) -> Result<(), String> {
+                Ok(())
+            }
+            async fn kv_delete(&self, _: &str, _: &str) {}
+            async fn kv_list(&self, _: &str, _: &str, _: u32) -> Vec<String> {
+                Vec::new()
+            }
+            async fn setting_get(
+                &self,
+                _: &str,
+                _: &str,
+                _: &crate::manifest::SettingSpec,
+            ) -> Option<String> {
+                None
+            }
+        }
+        let mut s = render_state(Arc::new(NoMail), false);
+        assert_eq!(
+            s.notify_admins("Hi".into(), "b".into()).await,
+            Err(crate::services::MAIL_NOT_CONFIGURED.into())
         );
     }
 

@@ -6,6 +6,7 @@
 
 mod common;
 mod install;
+mod mail;
 mod reload;
 mod settings;
 
