@@ -7,8 +7,12 @@
 //! only non-default members, and is read back through [`Manifest::parse`] (so a grant
 //! obeys every manifest rule, bare hosts included). `routes` holds the distinct route
 //! policies approved (ruling R7: `cross_origin` and `rate_limit` are part of the grant;
-//! the paths are not, R6), sorted. The M1c-2 form, a bare `[capabilities]` table, is
-//! still read; it carries no approved limits and no route policies.
+//! the paths are not, R6), sorted. `"hooks":["request.served"]` is present only when the
+//! plugin subscribes to `request.served` (ruling R23: site-wide traffic metadata is part
+//! of what is approved, so subscribing is widening); it is left out otherwise, so the
+//! stored form and the fingerprint of a grant without it are what they were before R23.
+//! Other hooks are not part of the grant. The M1c-2 form, a bare `[capabilities]` table,
+//! is still read; it carries no approved limits, no route policies and no hooks.
 
 use serde_json::{Map, Value, json};
 
@@ -95,9 +99,14 @@ pub struct Grant {
     pub limits: ApprovedLimits,
     /// Distinct, sorted.
     pub routes: Vec<RoutePolicy>,
+    /// The plugin may subscribe to `request.served` (R23).
+    pub request_served: bool,
 }
 
 const GRANT_VERSION: u64 = 1;
+
+/// The one hook that is part of a grant (R23).
+pub(crate) const GRANTED_HOOK: &str = "request.served";
 
 impl Grant {
     /// Exactly what `manifest` asks for: its capabilities, its `[limits]` requests and
@@ -113,6 +122,7 @@ impl Grant {
                 fuel: manifest.limits.fuel,
             },
             routes,
+            request_served: manifest.hooks.contains_key(GRANTED_HOOK),
         }
     }
 
@@ -128,7 +138,7 @@ impl Grant {
 
     /// The stored (v1) form; see the module docs.
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut doc = json!({
             "v": GRANT_VERSION,
             "capabilities": capabilities_json(&self.capabilities),
             "limits": { "memory": self.limits.memory, "fuel": self.limits.fuel },
@@ -136,7 +146,13 @@ impl Grant {
                 "cross_origin": r.cross_origin,
                 "rate_limit": r.rate_limit,
             })).collect::<Vec<_>>(),
-        })
+        });
+        if self.request_served
+            && let Value::Object(o) = &mut doc
+        {
+            o.insert("hooks".to_owned(), json!([GRANTED_HOOK]));
+        }
+        doc
     }
 
     /// Read a stored grant: the v1 form, or the M1c-2 bare `[capabilities]` table (no
@@ -158,10 +174,12 @@ impl Grant {
                 "granted: unsupported version (expected v = {GRANT_VERSION})"
             ));
         }
-        if let Some(key) = object
-            .keys()
-            .find(|k| !matches!(k.as_str(), "v" | "capabilities" | "limits" | "routes"))
-        {
+        if let Some(key) = object.keys().find(|k| {
+            !matches!(
+                k.as_str(),
+                "v" | "capabilities" | "limits" | "routes" | "hooks"
+            )
+        }) {
             return Err(format!("granted.{key}: unknown key"));
         }
         let capabilities = match object.get("capabilities") {
@@ -176,20 +194,34 @@ impl Grant {
             Some(Value::Array(r)) => parse_routes(r)?,
             _ => return Err("granted.routes: expected an array".to_owned()),
         };
+        let request_served = match object.get("hooks") {
+            None => false,
+            Some(Value::Array(h)) if h.iter().all(|v| v.as_str() == Some(GRANTED_HOOK)) => {
+                !h.is_empty()
+            }
+            Some(_) => {
+                return Err(format!(
+                    "granted.hooks: expected an array holding only \"{GRANTED_HOOK}\""
+                ));
+            }
+        };
         Ok(Grant {
             capabilities,
             limits,
             routes,
+            request_served,
         })
     }
 
-    /// Whether `wanted`'s capabilities and route policies are within this grant
+    /// Whether `wanted`'s capabilities, route policies and `request.served` subscription
+    /// are within this grant
     /// ([`Capabilities::is_subset_of`]; each route policy [`RoutePolicy::within`] an
     /// approved one). Limits are not compared: [`PluginHost::prepare_with`]
     /// (crate::PluginHost::prepare_with) applies them.
     pub fn covers_access(&self, wanted: &Grant) -> bool {
         wanted.capabilities.is_subset_of(&self.capabilities)
             && wanted.routes.iter().all(|r| self.covers_route(r))
+            && (!wanted.request_served || self.request_served)
     }
 
     /// Whether route policy `r` is within one approved here.
@@ -385,12 +417,48 @@ mod tests {
         assert!(!Grant::default().covers(&g));
     }
 
+    /// Ruling R23: `request.served` is part of the grant, written only when set.
+    #[test]
+    fn request_served_is_granted() {
+        let m = Manifest::parse(DESIGN_EXAMPLE).expect("parses");
+        let plugin = json!({
+            "name": "seo-pro",
+            "version": "1.4.0",
+            "publisher": "example.dev",
+            "world": "ferrite:plugin/plugin@0.1.0",
+        });
+        let with = Grant::of(&m);
+        assert!(with.request_served, "the design example subscribes");
+        assert_eq!(with.to_json()["hooks"], json!(["request.served"]));
+        let without = Grant {
+            request_served: false,
+            ..with.clone()
+        };
+        assert!(
+            without.to_json().get("hooks").is_none(),
+            "left out when unset"
+        );
+        assert_eq!(
+            Grant::from_json(&plugin, &without.to_json()),
+            Ok(without.clone())
+        );
+        assert!(with.covers_access(&without));
+        assert!(!without.covers_access(&with), "subscribing is widening");
+        // Only `request.served` may be listed.
+        let mut bad = with.to_json();
+        bad["hooks"] = json!(["post.saved"]);
+        assert!(Grant::from_json(&plugin, &bad).is_err());
+        // A legacy null grant follows its manifest.
+        assert!(Grant::legacy(&m).request_served);
+    }
+
     #[test]
     fn covers_compares_limits() {
         let with = |memory, fuel| Grant {
             capabilities: Capabilities::default(),
             limits: ApprovedLimits { memory, fuel },
             routes: Vec::new(),
+            request_served: false,
         };
         assert!(with(Some(64), None).covers(&with(Some(48), None)));
         assert!(!with(Some(48), None).covers(&with(Some(64), None)));

@@ -25,6 +25,7 @@ api_tests!(
     plugin_install_flow,
     install_needs_matching_approval,
     widening_update_without_approval_keeps_old_version,
+    subscribing_to_request_served_needs_approval,
     editor_cannot_manage_plugins,
     multipart_limits,
     delete_with_purge,
@@ -342,6 +343,82 @@ async fn widening_update_without_approval_keeps_old_version(api: Api) -> Api {
         .unwrap()
         .unwrap();
     assert_eq!(row.granted["capabilities"]["kv"], true, "{}", row.granted);
+    api
+}
+
+/// Ruling R23: subscribing to `request.served` (site-wide traffic metadata) is part of
+/// the grant. The same name, version and component with that one hook added has its own
+/// fingerprint, shows the hook in `added`, and the earlier approval does not install it.
+async fn subscribing_to_request_served_needs_approval(api: Api) -> Api {
+    let mut c = admin(&api).await;
+    let wasm = plugin_wasm("hello");
+    let v1 = plugin_manifest("hello");
+    let served = v1.replace("[hooks]\n", "[hooks]\n\"request.served\" = 5\n");
+    assert_ne!(served, v1);
+    let fp1 = inspect(&mut c, &api, &v1, &wasm).await.json()["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let r = install(&mut c, &api, &v1, &wasm, &fp1).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
+    let before = api
+        .store
+        .read()
+        .plugins()
+        .get("hello")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(before.granted.get("hooks").is_none(), "{}", before.granted);
+
+    let r = inspect(&mut c, &api, &served, &wasm).await;
+    let report = assert_report(&r, "0.1.0", true);
+    assert_eq!(
+        report["added"],
+        json!([{
+            "key": "hooks",
+            "text": report["added"][0]["text"],
+            "detail": ["request.served"],
+            "risk": "medium",
+            "high_risk": false,
+        }]),
+        "{report}"
+    );
+    let fp2 = report["fingerprint"].as_str().unwrap().to_owned();
+    assert_ne!(fp1, fp2, "the subscription is in the fingerprint");
+
+    // The earlier approval does not cover it (R1): 422, nothing changes.
+    let r = install(&mut c, &api, &served, &wasm, &fp1).await;
+    let p = r.assert_problem(422, "validation");
+    assert_eq!(p["errors"][0]["field"], "approve", "{p}");
+    let after = api
+        .store
+        .read()
+        .plugins()
+        .get("hello")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after, before);
+
+    // Its own fingerprint installs it, and the stored grant records the subscription.
+    let r = install(&mut c, &api, &served, &wasm, &fp2).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
+    assert_eq!(r.json()["report"]["added"], json!([]));
+    let row = api
+        .store
+        .read()
+        .plugins()
+        .get("hello")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.granted["hooks"],
+        json!(["request.served"]),
+        "{}",
+        row.granted
+    );
     api
 }
 

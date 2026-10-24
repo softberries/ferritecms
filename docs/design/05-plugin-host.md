@@ -82,8 +82,10 @@ upload .wasm + manifest ──► POST /plugins/inspect: validate manifest, insp
   is medium risk (it receives every page view: path, status, time, referrer host, browser
   class, cache outcome), `post.saved`, `post.published` and `user.created` are low (an item
   or user id). `added` lists what the manifest asks for beyond the installed version's
-  grant (a first install: everything). Hooks are not part of the grant, so on an update they
-  are never in `added` and they do not change the fingerprint.
+  grant (a first install: everything). The `request.served` subscription is part of the
+  grant (ruling R23): an update that adds it lists it in `added` and has a new fingerprint,
+  so an earlier approval does not install it. The low-risk hooks are not part of the grant:
+  on an update they are never in `added` and they do not change the fingerprint.
   The `fingerprint` is the lowercase hex SHA-256 of the compact JSON `{"artifact",
   "grant", "plugin", "version"}` (`grant` = `Grant::of(manifest).to_json()`; serde_json
   maps are sorted and a unit test pins one value). `POST /plugins` and `ferrite plugin
@@ -92,15 +94,17 @@ upload .wasm + manifest ──► POST /plugins/inspect: validate manifest, insp
   with `errors[0].field = "approve"` and the upload's report, and nothing changes.
 - **Grant (stored form v1).** `plugins.granted` = `{"v":1,"capabilities":<[capabilities]
   table, non-default members only>,"limits":{"memory":n|null,"fuel":n|null},"routes":
-  [{"cross_origin","rate_limit"}]}` (`ferrite_plugin_host::Grant`); the capabilities are
+  [{"cross_origin","rate_limit"}]}`, plus `"hooks":["request.served"]` only when the plugin
+  subscribes to `request.served` (R23; left out otherwise, so grants and fingerprints without
+  it are unchanged) (`ferrite_plugin_host::Grant`); the capabilities are
   read back through `Manifest::parse`, so a grant obeys every manifest rule. Route
   `cross_origin` and `rate_limit` are part of the grant (relaxing one is widening, ruling
   R7); route paths are not, since every route lives under the plugin's own `/_p/<name>/`
   (R6). The M1c-2 form (a bare `[capabilities]` table) is still read, with no approved
   limits and no route policies, so a legacy row with routes fails closed. A **null**
   `granted` (operator rows from before M2a-2a) counts as `Grant::legacy(manifest)`: the
-  manifest's capabilities, with `[limits]` capped at the host defaults (logged) until an
-  admin approves more; a reinstall writes a real grant.
+  manifest's capabilities and `request.served` subscription, with `[limits]` capped at the
+  host defaults (logged) until an admin approves more; a reinstall writes a real grant.
 - **Install-time check (P2)**: walk the component type's imports. Allowed:
   - `ferrite:plugin/*` interfaces that the manifest's capabilities map to (§4),
   - the WASI subset in §5.

@@ -1,10 +1,11 @@
 //! The permission report an admin approves before a plugin is installed or updated
 //! (plan rulings P3, P5, P6): every capability the manifest asks for as a plain-language
 //! line with its [`Risk`], what is new against the current grant, the limits, and the
-//! approval fingerprint. Action-hook subscriptions are listed too (ruling R22, M1), but
-//! they are not part of the grant: they do not change the fingerprint, and against a
-//! current grant (an update, or an installed row) they are never in `added`, because the
-//! grant does not record which hooks were approved.
+//! approval fingerprint. Action-hook subscriptions are listed too (ruling R22, M1).
+//! `request.served` is part of the grant (R23): it is in the fingerprint and, when the
+//! current grant lacks it, in `added`. The other action hooks are low risk and not part
+//! of the grant: they do not change the fingerprint, and against a current grant (an
+//! update, or an installed row) they are never in `added`.
 //!
 //! **Fingerprint.** Lowercase hex SHA-256 of the compact JSON of
 //! `{"artifact":<hash>,"grant":<Grant::of(manifest).to_json()>,"plugin":<name>,
@@ -17,7 +18,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::HostConfig;
 use crate::error::PluginError;
-use crate::grant::{Grant, LimitBounds, RoutePolicy};
+use crate::grant::{GRANTED_HOOK, Grant, LimitBounds, RoutePolicy};
 use crate::manifest::{Capabilities, HtmlMode, MailScope, Manifest, html_level, pattern_covered};
 
 /// What a manifest asks for, as an admin sees it before approving.
@@ -132,6 +133,13 @@ impl Manifest {
                 let uncovered = uncovered(&self.capabilities, &current.capabilities);
                 let relaxed = (self.capabilities.routes && !uncovered.routes).then_some(current);
                 let mut added = capability_items(self, &uncovered, relaxed);
+                if !current.request_served {
+                    added.extend(
+                        hook_items(self)
+                            .into_iter()
+                            .filter(|i| i.detail.iter().any(|h| h == GRANTED_HOOK)),
+                    );
+                }
                 let approved = |l: &LimitItem| match l.name {
                     "memory" => current.limits.memory,
                     _ => current.limits.fuel,
@@ -611,8 +619,8 @@ mod tests {
     }
 
     /// Ruling R22 (M1): action hooks are listed with their risk; `request.served` is
-    /// medium. They are outside the grant: an update adding one is not `added`, and the
-    /// fingerprint does not depend on them.
+    /// medium. Only `request.served` is part of the grant (R23): an update adding it is
+    /// `added` and changes the fingerprint; the other hooks do neither.
     #[test]
     fn hook_subscriptions_are_listed_with_their_risk() {
         let src = |hooks: &str| {
@@ -649,11 +657,34 @@ mod tests {
         let update = all
             .permission_report(ARTIFACT, Some(&Grant::of(&none)), &HostConfig::default())
             .expect("report");
-        assert!(update.added.is_empty(), "{:?}", update.added);
+        let added: Vec<_> = update.added.iter().map(|i| i.detail.clone()).collect();
+        assert_eq!(
+            added,
+            [v(&["request.served"])],
+            "only request.served widens"
+        );
         let base = none
             .permission_report(ARTIFACT, None, &HostConfig::default())
             .expect("report");
+        assert_ne!(
+            update.fingerprint, base.fingerprint,
+            "request.served is approved"
+        );
+        // The low-risk hooks alone: not added, fingerprint unchanged.
+        let low = Manifest::parse(&src(
+            "\"post.saved\" = 1\n\"post.published\" = 1\n\"user.created\" = 1",
+        ))
+        .expect("manifest");
+        let update = low
+            .permission_report(ARTIFACT, Some(&Grant::of(&none)), &HostConfig::default())
+            .expect("report");
+        assert!(update.added.is_empty(), "{:?}", update.added);
         assert_eq!(update.fingerprint, base.fingerprint);
+        // Approved: an installed row's report adds nothing.
+        let row = all
+            .permission_report(ARTIFACT, Some(&Grant::of(&all)), &HostConfig::default())
+            .expect("report");
+        assert!(row.added.is_empty(), "{:?}", row.added);
         assert_eq!(Risk::Medium.as_str(), "medium");
     }
 
@@ -663,7 +694,11 @@ mod tests {
     /// upgrade. Change the constants only for a deliberate format change.
     #[test]
     fn fingerprint_is_pinned() {
-        let m = Manifest::parse(DESIGN_EXAMPLE).expect("parses");
+        // R23: without `request.served` the grant has no `hooks` member, so this is the
+        // pre-R23 pin, unchanged.
+        let src = DESIGN_EXAMPLE.replace("\"request.served\" = 100", "");
+        let m = Manifest::parse(&src).expect("parses");
+        assert!(!m.hooks.contains_key("request.served"));
         let doc = json!({
             "plugin": m.plugin.name,
             "version": m.plugin.version.to_string(),
@@ -676,6 +711,17 @@ mod tests {
             .permission_report(ARTIFACT, None, &HostConfig::default())
             .expect("report");
         assert_eq!(r.fingerprint, PINNED_FINGERPRINT);
+
+        // With it (the full design example): `"hooks":["request.served"]` in the grant.
+        let m = Manifest::parse(DESIGN_EXAMPLE).expect("parses");
+        let doc = json!({
+            "plugin": m.plugin.name,
+            "version": m.plugin.version.to_string(),
+            "artifact": ARTIFACT,
+            "grant": Grant::of(&m).to_json(),
+        });
+        assert_eq!(doc.to_string(), PINNED_SERVED_DOC);
+        assert_eq!(fingerprint(&m, ARTIFACT), PINNED_SERVED_FINGERPRINT);
     }
 
     /// Checked independently: `printf '%s' "$PINNED_DOC" | shasum -a 256`.
@@ -690,4 +736,19 @@ mod tests {
     );
     const PINNED_FINGERPRINT: &str =
         "6fb42abbeba14e3a6954e699435216c68faa0a0b09deb9ac6c7b9c117d8049c8";
+
+    /// R23: [`PINNED_DOC`] with `"hooks":["request.served"]` in the grant; checked the
+    /// same way.
+    const PINNED_SERVED_DOC: &str = concat!(
+        r#"{"artifact":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","#,
+        r#""grant":{"capabilities":{"content":{"meta":{"read":["seo.*"],"write":["seo.*"]},"#,
+        r#""read":["post","page"]},"http":["api.indexnow.org"],"kv":true,"mail":"admins","#,
+        r#""options":{"read":["site.title","site.url"]},"render":{"head":true,"text":true},"#,
+        r#""routes":true},"hooks":["request.served"],"#,
+        r#""limits":{"fuel":20000000,"memory":16777216},"#,
+        r#""routes":[{"cross_origin":false,"rate_limit":"10/min"}],"v":1},"#,
+        r#""plugin":"seo-pro","version":"1.4.0"}"#,
+    );
+    const PINNED_SERVED_FINGERPRINT: &str =
+        "d822dda9e9f1b508e273bbc176674cd6b23f28677dfb9c7e5fb1d44129e66fae";
 }
