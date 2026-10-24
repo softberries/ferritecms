@@ -11,7 +11,7 @@ use ferrite_core::events::PLUGINS_CHANGED;
 use ferrite_domain::ArtifactKind;
 use ferrite_http::{LoadSummary, PluginReloader};
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode};
-use ferrite_plugin_host::{HostConfig, InMemoryServices, PluginHost};
+use ferrite_plugin_host::{Grant, HostConfig, InMemoryServices, Manifest, PluginHost};
 use ferrite_store_tests::{TestDb, backend_tests};
 use serde_json::json;
 
@@ -195,7 +195,32 @@ async fn install_plugin_file_uses_the_site_limits(db: &TestDb) {
     assert_eq!(summary.loaded, ["hello"], "{:?}", summary.skipped);
 }
 
+/// The operator path approves the manifest (P26): `granted` is always the v1 object
+/// (never null, M1c-2 R21 closed), it reads back as a grant covering the manifest, limits
+/// included, and a reinstall writes the same grant.
+async fn install_plugin_file_writes_a_grant(db: &TestDb) {
+    let dir = tempfile::tempdir().unwrap();
+    let media = media(&dir);
+    let store = db.shared_store();
+    let wasm = test_support::plugin_wasm("hello");
+    let manifest = format!("{}\n[limits]\nfuel = 60000000\n", manifest("hello"));
+    let row = install_plugin_file(&store, &media, &limits(""), &manifest, &wasm, false)
+        .await
+        .unwrap();
+    assert!(row.granted.is_object(), "{}", row.granted);
+    assert_eq!(row.granted["v"], 1);
+    assert_eq!(row.granted["limits"]["fuel"], 60_000_000);
+    let parsed = Manifest::parse(&manifest).unwrap();
+    let grant = Grant::from_json(&row.manifest["plugin"], &row.granted).unwrap();
+    assert_eq!(grant, Grant::of(&parsed));
+    let again = install_plugin_file(&store, &media, &limits(""), &manifest, &wasm, false)
+        .await
+        .unwrap();
+    assert_eq!(again.granted, row.granted);
+}
+
 backend_tests!(
+    install_plugin_file_writes_a_grant,
     install_plugin_file_uses_the_site_limits,
     install_plugin_file_roundtrip,
     install_plugin_file_refuses_what_does_not_load,

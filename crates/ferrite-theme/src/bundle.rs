@@ -24,7 +24,7 @@ use tar::{Archive, Builder, EntryType, Header};
 
 use crate::{
     ThemeError, ThemeSource,
-    package::{Files, MAX_DEPTH, MAX_FILES, MAX_TOTAL_BYTES, is_hidden, valid_path},
+    package::{Files, MAX_DEPTH, MAX_FILES, MAX_TOTAL_BYTES, is_hidden, read_embedded, valid_path},
 };
 
 /// Longest entry path in a bundle (what a ustar header holds, prefix + name).
@@ -41,8 +41,18 @@ pub const MAX_BUNDLE_BYTES: u64 = MAX_TOTAL_BYTES + MAX_FILES as u64 * 1024 + 10
 /// every path must fit a ustar header (at most 100 bytes after the last `/` that splits
 /// it, 255 in all). The theme is not compiled: load the bundle to check it.
 pub fn pack(source: &ThemeSource) -> Result<Vec<u8>, ThemeError> {
-    let files = source.files()?;
-    let problems = limit_problems(&files);
+    pack_files(&source.files()?)
+}
+
+/// [`pack`] of the embedded starter theme `name`, for names known only at runtime: the
+/// same bytes `pack(&ThemeSource::Embedded(name))` gives. An unknown name is
+/// [`ThemeError::NotFound`].
+pub fn pack_embedded(name: &str) -> Result<Vec<u8>, ThemeError> {
+    pack_files(&read_embedded(name)?)
+}
+
+fn pack_files(files: &Files) -> Result<Vec<u8>, ThemeError> {
+    let problems = limit_problems(files);
     if !problems.is_empty() {
         return Err(ThemeError::Invalid(problems));
     }
@@ -51,7 +61,7 @@ pub fn pack(source: &ThemeSource) -> Result<Vec<u8>, ThemeError> {
         .map(|d| 512 + d.len().div_ceil(512) * 512)
         .sum();
     let mut builder = Builder::new(Vec::with_capacity(size + 1024));
-    for (path, data) in &files {
+    for (path, data) in files {
         let mut header = Header::new_ustar();
         header
             .set_path(path)

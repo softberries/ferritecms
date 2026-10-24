@@ -1,7 +1,7 @@
-//! Operator install paths for themes and plugins (ruling P21): check that what is
-//! installed loads, upload the artifact bytes first, then let [`ExtensionService`] write
-//! the rows and the event in one transaction. Used by tests now and by the M2 CLI/admin
-//! API.
+//! Operator install paths for themes and plugins (rulings P21, P26): thin wrappers over
+//! the library pipeline ([`Installer`]) and [`ExtensionService`], which writes the rows
+//! and the event in one transaction under the `extensions` lock. Used by the CLI and
+//! tests.
 
 use std::{path::Path, sync::Arc};
 
@@ -9,79 +9,48 @@ use anyhow::Context;
 use bytes::Bytes;
 use ferrite_config::PluginsConfig;
 use ferrite_core::ExtensionService;
-use ferrite_domain::{Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, Timestamp};
+use ferrite_domain::{InstalledPlugin, InstalledTheme};
+use ferrite_http::extensions::Installer;
+pub use ferrite_http::extensions::{PLUGIN_MIME, THEME_MIME};
 use ferrite_media::MediaStore;
-use ferrite_plugin_host::{Grant, InMemoryServices, Manifest, PluginHost};
+use ferrite_plugin_host::HostConfig;
 use ferrite_store::Store;
-use ferrite_theme::{Theme, ThemeSource, pack};
-use serde_json::json;
-
-/// MIME type recorded for theme bundle artifacts (P17).
-pub const THEME_MIME: &str = "application/x-tar";
-
-/// MIME type recorded for plugin component artifacts.
-pub const PLUGIN_MIME: &str = "application/wasm";
+use ferrite_theme::{ThemeSource, pack};
 
 /// Installs a plugin from its `ferrite-plugin.toml` text and component bytes (P21):
-/// parses the manifest and prepares the component on a scratch host with the site's
-/// `[plugins]` limits and the manifest's own `[limits]` approved up to the ceilings (P5;
-/// a plugin that would not load on the site's nodes is refused before anything is
-/// written),
-/// uploads the bytes to the media store, and records the artifact and plugin rows
-/// through [`ExtensionService::install_plugin`]. A new plugin is installed disabled and
-/// a replaced one keeps its state; with `enabled` it is then enabled
-/// ([`ExtensionService::set_plugin_enabled`], which also clears its failure counters).
-/// The row's `granted` is [`Grant::of`] the manifest: an operator install approves the
-/// manifest as written (R21, P26), limits included. Returns the plugin row as stored.
+/// [`Installer::inspect_plugin`] with the site's `[plugins]` limits (a plugin that would
+/// not load on the site's nodes is refused before anything is written), then
+/// [`Installer::stage_plugin`] approving exactly that report: an operator install
+/// approves the manifest as written (R21, P26), limits up to the ceilings included, so
+/// the row's `granted` is [`Grant::of`](ferrite_plugin_host::Grant::of) the manifest.
+/// The rows are recorded through [`ExtensionService::install_plugin`]. A new plugin is
+/// installed disabled and a replaced one keeps its state; with `enabled` it is then
+/// enabled ([`ExtensionService::set_plugin_enabled`], which also clears its failure
+/// counters). Returns the plugin row as stored.
 pub async fn install_plugin_file(
     store: &Arc<dyn Store>,
-    media: &MediaStore,
+    media: &Arc<MediaStore>,
     limits: &PluginsConfig,
     manifest_toml: &str,
     wasm: &[u8],
     enabled: bool,
 ) -> anyhow::Result<InstalledPlugin> {
-    let manifest = Manifest::parse(manifest_toml).context("cannot install the plugin")?;
-    let table: toml::Table = manifest_toml.parse().context("invalid plugin manifest")?;
-    let name = manifest.plugin.name.clone();
-    let version = manifest.plugin.version.to_string();
-    let grant = Grant::of(&manifest);
-    let approved = grant.limits;
-    let bytes = Bytes::copy_from_slice(wasm);
-    let component = bytes.clone();
-    let host_config = crate::serve::host_config(limits);
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        let host = PluginHost::new(host_config, Arc::new(InMemoryServices::new()))
-            .context("cannot start a plugin host")?;
-        host.prepare_with(manifest, &component, approved)
-            .context("the plugin does not load")?;
-        Ok(())
-    })
-    .await
-    .context("the plugin check task failed")??;
-    let stored = media
-        .put_artifact(bytes)
+    let installer = Installer::new(
+        store.clone(),
+        media.clone(),
+        crate::serve::host_config(limits),
+    )
+    .context("cannot start a plugin host")?;
+    let inspected = installer
+        .inspect_plugin(manifest_toml, Bytes::copy_from_slice(wasm))
+        .await
+        .context("cannot install the plugin")?;
+    let name = inspected.manifest.plugin.name.clone();
+    let fingerprint = inspected.report.fingerprint.clone();
+    let (artifact, row) = installer
+        .stage_plugin(inspected, &fingerprint)
         .await
         .context("cannot upload the plugin component")?;
-    let artifact = Artifact {
-        hash: stored.hash.clone(),
-        kind: ArtifactKind::Plugin,
-        bytes: i64::try_from(stored.bytes)?,
-        mime: PLUGIN_MIME.to_owned(),
-        created_at: Timestamp::now(),
-    };
-    let now = Timestamp::now();
-    let row = InstalledPlugin {
-        name: name.clone(),
-        version,
-        artifact_hash: stored.hash,
-        manifest: serde_json::to_value(table).context("cannot store the manifest")?,
-        granted: grant.to_json(),
-        enabled: false,
-        disabled_reason: None,
-        installed_at: now,
-        updated_at: now,
-    };
     let service = ExtensionService::new(store.clone());
     service
         .install_plugin(&artifact, &row)
@@ -103,52 +72,28 @@ pub async fn install_plugin_file(
 }
 
 /// Installs the theme folder `dir` as an artifact (P17): packs it into a deterministic
-/// bundle, loads the bundle (a theme that does not compile is refused before anything
-/// is written), uploads it to the media store and records the artifact and theme rows
-/// through [`ExtensionService::install_theme`]; with `activate` it becomes the active
-/// theme. Returns the theme row as stored.
+/// bundle, then [`Installer::stage_theme`] (a theme that does not compile is refused
+/// before anything is written) and [`ExtensionService::install_theme`]; with `activate`
+/// it becomes the active theme. Returns the theme row as stored.
 pub async fn install_theme_dir(
     store: &Arc<dyn Store>,
-    media: &MediaStore,
+    media: &Arc<MediaStore>,
     dir: &Path,
     activate: bool,
 ) -> anyhow::Result<InstalledTheme> {
     let source = ThemeSource::Dir(dir.to_path_buf());
-    let (bundle, theme) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let bundle = Bytes::from(pack(&source).context("cannot pack the theme")?);
-        let theme =
-            Theme::load(&ThemeSource::Bundle(bundle.clone())).context("the theme does not load")?;
-        Ok((bundle, theme))
-    })
-    .await
-    .context("the theme pack task failed")??;
-    let stored = media
-        .put_artifact(bundle)
+    let bundle = tokio::task::spawn_blocking(move || pack(&source))
         .await
-        .context("cannot upload the theme bundle")?;
-    let artifact = Artifact {
-        hash: stored.hash.clone(),
-        kind: ArtifactKind::Theme,
-        bytes: i64::try_from(stored.bytes)?,
-        mime: THEME_MIME.to_owned(),
-        created_at: Timestamp::now(),
-    };
-    let m = theme.manifest();
-    let row = InstalledTheme {
-        name: m.name.clone(),
-        version: m.version.to_string(),
-        artifact_hash: stored.hash,
-        manifest: json!({
-            "name": m.name,
-            "version": m.version.to_string(),
-            "author": m.author,
-            "license": m.license,
-            "description": m.description,
-            "menus": m.menus,
-        }),
-        active: activate,
-        installed_at: Timestamp::now(),
-    };
+        .context("the theme pack task failed")?
+        .context("cannot pack the theme")?;
+    // Only themes are installed here: the scratch plugin host's limits do not matter.
+    let installer = Installer::new(store.clone(), media.clone(), HostConfig::default())
+        .context("cannot start the installer")?;
+    let (artifact, mut row) = installer
+        .stage_theme(Bytes::from(bundle))
+        .await
+        .context("cannot install the theme")?;
+    row.active = activate;
     ExtensionService::new(store.clone())
         .install_theme(&artifact, &row, activate)
         .await
@@ -167,16 +112,18 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use ferrite_config::ClusterMode;
-    use ferrite_domain::ArtifactHash;
+    use ferrite_domain::{Artifact, ArtifactHash, ArtifactKind, Timestamp};
     use ferrite_media::{Backend, MediaConfig, PublicUrlMode};
     use ferrite_store_tests::{TestDb, backend_tests};
+    use ferrite_theme::Theme;
+    use serde_json::json;
 
     use super::*;
     use crate::site::{ThemeOrigin, load_theme, reload_theme, sha256_hex};
 
     struct Site {
         data: tempfile::TempDir,
-        media: MediaStore,
+        media: Arc<MediaStore>,
     }
 
     fn site() -> Site {
@@ -191,7 +138,10 @@ mod tests {
             },
         })
         .unwrap();
-        Site { data, media }
+        Site {
+            data,
+            media: Arc::new(media),
+        }
     }
 
     impl Site {

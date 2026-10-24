@@ -7,7 +7,9 @@ use std::{
 };
 
 use bytes::Bytes;
-use ferrite_theme::{MAX_BUNDLE_BYTES, MAX_FILES, Theme, ThemeError, ThemeSource, pack};
+use ferrite_theme::{
+    MAX_BUNDLE_BYTES, MAX_FILES, Theme, ThemeError, ThemeSource, pack, pack_embedded,
+};
 
 use crate::common::{MANIFEST, write};
 
@@ -49,6 +51,21 @@ fn pack_is_deterministic() {
         pack(&ThemeSource::Bundle(Bytes::from(a.clone()))).unwrap(),
         a
     );
+}
+
+#[test]
+fn pack_embedded_matches_pack() {
+    let name = String::from("blog");
+    assert_eq!(
+        pack_embedded(&name).unwrap(),
+        pack(&ThemeSource::Embedded("blog")).unwrap()
+    );
+    for unknown in ["missing", "../blog", "blog/templates", ""] {
+        assert!(
+            matches!(pack_embedded(unknown), Err(ThemeError::NotFound(_))),
+            "{unknown:?}"
+        );
+    }
 }
 
 #[test]

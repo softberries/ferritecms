@@ -75,17 +75,19 @@ impl Site {
     }
 
     /// The node's media store, opened separately (same folder).
-    fn media(&self) -> MediaStore {
-        MediaStore::open(MediaConfig {
-            backend: Backend::Local {
-                root: self.data().join("media"),
-            },
-            prefix: String::new(),
-            public: PublicUrlMode::ServeViaApp {
-                path_prefix: "/_media".into(),
-            },
-        })
-        .unwrap()
+    fn media(&self) -> Arc<MediaStore> {
+        Arc::new(
+            MediaStore::open(MediaConfig {
+                backend: Backend::Local {
+                    root: self.data().join("media"),
+                },
+                prefix: String::new(),
+                public: PublicUrlMode::ServeViaApp {
+                    path_prefix: "/_media".into(),
+                },
+            })
+            .unwrap(),
+        )
     }
 
     /// A theme folder `src/<name>` whose index shows `marker` and has `style.css`.
@@ -385,6 +387,7 @@ async fn theme_hot_swap_without_restart(db: Arc<TestDb>) {
     .await;
     let m = meta(&db, &node).await;
     assert_eq!(m["site_url"], SITE_URL, "normalised site.url: {m}");
+    assert_eq!(m["theme"]["fallback"], false, "{m}");
     node.shutdown().await.unwrap();
 }
 
@@ -420,6 +423,10 @@ async fn bad_theme_activation_keeps_previous_theme(db: Arc<TestDb>) {
     .await;
     let m = meta(&db, &node).await;
     assert_eq!(m["theme"]["name"], "a", "{m}");
+    assert_eq!(
+        m["theme"]["fallback"], true,
+        "not the active row's theme: {m}"
+    );
     let (status, body) = get(node.addr, "/").await;
     assert_eq!(status, 200);
     assert!(
@@ -427,6 +434,45 @@ async fn bad_theme_activation_keeps_previous_theme(db: Arc<TestDb>) {
         "previous theme still served: {body}"
     );
     assert_eq!(node.state.theme.load().name(), "a", "no fallback to blog");
+    node.shutdown().await.unwrap();
+}
+
+/// Pre-flight F12: a node serving a fallback instead of the active row's artifact says
+/// so in `nodes.meta.theme.fallback`; serving the active row's artifact clears it.
+async fn fallback_is_flagged_in_meta(db: Arc<TestDb>) {
+    let site = Site::new(&db);
+    let media = site.media();
+    let store = db.shared_store();
+    let a = install_theme_dir(&store, &media, &site.theme_dir("a", "MARK-A"), true)
+        .await
+        .unwrap();
+    site.tamper(&a.artifact_hash, b"tampered");
+    let node = site.start(&db, NodeOptions::default()).await;
+    eventually(Duration::from_secs(3), "fallback flagged", || {
+        let db = db.clone();
+        let node = &node;
+        async move { meta(&db, node).await["theme"]["fallback"] == true }
+    })
+    .await;
+    let m = meta(&db, &node).await;
+    assert_eq!(m["theme"]["name"], "blog", "{m}");
+    assert_eq!(m["theme"]["origin"], "embedded", "{m}");
+    assert!(
+        m["theme"]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("hash mismatch")),
+        "{m}"
+    );
+    install_theme_dir(&store, &media, &site.theme_dir("b", "MARK-B"), true)
+        .await
+        .unwrap();
+    eventually(CONVERGE, "theme b", || home_contains(&node, "MARK-B")).await;
+    eventually(Duration::from_secs(3), "fallback cleared", || {
+        let db = db.clone();
+        let node = &node;
+        async move { meta(&db, node).await["theme"]["fallback"] == false }
+    })
+    .await;
     node.shutdown().await.unwrap();
 }
 
@@ -1086,6 +1132,7 @@ backend_tests_spawning!(
     startup_load_failure_is_retried,
     theme_hot_swap_without_restart,
     bad_theme_activation_keeps_previous_theme,
+    fallback_is_flagged_in_meta,
     bad_plugin_update_keeps_previous_version,
     plugin_hot_reload_on_enable_and_disable,
     plugin_delete_stops_its_hook,

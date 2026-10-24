@@ -40,8 +40,10 @@ struct Status {
 }
 
 impl NodeStatus {
-    /// `nodes.meta.theme`: the served theme and, if set, why the active one is not it.
-    pub fn set_theme(&self, loaded: &LoadedTheme, error: Option<&str>) {
+    /// `nodes.meta.theme`: the served theme, whether it is a `fallback` (there is an
+    /// active row and this is not its artifact: a startup fallback or a failed hot swap,
+    /// pre-flight F12) and, if set, why the active one is not served.
+    pub fn set_theme(&self, loaded: &LoadedTheme, error: Option<&str>, fallback: bool) {
         let origin = match &loaded.origin {
             ThemeOrigin::Artifact(hash) => json!({"artifact": hash.as_str()}),
             ThemeOrigin::Folder => json!("folder"),
@@ -52,6 +54,7 @@ impl NodeStatus {
             "hash": loaded.theme.hash(),
             "origin": origin,
             "error": error.map(cap),
+            "fallback": fallback,
         });
     }
 
@@ -144,9 +147,10 @@ mod tests {
             theme: Arc::new(theme),
             origin: ThemeOrigin::Embedded,
             error: None,
+            fallback: true,
         };
         let long = "é".repeat(MAX_META_ERROR);
-        status.set_theme(&loaded, Some(&long));
+        status.set_theme(&loaded, Some(&long), loaded.fallback);
         let h = ArtifactHash::parse(&"a".repeat(64)).unwrap();
         let mut states = BTreeMap::new();
         for (name, s) in [
@@ -172,6 +176,7 @@ mod tests {
         assert_eq!(meta["theme"]["name"], "blog");
         assert_eq!(meta["theme"]["hash"], hash.as_str());
         assert_eq!(meta["theme"]["origin"], "embedded");
+        assert_eq!(meta["theme"]["fallback"], true);
         let err = meta["theme"]["error"].as_str().unwrap();
         assert!(err.len() <= MAX_META_ERROR && err.len() > MAX_META_ERROR - 2);
         assert_eq!(meta["plugins"]["a"]["status"], "loaded");

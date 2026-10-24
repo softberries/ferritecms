@@ -3,16 +3,14 @@
 
 use std::{path::Path, sync::Arc};
 
-use anyhow::{Context, bail};
-use bytes::Bytes;
+use anyhow::Context;
 use ferrite_config::{ClusterMode, Config, MediaSection};
 use ferrite_core::PermalinkRules;
-use ferrite_domain::{ArtifactHash, InstalledTheme};
+use ferrite_domain::ArtifactHash;
+use ferrite_http::extensions::load_theme_artifact;
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode, S3Config};
 use ferrite_store::Store;
-use ferrite_theme::{MAX_BUNDLE_BYTES, Theme, ThemeSource};
-use futures::StreamExt;
-use sha2::{Digest, Sha256};
+use ferrite_theme::{Theme, ThemeSource};
 
 /// Path prefix under which the app serves media (`/_media/{hash}/{name}`).
 const MEDIA_PATH: &str = "/_media";
@@ -94,6 +92,9 @@ pub struct LoadedTheme {
     pub origin: ThemeOrigin,
     /// Why the active theme could not be used (set only when this is a fallback).
     pub error: Option<String>,
+    /// There is an active row and this is not its artifact (`nodes.meta.theme.fallback`,
+    /// pre-flight F12). `false` with no active row: the default theme is what it asks for.
+    pub fallback: bool,
 }
 
 /// The active theme at startup (06 §1, §7, ruling P17). `mode` must be the resolved
@@ -130,21 +131,25 @@ pub async fn load_theme(
     let mut errors = Vec::new();
     let name = match row {
         None => DEFAULT_THEME.to_owned(),
-        Some(row) => match artifact_theme(media, &row).await {
+        Some(row) => match load_theme_artifact(media, &row).await {
             Ok(theme) => {
                 return Ok(LoadedTheme {
                     theme: Arc::new(theme),
                     origin: ThemeOrigin::Artifact(row.artifact_hash),
                     error: None,
+                    fallback: false,
                 });
             }
             Err(e) => {
-                errors.push(format!("artifact {}: {e:#}", row.artifact_hash));
+                errors.push(format!("artifact {}: {e}", row.artifact_hash));
                 row.name
             }
         },
     };
-    fallback_theme(&name, data_dir, folders, errors)
+    let fallback = !errors.is_empty();
+    let mut loaded = fallback_theme(&name, data_dir, folders, errors)?;
+    loaded.fallback = fallback;
+    Ok(loaded)
 }
 
 /// Re-reads the active theme for a hot swap (ruling P18). `Ok(None)`: nothing to do
@@ -172,16 +177,14 @@ pub async fn reload_theme(
             if current.origin == origin {
                 return Ok(None);
             }
-            let theme = artifact_theme(media, &row).await.map_err(|e| {
-                format!(
-                    "theme {:?} (artifact {}): {e:#}",
-                    row.name, row.artifact_hash
-                )
+            let theme = load_theme_artifact(media, &row).await.map_err(|e| {
+                format!("theme {:?} (artifact {}): {e}", row.name, row.artifact_hash)
             })?;
             Ok(Some(LoadedTheme {
                 theme: Arc::new(theme),
                 origin,
                 error: None,
+                fallback: false,
             }))
         }
         // The active row went away: back to the default, as at startup.
@@ -200,66 +203,13 @@ fn reads_folders(mode: ClusterMode) -> bool {
     matches!(mode, ClusterMode::Solo)
 }
 
-/// Fetches the row's bundle in one request, checks its SHA-256 against the row and
-/// loads it. The declared size is checked before any body is read and the running
-/// total while it streams, so at most [`MAX_BUNDLE_BYTES`] are ever buffered. Hashing
-/// and unpacking run on the blocking pool. The bundle must hold the theme the row
-/// names.
-async fn artifact_theme(media: &MediaStore, row: &InstalledTheme) -> anyhow::Result<Theme> {
-    let hash = row.artifact_hash.clone();
-    let read = media
-        .open_read(&hash, None)
-        .await
-        .context("cannot read the artifact")?;
-    if read.size > MAX_BUNDLE_BYTES {
-        bail!(
-            "the artifact is {} bytes, more than a theme bundle may be ({MAX_BUNDLE_BYTES})",
-            read.size
-        );
-    }
-    let mut chunks = Vec::new();
-    let mut total = 0u64;
-    let mut stream = read.stream;
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.context("cannot read the artifact")?;
-        total += chunk.len() as u64;
-        if total > MAX_BUNDLE_BYTES {
-            bail!("the artifact is more than a theme bundle may be ({MAX_BUNDLE_BYTES} bytes)");
-        }
-        chunks.push(chunk);
-    }
-    let theme = tokio::task::spawn_blocking(move || -> anyhow::Result<Theme> {
-        let mut hasher = Sha256::new();
-        let mut bytes = Vec::with_capacity(usize::try_from(total)?);
-        for chunk in &chunks {
-            hasher.update(chunk);
-            bytes.extend_from_slice(chunk);
-        }
-        let actual = hex(&hasher.finalize());
-        if actual != hash.as_str() {
-            bail!("content hash mismatch: the stored bytes hash to {actual}");
-        }
-        Theme::load(&ThemeSource::Bundle(Bytes::from(bytes))).context("the bundle does not load")
-    })
-    .await
-    .context("the theme load task failed")??;
-    if theme.name() != row.name {
-        bail!(
-            "the bundle holds theme {:?}, the row names {:?}",
-            theme.name(),
-            row.name
-        );
-    }
-    Ok(theme)
-}
-
 #[cfg(test)]
 pub(crate) fn sha256_hex(data: &[u8]) -> String {
-    hex(&Sha256::digest(data))
-}
-
-fn hex(digest: &[u8]) -> String {
-    digest.iter().map(|b| format!("{b:02x}")).collect()
+    use sha2::{Digest, Sha256};
+    Sha256::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// The startup fallback chain for `name`: folder (if `folders`), embedded `name`,
@@ -292,6 +242,7 @@ fn fallback_theme(
         theme: Arc::new(found.0),
         origin: found.1,
         error,
+        fallback: false,
     })
 }
 

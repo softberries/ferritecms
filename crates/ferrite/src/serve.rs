@@ -380,7 +380,7 @@ async fn boot(
     );
 
     let status = Arc::new(NodeStatus::default());
-    status.set_theme(&loaded, loaded.error.as_deref());
+    status.set_theme(&loaded, loaded.error.as_deref(), loaded.fallback);
     status.set_plugins(&report);
 
     // The API's services; `content` also runs the scheduled-publishing jobs.

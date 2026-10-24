@@ -314,8 +314,11 @@ impl ReloadContext {
         match next {
             Ok(None) => {
                 // Still the theme startup chose; a fallback keeps reporting why.
-                self.status
-                    .set_theme(&self.theme, self.theme.error.as_deref());
+                self.status.set_theme(
+                    &self.theme,
+                    self.theme.error.as_deref(),
+                    self.theme.fallback,
+                );
                 true
             }
             Ok(Some(loaded)) => {
@@ -327,7 +330,8 @@ impl ReloadContext {
                     origin = ?loaded.origin,
                     "theme swapped"
                 );
-                self.status.set_theme(&loaded, loaded.error.as_deref());
+                self.status
+                    .set_theme(&loaded, loaded.error.as_deref(), loaded.fallback);
                 self.theme = loaded;
                 true
             }
@@ -337,7 +341,8 @@ impl ReloadContext {
                     keeping = %self.theme.theme.name(),
                     "theme reload failed; keeping the current theme"
                 );
-                self.status.set_theme(&self.theme, Some(&error));
+                // The active row is not what this node serves (F12).
+                self.status.set_theme(&self.theme, Some(&error), true);
                 false
             }
         }

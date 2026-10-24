@@ -1,9 +1,11 @@
 //! FerriteCMS HTTP layer: the axum app serving the public site ([`app`]) and the REST
 //! API under `/api/v1` ([`api`]; merged by [`build_site`]), the pure URL
-//! router ([`route`]), plugin wiring ([`plugins`]) and the page `<head>` ([`head`]).
+//! router ([`route`]), plugin wiring ([`plugins`]), the install pipeline
+//! ([`extensions`]) and the page `<head>` ([`head`]).
 
 pub mod api;
 pub mod app;
+pub mod extensions;
 pub mod head;
 pub mod plugins;
 pub mod route;

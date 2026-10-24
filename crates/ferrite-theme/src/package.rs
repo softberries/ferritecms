@@ -281,7 +281,7 @@ pub(crate) fn is_hidden(path: &str) -> bool {
     path.split('/').any(|s| s.starts_with('.'))
 }
 
-fn read_embedded(name: &str) -> Result<Files, ThemeError> {
+pub(crate) fn read_embedded(name: &str) -> Result<Files, ThemeError> {
     let prefix = format!("{name}/");
     let mut files = BTreeMap::new();
     if name.contains('/') || !valid_path(name) {
