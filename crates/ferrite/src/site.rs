@@ -204,10 +204,7 @@ fn reads_folders(mode: ClusterMode) -> bool {
 #[cfg(test)]
 pub(crate) fn sha256_hex(data: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    Sha256::digest(data)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    ferrite_domain::to_hex(&Sha256::digest(data))
 }
 
 /// The startup fallback chain for `name`: folder (if `folders`), embedded `name`,

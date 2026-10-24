@@ -499,13 +499,7 @@ fn check_range(range: &Range<u64>, size: u64) -> Result<(), MediaError> {
 }
 
 fn finish_hash(hasher: Sha256) -> Result<ArtifactHash, MediaError> {
-    use std::fmt::Write;
-    let digest = hasher.finalize();
-    let mut hex = String::with_capacity(64);
-    for b in digest.iter() {
-        // Writing to a String cannot fail.
-        let _ = write!(hex, "{b:02x}");
-    }
+    let hex = ferrite_domain::to_hex(&hasher.finalize());
     ArtifactHash::parse(&hex)
         .map_err(|e| MediaError::Backend(format!("computed hash invalid: {e}")))
 }

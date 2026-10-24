@@ -297,10 +297,7 @@ pub(crate) fn build_env(
 /// (`[a-z0-9-]{2,48}`) and `path` start with `/` and hold no `.`/`..` segment; anything
 /// else is `""` (a template typo yields an empty link, not a URL elsewhere).
 pub(crate) fn plugin_route(name: &str, path: &str) -> String {
-    let name_ok = (2..=48).contains(&name.len())
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    let name_ok = ferrite_domain::valid_plugin_name(name);
     let Some(rest) = path.strip_prefix('/') else {
         return String::new();
     };

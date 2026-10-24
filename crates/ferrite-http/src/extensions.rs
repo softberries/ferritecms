@@ -594,7 +594,7 @@ pub async fn load_theme_artifact(
             hasher.update(chunk);
             bytes.extend_from_slice(chunk);
         }
-        let actual = hex(&hasher.finalize());
+        let actual = ferrite_domain::to_hex(&hasher.finalize());
         if actual != hash.as_str() {
             tracing::warn!(artifact = %hash, %actual, "theme artifact hash mismatch");
             return Err(ExtensionError::HashMismatch);
@@ -686,11 +686,7 @@ fn task_error(e: tokio::task::JoinError) -> ExtensionError {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    hex(&Sha256::digest(bytes))
-}
-
-fn hex(digest: &[u8]) -> String {
-    digest.iter().map(|b| format!("{b:02x}")).collect()
+    ferrite_domain::to_hex(&Sha256::digest(bytes))
 }
 
 #[cfg(test)]

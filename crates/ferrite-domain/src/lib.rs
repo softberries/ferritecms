@@ -3,6 +3,7 @@
 mod auth;
 mod content;
 mod event;
+mod hex;
 mod ids;
 mod job;
 mod menu;
@@ -26,6 +27,7 @@ pub use content::{
     ReadableBy, Revision,
 };
 pub use event::{Event, NewEvent};
+pub use hex::to_hex;
 pub use ids::{
     ApiTokenId, ArtifactHash, AuditId, ContentId, JobId, MenuItemId, NodeId, RedirectId,
     RevisionId, TermId, UserId,
@@ -34,7 +36,10 @@ pub use job::{DEFAULT_MAX_ATTEMPTS, Job, JobLease, JobStatus, NewJob};
 pub use menu::{Menu, MenuItem, MenuItemKind};
 pub use node::{NewNode, Node};
 pub use page::{Cursor, Page};
-pub use plugin::{Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, Media};
+pub use plugin::{
+    Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, MAX_PLUGIN_NAME, Media,
+    valid_plugin_name,
+};
 pub use search::SearchQuery;
 pub use secret::Secret;
 pub use setting::{

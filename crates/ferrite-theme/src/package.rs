@@ -259,11 +259,7 @@ fn content_hash(files: &Files) -> String {
         h.update((data.len() as u64).to_le_bytes());
         h.update(data);
     }
-    h.finalize()
-        .iter()
-        .take(8)
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    ferrite_domain::to_hex(&h.finalize()[..8])
 }
 
 /// Relative, `/`-separated, no empty, `.` or `..` segments, no backslash or control

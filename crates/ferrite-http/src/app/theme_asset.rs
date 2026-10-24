@@ -52,7 +52,7 @@ pub(crate) fn serve(
         return not_found();
     };
     let digest = Sha256::digest(path.as_bytes());
-    let path_hash: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    let path_hash = ferrite_domain::to_hex(&digest[..8]);
     let essence = mime.split(';').next().unwrap_or_default().trim();
     let compressible = COMPRESSIBLE.contains(&essence);
     let weak = if compressible { "W/" } else { "" };

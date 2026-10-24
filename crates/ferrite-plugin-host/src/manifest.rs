@@ -461,13 +461,6 @@ impl Cx {
     }
 }
 
-fn valid_name(name: &str) -> bool {
-    (2..=48).contains(&name.len())
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-}
-
 fn parse_plugin(cx: &mut Cx, t: &mut toml::Table) -> Option<PluginMeta> {
     let name = cx.string(t, "name", "plugin.name");
     let version = cx.string(t, "version", "plugin.version");
@@ -495,7 +488,7 @@ fn parse_plugin(cx: &mut Cx, t: &mut toml::Table) -> Option<PluginMeta> {
     require(cx, &world, "world");
 
     if let Some(n) = &name {
-        if !valid_name(n) {
+        if !ferrite_domain::valid_plugin_name(n) {
             cx.push("plugin.name", "must match [a-z0-9-]{2,48}");
         } else if RESERVED_PLUGIN_NAMES.contains(&n.as_str()) {
             cx.push("plugin.name", format!("`{n}` is reserved"));

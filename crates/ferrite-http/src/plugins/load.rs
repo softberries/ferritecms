@@ -114,11 +114,7 @@ pub(super) fn cap_at_defaults(manifest: &mut Manifest, host: &HostConfig) {
 }
 
 pub(super) fn hash_of(bytes: &[u8]) -> Option<ArtifactHash> {
-    let hex: String = Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    ArtifactHash::parse(&hex).ok()
+    ArtifactHash::parse(&ferrite_domain::to_hex(&Sha256::digest(bytes))).ok()
 }
 
 #[cfg(test)]

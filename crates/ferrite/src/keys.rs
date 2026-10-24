@@ -110,7 +110,7 @@ fn create_key(path: &Path) -> anyhow::Result<SiteKey> {
 fn temp_path(path: &Path) -> anyhow::Result<PathBuf> {
     let suffix: [u8; 8] =
         ferrite_core::auth::random_bytes().context("cannot generate a temp file name")?;
-    let suffix: String = suffix.iter().map(|b| format!("{b:02x}")).collect();
+    let suffix = ferrite_domain::to_hex(&suffix);
     let name = path
         .file_name()
         .map_or_else(|| SECRET_KEY_FILE.into(), |n| n.to_string_lossy());

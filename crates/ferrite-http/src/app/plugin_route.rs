@@ -112,18 +112,10 @@ fn busy() -> Response<Body> {
     res
 }
 
-/// Whether `name` can be a plugin name (`[a-z0-9-]{2,48}`, the manifest rule).
-fn plugin_name(name: &str) -> bool {
-    (2..=48).contains(&name.len())
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-}
-
 /// `(plugin, route path)` of a raw `/_p/<plugin>/<rest>` path, or `None` (`404`).
 fn split_path(raw: &str) -> Option<(&str, String)> {
     let (name, rest) = raw.strip_prefix("/_p/")?.split_once('/')?;
-    if !plugin_name(name) {
+    if !ferrite_domain::valid_plugin_name(name) {
         return None;
     }
     let rest = percent_decode_str(rest).decode_utf8().ok()?;
@@ -134,8 +126,7 @@ fn split_path(raw: &str) -> Option<(&str, String)> {
 /// manifest paths are unbounded, the bucket is not).
 fn limit_scope(plugin: &str, path: &str) -> String {
     let digest = Sha256::digest(path.as_bytes());
-    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
-    format!("route:{plugin}:{hex}")
+    format!("route:{plugin}:{}", ferrite_domain::to_hex(&digest[..16]))
 }
 
 /// `application/x-www-form-urlencoded` pairs of `query`, or `None` above

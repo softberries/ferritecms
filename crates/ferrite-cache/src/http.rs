@@ -1,21 +1,13 @@
 //! Conditional-request helpers (RFC 9110 §8.8.3, §13.1.2). Pure functions; the HTTP
 //! layer wires them to headers.
 
-use std::fmt::Write as _;
-
 use sha2::{Digest, Sha256};
 
 /// A strong ETag for `body`: the first 16 hex digits of its SHA-256, quoted
 /// (`"0123456789abcdef"`).
 pub fn etag_for(body: &[u8]) -> String {
     let digest = Sha256::digest(body);
-    let mut out = String::with_capacity(18);
-    out.push('"');
-    for b in digest.iter().take(8) {
-        let _ = write!(out, "{b:02x}");
-    }
-    out.push('"');
-    out
+    format!("\"{}\"", ferrite_domain::to_hex(&digest[..8]))
 }
 
 /// Whether an `If-None-Match` header value matches `etag` (a quoted entity-tag, weak

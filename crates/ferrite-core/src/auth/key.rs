@@ -19,7 +19,6 @@ pub const SEAL_LABEL: &str = "ferrite:seal:v1";
 const KEY_LEN: usize = 32;
 /// SHA-256 block size: HMAC zero-pads shorter keys to it (RFC 2104 §2).
 const HMAC_BLOCK: usize = 64;
-const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
 /// The site's master key. `Debug` is redacted; there is deliberately no serde, so it
 /// cannot end up in a config dump, a log line or an API response.
@@ -115,15 +114,8 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
 
-/// Lowercase hex.
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(char::from(HEX_DIGITS[usize::from(b >> 4)]));
-        out.push(char::from(HEX_DIGITS[usize::from(b & 0x0f)]));
-    }
-    out
-}
+/// Lowercase hex (the workspace's one encoder).
+pub(crate) use ferrite_domain::to_hex as hex;
 
 fn hex_value(c: u8) -> Option<u8> {
     match c {

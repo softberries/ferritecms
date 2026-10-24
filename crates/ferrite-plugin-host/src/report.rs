@@ -164,10 +164,7 @@ fn fingerprint(m: &Manifest, artifact: &str) -> String {
         "artifact": artifact,
         "grant": Grant::of(m).to_json(),
     });
-    Sha256::digest(doc.to_string().as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    ferrite_domain::to_hex(&Sha256::digest(doc.to_string().as_bytes()))
 }
 
 /// What of `want` `have` does not cover (the same rules as
