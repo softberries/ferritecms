@@ -121,6 +121,11 @@ impl From<ExtensionError> for Problem {
                 }
                 p
             }
+            // Host faults, not the upload's (final review M8).
+            ExtensionError::Component(PluginError::Engine(_) | PluginError::InvalidConfig(_)) => {
+                tracing::error!(error = %e, "plugin host fault during install");
+                Self::internal()
+            }
             ExtensionError::Component(_) => {
                 let detail = e.to_string();
                 Self::validation(detail.clone()).with_error(Some("component"), detail)
@@ -762,9 +767,23 @@ mod tests {
         );
         let p = Problem::from(ExtensionError::Approval("x".into()));
         assert_eq!(p.errors[0].field.as_deref(), Some("approve"));
-        let p = Problem::from(ExtensionError::Component(PluginError::Engine("e".into())));
+        let p = Problem::from(ExtensionError::Component(PluginError::Inspect(
+            ferrite_plugin_host::InspectError::NotAComponent,
+        )));
         assert_eq!(p.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(p.errors[0].field.as_deref(), Some("component"));
+        // Host faults are not the upload's (final review M8): 500, nothing echoed.
+        for fault in [
+            PluginError::Engine("engine detail".into()),
+            PluginError::InvalidConfig("config detail".into()),
+        ] {
+            let p = Problem::from(ExtensionError::Component(fault));
+            assert_eq!(
+                (p.status, p.slug),
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal")
+            );
+            assert!(!p.detail.contains("detail"), "{}", p.detail);
+        }
     }
 
     #[test]

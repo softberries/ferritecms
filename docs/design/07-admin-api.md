@@ -149,7 +149,8 @@ appends an audit row (`plugin.install|enable|disable|delete|settings`,
   `400`; a missing part `422` naming it; a refused manifest is `422 validation` with one
   `errors[]` entry per problem, `field` = the manifest path (`capabilities.http`, …; a
   manifest that is not UTF-8: `manifest`), a refused component `422` with `field =
-  component`; a limit above its ceiling is refused at inspection. `POST /plugins/inspect` answers
+  component` (a host fault while compiling it, an engine or host-configuration error,
+  is `500 internal`); a limit above its ceiling is refused at inspection. `POST /plugins/inspect` answers
   `{ plugin, version, artifact, items[], added[], limits[], fingerprint, update }` (05 §2;
   `limits` lists only the limits the manifest requests); `POST /plugins` with an `approve` that is not that upload's
   fingerprint is `422 validation`, `errors[0].field = "approve"`, with the upload's
