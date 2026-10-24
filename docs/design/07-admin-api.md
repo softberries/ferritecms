@@ -26,13 +26,24 @@ surface).
   JSON body, `Location` and `ETag` with `Idempotent-Replayed: true` without reading the
   body (a retry with another file is not detected); a key whose request is still running
   is `409 conflict` with `Retry-After: 5`, and one pending for more than 1 h (database
-  clock) is taken over — the original request's late finish or release then changes
-  nothing (F5, an ownership token); a key reused for another method or path is
-  `422 validation` (`errors[0].field` = `Idempotency-Key`). Only a `2xx` outcome is
-  stored (≤ 64 KiB); any failure, and a request dropped mid-upload, frees the key so a
-  retry runs. Keys are deleted 24 h after the claim by `sessions.prune` (04 §6). Imports
-  take the header in M3 (P26); extension uploads do not (M2a-2 P11: an install is a
-  primary-key upsert, so a retry creates no second row).
+  clock) is taken over by the next retry (F5: an ownership token, so the original
+  request can no longer record or free the key); a key reused for another method or
+  path is `422 validation` (`errors[0].field` = `Idempotency-Key`; checked before the
+  pending/finished state, so a pending key on another path is `422`, not `409`). Only a
+  `2xx` outcome is stored (≤ 64 KiB); any failure, and a request dropped mid-upload,
+  frees the key so a retry runs. Keys are deleted 24 h after the claim by
+  `sessions.prune` (04 §6). Imports take the header in M3 (P26); extension uploads do
+  not (M2a-2 P11: an install is a primary-key upsert, so a retry creates no second
+  row). Limits — each can give a second item for one key:
+  - *A failed finish.* When storing the outcome fails (logged; the `201` still goes
+    out), the key stays pending: retries get `409` until it is 1 h old, then one takes
+    it over and uploads again.
+  - *An upload longer than 1 h.* A retry takes the key over while the original still
+    streams; the original still records its media item, only its outcome is not stored
+    under the key.
+  - *A drop during the commit.* A client that goes away while the item's transaction
+    commits frees the key (the request is treated as failed) although the item may be
+    committed; a retry then uploads again.
 - OpenAPI 3.1 generated from code with `utoipa` (6.x) at `/api/v1/openapi.json`; the
   admin's TypeScript client will be generated from it (`openapi-typescript` +
   `openapi-fetch`) and checked in CI for drift (M2b).

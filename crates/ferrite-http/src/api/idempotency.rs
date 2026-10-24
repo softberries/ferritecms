@@ -20,6 +20,11 @@
 //! the key with [`Guard::release`], and a request dropped before either (the client went
 //! away, a panic) frees it from the guard's drop, so a retry can run. Rows are deleted
 //! [`IDEMPOTENCY_RETENTION`] (24 h) after the claim by `sessions.prune`.
+//!
+//! Three cases can still give one key a second item (07 §1 lists them): a failed
+//! `finish` (the key stays pending, so after 1 h a retry takes it over), an upload that
+//! outlives [`IDEMPOTENCY_STALE`] (taken over while it streams; it still records its
+//! item), and a client drop while the item commits (the key is freed as for a failure).
 
 use std::sync::Arc;
 

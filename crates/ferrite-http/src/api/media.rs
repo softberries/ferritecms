@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Request, State},
+    extract::{OriginalUri, Request, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -209,16 +209,15 @@ pub async fn upload_media(
     }
 }
 
-/// The request's path with its query, as the client sent it (under [`BASE`]; the
-/// nested router hands the handler the part after it).
+/// The request's path with its query, as the client sent it: axum's [`OriginalUri`]
+/// (the nested router hands the handler only the part after [`BASE`]).
 fn request_path(req: &Request) -> String {
-    let uri = req.uri();
-    let tail = uri.path_and_query().map_or(uri.path(), |pq| pq.as_str());
-    if tail.starts_with(BASE) {
-        tail.to_owned()
-    } else {
-        format!("{BASE}{tail}")
-    }
+    let uri = req
+        .extensions()
+        .get::<OriginalUri>()
+        .map_or(req.uri(), |o| &o.0);
+    uri.path_and_query()
+        .map_or_else(|| uri.path().to_owned(), |pq| pq.as_str().to_owned())
 }
 
 /// The upload itself: reads the parts, stages the file and records the item; the

@@ -18,8 +18,8 @@ use tokio::sync::Barrier;
 use crate::{
     api_tests,
     harness::{
-        Api, Bearer, MAX_UPLOAD, Part, Resp, body_end, gated_body, part_head, send, upload_body,
-        upload_content_type,
+        Api, Bearer, Client, MAX_UPLOAD, Part, Resp, body_end, gated_body, part_head, send,
+        upload_body, upload_content_type,
     },
 };
 
@@ -31,6 +31,7 @@ api_tests!(
     key_scoped_to_user_and_path,
     malformed_keys,
     stale_pending_key_is_taken_over,
+    session_and_bearer_share_the_key,
 );
 
 const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -241,10 +242,7 @@ async fn concurrent_duplicates_across_nodes_create_one_item(api: Api) -> Api {
     }
     // The losers answer while the winner's body is still gated.
     let mut done = Vec::new();
-    let mut pending = Vec::new();
-    for task in tasks {
-        pending.push(task);
-    }
+    let mut pending = tasks;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while done.len() < 3 {
         assert!(
@@ -513,5 +511,58 @@ async fn stale_pending_key_is_taken_over(api: Api) -> Api {
         .await;
     assert_replay_of(&r, &first);
     assert_eq!(media_count(&api, &admin).await, 1);
+    api
+}
+
+/// A session request with `key` and a body of `parts` (the session's CSRF token and
+/// `Origin` unless `csrf` is false).
+fn session_keyed(c: &Client, key: &str, parts: &[Part<'_>], csrf: bool) -> Request<Body> {
+    let (content_type, body) = upload_body(parts);
+    let mut b = c
+        .builder(Method::POST, "/api/v1/media")
+        .header(header::CONTENT_TYPE, content_type)
+        .header(IDEMPOTENCY_HEADER, key);
+    if !csrf {
+        b.headers_mut().unwrap().remove("x-csrf-token");
+    }
+    b.body(Body::from(body)).unwrap()
+}
+
+/// A key belongs to the user, not to the credential: a retry may switch from the
+/// session to a token (and back). A request refused before the key is claimed (a
+/// session without its CSRF token) does not touch the key.
+async fn session_and_bearer_share_the_key(api: Api) -> Api {
+    let (_, bearer) = account(&api, "admin", Role::Admin).await;
+    let mut session = api.logged_in("admin").await;
+    let file = pdf("shared-credential");
+    let parts = [Part::file("c.pdf", "application/pdf", &file)];
+
+    let first = session
+        .send_on(&api.router, session_keyed(&session, "cred-1", &parts, true))
+        .await;
+    created(&first);
+    let r = api
+        .send(keyed(&bearer, "/api/v1/media", Some(b"cred-1"), &parts))
+        .await;
+    assert_replay_of(&r, &first);
+
+    // CSRF fails before the key is claimed: the token then starts it afresh.
+    let r = session
+        .send_on(
+            &api.router,
+            session_keyed(&session, "cred-2", &parts, false),
+        )
+        .await;
+    r.assert_problem(403, "csrf");
+    let second = api
+        .send(keyed(&bearer, "/api/v1/media", Some(b"cred-2"), &parts))
+        .await;
+    created(&second);
+    assert!(second.header(REPLAYED_HEADER).is_none());
+    let r = session
+        .send_on(&api.router, session_keyed(&session, "cred-2", &parts, true))
+        .await;
+    assert_replay_of(&r, &second);
+    assert_eq!(media_count(&api, &bearer).await, 2);
     api
 }
