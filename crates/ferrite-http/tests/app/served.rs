@@ -75,6 +75,9 @@ fn events(job: &Job) -> &Vec<Value> {
         .expect("events array")
 }
 
+/// Generous bound for the flusher to react (a slow CI runner).
+const FLUSH_WAIT: Duration = Duration::from_secs(30);
+
 fn event(path: &str) -> ServedEvent {
     ServedEvent::new(path, &Default::default(), 200, CacheOutcome::Miss)
 }
@@ -164,6 +167,13 @@ async fn excluded_requests_are_not_recorded(app: App) -> App {
         &format!("/_media/{hash}/x.png"),
         &format!("/_theme/{hash}/css/site.css"),
         "/_preview/00000000-0000-0000-0000-000000000000",
+        // Preview variants the router answers with a 404 page: still not recorded.
+        "/_preview/00000000-0000-0000-0000-000000000000/",
+        "/_preview/00000000-0000-0000-0000-000000000000/x",
+        "/_Preview/00000000-0000-0000-0000-000000000000",
+        "/_PREVIEW/",
+        "/%5Fpreview/00000000-0000-0000-0000-000000000000",
+        "/_%70review/00000000-0000-0000-0000-000000000000",
         "/_p/counter/anything",
     ] {
         app.send(browser(path)).await;
@@ -220,24 +230,24 @@ async fn flush_at_1000_events(app: App) -> App {
     for i in 0..SERVED_FLUSH_AT - 1 {
         served.record(event(&format!("/p/{i}")));
     }
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(served.len(), SERVED_FLUSH_AT - 1, "no flush below 1 000");
+    // Below 1 000 only the (1 h) tick could flush; the notify fires at exactly 1 000.
+    assert!(action_jobs(&app).await.is_empty(), "no flush below 1 000");
+    assert_eq!(served.len(), SERVED_FLUSH_AT - 1);
     served.record(event("/last"));
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while !served.is_empty() {
-        assert!(tokio::time::Instant::now() < deadline, "no flush at 1 000");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    // The flush took the buffer before enqueueing; wait for the commit.
-    let mut jobs = Vec::new();
-    while jobs.is_empty() {
+    // `flush` takes the buffer, then commits: wait for the job itself (claimed once).
+    let deadline = tokio::time::Instant::now() + FLUSH_WAIT;
+    let jobs = loop {
+        let jobs = action_jobs(&app).await;
+        if !jobs.is_empty() {
+            break jobs;
+        }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "no job after the flush"
+            "no job after the 1 000th event within {FLUSH_WAIT:?}"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
-        jobs = action_jobs(&app).await;
-    }
+    };
+    assert!(served.is_empty());
     assert_eq!(jobs.len(), 1, "{jobs:?}");
     assert_eq!(events(&jobs[0]).len(), SERVED_FLUSH_AT);
 

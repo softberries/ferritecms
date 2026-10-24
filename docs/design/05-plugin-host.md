@@ -263,7 +263,8 @@ As built:
 - **Recorded:** every response of the public handler after its health, asset and
   preview branches: content pages, archives, search, feeds, robots and sitemaps, 404
   and 410 pages, canonical and redirect-row redirects. **Not recorded:** non-GET/HEAD
-  requests, `/healthz`, `/readyz`, `/_media` and `/_theme` assets, `/_preview`,
+  requests, `/healthz`, `/readyz`, `/_media` and `/_theme` assets, every path whose
+  first segment percent-decodes to `_preview` in any case (also the 404 variants),
   plugin routes (`/_p/`) and the API (separate axum routes).
 - **Event:** `{"path", "status", "ts", "referrer_host", "ua_class", "cache"}`. `path` is
   the raw percent-encoded path without the query, cut to 512 bytes (F36; a decoded

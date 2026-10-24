@@ -110,6 +110,21 @@ impl ServedEvent {
     }
 }
 
+/// Whether `path` (raw) is under `/_preview`: its first segment, percent-decoded, is
+/// `_preview` in any ASCII case. Such paths are never recorded, whatever the router
+/// made of them (`/_preview/<id>/`, `/_Preview/<id>`, `/%5Fpreview/<id>`, … are 404
+/// pages), so a draft's id never reaches a subscriber (review round 1).
+pub(crate) fn is_preview_path(path: &str) -> bool {
+    let first = path
+        .trim_start_matches('/')
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    percent_encoding::percent_decode_str(first)
+        .decode_utf8_lossy()
+        .eq_ignore_ascii_case("_preview")
+}
+
 /// `bot` when the user agent contains `bot`, `crawl`, `spider` or `slurp` (ASCII case
 /// insensitive), else `browser` when it starts with `Mozilla/`, else `other`.
 pub fn ua_class(ua: &str) -> UaClass {
@@ -305,6 +320,36 @@ impl ServedBuffer {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_paths() {
+        let id = "0b5d3a52-6c1e-4a59-9a43-2f1d3c4b5a69";
+        for path in [
+            format!("/_preview/{id}"),
+            format!("/_preview/{id}/"),
+            format!("/_preview/{id}/x"),
+            format!("/_preview/{id}0"),
+            format!("/_Preview/{id}"),
+            format!("/_PREVIEW/{id}"),
+            format!("/%5Fpreview/{id}"),
+            format!("/%5fPreView/{id}"),
+            format!("/_%70review/{id}"),
+            "/_preview".to_owned(),
+            "/_preview/".to_owned(),
+            "//_preview/x".to_owned(),
+        ] {
+            assert!(is_preview_path(&path), "{path}");
+        }
+        for path in [
+            "/",
+            "/preview/",
+            "/_previews/x",
+            "/blog/_preview/x",
+            "/_preview-x/",
+        ] {
+            assert!(!is_preview_path(path), "{path}");
+        }
+    }
 
     #[test]
     fn ua_classes() {

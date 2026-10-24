@@ -25,7 +25,7 @@ use super::{
     theme_asset,
 };
 use crate::api::cookie::read_session_cookie;
-use crate::plugins::{CacheOutcome, ServedEvent};
+use crate::plugins::{CacheOutcome, ServedEvent, is_preview_path};
 use crate::route::{MAX_PATH_BYTES, NormalQuery, Route, resolve};
 
 /// Longest wait for the `/readyz` database ping.
@@ -47,7 +47,8 @@ const READY_TIMEOUT: Duration = Duration::from_secs(2);
 /// recorded as a `request.served` event when the state has a
 /// [`ServedBuffer`](crate::plugins::ServedBuffer) (P21; a non-blocking push). Not
 /// recorded: non-GET/HEAD requests, health checks, `/_media` and `/_theme` assets,
-/// previews, and plugin routes and the API (separate axum routes, never this handler).
+/// previews (any path whose first segment decodes to `_preview`, also the 404s), and
+/// plugin routes and the API (separate axum routes, never this handler).
 pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Body> {
     if req.method() != Method::GET && req.method() != Method::HEAD {
         return method_not_allowed();
@@ -73,7 +74,9 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
         _ => {}
     }
     let (res, cache) = page(&state, req.headers(), route, path, raw_query).await;
-    if let Some(served) = &state.served {
+    if let Some(served) = &state.served
+        && !is_preview_path(req.uri().path())
+    {
         served.record(ServedEvent::new(
             req.uri().path(),
             req.headers(),

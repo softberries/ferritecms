@@ -29,6 +29,7 @@ mod failures;
 mod load;
 mod reload;
 mod served;
+pub(crate) use served::is_preview_path;
 mod services;
 
 pub use apply::{PluginRequest, RenderTrace, filter_item, run_filter};
