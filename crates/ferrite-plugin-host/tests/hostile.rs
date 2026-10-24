@@ -436,8 +436,13 @@ impl HostServices for GatedServices {
     async fn kv_list(&self, plugin: &str, prefix: &str, limit: u32) -> Vec<String> {
         self.rest.kv_list(plugin, prefix, limit).await
     }
-    async fn setting_get(&self, plugin: &str, key: &str) -> Option<String> {
-        self.rest.setting_get(plugin, key).await
+    async fn setting_get(
+        &self,
+        plugin: &str,
+        key: &str,
+        spec: &ferrite_plugin_host::SettingSpec,
+    ) -> Option<String> {
+        self.rest.setting_get(plugin, key, spec).await
     }
 }
 

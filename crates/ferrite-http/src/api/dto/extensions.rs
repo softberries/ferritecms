@@ -400,14 +400,18 @@ impl ThemeSettingsDto {
 }
 
 /// `GET /plugins/{name}/settings`: the plugin's schema, the value of every non-secret
-/// setting as the plugin reads it (the stored value, else the default, else `null`),
-/// and for each `secret` only whether it is set. A secret's value is never returned.
+/// setting as the plugin reads it (the stored value if it fits the definition, else the
+/// default, else `null`), for each `secret` only whether it is set, and the keys whose
+/// stored value does not fit. A secret's value is never returned.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PluginSettingsDto {
     pub schema: Vec<SettingDefDto>,
     pub values: Map<String, Value>,
-    /// Secret key -> whether a value is set.
+    /// Secret key -> whether a usable value is set (sealed for this plugin and key).
     pub secrets: BTreeMap<String, bool>,
+    /// Keys whose stored value does not fit the current definition (its type changed in
+    /// an update): they read as the default (a secret as unset) until written again.
+    pub invalid: Vec<String>,
 }
 
 impl From<PluginSettingsView> for PluginSettingsDto {
@@ -416,6 +420,7 @@ impl From<PluginSettingsView> for PluginSettingsDto {
             schema: schema_dto(&v.schema),
             values: v.values,
             secrets: v.secrets,
+            invalid: v.invalid,
         }
     }
 }

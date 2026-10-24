@@ -62,5 +62,10 @@ async fn extension_service_futures_are_send() {
     assert_send(admin.delete_plugin(&actor, "p", true));
     assert_send(admin.install_theme(&actor, &artifact, &theme, true));
     assert_send(admin.activate_theme(&actor, "t", &artifact.hash));
+    let schema = ferrite_core::ext_settings::SettingsSchema::default();
+    assert_send(admin.theme_settings(&actor, "t", &schema));
+    assert_send(admin.set_theme_settings(&actor, "t", &schema, serde_json::Map::new()));
+    assert_send(admin.plugin_settings(&actor, "p"));
+    assert_send(admin.set_plugin_settings(&actor, "p", serde_json::Map::new()));
     db.teardown().await;
 }

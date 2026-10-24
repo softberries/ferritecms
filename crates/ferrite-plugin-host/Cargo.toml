@@ -11,6 +11,7 @@ workspace = true
 ammonia.workspace = true
 arc-swap.workspace = true
 bytes.workspace = true
+ferrite-domain = { path = "../ferrite-domain" }
 async-trait.workspace = true
 tokio.workspace = true
 tracing.workspace = true

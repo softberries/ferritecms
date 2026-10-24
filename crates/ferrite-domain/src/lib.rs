@@ -11,6 +11,7 @@ mod page;
 mod plugin;
 mod search;
 mod secret;
+mod setting;
 mod site;
 mod taxonomy;
 mod time;
@@ -36,6 +37,10 @@ pub use page::{Cursor, Page};
 pub use plugin::{Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, Media};
 pub use search::SearchQuery;
 pub use secret::Secret;
+pub use setting::{
+    MAX_SETTING_SECRET, MAX_SETTING_TEXT, MAX_SETTING_TEXTAREA, SettingType, check_setting_value,
+    empty_setting_value, is_color,
+};
 pub use site::{OptionEntry, REDIRECT_CODES, Redirect, RedirectOrigin};
 pub use taxonomy::{Taxonomy, Term};
 pub use time::Timestamp;

@@ -23,7 +23,10 @@
 
 use std::collections::BTreeMap;
 
-use ferrite_domain::ContentId;
+use ferrite_domain::{
+    MAX_SETTING_SECRET, MAX_SETTING_TEXT, MAX_SETTING_TEXTAREA, check_setting_value,
+    empty_setting_value,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -32,12 +35,14 @@ use crate::{
     auth::{SiteKey, open, seal},
 };
 
+pub use ferrite_domain::SettingType;
+
 /// Most characters of a `text` value.
-pub const MAX_TEXT: usize = 1_000;
+pub const MAX_TEXT: usize = MAX_SETTING_TEXT;
 /// Most characters of a `textarea` value.
-pub const MAX_TEXTAREA: usize = 65_536;
+pub const MAX_TEXTAREA: usize = MAX_SETTING_TEXTAREA;
 /// Most characters of a `secret` value (at least one).
-pub const MAX_SECRET: usize = 4_096;
+pub const MAX_SECRET: usize = MAX_SETTING_SECRET;
 
 /// Prefix of a plugin secret's seal purpose; see [`secret_purpose`].
 pub const SECRET_PURPOSE: &str = "plugin-setting";
@@ -53,38 +58,6 @@ pub fn theme_option(name: &str) -> String {
 /// The option holding plugin `plugin`'s setting `key`.
 pub fn plugin_option(plugin: &str, key: &str) -> String {
     format!("plugin.{plugin}.settings.{key}")
-}
-
-/// A setting's type (the manifests' `type`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SettingType {
-    Text,
-    Textarea,
-    Bool,
-    Number,
-    Select,
-    /// `#rgb` or `#rrggbb`.
-    Color,
-    /// A media item id (UUID string).
-    Media,
-    /// Plugin-only; sealed at rest, write-only in the API.
-    Secret,
-}
-
-impl SettingType {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Text => "text",
-            Self::Textarea => "textarea",
-            Self::Bool => "bool",
-            Self::Number => "number",
-            Self::Select => "select",
-            Self::Color => "color",
-            Self::Media => "media",
-            Self::Secret => "secret",
-        }
-    }
 }
 
 /// One declared setting.
@@ -181,16 +154,7 @@ impl SettingsSchema {
 }
 
 fn empty_value(d: &SettingDef) -> Value {
-    match d.kind {
-        SettingType::Text | SettingType::Textarea | SettingType::Color => Value::from(""),
-        SettingType::Bool => Value::from(false),
-        SettingType::Number => Value::from(0),
-        SettingType::Select => d
-            .options
-            .first()
-            .map_or(Value::Null, |o| Value::from(o.as_str())),
-        SettingType::Media | SettingType::Secret => Value::Null,
-    }
+    empty_setting_value(d.kind, &d.options)
 }
 
 /// Whether `value` passes [`validate_value`] for `def`.
@@ -201,52 +165,12 @@ pub fn is_valid(def: &SettingDef, value: &Value) -> bool {
 /// Checks `value` against `def`: `text` a string of at most [`MAX_TEXT`] characters,
 /// `textarea` at most [`MAX_TEXTAREA`], `secret` 1..=[`MAX_SECRET`], `number` a JSON
 /// number, `bool`, `select` one of the options, `color` `#rgb` / `#rrggbb`, `media` a
-/// UUID string; no string holds NUL. A refusal is [`CoreError::InvalidKey`] naming the
+/// UUID string; no string holds NUL (the rules of
+/// [`ferrite_domain::check_setting_value`]). A refusal is [`CoreError::InvalidKey`] naming the
 /// key; its message never holds the value.
 pub fn validate_value(def: &SettingDef, value: &Value) -> Result<(), CoreError> {
-    let refuse = |message: String| Err(CoreError::invalid_key(&def.key, message));
-    let text = |max: usize, min: usize| -> Result<(), CoreError> {
-        let Some(s) = value.as_str() else {
-            return refuse(format!("must be a string ({} setting)", def.kind.as_str()));
-        };
-        if s.contains('\0') {
-            return refuse("must not contain NUL".to_owned());
-        }
-        let n = s.chars().count();
-        if n < min || n > max {
-            return refuse(format!("must be {min}-{max} characters"));
-        }
-        Ok(())
-    };
-    match def.kind {
-        SettingType::Text => text(MAX_TEXT, 0),
-        SettingType::Textarea => text(MAX_TEXTAREA, 0),
-        SettingType::Secret => text(MAX_SECRET, 1),
-        SettingType::Number => match value.as_f64() {
-            Some(n) if n.is_finite() => Ok(()),
-            _ => refuse("must be a finite number".to_owned()),
-        },
-        SettingType::Bool if value.is_boolean() => Ok(()),
-        SettingType::Bool => refuse("must be true or false".to_owned()),
-        SettingType::Select => match value.as_str() {
-            Some(s) if def.options.iter().any(|o| o == s) => Ok(()),
-            _ => refuse(format!("must be one of: {}", def.options.join(", "))),
-        },
-        SettingType::Color => match value.as_str() {
-            Some(s) if is_color(s) => Ok(()),
-            _ => refuse("must be a colour #rgb or #rrggbb".to_owned()),
-        },
-        SettingType::Media => match value.as_str().map(str::parse::<ContentId>) {
-            Some(Ok(_)) => Ok(()),
-            _ => refuse("must be a media item id".to_owned()),
-        },
-    }
-}
-
-/// `#rgb` or `#rrggbb` (strict: colours land in CSS, where HTML escaping does not help).
-fn is_color(s: &str) -> bool {
-    s.strip_prefix('#')
-        .is_some_and(|hex| matches!(hex.len(), 3 | 6) && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+    check_setting_value(def.kind, &def.options, value)
+        .map_err(|message| CoreError::invalid_key(&def.key, message))
 }
 
 /// The seal purpose of plugin `plugin`'s secret setting `key`:
@@ -290,15 +214,82 @@ pub fn open_secret(
     String::from_utf8(bytes).map_err(|_| CoreError::Invalid("sealed value is not text".into()))
 }
 
-/// A plugin's settings as the admin sees them: the value of every non-secret key (the
-/// stored value, else the default, else `null`: what the plugin's `settings.get`
-/// answers), and for each secret only whether it is set. Holds no secret, so it may be
-/// logged.
+/// What a stored plugin setting means under the plugin's current definition (review
+/// R11): the one rule both the plugin's `settings.get` (`ferrite-http`'s
+/// `StoreHostServices`) and the admin view ([`PluginSettingsView`]) apply.
+#[derive(Clone, PartialEq)]
+pub struct Resolved {
+    /// The value the plugin reads: for a secret its opened plaintext (a JSON string),
+    /// else the stored value; the default when nothing usable is stored; `None` without
+    /// one.
+    pub value: Option<Value>,
+    /// A value is stored but does not fit the definition (its type changed in an
+    /// update, or it was written around the API), so `value` is the fallback.
+    pub fell_back: bool,
+}
+
+impl std::fmt::Debug for Resolved {
+    // The value may be a plaintext secret.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Resolved")
+            .field("set", &self.value.is_some())
+            .field("fell_back", &self.fell_back)
+            .finish()
+    }
+}
+
+/// Resolves `stored` (the option `plugin.<plugin>.settings.<key>`, if set) against
+/// `def`. A `secret` accepts only a sealed value that `open` opens (for this plugin and
+/// key: the caller opens with [`open_secret`]) to a valid secret; a non-secret accepts
+/// only an unsealed value that passes [`validate_value`] (a sealed blob is never
+/// opened for it). Anything else is unset: the default (a secret has none), with
+/// `fell_back` set.
+pub fn resolve_plugin_value(
+    def: &SettingDef,
+    stored: Option<&Value>,
+    open: impl FnOnce(&str) -> Option<String>,
+) -> Resolved {
+    let Some(stored) = stored else {
+        return Resolved {
+            value: def.default.clone(),
+            fell_back: false,
+        };
+    };
+    let accepted = match (def.kind, sealed_text(stored)) {
+        (SettingType::Secret, Some(sealed)) => {
+            open(sealed).map(Value::String).filter(|v| is_valid(def, v))
+        }
+        (SettingType::Secret, None) | (_, Some(_)) => None,
+        (_, None) => Some(stored.clone()).filter(|v| is_valid(def, v)),
+    };
+    match accepted {
+        Some(value) => Resolved {
+            value: Some(value),
+            fell_back: false,
+        },
+        None => Resolved {
+            value: if def.kind == SettingType::Secret {
+                None
+            } else {
+                def.default.clone()
+            },
+            fell_back: true,
+        },
+    }
+}
+
+/// A plugin's settings as the admin sees them, each key resolved by
+/// [`resolve_plugin_value`] (what the plugin's `settings.get` answers): the value of
+/// every non-secret key (`null` without one), for each secret only whether a usable
+/// value is set, and the keys whose stored value does not fit the definition (shown at
+/// their fallback). Holds no secret, so it may be logged.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginSettingsView {
     pub schema: SettingsSchema,
     pub values: Map<String, Value>,
     pub secrets: BTreeMap<String, bool>,
+    /// Keys with a stored value that does not fit the current definition, by key.
+    pub invalid: Vec<String>,
 }
 
 #[cfg(test)]

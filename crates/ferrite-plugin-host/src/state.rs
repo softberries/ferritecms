@@ -422,17 +422,23 @@ impl kv::Host for HostState {
 }
 
 /// Only keys the manifest declares (P13), read in the calling plugin's own namespace
-/// (the services key the read by plugin name); with nothing stored, the declared
-/// default. An undeclared key costs no budget.
+/// (the services key the read by plugin name) and resolved against the loaded
+/// manifest's definition; with nothing usable stored, the declared default. An
+/// undeclared key costs no budget.
 impl settings::Host for HostState {
     async fn get(&mut self, key: String) -> Option<String> {
-        let default = self.settings.get(&key)?.clone();
+        let declared = Arc::clone(&self.settings);
+        let declared = declared.get(&key)?;
         if !take(&mut self.budget.content) {
             return None;
         }
-        match self.services.setting_get(&self.plugin, &key).await {
+        match self
+            .services
+            .setting_get(&self.plugin, &key, &declared.spec)
+            .await
+        {
             Some(value) => Some(value),
-            None => default,
+            None => declared.default.clone(),
         }
     }
 }

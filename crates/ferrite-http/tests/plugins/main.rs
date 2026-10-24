@@ -513,8 +513,17 @@ async fn services_kv_settings_options_meta(site: Site) -> Site {
         .await
         .unwrap();
     options.set("site.title", &json!("T"), false).await.unwrap();
-    assert_eq!(s.setting_get("seo", "key").await.as_deref(), Some("\"v\""));
-    assert_eq!(s.setting_get("other", "key").await, None);
+    let text = ferrite_plugin_host::SettingSpec {
+        kind: ferrite_plugin_host::SettingKind::Text,
+        label: "Key".into(),
+        default: None,
+        options: Vec::new(),
+    };
+    assert_eq!(
+        s.setting_get("seo", "key", &text).await.as_deref(),
+        Some("\"v\"")
+    );
+    assert_eq!(s.setting_get("other", "key", &text).await, None);
     assert_eq!(s.option_get("site.title").await.as_deref(), Some("\"T\""));
     assert_eq!(
         s.option_get("plugin.seo.settings.key").await,

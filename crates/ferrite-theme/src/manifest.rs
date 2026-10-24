@@ -48,6 +48,23 @@ pub enum SettingKind {
     Media,
 }
 
+impl SettingKind {
+    /// The shared setting type (`ferrite_domain::SettingType`), whose value rules this
+    /// crate applies.
+    pub fn setting_type(self) -> ferrite_domain::SettingType {
+        use ferrite_domain::SettingType as T;
+        match self {
+            Self::Text => T::Text,
+            Self::Textarea => T::Textarea,
+            Self::Bool => T::Bool,
+            Self::Number => T::Number,
+            Self::Select => T::Select,
+            Self::Color => T::Color,
+            Self::Media => T::Media,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SettingSpec {
     pub kind: SettingKind,
@@ -196,37 +213,13 @@ impl ThemeManifest {
 }
 
 fn empty_value(spec: &SettingSpec) -> serde_json::Value {
-    use serde_json::Value;
-    match spec.kind {
-        SettingKind::Text | SettingKind::Textarea | SettingKind::Color => Value::from(""),
-        SettingKind::Bool => Value::from(false),
-        SettingKind::Number => Value::from(0),
-        SettingKind::Select => spec
-            .options
-            .first()
-            .map_or(Value::Null, |o| Value::from(o.as_str())),
-        SettingKind::Media => Value::Null,
-    }
+    ferrite_domain::empty_setting_value(spec.kind.setting_type(), &spec.options)
 }
 
+/// The shared value rules (`ferrite_domain::check_setting_value`), the same the admin
+/// API validates with: text lengths, select options, colour shape, media ids, no NUL.
 fn valid_value(kind: SettingKind, options: &[String], v: &serde_json::Value) -> bool {
-    match kind {
-        SettingKind::Text | SettingKind::Textarea => v.is_string(),
-        SettingKind::Bool => v.is_boolean(),
-        SettingKind::Number => v.is_number(),
-        SettingKind::Select => v.as_str().is_some_and(|s| options.iter().any(|o| o == s)),
-        SettingKind::Color => v.as_str().is_some_and(is_color),
-        SettingKind::Media => v
-            .as_str()
-            .is_some_and(|s| s.parse::<ferrite_domain::ContentId>().is_ok()),
-    }
-}
-
-/// `#rgb` or `#rrggbb`: strict, because colours land in CSS where HTML escaping does
-/// not help.
-fn is_color(s: &str) -> bool {
-    s.strip_prefix('#')
-        .is_some_and(|hex| matches!(hex.len(), 3 | 6) && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+    ferrite_domain::check_setting_value(kind.setting_type(), options, v).is_ok()
 }
 
 fn is_name(s: &str, underscore: bool) -> bool {
@@ -295,6 +288,35 @@ logo = { type = "media", label = "Logo" }
         assert_eq!(v["layout"], "wide");
         assert_eq!(v["logo"], serde_json::Value::Null);
         assert!(!v.contains_key("undeclared"));
+    }
+
+    /// Review m4: templates and the admin API apply the same rules
+    /// (`ferrite_domain::check_setting_value`), text lengths included.
+    #[test]
+    fn text_lengths_match_the_admin_rules() {
+        let m = parse(
+            "[theme]\nname = \"x\"\nversion = \"0.1.0\"\n[settings]\n\
+             tagline = { type = \"text\", default = \"short\" }\n\
+             body = { type = \"textarea\" }\n",
+        )
+        .unwrap();
+        let stored = serde_json::json!({
+            "tagline": "a".repeat(1_001),
+            "body": "b\u{0}",
+        });
+        let v = m.settings_values(stored.as_object().unwrap());
+        assert_eq!(v["tagline"], "short");
+        assert_eq!(v["body"], "");
+        let ok = serde_json::json!({ "tagline": "a".repeat(1_000) });
+        assert_eq!(
+            m.settings_values(ok.as_object().unwrap())["tagline"],
+            "a".repeat(1_000)
+        );
+        let long = format!(
+            "[theme]\nname = \"x\"\nversion = \"0.1.0\"\n[settings]\nt = {{ type = \"text\", default = \"{}\" }}\n",
+            "a".repeat(1_001)
+        );
+        assert!(parse(&long).unwrap_err()[0].contains("settings.t.default"));
     }
 
     #[test]

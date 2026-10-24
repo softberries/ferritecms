@@ -568,7 +568,60 @@ async fn secrets_are_write_only_and_owner_scoped(db: &TestDb) {
     );
 }
 
+/// Review R11 (view side; the guest side is `ferrite-http`'s
+/// `type_changed_settings_fall_back_after_update`): after an update changes a key's
+/// type, a stored value that does not fit reads as the default (a secret as unset) and
+/// is flagged, for text -> number, text -> secret and secret -> text.
+async fn type_changed_values_fall_back(db: &TestDb) {
+    let store = db.store();
+    let svc = ExtensionAdmin::new(db.shared_store(), SiteKey::generate().unwrap());
+    let admin = actor(store, Role::Admin).await;
+    let a = artifact(3);
+    let mut v1 = plugin_row("seo", &a);
+    v1.manifest["settings"] = json!({
+        "title": {"type": "secret", "label": "Title"},
+        "limit": {"type": "text", "label": "Limit"},
+        "api_key": {"type": "text", "label": "API key"},
+    });
+    svc.install_plugin(&admin, &a, &v1).await.unwrap();
+    svc.set_plugin_settings(
+        &admin,
+        "seo",
+        patch(json!({"title": "old-secret", "limit": "abc", "api_key": "plain"})),
+    )
+    .await
+    .unwrap();
+    // Version 2: `title` text (default "Hi"), `limit` number, `api_key` secret.
+    svc.install_plugin(&admin, &a, &plugin_row("seo", &a))
+        .await
+        .unwrap();
+    let view = svc.plugin_settings(&admin, "seo").await.unwrap();
+    assert_eq!(
+        Value::Object(view.values.clone()),
+        json!({"title": "Hi", "limit": null})
+    );
+    assert!(!view.secrets["api_key"]);
+    assert_eq!(view.invalid, ["api_key", "limit", "title"]);
+    let shown = format!("{view:?}");
+    assert!(
+        !shown.contains("plain") && !shown.contains("old-secret"),
+        "{shown}"
+    );
+    // Fitting values clear the flags.
+    let view = svc
+        .set_plugin_settings(
+            &admin,
+            "seo",
+            patch(json!({"title": "T", "limit": 2, "api_key": "k"})),
+        )
+        .await
+        .unwrap();
+    assert!(view.invalid.is_empty());
+    assert!(view.secrets["api_key"]);
+}
+
 backend_tests!(
     theme_settings_roundtrip_and_reset,
     secrets_are_write_only_and_owner_scoped,
+    type_changed_values_fall_back,
 );

@@ -7,16 +7,25 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crate::bindings::v0_1::PluginPre;
-use crate::manifest::{Capabilities, Manifest};
+use crate::manifest::{Capabilities, Manifest, SettingSpec};
 use crate::services::HostServices;
 use crate::state::HostState;
 
-/// The settings a manifest declares, each with its default as JSON text (`None`: no
-/// default). `settings.get` answers these keys only (M2a-2 P13).
-pub(crate) type SettingDefaults = BTreeMap<String, Option<String>>;
+/// One setting a manifest declares: its definition (passed to
+/// [`HostServices::setting_get`], which resolves the stored value against it) and its
+/// default as JSON text (`None`: no default).
+#[derive(Debug, Clone)]
+pub(crate) struct DeclaredSetting {
+    pub(crate) spec: SettingSpec,
+    pub(crate) default: Option<String>,
+}
 
-/// The declared settings of `manifest` with their defaults as JSON text. A default
-/// that cannot be written as JSON (none passes manifest validation) counts as none.
+/// The settings a manifest declares, by key. `settings.get` answers these keys only
+/// (M2a-2 P13).
+pub(crate) type SettingDefaults = BTreeMap<String, DeclaredSetting>;
+
+/// The declared settings of `manifest`. A default that cannot be written as JSON (none
+/// passes manifest validation) counts as none.
 pub(crate) fn setting_defaults(manifest: &Manifest) -> SettingDefaults {
     manifest
         .settings
@@ -26,7 +35,11 @@ pub(crate) fn setting_defaults(manifest: &Manifest) -> SettingDefaults {
                 .default
                 .as_ref()
                 .and_then(|d| serde_json::to_string(d).ok());
-            (key.clone(), default)
+            let declared = DeclaredSetting {
+                spec: spec.clone(),
+                default,
+            };
+            (key.clone(), declared)
         })
         .collect()
 }

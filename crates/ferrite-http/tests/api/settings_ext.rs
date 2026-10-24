@@ -10,15 +10,18 @@ use ferrite_core::events::option_key;
 use ferrite_domain::{Event, Role};
 use serde_json::{Value, json};
 
+use ferrite_store::{LOCK_EXTENSIONS, lock};
+
 use crate::{
     api_tests,
-    harness::{Api, Client, Resp, plugin_manifest, plugin_wasm},
+    harness::{Api, Client, EXTENSIONS_LOCK_WAIT, Resp, plugin_manifest, plugin_wasm},
 };
 
 api_tests!(
     theme_settings_change_shows_on_page,
     plugin_settings_over_http,
     editor_cannot_patch_extension_settings,
+    settings_writes_wait_for_the_extensions_lock,
 );
 
 const BLOG_SETTINGS: &str = "/api/v1/themes/blog/settings";
@@ -268,6 +271,7 @@ async fn plugin_settings_over_http(api: Api) -> Api {
     );
     assert_eq!(dto["values"], json!({"limit": null, "title": "Probe"}));
     assert_eq!(dto["secrets"], json!({"api_key": false}));
+    assert_eq!(dto["invalid"], json!([]));
     let page = api.get("/").await.body;
     assert_eq!(
         probe_meta(&page),
@@ -430,5 +434,40 @@ async fn editor_cannot_patch_extension_settings(api: Api) -> Api {
         option(&api, "plugin.settings-probe.settings.title").await,
         None
     );
+    api
+}
+
+/// Review m1: settings writes are extension writes; while another change holds the
+/// `extensions` lock they answer `503 busy` with `Retry-After` and write nothing.
+async fn settings_writes_wait_for_the_extensions_lock(api: Api) -> Api {
+    let mut c = admin(&api).await;
+    install_probe(&mut c, &api).await;
+    let seq = max_seq(&api).await;
+    let guard = lock(api.store.as_ref(), LOCK_EXTENSIONS, EXTENSIONS_LOCK_WAIT)
+        .await
+        .unwrap();
+    for (path, body) in [
+        (BLOG_SETTINGS, json!({"accent_color": "#000"})),
+        (PROBE_SETTINGS, json!({"title": "x", "api_key": SECRET})),
+    ] {
+        let r = patch(&mut c, &api, path, body).await;
+        assert!(!r.body.contains(SECRET), "{}", r.body);
+        assert_eq!(r.header("retry-after"), Some("5"), "{r:?}");
+        r.assert_problem(503, "busy");
+    }
+    guard.release().await.unwrap();
+    assert_eq!(events_after(&api, seq).await, []);
+    assert_eq!(option(&api, "theme.blog.settings").await, None);
+    assert_eq!(
+        option(&api, "plugin.settings-probe.settings.title").await,
+        None
+    );
+    assert_eq!(
+        option(&api, "plugin.settings-probe.settings.api_key").await,
+        None
+    );
+    // Reads do not take the lock.
+    let r = c.get(&api, PROBE_SETTINGS).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
     api
 }

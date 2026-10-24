@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use crate::manifest::SettingSpec;
 use crate::types::Post;
 
 /// Type filter passed to [`HostServices::get_post`]. The explicit `for<'k>` matters:
@@ -29,7 +30,10 @@ pub trait HostServices: Send + Sync + 'static {
     async fn kv_set(&self, plugin: &str, key: &str, value: Vec<u8>) -> Result<(), String>;
     async fn kv_delete(&self, plugin: &str, key: &str);
     async fn kv_list(&self, plugin: &str, prefix: &str, limit: u32) -> Vec<String>;
-    async fn setting_get(&self, plugin: &str, key: &str) -> Option<String>;
+    /// Plugin `plugin`'s setting `key`, declared in its loaded manifest as `spec`, as
+    /// JSON text: the stored value if it fits `spec`, else (or when unset) the declared
+    /// default or `None`; the host answers the declared default for `None`.
+    async fn setting_get(&self, plugin: &str, key: &str, spec: &SettingSpec) -> Option<String>;
 }
 
 #[derive(Default)]
@@ -144,7 +148,7 @@ impl HostServices for InMemoryServices {
             .collect()
     }
 
-    async fn setting_get(&self, plugin: &str, key: &str) -> Option<String> {
+    async fn setting_get(&self, plugin: &str, key: &str, _spec: &SettingSpec) -> Option<String> {
         self.lock().settings.get(&pair(plugin, key)).cloned()
     }
 }

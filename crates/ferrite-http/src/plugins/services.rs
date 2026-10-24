@@ -6,10 +6,10 @@ use ferrite_core::{
     DepKeys, PageItem, SiteRead, SiteReader,
     auth::SiteKey,
     events::{invalidate, option_key, post_key},
-    ext_settings::{open_secret, plugin_option, sealed_text},
+    ext_settings::{SettingDef, open_secret, plugin_option, resolve_plugin_value},
 };
 use ferrite_domain::{ContentId, ContentStatus};
-use ferrite_plugin_host::{HostServices, KindOk, Post, TermRef};
+use ferrite_plugin_host::{HostServices, KindOk, Post, SettingSpec, TermRef};
 use ferrite_store::Store;
 
 use super::apply::{mark_degraded, record, scoped_preview};
@@ -37,11 +37,13 @@ const PLUGIN_OPTION_PREFIX: &str = "plugin.";
 /// * `options.get`: JSON text of the option; never `plugin.*` keys.
 /// * `kv`: per plugin, quota [`KV_MAX_BYTES`] / [`KV_MAX_KEYS`] via `set_with_quota`.
 /// * `settings.get`: option `plugin.<name>.settings.<key>` of the calling plugin (the
-///   host passes its name and answers declared keys only). A sealed secret
-///   (`{"sealed": …}`) is opened with the site key ([`with_site_key`](Self::with_site_key))
-///   under that plugin's and key's purpose and returned as a JSON string; without the
-///   key, or when it does not open (sealed for another plugin or key, or under another
-///   site key), the read is logged (never the value) and answers `None`.
+///   host passes its name and the loaded manifest's definition, and answers declared
+///   keys only), resolved by `ext_settings::resolve_plugin_value` as the admin view
+///   is (review R11): a `secret` only as a sealed value that opens with the site key
+///   ([`with_site_key`](Self::with_site_key)) under that plugin's and key's purpose
+///   (returned as a JSON string); a non-secret only unsealed and valid for its type.
+///   Anything else is logged (plugin and key, never the value) and answers `None`, so
+///   the host falls back to the declared default.
 ///
 /// A store error is logged and the guest gets "not found" (reads) or a storage error
 /// (writes); inside a request scope it also marks the page volatile, so the degraded
@@ -268,13 +270,13 @@ impl HostServices for StoreHostServices {
         }
     }
 
-    async fn setting_get(&self, plugin: &str, key: &str) -> Option<String> {
+    async fn setting_get(&self, plugin: &str, key: &str, spec: &SettingSpec) -> Option<String> {
         let option = plugin_option(plugin, key);
         // The host records nothing for settings; a settings change is an option write.
         let mut deps = DepKeys::default();
         deps.insert(option_key(&option));
         record(deps);
-        let value = match self.store.read().options().get(&option).await {
+        let stored = match self.store.read().options().get(&option).await {
             Ok(entry) => entry?.value,
             Err(e) => {
                 tracing::warn!(key = option, error = %e, "plugin setting read failed");
@@ -282,28 +284,42 @@ impl HostServices for StoreHostServices {
                 return None;
             }
         };
-        let Some(sealed) = sealed_text(&value) else {
-            return Some(json_text(&value));
-        };
-        let Some(site_key) = &self.site_key else {
-            tracing::warn!(
-                plugin,
-                setting = key,
-                "no site key to open a sealed plugin setting"
-            );
-            return None;
-        };
-        match open_secret(site_key, plugin, key, sealed) {
-            Ok(plaintext) => Some(json_text(&serde_json::Value::String(plaintext))),
-            Err(_) => {
+        let def = setting_def(key, spec);
+        let resolved = resolve_plugin_value(&def, Some(&stored), |sealed| {
+            let Some(site_key) = &self.site_key else {
                 tracing::warn!(
                     plugin,
                     setting = key,
-                    "a sealed plugin setting does not open (another plugin's or key's, or another site key)"
+                    "no site key to open a sealed plugin setting"
                 );
-                None
-            }
+                return None;
+            };
+            open_secret(site_key, plugin, key, sealed).ok()
+        });
+        if resolved.fell_back {
+            tracing::warn!(
+                plugin,
+                setting = key,
+                kind = def.kind.as_str(),
+                "a stored plugin setting does not fit its declared type (or a sealed one does not open); answering the default"
+            );
         }
+        resolved.value.as_ref().map(json_text)
+    }
+}
+
+/// The core definition of a loaded manifest's setting (the value rules are shared,
+/// `ferrite_domain::check_setting_value`).
+fn setting_def(key: &str, spec: &SettingSpec) -> SettingDef {
+    SettingDef {
+        key: key.to_owned(),
+        kind: spec.kind.setting_type(),
+        label: spec.label.clone(),
+        default: spec
+            .default
+            .as_ref()
+            .and_then(|d| serde_json::to_value(d).ok()),
+        options: spec.options.clone(),
     }
 }
 

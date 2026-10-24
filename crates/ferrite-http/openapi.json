@@ -7365,13 +7365,21 @@
       },
       "PluginSettingsDto": {
         "type": "object",
-        "description": "`GET /plugins/{name}/settings`: the plugin's schema, the value of every non-secret\nsetting as the plugin reads it (the stored value, else the default, else `null`),\nand for each `secret` only whether it is set. A secret's value is never returned.",
+        "description": "`GET /plugins/{name}/settings`: the plugin's schema, the value of every non-secret\nsetting as the plugin reads it (the stored value if it fits the definition, else the\ndefault, else `null`), for each `secret` only whether it is set, and the keys whose\nstored value does not fit. A secret's value is never returned.",
         "required": [
           "schema",
           "values",
-          "secrets"
+          "secrets",
+          "invalid"
         ],
         "properties": {
+          "invalid": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Keys whose stored value does not fit the current definition (its type changed in\nan update): they read as the default (a secret as unset) until written again."
+          },
           "schema": {
             "type": "array",
             "items": {
@@ -7380,7 +7388,7 @@
           },
           "secrets": {
             "type": "object",
-            "description": "Secret key -> whether a value is set.",
+            "description": "Secret key -> whether a usable value is set (sealed for this plugin and key).",
             "additionalProperties": {
               "type": "boolean"
             },

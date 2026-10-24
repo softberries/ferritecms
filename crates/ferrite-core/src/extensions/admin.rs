@@ -16,8 +16,8 @@ use crate::{
     auth::SiteKey,
     events,
     ext_settings::{
-        PluginSettingsView, SettingType, SettingsSchema, plugin_option, seal_secret, sealed_text,
-        theme_option, validate_value,
+        PluginSettingsView, SettingType, SettingsSchema, open_secret, plugin_option,
+        resolve_plugin_value, seal_secret, theme_option, validate_value,
     },
 };
 
@@ -295,7 +295,7 @@ impl ExtensionAdmin {
             .get(name)
             .await?
             .ok_or(CoreError::NotFound)?;
-        plugin_view(repos, name, plugin_schema(&row)?).await
+        plugin_view(repos, &self.key, name, plugin_schema(&row)?).await
     }
 
     /// Applies `patch` (`key: value`, `null` deletes the key's option) to plugin
@@ -427,30 +427,32 @@ async fn write_theme_settings(
 
 async fn plugin_view(
     repos: &dyn Repos,
+    site_key: &SiteKey,
     name: &str,
     schema: SettingsSchema,
 ) -> Result<PluginSettingsView, CoreError> {
     let mut values = Map::new();
     let mut secrets = BTreeMap::new();
+    let mut invalid = Vec::new();
     for def in &schema.0 {
         let stored = repos.options().get(&plugin_option(name, &def.key)).await?;
+        let resolved = resolve_plugin_value(def, stored.as_ref().map(|e| &e.value), |sealed| {
+            open_secret(site_key, name, &def.key, sealed).ok()
+        });
+        if resolved.fell_back {
+            invalid.push(def.key.clone());
+        }
         if def.kind == SettingType::Secret {
-            secrets.insert(def.key.clone(), stored.is_some());
+            secrets.insert(def.key.clone(), resolved.value.is_some());
         } else {
-            // A sealed value under a key that is no longer a secret (the plugin's schema
-            // changed) is never shown, not even as ciphertext.
-            let value = stored
-                .map(|e| e.value)
-                .filter(|v| sealed_text(v).is_none())
-                .or_else(|| def.default.clone())
-                .unwrap_or(Value::Null);
-            values.insert(def.key.clone(), value);
+            values.insert(def.key.clone(), resolved.value.unwrap_or(Value::Null));
         }
     }
     Ok(PluginSettingsView {
         schema,
         values,
         secrets,
+        invalid,
     })
 }
 

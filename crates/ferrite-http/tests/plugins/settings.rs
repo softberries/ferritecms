@@ -6,13 +6,40 @@
 use ferrite_core::ExtensionAdmin;
 use ferrite_domain::Role;
 use ferrite_http::{PluginRequest, RenderTrace, StoreHostServices};
-use ferrite_plugin_host::HostServices;
+use ferrite_plugin_host::{HostServices, Manifest, SettingSpec};
 use serde_json::{Map, Value, json};
 
 use crate::common::{SITE_URL, Site, plugin_manifest, plugin_wasm};
 use crate::profile_tests;
 
-profile_tests!(secrets_open_only_for_the_owner);
+profile_tests!(
+    secrets_open_only_for_the_owner,
+    type_changed_settings_fall_back_after_update
+);
+
+/// The `settings-probe` manifest's definition of `key`.
+fn spec(key: &str) -> SettingSpec {
+    Manifest::parse(&plugin_manifest("settings-probe"))
+        .unwrap()
+        .settings
+        .remove(key)
+        .unwrap()
+}
+
+/// `settings-probe`'s manifest named `name`, with `settings` as its `[settings]` table.
+fn probe_manifest(name: &str, settings: Option<&str>) -> String {
+    let manifest = plugin_manifest("settings-probe").replace(
+        "name      = \"settings-probe\"",
+        &format!("name      = \"{name}\""),
+    );
+    match settings {
+        None => manifest,
+        Some(table) => {
+            let at = manifest.find("[settings]").unwrap();
+            format!("{}[settings]\n{table}", &manifest[..at])
+        }
+    }
+}
 
 /// Every `settings-probe` meta of `html`, in page order.
 fn probes(html: &str) -> Vec<String> {
@@ -49,10 +76,7 @@ async fn secrets_open_only_for_the_owner(site: Site) -> Site {
     // One component installed as two plugins with the same settings keys.
     let hash = site.put_artifact(plugin_wasm("settings-probe")).await;
     for name in ["probe-a", "probe-b"] {
-        let manifest = plugin_manifest("settings-probe").replace(
-            "name      = \"settings-probe\"",
-            &format!("name      = \"{name}\""),
-        );
+        let manifest = probe_manifest(name, None);
         assert!(manifest.contains(name));
         site.row(name, &manifest, hash.clone(), true).await;
     }
@@ -81,7 +105,9 @@ async fn secrets_open_only_for_the_owner(site: Site) -> Site {
     let s = site.services.as_ref();
     assert_eq!(s.option_get("plugin.probe-a.settings.api_key").await, None);
     assert_eq!(
-        s.setting_get("probe-a", "api_key").await.as_deref(),
+        s.setting_get("probe-a", "api_key", &spec("api_key"))
+            .await
+            .as_deref(),
         Some("\"secret-a\"")
     );
 
@@ -102,8 +128,14 @@ async fn secrets_open_only_for_the_owner(site: Site) -> Site {
         .set("plugin.probe-a.settings.limit", &sealed, false)
         .await
         .unwrap();
-    assert_eq!(s.setting_get("probe-b", "api_key").await, None);
-    assert_eq!(s.setting_get("probe-a", "limit").await, None);
+    assert_eq!(
+        s.setting_get("probe-b", "api_key", &spec("api_key")).await,
+        None
+    );
+    assert_eq!(
+        s.setting_get("probe-a", "limit", &spec("limit")).await,
+        None
+    );
     assert_eq!(
         probes(&head(&site).await),
         [
@@ -114,10 +146,100 @@ async fn secrets_open_only_for_the_owner(site: Site) -> Site {
 
     // Services without the site key open nothing (and read plain values as before).
     let keyless = StoreHostServices::new(site.store.clone(), site.reader.clone(), SITE_URL);
-    assert_eq!(keyless.setting_get("probe-a", "api_key").await, None);
     assert_eq!(
-        keyless.setting_get("probe-a", "title").await.as_deref(),
+        keyless
+            .setting_get("probe-a", "api_key", &spec("api_key"))
+            .await,
+        None
+    );
+    assert_eq!(
+        keyless
+            .setting_get("probe-a", "title", &spec("title"))
+            .await
+            .as_deref(),
         Some("\"A\"")
+    );
+    site
+}
+
+/// Review R11: after an update changes a key's type, a stored value that does not fit
+/// the new definition reaches neither the guest nor the admin view: text -> number
+/// (`limit`), text -> secret (`api_key`, a plaintext never "set"), secret -> text
+/// (`title`, the old secret never opened for a plain key). The view flags each key.
+async fn type_changed_settings_fall_back_after_update(site: Site) -> Site {
+    let admin = Site::actor(&site.user("root", Role::Admin).await);
+    let ext = ExtensionAdmin::new(site.store.clone(), site.key.clone());
+    let hash = site.put_artifact(plugin_wasm("settings-probe")).await;
+    // Version 1: `title` secret, `limit` and `api_key` text.
+    let v1 = probe_manifest(
+        "probe-a",
+        Some(
+            "title = { type = \"secret\", label = \"T\" }\n\
+             limit = { type = \"text\", label = \"L\" }\n\
+             api_key = { type = \"text\", label = \"K\" }\n",
+        ),
+    );
+    site.row("probe-a", &v1, hash.clone(), true).await;
+    ext.set_plugin_settings(
+        &admin,
+        "probe-a",
+        patch(json!({"title": "old-secret", "limit": "abc", "api_key": "plain"})),
+    )
+    .await
+    .unwrap();
+    let view = ext.plugin_settings(&admin, "probe-a").await.unwrap();
+    assert!(view.invalid.is_empty(), "{view:?}");
+
+    // Version 2 (the real manifest): `title` text, `limit` number, `api_key` secret.
+    site.row("probe-a", &probe_manifest("probe-a", None), hash, true)
+        .await;
+    assert_eq!(site.load().await.loaded, ["probe-a"]);
+    assert_eq!(
+        probes(&head(&site).await),
+        ["title=Probe;limit=-;key=-;undeclared=-;opt-a=-;opt-b=-"]
+    );
+    let s = site.services.as_ref();
+    assert_eq!(
+        s.setting_get("probe-a", "title", &spec("title"))
+            .await
+            .as_deref(),
+        Some("\"Probe\""),
+        "the declared default"
+    );
+    assert_eq!(
+        s.setting_get("probe-a", "limit", &spec("limit")).await,
+        None
+    );
+    assert_eq!(
+        s.setting_get("probe-a", "api_key", &spec("api_key")).await,
+        None
+    );
+    let view = ext.plugin_settings(&admin, "probe-a").await.unwrap();
+    assert_eq!(
+        Value::Object(view.values.clone()),
+        json!({"title": "Probe", "limit": null})
+    );
+    assert!(!view.secrets["api_key"], "a plaintext is not a set secret");
+    assert_eq!(view.invalid, ["api_key", "limit", "title"]);
+    let shown = format!("{view:?}");
+    assert!(
+        !shown.contains("plain") && !shown.contains("old-secret"),
+        "{shown}"
+    );
+
+    // Writing values that fit clears the flags; the guest reads them.
+    let view = ext
+        .set_plugin_settings(
+            &admin,
+            "probe-a",
+            patch(json!({"title": "New", "limit": 4, "api_key": "sealed-now"})),
+        )
+        .await
+        .unwrap();
+    assert!(view.invalid.is_empty(), "{view:?}");
+    assert_eq!(
+        probes(&head(&site).await),
+        ["title=New;limit=4;key=sealed-now;undeclared=-;opt-a=-;opt-b=-"]
     );
     site
 }

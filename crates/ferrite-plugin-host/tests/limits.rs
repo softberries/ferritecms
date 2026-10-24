@@ -161,7 +161,12 @@ impl HostServices for SlowServices {
     async fn kv_list(&self, _: &str, _: &str, _: u32) -> Vec<String> {
         Vec::new()
     }
-    async fn setting_get(&self, _: &str, _: &str) -> Option<String> {
+    async fn setting_get(
+        &self,
+        _: &str,
+        _: &str,
+        _: &ferrite_plugin_host::SettingSpec,
+    ) -> Option<String> {
         None
     }
 }

@@ -148,6 +148,23 @@ pub enum SettingKind {
     Secret,
 }
 
+impl SettingKind {
+    /// The shared setting type, whose value rules the manifest's defaults follow.
+    pub fn setting_type(self) -> ferrite_domain::SettingType {
+        use ferrite_domain::SettingType as T;
+        match self {
+            Self::Text => T::Text,
+            Self::Textarea => T::Textarea,
+            Self::Bool => T::Bool,
+            Self::Number => T::Number,
+            Self::Select => T::Select,
+            Self::Color => T::Color,
+            Self::Media => T::Media,
+            Self::Secret => T::Secret,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SettingSpec {
     /// TOML key `type`.
@@ -793,23 +810,24 @@ fn parse_settings(cx: &mut Cx, t: toml::Table) -> BTreeMap<String, SettingSpec> 
             cx.push(&opath, "`select` settings need a non-empty `options` list");
         }
         if let (Some(kind), Some(d)) = (kind, &default) {
-            let ok = match kind {
-                SettingKind::Bool => d.is_bool(),
-                SettingKind::Number => d.is_integer() || d.as_float().is_some_and(f64::is_finite),
-                SettingKind::Text
-                | SettingKind::Textarea
-                | SettingKind::Select
-                | SettingKind::Color => d.is_str(),
-                SettingKind::Media | SettingKind::Secret => false,
+            // Review m3: a default must pass the value rules a PATCH of it would
+            // (`ferrite_domain::check_setting_value`: type, options, colour, lengths).
+            let problem = match kind {
+                SettingKind::Media | SettingKind::Secret => Some(format!(
+                    "{} settings have no default",
+                    kind.setting_type().as_str()
+                )),
+                _ => match serde_json::to_value(d) {
+                    Ok(json) => {
+                        ferrite_domain::check_setting_value(kind.setting_type(), &options, &json)
+                            .err()
+                            .map(|e| format!("default {e}"))
+                    }
+                    Err(e) => Some(format!("default cannot be read: {e}")),
+                },
             };
-            if !ok {
-                cx.push(
-                    format!("{path}.default"),
-                    format!(
-                        "default of type {} is not valid for this setting type",
-                        d.type_str()
-                    ),
-                );
+            if let Some(message) = problem {
+                cx.push(format!("{path}.default"), message);
             }
         }
         cx.unknown(st, &path);
@@ -1200,6 +1218,19 @@ world = "ferrite:plugin/plugin@0.1.0"
                 "n = { type = \"number\", label = \"N\", default = nan }",
                 "settings.n.default",
             ),
+            // Review m3: defaults follow the value rules.
+            (
+                "s = { type = \"select\", label = \"S\", options = [\"x\"], default = \"y\" }",
+                "settings.s.default",
+            ),
+            (
+                "c = { type = \"color\", label = \"C\", default = \"red\" }",
+                "settings.c.default",
+            ),
+            (
+                "k = { type = \"secret\", label = \"K\", default = \"x\" }",
+                "settings.k.default",
+            ),
         ];
         for (line, path) in cases {
             let src = with(&format!("[settings]\n{line}\n"));
@@ -1220,6 +1251,13 @@ world = "ferrite:plugin/plugin@0.1.0"
             "k".repeat(64)
         ));
         assert_eq!(Manifest::parse(&ok).expect("ok").settings.len(), 2);
+        let long = with(&format!(
+            "[settings]\nt = {{ type = \"text\", label = \"T\", default = \"{}\" }}\n",
+            "a".repeat(1_001)
+        ));
+        assert_eq!(paths(Manifest::parse(&long)), ["settings.t.default"]);
+        let ok = with("[settings]\nc = { type = \"color\", label = \"C\", default = \"#abc\" }\n");
+        assert!(Manifest::parse(&ok).is_ok());
     }
 
     #[test]
