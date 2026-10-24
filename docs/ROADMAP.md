@@ -277,6 +277,7 @@ Design: [09](design/09-operations.md).
   - [ ] Expose `copy_if_not_exists` and `conditional_put` in `S3Config` (today neither is set on the builder, so production S3 uses the head + copy fallback). Note the explicit-keys vs `from_env` difference: with explicit `access_key_id`/`secret_access_key` the builder reads no `AWS_*` environment (so `AWS_COPY_IF_NOT_EXISTS`, `AWS_CONDITIONAL_PUT`, session tokens and instance/web-identity credentials do not apply); only the no-keys path uses `from_env`. Also: `build_s3` replaces any client options read from the environment with its own timeouts.
   - [ ] Before `PublicUrlMode::Direct` ships: set `Content-Type` / `Cache-Control` attributes on the S3 path only (object_store's local backend rejects attributes, and the `Multipart` `copy_if_not_exists` mode does not copy attributes from the source object, so they must be set on the final object explicitly).
   - [ ] Artifacts GC (`artifacts.gc` job, `ferrite media gc`; design 03 §6).
+  - [ ] Optional location-metadata stripping on upload: the stored original keeps its EXIF, GPS included, as WordPress does (M2a-2b R11); only variants are re-encoded without EXIF/XMP (03 §4).
 - [ ] `self-update` (signed), `rollback`, `rollback --schema`, `--restore-snapshot`.
 - [ ] ACME TLS (solo).
 - [ ] `/metrics`, `node_metrics`, dashboard charts wired.

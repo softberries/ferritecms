@@ -533,6 +533,59 @@ async fn every_media_class_has_its_headers(app: App) -> App {
     app
 }
 
+/// Variant URLs (review M3): a raster variant is served inline with its recorded type
+/// and `nosniff`, no policy. A variant entry without a `mime` falls back to the
+/// original's type; on a sanitised SVG item that is `image/svg+xml`, which is still an
+/// attachment (variants never carry the sanitiser's marker).
+async fn variant_headers_and_svg_fallback(app: App) -> App {
+    let thumb = {
+        let mut v = png();
+        v.push(1);
+        v
+    };
+    let up = upload(
+        &app,
+        &png(),
+        "pic.png",
+        ContentStatus::Published,
+        false,
+        &[("thumbnail", &thumb)],
+    )
+    .await;
+    let r = app
+        .get(&format!("/_media/{}/pic.png", up.variants[0]))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert_eq!(r.header("content-type"), Some("image/png"));
+    assert_eq!(r.header("content-disposition"), Some("inline"));
+    assert_eq!(r.header("x-content-type-options"), Some("nosniff"));
+    assert_eq!(r.header("content-security-policy"), None);
+
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>"#;
+    let up = upload_as(&app, svg, "icon.svg", "image/svg+xml", true).await;
+    let other = br#"<svg xmlns="http://www.w3.org/2000/svg" width="3" height="3"/>"#;
+    let (vhash, _) = artifact(&app, other, ArtifactKind::Variant).await;
+    let tx = app.site.store.begin().await.unwrap();
+    let mut row = tx.media().get_for_update(up.item).await.unwrap().unwrap();
+    row.variants = json!({"thumbnail": {"hash": vhash.as_str(), "w": 3, "h": 3}});
+    tx.media().update(&row).await.unwrap();
+    tx.commit().await.unwrap();
+    let r = app.get(&format!("/_media/{vhash}/icon.svg")).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert_eq!(r.header("content-type"), Some("application/octet-stream"));
+    assert!(
+        r.header("content-disposition")
+            .unwrap()
+            .starts_with("attachment;")
+    );
+    assert_eq!(r.header("x-content-type-options"), Some("nosniff"));
+    assert_eq!(r.header("content-security-policy"), None);
+    // The original itself stays inline under the SVG policy.
+    let r = app.get(&format!("/_media/{}/icon.svg", up.hash)).await;
+    assert_eq!(r.header("content-security-policy"), Some(SVG_CSP));
+    app
+}
+
 async fn theme_assets(app: App) -> App {
     let hash = app.state.theme.load().hash().to_owned();
     let url = format!("/_theme/{hash}/css/site.css");
@@ -654,5 +707,6 @@ app_tests!(
     sanitised_svg_is_inline_with_sandbox,
     unmarked_svg_stays_an_attachment,
     every_media_class_has_its_headers,
+    variant_headers_and_svg_fallback,
     theme_assets,
 );

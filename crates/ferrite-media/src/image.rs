@@ -126,9 +126,18 @@ fn validate(specs: &[VariantSpec]) -> Result<(), MediaError> {
 /// The ICC profile of the source is kept (colour fidelity) unless it is larger than 1 MiB;
 /// EXIF/XMP are not.
 ///
-/// Memory: peak usage is roughly 3 x w x h x 4 bytes (decoded buffer, oriented
-/// or converted copy, resized output). Callers must bound concurrency (the M1c
-/// job runner uses a semaphore).
+/// Memory (upper bounds, per call): the decoded buffer is at most 512 MiB (w × h ×
+/// bytes per pixel, checked from the header before decoding, else
+/// [`MediaError::ImageTooLarge`]). An EXIF rotation copies it (≤ 512 MiB more); the
+/// JPEG RGB conversion copies it as RGB8 (≤ 300 MB at 100 MP). Each resize holds an
+/// `f32` RGBA intermediate of source width × target height × 16 bytes (never more than
+/// 16 bytes per source pixel) plus its output (never larger than the decoded buffer,
+/// since nothing is upscaled). With the core sizes the intermediate is at most
+/// 50 000 × 1 600 × 16 B ≈ 1.3 GB (a tall image and `large`), so one call stays under
+/// about 0.5 + 1.3 + 0.5 ≈ 2.4 GB; a theme size wider than 1 600 can raise the
+/// intermediate to 16 B × 100 MP = 1.6 GB (≈ 2.7 GB). Decoder-internal buffers are capped
+/// separately at 512 MiB (`max_alloc`). Callers must bound concurrency (the
+/// `media.variants` handler's `media.image_workers` slots).
 ///
 /// Specs are validated first: names must be non-empty and unique, and a `height` requires
 /// `crop` (a bounding box is not implemented).
@@ -158,6 +167,13 @@ pub fn process_image(data: &[u8], specs: &[VariantSpec]) -> Result<Processed, Me
     let (w, h) = decoder.dimensions();
     let pixels = u64::from(w) * u64::from(h);
     if pixels > MAX_PIXELS {
+        return Err(MediaError::ImageTooLarge { pixels });
+    }
+    // The decoded buffer (w × h × bytes per pixel of the decoder's colour type) is
+    // allocated by `DynamicImage::from_decoder` outside `Limits::max_alloc` (image 0.25),
+    // so it is bounded here, before anything is allocated (M2a-2b R12): 100 MP of 16-bit
+    // RGBA would otherwise be 800 MB.
+    if decoder.total_bytes() > MAX_ALLOC {
         return Err(MediaError::ImageTooLarge { pixels });
     }
     let dims = Some((w, h));

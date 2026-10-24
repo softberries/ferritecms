@@ -143,6 +143,16 @@ impl Gate {
     }
 }
 
+/// Opens the gate when dropped, so a failing test never leaves a blocking thread
+/// parked (the runtime would wait for it).
+struct OpenOnDrop(Arc<Gate>);
+
+impl Drop for OpenOnDrop {
+    fn drop(&mut self) {
+        self.0.open();
+    }
+}
+
 fn opts(processor: Option<ImageProcessor>) -> NodeOptions {
     NodeOptions {
         periodics: Some(Vec::new()),
@@ -207,6 +217,7 @@ async fn image_workers_bound_processing(db: Arc<TestDb>) {
         "a second worker can claim"
     );
     let gate = Gate::closed();
+    let _open = OpenOnDrop(gate.clone());
     let node = site.start(&db, opts(Some(gate.processor()))).await;
     let store = db.shared_store();
     let user = fixture_user(store.as_ref()).await;
@@ -381,6 +392,56 @@ async fn processing_panic_is_permanent(db: Arc<TestDb>) {
     node.shutdown().await.unwrap();
 }
 
+/// F17 (review M2): the runner drops `run` mid-decode (lease loss, timeout, shutdown);
+/// the blocking decode carries on and keeps the image slot until it ends, so another job
+/// is `Busy` meanwhile and the slot frees itself afterwards.
+async fn dropped_run_keeps_the_slot_until_the_decode_ends(db: Arc<TestDb>) {
+    let site = Site::new(&db);
+    let store = db.shared_store();
+    let user = fixture_user(store.as_ref()).await;
+    let actor = Actor::new(user.id, Role::Admin);
+    let (item, hash) = record(&site, &store, &actor, png(200, 100), "d.png", false).await;
+    let queued = job(&store, variants_job(&store, item, &hash).await).await;
+    let slots = Arc::new(tokio::sync::Semaphore::new(1));
+    let gate = Gate::closed();
+    let _open = OpenOnDrop(gate.clone());
+    let handler = Arc::new(
+        ferrite::jobs::MediaVariantsHandler::new(
+            store.clone(),
+            site.media(),
+            Arc::new(services(&store)),
+            slots.clone(),
+            Arc::new(ferrite_media::default_variants),
+        )
+        .with_processor(gate.processor()),
+    );
+    let (h, j) = (handler.clone(), queued.clone());
+    let running = tokio::spawn(async move { h.run(&j).await });
+    eventually(Duration::from_secs(10), "decode started", || async {
+        gate.calls() == 1
+    })
+    .await;
+    running.abort();
+    assert!(running.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        slots.available_permits(),
+        0,
+        "the decode still holds the slot"
+    );
+    assert!(matches!(handler.run(&queued).await, Err(JobError::Busy(_))));
+    gate.open();
+    eventually(Duration::from_secs(10), "slot released", || async {
+        slots.available_permits() == 1
+    })
+    .await;
+    assert_eq!(gate.calls(), 1);
+    assert_eq!(
+        media_row(&store, item).await.width,
+        None,
+        "dropped: nothing recorded"
+    );
+}
+
 /// The handler's own outcomes, without a node: a payload it cannot read, a bad hash
 /// and a missing item.
 async fn variants_payload_outcomes(db: Arc<TestDb>) {
@@ -432,5 +493,6 @@ backend_tests_spawning!(
     undecodable_image_is_permanent,
     oversized_original_is_skipped,
     processing_panic_is_permanent,
+    dropped_run_keeps_the_slot_until_the_decode_ends,
     variants_payload_outcomes,
 );

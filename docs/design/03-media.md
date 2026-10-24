@@ -213,13 +213,19 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
 
 - **Input**: sniffed JPEG, PNG, GIF or WebP. Anything else is `UnsupportedImage`.
 - **Limits**: decoded pixels <= 100 MP (`MAX_PIXELS`), width and height each <= 50 000,
-  decoder allocation <= 512 MiB. `ImageTooLarge { pixels }` is returned when the header
+  decoded buffer (w × h × bytes per pixel of the decoder's colour type) <= 512 MiB, checked from
+  the header before anything is allocated (M2a-2b R12: image 0.25 allocates that buffer outside
+  `Limits::max_alloc`, so 100 MP of 16-bit RGBA would otherwise take 800 MB), and
+  decoder-internal allocations <= 512 MiB (`max_alloc`). `ImageTooLarge { pixels }` is returned when the header
   reports more than 100 MP, and when the decoder rejects a dimension/allocation limit
   (in that case `pixels` is `w*h` if the header was read, else `0`). Other decode failures are
   `UnsupportedImage`. Invalid specs are `Config` errors: a zero width/height, an empty name, a
   duplicate name, or a `height` without `crop` (a bounding box is not implemented).
 - **Orientation**: EXIF orientation is applied; `Processed.width/height` are post-orientation.
-- **Metadata**: output is re-encoded, so EXIF, XMP and GPS are dropped (no keep option yet).
+- **Metadata**: output is re-encoded, so variants carry no EXIF, XMP or GPS (no keep option
+  yet). The **stored original is kept byte for byte, EXIF (GPS included) and all**, as WordPress
+  does (M2a-2b R11): a photo's location stays readable from its original URL. Optional
+  location-metadata stripping on upload is an M4 item (ROADMAP).
   The **ICC profile** is kept only if its colour-space signature (header bytes 16..20) matches
   the output pixels: `RGB ` for JPEG and colour PNG, `GRAY` for grayscale PNG. A mismatching
   profile (for example CMYK) is dropped, as is one the encoder rejects or one larger than 1 MiB
@@ -236,11 +242,18 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
     result is the center-cropped square of `min(w, h)` capped at the target size. A non-square
     target therefore degrades to a square in that case.
 - **Defaults** (`default_variants()`): `thumbnail` 150x150 crop, `medium` 768 wide, `large` 1600 wide.
-- **Memory**: peak is roughly 3 x w x h x 4 bytes (decoded buffer, oriented/converted copy,
-  resized output); at the 100 MP cap that is on the order of 1.2 GB for one image. The function
-  does not limit concurrency. The caller must: the `media.variants` handler does so with a
-  per-node semaphore of `media.image_workers` slots (M1b R4, see below). The 100 MP cap is kept
-  as designed.
+- **Memory** (upper bounds per call): the decoded buffer (<= 512 MiB); an EXIF rotation copies it
+  (<= 512 MiB more), and the JPEG RGB conversion copies it as RGB8 (<= 300 MB at 100 MP). Each
+  size then holds the resize's `f32` RGBA intermediate (source width × target height × 16 bytes,
+  never more than 16 bytes per source pixel) and its output (never larger than the decoded
+  buffer: nothing is upscaled). With the core sizes the intermediate is at most
+  50 000 × 1 600 × 16 B ≈ 1.3 GB (a tall image and `large`), so one call stays under about
+  0.5 + 1.3 + 0.5 ≈ **2.4 GB**. A theme size wider than 1 600 can raise the intermediate to
+  16 B × 100 MP = 1.6 GB (≈ 2.7 GB). Typical photos need far less (a 24 MP JPEG: about 72 MB
+  decoded, ≈ 0.2 GB peak). `process_image` does not limit concurrency; the `media.variants`
+  handler does, with a per-node semaphore of `media.image_workers` slots (M1b R4, see below),
+  so a node needs about 2.4 GB × `image_workers` of headroom for worst-case uploads. The
+  100 MP cap is kept as designed.
 - **Decode time** is not bounded: the `image` crate has no time limit. The dimension, pixel and
   allocation limits bound the work per image, and the handler's slots bound how many run at
   once.
@@ -269,13 +282,14 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
 - **The `media.variants` handler** (`crates/ferrite/src/jobs/media.rs`, M2a-2b P8, F17), on
   every node's job runner:
   1. A payload that does not parse or names an invalid hash is `Permanent` (dead at once).
-  2. The `media` row is read; when it is gone or holds another original than the job's, the job
-     is done without decoding.
-  3. An original over 64 MiB (`MAX_PROCESS_BYTES`, by `head`) gets no variants: done, logged.
-     Templates fall back to the original.
-  4. One of the node's `media.image_workers` slots (default 1, 1–16) is taken **without
+  2. One of the node's `media.image_workers` slots (default 1, 1–16) is taken **without
      waiting**. With none free the job is `Busy`: put back with the attempt refunded and due
-     again after 1–5 s, so image jobs never hold every runner worker.
+     again after 1–5 s, so image jobs never hold every runner worker. It is taken first,
+     so a busy re-claim costs no store read and no (S3) `HEAD`.
+  3. The `media` row is read; when it is gone or holds another original than the job's, the job
+     is done without decoding.
+  4. An original over 64 MiB (`MAX_PROCESS_BYTES`, by `head`) gets no variants: done, logged.
+     Templates fall back to the original.
   5. The original is read (`get`, at most 64 MiB) and decoded with `process_image` on the
      blocking pool. The slot's permit moves into the blocking closure: the runner may drop the
      handler at any await (lease loss, timeout, shutdown), but a blocking task cannot be
@@ -295,7 +309,7 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
   task's panic is caught as a `JoinError`) is `Permanent`. Its job goes `dead` at the first
   attempt with the reason in `last_error`, the worker carries on, and the original stays
   served. Store and media-backend errors are `Retry`. Variants are re-encoded, so EXIF (GPS
-  included) and XMP never reach them. Regenerating variants after a theme change is M4 (P8).
+  included) and XMP never reach them; the stored original keeps its EXIF, GPS included (R11). Regenerating variants after a theme change is M4 (P8).
 - `ferrite seed demo` still runs `process_image` in-process, with the same
   `variant_specs(theme)`. It writes the `media` and `artifacts` rows in one transaction that
   also emits `post:<media id>` (`crates/ferrite/src/seed.rs`).

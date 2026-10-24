@@ -27,13 +27,14 @@ pub type VariantSpecs = Arc<dyn Fn() -> Vec<VariantSpec> + Send + Sync>;
 ///
 /// 1. The payload (`{"v":1,"item","artifact"}`) must parse and name a valid hash, else
 ///    `Permanent`.
-/// 2. The item's `media` row is read: gone, or holding another original (the file was
-///    replaced), the job is done without decoding anything.
-/// 3. An original over [`MAX_PROCESS_BYTES`] (64 MiB, by `head`) gets no variants: done,
-///    logged (the upload stays served as is; themes fall back to the original).
-/// 4. One of the node's image slots (`media.image_workers`, M1b R4) is taken **without
+/// 2. One of the node's image slots (`media.image_workers`, M1b R4) is taken **without
 ///    waiting**; none free is [`JobError::Busy`] (the attempt is refunded and the job is
-///    due again after 1–5 s), so image jobs never hold every runner worker (F17).
+///    due again after 1–5 s), so image jobs never hold every runner worker (F17). It is
+///    taken first, so a busy re-claim costs no store read and no (S3) `HEAD`.
+/// 3. The item's `media` row is read: gone, or holding another original (the file was
+///    replaced), the job is done without decoding anything.
+/// 4. An original over [`MAX_PROCESS_BYTES`] (64 MiB, by `head`) gets no variants: done,
+///    logged (the upload stays served as is; themes fall back to the original).
 /// 5. The original is read and decoded on the blocking pool. The slot's permit moves
 ///    into the blocking closure: the runner may drop `run` at any await (lease loss,
 ///    timeout, shutdown) but cannot stop a blocking task, and the slot stays taken until
@@ -44,10 +45,18 @@ pub type VariantSpecs = Arc<dyn Fn() -> Vec<VariantSpec> + Send + Sync>;
 ///
 /// **Hostile images.** [`process_image`] sniffs the type, reads the header's dimensions
 /// and refuses more than [`MAX_PIXELS`](ferrite_media::MAX_PIXELS) (100 MP) or 50 000 px
-/// a side **before** any pixel buffer is allocated, and caps decoder allocations at
-/// 512 MiB (decompression bombs); EXIF orientation is applied; variants are re-encoded,
-/// so EXIF (GPS included) and XMP are never copied into them (only a matching ICC
-/// profile ≤ 1 MiB is kept). An image that is too large, does not decode, or makes the
+/// a side, and a decoded buffer (w × h × bytes per pixel) over 512 MiB (R12), **before**
+/// any pixel buffer is allocated; decoder-internal allocations are capped at 512 MiB
+/// (decompression bombs). EXIF orientation is applied; variants are re-encoded, so EXIF
+/// (GPS included) and XMP are never copied into them (only a matching ICC profile
+/// ≤ 1 MiB is kept). The stored original is kept byte for byte, its EXIF (GPS included)
+/// with it, as WordPress does (R11).
+///
+/// **Memory per slot** (upper bounds, see [`process_image`]): the original (≤ 64 MiB),
+/// the decoded buffer (≤ 512 MiB), a rotated or RGB copy of it, and per size the resize's
+/// `f32` intermediate (≤ 16 B per source pixel; ≈ 1.3 GB at most with the core sizes) and
+/// its output (≤ the decoded buffer): about 2.4 GB with the core sizes, up to about
+/// 2.7 GB with wide theme sizes. Size `media.image_workers` against that (default 1). An image that is too large, does not decode, or makes the
 /// decoder panic is `Permanent`: the job goes `dead` at once with the reason in
 /// `last_error`, the worker carries on, and the original stays served. The image crate
 /// offers no decode-time limit; a slow decode is bounded only by the image limits above
@@ -108,6 +117,13 @@ impl JobHandler for MediaVariantsHandler {
         let hash = ArtifactHash::parse(&payload.artifact)
             .map_err(|e| JobError::Permanent(format!("invalid payload: artifact: {e}")))?;
         let item = payload.item;
+        // The slot first: a full node answers `Busy` before any store or media request.
+        // Dropping `run` before the decode starts releases it.
+        let Ok(slot) = self.slots.clone().try_acquire_owned() else {
+            return Err(JobError::Busy(
+                "busy: every image slot of this node is in use".to_owned(),
+            ));
+        };
         let row = self
             .store
             .read()
@@ -132,11 +148,6 @@ impl JobHandler for MediaVariantsHandler {
             );
             return Ok(());
         }
-        let Ok(slot) = self.slots.clone().try_acquire_owned() else {
-            return Err(JobError::Busy(
-                "busy: every image slot of this node is in use".to_owned(),
-            ));
-        };
         // Read with the slot held, so buffered originals are bounded by the slots too.
         let data = self
             .media

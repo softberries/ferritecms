@@ -165,10 +165,16 @@ fn gif_first_frame_to_png() {
 }
 
 fn png_header(w: u32, h: u32) -> Vec<u8> {
+    png_header_with(w, h, 8, 2)
+}
+
+/// A PNG of `w`×`h` at `depth` bits and colour type `colour` with an empty IDAT: only
+/// the header decodes.
+fn png_header_with(w: u32, h: u32, depth: u8, colour: u8) -> Vec<u8> {
     let mut ihdr = b"IHDR".to_vec();
     ihdr.extend_from_slice(&w.to_be_bytes());
     ihdr.extend_from_slice(&h.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    ihdr.extend_from_slice(&[depth, colour, 0, 0, 0]);
     let mut data = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
     data.extend_from_slice(&13u32.to_be_bytes());
     data.extend_from_slice(&ihdr);
@@ -184,6 +190,27 @@ fn png_header(w: u32, h: u32) -> Vec<u8> {
 fn side_limit_maps_to_image_too_large() {
     let err = process_image(&png_header(60_000, 2_000), &default_variants()).unwrap_err();
     assert!(matches!(err, MediaError::ImageTooLarge { .. }), "{err:?}");
+}
+
+/// Ruling R12: the decoded buffer is allocated outside `max_alloc` (image 0.25), so an
+/// image whose buffer (w × h × bytes per pixel) is over 512 MiB is refused from its
+/// header, before anything is allocated: here 100 MP (at the pixel cap) of 16-bit RGBA,
+/// 800 MB.
+#[test]
+fn decoded_buffer_over_512_mib_rejected() {
+    let start = Instant::now();
+    let err =
+        process_image(&png_header_with(10_000, 10_000, 16, 6), &default_variants()).unwrap_err();
+    assert!(start.elapsed().as_secs_f32() < 5.0);
+    assert!(
+        matches!(err, MediaError::ImageTooLarge { pixels } if pixels == 100_000_000),
+        "{err:?}"
+    );
+    // 16-bit RGB at 9 000 × 9 000 (486 MB) is under the cap: the header passes and the
+    // empty IDAT fails to decode.
+    let err =
+        process_image(&png_header_with(9_000, 9_000, 16, 2), &default_variants()).unwrap_err();
+    assert!(matches!(err, MediaError::UnsupportedImage(_)), "{err:?}");
 }
 
 #[test]
