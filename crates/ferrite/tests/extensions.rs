@@ -68,7 +68,7 @@ async fn install_plugin_file_roundtrip(db: &TestDb) {
     assert_eq!(
         row.granted,
         json!({ "v": 1, "capabilities": { "render": { "head": true } },
-                "limits": { "memory": null, "fuel": null } }),
+                "limits": { "memory": null, "fuel": null }, "routes": [] }),
         "operator install: the manifest is approved as written (R21, P26)"
     );
     assert_eq!(row.manifest["plugin"]["name"], "hello");

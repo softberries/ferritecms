@@ -2,7 +2,7 @@
 //! counters with cluster-wide auto-disable (P20).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use ferrite_core::ExtensionService;
@@ -484,8 +484,8 @@ async fn failed_check_is_retried_without_new_failures(site: Site) -> Site {
 }
 
 /// Plan ruling P5: a manifest asking 64 MiB (over the 32 MiB host default) loads only
-/// with a grant approving at least 64 MiB; a legacy bare grant approves no limits, and a
-/// null grant honours the manifest (pre-flight F9).
+/// with a grant approving at least 64 MiB; a legacy bare grant approves no limits; a
+/// null (legacy) grant loads with its limits capped at the defaults (R7).
 async fn reload_honours_approved_limits(site: Site) -> Site {
     const MIB: u64 = 1024 * 1024;
     let manifest = format!(
@@ -494,27 +494,40 @@ async fn reload_honours_approved_limits(site: Site) -> Site {
     );
     let hash = site.put_artifact(plugin_wasm("hello")).await;
     let caps = json!({ "render": { "head": true } });
-    let grant = |memory: Option<u64>| json!({ "v": 1, "capabilities": caps, "limits": { "memory": memory, "fuel": null } });
-    let reloader = reloader(&site);
-    for (granted, loads) in [
-        (grant(None), false),
-        (caps.clone(), false),
-        (grant(Some(48 * MIB)), false),
-        (grant(Some(64 * MIB)), true),
-        (grant(Some(48 * MIB)), false),
-        (Value::Null, true),
-        (grant(Some(300 * MIB)), true),
+    let grant = |memory: Option<u64>| {
+        json!({ "v": 1, "capabilities": caps, "routes": [],
+                "limits": { "memory": memory, "fuel": null } })
+    };
+    // The effective memory of the last compile.
+    let memory = Arc::new(AtomicU64::new(0));
+    let reloader = reloader(&site).with_prepare({
+        let memory = memory.clone();
+        move |host, manifest, wasm, approved| {
+            let prepared = host.prepare_with(manifest, wasm, approved)?;
+            memory.store(prepared.memory_bytes(), Ordering::SeqCst);
+            Ok(prepared)
+        }
+    });
+    for (granted, loads_with) in [
+        (grant(None), None),
+        (caps.clone(), None),
+        (grant(Some(48 * MIB)), None),
+        (grant(Some(64 * MIB)), Some(64 * MIB)),
+        (grant(Some(48 * MIB)), None),
+        (Value::Null, Some(32 * MIB)),
+        (grant(Some(300 * MIB)), Some(64 * MIB)),
     ] {
         site.row_granted("hello", &manifest, hash.clone(), true, granted.clone())
             .await;
         let report = reloader.reload().await.unwrap();
-        match status(&report, "hello") {
-            PluginStatus::Loaded => assert!(loads, "{granted} must not load"),
-            PluginStatus::Failed(reason) => {
-                assert!(!loads, "{granted}: {reason}");
+        match (status(&report, "hello"), loads_with) {
+            (PluginStatus::Loaded, Some(want)) => {
+                assert_eq!(memory.load(Ordering::SeqCst), want, "{granted}");
+            }
+            (PluginStatus::Failed(reason), None) => {
                 assert!(reason.contains("above the host default"), "{reason}");
             }
-            other => panic!("{granted}: {other:?}"),
+            (other, _) => panic!("{granted}: {other:?}, expected {loads_with:?}"),
         }
     }
     // Above the ceiling nothing loads, whatever the grant says.

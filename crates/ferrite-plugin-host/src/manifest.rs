@@ -154,8 +154,10 @@ pub struct SettingSpec {
 }
 
 impl Manifest {
-    /// Parse and validate. All problems are collected before returning. A manifest
-    /// larger than [`MAX_MANIFEST_BYTES`] is refused before parsing.
+    /// Parse and validate the `ferrite-plugin.toml` text as uploaded (install and
+    /// update). All problems are collected before returning. A text larger than
+    /// [`MAX_MANIFEST_BYTES`] is refused before parsing; stored manifests read back by
+    /// [`Manifest::from_json`] are not size-checked again (they passed here).
     pub fn parse(src: &str) -> Result<Manifest, ManifestError> {
         if src.len() > MAX_MANIFEST_BYTES {
             return Err(ManifestError::single(
@@ -167,10 +169,14 @@ impl Manifest {
                 ),
             ));
         }
-        let mut table: toml::Table = match src.parse() {
-            Ok(t) => t,
-            Err(e) => return Err(ManifestError::single("", format!("invalid TOML: {e}"))),
-        };
+        match src.parse() {
+            Ok(table) => Manifest::from_table(table),
+            Err(e) => Err(ManifestError::single("", format!("invalid TOML: {e}"))),
+        }
+    }
+
+    /// Validate a parsed table (see [`Manifest::parse`]).
+    fn from_table(mut table: toml::Table) -> Result<Manifest, ManifestError> {
         let mut cx = Cx::default();
 
         let plugin = match cx.section(&mut table, "plugin") {
@@ -226,14 +232,14 @@ impl Manifest {
     }
 
     /// A manifest stored as JSON (the `plugins.manifest` column: the `ferrite-plugin.toml`
-    /// table in JSON form, dotted keys as nested objects), turned back into TOML and
-    /// validated by [`Manifest::parse`], so stored manifests obey the install-time rules.
+    /// table in JSON form, dotted keys as nested objects), turned into a TOML table and
+    /// validated by the same rules as [`Manifest::parse`], except the size cap: a stored
+    /// row passed it at install, and is not refused later because its JSON form is
+    /// larger (review round 1, item 3).
     pub fn from_json(json: &Value) -> Result<Manifest, ManifestError> {
         let table: toml::Table = serde_json::from_value(json.clone())
             .map_err(|e| ManifestError::single("", format!("not a TOML table: {e}")))?;
-        let src = toml::to_string(&table)
-            .map_err(|e| ManifestError::single("", format!("cannot be written as TOML: {e}")))?;
-        Manifest::parse(&src)
+        Manifest::from_table(table)
     }
 }
 
@@ -496,15 +502,18 @@ fn valid_hostname(h: &str) -> bool {
         })
 }
 
-/// A hostname an allowlist must not name (P7, pre-flight F5): it parses as an IPv4
-/// address, has no dot (single-label names resolve through search domains), its last
-/// label is all digits (inet_aton forms such as `127.1` or `0177.0.0.1`), a label starts
-/// with `0x` (hex forms), or a label is `localhost`. Case-insensitive. IPv6 literals
-/// never get here: `:`, `[` and `%` already fail [`valid_hostname`].
+/// A hostname an allowlist must not name (P7, pre-flight F5, review round 1): it
+/// parses as an IPv4 address, has no dot (single-label names resolve through search
+/// domains), its last label is all digits (inet_aton forms such as `127.1` or
+/// `0177.0.0.1`), a label starts with `0x` (hex forms), a label is `localhost`, or the
+/// first label starts with `localhost` (`localhost4.localdomain4`,
+/// `localhost6.localdomain6`). Case-insensitive. IPv6 literals never get here: `:`,
+/// `[` and `%` already fail [`valid_hostname`].
 fn bare_host(h: &str) -> bool {
     let lower = h.to_ascii_lowercase();
     let labels: Vec<&str> = lower.split('.').collect();
     lower.parse::<Ipv4Addr>().is_ok()
+        || lower.starts_with("localhost")
         || labels.len() < 2
         || labels
             .last()
@@ -548,7 +557,17 @@ fn parse_capabilities(cx: &mut Cx, t: &mut toml::Table) -> Capabilities {
         cx.unknown(options, "capabilities.options");
     }
     c.kv = cx.boolean(t, "kv", "capabilities.kv").unwrap_or(false);
-    if let Some(hosts) = cx.strings(t, "http", "capabilities.http") {
+    if let Some(given) = cx.strings(t, "http", "capabilities.http") {
+        // Canonical form (review round 1): lowercase, one trailing dot dropped, so
+        // grants and fingerprints do not depend on spelling; duplicates removed.
+        let mut hosts: Vec<String> = Vec::with_capacity(given.len());
+        for h in given {
+            let h = h.to_ascii_lowercase();
+            let h = h.strip_suffix('.').map(str::to_owned).unwrap_or(h);
+            if !hosts.contains(&h) {
+                hosts.push(h);
+            }
+        }
         let (names, bad): (Vec<_>, Vec<_>) = hosts.iter().partition(|h| valid_hostname(h));
         if !bad.is_empty() {
             cx.push(
@@ -643,7 +662,7 @@ fn parse_hooks(cx: &mut Cx, t: toml::Table, caps: &Capabilities) -> BTreeMap<Str
     out
 }
 
-fn valid_rate_limit(s: &str) -> bool {
+pub(crate) fn valid_rate_limit(s: &str) -> bool {
     let Some((n, unit)) = s.split_once('/') else {
         return false;
     };

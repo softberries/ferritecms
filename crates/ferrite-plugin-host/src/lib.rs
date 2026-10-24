@@ -36,7 +36,10 @@ pub use capability::{
 pub use config::HostConfig;
 pub use error::{InspectError, ManifestError, ManifestProblem, PluginError};
 pub use failure::{FailureKind, FailureRecord};
-pub use grant::{ApprovedLimits, Grant, LIMIT_CEILING_FUEL_FACTOR, LIMIT_CEILING_MEMORY};
+pub use grant::{
+    ApprovedLimits, DEFAULT_ROUTE_RATE_LIMIT, Grant, LIMIT_CEILING_FUEL_FACTOR,
+    LIMIT_CEILING_MEMORY, RoutePolicy,
+};
 pub use inspect::{ComponentReport, inspect};
 pub use manifest::{
     Capabilities, HtmlMode, LimitRequest, MAX_MANIFEST_BYTES, MailScope, Manifest, PluginMeta,
@@ -170,18 +173,9 @@ impl PluginHost {
         wasm: &[u8],
         approved: ApprovedLimits,
     ) -> Result<PreparedPlugin, PluginError> {
-        let memory_default = u64::try_from(self.cfg.memory_bytes).unwrap_or(u64::MAX);
-        let memory_bounds = if self.cfg.pooling {
-            LimitBounds::fixed(memory_default)
-        } else {
-            LimitBounds::memory(memory_default)
-        };
+        let (memory_bounds, fuel_bounds) = LimitBounds::of_host(&self.cfg);
         let memory = memory_bounds.effective("memory", manifest.limits.memory, approved.memory)?;
-        let fuel = LimitBounds::fuel(self.cfg.fuel).effective(
-            "fuel",
-            manifest.limits.fuel,
-            approved.fuel,
-        )?;
+        let fuel = fuel_bounds.effective("fuel", manifest.limits.fuel, approved.fuel)?;
         let memory_bytes = usize::try_from(memory).map_err(|_| PluginError::LimitAboveCeiling {
             limit: "memory",
             requested: memory,
@@ -218,6 +212,11 @@ impl PluginHost {
                 disabled: OnceLock::new(),
             }),
         })
+    }
+
+    /// The host's configuration (defaults and limits).
+    pub fn config(&self) -> &HostConfig {
+        &self.cfg
     }
 
     /// Swap the registry, once, to exactly `prepared` plus the currently loaded plugins

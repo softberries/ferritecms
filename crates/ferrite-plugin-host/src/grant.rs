@@ -2,16 +2,22 @@
 //! resource limits above the host defaults, stored as the `plugins.granted` JSON.
 //!
 //! **Stored form (v1).** `{"v":1,"capabilities":<[capabilities] table>,"limits":
-//! {"memory":n|null,"fuel":n|null}}`. The capabilities table is the JSON form of a
-//! manifest's `[capabilities]` section with only non-default members, and is read back
-//! through [`Manifest::parse`] (so a grant obeys every manifest rule, bare hosts
-//! included). The M1c-2 form, a bare `[capabilities]` table, is still read; it carries
-//! no approved limits.
+//! {"memory":n|null,"fuel":n|null},"routes":[{"cross_origin":bool,"rate_limit":s|null}]}`.
+//! The capabilities table is the JSON form of a manifest's `[capabilities]` section with
+//! only non-default members, and is read back through [`Manifest::parse`] (so a grant
+//! obeys every manifest rule, bare hosts included). `routes` holds the distinct route
+//! policies approved (ruling R7: `cross_origin` and `rate_limit` are part of the grant;
+//! the paths are not, R6), sorted. The M1c-2 form, a bare `[capabilities]` table, is
+//! still read; it carries no approved limits and no route policies.
 
 use serde_json::{Map, Value, json};
 
+use crate::config::HostConfig;
 use crate::error::PluginError;
-use crate::manifest::{Capabilities, Manifest, capabilities_json};
+use crate::manifest::{Capabilities, Manifest, RouteSpec, capabilities_json, valid_rate_limit};
+
+/// The rate limit a route without `rate_limit` gets (plan "Exact values").
+pub const DEFAULT_ROUTE_RATE_LIMIT: &str = "10/min";
 
 /// Memory a plugin may be approved for, at most (P5): 256 MiB.
 pub const LIMIT_CEILING_MEMORY: u64 = 256 * 1024 * 1024;
@@ -28,24 +34,95 @@ pub struct ApprovedLimits {
     pub fuel: Option<u64>,
 }
 
-/// An approved grant: capabilities plus approved limits.
+/// What a route may do apart from its path (ruling R7).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RoutePolicy {
+    pub cross_origin: bool,
+    /// `"N/s"`, `"N/min"` or `"N/h"`; `None` = [`DEFAULT_ROUTE_RATE_LIMIT`].
+    pub rate_limit: Option<String>,
+}
+
+impl RoutePolicy {
+    pub fn of(spec: &RouteSpec) -> RoutePolicy {
+        RoutePolicy {
+            cross_origin: spec.cross_origin,
+            rate_limit: spec.rate_limit.clone(),
+        }
+    }
+
+    /// Whether `self` is at most as permissive as `approved` (R7): no cross-origin
+    /// unless approved; a rate limit no looser (no higher rate and no larger count per
+    /// window; an absent limit counts as the default); dropping an explicit limit is
+    /// always looser.
+    pub fn within(&self, approved: &RoutePolicy) -> bool {
+        if self.cross_origin && !approved.cross_origin {
+            return false;
+        }
+        match (&self.rate_limit, &approved.rate_limit) {
+            (None, None) => true,
+            (None, Some(_)) => false,
+            (Some(want), have) => {
+                let have = have.as_deref().unwrap_or(DEFAULT_ROUTE_RATE_LIMIT);
+                match (rate(want), rate(have)) {
+                    (Some((wn, ww)), Some((hn, hw))) => {
+                        // wn/ww <= hn/hw, and the burst wn <= hn.
+                        u128::from(wn) * u128::from(hw) <= u128::from(hn) * u128::from(ww)
+                            && wn <= hn
+                    }
+                    _ => false,
+                }
+            }
+        }
+    }
+}
+
+/// `(count, window seconds)` of a valid `N/unit` rate limit.
+fn rate(s: &str) -> Option<(u64, u64)> {
+    let (n, unit) = s.split_once('/')?;
+    let window = match unit {
+        "s" => 1,
+        "min" => 60,
+        "h" => 3600,
+        _ => return None,
+    };
+    Some((n.parse().ok()?, window))
+}
+
+/// An approved grant: capabilities, approved limits and route policies.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Grant {
     pub capabilities: Capabilities,
     pub limits: ApprovedLimits,
+    /// Distinct, sorted.
+    pub routes: Vec<RoutePolicy>,
 }
 
 const GRANT_VERSION: u64 = 1;
 
 impl Grant {
-    /// Exactly what `manifest` asks for: its capabilities and its `[limits]` requests.
+    /// Exactly what `manifest` asks for: its capabilities, its `[limits]` requests and
+    /// the policies of its routes.
     pub fn of(manifest: &Manifest) -> Grant {
+        let mut routes: Vec<RoutePolicy> = manifest.routes.values().map(RoutePolicy::of).collect();
+        routes.sort();
+        routes.dedup();
         Grant {
             capabilities: manifest.capabilities.clone(),
             limits: ApprovedLimits {
                 memory: manifest.limits.memory,
                 fuel: manifest.limits.fuel,
             },
+            routes,
+        }
+    }
+
+    /// What a legacy row with a null `granted` counts as (ruling R7): [`Grant::of`] its
+    /// manifest with no limit above the host defaults approved, so it loads with its
+    /// `[limits]` capped at the defaults until an admin approves more.
+    pub fn legacy(manifest: &Manifest) -> Grant {
+        Grant {
+            limits: ApprovedLimits::default(),
+            ..Grant::of(manifest)
         }
     }
 
@@ -55,11 +132,15 @@ impl Grant {
             "v": GRANT_VERSION,
             "capabilities": capabilities_json(&self.capabilities),
             "limits": { "memory": self.limits.memory, "fuel": self.limits.fuel },
+            "routes": self.routes.iter().map(|r| json!({
+                "cross_origin": r.cross_origin,
+                "rate_limit": r.rate_limit,
+            })).collect::<Vec<_>>(),
         })
     }
 
     /// Read a stored grant: the v1 form, or the M1c-2 bare `[capabilities]` table (no
-    /// approved limits). `plugin` is the manifest's `[plugin]` table in JSON form
+    /// approved limits, no route policies). `plugin` is the manifest's `[plugin]` table in JSON form
     /// (`row.manifest["plugin"]`), needed to validate the capabilities as a manifest.
     /// Anything malformed is an error, never an empty grant.
     pub fn from_json(plugin: &Value, granted: &Value) -> Result<Grant, String> {
@@ -69,7 +150,7 @@ impl Grant {
         if !object.contains_key("v") {
             return Ok(Grant {
                 capabilities: parse_capabilities(plugin, granted)?,
-                limits: ApprovedLimits::default(),
+                ..Grant::default()
             });
         }
         if object.get("v").and_then(Value::as_u64) != Some(GRANT_VERSION) {
@@ -79,7 +160,7 @@ impl Grant {
         }
         if let Some(key) = object
             .keys()
-            .find(|k| !matches!(k.as_str(), "v" | "capabilities" | "limits"))
+            .find(|k| !matches!(k.as_str(), "v" | "capabilities" | "limits" | "routes"))
         {
             return Err(format!("granted.{key}: unknown key"));
         }
@@ -91,24 +172,77 @@ impl Grant {
             Some(Value::Object(l)) => parse_limits(l)?,
             _ => return Err("granted.limits: expected an object".to_owned()),
         };
+        let routes = match object.get("routes") {
+            Some(Value::Array(r)) => parse_routes(r)?,
+            _ => return Err("granted.routes: expected an array".to_owned()),
+        };
         Ok(Grant {
             capabilities,
             limits,
+            routes,
         })
     }
 
-    /// Whether everything `wanted` asks for is within this grant: its capabilities
-    /// ([`Capabilities::is_subset_of`]) and each of its limits approved here at least as
-    /// high (a limit `wanted` leaves unset needs nothing).
+    /// Whether `wanted`'s capabilities and route policies are within this grant
+    /// ([`Capabilities::is_subset_of`]; each route policy [`RoutePolicy::within`] an
+    /// approved one). Limits are not compared: [`PluginHost::prepare_with`]
+    /// (crate::PluginHost::prepare_with) applies them.
+    pub fn covers_access(&self, wanted: &Grant) -> bool {
+        wanted.capabilities.is_subset_of(&self.capabilities)
+            && wanted.routes.iter().all(|r| self.covers_route(r))
+    }
+
+    /// Whether route policy `r` is within one approved here.
+    pub fn covers_route(&self, r: &RoutePolicy) -> bool {
+        self.routes.iter().any(|have| r.within(have))
+    }
+
+    /// [`covers_access`](Self::covers_access), and each of `wanted`'s limits approved
+    /// here at least as high (a limit `wanted` leaves unset needs nothing).
     pub fn covers(&self, wanted: &Grant) -> bool {
         let limit = |want: Option<u64>, have: Option<u64>| match want {
             None => true,
             Some(w) => have.is_some_and(|h| h >= w),
         };
-        wanted.capabilities.is_subset_of(&self.capabilities)
+        self.covers_access(wanted)
             && limit(wanted.limits.memory, self.limits.memory)
             && limit(wanted.limits.fuel, self.limits.fuel)
     }
+}
+
+fn parse_routes(items: &[Value]) -> Result<Vec<RoutePolicy>, String> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let Value::Object(o) = item else {
+            return Err("granted.routes: expected objects".to_owned());
+        };
+        if let Some(key) = o
+            .keys()
+            .find(|k| !matches!(k.as_str(), "cross_origin" | "rate_limit"))
+        {
+            return Err(format!("granted.routes.{key}: unknown key"));
+        }
+        let Some(Value::Bool(cross_origin)) = o.get("cross_origin") else {
+            return Err("granted.routes.cross_origin: expected a boolean".to_owned());
+        };
+        let rate_limit = match o.get("rate_limit") {
+            Some(Value::Null) => None,
+            Some(Value::String(r)) if valid_rate_limit(r) => Some(r.clone()),
+            _ => {
+                return Err(
+                    "granted.routes.rate_limit: expected null or \"N/s\", \"N/min\", \"N/h\""
+                        .to_owned(),
+                );
+            }
+        };
+        out.push(RoutePolicy {
+            cross_origin: *cross_origin,
+            rate_limit,
+        });
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
 }
 
 fn parse_capabilities(plugin: &Value, capabilities: &Value) -> Result<Capabilities, String> {
@@ -149,6 +283,19 @@ pub(crate) struct LimitBounds {
 }
 
 impl LimitBounds {
+    /// The memory and fuel bounds of a host with `cfg`: the memory ceiling is
+    /// [`LIMIT_CEILING_MEMORY`] (never below the default), or the default on a pooling
+    /// host (its pool slots are that size), so whatever a report allows can load.
+    pub(crate) fn of_host(cfg: &HostConfig) -> (Self, Self) {
+        let memory_default = u64::try_from(cfg.memory_bytes).unwrap_or(u64::MAX);
+        let memory = if cfg.pooling {
+            Self::fixed(memory_default)
+        } else {
+            Self::memory(memory_default)
+        };
+        (memory, Self::fuel(cfg.fuel))
+    }
+
     /// Memory: the default, and [`LIMIT_CEILING_MEMORY`] (never below the default).
     pub(crate) fn memory(default: u64) -> Self {
         Self {
@@ -243,6 +390,7 @@ mod tests {
         let with = |memory, fuel| Grant {
             capabilities: Capabilities::default(),
             limits: ApprovedLimits { memory, fuel },
+            routes: Vec::new(),
         };
         assert!(with(Some(64), None).covers(&with(Some(48), None)));
         assert!(!with(Some(48), None).covers(&with(Some(64), None)));

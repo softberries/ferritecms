@@ -14,7 +14,7 @@ use serde_json::json;
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 const MIB: u64 = 1024 * 1024;
-const DEFAULTS: (u64, u64) = (32 * MIB, 50_000_000);
+
 const ARTIFACT: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 const OTHER_ARTIFACT: &str = "ab7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
@@ -51,7 +51,7 @@ fn report_diff_against_current_grant() -> TestResult {
         "",
     );
     let current = Grant::of(&v1);
-    let report = v2.permission_report(ARTIFACT, Some(&current), DEFAULTS)?;
+    let report = v2.permission_report(ARTIFACT, Some(&current), &HostConfig::default())?;
     assert_eq!(report.plugin, "pinger");
     assert_eq!(report.version, "1.1.0");
     assert_eq!(report.artifact, ARTIFACT);
@@ -64,9 +64,9 @@ fn report_diff_against_current_grant() -> TestResult {
     assert!(added.high_risk);
 
     // Same grant: nothing added. No current grant (a fresh install): everything is new.
-    let same = v1.permission_report(ARTIFACT, Some(&current), DEFAULTS)?;
+    let same = v1.permission_report(ARTIFACT, Some(&current), &HostConfig::default())?;
     assert!(same.added.is_empty(), "{:?}", same.added);
-    let fresh = v2.permission_report(ARTIFACT, None, DEFAULTS)?;
+    let fresh = v2.permission_report(ARTIFACT, None, &HostConfig::default())?;
     assert_eq!(fresh.added, fresh.items);
 
     // Pattern lists: only what the current grant does not cover is added.
@@ -80,7 +80,7 @@ fn report_diff_against_current_grant() -> TestResult {
         "content.read = [\"post\", \"page\"]\noptions.read = [\"site.title\"]",
         "",
     );
-    let report = v2.permission_report(ARTIFACT, Some(&Grant::of(&v1)), DEFAULTS)?;
+    let report = v2.permission_report(ARTIFACT, Some(&Grant::of(&v1)), &HostConfig::default())?;
     assert_eq!(report.added.len(), 1, "{:?}", report.added);
     assert_eq!(report.added[0].key, "content.read");
     assert_eq!(report.added[0].detail, ["page"]);
@@ -88,11 +88,12 @@ fn report_diff_against_current_grant() -> TestResult {
     // A limit above the default is added unless the current grant approved at least it.
     let v1 = manifest("1.0.0", "kv = true", "[limits]\nmemory = \"64MiB\"\n");
     let v2 = manifest("1.1.0", "kv = true", "[limits]\nmemory = \"96MiB\"\n");
-    let report = v2.permission_report(ARTIFACT, Some(&Grant::of(&v1)), DEFAULTS)?;
+    let report = v2.permission_report(ARTIFACT, Some(&Grant::of(&v1)), &HostConfig::default())?;
     let keys: Vec<_> = report.added.iter().map(|i| i.key).collect();
     assert_eq!(keys, ["limits.memory"]);
     let lower = manifest("1.1.0", "kv = true", "[limits]\nmemory = \"48MiB\"\n");
-    let report = lower.permission_report(ARTIFACT, Some(&Grant::of(&v1)), DEFAULTS)?;
+    let report =
+        lower.permission_report(ARTIFACT, Some(&Grant::of(&v1)), &HostConfig::default())?;
     assert!(report.added.is_empty(), "{:?}", report.added);
     Ok(())
 }
@@ -101,7 +102,8 @@ fn report_diff_against_current_grant() -> TestResult {
 fn fingerprint_binds_artifact_and_grant() -> TestResult {
     let base = manifest("1.0.0", "kv = true\nhttp = [\"api.example.com\"]", "");
     let fp = |m: &Manifest, artifact: &str| -> TestResult<String> {
-        Ok(m.permission_report(artifact, None, DEFAULTS)?.fingerprint)
+        Ok(m.permission_report(artifact, None, &HostConfig::default())?
+            .fingerprint)
     };
     let reference = fp(&base, ARTIFACT)?;
     assert_eq!(reference.len(), 64);
@@ -115,7 +117,7 @@ fn fingerprint_binds_artifact_and_grant() -> TestResult {
     let again = manifest("1.0.0", "kv = true\nhttp = [\"api.example.com\"]", "");
     assert_eq!(fp(&again, ARTIFACT)?, reference);
     let with_current = base
-        .permission_report(ARTIFACT, Some(&Grant::of(&base)), DEFAULTS)?
+        .permission_report(ARTIFACT, Some(&Grant::of(&base)), &HostConfig::default())?
         .fingerprint;
     assert_eq!(with_current, reference);
 
@@ -288,7 +290,7 @@ fn limits_above_default_need_approval() -> TestResult {
     // The report refuses above-ceiling requests before anything is stored, and flags
     // above-default limits as high risk.
     let err = with_limits("memory = \"300MiB\"")
-        .permission_report(ARTIFACT, None, DEFAULTS)
+        .permission_report(ARTIFACT, None, &HostConfig::default())
         .expect_err("report above the ceiling");
     assert!(
         matches!(
@@ -300,8 +302,11 @@ fn limits_above_default_need_approval() -> TestResult {
         ),
         "{err}"
     );
-    let report = with_limits("memory = \"64MiB\"\nfuel = 1_000_000")
-        .permission_report(ARTIFACT, None, DEFAULTS)?;
+    let report = with_limits("memory = \"64MiB\"\nfuel = 1_000_000").permission_report(
+        ARTIFACT,
+        None,
+        &HostConfig::default(),
+    )?;
     assert_eq!(report.limits.len(), 2);
     let memory = &report.limits[0];
     assert_eq!(
@@ -361,6 +366,126 @@ fn pooling_host_never_exceeds_its_slot_size() -> TestResult {
         matches!(err, PluginError::LimitAboveCeiling { limit: "memory", ceiling, .. } if ceiling == 32 * MIB),
         "{err}"
     );
+    // Review round 1: the report uses the same ceiling, so it never offers an approval
+    // the host cannot load.
+    let err = Manifest::parse(&format!(
+        "{}\n[limits]\nmemory = \"64MiB\"\n",
+        plugin_manifest("hello")
+    ))?
+    .permission_report(ARTIFACT, None, host.config())
+    .expect_err("report on a pooling host");
+    assert!(
+        matches!(err, PluginError::LimitAboveCeiling { limit: "memory", ceiling, .. } if ceiling == 32 * MIB),
+        "{err}"
+    );
+    Ok(())
+}
+
+#[test]
+fn hosts_are_canonical_in_grants_and_fingerprints() -> TestResult {
+    let lower = manifest("1.0.0", "http = [\"api.example.com\"]", "");
+    let mixed = manifest(
+        "1.0.0",
+        "http = [\"API.Example.COM\", \"api.example.com.\"]",
+        "",
+    );
+    assert_eq!(mixed.capabilities.http, ["api.example.com"]);
+    assert_eq!(Grant::of(&mixed), Grant::of(&lower));
+    let cfg = HostConfig::default();
+    let a = lower.permission_report(ARTIFACT, None, &cfg)?;
+    let b = mixed.permission_report(ARTIFACT, Some(&Grant::of(&lower)), &cfg)?;
+    assert_eq!(a.fingerprint, b.fingerprint);
+    assert!(b.added.is_empty(), "{:?}", b.added);
+    Ok(())
+}
+
+/// Ruling R7: `cross_origin` and `rate_limit` are in the grant and the fingerprint;
+/// relaxing either is widening, tightening is not; paths stay out (R6).
+#[test]
+fn route_policies_are_part_of_the_grant() -> TestResult {
+    let routes = |table: &str| manifest("1.0.0", "routes = true", &format!("[routes]\n{table}\n"));
+    let cfg = HostConfig::default();
+    let base = routes("\"/a\" = { rate_limit = \"10/min\" }");
+    let current = Grant::of(&base);
+    let fp = |m: &Manifest| -> TestResult<String> {
+        Ok(m.permission_report(ARTIFACT, None, &cfg)?.fingerprint)
+    };
+    let added = |m: &Manifest| -> TestResult<Vec<String>> {
+        Ok(m.permission_report(ARTIFACT, Some(&current), &cfg)?
+            .added
+            .into_iter()
+            .map(|i| i.text)
+            .collect())
+    };
+    let covered = |m: &Manifest| current.covers_access(&Grant::of(m));
+
+    // A new path with an approved policy: not widening (R6); the fingerprint differs
+    // only through the route set it does not carry, so it is equal.
+    let new_path =
+        routes("\"/a\" = { rate_limit = \"10/min\" }\n\"/b\" = { rate_limit = \"10/min\" }");
+    assert!(covered(&new_path));
+    assert!(added(&new_path)?.is_empty());
+    assert_eq!(fp(&new_path)?, fp(&base)?);
+
+    // Tightening: not widening, but a different grant (and fingerprint).
+    for tighter in [
+        "\"/a\" = { rate_limit = \"5/min\" }",
+        "\"/a\" = { rate_limit = \"10/h\" }",
+        "\"/a\" = { rate_limit = \"2/min\" }",
+    ] {
+        let m = routes(tighter);
+        assert!(covered(&m), "{tighter}");
+        assert!(added(&m)?.is_empty(), "{tighter}");
+        assert_ne!(fp(&m)?, fp(&base)?, "{tighter}");
+    }
+    // Relaxing: widening, shown in `added`, and a different fingerprint.
+    for looser in [
+        "\"/a\" = { rate_limit = \"20/min\" }",
+        "\"/a\" = { rate_limit = \"1/s\" }",
+        // Same rate, larger burst.
+        "\"/a\" = { rate_limit = \"600/h\" }",
+        // Limit removed.
+        "\"/a\" = {}",
+        "\"/a\" = { rate_limit = \"10/min\", cross_origin = true }",
+    ] {
+        let m = routes(looser);
+        assert!(!covered(&m), "{looser}");
+        let added = added(&m)?;
+        assert_eq!(added.len(), 1, "{looser}: {added:?}");
+        assert_ne!(fp(&m)?, fp(&base)?, "{looser}");
+    }
+    // An absent limit counts as the default 10/min: 5/min under it is covered, a
+    // larger one is not; an absent limit is only covered by an absent one.
+    let default = Grant::of(&routes("\"/a\" = {}"));
+    assert!(default.covers_access(&Grant::of(&routes("\"/a\" = { rate_limit = \"5/min\" }"))));
+    assert!(!default.covers_access(&Grant::of(&routes("\"/a\" = { rate_limit = \"11/min\" }"))));
+    assert!(default.covers_access(&Grant::of(&routes("\"/a\" = {}"))));
+    // Cross-origin approved covers same-origin.
+    let cross = Grant::of(&routes(
+        "\"/a\" = { rate_limit = \"10/min\", cross_origin = true }",
+    ));
+    assert!(cross.covers_access(&current));
+    Ok(())
+}
+
+/// Ruling R7: a null (legacy) grant approves no limit above the defaults; the report
+/// against it flags such a limit until it is approved.
+#[test]
+fn legacy_grant_caps_limits_at_the_defaults() -> TestResult {
+    let m = manifest(
+        "1.0.0",
+        "kv = true",
+        "[limits]\nmemory = \"64MiB\"\nfuel = 1_000\n",
+    );
+    let legacy = Grant::legacy(&m);
+    assert_eq!(legacy.capabilities, m.capabilities);
+    assert_eq!(legacy.limits, ApprovedLimits::default());
+    let report = m.permission_report(ARTIFACT, Some(&legacy), &HostConfig::default())?;
+    let added: Vec<_> = report.added.iter().map(|i| i.key).collect();
+    assert_eq!(added, ["limits.memory"]);
+    assert!(report.added[0].high_risk);
+    let approved = m.permission_report(ARTIFACT, Some(&Grant::of(&m)), &HostConfig::default())?;
+    assert!(approved.added.is_empty(), "{:?}", approved.added);
     Ok(())
 }
 
@@ -407,6 +532,7 @@ fn grant_json_roundtrip_and_legacy_form() -> TestResult {
                 "mail": "admins",
             },
             "limits": { "memory": 64 * MIB, "fuel": 1_000 },
+            "routes": [{ "cross_origin": false, "rate_limit": null }],
         })
     );
     assert_eq!(Grant::from_json(&plugin, &stored)?, grant);
@@ -415,7 +541,7 @@ fn grant_json_roundtrip_and_legacy_form() -> TestResult {
     let empty = Grant::of(&manifest("1.0.0", "", ""));
     assert_eq!(
         empty.to_json(),
-        json!({ "v": 1, "capabilities": {}, "limits": { "memory": null, "fuel": null } })
+        json!({ "v": 1, "capabilities": {}, "limits": { "memory": null, "fuel": null }, "routes": [] })
     );
     assert_eq!(Grant::from_json(&plugin, &empty.to_json())?, empty);
 
@@ -438,14 +564,22 @@ fn grant_json_roundtrip_and_legacy_form() -> TestResult {
         json!([]),
         json!("kv"),
         json!({ "v": 2, "capabilities": {}, "limits": {} }),
-        json!({ "v": 1, "capabilities": { "fs": true }, "limits": {} }),
-        json!({ "v": 1, "capabilities": {}, "limits": { "memory": -1 } }),
-        json!({ "v": 1, "capabilities": {}, "limits": { "memory": 0 } }),
-        json!({ "v": 1, "capabilities": {}, "limits": { "memory": "64MiB" } }),
-        json!({ "v": 1, "capabilities": {}, "limits": { "cpu": 1 } }),
-        json!({ "v": 1, "capabilities": {}, "limits": {}, "extra": 1 }),
-        json!({ "v": 1, "limits": {} }),
-        json!({ "v": 1, "capabilities": {} }),
+        json!({ "v": 1, "capabilities": { "fs": true }, "limits": {} , "routes": [] }),
+        json!({ "v": 1, "capabilities": {}, "limits": { "memory": -1 } , "routes": [] }),
+        json!({ "v": 1, "capabilities": {}, "limits": { "memory": 0 } , "routes": [] }),
+        json!({ "v": 1, "capabilities": {}, "limits": { "memory": "64MiB" } , "routes": [] }),
+        json!({ "v": 1, "capabilities": {}, "limits": { "cpu": 1 } , "routes": [] }),
+        json!({ "v": 1, "capabilities": {}, "limits": {}, "extra": 1 , "routes": [] }),
+        json!({ "v": 1, "limits": {} , "routes": [] }),
+        json!({ "v": 1, "capabilities": {}, "routes": [] }),
+        json!({ "v": 1, "capabilities": {}, "limits": {} }),
+        json!({ "v": 1, "capabilities": {}, "limits": {}, "routes": {} }),
+        json!({ "v": 1, "capabilities": {}, "limits": {}, "routes": [1] }),
+        json!({ "v": 1, "capabilities": {}, "limits": {}, "routes": [{ "rate_limit": null }] }),
+        json!({ "v": 1, "capabilities": {}, "limits": {},
+                "routes": [{ "cross_origin": false, "rate_limit": "10/day" }] }),
+        json!({ "v": 1, "capabilities": {}, "limits": {},
+                "routes": [{ "cross_origin": false, "rate_limit": null, "path": "/x" }] }),
         json!({ "v": "1", "capabilities": {}, "limits": {} }),
         json!({ "fs": true }),
         json!({ "http": ["127.0.0.1"] }),
@@ -468,6 +602,11 @@ fn bare_ip_and_localhost_hosts_rejected() {
         "LOCALHOST",
         "Foo.LocalHost",
         "localhost.localdomain",
+        "localhost4.localdomain4",
+        "localhost6.localdomain6",
+        "localhost-proxy.example.com",
+        "LocalHost.",
+        "localhost.",
         "2130706433",
         "0x7f000001",
         "0x7f.0.0.1",
@@ -482,8 +621,11 @@ fn bare_ip_and_localhost_hosts_rejected() {
         assert_eq!(got.len(), 1, "{host}: {got:?}");
         assert_eq!(got[0].0, "capabilities.http", "{host}");
         assert!(got[0].1.starts_with(BARE), "{host}: {}", got[0].1);
+        // Shown in the canonical form: lowercase, no trailing dot.
+        let canonical = host.to_ascii_lowercase();
+        let canonical = canonical.trim_end_matches('.');
         assert!(
-            got[0].1.contains(&format!("`{host}`")),
+            got[0].1.contains(&format!("`{canonical}`")),
             "{host}: {}",
             got[0].1
         );
@@ -496,9 +638,12 @@ fn bare_ip_and_localhost_hosts_rejected() {
         "::ffff:127.0.0.1",
         "[::ffff:7f00:1]",
         "fe80::1%25eth0",
-        "localhost.",
-        "example.com.",
+        "example.com..",
         "*.example.com",
+        // Punycode cannot smuggle `localhost` in: `xn--localhost-` (all-ASCII input)
+        // ends with `-`, and resolvers do not decode `xn--` labels anyway.
+        "xn--localhost-",
+        "xn--localhost-.example",
         "*",
         "exämple.com",
         "127\u{3002}0\u{3002}0\u{3002}1",
@@ -519,7 +664,7 @@ fn bare_ip_and_localhost_hosts_rejected() {
         "x1.example",
         "1.example.com",
         "xn--exmple-cua.com",
-        "localhost-proxy.example.com",
+        "proxy-localhost.example.com",
     ] {
         assert_eq!(problems(&format!("http = [\"{ok}\"]")), Vec::new(), "{ok}");
     }
@@ -532,7 +677,7 @@ fn bare_ip_and_localhost_hosts_rejected() {
     });
     let err = Grant::from_json(
         &plugin,
-        &json!({ "v": 1, "capabilities": { "http": ["localhost"] }, "limits": {} }),
+        &json!({ "v": 1, "capabilities": { "http": ["localhost"] }, "limits": {}, "routes": [] }),
     )
     .expect_err("bare host in a grant");
     assert!(err.contains(BARE), "{err}");
@@ -552,6 +697,18 @@ fn hostile_manifests_are_refused() {
         "{}",
         err.problems[0]
     );
+    // The cap applies to the text as uploaded, not to a stored row read back as JSON
+    // (review round 1, item 3): a stored manifest is not refused later for its size.
+    let padded = json!({
+        "plugin": {
+            "name": "pinger",
+            "version": "1.0.0",
+            "publisher": "example.dev",
+            "world": "ferrite:plugin/plugin@0.1.0",
+            "description": "x".repeat(MAX_MANIFEST_BYTES),
+        },
+    });
+    assert!(Manifest::from_json(&padded).is_ok());
     // Unknown capabilities, nested or not.
     let got = problems("fs = true\nnet.raw = true\ncontent.write = [\"post\"]");
     let paths: Vec<_> = got.iter().map(|(p, _)| p.as_str()).collect();

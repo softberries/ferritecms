@@ -8,8 +8,8 @@
 //!   (P19: reuse is in memory, by artifact);
 //! * a new or changed row, or a row enabled again after a host-side disable (its
 //!   `updated_at` moved), is fetched (SHA-256 checked), its manifest parsed, its grant
-//!   checked (R21) and the component prepared on a blocking thread with the limits the
-//!   grant approved (P5);
+//!   checked (R21, R7) and the component prepared on a blocking thread with the limits
+//!   the grant approved (P5; a legacy null grant's limits are capped at the defaults);
 //! * if any of that fails, the previously loaded version keeps running (reported as
 //!   [`PluginStatus::Failed`]); a plugin with no previous version stays absent;
 //! * disabled and deleted rows are dropped.
@@ -41,7 +41,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use super::SharedFailures;
-use super::load::{check_row, hash_of};
+use super::load::{CheckedRow, cap_at_defaults, check_row, hash_of};
 
 /// Compiles one plugin with the limits its grant approved; [`PluginHost::prepare_with`]
 /// unless replaced in tests.
@@ -261,7 +261,14 @@ impl PluginReloader {
 
     /// Fetch, check and compile `row`'s plugin (the slow part on a blocking thread).
     async fn prepare_row(&self, row: &InstalledPlugin) -> Result<PreparedPlugin, String> {
-        let (manifest, approved) = check_row(row)?;
+        let CheckedRow {
+            mut manifest,
+            approved,
+            legacy,
+        } = check_row(row)?;
+        if legacy {
+            cap_at_defaults(&mut manifest, self.host.config());
+        }
         let wasm = self
             .media
             .get(&row.artifact_hash)

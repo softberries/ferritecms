@@ -12,8 +12,9 @@
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+use crate::config::HostConfig;
 use crate::error::PluginError;
-use crate::grant::{Grant, LimitBounds};
+use crate::grant::{Grant, LimitBounds, RoutePolicy};
 use crate::manifest::{Capabilities, HtmlMode, MailScope, Manifest, html_level, pattern_covered};
 
 /// What a manifest asks for, as an admin sees it before approving.
@@ -63,22 +64,20 @@ pub struct LimitItem {
 impl Manifest {
     /// The report for installing this manifest with the component `artifact` (64 hex,
     /// `ArtifactHash::as_str()`), against the `current` grant of an installed version
-    /// (`None` for a new plugin) and the host `defaults` `(memory bytes, fuel)`. A limit
-    /// above its ceiling is refused here (`LimitAboveCeiling`), before anything is
-    /// stored.
+    /// (`None` for a new plugin), for a host configured as `host` (its defaults and its
+    /// real ceilings: a pooling host's memory ceiling is its slot size, so an approval
+    /// the report allows always loads). A limit above its ceiling is refused here
+    /// (`LimitAboveCeiling`), before anything is stored.
     pub fn permission_report(
         &self,
         artifact: &str,
         current: Option<&Grant>,
-        defaults: (u64, u64),
+        host: &HostConfig,
     ) -> Result<PermissionReport, PluginError> {
+        let (memory, fuel) = LimitBounds::of_host(host);
         let bounds = [
-            (
-                "memory",
-                self.limits.memory,
-                LimitBounds::memory(defaults.0),
-            ),
-            ("fuel", self.limits.fuel, LimitBounds::fuel(defaults.1)),
+            ("memory", self.limits.memory, memory),
+            ("fuel", self.limits.fuel, fuel),
         ];
         let mut limits = Vec::new();
         for (name, requested, b) in bounds {
@@ -94,13 +93,14 @@ impl Manifest {
             }
         }
         let name = &self.plugin.name;
-        let mut items = capability_items(self, &self.capabilities);
+        let mut items = capability_items(self, &self.capabilities, None);
         items.extend(limits.iter().filter_map(limit_item));
         let added = match current {
             None => items.clone(),
             Some(current) => {
-                let mut added =
-                    capability_items(self, &uncovered(&self.capabilities, &current.capabilities));
+                let uncovered = uncovered(&self.capabilities, &current.capabilities);
+                let relaxed = (self.capabilities.routes && !uncovered.routes).then_some(current);
+                let mut added = capability_items(self, &uncovered, relaxed);
                 let approved = |l: &LimitItem| match l.name {
                     "memory" => current.limits.memory,
                     _ => current.limits.fuel,
@@ -217,7 +217,11 @@ fn quoted(patterns: &[String]) -> String {
 }
 
 /// The items for capabilities `c` of manifest `m` (routes come from `m`'s `[routes]`).
-fn capability_items(m: &Manifest, c: &Capabilities) -> Vec<PermissionItem> {
+fn capability_items(
+    m: &Manifest,
+    c: &Capabilities,
+    relaxed: Option<&Grant>,
+) -> Vec<PermissionItem> {
     let name = &m.plugin.name;
     let own = format!("plugin.{name}.");
     let any_star = |p: &[String]| p.iter().any(|p| p == "*");
@@ -333,8 +337,10 @@ fn capability_items(m: &Manifest, c: &Capabilities) -> Vec<PermissionItem> {
             true,
         )),
     }
-    if c.routes {
-        if m.routes.is_empty() {
+    // Routes: all of them when `c` asks for routes; otherwise (an `added` list under an
+    // already-granted `routes`) those whose policy `relaxed` says is not approved (R7).
+    if c.routes || relaxed.is_some() {
+        if c.routes && m.routes.is_empty() {
             out.push(item(
                 "routes",
                 format!("answer requests under /_p/{name}/"),
@@ -343,6 +349,9 @@ fn capability_items(m: &Manifest, c: &Capabilities) -> Vec<PermissionItem> {
             ));
         }
         for (path, spec) in &m.routes {
+            if !c.routes && !relaxed.is_some_and(|g| !g.covers_route(&RoutePolicy::of(spec))) {
+                continue;
+            }
             let mut text = format!(
                 "answer {} requests at /_p/{name}{path}",
                 and_list(&spec.methods)
@@ -431,7 +440,7 @@ mod tests {
     fn report_lists_capabilities_in_plain_language() {
         let m = Manifest::parse(DESIGN_EXAMPLE).expect("parses");
         let r = m
-            .permission_report(ARTIFACT, None, DEFAULTS)
+            .permission_report(ARTIFACT, None, &HostConfig::default())
             .expect("report");
         assert_eq!(r.plugin, "seo-pro");
         assert_eq!(r.version, "1.4.0");
@@ -507,7 +516,7 @@ mod tests {
             ))
             .expect("manifest");
             summary(
-                &m.permission_report(ARTIFACT, None, DEFAULTS)
+                &m.permission_report(ARTIFACT, None, &HostConfig::default())
                     .expect("report")
                     .items,
             )
@@ -557,7 +566,7 @@ mod tests {
         assert_eq!(doc.to_string(), PINNED_DOC);
         assert_eq!(fingerprint(&m, ARTIFACT), PINNED_FINGERPRINT);
         let r = m
-            .permission_report(ARTIFACT, None, DEFAULTS)
+            .permission_report(ARTIFACT, None, &HostConfig::default())
             .expect("report");
         assert_eq!(r.fingerprint, PINNED_FINGERPRINT);
     }
@@ -568,9 +577,10 @@ mod tests {
         r#""grant":{"capabilities":{"content":{"meta":{"read":["seo.*"],"write":["seo.*"]},"#,
         r#""read":["post","page"]},"http":["api.indexnow.org"],"kv":true,"mail":"admins","#,
         r#""options":{"read":["site.title","site.url"]},"render":{"head":true,"text":true},"#,
-        r#""routes":true},"limits":{"fuel":20000000,"memory":16777216},"v":1},"#,
+        r#""routes":true},"limits":{"fuel":20000000,"memory":16777216},"#,
+        r#""routes":[{"cross_origin":false,"rate_limit":"10/min"}],"v":1},"#,
         r#""plugin":"seo-pro","version":"1.4.0"}"#,
     );
     const PINNED_FINGERPRINT: &str =
-        "8bbedd0caa89cc6f6ca9058ca1afee3fbe2735f0fae9b878cf5de80189dc54a5";
+        "6fb42abbeba14e3a6954e699435216c68faa0a0b09deb9ac6c7b9c117d8049c8";
 }
