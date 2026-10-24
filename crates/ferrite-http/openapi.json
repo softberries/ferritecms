@@ -4434,6 +4434,261 @@
         ]
       }
     },
+    "/api/v1/themes": {
+      "get": {
+        "tags": [
+          "themes"
+        ],
+        "operationId": "list_themes",
+        "responses": {
+          "200": {
+            "description": "Every installed theme and every embedded theme without a row, by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThemeList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_themes`, `extensions:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "themes"
+        ],
+        "operationId": "install_theme",
+        "parameters": [
+          {
+            "name": "activate",
+            "in": "query",
+            "description": "`true`: make the uploaded theme the active one in the same write (default\n`false`).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A theme bundle: a ustar archive of `theme.toml`, `templates/` and `assets/` (regular files only), at most 23 020 544 bytes",
+          "content": {
+            "application/x-tar": {
+              "schema": {
+                "$ref": "#/components/schemas/ThemeBundle"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Installed (replacing a theme of that name; an active one stays active), active with `activate=true`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThemeDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-query`: `activate` is not `true` or `false`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_themes`, `extensions:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`too-large`: the body is over the bundle limit",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported-media-type`: not `application/x-tar`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: the theme does not load; one `errors[]` entry per problem (`templates/<file>:<line>: …` for a template); nothing is stored",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`busy`: every upload slot of this node is taken, or another extension change holds the lock (`Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/themes/{name}/activate": {
+      "post": {
+        "tags": [
+          "themes"
+        ],
+        "operationId": "activate_theme",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Theme",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active (an embedded theme without a row is installed first); nodes swap on `theme.changed`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThemeDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_themes`, `extensions:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no installed or embedded theme of that name",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: the theme does not load (its artifact is missing, tampered with or does not compile); the active theme is unchanged",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`busy`: another extension change holds the lock (`Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/types": {
       "get": {
         "tags": [
@@ -7316,6 +7571,129 @@
           }
         }
       },
+      "ThemeBundle": {
+        "type": "string",
+        "format": "binary",
+        "description": "`POST /themes` (`application/x-tar`; the schema only, the handler reads the body\nitself): a ustar archive of `theme.toml`, `templates/` and `assets/`."
+      },
+      "ThemeDto": {
+        "type": "object",
+        "description": "A theme: installed (a row) or embedded (no row).",
+        "required": [
+          "name",
+          "version",
+          "origin",
+          "active",
+          "nodes"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "The theme nodes should serve: the active row, or with no active row the embedded\ndefault (`blog`)."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "installed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the row was written; `null` for an embedded theme without a row."
+          },
+          "name": {
+            "type": "string"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThemeNodeState"
+            },
+            "description": "What each live node (heartbeat within 30 s) serves, by node; only on the active\ntheme (empty on the others)."
+          },
+          "origin": {
+            "$ref": "#/components/schemas/ThemeOrigin"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "ThemeList": {
+        "type": "object",
+        "description": "`GET /themes`: every installed theme and every embedded theme without a row, by\nname.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThemeDto"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Always `null`: one page holds every theme."
+          }
+        }
+      },
+      "ThemeNodeState": {
+        "type": "object",
+        "description": "What one live node serves (`nodes.meta.theme`).",
+        "required": [
+          "node",
+          "name",
+          "hash",
+          "origin",
+          "fallback"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the node could not serve the active theme, if it could not."
+          },
+          "fallback": {
+            "type": "boolean",
+            "description": "The node does not serve the active row's artifact: the startup fallback, or the\nprevious theme after a failed swap (pre-flight F12). `false` when no theme is\nactive and the embedded default serves."
+          },
+          "hash": {
+            "type": "string",
+            "description": "The served files' content hash (as in `/_theme/<hash>/` asset URLs)."
+          },
+          "name": {
+            "type": "string",
+            "description": "The theme the node serves."
+          },
+          "node": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The node's id."
+          },
+          "origin": {
+            "type": "string",
+            "description": "Where the node's files came from: `artifact` (the row's bundle), `folder`\n(`<data>/themes/<name>/`, solo only) or `embedded`."
+          }
+        }
+      },
+      "ThemeOrigin": {
+        "type": "string",
+        "description": "Where a listed theme comes from.",
+        "enum": [
+          "installed",
+          "embedded"
+        ]
+      },
       "TokenDto": {
         "type": "object",
         "description": "An API token's metadata (never its bearer value or hash).",
@@ -7683,6 +8061,10 @@
     {
       "name": "plugins",
       "description": "Plugins: inspection, approval, install, enable/disable, delete"
+    },
+    {
+      "name": "themes",
+      "description": "Themes: list, upload, activation"
     }
   ]
 }

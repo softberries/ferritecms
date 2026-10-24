@@ -64,6 +64,8 @@ pub struct Media {
     _dir: tempfile::TempDir,
     server: Option<JoinHandle<()>>,
     config: MediaConfig,
+    /// Where object keys appear as plain files (including the prefix).
+    objects_root: PathBuf,
 }
 
 impl Drop for Media {
@@ -90,6 +92,7 @@ pub fn local_media() -> Media {
         public: public(),
     };
     Media {
+        objects_root: dir.path().join("media"),
         _dir: dir,
         server: None,
         config,
@@ -128,6 +131,7 @@ pub async fn s3_media() -> Media {
         public: public(),
     };
     Media {
+        objects_root: dir.path().join(BUCKET).join("site"),
         _dir: dir,
         server: Some(server),
         config,
@@ -142,7 +146,7 @@ pub const CLIENT: SocketAddr = SocketAddr::new(
 
 pub struct Api {
     pub db: TestDb,
-    _media: Media,
+    backing: Media,
     pub store: Arc<dyn Store>,
     pub app: Arc<AppState>,
     pub api: Arc<ApiState>,
@@ -267,7 +271,7 @@ impl Api {
         let router = with_client(build_site(app.clone(), api.clone()));
         Self {
             db,
-            _media: media,
+            backing: media,
             store,
             app,
             api,
@@ -280,7 +284,7 @@ impl Api {
     pub async fn teardown(self) {
         let Self {
             db,
-            _media,
+            backing,
             store,
             app,
             api,
@@ -288,7 +292,7 @@ impl Api {
             compiles: _,
             reloader,
         } = self;
-        drop((router, reloader, app, api, store, _media));
+        drop((router, reloader, app, api, store, backing));
         db.teardown().await;
     }
 
@@ -298,6 +302,17 @@ impl Api {
 
     pub async fn get(&self, path: &str) -> Resp {
         self.send(request(Method::GET, path)).await
+    }
+
+    /// Overwrites the stored blob of artifact `hash` (bypassing the media store).
+    pub fn tamper(&self, hash: &ArtifactHash, bytes: &[u8]) {
+        let h = hash.as_str();
+        let path = self
+            .backing
+            .objects_root
+            .join(format!("artifacts/{}/{h}", &h[..2]));
+        assert!(path.is_file(), "no blob at {}", path.display());
+        std::fs::write(path, bytes).expect("tamper");
     }
 
     /// The whole site again, with the same store and services but another `site.url`
@@ -621,6 +636,16 @@ impl Client {
     /// `POST path` with a `multipart/form-data` body of `parts` (name, bytes), in order.
     pub async fn multipart(&mut self, api: &Api, path: &str, parts: &[(&str, &[u8])]) -> Resp {
         let (content_type, body) = multipart_body(parts);
+        let req = self
+            .builder(Method::POST, path)
+            .header(header::CONTENT_TYPE, content_type)
+            .body(Body::from(body))
+            .unwrap();
+        self.send_on(&api.router, req).await
+    }
+
+    /// `POST path` with `body` as `Content-Type: content_type`.
+    pub async fn raw(&mut self, api: &Api, path: &str, content_type: &str, body: Vec<u8>) -> Resp {
         let req = self
             .builder(Method::POST, path)
             .header(header::CONTENT_TYPE, content_type)

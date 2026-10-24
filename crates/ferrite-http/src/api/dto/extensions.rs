@@ -1,9 +1,10 @@
-//! Bodies of the `/plugins` endpoints. Responses never carry artifact bytes or secrets:
-//! a plugin is described by its row (name, version, state, times), the permission
-//! report of its stored grant, and what live nodes report about it.
+//! Bodies of the `/plugins` and `/themes` endpoints. Responses never carry artifact
+//! bytes or secrets: a plugin is described by its row (name, version, state, times), the
+//! permission report of its stored grant, and what live nodes report about it; a theme
+//! by its row or embedded manifest and what live nodes serve.
 
 use chrono::{DateTime, Utc};
-use ferrite_domain::{InstalledPlugin, Node};
+use ferrite_domain::{InstalledPlugin, InstalledTheme, Node};
 use ferrite_plugin_host::{LimitItem, PermissionItem, PermissionReport};
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -214,3 +215,122 @@ pub struct PluginUpload {
     /// most 128 bytes).
     pub approve: String,
 }
+
+/// Where a listed theme comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeOrigin {
+    /// A `themes` row (uploaded, or an embedded theme installed on activation).
+    Installed,
+    /// A starter theme compiled into the binary, without a row.
+    Embedded,
+}
+
+/// What one live node serves (`nodes.meta.theme`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ThemeNodeState {
+    /// The node's id.
+    pub node: Uuid,
+    /// The theme the node serves.
+    pub name: String,
+    /// The served files' content hash (as in `/_theme/<hash>/` asset URLs).
+    pub hash: String,
+    /// Where the node's files came from: `artifact` (the row's bundle), `folder`
+    /// (`<data>/themes/<name>/`, solo only) or `embedded`.
+    pub origin: String,
+    /// Why the node could not serve the active theme, if it could not.
+    pub error: Option<String>,
+    /// The node does not serve the active row's artifact: the startup fallback, or the
+    /// previous theme after a failed swap (pre-flight F12). `false` when no theme is
+    /// active and the embedded default serves.
+    pub fallback: bool,
+}
+
+impl ThemeNodeState {
+    /// What `node` reports about its theme, if anything.
+    pub fn of(node: &Node) -> Option<Self> {
+        let theme = node.meta.get("theme")?;
+        let text = |key: &str| theme.get(key).and_then(|v| v.as_str()).map(str::to_owned);
+        let origin = match theme.get("origin") {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(serde_json::Value::Object(o)) if o.contains_key("artifact") => "artifact".into(),
+            _ => return None,
+        };
+        Some(Self {
+            node: node.id.as_uuid(),
+            name: text("name")?,
+            hash: text("hash").unwrap_or_default(),
+            origin,
+            error: text("error"),
+            fallback: theme
+                .get("fallback")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+        })
+    }
+}
+
+/// A theme: installed (a row) or embedded (no row).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ThemeDto {
+    pub name: String,
+    pub version: String,
+    pub description: Option<String>,
+    pub origin: ThemeOrigin,
+    /// The theme nodes should serve: the active row, or with no active row the embedded
+    /// default (`blog`).
+    pub active: bool,
+    /// When the row was written; `null` for an embedded theme without a row.
+    pub installed_at: Option<DateTime<Utc>>,
+    /// What each live node (heartbeat within 30 s) serves, by node; only on the active
+    /// theme (empty on the others).
+    pub nodes: Vec<ThemeNodeState>,
+}
+
+impl ThemeDto {
+    /// The entry of an installed row.
+    pub fn installed(row: &InstalledTheme) -> Self {
+        let description = row
+            .manifest
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        Self {
+            name: row.name.clone(),
+            version: row.version.clone(),
+            description,
+            origin: ThemeOrigin::Installed,
+            active: row.active,
+            installed_at: Some(row.installed_at.as_datetime()),
+            nodes: Vec::new(),
+        }
+    }
+
+    /// The entry of an embedded theme without a row.
+    pub fn embedded(name: &str, version: &str, description: Option<&str>) -> Self {
+        Self {
+            name: name.to_owned(),
+            version: version.to_owned(),
+            description: description.map(str::to_owned),
+            origin: ThemeOrigin::Embedded,
+            active: false,
+            installed_at: None,
+            nodes: Vec::new(),
+        }
+    }
+}
+
+/// `GET /themes`: every installed theme and every embedded theme without a row, by
+/// name.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ThemeList {
+    pub items: Vec<ThemeDto>,
+    /// Always `null`: one page holds every theme.
+    pub next_cursor: Option<String>,
+}
+
+/// `POST /themes` (`application/x-tar`; the schema only, the handler reads the body
+/// itself): a ustar archive of `theme.toml`, `templates/` and `assets/`.
+#[derive(ToSchema)]
+#[schema(value_type = String, format = Binary)]
+pub struct ThemeBundle(pub Vec<u8>);

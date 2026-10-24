@@ -25,6 +25,11 @@ pub use error::ThemeError;
 pub use hierarchy::{TemplateKey, error_template, resolve_template};
 pub use manifest::{ImageSize, SettingKind, SettingSpec, ThemeManifest};
 pub use package::{MAX_FILES, MAX_TOTAL_BYTES, Theme, ThemeSource};
+
+/// The embedded starter theme nodes serve when no theme is active, and the startup
+/// fallback when the active one does not load (06 §7).
+pub const DEFAULT_THEME: &str = "blog";
+
 pub use render::{
     ArchiveInfo, FUEL, MAX_BRIDGE_CALLS, MAX_OUTPUT, Pagination, RenderContext, RenderOutput,
     Renderer, RequestInfo, SiteInfo,

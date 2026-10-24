@@ -311,11 +311,12 @@ async fn set_enabled(
     Ok(Json(dto(api, row, &live_nodes(api).await?)))
 }
 
-/// One of the node's upload slots, or `503 busy` (`Retry-After`) when all are taken.
-fn upload_slot(api: &ApiState) -> Result<tokio::sync::OwnedSemaphorePermit, Problem> {
+/// One of the node's upload slots (shared by plugin and theme uploads), or `503 busy`
+/// (`Retry-After`) when all are taken.
+pub(super) fn upload_slot(api: &ApiState) -> Result<tokio::sync::OwnedSemaphorePermit, Problem> {
     api.installer.try_upload_slot().ok_or_else(|| {
         let mut p = Problem::busy();
-        p.detail = "too many plugin uploads on this node; retry".to_owned();
+        p.detail = "too many uploads on this node; retry".to_owned();
         p
     })
 }
@@ -344,7 +345,7 @@ fn dto(api: &ApiState, row: InstalledPlugin, nodes: &[Node]) -> PluginDto {
 
 /// The registered nodes with a heartbeat within [`NODE_STALE_AFTER`] of the database
 /// clock, by node id.
-async fn live_nodes(api: &ApiState) -> Result<Vec<Node>, Problem> {
+pub(super) async fn live_nodes(api: &ApiState) -> Result<Vec<Node>, Problem> {
     let read = api.store.read();
     let nodes = read.nodes().list().await?;
     let now = read.nodes().db_now().await?;

@@ -122,6 +122,16 @@ impl From<ExtensionError> for Problem {
                 let detail = e.to_string();
                 Self::validation(detail.clone()).with_error(Some("component"), detail)
             }
+            // One `errors[]` entry per problem the package or its templates have
+            // (`templates/<file>:<line>: …`), as the admin fixes them one by one.
+            ExtensionError::Theme(ThemeError::Invalid(ref problems))
+            | ExtensionError::Theme(ThemeError::Templates(ref problems)) => {
+                let mut p = Self::validation(e.to_string());
+                for problem in problems {
+                    p = p.with_error(None, problem.clone());
+                }
+                p
+            }
             // Pre-flight F11: bytes sent or stored that do not load are an actionable
             // refusal, not an internal error.
             ExtensionError::Theme(_)
@@ -656,6 +666,22 @@ mod tests {
             let p = Problem::from(e);
             assert_eq!((p.status, p.slug), (status, slug));
         }
+        let p = Problem::from(ExtensionError::Theme(ThemeError::Templates(vec![
+            "templates/a.html:1: x".into(),
+            "templates/b.html:2: y".into(),
+        ])));
+        assert_eq!(
+            (p.status, p.slug),
+            (StatusCode::UNPROCESSABLE_ENTITY, "validation")
+        );
+        let details: Vec<&str> = p.errors.iter().map(|e| e.detail.as_str()).collect();
+        assert_eq!(details, ["templates/a.html:1: x", "templates/b.html:2: y"]);
+        assert!(p.errors.iter().all(|e| e.field.is_none()));
+        let p = Problem::from(ExtensionError::Theme(ThemeError::NotFound("x".into())));
+        assert_eq!(
+            (p.status, p.errors.len()),
+            (StatusCode::UNPROCESSABLE_ENTITY, 0)
+        );
         let p = Problem::from(ExtensionError::Approval("x".into()));
         assert_eq!(p.errors[0].field.as_deref(), Some("approve"));
         let p = Problem::from(ExtensionError::Component(PluginError::Engine("e".into())));

@@ -175,6 +175,7 @@ pub async fn extension_writes_need_capabilities(db: &TestDb) {
     forbidden(admin_svc.list_plugins(&author).await, "manage_plugins");
     forbidden(admin_svc.get_plugin(&author, "seo").await, "manage_plugins");
     forbidden(admin_svc.list_themes(&author).await, "manage_themes");
+    forbidden(admin_svc.get_theme(&author, "dark").await, "manage_themes");
 
     // A full admin installs; an `extensions:read` admin token reads but cannot write.
     admin_svc
@@ -207,6 +208,9 @@ pub async fn extension_writes_need_capabilities(db: &TestDb) {
         Err(CoreError::NotFound)
     ));
     assert_eq!(admin_svc.list_themes(&reader).await.unwrap().len(), 1);
+    let dark = admin_svc.get_theme(&reader, "dark").await.unwrap();
+    assert_eq!(dark.map(|t| t.name).as_deref(), Some("dark"));
+    assert_eq!(admin_svc.get_theme(&reader, "none").await.unwrap(), None);
     let q = artifact(ArtifactKind::Plugin, 3);
     forbidden(
         admin_svc
@@ -234,6 +238,10 @@ pub async fn extension_writes_need_capabilities(db: &TestDb) {
     );
     forbidden(
         admin_svc.list_themes(&content_only).await,
+        "extensions:read",
+    );
+    forbidden(
+        admin_svc.get_theme(&content_only, "dark").await,
         "extensions:read",
     );
     assert_eq!(store.read().plugins().list().await.unwrap().len(), 1);

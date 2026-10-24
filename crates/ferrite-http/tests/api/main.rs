@@ -10,5 +10,6 @@ mod foundation;
 mod plugins;
 mod site;
 mod sweep;
+mod themes;
 mod types;
 mod users;

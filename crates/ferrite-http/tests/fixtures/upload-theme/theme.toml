@@ -1,0 +1,6 @@
+# Fixture theme uploaded through `POST /api/v1/themes` (M2a-2 Task 5).
+[theme]
+name = "uploaded"
+version = "1.2.0"
+license = "MIT"
+description = "A theme uploaded in the API tests."

@@ -75,6 +75,16 @@ impl ExtensionAdmin {
         Ok(self.store.read().themes().list().await?)
     }
 
+    /// One installed theme, if there is a row named `name`.
+    pub async fn get_theme(
+        &self,
+        actor: &Actor,
+        name: &str,
+    ) -> Result<Option<InstalledTheme>, CoreError> {
+        require_reader(actor, Capability::ManageThemes)?;
+        Ok(self.store.read().themes().get(name).await?)
+    }
+
     /// [`ExtensionService::install_plugin`] with audit `plugin.install`
     /// `{name, version, artifact, granted}`. `row.granted` must be a JSON object (the
     /// approved grant, P3): anything else is `InvalidField { field: "approve" }` and

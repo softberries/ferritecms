@@ -121,6 +121,16 @@ impl Profile {
         self.dir.path()
     }
 
+    /// Where the stored blob of artifact `hash` (64 hex) is a plain file: under the
+    /// local media root (solo) or the in-process S3 server's bucket folder (cluster).
+    pub fn artifact_blob(&self, hash: &str) -> std::path::PathBuf {
+        let root = match self.pg {
+            None => self.data().join("media"),
+            Some(_) => self.dir.path().join("s3/ferrite-test/site"),
+        };
+        root.join("artifacts").join(&hash[..2]).join(hash)
+    }
+
     /// `ferrite <args> --data <data>` with the profile's environment only.
     pub fn cmd(&self, args: &[&str]) -> Command {
         self.cmd_in(self.data(), args)
@@ -396,6 +406,22 @@ pub fn request(
     headers: &[(&str, String)],
     body: Option<&Value>,
 ) -> Resp {
+    let body = body.map(|b| b.to_string()).unwrap_or_default();
+    let mut headers = headers.to_vec();
+    if !body.is_empty() {
+        headers.push(("Content-Type", "application/json".to_owned()));
+    }
+    request_bytes(addr, method, path, &headers, body.as_bytes())
+}
+
+/// [`request`] with a raw `body` (its `Content-Type`, if any, in `headers`).
+pub fn request_bytes(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    headers: &[(&str, String)],
+    body: &[u8],
+) -> Resp {
     let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).expect("connect");
     s.set_read_timeout(Some(Duration::from_secs(30)))
         .expect("read timeout");
@@ -405,16 +431,12 @@ pub fn request(
     for (name, value) in headers {
         head.push_str(&format!("{name}: {value}\r\n"));
     }
-    let body = body.map(|b| b.to_string()).unwrap_or_default();
     if !body.is_empty() || !matches!(method, "GET" | "HEAD") {
         head.push_str(&format!("Content-Length: {}\r\n", body.len()));
     }
-    if !body.is_empty() {
-        head.push_str("Content-Type: application/json\r\n");
-    }
     head.push_str("\r\n");
     s.write_all(head.as_bytes()).expect("write head");
-    s.write_all(body.as_bytes()).expect("write body");
+    s.write_all(body).expect("write body");
     let mut raw = Vec::new();
     // A refusal sent before the request body is read (the origin check of login) can end
     // in a reset once the response is out. That is accepted only for a response with a

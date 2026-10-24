@@ -10,12 +10,10 @@ use ferrite_domain::ArtifactHash;
 use ferrite_http::extensions::load_theme_artifact;
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode, S3Config};
 use ferrite_store::Store;
-use ferrite_theme::{Theme, ThemeSource};
+use ferrite_theme::{DEFAULT_THEME, Theme, ThemeSource};
 
 /// Path prefix under which the app serves media (`/_media/{hash}/{name}`).
 const MEDIA_PATH: &str = "/_media";
-/// The theme used when none is active, and the fallback when the active one fails.
-pub(crate) const DEFAULT_THEME: &str = "blog";
 /// Longest theme name accepted from the `themes` table.
 const MAX_THEME_NAME: usize = 64;
 
