@@ -203,6 +203,38 @@ impl ExtensionService {
             .await
     }
 
+    /// The operator form of delete (`ferrite plugin remove`, P26): [`delete_plugin`]
+    /// (Self::delete_plugin), or with `purge` the immediate purge of the KV and settings
+    /// after the commit, exactly as [`ExtensionAdmin::delete_plugin`] does it (the
+    /// delete's purge job, due [`PLUGIN_PURGE_GRACE`] later, is the final sweep and the
+    /// retry). Returns the deleted row.
+    pub async fn remove_plugin(
+        &self,
+        name: &str,
+        purge: bool,
+    ) -> Result<InstalledPlugin, CoreError> {
+        let deleted_at = Timestamp::now();
+        let row = self
+            .delete_plugin_with(name, deleted_at, purge, None)
+            .await?;
+        if purge {
+            self.purge_after_delete(&row, deleted_at).await;
+        }
+        Ok(row)
+    }
+
+    /// The immediate purge after a delete with `purge`; the marker stays (the delete's
+    /// job sweeps again after the grace). A failure is logged: the job retries.
+    pub(crate) async fn purge_after_delete(&self, row: &InstalledPlugin, deleted_at: Timestamp) {
+        let settings = setting_keys(&row.manifest);
+        if let Err(e) = self
+            .purge_plugin_data_with(&row.name, deleted_at, &settings, true)
+            .await
+        {
+            tracing::warn!(plugin = %row.name, error = %e, "purge after delete failed; the purge job retries");
+        }
+    }
+
     /// [`delete_plugin`](Self::delete_plugin) at `deleted_at`; with `purge_now` the
     /// purge job is due [`PLUGIN_PURGE_GRACE`] after the deletion instead of the
     /// retention: it sweeps KV a node wrote before it reloaded, and finishes the purge

@@ -9,7 +9,7 @@ use ferrite_domain::{
 use ferrite_store::{Repos, Store};
 use serde_json::{Map, Value, json};
 
-use super::{ExtensionService, append_audit, finish_locked, setting_keys};
+use super::{ExtensionService, append_audit, finish_locked};
 use crate::{
     Actor, CoreError,
     actor::{Capability, require, require_reader},
@@ -168,15 +168,7 @@ impl ExtensionAdmin {
             .delete_plugin_with(name, deleted_at, purge, Some(audit))
             .await?;
         if purge {
-            let settings = setting_keys(&row.manifest);
-            // The marker stays: the delete's job sweeps again after the grace.
-            if let Err(e) = self
-                .service
-                .purge_plugin_data_with(name, deleted_at, &settings, true)
-                .await
-            {
-                tracing::warn!(plugin = name, error = %e, "purge after delete failed; the purge job retries");
-            }
+            self.service.purge_after_delete(&row, deleted_at).await;
         }
         Ok(())
     }

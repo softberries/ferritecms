@@ -217,6 +217,12 @@ ferrite user create    --data DIR --login L --email E [--role admin|editor|autho
 ferrite user reset-password --data DIR --login L [--password-stdin]              # M2a
 ferrite user list      --data DIR                                                # M2a
 ferrite user disable-totp --data DIR --login L                                   # M2a
+ferrite theme install  --data DIR --dir PATH [--activate]                        # M2a-2
+ferrite theme activate --data DIR NAME                                           # M2a-2
+ferrite theme list     --data DIR                                                # M2a-2
+ferrite plugin check   --data DIR --dir PATH                                     # M2a-2
+ferrite plugin install --data DIR --dir PATH [--enable] [--yes]                  # M2a-2
+ferrite plugin list|enable|disable|remove --data DIR [NAME] [--purge]            # M2a-2
 ```
 
 **`ferrite config check`** (`crates/ferrite/src/config_cmd.rs`): loads `<data>/ferrite.toml`
@@ -386,6 +392,36 @@ e-mail, password policy of 12 to 1024 bytes); any error exits 1 with the message
   between columns, no header).
 - `disable-totp`: turns TOTP off (clears the secret and the replay step); the recovery for
   a lost authenticator, as there are no recovery codes.
+
+**`ferrite theme` and `ferrite plugin`** (`crates/ferrite/src/ext_cmd.rs`, ruling P26): the
+operator path for extensions, over `ExtensionService` and the install pipeline, with no
+login, no capability checks and no audit rows. Like `ferrite user`, every subcommand loads
+the config, opens the database and media and runs the migration check; with SQLite it takes
+the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the message.
+
+- `theme install --dir PATH [--activate]`: packs the folder into a bundle; a theme that
+  does not compile is refused before anything is stored. `theme activate NAME` loads the
+  stored bundle first (hash-checked) and refuses a theme that does not load, leaving the
+  active theme unchanged, as the API does; an embedded theme without a row is installed from
+  the embedded files. `theme list` prints `<name>  <version>  <installed|embedded>` plus
+  `  active` for the active one (the embedded `blog` when no row is active).
+- `plugin check --dir PATH`: `PATH` holds `ferrite-plugin.toml` and exactly one `*.wasm`.
+  Loads both on a scratch host, prints the permission report and stores nothing; exit 1 when
+  the manifest or component is refused. `plugin install --dir PATH [--enable] [--yes]` prints
+  the same report (one line per capability, `!` in front of high-risk ones; an update also
+  lists what it adds to the installed grant under `this update WIDENS the installed grant`,
+  and the limits and `fingerprint:`), then asks `install? [y/N]` on a terminal. Without a
+  terminal it exits 1 unless `--yes` is given, installing nothing. What is approved is
+  exactly the report printed: the install passes that report's fingerprint to the pipeline
+  (R1), so a widening update is installed only after that approval. A new plugin is
+  installed disabled; `--enable` enables it.
+- `plugin list` prints `<name>  <version>  <enabled|disabled>`, plus `  <reason>` after an
+  automatic disable. `plugin enable NAME` / `disable NAME`; an unknown name exits 1
+  (`plugin not found`).
+- `plugin remove NAME [--purge]`: removes the plugin. Its KV and settings stay for 30 days
+  (a reinstall within that time finds them; a `plugin.purge` job deletes them after);
+  `--purge` deletes them at once (the delete's own job sweeps again shortly after).
+- Setting values (including secrets) are never printed by any of these commands.
 
 **`ferrite seed demo`** (`crates/ferrite/src/seed.rs`):
 

@@ -6,6 +6,9 @@ use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin_cmd;
 use sqlx::{AssertSqlSafe, Connection, PgConnection, SqliteConnection};
 
+#[path = "../../ferrite-plugin-host/src/test_support.rs"]
+mod test_support;
+
 const PG_URL_ENV: &str = "FERRITE_TEST_PG_URL";
 
 fn ferrite() -> Command {
@@ -1264,4 +1267,439 @@ fn user_cli_refuses_invalid_login() {
     )
     .assert()
     .code(2);
+}
+
+// ---- ferrite theme / ferrite plugin (M2a-2 P26) --------------------------------------
+
+fn ext_cmd(dir: &Path, group: &str, args: &[&str]) -> Command {
+    let mut c = ferrite();
+    c.arg(group).args(args).arg("--data").arg(dir);
+    c
+}
+
+fn plugin_cmd(dir: &Path, args: &[&str]) -> Command {
+    ext_cmd(dir, "plugin", args)
+}
+
+fn theme_cmd(dir: &Path, args: &[&str]) -> Command {
+    ext_cmd(dir, "theme", args)
+}
+
+fn stderr_code(mut cmd: Command, code: i32) -> String {
+    let out = cmd.assert().code(code).get_output().stderr.clone();
+    String::from_utf8(out).expect("utf-8 stderr")
+}
+
+/// A plugin folder: the manifest of `plugins/examples/<manifest_of>` and the component
+/// of the example crate `wasm_of` (they differ for the manifest-only `hello-v2`).
+fn plugin_dir(parent: &Path, folder: &str, manifest_of: &str, wasm_of: &str) -> std::path::PathBuf {
+    let dir = parent.join(folder);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(
+        test_support::repo_root()
+            .join("plugins/examples")
+            .join(manifest_of)
+            .join("ferrite-plugin.toml"),
+        dir.join("ferrite-plugin.toml"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join(format!("{wasm_of}.wasm")),
+        test_support::plugin_wasm(wasm_of),
+    )
+    .unwrap();
+    dir
+}
+
+fn theme_dir(parent: &Path, name: &str, index: &str) -> std::path::PathBuf {
+    let dir = parent.join("src").join(name);
+    std::fs::create_dir_all(dir.join("templates")).unwrap();
+    std::fs::write(
+        dir.join("theme.toml"),
+        format!("[theme]\nname = \"{name}\"\nversion = \"1.2.3\"\n"),
+    )
+    .unwrap();
+    std::fs::write(dir.join("templates/index.html"), index).unwrap();
+    dir
+}
+
+fn dir_arg(dir: &Path) -> &str {
+    dir.to_str().expect("utf-8 temp path")
+}
+
+#[test]
+fn plugin_check_prints_report() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let site = tmp.path().join("site");
+    init_sqlite(&site);
+    let hello = plugin_dir(tmp.path(), "hello", "hello", "hello");
+    let out = stdout(plugin_cmd(&site, &["check", "--dir", dir_arg(&hello)]));
+    assert!(out.contains("plugin hello 0.1.0 (new)"), "{out}");
+    assert!(out.contains("render.head"), "{out}");
+    assert!(out.contains("fingerprint: "), "{out}");
+    assert!(out.contains("nothing was stored"), "{out}");
+    assert!(!out.contains("\n! "), "hello has no high-risk line: {out}");
+    // A wildcard read is high risk: its line starts with `!`.
+    let probe = plugin_dir(tmp.path(), "probe", "settings-probe", "settings_probe");
+    let out = stdout(plugin_cmd(&site, &["check", "--dir", dir_arg(&probe)]));
+    assert!(out.contains("\n! options.read"), "{out}");
+    // Nothing was stored: no row, no artifact.
+    assert_eq!(stdout(plugin_cmd(&site, &["list"])), "");
+    assert!(!site.join("media/artifacts").exists());
+
+    // Problems exit 1: a manifest that does not parse, a folder without a component.
+    std::fs::write(hello.join("ferrite-plugin.toml"), "[plugin\n").unwrap();
+    plugin_cmd(&site, &["check", "--dir", dir_arg(&hello)])
+        .assert()
+        .code(1);
+    let empty = tmp.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    std::fs::write(empty.join("ferrite-plugin.toml"), "").unwrap();
+    let err = stderr_code(plugin_cmd(&site, &["check", "--dir", dir_arg(&empty)]), 1);
+    assert!(err.contains("no *.wasm"), "{err}");
+}
+
+#[test]
+fn plugin_install_needs_yes_without_tty() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let site = tmp.path().join("site");
+    init_sqlite(&site);
+    let hello = plugin_dir(tmp.path(), "hello", "hello", "hello");
+    let mut c = plugin_cmd(&site, &["install", "--dir", dir_arg(&hello)]);
+    c.write_stdin("y\n");
+    let assert = c.assert().code(1);
+    let out = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    let err = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(err.contains("--yes"), "{err}");
+    assert!(
+        out.contains("fingerprint: "),
+        "the report is shown first: {out}"
+    );
+    assert_eq!(stdout(plugin_cmd(&site, &["list"])), "");
+    assert!(!site.join("media/artifacts").exists(), "nothing uploaded");
+}
+
+#[test]
+fn plugin_install_enable_list_remove() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let site = tmp.path().join("site");
+    init_sqlite(&site);
+    let hello = plugin_dir(tmp.path(), "hello", "hello", "hello");
+    let reader = plugin_dir(tmp.path(), "reader", "reader", "reader");
+    let out = stdout(plugin_cmd(
+        &site,
+        &["install", "--dir", dir_arg(&hello), "--yes"],
+    ));
+    assert!(
+        out.contains("installed plugin hello 0.1.0 (disabled)"),
+        "{out}"
+    );
+    let out = stdout(plugin_cmd(
+        &site,
+        &["install", "--dir", dir_arg(&reader), "--yes", "--enable"],
+    ));
+    assert!(
+        out.contains("installed plugin reader 0.1.0 (enabled)"),
+        "{out}"
+    );
+    assert_eq!(
+        stdout(plugin_cmd(&site, &["list"])),
+        "hello  0.1.0  disabled\nreader  0.1.0  enabled\n"
+    );
+
+    let out = stdout(plugin_cmd(&site, &["enable", "hello"]));
+    assert!(out.contains("enabled plugin hello"), "{out}");
+    stdout(plugin_cmd(&site, &["disable", "reader"]));
+    assert_eq!(
+        stdout(plugin_cmd(&site, &["list"])),
+        "hello  0.1.0  enabled\nreader  0.1.0  disabled\n"
+    );
+    // An automatic disable shows its reason.
+    with_site_store(&site, async |store| {
+        store
+            .read()
+            .plugins()
+            .set_enabled("reader", false, Some("too many failures"))
+            .await
+            .unwrap();
+    });
+    assert_eq!(
+        stdout(plugin_cmd(&site, &["list"])),
+        "hello  0.1.0  enabled\nreader  0.1.0  disabled  too many failures\n"
+    );
+
+    let out = stdout(plugin_cmd(&site, &["remove", "reader"]));
+    assert!(out.contains("removed plugin reader"), "{out}");
+    assert_eq!(
+        stdout(plugin_cmd(&site, &["list"])),
+        "hello  0.1.0  enabled\n"
+    );
+    for args in [
+        ["enable", "reader"],
+        ["disable", "reader"],
+        ["remove", "reader"],
+    ] {
+        let err = stderr_code(plugin_cmd(&site, &args), 1);
+        assert!(err.contains("plugin not found"), "{err}");
+    }
+}
+
+#[test]
+fn plugin_widening_update_needs_approval() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let site = tmp.path().join("site");
+    init_sqlite(&site);
+    let v1 = plugin_dir(tmp.path(), "v1", "hello", "hello");
+    stdout(plugin_cmd(
+        &site,
+        &["install", "--dir", dir_arg(&v1), "--yes", "--enable"],
+    ));
+    let granted_before = with_site_store(&site, async |store| {
+        store
+            .read()
+            .plugins()
+            .get("hello")
+            .await
+            .unwrap()
+            .unwrap()
+            .granted
+    });
+    // 0.2.0 also asks for `kv`: without approval it is refused and 0.1.0 keeps running.
+    let v2 = plugin_dir(tmp.path(), "v2", "hello-v2", "hello");
+    let mut c = plugin_cmd(&site, &["install", "--dir", dir_arg(&v2)]);
+    c.write_stdin("");
+    let assert = c.assert().code(1);
+    let out = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    assert!(out.contains("plugin hello 0.2.0 (update)"), "{out}");
+    assert!(out.contains("WIDENS"), "{out}");
+    assert!(out.contains("kv"), "{out}");
+    assert_eq!(
+        stdout(plugin_cmd(&site, &["list"])),
+        "hello  0.1.0  enabled\n"
+    );
+    with_site_store(&site, async |store| {
+        let row = store.read().plugins().get("hello").await.unwrap().unwrap();
+        assert_eq!(row.granted, granted_before);
+    });
+    // --yes approves exactly the report it printed.
+    let out = stdout(plugin_cmd(
+        &site,
+        &["install", "--dir", dir_arg(&v2), "--yes"],
+    ));
+    assert!(out.contains("WIDENS"), "{out}");
+    let fingerprint = out
+        .lines()
+        .find_map(|l| l.strip_prefix("fingerprint: "))
+        .expect("fingerprint line")
+        .to_owned();
+    assert_eq!(fingerprint.len(), 64, "{fingerprint}");
+    assert_eq!(
+        stdout(plugin_cmd(&site, &["list"])),
+        "hello  0.2.0  enabled\n"
+    );
+    with_site_store(&site, async |store| {
+        let row = store.read().plugins().get("hello").await.unwrap().unwrap();
+        assert_eq!(row.granted["capabilities"]["kv"], true, "{}", row.granted);
+    });
+    // The same version again asks for nothing more.
+    let out = stdout(plugin_cmd(
+        &site,
+        &["install", "--dir", dir_arg(&v2), "--yes"],
+    ));
+    assert!(out.contains("nothing beyond"), "{out}");
+    assert!(!out.contains("WIDENS"), "{out}");
+}
+
+#[test]
+fn plugin_remove_keeps_data_without_purge() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let site = tmp.path().join("site");
+    init_sqlite(&site);
+    let probe = plugin_dir(tmp.path(), "probe", "settings-probe", "settings_probe");
+    stdout(plugin_cmd(
+        &site,
+        &["install", "--dir", dir_arg(&probe), "--yes", "--enable"],
+    ));
+    let title = "plugin.settings-probe.settings.title";
+    let secret = "plugin.settings-probe.settings.api_key";
+    let marker = "plugin.settings-probe.deleted_at";
+    with_site_store(&site, async |store| {
+        let options = store.read().options();
+        options
+            .set(title, &serde_json::json!("Hi"), false)
+            .await
+            .unwrap();
+        options
+            .set(secret, &serde_json::json!("SEKRET-VALUE"), false)
+            .await
+            .unwrap();
+    });
+    let has = |name: &'static str| {
+        with_site_store(&site, async move |store| {
+            store.read().options().get(name).await.unwrap().is_some()
+        })
+    };
+
+    // Without --purge the data stays, with a deletion marker for the purge job.
+    let out = stdout(plugin_cmd(&site, &["remove", "settings-probe"]));
+    assert!(out.contains("30 days"), "{out}");
+    assert!(has(title) && has(secret) && has(marker));
+    assert_eq!(stdout(plugin_cmd(&site, &["list"])), "");
+    let queued = with_site_store(&site, async |store| {
+        store.read().jobs().counts().await.unwrap()[&ferrite_domain::JobStatus::Queued]
+    });
+    assert_eq!(queued, 1, "the 30-day purge job");
+
+    // A reinstall finds the data (and clears the marker); --purge deletes it at once.
+    stdout(plugin_cmd(
+        &site,
+        &["install", "--dir", dir_arg(&probe), "--yes"],
+    ));
+    assert!(has(title) && !has(marker));
+    let out = stdout(plugin_cmd(&site, &["remove", "settings-probe", "--purge"]));
+    assert!(out.contains("purged"), "{out}");
+    assert!(!has(title) && !has(secret));
+    // Setting values are never printed.
+    assert!(!out.contains("SEKRET-VALUE"), "{out}");
+}
+
+#[test]
+fn theme_install_activate_list() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let site = tmp.path().join("site");
+    init_sqlite(&site);
+    // Before any row the embedded default is the active theme.
+    let out = stdout(theme_cmd(&site, &["list"]));
+    assert!(out.contains("blog  "), "{out}");
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("blog  ") && l.ends_with("  embedded  active")),
+        "{out}"
+    );
+
+    let mine = theme_dir(tmp.path(), "mine", "mine index");
+    let out = stdout(theme_cmd(&site, &["install", "--dir", dir_arg(&mine)]));
+    assert!(out.contains("installed theme mine 1.2.3"), "{out}");
+    assert!(!out.contains("(active)"), "{out}");
+    let out = stdout(theme_cmd(&site, &["list"]));
+    assert!(out.contains("mine  1.2.3  installed\n"), "{out}");
+    assert!(
+        out.contains("blog  ") && out.contains("embedded  active"),
+        "{out}"
+    );
+
+    stdout(theme_cmd(&site, &["activate", "mine"]));
+    let out = stdout(theme_cmd(&site, &["list"]));
+    assert!(out.contains("mine  1.2.3  installed  active\n"), "{out}");
+    assert!(!out.contains("embedded  active"), "{out}");
+
+    // An embedded theme is installed from the embedded files and activated.
+    stdout(theme_cmd(&site, &["activate", "blog"]));
+    let out = stdout(theme_cmd(&site, &["list"]));
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("blog  ") && l.ends_with("  installed  active")),
+        "{out}"
+    );
+    assert!(out.contains("mine  1.2.3  installed\n"), "{out}");
+
+    // --activate installs and activates in one step.
+    let other = theme_dir(tmp.path(), "other", "other index");
+    let out = stdout(theme_cmd(
+        &site,
+        &["install", "--dir", dir_arg(&other), "--activate"],
+    ));
+    assert!(
+        out.contains("installed theme other 1.2.3 (active)"),
+        "{out}"
+    );
+
+    let err = stderr_code(theme_cmd(&site, &["activate", "nope"]), 1);
+    assert!(err.contains("theme not found"), "{err}");
+}
+
+#[test]
+fn theme_activate_refuses_broken() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let site = tmp.path().join("site");
+    init_sqlite(&site);
+    stdout(theme_cmd(
+        &site,
+        &[
+            "install",
+            "--dir",
+            dir_arg(&theme_dir(tmp.path(), "good", "good")),
+            "--activate",
+        ],
+    ));
+    stdout(theme_cmd(
+        &site,
+        &[
+            "install",
+            "--dir",
+            dir_arg(&theme_dir(tmp.path(), "bad", "bad")),
+        ],
+    ));
+    // Tamper with the stored bundle of `bad`.
+    let hash = with_site_store(&site, async |store| {
+        store
+            .read()
+            .themes()
+            .get("bad")
+            .await
+            .unwrap()
+            .unwrap()
+            .artifact_hash
+    });
+    let h = hash.as_str();
+    std::fs::write(
+        site.join("media/artifacts").join(&h[..2]).join(h),
+        b"not a tar",
+    )
+    .unwrap();
+    let err = stderr_code(theme_cmd(&site, &["activate", "bad"]), 1);
+    assert!(err.contains("does not load"), "{err}");
+    let out = stdout(theme_cmd(&site, &["list"]));
+    assert!(out.contains("good  1.2.3  installed  active\n"), "{out}");
+    assert!(out.contains("bad  1.2.3  installed\n"), "{out}");
+    // A theme that does not compile is refused at install.
+    let broken = theme_dir(tmp.path(), "broken", "{% if %}");
+    theme_cmd(&site, &["install", "--dir", dir_arg(&broken)])
+        .assert()
+        .code(1);
+}
+
+#[test]
+fn extension_commands_fail_while_the_lock_is_held() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let site = tmp.path().join("site");
+    init_sqlite(&site);
+    let hello = plugin_dir(tmp.path(), "hello", "hello", "hello");
+    let mine = theme_dir(tmp.path(), "mine", "mine");
+    tokio_rt().expect("runtime").block_on(async {
+        let config = ferrite_config::load(&site, Vec::new()).unwrap();
+        let store = ferrite::open_store(&config, ferrite::OpenMode::MustExist)
+            .await
+            .unwrap();
+        for args in [
+            vec!["list"],
+            vec!["check", "--dir", dir_arg(&hello)],
+            vec!["install", "--dir", dir_arg(&hello), "--yes"],
+            vec!["enable", "hello"],
+            vec!["disable", "hello"],
+            vec!["remove", "hello"],
+        ] {
+            plugin_cmd(&site, &args).assert().code(1);
+        }
+        for args in [
+            vec!["list"],
+            vec!["install", "--dir", dir_arg(&mine)],
+            vec!["activate", "blog"],
+        ] {
+            theme_cmd(&site, &args).assert().code(1);
+        }
+        store.close().await;
+    });
+    // Nothing was written while locked out; the commands work again afterwards.
+    assert_eq!(stdout(plugin_cmd(&site, &["list"])), "");
 }

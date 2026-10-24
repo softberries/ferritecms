@@ -4,7 +4,8 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand};
 
 use crate::config_cmd::ConfigCommand;
-use crate::{config_cmd, healthcheck, init, migrate, seed, serve, user_cmd};
+use crate::ext_cmd::{PluginCommand, ThemeCommand};
+use crate::{config_cmd, ext_cmd, healthcheck, init, migrate, seed, serve, user_cmd};
 
 #[derive(Debug, Parser)]
 #[command(name = "ferrite", version, about = "FerriteCMS")]
@@ -31,6 +32,12 @@ pub enum Command {
     /// Manage user accounts (the operator path: no login needed).
     #[command(subcommand)]
     User(user_cmd::UserCommand),
+    /// Install and manage themes (the operator path: no login needed).
+    #[command(subcommand)]
+    Theme(ThemeCommand),
+    /// Install and manage plugins (the operator path: no login needed).
+    #[command(subcommand)]
+    Plugin(PluginCommand),
     /// Probe a node's HTTP endpoint (for container health checks): exit 0 on 200, else 1.
     Healthcheck(healthcheck::HealthcheckArgs),
 }
@@ -84,6 +91,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Seed(cmd) => seed::run(cmd).await.map(|()| ExitCode::SUCCESS),
         Command::Config(cmd) => config_cmd::run(cmd),
         Command::Healthcheck(args) => healthcheck::run(args).await,
+        Command::Theme(cmd) => ext_cmd::run_theme(cmd).await.map(|()| ExitCode::SUCCESS),
+        Command::Plugin(cmd) => ext_cmd::run_plugin(cmd).await.map(|()| ExitCode::SUCCESS),
         Command::User(cmd) => user_cmd::run(cmd).await.map(|()| ExitCode::SUCCESS),
     }
 }

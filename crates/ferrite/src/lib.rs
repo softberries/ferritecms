@@ -2,6 +2,7 @@
 
 mod cli;
 mod config_cmd;
+mod ext_cmd;
 pub mod extensions;
 mod healthcheck;
 mod init;

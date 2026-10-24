@@ -10,7 +10,7 @@ use bytes::Bytes;
 use ferrite_config::PluginsConfig;
 use ferrite_core::ExtensionService;
 use ferrite_domain::{InstalledPlugin, InstalledTheme};
-use ferrite_http::extensions::Installer;
+use ferrite_http::extensions::{Inspected, Installer};
 pub use ferrite_http::extensions::{PLUGIN_MIME, THEME_MIME};
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::HostConfig;
@@ -45,6 +45,18 @@ pub async fn install_plugin_file(
         .inspect_plugin(manifest_toml, Bytes::copy_from_slice(wasm))
         .await
         .context("cannot install the plugin")?;
+    record_plugin(store, &installer, inspected, enabled).await
+}
+
+/// Stages and records an inspected plugin, approving exactly its report (the operator
+/// has seen it, or approves the manifest as written, P26); the steps after the
+/// inspection of [`install_plugin_file`]. With `enabled` the plugin is then enabled.
+pub(crate) async fn record_plugin(
+    store: &Arc<dyn Store>,
+    installer: &Installer,
+    inspected: Inspected,
+    enabled: bool,
+) -> anyhow::Result<InstalledPlugin> {
     let name = inspected.manifest().plugin.name.clone();
     let fingerprint = inspected.report().fingerprint.clone();
     let (artifact, row) = installer
