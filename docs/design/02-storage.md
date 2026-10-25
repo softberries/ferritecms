@@ -184,6 +184,16 @@ M2a-2b added (migration `0006_media_comments`, contract-tested on both backends)
   statistics the planner otherwise prefers the equality on `jobs_status_created_idx` and
   walks every queued or running row.
 
+M2b-1 added (migration `0007_autosaves`, contract-tested on both backends):
+
+- **`AutosaveRepo`** (`autosaves()`, M2b P15, F11): `put(&Autosave)` inserts or replaces
+  the row of (`item_id`, `user_id`) (NUL in a text or the JSON is `Invalid`, an unknown
+  item or user `ForeignKey`), `get(item, user) -> Option<Autosave>`, `delete(item, user)
+  -> bool`. `Autosave { item_id, user_id, base_version, title, excerpt?, slug?,
+  parent_id?, menu_order?, terms?, body, fields, saved_at }`; `terms` is stored as a JSON
+  array of term ids. Core's `ContentService::update` deletes the saver's own row in its
+  transaction.
+
 `JobRepo` (`jobs()`) and
 `NodeRepo` (`nodes()`) exist since M1.5 (migration `0004_cluster`); see the cluster table
 in §4. Named locks are `Store::try_lock` (Postgres advisory locks, SQLite in-process;
@@ -386,7 +396,7 @@ Notes:
 Same logical schema on both backends. Physical type mapping is in §5.
 Tables marked *not yet created* are planned; the milestone in the mark adds them in a
 new migration. Everything else exists in `0001_init` / `0002_search` / `0003_media_variants` /
-`0004_cluster` / `0005_auth` / `0006_media_comments` on both backends.
+`0004_cluster` / `0005_auth` / `0006_media_comments` / `0007_autosaves` on both backends.
 
 ### Content
 
@@ -396,6 +406,7 @@ new migration. Everything else exists in `0001_init` / `0002_search` / `0003_med
 | `content_items` | `id` PK, `type` FK, `status`, `slug`, `parent_id`, `author_id`, `title`, `excerpt`, `body` (json blocks), `body_html` (cached render), `fields` (json, custom fields), `menu_order`, `published_at`, `scheduled_at`, `created_at`, `updated_at`, `version` | `UNIQUE(type, parent_id, slug)` with NULL-parent handling; `status ∈ {draft, pending, scheduled, published, private, trash}`; `version` for optimistic locking |
 | `content_meta` | `item_id` FK, `key`, `value` (json), PK(`item_id`,`key`) | Namespaced keys (`seo.title`, `plugin.<name>.*`) — plugin write scopes match on these |
 | `revisions` | `id` PK, `item_id` FK, `author_id`, `created_at`, `title`, `excerpt`, `body`, `fields`, `meta` (json snapshot), `note` | Written on every save; retention configurable (default: keep 50 per item) |
+| `autosaves` *(since `0007_autosaves`)* | `item_id` → `content_items` `ON DELETE CASCADE` (`autosaves_item_id_fk`), `user_id` → `users` `ON DELETE CASCADE` (`autosaves_user_id_fk`), `base_version` bigint, `title`, `excerpt` null (= derive), `slug` null, `parent_id` null (no FK), `menu_order` int null, `terms` json array null (`null` = unchanged for these four, F11), `body` json, `fields` json, `saved_at`; PK (`item_id`, `user_id`) `autosaves_pkey`; index `autosaves_user_idx (user_id)` (users FK on delete) | The admin's per-user working copy (M2b P15): never a revision; the user's next real save of the item deletes it; at most one row per (item, user), so no retention job; the `0007` down drops it (lossy) |
 | `taxonomies` | `name` PK, `label`, `hierarchical`, `content_types` (json list), `built_in` | `category`, `tag` built in |
 | `terms` | `id` PK, `taxonomy` FK, `slug`, `name`, `description`, `parent_id`, `UNIQUE(taxonomy, slug)` | |
 | `term_links` | `item_id` FK, `term_id` FK, `position`, PK(`item_id`,`term_id`) | |
@@ -541,6 +552,8 @@ crates/ferrite-store-sqlite/migrations/
     0005_auth.down.sql
     0006_media_comments.up.sql      # M2a-2b, phase expand, lossy-down: idempotency keys,
     0006_media_comments.down.sql    #   media.sanitized, comments.by_account; comment and job indexes (P2)
+    0007_autosaves.up.sql           # M2b-1, phase expand, lossy-down: the autosave slot (P15)
+    0007_autosaves.down.sql
 crates/ferrite-store-postgres/migrations/
     0001_init.up.sql
     0001_init.down.sql
@@ -554,6 +567,8 @@ crates/ferrite-store-postgres/migrations/
     0005_auth.down.sql
     0006_media_comments.up.sql
     0006_media_comments.down.sql
+    0007_autosaves.up.sql
+    0007_autosaves.down.sql
 ```
 
 - sqlx reversible migrations, embedded with `sqlx::migrate!()`; sqlx's

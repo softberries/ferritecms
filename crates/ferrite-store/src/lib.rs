@@ -29,8 +29,8 @@ pub use paging::{
     MAX_ITEM_COMMENTS, MAX_JOB_ATTEMPTS, MAX_JOB_DURATION, MAX_JOB_ERROR, MAX_JOB_UNIQUE_KEY,
     MAX_META_KEYS, MAX_NODES, MAX_PRUNE_BATCH, MAX_RATE_BUCKET, MAX_RATE_WINDOW,
     MAX_REDIRECTS_BY_TARGET, MAX_SLUG_PREFIX_RESULTS, REDIRECT_CURSOR_TAG, SortKey,
-    USER_CURSOR_TAG, audit_cursor, check_admin_limit, check_claim, check_comment,
-    check_content_filters, check_event_limit, check_failure_count, check_id_list,
+    USER_CURSOR_TAG, audit_cursor, autosave_terms, check_admin_limit, check_autosave, check_claim,
+    check_comment, check_content_filters, check_event_limit, check_failure_count, check_id_list,
     check_idempotency, check_idempotency_outcome, check_item_comments_limit, check_job_duration,
     check_job_kind, check_job_query, check_key_hash, check_len, check_limit, check_new_audit,
     check_new_job, check_new_node, check_node_meta, check_prune_limit, check_rate_bucket,
@@ -40,11 +40,11 @@ pub use paging::{
     slug_has_prefix, slug_prefix_bounds, sort_claimed, text_cursor,
 };
 pub use repos::{
-    ApiTokenRepo, ArtifactRepo, AuditRepo, Backend, CommentRepo, ContentRepo, ContentTypeRepo,
-    EventRepo, IdempotencyRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo, NodeRepo, OptionRepo,
-    PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo,
-    SchemaMetaRepo, SearchRepo, SessionRepo, Store, TaxonomyRepo, TermRepo, ThemeRepo, Tx,
-    UserRepo,
+    ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, CommentRepo, ContentRepo,
+    ContentTypeRepo, EventRepo, IdempotencyRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo, NodeRepo,
+    OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos,
+    RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, Store, TaxonomyRepo, TermRepo,
+    ThemeRepo, Tx, UserRepo,
 };
 pub use search::{
     IndexTerms, IndexedTerm, MAX_INDEX_TERMS, MAX_QUERY_TERMS, MAX_SEARCH_KINDS, MAX_TERM_CHARS,

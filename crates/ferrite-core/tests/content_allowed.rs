@@ -216,6 +216,7 @@ pub async fn counts_respect_can_read(db: &TestDb) {
     let author = actor(store, Role::Author).await;
     let other = actor(store, Role::Author).await;
     let editor = actor(store, Role::Editor).await;
+    let contributor = actor(store, Role::Contributor).await;
     for _ in 0..2 {
         item(db, &svc, &author, ContentStatus::Draft).await;
     }
@@ -229,6 +230,10 @@ pub async fn counts_respect_can_read(db: &TestDb) {
     item(db, &svc, &other, ContentStatus::Private).await;
     item(db, &svc, &other, ContentStatus::Pending).await;
     item(db, &svc, &author, ContentStatus::Scheduled).await;
+    // Another author's published item dated in the future is not public yet (R23).
+    let mut future = item(db, &svc, &other, ContentStatus::Published).await;
+    future.published_at = Some(at(HOUR));
+    store.read().content().update(&future).await.unwrap();
 
     assert_eq!(
         svc.counts(&author, "post").await.unwrap(),
@@ -247,9 +252,17 @@ pub async fn counts_respect_can_read(db: &TestDb) {
             draft: 5,
             pending: 1,
             scheduled: 1,
-            published: 1,
+            published: 2,
             private: 1,
             trash: 1,
+        }
+    );
+    // A contributor with nothing of its own sees only the publicly visible item.
+    assert_eq!(
+        svc.counts(&contributor, "post").await.unwrap(),
+        StatusCounts {
+            published: 1,
+            ..StatusCounts::default()
         }
     );
     assert_eq!(

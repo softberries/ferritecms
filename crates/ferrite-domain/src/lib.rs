@@ -26,8 +26,8 @@ pub use auth::{
 };
 pub use comment::{Comment, CommentQuery, CommentStatus};
 pub use content::{
-    ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, NewContent, ParentFilter,
-    ReadableBy, Revision,
+    Autosave, ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, NewContent,
+    ParentFilter, ReadableBy, Revision,
 };
 pub use event::{Event, NewEvent};
 pub use hex::to_hex;

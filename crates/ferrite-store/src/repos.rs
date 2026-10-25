@@ -5,9 +5,9 @@ use std::{
 
 use async_trait::async_trait;
 use ferrite_domain::{
-    ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, Comment, CommentId,
-    CommentQuery, CommentStatus, ContentId, ContentItem, ContentQuery, ContentType, Event,
-    FailureBucket, IdemBegin, IdempotencyKey, InstalledPlugin, InstalledTheme, Job, JobId,
+    ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, Autosave, Comment,
+    CommentId, CommentQuery, CommentStatus, ContentId, ContentItem, ContentQuery, ContentType,
+    Event, FailureBucket, IdemBegin, IdempotencyKey, InstalledPlugin, InstalledTheme, Job, JobId,
     JobLease, JobQuery, JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob, NewNode,
     NewUser, Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId, Revision, RevisionId,
     SearchQuery, Secret, Session, Taxonomy, Term, TermId, Timestamp, User, UserId,
@@ -143,6 +143,7 @@ pub trait Repos: Send + Sync {
     fn audit(&self) -> &dyn AuditRepo;
     fn comments(&self) -> &dyn CommentRepo;
     fn idempotency(&self) -> &dyn IdempotencyRepo;
+    fn autosaves(&self) -> &dyn AutosaveRepo;
 }
 
 #[async_trait]
@@ -951,4 +952,17 @@ pub trait IdempotencyRepo: Send + Sync {
     /// created before `created_before`, pending or finished; returns the count. Callers
     /// loop until a batch comes back short (R5).
     async fn prune(&self, created_before: Timestamp, limit: u32) -> Result<u64, StoreError>;
+}
+
+/// The per-user autosave slot of content items (`0007_autosaves`, M2b P15): at most one
+/// row per (item, user). Deleting the item or the user deletes their rows.
+#[async_trait]
+pub trait AutosaveRepo: Send + Sync {
+    /// Inserts or replaces the row of (`autosave.item_id`, `autosave.user_id`). A missing
+    /// item or user is [`StoreError::ForeignKey`]; NUL in a text or the JSON is `Invalid`.
+    async fn put(&self, autosave: &Autosave) -> Result<(), StoreError>;
+    /// The row of (`item`, `user`), if any.
+    async fn get(&self, item: ContentId, user: UserId) -> Result<Option<Autosave>, StoreError>;
+    /// Deletes the row of (`item`, `user`); `true` when there was one.
+    async fn delete(&self, item: ContentId, user: UserId) -> Result<bool, StoreError>;
 }

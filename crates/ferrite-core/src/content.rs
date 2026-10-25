@@ -26,7 +26,7 @@ mod admin;
 mod allowed;
 mod lifecycle;
 
-pub use admin::{AdminQuery, AuthorRef, MAX_REVISIONS_LISTED, StatusCounts};
+pub use admin::{AdminQuery, AuthorRef, AutosaveDraft, MAX_REVISIONS_LISTED, StatusCounts};
 pub use allowed::{AllowedActions, allowed_actions};
 
 /// Unique index on (type, parent, slug); a violation of it means another writer took
@@ -193,7 +193,8 @@ impl ContentService {
     /// Replaces the editable fields of item `id`, which must still be at
     /// `expected_version` (else `Conflict`). The status is kept. Own items need
     /// `edit_own` (contributors: only while draft or pending), others' `edit_others`.
-    /// A trashed item is `Invalid("restore first")`. `draft.fields` is validated as on
+    /// A trashed item is `Invalid("restore first")`. The save deletes `actor`'s own
+    /// autosave of the item in the same transaction (M2b P15); other users' stay. `draft.fields` is validated as on
     /// create, also when a revision is restored.
     ///
     /// `draft.slug = None` keeps the current slug; a slug that is taken gets `-N` as on
@@ -350,6 +351,8 @@ impl ContentService {
             &moved_descendants,
         );
         after_save(tx, actor, &saved, keys, note).await?;
+        // A real save supersedes the actor's own autosave; other users' slots stay.
+        tx.autosaves().delete(id, actor.user).await?;
         Ok(saved)
     }
 }

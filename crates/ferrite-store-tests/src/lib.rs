@@ -7,6 +7,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 pub mod auth;
+pub mod autosave;
 pub mod batch;
 pub mod comment;
 pub mod constraints;

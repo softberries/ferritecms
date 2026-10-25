@@ -18,11 +18,11 @@ use ferrite_core::PermalinkRules;
 use ferrite_domain::{ContentType, Page, Redirect, RedirectId, Timestamp};
 use ferrite_http::{AppParts, AppState, HttpConfig, RouteTable, build_app, load_route_table};
 use ferrite_store::{
-    ApiTokenRepo, ArtifactRepo, AuditRepo, Backend, Channel, CommentRepo, ContentRepo,
-    ContentTypeRepo, EventRepo, IdempotencyRepo, JobRepo, LockGuard, MediaRepo, MenuRepo, MetaRepo,
-    MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
-    RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo,
-    Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
+    ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, JobRepo, LockGuard, MediaRepo,
+    MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo,
+    PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo,
+    SessionRepo, Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use serde_json::json;
 
@@ -176,6 +176,9 @@ impl Repos for HookRepos {
     }
     fn idempotency(&self) -> &dyn IdempotencyRepo {
         self.inner.read().idempotency()
+    }
+    fn autosaves(&self) -> &dyn AutosaveRepo {
+        self.inner.read().autosaves()
     }
 }
 

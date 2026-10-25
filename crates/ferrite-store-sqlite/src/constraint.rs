@@ -13,6 +13,7 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ("api_tokens.token_hash", "api_tokens_hash_uq"),
     ("artifacts.hash", "artifacts_pkey"),
     ("audit_log.id", "audit_log_pkey"),
+    ("autosaves.item_id, autosaves.user_id", "autosaves_pkey"),
     ("comments.id", "comments_pkey"),
     ("content_items.id", "content_items_pkey"),
     (

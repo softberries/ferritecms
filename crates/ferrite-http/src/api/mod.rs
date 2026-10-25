@@ -106,6 +106,11 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(content::list_revisions))
         .routes(routes!(content::get_revision))
         .routes(routes!(content::restore_revision))
+        .routes(routes!(
+            content::get_autosave,
+            content::put_autosave,
+            content::delete_autosave
+        ))
         .merge(uploads(
             routes!(comments::submit_comment),
             comments::MAX_COMMENT_REQUEST,

@@ -1,9 +1,9 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
-    auth::*, backend_tests, backend_tests_spawning, batch::*, comment::*, constraints::*,
-    content::*, event::*, idempotency::*, job::*, job_list::*, lock::*, menu::*, migration_dirs,
-    migration_files, migrations::*, node::*, notify::*, plugin::*, plugin_failure::*, search::*,
-    semantics::*, site::*, taxonomy::*, tx::*, user::*,
+    auth::*, autosave::*, backend_tests, backend_tests_spawning, batch::*, comment::*,
+    constraints::*, content::*, event::*, idempotency::*, job::*, job_list::*, lock::*, menu::*,
+    migration_dirs, migration_files, migrations::*, node::*, notify::*, plugin::*,
+    plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*,
 };
 
 backend_tests!(
@@ -14,6 +14,12 @@ backend_tests!(
     min_binary_survives_older_binary,
     status_reports_pending_directives,
     migration_0006_roundtrip,
+    migration_0007_roundtrip,
+);
+
+backend_tests!(
+    autosave_upsert_get_delete,
+    autosave_cascades_with_item_and_user,
 );
 
 backend_tests!(

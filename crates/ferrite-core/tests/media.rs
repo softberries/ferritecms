@@ -16,11 +16,11 @@ use ferrite_domain::{
     JobStatus, NewJob, NewUser, NodeId, Page, Role, Timestamp, UserId, UserStatus,
 };
 use ferrite_store::{
-    ApiTokenRepo, ArtifactRepo, AuditRepo, Backend, Channel, CommentRepo, ContentRepo,
-    ContentTypeRepo, EventRepo, IdempotencyRepo, JobRepo, LockGuard, MediaRepo, MenuRepo, MetaRepo,
-    MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
-    RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo,
-    Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
+    ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, JobRepo, LockGuard, MediaRepo,
+    MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo,
+    PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo,
+    SessionRepo, Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use ferrite_store_tests::{TestDb, backend_tests};
 use serde_json::json;
@@ -866,6 +866,9 @@ impl Repos for FailingTx {
     }
     fn idempotency(&self) -> &dyn IdempotencyRepo {
         self.inner.idempotency()
+    }
+    fn autosaves(&self) -> &dyn AutosaveRepo {
+        self.inner.autosaves()
     }
 }
 

@@ -1552,6 +1552,256 @@
         ]
       }
     },
+    "/api/v1/content/{type}/{id}/autosave": {
+      "get": {
+        "tags": [
+          "content"
+        ],
+        "operationId": "get_autosave",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The caller's autosave of the item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutosaveDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (your role may not edit the item, or no `content:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no such item that you may read, or no autosave of yours",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "content"
+        ],
+        "operationId": "put_autosave",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutosaveInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stored, replacing the caller's previous autosave",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutosaveDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no such item that you may read",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: control characters or NUL (`errors[0].field`), or the item is trashed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "content"
+        ],
+        "operationId": "delete_autosave",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The caller's autosave is gone (also when there was none)"
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no such item that you may read",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/content/{type}/{id}/comments": {
       "post": {
         "tags": [
@@ -7931,6 +8181,143 @@
           }
         }
       },
+      "AutosaveDto": {
+        "type": "object",
+        "description": "`GET`/`PUT /content/{type}/{id}/autosave`: the caller's own unsaved working copy of\nthe item (one per item and user). Nothing in it has been checked against the type's\nfields, the parent or the terms.",
+        "required": [
+          "base_version",
+          "title",
+          "body",
+          "fields",
+          "saved_at"
+        ],
+        "properties": {
+          "base_version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The item version the copy was made from."
+          },
+          "body": {
+            "description": "The block tree."
+          },
+          "excerpt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null`: derive from the body."
+          },
+          "fields": {},
+          "menu_order": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "`null`: unchanged."
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`null`: unchanged."
+          },
+          "saved_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null`: unchanged."
+          },
+          "terms": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Term ids in order; `null`: unchanged."
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "AutosaveInput": {
+        "type": "object",
+        "description": "`PUT /content/{type}/{id}/autosave`: replaces the caller's autosave (last write\nwins; no `If-Match`). Only text is checked (no NUL or control characters; the\nexcerpt may hold tabs and line breaks): a draft may be incomplete.",
+        "required": [
+          "base_version",
+          "title",
+          "body",
+          "fields"
+        ],
+        "properties": {
+          "base_version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The item version the working copy was made from."
+          },
+          "body": {
+            "type": "object"
+          },
+          "excerpt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absent or `null`: derive from the body."
+          },
+          "fields": {
+            "type": "object"
+          },
+          "menu_order": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Absent or `null`: unchanged."
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Absent or `null`: unchanged."
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absent or `null`: unchanged."
+          },
+          "terms": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Term ids in order; absent or `null`: unchanged."
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
       "CacheStatsDto": {
         "type": "object",
         "description": "The page cache of the answering node.",
@@ -11381,7 +11768,7 @@
     },
     {
       "name": "content",
-      "description": "Content items, their lifecycle and revisions"
+      "description": "Content items, their lifecycle, revisions and autosaves"
     },
     {
       "name": "media",

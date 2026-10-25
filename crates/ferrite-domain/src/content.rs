@@ -87,6 +87,27 @@ pub struct Revision {
     pub note: Option<String>,
 }
 
+/// A user's unsaved working copy of an item (the autosave slot, M2b P15): at most one per
+/// (item, user), never a revision. `base_version` is the item version the copy was made
+/// from. `excerpt` `None` means "derive from the body"; `slug`, `parent_id`,
+/// `menu_order` and `terms` `None` mean "unchanged" (F11). Nothing in it is checked
+/// against the type's field schema, the parent or the terms until it is really saved.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Autosave {
+    pub item_id: ContentId,
+    pub user_id: UserId,
+    pub base_version: i64,
+    pub title: String,
+    pub excerpt: Option<String>,
+    pub slug: Option<String>,
+    pub parent_id: Option<ContentId>,
+    pub menu_order: Option<i32>,
+    pub terms: Option<Vec<TermId>>,
+    pub body: Value,
+    pub fields: Value,
+    pub saved_at: Timestamp,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ParentFilter {
     #[default]

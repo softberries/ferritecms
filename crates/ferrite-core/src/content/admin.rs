@@ -5,19 +5,23 @@
 //! others' items that are not publicly visible now (unpublished, or published with a
 //! future `published_at`) only for roles with `edit_others`. Revisions need more: the
 //! actor's role must be able to edit the item ([`role_can_edit`], R26).
+//!
+//! The autosave slot (M2b P15) lives here too: one unsaved working copy per (item,
+//! user), read like revisions (F12) and written with [`can_edit`]. It is not a save:
+//! no revision, event, action job, search entry or cache invalidation.
 
 use std::collections::HashMap;
 
 use ferrite_domain::{
-    ContentId, ContentItem, ContentOrder, ContentQuery, ContentStatus, Page, ParentFilter,
-    ReadableBy, Revision, RevisionId, SearchQuery, TermId, Timestamp, UserId,
+    Autosave, ContentId, ContentItem, ContentOrder, ContentQuery, ContentStatus, Page,
+    ParentFilter, ReadableBy, Revision, RevisionId, SearchQuery, TermId, Timestamp, UserId,
 };
-use ferrite_store::MAX_ID_FILTER;
+use ferrite_store::{MAX_ID_FILTER, StoreError, validate_json};
 
 use super::{ContentDraft, ContentService, Edit, WALKED};
 use crate::{
     Actor, CoreError,
-    actor::{Area, Capability, can, can_read, require, require_read, role_can_edit},
+    actor::{Area, Capability, can, can_edit, can_read, require, require_read, role_can_edit},
     tx::finish,
 };
 
@@ -83,6 +87,47 @@ pub struct StatusCounts {
     pub published: u64,
     pub private: u64,
     pub trash: u64,
+}
+
+/// What [`ContentService::put_autosave`] stores: the editor's working copy of an item.
+/// `excerpt` `None` = derive from the body; `slug`, `parent_id`, `menu_order` and
+/// `terms` `None` = unchanged (F11). Only text is checked (no NUL, no control
+/// characters), never the field schema, the parent or the terms: a draft may be
+/// incomplete, and the real save checks it all.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutosaveDraft {
+    /// The item version the copy was made from.
+    pub base_version: i64,
+    pub title: String,
+    pub excerpt: Option<String>,
+    pub slug: Option<String>,
+    pub parent_id: Option<ContentId>,
+    pub menu_order: Option<i32>,
+    pub terms: Option<Vec<TermId>>,
+    pub body: serde_json::Value,
+    pub fields: serde_json::Value,
+}
+
+/// `InvalidField` when `value` holds NUL or a control character (`multiline`: tab,
+/// line feed and carriage return are allowed).
+fn check_draft_text(field: &'static str, value: &str, multiline: bool) -> Result<(), CoreError> {
+    let bad = value
+        .chars()
+        .any(|c| c.is_control() && !(multiline && matches!(c, '\t' | '\n' | '\r')));
+    if bad {
+        Err(CoreError::invalid_field(
+            field,
+            format!("{field} must not contain control characters"),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// `InvalidField` when the JSON `value` holds NUL in a string or a key.
+fn check_draft_json(field: &'static str, value: &serde_json::Value) -> Result<(), CoreError> {
+    validate_json(value)
+        .map_err(|_| CoreError::invalid_field(field, format!("{field} must not contain NUL")))
 }
 
 /// The `readable_by` filter of an admin list (and of [`ContentService::counts`]): set
@@ -370,5 +415,84 @@ impl ContentService {
             private: count(ContentStatus::Private).await?,
             trash: count(ContentStatus::Trash).await?,
         })
+    }
+}
+
+impl ContentService {
+    /// `actor`'s autosave of item `id`, if any. Read like revisions (F12):
+    /// [`get_for`](Self::get_for) (`NotFound` when the item cannot be read), then
+    /// [`role_can_edit`] (`Forbidden` otherwise), so a read-only token of a role that may
+    /// edit the item still reads its own slot.
+    pub async fn get_autosave(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+    ) -> Result<Option<Autosave>, CoreError> {
+        let item = self.get_for(actor, id).await?;
+        if !role_can_edit(actor, &item) {
+            let cap = if item.author_id == actor.user {
+                Capability::EditOwn
+            } else {
+                Capability::EditOthers
+            };
+            return Err(CoreError::Forbidden(cap.as_str()));
+        }
+        Ok(self.store.read().autosaves().get(id, actor.user).await?)
+    }
+
+    /// Stores `draft` as `actor`'s autosave of item `id`, replacing the previous one
+    /// (last write wins; `base_version` is kept, not compared). Needs [`can_edit`] on the
+    /// item as stored now; a trashed item is `Invalid("restore first")`. Text is checked
+    /// as [`AutosaveDraft`] says. Writes nothing else: no revision, event, action job,
+    /// search entry or invalidation. The user's next real save of the item
+    /// ([`update`](Self::update)) deletes it.
+    pub async fn put_autosave(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+        draft: AutosaveDraft,
+    ) -> Result<Autosave, CoreError> {
+        let item = self.get(id).await?;
+        can_edit(actor, &item)?;
+        if item.status == ContentStatus::Trash {
+            return Err(CoreError::Invalid("restore first".into()));
+        }
+        check_draft_text("title", &draft.title, false)?;
+        if let Some(excerpt) = &draft.excerpt {
+            check_draft_text("excerpt", excerpt, true)?;
+        }
+        if let Some(slug) = &draft.slug {
+            check_draft_text("slug", slug, false)?;
+        }
+        check_draft_json("body", &draft.body)?;
+        check_draft_json("fields", &draft.fields)?;
+        let autosave = Autosave {
+            item_id: id,
+            user_id: actor.user,
+            base_version: draft.base_version,
+            title: draft.title,
+            excerpt: draft.excerpt,
+            slug: draft.slug,
+            parent_id: draft.parent_id,
+            menu_order: draft.menu_order,
+            terms: draft.terms,
+            body: draft.body,
+            fields: draft.fields,
+            saved_at: Timestamp::now(),
+        };
+        match self.store.read().autosaves().put(&autosave).await {
+            Ok(()) => Ok(autosave),
+            // The item was deleted since it was read.
+            Err(StoreError::ForeignKey { .. }) => Err(CoreError::NotFound),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Deletes `actor`'s autosave of item `id` (needs [`can_edit`] on the item, trashed
+    /// or not); `true` when there was one.
+    pub async fn delete_autosave(&self, actor: &Actor, id: ContentId) -> Result<bool, CoreError> {
+        let item = self.get(id).await?;
+        can_edit(actor, &item)?;
+        Ok(self.store.read().autosaves().delete(id, actor.user).await?)
     }
 }

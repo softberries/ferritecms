@@ -21,11 +21,11 @@ use ferrite_domain::{
     Page, SearchQuery, Secret, Taxonomy, Term, TermId, Timestamp, User, UserId,
 };
 use ferrite_store::{
-    ApiTokenRepo, ArtifactRepo, AuditRepo, Backend, Channel, CommentRepo, ContentRepo,
-    ContentTypeRepo, EventRepo, IdempotencyRepo, JobRepo, LockGuard, MediaRepo, MenuRepo, MetaRepo,
-    MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
-    RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo,
-    Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
+    ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, JobRepo, LockGuard, MediaRepo,
+    MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo,
+    PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo,
+    SessionRepo, Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use serde_json::Value;
 
@@ -193,6 +193,9 @@ impl Repos for CountingRepos {
     }
     fn idempotency(&self) -> &dyn IdempotencyRepo {
         self.inner.read().idempotency()
+    }
+    fn autosaves(&self) -> &dyn AutosaveRepo {
+        self.inner.read().autosaves()
     }
 }
 
@@ -594,6 +597,9 @@ impl Repos for CountingTx {
     }
     fn idempotency(&self) -> &dyn IdempotencyRepo {
         self.tx.idempotency()
+    }
+    fn autosaves(&self) -> &dyn AutosaveRepo {
+        self.tx.autosaves()
     }
     fn types(&self) -> &dyn ContentTypeRepo {
         self

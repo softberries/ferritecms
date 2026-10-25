@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use ferrite_domain::{
-    Comment, ContentId, ContentItem, ContentOrder, ContentQuery, Cursor, IdempotencyKey, Job,
-    MAX_PAGE, NewAudit, NewJob, NewNode, RateHit, Timestamp,
+    Autosave, Comment, ContentId, ContentItem, ContentOrder, ContentQuery, Cursor, IdempotencyKey,
+    Job, MAX_PAGE, NewAudit, NewJob, NewNode, RateHit, TermId, Timestamp,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -426,6 +426,39 @@ pub fn check_key_hash(key_hash: &str) -> Result<(), StoreError> {
             "idempotency key_hash must be 64 lowercase hex characters".into(),
         ))
     }
+}
+
+/// Validates `AutosaveRepo::put` input (NUL in its texts or JSON, as for a content
+/// row) and returns its `terms` as a JSON array (`None` stays `None`).
+pub fn check_autosave(a: &Autosave) -> Result<Option<Value>, StoreError> {
+    validate_text("autosave title", &a.title)?;
+    if let Some(excerpt) = &a.excerpt {
+        validate_text("autosave excerpt", excerpt)?;
+    }
+    if let Some(slug) = &a.slug {
+        validate_text("autosave slug", slug)?;
+    }
+    validate_json(&a.body)?;
+    validate_json(&a.fields)?;
+    Ok(a.terms.as_ref().map(|terms| {
+        Value::Array(
+            terms
+                .iter()
+                .map(|t| Value::String(t.as_uuid().to_string()))
+                .collect(),
+        )
+    }))
+}
+
+/// Decodes the `terms` of a stored autosave (a JSON array of term ids).
+pub fn autosave_terms(value: Option<Value>) -> Result<Option<Vec<TermId>>, StoreError> {
+    value
+        .map(|v| {
+            serde_json::from_value::<Vec<Uuid>>(v)
+                .map(|ids| ids.into_iter().map(TermId::from_uuid).collect())
+                .map_err(|e| StoreError::Database(format!("corrupt autosave terms: {e}")))
+        })
+        .transpose()
 }
 
 /// Validates `IdempotencyRepo::begin` input and returns `stale_after` in microseconds.

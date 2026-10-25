@@ -37,7 +37,7 @@ pub use actor::{
     require_reader, role_can_edit,
 };
 pub use auth::{AuthService, Authenticated, IssuedSession, LoginAttempt, LoginOutcome, Via};
-pub use content::{AdminQuery, ContentDraft, ContentService, MAX_REVISIONS_LISTED};
+pub use content::{AdminQuery, AutosaveDraft, ContentDraft, ContentService, MAX_REVISIONS_LISTED};
 pub use error::{CoreError, RowError};
 pub use extensions::{EXTENSIONS_LOCK_WAIT, ExtensionAdmin, ExtensionService, MAX_FAILURE_BUCKETS};
 pub use media::{

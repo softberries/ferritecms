@@ -13,6 +13,7 @@
 //! the transaction, so reads see the transaction's own writes.
 
 mod auth;
+mod autosave;
 mod comment;
 mod content;
 mod event;
@@ -33,8 +34,8 @@ mod user;
 
 use async_trait::async_trait;
 use ferrite_store::{
-    ApiTokenRepo, ArtifactRepo, AuditRepo, CommentRepo, ContentRepo, ContentTypeRepo, EventRepo,
-    IdempotencyRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo, NodeRepo, OptionRepo,
+    ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, CommentRepo, ContentRepo, ContentTypeRepo,
+    EventRepo, IdempotencyRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo, NodeRepo, OptionRepo,
     PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo,
     SchemaMetaRepo, SearchRepo, SessionRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx,
     UserRepo,
@@ -141,6 +142,9 @@ impl Repos for SqliteRepos {
     fn idempotency(&self) -> &dyn IdempotencyRepo {
         self
     }
+    fn autosaves(&self) -> &dyn AutosaveRepo {
+        self
+    }
 }
 
 /// A write transaction (or a nested savepoint) on the writer connection; dropping it
@@ -221,4 +225,5 @@ delegate_repos!(
     audit: AuditRepo,
     comments: CommentRepo,
     idempotency: IdempotencyRepo,
+    autosaves: AutosaveRepo,
 );

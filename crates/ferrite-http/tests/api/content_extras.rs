@@ -237,6 +237,9 @@ async fn counts_endpoint_shape_and_routing(api: Api) -> Api {
         .get(&api, &format!("{POSTS}/counts"))
         .await
         .assert_problem(403, "forbidden");
+    api.get(&format!("{POSTS}/counts"))
+        .await
+        .assert_problem(401, "unauthenticated");
     api
 }
 

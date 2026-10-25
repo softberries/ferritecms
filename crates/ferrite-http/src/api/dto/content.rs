@@ -8,9 +8,9 @@
 use chrono::{DateTime, Utc};
 use ferrite_core::{
     ContentDraft,
-    content::{AllowedActions, AuthorRef, StatusCounts},
+    content::{AllowedActions, AuthorRef, AutosaveDraft, StatusCounts},
 };
-use ferrite_domain::{ContentId, ContentItem, Revision, TermId, Timestamp};
+use ferrite_domain::{Autosave, ContentId, ContentItem, Revision, TermId, Timestamp};
 use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -386,6 +386,96 @@ impl RevisionDto {
             fields: r.fields,
             note: r.note,
             author: author.into(),
+        }
+    }
+}
+
+/// `GET`/`PUT /content/{type}/{id}/autosave`: the caller's own unsaved working copy of
+/// the item (one per item and user). Nothing in it has been checked against the type's
+/// fields, the parent or the terms.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AutosaveDto {
+    /// The item version the copy was made from.
+    pub base_version: i64,
+    pub title: String,
+    /// `null`: derive from the body.
+    pub excerpt: Option<String>,
+    /// `null`: unchanged.
+    pub slug: Option<String>,
+    /// `null`: unchanged.
+    pub parent_id: Option<Uuid>,
+    /// `null`: unchanged.
+    pub menu_order: Option<i32>,
+    /// Term ids in order; `null`: unchanged.
+    pub terms: Option<Vec<Uuid>>,
+    /// The block tree.
+    pub body: serde_json::Value,
+    pub fields: serde_json::Value,
+    pub saved_at: DateTime<Utc>,
+}
+
+impl From<Autosave> for AutosaveDto {
+    fn from(a: Autosave) -> Self {
+        Self {
+            base_version: a.base_version,
+            title: a.title,
+            excerpt: a.excerpt,
+            slug: a.slug,
+            parent_id: a.parent_id.map(|p| p.as_uuid()),
+            menu_order: a.menu_order,
+            terms: a
+                .terms
+                .map(|t| t.into_iter().map(|id| id.as_uuid()).collect()),
+            body: a.body,
+            fields: a.fields,
+            saved_at: time(a.saved_at),
+        }
+    }
+}
+
+/// `PUT /content/{type}/{id}/autosave`: replaces the caller's autosave (last write
+/// wins; no `If-Match`). Only text is checked (no NUL or control characters; the
+/// excerpt may hold tabs and line breaks): a draft may be incomplete.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct AutosaveInput {
+    /// The item version the working copy was made from.
+    pub base_version: i64,
+    pub title: String,
+    /// Absent or `null`: derive from the body.
+    #[serde(default)]
+    pub excerpt: Option<String>,
+    /// Absent or `null`: unchanged.
+    #[serde(default)]
+    pub slug: Option<String>,
+    /// Absent or `null`: unchanged.
+    #[serde(default)]
+    pub parent_id: Option<Uuid>,
+    /// Absent or `null`: unchanged.
+    #[serde(default)]
+    pub menu_order: Option<i32>,
+    /// Term ids in order; absent or `null`: unchanged.
+    #[serde(default)]
+    pub terms: Option<Vec<Uuid>>,
+    #[serde(deserialize_with = "not_null")]
+    #[schema(value_type = Object)]
+    pub body: serde_json::Value,
+    #[serde(deserialize_with = "not_null")]
+    #[schema(value_type = Object)]
+    pub fields: serde_json::Value,
+}
+
+impl From<AutosaveInput> for AutosaveDraft {
+    fn from(i: AutosaveInput) -> Self {
+        Self {
+            base_version: i.base_version,
+            title: i.title,
+            excerpt: i.excerpt,
+            slug: i.slug,
+            parent_id: i.parent_id.map(ContentId::from_uuid),
+            menu_order: i.menu_order,
+            terms: i.terms.as_deref().map(term_ids),
+            body: i.body,
+            fields: i.fields,
         }
     }
 }

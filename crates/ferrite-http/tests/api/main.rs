@@ -5,6 +5,7 @@
 mod harness;
 
 mod auth;
+mod autosave;
 mod comments;
 mod content;
 mod content_extras;

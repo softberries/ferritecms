@@ -115,7 +115,7 @@ importer. The admin SPA that uses them is M2b.
 | Meta | `GET /meta`, `GET /openapi.json` (no auth) | M2a-1 | none |
 | Auth | `POST /auth/login`, `POST /auth/login/totp`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/password`, `POST /auth/totp/setup`, `POST /auth/totp/confirm`, `POST /auth/totp/disable` | M2a-1 | own account |
 | Auth: password reset by e-mail | `POST /auth/password-reset`, `POST /auth/password-reset/confirm` (no credentials; origin-checked like login) | M2a-2a (needs `[mail]`) | none (the sealed token is the credential) |
-| Content | `GET/POST /content/{type}`, `GET/PATCH/DELETE /content/{type}/{id}` (`DELETE` trashes; `?force=true` deletes a trashed item), `POST /content/{type}/{id}/publish`, `…/unpublish`, `…/submit`, `…/schedule`, `…/restore` (from trash); type `media` is 404 here (uploads are `/media`). Items and list entries carry `author` (`{id, login, display_name}`) and `allowed` (`{edit, publish, unpublish, schedule, submit, trash, restore, delete}`, from core's `allowed_actions`); `GET /content/{type}/counts` → `{draft, pending, scheduled, published, private, trash}` (M2b P13, P14) | M2a-1; `author`, `allowed`, `counts` M2b-1 | `read_admin` + `content:read` and `can_read`; writes `edit_own`/`edit_others`/`publish_*` + `content:write` |
+| Content | `GET/POST /content/{type}`, `GET/PATCH/DELETE /content/{type}/{id}` (`DELETE` trashes; `?force=true` deletes a trashed item), `POST /content/{type}/{id}/publish`, `…/unpublish`, `…/submit`, `…/schedule`, `…/restore` (from trash); type `media` is 404 here (uploads are `/media`). Items and list entries carry `author` (`{id, login, display_name}`) and `allowed` (`{edit, publish, unpublish, schedule, submit, trash, restore, delete}`, from core's `allowed_actions`); `GET /content/{type}/counts` → `{draft, pending, scheduled, published, private, trash}` (M2b P13, P14); `GET/PUT/DELETE /content/{type}/{id}/autosave`, the caller's own working copy (see **Autosave** below, P15) | M2a-1; `author`, `allowed`, `counts`, `autosave` M2b-1 | `read_admin` + `content:read` and `can_read`; writes `edit_own`/`edit_others`/`publish_*` + `content:write` |
 | Revisions | `GET /content/{type}/{id}/revisions`, `GET …/revisions/{rid}`, `POST …/revisions/{rid}/restore` | M2a-1 | reads as content plus a role that may edit the item (R26, §1 "Reading revisions"); restore as a content update |
 | Content types | `GET/POST /types`, `GET/PATCH/DELETE /types/{name}` | M2a-1 | reads `content:read`; writes `manage_settings` + `settings:write` |
 | Taxonomies & terms | `GET/POST /taxonomies`, `GET/PATCH/DELETE /taxonomies/{name}`, `GET/POST /taxonomies/{taxonomy}/terms`, `GET/PATCH/DELETE /terms/{id}` | M2a-1 | taxonomy reads `content:read`, writes `manage_settings` + `settings:write`; term reads `terms:read`, writes `manage_terms` + `terms:write` |
@@ -142,6 +142,26 @@ restore restores title, excerpt, body and fields, not meta (P13). Field values a
 validated against the type's schema on every content write; a type whose `fields` has no
 `fields` member (the built-ins' `{}`) accepts any object, and `featured_image` (UUID string
 or null) is always allowed (F17).
+
+**Autosave (M2b P15; F11, F12).** Each user has at most one autosave per item
+(`autosaves`, migration `0007`), kept apart from the item and its revisions. `PUT
+/content/{type}/{id}/autosave` takes `{ base_version, title, excerpt?, slug?, parent_id?,
+menu_order?, terms?, body, fields }` and stores it (`200` with `AutosaveDto`, the same
+members plus `saved_at`); there is no `If-Match` and the last write wins. `excerpt: null`
+means "derive from the body"; `slug`, `parent_id`, `menu_order` and `terms` absent or
+`null` mean "unchanged" (so the slot cannot express "move to the top level"; that edit
+is protected only by the leave guard until it is saved). Only text is checked (no NUL or
+control characters, the excerpt may hold tabs and line breaks; `422` with
+`errors[0].field`), never the field schema, the parent or the terms: a draft may be
+incomplete. A trashed item takes no autosave (`422`, "restore first"). `GET` returns it
+(`404` when there is none); `DELETE` is `204` whether or not one existed. Writing needs
+`can_edit` on the item as stored now (with `content:write`); reading needs
+`content:read` and a role that may edit the item, as revisions do (R26), so a read-only
+token reads its owner's slot. The item itself must be readable (`404` otherwise). An
+autosave writes no revision, event, action job, search entry or cache invalidation. A
+real save of the item by the same user (`PATCH`, revision restore) deletes that user's
+slot in the same transaction; other users' slots stay. Deleting the item or the user
+deletes their slots; there is no retention job.
 
 **Redirects (R20, R21, R26).** `POST /redirects` creates the redirect for `source` or
 changes the one stored for it; `PATCH /redirects/{id}` refuses a `source` another row
@@ -639,7 +659,7 @@ Versions pinned in `admin/package.json` at scaffold time (latest stable then); p
 |---|---|
 | Dashboard | Charts: page views (core lightweight counter, privacy-friendly; full analytics is a plugin), cache hit rate, plugin hook p95 latency per plugin, job queue depth, recent content, failed jobs |
 | Posts / Pages / custom types | Data table with filters, bulk actions, status tabs; animated row transitions |
-| Editor | TipTap; sidebar: status, schedule, slug, terms, featured image, SEO fields, custom fields; revisions drawer with diff; autosave (draft revision) every 10 s; conflict UI on 412 |
+| Editor | TipTap; sidebar: status, schedule, slug, terms, featured image, SEO fields, custom fields; revisions drawer with diff; autosave every 10 s while dirty into the user's autosave slot (`PUT …/autosave`, not a revision; P15), restored after a reload or a lost session; conflict UI on 412 |
 | Media library | Grid + list, drag-and-drop upload with progress, alt text, variant preview |
 | Content types | Field builder (text, rich text, number, date, bool, select, relation, media, repeater) |
 | Taxonomies | Tree editor for hierarchical |

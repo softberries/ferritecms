@@ -21,8 +21,12 @@
 //!   (`ferrite_core::content::allowed_actions`, M2b P13); revisions carry `author`.
 //! * `GET /content/{type}/counts` counts items per status as the list's visibility rule
 //!   allows (P14). The static `counts` segment wins over `{id}` in the router.
+//! * `…/{id}/autosave` is the caller's own unsaved working copy of the item (P15): no
+//!   `If-Match`, last write wins, never a revision. Reading needs a role that may edit
+//!   the item (as revisions), writing `can_edit` (F12). The caller's next real save of
+//!   the item deletes it.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     Json,
@@ -30,7 +34,6 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use std::collections::HashMap;
 
 use ferrite_core::{
     Actor, AdminQuery, CoreError, MAX_REVISIONS_LISTED,
@@ -47,8 +50,9 @@ use uuid::Uuid;
 use super::{
     ApiState, Authed, BASE,
     dto::content::{
-        ContentCountsDto, ContentDto, ContentInput, ContentList, ContentPatch, ContentSummaryDto,
-        RevisionDto, RevisionList, RevisionSummaryDto, ScheduleRequest,
+        AutosaveDto, AutosaveInput, ContentCountsDto, ContentDto, ContentInput, ContentList,
+        ContentPatch, ContentSummaryDto, RevisionDto, RevisionList, RevisionSummaryDto,
+        ScheduleRequest,
     },
     extract::{
         ApiJson, ApiPath, ApiQuery, DEFAULT_LIMIT, IfMatch, check_limit, created, etag,
@@ -736,4 +740,85 @@ pub async fn restore_revision(
         .restore_revision(actor, id, RevisionId::from_uuid(rid), version)
         .await;
     written(&api, actor, id, result).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/content/{type}/{id}/autosave",
+    tag = "content",
+    operation_id = "get_autosave",
+    security(("session" = []), ("bearer" = [])),
+    params(("type" = String, Path), ("id" = Uuid, Path)),
+    responses(
+        (status = 200, description = "The caller's autosave of the item", body = AutosaveDto),
+        (status = 404, description = "`not-found`: no such item that you may read, or no autosave of yours", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (your role may not edit the item, or no `content:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn get_autosave(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath((kind, id)): ApiPath<(String, Uuid)>,
+) -> Result<Json<AutosaveDto>, Problem> {
+    let id = load(&api, &who.actor, &kind, id).await?.id;
+    match api.content.get_autosave(&who.actor, id).await? {
+        Some(a) => Ok(Json(a.into())),
+        None => Err(Problem::not_found()),
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/content/{type}/{id}/autosave",
+    tag = "content",
+    operation_id = "put_autosave",
+    security(("session" = []), ("bearer" = [])),
+    params(("type" = String, Path), ("id" = Uuid, Path)),
+    request_body = AutosaveInput,
+    responses(
+        (status = 200, description = "Stored, replacing the caller's previous autosave", body = AutosaveDto),
+        (status = 404, description = "`not-found`: no such item that you may read", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: control characters or NUL (`errors[0].field`), or the item is trashed", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 400, description = "`malformed-json`", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn put_autosave(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath((kind, id)): ApiPath<(String, Uuid)>,
+    ApiJson(input): ApiJson<AutosaveInput>,
+) -> Result<Json<AutosaveDto>, Problem> {
+    let id = load(&api, &who.actor, &kind, id).await?.id;
+    let saved = api
+        .content
+        .put_autosave(&who.actor, id, input.into())
+        .await?;
+    Ok(Json(saved.into()))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/content/{type}/{id}/autosave",
+    tag = "content",
+    operation_id = "delete_autosave",
+    security(("session" = []), ("bearer" = [])),
+    params(("type" = String, Path), ("id" = Uuid, Path)),
+    responses(
+        (status = 204, description = "The caller's autosave is gone (also when there was none)"),
+        (status = 404, description = "`not-found`: no such item that you may read", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn delete_autosave(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath((kind, id)): ApiPath<(String, Uuid)>,
+) -> Result<StatusCode, Problem> {
+    let id = load(&api, &who.actor, &kind, id).await?.id;
+    api.content.delete_autosave(&who.actor, id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }

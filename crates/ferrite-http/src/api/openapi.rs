@@ -27,7 +27,7 @@ pub const HOST_SESSION_COOKIE: &str = "__Host-ferrite_session";
     tags(
         (name = "meta", description = "API metadata"),
         (name = "auth", description = "Login, session, password and TOTP"),
-        (name = "content", description = "Content items, their lifecycle and revisions"),
+        (name = "content", description = "Content items, their lifecycle, revisions and autosaves"),
         (name = "media", description = "Media uploads and items"),
         (name = "comments", description = "Comments: the public submit and moderation"),
         (name = "types", description = "Content types and their field schemas"),
