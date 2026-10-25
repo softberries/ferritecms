@@ -233,6 +233,7 @@ Outline in the M2a-2 plan ("Next plan: M2a-2b"); it gets its own plan.
 
 ### M2b — admin SPA
 
+- [ ] Design system first (product requirement): a state-of-the-art admin, clearly better than the WordPress admin. Study the best admin UIs (Linear, Vercel, Stripe Dashboard, Ghost) and borrow their ideas. Pick deliberate typography (a quality UI font plus a mono, self-hosted), design tokens (color, spacing, radius, shadows), dark mode, a motion language, a command palette and keyboard shortcuts. Treat design quality as a review gate, with Playwright screenshots of every screen in light and dark mode.
 - [ ] Admin SPA scaffold: Vite + React + TS, shadcn/ui, TanStack Router/Query, Motion, API client generated from `crates/ferrite-http/openapi.json` (CI drift check), embedded via `rust-embed` (`/admin/*` with SPA fallback, hashed assets `immutable`, a placeholder page when `admin/dist` is missing, the admin CSP; 07 §3).
 - [ ] Screens: dashboard (Recharts), content list + TipTap editor + revisions + autosave + the 412 conflict UI, media library, content types/field builder, taxonomies, menus, users (roles, tokens, TOTP), comments, redirects, settings, import, system (nodes, jobs, backups).
 - [ ] Themes + plugins screens incl. permission report and per-plugin metrics.
