@@ -23,7 +23,7 @@ export function StatusTabs({ type, search, counts }: StatusTabsProps) {
   const number = new Intl.NumberFormat(uiLocale());
   return (
     <nav aria-label={t("tabs.label")}>
-      <ScrollFade activeSelector="[aria-current=page]" activeKey={current}>
+      <ScrollFade activeSelector={`[data-tab="${current}"]`} activeKey={current}>
         {/* The rule under the tabs is an inset shadow, so the active underline covers it
           inside the scrolling row. */}
         <ul className="flex w-max min-w-full gap-1 shadow-[inset_0_-1px_0_var(--border)]">
@@ -36,6 +36,10 @@ export function StatusTabs({ type, search, counts }: StatusTabsProps) {
                   to="/content/$type"
                   params={{ type }}
                   search={(prev: ListSearch) => withStatus(prev, tab)}
+                  // The router marks a link current on a partial search match, which
+                  // would make All current on every tab; only the exact URL counts, and
+                  // `active` (from the parsed `status`) decides `aria-current`.
+                  activeOptions={{ exact: true, includeSearch: true }}
                   aria-current={active ? "page" : undefined}
                   data-tab={tab}
                   className={cn(

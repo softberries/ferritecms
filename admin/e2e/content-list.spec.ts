@@ -84,10 +84,11 @@ test("tabs_counts_and_filtering", async ({ as, site, backend }) => {
     for (const [name, count] of Object.entries(expected)) {
       await expect(tabCount(page, name)).toHaveText(String(count));
     }
-    // Each tab lists exactly as many rows as its count says.
+    // Each tab lists exactly as many rows as its count says, and is the one current tab.
     for (const [name, count] of Object.entries(expected)) {
       await tab(page, name).click();
       await expect(tab(page, name)).toHaveAttribute("aria-current", "page");
+      await expect(tabs(page).locator("[aria-current=page]")).toHaveCount(1);
       await loaded(page, label);
       await expect(rows(page, label)).toHaveCount(count);
     }
@@ -289,6 +290,37 @@ test("contributor_trash_asks_first_and_offers_no_undo", async ({
     expect((await editor.get("post", created.id)).status).toBe("trash");
   } finally {
     await Promise.all([contributor.dispose(), editor.dispose()]);
+  }
+});
+
+test("phone_tabs_keep_the_current_tab_in_view", async ({ as, site, backend }) => {
+  const admin = await ContentApi.as(backend, site.url, "admin");
+  const type = typeName();
+  const label = `Phone ${type.slice(-6)}`;
+  try {
+    await admin.createType(type, label);
+    await admin.createIn(type, "Trashed on a phone", "trash");
+    const page = await as("admin");
+    await page.setViewportSize(VIEWPORTS.mobile);
+    await openList(page, type, label);
+    const inView = async (name: string) =>
+      tab(page, name).evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return r.left >= 0 && r.right <= window.innerWidth;
+      });
+    // Trash starts off-screen at 390 px; after going there it is scrolled into view.
+    expect(await inView("Trash")).toBe(false);
+    await page.goto(`/admin/content/${type}?status=trash`);
+    await loaded(page, label);
+    await expect(tabs(page).locator("[aria-current=page]")).toHaveCount(1);
+    await expect.poll(() => inView("Trash")).toBe(true);
+    // And back to All from the strip itself.
+    await tab(page, "All").click();
+    await expect(tabs(page).locator("[aria-current=page]")).toHaveCount(1);
+    await expect.poll(() => inView("All")).toBe(true);
+  } finally {
+    await admin.removeType(type);
+    await admin.dispose();
   }
 });
 

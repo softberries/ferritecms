@@ -363,7 +363,7 @@ itself (`?raw` + `parseTokens`), so the page cannot drift from the gate.
   | `KbdCombo` | `keys` | `+` = together, space = sequence (`g d`); `mod` is ⌘ on Apple, Ctrl elsewhere; spoken text in `sr-only` |
   | `SaveState` | `state: saved \| saving \| dirty \| error \| offline, at?` | a polite `role="status"` region holds plain text; the visible label crossfades (Motion, 120 ms opacity) |
   | `RelativeTime` | `at` (RFC 3339) | `formatDistanceStrict` against a `now` that ticks every 30 s; "just now" within 45 s (Task 13 fix round 1); absolute time in `title` and `dateTime` |
-  | `ScrollFade` | `activeSelector?, activeKey?` | a row that scrolls sideways without a scrollbar (`no-scrollbar`, `globals.css`), fading the edge that hides more; keeps the active element in view (status tabs, filter chips on phones; Task 13) |
+  | `ScrollFade` | `activeSelector?, activeKey?` | a row that scrolls sideways without a scrollbar (`no-scrollbar`, `globals.css`), fading the edge that hides more; keeps the active element in view on change and on resize (status tabs, filter chips on phones; Task 13) |
 
   `ContentStatus` and `CONTENT_STATUSES` live in `src/api/content.ts`. Kit and
   styleguide strings are in the `common` (`ui.*`, `status.*`, `kit.*`) and `styleguide`
