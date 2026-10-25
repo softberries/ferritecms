@@ -1,0 +1,496 @@
+{
+  "pageTitle": "Styleguide · FerriteCMS",
+  "title": "Styleguide",
+  "subtitle": "Tokens and components as they ship in the admin",
+  "controls": {
+    "theme": "Colour theme",
+    "density": "Density",
+    "buttons": {
+      "title": "Buttons",
+      "body": "One primary action per view. Destructive actions are tinted, not filled.",
+      "saving": "Saving…",
+      "label": "Save draft"
+    },
+    "sizes": {
+      "title": "Sizes and icons",
+      "body": "The default height follows the density token.",
+      "lg": "Large",
+      "default": "Default",
+      "sm": "Small",
+      "xs": "Extra small",
+      "add": "Add",
+      "more": "More actions",
+      "newPost": "New post"
+    },
+    "fields": {
+      "title": "Fields",
+      "body": "Inputs carry a 3:1 boundary; errors add a destructive ring and a message.",
+      "placeholder": "Post title",
+      "search": "Search",
+      "status": "Status",
+      "check": "Select",
+      "switch": "Comments"
+    },
+    "toggles": {
+      "title": "Toggles",
+      "body": "Pressed state for formatting; a segmented control for views.",
+      "bold": "Bold",
+      "italic": "Italic",
+      "strike": "Strikethrough",
+      "link": "Link",
+      "formatting": "Text formatting",
+      "view": "View",
+      "list": "List",
+      "grid": "Grid"
+    },
+    "form": {
+      "title": "A form",
+      "body": "Labels above fields, help text below, mono for identifiers.",
+      "titleLabel": "Title",
+      "titleValue": "Hello, world",
+      "slug": "Slug",
+      "slugHelp": "Lowercase letters, digits and hyphens.",
+      "excerpt": "Excerpt",
+      "excerptValue": "A first post on a fresh FerriteCMS site.",
+      "invalid": "Slug (invalid)",
+      "invalidHelp": "Use lowercase letters, digits and hyphens only.",
+      "comments": "Allow comments",
+      "commentsHelp": "Readers can reply below the post.",
+      "sticky": "Pin to the top of the blog"
+    },
+    "tabs": {
+      "title": "Tabs",
+      "body": "Pills for switching views, a line for page sections.",
+      "all": "All",
+      "drafts": "Drafts",
+      "scheduled": "Scheduled",
+      "panel": "Tab panels hold the view's content.",
+      "content": "Content",
+      "seo": "Search",
+      "revisions": "Revisions"
+    }
+  },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  },
+  "density": {
+    "comfortable": "Comfortable",
+    "compact": "Compact"
+  },
+  "nav": {
+    "label": "Styleguide sections",
+    "all": "All sections"
+  },
+  "sections": {
+    "colour": {
+      "title": "Colour",
+      "lead": "Cool graphite neutrals and one accent, ember. Every text pair is checked at 4.5:1 and every boundary at 3:1, in both modes, by the token gate."
+    },
+    "type": {
+      "title": "Typography",
+      "lead": "Inter Variable for the interface, with optical sizing, and Geist Mono for identifiers. Nine sizes and nothing in between."
+    },
+    "layout": {
+      "title": "Space and elevation",
+      "lead": "A 4 px grid, four radii, three elevations, and two densities that resize controls, rows and page padding."
+    },
+    "motion": {
+      "title": "Motion",
+      "lead": "Short, meaningful transitions: overlays, list changes, route changes, the save indicator. Nothing loops and nothing travels far."
+    },
+    "controls": {
+      "title": "Controls",
+      "lead": "Buttons and form fields in every state. Hover and focus are forced here so they can be compared side by side."
+    },
+    "display": {
+      "title": "Display",
+      "lead": "Status, badges, the save indicator, times, shortcuts, avatars, skeletons, toasts and cards."
+    },
+    "navigation": {
+      "title": "Navigation",
+      "lead": "The sidebar, breadcrumbs and the command palette's list."
+    },
+    "overlays": {
+      "title": "Overlays",
+      "lead": "Dialogs, sheets, menus, popovers, tooltips and the date picker. Open each one to see it."
+    },
+    "patterns": {
+      "title": "Patterns",
+      "lead": "The kit every screen is built from: the page header, metric tiles and the empty, error and permission states."
+    },
+    "data": {
+      "title": "Data table",
+      "lead": "Lists with selection, keyboard movement, a sticky header and actions on hover, plus their loading and empty states."
+    },
+    "charts": {
+      "title": "Charts",
+      "lead": "Five series on the chart tokens, told apart by dash pattern as well as colour, and sparklines for tiles."
+    }
+  },
+  "states": {
+    "component": "Component",
+    "default": "Default",
+    "hover": "Hover",
+    "focus": "Focus",
+    "disabled": "Disabled",
+    "loading": "Loading",
+    "error": "Error"
+  },
+  "colour": {
+    "alias": "= --{{name}}",
+    "onBackground": "{{ratio}}:1 on background (min {{min}})",
+    "groups": {
+      "surface": {
+        "title": "Surfaces and text",
+        "body": "Backgrounds, text, borders and the input boundary. shadcn's accent is the hover surface, not the brand colour."
+      },
+      "brand": {
+        "title": "Ember",
+        "body": "The one accent: primary actions, links, the focus ring and selection."
+      },
+      "semantic": {
+        "title": "Semantic",
+        "body": "Destructive, success, warning and info. Always paired with an icon or a label."
+      },
+      "status": {
+        "title": "Content status",
+        "body": "One colour per lifecycle status, shown as a dot plus a label."
+      },
+      "chart": {
+        "title": "Chart series",
+        "body": "Five series colours, each at least 3:1 on background and card."
+      },
+      "sidebar": {
+        "title": "Sidebar",
+        "body": "Derived from card and muted, so the sidebar follows the theme."
+      }
+    },
+    "pairs": {
+      "title": "Contrast pairs",
+      "body": "Computed from tokens.css in this page. The bold column is the mode on screen.",
+      "sample": "Sample",
+      "foreground": "Foreground",
+      "background": "Background",
+      "min": "Min",
+      "light": "Light",
+      "dark": "Dark"
+    }
+  },
+  "type": {
+    "sample": "Publish when it reads right",
+    "scale": {
+      "title": "Scale",
+      "body": "Size and line height in px. Body text is 14/20.",
+      "3xl": "Editor title field, sign-in screens",
+      "2xl": "Page titles",
+      "xl": "Page titles on dense screens",
+      "lg": "Section titles",
+      "editor": "Editor body text",
+      "md": "Prominent body, form intros",
+      "base": "Interface default",
+      "sm": "Secondary text, table meta, identifiers",
+      "xs": "Captions, badges, keycaps"
+    },
+    "inter": "The interface face. Headings use 600 with tight tracking; optical sizing picks the display cut at large sizes.",
+    "weights": {
+      "regular": "Regular",
+      "medium": "Medium",
+      "semibold": "Semibold",
+      "bold": "Bold",
+      "italic": "Italic"
+    },
+    "tabular": "tabular figures in tables and tiles",
+    "mono": "Ids, slugs, versions and hashes, at 13 px.",
+    "ids": {
+      "slug": "Slug",
+      "version": "Version",
+      "hash": "Hash"
+    }
+  },
+  "layout": {
+    "spacing": {
+      "title": "Spacing",
+      "body": "Tailwind's 4 px steps."
+    },
+    "radius": {
+      "title": "Radius",
+      "body": "0.3, 0.4, 0.5 and 0.7 rem."
+    },
+    "elevation": {
+      "title": "Elevation",
+      "light": "Resting surfaces, raised menus, overlays.",
+      "dark": "In dark mode shadows are off: a 1 px border and a lighter card carry elevation."
+    },
+    "density": {
+      "title": "Density",
+      "body": "Switch density in the header to see controls, rows and padding change. Touch screens keep 44 px targets.",
+      "control": "Buttons, inputs, selects",
+      "row": "Table rows",
+      "pad": "Page padding",
+      "sampleInput": "Search posts",
+      "sampleButton": "Save"
+    }
+  },
+  "motion": {
+    "durations": {
+      "title": "Durations",
+      "body": "Page transitions stay at or under 200 ms."
+    },
+    "instant": "hover, press",
+    "fast": "popovers, tooltips",
+    "base": "pages, sheets",
+    "slow": "drawers",
+    "play": "Play",
+    "playHint": "Each bar fills over its own duration.",
+    "easing": {
+      "title": "Easing",
+      "body": "Enter with ease-out; move between resting states with ease-in-out."
+    },
+    "easeOut": "Enter, most transitions",
+    "easeInOut": "Between two resting states",
+    "reduced": {
+      "on": "Reduced motion is on",
+      "off": "Reduced motion is off",
+      "body": "With reduced motion, every duration token is 0 ms, keyframe animations end at once and Motion drops movement, keeping only fades."
+    }
+  },
+  "display": {
+    "status": {
+      "title": "Status badge",
+      "body": "A dot plus a label; drafts have a hollow dot."
+    },
+    "badges": {
+      "title": "Badges",
+      "body": "Counts, labels and versions.",
+      "new": "New",
+      "count_one": "{{count}} update",
+      "count_other": "{{count}} updates",
+      "beta": "Beta",
+      "failing": "Failing"
+    },
+    "save": {
+      "title": "Save state",
+      "body": "Announced politely to screen readers; the visible label crossfades."
+    },
+    "time": {
+      "title": "Relative time",
+      "body": "Relative in the text, absolute on hover (title) and in the markup.",
+      "updated": "Updated"
+    },
+    "keys": {
+      "title": "Shortcuts",
+      "body": "Keycaps follow the platform: ⌘ on Apple devices, Ctrl elsewhere.",
+      "palette": "Command palette",
+      "sheet": "Shortcut sheet",
+      "dashboard": "Go to dashboard",
+      "posts": "Go to posts",
+      "newPost": "New post",
+      "save": "Save",
+      "publish": "Publish",
+      "down": "Next row"
+    },
+    "avatars": {
+      "title": "Avatars",
+      "body": "Initials on muted; a group overlaps."
+    },
+    "skeleton": {
+      "title": "Skeleton",
+      "body": "Shaped like the content it stands in for."
+    },
+    "toasts": {
+      "title": "Toasts",
+      "body": "Bottom right; undo instead of confirm.",
+      "success": "Success",
+      "saved": "Post saved",
+      "withUndo": "With undo",
+      "trashed": "Moved to trash",
+      "undo": "Undo",
+      "warning": "Warning",
+      "busy": "The server is busy. Try again in a moment.",
+      "error": "Error",
+      "failed": "Couldn't publish the post"
+    },
+    "card": {
+      "title": "Cards",
+      "body": "A border and the card surface; shadows only in light mode.",
+      "siteTitle": "Site health",
+      "siteBody": "This node, right now.",
+      "healthy": "Healthy",
+      "nodes": "Nodes",
+      "jobs": "Failed jobs",
+      "cache": "Cache hits",
+      "details": "Details",
+      "smallTitle": "Recent jobs",
+      "smallBody": "A scroll area keeps long lists inside the card.",
+      "job": "Job {{n}}"
+    }
+  },
+  "navigation": {
+    "sidebar": {
+      "title": "Sidebar",
+      "body": "Active item on muted; counts in tabular figures.",
+      "site": "My site",
+      "group": "Content"
+    },
+    "items": {
+      "dashboard": "Dashboard",
+      "posts": "Posts",
+      "pages": "Pages",
+      "media": "Media",
+      "users": "Users",
+      "settings": "Settings"
+    },
+    "breadcrumb": {
+      "title": "Breadcrumb",
+      "body": "Collapses the middle when the path is long."
+    },
+    "command": {
+      "title": "Command list",
+      "body": "The palette's list, inline. Type to filter.",
+      "placeholder": "Search or jump to…",
+      "empty": "No results.",
+      "goTo": "Go to",
+      "create": "Create",
+      "schedule": "Schedule"
+    }
+  },
+  "overlays": {
+    "triggers": {
+      "title": "Overlays",
+      "body": "Each opens over a scrim; Escape closes, focus returns to the trigger."
+    },
+    "cancel": "Cancel",
+    "dialog": {
+      "open": "Schedule…",
+      "title": "Schedule post",
+      "body": "It goes live at the time you pick, in the site's time zone.",
+      "when": "Publish at",
+      "confirm": "Schedule"
+    },
+    "alert": {
+      "open": "Delete permanently",
+      "title": "Delete this post for good?",
+      "body": "This can't be undone. Trash keeps posts for 30 days instead.",
+      "confirm": "Delete"
+    },
+    "sheet": {
+      "open": "Post settings",
+      "title": "Post settings",
+      "body": "Settings slide in from the side so the editor stays in view.",
+      "done": "Done"
+    },
+    "menu": {
+      "open": "Actions",
+      "label": "Post",
+      "edit": "Edit",
+      "duplicate": "Duplicate",
+      "trash": "Move to trash"
+    },
+    "popover": {
+      "open": "Popover",
+      "title": "Visibility",
+      "body": "Public posts appear on the site and in feeds."
+    },
+    "tooltip": {
+      "label": "Settings"
+    },
+    "hover": {
+      "body": "Editor · 128 posts"
+    },
+    "calendar": {
+      "title": "Date picker",
+      "body": "For scheduling; today and the selection are marked."
+    }
+  },
+  "patterns": {
+    "header": {
+      "title": "Page header",
+      "body": "Title, description, actions (one primary) and tabs.",
+      "description": "Everything published on the blog, and what's on the way.",
+      "import": "Import"
+    },
+    "metrics": {
+      "title": "Metric tiles",
+      "body": "The number is text; the change is spoken; the sparkline only illustrates.",
+      "published": "Published posts",
+      "drafts": "Drafts",
+      "pending": "Pending review",
+      "scheduled": "Scheduled"
+    },
+    "empty": {
+      "title": "Empty",
+      "body": "What the screen is for and the way in.",
+      "heading": "No posts yet",
+      "text": "Posts you write show up here, drafts included."
+    },
+    "error": {
+      "title": "Error",
+      "body": "The server's message, then a retry."
+    },
+    "forbidden": {
+      "title": "No access",
+      "body": "When the server refuses the screen for this role."
+    },
+    "editorBar": {
+      "title": "Editor bar",
+      "body": "Status and save state on the left, one primary action on the right.",
+      "preview": "Preview",
+      "publish": "Publish"
+    }
+  },
+  "data": {
+    "columns": {
+      "title": "Title",
+      "status": "Status",
+      "author": "Author",
+      "words": "Words",
+      "updated": "Updated"
+    },
+    "table": {
+      "title": "Posts",
+      "body": "Click a row, or move with the keyboard:",
+      "selected_one": "{{count}} selected",
+      "selected_other": "{{count}} selected",
+      "clear": "Clear selection",
+      "opened": "Opened “{{title}}”",
+      "edit": "Edit “{{title}}”",
+      "trash": "Move “{{title}}” to trash"
+    },
+    "loading": {
+      "title": "Loading",
+      "body": "Skeleton rows at the real row height."
+    },
+    "empty": {
+      "title": "Empty",
+      "body": "The table keeps its header; the body explains.",
+      "text": "Nothing matches these filters."
+    },
+    "samples": {
+      "p1": "Shipping a CMS as one binary",
+      "p2": "Why plugins run in WebAssembly",
+      "p3": "Importing a WordPress export without the PHP",
+      "p4": "Notes on the ember accent",
+      "p5": "Team handbook",
+      "p6": "Old announcement"
+    }
+  },
+  "charts": {
+    "series": {
+      "posts": "Posts",
+      "pages": "Pages",
+      "comments": "Comments",
+      "media": "Media",
+      "users": "Users"
+    },
+    "lines": {
+      "title": "Five series",
+      "body": "Daily activity over two weeks. Hover for values."
+    },
+    "spark": {
+      "title": "Sparklines",
+      "body": "Decorative and hidden from assistive technology; the value sits next to them in text."
+    }
+  }
+}

@@ -34,6 +34,9 @@ export async function settle(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle");
   await page.evaluate(async () => {
     await document.fonts.ready;
+    // A colour-scheme change reaches <html> through a React effect, and the colour
+    // transitions it starts exist only after that; let two frames pass first.
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     const finite = document
       .getAnimations()
       .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity);

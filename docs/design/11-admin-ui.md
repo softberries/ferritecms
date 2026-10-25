@@ -1,6 +1,6 @@
 # 11 — Admin UI design language
 
-Status: **as built (M2b-1 Task 7)** · Date: 2026-10-25
+Status: **as built (M2b-1 Tasks 7–8)** · Date: 2026-10-25
 
 The admin SPA's visual and interaction language: what it borrows, the typography, the
 colour tokens, spacing, density, motion, the keyboard map, the component inventory and
@@ -121,6 +121,9 @@ Derived tokens (`var()` in `tokens.css`, so they follow the mode):
 - Charts: `chart-1` ember, `chart-2` info, `chart-3` success, `chart-4` warning,
   `chart-5` a violet 0.55 0.16 300 / 0.72 0.14 300. Series are also told apart by shape
   or label, never by colour alone.
+- `overlay` (the scrim behind dialogs, sheets and alert dialogs; decoration, no
+  contrast pair): 0.21 0.012 260 / 0.24 light, 0.1 0.005 260 / 0.6 dark (Task 8,
+  replacing the generated `bg-black/10`).
 - Sidebar: `sidebar` = `card`, `sidebar-accent` = `muted`, `sidebar-foreground` and
   `sidebar-accent-foreground` = `foreground`, `sidebar-primary(-foreground)` =
   `primary(-foreground)`, `sidebar-border` = `border`, `sidebar-ring` = `ring`.
@@ -211,7 +214,10 @@ contrast pair unchanged.
   The choice is stored per viewer in `localStorage` (`ferrite.admin.density`), read
   inside try/catch (private windows and blocked storage fall back to `comfortable`).
   `DensityProvider` / `useDensity()` (`@/design/density`) switch it. On touch-width
-  screens targets stay ≥ 44 px whatever the density (§8).
+  screens targets stay ≥ 44 px whatever the density (§8): under `@media (pointer:
+  coarse)` `tokens.css` sets `--control-h` 44 px and `--row-h` 48 px for both densities
+  (`:root:root, :root[data-density]`, so it outranks the compact rule; Task 8, E2E
+  `styleguide_touch_targets`).
 - Theme: `ThemeProvider` / `useTheme()` (`@/design/theme`; `{ theme, resolvedTheme,
   setTheme }`, the shape the shadcn sonner wrapper expects, P9) with `light | dark |
   system`; `system` follows `prefers-color-scheme` live. Once JS runs, `<html>` carries
@@ -292,36 +298,116 @@ inputs or the editor.
 
 ## 7. Component inventory
 
-Task 8 builds the kit and fills this section; the styleguide is the lazy route
-`/admin/_styleguide` (P12, file `routes/_app/[_]styleguide.tsx`, F19).
+The living styleguide is the lazy route `/admin/_styleguide` (P12; file
+`routes/_app/[_]styleguide.tsx`, F19; section modules in `routes/_app/-styleguide/`,
+which the router ignores). It is linked from nowhere (no nav or palette entry).
+`?section=<id>` shows one section (`colour type layout motion controls display
+navigation overlays patterns data charts`); without it, the whole page. Until Task 9
+adds the `_app` login guard, the route is reachable without a session (it holds no
+data). Colour values and contrast ratios on the page are computed from `tokens.css`
+itself (`?raw` + `parseTokens`), so the page cannot drift from the gate.
 
-- **shadcn (radix-nova, `components.json` → `src/styles/globals.css`):** button badge
-  card checkbox command dialog dropdown-menu input input-group label popover
-  scroll-area select separator sheet sidebar skeleton sonner switch table tabs textarea
-  toggle toggle-group tooltip chart calendar breadcrumb avatar alert-dialog hover-card
-  kbd.
-- **Kit (`src/components/kit/`):** PageHeader, StatusBadge, EmptyState, ErrorState,
-  ForbiddenState, MetricTile, Sparkline, DataTable, KbdCombo, SaveState, RelativeTime.
+- **shadcn (radix-nova, `components.json` → `src/styles/globals.css`), added with
+  `shadcn@4.21.4 add`:** button badge card checkbox command dialog dropdown-menu input
+  input-group label popover scroll-area select separator sheet sidebar skeleton sonner
+  switch table tabs textarea toggle toggle-group tooltip chart calendar breadcrumb
+  avatar alert-dialog hover-card kbd, plus `src/hooks/use-mobile.ts` (sidebar).
+- **Kit (`src/components/kit/`):**
 
-Rules for generated files (each edit is listed here by the task that makes it):
+  | Component | Props | Notes |
+  |---|---|---|
+  | `PageHeader` | `title, description?, actions?, tabs?` | h1 at `2xl`; actions wrap under the title below `sm` |
+  | `StatusBadge` | `status: ContentStatus` | dot + label, `text-status-*`; drafts get a hollow dot |
+  | `EmptyState` | `icon, title, body, action?` | dashed frame |
+  | `ErrorState` | `error: unknown, retry` | `role="alert"`; an `ApiError`'s `detail` (else `title`), anything else a generic line; never `message` or a stack |
+  | `ForbiddenState` | — | `EmptyState` with a lock |
+  | `MetricTile` | `label, value: number, delta?, series?, href?` | value and change are text (the change also spoken: "Up 12 on the previous period"); `href` is an admin path (router `Link`) |
+  | `Sparkline` | `data: number[]` | Recharts `AreaChart` (`responsive`, `accessibilityLayer={false}`), `aria-hidden` |
+  | `DataTable<T>` | `columns, data, getRowId, selection?, onRowOpen?, loading, empty, rowActions?, columnClassName?, label` | TanStack Table v9 `useTable` + `rowSelectionFeature` (`data-table-features.ts`: `dataTableFeatures`, `dataTableColumns<T>()`, `DataTableColumn<T>`); roving tabindex on rows, `j`/`k` (and arrows) move, `x` toggles selection, `enter` opens; header sticky from `md` up at `top: var(--sticky-top, 0px)` (the shell sets `--sticky-top`); below `md` the table scrolls inside its frame; rows are `h-row`; `rowActions` show on row hover/focus, always on coarse pointers; skeleton rows while `loading` |
+  | `KbdCombo` | `keys` | `+` = together, space = sequence (`g d`); `mod` is ⌘ on Apple, Ctrl elsewhere; spoken text in `sr-only` |
+  | `SaveState` | `state: saved \| saving \| dirty \| error \| offline, at?` | a polite `role="status"` region holds plain text; the visible label crossfades (Motion, 120 ms opacity) |
+  | `RelativeTime` | `at` (RFC 3339) | `formatDistanceToNowStrict`, absolute time in `title` and `dateTime`; re-renders each minute |
+
+  `ContentStatus` and `CONTENT_STATUSES` live in `src/api/content.ts`. Kit and
+  styleguide strings are in the `common` (`ui.*`, `status.*`, `kit.*`) and `styleguide`
+  namespaces.
+
+Rules for generated files:
 
 - Restyled only through tokens. Token values never go into `globals.css` or a
   component: after `shadcn add`, revert anything the CLI wrote into `globals.css`
   (`:root`/`.dark` blocks, `@theme` lines) — every variable it needs already exists in
-  `tokens.css` — and restore the pins (F13).
+  `tokens.css` — and restore the pins (F13). Task 8's `add` wrote nothing into
+  `globals.css`; it set `recharts` to 3.8.0 and added `next-themes ^0.4.6`; both were
+  restored/removed (`pnpm add -E recharts@3.10.1`, `pnpm remove next-themes`), and the
+  lockfile ended byte-identical to before.
 - Generated files are prettier-formatted once after `add`; ESLint turns off
   `react-refresh/only-export-components` and `react-hooks/set-state-in-effect` for
-  `src/components/ui/**` and `src/hooks/use-mobile.ts` (F16).
+  `src/components/ui/**` and `src/hooks/use-mobile.ts` (F16). `chart.tsx` also gets
+  `no-unsafe-assignment`, `no-unsafe-member-access`, `no-unsafe-argument`,
+  `restrict-template-expressions` and `no-unnecessary-type-assertion` off: it types
+  Recharts' payloads as `any`.
 - English sr-only/aria strings go through `t("common:…")` (F31).
 - Focus: the base layer draws `outline: 2px solid var(--ring); outline-offset: 2px` on
-  `:focus-visible`. Generated classes `outline-none` plus `focus-visible:ring-*` (for
-  example in `button.tsx`) hide that outline; Task 8 replaces them so every control
-  shows the standard ring.
+  `:focus-visible`. Generated `outline-none`/`outline-hidden` and `focus-visible:ring-*`
+  classes hide it; Task 8 removed them from every interactive control (list below), so
+  each shows the standard ring. Items inside clipping popovers and table rows draw the
+  same ring inset (`-outline-offset-2`).
+- Overlays that are not controls keep `outline-none` (dialog, alert-dialog, popover and
+  hover-card content, command list): they only take focus when they hold nothing
+  focusable. Command items never take focus (cmdk keeps it in the input).
+- Menus: use `DropdownMenu modal={false}`. Radix's modal mode marks the rest of the page
+  `aria-hidden` while it stays focusable, which axe reports as `aria-hidden-focus`
+  (checked in Task 8; `Dialog`, `AlertDialog` and `Sheet` pass).
+- Do not put `CommandSeparator` inside `CommandList`: a `separator` child of a `listbox`
+  fails axe `aria-required-children`.
+- Do not put `Kbd`/`KbdCombo` inside a filled (primary) button: their muted colours fail
+  contrast there; show the shortcut in the button's tooltip.
 - `no_raw_colours_outside_tokens` allowlists exactly these strings, only in
   `src/components/ui/chart.tsx` (F30): `[stroke='#ccc']` and `[stroke='#fff']` — the
-  shadcn chart's selectors for Recharts' default grid/axis and dot/sector strokes
-  (registry `radix-nova/chart`, checked 2026-10-25: three `#ccc`, two `#fff`). Nothing
-  else in that file, and no other file, may hold a colour literal.
+  shadcn chart's selectors for Recharts' default grid/axis and dot/sector strokes. The
+  generated file holds exactly three `#ccc` and two `#fff` (checked 2026-10-25), nothing
+  else, and no other file may hold a colour literal.
+
+**Every edit to a generated file (Task 8):**
+
+| File | Edit | Why |
+|---|---|---|
+| `button.tsx` | removed `outline-none`, `focus-visible:border-ring`, `focus-visible:ring-3`, `focus-visible:ring-ring/50`; in `destructive` removed `focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40` | standard focus ring |
+| `button.tsx` | `default` hover `bg-primary/80` → `bg-[color-mix(in_oklab,var(--primary),var(--foreground)_12%)]` | `primary/80` gave 3.64:1 for the label (axe on the forced hover state); oklab keeps the hue |
+| `button.tsx` | `destructive` hover `bg-destructive/20` (dark `/30`) → `hover:border-destructive/50` | the tint gave 3.88:1 (light) / 3.91:1 (dark) |
+| `button.tsx` | size `default` `h-8 px-2.5` → `h-control px-3` (icon padding 2 → 2.5); `icon` `size-8` → `size-control`; `lg` `h-9` → `h-[calc(var(--control-h)+4px)] px-3.5`; `icon-lg` likewise | buttons follow density (§4) and touch height; `lg` stays above default |
+| `badge.tsx` | removed the `focus-visible:*` ring classes (both places); link hover `bg-primary/80` → the oklab mix | standard focus ring; contrast |
+| `checkbox.tsx` | removed `outline-none` and the `focus-visible:*` ring classes; `group/checkbox`; indeterminate shows `MinusIcon` and the filled primary style | standard focus ring; "select all" with some rows selected |
+| `input.tsx` | removed `outline-none` and the `focus-visible:*` ring classes; `h-8` → `h-control` | focus ring; density |
+| `textarea.tsx` | removed `outline-none` and the `focus-visible:*` ring classes | focus ring |
+| `input-group.tsx` | group: removed `outline-none` and the `has-[…:focus-visible]` border/ring classes, added `has-[[data-slot=input-group-control]:focus-visible]:outline-2 …:outline-offset-2 …:outline-ring`; `h-8` → `h-control`; controls: `focus-visible:ring-0` → `focus-visible:outline-none` | the ring goes around the group, not the inner input |
+| `select.tsx` | trigger: removed `outline-none` and ring classes, `data-[size=default]:h-8` → `h-control`; item: `outline-hidden` → `-outline-offset-2` | focus ring; density |
+| `switch.tsx` | removed `outline-none` and the `focus-visible:*` ring classes | focus ring |
+| `toggle.tsx` | removed `outline-none` and ring classes; `default` size `h-8 min-w-8` → `h-control min-w-control`; pressed `bg-muted` → `border-primary/50 bg-primary/10 text-foreground` with an ember icon | focus ring; density; `bg-muted` was nearly invisible on `card` (0.965 on 1), and ember text on the tint gave 4.42:1 |
+| `tabs.tsx` | trigger: removed the `focus-visible:*` ring/outline classes, `text-foreground/60` → `text-muted-foreground`; content: removed `outline-none` | focus ring (panels are focusable); inactive tabs were 4.48:1 on `muted` |
+| `dropdown-menu.tsx` | item, checkbox item, radio item, sub-trigger: `outline-hidden` → `-outline-offset-2` | focus ring, inset inside the menu |
+| `scroll-area.tsx` | viewport: removed `outline-none` and ring classes, added `-outline-offset-2` and `tabIndex={0}` | a scrollable region must be keyboard-reachable (axe `scrollable-region-focusable`) |
+| `sidebar.tsx` | group label, group action, menu button, menu action, sub button: removed `outline-hidden focus-visible:ring-2`; strings through `t()` | focus ring; F31 |
+| `calendar.tsx` | day: removed `group-data-[focused=true]/day:border-ring …:ring-[3px] …:ring-ring/50` | the day button (a `Button`) shows the standard ring |
+| `chart.tsx` | removed `[&_.recharts-surface]:outline-hidden` | Recharts 3's accessibility layer makes the surface focusable |
+| `command.tsx` | input: `outline-hidden` → `focus-visible:outline-none`; its `InputGroup` gets `has-[[data-slot=command-input]:focus-visible]:outline-2 …:outline-offset-2 …:outline-ring`; `CommandDialog` title/description default to `t("ui.commandPalette")` / `t("ui.commandPaletteDescription")` | focus ring on the field; F31 |
+| `dialog.tsx`, `sheet.tsx`, `alert-dialog.tsx` | overlay `bg-black/10` → `bg-overlay`; "Close" → `t("ui.close")` (dialog, sheet) | mode-aware scrim token; F31 |
+| `breadcrumb.tsx` | `aria-label="breadcrumb"` → `t("ui.breadcrumb")`; "More" → `t("ui.more")` | F31 |
+| `sonner.tsx` | `useTheme` from `@/design/theme` instead of `next-themes`; dropped the `as ToasterProps["theme"]` cast | P9 (the cast was unnecessary with our typed theme) |
+
+Tailwind, CSS and lint config edits made in Task 8:
+
+- `globals.css`: `@custom-variant hover` = Tailwind's own `@media (hover: hover) {
+  &:hover }` plus `&:is(.force-hover)`, so `.force-hover` shows every `hover:` and
+  `group-hover:` style; the base `:focus-visible` rule also matches `.force-focus`. Both
+  classes exist for the styleguide's state matrices.
+- `globals.css`: `--color-overlay`; `tokens.css`: `--overlay` and the coarse-pointer
+  block (§3, §4); `tokens.ts`: `overlay` in the surface group.
+- `eslint.config.js`: the `chart.tsx` override above.
+- `e2e/support/snap.ts`: `settle()` lets two frames pass before collecting animations,
+  because a colour-scheme change reaches `<html>` through a React effect and the colour
+  transitions start only after it (axe otherwise sampled mid-transition).
 
 Tailwind and lint config edits made in Task 7:
 

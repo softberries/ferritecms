@@ -11,5 +11,57 @@
     "rateLimitedLater": "Too many requests. Try again in a moment.",
     "busy": "The server is busy. Try again in {{seconds}} s.",
     "busyLater": "The server is busy. Try again in a moment."
+  },
+  "ui": {
+    "close": "Close",
+    "more": "More",
+    "breadcrumb": "Breadcrumb",
+    "sidebar": "Sidebar",
+    "sidebarDescription": "Displays the mobile sidebar.",
+    "toggleSidebar": "Toggle sidebar",
+    "commandPalette": "Command palette",
+    "commandPaletteDescription": "Search for a command to run."
+  },
+  "status": {
+    "draft": "Draft",
+    "pending": "Pending review",
+    "scheduled": "Scheduled",
+    "published": "Published",
+    "private": "Private",
+    "trash": "Trash"
+  },
+  "kit": {
+    "error": {
+      "title": "Something went wrong",
+      "unknown": "The request failed. Check your connection and try again.",
+      "retry": "Try again"
+    },
+    "forbidden": {
+      "title": "You don't have access to this",
+      "body": "Your role doesn't include this screen. Ask an administrator if you need it."
+    },
+    "metric": {
+      "up": "Up {{value}} on the previous period",
+      "down": "Down {{value}} on the previous period",
+      "flat": "No change on the previous period"
+    },
+    "table": {
+      "selectAll": "Select all rows",
+      "selectRow": "Select row",
+      "loading": "Loading",
+      "actions": "Row actions",
+      "keyboardHint": "j / k to move, x to select, Enter to open"
+    },
+    "save": {
+      "saved": "Saved",
+      "savedAt": "Saved at {{time}}",
+      "saving": "Saving…",
+      "dirty": "Unsaved changes",
+      "error": "Couldn't save",
+      "offline": "Offline, waiting to reconnect"
+    },
+    "kbd": {
+      "then": "then"
+    }
   }
 }

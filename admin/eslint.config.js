@@ -71,6 +71,17 @@ export default defineConfig([
     },
   },
   {
+    // The generated shadcn chart types Recharts' payloads as `any` (docs/design/11-admin-ui.md §7).
+    files: ["src/components/ui/chart.tsx"],
+    rules: {
+      "@typescript-eslint/no-unsafe-assignment": "off",
+      "@typescript-eslint/no-unsafe-member-access": "off",
+      "@typescript-eslint/no-unsafe-argument": "off",
+      "@typescript-eslint/restrict-template-expressions": "off",
+      "@typescript-eslint/no-unnecessary-type-assertion": "off",
+    },
+  },
+  {
     // Playwright code, not React: fixtures call their `use` callback, and a fixture
     // without dependencies takes `{}` (Playwright requires an object pattern).
     files: ["e2e/**/*.ts", "playwright.config.ts"],

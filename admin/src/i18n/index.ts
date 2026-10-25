@@ -1,10 +1,11 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import common from "./en/common.json";
+import styleguide from "./en/styleguide.json";
 
 /** Every namespace, one per area of the admin. English only in M2b. */
 export const resources = {
-  en: { common },
+  en: { common, styleguide },
 } as const;
 
 export const defaultNS = "common";

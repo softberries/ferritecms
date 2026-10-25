@@ -21,6 +21,7 @@ export const TOKENS = {
     "border",
     "input",
     "ring",
+    "overlay",
   ],
   brand: ["primary", "primary-foreground"],
   semantic: ["destructive", "success", "warning", "info"],

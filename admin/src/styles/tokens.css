@@ -29,6 +29,8 @@
   --accent-foreground: var(--foreground);
   --border: oklch(0.91 0.005 260);
   --input: oklch(0.64 0.01 260);
+  /* Scrim behind dialogs, sheets and alert dialogs (decoration; no contrast pair). */
+  --overlay: oklch(0.21 0.012 260 / 0.24);
 
   /* "Ember": oxidised iron. */
   --primary: oklch(0.55 0.17 40);
@@ -95,6 +97,15 @@ html[data-density="compact"] {
   --page-pad: 16px;
 }
 
+/* Touch screens: controls and rows stay at least 44 px whatever the density (11 §4). */
+@media (pointer: coarse) {
+  :root:root,
+  :root[data-density] {
+    --control-h: 44px;
+    --row-h: 48px;
+  }
+}
+
 .dark {
   color-scheme: dark;
 
@@ -105,6 +116,7 @@ html[data-density="compact"] {
   --muted-foreground: oklch(0.71 0.015 260);
   --border: oklch(0.29 0.01 260);
   --input: oklch(0.52 0.012 260);
+  --overlay: oklch(0.1 0.005 260 / 0.6);
 
   --primary: oklch(0.73 0.15 52);
   --primary-foreground: oklch(0.2 0.03 45);

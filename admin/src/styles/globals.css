@@ -12,6 +12,20 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* The styleguide shows states statically (11 §7): an element with `.force-hover` gets
+   its `hover:` styles (`group-hover` included), and `.force-focus` draws the focus ring.
+   On devices with hover this is Tailwind's own `@media (hover: hover) { &:hover }`. */
+@custom-variant hover {
+  @media (hover: hover) {
+    &:hover {
+      @slot;
+    }
+  }
+  &:is(.force-hover) {
+    @slot;
+  }
+}
+
 /* `--shadow-1..3` and `--ease-*` keep their token names here, so Tailwind also writes
    `--x: var(--x)` into its theme layer; the unlayered tokens.css declaration wins the
    cascade, and the utilities read the token. */
@@ -31,6 +45,7 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
+  --color-overlay: var(--overlay);
   --color-ring: var(--ring);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
@@ -161,7 +176,8 @@
   ::selection {
     background-color: color-mix(in oklch, var(--primary) 24%, transparent);
   }
-  :focus-visible {
+  :focus-visible,
+  .force-focus {
     outline: 2px solid var(--ring);
     outline-offset: 2px;
   }

@@ -18,6 +18,17 @@ export function ifMatch(version: number): { "If-Match": string } {
   return { "If-Match": `"${version}"` };
 }
 
+/** Every content status, in lifecycle order (`ContentDto.status`; 07 §1). */
+export const CONTENT_STATUSES = [
+  "draft",
+  "pending",
+  "scheduled",
+  "published",
+  "private",
+  "trash",
+] as const;
+export type ContentStatus = (typeof CONTENT_STATUSES)[number];
+
 export type ContentListQuery = NonNullable<operations["list_content"]["parameters"]["query"]>;
 
 export function listContent(
