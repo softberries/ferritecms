@@ -11,8 +11,12 @@ use utoipa::{
 
 use super::problem::{FieldError, ProblemDocument};
 
-/// Name of the session cookie (P7) as the `session` security scheme describes it.
+/// Name of the session cookie (P7) on an `http` site.
 pub const SESSION_COOKIE: &str = "ferrite_session";
+/// Name of the session cookie on an `https` site (M2a-2b P23): the `__Host-` prefix
+/// makes browsers accept it only with `Secure`, `Path=/` and no `Domain`, so a sibling
+/// subdomain or a plain-http response cannot plant or overwrite it.
+pub const HOST_SESSION_COOKIE: &str = "__Host-ferrite_session";
 
 /// The document's fixed parts; paths come from [`super::router`].
 #[derive(OpenApi)]
@@ -39,7 +43,8 @@ pub const SESSION_COOKIE: &str = "ferrite_session";
 )]
 pub struct ApiDoc;
 
-/// Adds the `session` (cookie `ferrite_session`) and `bearer` (API token) schemes, and
+/// Adds the `session` (cookie `__Host-ferrite_session`, or `ferrite_session` on an
+/// `http` site) and `bearer` (API token) schemes, and
 /// drops the license the derive copies from the (empty) Cargo `license` field.
 struct SecuritySchemes;
 
@@ -49,7 +54,14 @@ impl Modify for SecuritySchemes {
         let components = openapi.components.get_or_insert_with(Default::default);
         components.add_security_scheme(
             "session",
-            SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::new(SESSION_COOKIE))),
+            SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::with_description(
+                HOST_SESSION_COOKIE.to_owned(),
+                format!(
+                    "The session cookie set by `POST /auth/login`. Its name follows the \
+                     scheme of `site.url`: `{HOST_SESSION_COOKIE}` on an `https` site, \
+                     `{SESSION_COOKIE}` on an `http` site; only that name is read."
+                ),
+            ))),
         );
         components.add_security_scheme(
             "bearer",

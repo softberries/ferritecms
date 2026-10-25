@@ -57,7 +57,8 @@ pub const MAX_MAIL_BODY_BYTES: usize = 64 * 1024;
 /// Host-import budget for one call (design 05 §6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Budget {
-    /// `content`, `meta`, `options` and `settings` calls (all storage reads/writes).
+    /// `content`, `meta`, `options` and `settings` calls (all storage reads/writes): one
+    /// unit each, two for `meta.get` ([`META_GET_COST`]).
     content: u32,
     kv_ops: u32,
     /// Bytes (key + value) `kv.set` may still write.
@@ -84,7 +85,16 @@ impl Budget {
 
 /// Take one unit from `counter`; `false` when it is already exhausted.
 fn take(counter: &mut u32) -> bool {
-    match counter.checked_sub(1) {
+    take_n(counter, 1)
+}
+
+/// `content` units one `meta.get` costs (M2a-2a R22 M6): up to three store reads
+/// (`post_kind`, the visibility check, the meta read), so twice a plain read.
+const META_GET_COST: u32 = 2;
+
+/// Take `n` units from `counter`, all or none; `false` when fewer than `n` are left.
+fn take_n(counter: &mut u32, n: u32) -> bool {
+    match counter.checked_sub(n) {
         Some(left) => {
             *counter = left;
             true
@@ -382,7 +392,7 @@ impl meta::Host for HostState {
         let readable = meta_key_matches(&self.grants.content_meta_read, &key, &self.plugin)
             || meta_key_matches(&self.grants.content_meta_write, &key, &self.plugin)
             || self.own_meta_key(&key);
-        if !take(&mut self.budget.content) || !readable {
+        if !take_n(&mut self.budget.content, META_GET_COST) || !readable {
             return None;
         }
         self.trace.post(&post);
@@ -740,6 +750,40 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    /// R22 M6: `meta.get` takes 2 of the 100 `content` units, so the 51st in one call
+    /// is refused.
+    #[tokio::test]
+    async fn meta_get_costs_two_units() {
+        let (mut caps, services) = post_reader();
+        caps.content_meta_read = vec!["seo.*".into()];
+        services
+            .meta_set("p", "seo.k", "\"v\"")
+            .await
+            .expect("seed");
+        let mut s = state(caps, services);
+        for i in 0..50 {
+            assert_eq!(
+                meta::Host::get(&mut s, "p".into(), "seo.k".into())
+                    .await
+                    .as_deref(),
+                Some("\"v\""),
+                "get {i}"
+            );
+        }
+        assert_eq!(s.budget.content, 0);
+        assert_eq!(
+            meta::Host::get(&mut s, "p".into(), "seo.k".into()).await,
+            None
+        );
+        // With one unit left, a `meta.get` is refused and does not take it.
+        s.budget.content = 1;
+        assert_eq!(
+            meta::Host::get(&mut s, "p".into(), "seo.k".into()).await,
+            None
+        );
+        assert_eq!(s.budget.content, 1);
     }
 
     #[tokio::test]

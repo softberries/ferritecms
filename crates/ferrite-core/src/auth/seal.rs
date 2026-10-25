@@ -5,6 +5,7 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use zeroize::Zeroize;
 
 use super::key::{SEAL_LABEL, SiteKey, random_bytes};
 use crate::CoreError;
@@ -13,8 +14,12 @@ const PREFIX: &str = "v1.";
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
 
+/// The cipher under the seal subkey; the subkey and its array copy are wiped here (P24).
 fn cipher(key: &SiteKey) -> XChaCha20Poly1305 {
-    XChaCha20Poly1305::new(&key.subkey(SEAL_LABEL).into())
+    let mut array = (*key.subkey(SEAL_LABEL)).into();
+    let cipher = XChaCha20Poly1305::new(&array);
+    array.zeroize();
+    cipher
 }
 
 /// `"v1." + base64url_nopad(nonce(24) || ciphertext || tag)` with a fresh random nonce.

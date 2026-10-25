@@ -40,6 +40,7 @@ use uuid::Uuid;
 
 use super::{
     ApiState, Authed, BASE,
+    dto::Password,
     dto::users::{
         CreatedTokenDto, DeleteUserParams, PasswordSet, TokenDto, TokenInput, TokenList, UserDto,
         UserInput, UserList, UserPatchInput,
@@ -111,7 +112,7 @@ pub async fn create_user(
                 email: input.email,
                 display_name: input.display_name,
                 role: input.role.into(),
-                password: input.password,
+                password: input.password.map(Password::into_secret),
                 must_reset: input.must_reset,
             },
         )
@@ -247,7 +248,7 @@ pub async fn set_user_password(
         ));
     }
     api.users
-        .set_password(&who.actor, id, None, &req.password, None)
+        .set_password(&who.actor, id, None, req.password.expose(), None)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }

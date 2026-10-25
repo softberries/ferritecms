@@ -58,8 +58,9 @@ pub struct NewAccount {
     pub email: String,
     pub display_name: String,
     pub role: Role,
-    /// `None` creates an account that cannot log in until a password is set.
-    pub password: Option<String>,
+    /// `None` creates an account that cannot log in until a password is set. A
+    /// [`Secret`]: redacted in `Debug`, wiped when dropped (M2a-2b P24).
+    pub password: Option<Secret>,
     /// Force a password change at the next login.
     pub must_reset: bool,
 }
@@ -390,6 +391,7 @@ impl UserService {
         let display_name = normalize_display_name(&account.display_name)?;
         let password_hash = match &account.password {
             Some(pw) => {
+                let pw = pw.expose();
                 password::check_policy(pw).map_err(|e| match e {
                     CoreError::Invalid(msg) => CoreError::invalid_field("password", msg),
                     other => other,

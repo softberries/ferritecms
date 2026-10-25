@@ -212,10 +212,10 @@ Outline in the M2a-2 plan ("Next plan: M2a-2b"); it gets its own plan.
 - [ ] Comments: moderation endpoints, public `POST` (rate-limited, honeypot), comment settings.
 - [ ] System API: status (incl. the theme fallback flag), nodes, jobs (queued kinds no node knows stay queued, M1.5 P5; dead jobs with `last_error`, retry), per-plugin metrics (`GET /plugins/{name}/metrics`), metrics summary, audit log listing.
 - [x] Node-reported error text (`nodes.meta` plugin and theme `error`, shown to admins by `GET /plugins` and `GET /themes`, and next by the system API) is passed through verbatim, cut to 1 KiB; it can carry storage-backend error text (local paths, S3 endpoints). Sanitise it or document it as operator diagnostics with the system API (M2a-2a Task 4 review, minor 4). Done in M2a-2b Task 9: scrubbed at the source and again on read (P18, 04 §3, 07 §1).
-- [ ] Hardening: sanitised `html` block nodes keep ammonia's default URL schemes, so `//evil` (scheme-relative), `ftp:` and `tel:` links pass (`ferrite-core/src/blocks`); decide an allowlist. Real `http` import (HTTPS only, allowlisted hosts, resolved-address SSRF checks, redirects to allowlisted hosts).
+- [x] Hardening: sanitised `html` block nodes keep ammonia's default URL schemes, so `//evil` (scheme-relative), `ftp:` and `tel:` links pass (`ferrite-core/src/blocks`); decide an allowlist. Real `http` import (HTTPS only, allowlisted hosts, resolved-address SSRF checks, redirects to allowlisted hosts). Done in M2a-2b: the shared URL allowlist `ferrite_domain::html` for content blocks and plugin `html` in Task 12 (P21), the `http` import in Task 11 (P16).
 - [ ] Auth follow-ups from M2a-1:
-  - [ ] `__Host-` prefix for the session cookie on `https` sites (defence against cookie tossing from a sibling subdomain; the cookie is `ferrite_session` today).
-  - [ ] Zeroize key material and passwords in memory (`SiteKey` is `Clone`; subkeys, HMAC blocks and password `String` copies stay in memory after use); parked from the M2a-1 Task 3 and Task 4 reviews (logs and `Debug` already redact them).
+  - [x] `__Host-` prefix for the session cookie on `https` sites (defence against cookie tossing from a sibling subdomain; the cookie is `ferrite_session` today). Done in M2a-2b Task 12 (P23; the name follows `site.url`'s scheme, no transition read).
+  - [x] Zeroize key material and passwords in memory (`SiteKey` is `Clone`; subkeys, HMAC blocks and password `String` copies stay in memory after use); parked from the M2a-1 Task 3 and Task 4 reviews (logs and `Debug` already redact them). Done in M2a-2b Task 12 (P24; serde_json buffers and argon2 internals are not wiped, 07 §2).
   - [ ] Term archives for custom types: `SiteReader::term_archive_page` lists only `post` items, so a taxonomy used only on custom types has 404 term archives (pre-existing since M1c-2; M2a-1 ruling R18).
 - [ ] Deferred from M1c-2:
   - [ ] Term rename and `permalink.*` option changes record no redirects (only content moves do).
@@ -228,7 +228,7 @@ Outline in the M2a-2 plan ("Next plan: M2a-2b"); it gets its own plan.
   - [ ] Wire the `render.footer` filter into rendering (in the hook catalogue, not called yet).
   - [ ] Make the 60 s short TTL configurable (search TTL with `0` disabling it, 06 §6; `plugins.volatile_ttl`, 05 §7a).
 - [ ] Deferred from the M2a-2a final review (ruling R22):
-  - [ ] `meta.get` makes up to three primary-key reads per budget unit (`post_kind`, then `is_visible` and the meta read): charge 2 units, or fold the type check into the services read (M6).
+  - [x] `meta.get` makes up to three primary-key reads per budget unit (`post_kind`, then `is_visible` and the meta read): charge 2 units, or fold the type check into the services read (M6). Done in M2a-2b Task 12: 2 units.
   - [ ] Test seams (`Installer::with_theme_loaded`, `Installer::with_prepare`, `PluginReloader::with_prepare`, `NodeOptions::{served_flush, listen, boot_barrier}`, `SharedFailures::with_before_disable`) are `#[doc(hidden)] pub` runtime hooks: move all of them behind one dev-only cargo feature in one chore (M11).
 
 ### M2b — admin SPA

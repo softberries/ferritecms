@@ -194,7 +194,7 @@ impl App {
             .issue_session(user, None, None)
             .await
             .expect("session");
-        format!("ferrite_session={}", issued.token.expose())
+        format!("__Host-ferrite_session={}", issued.token.expose())
     }
 
     /// GET `path` with the `Cookie` header `cookie`.

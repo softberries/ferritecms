@@ -719,13 +719,22 @@ impl Client {
         }
     }
 
+    /// The session cookie's name on the client's site (M2a-2b P23): `__Host-` on https.
+    pub fn cookie_name(&self) -> &'static str {
+        if self.origin.starts_with("https://") {
+            "__Host-ferrite_session"
+        } else {
+            "ferrite_session"
+        }
+    }
+
     /// A request carrying the client's `Origin`, cookie and (for unsafe methods) CSRF
     /// token.
     pub fn builder(&self, method: Method, path: &str) -> request::Builder {
         let unsafe_method = method != Method::GET && method != Method::HEAD;
         let mut b = builder(method, path).header(header::ORIGIN, &self.origin);
         if let Some(c) = &self.cookie {
-            b = b.header(header::COOKIE, format!("ferrite_session={c}"));
+            b = b.header(header::COOKIE, format!("{}={c}", self.cookie_name()));
         }
         if let (true, Some(t)) = (unsafe_method, &self.csrf) {
             b = b.header("x-csrf-token", t);
@@ -743,7 +752,8 @@ impl Client {
             let value = set
                 .split(';')
                 .next()
-                .and_then(|kv| kv.strip_prefix("ferrite_session="))
+                .and_then(|kv| kv.strip_prefix(self.cookie_name()))
+                .and_then(|kv| kv.strip_prefix('='))
                 .expect("session cookie")
                 .to_owned();
             self.csrf = None;

@@ -31,6 +31,7 @@ use ferrite_store::{Repos, Store};
 use hmac::Mac;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
+use zeroize::Zeroizing;
 
 use super::key::{
     COMMENT_IP_LABEL, PLUGIN_IP_LABEL, SiteKey, hex, ip_hash, keyed_id, keyed_mac, random_bytes,
@@ -936,15 +937,18 @@ impl AuthService {
         keyed_id(&self.key, CHALLENGE_PW_LABEL, hash.as_bytes())
     }
 
-    fn totp_secret_of(&self, user: &User) -> Result<Vec<u8>, CoreError> {
+    /// The user's TOTP secret, opened; wiped when dropped (P24).
+    fn totp_secret_of(&self, user: &User) -> Result<Zeroizing<Vec<u8>>, CoreError> {
         let sealed = user
             .totp_secret
             .as_ref()
             .ok_or(CoreError::Unauthenticated)?;
-        open(&self.key, &secret_purpose(user.id), sealed.expose()).map_err(|_| {
-            tracing::error!(user = %user.id, "stored TOTP secret does not open (wrong site key?)");
-            CoreError::Unauthenticated
-        })
+        open(&self.key, &secret_purpose(user.id), sealed.expose())
+            .map(Zeroizing::new)
+            .map_err(|_| {
+                tracing::error!(user = %user.id, "stored TOTP secret does not open (wrong site key?)");
+                CoreError::Unauthenticated
+            })
     }
 
     pub(super) fn seal_json<T: Serialize>(

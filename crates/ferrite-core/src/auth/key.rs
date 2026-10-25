@@ -6,6 +6,7 @@ use std::net::IpAddr;
 
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::CoreError;
 
@@ -23,8 +24,9 @@ const KEY_LEN: usize = 32;
 const HMAC_BLOCK: usize = 64;
 
 /// The site's master key. `Debug` is redacted; there is deliberately no serde, so it
-/// cannot end up in a config dump, a log line or an API response.
-#[derive(Clone)]
+/// cannot end up in a config dump, a log line or an API response. Every copy (it is
+/// `Clone`) is wiped when dropped, and so are its [`subkey`](Self::subkey)s (P24).
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct SiteKey([u8; KEY_LEN]);
 
 impl fmt::Debug for SiteKey {
@@ -41,19 +43,21 @@ impl SiteKey {
         if bytes.len() != KEY_LEN * 2 {
             return Err(invalid());
         }
-        let mut key = [0u8; KEY_LEN];
+        let mut key = Self([0u8; KEY_LEN]);
         let (pairs, _) = bytes.as_chunks::<2>();
-        for (out, [hi, lo]) in key.iter_mut().zip(pairs) {
+        for (out, [hi, lo]) in key.0.iter_mut().zip(pairs) {
             let hi = hex_value(*hi).ok_or_else(invalid)?;
             let lo = hex_value(*lo).ok_or_else(invalid)?;
             *out = (hi << 4) | lo;
         }
-        Ok(Self(key))
+        Ok(key)
     }
 
     /// A new random key from the operating system's generator.
     pub fn generate() -> Result<Self, CoreError> {
-        random_bytes().map(Self)
+        let mut key = Self([0u8; KEY_LEN]);
+        getrandom::fill(&mut key.0).map_err(|_| CoreError::Random)?;
+        Ok(key)
     }
 
     /// 64 lowercase hex characters.
@@ -61,9 +65,10 @@ impl SiteKey {
         hex(&self.0)
     }
 
-    /// HMAC-SHA256(master key, `label`): one independent key per purpose.
-    pub fn subkey(&self, label: &str) -> [u8; 32] {
-        hmac_sha256(&self.0, label.as_bytes())
+    /// HMAC-SHA256(master key, `label`): one independent key per purpose, wiped when
+    /// dropped.
+    pub fn subkey(&self, label: &str) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(hmac_sha256(&self.0, label.as_bytes()))
     }
 }
 
@@ -99,16 +104,22 @@ fn hmac_sha256(key: &[u8; KEY_LEN], msg: &[u8]) -> [u8; 32] {
 
 /// An HMAC-SHA256 instance keyed with `key` of any length. The key is prepared as RFC 2104
 /// §2 says (hashed when longer than the block, then zero-padded to it), so the
-/// infallible `KeyInit::new` applies and the result equals `new_from_slice(key)`.
+/// infallible `KeyInit::new` applies and the result equals `new_from_slice(key)`. The
+/// prepared block is wiped here; the instance wipes its own key state when dropped
+/// (`hmac`'s `zeroize` feature, P24).
 pub(crate) fn keyed_mac(key: &[u8]) -> Hmac<Sha256> {
-    let mut block = [0u8; HMAC_BLOCK];
+    let mut block = Zeroizing::new([0u8; HMAC_BLOCK]);
     if key.len() > HMAC_BLOCK {
-        let digest: [u8; 32] = Sha256::digest(key).into();
+        let mut digest: [u8; 32] = Sha256::digest(key).into();
         block[..digest.len()].copy_from_slice(&digest);
+        digest.zeroize();
     } else {
         block[..key.len()].copy_from_slice(key);
     }
-    <Hmac<Sha256> as KeyInit>::new(&block.into())
+    let mut array = (*block).into();
+    let mac = <Hmac<Sha256> as KeyInit>::new(&array);
+    array.zeroize();
+    mac
 }
 
 /// Lowercase hex SHA-256 of `bytes` (session and token ids in the database).
@@ -170,6 +181,32 @@ mod tests {
         assert_eq!(a.to_hex().len(), 64);
     }
 
+    /// P24: the key's bytes are wiped by what its `Drop` runs (`zeroize`), and every
+    /// type that holds key material wipes itself on drop.
+    #[test]
+    fn site_key_is_zeroized_on_drop() {
+        use std::mem::ManuallyDrop;
+        fn wipes_on_drop<T: ZeroizeOnDrop>() {}
+        wipes_on_drop::<SiteKey>();
+        wipes_on_drop::<Zeroizing<[u8; 32]>>();
+        // HMAC's inner and outer SHA-256 states (derived from its key; `sha2`'s `zeroize`).
+        wipes_on_drop::<sha2::block_api::Sha256VarCore>();
+        wipes_on_drop::<ferrite_domain::Secret>();
+
+        // `ManuallyDrop` keeps the memory alive to look at after the wipe.
+        let mut key = ManuallyDrop::new(SiteKey::from_hex(HEX).unwrap());
+        assert_ne!(key.0, [0u8; KEY_LEN]);
+        key.zeroize();
+        assert_eq!(key.0, [0u8; KEY_LEN]);
+        let mut copy = ManuallyDrop::new(SiteKey::from_hex(HEX).unwrap().clone());
+        copy.zeroize();
+        assert_eq!(copy.0, [0u8; KEY_LEN]);
+        let mut sub = ManuallyDrop::new(SiteKey::from_hex(HEX).unwrap().subkey(SEAL_LABEL));
+        assert_ne!(**sub, [0u8; 32]);
+        sub.zeroize();
+        assert_eq!(**sub, [0u8; 32]);
+    }
+
     #[test]
     fn subkeys_differ_by_label() {
         let key = SiteKey::from_hex(HEX).unwrap();
@@ -178,7 +215,7 @@ mod tests {
         assert_ne!(key.subkey(IP_HASH_LABEL), key.subkey(COMMENT_IP_LABEL));
         assert_ne!(key.subkey(PLUGIN_IP_LABEL), key.subkey(COMMENT_IP_LABEL));
         assert_eq!(key.subkey(SEAL_LABEL), key.subkey(SEAL_LABEL));
-        assert_ne!(key.subkey(SEAL_LABEL), [0u8; 32]);
+        assert_ne!(*key.subkey(SEAL_LABEL), [0u8; 32]);
         let other = SiteKey::generate().unwrap();
         assert_ne!(key.subkey(SEAL_LABEL), other.subkey(SEAL_LABEL));
     }
@@ -191,7 +228,7 @@ mod tests {
         let mut mac = Hmac::<Sha256>::new_from_slice(&key.0).unwrap();
         mac.update(SEAL_LABEL.as_bytes());
         let want: [u8; 32] = mac.finalize().into_bytes().into();
-        assert_eq!(key.subkey(SEAL_LABEL), want);
+        assert_eq!(*key.subkey(SEAL_LABEL), want);
     }
 
     #[test]

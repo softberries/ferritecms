@@ -1,10 +1,29 @@
 use super::text::collect_text;
 use super::url::{ImageSrc, image_src, safe_href};
 use super::{MAX_DEPTH, RenderCtx};
+use ferrite_domain::html::{SAFE_URL_SCHEMES, relative_url_allowed};
 use html_escape::{encode_double_quoted_attribute, encode_text};
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::HashSet;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex, OnceLock};
+
+/// The sanitiser for `html` nodes: ammonia's defaults with the shared URL policy
+/// (M2a-2b P21, [`ferrite_domain::html`]): only `http`, `https` and `mailto` absolute
+/// URLs, and relative URLs that [`relative_url_allowed`] accepts.
+///
+/// [`relative_url_allowed`]: ferrite_domain::html::relative_url_allowed
+static HTML_SANITIZER: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
+    let mut b = ammonia::Builder::default();
+    b.url_schemes(SAFE_URL_SCHEMES.into_iter().collect())
+        .url_relative(ammonia::UrlRelative::Custom(Box::new(keep_relative)));
+    b
+});
+
+/// A relative URL as the shared policy allows it, else `None` (the attribute is dropped).
+fn keep_relative(url: &str) -> Option<Cow<'_, str>> {
+    relative_url_allowed(url).then_some(Cow::Borrowed(url))
+}
 
 /// Renders a TipTap/ProseMirror JSON document to HTML. All text and attribute values
 /// are escaped; unsafe URLs are dropped. Nodes deeper than `MAX_DEPTH` render their
@@ -84,7 +103,7 @@ fn render_object(
         "tableCell" => wrap("td", &span_attrs(map), map, depth, ctx, out),
         "html" => {
             if let Some(h) = attr_str(map, "html") {
-                out.push_str(&ammonia::clean(h));
+                out.push_str(&HTML_SANITIZER.clean(h).to_string());
             }
         }
         "text" => render_text(map, out),
@@ -517,6 +536,46 @@ mod tests {
             !out.contains("script") && !out.contains("onclick") && !out.contains("javascript"),
             "{out}"
         );
+    }
+
+    /// M2a-2b P21: `html` nodes follow the shared URL policy (`ferrite_domain::html`).
+    #[test]
+    fn html_link_schemes() {
+        let link = |href: &str| {
+            let d = doc(vec![json!({
+                "type": "html",
+                "attrs": {"html": format!("<a href=\"{href}\">l</a><img src=\"{href}\">")}
+            })]);
+            r(d)
+        };
+        for bad in [
+            "//evil.example/x",
+            "\\\\evil.example/x",
+            "/\\evil.example/x",
+            "ftp://files.example/x",
+            "tel:+15550100",
+            "javascript:alert(1)",
+            "data:text/html,x",
+        ] {
+            let out = link(bad);
+            assert!(
+                !out.contains("href=") && !out.contains("src="),
+                "{bad:?} kept: {out}"
+            );
+        }
+        for ok in [
+            "https://ok.example/x",
+            "mailto:a@b.example",
+            "/x",
+            "#a",
+            "x/y",
+        ] {
+            let out = link(ok);
+            assert!(
+                out.contains(&format!("href=\"{ok}\"")),
+                "{ok:?} dropped: {out}"
+            );
+        }
     }
 
     #[test]

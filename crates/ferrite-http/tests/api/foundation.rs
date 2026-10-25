@@ -34,9 +34,16 @@ async fn openapi_json_is_valid_3_1(api: Api) -> Api {
     assert_eq!(doc["info"]["title"], "FerriteCMS API");
     assert_eq!(doc["info"]["version"], "1");
     let schemes = &doc["components"]["securitySchemes"];
-    assert_eq!(
-        schemes["session"],
-        json!({"type": "apiKey", "in": "cookie", "name": "ferrite_session"})
+    // P23: the scheme names the https cookie and documents the http one.
+    assert_eq!(schemes["session"]["type"], "apiKey");
+    assert_eq!(schemes["session"]["in"], "cookie");
+    assert_eq!(schemes["session"]["name"], "__Host-ferrite_session");
+    let about = schemes["session"]["description"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        about.contains("`__Host-ferrite_session`") && about.contains("`ferrite_session`"),
+        "{about}"
     );
     assert_eq!(schemes["bearer"]["type"], "http");
     assert_eq!(schemes["bearer"]["scheme"], "bearer");

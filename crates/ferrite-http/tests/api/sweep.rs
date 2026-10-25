@@ -82,7 +82,7 @@ async fn send_raw(api: &Api, method: &Method, path: &str, cookie: Option<&str>) 
         .header(header::ORIGIN, crate::harness::SITE_URL)
         .header(header::CONTENT_TYPE, "application/json");
     if let Some(c) = cookie {
-        b = b.header(header::COOKIE, format!("ferrite_session={c}"));
+        b = b.header(header::COOKIE, format!("__Host-ferrite_session={c}"));
     }
     // Not JSON: a body extractor that ran first would answer 400.
     api.send(b.body(Body::from("{not json")).unwrap()).await
@@ -132,7 +132,7 @@ async fn unsafe_operations_need_auth_and_csrf(api: Api) -> Api {
     let r = api
         .send(
             builder(Method::GET, "/api/v1/auth/me")
-                .header(header::COOKIE, format!("ferrite_session={cookie}"))
+                .header(header::COOKIE, format!("__Host-ferrite_session={cookie}"))
                 .body(Body::empty())
                 .unwrap(),
         )

@@ -9,7 +9,9 @@
 //!    unknown, expired or of a disabled user is `401` with `Bearer
 //!    error="invalid_token"`. **A request with `Authorization` never falls back to the
 //!    cookie**, whether or not its token is valid.
-//! 2. Else the `ferrite_session` cookie goes to `AuthService::resolve_session`.
+//! 2. Else the session cookie (`__Host-ferrite_session` when `site.url` is `https`,
+//!    else `ferrite_session`; only that name, P23) goes to
+//!    `AuthService::resolve_session`.
 //! 3. Neither: `401 unauthenticated` with `WWW-Authenticate: Bearer` (every 401 has a
 //!    challenge, see [`problem`](super::problem)).
 //!
@@ -34,7 +36,7 @@
 //! before any credential or rate-limit work: a cross-site form cannot log a browser
 //! into an attacker's account (login CSRF). Every login failure is `401
 //! invalid-credentials`. A successful login replaces the browser's previous session: a
-//! `ferrite_session` cookie sent with the login is deleted server-side.
+//! session cookie sent with the login is deleted server-side.
 //!
 //! **Password reset** (`POST /auth/password-reset`, `POST /auth/password-reset/confirm`,
 //! M2a-2 P19) has no credentials either and checks the origin the same way. The request
@@ -146,7 +148,7 @@ impl FromRequestParts<Arc<ApiState>> for MaybeAuthed {
                 "the request does not come from the site's origin",
             ));
         }
-        let Some(token) = read_session_cookie(&parts.headers) else {
+        let Some(token) = read_session_cookie(&parts.headers, api.cookie_secure) else {
             return Ok(Self::Anonymous);
         };
         let Some(who) = api.auth.resolve_session(token).await? else {
@@ -198,7 +200,8 @@ async fn authenticate(parts: &Parts, api: &ApiState) -> Result<Authenticated, Pr
     if let Some(who) = bearer(parts, api).await {
         return who;
     }
-    let token = read_session_cookie(&parts.headers).ok_or(CoreError::Unauthenticated)?;
+    let token =
+        read_session_cookie(&parts.headers, api.cookie_secure).ok_or(CoreError::Unauthenticated)?;
     let who = api
         .auth
         .resolve_session(token)
@@ -295,7 +298,7 @@ fn login_problem(e: CoreError) -> Problem {
 /// `200` with the new session's cookie and [`LoginResponse::Session`]; the browser's
 /// previous session (its cookie in `headers`) is deleted.
 async fn logged_in(api: &ApiState, headers: &HeaderMap, issued: IssuedSession) -> Response {
-    if let Some(old) = read_session_cookie(headers)
+    if let Some(old) = read_session_cookie(headers, api.cookie_secure)
         && let Err(e) = api.auth.logout(old).await
     {
         tracing::warn!(error = %e, "previous session not deleted at login");
@@ -322,7 +325,7 @@ async fn logged_in(api: &ApiState, headers: &HeaderMap, issued: IssuedSession) -
     operation_id = "login",
     request_body = LoginRequest,
     responses(
-        (status = 200, description = "Logged in (sets the `ferrite_session` cookie), or a TOTP code is needed", body = LoginResponse),
+        (status = 200, description = "Logged in (sets the session cookie), or a TOTP code is needed", body = LoginResponse),
         (status = 401, description = "`invalid-credentials`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`csrf`: not from the site's origin", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 429, description = "`rate-limited` (see `Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
@@ -339,7 +342,7 @@ pub async fn login(
         .auth
         .login(LoginAttempt {
             login: &req.login,
-            password: &req.password,
+            password: req.password.expose(),
             ip: client.ip,
             user_agent: client.user_agent.as_deref(),
         })
@@ -360,7 +363,7 @@ pub async fn login(
     operation_id = "login_totp",
     request_body = TotpLoginRequest,
     responses(
-        (status = 200, description = "Logged in (sets the `ferrite_session` cookie)", body = LoginResponse),
+        (status = 200, description = "Logged in (sets the session cookie)", body = LoginResponse),
         (status = 401, description = "`invalid-credentials`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`csrf`: not from the site's origin", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 429, description = "`rate-limited` (see `Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
@@ -410,7 +413,7 @@ pub async fn logout(
         ));
     }
     // A session request has no `Authorization` header, so this is the cookie it used.
-    if let Some(token) = read_session_cookie(&headers) {
+    if let Some(token) = read_session_cookie(&headers, api.cookie_secure) {
         api.auth.logout(token).await?;
     }
     Ok((
@@ -446,7 +449,7 @@ pub async fn me(
     security(("session" = []), ("bearer" = [])),
     request_body = PasswordChange,
     responses(
-        (status = 200, description = "Changed; every session of the user is deleted. A session request gets a new `ferrite_session` cookie and its `X-CSRF-Token` in `csrf_token` (as the login response); a bearer request gets `csrf_token: null`", body = PasswordChanged),
+        (status = 200, description = "Changed; every session of the user is deleted. A session request gets a new session cookie and its `X-CSRF-Token` in `csrf_token` (as the login response); a bearer request gets `csrf_token: null`", body = PasswordChanged),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (wrong current password) or `csrf`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation`: the new password breaks the policy", body = ProblemDocument, content_type = "application/problem+json"),
@@ -464,8 +467,8 @@ pub async fn change_password(
         .change_password(
             &api.users,
             &who,
-            &req.current,
-            &req.new,
+            req.current.expose(),
+            req.new.expose(),
             client.ip,
             client.user_agent.as_deref(),
         )
@@ -531,7 +534,7 @@ pub async fn confirm_password_reset(
     ApiJson(req): ApiJson<PasswordResetConfirm>,
 ) -> Result<StatusCode, Problem> {
     api.auth
-        .confirm_password_reset(&api.users, &req.token, &req.password)
+        .confirm_password_reset(&api.users, &req.token, req.password.expose())
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -582,7 +585,13 @@ pub async fn totp_confirm(
         Via::Token(_) => None,
     };
     api.auth
-        .totp_confirm(&who.actor, keep, &req.enrollment, &req.code, &req.password)
+        .totp_confirm(
+            &who.actor,
+            keep,
+            &req.enrollment,
+            &req.code,
+            req.password.expose(),
+        )
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -607,7 +616,9 @@ pub async fn totp_disable(
     Authed(who): Authed,
     ApiJson(req): ApiJson<TotpDisable>,
 ) -> Result<StatusCode, Problem> {
-    api.auth.totp_disable(&who.actor, &req.password).await?;
+    api.auth
+        .totp_disable(&who.actor, req.password.expose())
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

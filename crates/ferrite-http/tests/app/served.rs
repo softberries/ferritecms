@@ -24,7 +24,7 @@ use crate::harness::App;
 
 const UA: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0";
 const IP: &str = "198.51.100.23";
-const COOKIE: &str = "ferrite_session=not-a-real-session; theme=dark";
+const COOKIE: &str = "__Host-ferrite_session=not-a-real-session; theme=dark";
 
 /// GET `path` as a browser would send it: user agent, referrer, cookie, client address.
 fn browser(path: &str) -> Request<Body> {

@@ -11,11 +11,14 @@
 //!   apple-touch-icon, manifest). Others are dropped (logged at `debug`).
 //! * `script-tag.src` must be `https://…`, a URL on the site's own origin, or
 //!   root-relative (`/…`, not `//…`); no backslashes, whitespace or control characters.
-//!   A root-relative src, or one on the site's host (any scheme or port), may not point
-//!   under `/_p/` (plugin routes) or `/_media/` (uploads): both serve bytes a plugin or
-//!   an author controls, and a head script runs with the site's origin (ruling R22).
-//!   The path is checked after percent-decoding (repeatedly), lowercasing, collapsing
-//!   `//` and resolving `.`/`..`, from the root and from the site URL's base path.
+//!   The src is resolved against `site.url` the way a browser does (`Url::join`: host
+//!   IDNA mapping, numeric IPv4 forms, default ports, dot segments; R24 N1), and a
+//!   src that resolves onto the site's host (any scheme or port, a trailing dot
+//!   ignored) may not point under `/_p/` (plugin routes) or `/_media/` (uploads): both
+//!   serve bytes a plugin or an author controls, and a head script runs with the
+//!   site's origin (ruling R22). The resolved path is checked after percent-decoding
+//!   (repeatedly), lowercasing, collapsing `//` and resolving `.`/`..`, from the root
+//!   and from the site URL's base path.
 //!   `/_theme/…` and external `https://` hosts stay allowed. Others are dropped and
 //!   logged (`warn`).
 //! * `script-tag.json-ld` must parse as JSON. It is re-serialised compactly and every
@@ -289,48 +292,39 @@ fn clean_url(url: &str) -> bool {
 }
 
 /// `https://…`, the site's own origin, or root-relative, and never a same-site path
-/// under [`SCRIPT_REFUSED_PREFIXES`].
+/// under [`SCRIPT_REFUSED_PREFIXES`]. The src is resolved against `site_url` as a
+/// browser resolves it (R24 N1); a src or site URL that does not resolve is refused.
 fn script_src_allowed(src: &str, site_url: &str) -> bool {
-    let origin = site_url.trim_end_matches('/');
-    let same_origin = !origin.is_empty()
-        && src
-            .strip_prefix(origin)
-            .is_some_and(|rest| rest.starts_with('/'));
-    let shape_ok =
-        clean_url(src) && (src.starts_with("https://") || same_origin || is_root_relative(src));
-    if !shape_ok {
+    // Shape first: an absolute URL (it has a scheme) or root-relative text; never
+    // protocol-relative `//…` or path-relative `a.js`.
+    let absolute = url::Url::parse(src).is_ok();
+    if !clean_url(src) || !(absolute || is_root_relative(src)) {
         return false;
     }
-    let path = if is_root_relative(src) {
-        Some(src)
-    } else {
-        match (split_url(src), split_url(site_url)) {
-            (Some((host, path)), Some((site_host, _))) if host == site_host => Some(path),
-            _ => None,
-        }
+    let Ok(site) = url::Url::parse(site_url) else {
+        return false;
     };
-    let base = split_url(site_url).map_or("/", |(_, p)| p);
-    !path.is_some_and(|p| refused_script_path(p, base))
+    let Ok(url) = site.join(src) else {
+        return false;
+    };
+    let same_host = host_key(&url).is_some() && host_key(&url) == host_key(&site);
+    let same_origin = same_host
+        && url.scheme() == site.scheme()
+        && url.port_or_known_default() == site.port_or_known_default();
+    if url.scheme() != "https" && !same_origin {
+        return false;
+    }
+    !(same_host && refused_script_path(url.path(), site.path()))
 }
 
 /// First path segments a same-site head script may not load from (ruling R22): plugin
 /// routes and uploaded media serve bytes that plugins and authors control.
 const SCRIPT_REFUSED_PREFIXES: [&str; 2] = ["_p", "_media"];
 
-/// The host (lowercase, percent-decoded, without userinfo, port or a trailing dot) and
-/// the rest (path, query, fragment; `/` when empty) of an absolute `scheme://` URL.
-fn split_url(url: &str) -> Option<(String, &str)> {
-    let (_, rest) = url.split_once("://")?;
-    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let (authority, path) = rest.split_at(end);
-    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-    let host = match host_port.strip_prefix('[') {
-        Some(v6) => v6.split(']').next().unwrap_or_default(),
-        None => host_port.split(':').next().unwrap_or_default(),
-    };
-    let host = decode(host).to_ascii_lowercase();
-    let host = host.trim_end_matches('.').to_owned();
-    Some((host, if path.is_empty() { "/" } else { path }))
+/// The host as `url` parsed it (lowercase, IDNA-mapped, IPv4 canonical), without a
+/// trailing dot; `None` without a host.
+fn host_key(url: &url::Url) -> Option<&str> {
+    url.host_str().map(|h| h.trim_end_matches('.'))
 }
 
 /// Percent-decodes until nothing changes (at most 8 rounds; a value still changing

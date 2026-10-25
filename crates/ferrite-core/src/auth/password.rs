@@ -6,6 +6,10 @@
 //! of `max(2, available_parallelism)` permits: a burst of logins queues instead of
 //! starving the async runtime or allocating 19 MiB per concurrent request. Callers must
 //! not hold a store `Tx` across these calls (M1c-1 P1).
+//!
+//! Both take the password as `&str` and wipe the copy they hand to the blocking pool
+//! (M2a-2b P24). Not wiped: argon2's own working memory and the caller's buffers (an API
+//! request's JSON body, which serde_json reads before the password reaches us).
 
 use std::sync::OnceLock;
 
@@ -16,6 +20,7 @@ use argon2::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ferrite_domain::Secret;
 use tokio::sync::Semaphore;
+use zeroize::Zeroizing;
 
 use super::random_bytes;
 use crate::CoreError;
@@ -72,7 +77,8 @@ pub fn generate() -> Result<String, CoreError> {
 /// Hashes `password` with a fresh random salt. It does not check the policy (callers do,
 /// with [`check_policy`]).
 pub async fn hash(password: &str) -> Result<Secret, CoreError> {
-    let password = password.to_owned();
+    // The copy that moves to the blocking pool is wiped when the closure is done (P24).
+    let password = Zeroizing::new(password.to_owned());
     blocking(move || {
         hasher()
             .hash_password(password.as_bytes())
@@ -89,10 +95,13 @@ pub async fn hash(password: &str) -> Result<Secret, CoreError> {
 /// full verify (against a fixed dummy hash) and returns `Mismatch`, so the time taken
 /// does not reveal whether the account exists or has a password.
 pub async fn verify(password: &str, stored: Option<&Secret>) -> Verified {
-    let password = password.to_owned();
-    let stored = stored.map(|s| s.expose().to_owned());
+    // Copies for the blocking pool, wiped when the closure is done (P24).
+    let password = Zeroizing::new(password.to_owned());
+    let stored = stored.cloned();
     let outcome = blocking(move || {
-        let parsed = stored.as_deref().and_then(|s| PasswordHash::new(s).ok());
+        let parsed = stored
+            .as_ref()
+            .and_then(|s| PasswordHash::new(s.expose()).ok());
         match parsed {
             Some(hash) => match hasher().verify_password(password.as_bytes(), &hash) {
                 Ok(()) => Verified::Match {

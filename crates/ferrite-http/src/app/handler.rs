@@ -35,7 +35,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(2);
 /// cache) → canonical 301 → session cookie → page cache (or none) → render. The
 /// cache-key host is always the site's host (R25).
 ///
-/// A request with a `ferrite_session` cookie that resolves to a session is logged in
+/// A request with a session cookie that resolves to a session is logged in
 /// (P21): under [`LoggedIn::Bypass`] it is rendered without reading or filling the
 /// cache, under [`LoggedIn::PerUser`] cached under the user's own variant; either way
 /// the response is `private, no-store`. A cookie that resolves to nothing (unknown,
@@ -182,12 +182,13 @@ async fn page(
     (res, cache)
 }
 
-/// The session behind the request's `ferrite_session` cookie, if any. No cookie, no
+/// The session behind the request's session cookie (`__Host-ferrite_session` on an
+/// `https` site, `ferrite_session` on `http`; P23), if any. No cookie, no
 /// auth service: `None` without touching the store. A lookup error is logged and
 /// treated as no session (the request is served anonymously).
 pub(crate) async fn session(state: &AppState, headers: &HeaderMap) -> Option<Authenticated> {
     let auth = state.auth.as_ref()?;
-    let token = read_session_cookie(headers)?;
+    let token = read_session_cookie(headers, state.cookie_secure)?;
     match auth.resolve_session(token).await {
         Ok(who) => who,
         Err(e) => {

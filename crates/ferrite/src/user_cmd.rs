@@ -154,7 +154,7 @@ async fn execute(store: Arc<dyn Store>, action: Action) -> anyhow::Result<()> {
                     login: a.login,
                     email: a.email,
                     role: a.role.into(),
-                    password: Some(pw.value.clone()),
+                    password: Some(pw.value.as_str().into()),
                     must_reset: pw.generated,
                 })
                 .await?;

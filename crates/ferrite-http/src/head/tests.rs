@@ -313,6 +313,63 @@ fn script_src_refuses_same_site_plugin_and_media_paths() {
     assert!(kept(based, "http://localhost:8080/blog/a.js"));
 }
 
+/// R24 N1: a head script src is resolved against `site.url` like a browser resolves
+/// it before the `/_p/` and `/_media/` refusal, so other spellings of the site's host
+/// (case, default port, IDNA mapping, numeric IPv4 forms) and dot segments cannot reach
+/// them.
+#[test]
+fn head_src_resolved_like_a_browser() {
+    let kept = |site_url: &str, s: &str| {
+        render_head(
+            &Head {
+                scripts: vec![src(s)],
+                ..Head::default()
+            },
+            HeadSite {
+                url: site_url,
+                ..SITE
+            },
+        )
+        .contains("<script src=")
+    };
+    let site = "https://site.example/";
+    for bad in [
+        "//site.example/%2e%2e/_p/x",
+        "/blog/../_media/a",
+        "https://SITE.example:443/_p/x",
+        "https://site.example/blog/%2e%2e/_p/x",
+        "https://site.example/%2E%2E/_media/a",
+        // IDNA: a fullwidth letter and an ideographic full stop map to the site's host.
+        "https://\u{ff53}ite.example/_p/x",
+        "https://site\u{3002}example/_p/x",
+        "https://site.example./_p/x",
+    ] {
+        assert!(!kept(site, bad), "{bad:?} kept");
+    }
+    for ok in [
+        "https://cdn.example/x.js",
+        "/_theme/x.js",
+        "https://site.example/x.js",
+    ] {
+        assert!(kept(site, ok), "{ok:?} dropped");
+    }
+    // Numeric IPv4 forms of an IP-addressed site.
+    let ip_site = "http://127.0.0.1:8080/";
+    for bad in [
+        "http://2130706433:8080/_p/x",
+        "http://0x7f.0.0.1:8080/_p/x",
+        "http://127.1:8080/_media/a",
+        "https://127.0.0.1/_p/x",
+    ] {
+        assert!(!kept(ip_site, bad), "{bad:?} kept");
+    }
+    assert!(kept(ip_site, "http://127.1:8080/_theme/x.js"));
+    assert!(kept(ip_site, "/x.js"));
+    // A site URL that does not parse refuses every src.
+    assert!(!kept("not a url", "/_theme/x.js"));
+    assert!(!kept("not a url", "https://cdn.example/x.js"));
+}
+
 #[test]
 fn json_ld_is_validated_and_escaped() {
     let ld = |s: &str| ScriptTag {

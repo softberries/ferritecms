@@ -24,7 +24,7 @@
         },
         "responses": {
           "200": {
-            "description": "Logged in (sets the `ferrite_session` cookie), or a TOTP code is needed",
+            "description": "Logged in (sets the session cookie), or a TOTP code is needed",
             "content": {
               "application/json": {
                 "schema": {
@@ -84,7 +84,7 @@
         },
         "responses": {
           "200": {
-            "description": "Logged in (sets the `ferrite_session` cookie)",
+            "description": "Logged in (sets the session cookie)",
             "content": {
               "application/json": {
                 "schema": {
@@ -230,7 +230,7 @@
         },
         "responses": {
           "200": {
-            "description": "Changed; every session of the user is deleted. A session request gets a new `ferrite_session` cookie and its `X-CSRF-Token` in `csrf_token` (as the login response); a bearer request gets `csrf_token: null`",
+            "description": "Changed; every session of the user is deleted. A session request gets a new session cookie and its `X-CSRF-Token` in `csrf_token` (as the login response); a bearer request gets `csrf_token: null`",
             "content": {
               "application/json": {
                 "schema": {
@@ -8916,7 +8916,8 @@
             "description": "Login or e-mail address."
           },
           "password": {
-            "type": "string"
+            "type": "string",
+            "format": "password"
           }
         }
       },
@@ -9553,10 +9554,12 @@
         ],
         "properties": {
           "current": {
-            "type": "string"
+            "type": "string",
+            "format": "password"
           },
           "new": {
             "type": "string",
+            "format": "password",
             "description": "12 to 1024 bytes, at least 12 characters."
           }
         }
@@ -9584,6 +9587,7 @@
         "properties": {
           "password": {
             "type": "string",
+            "format": "password",
             "description": "The new password: 12 to 1024 bytes, at least 12 characters."
           },
           "token": {
@@ -9614,6 +9618,7 @@
         "properties": {
           "password": {
             "type": "string",
+            "format": "password",
             "description": "12 to 1024 bytes, at least 12 characters."
           }
         }
@@ -10942,6 +10947,7 @@
           },
           "password": {
             "type": "string",
+            "format": "password",
             "description": "The account's current password: a stolen session alone cannot enroll another\nauthenticator."
           }
         }
@@ -10955,6 +10961,7 @@
         "properties": {
           "password": {
             "type": "string",
+            "format": "password",
             "description": "The account's current password."
           }
         }
@@ -11083,6 +11090,7 @@
               "string",
               "null"
             ],
+            "format": "password",
             "description": "12 to 1024 bytes, at least 12 characters. Without it the account cannot log in\nuntil an admin sets one (`POST /users/{id}/password`)."
           },
           "role": {
@@ -11150,7 +11158,8 @@
       "session": {
         "type": "apiKey",
         "in": "cookie",
-        "name": "ferrite_session"
+        "name": "__Host-ferrite_session",
+        "description": "The session cookie set by `POST /auth/login`. Its name follows the scheme of `site.url`: `__Host-ferrite_session` on an `https` site, `ferrite_session` on an `http` site; only that name is read."
       }
     }
   },

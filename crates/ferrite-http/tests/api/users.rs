@@ -421,7 +421,7 @@ async fn role_change_logs_the_user_out(api: Api) -> Api {
     let cookie = c.cookie.clone().unwrap();
     let me_on = |router| {
         let req = builder(Method::GET, ME)
-            .header(header::COOKIE, format!("ferrite_session={cookie}"))
+            .header(header::COOKIE, format!("__Host-ferrite_session={cookie}"))
             .body(Body::empty())
             .unwrap();
         send(router, req)

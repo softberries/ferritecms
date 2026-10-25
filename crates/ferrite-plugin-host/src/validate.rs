@@ -6,6 +6,8 @@
 
 use std::sync::LazyLock;
 
+use ferrite_domain::html::{SAFE_URL_SCHEMES, relative_url_allowed};
+
 use crate::capability::FilterType;
 use crate::manifest::HtmlMode;
 use crate::types::{FilterValue, Head, RouteResponse};
@@ -19,7 +21,9 @@ pub const MAX_ROUTE_HEADER_BYTES: usize = 4 * 1024;
 
 /// Policy for `html` results of plugins without `render.html = "raw"` (ruling R22):
 /// ammonia's defaults (no `<script>`/`<style>`/`<iframe>`/`<form>`/`<svg>`/`<math>`, no
-/// `on*` handlers, no `javascript:`/`data:` or other non-allow-listed URL schemes),
+/// `on*` handlers) with the shared URL policy of content blocks (M2a-2b P21,
+/// [`ferrite_domain::html`]): absolute URLs only `http`, `https` or `mailto`; relative
+/// ones without `//`, a backslash or a control character;
 /// `rel="noopener noreferrer"` on every link, plus two additions: `a[target]`, and
 /// `code[class]` restricted to `language-*` classes, so core's code-block classes
 /// survive a sanitising plugin.
@@ -30,7 +34,9 @@ pub const MAX_ROUTE_HEADER_BYTES: usize = 4 * 1024;
 /// no non-raw plugin runs after it.
 static SANITIZER: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
     let mut b = ammonia::Builder::default();
-    b.link_rel(Some("noopener noreferrer"))
+    b.url_schemes(SAFE_URL_SCHEMES.into_iter().collect())
+        .url_relative(ammonia::UrlRelative::Custom(Box::new(keep_relative)))
+        .link_rel(Some("noopener noreferrer"))
         .add_tag_attributes("a", ["target"])
         .add_tag_attributes("code", ["class"])
         .attribute_filter(|element, attribute, value| {
@@ -41,6 +47,11 @@ static SANITIZER: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
         });
     b
 });
+
+/// A relative URL as the shared policy allows it, else `None` (the attribute is dropped).
+fn keep_relative(url: &str) -> Option<std::borrow::Cow<'_, str>> {
+    relative_url_allowed(url).then_some(std::borrow::Cow::Borrowed(url))
+}
 
 /// Only `language-<name>` tokens (core's `valid_language` charset), else none.
 fn language_classes(value: &str) -> Option<std::borrow::Cow<'_, str>> {
@@ -475,6 +486,39 @@ mod tests {
                 sanitized(input),
                 Ok(FilterValue::Html(want.into())),
                 "{input}"
+            );
+        }
+    }
+
+    /// M2a-2b P21: plugin `html` follows the same URL policy as content blocks.
+    #[test]
+    fn html_link_schemes() {
+        let link = |href: &str| match sanitized(&format!("<a href=\"{href}\">l</a>")) {
+            Ok(FilterValue::Html(h)) => h,
+            other => panic!("{other:?}"),
+        };
+        for bad in [
+            "//evil.example/x",
+            "\\\\evil.example/x",
+            "/\\evil.example/x",
+            "ftp://files.example/x",
+            "tel:+15550100",
+            "javascript:alert(1)",
+            "data:text/html,x",
+        ] {
+            assert_eq!(link(bad), "<a rel=\"noopener noreferrer\">l</a>", "{bad:?}");
+        }
+        for ok in [
+            "https://ok.example/x",
+            "mailto:a@b.example",
+            "/x",
+            "#a",
+            "x/y",
+        ] {
+            assert_eq!(
+                link(ok),
+                format!("<a href=\"{ok}\" rel=\"noopener noreferrer\">l</a>"),
+                "{ok:?}"
             );
         }
     }

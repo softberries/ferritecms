@@ -436,7 +436,7 @@ As built:
   6. more than 100 query pairs → `400`; body over 1 MiB → `413`.
 - **Request**: headers passed are only `content-type`, `accept`, `accept-language`,
   `user-agent`, `referer` — the session cookie and `Authorization` are never passed.
-  `user` is the id behind the `ferrite_session` cookie (bearer tokens never identify a
+  `user` is the id behind the session cookie (07 §2) (bearer tokens never identify a
   visitor to a plugin; an account that must reset its password counts as anonymous;
   see check 2). `client-ip-hash` is per plugin: 32 hex of HMAC(subkey
   `ferrite:plugin-ip:v1`, `plugin ‖ 0x00 ‖ ip`), so plugins cannot join visitors
@@ -618,7 +618,13 @@ under real concurrent load in M1.
   action's or route's deadline (R22): its epoch and hard deadlines run from when it began
   waiting (`CallDeadline::after_wait`), so wait and call together take at most the hard deadline
   (1.5 × the deadline; a slot free at once gives the full deadlines). A call the wait shortened
-  that then runs out of time is `Busy`, not a failure (`ended_by_budget`), like a budget cut.
+  that then runs out of time is the plugin's failure once the plugin itself ran at least half
+  the hook's deadline (R24 N2, M2a-2b P22; `CallDeadline::ended_by_budget(failure, ran)`, `ran`
+  measured from when the instance started, not from when the wait began), else `Busy`. Since a
+  wait is at most the deadline, at least half of it is always left, so in practice a
+  wait-shortened call that runs out is counted: under sustained contention a looping plugin
+  still reaches auto-disable. (The `Busy` branch is pinned by a unit test with a
+  `#[cfg(test)]` wait seam.) Budget cuts are unchanged (R20(4), below).
 - **Plugin actions and job workers (Task 11 carry).** At most `min(cluster.workers − 1,
   max_concurrent_calls)` (at least 1) `plugin.action` jobs call plugins at once per node
   (`ferrite::jobs::action_slots`, a slot in `PluginActionHandler`); one over that is released at
@@ -656,7 +662,8 @@ under real concurrent load in M1.
   `Tx`; `StoreHostServices::meta_set` is one `Tx` (value + `invalidate` event, all or nothing).
   Tested by dropping calls mid-import (`limits.rs` `dropped_call_frees_its_slot_and_instance`,
   `ferrite-http` `dropped_meta_write_is_all_or_nothing`).
-- Host-import budgets per call: `content` ≤ 100 calls, `kv` ≤ 100 ops / 1 MiB, `meta.set`
+- Host-import budgets per call: `content` ≤ 100 units (one per call, two per `meta.get`,
+  M2a-2a R22 M6: a `meta.get` is up to three store reads), `kv` ≤ 100 ops / 1 MiB, `meta.set`
   ≤ 1 MiB written (post id + key + value) with each value ≤ 64 KiB, `http` ≤ 3
   requests (each bounded to 5 s, 1 MiB out, 2 MiB in; see "HTTP capability details"),
   `mail` 1 per call; exceeding → the import
@@ -800,8 +807,11 @@ value is passed on and the call counts as a failure (§8).
 - **`html` sanitising (ruling R22).** `html` results (`content.body`; `render.footer` is in
   the catalogue but not wired into rendering yet) are sanitised with `ammonia` unless the
   plugin declares `render.html = "raw"`: ammonia's defaults (no `<script>`, `<style>`,
-  `<iframe>`, `<form>`, `<svg>`, `<math>`, no `on*` handlers, no `javascript:`/`data:` or other
-  non-allow-listed URL schemes), `rel="noopener noreferrer"` on every link, plus `a[target]`
+  `<iframe>`, `<form>`, `<svg>`, `<math>`, no `on*` handlers) with the URL policy content
+  blocks use too (M2a-2b P21, `ferrite_domain::html`): absolute URLs only `http`, `https` or
+  `mailto` (`ftp:`, `tel:`, `data:`, `javascript:` dropped), relative ones root-relative,
+  fragment, query or path-relative but never `//…`, with a backslash or a control character;
+  `rel="noopener noreferrer"` on every link, plus `a[target]`
   and `code[class]` restricted to `language-*` classes. Each non-raw plugin's whole output is
   re-sanitised after it runs, so markup a `raw` plugin added earlier in the chain survives
   only if no non-raw plugin runs after it. Raw HTML is meant to be shown as a high-risk
@@ -811,12 +821,16 @@ value is passed on and the call counts as a failure (§8).
   escaped (`& < > " '`). A meta needs a `name` or a `property`. A link needs an `http(s)://` or
   root-relative (`/…`, not `//…`) `href`, and `https://` or root-relative when its `rel` loads a
   resource (stylesheet, preload, modulepreload, prefetch, icon, apple-touch-icon, manifest).
-  `script-tag.src` must be `https://…`, on the site's own origin, or root-relative, with no
-  backslashes, whitespace or control characters. A root-relative src, or one on the site's
-  host (any scheme or port), may not point under `/_p/` or `/_media/` (bytes a plugin route or
-  an upload serves), counted from the root and from `site.url`'s base path, after
-  percent-decoding (repeatedly), lowercasing, collapsing `//` and resolving `.`/`..` (ruling
-  R22); `/_theme/…` and external `https://` hosts stay allowed. A head script runs with the
+  `script-tag.src` must be an absolute URL or root-relative (not `//…`, not path-relative),
+  with no backslashes, whitespace or control characters. It is then resolved against
+  `site.url` as a browser resolves it (`url::Url::join`: IDNA host mapping, numeric IPv4
+  forms, default ports, dot segments; a src or site URL that does not resolve is refused;
+  R24 N1, M2a-2b P22) and must be `https`, or the site's own scheme, host and port. A src
+  that resolves onto the site's host (any scheme or port, a trailing dot ignored) may not
+  point under `/_p/` or `/_media/` (bytes a plugin route or an upload serves), counted from
+  the root and from `site.url`'s base path, after percent-decoding the resolved path
+  (repeatedly), lowercasing, collapsing `//` and resolving `.`/`..` (ruling R22); `/_theme/…`
+  and external `https://` hosts stay allowed. A head script runs with the
   site's origin, which is why `render.head` is high risk (§2). `script-tag.json-ld` must
   parse as JSON; it is re-serialised compactly with every `<`, `>` and `&` written as
   `\u00XX`, so neither `</script>` nor `<!--` can occur inside the element. Anything else is
@@ -845,7 +859,8 @@ As built (M1c-2), in `crates/ferrite-http/src/plugins/` over the store-backed
   same answer as a missing or hidden item). A meta-only plugin must therefore declare the types
   it annotates (`meta-writer`: `content.read = ["post"]`). Cost (review m5, accepted): over
   `StoreHostServices` one `meta.get` is three store reads (`post_kind`, the visibility check, the
-  meta row) for one unit of the call's `content` budget, on the render path too. A `"*"` (or `plugin.*`) meta pattern
+  meta row); since M2a-2b it takes two units of the call's `content` budget (R22 M6), so at
+  most 50 per call, on the render path too. A `"*"` (or `plugin.*`) meta pattern
   never matches another plugin's `plugin.<other>.*` keys; only a pattern naming that namespace
   does, and a plugin's own `plugin.<name>.*` keys need no grant.
   `options.get` never returns `plugin.*` keys, whatever the manifest grants (a plugin reads its
@@ -968,7 +983,8 @@ increment (M4), and an upsert into `plugin_failures` as above.
 **What counts (as built through M2a-2a).** Filter, action (`plugin.action` jobs) and route
 calls count: a trap, a timeout, an invalid result or route response (a route answers
 `502`). Not counted: a call skipped for want of a call permit (`Busy`, P22) or cut by the
-per-render budget (R20(4)), refusals inside an import (the guest decides what to do with
+per-render budget (R20(4)), or a call the slot wait left under half its deadline that then
+ran out (R24 N2; a wait-shortened call that ran at least half is counted), refusals inside an import (the guest decides what to do with
 the error), and a call that was dropped (cancel-safety, §6). **Admin view (M2a-2a):** `GET
 /plugins` and `GET /plugins/{name}` show `enabled`, `disabled_reason` (`auto: <n> failures
 in <window>` after an automatic disable) and each live node's state (`loaded`, `failed`
@@ -986,7 +1002,8 @@ re-enables and clears the counters.
   (`PluginHost::call_stats`), per hook: `calls` that ran (successes, failures and budget
   cuts), `failures` (as counted above), `busy` (no call slot), `budget_cut` (a call the
   render budget or a slot wait cut short, or one skipped because the page's budget was
-  spent; R24 N2 makes a wait-shortened cut a failure from Task 12 on), `total_micros`,
+  spent; under R24 N2 a wait-shortened call that ran at least half its deadline is a failure,
+  not a cut), `total_micros`,
   `max_micros` and `buckets` (calls that ran by duration: ≤ 1, ≤ 5, ≤ 25, ≤ 100,
   ≤ 500 ms, longer). The counters live in one mutex-guarded map per host (plugin →
   hook → counters; a call allocates only for a plugin or hook not seen before), at

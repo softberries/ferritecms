@@ -34,7 +34,7 @@
 //! `accept-language`, `user-agent` and `referer` request headers (never `Cookie` or
 //! `Authorization`), its own client-address hash
 //! ([`AuthService::plugin_ip_hash`](ferrite_core::AuthService::plugin_ip_hash)), and
-//! `user` = the id behind the `ferrite_session` cookie (no bearer tokens; none for an
+//! `user` = the id behind the session cookie (no bearer tokens; none for an
 //! account that must reset its password, or per check 3).
 //!
 //! The call is bounded by the plugin host (fuel, memory, the 2 s route deadline, the

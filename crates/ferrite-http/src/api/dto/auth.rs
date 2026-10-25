@@ -2,6 +2,8 @@
 
 use ferrite_core::{AuthService, Authenticated, Capability, Via, auth::TotpSetup, require};
 use serde::{Deserialize, Serialize};
+
+use super::Password;
 use utoipa::ToSchema;
 
 /// `POST /auth/login`.
@@ -9,7 +11,8 @@ use utoipa::ToSchema;
 pub struct LoginRequest {
     /// Login or e-mail address.
     pub login: String,
-    pub password: String,
+    #[schema(value_type = String, format = Password)]
+    pub password: Password,
 }
 
 /// `POST /auth/login/totp`.
@@ -24,9 +27,11 @@ pub struct TotpLoginRequest {
 /// `POST /auth/password`.
 #[derive(Deserialize, ToSchema)]
 pub struct PasswordChange {
-    pub current: String,
+    #[schema(value_type = String, format = Password)]
+    pub current: Password,
     /// 12 to 1024 bytes, at least 12 characters.
-    pub new: String,
+    #[schema(value_type = String, format = Password)]
+    pub new: Password,
 }
 
 /// `POST /auth/password-reset`.
@@ -43,7 +48,8 @@ pub struct PasswordResetConfirm {
     /// 1 hour and once.
     pub token: String,
     /// The new password: 12 to 1024 bytes, at least 12 characters.
-    pub password: String,
+    #[schema(value_type = String, format = Password)]
+    pub password: Password,
 }
 
 /// `POST /auth/totp/confirm`.
@@ -54,7 +60,8 @@ pub struct TotpConfirm {
     pub code: String,
     /// The account's current password: a stolen session alone cannot enroll another
     /// authenticator.
-    pub password: String,
+    #[schema(value_type = String, format = Password)]
+    pub password: Password,
 }
 
 /// The result of `POST /auth/password`.
@@ -69,7 +76,8 @@ pub struct PasswordChanged {
 #[derive(Deserialize, ToSchema)]
 pub struct TotpDisable {
     /// The account's current password.
-    pub password: String,
+    #[schema(value_type = String, format = Password)]
+    pub password: Password,
 }
 
 /// The authenticated user and what the request's credential allows.

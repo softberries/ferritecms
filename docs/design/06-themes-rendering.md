@@ -206,7 +206,7 @@ table (exact path, then the trailing slash toggled; before the cache) → canoni
 session cookie (logged in or anonymous) → page cache (or none: logged-in bypass) → render.
 `410` redirect rows answer with the shared gone page.
 
-**Previews** (P20). `GET /_preview/<id>` takes the `ferrite_session` cookie only (no bearer
+**Previews** (P20). `GET /_preview/<id>` takes the session cookie only (`__Host-ferrite_session` on an `https` site, 07 §2) (no bearer
 tokens) of an account that need not reset its password, and loads the item with
 `SiteReader::preview(actor, id)`: any status but trash, readable by the actor under the API's
 rule (R17/R23 `can_read`: own items, items publicly visible now (published with
@@ -217,7 +217,7 @@ plugin preview scope (05 §7a) and `request.preview = true` (the blog theme show
 never through the cache; every preview answer carries `Cache-Control: private, no-store` and
 `X-Robots-Tag: noindex`, and no `ETag` (`If-None-Match` is ignored).
 
-**Logged-in requests** (P21). A request whose `ferrite_session` cookie resolves to a session
+**Logged-in requests** (P21). A request whose session cookie resolves to a session
 is logged in; without the cookie no session lookup happens, and a cookie that resolves to
 nothing (unknown, expired, logged out, disabled user) or a failed lookup is ignored (the
 request is anonymous, no `Set-Cookie`, never a 401). Plugins see `is_logged_in = true`.

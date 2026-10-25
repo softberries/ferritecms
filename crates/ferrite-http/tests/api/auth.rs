@@ -28,6 +28,7 @@ api_tests!(
     password_check_is_rate_limited,
     totp_login_flow_over_http,
     logout_clears_cookie_and_session,
+    host_cookie_on_https,
 );
 
 const NEW_PASSWORD: &str = "another long passphrase";
@@ -41,7 +42,7 @@ const EVIL: &str = "https://evil.example";
 /// A request with only the given cookie (no `Origin`, no CSRF token).
 async fn me_with_cookie(api: &Api, cookie: &str) -> Resp {
     let req = builder(Method::GET, ME)
-        .header(header::COOKIE, format!("ferrite_session={cookie}"))
+        .header(header::COOKIE, format!("__Host-ferrite_session={cookie}"))
         .body(Body::empty())
         .unwrap();
     api.send(req).await
@@ -86,7 +87,9 @@ async fn login_sets_cookie_and_me_works(api: Api) -> Api {
     // https site: `Secure`.
     assert_eq!(
         r.header("set-cookie").unwrap(),
-        format!("ferrite_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000; Secure")
+        format!(
+            "__Host-ferrite_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000; Secure"
+        )
     );
 
     let r = c.get(&api, ME).await;
@@ -235,7 +238,7 @@ async fn csrf_required_for_cookie_mutations(api: Api) -> Api {
 async fn foreign_origin_is_refused(api: Api) -> Api {
     api.user("ann", Role::Author, false).await;
     let c = api.logged_in("ann").await;
-    let cookie = format!("ferrite_session={}", c.cookie.as_deref().unwrap());
+    let cookie = format!("__Host-ferrite_session={}", c.cookie.as_deref().unwrap());
     let csrf = c.csrf.clone().unwrap();
     let setup = |origin: Option<&str>, referer: Option<&str>| {
         let mut b = builder(Method::POST, TOTP_SETUP)
@@ -346,7 +349,7 @@ async fn bearer_needs_no_csrf(api: Api) -> Api {
 
     // A bearer request never falls back to the cookie.
     let c = api.logged_in("ann").await;
-    let cookie = format!("ferrite_session={}", c.cookie.as_deref().unwrap());
+    let cookie = format!("__Host-ferrite_session={}", c.cookie.as_deref().unwrap());
     for value in [
         "Bearer fer_unknown",
         "Bearer",
@@ -369,7 +372,7 @@ async fn bearer_needs_no_csrf(api: Api) -> Api {
         .header(header::AUTHORIZATION, &auth)
         .header(
             header::COOKIE,
-            format!("ferrite_session={}", bob.cookie.as_deref().unwrap()),
+            format!("__Host-ferrite_session={}", bob.cookie.as_deref().unwrap()),
         )
         .header(header::ORIGIN, EVIL)
         .body(Body::empty())
@@ -697,7 +700,7 @@ async fn logout_clears_cookie_and_session(api: Api) -> Api {
     assert_eq!(r.status, StatusCode::NO_CONTENT, "{r:?}");
     assert_eq!(
         r.header("set-cookie"),
-        Some("ferrite_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure")
+        Some("__Host-ferrite_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure")
     );
     assert!(c.cookie.is_none());
     assert_unauthenticated(&me_with_cookie(&api, &cookie).await);
@@ -708,5 +711,63 @@ async fn logout_clears_cookie_and_session(api: Api) -> Api {
             .status,
         StatusCode::OK
     );
+    api
+}
+
+/// M2a-2b P23: on an `https` site the session cookie is `__Host-ferrite_session`
+/// (`Secure`, `Path=/`, no `Domain`) and only that name is read, so a request carrying
+/// the old `ferrite_session` name is anonymous there; an `http` site keeps the old name.
+async fn host_cookie_on_https(api: Api) -> Api {
+    api.user("eddie", Role::Editor, false).await;
+    let mut c = Client::new();
+    let r = c.login(&api, "eddie", PASSWORD).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let set = r.header("set-cookie").unwrap();
+    let token = c.cookie.clone().unwrap();
+    assert_eq!(
+        set,
+        format!(
+            "__Host-ferrite_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000; Secure"
+        )
+    );
+    assert!(!set.contains("Domain"), "{set}");
+    assert_eq!(c.get(&api, ME).await.status, StatusCode::OK);
+    // The same valid token under the http name is not read on the https site.
+    let req = builder(Method::GET, ME)
+        .header(header::COOKIE, format!("ferrite_session={token}"))
+        .body(Body::empty())
+        .unwrap();
+    assert_unauthenticated(&api.send(req).await);
+
+    // An http site: the old name, and only it.
+    let http = api.router_for_site("http://example.com");
+    let mut h = Client::with_origin("http://example.com");
+    let req = json_body(
+        h.builder(Method::POST, LOGIN),
+        &json!({"login": "eddie", "password": PASSWORD}),
+    );
+    let r = h.send_on(&http, req).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let token = h.cookie.clone().unwrap();
+    assert!(
+        r.header("set-cookie")
+            .unwrap()
+            .starts_with(&format!("ferrite_session={token};")),
+        "{r:?}"
+    );
+    let me = |cookie: String| {
+        builder(Method::GET, ME)
+            .header(header::ORIGIN, "http://example.com")
+            .header(header::COOKIE, cookie)
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        send(&http, me(format!("ferrite_session={token}")))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    assert_unauthenticated(&send(&http, me(format!("__Host-ferrite_session={token}"))).await);
     api
 }

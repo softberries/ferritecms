@@ -63,7 +63,8 @@ surface).
   belong to the public site (canonical slash, then the shared 404 page).
 - **Unauthenticated endpoints:** `GET /api/v1/meta` → `{ api: "v1", version, site_url }`
   (the admin's first call) and `GET /api/v1/openapi.json`. The document is OpenAPI
-  3.1.0 with security schemes `session` (cookie `ferrite_session`) and `bearer`; the
+  3.1.0 with security schemes `session` (cookie `__Host-ferrite_session`, `ferrite_session`
+  on an `http` site; §2) and `bearer`; the
   pretty-printed copy `crates/ferrite-http/openapi.json` is checked by the test
   `openapi_snapshot_is_current` (`FERRITE_UPDATE_OPENAPI=1 cargo test -p ferrite-http
   --test api openapi` rewrites it).
@@ -377,18 +378,24 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   lowercasing, immutable after creation, so `/author/<login>/` never moves. A login input
   containing `@` is looked up as an e-mail. E-mails are unique by the ASCII-lowercased
   `email_key`, so non-ASCII case variants (`É@x`, `é@x`) are distinct accounts.
-- **Sessions** (P7; DB-backed, [04 §5](04-cluster.md#5-sessions)): the cookie
-  `ferrite_session` holds 32 random bytes as base64url (43 characters); the database stores
-  only its SHA-256 hex. Cookie attributes: `HttpOnly; SameSite=Lax; Path=/;
-  Max-Age=2592000` (30 days), plus `Secure` **only when `site.url` is `https://`**, so local
-  `http://localhost` development keeps the cookie (an unconditional `Secure` would drop it).
+- **Sessions** (P7; DB-backed, [04 §5](04-cluster.md#5-sessions)): the session cookie
+  holds 32 random bytes as base64url (43 characters); the database stores only its SHA-256
+  hex. Cookie attributes: `HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000` (30 days),
+  plus `Secure` **only when `site.url` is `https://`**, so local `http://localhost`
+  development keeps the cookie (an unconditional `Secure` would drop it). The name follows
+  the same rule (M2a-2b P23): `__Host-ferrite_session` on an `https` site (browsers accept a
+  `__Host-` cookie only with `Secure`, `Path=/` and no `Domain`, so a sibling subdomain or
+  a plain-http response cannot plant or overwrite it), `ferrite_session` on an `http` one.
+  The scheme is `site.url`'s, not the request's, so a TLS-terminating proxy changes
+  nothing. Only the site's name is read (the API and the public site alike): there is no
+  transition, so sessions issued under the old name on an `https` site log in once more
+  after the upgrade.
   Idle timeout 7 days, absolute 30 days, `last_seen_at` written at most every 5 minutes. No
   per-node cache: every request reads its session row, so a revocation applies on every
   node at once. Sessions are deleted on logout, on a password change (the API then issues a
   new cookie for the caller), on a role change, disable and delete, by `ferrite user
   reset-password`, and when TOTP is enabled (all but the confirming session, R26). A
-  cookie sent with a successful login is deleted server-side (no session fixation). The
-  cookie has no `__Host-` prefix yet (M2a-2b).
+  cookie sent with a successful login is deleted server-side (no session fixation).
 - **CSRF and origin** (P8): a cookie-authenticated request with a method other than GET or
   HEAD needs `X-CSRF-Token` = base64url(HMAC-SHA256(session `csrf_secret`,
   `"ferrite-csrf:v1:" + id_hash`)) and an `Origin` equal to the `site.url` origin (without
@@ -453,6 +460,16 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   tokens use per-session secrets, so a lost or changed key logs nobody out but makes
   stored TOTP secrets unreadable (users then re-enroll after `ferrite user disable-totp`)
   and outstanding reset links invalid.
+- **Zeroization** (M2a-2b P24, `zeroize`): `SiteKey` (every clone) and its subkeys, the
+  HMAC key state (`hmac` and `sha2` with their `zeroize` features), the prepared HMAC key
+  block, opened TOTP secrets and `Secret` (password hashes, TOTP secrets, a new account's
+  password) are wiped when dropped. API password fields (login, password change, reset
+  confirm, TOTP confirm and disable, user create, an admin's password set) are
+  `api::dto::Password`: deserialised through a `String` held in `Zeroizing`, redacted in
+  `Debug`, `format: password` in the OpenAPI document; hashing and verifying wipe the
+  copies they hand to the blocking pool. **Not wiped**: serde_json's copy of the request
+  body (and its scratch buffer for escaped strings), hyper's buffers, argon2's working
+  memory, the CLI's password strings, and copies the allocator made when a `String` grew.
 - **Passkeys** (`webauthn-rs`): deferred past M2 (P3; the newest `webauthn-rs` is a
   pre-release, and the ceremony needs the SPA). There is no `passkeys` table.
 - **Audit log** (P22): user, token, TOTP, type/taxonomy and settings writes, extension

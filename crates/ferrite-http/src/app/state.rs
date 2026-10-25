@@ -163,7 +163,7 @@ pub struct AppState {
     pub config: HttpConfig,
     pub migrations_ok: bool,
     pub(crate) redirects: Arc<RedirectService>,
-    /// Resolves `ferrite_session` cookies for previews and logged-in requests; `None`
+    /// Resolves session cookies for previews and logged-in requests; `None`
     /// (no [`with_auth`](Self::with_auth)): every request is anonymous, previews 404.
     pub(crate) auth: Option<Arc<AuthService>>,
     pub(crate) renderer: Renderer,
@@ -174,6 +174,10 @@ pub struct AppState {
     /// not an absolute http(s) URL; unsafe plugin routes without `cross_origin` are
     /// then refused.
     pub(crate) origin: Option<String>,
+    /// `site.url` is `https`: the session cookie is `__Host-ferrite_session` (P23, as
+    /// the API's [`ApiState::cookie_secure`](crate::api::ApiState)); `false` for an
+    /// `http` or unparsable URL.
+    pub(crate) cookie_secure: bool,
     /// Where page responses are recorded as `request.served` events (P21); `None`
     /// (no [`with_served`](Self::with_served)): nothing is recorded.
     pub(crate) served: Option<Arc<ServedBuffer>>,
@@ -201,6 +205,8 @@ impl AppState {
             origin: crate::api::origin_of(&parts.config.site_url)
                 .ok()
                 .map(|(origin, _)| origin),
+            cookie_secure: crate::api::origin_of(&parts.config.site_url)
+                .is_ok_and(|(_, secure)| secure),
             store: parts.store,
             reader: parts.reader,
             plugins: parts.plugins,

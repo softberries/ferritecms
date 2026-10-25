@@ -12,7 +12,7 @@
 //! 2. [`resolve`](crate::route::resolve) gives the route. `/healthz` is `200 ok`;
 //!    `/readyz` is `200` when a store read succeeds (2 s timeout) and the startup
 //!    migration check passed, else `503`. `/_preview/<id>` (P20) is answered here,
-//!    before redirect rows and never through the cache: the `ferrite_session` cookie
+//!    before redirect rows and never through the cache: the session cookie
 //!    (bearer tokens are not accepted), an account without `must_reset`, and
 //!    `SiteReader::preview` (R17 `can_read`); the item is rendered like a single page
 //!    with the plugin preview scope and `request.preview = true`. Every failure (no or
@@ -30,7 +30,7 @@
 //!    Never cached under the request path: error statuses (404/410/500/503). TTL 60 s
 //!    ([`HttpConfig`]): search results, and pages whose plugin calls were volatile or
 //!    failed or whose theme helper reads failed. **Logged-in requests (P21)**: a
-//!    `ferrite_session` cookie that resolves to a session (looked up only when the
+//!    session cookie (`__Host-ferrite_session` on https, P23) that resolves to a session (looked up only when the
 //!    cookie is present; an unusable one is ignored, the request stays anonymous) makes
 //!    the request logged in: with [`LoggedIn::Bypass`] (default) it renders without
 //!    reading or filling the cache, with [`LoggedIn::PerUser`] it uses the user's own

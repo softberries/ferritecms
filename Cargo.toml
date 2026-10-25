@@ -22,7 +22,8 @@ criterion = "0.8"
 deunicode = "1.6.2"
 futures = "0.3"
 getrandom = "=0.4.3"
-hmac = "=0.13.0"
+# `zeroize`: HMAC key state is wiped on drop (M2a-2b P24).
+hmac = { version = "=0.13.0", features = ["zeroize"] }
 html-escape = "0.3.0"
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["server-auto", "tokio", "server"] }
@@ -44,7 +45,9 @@ rust-embed = { version = "8.13", features = ["debug-embed"] }
 object_store = { version = "0.14", features = ["aws"] }
 s3s = "0.17"
 s3s-fs = "0.17"
-sha2 = "0.11"
+# `zeroize`: the SHA-256 states inside an HMAC (derived from its key) are wiped on drop
+# (M2a-2b P24); `hmac`'s own `zeroize` only reaches its buffers.
+sha2 = { version = "0.11", features = ["zeroize"] }
 serde = { version = "1", features = ["derive"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "migrate", "macros", "json", "uuid", "chrono"] }
 semver = { version = "1.0.28", features = ["serde"] }
@@ -71,6 +74,8 @@ uuid = { version = "1", features = ["v7", "serde"] }
 # Fallback roots for plugin `http` on hosts without a CA bundle (ruling R19); already
 # linked through lettre.
 webpki-roots = "=1.0.10"
+# Wipes keys and passwords from memory on drop (M2a-2b P24); already in the tree.
+zeroize = { version = "=1.9.1", features = ["derive"] }
 wasmtime = "50"
 wasmtime-wasi = "50"
 wasmtime-wasi-io = "50"

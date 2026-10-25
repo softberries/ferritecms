@@ -122,7 +122,7 @@ async fn preview_is_404_without_session_or_rights(app: App) -> App {
         (
             "unknown session",
             preview_path(draft.id),
-            "ferrite_session=nope".into(),
+            "__Host-ferrite_session=nope".into(),
         ),
         ("malformed id", "/_preview/not-an-id".into(), root.clone()),
         (
@@ -294,7 +294,7 @@ async fn per_user_variant_caches_per_user(app: App) -> App {
     assert_eq!(r.status, StatusCode::NOT_MODIFIED, "{r:?}");
     assert_eq!(r.header("cache-control"), Some("private, no-store"));
     // An invalid cookie is anonymous: the anonymous entry.
-    let r = get(Some("ferrite_session=bogus")).await;
+    let r = get(Some("__Host-ferrite_session=bogus")).await;
     assert_eq!(r.body, anon.body);
     assert_eq!(state.renders(), renders + 3);
     assert_eq!(r.header("cache-control"), None);
@@ -324,7 +324,7 @@ async fn invalid_cookie_is_anonymous(app: App) -> App {
     // Unknown token, empty value, garbage, a logged-out session, a disabled user.
     let gone = app.session(&app.ada_user).await;
     App::auth(&app.site)
-        .logout(gone.trim_start_matches("ferrite_session="))
+        .logout(gone.trim_start_matches("__Host-ferrite_session="))
         .await
         .unwrap();
     let mut disabled = app.site.user("dora", Role::Editor).await;
@@ -338,9 +338,9 @@ async fn invalid_cookie_is_anonymous(app: App) -> App {
         .await
         .unwrap();
     for cookie in [
-        "ferrite_session=bogus".to_owned(),
-        "ferrite_session=".to_owned(),
-        format!("ferrite_session={}", "x".repeat(5000)),
+        "__Host-ferrite_session=bogus".to_owned(),
+        "__Host-ferrite_session=".to_owned(),
+        format!("__Host-ferrite_session={}", "x".repeat(5000)),
         gone,
         dora,
     ] {
@@ -413,7 +413,7 @@ async fn anonymous_requests_skip_the_session_lookup(app: App) -> App {
         counting.reset();
         send(
             &router,
-            with_cookie("/hello/", &format!("ferrite_session={junk}")),
+            with_cookie("/hello/", &format!("__Host-ferrite_session={junk}")),
         )
         .await;
         assert_eq!(
@@ -424,7 +424,7 @@ async fn anonymous_requests_skip_the_session_lookup(app: App) -> App {
     }
     // A well-formed unknown token costs exactly the one session read.
     counting.reset();
-    let unknown = format!("ferrite_session={}", "A".repeat(43));
+    let unknown = format!("__Host-ferrite_session={}", "A".repeat(43));
     send(&router, with_cookie("/hello/", &unknown)).await;
     assert_eq!(counting.calls(), anon + 1, "one session read");
     app

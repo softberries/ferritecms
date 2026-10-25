@@ -1,5 +1,6 @@
 //! URL allow-listing for link hrefs and image sources.
 
+use ferrite_domain::html::SAFE_URL_SCHEMES;
 use uuid::Uuid;
 
 /// Splits off a scheme the way browsers do: ASCII whitespace/control chars are ignored
@@ -32,7 +33,7 @@ pub(super) fn safe_href(raw: &str) -> Option<String> {
         return Some(s.to_owned());
     }
     match scheme(s) {
-        Some(sch) if matches!(sch.as_str(), "http" | "https" | "mailto") => Some(s.to_owned()),
+        Some(sch) if SAFE_URL_SCHEMES.contains(&sch.as_str()) => Some(s.to_owned()),
         Some(_) => None,
         // Leading `//` is protocol-relative; leading `&` could be an entity-encoded scheme.
         None if s.starts_with("//") || s.starts_with('&') => None,

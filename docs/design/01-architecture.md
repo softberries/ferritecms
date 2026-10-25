@@ -180,7 +180,7 @@ request ─► GET/HEAD? ──no──► 405
           store in cache with the dependency keys (unless an error status) → respond
 ```
 
-- **Cache variant** (M2a-1, P21): a request whose `ferrite_session` cookie resolves to a
+- **Cache variant** (M2a-1, P21): a request whose session cookie (07 §2) resolves to a
   session is logged in. `cache.logged_in = "bypass"` (default) renders it without the cache;
   `"per-user"` caches it under the user's own variant. Both answer `Cache-Control: private,
   no-store`. Everything else is anonymous. `/_preview/<id>` is handled right after

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
+use super::Password;
 use super::content::present;
 
 /// A user's role (07 §1).
@@ -127,7 +128,8 @@ pub struct UserInput {
     /// 12 to 1024 bytes, at least 12 characters. Without it the account cannot log in
     /// until an admin sets one (`POST /users/{id}/password`).
     #[serde(default)]
-    pub password: Option<String>,
+    #[schema(value_type = Option<String>, format = Password)]
+    pub password: Option<Password>,
     /// Force a password change at the next login (default `false`).
     #[serde(default)]
     pub must_reset: bool,
@@ -160,7 +162,8 @@ pub struct UserPatchInput {
 #[derive(Deserialize, ToSchema)]
 pub struct PasswordSet {
     /// 12 to 1024 bytes, at least 12 characters.
-    pub password: String,
+    #[schema(value_type = String, format = Password)]
+    pub password: Password,
 }
 
 /// `?reassign=` of `DELETE /users/{id}`.

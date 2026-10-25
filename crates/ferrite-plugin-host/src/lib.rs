@@ -91,6 +91,10 @@ pub struct PluginHost {
     stats: CallStats,
     /// Advances the engine epoch; joined when the host is dropped.
     _ticker: EpochTicker,
+    /// Test seam (R24 N2): added to every measured slot wait, so a unit test can make a
+    /// wait leave less than half the deadline, which the real host never does.
+    #[cfg(test)]
+    extra_wait: Duration,
 }
 
 /// A compiled, linked plugin from [`PluginHost::prepare`], not callable until
@@ -173,6 +177,8 @@ impl PluginHost {
             skips: SkipLog::new(SKIP_WARN_EVERY),
             stats: CallStats::default(),
             _ticker: ticker,
+            #[cfg(test)]
+            extra_wait: Duration::ZERO,
         })
     }
 
@@ -395,7 +401,12 @@ impl PluginHost {
         }
         let start = Instant::now();
         match tokio::time::timeout(wait, self.calls.acquire()).await {
-            Ok(Ok(permit)) => Some((permit, start.elapsed())),
+            Ok(Ok(permit)) => {
+                let waited = start.elapsed();
+                #[cfg(test)]
+                let waited = waited + self.extra_wait;
+                Some((permit, waited))
+            }
             // Timed out; the semaphore is never closed.
             Ok(Err(_)) | Err(_) => None,
         }
@@ -589,7 +600,7 @@ impl PluginHost {
                         );
                     }
                 },
-                Err(failure) if limit.ended_by_budget(&failure) => {
+                Err(failure) if limit.ended_by_budget(&failure, started.elapsed()) => {
                     trace.volatile();
                     self.stats
                         .record(&plugin.name, hook, Outcome::Cut(started.elapsed()));
@@ -626,7 +637,9 @@ impl PluginHost {
     /// wait for the slot counts toward the deadline (final review M5): soft and hard
     /// deadlines run from when the call began waiting, so wait and call together take at
     /// most the hard deadline (1.5 × the action deadline). A call whose deadline the wait
-    /// shortened and that then ran out of time is `Busy` too, not a failure.
+    /// shortened and that then ran out of time is a failure once the plugin itself ran at
+    /// least half the deadline (R24 N2), else `Busy`; since the wait is at most the
+    /// deadline, at least half is always left, so in practice such a call is counted.
     pub async fn dispatch_action(
         &self,
         plugin: &str,
@@ -655,7 +668,7 @@ impl PluginHost {
             self.stats.record(plugin, hook, Outcome::Success(elapsed));
         }
         done.map_err(|failure| {
-            if limit.ended_by_budget(&failure) {
+            if limit.ended_by_budget(&failure, elapsed) {
                 self.stats.record(plugin, hook, Outcome::Cut(elapsed));
                 self.log_busy(plugin, hook);
                 return PluginError::Busy {
@@ -693,7 +706,8 @@ impl PluginHost {
     /// instances); `Busy`, not a failure, when none freed up within the route deadline.
     /// The wait counts toward the deadline as for actions (final review M5): wait and
     /// call together take at most the hard deadline (1.5 × the route deadline), and a
-    /// call the wait shortened that then ran out of time is `Busy`.
+    /// call the wait shortened that then ran out of time is counted like an action's
+    /// (R24 N2).
     /// A response outside the route checks (status 200..=599, at most
     /// [`MAX_ROUTE_HEADERS`] headers whose names and values are valid header text of at
     /// most [`MAX_ROUTE_HEADER_BYTES`], a body of at most [`MAX_ROUTE_BODY_BYTES`]) is a
@@ -726,7 +740,7 @@ impl PluginHost {
             reason,
         };
         let res = call_route(&loaded, req, limit).await.map_err(|failure| {
-            if limit.ended_by_budget(&failure) {
+            if limit.ended_by_budget(&failure, started.elapsed()) {
                 self.stats
                     .record(plugin, &hook, Outcome::Cut(started.elapsed()));
                 self.log_busy(plugin, &hook);
@@ -867,5 +881,52 @@ mod tests {
             ..base()
         };
         assert!(new_host(pooled).is_ok());
+    }
+
+    /// R24 N2, the branch the host never reaches on its own: a call the slot wait left
+    /// with less than half its deadline (forced through `extra_wait`) that then runs out
+    /// is the wait's doing: `Busy`, nothing recorded.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_that_left_under_half_is_busy() {
+        let cfg = HostConfig {
+            max_concurrent_calls: 1,
+            route_deadline: Duration::from_secs(1),
+            // Enough fuel that the epoch deadline, not fuel, stops the loop.
+            fuel: u64::MAX / 2,
+            ..HostConfig::default()
+        };
+        let mut host = new_host(cfg).expect("host");
+        // A real wait of ~50 ms plus 1.1 s: 1.5 s − 1.15 s ≈ 350 ms are left.
+        host.extra_wait = Duration::from_millis(1_100);
+        let dir = test_support::repo_root().join("plugins/examples/hostile/route-xss");
+        let manifest = std::fs::read_to_string(dir.join("ferrite-plugin.toml")).expect("manifest");
+        host.install(
+            Manifest::parse(&manifest).expect("parse"),
+            &test_support::plugin_wasm("route-xss"),
+        )
+        .expect("install");
+        let held = host.calls.acquire().await.expect("slot");
+        let looping = RouteRequest {
+            method: "GET".into(),
+            path: "/loop".into(),
+            query: Vec::new(),
+            headers: Vec::new(),
+            body: Vec::new(),
+            client_ip_hash: "ab".repeat(16),
+            user: None,
+        };
+        let start = Instant::now();
+        let (result, ()) = tokio::join!(host.handle_route("route-xss", looping), async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            drop(held);
+        });
+        let took = start.elapsed();
+        assert!(
+            matches!(&result, Err(PluginError::Busy { plugin }) if plugin == "route-xss"),
+            "{result:?}"
+        );
+        // Waited ~50 ms, then ran into the ~350 ms left, well short of the full second.
+        assert!(took < Duration::from_millis(900), "took {took:?}");
+        assert!(host.failures().is_empty(), "{:?}", host.failures());
     }
 }

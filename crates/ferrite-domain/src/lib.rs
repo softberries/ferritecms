@@ -5,6 +5,7 @@ mod comment;
 mod content;
 mod event;
 mod hex;
+pub mod html;
 mod ids;
 mod job;
 mod menu;
