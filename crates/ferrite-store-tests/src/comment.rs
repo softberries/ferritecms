@@ -449,3 +449,30 @@ pub async fn has_approved_from_matches_exact_lowercase(db: &TestDb) {
             .unwrap()
     );
 }
+
+/// The moderation list (`CommentRepo::list`, the API's queue): every filter combination
+/// is served by its index, never a table scan (final review M1). On these empty tables
+/// only index use is checked (Postgres plans with `enable_seqscan = off`); the sort-free
+/// plans on 20k seeded rows are checked in `ferrite-store-sqlite` (`repos::comment::tests`).
+pub async fn comment_list_uses_indexes(db: &TestDb) {
+    for (status, item, index) in [
+        (false, false, "comments_created_idx"),
+        (true, false, "comments_status_created_idx"),
+        (true, true, "comments_item_status_idx"),
+        (false, true, "comments_item_created_idx"),
+    ] {
+        for cursor in [false, true] {
+            let plan = db.explain_comment_list(status, item, cursor).await;
+            println!("-- status={status} item={item} cursor={cursor}\n{plan}");
+            assert!(plan.contains(index), "{status} {item} {cursor}: {plan}");
+            if db.is_sqlite() {
+                assert!(
+                    !plan.contains("SCAN comments\n") && !plan.ends_with("SCAN comments"),
+                    "{plan}"
+                );
+            } else {
+                assert!(!plan.contains("Seq Scan"), "{plan}");
+            }
+        }
+    }
+}

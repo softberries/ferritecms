@@ -500,6 +500,93 @@ impl TestDb {
         }
     }
 
+    /// The query plan of `CommentRepo::list` with the given filters, one line per plan
+    /// node (Postgres with `enable_seqscan = off`, as for
+    /// [`explain_media_lookup`](Self::explain_media_lookup)).
+    pub async fn explain_comment_list(&self, status: bool, item: bool, cursor: bool) -> String {
+        let mut binds = Vec::new();
+        if status {
+            binds.push(PlanBind::Text("pending"));
+        }
+        if item {
+            binds.push(PlanBind::Uuid(uuid::Uuid::nil()));
+        }
+        if cursor {
+            binds.extend([
+                PlanBind::Micros(1_000_000),
+                PlanBind::Uuid(uuid::Uuid::nil()),
+            ]);
+        }
+        binds.push(PlanBind::Int(51));
+        let sql = match &self.backing {
+            Backing::Sqlite { .. } => ferrite_store_sqlite::comment_list_sql(status, item, cursor),
+            Backing::Postgres(_) => ferrite_store_postgres::comment_list_sql(status, item, cursor),
+        };
+        self.explain(&sql, &binds).await
+    }
+
+    /// The query plan of `IdempotencyRepo::prune` (as
+    /// [`explain_comment_list`](Self::explain_comment_list)).
+    pub async fn explain_idempotency_prune(&self) -> String {
+        let sql = match &self.backing {
+            Backing::Sqlite { .. } => ferrite_store_sqlite::PRUNE_IDEMPOTENCY_SQL,
+            Backing::Postgres(_) => ferrite_store_postgres::PRUNE_IDEMPOTENCY_SQL,
+        };
+        self.explain(sql, &[PlanBind::Micros(1_000_000), PlanBind::Int(500)])
+            .await
+    }
+
+    async fn explain(&self, sql: &str, binds: &[PlanBind]) -> String {
+        match &self.backing {
+            Backing::Sqlite { path, .. } => {
+                let mut c = sqlite_conn(path).await;
+                let mut q = sqlx::query_as::<_, (i64, i64, i64, String)>(AssertSqlSafe(format!(
+                    "EXPLAIN QUERY PLAN {sql}"
+                )));
+                for b in binds {
+                    q = match *b {
+                        PlanBind::Text(t) => q.bind(t),
+                        PlanBind::Uuid(u) => q.bind(u),
+                        PlanBind::Micros(n) | PlanBind::Int(n) => q.bind(n),
+                    };
+                }
+                let rows = q.fetch_all(&mut c).await.expect("explain sqlite");
+                rows.into_iter().map(|r| r.3).collect::<Vec<_>>().join("\n")
+            }
+            Backing::Postgres(f) => {
+                let mut c = PgConnection::connect(&f.url).await.expect("connect");
+                sqlx::query(AssertSqlSafe(format!(
+                    "SET search_path TO {}",
+                    quote_ident(&f.schema)
+                )))
+                .execute(&mut c)
+                .await
+                .expect("search_path");
+                sqlx::query("SET enable_seqscan = off")
+                    .execute(&mut c)
+                    .await
+                    .expect("enable_seqscan");
+                let mut q =
+                    sqlx::query_scalar::<_, String>(AssertSqlSafe(format!("EXPLAIN {sql}")));
+                for b in binds {
+                    q = match *b {
+                        PlanBind::Text(t) => q.bind(t),
+                        PlanBind::Uuid(u) => q.bind(u),
+                        PlanBind::Micros(n) => q.bind(
+                            chrono::DateTime::<chrono::Utc>::from_timestamp_micros(n)
+                                .expect("micros in range"),
+                        ),
+                        PlanBind::Int(n) => q.bind(n),
+                    };
+                }
+                q.fetch_all(&mut c)
+                    .await
+                    .expect("explain postgres")
+                    .join("\n")
+            }
+        }
+    }
+
     /// Whether this is the SQLite backing.
     pub fn is_sqlite(&self) -> bool {
         matches!(self.backing, Backing::Sqlite { .. })
@@ -609,6 +696,15 @@ macro_rules! backend_tests_spawning {
             }
         }
     )*};
+}
+
+/// A bind value for an `EXPLAIN` of a store statement.
+enum PlanBind {
+    Text(&'static str),
+    Uuid(uuid::Uuid),
+    /// A timestamp: unix micros on SQLite, `timestamptz` on Postgres.
+    Micros(i64),
+    Int(i64),
 }
 
 #[cfg(test)]

@@ -171,7 +171,8 @@ impl Uploader {
         self
     }
 
-    /// `media.max_upload`.
+    /// `media.max_upload`. Test seam (`test-seams`).
+    #[cfg(feature = "test-seams")]
     pub fn max_upload(&self) -> u64 {
         self.max_upload
     }
@@ -190,12 +191,14 @@ impl Uploader {
         }
     }
 
-    /// Uploads holding a slot now.
+    /// Uploads holding a slot now. Test seam (`test-seams`).
+    #[cfg(feature = "test-seams")]
     pub fn in_flight(&self) -> usize {
         MEDIA_UPLOAD_SLOTS.saturating_sub(self.slots.available_permits())
     }
 
-    /// Uploads that got a slot since this uploader was made.
+    /// Uploads that got a slot since this uploader was made. Test seam (`test-seams`).
+    #[cfg(feature = "test-seams")]
     pub fn started(&self) -> u64 {
         self.started.load(Ordering::Relaxed)
     }

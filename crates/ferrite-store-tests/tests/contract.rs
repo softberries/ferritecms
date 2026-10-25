@@ -222,6 +222,8 @@ backend_tests!(
     approved_for_item_is_oldest_first_and_capped,
     has_approved_from_matches_exact_lowercase,
     idempotency_prune_in_batches,
+    comment_list_uses_indexes,
+    idempotency_prune_uses_indexes,
 );
 
 backend_tests_spawning!(

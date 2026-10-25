@@ -657,6 +657,15 @@ async fn meta_writes_reach_visible_items_only(site: Site) -> Site {
 /// point is a drop point once. Between polls the test sleeps briefly so the store's
 /// worker can make progress; that only decides how far a poll gets, never whether the
 /// write is dropped.
+///
+/// A dropped write whose `COMMIT` was already sent may land later (on Postgres nothing
+/// orders it before the test's reads), even during a later attempt, and its event cannot
+/// be told from another attempt's. So the check is cumulative over every attempt since
+/// the start: `S` = `seo.k*` values stored, `E` = events since the start. Each sample
+/// reads `S`, then `E`, then `S` again; with all-or-nothing commits that always gives
+/// `S1 <= E <= S2`, whatever lands in between (no half-done state is observable). After
+/// each attempt the test waits (bounded) for `S == E`; a value without its event, or an
+/// event without its value, never converges.
 async fn dropped_meta_write_is_all_or_nothing(site: Site) -> Site {
     use std::{future::Future, task::Poll};
 
@@ -672,10 +681,16 @@ async fn dropped_meta_write_is_all_or_nothing(site: Site) -> Site {
         )
         .await;
     let subject = id.to_string();
+    let start = site.store.read().events().max_seq().await.unwrap();
+    let stored = async || {
+        let meta = site.store.read().meta().list(id).await.unwrap();
+        meta.iter().filter(|(k, _)| k.starts_with("seo.k")).count()
+    };
+    // At most one event per attempt, and attempts stop at 1000 (= `MAX_EVENT_BATCH`).
+    let events = async || site.store.read().events().since(start, 1000).await.unwrap();
     let (mut completed, mut dropped) = (false, 0);
     for k in 1..=1_000usize {
         let key = format!("seo.k{k}");
-        let before = site.store.read().events().max_seq().await.unwrap();
         let mut write = Box::pin(s.meta_set(&subject, &key, "1"));
         let mut result = None;
         for _ in 0..k {
@@ -688,30 +703,37 @@ async fn dropped_meta_write_is_all_or_nothing(site: Site) -> Site {
             }
         }
         drop(write);
-        // A dropped `Tx` rolls back (or its commit lands) before the writer serves the
-        // next transaction (SQLite has one writer); on Postgres the pause covers it.
-        site.store.begin().await.unwrap().rollback().await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        let stored = site.store.read().meta().get(id, &key).await.unwrap();
-        let events = site.store.read().events().since(before, 10).await.unwrap();
+        // Converge: every write so far has landed whole or not at all.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let s1 = stored().await;
+            let e = events().await.len();
+            let s2 = stored().await;
+            assert!(
+                s1 <= e && e <= s2,
+                "k {k}: half-done write ({s1} <= {e} <= {s2})"
+            );
+            if s1 == e && e == s2 {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "k {k}: values ({s2}) and events ({e}) never matched"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
         match result {
             Some(result) => {
                 assert_eq!(result, Ok(()), "k {k}");
-                assert_eq!(stored, Some(json!(1)), "k {k}");
-                assert_eq!(events.len(), 1, "k {k}");
+                assert_eq!(
+                    site.store.read().meta().get(id, &key).await.unwrap(),
+                    Some(json!(1)),
+                    "k {k}"
+                );
                 completed = true;
                 break;
             }
-            // Dropped: the value and its event both landed (the commit had gone out),
-            // or neither did.
-            None => {
-                dropped += 1;
-                assert_eq!(
-                    usize::from(stored.is_some()),
-                    events.len(),
-                    "k {k}: half-done write"
-                );
-            }
+            None => dropped += 1,
         }
     }
     assert!(completed, "the write never finished within 1000 polls");

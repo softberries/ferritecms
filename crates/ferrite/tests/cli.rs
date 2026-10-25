@@ -895,17 +895,33 @@ fn healthcheck_accepts_ipv6_literals() {
 
 // ---- ferrite user (P17) ------------------------------------------------------------
 
-/// Runs `f` on the site's store opened in-process (taking the SQLite folder lock), then
-/// closes it so the next command can take the lock.
+/// Runs `f` on the site's SQLite store opened in-process, then closes it.
+///
+/// The store's `ferrite.lock` goes to a scratch folder, not the site's: a lock fd of
+/// this process is copied into every `ferrite` child a sibling test spawns meanwhile
+/// (the fd table is copied before `O_CLOEXEC` closes it), and with `flock` that copy
+/// would keep the site locked for a moment after `close`, so the next command here
+/// could fail with "data folder is in use". The steps of a test run one at a time, so
+/// nothing needs the site lock in this process.
 fn with_site_store<T>(
     dir: &Path,
     f: impl AsyncFnOnce(std::sync::Arc<dyn ferrite_store::Store>) -> T,
 ) -> T {
     tokio_rt().expect("runtime").block_on(async {
         let config = ferrite_config::load(dir, Vec::new()).unwrap();
-        let store = ferrite::open_store(&config, ferrite::OpenMode::MustExist)
+        let ferrite_config::DbKind::Sqlite { path } = config.database_kind() else {
+            panic!("with_site_store is for SQLite sites");
+        };
+        assert!(path.is_file(), "no database at {}", path.display());
+        let lock_dir = tempfile::tempdir().expect("tempdir");
+        let store: std::sync::Arc<dyn ferrite_store::Store> = std::sync::Arc::new(
+            ferrite_store_sqlite::SqliteStore::open(ferrite_store_sqlite::SqliteOptions {
+                lock_dir: Some(lock_dir.path().to_path_buf()),
+                ..ferrite_store_sqlite::SqliteOptions::new(path)
+            })
             .await
-            .unwrap();
+            .unwrap(),
+        );
         let out = f(store.clone()).await;
         store.close().await;
         out
@@ -1740,8 +1756,22 @@ fn extension_commands_fail_while_the_lock_is_held() {
         }
         store.close().await;
     });
-    // Nothing was written while locked out; the commands work again afterwards.
-    assert_eq!(stdout(plugin_cmd(&site, &["list"])), "");
+    // Nothing was written while locked out; the commands work again afterwards. A
+    // `ferrite` child a sibling test spawned while this process held the lock can keep a
+    // copy of the lock fd until its exec completes (see `with_site_store`), so allow a
+    // short wait for the lock to come free.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let out = loop {
+        let out = plugin_cmd(&site, &["list"])
+            .output()
+            .expect("run plugin list");
+        if out.status.success() || std::time::Instant::now() >= deadline {
+            break out;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(String::from_utf8(out.stdout).expect("utf-8 stdout"), "");
 }
 
 fn now_micros() -> i64 {

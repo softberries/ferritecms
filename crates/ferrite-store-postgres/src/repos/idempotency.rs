@@ -19,6 +19,13 @@ use crate::exec::{map_db_err, run};
 /// `InProgress` (each lost race means another request holds or just freed the key).
 const BEGIN_ROUNDS: usize = 3;
 
+/// `IdempotencyRepo::prune`. The outer predicate repeats the subquery's: a row picked here
+/// and touched meanwhile (READ COMMITTED re-checks only the outer `WHERE`) is kept.
+/// Bind 1: created before; bind 2: the limit. Public so the plan tests can `EXPLAIN` it.
+pub const PRUNE_IDEMPOTENCY_SQL: &str = "DELETE FROM idempotency_keys WHERE (user_id, key_hash) IN \
+     (SELECT user_id, key_hash FROM idempotency_keys WHERE created_at < $1 LIMIT $2) \
+     AND created_at < $1";
+
 #[async_trait]
 impl IdempotencyRepo for PgRepos {
     async fn begin(
@@ -138,16 +145,10 @@ impl IdempotencyRepo for PgRepos {
 
     async fn prune(&self, created_before: Timestamp, limit: u32) -> Result<u64, StoreError> {
         let limit = check_prune_limit(limit)?;
-        // The outer predicate repeats the subquery's: a row picked here and touched
-        // meanwhile (READ COMMITTED re-checks only the outer `WHERE`) is kept.
-        let done = run!(&self.exec, |e| sqlx::query(
-            "DELETE FROM idempotency_keys WHERE (user_id, key_hash) IN \
-             (SELECT user_id, key_hash FROM idempotency_keys WHERE created_at < $1 LIMIT $2) \
-             AND created_at < $1"
-        )
-        .bind(DateTime::<Utc>::from(created_before))
-        .bind(limit)
-        .execute(e))?;
+        let done = run!(&self.exec, |e| sqlx::query(PRUNE_IDEMPOTENCY_SQL)
+            .bind(DateTime::<Utc>::from(created_before))
+            .bind(limit)
+            .execute(e))?;
         Ok(done.rows_affected())
     }
 }

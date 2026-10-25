@@ -251,3 +251,16 @@ pub async fn idempotency_prune_in_batches(db: &TestDb) {
     let later = Timestamp::from_micros(Timestamp::now().as_micros() + 3600 * 1_000_000).unwrap();
     assert_eq!(repo.prune(later, 100).await.unwrap(), 0);
 }
+
+/// The hourly prune finds old rows on `idempotency_keys_created_idx` and never scans the
+/// table (final review M1).
+pub async fn idempotency_prune_uses_indexes(db: &TestDb) {
+    let plan = db.explain_idempotency_prune().await;
+    println!("{plan}");
+    assert!(plan.contains("idempotency_keys_created_idx"), "{plan}");
+    if db.is_sqlite() {
+        assert!(!plan.contains("SCAN idempotency_keys"), "{plan}");
+    } else {
+        assert!(!plan.contains("Seq Scan"), "{plan}");
+    }
+}

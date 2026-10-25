@@ -1687,6 +1687,7 @@ name = "ferrite-store-tests"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "ferrite-domain",
  "ferrite-store",
  "ferrite-store-postgres",

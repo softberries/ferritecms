@@ -84,6 +84,13 @@ rollback is always driven by the newer binary before swapping back.
   same moment wait for the lock (up to 5 min, logged every 10 s), then find nothing to do.
   Two nodes started together on an empty schema (what `docker compose up` does) migrate
   exactly once.
+- A migration's DDL locks what it touches until it commits; the old nodes' statements
+  wait, up to the 30 s `statement_timeout` of application connections. `0006_media_comments` (M2a-2b) is the one to know about: it builds three
+  `jobs` indexes without `CONCURRENTLY` (sqlx cannot run that, [02 §7](02-storage.md#7-migrations)),
+  so job writes on every node (enqueue, claim, lease extensions, finishing, prune) wait for the build, and
+  `media`/`comments` are briefly locked by its `ADD COLUMN`s. `jobs` is pruned, so this
+  is usually well under a second; with a large `jobs` table, run `ferrite migrate up`
+  at a quiet moment before rolling the nodes.
 - Old nodes keep serving next to new ones: codecs ignore unknown columns, old runners
   claim only job kinds they know and hand back unknown payload versions without using an
   attempt, and an unknown event kind invalidates its keys.

@@ -9,13 +9,42 @@ use ferrite_store::{
     CommentRepo, StoreError, check_comment, check_item_comments_limit, check_limit, comment_cursor,
     email_key, encode_comment_cursor, validate_text,
 };
-use sqlx::{AssertSqlSafe, Postgres, QueryBuilder};
+use sqlx::AssertSqlSafe;
 
 use super::PgRepos;
 use crate::{
     codec::{self, COMMENT_COLUMNS},
     exec::run,
 };
+
+/// The moderation list (`CommentRepo::list`). Only the filters given are in the SQL, so
+/// the planner picks the matching index (`comments_status_created_idx`,
+/// `comments_item_status_idx`, `comments_item_created_idx` or `comments_created_idx`).
+/// Binds, in order: status, item, cursor (created_at, id), limit. Public so the plan
+/// tests can `EXPLAIN` it.
+pub fn comment_list_sql(status: bool, item: bool, cursor: bool) -> String {
+    let mut sql = format!("SELECT {COMMENT_COLUMNS} FROM comments WHERE 1 = 1");
+    let mut n = 0;
+    let mut next = || {
+        n += 1;
+        format!("${n}")
+    };
+    if status {
+        sql.push_str(&format!(" AND status = {}", next()));
+    }
+    if item {
+        sql.push_str(&format!(" AND item_id = {}", next()));
+    }
+    if cursor {
+        let (a, b) = (next(), next());
+        sql.push_str(&format!(" AND (created_at, id) < ({a}, {b})"));
+    }
+    sql.push_str(&format!(
+        " ORDER BY created_at DESC, id DESC LIMIT {}",
+        next()
+    ));
+    sql
+}
 
 #[async_trait]
 impl CommentRepo for PgRepos {
@@ -77,28 +106,25 @@ impl CommentRepo for PgRepos {
     async fn list(&self, query: &CommentQuery) -> Result<Page<Comment>, StoreError> {
         let limit = check_limit(query.limit)?;
         let after = query.cursor.as_deref().map(comment_cursor).transpose()?;
-        // Only the filters given are in the SQL, so the planner picks the matching index
-        // (`comments_status_created_idx`, `comments_item_created_idx` or
-        // `comments_created_idx`).
-        let mut qb = QueryBuilder::<Postgres>::new(format!(
-            "SELECT {COMMENT_COLUMNS} FROM comments WHERE 1 = 1"
-        ));
+        let sql = comment_list_sql(
+            query.status.is_some(),
+            query.item.is_some(),
+            after.is_some(),
+        );
+        let mut q = sqlx::query(AssertSqlSafe(sql));
         if let Some(status) = query.status {
-            qb.push(" AND status = ").push_bind(status.as_str());
+            q = q.bind(status.as_str());
         }
         if let Some(item) = query.item {
-            qb.push(" AND item_id = ").push_bind(item.as_uuid());
+            q = q.bind(item.as_uuid());
         }
         if let Some((at, id)) = after {
-            qb.push(" AND (created_at, id) < (")
-                .push_bind(DateTime::<Utc>::from(Timestamp::from_micros(at)?))
-                .push(", ")
-                .push_bind(id)
-                .push(")");
+            q = q
+                .bind(DateTime::<Utc>::from(Timestamp::from_micros(at)?))
+                .bind(id);
         }
-        qb.push(" ORDER BY created_at DESC, id DESC LIMIT ")
-            .push_bind(i64::from(limit) + 1);
-        let rows = run!(&self.exec, |e| qb.build().fetch_all(e))?;
+        let q = q.bind(i64::from(limit) + 1);
+        let rows = run!(&self.exec, |e| q.fetch_all(e))?;
         let mut items = rows
             .iter()
             .map(codec::comment)

@@ -23,6 +23,8 @@ mod node;
 mod plugin;
 mod plugin_failure;
 
+pub use comment::comment_list_sql;
+pub use idempotency::PRUNE_IDEMPOTENCY_SQL;
 pub use plugin::FIND_MEDIA_BY_ARTIFACT_SQL;
 mod search;
 mod site;

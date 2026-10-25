@@ -22,6 +22,14 @@ use crate::{
 /// `InProgress` (each lost race means another request holds or just freed the key).
 const BEGIN_ROUNDS: usize = 3;
 
+/// `IdempotencyRepo::prune`. As on Postgres the outer predicate repeats the subquery's
+/// (moot under the single writer); `NOT INDEXED` keeps the outer delete on rowid lookups.
+/// Bind 1: created before (unix micros); bind 2: the limit. Public so the plan tests can
+/// `EXPLAIN` it.
+pub const PRUNE_IDEMPOTENCY_SQL: &str = "DELETE FROM idempotency_keys NOT INDEXED WHERE rowid IN \
+     (SELECT rowid FROM idempotency_keys WHERE created_at < ?1 LIMIT ?2) \
+     AND created_at < ?1";
+
 fn ts(micros: i64) -> Result<Timestamp, StoreError> {
     Ok(Timestamp::from_micros(micros)?)
 }
@@ -139,16 +147,64 @@ impl IdempotencyRepo for SqliteRepos {
 
     async fn prune(&self, created_before: Timestamp, limit: u32) -> Result<u64, StoreError> {
         let limit = check_prune_limit(limit)?;
-        // As on Postgres the outer predicate repeats the subquery's (moot under the single
-        // writer); `NOT INDEXED` keeps the outer delete on rowid lookups.
-        let done = run!(&self.writer, |e| sqlx::query(
-            "DELETE FROM idempotency_keys NOT INDEXED WHERE rowid IN \
-             (SELECT rowid FROM idempotency_keys WHERE created_at < ?1 LIMIT ?2) \
-             AND created_at < ?1"
-        )
-        .bind(created_before.as_micros())
-        .bind(limit)
-        .execute(e))?;
+        let done = run!(&self.writer, |e| sqlx::query(PRUNE_IDEMPOTENCY_SQL)
+            .bind(created_before.as_micros())
+            .bind(limit)
+            .execute(e))?;
         Ok(done.rows_affected())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ferrite_store::Store;
+    use sqlx::AssertSqlSafe;
+
+    use super::*;
+    use crate::{SqliteOptions, SqliteStore};
+
+    /// The hourly prune finds old rows on `idempotency_keys_created_idx` and deletes them
+    /// by rowid, never scanning the table; before and after ANALYZE on 20k rows.
+    #[tokio::test]
+    async fn prune_uses_indexes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteStore::open(SqliteOptions::new(dir.path().join("ferrite.db")))
+            .await
+            .unwrap();
+        store.migrate_up(None).await.unwrap();
+        // The plan does not depend on the referenced users existing.
+        sqlx::raw_sql(
+            "PRAGMA foreign_keys = OFF; \
+             WITH RECURSIVE g(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM g WHERE n < 20000) \
+             INSERT INTO idempotency_keys (user_id, key_hash, method, path, status_code, \
+               response, created_at) \
+             SELECT randomblob(16), printf('%064d', n), 'POST', '/api/v1/media', 201, '{}', n \
+             FROM g; \
+             PRAGMA foreign_keys = ON",
+        )
+        .execute(&store.writer)
+        .await
+        .unwrap();
+        for analyzed in [false, true] {
+            if analyzed {
+                sqlx::raw_sql("ANALYZE")
+                    .execute(&store.writer)
+                    .await
+                    .unwrap();
+            }
+            let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(AssertSqlSafe(format!(
+                "EXPLAIN QUERY PLAN {PRUNE_IDEMPOTENCY_SQL}"
+            )))
+            .bind(1_000_i64)
+            .bind(500_i64)
+            .fetch_all(&store.reader)
+            .await
+            .unwrap();
+            let p = rows.into_iter().map(|r| r.3).collect::<Vec<_>>().join("\n");
+            eprintln!("-- analyzed={analyzed}\n{p}");
+            assert!(p.contains("idempotency_keys_created_idx"), "{p}");
+            assert!(p.contains("INTEGER PRIMARY KEY (rowid=?)"), "{p}");
+            assert!(!p.contains("SCAN idempotency_keys"), "{p}");
+        }
     }
 }

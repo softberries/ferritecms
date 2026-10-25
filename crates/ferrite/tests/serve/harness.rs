@@ -35,6 +35,10 @@ pub fn rt() -> tokio::runtime::Runtime {
 /// A data folder for one profile, plus what keeps its backing services alive.
 pub struct Profile {
     dir: tempfile::TempDir,
+    /// Where an in-process SQLite store keeps its `ferrite.lock`: never the data folder, so
+    /// no lock fd of the test process exists for a concurrently spawned child to inherit
+    /// (posix_spawn/fork copy the fd table before `O_CLOEXEC` closes it) and hold briefly.
+    lock_dir: tempfile::TempDir,
     env: Vec<(String, String)>,
     init_args: Vec<String>,
     pg: Option<(String, String)>,
@@ -46,6 +50,7 @@ impl Profile {
     pub fn solo() -> Self {
         Self {
             dir: tempfile::tempdir().expect("tempdir"),
+            lock_dir: tempfile::tempdir().expect("tempdir"),
             env: Vec::new(),
             init_args: Vec::new(),
             pg: None,
@@ -112,6 +117,7 @@ impl Profile {
             ],
             env,
             dir,
+            lock_dir: tempfile::tempdir().expect("tempdir"),
             pg: Some((url, schema)),
             _s3: Some(s3),
         })
@@ -156,13 +162,17 @@ impl Profile {
         assert!(out.status.success(), "init: {out:?}");
     }
 
-    /// The profile's store, opened directly (SQLite: only while `serve` is not running).
+    /// The profile's store, opened directly (SQLite: only while `serve` is not running; its
+    /// folder lock lives outside the data folder, see `lock_dir`).
     pub async fn store(&self) -> Box<dyn Store> {
         match &self.pg {
             None => Box::new(
-                SqliteStore::open(SqliteOptions::new(self.data().join("ferrite.db")))
-                    .await
-                    .expect("open sqlite"),
+                SqliteStore::open(SqliteOptions {
+                    lock_dir: Some(self.lock_dir.path().to_path_buf()),
+                    ..SqliteOptions::new(self.data().join("ferrite.db"))
+                })
+                .await
+                .expect("open sqlite"),
             ),
             Some((url, schema)) => Box::new(
                 PgStore::open(PgOptions {
