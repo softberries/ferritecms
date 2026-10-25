@@ -32,7 +32,7 @@ Every number below was read from the code or from a command run for this exit.
 | SVG input at most 2 MiB | `crates/ferrite-media/src/svg.rs` (`MAX_SVG_BYTES = 2 * 1024 * 1024`) | matches |
 | `media.image_workers` default 1, at most 16 | `model.rs` (`image_workers: 1`, `MAX_IMAGE_WORKERS = 16`) | matches |
 | Accepted document classes and their types | `media.rs` `ZIP_TYPES` (7 entries), `TEXT_TYPES` (2); manual §3 (CSV `201` as `text/csv`, served `attachment` + `nosniff`; HTML named `.txt` `415`) | matches 03 §3 |
-| PDF inline with `sandbox`; sanitised SVG inline with its CSP; everything else `attachment` | `crates/ferrite-http/src/app/media.rs` (`SVG_CSP`, lines 286–304) | matches 03 §5 |
+| PDF inline with `sandbox`; sanitised SVG inline with its CSP; everything else `attachment` | `crates/ferrite-http/src/app/media.rs` (`SVG_CSP` and its use in the media response headers) | matches 03 §5 |
 | `Idempotency-Key` kept 24 h, stale after 1 h | `crates/ferrite-domain/src/auth.rs` (`IDEMPOTENCY_RETENTION`, `IDEMPOTENCY_STALE`) | matches 07 §1 |
 | `Busy` jobs due again after 1–5 s | `crates/ferrite-cluster/src/jobs/mod.rs` (`BUSY_RETRY_MIN = 1 s` + up to `BUSY_RETRY_JITTER = 4 s`) | matches 03 §4, 04 §6 |
 | Comments: default on, `known`, 3/min, 20/h, depth 5, ≤ 2 links, thread ≤ 500 | `crates/ferrite-core/src/comments.rs` (`COMMENTS_ENABLED_DEFAULT`, `COMMENTS_MODERATION_DEFAULT = "known"`, `COMMENTS_PER_MINUTE = 3`, `COMMENTS_PER_HOUR = 20`, `MAX_COMMENT_DEPTH = 5`, `MAX_KNOWN_LINKS = 2`, `MAX_THREAD = MAX_ITEM_COMMENTS = 500`); manual §4 (`GET /settings` shows `null` for both keys, the second comment is approved) | matches 06 §4, 07 §1 |
