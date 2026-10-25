@@ -1,6 +1,6 @@
 // The living styleguide at /admin/_styleguide (M2b P12): every token and component as
 // shipped. A lazy chunk (autoCodeSplitting), linked from nowhere (no nav, no palette
-// entry). It sits under `_app`, whose login guard arrives in Task 9 (pre-flight F19).
+// entry). It sits under `_app`, behind the login guard (pre-flight F19).
 // `?section=<id>` shows one section; without it, the whole page.
 
 import { Link, createFileRoute } from "@tanstack/react-router";

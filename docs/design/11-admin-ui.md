@@ -69,8 +69,8 @@ exist):
 | `editor` | 17 / 28 | Editor body (instead of `md` there) |
 | `lg` | 18 / 26 | Section titles |
 | `xl` | 22 / 28 | Page titles in dense screens |
-| `2xl` | 28 / 34 | Page titles |
-| `3xl` | 36 / 42 | Editor title field, auth screens |
+| `2xl` | 28 / 34 | Page titles; auth screen titles (Task 9: `3xl` wrapped "Choose a new password" in the 400 px card) |
+| `3xl` | 36 / 42 | Editor title field |
 
 - Headings (`h1`–`h6`, base layer) use weight 600 and tracking −0.01em; `xl` carries
   −0.01em and `2xl`/`3xl` −0.02em in the scale itself.
@@ -308,9 +308,8 @@ The living styleguide is the lazy route `/admin/_styleguide` (P12; file
 `routes/_app/[_]styleguide.tsx`, F19; section modules in `routes/_app/-styleguide/`,
 which the router ignores). It is linked from nowhere (no nav or palette entry).
 `?section=<id>` shows one section (`colour type layout motion controls display
-navigation overlays patterns data charts`); without it, the whole page. Until Task 9
-adds the `_app` login guard, the route is reachable without a session (it holds no
-data). Colour values and contrast ratios on the page are computed from `tokens.css`
+navigation overlays patterns data charts`); without it, the whole page. It sits behind
+the `_app` login guard (Task 9, `routes/_app.tsx`). Colour values and contrast ratios on the page are computed from `tokens.css`
 itself (`?raw` + `parseTokens`), so the page cannot drift from the gate.
 
 - **shadcn (radix-nova, `components.json` → `src/styles/globals.css`), added with

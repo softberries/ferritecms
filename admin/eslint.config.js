@@ -32,6 +32,14 @@ export default defineConfig([
       },
     },
     rules: {
+      // TanStack Router redirects are thrown from `beforeLoad` (its documented pattern);
+      // a `Redirect` is a `Response`, not an `Error`.
+      "@typescript-eslint/only-throw-error": [
+        "error",
+        {
+          allow: [{ from: "package", package: "@tanstack/router-core", name: "Redirect" }],
+        },
+      ],
       // Every schema imports `z` from `@/lib/zod`, which turns Zod's JIT off
       // before any schema exists (the CSP forbids eval).
       "no-restricted-imports": [

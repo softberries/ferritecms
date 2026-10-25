@@ -93,12 +93,13 @@ test("dark_os_first_paint_is_dark_before_js", async ({ browser, site, guard }) =
   expect(light.scheme).toBe("light");
   expect(dark.bg).not.toBe(light.bg);
 
-  // Same colour as the JS-applied `.dark` background.
+  // Same colour as the JS-applied `.dark` background (on the sign-in screen: this
+  // context has no session, and `/admin/` would answer the guard's `me` with a 401).
   const ctx = await browser.newContext({ baseURL: site.url, colorScheme: "dark" });
   await guard.watch(ctx);
   try {
     const page = await ctx.newPage();
-    await page.goto("/admin/");
+    await page.goto("/admin/login");
     await expect(page.locator("html")).toHaveClass("dark");
     expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
       dark.bg,

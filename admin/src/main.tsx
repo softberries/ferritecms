@@ -7,11 +7,19 @@ import { createRoot } from "react-dom/client";
 import { toast } from "sonner";
 import { createQueryClient, currentPath } from "./api/client";
 import { App } from "./app";
+import { holdResetToken, isResetPath, takeResetToken } from "./auth/reset-token";
 import { DensityProvider } from "./design/density";
 import { applyStoredPreferences } from "./design/preferences";
 import { ThemeProvider } from "./design/theme";
 import { initI18n } from "./i18n";
 import { createAppRouter } from "./router";
+
+// The password-reset link carries its token in the fragment: take it and drop it from
+// the address bar before the router reads the location or anything sends a request
+// (Review Focus 1). The reset page takes it from the holder once.
+if (isResetPath(window.location.pathname)) {
+  holdResetToken(takeResetToken(window.location, window.history));
+}
 
 // Theme and density before the first render, so the first frame is right (11 §3, §4).
 applyStoredPreferences();

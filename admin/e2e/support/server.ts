@@ -193,12 +193,19 @@ async function stopChild(child: ChildProcess): Promise<void> {
 /** An E2E site's backend; one Playwright project each (`playwright.config.ts`). */
 export type Backend = "sqlite" | "pg";
 
+/** The `totp` account's enrollment: its secret and the step its confirm code used. */
+export interface TotpEnrollment {
+  secret: string;
+  step: number;
+}
+
 /** What global setup tells the workers about a running site (`FERRITE_E2E_SITES`). */
 export interface SiteInfo {
   url: string;
   data: string;
   mailDir: string;
   resetmePassword: string;
+  totp: TotpEnrollment;
 }
 
 const SITES_ENV = "FERRITE_E2E_SITES";

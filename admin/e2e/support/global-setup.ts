@@ -15,9 +15,11 @@ import {
   type Backend,
   type Site,
   type SiteInfo,
+  type TotpEnrollment,
 } from "./server";
 import { SCREENS_DIR } from "./snap";
-import { ACCOUNTS, forwardedFor } from "./users";
+import { stepAt, totpCode } from "./totp";
+import { ACCOUNTS, account, forwardedFor } from "./users";
 
 export default async function globalSetup(): Promise<() => Promise<void>> {
   // The contact sheet shows this run's screens only.
@@ -45,8 +47,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     const published: Partial<Record<Backend, SiteInfo>> = {};
     for (const [backend, site] of sites) {
       await saveStorageStates(backend, site);
+      const totp = await enrollTotp(backend, site);
       const { url, data, mailDir, resetmePassword } = site;
-      published[backend] = { url, data, mailDir, resetmePassword };
+      published[backend] = { url, data, mailDir, resetmePassword, totp };
     }
     publishSites(published);
   } catch (e) {
@@ -77,6 +80,53 @@ async function saveStorageStates(backend: Backend, site: Site): Promise<void> {
     } finally {
       await ctx.dispose();
     }
+  }
+}
+
+/**
+ * Turns TOTP on for the `totp` account over the API (07 §2): log in, `POST
+ * /auth/totp/setup`, then `confirm` with a code computed from the returned secret.
+ */
+async function enrollTotp(backend: Backend, site: Site): Promise<TotpEnrollment> {
+  const a = account("totp");
+  const ctx = await request.newContext({
+    baseURL: site.url,
+    extraHTTPHeaders: { Origin: site.url, "X-Forwarded-For": forwardedFor(0, 200) },
+  });
+  try {
+    const login = await ctx.post("/api/v1/auth/login", {
+      data: { login: a.login, password: a.password },
+    });
+    const session = (await login.json().catch(() => null)) as { csrf_token?: string } | null;
+    if (login.status() !== 200 || !session?.csrf_token) {
+      throw new Error(`${backend}: login of totp answered ${login.status()}`);
+    }
+    const headers = { "X-CSRF-Token": session.csrf_token };
+    const setup = await ctx.post("/api/v1/auth/totp/setup", { headers });
+    const body = (await setup.json().catch(() => null)) as {
+      enrollment?: string;
+      secret_base32?: string;
+    } | null;
+    if (setup.status() !== 200 || !body?.enrollment || !body.secret_base32) {
+      throw new Error(`${backend}: totp setup answered ${setup.status()}`);
+    }
+    const step = stepAt();
+    const confirm = await ctx.post("/api/v1/auth/totp/confirm", {
+      headers,
+      data: {
+        enrollment: body.enrollment,
+        code: totpCode(body.secret_base32, step),
+        password: a.password,
+      },
+    });
+    if (!confirm.ok()) {
+      throw new Error(
+        `${backend}: totp confirm answered ${confirm.status()} ${await confirm.text()}`,
+      );
+    }
+    return { secret: body.secret_base32, step };
+  } finally {
+    await ctx.dispose();
   }
 }
 

@@ -5,11 +5,12 @@
 // reset ends every session of the account, so the reset flows use `resetuser`, which has
 // no storage state; a test that logs out or lets a session expire logs in a fresh session
 // of its own (`fixtures.ts` `freshSession`). `author2` is a second author for tests that
-// compare one author's counts with a list (F35).
+// compare one author's counts with a list (F35). `totp` has TOTP enrolled by global setup
+// (its secret and last used step reach the workers in `SiteInfo.totp`).
 
 /** A harness account, by its login. */
 export type Role =
-  "admin" | "editor" | "author" | "author2" | "contributor" | "resetuser" | "resetme";
+  "admin" | "editor" | "author" | "author2" | "contributor" | "resetuser" | "resetme" | "totp";
 
 export interface Account {
   login: Role;
@@ -76,6 +77,13 @@ export const ACCOUNTS: readonly Account[] = [
     role: "author",
     password: null,
     storageState: true,
+  },
+  {
+    login: "totp",
+    email: "totp@example.test",
+    role: "author",
+    password: "e2e-totp-pass-0007",
+    storageState: false,
   },
 ];
 
