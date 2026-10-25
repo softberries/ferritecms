@@ -9,6 +9,11 @@ import type { Options } from "./e2e/support/fixtures";
 import { VIEWPORTS } from "./e2e/support/snap";
 
 const ci = !!process.env.CI;
+// CI always runs the Postgres project; a missing URL there is a broken job, not a skip
+// (mirrors the Rust suites, 10 §2).
+if (ci && !process.env.FERRITE_TEST_PG_URL) {
+  throw new Error("CI is set but FERRITE_TEST_PG_URL is missing: the chromium-pg project needs it");
+}
 const chromium = { ...devices["Desktop Chrome"], viewport: VIEWPORTS.desktop };
 
 export default defineConfig<Options>({
