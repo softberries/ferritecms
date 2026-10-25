@@ -241,16 +241,21 @@ async fn image_workers_bound_processing(db: Arc<TestDb>) {
     .await;
     assert_eq!(gate.calls(), 1, "no second decode while the slot is taken");
     gate.open();
-    eventually(Duration::from_secs(30), "both recorded", || {
-        let store = store.clone();
-        async move {
-            media_row(&store, first).await.width.is_some()
-                && media_row(&store, second).await.width.is_some()
-        }
-    })
+    // The runner marks the job done after the handler recorded the row, so wait for both.
+    eventually(
+        Duration::from_secs(30),
+        "both recorded, second job done",
+        || {
+            let store = store.clone();
+            async move {
+                media_row(&store, first).await.width.is_some()
+                    && media_row(&store, second).await.width.is_some()
+                    && job(&store, id).await.status == JobStatus::Done
+            }
+        },
+    )
     .await;
     let j = job(&store, id).await;
-    assert_eq!(j.status, JobStatus::Done);
     assert_eq!(j.attempts, 1, "the busy release refunded its attempt");
     assert_eq!(gate.max_active.load(Ordering::SeqCst), 1);
     assert_eq!(gate.calls(), 2);

@@ -22,7 +22,9 @@ mod user_cmd;
 
 pub use cli::{Cli, Command, MigrateCommand, run};
 pub use open::{Decision, OpenMode, decide, open_store, startup_check};
-pub use serve::{NodeOptions, RUNTIME_SHUTDOWN, RunnerOverrides, RunningNode, start};
+#[cfg(feature = "test-seams")]
+pub use serve::RunnerOverrides;
+pub use serve::{NodeOptions, RUNTIME_SHUTDOWN, RunningNode, start};
 pub use site::{LoadedTheme, ThemeOrigin, load_theme, reload_theme};
 
 /// The version of this binary, parsed from `Cargo.toml`.

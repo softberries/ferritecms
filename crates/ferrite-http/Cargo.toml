@@ -10,7 +10,7 @@ workspace = true
 [features]
 # Test seams (10-testing §2): only this crate's tests and the `ferrite` crate's tests
 # enable it, through the dev-dependencies on themselves; never a normal build.
-test-seams = []
+test-seams = ["ferrite-core/test-seams"]
 
 [dependencies]
 arc-swap.workspace = true

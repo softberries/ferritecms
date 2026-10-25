@@ -58,8 +58,8 @@ use std::{future::IntoFuture, net::SocketAddr, sync::Arc, time::Duration};
 use anyhow::Context;
 use ferrite_cache::{InvalidationLoop, PageCache};
 use ferrite_cluster::{
-    ClusterMode as NodeMode, JobHandler, JobRunner, NodeIdentity, Periodic, Registry, RunnerConfig,
-    SCHEDULER_TICK, Scheduler, builtin, node_name,
+    ClusterMode as NodeMode, JobRunner, NodeIdentity, Registry, RunnerConfig, SCHEDULER_TICK,
+    Scheduler, builtin, node_name,
 };
 use ferrite_config::{Config, LoggedInCache, PluginsConfig};
 use ferrite_core::mail::MailQueue;
@@ -122,7 +122,8 @@ const SHUTDOWN_BOUND: Duration = Duration::from_secs(13);
 /// Grace `main` gives the runtime's remaining tasks when it shuts down.
 pub const RUNTIME_SHUTDOWN: Duration = Duration::from_secs(1);
 
-/// Job runner timings that tests shorten; `None` keeps the production value.
+/// Test seam: job runner timings that tests shorten; `None` keeps the production value.
+#[cfg(feature = "test-seams")]
 #[derive(Debug, Clone, Default)]
 pub struct RunnerOverrides {
     pub lease: Option<Duration>,
@@ -130,19 +131,26 @@ pub struct RunnerOverrides {
     pub idle_poll: Option<Duration>,
 }
 
-/// How [`start`] deviates from a production node; `Default` is production.
+/// How [`start`] deviates from a production node; `Default` is production. Every field
+/// is a test seam, so without the dev-only `test-seams` feature it has none.
 #[derive(Default)]
 pub struct NodeOptions {
-    /// The version this node registers and checks the schema with (rolling-upgrade
-    /// tests); `None` is this binary's.
+    /// Test seam: the version this node registers and checks the schema with
+    /// (rolling-upgrade tests); `None` is this binary's.
+    #[cfg(feature = "test-seams")]
     pub version: Option<semver::Version>,
-    /// Handlers run besides the built-in ones.
-    pub extra_handlers: Vec<Arc<dyn JobHandler>>,
+    /// Test seam: handlers run besides the built-in ones.
+    #[cfg(feature = "test-seams")]
+    pub extra_handlers: Vec<Arc<dyn ferrite_cluster::JobHandler>>,
+    /// Test seam: shorter job runner timings.
+    #[cfg(feature = "test-seams")]
     pub runner: RunnerOverrides,
-    /// Replaces the periodic jobs (default: the built-in prune jobs and
-    /// `content.publish_due`).
-    pub periodics: Option<Vec<Periodic>>,
-    /// Scheduler tick (default `SCHEDULER_TICK`, 10 s).
+    /// Test seam: replaces the periodic jobs (default: the built-in prune jobs,
+    /// `content.publish_due` and the plugin purge sweep).
+    #[cfg(feature = "test-seams")]
+    pub periodics: Option<Vec<ferrite_cluster::Periodic>>,
+    /// Test seam: the scheduler tick (default `SCHEDULER_TICK`, 10 s).
+    #[cfg(feature = "test-seams")]
     pub scheduler_tick: Option<Duration>,
     /// Test seam: the `request.served` flush interval (default `SERVED_FLUSH_EVERY`,
     /// 10 s).
@@ -258,9 +266,16 @@ async fn join(
     store: &Arc<dyn Store>,
     opts: &NodeOptions,
 ) -> anyhow::Result<(Registry, HttpConfig)> {
+    #[cfg(feature = "test-seams")]
     let version = match &opts.version {
         Some(v) => v.clone(),
         None => binary_version()?,
+    };
+    // A production node has no options to read.
+    #[cfg(not(feature = "test-seams"))]
+    let version = {
+        let NodeOptions {} = opts;
+        binary_version()?
     };
     startup_check(store.as_ref(), &version, &config.database).await?;
     let schema_version = store
@@ -326,6 +341,9 @@ async fn boot(
 ) -> anyhow::Result<RunningNode> {
     // Close to the registry's `started_at` (database clock), which `boot` cannot see.
     let started_at = Timestamp::now();
+    // A production node has no options to read.
+    #[cfg(not(feature = "test-seams"))]
+    let NodeOptions {} = opts;
     let mode = config.effective_cluster_mode();
     let listen = node_mode(mode) == NodeMode::Cluster;
     #[cfg(feature = "test-seams")]
@@ -531,28 +549,31 @@ async fn boot(
         None => variants,
     };
     handlers.push(Arc::new(variants));
+    #[cfg(feature = "test-seams")]
     handlers.extend(opts.extra_handlers);
     // What the job list's `handled` reads (P19).
     status.set_job_kinds(handlers.iter().map(|h| h.kind().to_owned()).collect());
     let mut runner_config = RunnerConfig::new(registry.id(), config.cluster.workers);
-    let o = &opts.runner;
-    runner_config.lease = o.lease.unwrap_or(runner_config.lease);
-    runner_config.extend_every = o.extend_every.unwrap_or(runner_config.extend_every);
-    runner_config.idle_poll = o.idle_poll.unwrap_or(runner_config.idle_poll);
+    #[cfg(feature = "test-seams")]
+    {
+        let o = &opts.runner;
+        runner_config.lease = o.lease.unwrap_or(runner_config.lease);
+        runner_config.extend_every = o.extend_every.unwrap_or(runner_config.extend_every);
+        runner_config.idle_poll = o.idle_poll.unwrap_or(runner_config.idle_poll);
+    }
     runner_config.listen = listen;
     let runner = JobRunner::new(store.clone(), runner_config, handlers)
         .context("cannot set up the job runner")?;
-    let periodics = opts.periodics.unwrap_or_else(|| {
-        let mut p = builtin::periodics();
-        p.push(jobs::publish_due_periodic());
-        p.push(jobs::plugin_purge_sweep_periodic());
-        p
-    });
-    let scheduler = Scheduler::new(
-        store.clone(),
-        periodics,
-        opts.scheduler_tick.unwrap_or(SCHEDULER_TICK),
+    let mut periodics = builtin::periodics();
+    periodics.push(jobs::publish_due_periodic());
+    periodics.push(jobs::plugin_purge_sweep_periodic());
+    let tick = SCHEDULER_TICK;
+    #[cfg(feature = "test-seams")]
+    let (periodics, tick) = (
+        opts.periodics.unwrap_or(periodics),
+        opts.scheduler_tick.unwrap_or(tick),
     );
+    let scheduler = Scheduler::new(store.clone(), periodics, tick);
 
     let listener = TcpListener::bind(config.server.listen)
         .await

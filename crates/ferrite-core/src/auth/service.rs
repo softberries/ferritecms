@@ -15,7 +15,8 @@
 //!   had accepted a soft cap; no concurrency test covers the lock). It is housekeeping,
 //!   not a security boundary.
 //! * The clock (session times, challenge and enrollment expiry, TOTP steps) is
-//!   injectable for tests; rate-limit windows use the database clock.
+//!   injectable for tests (`with_clock`, behind `test-seams`); rate-limit windows use
+//!   the database clock.
 
 use std::fmt;
 use std::net::IpAddr;
@@ -195,7 +196,8 @@ impl AuthService {
         }
     }
 
-    /// Replaces the clock (tests).
+    /// Test seam: replaces the clock.
+    #[cfg(feature = "test-seams")]
     pub fn with_clock(self, clock: Clock) -> Self {
         Self { clock, ..self }
     }

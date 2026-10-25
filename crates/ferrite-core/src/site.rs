@@ -138,7 +138,8 @@ impl SiteReader {
     }
 
     /// Splits sitemaps every `len` URLs (at least 1) instead of [`SITEMAP_FILE_LEN`];
-    /// for tests of the split (a real site would need 50 001 items).
+    /// test seam for the split (a real site would need 50 001 items).
+    #[cfg(feature = "test-seams")]
     pub fn with_sitemap_file_len(mut self, len: usize) -> Self {
         self.sitemap_file_len = len.max(1);
         self
@@ -536,9 +537,8 @@ impl SiteReader {
         Ok(public(Some(items), deps))
     }
 
-    /// One sitemap file of `kind`: up to [`SITEMAP_FILE_LEN`] (or the
-    /// [overridden](Self::with_sitemap_file_len) length) public items, newest
-    /// first, as URL and `updated_at`. Pass the returned cursor back for the next file.
+    /// One sitemap file of `kind`: up to [`SITEMAP_FILE_LEN`] (or the length a test seam
+    /// set) public items, newest first, as URL and `updated_at`. Pass the returned cursor back for the next file.
     ///
     /// Deps are `archive:<kind>` only: every content write (and every term write)
     /// emits it, which covers any URL change; per-item keys for 50 000 URLs would only

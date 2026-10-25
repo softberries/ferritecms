@@ -7,6 +7,11 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Test seams (10-testing §2): enabled by this crate's tests through the dev-dependency on
+# itself and by `ferrite-http/test-seams`; never by a normal build.
+test-seams = []
+
 [dependencies]
 ammonia.workspace = true
 arc-swap.workspace = true
@@ -34,4 +39,5 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+ferrite-core = { path = ".", features = ["test-seams"] }
 ferrite-store-tests = { path = "../ferrite-store-tests" }

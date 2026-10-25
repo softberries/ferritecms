@@ -35,20 +35,26 @@
   test binary (`OnceLock`) before reading the `.wasm`, and panics with cargo's stderr if it fails.
   This needs the `wasm32-wasip2` target installed. CI also builds the plugins in an explicit step.
 - **Test seams** sit behind one dev-only cargo feature, `test-seams` (M2a-2a R22 M11):
-  `ferrite-http` has `test-seams = []` and `ferrite` has
-  `test-seams = ["ferrite-http/test-seams"]`, and each crate enables its own feature through a
+  `ferrite-core` has `test-seams = []`, `ferrite-http` has
+  `test-seams = ["ferrite-core/test-seams"]` and `ferrite` has
+  `test-seams = ["ferrite-http/test-seams"]`. Each crate enables its own feature through a
   dev-dependency on itself (`ferrite-http = { path = ".", features = ["test-seams"] }`). With
   the workspace's resolver 3, dev-dependency features apply only when a test, example or bench
-  target is built, so `cargo test` compiles the seams and `cargo build -p ferrite --release` (the Docker
-  image) does not. `crates/ferrite/tests/seams.rs` (`release_build_has_no_seams`) checks
-  this with `cargo tree -e features,normal`. The seams are `Installer::{with_theme_loaded,
-  with_prepare}`, `PluginReloader::with_prepare`, `SharedFailures::with_before_disable`,
-  `Egress::{for_tests, for_tests_webpki}` with `EgressOverrides`, `NodeOptions::{served_flush,
-  listen, boot_barrier, image_processor}` with `BootBarrier`/`BootGate`,
-  `MediaVariantsHandler::with_processor` with the `ferrite::jobs::ImageProcessor` re-export,
-  and `RunningNode::abort` (crash simulation). A seam needed only by a crate's own unit tests
-  stays `#[cfg(test)]` (for example `PluginHost::extra_wait`). A new seam goes behind the
-  feature, never in a normal build as `#[doc(hidden)] pub`.
+  target is built (`cargo test`, and `cargo build`/`clippy --all-targets`), so tests compile
+  the seams and `cargo build -p ferrite --release` (the Docker image) does not.
+  `crates/ferrite/tests/seams.rs` (`release_build_has_no_seams`) checks this with
+  `cargo tree --locked --offline -e features,normal`. The seams are
+  `AuthService::with_clock`, `SiteReader::with_sitemap_file_len`,
+  `Installer::{with_theme_loaded, with_prepare}`, `PluginReloader::with_prepare`,
+  `SharedFailures::with_before_disable`, `Egress::{for_tests, for_tests_webpki}` with
+  `EgressOverrides`, every `NodeOptions` field (`version`, `extra_handlers`, `runner` with
+  `RunnerOverrides`, `periodics`, `scheduler_tick`, `served_flush`, `listen`, `boot_barrier`
+  with `BootBarrier`/`BootGate`, `image_processor`; a production node uses
+  `NodeOptions::default()`), `MediaVariantsHandler::with_processor` with the
+  `ferrite::jobs::ImageProcessor` re-export, and `RunningNode::abort` (crash simulation). A
+  seam needed only by a crate's own unit tests stays `#[cfg(test)]` (for example
+  `PluginHost::extra_wait`). A new seam goes behind the feature, never in a normal build as
+  `#[doc(hidden)] pub`.
 
 ## 3. CI (GitHub Actions)
 
