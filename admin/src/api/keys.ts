@@ -36,6 +36,8 @@ export const qk = {
       ["content", type, "item", id, "revisions", rid] as const,
     autosave: (type: string, id: string) => ["content", type, "item", id, "autosave"] as const,
   },
+  /** The palette's content search (`palette/sources.ts`): one entry per query. */
+  paletteSearch: (q: string, types: readonly string[]) => ["palette-search", q, types] as const,
   taxonomies: ["taxonomies"] as const,
   terms: (taxonomy: string) => ["taxonomies", taxonomy, "terms"] as const,
   system: {

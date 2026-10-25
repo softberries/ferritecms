@@ -461,7 +461,7 @@ Tailwind and lint config edits made in Task 7:
 then `SidebarProvider` (controlled; state per viewer) → skip link, `AppSidebar`
 (`shell/app-sidebar.tsx`), `SidebarInset` with `TopBar` (`shell/top-bar.tsx`) and
 `<main id="main">` holding `RouteTransition`, plus the shell's shortcuts, the ⌘K
-palette (`shell/go-to-palette.tsx`, a minimal "Go to" list that Task 11 replaces), the
+palette (`palette/palette.tsx`, Task 11, below), the
 `?` sheet (`shell/shortcut-sheet.tsx`) and the app's `<Toaster>` (bottom right; the bare
 styleguide mounts its own for its toast specimens).
 
@@ -498,6 +498,51 @@ styleguide mounts its own for its toast specimens).
   screens, which answer inline: a `429` with a countdown from `Retry-After`, a `503
   busy` with their generic error (sonner replays still-active toasts when a `<Toaster>`
   mounts, so the handler, not only the mount point, has to hold back).
+
+**The command palette (Task 11).** `palette/palette.tsx`: the shadcn `CommandDialog`,
+opened by `mod+k` (`allowInInput`, so it also closes from its own field) and the top
+bar's trigger (`aria-haspopup="dialog"`, `aria-keyshortcuts`).
+
+- Groups, in this order without a query: **Recent** (`palette/recent.ts`: the last 8
+  screens and items, newest first, per viewer in `localStorage`
+  `ferrite.admin.recent.<user id>`, read in try/catch; the shell pushes every nav screen
+  the viewer lands on, the palette pushes each item it opens; the screen already open is
+  left out; only shown before anything is typed, so no row appears twice), **Go to**
+  (every `navFor` item with its chord, and the `?` sheet), **Create** (new post, new
+  page, "New entry in <label>" per custom type the nav shows; only with `edit_own`; each
+  goes to `/content/<type>/new`), **Content** (live search) and **Preferences** (theme
+  light/dark/system, density; the current one is checked and announced "Current").
+- Filtering: cmdk's own `defaultFilter` ranks the static rows (each row's value is its
+  label, with keywords such as "go to", "create", "theme"). Content hits are already
+  matched by the server, so the palette's `filter` gives every one a fixed 0.5: they
+  keep the server's order and sort below a strong static match. `vimBindings` is off
+  (cmdk's Ctrl+K would swallow `mod+k` off Apple platforms); arrows loop.
+- Search (`palette/sources.ts` `searchContent(q, types, signal)`): from 2 characters
+  (trimmed), it waits 150 ms (abortable), then sends one `GET /content/{type}?q=…&limit=8`
+  per type the nav shows, in parallel; hits come by type (nav order), then the server's
+  relevance order. A failing type is left out; all failing shows "Content search
+  failed". TanStack Query (`qk.paletteSearch`) aborts the previous round when the query
+  changes and keeps the last answer up while the next loads (`keepPreviousData`).
+  `PaletteHit` has no permalink (F6): a hit shows title, slug (mono), status dot with
+  its label, and the type. Opening a hit goes to `/content/<type>/<id>`.
+- Loading without flicker: nothing changes for the first 250 ms of a search; after
+  that, a first search shows three skeleton rows under "Content" and a later one dims
+  the previous hits to 60 %. The footer's `role="status"` says "Searching content…" or
+  "N content results" (it is visually hidden on phones, still read).
+- Empty: a centred icon, "No results for “…”" and a hint, drawn over the list, not
+  inside it (`useCommandState`): a listbox holding text but no option fails axe
+  `aria-required-children`, so `CommandEmpty` is not used.
+- Frame: pinned at 12 vh from the top, 40 rem wide, a fixed list height
+  (`min(26rem, 76svh − 7rem)`), so it never jumps while results change; on phones a
+  near full-screen sheet (`100dvh − 1rem`) with a "Cancel" button instead of the `Esc`
+  hint and the footer. Enter: fade, scale 0.98 and 4 px down over `--dur-fast`; exit
+  over `--dur-instant`.
+- The input has no focus ring or fill (Linear, Raycast): the open dialog is the focused
+  context, separated by the header's bottom border; the keyboard position is the active
+  row: `bg-muted`, a 2 px ember bar at its left edge and its icon tile in ember. Rows
+  are 40 px (48 px under `pointer: coarse`). Every opening starts empty: the body is
+  keyed per opening, so a reopening during the closing animation does not keep the
+  old query.
 
 ## 8. Design review checklist
 

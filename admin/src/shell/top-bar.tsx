@@ -41,6 +41,7 @@ import {
 } from "@/components/ui/popover";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isApplePlatform } from "@/lib/shortcuts";
 import { UserMenu } from "./user-menu";
 
 export interface TopBarProps {
@@ -135,12 +136,17 @@ function DiscouragedPill() {
   );
 }
 
+/** Opens the command palette (`palette/palette.tsx`); `mod+k` does the same. */
 function PaletteTrigger({ onPalette }: { onPalette: () => void }) {
   const { t } = useTranslation("shell");
+  const keyshortcuts = isApplePlatform() ? "Meta+K" : "Control+K";
   return (
     <>
       <Button
         variant="outline"
+        data-slot="palette-trigger"
+        aria-haspopup="dialog"
+        aria-keyshortcuts={keyshortcuts}
         onClick={onPalette}
         className="w-60 justify-start gap-2 bg-muted/40 px-2.5 font-normal text-muted-foreground shadow-none hover:text-foreground max-md:hidden lg:w-72"
       >
@@ -151,6 +157,8 @@ function PaletteTrigger({ onPalette }: { onPalette: () => void }) {
       <Button
         variant="ghost"
         size="icon"
+        aria-haspopup="dialog"
+        aria-keyshortcuts={keyshortcuts}
         onClick={onPalette}
         aria-label={t("topBar.searchShort")}
         className="md:hidden"

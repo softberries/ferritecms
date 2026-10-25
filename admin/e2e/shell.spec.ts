@@ -5,6 +5,7 @@
 
 import type { Page, Route } from "@playwright/test";
 import { expect, test } from "./support/fixtures";
+import { mod } from "./support/keys";
 import { authFile } from "./support/server";
 import { screenFile, settle, VIEWPORTS } from "./support/snap";
 
@@ -18,18 +19,6 @@ const nav = (page: Page) => page.getByRole("navigation", { name: "Main" });
 // The top bar's toggle (the sidebar's rail is a second, mouse-only one).
 const toggle = (page: Page) =>
   page.getByRole("banner").getByRole("button", { name: "Toggle sidebar" });
-
-/**
- * `mod` as the page sees it (11 §6). Not Playwright's `ControlOrMeta`, which follows the
- * host OS while the page's platform follows the emulated device.
- */
-async function mod(page: Page): Promise<"Meta" | "Control"> {
-  const apple = await page.evaluate(() => {
-    const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
-    return /mac|iphone|ipad|ipod/i.test(nav.userAgentData?.platform ?? navigator.platform);
-  });
-  return apple ? "Meta" : "Control";
-}
 
 async function openDashboard(page: Page): Promise<void> {
   await page.goto("/admin/");
@@ -417,9 +406,9 @@ test("screens", async ({ as, guard, snap, expectAccessible }) => {
   await expectAccessible(page);
   await page.keyboard.press("Escape");
 
-  // The ⌘K palette (minimal until Task 11).
+  // The ⌘K palette (its own states: palette.spec.ts).
   await page.keyboard.press(`${await mod(page)}+k`);
-  await expect(page.getByRole("dialog", { name: "Jump to" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
   await snap(page, "shell-palette");
   await expectAccessible(page);
   await page.keyboard.press("Escape");

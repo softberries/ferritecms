@@ -30,15 +30,27 @@ export function StatusBadge({ status, className }: StatusBadgeProps) {
         className,
       )}
     >
-      {/* A hollow dot for drafts, a filled one once the item has moved on. */}
-      <span
-        aria-hidden="true"
-        className={cn(
-          "size-2 rounded-full border-[1.5px] border-current",
-          status === "draft" ? "bg-transparent" : "bg-current",
-        )}
-      />
+      <StatusDot status={status} />
       {t(`status.${status}`)}
     </span>
+  );
+}
+
+/**
+ * The badge's dot alone, in the status colour (decorative: put the status label next
+ * to it). A hollow dot for drafts, a filled one once the item has moved on.
+ */
+export function StatusDot({ status, className }: StatusBadgeProps) {
+  return (
+    <span
+      aria-hidden="true"
+      data-slot="status-dot"
+      className={cn(
+        "size-2 shrink-0 rounded-full border-[1.5px] border-current",
+        status === "draft" ? "bg-transparent" : "bg-current",
+        TONE[status],
+        className,
+      )}
+    />
   );
 }

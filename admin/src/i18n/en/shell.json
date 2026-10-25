@@ -58,13 +58,6 @@
     "toggleSidebar": "Collapse or expand the sidebar",
     "goTo": "Go to {{label}}"
   },
-  "palette": {
-    "title": "Jump to",
-    "description": "Type to filter the screens, then press Enter.",
-    "placeholder": "Jump to…",
-    "empty": "Nothing matches.",
-    "goTo": "Go to"
-  },
   "notFound": {
     "title": "Page not found",
     "body": "Nothing lives at this address. The link may be old, or the page has moved.",

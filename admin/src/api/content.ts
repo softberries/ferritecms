@@ -29,13 +29,25 @@ export const CONTENT_STATUSES = [
 ] as const;
 export type ContentStatus = (typeof CONTENT_STATUSES)[number];
 
+/** Whether a status string from the API (`status: string` in the DTOs) is a known one. */
+export function isContentStatus(status: string): status is ContentStatus {
+  return (CONTENT_STATUSES as readonly string[]).includes(status);
+}
+
 export type ContentListQuery = NonNullable<operations["list_content"]["parameters"]["query"]>;
 
+/** `signal` cancels the request (an abort rejects with the `AbortError` as is). */
 export function listContent(
   type: string,
   query: ContentListQuery = {},
+  options: { signal?: AbortSignal } = {},
 ): Promise<SchemaContentList> {
-  return unwrap(api.GET("/api/v1/content/{type}", { params: { path: { type }, query } }));
+  return unwrap(
+    api.GET("/api/v1/content/{type}", {
+      params: { path: { type }, query },
+      ...(options.signal ? { signal: options.signal } : {}),
+    }),
+  );
 }
 
 export function getContent(type: string, id: string): Promise<SchemaContentDto> {

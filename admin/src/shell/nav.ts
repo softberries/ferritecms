@@ -1,4 +1,4 @@
-// The sidebar's sections (and, from Task 11, the palette's "Go to" group). An item
+// The sidebar's sections (and the palette's "Go to", "Create" and "Recent" groups). An item
 // shows only when `me.capabilities` holds what its API needs; the server still
 // enforces every call, the SPA only hides (constraints: capabilities in core).
 // Sections for Media, Comments, Appearance, Plugins, Users, Settings and System are
@@ -22,6 +22,8 @@ export interface NavItem {
   /** An admin path under the router's `/admin` base (`/`, `/content/post`). */
   to: string;
   icon: LucideIcon;
+  /** The content type a content item lists (`post`); the palette searches these. */
+  contentType?: string;
   /** A `shortcuts.ts` key string (`g d`); registered by the shell. */
   shortcut?: string;
   badge?: number;
@@ -72,10 +74,17 @@ export function navFor(
       label: t.label,
       to: `/content/${t.name}`,
       icon: TYPE_ICONS[t.name] ?? ShapesIcon,
+      contentType: t.name,
     }));
     if (items.length > 0) {
       sections.push({ id: "content", label: t("nav.content"), items });
     }
   }
   return sections;
+}
+
+/** The nav item whose screen `pathname` (an admin path, no `/admin` base) shows. */
+export function navItemAt(sections: NavSection[], pathname: string): NavItem | undefined {
+  const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  return sections.flatMap((s) => s.items).find((item) => item.to === (path || "/"));
 }

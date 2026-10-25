@@ -2,12 +2,13 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import auth from "./en/auth.json";
 import common from "./en/common.json";
+import palette from "./en/palette.json";
 import shell from "./en/shell.json";
 import styleguide from "./en/styleguide.json";
 
 /** Every namespace, one per area of the admin. English only in M2b. */
 export const resources = {
-  en: { common, auth, shell, styleguide },
+  en: { common, auth, shell, styleguide, palette },
 } as const;
 
 export const defaultNS = "common";

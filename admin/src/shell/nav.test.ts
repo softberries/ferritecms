@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { ContentTypeDto } from "@/api/types";
 import type { MeDto } from "@/auth/session";
-import { navFor } from "./nav";
+import { navFor, navItemAt } from "./nav";
 
 const type = (name: string, label: string, built_in = false): ContentTypeDto => ({
   name,
@@ -82,4 +82,14 @@ test("nothing_above_its_rights", () => {
 
 test("no_types_yet_means_no_content_section", () => {
   expect(navFor(AUTHOR, []).map((s) => s.id)).toEqual(["overview"]);
+});
+
+test("content_items_name_their_type_and_paths_find_their_item", () => {
+  const sections = navFor(AUTHOR, TYPES);
+  const content = sections.find((s) => s.id === "content")?.items ?? [];
+  expect(content.map((i) => i.contentType)).toEqual(["post", "page", "event", "recipe"]);
+  expect(navItemAt(sections, "/")?.id).toBe("dashboard");
+  expect(navItemAt(sections, "/content/page")?.id).toBe("content-page");
+  expect(navItemAt(sections, "/content/page/")?.id).toBe("content-page");
+  expect(navItemAt(sections, "/content/page/new")).toBeUndefined();
 });

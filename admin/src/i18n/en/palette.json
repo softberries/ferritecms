@@ -1,0 +1,53 @@
+{
+  "title": "Command palette",
+  "description": "Search content, jump to a screen, create something or change a preference. Use the arrow keys to move and Enter to choose.",
+  "placeholder": "Search or type a command…",
+  "clear": "Clear the search",
+  "cancel": "Cancel",
+  "group": {
+    "recent": "Recent",
+    "goTo": "Go to",
+    "create": "Create",
+    "content": "Content",
+    "preferences": "Preferences"
+  },
+  "goTo": {
+    "shortcuts": "Keyboard shortcuts",
+    "keywords": "go to open screen"
+  },
+  "create": {
+    "post": "New post",
+    "page": "New page",
+    "other": "New entry in {{label}}",
+    "keywords": "create add write new"
+  },
+  "preferences": {
+    "light": "Light theme",
+    "dark": "Dark theme",
+    "system": "System theme",
+    "comfortable": "Comfortable density",
+    "compact": "Compact density",
+    "themeKeywords": "theme appearance mode colour color",
+    "densityKeywords": "density spacing size rows",
+    "current": "Current"
+  },
+  "hit": {
+    "untitled": "Untitled",
+    "screen": "Screen"
+  },
+  "status": {
+    "searching": "Searching content…",
+    "results_one": "{{count}} content result",
+    "results_other": "{{count}} content results",
+    "failed": "Content search failed. Keep typing to try again."
+  },
+  "empty": {
+    "title": "No results for “{{q}}”",
+    "body": "Search covers the titles and text of your site's content. Try another word, or fewer of them."
+  },
+  "footer": {
+    "move": "Move",
+    "open": "Open",
+    "close": "Close"
+  }
+}

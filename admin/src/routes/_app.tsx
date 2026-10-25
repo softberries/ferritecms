@@ -25,8 +25,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { storeSidebarOpen, storedSidebarOpen } from "@/design/preferences";
 import { registerShortcut, useShortcut } from "@/lib/shortcuts";
 import { AppSidebar } from "@/shell/app-sidebar";
-import { GoToPalette } from "@/shell/go-to-palette";
-import { type NavSection, navFor } from "@/shell/nav";
+import { CommandPalette } from "@/palette/palette";
+import { pushRecent, setRecentViewer } from "@/palette/recent";
+import { type NavSection, navFor, navItemAt } from "@/shell/nav";
 import { RouteTransition } from "@/shell/route-transition";
 import { ShortcutSheet } from "@/shell/shortcut-sheet";
 import { TopBar } from "@/shell/top-bar";
@@ -84,6 +85,7 @@ function Shell({ me }: { me: MeDto }) {
   const signOut = () => {
     void logout();
   };
+  useRecentScreens(me, sections);
 
   return (
     <TooltipProvider delayDuration={400}>
@@ -128,9 +130,10 @@ function Shell({ me }: { me: MeDto }) {
           openSheet={openSheet}
           closeOverlays={closeOverlays}
         />
-        <GoToPalette
+        <CommandPalette
           open={palette}
           onOpenChange={setPalette}
+          me={me}
           sections={sections}
           onShortcuts={openSheet}
         />
@@ -139,6 +142,20 @@ function Shell({ me }: { me: MeDto }) {
       </SidebarProvider>
     </TooltipProvider>
   );
+}
+
+/**
+ * Feeds the palette's Recent group: every screen of the nav the viewer lands on, however
+ * they got there (sidebar, chord, palette, link). Items are pushed by whoever opens them.
+ */
+function useRecentScreens(me: MeDto, sections: NavSection[]): void {
+  const leaf = useMatches({ select: (ms) => ms.at(-1)?.pathname ?? "" });
+  // Declared first, so the viewer is set before the push below runs.
+  useEffect(() => setRecentViewer(me.id), [me.id]);
+  useEffect(() => {
+    const item = navItemAt(sections, leaf);
+    if (item) pushRecent({ kind: "screen", id: item.id });
+  }, [leaf, sections]);
 }
 
 /** The shell's global bindings (11 §6): only those whose screens exist. */
