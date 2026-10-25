@@ -1568,6 +1568,7 @@ dependencies = [
  "utoipa",
  "utoipa-axum",
  "uuid",
+ "webpki-roots",
 ]
 
 [[package]]

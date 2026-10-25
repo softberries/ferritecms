@@ -68,6 +68,9 @@ url = "2"
 utoipa = { version = "=6.0.0", features = ["uuid", "chrono"] }
 utoipa-axum = "=0.3.0"
 uuid = { version = "1", features = ["v7", "serde"] }
+# Fallback roots for plugin `http` on hosts without a CA bundle (ruling R19); already
+# linked through lettre.
+webpki-roots = "=1.0.10"
 wasmtime = "50"
 wasmtime-wasi = "50"
 wasmtime-wasi-io = "50"

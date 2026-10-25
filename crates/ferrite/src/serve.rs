@@ -369,11 +369,12 @@ async fn boot(
     if let Some(queue) = &mail {
         services = services.with_mailer(queue.clone(), config.site.title.clone());
     }
-    // The plugin `http` import (P16): one outbound client per node.
-    let egress = Egress::new(env!("CARGO_PKG_VERSION"))
-        .map_err(anyhow::Error::msg)
-        .context("cannot start the plugin http client")?;
-    let services = Arc::new(services.with_egress(Arc::new(egress)));
+    // The plugin `http` import (P16): one outbound client per node; never a reason not
+    // to boot (ruling R19).
+    if let Some(egress) = plugin_egress(Egress::new(env!("CARGO_PKG_VERSION"))) {
+        services = services.with_egress(egress);
+    }
+    let services = Arc::new(services);
     let host = Arc::new(
         PluginHost::new(host_config(&config.plugins), services)
             .context("cannot start the plugin host")?,
@@ -909,9 +910,30 @@ impl Signals {
     }
 }
 
+/// The node's plugin egress, or `None` (plugins get "http is not configured") when it
+/// could not be built, with or without the `webpki-roots` fallback: logged as an error,
+/// never fatal (ruling R19).
+fn plugin_egress(built: Result<Egress, String>) -> Option<Arc<Egress>> {
+    match built {
+        Ok(egress) => Some(Arc::new(egress)),
+        Err(e) => {
+            tracing::error!(error = %e, "plugin http is unavailable: the outbound client could not be built");
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ruling R19: an egress that cannot be built leaves `http` unconfigured; boot goes
+    /// on.
+    #[test]
+    fn egress_failure_does_not_stop_boot() {
+        assert!(plugin_egress(Err("no roots at all".to_owned())).is_none());
+        assert!(plugin_egress(Egress::new("0.0.0")).is_some());
+    }
 
     /// `cache.logged_in` reaches the public site's settings (P21).
     #[test]

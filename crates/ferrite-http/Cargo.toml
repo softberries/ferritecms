@@ -43,6 +43,7 @@ utoipa.workspace = true
 utoipa-axum.workspace = true
 url.workspace = true
 uuid.workspace = true
+webpki-roots.workspace = true
 
 [dev-dependencies]
 ferrite-store-tests = { path = "../ferrite-store-tests" }

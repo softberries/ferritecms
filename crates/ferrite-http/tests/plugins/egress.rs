@@ -233,6 +233,8 @@ async fn answer<S: tokio::io::AsyncWrite + Unpin>(io: &mut S, req: &Seen) {
         "/to-ip" => redirect(302, "https://127.0.0.1/ok"),
         "/post-307" => redirect(307, "/echo"),
         "/post-303" => redirect(303, "/echo"),
+        "/post-307-evil" => redirect(307, "https://evil.example.test/echo"),
+        "/post-308-evil" => redirect(308, "https://evil.example.test/echo"),
         "/echo" => {
             let mut body = format!("{} ", req.method).into_bytes();
             body.extend_from_slice(&req.body);
@@ -649,12 +651,14 @@ async fn redirects_stay_on_the_allowlist(site: Site) -> Site {
     );
     assert!(host.failures().is_empty(), "{:?}", host.failures());
 
-    // A hop to another listed host is followed, without the `Authorization` header.
+    // A hop to another listed host is followed with only the safe guest headers
+    // (review round 1, Minor 3): no `Authorization`, no API key.
     let egress = egress_to(&server);
     let mut req = get(&url("/to-evil"));
     req.headers = vec![
         ("Authorization".into(), "Bearer secret".into()),
-        ("X-Keep".into(), "1".into()),
+        ("X-Api-Key".into(), "k1".into()),
+        ("Accept".into(), "text/plain".into()),
     ];
     let res = egress
         .fetch("fetcher", &hosts(&[LISTED, EVIL]), req)
@@ -666,7 +670,29 @@ async fn redirects_stay_on_the_allowlist(site: Site) -> Site {
     assert_eq!(last.path, "/ok");
     assert_eq!(last.header("host"), Some(EVIL));
     assert!(last.header("authorization").is_none());
-    assert_eq!(last.header("x-keep"), Some("1"));
+    assert!(last.header("x-api-key").is_none());
+    assert_eq!(last.header("accept"), Some("text/plain"));
+    assert_eq!(
+        last.header("user-agent"),
+        Some(format!("ferrite/{} plugin/fetcher", env!("CARGO_PKG_VERSION")).as_str())
+    );
+    // A 307/308 to another host would re-send the body there: refused.
+    for path in ["/post-307-evil", "/post-308-evil"] {
+        let mut post = get(&url(path));
+        post.method = "POST".into();
+        post.body = Some(b"SECRET".to_vec());
+        let before = server.seen().len();
+        assert_eq!(
+            egress.fetch("fetcher", &hosts(&[LISTED, EVIL]), post).await,
+            Err("redirect not allowed".to_owned()),
+            "{path}"
+        );
+        assert_eq!(
+            server.seen().len(),
+            before + 1,
+            "{path}: /echo never requested"
+        );
+    }
     site
 }
 
@@ -749,7 +775,8 @@ async fn response_body_is_capped() {
     );
 }
 
-/// The production roots (the platform verifier) do not trust the self-signed test
+/// The production roots (the platform verifier, or `webpki-roots` on a host without a
+/// CA bundle: ruling R19, so this never panics there) do not trust the self-signed test
 /// certificate: a TLS error, named by class only.
 #[tokio::test]
 async fn untrusted_certificate_is_a_tls_error() {
@@ -806,4 +833,81 @@ async fn egress_rechecks_the_url() {
         Err("method not allowed".to_owned())
     );
     assert_eq!(resolver.calls.load(Ordering::SeqCst), 0);
+}
+
+/// Ruling R19: the `webpki-roots` fallback client refuses the self-signed certificate,
+/// and with it added as a root it completes a fetch (ALPN, HTTP/1.1, the checks).
+#[tokio::test]
+async fn webpki_fallback_client_works() {
+    let server = TestServer::start().await;
+    let resolver = || MapResolver::new(&[(LISTED, vec![server.addr])]);
+    let plain = Egress::for_tests_webpki(resolver(), loopback_only, b"").unwrap();
+    assert_eq!(
+        plain
+            .fetch("fetcher", &hosts(&[LISTED]), get(&url("/ok")))
+            .await,
+        Err("TLS error".to_owned())
+    );
+    let trusting = Egress::for_tests_webpki(resolver(), loopback_only, CERT).unwrap();
+    let res = trusting
+        .fetch("fetcher", &hosts(&[LISTED]), get(&url("/ok")))
+        .await
+        .unwrap();
+    assert_eq!(
+        (res.status, res.body.as_slice()),
+        (200, b"hello".as_slice())
+    );
+}
+
+/// Never answers.
+struct HangingResolver {
+    calls: AtomicUsize,
+}
+
+impl Resolve for HangingResolver {
+    fn resolve(&self, _name: Name) -> Resolving {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(std::future::pending())
+    }
+}
+
+/// Review round 1, Minor 2: at most `LOOKUP_SLOTS` lookups at once; one more fails at
+/// once instead of queueing behind a hanging name server.
+#[tokio::test]
+async fn lookups_are_bounded_per_node() {
+    use ferrite_http::plugins::egress::LOOKUP_SLOTS;
+    let resolver = Arc::new(HangingResolver {
+        calls: AtomicUsize::new(0),
+    });
+    let egress = Arc::new(egress_with_policy(resolver.clone()));
+    let tasks: Vec<_> = (0..LOOKUP_SLOTS)
+        .map(|_| {
+            let egress = egress.clone();
+            tokio::spawn(async move {
+                egress
+                    .fetch("fetcher", &hosts(&[LISTED]), get(&url("/ok")))
+                    .await
+            })
+        })
+        .collect();
+    let start = Instant::now();
+    while resolver.calls.load(Ordering::SeqCst) < LOOKUP_SLOTS {
+        assert!(
+            start.elapsed() < Duration::from_secs(4),
+            "lookups did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let start = Instant::now();
+    assert_eq!(
+        egress
+            .fetch("fetcher", &hosts(&[LISTED]), get(&url("/ok")))
+            .await,
+        Err("resolver busy".to_owned())
+    );
+    assert!(start.elapsed() < Duration::from_secs(1));
+    assert_eq!(resolver.calls.load(Ordering::SeqCst), LOOKUP_SLOTS);
+    for t in tasks {
+        t.abort();
+    }
 }

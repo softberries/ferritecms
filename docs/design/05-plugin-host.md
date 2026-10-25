@@ -709,6 +709,14 @@ with the canonical URL and the plugin's list (default: "http is not configured")
 
 **Egress** (one reqwest 0.13 client per node, rustls with the platform verifier):
 
+- *Roots (ruling R19).* The platform verifier (the OS trust store, P17); when it cannot be
+  built (a Linux host without a CA bundle) the client trusts the Mozilla roots compiled in
+  through `webpki-roots` (already linked by lettre) and logs a warning; when even that
+  fails, `serve` logs an error and leaves `http` unconfigured (guests get "http is not
+  configured"): egress never stops a node from booting. The project's image
+  (`gcr.io/distroless/cc-debian12:nonroot`) ships Debian's `ca-certificates` bundle
+  (`/etc/ssl/certs/ca-certificates.crt`), so it uses the platform verifier.
+
 - *Resolved addresses (SSRF, DNS rebinding).* The client's resolver looks the name up once
   (`tokio::net::lookup_host`, port 0 so the URL's 443 applies) and refuses the whole
   answer when **any** address is not public; reqwest connects only to the addresses it
@@ -717,27 +725,45 @@ with the canonical URL and the plugin's list (default: "http is not configured")
   192.0.2/24 192.88.99/24 192.168/16 198.18/15 198.51.100/24 203.0.113/24 224/4 240/4`;
   IPv6 `::/96` (unspecified, loopback, IPv4-compatible), `64:ff9b:1::/48`, `100::/64`,
   `2001::/32`, `2001:2::/48`, `2001:db8::/32`, `3fff::/20`, `fc00::/7`, `fe80::/10`,
-  `fec0::/10`, `ff00::/8`; IPv4-mapped `::ffff:0:0/96`, NAT64 `64:ff9b::/96` and 6to4
-  `2002::/16` are judged by the IPv4 address they embed. An IP-literal URL host is refused
+  `fec0::/10`, `ff00::/8`; IPv4-mapped `::ffff:0:0/96`, IPv4-translated (SIIT)
+  `::ffff:0:0:0/96`, NAT64 `64:ff9b::/96` and 6to4 `2002::/16` are judged by the IPv4
+  address they embed. An IP-literal URL host is refused
   before any lookup.
+- *Lookups.* At most 16 run at once per node (`LOOKUP_SLOTS`); one more fails at once
+  ("resolver busy", not queued). System lookups are `getaddrinfo` on tokio's blocking
+  pool, which cannot be cancelled: when the fetch's deadline drops the future, the thread
+  runs on until the system resolver gives up, and it keeps its slot until then. A plugin
+  that controls slow authoritative DNS for its listed host can therefore pin at most 16
+  blocking threads per node (residual risk, bounded; the blocking pool is shared with
+  `tokio::fs`), and its fetches fail fast as "resolver busy" meanwhile.
 - *Redirects.* reqwest follows none (its redirect policy cannot see the calling plugin's
   list, pre-flight F27); `Egress::fetch` follows at most 3, each `Location` joined to the
   current URL and checked like the first URL (listed host, `https`, port 443, no
   userinfo, no IP literal), else "redirect not allowed" (also for a 4th hop). 301/302/303
-  continue as `GET` without a body (`HEAD` stays `HEAD`), 307/308 keep method and body;
-  `Authorization` is dropped when the host changes. A `Location` is never followed
-  outside this loop.
+  continue as `GET` without a body (`HEAD` stays `HEAD`), 307/308 keep method and body on
+  the same host. A hop to **another** listed host: a 307/308 is refused ("redirect not
+  allowed": the body was meant for the first host), any other keeps only the guest's
+  `Accept` and `Accept-Language` headers (no `Authorization`, API keys or other
+  credentials) plus the egress's `User-Agent`. A `Location` is never followed outside
+  this loop.
 - *Bounds.* 5 s for the whole fetch (connects, hops and body); the response body is read
   in chunks up to 2 MiB (one byte more, or a larger `Content-Length`: "response body over
   2 MiB"); at most 64 response headers, `Set-Cookie` dropped. The plugin call's own
   deadline still applies: on the render path (200 ms) a slow fetch ends the call (a
   timeout, counted toward auto-disable like any other, §8).
+- *Protocol.* HTTP/1.1 or HTTP/2, whichever the server picks by ALPN (reqwest's `http2`
+  feature is linked through `object_store`); every check above is per request, not per
+  protocol, but the in-test server speaks HTTP/1.1 only, so h2 is exercised by real
+  servers, not by the suite.
 - *No ambient state.* No proxy (`HTTP_PROXY` and the like are ignored), no cookie store,
   no `Referer`, no decompression; `User-Agent: ferrite/<version> plugin/<name>`, which
   the guest cannot replace.
 - *Errors* name the class only ("address not allowed", "redirect not allowed", "timed
   out", "TLS error", "connection failed", "request failed", …), never a resolved
-  address; details go to the debug log.
+  address; details go to the debug log. "address not allowed" and "redirect not allowed"
+  are also logged at `warn` with the plugin name and the class (never the address), at
+  most once a minute per plugin, so an operator notices a plugin probing internal
+  addresses; they still are not plugin failures.
 
 Tests: `ferrite-plugin-host` `tests/capabilities.rs` `fetch_preflight_refusals`;
 `ferrite-http` `plugins/egress.rs` (unit `public_ip_table`) and `tests/plugins/egress.rs`
