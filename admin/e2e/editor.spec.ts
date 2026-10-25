@@ -28,7 +28,7 @@ async function openNew(page: Page, type = "post"): Promise<void> {
 
 async function openItem(page: Page, type: string, id: string): Promise<void> {
   await page.goto(`/admin/content/${type}/${id}`);
-  await expect(body(page)).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Title" })).toBeVisible();
 }
 
 /** Selects `text` inside the body (a mouse drag over its characters' box). */
@@ -356,6 +356,18 @@ test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
   const imported = await api.create("post", "Imported from another editor", {
     body: fixture("unknown-node.json"),
   });
+  const broken = await api.create("post", "Structure the editor refuses", {
+    body: {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "Written by an API client." }] },
+        {
+          type: "listItem",
+          content: [{ type: "paragraph", content: [{ type: "text", text: "A stray list item." }] }],
+        },
+      ],
+    },
+  });
   const page = await as("admin");
 
   // An empty new post.
@@ -400,6 +412,18 @@ test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
   await expect(page.getByRole("note")).toContainText("callout");
   await expect(body(page)).toHaveAttribute("contenteditable", "false");
   await snap(page, "editor-read-only");
+  await expectAccessible(page);
+
+  // A body whose structure the schema refuses: its text, read-only, and the stored JSON
+  // behind a disclosure (admins and editors).
+  await openItem(page, "post", broken.id);
+  const stored = page.locator("[data-slot=stored-text]");
+  await expect(stored).toContainText("A stray list item.");
+  await expect(page.locator('[contenteditable="true"]')).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
+  await stored.getByText("Show stored JSON").click();
+  await expect(stored.locator("pre")).toContainText('"listItem"');
+  await snap(page, "editor-content-error");
   await expectAccessible(page);
   await api.dispose();
 });

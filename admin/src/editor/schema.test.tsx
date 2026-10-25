@@ -4,7 +4,7 @@
 // schema holds exactly the supported sets.
 
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { SchemaContentDto } from "@/api/schema";
@@ -21,6 +21,7 @@ import {
 } from "./schema";
 import everyNode from "./fixtures/every-node.json";
 import seedSample from "./fixtures/seed-sample.json";
+import minimalAttrs from "./fixtures/minimal-attrs.json";
 import unknownNode from "./fixtures/unknown-node.json";
 
 /**
@@ -160,6 +161,51 @@ describe("schema", () => {
     const stripped = stripAdded(wire(editor), everyNode, added);
     expect(stripped).toStrictEqual(everyNode);
     expect([...new Set(added)].sort()).toEqual([...DOCUMENTED_DEFAULTS].sort());
+  });
+
+  test("minimal_attrs_gain_only_renderer_equivalent_defaults", () => {
+    // Real bodies (seeded, imported, written by API clients) often leave optional
+    // attributes out. TipTap fills in its defaults on load; each one renders exactly as
+    // the absent attribute does (`start="1"`/`colspan="1"` mean what no attribute means;
+    // the rest are ignored or null), so no stripping is needed before a save. An
+    // unedited open + save sends nothing at all (`unedited_open_and_save_sends_nothing`).
+    const editor = mount(minimalAttrs);
+    const added: string[] = [];
+    expect(stripAdded(wire(editor), minimalAttrs, added)).toStrictEqual(minimalAttrs);
+    expect([...new Set(added)].sort()).toEqual(
+      [
+        "orderedList.start=1",
+        "orderedList.type=null",
+        "codeBlock.language=null",
+        "image.alt=null",
+        "image.title=null",
+        "image.width=null",
+        "image.height=null",
+        "tableHeader.colspan=1",
+        "tableHeader.rowspan=1",
+        "tableHeader.colwidth=null",
+        "tableHeader.align=null",
+        "tableCell.colspan=1",
+        "tableCell.rowspan=1",
+        "tableCell.colwidth=null",
+        "tableCell.align=null",
+        'html.html=""',
+      ].sort(),
+    );
+  });
+
+  test("non_doc_root_is_unknown", () => {
+    expect(validateBody({ type: "paragraph", content: [{ type: "text", text: "Bare" }] })).toEqual({
+      ok: false,
+      unknown: ["(root: paragraph)"],
+    });
+    expect(validateBody([{ type: "doc" }])).toEqual({ ok: false, unknown: ["(root: list)"] });
+    expect(validateBody("text")).toEqual({ ok: false, unknown: ["(root: string)"] });
+    expect(validateBody({ content: [] })).toEqual({ ok: false, unknown: ["(root: no type)"] });
+    expect(validateBody({ type: "doc", content: "x" })).toEqual({
+      ok: false,
+      unknown: ["(content)"],
+    });
   });
 
   test("seed_sample_roundtrips", () => {
@@ -303,6 +349,73 @@ describe("editor screen", () => {
 
     const user = userEvent.setup();
     await user.keyboard("{Control>}s{/Control}{Meta>}s{/Meta}");
+    await act(() => Promise.resolve());
+    expect(seen).toEqual([]);
+  });
+
+  test("non_doc_root_opens_read_only", async () => {
+    const seen = stubRoutes({});
+    await openScreen(
+      itemWith({ type: "paragraph", content: [{ type: "text", text: "A bare paragraph body." }] }),
+    );
+    const body = screen.getByRole("textbox", { name: "Body" });
+    expect(body).toHaveAttribute("contenteditable", "false");
+    expect(body).toHaveTextContent("A bare paragraph body.");
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "cannot edit safely: (root: paragraph). It is shown read-only so nothing is lost.",
+    );
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    await userEvent.setup().keyboard("{Control>}s{/Control}{Meta>}s{/Meta}");
+    await act(() => Promise.resolve());
+    expect(seen).toEqual([]);
+  });
+
+  test("content_error_opens_read_only", async () => {
+    // Every type is known, so `validateBody` passes, but the structure breaks the
+    // schema (a list item straight in the document): TipTap's content check fails.
+    const broken = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "Intro line." }] },
+        {
+          type: "listItem",
+          content: [{ type: "paragraph", content: [{ type: "text", text: "A stray list item." }] }],
+        },
+      ],
+    };
+    expect(validateBody(broken)).toEqual({ ok: true });
+    const seen = stubRoutes({});
+    renderWithRouter(
+      <TooltipProvider>
+        <EditorScreen type="post" typeLabel="Posts" item={itemWith(broken)} />
+      </TooltipProvider>,
+    );
+    // The plain-text view shows the text; the editor itself is hidden.
+    const stored = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>("[data-slot=stored-text]");
+      if (!el) throw new Error("no stored-text view");
+      return el;
+    });
+    expect(within(stored).getByText("A stray list item.")).toBeVisible();
+    expect(within(stored).getByText("Intro line.")).toBeVisible();
+    expect(document.querySelector('[contenteditable="true"]')).toBeNull();
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "its text is shown read-only instead. Nothing is lost",
+    );
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    await userEvent.setup().keyboard("{Control>}s{/Control}{Meta>}s{/Meta}");
+    await act(() => Promise.resolve());
+    expect(seen).toEqual([]);
+  });
+
+  test("unedited_open_and_save_sends_nothing", async () => {
+    // A body without optional attributes: TipTap fills in defaults on load, but the
+    // baseline is taken after that, so an untouched save writes nothing.
+    const seen = stubRoutes({});
+    await openScreen(itemWith(minimalAttrs));
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.setup().keyboard("{Control>}s{/Control}{Meta>}s{/Meta}");
     await act(() => Promise.resolve());
     expect(seen).toEqual([]);
   });

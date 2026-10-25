@@ -123,6 +123,7 @@ function headingLevelOk(node: Record<string, unknown>): boolean {
 }
 
 /**
+ * A root that is not `{ type: "doc" }` is unknown too (`(root: paragraph)`).
  * Walks `doc` for any node type or mark outside the supported sets, and for a heading
  * whose level is not 2–6 (level 1 included, P18; a missing level too, F32). `null`, an
  * empty object and a document without content are an empty body. Iterative: any depth.
@@ -130,6 +131,16 @@ function headingLevelOk(node: Record<string, unknown>): boolean {
 export function validateBody(doc: unknown): BodyCheck {
   if (doc === null || doc === undefined || (isObject(doc) && Object.keys(doc).length === 0)) {
     return { ok: true };
+  }
+  // The root must be a document: the renderer renders any node, so a body stored as a
+  // bare paragraph (an API client's) shows on the site and must not be replaced.
+  if (!isObject(doc))
+    return { ok: false, unknown: [`(root: ${Array.isArray(doc) ? "list" : typeof doc})`] };
+  if (doc.type !== "doc") {
+    return {
+      ok: false,
+      unknown: [`(root: ${typeof doc.type === "string" ? doc.type : "no type"})`],
+    };
   }
   const unknown = new Set<string>();
   const stack: unknown[] = [doc];
@@ -208,6 +219,10 @@ export function displayBody(doc: unknown): unknown {
       }
       return text ? [{ type: "paragraph", content: [{ type: "text", text }] }] : [];
     }
+    if (!inline && (type === "text" || type === "hardBreak")) {
+      const text = textOf(node);
+      return text ? [{ type: "paragraph", content: [{ type: "text", text }] }] : [];
+    }
     const out: Record<string, unknown> = { ...node };
     if (type === "heading" && !headingLevelOk(node)) {
       out.attrs = { ...(isObject(node.attrs) ? node.attrs : {}), level: 2 };
@@ -221,7 +236,13 @@ export function displayBody(doc: unknown): unknown {
     }
     return [out];
   };
-  const content = isObject(doc) && Array.isArray(doc.content) ? (doc.content as unknown[]) : [];
+  // A root that is not a document is shown as the document's only block.
+  const content =
+    isObject(doc) && doc.type === "doc"
+      ? Array.isArray(doc.content)
+        ? (doc.content as unknown[])
+        : []
+      : [doc];
   return { type: "doc", content: content.flatMap((c) => convert(c, false)) };
 }
 

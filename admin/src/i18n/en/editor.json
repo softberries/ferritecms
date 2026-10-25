@@ -14,9 +14,10 @@
   },
   "readOnly": {
     "unsupported": "This item contains content this editor cannot edit safely: {{types}}. It is shown read-only so nothing is lost.",
-    "invalid": "This item contains content this editor cannot edit safely. It is shown read-only so nothing is lost.",
+    "invalid": "This item's content does not match the structure this editor can edit, so its text is shown read-only instead. Nothing is lost: the stored content is unchanged.",
     "forbidden": "You can read this item but not edit it.",
-    "trash": "This item is in the trash. Restore it to edit it."
+    "trash": "This item is in the trash. Restore it to edit it.",
+    "showJson": "Show stored JSON"
   },
   "save": {
     "button": "Save",

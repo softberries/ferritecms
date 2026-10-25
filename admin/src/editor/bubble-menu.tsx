@@ -21,7 +21,15 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "cn";
-import { useCallback, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { checkHref } from "./schema";
 
@@ -68,7 +76,15 @@ function Divider() {
   return <span aria-hidden="true" className="mx-0.5 h-5 w-px bg-border" />;
 }
 
-export function EditorBubbleMenu({ editor }: { editor: Editor }) {
+/** The bubble's plugin key (its `updatePosition` meta goes to it). */
+const BUBBLE_KEY = "editorBubble";
+
+/**
+ * `layoutKey` changes when the page around the editor moves without a scroll or resize
+ * (focus mode hides the top bar): the bubble is then placed again, once at once and once
+ * after the shell's transition.
+ */
+export function EditorBubbleMenu({ editor, layoutKey }: { editor: Editor; layoutKey?: unknown }) {
   const { t } = useTranslation("editor");
   const active = useEditorState({
     editor,
@@ -83,6 +99,19 @@ export function EditorBubbleMenu({ editor }: { editor: Editor }) {
       quote: e.isActive("blockquote"),
     }),
   });
+  useEffect(() => {
+    const place = () => {
+      if (!editor.isDestroyed) {
+        editor.view.dispatch(editor.state.tr.setMeta(BUBBLE_KEY, "updatePosition"));
+      }
+    };
+    const frame = requestAnimationFrame(place);
+    const later = setTimeout(place, 260);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(later);
+    };
+  }, [editor, layoutKey]);
   const [linking, setLinking] = useState(false);
   const [url, setUrl] = useState("");
   const [refused, setRefused] = useState(false);
@@ -164,6 +193,7 @@ export function EditorBubbleMenu({ editor }: { editor: Editor }) {
   return (
     <BubbleMenu
       editor={editor}
+      pluginKey={BUBBLE_KEY}
       options={options}
       shouldShow={shouldShow}
       className="editor-menu z-40"

@@ -153,8 +153,9 @@ export const HtmlBlock = Node.create({
     return {
       insertHtmlBlock:
         () =>
-        ({ commands }) => {
-          openNext = true;
+        ({ commands, dispatch }) => {
+          // Only a real insert opens the sheet, never a `can()` dry run (no `dispatch`).
+          if (dispatch) openNext = true;
           const done = commands.insertContent({ type: this.name, attrs: { html: "" } });
           if (!done) openNext = false;
           return done;

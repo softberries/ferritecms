@@ -30,6 +30,9 @@ export type ReadOnlyReason =
   /** The body holds what the editor cannot represent; `unknown` names it (may be empty
    * when TipTap's content check refused the structure). */
   | { kind: "unsupported"; unknown: string[] }
+  /** TipTap's content check refused the body's structure: it is shown as plain text
+   * (`storedBody`), never through the editor's schema, so nothing seems lost. */
+  | { kind: "invalid" }
   /** The server says this account may not edit the item (`allowed.edit`). */
   | { kind: "forbidden" }
   | { kind: "trash" };
@@ -89,6 +92,8 @@ export interface EditorDocument {
   title: string;
   setTitle: (title: string) => void;
   readOnly: ReadOnlyReason | null;
+  /** The body as the server stored it (for the `invalid` plain-text view). */
+  storedBody: unknown;
   /** Where the cursor goes when the screen opens (a hand-over keeps the user's place). */
   initialFocus: "title" | "body" | null;
   dirty: boolean;
@@ -129,7 +134,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   const [initialReadOnly] = useState(() => readOnlyFor(opts.item, storedBody));
   const [contentError, setContentError] = useState(false);
   const readOnly: ReadOnlyReason | null =
-    initialReadOnly ?? (contentError ? { kind: "unsupported", unknown: [] } : null);
+    initialReadOnly ?? (contentError ? { kind: "invalid" } : null);
   const readOnlyRef = useRef(readOnly);
   useEffect(() => {
     readOnlyRef.current = readOnly;
@@ -165,7 +170,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     enableContentCheck: true,
     onContentError: ({ editor: e }) => {
       // TipTap refused the structure: never let it be saved over (Review Focus 3).
-      readOnlyRef.current = readOnlyRef.current ?? { kind: "unsupported", unknown: [] };
+      readOnlyRef.current = readOnlyRef.current ?? { kind: "invalid" };
       e.setEditable(false, false);
       queueMicrotask(() => setContentError(true));
     },
@@ -312,5 +317,17 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   }, [editor, queryClient, type]);
 
   const initialFocus = handoff ? handoff.focus : opts.item === null ? "title" : null;
-  return { editor, item, title, setTitle, readOnly, initialFocus, dirty, saveState, savedAt, save };
+  return {
+    editor,
+    item,
+    title,
+    setTitle,
+    readOnly,
+    storedBody,
+    initialFocus,
+    dirty,
+    saveState,
+    savedAt,
+    save,
+  };
 }

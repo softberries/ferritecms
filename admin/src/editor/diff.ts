@@ -10,7 +10,10 @@ export interface DiffPart {
   text: string;
 }
 
-/** The parts that turn `a` into `b`, adjacent parts of one kind merged. */
+/**
+ * The parts that turn `a` into `b`, adjacent parts of one kind merged. Two empty
+ * strings give `[]` (no part at all), so callers must not assume at least one part.
+ */
 export function diffWords(a: string, b: string): DiffPart[] {
   const parts: DiffPart[] = [];
   for (const change of diffWordsWithSpace(a, b)) {

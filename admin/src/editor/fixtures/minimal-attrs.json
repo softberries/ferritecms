@@ -1,0 +1,50 @@
+{
+  "type": "doc",
+  "content": [
+    {
+      "type": "orderedList",
+      "content": [
+        {
+          "type": "listItem",
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "One" }] }]
+        }
+      ]
+    },
+    { "type": "codeBlock", "content": [{ "type": "text", "text": "plain code" }] },
+    { "type": "image", "attrs": { "src": "/media/a.png" } },
+    {
+      "type": "table",
+      "content": [
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableHeader",
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "H" }] }]
+            }
+          ]
+        },
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableCell",
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "C" }] }]
+            }
+          ]
+        }
+      ]
+    },
+    { "type": "html" },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "link",
+          "marks": [{ "type": "link", "attrs": { "href": "/x/" } }]
+        }
+      ]
+    }
+  ]
+}

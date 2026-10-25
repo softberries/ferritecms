@@ -14,7 +14,10 @@ import { cn } from "cn";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import { isContentStatus } from "@/api/content";
+import { qk } from "@/api/keys";
+import type { MeDto } from "@/auth/session";
 import { ApiError } from "@/api/problem";
 import { KbdCombo } from "@/components/kit/kbd-combo";
 import { SaveState } from "@/components/kit/save-state";
@@ -93,7 +96,8 @@ export function EditorScreen({ type, typeLabel, item, handoff, onCreated }: Edit
     label: t("shortcuts.focusExit"),
     group,
     allowInInput: true,
-    when: () => focusMode,
+    // Not while a dialog or sheet is open: its own Esc closes it (the HTML sheet).
+    when: () => focusMode && document.querySelector('[role="dialog"]') === null,
     run: () => setFocusMode(false),
   });
   // Leaving the editor leaves focus mode.
@@ -113,9 +117,12 @@ export function EditorScreen({ type, typeLabel, item, handoff, onCreated }: Edit
         onFocusMode={setFocusMode}
       />
       <div className="flex-1 px-page">
-        <WritingSurface doc={doc} typeLabel={typeLabel} />
+        <WritingSurface doc={doc} typeLabel={typeLabel} focusMode={focusMode} />
       </div>
-      <EditorFooter editor={doc.editor} />
+      <EditorFooter
+        editor={doc.editor}
+        {...(doc.readOnly?.kind === "invalid" ? { fixedText: blockText(doc.storedBody) } : {})}
+      />
     </div>
   );
 }
@@ -234,7 +241,15 @@ function ReadOnlyBanner({ reason }: { reason: ReadOnlyReason }) {
   );
 }
 
-function WritingSurface({ doc, typeLabel }: { doc: EditorDocument; typeLabel: string }) {
+function WritingSurface({
+  doc,
+  typeLabel,
+  focusMode,
+}: {
+  doc: EditorDocument;
+  typeLabel: string;
+  focusMode: boolean;
+}) {
   const { t } = useTranslation("editor");
   const { editor, readOnly } = doc;
   const title = useRef<HTMLTextAreaElement>(null);
@@ -300,9 +315,45 @@ function WritingSurface({ doc, typeLabel }: { doc: EditorDocument; typeLabel: st
         onKeyDown={onTitleKey}
         className="editor-title mt-10 block w-full resize-none bg-transparent text-2xl font-semibold text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none sm:mt-16 sm:text-3xl"
       />
-      <EditorContent editor={editor} className="mt-4 sm:mt-6" />
-      {editable ? <EditorBubbleMenu editor={editor} /> : null}
+      {readOnly?.kind === "invalid" ? <StoredText body={doc.storedBody} /> : null}
+      {/* Kept mounted (the editor's view lives in it), hidden when the stored body is
+          shown as plain text instead. */}
+      <EditorContent
+        editor={editor}
+        className="mt-4 sm:mt-6"
+        hidden={readOnly?.kind === "invalid"}
+      />
+      {editable ? <EditorBubbleMenu editor={editor} layoutKey={focusMode} /> : null}
     </article>
+  );
+}
+
+/**
+ * A body TipTap's schema refused, shown without it: its text (`blockText`, the text the
+ * site indexes) one paragraph per line, and, for accounts that edit others' content, the
+ * stored JSON behind a disclosure. Nothing goes through the editor, so nothing is
+ * dropped from view.
+ */
+function StoredText({ body }: { body: unknown }) {
+  const { t } = useTranslation("editor");
+  const queryClient = useQueryClient();
+  const me = queryClient.getQueryData<MeDto>(qk.me);
+  const lines = blockText(body)
+    .split("\n")
+    .filter((l) => l.trim() !== "");
+  return (
+    <div data-slot="stored-text" className="editor-body mt-4 sm:mt-6">
+      {lines.map((line, i) => (
+        <p key={i}>{line}</p>
+      ))}
+      {me?.capabilities.includes("edit_others") ? (
+        <details className="editor-stored-json">
+          <summary>{t("readOnly.showJson")}</summary>
+          {/* Focusable: a scrolling region must be reachable by keyboard. */}
+          <pre tabIndex={0}>{JSON.stringify(body, null, 2)}</pre>
+        </details>
+      ) : null}
+    </div>
   );
 }
 
@@ -324,9 +375,10 @@ function useWordCount(editor: Editor): number {
   return words;
 }
 
-function EditorFooter({ editor }: { editor: Editor }) {
+function EditorFooter({ editor, fixedText }: { editor: Editor; fixedText?: string }) {
   const { t } = useTranslation("editor");
-  const words = useWordCount(editor);
+  const live = useWordCount(editor);
+  const words = fixedText === undefined ? live : wordCount(fixedText);
   const minutes = readingMinutes(words);
   const n = new Intl.NumberFormat(uiLocale());
   return (

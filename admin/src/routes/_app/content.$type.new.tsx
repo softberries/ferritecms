@@ -3,7 +3,13 @@
 // the item's `/$id`, handing the live editor state over so writing continues where it
 // was (the two routes share one route transition, so nothing flashes).
 
-import { createFileRoute, notFound, useNavigate } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  notFound,
+  useLocation,
+  useNavigate,
+  useRouter,
+} from "@tanstack/react-router";
 import { typesQuery } from "@/api/types";
 import { useMe } from "@/auth/session";
 import { ForbiddenState } from "@/components/kit/forbidden-state";
@@ -34,6 +40,8 @@ function NewItem() {
   const { me: guarded } = Route.useRouteContext();
   const me = useMe() ?? guarded;
   const navigate = useNavigate();
+  const router = useRouter();
+  const newPath = useLocation({ select: (l) => l.pathname });
 
   // The SPA hides what the server would refuse (it never decides): no `edit_own`, no
   // writing surface.
@@ -45,6 +53,8 @@ function NewItem() {
       typeLabel={label}
       item={null}
       onCreated={(item, handoff) => {
+        // Moved on while the first save was in flight: the draft exists, stay where they are.
+        if (router.state.location.pathname !== newPath) return;
         handOff(handoff);
         void navigate({
           to: "/content/$type/$id",
