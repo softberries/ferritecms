@@ -1047,6 +1047,91 @@ pub async fn term_rename_records_redirect(db: &TestDb) {
     assert!(redirect_of(store, "/category/quiet/").await.is_none());
 }
 
+/// A term's archive path is the term's: creating a term, or any slug change (with or
+/// without a public archive), deletes the redirects from the new path, either slash
+/// variant, as publishing does for content. Renaming back re-targets, no loop.
+pub async fn term_paths_clear_redirects(db: &TestDb) {
+    let store = db.store();
+    let svc = TaxonomyService::new(db.shared_store());
+    let redirects = RedirectService::new(db.shared_store());
+    let admin = actor(store, Role::Admin).await;
+    let author = store.read().users().get(admin.user).await.unwrap().unwrap();
+
+    // Rename old -> new with a public item: 301 stored.
+    let term = svc
+        .create_term(&admin, "category", "Old", None, None, "")
+        .await
+        .unwrap();
+    let mut post = new_post(&author, "filed");
+    post.status = ContentStatus::Published;
+    post.published_at = Some(ferrite_domain::Timestamp::from_micros(1_000_000).unwrap());
+    let post = store.read().content().insert(&post).await.unwrap();
+    store
+        .read()
+        .terms()
+        .set_for_item(post.id, &[term.id])
+        .await
+        .unwrap();
+    svc.update_term(&admin, term.id, "New", Some("new".into()), None, "")
+        .await
+        .unwrap();
+    assert!(redirect_of(store, "/category/old/").await.is_some());
+
+    // Rename back new -> old: nothing at the live path, `new` points to `old`.
+    svc.update_term(&admin, term.id, "Old", Some("old".into()), None, "")
+        .await
+        .unwrap();
+    assert!(redirects.resolve("/category/old/").await.unwrap().is_none());
+    assert_eq!(
+        redirect_of(store, "/category/new/").await.unwrap().target,
+        "/category/old/"
+    );
+
+    // Creating a term at a redirected path (the rename's `/category/new/`) clears it,
+    // whichever variant is asked for, and emits the keys of both.
+    assert!(redirects.resolve("/category/new").await.unwrap().is_some());
+    let seq = max_seq(store).await;
+    svc.create_term(&admin, "category", "New", Some("new".into()), None, "")
+        .await
+        .unwrap();
+    assert!(redirects.resolve("/category/new/").await.unwrap().is_none());
+    assert!(redirects.resolve("/category/new").await.unwrap().is_none());
+    let keys = keys_since(store, seq).await;
+    for source in ["/category/new/", "/category/new"] {
+        assert!(keys.contains(&redirect_key(source)), "{source}: {keys:?}");
+    }
+
+    // A slug change of a term without public items clears the new path too.
+    let quiet = svc
+        .create_term(&admin, "category", "Quiet", None, None, "")
+        .await
+        .unwrap();
+    redirects
+        .upsert(&admin, "/category/loud/", "/elsewhere/", 302)
+        .await
+        .unwrap();
+    svc.update_term(&admin, quiet.id, "Loud", Some("loud".into()), None, "")
+        .await
+        .unwrap();
+    assert!(
+        redirects
+            .resolve("/category/loud/")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(redirect_of(store, "/category/quiet/").await.is_none());
+    // A name-only update touches no redirects.
+    redirects
+        .upsert(&admin, "/category/loud", "/elsewhere/", 302)
+        .await
+        .unwrap();
+    svc.update_term(&admin, quiet.id, "Louder", None, None, "")
+        .await
+        .unwrap();
+    assert!(redirects.resolve("/category/loud").await.unwrap().is_some());
+}
+
 backend_tests!(
     term_crud_and_events,
     term_permissions,
@@ -1065,6 +1150,7 @@ backend_tests!(
     flat_taxonomy_rejects_parents,
     menu_field_rules_and_caps,
     term_rename_records_redirect,
+    term_paths_clear_redirects,
 );
 
 backend_tests_spawning!(term_slug_retry, term_parallel_same_name);

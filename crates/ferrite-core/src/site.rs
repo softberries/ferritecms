@@ -1153,9 +1153,11 @@ pub(crate) fn published(now: Timestamp) -> ContentQuery {
     }
 }
 
-/// The public types of `tax` (its `content_types` but media), at most
-/// [`MAX_CONTENT_KINDS`]: the types its term archives list.
+/// The public types of `tax` (its `content_types` but media): the types its term
+/// archives list. `TaxonomyService` keeps `content_types` within [`MAX_CONTENT_KINDS`];
+/// the `take` only guards rows written another way.
 pub(crate) fn public_kinds(tax: &Taxonomy) -> Vec<String> {
+    debug_assert!(tax.content_types.len() <= MAX_CONTENT_KINDS);
     tax.content_types
         .iter()
         .filter(|k| *k != MEDIA_KIND)

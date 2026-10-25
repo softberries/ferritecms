@@ -213,10 +213,12 @@ Renaming a term (`TaxonomyService::update_term` with a new slug) stores a `301` 
 content-move rules: redirects to the old path are re-targeted (no chains), redirects from the
 new path (either slash variant) are deleted, and the `redirect:` keys are emitted. It does so
 only when the term had a public archive (a public item with the term), so no redirect reveals a
-term the site does not show (R7). Not handled: a redirect left at a term path that later becomes
-a live archive again by other means than a rename (a new term taking the slug, a first public
-item) keeps answering until removed; items whose permalink contains `%category%` move with the
-term without redirects (permalink structure redirects are M3, P26).
+term the site does not show (R7). Because redirect rows outrank every route, creating a term and
+every slug change (with or without a public archive) delete the redirects from the term's new
+archive path, either slash variant and any origin, in the same transaction, as publishing does
+for content; the `redirect:` keys are emitted. A taxonomy applies to at most 20 content types
+(`content_types`, refused beyond). Not handled: items whose permalink contains `%category%` move
+with the term without redirects (permalink structure redirects are M3, P26).
 
 **Request order** (`crates/ferrite-http/src/app/handler.rs`): methods other than GET/HEAD →
 405; `/healthz`, `/readyz`, `/_media`, `/_theme` (never redirected, not in the page cache) →

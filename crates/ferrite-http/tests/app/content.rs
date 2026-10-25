@@ -311,6 +311,29 @@ async fn term_redirect_served(app: App) -> App {
     app
 }
 
+/// A new term taking a renamed term's old slug serves its own archive: creating it
+/// cleared the rename's redirect.
+async fn new_term_reclaims_renamed_path(app: App) -> App {
+    let old = app.category("old").await;
+    app.post("First", "first", &[old]).await;
+    TaxonomyService::new(app.site.store.clone())
+        .update_term(&app.admin, old, "New", Some("new".into()), None, "")
+        .await
+        .expect("rename");
+    let r = app.get("/category/old/").await;
+    assert_eq!(r.status, StatusCode::MOVED_PERMANENTLY, "{r:?}");
+
+    let again = app.category("old").await;
+    app.post("Second", "second", &[again]).await;
+    let mut poller = app.poller().await;
+    poller.poll_once().await.unwrap();
+    let r = app.get("/category/old/").await;
+    assert_eq!((r.status, r.tpl()), (StatusCode::OK, "archive"), "{r:?}");
+    assert!(r.body.contains("Second"), "{}", r.body);
+    assert!(!r.body.contains("First"), "{}", r.body);
+    app
+}
+
 app_tests!(
     unsafe_menu_urls_are_dropped,
     listings_carry_archive_and_pagination,
@@ -319,4 +342,5 @@ app_tests!(
     static_front_page,
     plugin_head_meta_is_served,
     term_redirect_served,
+    new_term_reclaims_renamed_path,
 );

@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use ferrite_domain::{Taxonomy, Term, TermId, Timestamp};
-use ferrite_store::{Repos, Store, StoreError, Tx};
+use ferrite_store::{MAX_CONTENT_KINDS, Repos, Store, StoreError, Tx};
 use serde_json::json;
 
 use crate::{
@@ -20,7 +20,7 @@ use crate::{
     actor::{Area, Capability, require, require_read},
     events,
     permalink::term_path,
-    redirects::record_move,
+    redirects::{clear_redirects_from, record_move},
     site, slug,
     tx::finish,
     types::{
@@ -62,7 +62,8 @@ impl TaxonomyService {
 
     /// Registers a taxonomy (needs `manage_settings`). The name follows the type name
     /// rules, the label is 1..=100 characters, every entry of `content_types` must be a
-    /// registered type (duplicates are dropped), and `built_in` must be `false`.
+    /// registered type (duplicates are dropped, at most 20 remain), and `built_in` must
+    /// be `false`.
     pub async fn create_taxonomy(
         &self,
         actor: &Actor,
@@ -78,7 +79,7 @@ impl TaxonomyService {
         }
         let tax = Taxonomy {
             label: check_label(&taxonomy.label)?,
-            content_types: dedup_names(&taxonomy.content_types),
+            content_types: check_content_types(&taxonomy.content_types)?,
             ..taxonomy
         };
         let (guard, tx) = begin_locked(self.store.as_ref()).await?;
@@ -119,7 +120,10 @@ impl TaxonomyService {
     ) -> Result<Taxonomy, CoreError> {
         require(actor, Capability::ManageSettings)?;
         let label = label.as_deref().map(check_label).transpose()?;
-        let content_types = content_types.as_deref().map(dedup_names);
+        let content_types = content_types
+            .as_deref()
+            .map(check_content_types)
+            .transpose()?;
         let (guard, tx) = begin_locked(self.store.as_ref()).await?;
         let done = async {
             let mut tax = tx
@@ -224,7 +228,9 @@ impl TaxonomyService {
     /// Finding a free slug lists the whole taxonomy, so it is O(n) in the number of its
     /// terms (the store has no prefix lookup for terms). A concurrent create that takes
     /// the same slug is retried, up to 5 attempts. Only hierarchical taxonomies accept a
-    /// parent.
+    /// parent. Redirects from the new term's archive path (either slash variant) are
+    /// deleted in the same transaction, as publishing does for content: they would
+    /// outrank the archive once it has a public item.
     pub async fn create_term(
         &self,
         actor: &Actor,
@@ -256,6 +262,8 @@ impl TaxonomyService {
                 parent_id: parent,
             };
             let saved = save_with_free_slug(tx.as_ref(), term, &base, false).await?;
+            // The archive path is the term's now; a redirect there would outrank it.
+            clear_redirects_from(tx.as_ref(), &term_path(&tax.name, &saved.slug)).await?;
             emit(tx.as_ref(), &tax, &saved).await?;
             Ok(saved)
         }
@@ -274,7 +282,9 @@ impl TaxonomyService {
     /// does not show, R7), a `301` from the old archive path to the new one is stored in
     /// the same transaction with the content-move rules: redirects to the old path are
     /// re-targeted (no chains), redirects from the new path (either slash variant) are
-    /// deleted, and the `redirect:` keys are emitted.
+    /// deleted, and the `redirect:` keys are emitted. Any other slug change still deletes
+    /// the redirects from the new path (either slash variant; they would outrank the
+    /// archive once it has a public item), as [`create_term`](Self::create_term) does.
     pub async fn update_term(
         &self,
         actor: &Actor,
@@ -299,22 +309,22 @@ impl TaxonomyService {
                 check_cycle(tx.as_ref(), id, new_parent).await?;
             }
             let base = explicit.unwrap_or_else(|| current.slug.clone());
-            let current_slug = current.slug.clone();
+            let old_slug = current.slug.clone();
             let next = Term {
                 name,
                 description: description.to_owned(),
                 parent_id: parent,
                 ..current
             };
-            let old_slug = current_slug;
             let saved = save_with_free_slug(tx.as_ref(), next, &base, true).await?;
-            if saved.slug != old_slug && had_archive(tx.as_ref(), &tax, id).await? {
-                record_move(
-                    tx.as_ref(),
-                    &term_path(&tax.name, &old_slug),
-                    &term_path(&tax.name, &saved.slug),
-                )
-                .await?;
+            if saved.slug != old_slug {
+                let new_path = term_path(&tax.name, &saved.slug);
+                if had_archive(tx.as_ref(), &tax, id).await? {
+                    // Also clears the redirects from the new path.
+                    record_move(tx.as_ref(), &term_path(&tax.name, &old_slug), &new_path).await?;
+                } else {
+                    clear_redirects_from(tx.as_ref(), &new_path).await?;
+                }
             }
             emit(tx.as_ref(), &tax, &saved).await?;
             Ok(saved)
@@ -356,6 +366,19 @@ async fn had_archive(repos: &dyn Repos, tax: &Taxonomy, id: TermId) -> Result<bo
     q.term = Some(id);
     q.limit = 1;
     Ok(!repos.content().list(&q).await?.items.is_empty())
+}
+
+/// `types` without repeats; more than [`MAX_CONTENT_KINDS`] distinct types is
+/// `InvalidField { field: "content_types" }` (a term archive lists at most that many).
+fn check_content_types(types: &[String]) -> Result<Vec<String>, CoreError> {
+    let types = dedup_names(types);
+    if types.len() > MAX_CONTENT_KINDS {
+        return Err(CoreError::invalid_field(
+            "content_types",
+            format!("a taxonomy applies to at most {MAX_CONTENT_KINDS} content types"),
+        ));
+    }
+    Ok(types)
 }
 
 /// `names` without repeats, in their first order.

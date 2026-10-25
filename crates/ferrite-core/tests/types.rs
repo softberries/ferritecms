@@ -823,6 +823,41 @@ pub async fn concurrent_registration_one_wins(db: Arc<TestDb>) {
 
 backend_tests_spawning!(concurrent_registration_one_wins);
 
+/// A taxonomy applies to at most 20 types (a term archive lists at most that many);
+/// duplicates do not count.
+pub async fn taxonomy_content_types_capped(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    types(db)
+        .create(&admin, new_type("book", vec![]))
+        .await
+        .unwrap();
+    let svc = TaxonomyService::new(db.shared_store());
+    let many: Vec<String> = (0..21).map(|i| format!("t{i}")).collect();
+    let refs: Vec<&str> = many.iter().map(String::as_str).collect();
+    let m = invalid(
+        svc.create_taxonomy(&admin, genre(&refs)).await,
+        "content_types",
+    );
+    assert!(m.contains("20"), "{m}");
+    let mut dups = vec!["book"; 25];
+    dups.push("post");
+    let created = svc.create_taxonomy(&admin, genre(&dups)).await.unwrap();
+    assert_eq!(created.content_types, ["book", "post"]);
+    invalid(
+        svc.update_taxonomy(&admin, "genre", None, Some(many.clone()))
+            .await,
+        "content_types",
+    );
+    assert_eq!(
+        svc.get_taxonomy(&admin, "genre")
+            .await
+            .unwrap()
+            .content_types,
+        ["book", "post"]
+    );
+}
+
 backend_tests!(
     stored_permalink_errors_are_not_field_errors,
     field_values_validated_on_write,
@@ -830,4 +865,5 @@ backend_tests!(
     type_delete_rules,
     taxonomy_register_and_delete,
     types_changed_emitted_with_all,
+    taxonomy_content_types_capped,
 );
