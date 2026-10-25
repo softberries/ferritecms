@@ -25,7 +25,7 @@ async function openDashboard(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
 }
 
-/** Answers `GET /settings` (the dashboard placeholder's loader) with a problem. */
+/** Answers `GET /settings` (read by the dashboard's loader) with a problem. */
 function failSettings(status: 403 | 500) {
   return (route: Route) =>
     route.fulfill({

@@ -29,6 +29,10 @@ export const qk = {
      * would refetch the open item and its autosave). */
     lists: (type: string) => ["content", type, "list"] as const,
     list: (type: string, filters: ContentFilters) => ["content", type, "list", filters] as const,
+    /** The dashboard's published items of the last `days` days (`fetchPublished`); under
+     * `lists`, so a save refreshes the activity chart too. */
+    published: (type: string, days: number) =>
+      ["content", type, "list", "published-since", days] as const,
     item: (type: string, id: string) => ["content", type, "item", id] as const,
     counts: (type: string) => ["content", type, "counts"] as const,
     revisions: (type: string, id: string) => ["content", type, "item", id, "revisions"] as const,

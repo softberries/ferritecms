@@ -62,12 +62,5 @@
     "title": "Page not found",
     "body": "Nothing lives at this address. The link may be old, or the page has moved.",
     "action": "Go to dashboard"
-  },
-  "home": {
-    "description": "Welcome back, {{name}}.",
-    "soonTitle": "Your site at a glance",
-    "soonBody": "Recent drafts, activity and site health land here next.",
-    "write": "Write a post",
-    "viewSite": "View site"
   }
 }

@@ -15,19 +15,32 @@ export interface MetricTileProps {
   /** Change on the previous period, in the value's own unit. */
   delta?: number;
   series?: number[];
+  /** A short line under the value naming the change's period ("in the last 30 days"). */
+  caption?: string;
   /** An admin path (without `/admin`); the whole tile links there. */
   href?: string;
   className?: string;
 }
 
-export function MetricTile({ label, value, delta, series, href, className }: MetricTileProps) {
+export function MetricTile({
+  label,
+  value,
+  delta,
+  series,
+  caption,
+  href,
+  className,
+}: MetricTileProps) {
   const { t } = useTranslation();
   const number = new Intl.NumberFormat(uiLocale());
   const body: ReactNode = (
     <>
       <span className="text-sm font-medium text-muted-foreground">{label}</span>
       <span className="flex items-baseline gap-2">
-        <span className="text-2xl font-semibold text-foreground tabular-nums">
+        <span
+          data-slot="metric-value"
+          className="text-2xl font-semibold text-foreground tabular-nums"
+        >
           {number.format(value)}
         </span>
         {delta !== undefined ? <Delta delta={delta} /> : null}
@@ -42,6 +55,9 @@ export function MetricTile({ label, value, delta, series, href, className }: Met
         </span>
       ) : null}
       {series && series.length > 1 ? <Sparkline data={series} className="mt-1" /> : null}
+      {caption ? (
+        <span className="mt-auto pt-1 text-xs text-muted-foreground">{caption}</span>
+      ) : null}
     </>
   );
   const classes = cn(

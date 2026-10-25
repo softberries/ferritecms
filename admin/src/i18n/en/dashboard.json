@@ -1,0 +1,124 @@
+{
+  "title": "Dashboard",
+  "greeting": "Welcome back, {{name}}. Here's what's happening on your site.",
+  "greetingSite": "Welcome back, {{name}}. Here's what's happening on {{site}}.",
+  "viewSite": "View site",
+  "tiles": {
+    "title": "Posts at a glance",
+    "published": "Published",
+    "draft": "Drafts",
+    "pending": "Pending review",
+    "scheduled": "Scheduled",
+    "caption": {
+      "published": "Last {{days}} days",
+      "draft": "Not yet published",
+      "pending": "Waiting for an editor",
+      "scheduled": "Publish on their date"
+    }
+  },
+  "activity": {
+    "title": "Publishing activity",
+    "description": "Posts and pages published per day, last {{days}} days",
+    "posts": "Posts",
+    "pages": "Pages",
+    "legend": "Series",
+    "day": "Day",
+    "tableCaption": "Posts and pages published per day over the last {{days}} days",
+    "emptyTitle": "No posts published in the last {{days}} days",
+    "emptyBody": "Published posts and pages show up here day by day.",
+    "write": "Write a post",
+    "capped_one": "Counts the latest {{formatted}} published item of each type.",
+    "capped_other": "Counts the latest {{formatted}} published items of each type."
+  },
+  "drafts": {
+    "title": "Recent drafts",
+    "description": "Your latest unpublished work",
+    "emptyTitle": "No drafts",
+    "emptyBody": "Posts and pages you start and don't publish yet wait here.",
+    "untitled": "Untitled",
+    "type": {
+      "post": "Post",
+      "page": "Page"
+    },
+    "edited": "edited",
+    "continue": "Continue editing"
+  },
+  "attention": {
+    "title": "Needs attention",
+    "checking": "Checking…",
+    "allClear": "All clear. Nothing is waiting for you.",
+    "open_one": "{{count}} thing is waiting for you.",
+    "open_other": "{{count}} things are waiting for you.",
+    "failed": "Couldn't check {{label}}",
+    "retry": "Retry",
+    "pending": {
+      "label": "Pending review",
+      "some_one": "{{count}} item waits for review",
+      "some_other": "{{count}} items wait for review",
+      "none": "Nothing waits for review",
+      "all": "View all"
+    },
+    "jobs": {
+      "label": "Background jobs",
+      "some_one": "{{count}} dead job",
+      "some_other": "{{count}} dead jobs",
+      "none": "No dead jobs",
+      "attempts_one": "{{attempts}} of {{max}} attempt",
+      "attempts_other": "{{attempts}} of {{max}} attempts"
+    },
+    "plugins": {
+      "label": "Plugins",
+      "some_one": "{{count}} plugin disabled after failures",
+      "some_other": "{{count}} plugins disabled after failures",
+      "none": "No plugin disabled after failures"
+    },
+    "schema": {
+      "label": "Database schema",
+      "up_to_date": "Up to date (version {{db}})",
+      "needs_up_one": "{{count}} migration pending (database {{db}}, binary {{binary}})",
+      "needs_up_other": "{{count}} migrations pending (database {{db}}, binary {{binary}})",
+      "newer_schema_ok": "The database (version {{db}}) is newer than this binary ({{binary}}) but compatible",
+      "incompatible": "The database (version {{db}}) is incompatible with this binary ({{binary}})"
+    },
+    "theme": {
+      "label": "Theme",
+      "some_one": "{{formatted}} node serves the fallback theme",
+      "some_other": "{{formatted}} nodes serve the fallback theme",
+      "none": "Every node serves the active theme"
+    }
+  },
+  "health": {
+    "title": "Site health",
+    "description": "Page cache, background jobs and plugin failures",
+    "thisNode": "This node only",
+    "allNodes": "All nodes",
+    "cache": {
+      "title": "Page cache",
+      "ratio": "Hit ratio",
+      "ratioShort": "hit ratio",
+      "hits": "Hits",
+      "misses": "Misses",
+      "entries": "Cached pages",
+      "size": "Size",
+      "noLookups": "No cache lookups on this node since it started."
+    },
+    "jobs": {
+      "title": "Jobs by status",
+      "count": "Jobs",
+      "queued": "Queued",
+      "running": "Running",
+      "done": "Done",
+      "dead": "Dead"
+    },
+    "failures": {
+      "title": "Plugin failures, last {{hours}} hours",
+      "other": "Other plugins",
+      "noPlugins": "No plugin is enabled.",
+      "none": "No plugin failures in the last {{hours}} hours.",
+      "summary_one": "{{count}} plugin failure in the last {{hours}} hours.",
+      "summary_other": "{{count}} plugin failures in the last {{hours}} hours.",
+      "capped_one": "Shows the first {{count}} enabled plugin.",
+      "capped_other": "Shows the first {{count}} enabled plugins."
+    }
+  }
+}

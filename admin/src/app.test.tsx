@@ -87,7 +87,11 @@ test("renders_the_shell_with_translated_title", async () => {
 
   const name = i18n.t("app.name");
   expect(name).toBe("FerriteCMS");
-  expect(await screen.findByRole("heading", { level: 1, name: "Dashboard" })).toBeInTheDocument();
+  // The dashboard's route chunk imports Recharts; its first transform in Vitest takes
+  // about a second, longer than the default `findBy` timeout.
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "Dashboard" }, { timeout: 5000 }),
+  ).toBeInTheDocument();
   expect(screen.getByRole("navigation", { name: "Main" })).toBeInTheDocument();
   expect(await screen.findByRole("link", { name: "Posts" })).toHaveAttribute(
     "href",

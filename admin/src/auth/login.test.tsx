@@ -1,6 +1,7 @@
 import { createMemoryHistory } from "@tanstack/react-router";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQueryClient } from "@/api/client";
 import { getCsrfToken, setCsrfToken } from "@/api/csrf";
@@ -54,6 +55,10 @@ function stubApi(queue: Handler[]) {
   return seen;
 }
 
+/** Every client a test made: its queries are cancelled afterwards, so a retry of one
+ * test's request never reaches the next test's stubbed `fetch`. */
+const clients: QueryClient[] = [];
+
 function renderAt(path: string) {
   const queryClient = createQueryClient({
     navigate: () => undefined,
@@ -62,6 +67,7 @@ function renderAt(path: string) {
   });
   const history = createMemoryHistory({ initialEntries: [path] });
   const router = createAppRouter(queryClient, history);
+  clients.push(queryClient);
   render(<App queryClient={queryClient} router={router} />);
   return { router, history, queryClient };
 }
@@ -70,7 +76,8 @@ beforeEach(() => {
   setCsrfToken(null);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(clients.splice(0).map((c) => c.cancelQueries()));
   vi.unstubAllGlobals();
 });
 
@@ -167,9 +174,13 @@ describe("login_maps_problems", () => {
       await user.type(await screen.findByLabelText("Login or e-mail"), "alice");
       await user.type(screen.getByLabelText("Password"), "correct-horse-battery");
       await user.click(screen.getByRole("button", { name: "Sign in" }));
-      await waitFor(() => {
-        expect(router.state.location.pathname).toBe("/");
-      });
+      // Landing on the dashboard loads its route chunk (Recharts), slow on first import.
+      await waitFor(
+        () => {
+          expect(router.state.location.pathname).toBe("/");
+        },
+        { timeout: 5000 },
+      );
       expect(router.state.location.href).toBe("/");
     },
   );

@@ -1,64 +1,75 @@
+// The dashboard (07 §3, M2b P16/P17): post count tiles, publishing activity, the actor's
+// recent drafts, what needs attention and site health. Every card loads and fails on
+// its own; a card the actor may not see is not rendered, so its data is never
+// requested. The loader reads only the settings (the site title in the header, shared
+// with the shell's sidebar), so a failing settings read shows the shell's route states.
+
+import { createFileRoute } from "@tanstack/react-router";
+import { ExternalLinkIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, createFileRoute } from "@tanstack/react-router";
-import { ExternalLinkIcon, PenLineIcon, SparklesIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { metaQuery } from "@/api/meta";
 import { settingsQuery } from "@/api/settings";
 import { useMe } from "@/auth/session";
-import { EmptyState } from "@/components/kit/empty-state";
 import { PageHeader } from "@/components/kit/page-header";
 import { Button } from "@/components/ui/button";
+import { ActivityChart } from "@/dashboard/activity-chart";
+import { NeedsAttention } from "@/dashboard/needs-attention";
+import { attentionAccess, hasAttention } from "@/dashboard/queries";
+import { RecentDrafts } from "@/dashboard/recent-drafts";
+import { SiteHealth } from "@/dashboard/site-health";
+import { Tiles } from "@/dashboard/tiles";
 
-// Placeholder dashboard inside the shell (pre-flight F19); Task 12 replaces it. Its
-// loader reads the settings (the site title), so a failing read shows the shell's error
-// states.
 export const Route = createFileRoute("/_app/")({
   staticData: { crumb: (t) => t("crumbs.dashboard") },
   loader: ({ context }) => context.queryClient.ensureQueryData(settingsQuery),
-  component: IndexPage,
+  component: Dashboard,
 });
 
-function IndexPage() {
-  const { t } = useTranslation("shell");
-  const me = useMe();
+function Dashboard() {
+  const { t } = useTranslation("dashboard");
+  const { me: guarded } = Route.useRouteContext();
+  const me = useMe() ?? guarded;
   const settings = Route.useLoaderData();
   const site = useQuery(metaQuery);
-  const canWrite = me?.capabilities.includes("edit_own") ?? false;
+  const caps = me.capabilities;
+  const canWrite = caps.includes("edit_own");
+  const access = attentionAccess(caps);
+  const attention = hasAttention(access);
+  const health = caps.includes("manage_system");
+  const name = me.display_name || me.login;
+  const title = settings["site.title"];
+
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
       <PageHeader
-        title={t("crumbs.dashboard")}
-        description={me ? t("home.description", { name: me.display_name || me.login }) : undefined}
-      />
-      <EmptyState
-        icon={SparklesIcon}
-        title={
-          settings["site.title"]
-            ? `${settings["site.title"]} · ${t("home.soonTitle")}`
-            : t("home.soonTitle")
-        }
-        body={t("home.soonBody")}
-        action={
-          <>
-            {canWrite ? (
-              <Button variant="outline" asChild>
-                <Link to={"/content/post/new" as "/"}>
-                  <PenLineIcon data-icon="inline-start" />
-                  {t("home.write")}
-                </Link>
-              </Button>
-            ) : null}
-            {site.data ? (
-              <Button variant="ghost" asChild>
-                <a href={site.data.site_url} target="_blank" rel="noopener noreferrer">
-                  <ExternalLinkIcon data-icon="inline-start" />
-                  {t("home.viewSite")}
-                </a>
-              </Button>
-            ) : null}
-          </>
+        title={t("title")}
+        description={title ? t("greetingSite", { name, site: title }) : t("greeting", { name })}
+        actions={
+          site.data ? (
+            <Button variant="outline" asChild>
+              <a href={site.data.site_url} target="_blank" rel="noopener noreferrer">
+                <ExternalLinkIcon data-icon="inline-start" />
+                {t("viewSite")}
+              </a>
+            </Button>
+          ) : null
         }
       />
+      <Tiles />
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        <ActivityChart canWrite={canWrite} />
+        <RecentDrafts me={me.id} canWrite={canWrite} />
+        {attention ? (
+          <NeedsAttention access={access} className={health ? "lg:col-span-5" : "lg:col-span-12"} />
+        ) : null}
+        {health ? (
+          <SiteHealth
+            plugins={caps.includes("manage_plugins")}
+            className={attention ? "lg:col-span-7" : "lg:col-span-12"}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }
