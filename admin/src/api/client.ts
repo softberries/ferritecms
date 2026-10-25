@@ -8,6 +8,18 @@ import type { paths } from "./schema";
 const SAFE_METHODS = new Set(["GET", "HEAD"]);
 
 /**
+ * `fetch` itself failed: the request got no response (offline, DNS, connection
+ * reset). Only these and `503` are retried; any other error in a `queryFn`
+ * (a `TypeError` from a bug included) surfaces at once.
+ */
+export class NetworkError extends Error {
+  constructor(cause: unknown) {
+    super("network request failed", { cause });
+    this.name = "NetworkError";
+  }
+}
+
+/**
  * Sets `Accept` on every request and `X-CSRF-Token` on unsafe ones, and turns a
  * problem response (`application/problem+json`) into a thrown `ApiError`.
  */
@@ -27,6 +39,11 @@ export const requestMiddleware: Middleware = {
     }
     return undefined;
   },
+  onError({ error }) {
+    // An abort is the caller's own choice (TanStack Query cancels this way): not wrapped.
+    if (error instanceof DOMException && error.name === "AbortError") return undefined;
+    return new NetworkError(error);
+  },
 };
 
 /**
@@ -37,6 +54,8 @@ export const requestMiddleware: Middleware = {
 export const api = createClient<paths>({
   baseUrl: globalThis.location.origin,
   credentials: "same-origin",
+  // openapi-fetch passes a second argument (`requestInitExt`, undici-only options
+  // from `createClient`); none is configured here, so it is not forwarded.
   fetch: (request: Request) => globalThis.fetch(request),
 });
 api.use(requestMiddleware);
@@ -80,7 +99,7 @@ function isOn(path: string, page: string): boolean {
 /** Network failures (the request never got a response) and `503 busy` are retried. */
 function isTransient(error: unknown): boolean {
   if (error instanceof ApiError) return error.status === 503;
-  return error instanceof TypeError;
+  return error instanceof NetworkError;
 }
 
 /** Default `retry`: never for an HTTP error but 503, twice for network errors and 503. */
@@ -96,14 +115,29 @@ export function retryDelay(failureCount: number, error: unknown): number {
   return Math.min(1000 * 2 ** failureCount, 30_000);
 }
 
+/** The `reset` of every error handler, for `rearmRedirects`. */
+const rearmers = new Set<() => void>();
+
+/**
+ * Re-arms the 401/forced-change redirect of every error handler. `auth.ts` calls
+ * it whenever a session starts or is confirmed (login, TOTP login, `me`, password
+ * change), so a login made outside the query cache re-arms it too.
+ */
+export function rearmRedirects(): void {
+  for (const rearm of rearmers) rearm();
+}
+
 /**
  * Builds the app's error handler: `unauthenticated` → login with `next`,
  * `password-reset-required` → change password, `rate-limited`/`busy` → a toast.
  * Parallel failures navigate once: after one redirect the next are ignored until
- * any query or mutation succeeds again (`reset`).
+ * any query or mutation succeeds again or a session starts (`rearmRedirects`).
  */
 export function createErrorHandler(routing: ErrorRouting) {
   let redirecting = false;
+  rearmers.add(() => {
+    redirecting = false;
+  });
 
   const redirect = (href: string) => {
     if (redirecting) return;

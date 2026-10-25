@@ -15,7 +15,8 @@ export type JobFilters = Omit<
 /**
  * TanStack Query keys. Keys nest, so invalidating a prefix covers what is under it:
  * `["content", type]` covers that type's lists, counts and items, and an item's key
- * covers its revisions and its autosave.
+ * covers its revisions and its autosave. After a save, invalidate
+ * `qk.content.lists(type)` and `qk.content.counts(type)`, never `qk.content.all(type)`.
  */
 export const qk = {
   meta: ["meta"] as const,
@@ -24,6 +25,9 @@ export const qk = {
   settings: ["settings"] as const,
   content: {
     all: (type: string) => ["content", type] as const,
+    /** Every list of the type; a save invalidates `lists` + `counts` (never `all`, which
+     * would refetch the open item and its autosave). */
+    lists: (type: string) => ["content", type, "list"] as const,
     list: (type: string, filters: ContentFilters) => ["content", type, "list", filters] as const,
     item: (type: string, id: string) => ["content", type, "item", id] as const,
     counts: (type: string) => ["content", type, "counts"] as const,

@@ -1,6 +1,13 @@
 import { MutationObserver, type QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { createQueryClient, currentPath, shouldRetry, type ErrorRouting } from "./client";
+import { confirmReset, login } from "./auth";
+import {
+  NetworkError,
+  createQueryClient,
+  currentPath,
+  shouldRetry,
+  type ErrorRouting,
+} from "./client";
 import { getContent, ifMatch, lifecycle, patchContent } from "./content";
 import { getCsrfToken, setCsrfToken } from "./csrf";
 import { ApiError, isProblem } from "./problem";
@@ -230,9 +237,57 @@ test("no_retry_on_4xx", async () => {
   expect(shouldRetry(0, e(412, "precondition-failed"))).toBe(false);
   expect(shouldRetry(0, e(429, "rate-limited"))).toBe(false);
   expect(shouldRetry(0, e(500, "internal"))).toBe(false);
-  expect(shouldRetry(0, new TypeError("Failed to fetch"))).toBe(true);
-  expect(shouldRetry(1, new TypeError("Failed to fetch"))).toBe(true);
-  expect(shouldRetry(2, new TypeError("Failed to fetch"))).toBe(false);
+  const offline = new NetworkError(new TypeError("Failed to fetch"));
+  expect(shouldRetry(0, offline)).toBe(true);
+  expect(shouldRetry(1, offline)).toBe(true);
+  expect(shouldRetry(2, offline)).toBe(false);
+  expect(shouldRetry(0, new TypeError("x is undefined"))).toBe(false);
   expect(shouldRetry(1, e(503, "busy"))).toBe(true);
   expect(shouldRetry(2, e(503, "busy"))).toBe(false);
+});
+
+test("only_fetch_failures_are_network_errors", async () => {
+  // A rejected `fetch` becomes a `NetworkError` (retried) ...
+  stubFetch(() => Promise.reject(new TypeError("Failed to fetch")));
+  const error = await getContent("post", "x").catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(NetworkError);
+  expect((error as NetworkError).cause).toBeInstanceOf(TypeError);
+  expect(shouldRetry(0, error)).toBe(true);
+
+  // ... while a `TypeError` from the code in a `queryFn` is not retried.
+  const client = createQueryClient(routing().r);
+  const queryFn = vi.fn(() => {
+    throw new TypeError("Cannot read properties of undefined");
+  });
+  await client.fetchQuery({ queryKey: ["bug"], queryFn }).catch(() => {});
+  expect(queryFn).toHaveBeenCalledTimes(1);
+});
+
+test("login_rearms_the_redirect", async () => {
+  let answer: () => Response = () => problem(401, "unauthenticated");
+  stubFetch(() => answer());
+  const { r, navigate } = routing();
+  const client = createQueryClient(r);
+  const fail = (k: string) =>
+    client.fetchQuery({ queryKey: [k], queryFn: () => getContent("post", k) }).catch(() => {});
+
+  await fail("a");
+  await fail("b");
+  expect(navigate).toHaveBeenCalledTimes(1);
+
+  // A direct `login()` (outside the query cache) starts a session and re-arms it.
+  answer = () => json({ status: "session", csrf_token: "tok-2", user: {} });
+  await login({ login: "me", password: "pw" });
+  expect(getCsrfToken()).toBe("tok-2");
+
+  answer = () => problem(401, "unauthenticated");
+  await fail("c");
+  expect(navigate).toHaveBeenCalledTimes(2);
+});
+
+test("confirm_reset_drops_the_csrf_token", async () => {
+  stubFetch(() => new Response(null, { status: 204 }));
+  setCsrfToken("tok-1");
+  await confirmReset({ token: "t", password: "a long new password" });
+  expect(getCsrfToken()).toBeNull();
 });

@@ -1,4 +1,4 @@
-import { api, unwrap } from "./client";
+import { api, rearmRedirects, unwrap } from "./client";
 import { setCsrfToken } from "./csrf";
 import type {
   SchemaLoginRequest,
@@ -12,7 +12,10 @@ import type {
 } from "./schema";
 
 function keepToken(r: SchemaLoginResponse): SchemaLoginResponse {
-  if (r.status === "session") setCsrfToken(r.csrf_token);
+  if (r.status === "session") {
+    setCsrfToken(r.csrf_token);
+    rearmRedirects();
+  }
   return r;
 }
 
@@ -39,6 +42,7 @@ export async function logout(): Promise<void> {
 export async function me(): Promise<SchemaMeDto> {
   const user = await unwrap(api.GET("/api/v1/auth/me"));
   setCsrfToken(user.csrf_token ?? null);
+  rearmRedirects();
   return user;
 }
 
@@ -46,6 +50,7 @@ export async function me(): Promise<SchemaMeDto> {
 export async function changePassword(body: SchemaPasswordChange): Promise<SchemaPasswordChanged> {
   const changed = await unwrap(api.POST("/api/v1/auth/password", { body }));
   setCsrfToken(changed.csrf_token ?? null);
+  rearmRedirects();
   return changed;
 }
 
@@ -54,7 +59,11 @@ export function requestReset(body: SchemaPasswordResetRequest): Promise<void> {
   return unwrap(api.POST("/api/v1/auth/password-reset", { body }));
 }
 
-/** Sets a new password with the e-mailed token (`204`; ends every session of the account). */
-export function confirmReset(body: SchemaPasswordResetConfirm): Promise<void> {
-  return unwrap(api.POST("/api/v1/auth/password-reset/confirm", { body }));
+/**
+ * Sets a new password with the e-mailed token (`204`). It ends every session of
+ * the account, so a held CSRF token is dropped as on logout.
+ */
+export async function confirmReset(body: SchemaPasswordResetConfirm): Promise<void> {
+  await unwrap(api.POST("/api/v1/auth/password-reset/confirm", { body }));
+  setCsrfToken(null);
 }

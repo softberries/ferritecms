@@ -49,7 +49,7 @@ surface).
   `crates/ferrite-http/openapi.json` by `pnpm -C admin api:gen` (`openapi-typescript`
   7.13.0 with `--root-types`) into the committed `admin/src/api/schema.d.ts`, and
   `pnpm -C admin api:check` regenerates to a temp file and fails with a diff when the
-  committed file differs (drift is a regenerate-and-diff, M2b P6; it runs in CI). Every
+  committed file differs (drift is a regenerate-and-diff, M2b P6; the CI admin job that runs it arrives in M2b-1 Task 6). Every
   `$ref` in the spec must resolve (`openapi_json_is_valid_3_1`). The request layer
   (`admin/src/api/`) is one `openapi-fetch` 0.17.0 client on the page's origin (the
   generated paths carry `/api/v1`) with one middleware: `Accept: application/json` on
@@ -61,7 +61,7 @@ surface).
   (never the fragment; not from the sign-in pages; once for parallel failures) and
   `password-reset-required` to `/admin/change-password`, both through the router with
   `ignoreBlocker` (never a full-page load), and shows `rate-limited`/`busy` as a toast
-  with the `Retry-After` seconds. Queries retry network errors and `503` twice (after
+  with the `Retry-After` seconds. Queries retry network errors (a rejected `fetch`, wrapped as `NetworkError`) and `503` twice (after
   `Retry-After` when sent) and never another HTTP error; mutations never retry.
 
 ### As implemented (M2a-1 foundation, `crates/ferrite-http/src/api/`)
