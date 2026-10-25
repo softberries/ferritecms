@@ -154,6 +154,7 @@ impl App {
             config,
             migrations_ok,
         })
+        .expect("app state")
         .with_auth(Self::auth(site))
         .with_comments(Arc::new(CommentService::new(
             site.store.clone(),

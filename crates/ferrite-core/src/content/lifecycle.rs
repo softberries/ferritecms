@@ -34,7 +34,7 @@ use crate::{
 const DUE_BATCH: u32 = 100;
 
 #[derive(Debug, Clone, Copy)]
-enum Action {
+pub(super) enum Action {
     Publish,
     /// Publish by the scheduler: the item must be scheduled.
     PublishDue,
@@ -346,7 +346,7 @@ async fn delete_in(
             current_version: current.version,
         });
     }
-    if current.status != ContentStatus::Trash {
+    if !deletable(current.status) {
         return Err(illegal(current.status, "deleted"));
     }
     // Version-checked touch: see `delete`.
@@ -425,19 +425,8 @@ async fn reclaim_path(
 
 /// The item as it looks after `action`, or `Invalid("illegal transition ...")`. Pure.
 fn apply(current: &ContentItem, action: Action, now: Timestamp) -> Result<ContentItem, CoreError> {
-    use ContentStatus::*;
     let from = current.status;
-    let legal = match action {
-        // "Publish now" on a scheduled item; the scheduler's own path is `PublishDue`.
-        Action::Publish => matches!(from, Draft | Pending | Scheduled),
-        Action::Schedule(_) => matches!(from, Draft | Pending),
-        Action::PublishDue => from == Scheduled,
-        Action::Submit => from == Draft,
-        Action::Unpublish => matches!(from, Published | Scheduled | Private),
-        Action::Trash => from != Trash,
-        Action::Restore => from == Trash,
-    };
-    if !legal {
+    if !legal(action, from) {
         return Err(illegal(from, action.target().as_str()));
     }
     let mut next = current.clone();
@@ -461,11 +450,42 @@ fn apply(current: &ContentItem, action: Action, now: Timestamp) -> Result<Conten
     Ok(next)
 }
 
+/// Whether `action` may start from status `from` (the transition table in the module
+/// docs). [`apply`] and [`allowed_actions`](super::allowed_actions) both use it.
+pub(super) fn legal(action: Action, from: ContentStatus) -> bool {
+    use ContentStatus::*;
+    match action {
+        // "Publish now" on a scheduled item; the scheduler's own path is `PublishDue`.
+        Action::Publish => matches!(from, Draft | Pending | Scheduled),
+        Action::Schedule(_) => matches!(from, Draft | Pending),
+        Action::PublishDue => from == Scheduled,
+        Action::Submit => from == Draft,
+        Action::Unpublish => matches!(from, Published | Scheduled | Private),
+        Action::Trash => from != Trash,
+        Action::Restore => from == Trash,
+    }
+}
+
+/// Whether an item in `status` may be permanently deleted (only from trash).
+pub(super) fn deletable(status: ContentStatus) -> bool {
+    status == ContentStatus::Trash
+}
+
+/// Whether an item in `status` may be edited (`update`, revision restore): not while
+/// trashed (`Invalid("restore first")`).
+pub(super) fn editable(status: ContentStatus) -> bool {
+    status != ContentStatus::Trash
+}
+
 fn illegal(from: ContentStatus, to: &str) -> CoreError {
     CoreError::Invalid(format!("illegal transition {} -> {to}", from.as_str()))
 }
 
-fn authorize(actor: &Actor, item: &ContentItem, action: Action) -> Result<(), CoreError> {
+pub(super) fn authorize(
+    actor: &Actor,
+    item: &ContentItem,
+    action: Action,
+) -> Result<(), CoreError> {
     match action {
         Action::Publish | Action::Unpublish | Action::Schedule(_) => {
             if item.author_id == actor.user {
@@ -483,7 +503,7 @@ fn authorize(actor: &Actor, item: &ContentItem, action: Action) -> Result<(), Co
 
 /// `edit_own` for the author, `edit_others` for anyone else, whatever the status.
 /// Contributors have no rights on trashed items at all.
-fn authorize_ownership(actor: &Actor, item: &ContentItem) -> Result<(), CoreError> {
+pub(super) fn authorize_ownership(actor: &Actor, item: &ContentItem) -> Result<(), CoreError> {
     if actor.role == Role::Contributor {
         return Err(CoreError::Forbidden(if item.author_id == actor.user {
             Capability::EditOwn.as_str()

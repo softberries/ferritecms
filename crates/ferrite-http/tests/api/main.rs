@@ -7,6 +7,7 @@ mod harness;
 mod auth;
 mod comments;
 mod content;
+mod content_extras;
 mod foundation;
 mod idempotency;
 mod jobs;

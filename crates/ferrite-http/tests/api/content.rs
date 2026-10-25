@@ -1435,6 +1435,17 @@ async fn others_items_are_403(api: Api) -> Api {
         prob["detail"].as_str().unwrap().contains("edit_own"),
         "{prob}"
     );
-    assert_eq!(ok_item(&cb.get(&api, &own2_path).await), live2);
+    // Unchanged; `allowed` is the reader's own (nothing on its published post).
+    let mut got = ok_item(&cb.get(&api, &own2_path).await);
+    assert!(
+        got["allowed"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|v| v == false),
+        "{got}"
+    );
+    got["allowed"] = live2["allowed"].clone();
+    assert_eq!(got, live2);
     api
 }

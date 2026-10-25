@@ -257,17 +257,20 @@ async fn route_swap_during_lookup_is_not_cached(app: App) -> App {
             },
         },
     });
-    let state = Arc::new(AppState::new(AppParts {
-        store: hooked,
-        reader: app.site.reader.clone(),
-        plugins: app.site.host.clone(),
-        media: app.site.media.clone(),
-        theme: load_theme(crate::harness::fixture("app-theme")),
-        cache: Arc::new(PageCache::new(64 * 1024 * 1024)),
-        routes: with,
-        config: HttpConfig::new(SITE_URL, SITE_TITLE, "en"),
-        migrations_ok: true,
-    }));
+    let state = Arc::new(
+        AppState::new(AppParts {
+            store: hooked,
+            reader: app.site.reader.clone(),
+            plugins: app.site.host.clone(),
+            media: app.site.media.clone(),
+            theme: load_theme(crate::harness::fixture("app-theme")),
+            cache: Arc::new(PageCache::new(64 * 1024 * 1024)),
+            routes: with,
+            config: HttpConfig::new(SITE_URL, SITE_TITLE, "en"),
+            migrations_ok: true,
+        })
+        .expect("app state"),
+    );
     hook.state.set(Arc::downgrade(&state)).unwrap();
     let router = build_app(state.clone());
 

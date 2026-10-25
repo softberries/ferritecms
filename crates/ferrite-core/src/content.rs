@@ -23,9 +23,11 @@ use crate::{
 };
 
 mod admin;
+mod allowed;
 mod lifecycle;
 
-pub use admin::{AdminQuery, MAX_REVISIONS_LISTED};
+pub use admin::{AdminQuery, AuthorRef, MAX_REVISIONS_LISTED, StatusCounts};
+pub use allowed::{AllowedActions, allowed_actions};
 
 /// Unique index on (type, parent, slug); a violation of it means another writer took
 /// the slug between our lookup and our write.
@@ -254,7 +256,7 @@ impl ContentService {
                 current_version: current.version,
             });
         }
-        if current.status == ContentStatus::Trash {
+        if !lifecycle::editable(current.status) {
             return Err(CoreError::Invalid("restore first".into()));
         }
         if draft.kind != current.kind {

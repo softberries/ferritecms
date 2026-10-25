@@ -16,6 +16,11 @@
 //!   precondition-failed` with the item as stored now in `current`; nothing is written.
 //! * `DELETE` trashes; `DELETE ?force=true` deletes a trashed item for good (`204`).
 //! * Every item response carries `ETag: "<version>"`.
+//! * Items (and list entries) carry `author` (id, login, display name) and `allowed`,
+//!   what the caller may do with the item now, computed in core
+//!   (`ferrite_core::content::allowed_actions`, M2b P13); revisions carry `author`.
+//! * `GET /content/{type}/counts` counts items per status as the list's visibility rule
+//!   allows (P14). The static `counts` segment wins over `{id}` in the router.
 
 use std::sync::Arc;
 
@@ -25,7 +30,12 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use ferrite_core::{Actor, AdminQuery, CoreError, MAX_REVISIONS_LISTED};
+use std::collections::HashMap;
+
+use ferrite_core::{
+    Actor, AdminQuery, CoreError, MAX_REVISIONS_LISTED,
+    content::{AuthorRef, allowed_actions},
+};
 use ferrite_domain::{
     ContentId, ContentItem, ContentOrder, ContentStatus, MAX_PAGE, ParentFilter, RevisionId,
     TermId, Timestamp, UserId,
@@ -37,8 +47,8 @@ use uuid::Uuid;
 use super::{
     ApiState, Authed, BASE,
     dto::content::{
-        ContentDto, ContentInput, ContentList, ContentPatch, ContentSummaryDto, RevisionDto,
-        RevisionList, RevisionSummaryDto, ScheduleRequest,
+        ContentCountsDto, ContentDto, ContentInput, ContentList, ContentPatch, ContentSummaryDto,
+        RevisionDto, RevisionList, RevisionSummaryDto, ScheduleRequest,
     },
     extract::{
         ApiJson, ApiPath, ApiQuery, DEFAULT_LIMIT, IfMatch, check_limit, created, etag,
@@ -181,11 +191,37 @@ async fn load(api: &ApiState, actor: &Actor, kind: &str, id: Uuid) -> Result<Con
     Ok(item)
 }
 
-/// `item` with its terms and permalink.
+/// `item` with its terms, permalink, author and allowed actions.
 async fn dto(api: &ApiState, actor: &Actor, item: ContentItem) -> Result<ContentDto, Problem> {
     let terms = api.content.terms_of(actor, item.id).await?;
     let permalink = api.content.permalink(item.id).await?;
-    Ok(ContentDto::new(item, terms, permalink))
+    let author = author_of(api, actor, item.author_id).await?;
+    let allowed = allowed_actions(actor, &item);
+    Ok(ContentDto::new(item, terms, permalink, author, allowed))
+}
+
+/// The authors of `ids` (one lookup), keyed by id.
+async fn authors(
+    api: &ApiState,
+    actor: &Actor,
+    ids: impl IntoIterator<Item = UserId>,
+) -> Result<HashMap<UserId, AuthorRef>, Problem> {
+    let ids: Vec<UserId> = ids.into_iter().collect();
+    Ok(api.content.authors(actor, &ids).await?)
+}
+
+/// Author `id` from `map`. Items and revisions reference existing users (foreign
+/// keys), so a miss is a `500`.
+fn pick(map: &HashMap<UserId, AuthorRef>, id: UserId) -> Result<AuthorRef, Problem> {
+    map.get(&id).cloned().ok_or_else(|| {
+        tracing::error!(user = %id, "author not found");
+        Problem::internal()
+    })
+}
+
+/// The author of one item or revision.
+async fn author_of(api: &ApiState, actor: &Actor, id: UserId) -> Result<AuthorRef, Problem> {
+    pick(&authors(api, actor, [id]).await?, id)
 }
 
 /// `200` (or `status`) with `ETag` and the item.
@@ -262,8 +298,38 @@ pub async fn list_content(
     api.types.get(&who.actor, &kind).await?;
     let query = params.into_query(&kind)?;
     let page = api.content.list(&who.actor, &query).await?;
-    let (items, next_cursor) = list::items(page, ContentSummaryDto::from);
+    let map = authors(&api, &who.actor, page.items.iter().map(|i| i.author_id)).await?;
+    let (items, next_cursor) = list::items(page, |item| {
+        let author = pick(&map, item.author_id)?;
+        let allowed = allowed_actions(&who.actor, &item);
+        Ok::<_, Problem>(ContentSummaryDto::new(item, author, allowed))
+    });
+    let items = items.into_iter().collect::<Result<_, _>>()?;
     Ok(Json(ContentList { items, next_cursor }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/content/{type}/counts",
+    tag = "content",
+    operation_id = "count_content",
+    security(("session" = []), ("bearer" = [])),
+    params(("type" = String, Path, description = "Content type")),
+    responses(
+        (status = 200, description = "Items per status that the caller may read (others' items that are not publicly visible only with `edit_others`)", body = ContentCountsDto),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (needs `content:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`: no such type", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn count_content(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(kind): ApiPath<String>,
+) -> Result<Json<ContentCountsDto>, Problem> {
+    served(&kind)?;
+    let counts = api.content.counts(&who.actor, &kind).await?;
+    Ok(Json(counts.into()))
 }
 
 #[utoipa::path(
@@ -597,11 +663,16 @@ pub async fn list_revisions(
     let limit = check_limit(params.limit, MAX_REVISIONS_LISTED, MAX_REVISIONS_LISTED)?;
     let id = load(&api, &who.actor, &kind, id).await?.id;
     let revisions = api.content.revisions(&who.actor, id, limit).await?;
+    let map = authors(&api, &who.actor, revisions.iter().map(|r| r.author_id)).await?;
+    let items = revisions
+        .into_iter()
+        .map(|r| {
+            let author = pick(&map, r.author_id)?;
+            Ok(RevisionSummaryDto::new(r, author))
+        })
+        .collect::<Result<_, Problem>>()?;
     Ok(Json(RevisionList {
-        items: revisions
-            .into_iter()
-            .map(RevisionSummaryDto::from)
-            .collect(),
+        items,
         next_cursor: None,
     }))
 }
@@ -630,7 +701,8 @@ pub async fn get_revision(
         .content
         .revision(&who.actor, id, RevisionId::from_uuid(rid))
         .await?;
-    Ok(Json(RevisionDto::from(rev)))
+    let author = author_of(&api, &who.actor, rev.author_id).await?;
+    Ok(Json(RevisionDto::new(rev, author)))
 }
 
 #[utoipa::path(

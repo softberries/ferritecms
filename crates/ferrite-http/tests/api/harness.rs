@@ -270,17 +270,20 @@ impl Api {
         let routes = load_route_table(store.as_ref(), &PermalinkRules::default())
             .await
             .expect("route table");
-        let app = Arc::new(AppState::new(AppParts {
-            store: store.clone(),
-            reader,
-            plugins: host,
-            media: media_store.clone(),
-            theme,
-            cache: Arc::new(PageCache::new(64 * 1024 * 1024)),
-            routes,
-            config: HttpConfig::new(SITE_URL, SITE_TITLE, "en"),
-            migrations_ok: true,
-        }));
+        let app = Arc::new(
+            AppState::new(AppParts {
+                store: store.clone(),
+                reader,
+                plugins: host,
+                media: media_store.clone(),
+                theme,
+                cache: Arc::new(PageCache::new(64 * 1024 * 1024)),
+                routes,
+                config: HttpConfig::new(SITE_URL, SITE_TITLE, "en"),
+                migrations_ok: true,
+            })
+            .expect("app state"),
+        );
         let mailer = Arc::new(MemoryMailer::new());
         let content = Arc::new(ContentService::new(
             store.clone(),

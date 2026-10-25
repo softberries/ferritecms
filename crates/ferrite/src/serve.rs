@@ -456,6 +456,7 @@ async fn boot(
             config: http,
             migrations_ok: true,
         })
+        .context("admin headers")?
         .with_auth(auth.clone())
         .with_served(served.clone())
         .with_hits(hits.clone())

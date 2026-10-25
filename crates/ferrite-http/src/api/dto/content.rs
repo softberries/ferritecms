@@ -6,7 +6,10 @@
 //! is `400 malformed-json` naming it.
 
 use chrono::{DateTime, Utc};
-use ferrite_core::ContentDraft;
+use ferrite_core::{
+    ContentDraft,
+    content::{AllowedActions, AuthorRef, StatusCounts},
+};
 use ferrite_domain::{ContentId, ContentItem, Revision, TermId, Timestamp};
 use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::ToSchema;
@@ -41,10 +44,20 @@ pub struct ContentDto {
     pub terms: Vec<Uuid>,
     /// The public path (whatever the status).
     pub permalink: String,
+    /// Who wrote it (`author_id` resolved).
+    pub author: AuthorRefDto,
+    /// What the caller may do with it now.
+    pub allowed: AllowedActionsDto,
 }
 
 impl ContentDto {
-    pub fn new(item: ContentItem, terms: Vec<TermId>, permalink: String) -> Self {
+    pub fn new(
+        item: ContentItem,
+        terms: Vec<TermId>,
+        permalink: String,
+        author: AuthorRef,
+        allowed: AllowedActions,
+    ) -> Self {
         Self {
             id: item.id.as_uuid(),
             kind: item.kind,
@@ -64,6 +77,8 @@ impl ContentDto {
             version: item.version,
             terms: terms.into_iter().map(|t| t.as_uuid()).collect(),
             permalink,
+            author: author.into(),
+            allowed: allowed.into(),
         }
     }
 }
@@ -87,10 +102,14 @@ pub struct ContentSummaryDto {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub version: i64,
+    /// Who wrote it (`author_id` resolved).
+    pub author: AuthorRefDto,
+    /// What the caller may do with it now.
+    pub allowed: AllowedActionsDto,
 }
 
-impl From<ContentItem> for ContentSummaryDto {
-    fn from(item: ContentItem) -> Self {
+impl ContentSummaryDto {
+    pub fn new(item: ContentItem, author: AuthorRef, allowed: AllowedActions) -> Self {
         Self {
             id: item.id.as_uuid(),
             kind: item.kind,
@@ -107,6 +126,86 @@ impl From<ContentItem> for ContentSummaryDto {
             created_at: time(item.created_at),
             updated_at: time(item.updated_at),
             version: item.version,
+            author: author.into(),
+            allowed: allowed.into(),
+        }
+    }
+}
+
+/// A user as an item's or a revision's author: id, login and display name (public on
+/// author archives).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AuthorRefDto {
+    pub id: Uuid,
+    pub login: String,
+    pub display_name: String,
+}
+
+impl From<AuthorRef> for AuthorRefDto {
+    fn from(a: AuthorRef) -> Self {
+        Self {
+            id: a.id.as_uuid(),
+            login: a.login,
+            display_name: a.display_name,
+        }
+    }
+}
+
+/// What the caller may do with an item now, as core decides it (role, token scopes and
+/// status): the admin shows only these actions. `true` means the request passes its
+/// permission and transition checks; it can still fail on a stale version, a schedule
+/// time in the past, or (`delete`) children.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AllowedActionsDto {
+    /// `PATCH` (and revision restore).
+    pub edit: bool,
+    pub publish: bool,
+    pub unpublish: bool,
+    pub schedule: bool,
+    pub submit: bool,
+    /// `DELETE` without `force`.
+    pub trash: bool,
+    pub restore: bool,
+    /// `DELETE ?force=true`.
+    pub delete: bool,
+}
+
+impl From<AllowedActions> for AllowedActionsDto {
+    fn from(a: AllowedActions) -> Self {
+        Self {
+            edit: a.edit,
+            publish: a.publish,
+            unpublish: a.unpublish,
+            schedule: a.schedule,
+            submit: a.submit,
+            trash: a.trash,
+            restore: a.restore,
+            delete: a.delete,
+        }
+    }
+}
+
+/// `GET /content/{type}/counts`: items per status that the caller may read (the same
+/// rule as the list: without `edit_others`, others' items only when publicly visible).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ContentCountsDto {
+    pub draft: u64,
+    pub pending: u64,
+    pub scheduled: u64,
+    pub published: u64,
+    pub private: u64,
+    pub trash: u64,
+}
+
+impl From<StatusCounts> for ContentCountsDto {
+    fn from(c: StatusCounts) -> Self {
+        Self {
+            draft: c.draft,
+            pending: c.pending,
+            scheduled: c.scheduled,
+            published: c.published,
+            private: c.private,
+            trash: c.trash,
         }
     }
 }
@@ -235,16 +334,19 @@ pub struct RevisionSummaryDto {
     pub title: String,
     /// `restored from <revision id>` for a restore; else `null`.
     pub note: Option<String>,
+    /// Who saved it (`author_id` resolved).
+    pub author: AuthorRefDto,
 }
 
-impl From<Revision> for RevisionSummaryDto {
-    fn from(r: Revision) -> Self {
+impl RevisionSummaryDto {
+    pub fn new(r: Revision, author: AuthorRef) -> Self {
         Self {
             id: r.id.as_uuid(),
             author_id: r.author_id.as_uuid(),
             created_at: time(r.created_at),
             title: r.title,
             note: r.note,
+            author: author.into(),
         }
     }
 }
@@ -268,10 +370,12 @@ pub struct RevisionDto {
     pub body: serde_json::Value,
     pub fields: serde_json::Value,
     pub note: Option<String>,
+    /// Who saved it (`author_id` resolved).
+    pub author: AuthorRefDto,
 }
 
-impl From<Revision> for RevisionDto {
-    fn from(r: Revision) -> Self {
+impl RevisionDto {
+    pub fn new(r: Revision, author: AuthorRef) -> Self {
         Self {
             id: r.id.as_uuid(),
             author_id: r.author_id.as_uuid(),
@@ -281,6 +385,7 @@ impl From<Revision> for RevisionDto {
             body: r.body,
             fields: r.fields,
             note: r.note,
+            author: author.into(),
         }
     }
 }

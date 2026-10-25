@@ -388,6 +388,7 @@ async fn anonymous_requests_skip_the_session_lookup(app: App) -> App {
             config: HttpConfig::new(SITE_URL, SITE_TITLE, "en"),
             migrations_ok: true,
         })
+        .expect("app state")
         .with_auth(Arc::new(ferrite_core::AuthService::new(
             store,
             ferrite_core::auth::SiteKey::generate().unwrap(),

@@ -1126,6 +1126,75 @@
         ]
       }
     },
+    "/api/v1/content/{type}/counts": {
+      "get": {
+        "tags": [
+          "content"
+        ],
+        "operationId": "count_content",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "description": "Content type",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Items per status that the caller may read (others' items that are not publicly visible only with `edit_others`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentCountsDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (needs `content:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no such type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/content/{type}/{id}": {
       "get": {
         "tags": [
@@ -7711,6 +7780,49 @@
   },
   "components": {
     "schemas": {
+      "AllowedActionsDto": {
+        "type": "object",
+        "description": "What the caller may do with an item now, as core decides it (role, token scopes and\nstatus): the admin shows only these actions. `true` means the request passes its\npermission and transition checks; it can still fail on a stale version, a schedule\ntime in the past, or (`delete`) children.",
+        "required": [
+          "edit",
+          "publish",
+          "unpublish",
+          "schedule",
+          "submit",
+          "trash",
+          "restore",
+          "delete"
+        ],
+        "properties": {
+          "delete": {
+            "type": "boolean",
+            "description": "`DELETE ?force=true`."
+          },
+          "edit": {
+            "type": "boolean",
+            "description": "`PATCH` (and revision restore)."
+          },
+          "publish": {
+            "type": "boolean"
+          },
+          "restore": {
+            "type": "boolean"
+          },
+          "schedule": {
+            "type": "boolean"
+          },
+          "submit": {
+            "type": "boolean"
+          },
+          "trash": {
+            "type": "boolean",
+            "description": "`DELETE` without `force`."
+          },
+          "unpublish": {
+            "type": "boolean"
+          }
+        }
+      },
       "AuditActorDto": {
         "type": "object",
         "description": "Who wrote an audit row.",
@@ -7795,6 +7907,27 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "AuthorRefDto": {
+        "type": "object",
+        "description": "A user as an item's or a revision's author: id, login and display name (public on\nauthor archives).",
+        "required": [
+          "id",
+          "login",
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "login": {
+            "type": "string"
           }
         }
       },
@@ -8035,6 +8168,50 @@
           }
         }
       },
+      "ContentCountsDto": {
+        "type": "object",
+        "description": "`GET /content/{type}/counts`: items per status that the caller may read (the same\nrule as the list: without `edit_others`, others' items only when publicly visible).",
+        "required": [
+          "draft",
+          "pending",
+          "scheduled",
+          "published",
+          "private",
+          "trash"
+        ],
+        "properties": {
+          "draft": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "pending": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "private": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "published": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "scheduled": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "trash": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "ContentDto": {
         "type": "object",
         "description": "A content item with its terms and public path (`GET`, and every write's result).",
@@ -8053,9 +8230,19 @@
           "updated_at",
           "version",
           "terms",
-          "permalink"
+          "permalink",
+          "author",
+          "allowed"
         ],
         "properties": {
+          "allowed": {
+            "$ref": "#/components/schemas/AllowedActionsDto",
+            "description": "What the caller may do with it now."
+          },
+          "author": {
+            "$ref": "#/components/schemas/AuthorRefDto",
+            "description": "Who wrote it (`author_id` resolved)."
+          },
           "author_id": {
             "type": "string",
             "format": "uuid"
@@ -8273,9 +8460,19 @@
           "menu_order",
           "created_at",
           "updated_at",
-          "version"
+          "version",
+          "author",
+          "allowed"
         ],
         "properties": {
+          "allowed": {
+            "$ref": "#/components/schemas/AllowedActionsDto",
+            "description": "What the caller may do with it now."
+          },
+          "author": {
+            "$ref": "#/components/schemas/AuthorRefDto",
+            "description": "Who wrote it (`author_id` resolved)."
+          },
           "author_id": {
             "type": "string",
             "format": "uuid"
@@ -10100,9 +10297,14 @@
           "title",
           "excerpt",
           "body",
-          "fields"
+          "fields",
+          "author"
         ],
         "properties": {
+          "author": {
+            "$ref": "#/components/schemas/AuthorRefDto",
+            "description": "Who saved it (`author_id` resolved)."
+          },
           "author_id": {
             "type": "string",
             "format": "uuid"
@@ -10160,9 +10362,14 @@
           "id",
           "author_id",
           "created_at",
-          "title"
+          "title",
+          "author"
         ],
         "properties": {
+          "author": {
+            "$ref": "#/components/schemas/AuthorRefDto",
+            "description": "Who saved it (`author_id` resolved)."
+          },
           "author_id": {
             "type": "string",
             "format": "uuid"

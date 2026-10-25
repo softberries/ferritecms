@@ -115,7 +115,7 @@ importer. The admin SPA that uses them is M2b.
 | Meta | `GET /meta`, `GET /openapi.json` (no auth) | M2a-1 | none |
 | Auth | `POST /auth/login`, `POST /auth/login/totp`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/password`, `POST /auth/totp/setup`, `POST /auth/totp/confirm`, `POST /auth/totp/disable` | M2a-1 | own account |
 | Auth: password reset by e-mail | `POST /auth/password-reset`, `POST /auth/password-reset/confirm` (no credentials; origin-checked like login) | M2a-2a (needs `[mail]`) | none (the sealed token is the credential) |
-| Content | `GET/POST /content/{type}`, `GET/PATCH/DELETE /content/{type}/{id}` (`DELETE` trashes; `?force=true` deletes a trashed item), `POST /content/{type}/{id}/publish`, `…/unpublish`, `…/submit`, `…/schedule`, `…/restore` (from trash); type `media` is 404 here (uploads are `/media`) | M2a-1 | `read_admin` + `content:read` and `can_read`; writes `edit_own`/`edit_others`/`publish_*` + `content:write` |
+| Content | `GET/POST /content/{type}`, `GET/PATCH/DELETE /content/{type}/{id}` (`DELETE` trashes; `?force=true` deletes a trashed item), `POST /content/{type}/{id}/publish`, `…/unpublish`, `…/submit`, `…/schedule`, `…/restore` (from trash); type `media` is 404 here (uploads are `/media`). Items and list entries carry `author` (`{id, login, display_name}`) and `allowed` (`{edit, publish, unpublish, schedule, submit, trash, restore, delete}`, from core's `allowed_actions`); `GET /content/{type}/counts` → `{draft, pending, scheduled, published, private, trash}` (M2b P13, P14) | M2a-1; `author`, `allowed`, `counts` M2b-1 | `read_admin` + `content:read` and `can_read`; writes `edit_own`/`edit_others`/`publish_*` + `content:write` |
 | Revisions | `GET /content/{type}/{id}/revisions`, `GET …/revisions/{rid}`, `POST …/revisions/{rid}/restore` | M2a-1 | reads as content plus a role that may edit the item (R26, §1 "Reading revisions"); restore as a content update |
 | Content types | `GET/POST /types`, `GET/PATCH/DELETE /types/{name}` | M2a-1 | reads `content:read`; writes `manage_settings` + `settings:write` |
 | Taxonomies & terms | `GET/POST /taxonomies`, `GET/PATCH/DELETE /taxonomies/{name}`, `GET/POST /taxonomies/{taxonomy}/terms`, `GET/PATCH/DELETE /terms/{id}` | M2a-1 | taxonomy reads `content:read`, writes `manage_settings` + `settings:write`; term reads `terms:read`, writes `manage_terms` + `terms:write` |
@@ -371,7 +371,22 @@ the HTTP endpoints above since M2a-1):
   (editor, admin; it also stands for WordPress's `read_private_posts`). An item the actor
   may not read is `404`, never `403`. Lists and `q` search apply the same rule in the
   query, so pages and cursors stay exact. `publish` also accepts a scheduled item
-  ("publish now").
+  ("publish now"). `GET /content/{type}/counts` (M2b P14) counts with the same rule
+  (one `count` per status with the list's `readable_by`), so an author's draft count
+  never includes another author's drafts; an unknown type is `404`. Every item, list
+  entry and revision names its author (`author`: id, login, display name; one
+  `get_many` per response, M2b P13): only authors of what the actor already read, and
+  logins and display names are public on author archives anyway.
+- **Allowed actions (M2b P13)**: every item and list entry carries `allowed`, what the
+  caller may do with the item now. `ferrite_core::content::allowed_actions` computes
+  each flag as the permission check of the matching method (role, then the token's
+  `content:write` scope) and the transition being legal from the item's status, with the
+  same predicates the lifecycle calls (`content/allowed.rs`), so they cannot drift:
+  `edit` = `can_edit` and not trashed; `publish`/`unpublish`/`schedule` per the rules
+  above and the transition table; `submit` and `trash` per `can_edit`; `restore` and
+  `delete` per R8 and only on trashed items. A `true` flag can still fail on a stale
+  version, a schedule time in the past or (`delete`) children. The admin shows only the
+  actions `allowed` names and never decides on its own.
 - **Reading revisions (M2a-1 R26)** needs more than reading the item: the actor's role
   must be able to edit it (`role_can_edit`, the role half of the edit rule above, so a
   `content:read` token of such a role still reads them). Revisions keep text that was

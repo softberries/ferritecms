@@ -121,6 +121,36 @@ pub fn admin_csp(media_origin: Option<&str>) -> String {
     )
 }
 
+/// A header value of [`AdminHeaders`] that is not a valid header value (in practice a
+/// media origin with characters a header cannot carry).
+#[derive(Debug, thiserror::Error)]
+#[error("invalid admin {name} header value {value:?}")]
+pub struct InvalidAdminHeader {
+    pub name: HeaderName,
+    pub value: String,
+}
+
+/// The CSP ([`admin_csp`]) and [`ADMIN_HEADERS`] as header values, built once with the
+/// app state: an invalid value fails there, so no admin response goes out without its
+/// CSP.
+#[derive(Debug, Clone)]
+pub struct AdminHeaders(Vec<(HeaderName, HeaderValue)>);
+
+impl AdminHeaders {
+    pub fn new(media_origin: Option<&str>) -> Result<Self, InvalidAdminHeader> {
+        let csp = (header::CONTENT_SECURITY_POLICY, admin_csp(media_origin));
+        let fixed = ADMIN_HEADERS.map(|(name, value)| (name, value.to_owned()));
+        std::iter::once(csp)
+            .chain(fixed)
+            .map(|(name, value)| match HeaderValue::from_str(&value) {
+                Ok(v) => Ok((name, v)),
+                Err(_) => Err(InvalidAdminHeader { name, value }),
+            })
+            .collect::<Result<_, _>>()
+            .map(Self)
+    }
+}
+
 /// `/admin`, `/admin/` and `/admin/{*path}` (see the module docs).
 pub fn admin_routes(state: &Arc<AppState>) -> Router {
     Router::new()
@@ -290,11 +320,10 @@ fn method_not_allowed() -> Response<Body> {
     res
 }
 
-/// The CSP and [`ADMIN_HEADERS`], replacing whatever was set.
+/// The CSP and [`ADMIN_HEADERS`] ([`AdminHeaders`]), replacing whatever was set.
 fn secure(res: &mut Response<Body>, state: &AppState) {
-    set(res, header::CONTENT_SECURITY_POLICY, &state.admin_csp);
-    for (name, value) in ADMIN_HEADERS {
-        set(res, name, value);
+    for (name, value) in &state.admin_headers.0 {
+        res.headers_mut().insert(name.clone(), value.clone());
     }
 }
 
@@ -334,6 +363,21 @@ mod tests {
         assert_eq!(extension("a.b/c"), None);
         assert_eq!(extension(".hidden"), None);
         assert_eq!(extension("x."), None);
+    }
+
+    #[test]
+    fn admin_headers_hold_the_csp_or_fail() {
+        let headers = AdminHeaders::new(Some("https://cdn.example.com")).unwrap();
+        let csp = headers
+            .0
+            .iter()
+            .find(|(n, _)| *n == header::CONTENT_SECURITY_POLICY)
+            .map(|(_, v)| v.to_str().unwrap().to_owned());
+        assert_eq!(csp, Some(admin_csp(Some("https://cdn.example.com"))));
+        assert_eq!(headers.0.len(), 1 + ADMIN_HEADERS.len());
+        let err = AdminHeaders::new(Some("https://cdn.example.com\nx: y")).unwrap_err();
+        assert_eq!(err.name, header::CONTENT_SECURITY_POLICY);
+        assert!(AdminHeaders::new(Some("https://cdn\u{7f}.example.com")).is_err());
     }
 
     #[test]

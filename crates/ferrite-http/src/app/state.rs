@@ -21,7 +21,7 @@ use ferrite_theme::{Renderer, SiteInfo, Theme};
 use tokio::sync::Semaphore;
 
 use super::hits::HitCounter;
-use crate::admin::{AdminAssets, EmbeddedAdmin, admin_csp};
+use crate::admin::{AdminAssets, AdminHeaders, EmbeddedAdmin, InvalidAdminHeader};
 use crate::plugins::ServedBuffer;
 use crate::route::{RouteTable, TypeInfo};
 
@@ -198,21 +198,26 @@ pub struct AppState {
     pub(crate) comments: Option<Arc<CommentService>>,
     /// The admin build served under `/admin/` (default [`EmbeddedAdmin`]).
     pub(crate) admin: Arc<dyn AdminAssets>,
-    /// The admin `Content-Security-Policy`, from [`HttpConfig::media_origin`].
-    pub(crate) admin_csp: String,
+    /// The headers of every admin response: the CSP (from
+    /// [`HttpConfig::media_origin`]) and the fixed security headers.
+    pub(crate) admin_headers: AdminHeaders,
     renders: AtomicU64,
 }
 
 impl AppState {
-    pub fn new(parts: AppParts) -> Self {
-        Self {
+    /// The state built from `parts`; fails when the admin headers cannot be built (a
+    /// [`HttpConfig::media_origin`] that is not a valid header value), so the admin is
+    /// never served without its CSP.
+    pub fn new(parts: AppParts) -> Result<Self, InvalidAdminHeader> {
+        let admin_headers = AdminHeaders::new(parts.config.media_origin.as_deref())?;
+        Ok(Self {
             redirects: Arc::new(RedirectService::new(parts.store.clone())),
             auth: None,
             served: None,
             hits: None,
             comments: None,
             admin: Arc::new(EmbeddedAdmin),
-            admin_csp: admin_csp(parts.config.media_origin.as_deref()),
+            admin_headers,
             renderer: Renderer::new(),
             render_slots: Arc::new(Semaphore::new(
                 parts
@@ -236,7 +241,7 @@ impl AppState {
             routes: ArcSwap::from_pointee(parts.routes),
             config: parts.config,
             migrations_ok: parts.migrations_ok,
-        }
+        })
     }
 
     /// Session cookies are resolved with `auth` (previews and logged-in requests, P20,

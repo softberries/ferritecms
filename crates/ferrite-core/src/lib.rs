@@ -6,7 +6,7 @@ mod actor;
 pub mod auth;
 pub mod blocks;
 pub mod comments;
-mod content;
+pub mod content;
 pub mod diagnostics;
 mod error;
 pub mod events;

@@ -94,17 +94,20 @@ async fn counting_app_with(app: &App, config: HttpConfig) -> (Arc<CountingStore>
         .await
         .unwrap();
     let theme = load_theme(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes/blog"));
-    let state = Arc::new(AppState::new(AppParts {
-        store,
-        reader,
-        plugins: app.site.host.clone(),
-        media: app.site.media.clone(),
-        theme,
-        cache: Arc::new(ferrite_cache::PageCache::new(64 * 1024 * 1024)),
-        routes,
-        config,
-        migrations_ok: true,
-    }));
+    let state = Arc::new(
+        AppState::new(AppParts {
+            store,
+            reader,
+            plugins: app.site.host.clone(),
+            media: app.site.media.clone(),
+            theme,
+            cache: Arc::new(ferrite_cache::PageCache::new(64 * 1024 * 1024)),
+            routes,
+            config,
+            migrations_ok: true,
+        })
+        .expect("app state"),
+    );
     (counting, build_app(state))
 }
 

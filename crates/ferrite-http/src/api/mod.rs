@@ -92,6 +92,7 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(auth::totp_confirm))
         .routes(routes!(auth::totp_disable))
         .routes(routes!(content::list_content, content::create_content))
+        .routes(routes!(content::count_content))
         .routes(routes!(
             content::get_content,
             content::update_content,

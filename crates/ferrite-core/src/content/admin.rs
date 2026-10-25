@@ -6,10 +6,13 @@
 //! future `published_at`) only for roles with `edit_others`. Revisions need more: the
 //! actor's role must be able to edit the item ([`role_can_edit`], R26).
 
+use std::collections::HashMap;
+
 use ferrite_domain::{
     ContentId, ContentItem, ContentOrder, ContentQuery, ContentStatus, Page, ParentFilter,
     ReadableBy, Revision, RevisionId, SearchQuery, TermId, Timestamp, UserId,
 };
+use ferrite_store::MAX_ID_FILTER;
 
 use super::{ContentDraft, ContentService, Edit, WALKED};
 use crate::{
@@ -62,6 +65,35 @@ impl AdminQuery {
     }
 }
 
+/// Who wrote an item or a revision, as the admin shows it ([`ContentService::authors`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorRef {
+    pub id: UserId,
+    pub login: String,
+    pub display_name: String,
+}
+
+/// How many items of one type are in each status, as the actor may read them
+/// ([`ContentService::counts`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StatusCounts {
+    pub draft: u64,
+    pub pending: u64,
+    pub scheduled: u64,
+    pub published: u64,
+    pub private: u64,
+    pub trash: u64,
+}
+
+/// The `readable_by` filter of an admin list (and of [`ContentService::counts`]): set
+/// when `actor`'s role lacks `edit_others` (see [`can_read`]).
+fn readable_by(actor: &Actor, now: Timestamp) -> Option<ReadableBy> {
+    (!can(actor.role, Capability::EditOthers)).then_some(ReadableBy {
+        user: actor.user,
+        now,
+    })
+}
+
 impl ContentService {
     /// One page of the items `query` selects (needs `require_read(Content)`). Without
     /// `edit_others` in its role, `actor` sees only items publicly visible now
@@ -85,10 +117,7 @@ impl ContentService {
             query.statuses.clone()
         };
         let now = Timestamp::now();
-        let readable_by = (!can(actor.role, Capability::EditOthers)).then_some(ReadableBy {
-            user: actor.user,
-            now,
-        });
+        let readable_by = readable_by(actor, now);
         let repos = self.store.read();
         let Some(q) = query.search_text() else {
             return Ok(repos
@@ -280,5 +309,66 @@ impl ContentService {
         }
         .await;
         finish(tx, done).await
+    }
+    /// The login and display name of each user in `ids` (needs `require_read(Content)`),
+    /// keyed by id; repeated ids are looked up once, unknown ids are left out. Meant for
+    /// the authors of items and revisions the actor has already read: logins and
+    /// display names are public on author archives. One `get_many` per
+    /// [`MAX_ID_FILTER`] ids.
+    pub async fn authors(
+        &self,
+        actor: &Actor,
+        ids: &[UserId],
+    ) -> Result<HashMap<UserId, AuthorRef>, CoreError> {
+        require_read(actor, Area::Content)?;
+        let mut unique = ids.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        let users = self.store.read().users();
+        let mut out = HashMap::with_capacity(unique.len());
+        for chunk in unique.chunks(MAX_ID_FILTER) {
+            for user in users.get_many(chunk).await? {
+                out.insert(
+                    user.id,
+                    AuthorRef {
+                        id: user.id,
+                        login: user.login,
+                        display_name: user.display_name,
+                    },
+                );
+            }
+        }
+        Ok(out)
+    }
+
+    /// How many items of type `kind` are in each status, counting only what `actor` may
+    /// read, with the same `readable_by` filter as [`list`](Self::list) (needs
+    /// `require_read(Content)`; an unknown type is `NotFound`). One count per status.
+    pub async fn counts(&self, actor: &Actor, kind: &str) -> Result<StatusCounts, CoreError> {
+        require_read(actor, Area::Content)?;
+        let repos = self.store.read();
+        if repos.types().get(kind).await?.is_none() {
+            return Err(CoreError::NotFound);
+        }
+        let readable_by = readable_by(actor, Timestamp::now());
+        let content = repos.content();
+        let count = async |status: ContentStatus| {
+            content
+                .count(&ContentQuery {
+                    kind: Some(kind.to_owned()),
+                    statuses: vec![status],
+                    readable_by,
+                    ..ContentQuery::default()
+                })
+                .await
+        };
+        Ok(StatusCounts {
+            draft: count(ContentStatus::Draft).await?,
+            pending: count(ContentStatus::Pending).await?,
+            scheduled: count(ContentStatus::Scheduled).await?,
+            published: count(ContentStatus::Published).await?,
+            private: count(ContentStatus::Private).await?,
+            trash: count(ContentStatus::Trash).await?,
+        })
     }
 }
