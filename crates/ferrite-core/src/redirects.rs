@@ -8,7 +8,7 @@ use std::{
 use ferrite_domain::{
     MAX_PAGE, Page, REDIRECT_CODES, Redirect, RedirectId, RedirectOrigin, Timestamp,
 };
-use ferrite_store::{Repos, Store};
+use ferrite_store::{MAX_REDIRECTS_BY_TARGET, Repos, Store};
 
 use crate::{
     Actor, CoreError, RowError,
@@ -476,6 +476,71 @@ pub(crate) async fn emit_redirects_changed(
         repos.events().append(&events::invalidate(keys)).await?;
     }
     Ok(())
+}
+
+/// Deletes the redirects that start at `path` or its slash-toggled variant: `path` is
+/// a live page now, and [`RedirectService::resolve`]
+/// matches either variant. Emits `redirect:` keys for the sources deleted.
+pub(crate) async fn clear_redirects_from(repos: &dyn Repos, path: &str) -> Result<(), CoreError> {
+    let cleared = delete_redirects_from(repos, path).await?;
+    emit_redirects_changed(repos, cleared).await
+}
+
+/// Deletes the redirects from `path` and its toggled variant; returns their sources.
+async fn delete_redirects_from(repos: &dyn Repos, path: &str) -> Result<Vec<String>, CoreError> {
+    let redirects = repos.redirects();
+    let mut cleared = Vec::new();
+    for source in std::iter::once(path.to_owned()).chain(toggled(path)) {
+        if let Some(r) = redirects.get_by_source(&source).await? {
+            redirects.delete(r.id).await?;
+            cleared.push(source);
+        }
+    }
+    Ok(cleared)
+}
+
+/// Repoints redirects after a published item (or a term archive) moved from `old` to `new`: no redirect may
+/// start at `new` or its slash variant (it is a live page again), redirects to `old` now
+/// go to `new` (no chains; one that would start at `new` is dropped rather than left as
+/// a self-loop), and `old` redirects to `new` with a `301`.
+/// Emits one `invalidate` event with the `redirect:` keys of every source touched.
+pub(crate) async fn record_move(repos: &dyn Repos, old: &str, new: &str) -> Result<(), CoreError> {
+    let mut changed = delete_redirects_from(repos, new).await?;
+    changed.push(old.to_owned());
+    let ours: Vec<String> = std::iter::once(new.to_owned())
+        .chain(toggled(new))
+        .collect();
+    let redirects = repos.redirects();
+    // Each pass re-targets (or drops) what it read, so the next pass sees the rest.
+    loop {
+        let batch = redirects.list_by_target(old).await?;
+        let full = batch.len() >= MAX_REDIRECTS_BY_TARGET as usize;
+        for mut r in batch {
+            changed.push(r.source_path.clone());
+            if ours.contains(&r.source_path) {
+                redirects.delete(r.id).await?;
+            } else {
+                r.target = new.to_owned();
+                redirects.upsert(&r).await?;
+            }
+        }
+        if !full {
+            break;
+        }
+    }
+    redirects
+        .upsert(&Redirect {
+            id: RedirectId::new(),
+            source_path: old.to_owned(),
+            target: new.to_owned(),
+            code: 301,
+            hits: 0,
+            origin: RedirectOrigin::SlugChange,
+            created_at: Timestamp::now(),
+            last_hit_at: None,
+        })
+        .await?;
+    emit_redirects_changed(repos, changed).await
 }
 
 /// The redirect for `path`: exact match first, then the slash-toggled path.

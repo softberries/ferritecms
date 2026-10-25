@@ -6,7 +6,7 @@ use std::{sync::Arc, time::Duration};
 
 use ferrite_core::{
     Actor, CoreError, MenuService, OptionService, RedirectService, TaxonomyService,
-    events::{archive_key, menu_key, option_key, term_key},
+    events::{archive_key, menu_key, option_key, redirect_key, term_key},
 };
 use ferrite_domain::{
     ContentStatus, Menu, MenuItem, MenuItemId, MenuItemKind, NewUser, Role, Term, TermId, UserId,
@@ -897,6 +897,156 @@ pub async fn redirect_permissions(db: &TestDb) {
     assert!(svc.resolve("/x").await.unwrap().is_some());
 }
 
+/// The `redirect:` keys of every event after `seq`.
+async fn keys_since(store: &dyn Store, seq: i64) -> Vec<String> {
+    store
+        .read()
+        .events()
+        .since(seq, 1000)
+        .await
+        .unwrap()
+        .into_iter()
+        .flat_map(|e| e.keys)
+        .collect()
+}
+
+async fn redirect_of(store: &dyn Store, source: &str) -> Option<ferrite_domain::Redirect> {
+    store
+        .read()
+        .redirects()
+        .get_by_source(source)
+        .await
+        .unwrap()
+}
+
+/// P25: a term slug change records a 301 from the old archive to the new one with the
+/// content-move rules (re-targeted, no chains, no redirect from a live path), only
+/// when the term had a public archive (R7).
+pub async fn term_rename_records_redirect(db: &TestDb) {
+    let store = db.store();
+    let svc = TaxonomyService::new(db.shared_store());
+    let redirects = RedirectService::new(db.shared_store());
+    let admin = actor(store, Role::Admin).await;
+    let author = store.read().users().get(admin.user).await.unwrap().unwrap();
+    let term = svc
+        .create_term(&admin, "category", "Old", None, None, "")
+        .await
+        .unwrap();
+    let mut post = new_post(&author, "in-old");
+    post.status = ContentStatus::Published;
+    post.published_at = Some(ferrite_domain::Timestamp::from_micros(1_000_000).unwrap());
+    let post = store.read().content().insert(&post).await.unwrap();
+    store
+        .read()
+        .terms()
+        .set_for_item(post.id, &[term.id])
+        .await
+        .unwrap();
+    // A manual redirect into the old archive, and one out of the new archive's path.
+    redirects
+        .upsert(&admin, "/elsewhere/", "/category/old/", 302)
+        .await
+        .unwrap();
+    redirects
+        .upsert(&admin, "/category/new", "/somewhere/", 301)
+        .await
+        .unwrap();
+
+    // A name-only update moves nothing.
+    svc.update_term(&admin, term.id, "Old!", None, None, "")
+        .await
+        .unwrap();
+    assert!(redirect_of(store, "/category/old/").await.is_none());
+
+    let seq = max_seq(store).await;
+    let renamed = svc
+        .update_term(&admin, term.id, "New", Some("new".into()), None, "")
+        .await
+        .unwrap();
+    assert_eq!(renamed.slug, "new");
+    let r = redirect_of(store, "/category/old/").await.unwrap();
+    assert_eq!(
+        (r.target.as_str(), r.code, r.origin),
+        (
+            "/category/new/",
+            301,
+            ferrite_domain::RedirectOrigin::SlugChange
+        )
+    );
+    assert_eq!(
+        redirects
+            .resolve("/category/old")
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        r.id
+    );
+    // The new path is live: its redirect (the slash variant) is gone.
+    assert!(redirects.resolve("/category/new/").await.unwrap().is_none());
+    // Redirects into the old path follow the move.
+    assert_eq!(
+        redirect_of(store, "/elsewhere/").await.unwrap().target,
+        "/category/new/"
+    );
+    let keys = keys_since(store, seq).await;
+    for source in [
+        "/category/old/",
+        "/category/old",
+        "/category/new",
+        "/elsewhere/",
+    ] {
+        assert!(keys.contains(&redirect_key(source)), "{source}: {keys:?}");
+    }
+    assert!(keys.contains(&term_key(term.id)));
+
+    // A second rename re-targets: no chain.
+    svc.update_term(&admin, term.id, "Newer", Some("newer".into()), None, "")
+        .await
+        .unwrap();
+    for source in ["/category/old/", "/category/new/", "/elsewhere/"] {
+        assert_eq!(
+            redirect_of(store, source).await.unwrap().target,
+            "/category/newer/",
+            "{source}"
+        );
+    }
+    // Back to the first slug: no redirect starts at a live path, none loops.
+    svc.update_term(&admin, term.id, "Old", Some("old".into()), None, "")
+        .await
+        .unwrap();
+    assert!(redirect_of(store, "/category/old/").await.is_none());
+    for source in ["/category/new/", "/category/newer/", "/elsewhere/"] {
+        assert_eq!(
+            redirect_of(store, source).await.unwrap().target,
+            "/category/old/",
+            "{source}"
+        );
+    }
+
+    // A term without public items has no archive to redirect from (R7).
+    let quiet = svc
+        .create_term(&admin, "category", "Quiet", None, None, "")
+        .await
+        .unwrap();
+    let draft = store
+        .read()
+        .content()
+        .insert(&new_post(&author, "draft-in-quiet"))
+        .await
+        .unwrap();
+    store
+        .read()
+        .terms()
+        .set_for_item(draft.id, &[quiet.id])
+        .await
+        .unwrap();
+    svc.update_term(&admin, quiet.id, "Loud", Some("loud".into()), None, "")
+        .await
+        .unwrap();
+    assert!(redirect_of(store, "/category/quiet/").await.is_none());
+}
+
 backend_tests!(
     term_crud_and_events,
     term_permissions,
@@ -914,6 +1064,7 @@ backend_tests!(
     redirect_slash_variants_and_caps,
     flat_taxonomy_rejects_parents,
     menu_field_rules_and_caps,
+    term_rename_records_redirect,
 );
 
 backend_tests_spawning!(term_slug_retry, term_parallel_same_name);

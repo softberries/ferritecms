@@ -4,8 +4,8 @@ use ferrite_core::{DepKeys, MediaPublic, PageItem, comments::CommentThread};
 use ferrite_domain::ContentId;
 use serde::Serialize;
 
-/// Most items `query()` may ask for.
-pub const MAX_QUERY_LIMIT: u32 = 50;
+/// Most items `query()` may ask for (`SiteReader::term_items` caps at the same).
+pub const MAX_QUERY_LIMIT: u32 = ferrite_core::site::MAX_QUERY_LIMIT;
 /// Most items `related()` may ask for (`SiteReader::related` caps at the same).
 pub const MAX_RELATED: u32 = ferrite_core::site::MAX_RELATED as u32;
 

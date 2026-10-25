@@ -2,7 +2,10 @@
 //!
 //! The repositories `SiteReader` reads from are wrapped method by method (each method
 //! call counts once). The others are counted per accessor call, which can only
-//! over-count. `begin()` counts as one call.
+//! over-count. `begin()` counts as one call; calls inside the transaction do not count
+//! there, except the content-type reads: [`CountingStore::type_lists`] counts
+//! `types().list()` and [`CountingStore::type_reads`] `types().get()` and `list()`,
+//! through `read()` and every transaction (nested ones too).
 
 use std::{
     collections::HashMap,
@@ -30,6 +33,25 @@ use serde_json::Value;
 struct Inner {
     store: Arc<dyn Store>,
     calls: Arc<AtomicUsize>,
+    types: TypeCounters,
+}
+
+/// Content-type read counters, shared by the store and its transactions.
+#[derive(Clone, Default)]
+struct TypeCounters {
+    lists: Arc<AtomicUsize>,
+    reads: Arc<AtomicUsize>,
+}
+
+impl TypeCounters {
+    fn list(&self) {
+        self.lists.fetch_add(1, Ordering::SeqCst);
+        self.reads.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn get(&self) {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 impl Inner {
@@ -49,6 +71,7 @@ impl CountingStore {
         let inner = Inner {
             store,
             calls: Arc::new(AtomicUsize::new(0)),
+            types: TypeCounters::default(),
         };
         Self {
             repos: CountingRepos {
@@ -63,8 +86,21 @@ impl CountingStore {
         self.inner.calls.load(Ordering::SeqCst)
     }
 
+    /// `ContentTypeRepo::list` calls, through `read()` and inside transactions.
+    pub fn type_lists(&self) -> usize {
+        self.inner.types.lists.load(Ordering::SeqCst)
+    }
+
+    /// `ContentTypeRepo::get` and `list` calls, through `read()` and inside
+    /// transactions.
+    pub fn type_reads(&self) -> usize {
+        self.inner.types.reads.load(Ordering::SeqCst)
+    }
+
     pub fn reset(&self) {
         self.inner.calls.store(0, Ordering::SeqCst);
+        self.inner.types.lists.store(0, Ordering::SeqCst);
+        self.inner.types.reads.store(0, Ordering::SeqCst);
     }
 }
 
@@ -170,7 +206,11 @@ impl Store for CountingStore {
     }
     async fn begin(&self) -> Result<Box<dyn Tx>, StoreError> {
         self.inner.calls.fetch_add(1, Ordering::SeqCst);
-        self.inner.store.begin().await
+        let tx = self.inner.store.begin().await?;
+        Ok(Box::new(CountingTx {
+            tx,
+            types: self.inner.types.clone(),
+        }))
     }
     async fn subscribe(
         &self,
@@ -295,9 +335,11 @@ impl ContentTypeRepo for Counted {
         self.0.read().types().insert(ty).await
     }
     async fn get(&self, name: &str) -> Result<Option<ContentType>, StoreError> {
+        self.0.types.get();
         self.0.read().types().get(name).await
     }
     async fn list(&self) -> Result<Vec<ContentType>, StoreError> {
+        self.0.types.list();
         self.0.read().types().list().await
     }
     async fn delete(&self, name: &str) -> Result<(), StoreError> {
@@ -465,5 +507,133 @@ impl SearchRepo for Counted {
     }
     async fn search(&self, query: &SearchQuery) -> Result<Page<ContentId>, StoreError> {
         self.0.read().search().search(query).await
+    }
+}
+
+/// A transaction that passes every call through, counting the content-type reads.
+struct CountingTx {
+    tx: Box<dyn Tx>,
+    types: TypeCounters,
+}
+
+impl Repos for CountingTx {
+    fn content(&self) -> &dyn ContentRepo {
+        self.tx.content()
+    }
+    fn meta(&self) -> &dyn MetaRepo {
+        self.tx.meta()
+    }
+    fn revisions(&self) -> &dyn RevisionRepo {
+        self.tx.revisions()
+    }
+    fn taxonomies(&self) -> &dyn TaxonomyRepo {
+        self.tx.taxonomies()
+    }
+    fn terms(&self) -> &dyn TermRepo {
+        self.tx.terms()
+    }
+    fn menus(&self) -> &dyn MenuRepo {
+        self.tx.menus()
+    }
+    fn options(&self) -> &dyn OptionRepo {
+        self.tx.options()
+    }
+    fn redirects(&self) -> &dyn RedirectRepo {
+        self.tx.redirects()
+    }
+    fn users(&self) -> &dyn UserRepo {
+        self.tx.users()
+    }
+    fn artifacts(&self) -> &dyn ArtifactRepo {
+        self.tx.artifacts()
+    }
+    fn media(&self) -> &dyn MediaRepo {
+        self.tx.media()
+    }
+    fn plugins(&self) -> &dyn PluginRepo {
+        self.tx.plugins()
+    }
+    fn plugin_failures(&self) -> &dyn PluginFailureRepo {
+        self.tx.plugin_failures()
+    }
+    fn plugin_kv(&self) -> &dyn PluginKvRepo {
+        self.tx.plugin_kv()
+    }
+    fn themes(&self) -> &dyn ThemeRepo {
+        self.tx.themes()
+    }
+    fn events(&self) -> &dyn EventRepo {
+        self.tx.events()
+    }
+    fn jobs(&self) -> &dyn JobRepo {
+        self.tx.jobs()
+    }
+    fn nodes(&self) -> &dyn NodeRepo {
+        self.tx.nodes()
+    }
+    fn search(&self) -> &dyn SearchRepo {
+        self.tx.search()
+    }
+    fn schema_meta(&self) -> &dyn SchemaMetaRepo {
+        self.tx.schema_meta()
+    }
+    fn sessions(&self) -> &dyn SessionRepo {
+        self.tx.sessions()
+    }
+    fn api_tokens(&self) -> &dyn ApiTokenRepo {
+        self.tx.api_tokens()
+    }
+    fn rate_limits(&self) -> &dyn RateLimitRepo {
+        self.tx.rate_limits()
+    }
+    fn audit(&self) -> &dyn AuditRepo {
+        self.tx.audit()
+    }
+    fn comments(&self) -> &dyn CommentRepo {
+        self.tx.comments()
+    }
+    fn idempotency(&self) -> &dyn IdempotencyRepo {
+        self.tx.idempotency()
+    }
+    fn types(&self) -> &dyn ContentTypeRepo {
+        self
+    }
+}
+
+#[async_trait]
+impl Tx for CountingTx {
+    async fn commit(self: Box<Self>) -> Result<(), StoreError> {
+        self.tx.commit().await
+    }
+    async fn rollback(self: Box<Self>) -> Result<(), StoreError> {
+        self.tx.rollback().await
+    }
+    async fn begin_nested(&self) -> Result<Box<dyn Tx>, StoreError> {
+        let tx = self.tx.begin_nested().await?;
+        Ok(Box::new(CountingTx {
+            tx,
+            types: self.types.clone(),
+        }))
+    }
+}
+
+#[async_trait]
+impl ContentTypeRepo for CountingTx {
+    async fn upsert(&self, ty: &ContentType) -> Result<(), StoreError> {
+        self.tx.types().upsert(ty).await
+    }
+    async fn insert(&self, ty: &ContentType) -> Result<(), StoreError> {
+        self.tx.types().insert(ty).await
+    }
+    async fn get(&self, name: &str) -> Result<Option<ContentType>, StoreError> {
+        self.types.get();
+        self.tx.types().get(name).await
+    }
+    async fn list(&self) -> Result<Vec<ContentType>, StoreError> {
+        self.types.list();
+        self.tx.types().list().await
+    }
+    async fn delete(&self, name: &str) -> Result<(), StoreError> {
+        self.tx.types().delete(name).await
     }
 }

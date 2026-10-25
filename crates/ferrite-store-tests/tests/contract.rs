@@ -81,6 +81,7 @@ backend_tests!(
     get_many_order_and_missing,
     slugs_with_prefix_matches,
     slugs_with_prefix_limit_1000,
+    content_query_kinds,
 );
 
 backend_tests!(

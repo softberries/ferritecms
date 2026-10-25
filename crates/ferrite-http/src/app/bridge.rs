@@ -20,8 +20,6 @@ use ferrite_store::Store;
 use ferrite_theme::{Bridged, HelperBridge, ImageRef, MenuNode, MenuTree};
 use tokio::runtime::Handle;
 
-/// Content type of term archives (`SiteReader::term_archive` lists posts).
-const POST_KIND: &str = "post";
 /// Deepest menu nesting rendered; deeper items are dropped.
 const MAX_MENU_DEPTH: usize = 16;
 
@@ -70,7 +68,8 @@ impl BlockingBridge {
     /// Label and URL of each shown entry of `menu`. Item targets are loaded with one
     /// batched [`SiteReader::links`] call (published only; `post:<id>` recorded for
     /// every target, hidden ones too); each term target is one cheap
-    /// [`SiteReader::term_link`] probe (`term:<id>` and `archive:post`).
+    /// [`SiteReader::term_link`] probe (`term:<id>` and the taxonomy's `archive:<kind>`
+    /// keys).
     async fn entries(
         &self,
         items: &[MenuItem],
@@ -205,8 +204,8 @@ impl HelperBridge for BlockingBridge {
         (items.unwrap_or_default(), deps)
     }
 
-    /// With `term`, only posts can match (term archives list posts) and at most
-    /// `reading.per_page` items come back: the first page of the term archive.
+    /// With `term`, [`SiteReader::term_items`]: exactly `limit` items at most, of any
+    /// kind the term's taxonomy lists (another kind gets none).
     fn query(&self, kind: &str, term: Option<&str>, limit: u32) -> Bridged<Vec<PageItem>> {
         let mut deps = DepKeys::default();
         deps.insert(archive_key(kind));
@@ -216,15 +215,9 @@ impl HelperBridge for BlockingBridge {
                     let Some((taxonomy, slug)) = term.split_once('/') else {
                         return Ok(Vec::new());
                     };
-                    if kind != POST_KIND {
-                        return Ok(Vec::new());
-                    }
-                    let read = self.reader.term_archive(taxonomy, slug, 1).await?;
+                    let read = self.reader.term_items(kind, taxonomy, slug, limit).await?;
                     deps.extend(read.deps);
-                    Ok(read
-                        .value
-                        .map(|l| l.items.into_iter().take(limit as usize).collect())
-                        .unwrap_or_default())
+                    Ok(read.value)
                 }
                 None => {
                     let read = self.reader.latest(kind, limit, 0).await?;

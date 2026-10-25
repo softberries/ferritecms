@@ -20,12 +20,13 @@
 use ferrite_domain::{ContentId, ContentItem, ContentStatus, Role, Term, Timestamp};
 use ferrite_store::{Repos, StoreError};
 
-use super::{ContentService, clear_redirects_from};
+use super::ContentService;
 use crate::{
     Actor, CoreError, actions,
     actor::{Capability, can_edit, require},
     blocks, events, jobs,
     permalink::{Permalinks, load_input},
+    redirects::clear_redirects_from,
     tx::finish,
 };
 

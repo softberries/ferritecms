@@ -11,14 +11,17 @@
 
 use std::sync::Arc;
 
-use ferrite_domain::{Taxonomy, Term, TermId};
+use ferrite_domain::{Taxonomy, Term, TermId, Timestamp};
 use ferrite_store::{Repos, Store, StoreError, Tx};
 use serde_json::json;
 
 use crate::{
     Actor, CoreError, MAX_PARENT_DEPTH,
     actor::{Area, Capability, require, require_read},
-    events, slug,
+    events,
+    permalink::term_path,
+    redirects::record_move,
+    site, slug,
     tx::finish,
     types::{
         Change, announce, begin_locked, check_label, check_name_free, check_permalinks,
@@ -265,6 +268,13 @@ impl TaxonomyService {
     /// taxonomy and must not be the term itself or one of its descendants (the chain is
     /// walked up to 64 levels, only when the parent changes). Under READ COMMITTED two
     /// concurrent updates can still form a cycle together (plan ruling P2).
+    ///
+    /// When the slug changes and the term had a public archive (a public type in its
+    /// taxonomy and a public item with the term, so no redirect reveals a term the site
+    /// does not show, R7), a `301` from the old archive path to the new one is stored in
+    /// the same transaction with the content-move rules: redirects to the old path are
+    /// re-targeted (no chains), redirects from the new path (either slash variant) are
+    /// deleted, and the `redirect:` keys are emitted.
     pub async fn update_term(
         &self,
         actor: &Actor,
@@ -289,13 +299,23 @@ impl TaxonomyService {
                 check_cycle(tx.as_ref(), id, new_parent).await?;
             }
             let base = explicit.unwrap_or_else(|| current.slug.clone());
+            let current_slug = current.slug.clone();
             let next = Term {
                 name,
                 description: description.to_owned(),
                 parent_id: parent,
                 ..current
             };
+            let old_slug = current_slug;
             let saved = save_with_free_slug(tx.as_ref(), next, &base, true).await?;
+            if saved.slug != old_slug && had_archive(tx.as_ref(), &tax, id).await? {
+                record_move(
+                    tx.as_ref(),
+                    &term_path(&tax.name, &old_slug),
+                    &term_path(&tax.name, &saved.slug),
+                )
+                .await?;
+            }
             emit(tx.as_ref(), &tax, &saved).await?;
             Ok(saved)
         }
@@ -322,6 +342,20 @@ impl TaxonomyService {
         .await;
         finish(tx, done).await
     }
+}
+
+/// Whether term `id` of `tax` has a public archive: a public type in the taxonomy and
+/// a public item with the term (one content query at most).
+async fn had_archive(repos: &dyn Repos, tax: &Taxonomy, id: TermId) -> Result<bool, CoreError> {
+    let kinds = site::public_kinds(tax);
+    if kinds.is_empty() {
+        return Ok(false);
+    }
+    let mut q = site::published(Timestamp::now());
+    q.kinds = kinds;
+    q.term = Some(id);
+    q.limit = 1;
+    Ok(!repos.content().list(&q).await?.items.is_empty())
 }
 
 /// `names` without repeats, in their first order.

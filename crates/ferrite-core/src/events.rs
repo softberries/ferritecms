@@ -12,7 +12,7 @@
 //! |-----|---------|
 //! | `post:<content id>` | one content item: its fields, URL, body, status. Also used for media items (a media item is a content item of kind `media`) |
 //! | `term:<term id>` | one term: its name, slug, description, and the list of items in it |
-//! | `archive:<kind>` | the listing of a content type (home, feeds, type archives, term archives of posts, date archives, search) |
+//! | `archive:<kind>` | the listing of a content type (home, feeds, type archives, term archives of each type of the taxonomy, date archives, search) |
 //! | `menu:<name>` | a menu's items |
 //! | `option:<key>` | one option value |
 //! | `user:<user id>` | the public face of a user (login, display name) shown as an author |
@@ -54,7 +54,7 @@
 //!   (cascade) and the delete transition names it. `ferrite seed demo` writes its sample
 //!   image's row the same way. Replacing the file is not built yet (M4).
 //! * Redirect writes (manual upsert/delete, and the 301s recorded when a published item
-//!   moves): kind `invalidate`, keys `redirect:<source>` for each source touched and its
+//!   moves or a term with a public archive is renamed): kind `invalidate`, keys `redirect:<source>` for each source touched and its
 //!   trailing-slash variant. **Informational**: the router checks redirects before the
 //!   cache, so no cached page depends on them; the keys exist so other nodes and
 //!   observers can follow the changes.
@@ -87,8 +87,8 @@
 //! and feeds that read site options (`site.title` and the like) record `option:<key>`
 //! too (the theme renderer and `ferrite-http` do). The sitemap index records
 //! `archive:<kind>` for every public kind. Menus record `menu:<name>`, `post:<target>`
-//! for every item target (shown or hidden), and `term:<id>` plus `archive:post` for
-//! every term target. The HTTP layer adds `theme` and `plugins` to every page.
+//! for every item target (shown or hidden), and `term:<id>`, `archive:post` and
+//! `archive:<kind>` for each public type of the term's taxonomy for every term target. The HTTP layer adds `theme` and `plugins` to every page.
 //!
 //! Because every item shown is recorded as `post:<id>`, a write that changes how an item
 //! appears needs only to emit that item's key; the extra keys above cover pages that

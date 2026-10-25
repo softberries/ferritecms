@@ -10,8 +10,8 @@ use ferrite_core::{
     events::{archive_key, option_key, post_key, term_key, user_key},
 };
 use ferrite_domain::{
-    Artifact, ArtifactHash, ArtifactKind, ContentId, ContentStatus, Media, NewContent, NewUser,
-    Role, Term, TermId, Timestamp, User, UserId, UserStatus,
+    Artifact, ArtifactHash, ArtifactKind, ContentId, ContentStatus, ContentType, Media, NewContent,
+    NewUser, Role, Taxonomy, Term, TermId, Timestamp, User, UserId, UserStatus,
 };
 use ferrite_store::Store;
 use ferrite_store_tests::{CountingStore, TestDb, backend_tests};
@@ -1536,6 +1536,183 @@ pub async fn sitemap_files_count_and_split(db: &TestDb) {
     );
 }
 
+/// A `book` type with a `genre` taxonomy used by books only.
+async fn book_genre(store: &dyn Store) {
+    store
+        .read()
+        .types()
+        .upsert(&ContentType {
+            name: "book".into(),
+            label: "Books".into(),
+            hierarchical: false,
+            has_archive: true,
+            fields: json!({}),
+            built_in: false,
+            created_at: at(-HOUR),
+        })
+        .await
+        .unwrap();
+    store
+        .read()
+        .taxonomies()
+        .upsert(&Taxonomy {
+            name: "genre".into(),
+            label: "Genres".into(),
+            hierarchical: false,
+            content_types: vec!["book".into()],
+            built_in: false,
+        })
+        .await
+        .unwrap();
+}
+
+/// P25: a term archive lists every public type of its taxonomy, so a taxonomy used
+/// only by `book` has one; its keys cover each listed type.
+pub async fn custom_type_term_archive(db: &TestDb) {
+    let store = db.store();
+    let author = user(store, "writer", Role::Author).await;
+    book_genre(store).await;
+    let scifi = term(store, "genre", "scifi").await;
+    let mut book = item("book", "dune", ContentStatus::Published, Some(-HOUR));
+    book.terms = vec![scifi];
+    insert(store, &author, book).await;
+    // A post carrying the term is not of a type the taxonomy lists.
+    let mut post = item("post", "stray", ContentStatus::Published, Some(-HOUR));
+    post.terms = vec![scifi];
+    insert(store, &author, post).await;
+    let mut draft = item("book", "unwritten", ContentStatus::Draft, None);
+    draft.terms = vec![scifi];
+    insert(store, &author, draft).await;
+    let r = reader(db.shared_store());
+
+    let read = r.term_archive_page("genre", "scifi", 1).await.unwrap();
+    let (t, listing) = read.value.unwrap();
+    assert_eq!((t.id, t.url.as_str()), (scifi, "/genre/scifi/"));
+    assert_eq!(slugs(&listing.items), ["dune"]);
+    assert_eq!(listing.total, 1);
+    assert!(read.deps.contains(&archive_key("book")));
+    assert!(read.deps.contains(&term_key(scifi)));
+    assert!(!read.deps.contains(&archive_key("post")));
+    // The menu probe agrees.
+    let link = r.term_link(scifi).await.unwrap();
+    assert_eq!(link.value.unwrap().url, "/genre/scifi/");
+    assert!(link.deps.contains(&archive_key("book")));
+
+    // Both of two types are listed, newest first.
+    store
+        .read()
+        .taxonomies()
+        .upsert(&Taxonomy {
+            name: "genre".into(),
+            label: "Genres".into(),
+            hierarchical: false,
+            content_types: vec!["book".into(), "post".into(), "media".into()],
+            built_in: false,
+        })
+        .await
+        .unwrap();
+    let read = r.term_archive("genre", "scifi", 1).await.unwrap();
+    let listing = read.value.unwrap();
+    let mut listed = slugs(&listing.items);
+    listed.sort();
+    assert_eq!(listed, ["dune", "stray"]);
+    for k in ["book", "post"] {
+        assert!(read.deps.contains(&archive_key(k)), "{k}");
+    }
+    // Media is never listed, so a media-only taxonomy has no archive.
+    store
+        .read()
+        .taxonomies()
+        .upsert(&Taxonomy {
+            name: "genre".into(),
+            label: "Genres".into(),
+            hierarchical: false,
+            content_types: vec!["media".into()],
+            built_in: false,
+        })
+        .await
+        .unwrap();
+    assert!(
+        r.term_archive("genre", "scifi", 1)
+            .await
+            .unwrap()
+            .value
+            .is_none()
+    );
+    assert!(r.term_link(scifi).await.unwrap().value.is_none());
+}
+
+/// P25: the theme's `query(type, term, limit)` reads exactly `limit` items of the
+/// requested kind in one query, whatever `reading.per_page` says.
+pub async fn term_items_respects_limit(db: &TestDb) {
+    let store = db.store();
+    let author = user(store, "writer", Role::Author).await;
+    book_genre(store).await;
+    set_option(store, "reading.per_page", json!(10)).await;
+    let news = term(store, "category", "news").await;
+    let scifi = term(store, "genre", "scifi").await;
+    for i in 0..35_i64 {
+        let mut it = item(
+            "post",
+            &format!("p{i:02}"),
+            ContentStatus::Published,
+            Some(-HOUR - i),
+        );
+        it.terms = vec![news];
+        insert(store, &author, it).await;
+    }
+    let mut it = item("post", "hidden", ContentStatus::Draft, None);
+    it.terms = vec![news];
+    insert(store, &author, it).await;
+    let mut it = item("book", "dune", ContentStatus::Published, Some(-HOUR));
+    it.terms = vec![scifi];
+    insert(store, &author, it).await;
+
+    let counting = Arc::new(CountingStore::new(db.shared_store()));
+    let r = reader(counting.clone());
+    let read = r.term_items("post", "category", "news", 30).await.unwrap();
+    assert_eq!(read.value.len(), 30);
+    let expected: Vec<String> = (0..30).map(|i| format!("p{i:02}")).collect();
+    assert_eq!(slugs(&read.value), expected);
+    assert!(read.deps.contains(&archive_key("post")));
+    assert!(read.deps.contains(&term_key(news)));
+    assert!(!read.deps.contains(&option_key("reading.per_page")));
+    // Term, taxonomy, the one content query, then hydration (terms and users).
+    assert!(counting.calls() <= 5, "{} calls", counting.calls());
+
+    // Any kind the taxonomy lists works; another kind, an unknown term or taxonomy
+    // returns nothing.
+    let books = r.term_items("book", "genre", "scifi", 5).await.unwrap();
+    assert_eq!(slugs(&books.value), ["dune"]);
+    assert!(books.deps.contains(&archive_key("book")));
+    let wrong = r.term_items("post", "genre", "scifi", 5).await.unwrap();
+    assert!(wrong.value.is_empty());
+    assert!(wrong.deps.contains(&archive_key("post")));
+    assert!(wrong.deps.contains(&term_key(scifi)));
+    for (tax, slug) in [("category", "nope"), ("nope", "news")] {
+        let none = r.term_items("post", tax, slug, 5).await.unwrap();
+        assert!(none.value.is_empty(), "{tax}/{slug}");
+        assert!(none.deps.contains(&archive_key("post")));
+    }
+    // The limit is 1..=MAX_QUERY_LIMIT.
+    for bad in [0, ferrite_core::site::MAX_QUERY_LIMIT + 1] {
+        assert!(matches!(
+            r.term_items("post", "category", "news", bad).await,
+            Err(CoreError::InvalidField { .. })
+        ));
+    }
+    let max = r
+        .term_items(
+            "post",
+            "category",
+            "news",
+            ferrite_core::site::MAX_QUERY_LIMIT,
+        )
+        .await
+        .unwrap();
+    assert_eq!(max.value.len(), 35);
+}
+
 backend_tests!(
     media_is_published_only,
     sitemap_files_count_and_split,
@@ -1556,4 +1733,6 @@ backend_tests!(
     preview_is_gated,
     listing_call_count_is_constant,
     past_last_page_is_one_count,
+    custom_type_term_archive,
+    term_items_respects_limit,
 );

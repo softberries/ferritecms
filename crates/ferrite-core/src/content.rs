@@ -8,16 +8,16 @@ use std::{
 
 use ferrite_domain::{
     ContentId, ContentItem, ContentQuery, ContentStatus, ContentType, NewContent, ParentFilter,
-    Redirect, RedirectId, RedirectOrigin, Revision, RevisionId, TermId, Timestamp,
+    Revision, RevisionId, TermId, Timestamp,
 };
-use ferrite_store::{MAX_REDIRECTS_BY_TARGET, Repos, Store, StoreError, Tx};
+use ferrite_store::{Repos, Store, StoreError, Tx};
 
 use crate::{
     Actor, CoreError, MAX_PARENT_DEPTH, actions,
     actor::{Capability, can_edit, require},
     blocks, events, fields,
     permalink::{PermalinkInput, Permalinks, ancestors, load_input, primary_term},
-    redirects::{emit_redirects_changed, toggled},
+    redirects::record_move,
     slug,
     tx::finish,
 };
@@ -103,8 +103,10 @@ impl ContentService {
     /// to 5 times. A top-level item may not take a [`slug::RESERVED`] word, the name
     /// of a registered content type (its archive prefix) or taxonomy (its term
     /// prefix), a [`slug::ROUTE_WORDS`] word or four digits (a year archive; ruling
-    /// R13): a caller slug is `InvalidField { field: "slug", .. }` ("reserved slug"), a generated one gets the `-N`
-    /// suffix.
+    /// R13), and a child may not take a [`slug::CHILD_RESERVED`] word (`page`): a
+    /// caller slug is `InvalidField { field: "slug", .. }` ("reserved slug"), a
+    /// generated one gets the `-N` suffix. The type check and these rules share one
+    /// `types().list()` read.
     ///
     /// Top-level items of types that share the root path namespace
     /// ([`Permalinks::root_namespace_peers`], e.g. posts at `/%slug%/` and top-level
@@ -142,25 +144,26 @@ impl ContentService {
         actor: &Actor,
         draft: ContentDraft,
     ) -> Result<ContentItem, CoreError> {
-        let base = base_slug(draft.slug.as_deref(), draft.parent_id, || {
+        let base = base_slug(draft.slug.as_deref(), draft.parent_id, None, || {
             slug::slugify(&draft.title)
         })?;
         let terms = dedup(&draft.terms);
-        let ty = content_type(tx, &draft.kind).await?;
+        let types = tx.types().list().await?;
+        let ty = content_type(&types, &draft.kind)?;
         fields::validate_item(&ty.fields, &draft.fields)?;
         if let Some(parent) = draft.parent_id {
-            check_parent(tx, &ty, None, parent).await?;
+            check_parent(tx, ty, None, parent).await?;
         }
-        let root = self
-            .root_namespace(
-                tx,
-                rules,
-                &draft.kind,
-                draft.parent_id,
-                draft.slug.is_some(),
-                &base,
-            )
-            .await?;
+        let root = root_namespace(
+            tx,
+            rules,
+            &types,
+            &draft.kind,
+            draft.parent_id,
+            draft.slug.is_some(),
+            &base,
+        )
+        .await?;
         let excerpt = excerpt_of(&draft);
         let row = Row::New(NewContent {
             id: ContentId::new(),
@@ -193,7 +196,8 @@ impl ContentService {
     ///
     /// `draft.slug = None` keeps the current slug; a slug that is taken gets `-N` as on
     /// create, and the reserved-slug and root-namespace rules of create apply (an item
-    /// keeping its slug under the same parent is never renamed by them). When the parent
+    /// keeping its slug under the same parent is never refused or renamed by them, even
+    /// when its stored slug is a reserved word). When the parent
     /// changes, the new one is checked as on create. When a published item's permalink changes
     /// (slug, parent, or primary category under a `%category%` structure), a `301`
     /// redirect from the old path is stored, redirects to the old path are re-targeted
@@ -256,17 +260,21 @@ impl ContentService {
         if draft.kind != current.kind {
             return Err(CoreError::Invalid("the content type cannot change".into()));
         }
-        let base = base_slug(draft.slug.as_deref(), draft.parent_id, || {
+        // Under the same parent the item's own slug is not a conflict, and keeping it is
+        // never refused or renamed, even when a later rule reserves it.
+        let own = (current.parent_id == draft.parent_id).then_some(current.slug.as_str());
+        let base = base_slug(draft.slug.as_deref(), draft.parent_id, own, || {
             current.slug.clone()
         })?;
         let terms = dedup(&draft.terms);
-        let ty = content_type(tx, &current.kind).await?;
+        let types = tx.types().list().await?;
+        let ty = content_type(&types, &current.kind)?;
         fields::validate_item(&ty.fields, &draft.fields)?;
         // Parent rules and the cycle walk only apply when the parent actually changes.
         if let Some(parent) = draft.parent_id
             && draft.parent_id != current.parent_id
         {
-            check_parent(tx, &ty, Some(id), parent).await?;
+            check_parent(tx, ty, Some(id), parent).await?;
         }
         let old_term_rows = tx.terms().for_item(id).await?;
         let old_terms: Vec<TermId> = old_term_rows.iter().map(|t| t.id).collect();
@@ -280,15 +288,14 @@ impl ContentService {
         next.body_html = None;
         next.fields = draft.fields;
         next.menu_order = draft.menu_order;
-        // Under the same parent the item's own slug is not a conflict.
-        let own = (current.parent_id == next.parent_id).then_some(current.slug.as_str());
         let root = if own == Some(base.as_str()) {
             // Keeps its slug where it is: never renamed by the root rules.
             RootNamespace::default()
         } else {
-            self.root_namespace(
+            root_namespace(
                 tx,
                 permalinks,
+                &types,
                 &current.kind,
                 next.parent_id,
                 draft.slug.is_some(),
@@ -355,18 +362,28 @@ pub(crate) struct Edit {
 }
 
 /// The validated caller slug, or `fallback()` when there is none. A caller slug that is
-/// a reserved word is `Invalid` for a top-level item; a fallback one is not (the save
-/// steps around it).
+/// a reserved word ([`slug::RESERVED`] for a top-level item, [`slug::CHILD_RESERVED`]
+/// for a child) is `InvalidField { field: "slug", .. }` ("reserved slug"); a fallback one
+/// is not (the save steps around it), and neither is `own`, the item's current slug
+/// under an unchanged parent.
 fn base_slug(
     explicit: Option<&str>,
     parent: Option<ContentId>,
+    own: Option<&str>,
     fallback: impl FnOnce() -> String,
 ) -> Result<String, CoreError> {
     let Some(s) = explicit else {
         return Ok(fallback());
     };
     let s = slug::validate(s)?;
-    if parent.is_none() && slug::is_reserved(&s) {
+    if own == Some(s.as_str()) {
+        return Ok(s);
+    }
+    let reserved = match parent {
+        None => slug::is_reserved(&s),
+        Some(_) => slug::CHILD_RESERVED.contains(&s.as_str()),
+    };
+    if reserved {
         return Err(CoreError::invalid_field("slug", "reserved slug"));
     }
     Ok(s)
@@ -384,41 +401,34 @@ struct RootNamespace {
     peers: Vec<String>,
 }
 
-impl ContentService {
-    /// The root-namespace rules for an item of `kind` under `parent` (none below the
-    /// top level). A caller slug (`explicit`) that is a router prefix or four digits
-    /// is `InvalidField { field: "slug", .. }` ("reserved slug").
-    async fn root_namespace(
-        &self,
-        repos: &dyn Repos,
-        permalinks: &dyn Permalinks,
-        kind: &str,
-        parent: Option<ContentId>,
-        explicit: bool,
-        base: &str,
-    ) -> Result<RootNamespace, CoreError> {
-        if parent.is_some() {
-            return Ok(RootNamespace::default());
-        }
-        let mut names: Vec<String> = repos
-            .types()
-            .list()
-            .await?
-            .into_iter()
-            .map(|t| t.name)
-            .collect();
-        names.extend(repos.taxonomies().list().await?.into_iter().map(|t| t.name));
-        names.extend(slug::ROUTE_WORDS.iter().map(|w| (*w).to_owned()));
-        let year = slug::is_year(base);
-        if explicit && (year || names.iter().any(|n| n == base)) {
-            return Err(CoreError::invalid_field("slug", "reserved slug"));
-        }
-        Ok(RootNamespace {
-            names,
-            year,
-            peers: permalinks.root_namespace_peers(kind),
-        })
+/// The root-namespace rules for an item of `kind` under `parent` (none below the
+/// top level). `types` is every registered type, read once by the caller for its
+/// kind check too. A caller slug (`explicit`) that is a router prefix or four digits
+/// is `InvalidField { field: "slug", .. }` ("reserved slug").
+async fn root_namespace(
+    repos: &dyn Repos,
+    permalinks: &dyn Permalinks,
+    types: &[ContentType],
+    kind: &str,
+    parent: Option<ContentId>,
+    explicit: bool,
+    base: &str,
+) -> Result<RootNamespace, CoreError> {
+    if parent.is_some() {
+        return Ok(RootNamespace::default());
     }
+    let mut names: Vec<String> = types.iter().map(|t| t.name.clone()).collect();
+    names.extend(repos.taxonomies().list().await?.into_iter().map(|t| t.name));
+    names.extend(slug::ROUTE_WORDS.iter().map(|w| (*w).to_owned()));
+    let year = slug::is_year(base);
+    if explicit && (year || names.iter().any(|n| n == base)) {
+        return Err(CoreError::invalid_field("slug", "reserved slug"));
+    }
+    Ok(RootNamespace {
+        names,
+        year,
+        peers: permalinks.root_namespace_peers(kind),
+    })
 }
 
 /// The row being written: a new item or a new version of an existing one.
@@ -479,9 +489,6 @@ async fn save_with_free_slug(
             .content()
             .slugs_with_prefix(row.kind(), row.parent(), base)
             .await?;
-        if let Some(own) = own {
-            taken.retain(|s| s != own);
-        }
         if row.parent().is_none() {
             taken.extend(slug::RESERVED.iter().map(|s| (*s).to_owned()));
             taken.extend(root.names.iter().cloned());
@@ -496,6 +503,12 @@ async fn save_with_free_slug(
                         .await?,
                 );
             }
+        } else {
+            taken.extend(slug::CHILD_RESERVED.iter().map(|s| (*s).to_owned()));
+        }
+        // Last, so no rule takes the item's own slug from it.
+        if let Some(own) = own {
+            taken.retain(|s| s != own);
         }
         taken.extend(failed.iter().cloned());
         let candidate = slug::next_free(base, &taken);
@@ -579,27 +592,6 @@ fn invalidation_keys(
         .chain(item.parent_id.map(events::post_key))
         .chain(moved_descendants.iter().copied().map(events::post_key))
         .collect()
-}
-
-/// Deletes the redirects that start at `path` or its slash-toggled variant: `path` is
-/// a live page now, and [`RedirectService::resolve`](crate::RedirectService::resolve)
-/// matches either variant. Emits `redirect:` keys for the sources deleted.
-pub(crate) async fn clear_redirects_from(repos: &dyn Repos, path: &str) -> Result<(), CoreError> {
-    let cleared = delete_redirects_from(repos, path).await?;
-    emit_redirects_changed(repos, cleared).await
-}
-
-/// Deletes the redirects from `path` and its toggled variant; returns their sources.
-async fn delete_redirects_from(repos: &dyn Repos, path: &str) -> Result<Vec<String>, CoreError> {
-    let redirects = repos.redirects();
-    let mut cleared = Vec::new();
-    for source in std::iter::once(path.to_owned()).chain(toggled(path)) {
-        if let Some(r) = redirects.get_by_source(&source).await? {
-            redirects.delete(r.id).await?;
-            cleared.push(source);
-        }
-    }
-    Ok(cleared)
 }
 
 /// Records a move when the paths of `old` and `new` (the same item) differ; returns
@@ -693,55 +685,11 @@ async fn move_descendants(
     Ok(moved)
 }
 
-/// Repoints redirects after a published item moved from `old` to `new`: no redirect may
-/// start at `new` or its slash variant (it is a live page again), redirects to `old` now
-/// go to `new` (no chains; one that would start at `new` is dropped rather than left as
-/// a self-loop), and `old` redirects to `new` with a `301`.
-/// Emits one `invalidate` event with the `redirect:` keys of every source touched.
-async fn record_move(repos: &dyn Repos, old: &str, new: &str) -> Result<(), CoreError> {
-    let mut changed = delete_redirects_from(repos, new).await?;
-    changed.push(old.to_owned());
-    let ours: Vec<String> = std::iter::once(new.to_owned())
-        .chain(toggled(new))
-        .collect();
-    let redirects = repos.redirects();
-    // Each pass re-targets (or drops) what it read, so the next pass sees the rest.
-    loop {
-        let batch = redirects.list_by_target(old).await?;
-        let full = batch.len() >= MAX_REDIRECTS_BY_TARGET as usize;
-        for mut r in batch {
-            changed.push(r.source_path.clone());
-            if ours.contains(&r.source_path) {
-                redirects.delete(r.id).await?;
-            } else {
-                r.target = new.to_owned();
-                redirects.upsert(&r).await?;
-            }
-        }
-        if !full {
-            break;
-        }
-    }
-    redirects
-        .upsert(&Redirect {
-            id: RedirectId::new(),
-            source_path: old.to_owned(),
-            target: new.to_owned(),
-            code: 301,
-            hits: 0,
-            origin: RedirectOrigin::SlugChange,
-            created_at: Timestamp::now(),
-            last_hit_at: None,
-        })
-        .await?;
-    emit_redirects_changed(repos, changed).await
-}
-
-async fn content_type(repos: &dyn Repos, kind: &str) -> Result<ContentType, CoreError> {
-    repos
-        .types()
-        .get(kind)
-        .await?
+/// Type `kind` from `types` (every registered type).
+fn content_type<'a>(types: &'a [ContentType], kind: &str) -> Result<&'a ContentType, CoreError> {
+    types
+        .iter()
+        .find(|t| t.name == kind)
         .ok_or_else(|| CoreError::Invalid(format!("unknown content type {kind:?}")))
 }
 

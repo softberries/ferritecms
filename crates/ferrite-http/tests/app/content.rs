@@ -1,7 +1,10 @@
 //! Every content route type, end to end, plus a plugin's head tag in a served page.
 
 use axum::http::StatusCode;
-use ferrite_core::site::{FRONT_PAGE_OPTION, PER_PAGE_OPTION};
+use ferrite_core::{
+    TaxonomyService,
+    site::{FRONT_PAGE_OPTION, PER_PAGE_OPTION},
+};
 use serde_json::json;
 
 use crate::app_tests;
@@ -283,6 +286,31 @@ async fn unsafe_menu_urls_are_dropped(app: App) -> App {
     app
 }
 
+/// P25: renaming a term serves a 301 from its old archive to the new one.
+async fn term_redirect_served(app: App) -> App {
+    let old = app.category("old").await;
+    app.post("Filed", "filed", &[old]).await;
+    let mut poller = app.poller().await;
+    let r = app.get("/category/old/").await;
+    assert_eq!((r.status, r.tpl()), (StatusCode::OK, "archive"), "{r:?}");
+
+    TaxonomyService::new(app.site.store.clone())
+        .update_term(&app.admin, old, "New", Some("new".into()), None, "")
+        .await
+        .expect("rename");
+    poller.poll_once().await.unwrap();
+
+    for path in ["/category/old/", "/category/old"] {
+        let r = app.get(path).await;
+        assert_eq!(r.status, StatusCode::MOVED_PERMANENTLY, "{path}: {r:?}");
+        assert_eq!(r.header("location"), Some("/category/new/"), "{path}");
+    }
+    let r = app.get("/category/new/").await;
+    assert_eq!((r.status, r.tpl()), (StatusCode::OK, "archive"), "{r:?}");
+    assert!(r.body.contains("Filed"), "{}", r.body);
+    app
+}
+
 app_tests!(
     unsafe_menu_urls_are_dropped,
     listings_carry_archive_and_pagination,
@@ -290,4 +318,5 @@ app_tests!(
     serves_every_content_route,
     static_front_page,
     plugin_head_meta_is_served,
+    term_redirect_served,
 );

@@ -207,11 +207,14 @@ The `user_meta` table already exists in `0001_init` but has no repository yet.
 (`ferrite-store-tests`). Limits are constants exported by `ferrite-store`
 (`src/paging.rs`):
 
-- **`ContentQuery` filters** (`ferrite-domain/src/content.rs`): `kind`, `statuses` (empty:
+- **`ContentQuery` filters** (`ferrite-domain/src/content.rs`): `kind`, `kinds` (`type IN
+  (…)`; empty: no filter), `statuses` (empty:
   any), `parent` (`Any` | `Root` | `Of(id)`), `term`, `author`, `ids`, `exclude`,
   `published_after` (`>=`) and `published_before` (`<`), where items without a publish
   time never match either bound, plus `order`, `limit` and `cursor`. `ids` and `exclude` hold
-  at most `MAX_ID_FILTER` (200) entries (`Invalid` beyond).
+  at most `MAX_ID_FILTER` (200) entries (`Invalid` beyond); `kinds` at most
+  `MAX_CONTENT_KINDS` (20), and `kind` together with a non-empty `kinds` is `Invalid` (M2a-2b
+  P25; term archives list every type of their taxonomy). Both apply to `list` and `count`.
 - **R3: an empty `ids` (or `exclude`) means no filter, not "match nothing".** A caller that
   computed an empty id set must short-circuit instead of calling `list`/`count`, or it lists
   everything. No core service builds an `ids` query yet; the rule is stated in the
@@ -400,7 +403,7 @@ new migration. Everything else exists in `0001_init` / `0002_search` / `0003_med
 | `media` | `item_id` PK/FK → `content_items` (type `media`), `artifact_hash` FK, `mime`, `bytes`, `width`, `height`, `alt`, `original_name`, `variants` (json: name → hash, w, h, mime), `sanitized` boolean not null default false (since `0006_media_comments`; SQLite `INTEGER CHECK (sanitized IN (0, 1))`) | `sanitized`: the stored bytes are the SVG sanitiser's output, so the file may be served inline (M2a-2b P7); the `0006` down drops it (lossy) |
 | `media_variants` | `hash`, `item_id` FK → `media` (`ON DELETE CASCADE`), `name`, PK(`item_id`,`name`), index on `hash` | Added by `0003_media_variants` (ruling R29). Derived from `media.variants` (one row per entry whose value is an object with a string `hash`), backfilled by the migration and kept in sync by `MediaRepo::insert`/`update` in the same transaction; `media.variants` stays the source of truth |
 | `comments` | `id`, `item_id` → `content_items` `CASCADE`, `parent_id` → `comments` `CASCADE`, `user_id` null → `users` `SET NULL`, `author_name`, `author_email` (ASCII-lowercased), `author_url` (`""` = none), `body` (plain text), `status` (`pending`/`approved`/`spam`/`trash`, no CHECK, P2), `ip_hash` null (keyed), `created_at`, `by_account` boolean not null default false (since `0006`; SQLite `INTEGER CHECK (by_account IN (0, 1))`; set on insert when `user_id` is given and kept after the user is deleted, so such a comment never counts for a guest in `has_approved_from`; the `0006` down drops it, lossy); indexes `comments_item_created_idx (item_id, created_at)` (`0001`) and since `0006`: `comments_status_created_idx (status, created_at, id)` and `comments_created_idx (created_at, id)` (moderation queue), `comments_item_status_idx (item_id, status, created_at, id)` (an item's approved thread), `comments_author_email_idx (author_email, status)` and `comments_user_idx (user_id, status)` (`known` checks, F19; also the users FK on delete) | `CommentRepo` since M2a-2b |
-| `redirects` | `id`, `source_path` UNIQUE, `target`, `code` (301/302/307/308/410), `hits`, `origin` (`manual`/`import`/`slug-change`), `created_at`, `last_hit_at` | Auto-created on slug change of a published item |
+| `redirects` | `id`, `source_path` UNIQUE, `target`, `code` (301/302/307/308/410), `hits`, `origin` (`manual`/`import`/`slug-change`), `created_at`, `last_hit_at` | Auto-created on slug change of a published item, and of a term with a public archive (06 §3) |
 
 ### Users & auth
 

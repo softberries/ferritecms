@@ -116,6 +116,9 @@ pub struct ReadableBy {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContentQuery {
     pub kind: Option<String>,
+    /// `type IN (kinds)` when non-empty; empty means no filter. At most 20 (`Invalid`
+    /// beyond), and `Invalid` together with [`ContentQuery::kind`].
+    pub kinds: Vec<String>,
     /// Empty means any status.
     pub statuses: Vec<ContentStatus>,
     pub parent: ParentFilter,
@@ -146,6 +149,7 @@ impl Default for ContentQuery {
     fn default() -> Self {
         Self {
             kind: None,
+            kinds: Vec::new(),
             statuses: Vec::new(),
             parent: ParentFilter::Any,
             term: None,

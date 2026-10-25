@@ -51,9 +51,9 @@ use std::{collections::HashMap, sync::Arc};
 use chrono::NaiveDate;
 use ferrite_domain::{
     ArtifactHash, ContentId, ContentItem, ContentQuery, ContentStatus, MAX_PAGE, SearchQuery,
-    TermId, Timestamp,
+    Taxonomy, TermId, Timestamp,
 };
-use ferrite_store::{MAX_ID_FILTER, MAX_SEARCH_KINDS, Repos, Store};
+use ferrite_store::{MAX_CONTENT_KINDS, MAX_ID_FILTER, MAX_SEARCH_KINDS, Repos, Store};
 
 use crate::{
     Actor, Capability, CoreError, MAX_PARENT_DEPTH,
@@ -75,7 +75,7 @@ pub type Clock = Arc<dyn Fn() -> Timestamp + Send + Sync>;
 
 /// Content type of media items.
 pub(crate) const MEDIA_KIND: &str = "media";
-/// Content type listed on the front page and in date, author and term archives.
+/// Content type listed on the front page and in date and author archives.
 const POST_KIND: &str = "post";
 /// Option: items per listing page (integer, clamped to 1..=100; default 10).
 pub const PER_PAGE_OPTION: &str = "reading.per_page";
@@ -96,6 +96,8 @@ pub const SITEMAP_FILE_LEN: usize = 50_000;
 pub const MAX_MEDIA_ROWS: u32 = 100;
 /// Most items [`SiteReader::related`] returns.
 pub const MAX_RELATED: usize = 10;
+/// Most items [`SiteReader::term_items`] returns (the theme `query()` helper's cap).
+pub const MAX_QUERY_LIMIT: u32 = 50;
 /// Most items [`SiteReader::latest`] returns.
 pub const MAX_LATEST: u32 = 100;
 /// Most search matches paged through; a search `total` never exceeds it (ruling R9:
@@ -268,8 +270,10 @@ impl SiteReader {
         Ok(public(listing, deps))
     }
 
-    /// Posts with the term `taxonomy`/`slug`; `None` for an unknown term, a term
-    /// without public posts (R7), or past [`MAX_SKIP`].
+    /// Public items with the term `taxonomy`/`slug`, of every public type of the
+    /// taxonomy (its `content_types` but media); `None` for an unknown term, a term
+    /// without public items (R7), a taxonomy without public types, or past
+    /// [`MAX_SKIP`].
     pub async fn term_archive(
         &self,
         taxonomy: &str,
@@ -282,7 +286,8 @@ impl SiteReader {
 
     /// [`term_archive`](Self::term_archive) plus the term itself, for the archive's
     /// heading. The term is returned only together with a public listing, so this is
-    /// no existence oracle either (R7). Records `term:<id>`.
+    /// no existence oracle either (R7). Records `term:<id>` and `archive:<kind>` for
+    /// each type listed.
     pub async fn term_archive_page(
         &self,
         taxonomy: &str,
@@ -299,9 +304,16 @@ impl SiteReader {
             return Ok(public(None, deps));
         };
         deps.insert(term_key(term.id));
-        deps.insert(archive_key(POST_KIND));
+        let kinds = term_kinds(repos, taxonomy).await?;
+        for k in &kinds {
+            deps.insert(archive_key(k));
+        }
+        // Empty kinds would mean "every type", media included.
+        if kinds.is_empty() {
+            return Ok(public(None, deps));
+        }
         let q = ContentQuery {
-            kind: Some(POST_KIND.to_owned()),
+            kinds,
             term: Some(term.id),
             ..ContentQuery::default()
         };
@@ -734,10 +746,11 @@ impl SiteReader {
         Ok(public(out, deps))
     }
 
-    /// Term `id` if its archive would show (it has a public post, ruling R7): two store
-    /// calls (the term, then one public post id at most), no hydration. Records
-    /// `term:<id>` and `archive:post` either way, so the first public post in it brings
-    /// the link back.
+    /// Term `id` if its archive would show (it has a public item of a public type of
+    /// its taxonomy, ruling R7): three store calls (the term, its taxonomy, then one
+    /// public item at most), no hydration. Records `term:<id>` and `archive:post`
+    /// either way, plus `archive:<kind>` for each public type of the taxonomy, so the
+    /// first public item in it brings the link back.
     pub async fn term_link(&self, id: TermId) -> Result<SiteRead<Option<TermPublic>>, CoreError> {
         let now = (self.clock)();
         let repos = self.store.read();
@@ -747,8 +760,15 @@ impl SiteReader {
         let Some(term) = repos.terms().get(id).await? else {
             return Ok(public(None, deps));
         };
+        let kinds = term_kinds(repos, &term.taxonomy).await?;
+        for k in &kinds {
+            deps.insert(archive_key(k));
+        }
+        if kinds.is_empty() {
+            return Ok(public(None, deps));
+        }
         let mut q = published(now);
-        q.kind = Some(POST_KIND.to_owned());
+        q.kinds = kinds;
         q.term = Some(id);
         q.limit = 1;
         let shown = !repos.content().list(&q).await?.items.is_empty();
@@ -912,6 +932,51 @@ impl SiteReader {
         Ok(public(items, deps))
     }
 
+    /// Up to `limit` (1..=[`MAX_QUERY_LIMIT`], else `Invalid`) public items of `kind`
+    /// with the term `taxonomy`/`slug`, newest first, for the theme's
+    /// `query(type, term, limit)` helper: one content query, then hydration (no
+    /// `reading.per_page`, no count). Empty for an unknown term or taxonomy and when
+    /// `kind` is not a public type of the taxonomy. Records `archive:<kind>`, and
+    /// `term:<id>` when the term exists.
+    pub async fn term_items(
+        &self,
+        kind: &str,
+        taxonomy: &str,
+        slug: &str,
+        limit: u32,
+    ) -> Result<SiteRead<Vec<PageItem>>, CoreError> {
+        if !(1..=MAX_QUERY_LIMIT).contains(&limit) {
+            return Err(CoreError::invalid_field(
+                "limit",
+                format!("limit must be between 1 and {MAX_QUERY_LIMIT}"),
+            ));
+        }
+        let now = (self.clock)();
+        // One set of rules for the whole read (R10).
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
+        let repos = self.store.read();
+        let mut deps = DepKeys::default();
+        deps.insert(archive_key(kind));
+        let Some(term) = repos.terms().get_by_slug(taxonomy, slug).await? else {
+            return Ok(public(Vec::new(), deps));
+        };
+        deps.insert(term_key(term.id));
+        if !term_kinds(repos, taxonomy).await?.iter().any(|k| k == kind) {
+            return Ok(public(Vec::new(), deps));
+        }
+        let mut q = published(now);
+        q.kind = Some(kind.to_owned());
+        q.term = Some(term.id);
+        q.limit = limit;
+        let rows = repos.content().list(&q).await?.items;
+        let items = self
+            .hydrator(repos, now, rules)
+            .hydrate(rows, Nodes::new(), &mut deps)
+            .await?;
+        Ok(public(items, deps))
+    }
+
     /// Item `id` in any status but trash, for an actor who may read it in the admin
     /// ([`can_read`] at the reader's clock, rulings R17/R23: own items, items publicly
     /// visible now, or `edit_others`; else `Forbidden("edit_others")`). Trashed or missing items are `NotFound`. The result
@@ -994,6 +1059,7 @@ impl SiteReader {
         let page = page.max(1);
         let mut q = published(now);
         q.kind = filter.kind;
+        q.kinds = filter.kinds;
         q.term = filter.term;
         q.author = filter.author;
         q.published_after = filter.published_after;
@@ -1077,7 +1143,7 @@ fn empty(page: u32, per_page: u32, total: u64) -> Listing {
 }
 
 /// A query for public items: published, `published_at <= now`.
-fn published(now: Timestamp) -> ContentQuery {
+pub(crate) fn published(now: Timestamp) -> ContentQuery {
     // `published_before` is exclusive; one microsecond past now includes now itself.
     let limit = Timestamp::from_micros(now.as_micros().saturating_add(1)).unwrap_or(now);
     ContentQuery {
@@ -1085,6 +1151,27 @@ fn published(now: Timestamp) -> ContentQuery {
         published_before: Some(limit),
         ..ContentQuery::default()
     }
+}
+
+/// The public types of `tax` (its `content_types` but media), at most
+/// [`MAX_CONTENT_KINDS`]: the types its term archives list.
+pub(crate) fn public_kinds(tax: &Taxonomy) -> Vec<String> {
+    tax.content_types
+        .iter()
+        .filter(|k| *k != MEDIA_KIND)
+        .take(MAX_CONTENT_KINDS)
+        .cloned()
+        .collect()
+}
+
+/// [`public_kinds`] of taxonomy `name`; empty when it is unknown.
+async fn term_kinds(repos: &dyn Repos, name: &str) -> Result<Vec<String>, CoreError> {
+    Ok(repos
+        .taxonomies()
+        .get(name)
+        .await?
+        .map(|t| public_kinds(&t))
+        .unwrap_or_default())
 }
 
 /// `reading.per_page`: an integer clamped to 1..=100, else the default.

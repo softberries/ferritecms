@@ -14,7 +14,9 @@ use ferrite_domain::{
     SearchQuery, Term, TermId, Timestamp, UserId, UserStatus,
 };
 use ferrite_store::{Store, StoreError};
-use ferrite_store_tests::{TestDb, backend_tests, backend_tests_spawning, fixtures::new_post};
+use ferrite_store_tests::{
+    CountingStore, TestDb, backend_tests, backend_tests_spawning, fixtures::new_post,
+};
 use serde_json::json;
 
 async fn actor(store: &dyn Store, role: Role) -> Actor {
@@ -906,6 +908,146 @@ pub async fn update_pins_permalinks_once(db: &TestDb) {
     );
 }
 
+/// A child may not take `page` (`/{path}/page/{n}/` is a listing page): a caller slug
+/// is refused, a generated one steps around it. At the top level it is a route word.
+pub async fn child_slug_page_is_reserved(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let admin = actor(store, Role::Admin).await;
+    let parent = svc.create(&admin, draft("page", "Parent")).await.unwrap();
+    for s in ["page", "Page"] {
+        let mut d = draft("page", "Child");
+        d.parent_id = Some(parent.id);
+        d.slug = Some(s.into());
+        assert_eq!(invalid(svc.create(&admin, d).await), "reserved slug", "{s}");
+    }
+    let mut d = draft("page", "Page");
+    d.parent_id = Some(parent.id);
+    let child = svc.create(&admin, d).await.unwrap();
+    assert_eq!(child.slug, "page-2");
+    // Renaming a child onto it is refused too; other words stay fine below the top.
+    let mut d = draft("page", "Page");
+    d.parent_id = Some(parent.id);
+    d.slug = Some("page".into());
+    assert_eq!(
+        invalid(svc.update(&admin, child.id, child.version, d).await),
+        "reserved slug"
+    );
+    let mut d = draft("page", "Feed");
+    d.parent_id = Some(parent.id);
+    d.slug = Some("feed".into());
+    assert_eq!(svc.create(&admin, d).await.unwrap().slug, "feed");
+    // Top level: `page` is a router word.
+    let mut d = draft("page", "Page");
+    d.slug = Some("page".into());
+    assert_eq!(invalid(svc.create(&admin, d).await), "reserved slug");
+}
+
+/// An update that keeps slug and parent never renames, even a slug a later rule
+/// reserves (rows written before the rule, or through the store).
+pub async fn legacy_reserved_slug_survives_update(db: &TestDb) {
+    let store = db.store();
+    let svc = service(db);
+    let admin = actor(store, Role::Admin).await;
+    let author = store.read().users().get(admin.user).await.unwrap().unwrap();
+    let legacy = store
+        .read()
+        .content()
+        .insert(&new_post(&author, "feed"))
+        .await
+        .unwrap();
+    let saved = svc
+        .update(&admin, legacy.id, legacy.version, draft("post", "Retitled"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (saved.title.as_str(), saved.slug.as_str()),
+        ("Retitled", "feed")
+    );
+    // Naming the kept slug explicitly is fine as well.
+    let mut d = draft("post", "Retitled again");
+    d.slug = Some("feed".into());
+    let saved = svc
+        .update(&admin, saved.id, saved.version, d)
+        .await
+        .unwrap();
+    assert_eq!(saved.slug, "feed");
+
+    // A legacy child slugged `page` keeps it under the same parent.
+    let parent = svc.create(&admin, draft("page", "Parent")).await.unwrap();
+    let mut row = new_post(&author, "page");
+    row.kind = "page".into();
+    row.parent_id = Some(parent.id);
+    let child = store.read().content().insert(&row).await.unwrap();
+    let mut d = draft("page", "Child retitled");
+    d.parent_id = Some(parent.id);
+    let saved = svc
+        .update(&admin, child.id, child.version, d)
+        .await
+        .unwrap();
+    assert_eq!(saved.slug, "page");
+    // Moving it elsewhere applies the rules again.
+    let other = svc.create(&admin, draft("page", "Other")).await.unwrap();
+    let mut d = draft("page", "Child moved");
+    d.parent_id = Some(other.id);
+    let moved = svc
+        .update(&admin, saved.id, saved.version, d)
+        .await
+        .unwrap();
+    assert_eq!(moved.slug, "page-2");
+}
+
+/// The kind check and the root namespace share one `types().list()` per write
+/// (create goes through `create_in`; transactions are counted too).
+pub async fn top_level_write_lists_types_once(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let counting = Arc::new(CountingStore::new(db.shared_store()));
+    let svc = ContentService::new(counting.clone(), permalink());
+
+    counting.reset();
+    let item = svc.create(&admin, draft("post", "Counted")).await.unwrap();
+    assert_eq!(
+        (counting.type_lists(), counting.type_reads()),
+        (1, 1),
+        "create"
+    );
+
+    counting.reset();
+    let mut d = draft("post", "Counted");
+    d.slug = Some("renamed".into());
+    let item = svc.update(&admin, item.id, item.version, d).await.unwrap();
+    assert_eq!(item.slug, "renamed");
+    assert_eq!(
+        (counting.type_lists(), counting.type_reads()),
+        (1, 1),
+        "update with a new slug"
+    );
+
+    counting.reset();
+    let item = svc
+        .update(&admin, item.id, item.version, draft("post", "Kept"))
+        .await
+        .unwrap();
+    assert_eq!(item.slug, "renamed");
+    assert_eq!(
+        (counting.type_lists(), counting.type_reads()),
+        (1, 1),
+        "update keeping the slug"
+    );
+
+    let parent = svc.create(&admin, draft("page", "Parent")).await.unwrap();
+    counting.reset();
+    let mut d = draft("page", "Child");
+    d.parent_id = Some(parent.id);
+    svc.create(&admin, d).await.unwrap();
+    assert_eq!(
+        (counting.type_lists(), counting.type_reads()),
+        (1, 1),
+        "child create"
+    );
+}
+
 backend_tests!(
     update_pins_permalinks_once,
     create_update_roundtrip,
@@ -922,6 +1064,9 @@ backend_tests!(
     move_onto_slash_variant_leaves_no_loop,
     reserved_and_dot_slugs,
     trashed_item_cannot_be_updated,
+    child_slug_page_is_reserved,
+    legacy_reserved_slug_survives_update,
+    top_level_write_lists_types_once,
 );
 
 backend_tests_spawning!(parallel_same_title, slug_retry_after_unique_violation);

@@ -62,9 +62,25 @@ pub fn check_id_list(what: &str, ids: &[ContentId]) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// Most kinds a content query's `kinds` filter accepts.
+pub const MAX_CONTENT_KINDS: usize = 20;
+
 /// Validates the filter part of a content query (shared by `list` and `count`).
 pub fn check_content_filters(query: &ContentQuery) -> Result<(), StoreError> {
     if let Some(kind) = &query.kind {
+        validate_text("content kind", kind)?;
+    }
+    if query.kind.is_some() && !query.kinds.is_empty() {
+        return Err(StoreError::Invalid(
+            "content query takes kind or kinds, not both".into(),
+        ));
+    }
+    if query.kinds.len() > MAX_CONTENT_KINDS {
+        return Err(StoreError::Invalid(format!(
+            "kinds holds more than {MAX_CONTENT_KINDS} entries"
+        )));
+    }
+    for kind in &query.kinds {
         validate_text("content kind", kind)?;
     }
     check_id_list("ids", &query.ids)?;

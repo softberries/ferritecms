@@ -1286,3 +1286,87 @@ pub async fn list_readable_by_hides_future_dated(db: &TestDb) {
         ["mine-future", "theirs-future", "theirs-past"]
     );
 }
+
+pub async fn content_query_kinds(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    // Interleaved publish times so a page mixes kinds.
+    for (i, (slug, kind)) in [
+        ("p1", "post"),
+        ("g1", "page"),
+        ("p2", "post"),
+        ("m1", "media"),
+        ("g2", "page"),
+        ("p3", "post"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut n = new_post(&author, slug);
+        n.kind = kind.into();
+        n.status = ContentStatus::Published;
+        n.published_at = Some(micros(1_000 + i as i64));
+        insert(store, &n).await;
+    }
+
+    let q = ContentQuery {
+        kinds: vec!["post".into(), "page".into()],
+        limit: 2,
+        ..Default::default()
+    };
+    assert_eq!(
+        pages(store, q.clone()).await,
+        [vec!["p3", "g2"], vec!["p2", "g1"], vec!["p1"]]
+    );
+    assert_eq!(store.read().content().count(&q).await.unwrap(), 5);
+    // One kind in the list behaves like `kind`; an unknown kind matches nothing.
+    let q = ContentQuery {
+        kinds: vec!["media".into(), "nope".into()],
+        limit: 50,
+        ..Default::default()
+    };
+    assert_eq!(pages(store, q.clone()).await, [vec!["m1"]]);
+    assert_eq!(store.read().content().count(&q).await.unwrap(), 1);
+    // Other filters still apply.
+    let q = ContentQuery {
+        kinds: vec!["post".into(), "page".into()],
+        published_after: Some(micros(1_003)),
+        limit: 50,
+        ..Default::default()
+    };
+    assert_eq!(pages(store, q.clone()).await, [vec!["p3", "g2"]]);
+    assert_eq!(store.read().content().count(&q).await.unwrap(), 2);
+
+    // 20 kinds are fine; 21, kind together with kinds, and bad text are Invalid.
+    let many = |n: usize| (0..n).map(|i| format!("k{i}")).collect::<Vec<_>>();
+    let ok = ContentQuery {
+        kinds: many(20),
+        ..Default::default()
+    };
+    store.read().content().list(&ok).await.unwrap();
+    store.read().content().count(&ok).await.unwrap();
+    for bad in [
+        ContentQuery {
+            kinds: many(21),
+            ..Default::default()
+        },
+        ContentQuery {
+            kind: Some("post".into()),
+            kinds: vec!["page".into()],
+            ..Default::default()
+        },
+        ContentQuery {
+            kinds: vec!["a\u{0}".into()],
+            ..Default::default()
+        },
+    ] {
+        assert!(matches!(
+            store.read().content().list(&bad).await,
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            store.read().content().count(&bad).await,
+            Err(StoreError::Invalid(_))
+        ));
+    }
+}

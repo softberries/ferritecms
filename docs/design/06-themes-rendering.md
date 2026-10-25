@@ -179,7 +179,11 @@ rejects a structure whose first literal is a type or taxonomy name, a router wor
 core allocates slugs so they do not collide (`about-2`), and the router tries a page before a
 post as a safety net. Top-level slugs may not be reserved words (`admin`, `api`, `feed`,
 `_media`, `_theme`, `_preview`, `_p`, `_comment`, …), type or taxonomy names, `author`, `page`, `search`, or four
-digits, so static routes never hide content.
+digits, so static routes never hide content. A child item (one with a parent) may not take
+`page` (`/{path}/page/{n}/` is a listing page). A caller slug that breaks these rules is
+refused (`reserved slug`); a generated one gets `-2`. An update that keeps an item's slug and
+parent never refuses or renames it, even when a later rule (or a row written another way)
+makes the stored slug reserved. Both checks read the registered types once per write.
 
 **Canonical form.** Each segment is percent-decoded once and re-encoded, so a request
 compares byte for byte with stored permalinks. Fixed words match ASCII case-insensitively,
@@ -198,6 +202,21 @@ slash; anything else under `/_preview/` is 404), `/healthz`, `/readyz`. Listings
 left goes to the permalink matcher, which returns the candidates in order (pages, then posts,
 then other types); a hit counts only when the item's computed URL equals the request path, so
 a wrong year, month or category is a 404.
+
+**Term archives** (P25). `/{taxonomy}/{slug}/` lists the public items of every public type the
+taxonomy applies to (its `content_types` but media, at most 20, through `ContentQuery.kinds`),
+newest first, so a taxonomy used only by `book` has archives too. The read records `term:<id>`
+and `archive:<kind>` for each listed type. A term without public items, or a taxonomy without a
+public type, is 404 (R7); the menu probe `SiteReader::term_link` applies the same rule.
+Renaming a term (`TaxonomyService::update_term` with a new slug) stores a `301` (origin
+`slug-change`) from the old archive path to the new one in the same transaction, with the
+content-move rules: redirects to the old path are re-targeted (no chains), redirects from the
+new path (either slash variant) are deleted, and the `redirect:` keys are emitted. It does so
+only when the term had a public archive (a public item with the term), so no redirect reveals a
+term the site does not show (R7). Not handled: a redirect left at a term path that later becomes
+a live archive again by other means than a rename (a new term taking the slug, a first public
+item) keeps answering until removed; items whose permalink contains `%category%` move with the
+term without redirects (permalink structure redirects are M3, P26).
 
 **Request order** (`crates/ferrite-http/src/app/handler.rs`): methods other than GET/HEAD →
 405; `/healthz`, `/readyz`, `/_media`, `/_theme` (never redirected, not in the page cache) →
@@ -288,9 +307,9 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 | `archive` | listing routes only (R30): `kind` (`front`, `type`, `term`, `author`, `date`, `search`), `content_type`, `term`, `author`, `year`, `month` | `term:<id>` / `user:<id>` |
 | `pagination` | listing routes only (R30): `page`, `pages`, `prev_url`, `next_url` (ready-made, encoded links; `none` at either end) | — |
 | `request` | `path`, `s` (the search query), `page`, `status`, `preview` | — |
-| `menu(name)` | menu tree; links to non-public items, and to terms without a public post, removed. Item targets load in one batch (`SiteReader::links`: titles and URLs only, no body render); each term target is one existence probe (`SiteReader::term_link`) | `menu:<name>`, plus `post:<id>`/`term:<id>` for every target, removed ones included, and `archive:post` for term targets |
+| `menu(name)` | menu tree; links to non-public items, and to terms without a public item, removed. Item targets load in one batch (`SiteReader::links`: titles and URLs only, no body render); each term target is one existence probe (`SiteReader::term_link`) | `menu:<name>`, plus `post:<id>`/`term:<id>` for every target, removed ones included, and `archive:post` plus `archive:<kind>` per type of the taxonomy for term targets |
 | `related(post, n=3)` | public items of the same type sharing a term with `post`, newest first per term; `n` ≤ 10 | `archive:<kind>`, `post:<item>` |
-| `query(type=…, term="<tax>/<slug>", limit=10)` | public items, newest first; `limit` ≤ 50; with `term` the result is also capped at `reading.per_page` (page 1 of the term archive) | `archive:<kind>`, `term:<id>` |
+| `query(type=…, term="<tax>/<slug>", limit=10)` | public items, newest first; `limit` ≤ 50; with `term`, exactly up to `limit` items of `type` with the term in one query (`SiteReader::term_items`, any type the taxonomy applies to, not capped by `reading.per_page`); a type the taxonomy does not list gets none | `archive:<kind>`, `term:<id>` |
 | `asset(path)` | `/_theme/<theme hash>/<path>`, each segment percent-encoded | `theme` |
 | `image(media, size)` | the `size` variant of a public media item (the original for an unknown size) with `width`, `height` and a `srcset` of one candidate per width | `post:<media id>` |
 | `head()` | the pre-rendered `<head>` HTML (core SEO + `render.head` plugin filters, §5) | — |

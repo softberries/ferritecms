@@ -27,6 +27,11 @@ pub const RESERVED: &[&str] = &[
 /// names are reserved the same way by the content service, which knows them.
 pub const ROUTE_WORDS: &[&str] = &["author", "page", "search"];
 
+/// Slugs a child item (one with a parent) may not take: the router reads
+/// `/{path}/page/{n}/` as page `n` of a listing, so a child slugged `page` would shadow
+/// its own numbered children.
+pub const CHILD_RESERVED: &[&str] = &["page"];
+
 /// Whether `slug` is four ASCII digits: the shape of a `/{yyyy}/` date archive, which
 /// a top-level item may not take (ruling R13).
 pub fn is_year(slug: &str) -> bool {

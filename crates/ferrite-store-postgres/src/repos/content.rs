@@ -383,6 +383,14 @@ fn push_filters(qb: &mut QueryBuilder<Postgres>, query: &ContentQuery) {
     if let Some(kind) = &query.kind {
         qb.push(" AND type = ").push_bind(kind.clone());
     }
+    if !query.kinds.is_empty() {
+        qb.push(" AND type IN (");
+        let mut list = qb.separated(", ");
+        for kind in &query.kinds {
+            list.push_bind(kind.clone());
+        }
+        list.push_unseparated(")");
+    }
     if !query.statuses.is_empty() {
         qb.push(" AND status IN (");
         let mut list = qb.separated(", ");
