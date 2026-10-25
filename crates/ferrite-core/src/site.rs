@@ -1157,7 +1157,9 @@ pub(crate) fn published(now: Timestamp) -> ContentQuery {
 /// archives list. `TaxonomyService` keeps `content_types` within [`MAX_CONTENT_KINDS`];
 /// the `take` only guards rows written another way.
 pub(crate) fn public_kinds(tax: &Taxonomy) -> Vec<String> {
-    debug_assert!(tax.content_types.len() <= MAX_CONTENT_KINDS);
+    if tax.content_types.len() > MAX_CONTENT_KINDS {
+        tracing::warn!(taxonomy = %tax.name, "taxonomy has more than {MAX_CONTENT_KINDS} content types; extra types are ignored");
+    }
     tax.content_types
         .iter()
         .filter(|k| *k != MEDIA_KIND)
