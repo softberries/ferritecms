@@ -13,7 +13,7 @@
   "crumbs": {
     "dashboard": "Dashboard",
     "notFound": "Not found",
-    "probe": "Route check"
+    "content": "Content"
   },
   "topBar": {
     "search": "Search or jump to…",
@@ -63,9 +63,5 @@
     "title": "Page not found",
     "body": "Nothing lives at this address. The link may be old, or the page has moved.",
     "action": "Go to dashboard"
-  },
-  "probe": {
-    "title": "Route check",
-    "body": "The settings of {{site}} loaded. The admin's end-to-end tests use this screen to check route states."
   }
 }

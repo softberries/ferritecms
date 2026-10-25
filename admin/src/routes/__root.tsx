@@ -13,7 +13,8 @@ function RootLayout() {
   const crumb = useMatches({
     select: (matches) => {
       for (let i = matches.length - 1; i >= 0; i--) {
-        const label = matches[i]?.staticData.crumb?.(ts);
+        const match = matches[i];
+        const label = match?.staticData.crumb?.(ts, match.loaderData);
         if (label) return label;
       }
       return null;

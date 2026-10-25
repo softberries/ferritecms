@@ -16,9 +16,9 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppSplatRouteImport } from './routes/_app/$'
-import { Route as AppProbeRouteImport } from './routes/_app/[_]probe'
 import { Route as AppStyleguideRouteImport } from './routes/_app/[_]styleguide'
 import { Route as LoginTotpRouteImport } from './routes/login_.totp'
+import { Route as AppContentTypeIndexRouteImport } from './routes/_app/content.$type.index'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -54,11 +54,6 @@ const AppSplatRoute = AppSplatRouteImport.update({
   path: '/$',
   getParentRoute: () => AppRoute,
 } as any)
-const AppProbeRoute = AppProbeRouteImport.update({
-  id: '/_probe',
-  path: '/_probe',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppStyleguideRoute = AppStyleguideRouteImport.update({
   id: '/_styleguide',
   path: '/_styleguide',
@@ -69,6 +64,11 @@ const LoginTotpRoute = LoginTotpRouteImport.update({
   path: '/login/totp',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppContentTypeIndexRoute = AppContentTypeIndexRouteImport.update({
+  id: '/content/$type/',
+  path: '/content/$type/',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -77,9 +77,9 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/reset-password': typeof ResetPasswordRoute
   '/$': typeof AppSplatRoute
-  '/_probe': typeof AppProbeRoute
   '/_styleguide': typeof AppStyleguideRoute
   '/login/totp': typeof LoginTotpRoute
+  '/content/$type/': typeof AppContentTypeIndexRoute
 }
 export interface FileRoutesByTo {
   '/change-password': typeof ChangePasswordRoute
@@ -87,10 +87,10 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/reset-password': typeof ResetPasswordRoute
   '/$': typeof AppSplatRoute
-  '/_probe': typeof AppProbeRoute
   '/_styleguide': typeof AppStyleguideRoute
   '/login/totp': typeof LoginTotpRoute
   '/': typeof AppIndexRoute
+  '/content/$type': typeof AppContentTypeIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -100,10 +100,10 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/reset-password': typeof ResetPasswordRoute
   '/_app/$': typeof AppSplatRoute
-  '/_app/_probe': typeof AppProbeRoute
   '/_app/_styleguide': typeof AppStyleguideRoute
   '/login_/totp': typeof LoginTotpRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/content/$type/': typeof AppContentTypeIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -114,9 +114,9 @@ export interface FileRouteTypes {
     | '/login'
     | '/reset-password'
     | '/$'
-    | '/_probe'
     | '/_styleguide'
     | '/login/totp'
+    | '/content/$type/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/change-password'
@@ -124,10 +124,10 @@ export interface FileRouteTypes {
     | '/login'
     | '/reset-password'
     | '/$'
-    | '/_probe'
     | '/_styleguide'
     | '/login/totp'
     | '/'
+    | '/content/$type'
   id:
     | '__root__'
     | '/_app'
@@ -136,10 +136,10 @@ export interface FileRouteTypes {
     | '/login'
     | '/reset-password'
     | '/_app/$'
-    | '/_app/_probe'
     | '/_app/_styleguide'
     | '/login_/totp'
     | '/_app/'
+    | '/_app/content/$type/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -202,13 +202,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSplatRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/_probe': {
-      id: '/_app/_probe'
-      path: '/_probe'
-      fullPath: '/_probe'
-      preLoaderRoute: typeof AppProbeRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/_styleguide': {
       id: '/_app/_styleguide'
       path: '/_styleguide'
@@ -223,21 +216,28 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginTotpRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/content/$type/': {
+      id: '/_app/content/$type/'
+      path: '/content/$type'
+      fullPath: '/content/$type/'
+      preLoaderRoute: typeof AppContentTypeIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
 interface AppRouteChildren {
   AppSplatRoute: typeof AppSplatRoute
-  AppProbeRoute: typeof AppProbeRoute
   AppStyleguideRoute: typeof AppStyleguideRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppContentTypeIndexRoute: typeof AppContentTypeIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppSplatRoute: AppSplatRoute,
-  AppProbeRoute: AppProbeRoute,
   AppStyleguideRoute: AppStyleguideRoute,
   AppIndexRoute: AppIndexRoute,
+  AppContentTypeIndexRoute: AppContentTypeIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

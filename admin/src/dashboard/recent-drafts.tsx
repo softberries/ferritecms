@@ -113,7 +113,9 @@ export function RecentDrafts({ me, canWrite }: { me: string; canWrite: boolean }
       footer={
         items.length > 0 ? (
           <Link
-            to={"/content/post?status=draft" as "/"}
+            to="/content/$type"
+            params={{ type: "post" }}
+            search={{ status: "draft" }}
             className="inline-flex min-h-6 items-center gap-1 font-medium text-primary hover:underline"
           >
             {t("drafts.all")}

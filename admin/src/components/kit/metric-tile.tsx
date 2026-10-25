@@ -17,7 +17,11 @@ export interface MetricTileProps {
   series?: number[];
   /** A short line under the value naming the change's period ("in the last 30 days"). */
   caption?: string;
-  /** An admin path (without `/admin`); the whole tile links there. */
+  /**
+   * An admin path (without `/admin`), a query allowed (`/content/post?status=draft`); the
+   * whole tile links there. The query goes to the router as search params, so the path
+   * alone is matched (and preloaded).
+   */
   href?: string;
   className?: string;
 }
@@ -66,7 +70,7 @@ export function MetricTile({
     className,
   );
   return href ? (
-    <Link to={href} data-slot="metric-tile" className={classes}>
+    <Link {...linkTo(href)} data-slot="metric-tile" className={classes}>
       {body}
     </Link>
   ) : (
@@ -74,6 +78,16 @@ export function MetricTile({
       {body}
     </div>
   );
+}
+
+/** `/content/post?status=draft` → the router's `to` and `search`. */
+function linkTo(href: string): { to: string; search: Record<string, string> } {
+  const at = href.indexOf("?");
+  if (at < 0) return { to: href, search: {} };
+  return {
+    to: href.slice(0, at),
+    search: Object.fromEntries(new URLSearchParams(href.slice(at + 1))),
+  };
 }
 
 function Delta({ delta }: { delta: number }) {

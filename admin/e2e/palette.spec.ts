@@ -48,7 +48,8 @@ test("open_with_mod_k_and_navigate", async ({ as, site }) => {
   // Keyboard only: open, type, Enter.
   await openPalette(page);
   await page.keyboard.type("pages");
-  await expect(option(page, "Pages")).toHaveAttribute("aria-selected", "true");
+  // The row's name ends with its chord (`g g`).
+  await expect(option(page, /^Pages/)).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(`${site.url}/admin/content/page`);
   await expect(palette(page)).toBeHidden();

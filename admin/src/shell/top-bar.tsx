@@ -66,7 +66,7 @@ function useCrumbs(): Crumb[] {
       const crumbs: Crumb[] = [];
       for (const m of matches) {
         const crumb = m.staticData.crumb;
-        if (crumb) crumbs.push({ id: m.id, label: crumb(t), to: m.pathname });
+        if (crumb) crumbs.push({ id: m.id, label: crumb(t, m.loaderData), to: m.pathname });
       }
       if (matches.some((m) => m.status === "notFound")) {
         crumbs.push({ id: "not-found", label: t("crumbs.notFound"), to: "" });

@@ -1,0 +1,181 @@
+{
+  "list": {
+    "tableLabel": "{{label}}",
+    "newPost": "New post",
+    "newPage": "New page",
+    "newEntry": "New entry",
+    "loadMore": "Load more",
+    "loadingMore": "Loading more…",
+    "end_one": "{{formatted}} item",
+    "end_other": "All {{formatted}} items"
+  },
+  "tabs": {
+    "label": "Status",
+    "all": "All",
+    "draft": "Draft",
+    "pending": "Pending",
+    "scheduled": "Scheduled",
+    "published": "Published",
+    "private": "Private",
+    "trash": "Trash"
+  },
+  "filters": {
+    "searchLabel": "Search {{label}}",
+    "searchPlaceholder": "Search {{label}}…",
+    "clearSearch": "Clear search",
+    "mine": "Mine",
+    "termPick": "Filter by {{taxonomy}}",
+    "termChosen": "{{taxonomy}}: {{term}}, change",
+    "termClear": "Remove the {{taxonomy}} filter",
+    "termSearch": "Find in {{taxonomy}}…",
+    "termsLoading": "Loading…",
+    "termsNone": "No terms in {{taxonomy}} yet",
+    "clear": "Clear filters",
+    "disabledBySearch": "A search covers every author and term. Clear it to use this filter.",
+    "orderBySearch": "Search results come by relevance. Clear the search to sort."
+  },
+  "order": {
+    "sortBy": "Sort",
+    "label": "Sort by {{order}}",
+    "updated": "Last updated",
+    "published": "Published date",
+    "title": "Title (A–Z)"
+  },
+  "columns": {
+    "title": "Title",
+    "parent": "Parent",
+    "status": "Status",
+    "author": "Author",
+    "date": "Date"
+  },
+  "row": {
+    "untitled": "(untitled)",
+    "noParent": "None",
+    "scheduledFor": "for {{at}}",
+    "published": "Published",
+    "updated": "Last updated",
+    "menu": "Actions for {{title}}",
+    "actionOn": "{{action}}: {{title}}",
+    "newTab": "(opens in a new tab)"
+  },
+  "actions": {
+    "edit": "Edit",
+    "preview": "Preview",
+    "trash": "Move to trash",
+    "restore": "Restore",
+    "delete": "Delete permanently"
+  },
+  "bulk": {
+    "label": "Selection",
+    "selectedShort": "selected",
+    "selected_one": "{{count}} selected",
+    "selected_other": "{{count}} selected",
+    "publish": "Publish",
+    "publishSome_one": "Publish {{formatted}}",
+    "publishSome_other": "Publish {{formatted}}",
+    "restore": "Restore",
+    "restoreSome_one": "Restore {{formatted}}",
+    "restoreSome_other": "Restore {{formatted}}",
+    "trash": "Move to trash",
+    "trashSome_one": "Trash {{formatted}}",
+    "trashSome_other": "Trash {{formatted}}",
+    "delete": "Delete permanently",
+    "deleteSome_one": "Delete {{formatted}}",
+    "deleteSome_other": "Delete {{formatted}}",
+    "clear": "Clear selection"
+  },
+  "toast": {
+    "undo": "Undo",
+    "trashed_one": "{{count}} item moved to trash",
+    "trashed_other": "{{count}} items moved to trash",
+    "undone_one": "{{count}} item restored",
+    "undone_other": "{{count}} items restored",
+    "publish_one": "{{count}} item published",
+    "publish_other": "{{count}} items published",
+    "restore_one": "{{count}} item restored as a draft",
+    "restore_other": "{{count}} items restored as drafts",
+    "delete_one": "{{count}} item deleted permanently",
+    "delete_other": "{{count}} items deleted permanently",
+    "notice": {
+      "scheduleLapsed_one": "{{count}} is back as a draft: its scheduled time has passed.",
+      "scheduleLapsed_other": "{{count}} are back as drafts: their scheduled times have passed.",
+      "privateLost_one": "{{count}} private item is back as a draft.",
+      "privateLost_other": "{{count}} private items are back as drafts.",
+      "notAllowed_one": "{{count}} is back as a draft: you can't restore its old status.",
+      "notAllowed_other": "{{count}} are back as drafts: you can't restore their old status.",
+      "failed_one": "{{count}} is back as a draft: its old status couldn't be restored.",
+      "failed_other": "{{count}} are back as drafts: their old status couldn't be restored."
+    }
+  },
+  "report": {
+    "publish_one": "{{count}} of {{total}} couldn't be published",
+    "publish_other": "{{count}} of {{total}} couldn't be published",
+    "restore_one": "{{count}} of {{total}} couldn't be restored",
+    "restore_other": "{{count}} of {{total}} couldn't be restored",
+    "trash_one": "{{count}} of {{total}} couldn't be moved to trash",
+    "trash_other": "{{count}} of {{total}} couldn't be moved to trash",
+    "delete_one": "{{count}} of {{total}} couldn't be deleted",
+    "delete_other": "{{count}} of {{total}} couldn't be deleted",
+    "undo_one": "{{count}} of {{total}} couldn't be restored",
+    "undo_other": "{{count}} of {{total}} couldn't be restored",
+    "stale": "Someone changed it since this list loaded. Reload to see the latest version.",
+    "network": "The request didn't reach the server.",
+    "dismiss": "Dismiss"
+  },
+  "delete": {
+    "title_one": "Delete permanently?",
+    "title_other": "Delete {{count}} items permanently?",
+    "bodyOne": "“{{title}}” and its revisions will be deleted for good. This can't be undone.",
+    "bodyMany_one": "{{count}} item and its revisions will be deleted for good. This can't be undone.",
+    "bodyMany_other": "{{count}} items and their revisions will be deleted for good. This can't be undone.",
+    "cancel": "Cancel",
+    "confirm_one": "Delete permanently",
+    "confirm_other": "Delete {{count}} permanently"
+  },
+  "empty": {
+    "all": {
+      "title": "No {{label}} yet",
+      "body": "Everything you write shows up here, newest first.",
+      "action": "Write the first one"
+    },
+    "draft": {
+      "title": "No drafts",
+      "body": "Drafts stay here until they are published or submitted for review."
+    },
+    "pending": {
+      "title": "Nothing waiting for review",
+      "body": "Items submitted for review show up here for an editor to publish."
+    },
+    "scheduled": {
+      "title": "Nothing scheduled",
+      "body": "Schedule from the editor to publish at a set time."
+    },
+    "published": {
+      "title": "Nothing published yet",
+      "body": "Published {{label}} are live on the site."
+    },
+    "private": {
+      "title": "No private {{label}}",
+      "body": "Private items are visible only to editors and their authors."
+    },
+    "trash": {
+      "title": "Trash is empty",
+      "body": "Trashed items stay here until they are restored or deleted permanently."
+    },
+    "search": {
+      "title": "No results for “{{q}}”",
+      "body": "Try fewer or different words. The search covers titles and text of every status but trash.",
+      "action": "Clear search"
+    },
+    "filtered": {
+      "title": "Nothing matches these filters",
+      "body": "Try removing a filter to see more."
+    }
+  },
+  "shortcuts": {
+    "group": "Lists",
+    "search": "Focus the search",
+    "trashSelection": "Move the selection to trash",
+    "clearSelection": "Clear the selection"
+  }
+}

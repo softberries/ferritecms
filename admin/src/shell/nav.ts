@@ -39,6 +39,8 @@ export interface NavSection {
 const NOT_CONTENT = new Set(["media"]);
 const BUILT_IN_ORDER = ["post", "page"];
 const TYPE_ICONS: Record<string, LucideIcon> = { post: FileTextIcon, page: FilesIcon };
+/** 11 §6: `g p` Posts, `g g` Pages (the lists exist from Task 13). */
+const TYPE_SHORTCUTS: Record<string, string> = { post: "g p", page: "g g" };
 
 /** `t` defaults to the shared instance; the shell passes its hook's `t` (language changes). */
 export function navFor(
@@ -69,13 +71,17 @@ export function navFor(
     const custom = shown
       .filter((ty) => !BUILT_IN_ORDER.includes(ty.name))
       .sort((a, b) => a.label.localeCompare(b.label));
-    const items = [...builtIn, ...custom].map((t): NavItem => ({
-      id: `content-${t.name}`,
-      label: t.label,
-      to: `/content/${t.name}`,
-      icon: TYPE_ICONS[t.name] ?? ShapesIcon,
-      contentType: t.name,
-    }));
+    const items = [...builtIn, ...custom].map((t): NavItem => {
+      const shortcut = TYPE_SHORTCUTS[t.name];
+      return {
+        id: `content-${t.name}`,
+        label: t.label,
+        to: `/content/${t.name}`,
+        icon: TYPE_ICONS[t.name] ?? ShapesIcon,
+        contentType: t.name,
+        ...(shortcut ? { shortcut } : {}),
+      };
+    });
     if (items.length > 0) {
       sections.push({ id: "content", label: t("nav.content"), items });
     }

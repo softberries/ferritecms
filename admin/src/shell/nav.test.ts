@@ -53,6 +53,13 @@ test("author_sees_posts_pages_and_custom_types", () => {
     ],
   ]);
   expect(navFor(AUTHOR, TYPES)[0]?.items[0]?.shortcut).toBe("g d");
+  // 11 §6: the lists' chords; custom types have none.
+  expect(navFor(AUTHOR, TYPES)[1]?.items.map((i) => i.shortcut)).toEqual([
+    "g p",
+    "g g",
+    undefined,
+    undefined,
+  ]);
 });
 
 test("nothing_above_its_rights", () => {

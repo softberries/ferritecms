@@ -26,10 +26,11 @@ async function openDashboard(page: Page): Promise<void> {
 }
 
 /**
- * Answers `GET /settings` with a problem. `/admin/_probe` is the screen whose loader reads
- * it (the dashboard has no loader; its cards fail on their own).
+ * Answers a read with a problem. The content list's loader reads the type's counts
+ * (`GET /content/{type}/counts`), so failing it shows the route-level states (the
+ * dashboard has no loader; its cards fail on their own).
  */
-function failSettings(status: 403 | 500) {
+function failRead(status: 403 | 500) {
   return (route: Route) =>
     route.fulfill({
       status,
@@ -40,7 +41,7 @@ function failSettings(status: 403 | 500) {
               type: `${PROBLEM}forbidden`,
               title: "Forbidden",
               status,
-              detail: "needs settings:read",
+              detail: "needs content:read",
             }
           : {
               type: `${PROBLEM}internal`,
@@ -151,6 +152,8 @@ test("g_chords_navigate", async ({ as, site }) => {
 test("shortcut_sheet_lists_bindings", async ({ as, snap, expectAccessible }) => {
   const page = await as("admin");
   await openDashboard(page);
+  // The lists' chords register once the types (and so the nav) have loaded.
+  await expect(nav(page).getByRole("link", { name: "Pages" })).toBeVisible();
   await page.keyboard.press("?");
   const sheet = page.getByRole("dialog", { name: "Keyboard shortcuts" });
   await expect(sheet).toBeVisible();
@@ -160,6 +163,8 @@ test("shortcut_sheet_lists_bindings", async ({ as, snap, expectAccessible }) => 
     "Show keyboard shortcuts",
     "Collapse or expand the sidebar",
     "Go to Dashboard",
+    "Go to Posts",
+    "Go to Pages",
   ]);
   await expect(sheet.getByRole("heading", { name: "General" })).toBeVisible();
   await expect(sheet.getByRole("heading", { name: "Go to" })).toBeVisible();
@@ -244,14 +249,14 @@ async function insertedTransforms(
 
 test("reduced_motion_disables_transforms", async ({ as }) => {
   const page = await as("admin");
-  const notFound = () =>
-    expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  const list = (name: string) => () =>
+    expect(page.getByRole("heading", { level: 1, name: new RegExp(`^${name}`) })).toBeVisible();
   // Control: with motion allowed, the entering screen starts 4 px down.
   await openDashboard(page);
   const moving = await insertedTransforms(
     page,
     () => nav(page).getByRole("link", { name: "Posts" }).click(),
-    notFound,
+    list("Posts"),
   );
   // One container per navigation (no exiting copy; Task 10 fix round 1).
   expect(moving).toEqual(["translateY(4px)"]);
@@ -261,7 +266,7 @@ test("reduced_motion_disables_transforms", async ({ as }) => {
   const still = await insertedTransforms(
     page,
     () => nav(page).getByRole("link", { name: "Pages" }).click(),
-    notFound,
+    list("Pages"),
   );
   expect(still).toHaveLength(1);
   expect(["", "none"]).toContain(still[0]);
@@ -422,25 +427,26 @@ test("screens", async ({ as, guard, snap, expectAccessible }) => {
   await snap(page, "shell-not-found");
   await expectAccessible(page);
 
-  await page.route("**/api/v1/settings", failSettings(403));
-  await page.goto("/admin/_probe");
+  const counts = "**/api/v1/content/post/counts";
+  await page.route(counts, failRead(403));
+  await page.goto("/admin/content/post");
   await expect(page.getByRole("heading", { name: "You don't have access to this" })).toBeVisible();
   await expect(nav(page)).toBeVisible();
   await snap(page, "shell-forbidden");
   await expectAccessible(page);
-  await page.unroute("**/api/v1/settings");
+  await page.unroute(counts);
 
-  await page.route("**/api/v1/settings", failSettings(500));
-  await page.goto("/admin/_probe");
+  await page.route(counts, failRead(500));
+  await page.goto("/admin/content/post");
   const alert = page.getByRole("alert");
   await expect(alert).toContainText("The server could not answer.");
   await expect(nav(page)).toBeVisible();
   await snap(page, "shell-error");
   await expectAccessible(page);
-  await page.unroute("**/api/v1/settings");
+  await page.unroute(counts);
   // Retry recovers once the server answers.
   await alert.getByRole("button", { name: "Try again" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Route check" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /^Posts/ })).toBeVisible();
 
   // The mobile nav sheet, open (the desktop shots of this state show the plain shell).
   await page.setViewportSize(VIEWPORTS.mobile);

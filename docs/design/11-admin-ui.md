@@ -304,8 +304,10 @@ inside `input`, `textarea`, `select` and `[contenteditable]` only `allowInInput`
 bindings fire; a key a component already handled — `defaultPrevented` — is left
 alone). Local keys (the `DataTable` row keys, the editor's) stay in their components.
 Bound by the shell as of Task 10: `mod+k` (`allowInInput`), `?`, `mod+b` and `g d`;
-the rest arrive with their screens (`g p`/`g g` with the lists, Task 13; `c p`/`c g`
-with the editor, Task 14; `g m`, `g s` in M2b-2/3). The `?` sheet lists whatever is
+Task 13 adds `g p`/`g g` (nav items, `shell/nav.ts`) and, while a content list is open,
+`/`, `#` and `esc` (clear the selection; not while a menu or dialog is open); the rest
+arrive with their screens (`c p`/`c g` with the editor, Task 14; `g m`, `g s` in
+M2b-2/3). The `?` sheet lists whatever is
 registered at the moment it opens.
 
 | Where | Keys | Action |
@@ -324,6 +326,7 @@ registered at the moment it opens.
 | Lists | `enter` | Open |
 | Lists | `/` | Focus search |
 | Lists | `#` | Trash the selection (with undo) |
+| Lists | `esc` | Clear the selection |
 | Editor | `mod+s` | Save |
 | Editor | `mod+shift+p` | Publish dialog |
 | Editor | `mod+.` | Toggle the side panel |
@@ -354,9 +357,9 @@ itself (`?raw` + `parseTokens`), so the page cannot drift from the gate.
   | `EmptyState` | `icon, title, body, action?` | dashed frame |
   | `ErrorState` | `error: unknown, retry` | `role="alert"`; an `ApiError`'s `detail` (else `title`), anything else a generic line; never `message` or a stack |
   | `ForbiddenState` | — | `EmptyState` with a lock |
-  | `MetricTile` | `label, value: number, delta?, series?, caption?, href?` | value and change are text (the change also spoken: "Up 12 on the previous period"); `caption` names the change's period ("Last 30 days", Task 12); `href` is an admin path, a query allowed (router `Link`); the value carries `data-slot="metric-value"` |
+  | `MetricTile` | `label, value: number, delta?, series?, caption?, href?` | value and change are text (the change also spoken: "Up 12 on the previous period"); `caption` names the change's period ("Last 30 days", Task 12); `href` is an admin path, a query allowed (router `Link`; the query is split off into `search`, Task 13, so preloading matches the path alone); the value carries `data-slot="metric-value"` |
   | `Sparkline` | `data: number[]` | Recharts `AreaChart` (`responsive`, `accessibilityLayer={false}`), `aria-hidden` |
-  | `DataTable<T>` | `columns, data, getRowId, selection?, onRowOpen?, loading, empty, rowActions?, columnClassName?, label, className?` | TanStack Table v9 `useTable` + `rowSelectionFeature` (`data-table-features.ts`: `dataTableFeatures`, `dataTableColumns<T>()`, `DataTableColumn<T>`); roving tabindex on rows, `j`/`k` (and arrows) move, `x` toggles selection, `enter` opens; rows are `h-row`; `rowActions` show on row hover/focus, always on coarse pointers; skeleton rows while `loading`. **Scrolling:** the frame is its own scroll container on both axes at every width (`overflow-auto`), so a wide table never spills past it; `overflow-x` makes the frame the sticky header's scroll container, so the header sticks to the frame's top (`top: 0`), not the page's, and the frame is capped at `max-h: calc(100svh - var(--sticky-top) - var(--page-pad))` so a long list scrolls inside a frame that fits below the top bar. Hide less important columns per breakpoint with `columnClassName` |
+  | `DataTable<T>` | `columns, data, getRowId, selection?, onRowOpen?, loading, empty, rowActions?, columnClassName?, label, animateRows?, footer?, className?` | TanStack Table v9 `useTable` + `rowSelectionFeature` (`data-table-features.ts`: `dataTableFeatures`, `dataTableColumns<T>()`, `DataTableColumn<T>`); roving tabindex on rows, `j`/`k` (and arrows) move, `x` toggles selection, `enter` opens; rows are `h-row`; `rowActions` show on row hover/focus, always on coarse pointers; skeleton rows while `loading`. **Scrolling:** the frame is its own scroll container on both axes at every width (`overflow-auto`), so a wide table never spills past it; `overflow-x` makes the frame the sticky header's scroll container, so the header sticks to the frame's top (`top: 0`), not the page's, and the frame is capped at `max-h: calc(100svh - var(--sticky-top) - var(--page-pad))` so a long list scrolls inside a frame that fits below the top bar. Hide less important columns per breakpoint with `columnClassName`. `animateRows` (Task 13): rows are `m.tr` in `AnimatePresence`, fading in and out over `--dur-base` and moving with the layout spring (`layout="position"`, the frame has `layoutScroll`); nothing animates under reduced motion. `footer` renders inside the scrolling frame, below the table (the list's "Load more" and paging sentinel). Selected rows are tinted `bg-primary/4`, not `muted`: axe found the warning-coloured "Pending review" badge below 4.5:1 on `muted` |
   | `KbdCombo` | `keys` | `+` = together, space = sequence (`g d`); `mod` is ⌘ on Apple, Ctrl elsewhere; spoken text in `sr-only` |
   | `SaveState` | `state: saved \| saving \| dirty \| error \| offline, at?` | a polite `role="status"` region holds plain text; the visible label crossfades (Motion, 120 ms opacity) |
   | `RelativeTime` | `at` (RFC 3339) | `formatDistanceToNowStrict`, absolute time in `title` and `dateTime`; re-renders each minute |
@@ -499,6 +502,46 @@ styleguide mounts its own for its toast specimens).
   screens, which answer inline: a `429` with a countdown from `Retry-After`, a `503
   busy` with their generic error (sonner replays still-active toasts when a `<Toaster>`
   mounts, so the handler, not only the mount point, has to hold back).
+
+**The content list (Task 13).** `routes/_app/content.$type.index.tsx`, modules in
+`src/content/`:
+
+- URL state (`list-search.ts`, Zod): `status` (absent = all but trash), `q`, `mine`,
+  `term`, `order` (absent = `updated`); defaults never reach the URL and an invalid
+  member is dropped. `mine` is sent as `author=<me.id>` (F34). A search drops `author`,
+  `term` and `order` from the request (07 §1); the Mine, term and sort chips stay in
+  the URL but show `aria-disabled` with a tooltip saying why.
+- The loader reads the types and the type's counts (`GET /content/{type}/counts`): a
+  missing type (or `media`) is the not-found screen, a `403`/`500` the shell's forbidden
+  and error states (shell.spec's route-state screenshots intercept that read). The rows
+  load in the component (`useInfiniteQuery` over `next_cursor`, 50 a page, the previous
+  rows dimmed to 60 % while a new filter loads). The crumb and document title are the
+  type's label (`staticData.crumb(t, loaderData)`).
+- Header: label, count (all but trash), "New post/page/entry" (`edit_own`). Status tabs
+  are links with counts (`nav` "Status", `aria-current`), not ARIA tabs (there is no
+  panel). Toolbar: search (`/`, 200 ms debounce, Esc clears), Mine, one dashed "+
+  <taxonomy>" chip per taxonomy of the type (Popover + Command, ≤ 200 terms; a chosen
+  term shows "<taxonomy> <term>" with a separate remove button), the sort menu, "Clear
+  filters".
+- Columns: select; title (a link, `tabIndex=-1`; two lines on phones) with the slug in
+  mono under it (F6; a hierarchical type prefixes the parent's slug); parent
+  (hierarchical only: from the loaded rows, else one `GET` per missing parent); status
+  with the scheduled time; author (initials + display name); date (published, else last
+  updated, labelled). Below `md` status and date fold into a line under the title.
+  Row actions: Edit and Trash/Restore icons at `md`+, and a menu (Edit, Preview
+  `/_preview/<id>` in a new tab for anything outside the trash, Restore, Move to trash,
+  Delete permanently), each from `allowed` (Review Focus 4).
+- Bulk (`bulk.ts` `runBulk`, `list-actions.ts`): a floating selection bar (count,
+  "Publish 2" when fewer than the selection qualify, Esc clears) fans out 4 requests at
+  a time with each item's `If-Match`; failures stay on screen in a report (a `412`
+  reads "Someone changed it since this list loaded"); a `401` among them goes to the
+  global handler. Trash (row, bulk or `#`) shows "N moved to trash" with Undo for 10 s;
+  Undo restores and re-applies the old status (F36: published → publish, pending →
+  submit, scheduled → schedule if still ahead; private or a lapsed schedule come back
+  as drafts with a notice). Delete permanently is the only confirm (`AlertDialog`, a
+  filled destructive button: the tinted one fails contrast on the dialog footer).
+- Empty states per tab, for a search ("No results for “…”" + Clear search) and for
+  other filters; skeleton rows while the first page loads; `ErrorState` when it fails.
 
 **The command palette (Task 11).** `palette/palette.tsx`: the shadcn `CommandDialog`,
 opened by `mod+k` (`allowInInput`, so it also closes from its own field) and the top

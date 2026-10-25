@@ -101,7 +101,9 @@ export function NeedsAttention({
             action={
               pendingItems && pendingItems.length > 0 ? (
                 <Link
-                  to={"/content/post?status=pending" as "/"}
+                  to="/content/$type"
+                  params={{ type: "post" }}
+                  search={{ status: "pending" }}
                   className="text-sm font-medium text-primary hover:underline"
                 >
                   {t("attention.pending.all")}

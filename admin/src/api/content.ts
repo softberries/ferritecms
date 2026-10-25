@@ -1,4 +1,6 @@
+import { queryOptions } from "@tanstack/react-query";
 import { api, unwrap } from "./client";
+import { qk } from "./keys";
 import type {
   SchemaAutosaveDto,
   SchemaAutosaveInput,
@@ -115,8 +117,26 @@ export function lifecycle(
   }
 }
 
+/** Deletes a trashed item for good (`DELETE ?force=true`; 07 §1). */
+export function deleteContent(type: string, id: string, version: number): Promise<void> {
+  return unwrap(
+    api.DELETE("/api/v1/content/{type}/{id}", {
+      params: { path: { type, id }, query: { force: true }, header: ifMatch(version) },
+    }),
+  ).then(() => undefined);
+}
+
 export function getCounts(type: string): Promise<SchemaContentCountsDto> {
   return unwrap(api.GET("/api/v1/content/{type}/counts", { params: { path: { type } } }));
+}
+
+/** The type's status counts (what the actor may read); the list tabs and dashboard tiles. */
+export function countsQuery(type: string) {
+  return queryOptions({
+    queryKey: qk.content.counts(type),
+    queryFn: () => getCounts(type),
+    staleTime: 30_000,
+  });
 }
 
 /** The caller's autosave of the item; a `not-found` `ApiError` when there is none. */

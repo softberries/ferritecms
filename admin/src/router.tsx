@@ -28,8 +28,11 @@ declare module "@tanstack/react-router" {
   }
 
   interface StaticDataRouteOption {
-    /** This route's breadcrumb in the top bar (`shell` namespace). */
-    crumb?: (t: TFunction<"shell">) => string;
+    /**
+     * This route's breadcrumb in the top bar (`shell` namespace) and the document title;
+     * `loaderData` is the route's loader result once it has loaded (a content type's label).
+     */
+    crumb?: (t: TFunction<"shell">, loaderData?: unknown) => string;
     /** Rendered without the shell (the styleguide brings its own frame). */
     bare?: boolean;
   }

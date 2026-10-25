@@ -2,15 +2,20 @@
 // `enter` to open; actions that appear on row hover or focus (always shown on touch
 // screens). The frame is its own scroll container on both axes, so a wide table never
 // spills out of it, and the header sticks to the frame's top. The frame is at most the
-// viewport below the shell's top bar (`--sticky-top`, 11 §7) tall.
+// viewport below the shell's top bar (`--sticky-top`, 11 §7) tall. With `animateRows`,
+// rows enter and leave with `AnimatePresence` and move with the layout spring (11 §5);
+// under reduced motion they appear and go at once.
 
 import { useTable, type Row, type RowData, type Updater } from "@tanstack/react-table";
 import { cn } from "cn";
+import { AnimatePresence, useReducedMotion } from "motion/react";
+import * as m from "motion/react-m";
 import { useCallback, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { MOTION } from "@/design/tokens";
 import {
   dataTableFeatures,
   type DataTableColumn,
@@ -40,13 +45,23 @@ export interface DataTableProps<T extends RowData> {
   columnClassName?: Record<string, string>;
   /** The table's accessible name. */
   label: string;
+  /** Rows enter, leave and move with motion (11 §5); none under reduced motion. */
+  animateRows?: boolean;
+  /** Rendered inside the scrolling frame, below the table (a "Load more" row, a sentinel). */
+  footer?: ReactNode;
   className?: string;
 }
 
+/** 11 §5: the layout spring (list insert, remove, reorder). */
+const LAYOUT_SPRING = { type: "spring", stiffness: 520, damping: 42, mass: 1 } as const;
 const SELECT = "__select";
 const ACTIONS = "__actions";
 const SKELETON_ROWS = 5;
 const INTERACTIVE = "a, button, input, textarea, select, [role=checkbox], [role=menuitem]";
+// `TableRow`'s classes, for the `m.tr`, except the selected tint: a 4 % ember wash, not
+// `muted`, on which the warning-coloured "Pending review" badge drops below 4.5:1.
+const ROW =
+  "border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-primary/4";
 
 export function DataTable<T extends RowData>({
   columns,
@@ -59,9 +74,13 @@ export function DataTable<T extends RowData>({
   rowActions,
   columnClassName,
   label,
+  animateRows = false,
+  footer,
   className,
 }: DataTableProps<T>) {
   const { t } = useTranslation();
+  const reduce = useReducedMotion() ?? false;
+  const motionOn = animateRows && !reduce;
   const [active, setActive] = useState(0);
   const body = useRef<HTMLTableSectionElement>(null);
 
@@ -98,7 +117,7 @@ export function DataTable<T extends RowData>({
         id: ACTIONS,
         header: () => <span className="sr-only">{t("kit.table.actions")}</span>,
         cell: ({ row }) => (
-          <div className="flex justify-end gap-1 opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100 group-data-[state=selected]/row:opacity-100 pointer-coarse:opacity-100">
+          <div className="flex justify-end gap-1 opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100 group-data-[state=selected]/row:opacity-100 has-aria-expanded:opacity-100 pointer-coarse:opacity-100">
             {rowActions(row.original)}
           </div>
         ),
@@ -174,8 +193,9 @@ export function DataTable<T extends RowData>({
     cn(id === SELECT && "w-10 pr-0", id === ACTIONS && "w-px text-right", columnClassName?.[id]);
 
   return (
-    <div
+    <m.div
       data-slot="data-table"
+      layoutScroll={motionOn}
       className={cn(
         "relative max-h-[calc(100svh-var(--sticky-top)-var(--page-pad))] w-full overflow-auto rounded-xl border bg-card",
         className,
@@ -232,40 +252,60 @@ export function DataTable<T extends RowData>({
               </TableCell>
             </TableRow>
           ) : (
-            rows.map((row, index) => (
-              <TableRow
-                key={row.id}
-                data-row=""
-                data-state={row.getIsSelected() ? "selected" : undefined}
-                tabIndex={index === current ? 0 : -1}
-                onFocus={(e) => {
-                  if (e.target === e.currentTarget) setActive(index);
-                }}
-                onKeyDown={(e) => onRowKeyDown(e, row, index)}
-                onClick={(e) => {
-                  if (!onRowOpen) return;
-                  if ((e.target as HTMLElement).closest(INTERACTIVE)) return;
-                  onRowOpen(row.original);
-                }}
-                className={cn("group/row h-row -outline-offset-2", onRowOpen && "cursor-pointer")}
-              >
-                {row.getAllCells().map((cell) => (
-                  <TableCell
-                    key={cell.id}
-                    className={cn(
-                      "border-b px-3 py-0 group-last/row:border-b-0 first:pl-4 last:pr-4",
-                      cellClass(cell.column.id),
-                    )}
-                  >
-                    <table.FlexRender cell={cell} />
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))
+            <AnimatePresence initial={false}>
+              {rows.map((row, index) => (
+                <m.tr
+                  key={row.id}
+                  data-slot="table-row"
+                  data-row=""
+                  data-state={row.getIsSelected() ? "selected" : undefined}
+                  tabIndex={index === current ? 0 : -1}
+                  onFocus={(e) => {
+                    if (e.target === e.currentTarget) setActive(index);
+                  }}
+                  onKeyDown={(e) => onRowKeyDown(e, row, index)}
+                  onClick={(e) => {
+                    if (!onRowOpen) return;
+                    if ((e.target as HTMLElement).closest(INTERACTIVE)) return;
+                    onRowOpen(row.original);
+                  }}
+                  className={cn(
+                    ROW,
+                    "group/row h-row -outline-offset-2",
+                    onRowOpen && "cursor-pointer",
+                  )}
+                  {...(motionOn
+                    ? {
+                        layout: "position" as const,
+                        initial: { opacity: 0 },
+                        animate: { opacity: 1 },
+                        exit: { opacity: 0 },
+                        transition: {
+                          opacity: { duration: MOTION.durBase, ease: MOTION.easeOut },
+                          layout: LAYOUT_SPRING,
+                        },
+                      }
+                    : {})}
+                >
+                  {row.getAllCells().map((cell) => (
+                    <TableCell
+                      key={cell.id}
+                      className={cn(
+                        "border-b px-3 py-0 group-last/row:border-b-0 first:pl-4 last:pr-4",
+                        cellClass(cell.column.id),
+                      )}
+                    >
+                      <table.FlexRender cell={cell} />
+                    </TableCell>
+                  ))}
+                </m.tr>
+              ))}
+            </AnimatePresence>
           )}
         </TableBody>
       </table>
+      {footer}
       {loading ? <span className="sr-only">{t("kit.table.loading")}</span> : null}
-    </div>
+    </m.div>
   );
 }

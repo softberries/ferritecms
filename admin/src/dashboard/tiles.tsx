@@ -7,6 +7,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { countsQuery } from "@/api/content";
 import { MetricTile } from "@/components/kit/metric-tile";
 import { Skeleton } from "@/components/ui/skeleton";
 import { uiLocale } from "@/lib/locale";
@@ -19,7 +20,6 @@ import {
   publishedQuery,
 } from "./activity";
 import { PanelError } from "./panel";
-import { countsQuery } from "./queries";
 
 const TILES = ["published", "draft", "pending", "scheduled"] as const;
 
