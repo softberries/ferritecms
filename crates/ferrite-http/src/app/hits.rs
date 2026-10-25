@@ -131,7 +131,9 @@ impl HitCounter {
     /// Writes every buffered redirect's hits (one `add_hits` each) and empties the
     /// buffer; returns how many writes succeeded. A failed write is logged and its hits
     /// go back into the buffer for the next flush. If the flush is cancelled (the task
-    /// aborted at shutdown), the redirects not written yet go back too.
+    /// aborted at shutdown), the redirects not written yet go back too; a write that
+    /// committed just before the cancel goes back as well, so only cancel a flush when
+    /// no flush follows (at most one row is then over-reported as unwritten).
     pub async fn flush(&self) -> usize {
         let mut batch = Unwritten {
             counter: self,
