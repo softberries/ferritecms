@@ -275,7 +275,31 @@ export function ControlsSection() {
               render: (s) => (
                 <Checkbox
                   aria-label={t("controls.fields.check")}
-                  defaultChecked={s !== "default"}
+                  defaultChecked={false}
+                  className={stateClass(s)}
+                  disabled={s === "disabled"}
+                  aria-invalid={s === "error" || undefined}
+                />
+              ),
+            },
+            {
+              label: "checked",
+              render: (s) => (
+                <Checkbox
+                  aria-label={t("controls.fields.check")}
+                  defaultChecked={true}
+                  className={stateClass(s)}
+                  disabled={s === "disabled"}
+                  aria-invalid={s === "error" || undefined}
+                />
+              ),
+            },
+            {
+              label: "mixed",
+              render: (s) => (
+                <Checkbox
+                  aria-label={t("controls.fields.check")}
+                  defaultChecked={"indeterminate"}
                   className={stateClass(s)}
                   disabled={s === "disabled"}
                   aria-invalid={s === "error" || undefined}
@@ -288,7 +312,19 @@ export function ControlsSection() {
                 s === "error" ? null : (
                   <Switch
                     aria-label={t("controls.fields.switch")}
-                    defaultChecked={s !== "default"}
+                    defaultChecked={false}
+                    className={stateClass(s)}
+                    disabled={s === "disabled"}
+                  />
+                ),
+            },
+            {
+              label: "switch on",
+              render: (s) =>
+                s === "error" ? null : (
+                  <Switch
+                    aria-label={t("controls.fields.switch")}
+                    defaultChecked={true}
                     className={stateClass(s)}
                     disabled={s === "disabled"}
                   />

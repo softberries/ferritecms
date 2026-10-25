@@ -20,6 +20,7 @@ import { SaveState } from "@/components/kit/save-state";
 import { Sparkline } from "@/components/kit/sparkline";
 import { StatusBadge } from "@/components/kit/status-badge";
 import { Button } from "@/components/ui/button";
+import { uiLocale } from "@/lib/locale";
 import {
   ChartContainer,
   ChartTooltip,
@@ -214,7 +215,9 @@ export function DataSection() {
       col.accessor("words", {
         header: () => <span className="block text-right">{t("data.columns.words")}</span>,
         cell: (c) => (
-          <span className="block text-right tabular-nums">{c.getValue().toLocaleString("en")}</span>
+          <span className="block text-right tabular-nums">
+            {c.getValue().toLocaleString(uiLocale())}
+          </span>
         ),
       }),
       col.accessor("updated", {
@@ -228,6 +231,8 @@ export function DataSection() {
     words: "hidden lg:table-cell",
     updated: "hidden sm:table-cell",
   };
+  // The half-width specimens show fewer columns.
+  const narrow = { ...hide, author: "hidden 2xl:table-cell", words: "hidden 2xl:table-cell" };
   const count = Object.keys(selection).length;
   return (
     <Section id="data">
@@ -302,7 +307,8 @@ export function DataSection() {
             getRowId={(p) => p.id}
             loading
             empty={null}
-            columnClassName={hide}
+            columnClassName={narrow}
+            className="flex-1"
           />
         </Block>
         <Block title={t("data.empty.title")} description={t("data.empty.body")}>
@@ -312,7 +318,8 @@ export function DataSection() {
             data={[]}
             getRowId={(p) => p.id}
             loading={false}
-            columnClassName={hide}
+            columnClassName={narrow}
+            className="flex-1"
             empty={
               <EmptyState
                 icon={FileTextIcon}
@@ -356,7 +363,7 @@ export function ChartsSection() {
     return Array.from({ length: DAYS }, (_, d) => {
       const date = new Date(2026, 9, 12 + d);
       const row: Record<string, number | string> = {
-        day: date.toLocaleDateString("en", { month: "short", day: "numeric" }),
+        day: date.toLocaleDateString(uiLocale(), { month: "short", day: "numeric" }),
       };
       CHART_KEYS.forEach((key, i) => {
         row[key] = Math.max(0, values[i]?.[d] ?? 0);

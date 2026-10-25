@@ -49,6 +49,7 @@
   --color-ring: var(--ring);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
   --color-destructive: var(--destructive);
   --color-success: var(--success);
   --color-warning: var(--warning);

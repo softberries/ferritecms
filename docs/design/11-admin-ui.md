@@ -100,6 +100,7 @@ All colours are `oklch(L C H [/ A])`, light / dark. Neutrals have a cool graphit
 | `input` | 0.64 0.01 260 | 0.52 0.012 260 |
 | `primary` (ember) | 0.55 0.17 40 | 0.73 0.15 52 |
 | `primary-foreground` | 0.99 0.005 40 | 0.20 0.03 45 |
+| `primary-hover` (primary fill on hover) | 0.49 0.15 40 | 0.80 0.12 55 |
 | `ring` | = `primary` | = `primary` |
 | `destructive` | 0.55 0.21 27 | 0.70 0.18 25 |
 | `success` | 0.52 0.13 150 | 0.74 0.14 150 |
@@ -153,6 +154,7 @@ shipped `tokens.css`:
 | `muted-foreground` | `card` | 4.5 | 6.00 | 7.11 |
 | `muted-foreground` | `muted` | 4.5 | 5.42 | 6.73 |
 | `primary-foreground` | `primary` | 4.5 | 5.08 | 7.27 |
+| `primary-foreground` | `primary-hover` | 4.5 | 6.51 | 9.45 |
 | `primary` (link text) | `background` | 4.5 | 5.09 | 7.69 |
 | `primary` (link text) | `card` | 4.5 | 5.24 | 7.30 |
 | `destructive` | `background` | 4.5 | 5.25 | 6.65 |
@@ -218,6 +220,10 @@ contrast pair unchanged.
   coarse)` `tokens.css` sets `--control-h` 44 px and `--row-h` 48 px for both densities
   (`:root:root, :root[data-density]`, so it outranks the compact rule; Task 8, E2E
   `styleguide_touch_targets`).
+- `--sticky-top` (default `0px`, `tokens.css`): the height of whatever sticks to the
+  top of the viewport above page content. Task 10's top bar sets it on the shell; the
+  styleguide sets it to its own header (6.5 rem below `sm`, 4 rem above). `DataTable`
+  frames use it to cap their height (§7).
 - Theme: `ThemeProvider` / `useTheme()` (`@/design/theme`; `{ theme, resolvedTheme,
   setTheme }`, the shape the shadcn sonner wrapper expects, P9) with `light | dark |
   system`; `system` follows `prefers-color-scheme` live. Once JS runs, `<html>` carries
@@ -323,7 +329,7 @@ itself (`?raw` + `parseTokens`), so the page cannot drift from the gate.
   | `ForbiddenState` | — | `EmptyState` with a lock |
   | `MetricTile` | `label, value: number, delta?, series?, href?` | value and change are text (the change also spoken: "Up 12 on the previous period"); `href` is an admin path (router `Link`) |
   | `Sparkline` | `data: number[]` | Recharts `AreaChart` (`responsive`, `accessibilityLayer={false}`), `aria-hidden` |
-  | `DataTable<T>` | `columns, data, getRowId, selection?, onRowOpen?, loading, empty, rowActions?, columnClassName?, label` | TanStack Table v9 `useTable` + `rowSelectionFeature` (`data-table-features.ts`: `dataTableFeatures`, `dataTableColumns<T>()`, `DataTableColumn<T>`); roving tabindex on rows, `j`/`k` (and arrows) move, `x` toggles selection, `enter` opens; header sticky from `md` up at `top: var(--sticky-top, 0px)` (the shell sets `--sticky-top`); below `md` the table scrolls inside its frame; rows are `h-row`; `rowActions` show on row hover/focus, always on coarse pointers; skeleton rows while `loading` |
+  | `DataTable<T>` | `columns, data, getRowId, selection?, onRowOpen?, loading, empty, rowActions?, columnClassName?, label, className?` | TanStack Table v9 `useTable` + `rowSelectionFeature` (`data-table-features.ts`: `dataTableFeatures`, `dataTableColumns<T>()`, `DataTableColumn<T>`); roving tabindex on rows, `j`/`k` (and arrows) move, `x` toggles selection, `enter` opens; rows are `h-row`; `rowActions` show on row hover/focus, always on coarse pointers; skeleton rows while `loading`. **Scrolling:** the frame is its own scroll container on both axes at every width (`overflow-auto`), so a wide table never spills past it; `overflow-x` makes the frame the sticky header's scroll container, so the header sticks to the frame's top (`top: 0`), not the page's, and the frame is capped at `max-h: calc(100svh - var(--sticky-top) - var(--page-pad))` so a long list scrolls inside a frame that fits below the top bar. Hide less important columns per breakpoint with `columnClassName` |
   | `KbdCombo` | `keys` | `+` = together, space = sequence (`g d`); `mod` is ⌘ on Apple, Ctrl elsewhere; spoken text in `sr-only` |
   | `SaveState` | `state: saved \| saving \| dirty \| error \| offline, at?` | a polite `role="status"` region holds plain text; the visible label crossfades (Motion, 120 ms opacity) |
   | `RelativeTime` | `at` (RFC 3339) | `formatDistanceToNowStrict`, absolute time in `title` and `dateTime`; re-renders each minute |
@@ -374,11 +380,11 @@ Rules for generated files:
 | File | Edit | Why |
 |---|---|---|
 | `button.tsx` | removed `outline-none`, `focus-visible:border-ring`, `focus-visible:ring-3`, `focus-visible:ring-ring/50`; in `destructive` removed `focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40` | standard focus ring |
-| `button.tsx` | `default` hover `bg-primary/80` → `bg-[color-mix(in_oklab,var(--primary),var(--foreground)_12%)]` | `primary/80` gave 3.64:1 for the label (axe on the forced hover state); oklab keeps the hue |
+| `button.tsx` | `default` hover `bg-primary/80` → `bg-primary-hover` (token, §3) | `primary/80` gave 3.64:1 for the label (axe on the forced hover state); a mix toward `foreground` was nearly invisible in dark mode (fix round 1) |
 | `button.tsx` | `destructive` hover `bg-destructive/20` (dark `/30`) → `hover:border-destructive/50` | the tint gave 3.88:1 (light) / 3.91:1 (dark) |
 | `button.tsx` | size `default` `h-8 px-2.5` → `h-control px-3` (icon padding 2 → 2.5); `icon` `size-8` → `size-control`; `lg` `h-9` → `h-[calc(var(--control-h)+4px)] px-3.5`; `icon-lg` likewise | buttons follow density (§4) and touch height; `lg` stays above default |
-| `badge.tsx` | removed the `focus-visible:*` ring classes (both places); link hover `bg-primary/80` → the oklab mix | standard focus ring; contrast |
-| `checkbox.tsx` | removed `outline-none` and the `focus-visible:*` ring classes; `group/checkbox`; indeterminate shows `MinusIcon` and the filled primary style | standard focus ring; "select all" with some rows selected |
+| `badge.tsx` | removed the `focus-visible:*` ring classes (both places); link hover `bg-primary/80` → `bg-primary-hover` | standard focus ring; contrast |
+| `checkbox.tsx` | removed `outline-none` and the `focus-visible:*` ring classes; `group/checkbox`; indeterminate shows `MinusIcon` and the filled primary style, with `dark:data-[state=indeterminate]:bg-primary` because the generated `dark:bg-input/30` outranks the plain variant (fix round 1) | standard focus ring; "select all" with some rows selected |
 | `input.tsx` | removed `outline-none` and the `focus-visible:*` ring classes; `h-8` → `h-control` | focus ring; density |
 | `textarea.tsx` | removed `outline-none` and the `focus-visible:*` ring classes | focus ring |
 | `input-group.tsx` | group: removed `outline-none` and the `has-[…:focus-visible]` border/ring classes, added `has-[[data-slot=input-group-control]:focus-visible]:outline-2 …:outline-offset-2 …:outline-ring`; `h-8` → `h-control`; controls: `focus-visible:ring-0` → `focus-visible:outline-none` | the ring goes around the group, not the inner input |
@@ -402,8 +408,12 @@ Tailwind, CSS and lint config edits made in Task 8:
   &:hover }` plus `&:is(.force-hover)`, so `.force-hover` shows every `hover:` and
   `group-hover:` style; the base `:focus-visible` rule also matches `.force-focus`. Both
   classes exist for the styleguide's state matrices.
-- `globals.css`: `--color-overlay`; `tokens.css`: `--overlay` and the coarse-pointer
-  block (§3, §4); `tokens.ts`: `overlay` in the surface group.
+- `globals.css`: `--color-overlay`, `--color-primary-hover`; `tokens.css`: `--overlay`,
+  `--primary-hover`, `--sticky-top` and the coarse-pointer block (§3, §4); `tokens.ts`:
+  `overlay` in the surface group, `primary-hover` in brand (and its contrast pair).
+- Numbers and dates in the kit format with `uiLocale()` (`src/lib/locale.ts`: the
+  document's `lang`, else the browser's), not a hard-coded `"en"`. `RelativeTime` still
+  uses date-fns' default (English) locale; M2b ships `en` only.
 - `eslint.config.js`: the `chart.tsx` override above.
 - `e2e/support/snap.ts`: `settle()` lets two frames pass before collecting animations,
   because a colour-scheme change reaches `<html>` through a React effect and the colour

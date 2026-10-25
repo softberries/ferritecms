@@ -23,7 +23,7 @@ export const TOKENS = {
     "ring",
     "overlay",
   ],
-  brand: ["primary", "primary-foreground"],
+  brand: ["primary", "primary-foreground", "primary-hover"],
   semantic: ["destructive", "success", "warning", "info"],
   status: [
     "status-draft",
@@ -76,7 +76,7 @@ const on = (fgs: readonly string[], bgs: readonly string[], min: 4.5 | 3): Contr
 /** Every pair the token gate checks, in both modes. */
 export const CONTRAST_PAIRS: ContrastPair[] = [
   ...on(["foreground", "muted-foreground"], ["background", "card", "muted"], 4.5),
-  ...on(["primary-foreground"], ["primary"], 4.5),
+  ...on(["primary-foreground"], ["primary", "primary-hover"], 4.5),
   // `primary` is also link text.
   ...on(["primary"], ["background", "card"], 4.5),
   ...on([...TOKENS.semantic, ...TOKENS.status], ["background", "card"], 4.5),

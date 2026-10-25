@@ -1,6 +1,7 @@
 // "3 min ago", with the absolute time in `title` and `dateTime`; refreshes each minute.
 
 import { format, formatDistanceToNowStrict } from "date-fns";
+import { cn } from "cn";
 import { useEffect, useState } from "react";
 
 export interface RelativeTimeProps {
@@ -18,11 +19,7 @@ export function RelativeTime({ at, className }: RelativeTimeProps) {
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return null;
   return (
-    <time
-      dateTime={at}
-      title={format(date, "PPpp")}
-      className={className ? `${className} tabular-nums` : "tabular-nums"}
-    >
+    <time dateTime={at} title={format(date, "PPpp")} className={cn("tabular-nums", className)}>
       {formatDistanceToNowStrict(date, { addSuffix: true })}
     </time>
   );

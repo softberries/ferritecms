@@ -6,6 +6,7 @@ import { ArrowDownRightIcon, ArrowRightIcon, ArrowUpRightIcon } from "lucide-rea
 import { cn } from "cn";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { uiLocale } from "@/lib/locale";
 import { Sparkline } from "./sparkline";
 
 export interface MetricTileProps {
@@ -19,11 +20,9 @@ export interface MetricTileProps {
   className?: string;
 }
 
-const number = new Intl.NumberFormat("en");
-const signed = new Intl.NumberFormat("en", { signDisplay: "exceptZero" });
-
 export function MetricTile({ label, value, delta, series, href, className }: MetricTileProps) {
   const { t } = useTranslation();
+  const number = new Intl.NumberFormat(uiLocale());
   const body: ReactNode = (
     <>
       <span className="text-sm font-medium text-muted-foreground">{label}</span>
@@ -62,6 +61,7 @@ export function MetricTile({ label, value, delta, series, href, className }: Met
 }
 
 function Delta({ delta }: { delta: number }) {
+  const signed = new Intl.NumberFormat(uiLocale(), { signDisplay: "exceptZero" });
   const Icon = delta > 0 ? ArrowUpRightIcon : delta < 0 ? ArrowDownRightIcon : ArrowRightIcon;
   return (
     <span

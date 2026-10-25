@@ -127,3 +127,47 @@ test("styleguide_touch_targets", async ({ browser, backend, site, guard }) => {
     await ctx.close();
   }
 });
+
+test("styleguide_table_frame_and_mixed_checkbox", async ({ as }) => {
+  const page = await as("admin");
+  await page.goto("/admin/_styleguide?section=data");
+  // Every table scrolls inside its frame and never spills past its parent, at desktop
+  // width too (review fix round 1); the header sticks to the frame.
+  const frames = page.locator("[data-slot=data-table]");
+  await expect(frames).toHaveCount(3);
+  for (const frame of await frames.all()) {
+    const box = await frame.evaluate((el) => {
+      const s = getComputedStyle(el);
+      const parent = el.parentElement?.getBoundingClientRect();
+      return {
+        overflowX: s.overflowX,
+        spill: parent ? el.getBoundingClientRect().right - parent.right : 0,
+        sticky: getComputedStyle(el.querySelector("thead") as Element).position,
+      };
+    });
+    expect(box).toEqual({ overflowX: "auto", spill: 0, sticky: "sticky" });
+  }
+
+  // "Select all" with one row selected is mixed, and filled with primary in both schemes.
+  const all = page.getByRole("table", { name: "Posts" }).getByRole("checkbox", {
+    name: "Select all rows",
+  });
+  await expect(all).toHaveAttribute("data-state", "indeterminate");
+  for (const scheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await expect(page.locator("html")).toHaveClass(scheme);
+    await expect
+      .poll(() =>
+        all.evaluate((el) => {
+          // A probe painted with the primary token, resolved like the checkbox fill.
+          const probe = document.createElement("span");
+          probe.style.backgroundColor = "var(--primary)";
+          document.body.append(probe);
+          const primary = getComputedStyle(probe).backgroundColor;
+          probe.remove();
+          return getComputedStyle(el).backgroundColor === primary;
+        }),
+      )
+      .toBe(true);
+  }
+});

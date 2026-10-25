@@ -35,6 +35,8 @@
   /* "Ember": oxidised iron. */
   --primary: oklch(0.55 0.17 40);
   --primary-foreground: oklch(0.99 0.005 40);
+  /* Hover/pressed fill of primary buttons: darker in light mode, lighter in dark. */
+  --primary-hover: oklch(0.49 0.15 40);
   --ring: var(--primary);
 
   /* Semantic. */
@@ -89,6 +91,11 @@
   --control-h: 36px;
   --row-h: 44px;
   --page-pad: 24px;
+
+  /* Height of whatever sticks to the top of the viewport above page content (the
+     shell's top bar, Task 10 sets it); sticky elements and DataTable frames sit
+     below it. */
+  --sticky-top: 0px;
 }
 
 html[data-density="compact"] {
@@ -120,6 +127,7 @@ html[data-density="compact"] {
 
   --primary: oklch(0.73 0.15 52);
   --primary-foreground: oklch(0.2 0.03 45);
+  --primary-hover: oklch(0.8 0.12 55);
 
   --destructive: oklch(0.7 0.18 25);
   --success: oklch(0.74 0.14 150);

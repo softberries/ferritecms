@@ -1,6 +1,8 @@
 // Lists (11 §6): TanStack Table v9 with row selection, `j`/`k` to move, `x` to select,
-// `enter` to open; a sticky header on wide screens and actions that appear on row hover
-// or focus (always shown on touch screens).
+// `enter` to open; actions that appear on row hover or focus (always shown on touch
+// screens). The frame is its own scroll container on both axes, so a wide table never
+// spills out of it, and the header sticks to the frame's top. The frame is at most the
+// viewport below the shell's top bar (`--sticky-top`, 11 §7) tall.
 
 import { useTable, type Row, type RowData, type Updater } from "@tanstack/react-table";
 import { cn } from "cn";
@@ -174,14 +176,17 @@ export function DataTable<T extends RowData>({
   return (
     <div
       data-slot="data-table"
-      className={cn("relative w-full rounded-xl border bg-card max-md:overflow-x-auto", className)}
+      className={cn(
+        "relative max-h-[calc(100svh-var(--sticky-top)-var(--page-pad))] w-full overflow-auto rounded-xl border bg-card",
+        className,
+      )}
     >
       <table
         aria-label={label}
         aria-busy={loading || undefined}
         className="w-full caption-bottom border-separate border-spacing-0 text-base"
       >
-        <TableHeader className="bg-card md:sticky md:top-(--sticky-top,0px) md:z-10 [&_tr]:border-b-0">
+        <TableHeader className="sticky top-0 z-10 bg-card [&_tr]:border-b-0">
           {headerGroups.map((group) => (
             <TableRow key={group.id} className="hover:bg-transparent">
               {group.headers.map((header) => (

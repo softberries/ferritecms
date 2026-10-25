@@ -58,7 +58,8 @@ function StyleguidePage() {
   return (
     <TooltipProvider>
       <title>{t("pageTitle")}</title>
-      <div className="min-h-svh bg-background">
+      {/* `--sticky-top`: the height of this page's own sticky header (11 §7). */}
+      <div className="min-h-svh bg-background [--sticky-top:6.5rem] sm:[--sticky-top:4rem]">
         <Header />
         <div className="mx-auto w-full max-w-7xl px-page pb-24 lg:grid lg:grid-cols-[12rem_minmax(0,1fr)] lg:gap-12">
           <SectionNav current={section} />
