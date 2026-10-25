@@ -269,11 +269,17 @@ contrast pair unchanged.
   `m.*` from `motion/react-m` inside it. Numbers for Motion come from `MOTION` in
   `design/tokens.ts` (`durBase` 0.18 s, `easeOut`), kept equal to `tokens.css` by
   `motion_constants_match_tokens`.
-- Route change (`shell/route-transition.tsx`): `AnimatePresence mode="wait"
-  initial={false}` keyed by the leaf route id; enter `opacity 0→1, y 4→0` over
-  `--dur-base` with `--ease-out`; the exit is instant (during an exit the `<Outlet>`
-  already renders the next route). Under reduced motion it animates opacity only, so
-  no frame carries a transform (E2E `reduced_motion_disables_transforms`).
+- Route change (`shell/route-transition.tsx`): an `m.div` keyed by the leaf route id,
+  enter only: `opacity 0→1, y 4→0` over `--dur-base` with `--ease-out`. **No
+  `AnimatePresence`** (ruling at Task 10 fix round 1, overriding the plan's `mode="wait"`):
+  an exiting copy keeps rendering the same `<Outlet>`, so the next route mounted inside
+  it, unmounted with it and mounted again — twice per navigation, which would create a
+  TipTap editor or a blocker twice. A new key remounts the div and plays the enter
+  animation; a search-param change keeps it. Under reduced motion it animates opacity
+  only, so no frame carries a transform. Tests: `one_navigation_mounts_the_new_route_once`
+  (Vitest), E2E `reduced_motion_disables_transforms` (a `MutationObserver` records each
+  inserted container's inline transform: `translateY(4px)` normally, none under reduced
+  motion).
 - Meaning only: enter/exit of overlays, list insert/remove/reorder, the route change
   (opacity plus 4 px y), the save-state indicator. Nothing loops, and nothing moves more
   than 8 px except sheets.
@@ -456,17 +462,21 @@ then `SidebarProvider` (controlled; state per viewer) → skip link, `AppSidebar
 (`shell/app-sidebar.tsx`), `SidebarInset` with `TopBar` (`shell/top-bar.tsx`) and
 `<main id="main">` holding `RouteTransition`, plus the shell's shortcuts, the ⌘K
 palette (`shell/go-to-palette.tsx`, a minimal "Go to" list that Task 11 replaces), the
-`?` sheet (`shell/shortcut-sheet.tsx`) and the only `<Toaster>` (bottom right).
+`?` sheet (`shell/shortcut-sheet.tsx`) and the app's `<Toaster>` (bottom right; the bare
+styleguide mounts its own for its toast specimens).
 
 - Nav (`shell/nav.ts` `navFor(me, types)`): Overview (Dashboard, `g d`), Content (Posts,
   Pages, then custom types by label, never `media`) when `me.capabilities` holds
-  `read_admin`. Rows are 36 px (44 px under `pointer: coarse`); the active row is
+  `read_admin`. Rows are `h-control` (36 px comfortable, 30 px compact, 44 px under
+  `pointer: coarse`); the top bar stays 56 px in both densities (it is `--sticky-top`).
+  The active row is
   tinted (`sidebar-accent`) with its icon in `primary`. Tooltips name the icons only on
   the collapsed rail.
 - Top bar (56 px, sticky, translucent with a blur): sidebar toggle (tooltip shows
   `mod+b`), breadcrumbs from the matched routes' `staticData.crumb` (`(t) => string`,
   `shell` namespace; typed in `router.tsx`), the "Search engines discouraged" pill
-  (`reading.discourage_indexing`; text hidden below `lg`, `title` always), the ⌘K
+  (`reading.discourage_indexing`; a popover button, so a tap or Enter shows what it
+  means — its text is hidden below `lg`, and a `title` never shows on touch), the ⌘K
   trigger (an input-like button at `md`+, an icon below), the "New" split button
   (`edit_own`; new post, menu: new page) and the account menu (`shell/user-menu.tsx`:
   name, role, e-mail, theme and density radio groups, shortcuts, sign out).
@@ -479,11 +489,14 @@ palette (`shell/go-to-palette.tsx`, a minimal "Go to" list that Task 11 replaces
   `ErrorState` with a retry (`router.invalidate()`); `defaultNotFoundComponent` and the
   catch-all `routes/_app/$.tsx` show `shell/not-found.tsx` (pre-flight F20: no
   `/not-found` route; the address stays as typed, and the guard runs first). `main.tsx`'s
-  `onCaughtError` does not log an `ApiError` an error component rendered (a handled
-  answer); everything else is still logged.
-- Toasts: the `<Toaster>` is mounted only in the shell, and the global error handler
-  does not toast `rate-limited`/`busy` on the sign-in, reset and forced-change screens,
-  which show their own countdown (sonner replays still-active toasts when a `<Toaster>`
+  `onCaughtError` (`lib/caught-error.ts`, unit-tested) does not log an `ApiError` an
+  error component rendered (a handled answer); everything else is still logged.
+- Crumb links: `match.pathname` excludes the `/admin` basepath, so a non-last crumb's
+  `Link` resolves once (`/admin/parent`; `non_last_crumb_links_inside_the_admin_once`).
+- Toasts: the app's `<Toaster>` is mounted only in the shell, and the global error
+  handler does not toast `rate-limited`/`busy` on the sign-in, reset and forced-change
+  screens, which answer inline: a `429` with a countdown from `Retry-After`, a `503
+  busy` with their generic error (sonner replays still-active toasts when a `<Toaster>`
   mounts, so the handler, not only the mount point, has to hold back).
 
 ## 8. Design review checklist

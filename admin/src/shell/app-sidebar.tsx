@@ -41,10 +41,11 @@ function isActive(item: NavItem, pathname: string): boolean {
   return pathname === item.to || pathname.startsWith(`${item.to}/`);
 }
 
-// Rows are 36 px (44 px on touch screens, 11 §8); the active one is tinted with its
-// icon in the accent, the rest stay quiet.
+// Rows are control height: 36 px comfortable, 30 px compact, 44 px on touch screens
+// (`--control-h`, 11 §4, §8); the active one is tinted with its icon in the accent,
+// the rest stay quiet.
 const ROW =
-  "h-9 gap-2.5 px-2.5 text-sidebar-foreground/80 pointer-coarse:h-11 data-active:text-sidebar-accent-foreground data-active:[&>svg]:text-primary [&>svg]:text-muted-foreground hover:[&>svg]:text-sidebar-accent-foreground";
+  "h-control gap-2.5 px-2.5 text-sidebar-foreground/80 data-active:text-sidebar-accent-foreground data-active:[&>svg]:text-primary [&>svg]:text-muted-foreground hover:[&>svg]:text-sidebar-accent-foreground";
 
 export function AppSidebar({ sections, loading, siteTitle, siteUrl }: AppSidebarProps) {
   const { t } = useTranslation("shell");
@@ -128,7 +129,7 @@ export function AppSidebar({ sections, loading, siteTitle, siteUrl }: AppSidebar
               <SidebarMenu className="gap-0.5">
                 {[0, 1, 2].map((i) => (
                   <SidebarMenuItem key={i}>
-                    <SidebarMenuSkeleton showIcon className="h-9" />
+                    <SidebarMenuSkeleton showIcon className="h-control" />
                   </SidebarMenuItem>
                 ))}
               </SidebarMenu>

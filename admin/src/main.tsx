@@ -6,13 +6,13 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { toast } from "sonner";
 import { createQueryClient, currentPath } from "./api/client";
-import { ApiError } from "./api/problem";
 import { App } from "./app";
 import { holdResetToken, isResetPath, takeResetToken } from "./auth/reset-token";
 import { DensityProvider } from "./design/density";
 import { applyStoredPreferences } from "./design/preferences";
 import { ThemeProvider } from "./design/theme";
 import { initI18n } from "./i18n";
+import { reportCaughtError } from "./lib/caught-error";
 import { createAppRouter } from "./router";
 
 // The password-reset link carries its token in the fragment: take it and drop it from
@@ -42,13 +42,7 @@ void initI18n().then(() => {
   const root = document.getElementById("root");
   if (root) {
     createRoot(root, {
-      // A route's error component shows an API problem (403, 404, a failed load) as a
-      // state of the screen; React's default report of every caught error would log
-      // those answers as console errors. Anything else is still reported.
-      onCaughtError: (error, info) => {
-        if (error instanceof ApiError) return;
-        console.error(error, info.componentStack);
-      },
+      onCaughtError: reportCaughtError,
     }).render(
       <StrictMode>
         <ThemeProvider>

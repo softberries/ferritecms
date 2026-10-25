@@ -6,7 +6,7 @@
 import type { Page, Route } from "@playwright/test";
 import { expect, test } from "./support/fixtures";
 import { authFile } from "./support/server";
-import { VIEWPORTS } from "./support/snap";
+import { screenFile, settle, VIEWPORTS } from "./support/snap";
 
 // The browser logs every non-2xx fetch as a console error; the state tests expect some.
 const EXPECTED_FAILURES =
@@ -212,45 +212,114 @@ test("theme_toggle_and_system", async ({ as }) => {
   await expect(html).toHaveAttribute("data-density", "compact");
 });
 
-/** Every computed `transform` of the route container over ~300 ms after `act`. */
-async function transformsDuring(page: Page, act: () => Promise<void>): Promise<string[]> {
+/**
+ * The inline `transform` of every route container inserted while `act` runs and
+ * `until` becomes visible. Motion writes `initial` into the inline style when the
+ * element renders, before any frame, so this does not depend on timing.
+ */
+async function insertedTransforms(
+  page: Page,
+  act: () => Promise<void>,
+  until: () => Promise<void>,
+): Promise<string[]> {
   await page.evaluate(() => {
-    const w = window as unknown as { __samples: string[]; __sampling: boolean };
-    w.__samples = [];
-    w.__sampling = true;
-    const tick = () => {
-      const el = document.querySelector("[data-slot=route-transition]");
-      if (el) w.__samples.push(getComputedStyle(el).transform);
-      if (w.__sampling) requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
+    const w = window as unknown as { __inserted: string[]; __observer?: MutationObserver };
+    w.__inserted = [];
+    w.__observer = new MutationObserver((records) => {
+      for (const r of records) {
+        for (const node of r.addedNodes) {
+          if (!(node instanceof HTMLElement)) continue;
+          const els = node.matches("[data-slot=route-transition]")
+            ? [node]
+            : [...node.querySelectorAll<HTMLElement>("[data-slot=route-transition]")];
+          for (const el of els) w.__inserted.push(el.style.transform);
+        }
+      }
+    });
+    w.__observer.observe(document.getElementById("main") ?? document.body, {
+      childList: true,
+      subtree: true,
+    });
   });
   await act();
-  await page.waitForTimeout(350);
+  await until();
   return page.evaluate(() => {
-    const w = window as unknown as { __samples: string[]; __sampling: boolean };
-    w.__sampling = false;
-    return w.__samples;
+    const w = window as unknown as { __inserted: string[]; __observer?: MutationObserver };
+    w.__observer?.disconnect();
+    return w.__inserted;
   });
 }
 
 test("reduced_motion_disables_transforms", async ({ as }) => {
   const page = await as("admin");
-  // Control: with motion allowed, the entering screen rises (a transform is seen).
+  const notFound = () =>
+    expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  // Control: with motion allowed, the entering screen starts 4 px down.
   await openDashboard(page);
-  const moving = await transformsDuring(page, () =>
-    nav(page).getByRole("link", { name: "Posts" }).click(),
+  const moving = await insertedTransforms(
+    page,
+    () => nav(page).getByRole("link", { name: "Posts" }).click(),
+    notFound,
   );
-  expect(moving.some((t) => t !== "none")).toBe(true);
+  // One container per navigation (no exiting copy; Task 10 fix round 1).
+  expect(moving).toEqual(["translateY(4px)"]);
 
   await page.emulateMedia({ reducedMotion: "reduce" });
   await openDashboard(page);
-  const still = await transformsDuring(page, () =>
-    nav(page).getByRole("link", { name: "Pages" }).click(),
+  const still = await insertedTransforms(
+    page,
+    () => nav(page).getByRole("link", { name: "Pages" }).click(),
+    notFound,
   );
-  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
-  expect(still.length).toBeGreaterThan(0);
-  expect(still.filter((t) => t !== "none")).toEqual([]);
+  expect(still).toHaveLength(1);
+  expect(["", "none"]).toContain(still[0]);
+});
+
+/** Tabs until `target` has focus (at most `max` presses). */
+async function tabTo(page: Page, target: ReturnType<Page["locator"]>, max = 20): Promise<void> {
+  for (let i = 0; i < max; i++) {
+    await page.keyboard.press("Tab");
+    if (await target.evaluate((el) => el === document.activeElement)) return;
+  }
+  throw new Error("focus never reached the target");
+}
+
+const ring = (el: Element) => {
+  const s = getComputedStyle(el);
+  return `${s.outlineStyle} ${s.outlineWidth}`;
+};
+
+test("keyboard_focus_rings_in_the_shell", async ({ as, snap }) => {
+  const page = await as("admin");
+  await openDashboard(page);
+  // A sidebar row (inset ring inside the sidebar) ...
+  const posts = nav(page).getByRole("link", { name: "Posts" });
+  await tabTo(page, posts);
+  for (const scheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await expect.poll(() => posts.evaluate(ring)).toBe("solid 2px");
+  }
+  await page.emulateMedia({ colorScheme: "light" });
+  await snap(page, "shell-focus-nav");
+  // `snap` passes through the phone width, where the desktop sidebar (and its focus) is
+  // gone, before the dark desktop shot; take that one again with the row focused.
+  await openDashboard(page);
+  await page.emulateMedia({ colorScheme: "dark" });
+  await tabTo(page, posts);
+  await settle(page);
+  await page.screenshot({ path: screenFile("shell-focus-nav-dark", "dark", "desktop") });
+  await page.emulateMedia({ colorScheme: "light" });
+
+  // ... and a top-bar button.
+  await openDashboard(page);
+  const search = page.getByRole("banner").getByRole("button", { name: /Search or jump to/ });
+  await tabTo(page, search);
+  for (const scheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await expect.poll(() => search.evaluate(ring)).toBe("solid 2px");
+  }
+  await page.emulateMedia({ colorScheme: "light" });
+  await snap(page, "shell-focus-top-bar");
 });
 
 test("not_found_inside_shell", async ({ as, site }) => {
@@ -287,6 +356,11 @@ test("screens", async ({ as, guard, snap, expectAccessible }) => {
   const page = await as("admin");
 
   await openDashboard(page);
+  expect(
+    await nav(page)
+      .getByRole("link", { name: "Posts" })
+      .evaluate((el) => el.getBoundingClientRect().height),
+  ).toBe(36);
   await snap(page, "shell-dashboard");
   await expectAccessible(page);
 
@@ -297,15 +371,28 @@ test("screens", async ({ as, guard, snap, expectAccessible }) => {
     await route.fulfill({ response, json: { ...body, "reading.discourage_indexing": true } });
   });
   await openDashboard(page);
-  await expect(page.locator("[data-slot=discouraged-pill]")).toBeVisible();
+  const pill = page.getByRole("button", { name: "Search engines discouraged" });
+  await expect(pill).toBeVisible();
   await snap(page, "shell-dashboard-discouraged");
   await expectAccessible(page);
+  // Below `lg` it is an icon; a tap or Enter explains it (no `title` on touch).
+  await pill.click();
+  await expect(page.getByRole("dialog")).toContainText("not to index");
+  await snap(page, "shell-discouraged-hint");
+  await expectAccessible(page);
+  await page.keyboard.press("Escape");
   await page.unroute("**/api/v1/settings");
 
   // Compact density.
   await page.evaluate(() => localStorage.setItem("ferrite.admin.density", "compact"));
   await openDashboard(page);
   await expect(page.locator("html")).toHaveAttribute("data-density", "compact");
+  // Sidebar rows follow the density (`--control-h`: 36 px comfortable, 30 px compact).
+  const rowHeight = () =>
+    nav(page)
+      .getByRole("link", { name: "Posts" })
+      .evaluate((el) => el.getBoundingClientRect().height);
+  expect(await rowHeight()).toBe(30);
   await snap(page, "shell-dashboard-compact");
   await expectAccessible(page);
   await page.evaluate(() => localStorage.removeItem("ferrite.admin.density"));

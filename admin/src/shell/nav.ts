@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import type { ContentTypeDto } from "@/api/types";
 import type { MeDto } from "@/auth/session";
+import type { TFunction } from "i18next";
 import { i18n } from "@/i18n";
 
 export interface NavItem {
@@ -37,16 +38,21 @@ const NOT_CONTENT = new Set(["media"]);
 const BUILT_IN_ORDER = ["post", "page"];
 const TYPE_ICONS: Record<string, LucideIcon> = { post: FileTextIcon, page: FilesIcon };
 
-export function navFor(me: MeDto, types: ContentTypeDto[]): NavSection[] {
+/** `t` defaults to the shared instance; the shell passes its hook's `t` (language changes). */
+export function navFor(
+  me: MeDto,
+  types: ContentTypeDto[],
+  t: TFunction<"shell"> = i18n.getFixedT(null, "shell"),
+): NavSection[] {
   const can = (cap: string) => me.capabilities.includes(cap);
   const sections: NavSection[] = [
     {
       id: "overview",
-      label: i18n.t("shell:nav.overview"),
+      label: t("nav.overview"),
       items: [
         {
           id: "dashboard",
-          label: i18n.t("shell:nav.dashboard"),
+          label: t("nav.dashboard"),
           to: "/",
           icon: LayoutDashboardIcon,
           shortcut: "g d",
@@ -56,10 +62,10 @@ export function navFor(me: MeDto, types: ContentTypeDto[]): NavSection[] {
   ];
 
   if (can("read_admin")) {
-    const shown = types.filter((t) => !NOT_CONTENT.has(t.name));
-    const builtIn = BUILT_IN_ORDER.flatMap((name) => shown.filter((t) => t.name === name));
+    const shown = types.filter((ty) => !NOT_CONTENT.has(ty.name));
+    const builtIn = BUILT_IN_ORDER.flatMap((name) => shown.filter((ty) => ty.name === name));
     const custom = shown
-      .filter((t) => !BUILT_IN_ORDER.includes(t.name))
+      .filter((ty) => !BUILT_IN_ORDER.includes(ty.name))
       .sort((a, b) => a.label.localeCompare(b.label));
     const items = [...builtIn, ...custom].map((t): NavItem => ({
       id: `content-${t.name}`,
@@ -68,7 +74,7 @@ export function navFor(me: MeDto, types: ContentTypeDto[]): NavSection[] {
       icon: TYPE_ICONS[t.name] ?? ShapesIcon,
     }));
     if (items.length > 0) {
-      sections.push({ id: "content", label: i18n.t("shell:nav.content"), items });
+      sections.push({ id: "content", label: t("nav.content"), items });
     }
   }
   return sections;

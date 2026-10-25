@@ -67,7 +67,8 @@ function Shell({ me }: { me: MeDto }) {
   const types = useQuery({ ...typesQuery, enabled: canRead });
   const settings = useQuery({ ...settingsQuery, enabled: canRead });
   const site = useQuery(metaQuery);
-  const sections = useMemo(() => navFor(me, types.data ?? []), [me, types.data]);
+  // `t` changes with the language, so the nav relabels with it.
+  const sections = useMemo(() => navFor(me, types.data ?? [], t), [me, types.data, t]);
 
   const [sidebarOpen, setSidebarOpen] = useState(storedSidebarOpen);
   const [palette, setPalette] = useState(false);

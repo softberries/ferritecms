@@ -31,6 +31,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UserMenu } from "./user-menu";
@@ -67,7 +75,7 @@ function useCrumbs(): Crumb[] {
   });
 }
 
-function Crumbs() {
+export function Crumbs() {
   const crumbs = useCrumbs();
   return (
     <Breadcrumb className="min-w-0 flex-1">
@@ -96,17 +104,34 @@ function Crumbs() {
   );
 }
 
+/**
+ * A button, not a bare badge: below `lg` only the icon shows, and a `title` never
+ * appears on touch screens, so a tap (or Enter) opens the explanation.
+ */
 function DiscouragedPill() {
   const { t } = useTranslation("shell");
   return (
-    <span
-      data-slot="discouraged-pill"
-      title={t("topBar.discouragedHint")}
-      className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-warning/45 bg-warning/10 px-2.5 text-xs font-medium text-foreground"
-    >
-      <EyeOffIcon aria-hidden="true" className="size-3.5 text-warning" />
-      <span className="max-lg:sr-only">{t("topBar.discouraged")}</span>
-    </span>
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-slot="discouraged-pill"
+          aria-label={t("topBar.discouraged")}
+          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-warning/45 bg-warning/10 px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-warning/20 pointer-coarse:h-11 pointer-coarse:px-3.5"
+        >
+          <EyeOffIcon aria-hidden="true" className="size-3.5 text-warning" />
+          <span aria-hidden="true" className="max-lg:hidden">
+            {t("topBar.discouraged")}
+          </span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" sideOffset={8} className="w-72">
+        <PopoverHeader>
+          <PopoverTitle>{t("topBar.discouraged")}</PopoverTitle>
+          <PopoverDescription>{t("topBar.discouragedHint")}</PopoverDescription>
+        </PopoverHeader>
+      </PopoverContent>
+    </Popover>
   );
 }
 
