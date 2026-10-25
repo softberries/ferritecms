@@ -718,7 +718,7 @@ with the canonical URL and the plugin's list (default: "http is not configured")
   (`/etc/ssl/certs/ca-certificates.crt`), so it uses the platform verifier.
 
 - *Resolved addresses (SSRF, DNS rebinding).* The client's resolver looks the name up once
-  (`tokio::net::lookup_host`, port 0 so the URL's 443 applies) and refuses the whole
+  (`getaddrinfo` in `spawn_blocking` under the per-node lookup cap, port 0 so the URL's 443 applies) and refuses the whole
   answer when **any** address is not public; reqwest connects only to the addresses it
   returned (no second lookup), and the connected peer address is checked again. Refused
   (`is_public_ip`): IPv4 `0/8 10/8 100.64/10 127/8 169.254/16 172.16/12 192.0.0/24
