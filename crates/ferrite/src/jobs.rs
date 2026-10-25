@@ -24,7 +24,9 @@ use ferrite_store::Store;
 use serde_json::json;
 use tokio::sync::Semaphore;
 
-pub use media::{ImageProcessor, MediaVariantsHandler, VariantSpecs};
+#[cfg(feature = "test-seams")]
+pub use media::ImageProcessor;
+pub use media::{MediaVariantsHandler, VariantSpecs};
 
 /// Period of the [`PUBLISH_DUE_KIND`] safety net.
 pub const PUBLISH_DUE_EVERY: Duration = Duration::from_secs(30);

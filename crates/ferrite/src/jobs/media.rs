@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::Semaphore;
 
 /// What decodes an original into its variants: [`process_image`] in production; a
-/// test seam replaces it ([`NodeOptions::image_processor`](crate::NodeOptions)).
+/// test seam (`NodeOptions::image_processor`, behind `test-seams`) replaces it.
 pub type ImageProcessor =
     Arc<dyn Fn(&[u8], &[VariantSpec]) -> Result<Processed, MediaError> + Send + Sync>;
 
@@ -94,7 +94,7 @@ impl MediaVariantsHandler {
     }
 
     /// Test seam: decodes with `processor` instead of [`process_image`].
-    #[doc(hidden)]
+    #[cfg(feature = "test-seams")]
     pub fn with_processor(mut self, processor: ImageProcessor) -> Self {
         self.processor = processor;
         self

@@ -34,6 +34,21 @@
   `cargo build --release --target wasm32-wasip2 --manifest-path plugins/Cargo.toml` once per
   test binary (`OnceLock`) before reading the `.wasm`, and panics with cargo's stderr if it fails.
   This needs the `wasm32-wasip2` target installed. CI also builds the plugins in an explicit step.
+- **Test seams** sit behind one dev-only cargo feature, `test-seams` (M2a-2a R22 M11):
+  `ferrite-http` has `test-seams = []` and `ferrite` has
+  `test-seams = ["ferrite-http/test-seams"]`, and each crate enables its own feature through a
+  dev-dependency on itself (`ferrite-http = { path = ".", features = ["test-seams"] }`). With
+  the workspace's resolver 3, dev-dependency features apply only when a test, example or bench
+  target is built, so `cargo test` compiles the seams and `cargo build -p ferrite --release` (the Docker
+  image) does not. `crates/ferrite/tests/seams.rs` (`release_build_has_no_seams`) checks
+  this with `cargo tree -e features,normal`. The seams are `Installer::{with_theme_loaded,
+  with_prepare}`, `PluginReloader::with_prepare`, `SharedFailures::with_before_disable`,
+  `Egress::{for_tests, for_tests_webpki}` with `EgressOverrides`, `NodeOptions::{served_flush,
+  listen, boot_barrier, image_processor}` with `BootBarrier`/`BootGate`,
+  `MediaVariantsHandler::with_processor` with the `ferrite::jobs::ImageProcessor` re-export,
+  and `RunningNode::abort` (crash simulation). A seam needed only by a crate's own unit tests
+  stays `#[cfg(test)]` (for example `PluginHost::extra_wait`). A new seam goes behind the
+  feature, never in a normal build as `#[doc(hidden)] pub`.
 
 ## 3. CI (GitHub Actions)
 

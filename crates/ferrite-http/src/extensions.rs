@@ -208,6 +208,7 @@ impl Inspected {
 }
 
 /// Test seam: runs after [`Installer::theme_from_artifact`] loaded a row's theme.
+#[cfg(feature = "test-seams")]
 type ThemeLoadedFn =
     Arc<dyn Fn(&InstalledTheme) -> futures::future::BoxFuture<'static, ()> + Send + Sync>;
 
@@ -225,6 +226,7 @@ pub struct Installer {
     slots: Arc<Semaphore>,
     uploads: Arc<Semaphore>,
     prepare: PrepareFn,
+    #[cfg(feature = "test-seams")]
     theme_loaded: Option<ThemeLoadedFn>,
 }
 
@@ -246,13 +248,14 @@ impl Installer {
             prepare: Arc::new(|host, manifest, wasm, approved| {
                 host.prepare_with(manifest, wasm, approved)
             }),
+            #[cfg(feature = "test-seams")]
             theme_loaded: None,
         })
     }
 
     /// Test seam: await `hook` after each [`theme_from_artifact`](Self::theme_from_artifact)
     /// that loaded (for example to change the row before the caller records anything).
-    #[doc(hidden)]
+    #[cfg(feature = "test-seams")]
     pub fn with_theme_loaded(
         mut self,
         hook: impl Fn(&InstalledTheme) -> futures::future::BoxFuture<'static, ()>
@@ -266,7 +269,7 @@ impl Installer {
 
     /// Test seam: compile through `prepare` instead of [`PluginHost::prepare_with`] (for
     /// example a wrapper that counts compiles in flight).
-    #[doc(hidden)]
+    #[cfg(feature = "test-seams")]
     pub fn with_prepare(
         mut self,
         prepare: impl Fn(
@@ -428,6 +431,7 @@ impl Installer {
     /// [`load_theme_artifact`] from this installer's media store.
     pub async fn theme_from_artifact(&self, row: &InstalledTheme) -> Result<Theme, ExtensionError> {
         let theme = load_theme_artifact(&self.media, row).await?;
+        #[cfg(feature = "test-seams")]
         if let Some(hook) = &self.theme_loaded {
             hook(row).await;
         }

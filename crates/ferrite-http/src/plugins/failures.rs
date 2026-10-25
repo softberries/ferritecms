@@ -44,6 +44,7 @@ use ferrite_core::events::plugin_disabled;
 use ferrite_domain::Timestamp;
 use ferrite_plugin_host::{FailureKind, FailureSink, PluginHost};
 use ferrite_store::{Store, StoreError};
+#[cfg(feature = "test-seams")]
 use futures::future::BoxFuture;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -58,6 +59,7 @@ const BUCKET_MICROS: i64 = 60_000_000;
 type Key = (String, String, Option<Timestamp>);
 
 /// Test seam run between the threshold check and the conditional disable.
+#[cfg(feature = "test-seams")]
 type BeforeDisable =
     Arc<dyn Fn(String) -> BoxFuture<'static, Result<(), StoreError>> + Send + Sync>;
 
@@ -76,6 +78,7 @@ pub struct SharedFailures {
     threshold: u32,
     window: Duration,
     inner: Mutex<Inner>,
+    #[cfg(feature = "test-seams")]
     before_disable: Option<BeforeDisable>,
 }
 
@@ -88,13 +91,14 @@ impl SharedFailures {
             threshold: threshold.max(1),
             window,
             inner: Mutex::new(Inner::default()),
+            #[cfg(feature = "test-seams")]
             before_disable: None,
         }
     }
 
     /// Test seam: run `hook(plugin)` after a check found the threshold reached and
     /// before the conditional disable; an error counts as a failed check.
-    #[doc(hidden)]
+    #[cfg(feature = "test-seams")]
     pub fn with_before_disable(
         mut self,
         hook: impl Fn(String) -> BoxFuture<'static, Result<(), StoreError>> + Send + Sync + 'static,
@@ -246,6 +250,7 @@ impl SharedFailures {
             return Ok(());
         }
         let reason = format!("auto: {n} failures in {}", window_text(self.window));
+        #[cfg(feature = "test-seams")]
         if let Some(hook) = &self.before_disable {
             hook(plugin.to_owned()).await?;
         }

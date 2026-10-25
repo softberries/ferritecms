@@ -141,7 +141,7 @@ impl PluginReloader {
 
     /// Test seam: compile through `prepare` instead of [`PluginHost::prepare_with`] (for
     /// example a wrapper that counts compiles).
-    #[doc(hidden)]
+    #[cfg(feature = "test-seams")]
     pub fn with_prepare(
         mut self,
         prepare: impl Fn(

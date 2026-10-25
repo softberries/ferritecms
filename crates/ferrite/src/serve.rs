@@ -86,7 +86,7 @@ use ferrite_plugin_host::{HostConfig, PluginHost};
 use ferrite_store::{Backend, Store};
 use tokio::{
     net::TcpListener,
-    sync::{Semaphore, oneshot},
+    sync::Semaphore,
     task::{JoinError, JoinHandle},
     time::Instant,
 };
@@ -95,7 +95,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     binary_version,
     cli::DataArg,
-    jobs::{self, ImageProcessor, MediaVariantsHandler},
+    jobs::{self, MediaVariantsHandler},
     keys, load_config,
     node::{NodeStatus, node_mode},
     open::{OpenMode, open_store, startup_check},
@@ -146,40 +146,41 @@ pub struct NodeOptions {
     pub scheduler_tick: Option<Duration>,
     /// Test seam: the `request.served` flush interval (default `SERVED_FLUSH_EVERY`,
     /// 10 s).
-    #[doc(hidden)]
+    #[cfg(feature = "test-seams")]
     pub served_flush: Option<Duration>,
     /// Test seam: whether the invalidation loop and the job runner use `LISTEN`
     /// wake-ups (default: in cluster mode). `Some(false)` leaves the node on polling only.
-    #[doc(hidden)]
+    #[cfg(feature = "test-seams")]
     pub listen: Option<bool>,
     /// Test seam: [`start`] pauses right after the invalidation cursor is set.
-    #[doc(hidden)]
+    #[cfg(feature = "test-seams")]
     pub boot_barrier: Option<BootBarrier>,
     /// Test seam: what the `media.variants` handler decodes with (default
     /// `ferrite_media::process_image`).
-    #[doc(hidden)]
-    pub image_processor: Option<ImageProcessor>,
+    #[cfg(feature = "test-seams")]
+    pub image_processor: Option<jobs::ImageProcessor>,
 }
 
 /// The node side of a boot pause (test seam; see [`NodeOptions::boot_barrier`]).
-#[doc(hidden)]
+#[cfg(feature = "test-seams")]
 pub struct BootBarrier {
-    reached: oneshot::Sender<()>,
-    resume: oneshot::Receiver<()>,
+    reached: tokio::sync::oneshot::Sender<()>,
+    resume: tokio::sync::oneshot::Receiver<()>,
 }
 
 /// The test side of a boot pause.
-#[doc(hidden)]
+#[cfg(feature = "test-seams")]
 pub struct BootGate {
-    reached: oneshot::Receiver<()>,
-    resume: oneshot::Sender<()>,
+    reached: tokio::sync::oneshot::Receiver<()>,
+    resume: tokio::sync::oneshot::Sender<()>,
 }
 
+#[cfg(feature = "test-seams")]
 impl BootBarrier {
     /// A barrier for [`NodeOptions::boot_barrier`] and the gate that controls it.
     pub fn new() -> (BootBarrier, BootGate) {
-        let (reached_tx, reached_rx) = oneshot::channel();
-        let (resume_tx, resume_rx) = oneshot::channel();
+        let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
         (
             BootBarrier {
                 reached: reached_tx,
@@ -200,6 +201,7 @@ impl BootBarrier {
     }
 }
 
+#[cfg(feature = "test-seams")]
 impl BootGate {
     /// Resolves once `start` is paused at the barrier (or has failed before it).
     pub async fn reached(&mut self) {
@@ -325,7 +327,9 @@ async fn boot(
     // Close to the registry's `started_at` (database clock), which `boot` cannot see.
     let started_at = Timestamp::now();
     let mode = config.effective_cluster_mode();
-    let listen = opts.listen.unwrap_or(node_mode(mode) == NodeMode::Cluster);
+    let listen = node_mode(mode) == NodeMode::Cluster;
+    #[cfg(feature = "test-seams")]
+    let listen = opts.listen.unwrap_or(listen);
     let media = Arc::new(open_media(config)?);
     media
         .check()
@@ -336,6 +340,7 @@ async fn boot(
     let events = InvalidationLoop::for_store(store.clone(), cache.clone())
         .await
         .context("cannot read the event outbox")?;
+    #[cfg(feature = "test-seams")]
     if let Some(barrier) = opts.boot_barrier {
         barrier.wait().await;
     }
@@ -513,16 +518,18 @@ async fn boot(
     // At most `media.image_workers` images decode at once on this node (M1b R4, P8),
     // with the sizes of the theme active when the job runs.
     let theme_state = state.clone();
-    let mut variants = MediaVariantsHandler::new(
+    let variants = MediaVariantsHandler::new(
         store.clone(),
         media.clone(),
         media_service.clone(),
         Arc::new(Semaphore::new(config.uploads.image_workers)),
         Arc::new(move || variant_specs(&theme_state.theme.load())),
     );
-    if let Some(processor) = opts.image_processor {
-        variants = variants.with_processor(processor);
-    }
+    #[cfg(feature = "test-seams")]
+    let variants = match opts.image_processor {
+        Some(processor) => variants.with_processor(processor),
+        None => variants,
+    };
     handlers.push(Arc::new(variants));
     handlers.extend(opts.extra_handlers);
     // What the job list's `handled` reads (P19).
@@ -578,10 +585,10 @@ async fn boot(
         background.clone(),
     );
     let flusher = failures.spawn_flusher(store.clone(), host, FLUSH_EVERY, background.clone());
-    let served_flusher = served.spawn_flusher(
-        opts.served_flush.unwrap_or(SERVED_FLUSH_EVERY),
-        background.clone(),
-    );
+    let served_flush = SERVED_FLUSH_EVERY;
+    #[cfg(feature = "test-seams")]
+    let served_flush = opts.served_flush.unwrap_or(served_flush);
+    let served_flusher = served.spawn_flusher(served_flush, background.clone());
     let hits_flusher = hits
         .clone()
         .spawn_flusher(HIT_FLUSH_EVERY, background.clone());
@@ -712,7 +719,7 @@ impl RunningNode {
 
     /// Crash simulation (test seam, ruling P25): drops every task at once; running
     /// jobs are not released and the node does not leave the registry.
-    #[doc(hidden)]
+    #[cfg(feature = "test-seams")]
     pub fn abort(self) {
         if let Some(server) = &self.server {
             server.abort();

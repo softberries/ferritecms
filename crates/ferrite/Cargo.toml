@@ -7,6 +7,11 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Test seams (10-testing §2): only the tests enable it, through the dev-dependency on
+# this crate itself; `cargo build -p ferrite --release` never does.
+test-seams = ["ferrite-http/test-seams"]
+
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
@@ -41,6 +46,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+ferrite = { path = ".", features = ["test-seams"] }
 assert_cmd = "2.2.2"
 ferrite-store-tests = { path = "../ferrite-store-tests" }
 hyper-util.workspace = true

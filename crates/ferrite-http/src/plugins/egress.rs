@@ -27,7 +27,7 @@
 //!   `User-Agent` is always `ferrite/<version> plugin/<name>`.
 //! * **TLS.** rustls with the platform verifier (P17), falling back to the compiled-in
 //!   `webpki-roots` when the OS has no CA roots (ruling R19); test roots only through
-//!   [`Egress::for_tests`].
+//!   `Egress::for_tests` (behind the dev-only `test-seams` feature).
 //!
 //! Errors reaching the guest name the class only ("address not allowed", "redirect not
 //! allowed", "timed out", "TLS error", …), never a resolved address; the details go to
@@ -182,6 +182,7 @@ enum Lookup {
     /// `getaddrinfo` returns, even when the fetch was dropped.
     System,
     /// A test resolver (its port is kept: the URL names none).
+    #[cfg(feature = "test-seams")]
     Custom(Arc<dyn Resolve>),
 }
 
@@ -215,6 +216,7 @@ impl Resolve for CheckedResolver {
                     checked(addrs, allow_ip)
                 })
             }
+            #[cfg(feature = "test-seams")]
             Lookup::Custom(inner) => {
                 let answer = inner.resolve(name);
                 Box::pin(async move {
@@ -236,10 +238,9 @@ fn checked(addrs: Vec<SocketAddr>, allow_ip: fn(IpAddr) -> bool) -> Result<Addrs
     Ok(Box::new(addrs.into_iter()))
 }
 
-/// Test seam (gated behind `test-seams` in Task 15): the resolver, the trusted roots
-/// (empty: the platform verifier with the `webpki-roots` fallback, as in production)
-/// and the address policy.
-#[doc(hidden)]
+/// Test seam: the resolver, the trusted roots (empty: the platform verifier with the
+/// `webpki-roots` fallback, as in production) and the address policy.
+#[cfg(feature = "test-seams")]
 pub struct EgressOverrides {
     pub resolver: Arc<dyn Resolve>,
     pub roots: Vec<reqwest::Certificate>,
@@ -264,6 +265,7 @@ enum Roots {
     /// these (tests only; empty in production).
     WebPki(Vec<rustls::pki_types::CertificateDer<'static>>),
     /// Exactly these (tests).
+    #[cfg(feature = "test-seams")]
     Only(Vec<reqwest::Certificate>),
 }
 
@@ -281,7 +283,9 @@ impl Egress {
         Ok(Self::from_client(version, client, is_public_ip))
     }
 
-    #[doc(hidden)]
+    /// Test seam: a client with `overrides` instead of the system resolver, the
+    /// platform roots and [`is_public_ip`].
+    #[cfg(feature = "test-seams")]
     pub fn for_tests(overrides: EgressOverrides) -> Result<Self, String> {
         let EgressOverrides {
             resolver,
@@ -311,7 +315,7 @@ impl Egress {
 
     /// Test seam: the `webpki-roots` fallback client (what a host without a CA bundle
     /// gets), trusting `extra_pem` roots as well.
-    #[doc(hidden)]
+    #[cfg(feature = "test-seams")]
     pub fn for_tests_webpki(
         resolver: Arc<dyn Resolve>,
         allow_ip: fn(IpAddr) -> bool,
@@ -548,6 +552,7 @@ fn client(
         .timeout(TIMEOUT);
     let builder = match roots {
         Roots::Platform => builder,
+        #[cfg(feature = "test-seams")]
         Roots::Only(certs) => builder.tls_certs_only(certs),
         Roots::WebPki(extra) => builder.tls_backend_preconfigured(webpki_config(extra)?),
     };
