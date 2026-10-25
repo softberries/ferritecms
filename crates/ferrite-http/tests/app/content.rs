@@ -433,6 +433,18 @@ async fn footer_filter_renders(app: App) -> App {
     for bad in ["alert(4)", "alert(5)", "onclick", "injected-footer"] {
         assert!(!r.body.contains(bad), "{bad}: {}", r.body);
     }
+    // A working footer plugin alone does not make the page volatile.
+    let page = app
+        .state
+        .cache
+        .get(&ferrite_cache::CacheKey::anon(
+            "example.com",
+            "/hello-world/",
+            "",
+        ))
+        .await
+        .expect("cached");
+    assert_eq!(page.ttl, None);
 
     // A footer plugin that answers with the wrong variant (a failure), before
     // html-inject.
@@ -451,6 +463,18 @@ async fn footer_filter_renders(app: App) -> App {
     assert!(r.body.contains("<h1>Hello World</h1>"), "{}", r.body);
     assert!(r.body.contains("<p>Injected footer</p>"), "{}", r.body);
     assert!(!r.body.contains("not a head"), "{}", r.body);
+    // The failed footer call makes the page volatile: cached with `volatile_ttl`.
+    let page = app
+        .state
+        .cache
+        .get(&ferrite_cache::CacheKey::anon(
+            "example.com",
+            "/hello-world/",
+            "",
+        ))
+        .await
+        .expect("cached");
+    assert_eq!(page.ttl, Some(app.state.config.volatile_ttl));
     app
 }
 

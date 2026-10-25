@@ -90,9 +90,6 @@ impl RedirectRepo for HookRedirects {
     async fn list_by_target(&self, target: &str) -> Result<Vec<Redirect>, StoreError> {
         self.inner.read().redirects().list_by_target(target).await
     }
-    async fn hit(&self, id: RedirectId) -> Result<(), StoreError> {
-        self.inner.read().redirects().hit(id).await
-    }
     async fn add_hits(&self, id: RedirectId, n: u32, at: Timestamp) -> Result<(), StoreError> {
         self.inner.read().redirects().add_hits(id, n, at).await
     }

@@ -31,6 +31,6 @@ pub struct Redirect {
     pub hits: i64,
     pub origin: RedirectOrigin,
     pub created_at: Timestamp,
-    /// When `RedirectRepo::hit` last ran for it; `None` if never hit.
+    /// Time of the last counted hit (`RedirectRepo::add_hits`, never moved back); `None` if never hit.
     pub last_hit_at: Option<Timestamp>,
 }

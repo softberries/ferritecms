@@ -109,11 +109,12 @@ pub trait Tx: Repos + Send {
 ///
 /// Missing-row semantics, the same in every repository and on every backend:
 /// - lookups (`get`, `get_by_*`) return `Ok(None)`;
-/// - `update`, `RedirectRepo::hit`, `PluginRepo::set_enabled` and
-///   `ThemeRepo::activate` return [`StoreError::NotFound`] (`ContentRepo::update` returns
+/// - `update`, `PluginRepo::set_enabled` and `ThemeRepo::activate` return [`StoreError::NotFound`] (`ContentRepo::update` returns
 ///   `Conflict` instead when the row exists with another version);
 /// - `delete` is idempotent: deleting a missing row is `Ok(())`. A delete blocked by
-///   dependent rows (`RESTRICT`) is [`StoreError::ForeignKey`].
+///   dependent rows (`RESTRICT`) is [`StoreError::ForeignKey`];
+/// - `RedirectRepo::add_hits` on a missing row is `Ok(())` (the redirect was deleted
+///   since the hits were counted).
 pub trait Repos: Send + Sync {
     fn content(&self) -> &dyn ContentRepo;
     fn meta(&self) -> &dyn MetaRepo;
@@ -353,8 +354,6 @@ pub trait RedirectRepo: Send + Sync {
     /// `source_path` in binary order, at most
     /// [`MAX_REDIRECTS_BY_TARGET`](crate::MAX_REDIRECTS_BY_TARGET).
     async fn list_by_target(&self, target: &str) -> Result<Vec<Redirect>, StoreError>;
-    /// Records a hit (increments the counter, sets `last_hit_at`); missing: `NotFound`.
-    async fn hit(&self, id: RedirectId) -> Result<(), StoreError>;
     /// Adds `n` (>= 1) hits seen up to `at` in one statement: `hits = hits + n`,
     /// `last_hit_at = max(last_hit_at, at)`, so a late flush never moves it back. A
     /// missing row is `Ok` (the redirect was deleted since the hits were counted);

@@ -425,7 +425,7 @@ are never cached.
 - **Shared error pages (R26):** the 404 and 410 bodies are rendered without the request path
   and cached under internal keys with their dependency keys, so random missing URLs render
   once and a menu edit still refreshes them. Nothing is cached under a missing URL's path.
-- **Short TTLs** (Task 14): search results are cached for `cache.search_ttl` (default 60 s;
+- **Short TTLs** (Task 14): search results are cached for `cache.search_ttl` (default 60 s, at most 1 h;
   `0` = search pages are not cached, each search renders), and pages whose plugin calls were
   volatile or failed, or whose theme helper reads failed, for `plugins.volatile_ttl` (default
   60 s, 1 s..=1 h; [05 §7a](05-plugin-host.md#7a-data-visibility-and-caching)); a volatile
@@ -436,8 +436,10 @@ are never cached.
   hits on further new ones are dropped and counted, hits on buffered ones always count). A
   flusher writes every 10 s, and once more when `serve` stops (after the HTTP drain, before
   the database pools close): one `RedirectRepo::add_hits` (`hits = hits + n`, `last_hit_at`
-  never moved back) per redirect. Best effort: a crash loses the buffer, a failed write its
-  redirect's batch (logged). Each cluster node keeps its own buffer.
+  never moved back) per redirect. A failed write goes back into the buffer for the next flush
+  (within the cap), and so does what a final flush cut short by the shutdown bound did not
+  write, which `serve` then logs (ids and hits). Best effort: a crash loses the buffer. Each
+  cluster node keeps its own buffer.
 - Scheduled publish (M1.5, P12): scheduling an item enqueues a `content.publish_scheduled`
   job due at `scheduled_at`; the periodic `content.publish_due` job (every 30 s, one per
   period cluster-wide) is the safety net. Their writes emit normal events.

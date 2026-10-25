@@ -389,8 +389,10 @@ pub async fn redirects_upsert_get_hit(db: &TestDb) {
         upper
     );
 
-    redirects.hit(first.id).await.unwrap();
-    redirects.hit(first.id).await.unwrap();
+    redirects
+        .add_hits(first.id, 2, Timestamp::now())
+        .await
+        .unwrap();
     assert_eq!(
         redirects.get_by_source("/old").await.unwrap().unwrap().hits,
         2
@@ -435,10 +437,6 @@ pub async fn redirects_upsert_get_hit(db: &TestDb) {
     );
     assert!(redirects.get_by_source("/fresh").await.unwrap().is_none());
 
-    assert!(matches!(
-        redirects.hit(RedirectId::new()).await,
-        Err(StoreError::NotFound)
-    ));
     assert_eq!(
         redirects.get(first.id).await.unwrap().unwrap().source_path,
         "/old"

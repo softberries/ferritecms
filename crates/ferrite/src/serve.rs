@@ -227,11 +227,13 @@ pub struct RunningNode {
     runner_stop: CancellationToken,
     runner: JoinHandle<()>,
     background: CancellationToken,
-    /// Reloader, invalidation loop, failure flusher, `request.served` flusher, scheduler,
-    /// heartbeat.
+    /// Reloader, invalidation loop, failure flusher, `request.served` flusher, redirect
+    /// hits flusher, scheduler, heartbeat.
     tasks: Vec<(&'static str, JoinHandle<()>)>,
     /// The outgoing-mail queue (`[mail]` set); its sends are cancelled at shutdown.
     mail: Option<Arc<MailQueue>>,
+    /// Redirect hits; what its final flush could not write is logged at shutdown.
+    hits: Arc<HitCounter>,
     registry: Registry,
 }
 
@@ -580,7 +582,9 @@ async fn boot(
         opts.served_flush.unwrap_or(SERVED_FLUSH_EVERY),
         background.clone(),
     );
-    let hits_flusher = hits.spawn_flusher(HIT_FLUSH_EVERY, background.clone());
+    let hits_flusher = hits
+        .clone()
+        .spawn_flusher(HIT_FLUSH_EVERY, background.clone());
     let runner_stop = CancellationToken::new();
     let runner = runner.spawn(runner_stop.clone());
     let scheduler = scheduler.spawn(background.clone());
@@ -620,6 +624,7 @@ async fn boot(
             ("heartbeat", heartbeat),
         ],
         mail,
+        hits,
         registry,
     })
 }
@@ -639,6 +644,7 @@ impl RunningNode {
             background,
             tasks,
             mail,
+            hits,
             registry,
             ..
         } = self;
@@ -681,6 +687,15 @@ impl RunningNode {
             }
         };
         tokio::join!(stop_tasks, stop_mail);
+        // A final flush cut short by the bound leaves the rest in the buffer.
+        let (ids, lost) = hits.pending();
+        if ids > 0 {
+            tracing::warn!(
+                redirects = ids,
+                hits = lost,
+                "redirect hits not written before shutdown"
+            );
+        }
         match tokio::time::timeout_at(deadline, registry.leave()).await {
             Ok(Ok(())) => tracing::info!(node = %registry.id(), "left the node registry"),
             Ok(Err(e)) => tracing::warn!(error = %e, "could not leave the node registry"),

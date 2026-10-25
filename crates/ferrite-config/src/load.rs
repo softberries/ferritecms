@@ -577,9 +577,17 @@ fn parse_cache(cx: &mut Cx, root: &mut Table) -> CacheConfig {
         .positive(&mut t, "cache", "poll_interval_ms")
         .unwrap_or(250);
     // 0: search pages are not cached (F34).
-    let search_ttl_secs = cx
-        .duration_secs(&mut t, "cache", "search_ttl", true)
-        .unwrap_or(DEFAULT_SHORT_TTL_SECS);
+    let search_ttl_secs = match cx.duration_secs(&mut t, "cache", "search_ttl", true) {
+        None => DEFAULT_SHORT_TTL_SECS,
+        Some(n) if n > MAX_SHORT_TTL_SECS => {
+            cx.push(
+                "cache.search_ttl",
+                format!("must be at most {MAX_SHORT_TTL_SECS} seconds (1h)"),
+            );
+            DEFAULT_SHORT_TTL_SECS
+        }
+        Some(n) => n,
+    };
     cx.unknown(t, "cache");
     CacheConfig {
         max_bytes,
@@ -636,10 +644,10 @@ fn parse_plugins(cx: &mut Cx, root: &mut Table) -> PluginsConfig {
     };
     let volatile_ttl_secs = match cx.duration_secs(&mut t, b, "volatile_ttl", false) {
         None => DEFAULT_SHORT_TTL_SECS,
-        Some(n) if n > MAX_VOLATILE_TTL_SECS => {
+        Some(n) if n > MAX_SHORT_TTL_SECS => {
             cx.push(
                 "plugins.volatile_ttl",
-                format!("must be at most {MAX_VOLATILE_TTL_SECS} seconds (1h)"),
+                format!("must be at most {MAX_SHORT_TTL_SECS} seconds (1h)"),
             );
             DEFAULT_SHORT_TTL_SECS
         }
@@ -661,8 +669,8 @@ fn parse_plugins(cx: &mut Cx, root: &mut Table) -> PluginsConfig {
 
 /// Default `cache.search_ttl` and `plugins.volatile_ttl` (the HTTP layer's `SHORT_TTL`).
 const DEFAULT_SHORT_TTL_SECS: u64 = 60;
-/// Largest `plugins.volatile_ttl`.
-const MAX_VOLATILE_TTL_SECS: u64 = 3600;
+/// Largest `cache.search_ttl` and `plugins.volatile_ttl` (1 h).
+const MAX_SHORT_TTL_SECS: u64 = 3600;
 
 /// Largest `plugins.render_budget_ms` (one minute: a page is not worth waiting longer).
 const MAX_RENDER_BUDGET_MS: u64 = 60_000;
@@ -944,7 +952,9 @@ pub fn render_default_toml(
     out.push_str(
         "[cache]\nmax_bytes = \"256MB\"\nlogged_in = \"bypass\"\npoll_interval_ms = 250\n",
     );
-    out.push_str("# Cache lifetime of search result pages; 0 = search pages are not cached.\n");
+    out.push_str(
+        "# Cache lifetime of search result pages (0..=1h); 0 = search pages are not cached.\n",
+    );
     out.push_str("search_ttl = \"60s\"\n\n");
     out.push_str("[auth]\n");
     out.push_str("# Site key (64 hex characters) that seals stored secrets. Unset, a solo site\n");

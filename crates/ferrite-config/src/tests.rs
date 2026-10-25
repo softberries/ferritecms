@@ -977,7 +977,7 @@ fn media_upload_rules() {
     }
 }
 
-/// `cache.search_ttl` (default 60 s, `0` = search pages are not cached) and
+/// `cache.search_ttl` (default 60 s, 0..=1 h, `0` = search pages are not cached) and
 /// `plugins.volatile_ttl` (default 60 s, 1 s..=1 h); both durations.
 #[test]
 fn ttl_rules() {
@@ -1002,8 +1002,8 @@ fn ttl_rules() {
         300
     );
     assert_eq!(
-        ok("[cache]\nsearch_ttl = 7200\n").cache.search_ttl_secs,
-        7200
+        ok("[cache]\nsearch_ttl = \"1h\"\n").cache.search_ttl_secs,
+        3600
     );
     assert_eq!(
         ok("[plugins]\nvolatile_ttl = 1\n")
@@ -1051,6 +1051,18 @@ fn ttl_rules() {
         let (path, _) = problem(&format!("[plugins]\nvolatile_ttl = {bad}\n"));
         assert_eq!(path, "plugins.volatile_ttl", "{bad}");
     }
+    // Review round 1: search_ttl is capped at 1 h like volatile_ttl.
+    assert_eq!(
+        problem("[cache]\nsearch_ttl = 3601\n"),
+        (
+            "cache.search_ttl".into(),
+            "must be at most 3600 seconds (1h)".into()
+        )
+    );
+    assert_eq!(
+        problem("[cache]\nsearch_ttl = \"2h\"\n").0,
+        "cache.search_ttl"
+    );
     assert_eq!(
         problem("[plugins]\nvolatile_ttl = 3601\n"),
         (

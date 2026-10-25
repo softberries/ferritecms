@@ -766,10 +766,12 @@ pub async fn redirect_resolve(db: &TestDb) {
         (r.id, "/newer", 308)
     );
 
-    // hit: counted; a missing id is swallowed.
-    svc.hit(r.id).await;
-    svc.hit(r.id).await;
-    svc.hit(ferrite_domain::RedirectId::new()).await;
+    // add_hits: counted; a missing id is Ok.
+    let now = ferrite_domain::Timestamp::now();
+    svc.add_hits(r.id, 2, now).await.unwrap();
+    svc.add_hits(ferrite_domain::RedirectId::new(), 1, now)
+        .await
+        .unwrap();
     let stored = svc.resolve("/old").await.unwrap().unwrap();
     assert_eq!(stored.hits, 2);
     assert!(stored.last_hit_at.is_some());

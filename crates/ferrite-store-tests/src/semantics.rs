@@ -76,7 +76,6 @@ pub async fn missing_rows_update_not_found_delete_ok(db: &TestDb) {
         "plugins.set_enabled",
     );
     assert_not_found(r.themes().activate("missing").await, "themes.activate");
-    assert_not_found(r.redirects().hit(RedirectId::new()).await, "redirects.hit");
 
     r.content().delete(ContentId::new()).await.unwrap();
     r.meta().delete(ContentId::new(), "k").await.unwrap();
@@ -127,10 +126,13 @@ pub async fn redirects_upsert_returns_stored_and_hit_time(db: &TestDb) {
     assert_eq!(stored, first);
 
     let before = Timestamp::now();
-    redirects.hit(first.id).await.unwrap();
+    redirects
+        .add_hits(first.id, 1, Timestamp::now())
+        .await
+        .unwrap();
     let got = redirects.get_by_source("/a").await.unwrap().unwrap();
     assert_eq!(got.hits, 1);
-    let hit_at = got.last_hit_at.expect("last_hit_at set by hit");
+    let hit_at = got.last_hit_at.expect("last_hit_at set by add_hits");
     assert!(hit_at >= before, "{hit_at:?} < {before:?}");
 
     let replacement = Redirect {

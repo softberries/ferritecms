@@ -280,7 +280,7 @@ mode       = "auto"                    # "solo" | "cluster" | "auto"
 max_bytes  = "256MB"                   # 0 allowed
 logged_in  = "bypass"                  # "bypass" | "per-user"
 poll_interval_ms = 250                 # > 0; how often the invalidation loop reads the outbox
-search_ttl = "60s"                     # M2a-2b: TTL of search result pages; 0 = not cached
+search_ttl = "60s"                     # M2a-2b: TTL of search result pages, 0 ..= 1h; 0 = not cached
 
 [auth]
 # secret_key = "<64 hex characters>"   # the site key (32 bytes); or secret_key_file
@@ -336,7 +336,7 @@ whose plugin calls were volatile or failed stays cached (05 §7a): a duration (i
 seconds or `"90s"`/`"10m"`/`"1h"`) from 1 s to 1 h, default 60 s.
 
 **Cache** (`[cache]`): `search_ttl` (M2a-2b Task 14) is how long search result pages stay
-cached, a duration with `0` allowed (search pages are then never cached), default 60 s
+cached, a duration from 0 to 1 h (`0`: search pages are never cached), default 60 s
 (06 §6).
 
 `media.root` / `media.local_shared` are rejected with `backend = "s3"`, and `media.s3` with

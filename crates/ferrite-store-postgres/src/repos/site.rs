@@ -211,19 +211,6 @@ impl RedirectRepo for PgRepos {
         Ok(Page { items, next_cursor })
     }
 
-    async fn hit(&self, id: RedirectId) -> Result<(), StoreError> {
-        let done = run!(&self.exec, |e| sqlx::query(
-            "UPDATE redirects SET hits = hits + 1, last_hit_at = $1 WHERE id = $2"
-        )
-        .bind(DateTime::<Utc>::from(Timestamp::now()))
-        .bind(id.as_uuid())
-        .execute(e))?;
-        if done.rows_affected() == 0 {
-            return Err(StoreError::NotFound);
-        }
-        Ok(())
-    }
-
     async fn add_hits(&self, id: RedirectId, n: u32, at: Timestamp) -> Result<(), StoreError> {
         if n == 0 {
             return Err(StoreError::Invalid(
