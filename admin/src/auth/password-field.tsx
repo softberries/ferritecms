@@ -86,6 +86,8 @@ export function PasswordField({
           )}
         </button>
       </div>
+      {/* The error sits right under its input, above the length hint and policy. */}
+      <FieldMessage id={id} error={error} />
       {policy ? (
         <div id={`${id}-policy`} className="flex flex-col gap-1.5">
           <LengthMeter count={count} />
@@ -98,7 +100,6 @@ export function PasswordField({
           <p className="text-xs text-muted-foreground">{t("policy.text")}</p>
         </div>
       ) : null}
-      <FieldMessage id={id} error={error} />
     </div>
   );
 }

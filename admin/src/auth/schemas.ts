@@ -23,6 +23,9 @@ const newPassword = z
   .refine((v) => charCount(v) >= MIN_PASSWORD_CHARS, message("policy.tooShort"))
   .refine((v) => byteLength(v) <= MAX_PASSWORD_BYTES, message("policy.tooLong"));
 
+// The login field is sent trimmed but not lowercased: the server trims and
+// ASCII-lowercases logins (`normalize_login`) and matches e-mails case-insensitively
+// (`email_key`), and its rate-limit buckets normalise the same way (07 §2).
 export const loginSchema = z.object({
   login: z.string().trim().min(1, message("login.required")),
   password: z.string().min(1, message("login.passwordRequired")),

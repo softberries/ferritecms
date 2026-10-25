@@ -158,17 +158,21 @@ describe("login_maps_problems", () => {
     expect(getCsrfToken()).toBe("csrf-1");
   });
 
-  it("an open-redirect next lands on the dashboard", async () => {
-    const user = userEvent.setup();
-    stubApi([() => json({ status: "session", user: ME, csrf_token: "csrf-1" })]);
-    const { router } = renderAt("/admin/login?next=%2F%2Fevil.example");
-    await user.type(await screen.findByLabelText("Login or e-mail"), "alice");
-    await user.type(screen.getByLabelText("Password"), "correct-horse-battery");
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
-    await waitFor(() => {
-      expect(router.state.location.pathname).toBe("/");
-    });
-  });
+  it.each(["%2F%2Fevil.example", "%2Fadmin%2F%2Fevil.example", "/admin//evil.example"])(
+    "an open-redirect next (%s) lands on the dashboard",
+    async (next) => {
+      const user = userEvent.setup();
+      stubApi([() => json({ status: "session", user: ME, csrf_token: "csrf-1" })]);
+      const { router } = renderAt(`/admin/login?next=${next}`);
+      await user.type(await screen.findByLabelText("Login or e-mail"), "alice");
+      await user.type(screen.getByLabelText("Password"), "correct-horse-battery");
+      await user.click(screen.getByRole("button", { name: "Sign in" }));
+      await waitFor(() => {
+        expect(router.state.location.pathname).toBe("/");
+      });
+      expect(router.state.location.href).toBe("/");
+    },
+  );
 });
 
 describe("ensure_session_guard", () => {

@@ -155,7 +155,7 @@ test("login_password_and_logout", async ({ browser, site, guard }) => {
   expect(me.status()).toBe(401);
 });
 
-test("login_with_totp", async ({ browser, site, guard }) => {
+test("login_with_totp", async ({ browser, site, guard }, testInfo) => {
   test.setTimeout(120_000);
   const a = account("totp");
   const page = await anonymousPage(browser, site, guard, 2);
@@ -168,8 +168,10 @@ test("login_with_totp", async ({ browser, site, guard }) => {
   await expect(input).toHaveAttribute("autocomplete", "one-time-code");
   await expect(input).toBeFocused();
 
-  // A step is accepted once and setup's confirm used one: wait for a newer step.
-  const step = await nextFreshStep(site.totp.step);
+  // A step is accepted once and setup's confirm used one: wait for a newer step. A retry
+  // may follow an attempt that spent the current step, so it waits for the next one.
+  const spent = testInfo.retry > 0 ? Math.max(site.totp.step, stepAt()) : site.totp.step;
+  const step = await nextFreshStep(spent);
   // Six digits submit on their own.
   await input.fill(totpCode(site.totp.secret, step));
   await expectDashboard(page, site);
@@ -218,12 +220,20 @@ test("must_reset_session_is_confined", async ({
 
 test("next_is_not_an_open_redirect", async ({ browser, site, guard }) => {
   const a = account("contributor");
-  const page = await anonymousPage(browser, site, guard, 4);
-  await page.goto("/admin/login?next=//evil.example");
-  await signIn(page, a.login, a.password ?? "");
-  await expectDashboard(page, site);
+  // A protocol-relative next, and one hiding an empty segment under /admin/.
+  for (const [n, next] of [
+    [4, "//evil.example"],
+    [10, "/admin//evil.example"],
+  ] as const) {
+    const page = await anonymousPage(browser, site, guard, n);
+    await page.goto(`/admin/login?next=${next}`);
+    await signIn(page, a.login, a.password ?? "");
+    await expectDashboard(page, site);
+  }
 });
 
+// The two reset tests below share `resetuser`: they rely on running one after the other
+// in one worker (a file's tests do; `--repeat-each` across workers makes them race).
 test("forgot_and_reset_flow", async ({ browser, site, guard, snap, expectAccessible }) => {
   test.setTimeout(120_000);
   guard.allow(EXPECTED_FAILURES);

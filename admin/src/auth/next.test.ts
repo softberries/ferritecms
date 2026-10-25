@@ -34,6 +34,13 @@ describe("safe_next_table", () => {
     "/admin/login",
     "/admin/login?next=/admin/",
     "/admin/login/totp",
+    "/admin/LOGIN",
+    "/admin/Login/totp",
+    "/admin//evil.com",
+    "/admin//evil.example",
+    "/admin/x//y",
+    "/admin/%2f%2fevil.com",
+    "/admin/x/%2F/y",
     "/admin/%zz",
     "admin/",
     "",
@@ -55,5 +62,16 @@ describe("safe_next_table", () => {
   it("maps to a router href under the basepath", () => {
     expect(routerHref("/admin/")).toBe("/");
     expect(routerHref("/admin/content/post?status=draft")).toBe("/content/post?status=draft");
+  });
+
+  it("never yields a protocol-relative router href", () => {
+    for (const raw of ["/admin//evil.com", "//evil.com", "/admin/\\evil", "https://evil", ""]) {
+      const href = routerHref(raw);
+      expect(href.startsWith("/") && !href.startsWith("//") && !href.includes("\\")).toBe(true);
+    }
+    // Every value safeNext lets through maps to a single-slash path.
+    for (const raw of ["/admin//evil.com", "/admin/x//y", "/admin/%2f%2fevil.com"]) {
+      expect(routerHref(safeNext(raw))).toMatch(/^\/(?!\/)/);
+    }
   });
 });

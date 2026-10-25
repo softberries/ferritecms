@@ -48,6 +48,9 @@ export function safeNext(raw: string | null | undefined): string {
     return DEFAULT_NEXT;
   }
   const path = decoded.split(/[?#]/, 1)[0] ?? "";
+  // No empty segment anywhere (`/admin//evil.com` would become the router href
+  // `//evil.com`), and no dot segments.
+  if (path.includes("//")) return DEFAULT_NEXT;
   if (path.split("/").some((segment) => segment === ".." || segment === ".")) return DEFAULT_NEXT;
 
   const origin = globalThis.location.origin;
@@ -59,13 +62,21 @@ export function safeNext(raw: string | null | undefined): string {
   }
   if (url.origin !== origin) return DEFAULT_NEXT;
   if (!url.pathname.startsWith(ADMIN)) return DEFAULT_NEXT;
-  if (url.pathname === LOGIN || url.pathname.startsWith(`${LOGIN}/`)) return DEFAULT_NEXT;
+  // The router matches paths case-insensitively, so the login page in any case.
+  const lower = url.pathname.toLowerCase();
+  if (lower === LOGIN || lower.startsWith(`${LOGIN}/`)) return DEFAULT_NEXT;
   return raw;
 }
 
-/** `next` as a router `href` (the router's paths are relative to the `/admin` basepath). */
+/**
+ * `next` (from `safeNext`) as a router `href`; the router's paths are relative to the
+ * `/admin` basepath. Defence in depth: anything that would not be a single-slash path
+ * (a protocol-relative `//host` or a backslash) becomes `/`.
+ */
 export function routerHref(next: string): string {
-  return next.slice(ADMIN.length - 1);
+  const href = next.startsWith(ADMIN) ? next.slice(ADMIN.length - 1) : "/";
+  if (!href.startsWith("/") || href.startsWith("//") || href.includes("\\")) return "/";
+  return href;
 }
 
 /** The `?next=` search of the sign-in routes. */
