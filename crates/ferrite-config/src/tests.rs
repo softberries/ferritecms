@@ -60,6 +60,8 @@ fn defaults_minimal() {
     assert_eq!(c.plugins.action_deadline_ms, 5000);
     assert_eq!(c.plugins.disable_after_failures, 20);
     assert_eq!(c.plugins.failure_window_secs, 600);
+    assert_eq!(c.cache.search_ttl_secs, 60);
+    assert_eq!(c.plugins.volatile_ttl_secs, 60);
     assert_eq!(
         c.database_kind(),
         DbKind::Sqlite {
@@ -973,4 +975,91 @@ fn media_upload_rules() {
             "{bad}"
         );
     }
+}
+
+/// `cache.search_ttl` (default 60 s, `0` = search pages are not cached) and
+/// `plugins.volatile_ttl` (default 60 s, 1 s..=1 h); both durations.
+#[test]
+fn ttl_rules() {
+    let (_d, r) = run(Some(MIN), &[]);
+    let c = r.unwrap();
+    assert_eq!(
+        (c.cache.search_ttl_secs, c.plugins.volatile_ttl_secs),
+        (60, 60)
+    );
+
+    let ok = |toml: &str| {
+        let (_d, r) = run(Some(&format!("{MIN}{toml}")), &[]);
+        r.unwrap_or_else(|e| panic!("{toml}: {e}"))
+    };
+    assert_eq!(ok("[cache]\nsearch_ttl = 0\n").cache.search_ttl_secs, 0);
+    assert_eq!(
+        ok("[cache]\nsearch_ttl = \"0s\"\n").cache.search_ttl_secs,
+        0
+    );
+    assert_eq!(
+        ok("[cache]\nsearch_ttl = \"5m\"\n").cache.search_ttl_secs,
+        300
+    );
+    assert_eq!(
+        ok("[cache]\nsearch_ttl = 7200\n").cache.search_ttl_secs,
+        7200
+    );
+    assert_eq!(
+        ok("[plugins]\nvolatile_ttl = 1\n")
+            .plugins
+            .volatile_ttl_secs,
+        1
+    );
+    assert_eq!(
+        ok("[plugins]\nvolatile_ttl = \"1h\"\n")
+            .plugins
+            .volatile_ttl_secs,
+        3600
+    );
+    assert_eq!(
+        ok("[plugins]\nvolatile_ttl = \"90s\"\n")
+            .plugins
+            .volatile_ttl_secs,
+        90
+    );
+
+    let (_d, r) = run(
+        Some(MIN),
+        &[
+            ("FERRITE_CACHE__SEARCH_TTL", "0"),
+            ("FERRITE_PLUGINS__VOLATILE_TTL", "\"2m\""),
+        ],
+    );
+    let c = r.unwrap();
+    assert_eq!(
+        (c.cache.search_ttl_secs, c.plugins.volatile_ttl_secs),
+        (0, 120)
+    );
+
+    let problem = |toml: &str| {
+        let (_d, r) = run(Some(&format!("{MIN}{toml}")), &[]);
+        let e = r.unwrap_err();
+        assert_eq!(e.problems.len(), 1, "{toml}: {e}");
+        (e.problems[0].path.clone(), e.problems[0].message.clone())
+    };
+    for bad in ["-1", "\"soon\"", "1.5", "\"-5s\""] {
+        let (path, _) = problem(&format!("[cache]\nsearch_ttl = {bad}\n"));
+        assert_eq!(path, "cache.search_ttl", "{bad}");
+    }
+    for bad in ["0", "\"0s\"", "-1", "\"x\""] {
+        let (path, _) = problem(&format!("[plugins]\nvolatile_ttl = {bad}\n"));
+        assert_eq!(path, "plugins.volatile_ttl", "{bad}");
+    }
+    assert_eq!(
+        problem("[plugins]\nvolatile_ttl = 3601\n"),
+        (
+            "plugins.volatile_ttl".into(),
+            "must be at most 3600 seconds (1h)".into()
+        )
+    );
+    assert_eq!(
+        problem("[plugins]\nvolatile_ttl = \"2h\"\n").0,
+        "plugins.volatile_ttl"
+    );
 }

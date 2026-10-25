@@ -355,6 +355,11 @@ pub trait RedirectRepo: Send + Sync {
     async fn list_by_target(&self, target: &str) -> Result<Vec<Redirect>, StoreError>;
     /// Records a hit (increments the counter, sets `last_hit_at`); missing: `NotFound`.
     async fn hit(&self, id: RedirectId) -> Result<(), StoreError>;
+    /// Adds `n` (>= 1) hits seen up to `at` in one statement: `hits = hits + n`,
+    /// `last_hit_at = max(last_hit_at, at)`, so a late flush never moves it back. A
+    /// missing row is `Ok` (the redirect was deleted since the hits were counted);
+    /// `n = 0` is `Invalid`.
+    async fn add_hits(&self, id: RedirectId, n: u32, at: Timestamp) -> Result<(), StoreError>;
 }
 
 #[async_trait]

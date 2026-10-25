@@ -69,11 +69,20 @@ impl RedirectService {
         lookup(self.store.read(), path).await
     }
 
-    /// Records a hit. Best effort: failures are logged and swallowed.
+    /// Records one hit now ([`add_hits`](Self::add_hits) with `n = 1`). Best effort:
+    /// failures are logged and swallowed.
     pub async fn hit(&self, id: RedirectId) {
-        if let Err(e) = self.store.read().redirects().hit(id).await {
+        if let Err(e) = self.add_hits(id, 1, Timestamp::now()).await {
             tracing::warn!(redirect = %id, error = %e, "redirect hit not recorded");
         }
+    }
+
+    /// Adds `n` (>= 1) hits, the last one at `at`, in one statement
+    /// ([`RedirectRepo::add_hits`](ferrite_store::RedirectRepo::add_hits): `last_hit_at`
+    /// never moves back; a deleted redirect is `Ok`). No capability check: hits come
+    /// from the public site, not from an actor.
+    pub async fn add_hits(&self, id: RedirectId, n: u32, at: Timestamp) -> Result<(), CoreError> {
+        Ok(self.store.read().redirects().add_hits(id, n, at).await?)
     }
 
     /// Lists redirects with cursor pagination.

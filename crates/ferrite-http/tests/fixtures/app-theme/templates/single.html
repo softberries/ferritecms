@@ -6,5 +6,6 @@
 {% if request.preview %}<p class="preview-notice">Preview</p>{% endif %}
 <article><h1>{{ post.title }}</h1>{{ post.body }}<p class="excerpt">{{ post.excerpt }}</p></article>
 <aside>{% for r in related(post, 3) %}<a class="related" href="{{ r.url }}">{{ r.title }}</a>{% endfor %}</aside>
+{{ footer() }}
 </body>
 </html>

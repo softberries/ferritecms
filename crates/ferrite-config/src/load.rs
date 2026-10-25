@@ -393,7 +393,7 @@ fn parse_uploads(cx: &mut Cx, t: &mut Table) -> UploadConfig {
         }
     };
     let idle_timeout_secs = cx
-        .duration_secs(t, "media", "upload_idle_timeout")
+        .duration_secs(t, "media", "upload_idle_timeout", false)
         .unwrap_or(defaults.idle_timeout_secs);
     UploadConfig {
         max_upload,
@@ -576,11 +576,16 @@ fn parse_cache(cx: &mut Cx, root: &mut Table) -> CacheConfig {
     let poll_interval_ms = cx
         .positive(&mut t, "cache", "poll_interval_ms")
         .unwrap_or(250);
+    // 0: search pages are not cached (F34).
+    let search_ttl_secs = cx
+        .duration_secs(&mut t, "cache", "search_ttl", true)
+        .unwrap_or(DEFAULT_SHORT_TTL_SECS);
     cx.unknown(t, "cache");
     CacheConfig {
         max_bytes,
         logged_in,
         poll_interval_ms,
+        search_ttl_secs,
     }
 }
 
@@ -596,7 +601,9 @@ fn parse_plugins(cx: &mut Cx, root: &mut Table) -> PluginsConfig {
     let disable_after_failures = cx
         .positive_u32(&mut t, b, "disable_after_failures")
         .unwrap_or(20);
-    let failure_window_secs = cx.duration_secs(&mut t, b, "failure_window").unwrap_or(600);
+    let failure_window_secs = cx
+        .duration_secs(&mut t, b, "failure_window", false)
+        .unwrap_or(600);
     let max_concurrent_calls = cx
         .positive(&mut t, b, "max_concurrent_calls")
         .and_then(|n| match usize::try_from(n) {
@@ -627,6 +634,17 @@ fn parse_plugins(cx: &mut Cx, root: &mut Table) -> PluginsConfig {
         }
         Some(n) => n,
     };
+    let volatile_ttl_secs = match cx.duration_secs(&mut t, b, "volatile_ttl", false) {
+        None => DEFAULT_SHORT_TTL_SECS,
+        Some(n) if n > MAX_VOLATILE_TTL_SECS => {
+            cx.push(
+                "plugins.volatile_ttl",
+                format!("must be at most {MAX_VOLATILE_TTL_SECS} seconds (1h)"),
+            );
+            DEFAULT_SHORT_TTL_SECS
+        }
+        Some(n) => n,
+    };
     cx.unknown(t, b);
     PluginsConfig {
         default_memory,
@@ -637,8 +655,14 @@ fn parse_plugins(cx: &mut Cx, root: &mut Table) -> PluginsConfig {
         failure_window_secs,
         max_concurrent_calls,
         render_budget_ms,
+        volatile_ttl_secs,
     }
 }
+
+/// Default `cache.search_ttl` and `plugins.volatile_ttl` (the HTTP layer's `SHORT_TTL`).
+const DEFAULT_SHORT_TTL_SECS: u64 = 60;
+/// Largest `plugins.volatile_ttl`.
+const MAX_VOLATILE_TTL_SECS: u64 = 3600;
 
 /// Largest `plugins.render_budget_ms` (one minute: a page is not worth waiting longer).
 const MAX_RENDER_BUDGET_MS: u64 = 60_000;
@@ -918,8 +942,10 @@ pub fn render_default_toml(
     out.push_str("# Concurrent background jobs per node (1..=256); default max(2, CPU count).\n");
     out.push_str("# workers = 4\n\n");
     out.push_str(
-        "[cache]\nmax_bytes = \"256MB\"\nlogged_in = \"bypass\"\npoll_interval_ms = 250\n\n",
+        "[cache]\nmax_bytes = \"256MB\"\nlogged_in = \"bypass\"\npoll_interval_ms = 250\n",
     );
+    out.push_str("# Cache lifetime of search result pages; 0 = search pages are not cached.\n");
+    out.push_str("search_ttl = \"60s\"\n\n");
     out.push_str("[auth]\n");
     out.push_str("# Site key (64 hex characters) that seals stored secrets. Unset, a solo site\n");
     out.push_str(
@@ -932,6 +958,10 @@ pub fn render_default_toml(
     );
     out.push_str("# All plugin filters of one page together; past it the rest are skipped.\n");
     out.push_str("render_budget_ms = 1000\n");
+    out.push_str(
+        "# Cache lifetime of pages whose plugin calls were volatile or failed (1s..=1h).\n",
+    );
+    out.push_str("volatile_ttl = \"60s\"\n");
     out.push_str(
         "# Plugin calls at once per node (filters, actions, routes); default\n# max(8, 4 x CPU count). Plugin action jobs use at most cluster.workers - 1 of them.\n",
     );

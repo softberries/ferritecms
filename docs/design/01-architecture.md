@@ -115,6 +115,7 @@ One `ferrite serve` process contains (as built after M2a-2a; planned parts marke
 | Plugin host | Load components, run filters/actions/routes under limits, a per-node call cap and a per-render budget | ferrite-plugin-host |
 | Mail | `MailQueue` (16 sends in flight, 10 s each) over the SMTP mailer when `[mail]` is set: password reset and plugin `notify-admins` | ferrite-core + ferrite-http |
 | Served buffer | `request.served` events buffered per node, flushed as `plugin.action` jobs every 10 s or 1 000 events (05 §4a) | ferrite-http |
+| Redirect hits | Redirect hits counted per node (at most 10 000 redirects buffered), one `add_hits` write per redirect every 10 s and on stop (06 §6) | ferrite-http |
 | Theme engine | Resolve template, render with MiniJinja | ferrite-theme |
 | Page cache | URL → rendered response, dependency-based invalidation | ferrite-cache |
 | Invalidation loop | Polls the `events` outbox every `cache.poll_interval_ms` (default 250; woken by `LISTEN` in cluster mode) and applies events to the page cache; its hook drives the hot swap | ferrite-cache |
@@ -279,6 +280,7 @@ mode       = "auto"                    # "solo" | "cluster" | "auto"
 max_bytes  = "256MB"                   # 0 allowed
 logged_in  = "bypass"                  # "bypass" | "per-user"
 poll_interval_ms = 250                 # > 0; how often the invalidation loop reads the outbox
+search_ttl = "60s"                     # M2a-2b: TTL of search result pages; 0 = not cached
 
 [auth]
 # secret_key = "<64 hex characters>"   # the site key (32 bytes); or secret_key_file
@@ -295,6 +297,8 @@ failure_window = "10m"
                                        #   unset: max(8, 4 × available parallelism)
 render_budget_ms = 1_000               # M2a-2a: all plugin filters of one page together;
                                        #   render_deadline_ms ..= 60_000
+volatile_ttl = "60s"                   # M2a-2b: TTL of pages with volatile or failed plugin
+                                       #   calls; 1s ..= 1h
 
 [mail]                                 # optional; unset: no outgoing mail
 # smtp_url = "smtps://user:pass@mail.example.com"   # or smtp_url_file; a secret
@@ -327,7 +331,13 @@ manifest may lower; above them it needs the admin's approval, up to 256 MiB and 
 route calls running at once on a node; a call that gets no permit within its deadline is
 skipped, never counted as a failure. `render_budget_ms` (P22) is the time all plugin
 filters of one page share, from the render slot on; it must lie between
-`render_deadline_ms` and 60 000 (05 §6).
+`render_deadline_ms` and 60 000 (05 §6). `volatile_ttl` (M2a-2b Task 14) is how long a page
+whose plugin calls were volatile or failed stays cached (05 §7a): a duration (integer
+seconds or `"90s"`/`"10m"`/`"1h"`) from 1 s to 1 h, default 60 s.
+
+**Cache** (`[cache]`): `search_ttl` (M2a-2b Task 14) is how long search result pages stay
+cached, a duration with `0` allowed (search pages are then never cached), default 60 s
+(06 §6).
 
 `media.root` / `media.local_shared` are rejected with `backend = "s3"`, and `media.s3` with
 `backend = "local"`.

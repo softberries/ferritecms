@@ -36,6 +36,22 @@ fn head_is_unescaped_asset_is_hashed() {
     assert!(out.deps.contains("theme"));
 }
 
+/// `footer()` returns the plugin footer HTML unescaped; empty by default.
+#[test]
+fn footer_is_unescaped() {
+    let t = theme(&[("templates/t.html", "[{{ footer() }}]")]);
+    let mut c = ctx();
+    c.footer_html = "<p class=\"f\">Hi</p>".into();
+    let out = Renderer::new()
+        .render(&t, "t.html", c, Arc::new(ferrite_theme::NoBridge))
+        .unwrap();
+    assert_eq!(out.html, "[<p class=\"f\">Hi</p>]");
+    let out = Renderer::new()
+        .render(&t, "t.html", ctx(), Arc::new(ferrite_theme::NoBridge))
+        .unwrap();
+    assert_eq!(out.html, "[]");
+}
+
 #[test]
 fn filters_in_templates() {
     let mut c = ctx();

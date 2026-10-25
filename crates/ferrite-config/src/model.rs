@@ -130,6 +130,9 @@ pub struct CacheConfig {
     pub logged_in: LoggedInCache,
     /// How often the invalidation loop polls the event outbox (milliseconds, >= 1).
     pub poll_interval_ms: u64,
+    /// Cache TTL of search result pages in seconds (`cache.search_ttl`, default 60);
+    /// `0` means search pages are not cached.
+    pub search_ttl_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +149,9 @@ pub struct PluginsConfig {
     /// Time all plugin filters of one page may take together, from the render slot on
     /// (`plugins.render_budget_ms`, P22): default 1 000, > 0.
     pub render_budget_ms: u64,
+    /// Cache TTL in seconds of pages whose plugin calls were volatile or failed
+    /// (`plugins.volatile_ttl`, 05 §7a): default 60, 1..=3 600.
+    pub volatile_ttl_secs: u64,
 }
 
 /// `[auth]` (P4). `secret_key` is the site key as 64 hex characters; `None` means solo

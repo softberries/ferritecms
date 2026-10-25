@@ -20,12 +20,14 @@ use ferrite_store::{Store, StoreError};
 use ferrite_theme::{Renderer, SiteInfo, Theme};
 use tokio::sync::Semaphore;
 
+use super::hits::HitCounter;
 use crate::plugins::ServedBuffer;
 use crate::route::{RouteTable, TypeInfo};
 
 /// Content type that is never routed (media items are only shown inside other items).
 const MEDIA_KIND: &str = "media";
-/// TTL of pages marked volatile by plugins (05 §7a) and of search results (06 §6).
+/// Default TTL of pages marked volatile by plugins (05 §7a, `plugins.volatile_ttl`)
+/// and of search results (06 §6, `cache.search_ttl`).
 pub const SHORT_TTL: Duration = Duration::from_secs(60);
 /// How long a render waits for a free render slot before the request gets a 503.
 pub const RENDER_WAIT: Duration = Duration::from_secs(5);
@@ -69,9 +71,10 @@ pub struct HttpConfig {
     pub site_description: String,
     pub locale: String,
     /// Cache TTL of pages whose plugin calls were volatile or failed, or whose theme
-    /// helper reads failed.
+    /// helper reads failed (`plugins.volatile_ttl`, 1 s..=1 h). Default [`SHORT_TTL`].
     pub volatile_ttl: Duration,
-    /// Cache TTL of search results.
+    /// Cache TTL of search results (`cache.search_ttl`); zero: search pages are not
+    /// cached. Default [`SHORT_TTL`].
     pub search_ttl: Duration,
     /// Host (and port) of `site_url`: the host of every cache key (ruling R25; the
     /// `Host` header is not used, so clients cannot multiply cache entries).
@@ -181,6 +184,9 @@ pub struct AppState {
     /// Where page responses are recorded as `request.served` events (P21); `None`
     /// (no [`with_served`](Self::with_served)): nothing is recorded.
     pub(crate) served: Option<Arc<ServedBuffer>>,
+    /// Counts redirect hits (bounded, flushed by `serve`); `None` (no
+    /// [`with_hits`](Self::with_hits)): hits are not counted.
+    pub(crate) hits: Option<Arc<HitCounter>>,
     /// Takes theme-form comments (`POST /_comment`, P12); `None` (no
     /// [`with_comments`](Self::with_comments)): the form answers `503`.
     pub(crate) comments: Option<Arc<CommentService>>,
@@ -193,6 +199,7 @@ impl AppState {
             redirects: Arc::new(RedirectService::new(parts.store.clone())),
             auth: None,
             served: None,
+            hits: None,
             comments: None,
             renderer: Renderer::new(),
             render_slots: Arc::new(Semaphore::new(
@@ -230,6 +237,13 @@ impl AppState {
     /// Every public page response is recorded into `served` (`request.served`, P21).
     pub fn with_served(mut self, served: Arc<ServedBuffer>) -> Self {
         self.served = Some(served);
+        self
+    }
+
+    /// Every redirect answered from a redirect row is counted into `hits` (the node's
+    /// one counter; `serve` runs its flusher).
+    pub fn with_hits(mut self, hits: Arc<HitCounter>) -> Self {
+        self.hits = Some(hits);
         self
     }
 

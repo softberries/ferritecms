@@ -330,6 +330,47 @@ fn redirect(source: &str, target: &str, code: u16) -> Redirect {
     }
 }
 
+/// `add_hits` adds `n` in one statement and `last_hit_at` never moves back; a missing
+/// row is `Ok`, `n = 0` is `Invalid` and changes nothing.
+pub async fn redirect_add_hits(db: &TestDb) {
+    let redirects = db.store().read().redirects();
+    let r = redirect("/counted", "/target", 301);
+    redirects.upsert(&r).await.unwrap();
+    let t0 = Timestamp::from_micros(1_700_000_000_000_000).unwrap();
+    let later = Timestamp::from_micros(t0.as_micros() + 5_000_000).unwrap();
+
+    redirects.add_hits(r.id, 50, t0).await.unwrap();
+    let got = redirects.get(r.id).await.unwrap().unwrap();
+    assert_eq!((got.hits, got.last_hit_at), (50, Some(t0)));
+
+    redirects.add_hits(r.id, 3, later).await.unwrap();
+    let got = redirects.get(r.id).await.unwrap().unwrap();
+    assert_eq!((got.hits, got.last_hit_at), (53, Some(later)));
+
+    // An older batch (a late flush) adds its hits but keeps the newer time.
+    redirects.add_hits(r.id, 1, t0).await.unwrap();
+    let got = redirects.get(r.id).await.unwrap().unwrap();
+    assert_eq!((got.hits, got.last_hit_at), (54, Some(later)));
+
+    // The largest batch fits.
+    redirects.add_hits(r.id, u32::MAX, later).await.unwrap();
+    let got = redirects.get(r.id).await.unwrap().unwrap();
+    assert_eq!(got.hits, 54 + i64::from(u32::MAX));
+
+    assert!(matches!(
+        redirects.add_hits(r.id, 0, later).await,
+        Err(StoreError::Invalid(_))
+    ));
+    assert_eq!(
+        redirects.get(r.id).await.unwrap().unwrap().hits,
+        54 + i64::from(u32::MAX)
+    );
+    redirects
+        .add_hits(RedirectId::new(), 2, later)
+        .await
+        .expect("missing row is Ok");
+}
+
 pub async fn redirects_upsert_get_hit(db: &TestDb) {
     let redirects = db.store().read().redirects();
     let first = redirect("/old", "/new", 301);

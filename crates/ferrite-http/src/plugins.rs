@@ -10,7 +10,7 @@
 //!   (P20).
 //! * [`StoreHostServices`]: the store-backed [`HostServices`](ferrite_plugin_host::HostServices).
 //!   `content.read` sees public items only, through [`SiteReader`](ferrite_core::SiteReader).
-//! * [`run_filter`] / [`filter_item`]: apply render filters for one request and collect
+//! * [`run_filter`] / [`filter_item`] / [`filter_footer`]: apply render filters for one request and collect
 //!   what they touched into a [`RenderTrace`] for the page cache.
 //! * [`egress::Egress`]: the node's outbound HTTPS client behind the plugin `http`
 //!   import (resolved-address SSRF checks, allowlisted redirects, P16).
@@ -35,7 +35,7 @@ mod served;
 pub(crate) use served::is_preview_path;
 mod services;
 
-pub use apply::{PluginRequest, RenderTrace, filter_item, run_filter};
+pub use apply::{PluginRequest, RenderTrace, filter_footer, filter_item, run_filter};
 pub use failures::{FLUSH_EVERY, SharedFailures};
 pub use load::LoadSummary;
 pub use reload::{PluginReloader, PluginState, PluginStatus, ReloadReport};

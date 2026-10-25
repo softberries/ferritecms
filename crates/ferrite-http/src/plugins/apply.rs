@@ -186,6 +186,23 @@ pub async fn filter_item(
     }
 }
 
+/// The page footer: `render.footer` run once over `""` (06 §5), within the page's
+/// render budget like every other filter. The host sanitises `html` output like
+/// `content.body` (unless a plugin is `render.html = "raw"`); a failing plugin is
+/// skipped, so the footer is what the others returned (or empty).
+pub async fn filter_footer(
+    host: &PluginHost,
+    req: &PluginRequest,
+    trace: &mut RenderTrace,
+) -> String {
+    let value = FilterValue::Html(String::new());
+    match run_filter(host, "render.footer", value, req, trace).await {
+        FilterValue::Html(h) => h,
+        // The host always returns the variant it was given.
+        _ => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

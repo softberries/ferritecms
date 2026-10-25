@@ -1,13 +1,20 @@
 //! Every content route type, end to end, plus a plugin's head tag in a served page.
 
+use std::{sync::Arc, time::Duration};
+
 use axum::http::StatusCode;
 use ferrite_core::{
-    TaxonomyService,
+    RedirectService, TaxonomyService,
     site::{FRONT_PAGE_OPTION, PER_PAGE_OPTION},
 };
+use ferrite_domain::RedirectId;
+use ferrite_http::app::hits::{HitCounter, MAX_BUFFERED_REDIRECTS};
+use ferrite_store_tests::CountingStore;
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
 use crate::app_tests;
+use crate::common::plugin_wasm;
 use crate::harness::App;
 
 /// `/YYYY/` and `/YYYY/MM/` of an RFC 3339 UTC timestamp.
@@ -334,6 +341,119 @@ async fn new_term_reclaims_renamed_path(app: App) -> App {
     app
 }
 
+/// Task 14: hits on one redirect coalesce into one `add_hits` per flush (counted
+/// through a counting store that only the counter uses); serving the redirect does no
+/// store write.
+async fn redirect_hits_coalesce(app: App) -> App {
+    let r = app
+        .redirects()
+        .upsert(&app.admin, "/old-path", "/new-path", 301)
+        .await
+        .unwrap();
+    let counting = Arc::new(CountingStore::new(app.site.store.clone()));
+    let hits = Arc::new(HitCounter::new(Arc::new(RedirectService::new(
+        counting.clone(),
+    ))));
+    let app = app
+        .rebuilt(App::config(), |s| s.with_hits(hits.clone()))
+        .await;
+    for _ in 0..50 {
+        let res = app.get("/old-path").await;
+        assert_eq!(res.status, StatusCode::MOVED_PERMANENTLY, "{res:?}");
+    }
+    assert_eq!(counting.calls(), 0, "no store call on the request path");
+    assert_eq!(hits.len(), 1);
+
+    // The flusher writes once on stop.
+    let stop = CancellationToken::new();
+    let flusher = hits
+        .clone()
+        .spawn_flusher(Duration::from_secs(3600), stop.clone());
+    stop.cancel();
+    flusher.await.unwrap();
+    assert_eq!(counting.calls(), 1, "one write for 50 hits");
+    let stored = app.redirects().resolve("/old-path").await.unwrap().unwrap();
+    assert_eq!(stored.hits, 50);
+    let first = stored.last_hit_at.expect("last hit time");
+    assert!(hits.is_empty());
+
+    // The next batch: one more write, added to the count, time moves forward.
+    for _ in 0..3 {
+        app.get("/old-path").await;
+    }
+    assert_eq!(hits.flush().await, 1);
+    assert_eq!(counting.calls(), 2);
+    let stored = app.redirects().resolve("/old-path").await.unwrap().unwrap();
+    assert_eq!((stored.id, stored.hits), (r.id, 53));
+    assert!(stored.last_hit_at.unwrap() >= first);
+    // Nothing buffered: a flush writes nothing.
+    assert_eq!(hits.flush().await, 0);
+    assert_eq!(counting.calls(), 2);
+    app
+}
+
+/// Task 14: at most 10 000 distinct redirects are buffered; a hit on a further new one
+/// is dropped and counted, hits on buffered ones still count.
+async fn hit_buffer_is_bounded(app: App) -> App {
+    let hits = HitCounter::new(Arc::new(app.redirects()));
+    let ids: Vec<RedirectId> = (0..MAX_BUFFERED_REDIRECTS + 1)
+        .map(|_| RedirectId::new())
+        .collect();
+    for id in &ids {
+        hits.record(*id);
+    }
+    assert_eq!(MAX_BUFFERED_REDIRECTS, 10_000);
+    assert_eq!((hits.len(), hits.dropped()), (10_000, 1));
+    hits.record(ids[0]);
+    assert_eq!((hits.len(), hits.dropped()), (10_000, 1));
+    hits.record(RedirectId::new());
+    assert_eq!(hits.dropped(), 2);
+    app
+}
+
+/// Task 14: `render.footer` output reaches `footer()` sanitised (html-inject's
+/// paragraph without its handler, class or script); a failing footer plugin is skipped and
+/// the page stays intact.
+async fn footer_filter_renders(app: App) -> App {
+    app.post("Hello World", "hello-world", &[]).await;
+    let plain = app.get("/hello-world/").await;
+    assert!(!plain.body.contains("Injected footer"), "{}", plain.body);
+
+    app.site.install("html-inject").await;
+    assert_eq!(app.site.load().await.loaded, ["html-inject"]);
+    app.state.cache.flush();
+    let r = app.get("/hello-world/").await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(
+        r.body.contains("<p>Injected footer</p>\n</body>"),
+        "{}",
+        r.body
+    );
+    // ammonia drops the script, the handler and the class.
+    for bad in ["alert(4)", "alert(5)", "onclick", "injected-footer"] {
+        assert!(!r.body.contains(bad), "{bad}: {}", r.body);
+    }
+
+    // A footer plugin that answers with the wrong variant (a failure), before
+    // html-inject.
+    let hash = app.site.put_artifact(plugin_wasm("wrong-variant")).await;
+    let manifest = "[plugin]\nname = \"wrong-variant\"\nversion = \"0.1.0\"\n\
+                    publisher = \"ferritecms.dev\"\nworld = \"ferrite:plugin/plugin@0.1.0\"\n\
+                    [capabilities]\nrender.html = \"sanitized\"\n\
+                    [hooks]\n\"render.footer\" = 5\n";
+    app.site.row("wrong-variant", manifest, hash, true).await;
+    let mut loaded = app.site.load().await.loaded;
+    loaded.sort();
+    assert_eq!(loaded, ["html-inject", "wrong-variant"]);
+    app.state.cache.flush();
+    let r = app.get("/hello-world/").await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.body.contains("<h1>Hello World</h1>"), "{}", r.body);
+    assert!(r.body.contains("<p>Injected footer</p>"), "{}", r.body);
+    assert!(!r.body.contains("not a head"), "{}", r.body);
+    app
+}
+
 app_tests!(
     unsafe_menu_urls_are_dropped,
     listings_carry_archive_and_pagination,
@@ -343,4 +463,7 @@ app_tests!(
     plugin_head_meta_is_served,
     term_redirect_served,
     new_term_reclaims_renamed_path,
+    redirect_hits_coalesce,
+    hit_buffer_is_bounded,
+    footer_filter_renders,
 );

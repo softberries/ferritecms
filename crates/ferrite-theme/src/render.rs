@@ -43,7 +43,8 @@
 //! `pagination` (`page`, `pages`, `prev_url`, `next_url`), `request` (`path`,
 //! `s` = the search query, `page`, `status`, `preview`) and the
 //! helpers `menu(name)`, `related(post, n=3)`, `query(type=…, term=…, limit=10)`,
-//! `asset(path)`, `image(media, size)`, `head()`, `plugin_route(name, path)` (a plugin
+//! `asset(path)`, `image(media, size)`, `head()`, `footer()` (the plugins'
+//! `render.footer` HTML, safe; empty without footer plugins), `plugin_route(name, path)` (a plugin
 //! route's URL, `/_p/<name><path>`), `comments(post)` (the public thread of a post or
 //! none: `open`, `count`, `items`, `action` = `/_comment`, `honeypot` = `website`; each
 //! item `id`, `parent_id`, `depth`, `author_name`, `author_url`, `html` (core-rendered,
@@ -183,6 +184,10 @@ pub struct RenderContext {
     /// Pre-rendered `<head>` HTML (core SEO + plugin filters); `head()` returns it
     /// unescaped, so it must already be safe.
     pub head_html: String,
+    /// Plugin footer HTML (the `render.footer` filter, sanitised by the plugin host
+    /// unless a plugin is `render.html = "raw"`); `footer()` returns it unescaped, so it
+    /// must already be safe. Empty without footer plugins and on error pages.
+    pub footer_html: String,
     pub status: u16,
     pub preview: bool,
 }
@@ -501,6 +506,11 @@ fn root_value(ctx: RenderContext, scope: &Arc<Scope>) -> Value {
     root.insert(
         "head",
         Value::from_function(move || Value::from_safe_string(head.clone())),
+    );
+    let footer = ctx.footer_html;
+    root.insert(
+        "footer",
+        Value::from_function(move || Value::from_safe_string(footer.clone())),
     );
     let s = scope.clone();
     root.insert(

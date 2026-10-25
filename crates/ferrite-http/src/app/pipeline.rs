@@ -22,7 +22,7 @@ use tokio::{runtime::Handle, sync::OwnedSemaphorePermit};
 use super::{AppState, bridge::BlockingBridge, error_page, feeds, response::HTML};
 use crate::{
     head::{HeadPage, HeadSite, page_head},
-    plugins::{PluginRequest, RenderTrace, filter_item},
+    plugins::{PluginRequest, RenderTrace, filter_footer, filter_item},
     route::{Candidate, NormalQuery, Route, listing_page_url},
 };
 
@@ -230,6 +230,9 @@ async fn finish(
             filter_item(&state.plugins, item, &req, &mut trace).await;
         }
     }
+    // `render.footer` once per page, after the item filters and before the head, all
+    // within the same render budget (06 §5).
+    let footer_html = filter_footer(&state.plugins, &req, &mut trace).await;
     let head_html = page_head(
         &state.plugins,
         state.store.as_ref(),
@@ -261,6 +264,7 @@ async fn finish(
             page,
         },
         head_html,
+        footer_html,
         status: 200,
         preview,
     };

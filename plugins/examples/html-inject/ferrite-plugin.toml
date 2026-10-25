@@ -11,3 +11,4 @@ render.text = true
 [hooks]
 "content.body"    = 10
 "content.excerpt" = 10
+"render.footer"   = 10

@@ -21,15 +21,18 @@
 //!    `X-Robots-Tag: noindex`.
 //! 3. Redirect rows (exact path, then the trailing slash toggled), **before the cache**:
 //!    301/302/307/308 to the row's target, `410` as the shared gone page. The hit is
-//!    counted in a spawned task (fire and forget).
+//!    counted in the node's bounded [`hits::HitCounter`] (no I/O on the request; one
+//!    write per redirect every 10 s); without [`AppState::with_hits`] hits are not
+//!    counted.
 //! 4. A non-canonical path: `301` to the canonical one (query kept).
 //! 5. The page cache ([`PageCache::get_or_render`](ferrite_cache::PageCache), single
 //!    flight). Key: the site's host from the config (ruling R25: never the `Host` or
 //!    `X-Forwarded-Host` header, so clients cannot multiply entries), the canonical
 //!    path, and [`NormalQuery::cache_query`](crate::route::NormalQuery::cache_query).
-//!    Never cached under the request path: error statuses (404/410/500/503). TTL 60 s
-//!    ([`HttpConfig`]): search results, and pages whose plugin calls were volatile or
-//!    failed or whose theme helper reads failed. **Logged-in requests (P21)**: a
+//!    Never cached under the request path: error statuses (404/410/500/503). Short
+//!    TTLs ([`HttpConfig`], default 60 s): `search_ttl` for search results (`0`: search
+//!    pages are not cached), `volatile_ttl` for pages whose plugin calls were volatile
+//!    or failed or whose theme helper reads failed. **Logged-in requests (P21)**: a
 //!    session cookie (`__Host-ferrite_session` on https, P23) that resolves to a session (looked up only when the
 //!    cookie is present; an unusable one is ignored, the request stays anonymous) makes
 //!    the request logged in: with [`LoggedIn::Bypass`] (default) it renders without
@@ -38,8 +41,8 @@
 //!    `is_logged_in = true`.
 //! 6. The render pipeline (06 §5): the candidates' items through `SiteReader`
 //!    (published-only; a hit counts only if its URL equals the request path), plugin
-//!    filters `content.body`/`content.excerpt` on every item, the head (core SEO +
-//!    `render.head`), the template hierarchy, and `Renderer::render` on a blocking
+//!    filters `content.body`/`content.excerpt` on every item, `render.footer` once
+//!    (template helper `footer()`), the head (core SEO + `render.head`), the template hierarchy, and `Renderer::render` on a blocking
 //!    thread with a store-backed `HelperBridge` (`Handle::block_on`). The page's
 //!    dependency keys are the reads', the plugin trace's, the renderer's,
 //!    `option:theme.<name>.settings`, `theme` and `plugins`.
@@ -84,6 +87,7 @@ mod comment_form;
 mod error_page;
 pub mod feeds;
 mod handler;
+pub mod hits;
 pub mod media;
 mod pipeline;
 mod plugin_route;

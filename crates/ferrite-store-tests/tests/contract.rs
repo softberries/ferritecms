@@ -104,6 +104,7 @@ backend_tests!(
 
 backend_tests!(
     redirects_upsert_get_hit,
+    redirect_add_hits,
     redirects_list_paginates_in_binary_order,
     redirects_list_by_target,
     text_writes_reject_nul,

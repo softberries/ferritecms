@@ -220,13 +220,13 @@ Outline in the M2a-2 plan ("Next plan: M2a-2b"); it gets its own plan.
 - [ ] Deferred from M1c-2:
   - [ ] Term rename and `permalink.*` option changes record no redirects (only content moves do).
   - [ ] `ferrite seed demo` atomicity (each step is its own transaction; a failed run leaves a partial batch).
-  - [ ] Redirect hit counting spawns one task per hit, unbounded: use a bounded channel or coalesce.
+  - [x] Redirect hit counting spawns one task per hit, unbounded: use a bounded channel or coalesce (M2a-2b Task 14: per-node buffer of ≤ 10 000 redirects, one `add_hits` per redirect every 10 s).
   - [ ] `date` filter timezone support (`site.timezone`; today UTC).
   - [ ] Theme `query(term=…)` is capped at `reading.per_page` (it reads page 1 of the term archive): add a term + limit reader.
   - [ ] A child page with slug `page` is shadowed by pagination (`/parent/page/…`): reject it in slug validation.
   - [ ] A legacy item holding a reserved slug is renamed on update; every top-level write does an extra `types().list()`.
-  - [ ] Wire the `render.footer` filter into rendering (in the hook catalogue, not called yet).
-  - [ ] Make the 60 s short TTL configurable (search TTL with `0` disabling it, 06 §6; `plugins.volatile_ttl`, 05 §7a).
+  - [x] Wire the `render.footer` filter into rendering (M2a-2b Task 14: once per page, `footer()` helper).
+  - [x] Make the 60 s short TTL configurable (`cache.search_ttl` with `0` disabling it, 06 §6; `plugins.volatile_ttl`, 05 §7a; M2a-2b Task 14).
 - [ ] Deferred from the M2a-2a final review (ruling R22):
   - [x] `meta.get` makes up to three primary-key reads per budget unit (`post_kind`, then `is_visible` and the meta read): charge 2 units, or fold the type check into the services read (M6). Done in M2a-2b Task 12: 2 units.
   - [ ] Test seams (`Installer::with_theme_loaded`, `Installer::with_prepare`, `PluginReloader::with_prepare`, `NodeOptions::{served_flush, listen, boot_barrier}`, `SharedFailures::with_before_disable`) are `#[doc(hidden)] pub` runtime hooks: move all of them behind one dev-only cargo feature in one chore (M11).

@@ -21,6 +21,6 @@ pub use plugins::{
     CacheOutcome, FLUSH_EVERY, LoadSummary, MAX_SERVED_PATH, PluginReloader, PluginRequest,
     PluginState, PluginStatus, ReloadReport, RenderTrace, SERVED_BUFFER_CAP, SERVED_FLUSH_AT,
     SERVED_FLUSH_EVERY, SERVED_HOOK, ServedBuffer, ServedEvent, SharedFailures, StoreHostServices,
-    UaClass, filter_item, run_filter, ua_class,
+    UaClass, filter_footer, filter_item, run_filter, ua_class,
 };
 pub use route::{Candidate, NormalQuery, Route, RouteTable, SitemapPart, TypeInfo, resolve};

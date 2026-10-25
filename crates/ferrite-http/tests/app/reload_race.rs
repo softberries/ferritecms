@@ -93,6 +93,9 @@ impl RedirectRepo for HookRedirects {
     async fn hit(&self, id: RedirectId) -> Result<(), StoreError> {
         self.inner.read().redirects().hit(id).await
     }
+    async fn add_hits(&self, id: RedirectId, n: u32, at: Timestamp) -> Result<(), StoreError> {
+        self.inner.read().redirects().add_hits(id, n, at).await
+    }
 }
 
 impl Repos for HookRepos {

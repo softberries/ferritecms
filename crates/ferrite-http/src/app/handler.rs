@@ -233,10 +233,10 @@ async fn missing(state: &Arc<AppState>, kind: Missing) -> Response<Body> {
 
 /// Answers with redirect row `r`: its code and target, `410` as the gone page.
 async fn follow(state: &Arc<AppState>, r: Redirect) -> Response<Body> {
-    // Fire and forget: the hit count must not delay the redirect (`hit` logs failures).
-    let redirects = state.redirects.clone();
-    let id = r.id;
-    tokio::spawn(async move { redirects.hit(id).await });
+    // Buffered, never I/O: the hit count must not delay the redirect.
+    if let Some(hits) = &state.hits {
+        hits.record(r.id);
+    }
     let status = StatusCode::from_u16(r.code)
         .ok()
         .filter(StatusCode::is_redirection);

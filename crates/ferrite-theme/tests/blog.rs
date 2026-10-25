@@ -42,6 +42,7 @@ fn ctx(theme: &Theme, path: &str) -> RenderContext {
         },
         status: 200,
         head_html: "<title>Head title</title>".into(),
+        footer_html: "<p class=\"plugin-footer\">Plugin footer</p>".into(),
         ..RenderContext::default()
     }
 }
@@ -231,6 +232,8 @@ fn assert_frame(theme: &Theme, html: &str) {
         "<nav class=\"footer-nav\" aria-label=\"Footer\">",
         "Ferrite &lt;Notes&gt;",
         "<style>:root{--accent:#c2410c}</style>",
+        // `footer()` after the site footer, just before `</body>`.
+        "</footer>\n<p class=\"plugin-footer\">Plugin footer</p>\n</body>",
     ] {
         assert!(html.contains(needle), "missing {needle:?} in:\n{html}");
     }

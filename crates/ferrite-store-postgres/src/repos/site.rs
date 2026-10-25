@@ -223,4 +223,22 @@ impl RedirectRepo for PgRepos {
         }
         Ok(())
     }
+
+    async fn add_hits(&self, id: RedirectId, n: u32, at: Timestamp) -> Result<(), StoreError> {
+        if n == 0 {
+            return Err(StoreError::Invalid(
+                "redirect hits: n must be at least 1".into(),
+            ));
+        }
+        // GREATEST ignores NULL: a first hit sets `at`.
+        run!(&self.exec, |e| sqlx::query(
+            "UPDATE redirects SET hits = hits + $1, last_hit_at = GREATEST(last_hit_at, $2) \
+             WHERE id = $3"
+        )
+        .bind(i64::from(n))
+        .bind(DateTime::<Utc>::from(at))
+        .bind(id.as_uuid())
+        .execute(e))?;
+        Ok(())
+    }
 }

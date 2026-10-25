@@ -421,6 +421,69 @@ async fn short_ttls_for_search_and_volatile_pages(app: App) -> App {
     app
 }
 
+/// Task 14: `search_ttl = 0` (`cache.search_ttl = 0`): search pages are not cached,
+/// so two identical searches render twice; other pages are still cached.
+async fn search_ttl_zero_disables_caching(app: App) -> App {
+    use std::time::Duration;
+    let mut config = App::config();
+    config.search_ttl = Duration::ZERO;
+    let app = app.rebuilt(config, |s| s).await;
+    app.post("Hello World", "hello-world", &[]).await;
+    let before = app.state.renders();
+    let first = app.get("/?s=Hello").await;
+    let second = app.get("/?s=Hello").await;
+    assert_eq!(
+        (first.status, second.status),
+        (StatusCode::OK, StatusCode::OK)
+    );
+    assert!(second.body.contains("Hello World"), "{}", second.body);
+    assert_eq!(app.state.renders(), before + 2, "rendered twice");
+    assert_eq!(app.cached().await, 0);
+    app.get("/hello-world/").await;
+    app.get("/hello-world/").await;
+    assert_eq!(
+        app.state.renders(),
+        before + 3,
+        "plain pages are still cached"
+    );
+    assert_eq!(app.cached().await, 1);
+    app
+}
+
+/// Task 14: `volatile_ttl` (`plugins.volatile_ttl`) and `search_ttl` are the TTLs the
+/// pipeline gives volatile and search pages; a volatile search page gets the shorter.
+async fn volatile_ttl_is_configurable(app: App) -> App {
+    use std::time::Duration;
+
+    use ferrite_cache::CacheKey;
+    let key = |path: &str, q: &str| CacheKey::anon("example.com", path, q);
+    let mut config = App::config();
+    config.volatile_ttl = Duration::from_secs(7);
+    config.search_ttl = Duration::from_secs(30);
+    let app = app.rebuilt(config, |s| s).await;
+    app.post("Hello World", "hello-world", &[]).await;
+    app.get("/?s=Hello").await;
+    let search = app.state.cache.get(&key("/", "s=Hello")).await.unwrap();
+    assert_eq!(search.ttl, Some(Duration::from_secs(30)));
+
+    // kv use in `render.head` is volatile (05 §7a).
+    app.site.install("kv-budget").await;
+    assert_eq!(app.site.load().await.loaded, ["kv-budget"]);
+    app.state.cache.flush();
+    app.get("/hello-world/").await;
+    app.get("/?s=Hello").await;
+    let volatile = app
+        .state
+        .cache
+        .get(&key("/hello-world/", ""))
+        .await
+        .unwrap();
+    assert_eq!(volatile.ttl, Some(Duration::from_secs(7)));
+    let search = app.state.cache.get(&key("/", "s=Hello")).await.unwrap();
+    assert_eq!(search.ttl, Some(Duration::from_secs(7)), "the shorter one");
+    app
+}
+
 app_tests!(
     menu_terms_follow_the_public_check,
     site_title_change_refreshes_pages,
@@ -429,4 +492,6 @@ app_tests!(
     unpublished_items_never_render,
     edits_and_trash_reach_every_page,
     second_request_is_a_cache_hit,
+    search_ttl_zero_disables_caching,
+    volatile_ttl_is_configurable,
 );

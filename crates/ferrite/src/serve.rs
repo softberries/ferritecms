@@ -26,7 +26,8 @@
 //! 9. the background tasks: the invalidation loop (`cache.poll_interval_ms`; with
 //!    `LISTEN` wake-ups in cluster mode) with the [`Reloader`] hook (hot swap of theme,
 //!    plugins and permalinks, P18), the shared plugin-failure flusher (P20), the
-//!    `request.served` flusher (every 10 s or 1 000 events, P21), the job
+//!    `request.served` flusher (every 10 s or 1 000 events, P21), the redirect hits
+//!    flusher (every 10 s, at most 10 000 redirects buffered), the job
 //!    runner (`cluster.workers`; built-in prune jobs, scheduled publishing, plugin
 //!    actions, `media.variants` bounded by `media.image_workers`, and the caller's
 //!    handlers), the periodic scheduler (prune jobs hourly,
@@ -41,7 +42,8 @@
 //! running jobs get 9 s (P10) to finish, after which the runner releases the rest
 //! without using an attempt (the runner is abandoned after 12 s, R6). Then the
 //! background tasks stop (the failure flusher writes once more, the `request.served`
-//! buffer is flushed into jobs once more, for the next runner to claim), mail sends still
+//! buffer is flushed into jobs once more, for the next runner to claim, and the buffered
+//! redirect hits are written once more, before the pools close), mail sends still
 //! running (`[mail]`) are cancelled, and the node leaves the registry, together within
 //! 1 s; [`run`] closes the database pools (up to 2 s, cut so that the steps so far end
 //! within 13 s of the signal), and `main` shuts the runtime
@@ -71,6 +73,7 @@ use ferrite_http::{
     AppParts, AppState, FLUSH_EVERY, HttpConfig, LoadSummary, LoggedIn, PluginReloader,
     SERVED_FLUSH_EVERY, ServedBuffer, SharedFailures, StoreHostServices,
     api::{ApiParts, ApiState, NodeInfo},
+    app::hits::{HIT_FLUSH_EVERY, HitCounter},
     build_site,
     extensions::Installer,
     load_route_table,
@@ -409,6 +412,10 @@ async fn boot(
     );
     // `request.served` events of this node's page responses (P21).
     let served = Arc::new(ServedBuffer::new(store.clone(), host.clone()));
+    // Redirect hits of this node, one write per redirect per flush (06 §6).
+    let hits = Arc::new(HitCounter::new(Arc::new(RedirectService::new(
+        store.clone(),
+    ))));
     // One comment service per node: the API submit and moderation, and the theme form
     // (`POST /_comment`, P12).
     let comments = Arc::new(CommentService::new(store.clone(), auth.clone()));
@@ -426,6 +433,7 @@ async fn boot(
         })
         .with_auth(auth.clone())
         .with_served(served.clone())
+        .with_hits(hits.clone())
         .with_comments(comments.clone()),
     );
 
@@ -572,6 +580,7 @@ async fn boot(
         opts.served_flush.unwrap_or(SERVED_FLUSH_EVERY),
         background.clone(),
     );
+    let hits_flusher = hits.spawn_flusher(HIT_FLUSH_EVERY, background.clone());
     let runner_stop = CancellationToken::new();
     let runner = runner.spawn(runner_stop.clone());
     let scheduler = scheduler.spawn(background.clone());
@@ -606,6 +615,7 @@ async fn boot(
             ("invalidation loop", poller),
             ("plugin failure flusher", flusher),
             ("request.served flusher", served_flusher),
+            ("redirect hits flusher", hits_flusher),
             ("scheduler", scheduler),
             ("heartbeat", heartbeat),
         ],
@@ -814,6 +824,8 @@ fn http_config(config: &Config) -> HttpConfig {
     );
     http.trusted_proxies = config.server.trusted_proxies.clone();
     http.render_budget = Duration::from_millis(config.plugins.render_budget_ms);
+    http.search_ttl = Duration::from_secs(config.cache.search_ttl_secs);
+    http.volatile_ttl = Duration::from_secs(config.plugins.volatile_ttl_secs);
     http.logged_in = match config.cache.logged_in {
         LoggedInCache::Bypass => LoggedIn::Bypass,
         LoggedInCache::PerUser => LoggedIn::PerUser,
@@ -968,6 +980,18 @@ mod tests {
             http_config(&config).render_budget,
             Duration::from_millis(250)
         );
+        // Task 14: the short TTLs reach the pipeline.
+        const SHORT: Duration = ferrite_http::app::SHORT_TTL;
+        let http = http_config(&config);
+        assert_eq!((http.search_ttl, http.volatile_ttl), (SHORT, SHORT));
+        let mut e = env(None);
+        e.push(("FERRITE_CACHE__SEARCH_TTL".to_owned(), "0".to_owned()));
+        e.push(("FERRITE_PLUGINS__VOLATILE_TTL".to_owned(), "5".to_owned()));
+        let http = http_config(&ferrite_config::load(dir.path(), e).unwrap());
+        assert_eq!(
+            (http.search_ttl, http.volatile_ttl),
+            (Duration::ZERO, Duration::from_secs(5))
+        );
     }
 
     #[test]
@@ -981,6 +1005,7 @@ mod tests {
             failure_window_secs: 60,
             max_concurrent_calls: 5,
             render_budget_ms: 300,
+            volatile_ttl_secs: 60,
         };
         let h = host_config(&p);
         assert_eq!(h.max_concurrent_calls, 5);

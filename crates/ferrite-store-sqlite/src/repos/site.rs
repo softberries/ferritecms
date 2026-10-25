@@ -222,4 +222,24 @@ impl RedirectRepo for SqliteRepos {
         }
         Ok(())
     }
+
+    async fn add_hits(&self, id: RedirectId, n: u32, at: Timestamp) -> Result<(), StoreError> {
+        if n == 0 {
+            return Err(StoreError::Invalid(
+                "redirect hits: n must be at least 1".into(),
+            ));
+        }
+        let at = at.as_micros();
+        run!(&self.writer, |e| sqlx::query(
+            "UPDATE redirects SET hits = hits + ?, \
+             last_hit_at = CASE WHEN last_hit_at IS NULL OR last_hit_at < ? THEN ? \
+             ELSE last_hit_at END WHERE id = ?"
+        )
+        .bind(i64::from(n))
+        .bind(at)
+        .bind(at)
+        .bind(id.as_uuid())
+        .execute(e))?;
+        Ok(())
+    }
 }

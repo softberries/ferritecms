@@ -139,21 +139,35 @@ impl Cx {
         }
     }
 
-    /// Duration in seconds: integer seconds or a string such as `"10m"`.
-    pub fn duration_secs(&mut self, t: &mut Table, base: &str, key: &str) -> Option<u64> {
+    /// Duration in seconds: integer seconds or a string such as `"10m"`; `0` only with
+    /// `allow_zero`.
+    pub fn duration_secs(
+        &mut self,
+        t: &mut Table,
+        base: &str,
+        key: &str,
+        allow_zero: bool,
+    ) -> Option<u64> {
         let path = join(base, key);
         let parsed = match t.remove(key)? {
-            Value::Integer(i) if i > 0 => Some(i as u64),
+            Value::Integer(i) if i >= 0 => Some(i as u64),
             Value::String(s) => parse_duration(&s),
             _ => None,
         };
-        if parsed.is_none() {
+        match parsed {
+            Some(0) if !allow_zero => None,
+            other => other,
+        }
+        .or_else(|| {
+            let what = if allow_zero { "a" } else { "a positive" };
             self.push(
                 &path,
-                "must be a positive duration such as \"10m\", \"90s\", \"2h\" or a number of seconds",
+                format!(
+                    "must be {what} duration such as \"10m\", \"90s\", \"2h\" or a number of seconds"
+                ),
             );
-        }
-        parsed
+            None
+        })
     }
 
     /// A secret that may be given inline (`key`) or as a file path (`key_file`).
@@ -241,6 +255,5 @@ fn parse_duration(s: &str) -> Option<u64> {
         "h" => 3600,
         _ => return None,
     };
-    let v = n.checked_mul(mult)?;
-    (v > 0).then_some(v)
+    n.checked_mul(mult)
 }

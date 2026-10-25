@@ -225,7 +225,8 @@ with the term without redirects (permalink structure redirects are M3, P26).
 `/_preview/<id>` (before the redirect rows, so none can shadow it; never cached) → redirect
 table (exact path, then the trailing slash toggled; before the cache) → canonical 301 →
 session cookie (logged in or anonymous) → page cache (or none: logged-in bypass) → render.
-`410` redirect rows answer with the shared gone page.
+`410` redirect rows answer with the shared gone page. A hit on a redirect row is counted in
+the node's bounded buffer (`app/hits.rs`, §6), never with I/O on the request.
 
 **Previews** (P20). `GET /_preview/<id>` takes the session cookie only (`__Host-ferrite_session` on an `https` site, 07 §2) (no bearer
 tokens) of an account that need not reset its password, and loads the item with
@@ -315,6 +316,7 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 | `asset(path)` | `/_theme/<theme hash>/<path>`, each segment percent-encoded | `theme` |
 | `image(media, size)` | the `size` variant of a public media item (the original for an unknown size) with `width`, `height` and a `srcset` of one candidate per width | `post:<media id>` |
 | `head()` | the pre-rendered `<head>` HTML (core SEO + `render.head` plugin filters, §5) | — |
+| `footer()` | the plugins' footer HTML (`render.footer`, §5; sanitised like `content.body`); `""` without footer plugins and on error pages. `blog` prints it just before `</body>` | — |
 | `comments(post)` | the public thread of a **public post** (other kinds, drafts, unknown ids: `none`), through `SiteReader::comments`: `open` (`comments.enabled`, default on; a closed thread still lists its comments, as WordPress does, and the theme hides the form), `count` (approved comments shown, ≤ 500), `items` in thread order (oldest first, each reply right after its parent), `action` (`/_comment`), `honeypot` (`website`). Each item: `id`, `parent_id`, `depth` (0 at the top level), `author_name` (plain text), `author_url` (`http(s)` only, else `none`), `html` (the plain-text body escaped by core into `<p>`/`<br>`, marked safe), `date` (RFC 3339), `can_reply` (a reply would be accepted: core's own depth rule over the stored chain, so it holds when a parent is hidden). Approved comments only; never an e-mail or address hash. One bridge call | `post:<id>`, `option:comments.enabled` |
 | `plugin_route(name, path)` | `/_p/<name><path>` (05 §4b), each path segment percent-encoded; `""` unless `name` is a plugin name (`[a-z0-9-]{2,48}`) and `path` starts with `/` and has no `.`/`..` segment | — |
 | filters | `date(fmt)` (chrono strftime, UTC), `excerpt(n=55)` (plain text), `slugify` (core's slug function), `json` (safe in `<script>` and in **single-quoted** attributes only), MiniJinja's `urlencode`; `t` (i18n) is not built | — |
@@ -352,6 +354,7 @@ contract are in `crates/ferrite-core/src/events.rs`.
 ```
 Route ─► SiteReader loads item(s), published-only (blocks were rendered to sanitised HTML by core)
       ─► plugin filters on every item: content.body (html), content.excerpt (text)
+      ─► footer(): render.footer filter chain over "" (html), once per page
       ─► head(): core SEO tags + render.head filter chain → structured head → HTML (host-escaped)
       ─► template by hierarchy ─► Renderer::render on a blocking thread with the HelperBridge
       ─► CachedPage { status, html, deps, ttl }
@@ -363,7 +366,14 @@ recorded and whether a call was volatile or failed ([05 §7a](05-plugin-host.md#
 The core head (`crates/ferrite-http/src/head.rs`) has the title, a canonical link, Open Graph
 `og:title`/`og:description`/`og:url`/`og:type` (plus `og:image` for a featured image) and a
 meta description from the item's `seo.description` meta, else its excerpt cut to 160
-characters, else the site tagline. `render.footer` is not wired yet.
+characters, else the site tagline.
+
+`render.footer` (Task 14) runs once per page, after the item filters and before the head,
+with the input `""`; every filter of the page (items, footer, head) shares the page's render
+budget (P22). Its output is `html` and sanitised by the host like `content.body` (unless a
+plugin is `render.html = "raw"`), and a failing plugin is skipped, so the footer is what the
+others returned. The result reaches templates as `footer()` (marked safe). Error pages get an
+empty footer (no plugin calls).
 
 Block rendering: blocks are JSON (`[{type:"paragraph", content:[…]}, …]`) using the
 TipTap/ProseMirror JSON document model ([07](07-admin-api.md#editor)). The Rust renderer in
@@ -415,9 +425,19 @@ are never cached.
 - **Shared error pages (R26):** the 404 and 410 bodies are rendered without the request path
   and cached under internal keys with their dependency keys, so random missing URLs render
   once and a menu edit still refreshes them. Nothing is cached under a missing URL's path.
-- **Short TTL**: search results and pages whose plugin calls were volatile or failed, or whose
-  theme helper reads failed, are cached for 60 s (`SHORT_TTL`; a constant, not configurable
-  yet).
+- **Short TTLs** (Task 14): search results are cached for `cache.search_ttl` (default 60 s;
+  `0` = search pages are not cached, each search renders), and pages whose plugin calls were
+  volatile or failed, or whose theme helper reads failed, for `plugins.volatile_ttl` (default
+  60 s, 1 s..=1 h; [05 §7a](05-plugin-host.md#7a-data-visibility-and-caching)); a volatile
+  search page gets the shorter of the two. Both map to `HttpConfig.search_ttl` /
+  `volatile_ttl` (default `SHORT_TTL`, 60 s).
+- **Redirect hits** (Task 14, `crates/ferrite-http/src/app/hits.rs`): a redirect answered
+  from a row is counted in the node's in-memory buffer (at most 10 000 distinct redirects;
+  hits on further new ones are dropped and counted, hits on buffered ones always count). A
+  flusher writes every 10 s, and once more when `serve` stops (after the HTTP drain, before
+  the database pools close): one `RedirectRepo::add_hits` (`hits = hits + n`, `last_hit_at`
+  never moved back) per redirect. Best effort: a crash loses the buffer, a failed write its
+  redirect's batch (logged). Each cluster node keeps its own buffer.
 - Scheduled publish (M1.5, P12): scheduling an item enqueues a `content.publish_scheduled`
   job due at `scheduled_at`; the periodic `content.publish_due` job (every 30 s, one per
   period cluster-wide) is the safety net. Their writes emit normal events.

@@ -31,14 +31,15 @@
 </main>
 <footer class="site-footer">
   <div class="wrap site-footer__inner">
-    {% set footer = menu("footer") %}
-    {% if footer and footer.items %}
+    {% set footer_menu = menu("footer") %}
+    {% if footer_menu and footer_menu.items %}
     <nav class="footer-nav" aria-label="Footer">
-      {% with items = footer.items %}{% include "partials/menu.html" %}{% endwith %}
+      {% with items = footer_menu.items %}{% include "partials/menu.html" %}{% endwith %}
     </nav>
     {% endif %}
     <p class="site-credit">{% if site.title %}{{ site.title }} · {% endif %}Powered by FerriteCMS</p>
   </div>
 </footer>
+{{ footer() }}
 </body>
 </html>

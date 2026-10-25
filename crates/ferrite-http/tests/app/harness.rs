@@ -182,6 +182,31 @@ impl App {
         (self, served)
     }
 
+    /// This app with a fresh state (empty cache) built with `config` and passed
+    /// through `f` (e.g. `with_hits`).
+    pub async fn rebuilt(
+        mut self,
+        config: HttpConfig,
+        f: impl FnOnce(AppState) -> AppState,
+    ) -> Self {
+        let state = Self::build_state(
+            &self.site,
+            self.site.reader.clone(),
+            load_theme(fixture("app-theme")),
+            true,
+            config,
+        )
+        .await;
+        self.state = Arc::new(f(state));
+        self.router = build_app(self.state.clone());
+        self
+    }
+
+    /// The default config of [`App::new`].
+    pub fn config() -> HttpConfig {
+        HttpConfig::new(SITE_URL, SITE_TITLE, "en")
+    }
+
     /// An auth service over `site`'s store with the site's key (sessions live in the
     /// database, so any instance resolves the cookies another one issued).
     pub fn auth(site: &Site) -> Arc<AuthService> {

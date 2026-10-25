@@ -804,8 +804,8 @@ value is passed on and the call counts as a failure (§8).
 - **Variant and size.** The result must be the variant the hook works on. `head` ≤ 64 KiB
   of serialised strings plus 64 B per meta/link/script, and at most 256 metas, 64 links,
   16 scripts; `html`/`text` ≤ max(4 × input, 64 KiB), never above 2 MiB.
-- **`html` sanitising (ruling R22).** `html` results (`content.body`; `render.footer` is in
-  the catalogue but not wired into rendering yet) are sanitised with `ammonia` unless the
+- **`html` sanitising (ruling R22).** `html` results (`content.body`, and `render.footer`,
+  which the pipeline runs once per page over `""`, 06 §5) are sanitised with `ammonia` unless the
   plugin declares `render.html = "raw"`: ammonia's defaults (no `<script>`, `<style>`,
   `<iframe>`, `<form>`, `<svg>`, `<math>`, no `on*` handlers) with the URL policy content
   blocks use too (M2a-2b P21, `ferrite_domain::html`): absolute URLs only `http`, `https` or
@@ -891,9 +891,9 @@ As built (M1c-2), in `crates/ferrite-http/src/plugins/` over the store-backed
   `plugin:<name>` key of §4c is not recorded; plugin changes flush through `plugins`.)
 - **Volatile output (ruling R19).** A filter call that uses `kv` or `http`, reads the wall
   clock (`wasi:clocks/wall-clock.now`; the monotonic clock is not volatile), **or fails** marks
-  the page volatile, and it is cached for at most 60 s (`SHORT_TTL` in
-  `crates/ferrite-http/src/app/state.rs`; the planned `plugins.volatile_ttl` setting does not
-  exist yet). No WIT change needed.
+  the page volatile, and it is cached for at most `plugins.volatile_ttl` (default 60 s,
+  1 s..=1 h; `HttpConfig.volatile_ttl`, default `SHORT_TTL` in
+  `crates/ferrite-http/src/app/state.rs`). No WIT change needed.
 - **Render deadline (ruling R18).** Render-class hooks get a 200 ms epoch deadline by default
   (`plugins.render_deadline_ms`), with the tokio hard timeout at 1.5 × that. The epoch
   deadline includes time a call spends awaiting host imports, which on Postgres in debug builds
