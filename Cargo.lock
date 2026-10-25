@@ -1552,6 +1552,7 @@ dependencies = [
  "percent-encoding",
  "quick-xml 0.41.0",
  "reqwest",
+ "rust-embed",
  "rustls",
  "s3s",
  "s3s-fs",

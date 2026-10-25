@@ -568,15 +568,55 @@ Versions pinned in `admin/package.json` at scaffold time (latest stable then); p
 
 ### Embedding & serving
 
-- `admin/` builds to `admin/dist/`. `crates/ferrite-http` embeds it with `rust-embed`
-  (8.x) under `/admin/*`, SPA fallback to `index.html`, hashed assets
-  `Cache-Control: immutable`.
+- `admin/` builds to `admin/dist/` (Vite `base: "/admin/"`). `crates/ferrite-http`
+  embeds it with `rust-embed` (workspace pin 8.13, `debug-embed`):
+  `ferrite_http::admin::EmbeddedAdmin` (`#[folder = "../../admin/dist/"]`,
+  `#[allow_missing = true]`) behind the `AdminAssets` trait. Tests swap the set with
+  `AppState::with_admin_assets` (`test-seams`, 10 §2).
 - `build.rs` does **not** run pnpm (keeps `cargo build` hermetic); CI builds the admin
-  first. A missing `dist/` compiles in a placeholder page saying "admin not built".
-- Dev: `pnpm dev` (Vite on :5173) proxies `/api` to `ferrite serve` on :8080.
-- CSP for admin: `default-src 'self'; img-src 'self' data: blob: <media base>;
-  style-src 'self' 'unsafe-inline'` (shadcn chart injects `<style>` — verify whether a
-  nonce can be used; otherwise allow inline styles only), no inline scripts.
+  first. It only tells Cargo what to watch: `admin/dist` when it exists, else `admin`
+  when that exists (a new `dist/` changes it), else only `build.rs` — a missing
+  watched path would make Cargo rebuild the crate on every invocation (M2b-1 F1); if
+  neither existed at the last build, a later `admin/` needs `touch
+  crates/ferrite-http/build.rs` once. A
+  missing `dist/` compiles an empty set, and every page path then answers a static
+  placeholder page ("FerriteCMS admin not built", naming
+  `pnpm -C admin install && pnpm -C admin build` and a rebuild; no script).
+- Routes (`admin_routes`, in `build_site` and `build_app` inside the shared layers, in
+  front of the public fallback: admin paths never reach redirect rows or the page
+  cache; `admin` is in `slug::RESERVED`, so no redirect row can be written under it):
+  - `GET|HEAD /admin` → `308` to `/admin/` (query kept). Other methods on any admin
+    path → `405` with `Allow: GET, HEAD`.
+  - The rest of the path is percent-decoded once; a path that is not UTF-8 or holds a
+    `.`/`..` segment, a backslash or a NUL is a plain `404` (F3).
+  - Under `assets/`: the file or a plain `404`. Elsewhere: the file if it exists and
+    its last segment has an extension (`favicon.svg`, `robots.txt`); a missing path
+    whose extension is in the content-type table (`html`, `js`, `css`, `woff2`, `svg`,
+    `png`, `ico`, `json`, `txt`, `webmanifest`) is `404`; anything else is
+    `index.html`, the SPA fallback (the placeholder when none is embedded).
+- Caching: `assets/*` `Cache-Control: public, max-age=31536000, immutable`;
+  `index.html`, the placeholder and other root files `no-cache`. Every file has a weak
+  `ETag: W/"<first 16 hex of SHA-256>"` (the compression layer may re-encode text
+  formats, F2), `If-None-Match` (weak comparison) → `304`, and `Vary: Accept-Encoding`.
+  Text formats go through the shared compression layer; fonts, images and unknown
+  types (`application/octet-stream`) are not compressed.
+- Headers on every admin response (errors and the redirect included):
+  `Referrer-Policy: no-referrer` (the password-reset link carries its token in the
+  fragment; P24), `X-Frame-Options: DENY`, `Cross-Origin-Opener-Policy: same-origin`,
+  `X-Content-Type-Options: nosniff`,
+  `Permissions-Policy: camera=(), microphone=(), geolocation=()`,
+  `X-Robots-Tag: noindex`, and the CSP (`admin_csp`):
+  `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src
+  'self' data: blob: https:[ <media origin>]; font-src 'self'; connect-src 'self';
+  frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self';
+  object-src 'none'; worker-src 'self'`. `<media origin>` is the origin of
+  `[media] s3.public_base_url` (Direct S3 mode; `HttpConfig::media_origin`, set by
+  `serve`), else absent. `https:` covers external body images (F5; `no-referrer` keeps
+  the admin path from the remote host). `'unsafe-inline'` styles are needed by the
+  `<style>` elements sonner, Radix and the shadcn chart inject (P8); there is no
+  inline script and no `eval` (Zod runs jitless).
+- Dev: `pnpm dev` (Vite on :5173) proxies `/api` and `/_preview` to `ferrite serve` on
+  :8080.
 
 ### Screens (M2)
 

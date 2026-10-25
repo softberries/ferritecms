@@ -202,6 +202,16 @@ impl App {
         self
     }
 
+    /// This app with a fresh state built with `config` that serves `admin` under
+    /// `/admin/` (the `with_admin_assets` seam).
+    pub async fn with_admin(
+        self,
+        config: HttpConfig,
+        admin: Arc<dyn ferrite_http::admin::AdminAssets>,
+    ) -> Self {
+        self.rebuilt(config, |s| s.with_admin_assets(admin)).await
+    }
+
     /// The default config of [`App::new`].
     pub fn config() -> HttpConfig {
         HttpConfig::new(SITE_URL, SITE_TITLE, "en")

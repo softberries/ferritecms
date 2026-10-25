@@ -2,8 +2,10 @@
 //!
 //! [`build_app`] returns a [`Router`] with a single fallback handler; every public URL
 //! goes through it, except plugin routes under `/_p/<plugin>/` (see `app/plugin_route.rs`:
-//! own checks, never cached) and the theme comment form `POST /_comment` (see
-//! `app/comment_form.rs`: same-origin, anonymous, never cached), mounted in front of it. [`build_site`] (what `serve` runs) puts the API's `/api/v1` routes
+//! own checks, never cached), the theme comment form `POST /_comment` (see
+//! `app/comment_form.rs`: same-origin, anonymous, never cached) and the admin SPA under
+//! `/admin` (see [`crate::admin`]: own headers, never cached or redirected), mounted in
+//! front of it. [`build_site`] (what `serve` runs) puts the API's `/api/v1` routes
 //! ([`crate::api`]) in front of the same fallback, inside the same layers:
 //!
 //! 1. Methods other than GET and HEAD: `405` with `Allow: GET, HEAD`. HEAD is answered
@@ -111,6 +113,8 @@ use tower_http::{
 
 use crate::api::ApiState;
 
+pub(crate) use response::NoCompress;
+
 pub use state::{
     AppParts, AppState, DESCRIPTION_OPTION, HttpConfig, LOCALE_OPTION, LoggedIn, RENDER_WAIT,
     SHORT_TTL, TITLE_OPTION, load_route_table, theme_settings_option,
@@ -132,9 +136,10 @@ pub fn build_site(state: Arc<AppState>, api: Arc<ApiState>) -> Router {
 }
 
 /// Plugin routes ([`plugin_route`]; `/_p/{plugin}/` too, since the wildcard does not
-/// match an empty rest, F25) and the theme comment form ([`comment_form`], POST only;
-/// other methods get a `no-store` `405` with `Allow: POST`) in front of the public
-/// fallback.
+/// match an empty rest, F25), the theme comment form ([`comment_form`], POST only;
+/// other methods get a `no-store` `405` with `Allow: POST`) and the admin SPA
+/// ([`admin_routes`](crate::admin::admin_routes): `/admin`, `/admin/…`) in front of
+/// the public fallback.
 fn public(state: &Arc<AppState>) -> Router {
     Router::new()
         .route(
@@ -145,6 +150,7 @@ fn public(state: &Arc<AppState>) -> Router {
         .route("/_p/{plugin}/{*path}", any(plugin_route::handle))
         .fallback(handler::handle)
         .with_state(state.clone())
+        .merge(crate::admin::admin_routes(state))
 }
 
 /// The layers every response passes, inner to outer (see the module docs).

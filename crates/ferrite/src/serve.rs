@@ -61,7 +61,7 @@ use ferrite_cluster::{
     ClusterMode as NodeMode, JobRunner, NodeIdentity, Registry, RunnerConfig, SCHEDULER_TICK,
     Scheduler, builtin, node_name,
 };
-use ferrite_config::{Config, LoggedInCache, PluginsConfig};
+use ferrite_config::{Config, LoggedInCache, MediaSection, PluginsConfig};
 use ferrite_core::mail::MailQueue;
 use ferrite_core::{
     AuthService, ContentService, ContentTypeService, ExtensionAdmin, ExtensionService,
@@ -873,7 +873,19 @@ fn http_config(config: &Config) -> HttpConfig {
         LoggedInCache::Bypass => LoggedIn::Bypass,
         LoggedInCache::PerUser => LoggedIn::PerUser,
     };
+    http.media_origin = media_origin(config);
     http
+}
+
+/// The origin of `[media] public_base_url` (Direct S3 mode; the admin CSP's `img-src`).
+fn media_origin(config: &Config) -> Option<String> {
+    match &config.media {
+        MediaSection::S3 {
+            public_base_url: Some(url),
+            ..
+        } => Some(url.origin().ascii_serialization()),
+        _ => None,
+    }
 }
 
 /// Public media URLs as the media store builds them (`/_media/…` or the CDN).
@@ -1034,6 +1046,44 @@ mod tests {
         assert_eq!(
             (http.search_ttl, http.volatile_ttl),
             (Duration::ZERO, Duration::from_secs(5))
+        );
+    }
+
+    /// M2b-1 Task 1: only Direct S3 media (`public_base_url`) adds an origin to the
+    /// admin CSP.
+    #[test]
+    fn http_config_maps_the_media_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = |extra: &[(&str, &str)]| {
+            let mut e = vec![(
+                "FERRITE_SITE__URL".to_owned(),
+                "http://localhost:8080".to_owned(),
+            )];
+            e.extend(
+                extra
+                    .iter()
+                    .map(|(k, v)| ((*k).to_owned(), (*v).to_owned())),
+            );
+            e
+        };
+        let local = ferrite_config::load(dir.path(), env(&[])).unwrap();
+        assert_eq!(http_config(&local).media_origin, None);
+        let s3 = [
+            ("FERRITE_MEDIA__BACKEND", "s3"),
+            ("FERRITE_MEDIA__S3__BUCKET", "media"),
+            ("FERRITE_MEDIA__S3__REGION", "eu-central-1"),
+        ];
+        let via_app = ferrite_config::load(dir.path(), env(&s3)).unwrap();
+        assert_eq!(http_config(&via_app).media_origin, None);
+        let mut direct = s3.to_vec();
+        direct.push((
+            "FERRITE_MEDIA__S3__PUBLIC_BASE_URL",
+            "https://cdn.example.com:8443/site/media/",
+        ));
+        let direct = ferrite_config::load(dir.path(), env(&direct)).unwrap();
+        assert_eq!(
+            http_config(&direct).media_origin.as_deref(),
+            Some("https://cdn.example.com:8443")
         );
     }
 

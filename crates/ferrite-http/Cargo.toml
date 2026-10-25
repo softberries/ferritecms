@@ -32,6 +32,7 @@ ipnet.workspace = true
 lettre.workspace = true
 percent-encoding.workspace = true
 reqwest.workspace = true
+rust-embed.workspace = true
 rustls.workspace = true
 semver.workspace = true
 serde.workspace = true

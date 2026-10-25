@@ -21,6 +21,7 @@ use ferrite_theme::{Renderer, SiteInfo, Theme};
 use tokio::sync::Semaphore;
 
 use super::hits::HitCounter;
+use crate::admin::{AdminAssets, EmbeddedAdmin, admin_csp};
 use crate::plugins::ServedBuffer;
 use crate::route::{RouteTable, TypeInfo};
 
@@ -94,6 +95,10 @@ pub struct HttpConfig {
     pub trusted_proxies: Vec<ipnet::IpNet>,
     /// Caching of logged-in requests (`cache.logged_in`). Default [`LoggedIn::Bypass`].
     pub logged_in: LoggedIn,
+    /// Origin (`https://cdn.example.com`) of `[media] public_base_url` when media is
+    /// served directly from S3/a CDN: the admin CSP allows images from it
+    /// ([`admin_csp`](crate::admin::admin_csp)). Default `None` (media under `/_media`).
+    pub media_origin: Option<String>,
 }
 
 impl HttpConfig {
@@ -121,6 +126,7 @@ impl HttpConfig {
             render_budget: RENDER_BUDGET,
             trusted_proxies: Vec::new(),
             logged_in: LoggedIn::Bypass,
+            media_origin: None,
         }
     }
 }
@@ -190,6 +196,10 @@ pub struct AppState {
     /// Takes theme-form comments (`POST /_comment`, P12); `None` (no
     /// [`with_comments`](Self::with_comments)): the form answers `503`.
     pub(crate) comments: Option<Arc<CommentService>>,
+    /// The admin build served under `/admin/` (default [`EmbeddedAdmin`]).
+    pub(crate) admin: Arc<dyn AdminAssets>,
+    /// The admin `Content-Security-Policy`, from [`HttpConfig::media_origin`].
+    pub(crate) admin_csp: String,
     renders: AtomicU64,
 }
 
@@ -201,6 +211,8 @@ impl AppState {
             served: None,
             hits: None,
             comments: None,
+            admin: Arc::new(EmbeddedAdmin),
+            admin_csp: admin_csp(parts.config.media_origin.as_deref()),
             renderer: Renderer::new(),
             render_slots: Arc::new(Semaphore::new(
                 parts
@@ -251,6 +263,14 @@ impl AppState {
     /// service (shared with the API's submit, P12).
     pub fn with_comments(mut self, comments: Arc<CommentService>) -> Self {
         self.comments = Some(comments);
+        self
+    }
+
+    /// Serves `admin` under `/admin/` instead of the embedded build. Test seam
+    /// (`test-seams`).
+    #[cfg(feature = "test-seams")]
+    pub fn with_admin_assets(mut self, admin: Arc<dyn AdminAssets>) -> Self {
+        self.admin = admin;
         self
     }
 

@@ -463,3 +463,64 @@ fn stuck_connection_does_not_block_shutdown() {
     server.wait_log("connections still open after", Duration::from_secs(3));
     drop(stuck);
 }
+
+/// Whether this build embeds an admin build (`admin/dist/index.html` at compile time).
+fn admin_embedded() -> bool {
+    use ferrite_http::admin::{AdminAssets, EmbeddedAdmin};
+    EmbeddedAdmin.get("index.html").is_some()
+}
+
+/// `/admin` on the real binary (both profiles): the redirect, `check` on `/admin/` and
+/// a client-side route, and a missing asset.
+fn admin_on_real_binary(check: impl Fn(&crate::harness::Resp)) {
+    let profiles = std::iter::once(Profile::solo()).chain(Profile::cluster());
+    for p in profiles {
+        p.init();
+        let server = Server::start(&p);
+        let bare = server.get("/admin");
+        assert_eq!(bare.status, 308, "{bare:?}");
+        assert_eq!(bare.header("location"), Some("/admin/"));
+        for path in ["/admin/", "/admin/content/post"] {
+            let r = server.get(path);
+            assert_eq!(r.status, 200, "{path}: {r:?}");
+            assert_eq!(
+                r.header("content-security-policy"),
+                Some(ferrite_http::admin::admin_csp(None).as_str()),
+                "{path}"
+            );
+            assert_eq!(r.header("referrer-policy"), Some("no-referrer"), "{path}");
+            assert_eq!(r.header("x-frame-options"), Some("DENY"), "{path}");
+            assert_eq!(r.header("cache-control"), Some("no-cache"), "{path}");
+            check(&r);
+        }
+        let missing = server.get("/admin/assets/missing-0000.js");
+        assert_eq!(missing.status, 404, "{missing:?}");
+        let status = server.stop_with("TERM");
+        assert!(status.success(), "serve exit status: {status:?}");
+    }
+}
+
+/// M2b-1 Task 1: without `admin/dist` at build time the binary serves the placeholder.
+#[test]
+fn admin_placeholder_on_real_binary() {
+    if admin_embedded() {
+        eprintln!("SKIP admin_placeholder_on_real_binary: an admin build is embedded");
+        return;
+    }
+    admin_on_real_binary(|r| {
+        let body = r.text();
+        assert!(body.contains("FerriteCMS admin not built"), "{body}");
+        assert!(!body.contains("<script"), "{body}");
+    });
+}
+
+/// M2b-1 Task 1: with `admin/dist` at build time the binary serves its `index.html`.
+#[test]
+fn admin_index_on_real_binary() {
+    use ferrite_http::admin::{AdminAssets, EmbeddedAdmin};
+    let Some(index) = EmbeddedAdmin.get("index.html") else {
+        eprintln!("SKIP admin_index_on_real_binary: no admin build is embedded");
+        return;
+    };
+    admin_on_real_binary(|r| assert_eq!(r.body, index.bytes.as_ref()));
+}

@@ -8,3 +8,7 @@
 .env
 /.superpowers/
 /plugins/target
+admin/dist/
+admin/node_modules/
+admin/test-results/
+admin/e2e/.auth/

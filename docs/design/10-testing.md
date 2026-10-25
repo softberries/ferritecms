@@ -52,7 +52,8 @@
   `RunnerOverrides`, `periodics`, `scheduler_tick`, `served_flush`, `listen`, `boot_barrier`
   with `BootBarrier`/`BootGate`, `image_processor`; a production node uses
   `NodeOptions::default()`), `MediaVariantsHandler::with_processor` with the
-  `ferrite::jobs::ImageProcessor` re-export, and `RunningNode::abort` (crash simulation). A
+  `ferrite::jobs::ImageProcessor` re-export, `AppState::with_admin_assets` (an in-memory
+  admin build instead of the embedded `admin/dist`, M2b-1), and `RunningNode::abort` (crash simulation). A
   seam needed only by a crate's own unit tests stays `#[cfg(test)]` (for example
   `PluginHost::extra_wait`). A new seam goes behind the feature, never in a normal build as
   `#[doc(hidden)] pub`.

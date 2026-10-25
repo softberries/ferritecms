@@ -1,8 +1,10 @@
-//! FerriteCMS HTTP layer: the axum app serving the public site ([`app`]) and the REST
-//! API under `/api/v1` ([`api`]; merged by [`build_site`]), the pure URL
+//! FerriteCMS HTTP layer: the axum app serving the public site ([`app`]), the embedded
+//! admin SPA under `/admin/` ([`admin`]) and the REST API under `/api/v1` ([`api`];
+//! merged by [`build_site`]), the pure URL
 //! router ([`route`]), plugin wiring ([`plugins`]), the install pipeline
 //! ([`extensions`]), media upload staging ([`media`]) and the page `<head>` ([`head`]).
 
+pub mod admin;
 pub mod api;
 pub mod app;
 pub mod extensions;
