@@ -1,0 +1,9 @@
+{
+  "app": {
+    "name": "FerriteCMS",
+    "tagline": "Administration"
+  },
+  "placeholder": {
+    "body": "The admin is being built."
+  }
+}

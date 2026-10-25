@@ -12,3 +12,4 @@ admin/dist/
 admin/node_modules/
 admin/test-results/
 admin/e2e/.auth/
+*.tsbuildinfo

@@ -171,7 +171,8 @@ Per project rules, claims about third-party libraries were checked on 2026-10-22
 | Local toolchain: rustc 1.98.1, Node 24.18.0, pnpm 10.28.2, Docker 29.8.1, psql 18.1 | local commands | Yes |
 | "~96% of WP security issues come from plugins" (Patchstack) | quoted in BRIEF | **Not re-verified** — check before any public use |
 | MiniJinja 3.x has a `fuel` feature to bound template execution | memory | **Not verified** — confirm in M1 |
-| Motion (formerly Framer Motion) is published as the `motion` npm package | memory | **Not verified** — confirm at admin scaffold |
+| Motion (formerly Framer Motion) is published as the `motion` npm package, React API under `motion/react` | npm registry (`motion@14.1.0`) + Context7 (motion.dev upgrade guide), 2026-10-25 | Yes |
+| Admin toolchain installs and builds with the exact pins (Vite 8.3.4, React 19.3.0, TypeScript 5.9.3, Tailwind 4.3.3, shadcn 4.21.4 `radix-nova`, TanStack Router 1.170.42, Vitest 5.0.3, ESLint 10.12.0); `vite build` emits no inline script and no `data:` URL | `admin/package.json` + `pnpm-lock.yaml`, `pnpm -C admin build` (`scripts/check-dist.mjs`), 2026-10-25 | Yes |
 | Yoast / Rank Math / ACF meta key names in 08 §3 | memory | **Not verified** — confirm against real exports in M3 |
 | `wasm32-wasip2` target builds components directly; unused WIT imports are dropped | M0 spike + tests (`hello` imports exactly `log`; hostile `undeclared-import`) | Yes |
 
