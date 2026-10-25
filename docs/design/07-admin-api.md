@@ -693,9 +693,13 @@ Versions pinned in `admin/package.json` at scaffold time (latest stable then); p
 
 ### UX principles
 
+The design language (fonts, colour tokens, density, motion, keyboard map, components
+and the review checklist) is [11-admin-ui.md](11-admin-ui.md); the principles below
+are the summary.
+
 - Every destructive action has undo (trash, revision restore) rather than confirm
   dialogs where possible.
 - Motion is used for meaning (list reorder, panel open, page transitions ≤ 200 ms) and
   respects `prefers-reduced-motion`.
-- Dark mode via shadcn theme tokens.
+- Dark mode via shadcn theme tokens (`admin/src/styles/tokens.css`, contrast-gated; 11 §3).
 - Keyboard: command palette (`⌘K`, shadcn `command`) for navigation and "new post".

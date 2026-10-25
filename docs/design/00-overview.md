@@ -20,6 +20,7 @@ the brief gets updated.
 | 08 | [WordPress import](08-wp-import.md) | WXR parsing, mapping, media, redirects, report |
 | 09 | [Operations](09-operations.md) | Upgrade, rollback, backup/restore, TLS, metrics, packaging |
 | 10 | [Testing strategy](10-testing.md) | Test layers, dual-backend contract tests, hostile plugins, CI |
+| 11 | [Admin UI design language](11-admin-ui.md) | Admin study notes, typography, colour tokens and contrast gate, density, motion, keyboard map, components, review checklist |
 
 ## Goals
 

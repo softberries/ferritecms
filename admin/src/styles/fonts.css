@@ -1,0 +1,11 @@
+/*
+ * Self-hosted variable fonts (docs/design/11-admin-ui.md §2), OFL-1.1, licences in
+ * public/licenses/. Vite hashes the woff2 files into dist/assets; each @font-face
+ * carries a unicode-range, so the browser fetches only the subsets a page uses.
+ */
+
+/* Inter Variable: wght 100–900 and opsz (display cut for headings). */
+@import "@fontsource-variable/inter/opsz.css";
+@import "@fontsource-variable/inter/opsz-italic.css";
+/* Geist Mono Variable: wght 100–900. */
+@import "@fontsource-variable/geist-mono/wght.css";

@@ -12,6 +12,8 @@ export default mergeConfig(
             name: "app",
             environment: "jsdom",
             setupFiles: ["./src/test/setup.ts"],
+            // Vitest blanks CSS by default; the token gate reads these as `?raw` text.
+            css: { include: [/\/src\/styles\/[\w-]+\.css/] },
             include: ["src/**/*.test.{ts,tsx}"],
           },
         },

@@ -1,0 +1,132 @@
+/*
+ * FerriteCMS admin design tokens (docs/design/11-admin-ui.md §3–§5).
+ *
+ * The only file allowed to hold colour literals (`no_raw_colours_outside_tokens`).
+ * `src/design/contrast.test.ts` parses it and gates every text pair at 4.5:1 and every
+ * boundary at 3:1 in both modes. `.dark` sits on <html>, the element `:root` matches,
+ * so a `var()` below resolves in the active mode. Colours are oklch(L C H [/ A]),
+ * kept inside the sRGB gamut.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Cool graphite neutrals (hue 260). */
+  --background: oklch(0.99 0.002 250);
+  --foreground: oklch(0.21 0.012 260);
+  --card: oklch(1 0 0);
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --muted: oklch(0.965 0.004 260);
+  --muted-foreground: oklch(0.5 0.015 260);
+  --secondary: var(--muted);
+  --secondary-foreground: var(--foreground);
+  /* shadcn's "accent" is the hover/selected surface, not the brand accent. */
+  --accent: var(--muted);
+  --accent-foreground: var(--foreground);
+  --border: oklch(0.91 0.005 260);
+  --input: oklch(0.64 0.01 260);
+
+  /* "Ember": oxidised iron. */
+  --primary: oklch(0.55 0.17 40);
+  --primary-foreground: oklch(0.99 0.005 40);
+  --ring: var(--primary);
+
+  /* Semantic. */
+  --destructive: oklch(0.55 0.21 27);
+  --success: oklch(0.52 0.13 150);
+  /* Chroma 0.13 -> 0.12: 0.13 is outside sRGB at L 0.55 (11 §3). */
+  --warning: oklch(0.55 0.12 70);
+  --info: oklch(0.52 0.14 255);
+
+  /* Content status. */
+  --status-draft: var(--muted-foreground);
+  --status-pending: var(--warning);
+  --status-scheduled: var(--info);
+  --status-published: var(--success);
+  --status-private: oklch(0.21 0.012 260 / 0.7);
+  --status-trash: var(--destructive);
+
+  /* Charts: series also differ by shape or label, never by colour alone. */
+  --chart-1: var(--primary);
+  --chart-2: var(--info);
+  --chart-3: var(--success);
+  --chart-4: var(--warning);
+  --chart-5: oklch(0.55 0.16 300);
+
+  /* Sidebar: derived from card and muted. */
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--muted);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+
+  /* Radius (sm 0.3, md 0.4, lg 0.5, xl 0.7 rem; mapped in globals.css). */
+  --radius: 0.5rem;
+
+  /* Elevation. */
+  --shadow-1: 0 1px 2px oklch(0 0 0 / 0.06);
+  --shadow-2: 0 4px 12px oklch(0 0 0 / 0.08), 0 1px 3px oklch(0 0 0 / 0.06);
+  --shadow-3: 0 12px 32px oklch(0 0 0 / 0.14);
+
+  /* Motion. */
+  --dur-instant: 80ms;
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 240ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* Density: comfortable (default). */
+  --control-h: 36px;
+  --row-h: 44px;
+  --page-pad: 24px;
+}
+
+html[data-density="compact"] {
+  --control-h: 30px;
+  --row-h: 34px;
+  --page-pad: 16px;
+}
+
+.dark {
+  color-scheme: dark;
+
+  --background: oklch(0.165 0.008 260);
+  --foreground: oklch(0.965 0.004 260);
+  --card: oklch(0.195 0.009 260);
+  --muted: oklch(0.22 0.01 260);
+  --muted-foreground: oklch(0.71 0.015 260);
+  --border: oklch(0.29 0.01 260);
+  --input: oklch(0.52 0.012 260);
+
+  --primary: oklch(0.73 0.15 52);
+  --primary-foreground: oklch(0.2 0.03 45);
+
+  --destructive: oklch(0.7 0.18 25);
+  --success: oklch(0.74 0.14 150);
+  --warning: oklch(0.8 0.14 80);
+  --info: oklch(0.72 0.13 250);
+
+  --status-private: oklch(0.965 0.004 260 / 0.7);
+
+  --chart-5: oklch(0.72 0.14 300);
+
+  /* Elevation in dark mode comes from a 1 px border and a lighter card, not shadows. */
+  --shadow-1: none;
+  --shadow-2: none;
+  --shadow-3: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-instant: 0ms;
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
+  }
+}
