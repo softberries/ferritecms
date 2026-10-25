@@ -25,6 +25,18 @@ and `/_preview` to the site and rewrites `Origin` so the server's CSRF check pas
 | `lint`      | ESLint, then `prettier --check`                                |
 | `format`    | `prettier --write`                                             |
 | `test`      | Vitest (`app` project in jsdom, `scripts` project in Node)     |
+| `e2e`       | Playwright against a real `ferrite serve` (below)              |
+
+E2E: `pnpm -C admin build && cargo build --release -p ferrite && pnpm -C admin e2e`
+(`FERRITE_BIN` overrides `../target/release/ferrite`; first time:
+`pnpm -C admin exec playwright install chromium`). Global setup starts a SQLite site with
+`seed demo`, the harness accounts of `e2e/support/users.ts` and an SMTP sink, and logs the
+accounts in once (`e2e/.auth/`). With `FERRITE_TEST_PG_URL` set, the `chromium-pg` project
+runs the `*.smoke.spec.ts` files against a Postgres site too. Specs import `test` from
+`e2e/support/fixtures.ts`: `as(role)`, `freshSession`, `snap`, `expectAccessible`, and a
+guard that fails a test on a CSP violation, a page error or a `console.error`. Screens go to
+`test-results/screens/` with a contact sheet (`index.html`); server logs to
+`test-results/e2e-logs/`.
 
 Rules the tooling enforces:
 

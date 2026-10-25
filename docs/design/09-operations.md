@@ -192,14 +192,17 @@ of truth for real monitoring.)
 - Release targets: `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl`,
   `aarch64-unknown-linux-gnu`, `aarch64-unknown-linux-musl`, `aarch64-apple-darwin`,
   `x86_64-apple-darwin` (wasmtime/cranelift support for all to verify in CI).
-- **Docker image (as built, M1.5):** `Dockerfile` at the repository root, multi-stage:
-  `rust:1-bookworm` (current stable, matching `rust-toolchain.toml`'s `channel = "stable"`)
-  builds `cargo build --release --locked -p ferrite`; the runtime is
+- **Docker image (as built, M1.5; admin stage M2b-1):** `Dockerfile` at the repository
+  root, multi-stage: `node:24-bookworm-slim` (stage `admin`: `npm install -g pnpm@10.28.2`,
+  `pnpm install --frozen-lockfile`, `pnpm build`) builds the admin SPA; `rust:1-bookworm`
+  (current stable, matching `rust-toolchain.toml`'s `channel = "stable"`) copies its
+  `/src/admin/dist` in and builds `cargo build --release --locked -p ferrite`, which embeds
+  it; the runtime is
   `gcr.io/distroless/cc-debian12:nonroot` (glibc, no shell, uid 65532) with the binary at
   `/ferrite`, an empty `/data` owned by the non-root user, `VOLUME /data`, `EXPOSE 8080`,
   `ENTRYPOINT ["/ferrite"]`, `CMD ["serve", "--data", "/data"]`. CA certificates come with
-  the distroless base. `.dockerignore` keeps `target/`, `.git`, docs and examples out of
-  the build context. Health checks use `ferrite healthcheck` (§8), because the image has
+  the distroless base. `.dockerignore` keeps `target/`, `.git`, docs, examples and the admin's local
+  `node_modules`, `dist`, `test-results`, `e2e/.auth` and `.tanstack` out of the build context. Health checks use `ferrite healthcheck` (§8), because the image has
   no shell, curl or wget. CI builds the image (`docker build -t ferrite:ci .`) and runs
   `config check` in it; publishing images is M4.
 - systemd unit with hardening (`ProtectSystem=strict`, `ReadWritePaths=/var/lib/ferrite`,

@@ -12,7 +12,7 @@
 | HTTP integration | as built (M1c-2): `crates/ferrite-http/tests/app` (in-process app; `app_tests!` runs each test on solo = SQLite + local media and cluster = Postgres + in-process S3), `crates/ferrite-http/tests/plugins`, `crates/ferrite-http/tests/api` (M2a-1: the REST API in process; `api_tests!` runs each test on the same two profiles, `openapi_snapshot_is_current` checks `crates/ferrite-http/openapi.json`, and `sweep.rs` walks the generated spec: every unsafe operation but the five without credentials (the two logins, the two password-reset calls and, since M2a-2b, the comment submit) is `401` without credentials and `403 csrf` for a cookie without the token; M2a-2b added `media.rs`, `idempotency.rs`, `comments.rs`, `system.rs` and `jobs.rs`), `crates/ferrite/tests/serve/` (one test binary, `--test serve`, with one harness: the real binary on a random port with temp data, both profiles; `site.rs` covers `seed demo` + `serve`, `api.rs` has `api_end_to_end_on_real_binary`, which drives login, CSRF, content, tokens, users and revocation over raw HTTP); theme renderer and `blog` theme in `crates/ferrite-theme/tests`, cache review-focus tests in `crates/ferrite-cache/tests` | public pages, routing, cache invalidation, media, feeds, plugins, shutdown, previews and logged-in requests; API CRUD, auth, CSRF/origin, `If-Match`, scopes, rate limits | every CI run, both backends |
 | Media | `ferrite-media` tests; uploads in `crates/ferrite-http/tests/api/media.rs`, the `media.variants` job in `crates/ferrite/tests/node/media.rs` | local folder + in-process S3 server (`s3s-fs`), no Docker; `tests/svg.rs` runs the sanitiser over the hostile fixtures in `tests/svg/` (script, `foreignObject`, event handlers, entity tricks, DOCTYPEs, UTF-16, `<use>` fan-out) | every `cargo test` |
 | Import | `ferrite-import-wp` tests | fixture WXRs → golden JSON of resulting content | CI |
-| Admin | `admin/` | Vitest unit/component tests; Playwright E2E against a real binary | CI |
+| Admin | `admin/` | as built (M2b-1): Vitest (`pnpm test`: the `app` project in jsdom, the `scripts` project in Node) and Playwright (`pnpm e2e`, `admin/playwright.config.ts`) against the real release binary. Global setup (`admin/e2e/support/`) starts a SQLite site (`init`, `seed demo`, the harness accounts `admin`, `editor`, `author`, `author2`, `contributor`, `resetuser` and the `must_reset` `resetme`, an in-process SMTP sink over `node:net`, then `serve` trusting `127.0.0.1` as a proxy so each login context sends its own `X-Forwarded-For`) and, with `FERRITE_TEST_PG_URL`, a Postgres site in a throwaway schema `e2e_<random>`; it logs the accounts in once and saves storage states (`e2e/.auth/<backend>/<login>.json`). Projects `chromium-sqlite` (every spec) and `chromium-pg` (`*.smoke.spec.ts`), 2 workers, 1 retry on CI. Fixtures: `as(role)`, `freshSession` (for tests that log out or reset; shared sessions are never ended), `snap` (light/dark × 1440×900/390×844 under `test-results/screens/` plus a contact sheet), `expectAccessible` (axe, WCAG 2.2 AA tags, both schemes) and an automatic guard that fails a test on a `securitypolicyviolation`, a page error or a `console.error`. Tests create their own data (`uid()`); tests that compare counts with lists create their own content type | every CI run (`admin` job) |
 | Benchmarks | `benches/` (criterion) | filter call overhead, cached/uncached render, cache invalidation fan-out | manual + nightly, results tracked |
 | Backward compat | CI job | previous release's integration tests against current migrations | from first tag |
 
@@ -67,11 +67,16 @@ Exists today (`.github/workflows/ci.yml`):
 3. build test plugins (`wasm32-wasip2`)
 4. `cargo test --workspace` with a Postgres 18 service
 
+As built in M2b-1, job `admin` (Ubuntu, `postgres:18` service as in `check`, the same free-disk step):
+
+5. admin: `pnpm/action-setup@v4` (pnpm from `admin/package.json`'s `packageManager`), Node 24 with the pnpm cache keyed on `admin/pnpm-lock.yaml`, `pnpm -C admin install --frozen-lockfile`, then `lint`, `typecheck`, `test`, `build`
+6. E2E: `cargo build --release --locked -p ferrite` (embedding the fresh `admin/dist`), `playwright install --with-deps chromium`, `pnpm -C admin e2e` with `FERRITE_TEST_PG_URL` (SQLite project plus the Postgres smoke project); `admin/test-results/` (screens, contact sheet, report, traces, server logs) is always uploaded as the `admin-screens` artifact
+7. OpenAPI drift check: `pnpm -C admin api:check` regenerates `src/api/schema.d.ts` from `crates/ferrite-http/openapi.json` and diffs it with the committed file (the spec itself is checked by `openapi_snapshot_is_current` in `check`)
+
+The `check` job builds without `admin/dist`, so it covers the placeholder path; the `docker` job builds the image, whose `admin` stage builds the SPA.
+
 Planned:
 
-5. admin: `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm test`, `pnpm build`
-6. E2E (Playwright) against release build
-7. OpenAPI drift check (generated client == committed)
 8. migration set parity + expand-lint
 
 ## 4. Definition of done (per checklist item)

@@ -12,3 +12,9 @@ site
 **/*.db-shm
 **/*.db-wal
 .env
+# The admin's local install and outputs; the image builds `admin/dist` in its own stage.
+admin/node_modules
+admin/dist
+admin/test-results
+admin/e2e/.auth
+admin/.tanstack

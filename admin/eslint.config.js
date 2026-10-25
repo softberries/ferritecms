@@ -65,6 +65,17 @@ export default defineConfig([
     },
   },
   {
+    // Playwright code, not React: fixtures call their `use` callback, and a fixture
+    // without dependencies takes `{}` (Playwright requires an object pattern).
+    files: ["e2e/**/*.ts", "playwright.config.ts"],
+    languageOptions: { globals: globals.node },
+    rules: {
+      "react-hooks/rules-of-hooks": "off",
+      "react-refresh/only-export-components": "off",
+      "no-empty-pattern": ["error", { allowObjectPatternsAsParameters: true }],
+    },
+  },
+  {
     files: ["**/*.{js,mjs}", "vite.config.ts", "vitest.config.ts"],
     languageOptions: { globals: globals.node },
   },

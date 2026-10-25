@@ -4,12 +4,23 @@
 #   docker build -t ferrite .
 #   docker run -v ferrite-data:/data ferrite init --data /data --url http://localhost:8080
 #
-# The builder is the current stable Rust (rust-toolchain.toml pins `channel = "stable"`),
-# on Debian 12 so the glibc matches the runtime image.
+# The `admin` stage builds the admin SPA (`admin/dist`), which the Rust build embeds
+# (without it the binary serves the admin placeholder). The builder is the current stable
+# Rust (rust-toolchain.toml pins `channel = "stable"`), on Debian 12 so the glibc matches
+# the runtime image.
+
+FROM node:24-bookworm-slim AS admin
+RUN npm install -g pnpm@10.28.2
+WORKDIR /src/admin
+COPY admin/package.json admin/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY admin/ ./
+RUN pnpm build
 
 FROM rust:1-bookworm AS builder
 WORKDIR /src
 COPY . .
+COPY --from=admin /src/admin/dist /src/admin/dist
 RUN cargo build --release --locked -p ferrite \
     && mkdir /data-empty
 

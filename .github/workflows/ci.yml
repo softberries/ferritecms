@@ -53,6 +53,59 @@ jobs:
         env:
           FERRITE_TEST_PG_URL: postgres://ferrite@localhost:5432/ferrite_test
 
+  # The admin SPA (M2b-1): lint, types, unit tests, the API client drift check, the build,
+  # then Playwright against a release `ferrite serve` (SQLite, plus the Postgres smoke
+  # project; 10 §3). `check` stays without `admin/dist`, so it covers the placeholder.
+  admin:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_USER: ferrite
+          POSTGRES_DB: ferrite_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: admin/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: admin/pnpm-lock.yaml
+      - run: pnpm -C admin install --frozen-lockfile
+      - run: pnpm -C admin lint
+      - run: pnpm -C admin typecheck
+      - run: pnpm -C admin test
+      - run: pnpm -C admin api:check
+      - run: pnpm -C admin build
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked -p ferrite
+      - run: pnpm -C admin exec playwright install --with-deps chromium
+      - run: pnpm -C admin e2e
+        env:
+          FERRITE_TEST_PG_URL: postgres://ferrite@localhost:5432/ferrite_test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: admin-screens
+          path: admin/test-results/
+          if-no-files-found: ignore
+
   # The cluster example (P24): validated and built, not started (`docker compose up`
   # is not run in CI; docs/superpowers/m15-exit.md).
   docker:
