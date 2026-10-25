@@ -1,12 +1,20 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { type RouterHistory, createRouter } from "@tanstack/react-router";
+import type { TFunction } from "i18next";
 import { routeTree } from "./routeTree.gen";
+import { RouteError } from "./shell/error-boundary";
+import { NotFound } from "./shell/not-found";
 
 export function createAppRouter(queryClient: QueryClient, history?: RouterHistory) {
   return createRouter({
     routeTree,
     basepath: "/admin",
     defaultPreload: "intent",
+    // Inside the `_app` shell when the failing or missing route is under it (fuzzy
+    // not-found mode, the default): the not-found screen is a component, not a
+    // `/not-found` route (pre-flight F20).
+    defaultNotFoundComponent: NotFound,
+    defaultErrorComponent: RouteError,
     context: { queryClient },
     ...(history ? { history } : {}),
   });
@@ -17,6 +25,13 @@ export type AppRouter = ReturnType<typeof createAppRouter>;
 declare module "@tanstack/react-router" {
   interface Register {
     router: AppRouter;
+  }
+
+  interface StaticDataRouteOption {
+    /** This route's breadcrumb in the top bar (`shell` namespace). */
+    crumb?: (t: TFunction<"shell">) => string;
+    /** Rendered without the shell (the styleguide brings its own frame). */
+    bare?: boolean;
   }
 
   /** What the sign-in screens pass through history state (never through the URL). */

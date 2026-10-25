@@ -84,3 +84,12 @@ export const CONTRAST_PAIRS: ContrastPair[] = [
   ...on(["input", "ring"], ["background"], 3),
   ...on(TOKENS.chart, ["background", "card"], 3),
 ];
+
+/**
+ * `--dur-base` and `--ease-out` as numbers, for the `motion` package (seconds, a
+ * cubic-bezier array). `contrast.test.ts` keeps them equal to tokens.css (11 §5).
+ */
+export const MOTION = {
+  durBase: 0.18,
+  easeOut: [0.22, 1, 0.36, 1] as [number, number, number, number],
+} as const;

@@ -1,11 +1,12 @@
 // Must stay the first import: it configures Zod before any schema is built.
 import "./lib/zod";
 import "./styles/globals.css";
-import { MotionConfig } from "motion/react";
+import { LazyMotion, MotionConfig } from "motion/react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { toast } from "sonner";
 import { createQueryClient, currentPath } from "./api/client";
+import { ApiError } from "./api/problem";
 import { App } from "./app";
 import { holdResetToken, isResetPath, takeResetToken } from "./auth/reset-token";
 import { DensityProvider } from "./design/density";
@@ -20,6 +21,9 @@ import { createAppRouter } from "./router";
 if (isResetPath(window.location.pathname)) {
   holdResetToken(takeResetToken(window.location, window.history));
 }
+
+// `domMax` (layout animation included, pre-flight F28) in a chunk of its own.
+const motionFeatures = () => import("./lib/motion-features").then((m) => m.default);
 
 // Theme and density before the first render, so the first frame is right (11 §3, §4).
 applyStoredPreferences();
@@ -37,13 +41,25 @@ const router = createAppRouter(queryClient);
 void initI18n().then(() => {
   const root = document.getElementById("root");
   if (root) {
-    createRoot(root).render(
+    createRoot(root, {
+      // A route's error component shows an API problem (403, 404, a failed load) as a
+      // state of the screen; React's default report of every caught error would log
+      // those answers as console errors. Anything else is still reported.
+      onCaughtError: (error, info) => {
+        if (error instanceof ApiError) return;
+        console.error(error, info.componentStack);
+      },
+    }).render(
       <StrictMode>
         <ThemeProvider>
           <DensityProvider>
             {/* Reduced motion turns off transform and layout animation (11 §5). */}
             <MotionConfig reducedMotion="user">
-              <App queryClient={queryClient} router={router} />
+              <LazyMotion features={motionFeatures}>
+                {/* The <Toaster> lives in the `_app` shell, not here: sign-in screens show
+                    rate limits inline (Task 9 carry, ruling at Task 10 dispatch). */}
+                <App queryClient={queryClient} router={router} />
+              </LazyMotion>
             </MotionConfig>
           </DensityProvider>
         </ThemeProvider>

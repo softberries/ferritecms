@@ -7,8 +7,7 @@ import { ArrowLeftIcon, CircleAlertIcon, InfoIcon, TimerIcon } from "lucide-reac
 import { cn } from "cn";
 import type { ComponentProps, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { qk } from "@/api/keys";
-import { meta } from "@/api/meta";
+import { metaQuery } from "@/api/meta";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,7 +23,7 @@ function hostOf(url: string): string | null {
 
 /** The site's host, or `null` while unknown (the meta call is public and cheap). */
 function useSite(): { host: string | null; url: string | null; version: string | null } {
-  const { data } = useQuery({ queryKey: qk.meta, queryFn: meta, staleTime: Infinity });
+  const { data } = useQuery(metaQuery);
   if (!data) return { host: null, url: null, version: null };
   return { host: hostOf(data.site_url), url: data.site_url, version: data.version };
 }

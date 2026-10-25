@@ -1,0 +1,181 @@
+import { renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import {
+  CHORD_TIMEOUT_MS,
+  listShortcuts,
+  registerShortcut,
+  useShortcut,
+  type Shortcut,
+} from "./shortcuts";
+
+const cleanups: (() => void)[] = [];
+
+function bind(keys: string, extra: Partial<Shortcut> = {}) {
+  const run = vi.fn();
+  cleanups.push(registerShortcut({ id: keys, keys, label: keys, group: "Test", run, ...extra }));
+  return run;
+}
+
+function press(key: string, init: KeyboardEventInit = {}, target: EventTarget = document.body) {
+  const e = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+  target.dispatchEvent(e);
+  return e;
+}
+
+function platform(name: string) {
+  vi.spyOn(navigator, "platform", "get").mockReturnValue(name);
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  platform("Linux x86_64");
+});
+
+afterEach(() => {
+  cleanups.splice(0).forEach((c) => c());
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  document.body.innerHTML = "";
+});
+
+test("single_key_and_combination", () => {
+  const help = bind("?");
+  const palette = bind("mod+k");
+  expect(press("?", { shiftKey: true }).defaultPrevented).toBe(true);
+  expect(help).toHaveBeenCalledOnce();
+  press("k", { ctrlKey: true });
+  expect(palette).toHaveBeenCalledOnce();
+  // Without the modifier, or with an extra one, nothing.
+  press("k");
+  press("k", { ctrlKey: true, shiftKey: true });
+  press("k", { ctrlKey: true, altKey: true });
+  expect(palette).toHaveBeenCalledOnce();
+});
+
+test("chords", () => {
+  const dash = bind("g d");
+  const pages = bind("g g");
+  press("g");
+  expect(dash).not.toHaveBeenCalled();
+  press("d");
+  expect(dash).toHaveBeenCalledOnce();
+  press("g");
+  press("g");
+  expect(pages).toHaveBeenCalledOnce();
+  // A wrong second step cancels the sequence; the next `d` alone does nothing.
+  press("g");
+  press("x");
+  press("d");
+  expect(dash).toHaveBeenCalledOnce();
+});
+
+test("chord_timeout", () => {
+  const dash = bind("g d");
+  press("g");
+  vi.advanceTimersByTime(CHORD_TIMEOUT_MS - 1);
+  press("d");
+  expect(dash).toHaveBeenCalledOnce();
+  press("g");
+  vi.advanceTimersByTime(CHORD_TIMEOUT_MS);
+  press("d");
+  expect(dash).toHaveBeenCalledOnce();
+});
+
+test("ignored_in_inputs", () => {
+  const help = bind("?");
+  const dash = bind("g d");
+  const palette = bind("mod+k", { allowInInput: true });
+  const input = document.createElement("input");
+  const area = document.createElement("textarea");
+  const editor = document.createElement("div");
+  editor.setAttribute("contenteditable", "true");
+  const inner = document.createElement("p");
+  editor.append(inner);
+  document.body.append(input, area, editor);
+
+  for (const target of [input, area, inner]) {
+    press("?", { shiftKey: true }, target);
+    press("g", {}, target);
+    press("d", {}, target);
+    press("k", { ctrlKey: true }, target);
+  }
+  expect(help).not.toHaveBeenCalled();
+  expect(dash).not.toHaveBeenCalled();
+  expect(palette).toHaveBeenCalledTimes(3);
+
+  // `contenteditable="false"` is not a text field.
+  const off = document.createElement("div");
+  off.setAttribute("contenteditable", "false");
+  document.body.append(off);
+  press("?", { shiftKey: true }, off);
+  expect(help).toHaveBeenCalledOnce();
+});
+
+test("mod_is_meta_on_macos_and_control_elsewhere", () => {
+  const palette = bind("mod+k");
+  press("k", { metaKey: true });
+  expect(palette).not.toHaveBeenCalled();
+  press("k", { ctrlKey: true });
+  expect(palette).toHaveBeenCalledOnce();
+
+  platform("MacIntel");
+  press("k", { ctrlKey: true });
+  expect(palette).toHaveBeenCalledOnce();
+  press("k", { metaKey: true });
+  expect(palette).toHaveBeenCalledTimes(2);
+});
+
+test("when_and_default_prevented", () => {
+  let live = false;
+  const help = bind("?", { when: () => live });
+  press("?", { shiftKey: true });
+  expect(help).not.toHaveBeenCalled();
+  live = true;
+  // A key a component already handled is not taken again.
+  const button = document.createElement("button");
+  button.addEventListener("keydown", (e) => e.preventDefault());
+  document.body.append(button);
+  press("?", { shiftKey: true }, button);
+  expect(help).not.toHaveBeenCalled();
+  press("?", { shiftKey: true });
+  expect(help).toHaveBeenCalledOnce();
+});
+
+test("unregister", () => {
+  const run = vi.fn();
+  const off = registerShortcut({ id: "x", keys: "x", label: "X", group: "Test", run });
+  expect(listShortcuts().map((s) => s.id)).toEqual(["x"]);
+  off();
+  expect(listShortcuts()).toEqual([]);
+  press("x");
+  expect(run).not.toHaveBeenCalled();
+
+  // Re-registering an id replaces it; the old handle no longer removes the new one.
+  const first = vi.fn();
+  const second = vi.fn();
+  const offFirst = registerShortcut({ id: "y", keys: "y", label: "Y", group: "T", run: first });
+  cleanups.push(registerShortcut({ id: "y", keys: "y", label: "Y", group: "T", run: second }));
+  offFirst();
+  press("y");
+  expect(first).not.toHaveBeenCalled();
+  expect(second).toHaveBeenCalledOnce();
+});
+
+test("use_shortcut_registers_while_mounted_and_reads_the_latest_run", () => {
+  const a = vi.fn();
+  const b = vi.fn();
+  const { rerender, unmount } = renderHook(
+    ({ run }: { run: () => void }) => {
+      useShortcut({ id: "h", keys: "h", label: "H", group: "T", run });
+    },
+    { initialProps: { run: a } },
+  );
+  press("h");
+  expect(a).toHaveBeenCalledOnce();
+  rerender({ run: b });
+  press("h");
+  expect(b).toHaveBeenCalledOnce();
+  expect(a).toHaveBeenCalledOnce();
+  unmount();
+  expect(listShortcuts()).toEqual([]);
+});

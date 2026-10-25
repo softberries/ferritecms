@@ -13,7 +13,7 @@ import {
   type Mode,
   type Srgb,
 } from "./contrast";
-import { COLOUR_TOKENS, CONTRAST_PAIRS, TOKENS } from "./tokens";
+import { COLOUR_TOKENS, CONTRAST_PAIRS, MOTION, TOKENS } from "./tokens";
 
 const MODES: Mode[] = ["light", "dark"];
 const tokens = parseTokens(tokensCss);
@@ -142,6 +142,11 @@ describe("design tokens", () => {
     expect(globalBlock).toMatch(/animation-duration:\s*0\.01ms\s*!important/);
     expect(globalBlock).toMatch(/animation-iteration-count:\s*1\s*!important/);
     expect(globalBlock).toMatch(/transition-duration:\s*0\.01ms\s*!important/);
+  });
+
+  it("motion_constants_match_tokens", () => {
+    expect(tokensCss).toMatch(new RegExp(`--dur-base:\\s*${MOTION.durBase * 1000}ms;`));
+    expect(tokensCss).toContain(`--ease-out: cubic-bezier(${MOTION.easeOut.join(", ")});`);
   });
 
   it("no_raw_colours_outside_tokens", () => {

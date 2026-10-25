@@ -4,13 +4,7 @@
 import { Fragment } from "react";
 import { useTranslation } from "react-i18next";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
-
-const isApple = (): boolean => {
-  if (typeof navigator === "undefined") return false;
-  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
-  const platform = nav.userAgentData?.platform ?? navigator.platform;
-  return /mac|iphone|ipad|ipod/i.test(platform);
-};
+import { isApplePlatform } from "@/lib/shortcuts";
 
 /** Visible cap and spoken name of one key. */
 function keyCap(key: string, apple: boolean): { cap: string; name: string } {
@@ -42,7 +36,7 @@ export interface KbdComboProps {
 
 export function KbdCombo({ keys, className }: KbdComboProps) {
   const { t } = useTranslation();
-  const apple = isApple();
+  const apple = isApplePlatform();
   const steps = keys
     .trim()
     .split(/\s+/)

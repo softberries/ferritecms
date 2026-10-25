@@ -1,7 +1,14 @@
 import { act, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DensityProvider, useDensity } from "./density";
-import { applyStoredPreferences, DENSITY_KEY, THEME_KEY } from "./preferences";
+import {
+  applyStoredPreferences,
+  DENSITY_KEY,
+  SIDEBAR_KEY,
+  storeSidebarOpen,
+  storedSidebarOpen,
+  THEME_KEY,
+} from "./preferences";
 import { ThemeProvider, useTheme } from "./theme";
 
 /** A controllable `prefers-color-scheme: dark` query. */
@@ -139,5 +146,25 @@ describe("density", () => {
     act(() => result.current.setDensity("compact"));
     expect(html.dataset.density).toBe("compact");
     expect(localStorage.getItem(DENSITY_KEY)).toBe("compact");
+  });
+});
+
+describe("sidebar", () => {
+  it("sidebar_state_is_stored_per_viewer", () => {
+    expect(storedSidebarOpen()).toBe(true);
+    storeSidebarOpen(false);
+    expect(localStorage.getItem(SIDEBAR_KEY)).toBe("collapsed");
+    expect(storedSidebarOpen()).toBe(false);
+    storeSidebarOpen(true);
+    expect(storedSidebarOpen()).toBe(true);
+    // Blocked storage: the default, and no throw.
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    expect(storedSidebarOpen()).toBe(true);
+    expect(() => storeSidebarOpen(false)).not.toThrow();
   });
 });

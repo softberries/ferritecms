@@ -1,6 +1,7 @@
-// Per-viewer display preferences (docs/design/11-admin-ui.md §3, §4): the colour theme
-// and the density, kept in `localStorage`. Storage can be missing or throw (private
-// windows, blocked site data), so every access is guarded and falls back to the default.
+// Per-viewer display preferences (docs/design/11-admin-ui.md §3, §4, §7): the colour
+// theme, the density and the sidebar state, kept in `localStorage`. Storage can be
+// missing or throw (private windows, blocked site data), so every access is guarded and
+// falls back to the default.
 
 export type ThemePreference = "light" | "dark" | "system";
 export type ResolvedTheme = "light" | "dark";
@@ -8,6 +9,8 @@ export type Density = "comfortable" | "compact";
 
 export const THEME_KEY = "ferrite.admin.theme";
 export const DENSITY_KEY = "ferrite.admin.density";
+/** The shell's sidebar: `expanded` (default) or `collapsed` to the icon rail. */
+export const SIDEBAR_KEY = "ferrite.admin.sidebar";
 export const DARK_QUERY = "(prefers-color-scheme: dark)";
 
 const THEMES: readonly ThemePreference[] = ["light", "dark", "system"];
@@ -45,6 +48,15 @@ export function storedDensity(): Density {
 
 export function storeDensity(density: Density): void {
   write(DENSITY_KEY, density);
+}
+
+/** Whether the desktop sidebar is expanded (the default) rather than an icon rail. */
+export function storedSidebarOpen(): boolean {
+  return read(SIDEBAR_KEY) !== "collapsed";
+}
+
+export function storeSidebarOpen(open: boolean): void {
+  write(SIDEBAR_KEY, open ? "expanded" : "collapsed");
 }
 
 /** The system scheme; light where `matchMedia` is unavailable. */

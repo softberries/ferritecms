@@ -32,6 +32,8 @@ interface StyleguideSearch {
 }
 
 export const Route = createFileRoute("/_app/_styleguide")({
+  // Its own frame (header, section nav); no shell around it.
+  staticData: { bare: true },
   validateSearch: (search: Record<string, unknown>): StyleguideSearch =>
     isSection(search.section) ? { section: search.section } : {},
   component: StyleguidePage,

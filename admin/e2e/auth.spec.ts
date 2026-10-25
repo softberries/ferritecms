@@ -57,7 +57,7 @@ async function signIn(page: Page, login: string, password: string): Promise<void
 
 async function expectDashboard(page: Page, site: SiteInfo): Promise<void> {
   await expect(page).toHaveURL(`${site.url}/admin/`);
-  await expect(page.getByRole("heading", { level: 1, name: "FerriteCMS" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
 }
 
 async function expectNoHorizontalScroll(page: Page): Promise<void> {
@@ -143,9 +143,10 @@ test("login_password_and_logout", async ({ browser, site, guard }) => {
 
   await signIn(page, a.login, a.password ?? "");
   await expectDashboard(page, site);
-  await expect(page.getByText("Signed in as")).toBeVisible();
-
-  await page.getByRole("button", { name: "Sign out" }).click();
+  // Sign out from the account menu, which names who is signed in.
+  await page.getByRole("button", { name: "Account" }).click();
+  await expect(page.getByRole("menu")).toContainText(a.email);
+  await page.getByRole("menuitem", { name: "Sign out" }).click();
   await expect(page).toHaveURL(`${site.url}/admin/login`);
   await expect(page.getByRole("status")).toHaveText("You're signed out.");
   // The session is gone on the server: the guard sends the dashboard back to login.

@@ -209,6 +209,20 @@ test("rate_limited_and_busy_toast_retry_after", async () => {
   expect(navigate).not.toHaveBeenCalled();
 });
 
+test("no_toast_on_auth_screens", async () => {
+  stubFetch(() => problem(429, "rate-limited", {}, { "Retry-After": "42" }));
+  const { r, notify } = routing();
+  const client = createQueryClient(r);
+  for (const path of ["/admin/login", "/admin/login/totp", "/admin/change-password"]) {
+    window.history.replaceState(null, "", path);
+    await mutate(client, () => patchContent("post", "x", 1, {}));
+  }
+  expect(notify).not.toHaveBeenCalled();
+  window.history.replaceState(null, "", "/admin/");
+  await mutate(client, () => patchContent("post", "x", 1, {}));
+  expect(notify).toHaveBeenCalledOnce();
+});
+
 test("no_retry_on_4xx", async () => {
   const { fetch } = stubFetch(() => problem(404, "not-found"));
   const client = createQueryClient(routing().r);

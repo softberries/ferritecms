@@ -1,0 +1,80 @@
+{
+  "skipToContent": "Skip to content",
+  "brand": {
+    "subtitle": "Administration"
+  },
+  "nav": {
+    "label": "Main",
+    "overview": "Overview",
+    "dashboard": "Dashboard",
+    "content": "Content",
+    "viewSite": "View site"
+  },
+  "crumbs": {
+    "dashboard": "Dashboard",
+    "notFound": "Not found"
+  },
+  "topBar": {
+    "search": "Search or jump to…",
+    "searchShort": "Search",
+    "new": "New",
+    "newPost": "New post",
+    "newPage": "New page",
+    "newMore": "More to create",
+    "discouraged": "Search engines discouraged",
+    "discouragedHint": "The site asks search engines not to index it (Settings → Reading)."
+  },
+  "user": {
+    "menu": "Account",
+    "role": {
+      "admin": "Administrator",
+      "editor": "Editor",
+      "author": "Author",
+      "contributor": "Contributor"
+    },
+    "theme": "Theme",
+    "density": "Density",
+    "shortcuts": "Keyboard shortcuts",
+    "signOut": "Sign out"
+  },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  },
+  "density": {
+    "comfortable": "Comfortable",
+    "compact": "Compact"
+  },
+  "shortcuts": {
+    "title": "Keyboard shortcuts",
+    "description": "Single keys never fire while you type in a field or the editor.",
+    "group": {
+      "general": "General",
+      "goTo": "Go to"
+    },
+    "palette": "Open the command palette",
+    "sheet": "Show keyboard shortcuts",
+    "toggleSidebar": "Collapse or expand the sidebar",
+    "goTo": "Go to {{label}}"
+  },
+  "palette": {
+    "title": "Jump to",
+    "description": "Type to filter the screens, then press Enter.",
+    "placeholder": "Jump to…",
+    "empty": "Nothing matches.",
+    "goTo": "Go to"
+  },
+  "notFound": {
+    "title": "Page not found",
+    "body": "Nothing lives at this address. The link may be old, or the page has moved.",
+    "action": "Go to dashboard"
+  },
+  "home": {
+    "description": "Welcome back, {{name}}.",
+    "soonTitle": "Your site at a glance",
+    "soonBody": "Recent drafts, activity and site health land here next.",
+    "write": "Write a post",
+    "viewSite": "View site"
+  }
+}

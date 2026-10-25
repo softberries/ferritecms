@@ -14,7 +14,8 @@ test("admin_loads_under_csp", async ({ as }) => {
   expect(csp).toContain("script-src 'self'");
   expect(csp).not.toContain("unsafe-eval");
   expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
-  await expect(page.getByRole("heading", { level: 1, name: "FerriteCMS" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
   // The guard fixture fails the test on any CSP violation, page error or console error.
 });
 

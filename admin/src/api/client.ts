@@ -96,6 +96,11 @@ function isOn(path: string, page: string): boolean {
   return pathname === page || pathname.startsWith(`${page}/`);
 }
 
+/** The screens outside the shell (sign-in, reset, forced change): no toasts there. */
+function onAuthScreen(path: string): boolean {
+  return [...SIGN_IN_PAGES, CHANGE_PASSWORD_PAGE].some((page) => isOn(path, page));
+}
+
 /** Network failures (the request never got a response) and `503 busy` are retried. */
 function isTransient(error: unknown): boolean {
   if (error instanceof ApiError) return error.status === 503;
@@ -160,6 +165,9 @@ export function createErrorHandler(routing: ErrorRouting) {
           redirect("/change-password");
           return;
         case "rate-limited":
+          // Sign-in screens show their own countdown; a toast there would say it twice
+          // (and sonner replays it once the shell's <Toaster> mounts).
+          if (onAuthScreen(path)) return;
           routing.notify(
             error.slug,
             error.retryAfter === null
@@ -168,6 +176,7 @@ export function createErrorHandler(routing: ErrorRouting) {
           );
           return;
         case "busy":
+          if (onAuthScreen(path)) return;
           routing.notify(
             error.slug,
             error.retryAfter === null

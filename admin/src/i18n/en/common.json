@@ -1,10 +1,6 @@
 {
   "app": {
-    "name": "FerriteCMS",
-    "tagline": "Administration"
-  },
-  "placeholder": {
-    "body": "The admin is being built."
+    "name": "FerriteCMS"
   },
   "errors": {
     "rateLimited": "Too many requests. Try again in {{seconds}} s.",

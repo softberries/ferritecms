@@ -1,6 +1,6 @@
 # 11 — Admin UI design language
 
-Status: **as built (M2b-1 Tasks 7–8)** · Date: 2026-10-25
+Status: **as built (M2b-1 Tasks 7–10)** · Date: 2026-10-25
 
 The admin SPA's visual and interaction language: what it borrows, the typography, the
 colour tokens, spacing, density, motion, the keyboard map, the component inventory and
@@ -221,7 +221,8 @@ contrast pair unchanged.
   (`:root:root, :root[data-density]`, so it outranks the compact rule; Task 8, E2E
   `styleguide_touch_targets`).
 - `--sticky-top` (default `0px`, `tokens.css`): the height of whatever sticks to the
-  top of the viewport above page content. Task 10's top bar sets it on the shell; the
+  top of the viewport above page content. The shell sets it to its top bar's height
+  (`3.5rem`, on the `SidebarProvider` wrapper in `routes/_app.tsx`); the
   styleguide sets it to its own header (6.5 rem below `sm`, 4 rem above). `DataTable`
   frames use it to cap their height (§7).
 - Theme: `ThemeProvider` / `useTheme()` (`@/design/theme`; `{ theme, resolvedTheme,
@@ -263,7 +264,16 @@ contrast pair unchanged.
   `duration-(--dur-base)`; plain `transition` uses `--dur-fast` and `--ease-out`.
 - Motion springs (the `motion` package): layout (list reorder) `{ type: "spring",
   stiffness: 520, damping: 42, mass: 1 }`; panels `{ type: "spring", stiffness: 380,
-  damping: 34 }`. Layout animation needs `domMax` (F28; Task 10 loads it lazily).
+  damping: 34 }`. Layout animation needs `domMax` (F28): `main.tsx` wraps the app in
+  `LazyMotion features={() => import("./lib/motion-features")…}` (its own chunk); use
+  `m.*` from `motion/react-m` inside it. Numbers for Motion come from `MOTION` in
+  `design/tokens.ts` (`durBase` 0.18 s, `easeOut`), kept equal to `tokens.css` by
+  `motion_constants_match_tokens`.
+- Route change (`shell/route-transition.tsx`): `AnimatePresence mode="wait"
+  initial={false}` keyed by the leaf route id; enter `opacity 0→1, y 4→0` over
+  `--dur-base` with `--ease-out`; the exit is instant (during an exit the `<Outlet>`
+  already renders the next route). Under reduced motion it animates opacity only, so
+  no frame carries a transform (E2E `reduced_motion_disables_transforms`).
 - Meaning only: enter/exit of overlays, list insert/remove/reorder, the route change
   (opacity plus 4 px y), the save-state indicator. Nothing loops, and nothing moves more
   than 8 px except sheets.
@@ -281,9 +291,20 @@ contrast pair unchanged.
 `mod` is ⌘ on macOS and Ctrl elsewhere. Single-key shortcuts never fire inside text
 inputs or the editor.
 
+Bindings go through `@/lib/shortcuts` (`registerShortcut`, `useShortcut`,
+`listShortcuts`; one window `keydown` listener; sequences time out after 1 000 ms;
+inside `input`, `textarea`, `select` and `[contenteditable]` only `allowInInput`
+bindings fire; a key a component already handled — `defaultPrevented` — is left
+alone). Local keys (the `DataTable` row keys, the editor's) stay in their components.
+Bound by the shell as of Task 10: `mod+k` (`allowInInput`), `?`, `mod+b` and `g d`;
+the rest arrive with their screens (`g p`/`g g` with the lists, Task 13; `c p`/`c g`
+with the editor, Task 14; `g m`, `g s` in M2b-2/3). The `?` sheet lists whatever is
+registered at the moment it opens.
+
 | Where | Keys | Action |
 |---|---|---|
 | Anywhere | `mod+k` | Command palette |
+| Anywhere (not in fields or the editor) | `mod+b` | Collapse / expand the sidebar |
 | Anywhere | `?` | Shortcut sheet |
 | Anywhere | `g d` | Dashboard |
 | Anywhere | `g p` | Posts |
@@ -394,6 +415,10 @@ Rules for generated files:
 | `dropdown-menu.tsx` | item, checkbox item, radio item, sub-trigger: `outline-hidden` → `-outline-offset-2` | focus ring, inset inside the menu |
 | `scroll-area.tsx` | viewport: removed `outline-none` and ring classes, added `-outline-offset-2` and `tabIndex={0}` | a scrollable region must be keyboard-reachable (axe `scrollable-region-focusable`) |
 | `sidebar.tsx` | group label, group action, menu button, menu action, sub button: removed `outline-hidden focus-visible:ring-2`; strings through `t()` | focus ring; F31 |
+| `sidebar.tsx` (Task 10) | removed the `sidebar_state` cookie write and the global `mod+b` `keydown` listener | the shell stores the state per viewer (`ferrite.admin.sidebar` in `localStorage`, `preferences.ts`) and binds `mod+b` through `shortcuts.ts`, which leaves text fields and the editor alone (TipTap's bold is `mod+b`) |
+| `sidebar.tsx` (Task 10) | `SidebarInset` renders a `div`, not `main` | the shell puts its top bar (a banner) and its own `<main id="main">` inside |
+| `sidebar.tsx` (Task 10) | `data-active={isActive \|\| undefined}` (menu and sub buttons) | `data-active="false"` would match Tailwind's `data-active:` variant (it tests presence), styling every row as active |
+| `sidebar.tsx` (Task 10) | mobile `SheetContent` `onCloseAutoFocus` focuses `[data-sidebar=trigger]` | the sheet has no `SheetTrigger`, so Radix left focus on `<body>` after Escape |
 | `calendar.tsx` | day: removed `group-data-[focused=true]/day:border-ring …:ring-[3px] …:ring-ring/50` | the day button (a `Button`) shows the standard ring |
 | `chart.tsx` | removed `[&_.recharts-surface]:outline-hidden` | Recharts 3's accessibility layer makes the surface focusable |
 | `command.tsx` | input: `outline-hidden` → `focus-visible:outline-none`; its `InputGroup` gets `has-[[data-slot=command-input]:focus-visible]:outline-2 …:outline-offset-2 …:outline-ring`; `CommandDialog` title/description default to `t("ui.commandPalette")` / `t("ui.commandPaletteDescription")` | focus ring on the field; F31 |
@@ -425,6 +450,41 @@ Tailwind and lint config edits made in Task 7:
   module; the import path `@/design/theme` is fixed by the plan).
 - `vitest.config.ts` (`app` project) sets `css.include` to `src/styles/*.css`, so the
   gate can read them as `?raw` text (Vitest blanks CSS otherwise).
+
+**The shell (Task 10).** `routes/_app.tsx` is the signed-in layout: the login guard,
+then `SidebarProvider` (controlled; state per viewer) → skip link, `AppSidebar`
+(`shell/app-sidebar.tsx`), `SidebarInset` with `TopBar` (`shell/top-bar.tsx`) and
+`<main id="main">` holding `RouteTransition`, plus the shell's shortcuts, the ⌘K
+palette (`shell/go-to-palette.tsx`, a minimal "Go to" list that Task 11 replaces), the
+`?` sheet (`shell/shortcut-sheet.tsx`) and the only `<Toaster>` (bottom right).
+
+- Nav (`shell/nav.ts` `navFor(me, types)`): Overview (Dashboard, `g d`), Content (Posts,
+  Pages, then custom types by label, never `media`) when `me.capabilities` holds
+  `read_admin`. Rows are 36 px (44 px under `pointer: coarse`); the active row is
+  tinted (`sidebar-accent`) with its icon in `primary`. Tooltips name the icons only on
+  the collapsed rail.
+- Top bar (56 px, sticky, translucent with a blur): sidebar toggle (tooltip shows
+  `mod+b`), breadcrumbs from the matched routes' `staticData.crumb` (`(t) => string`,
+  `shell` namespace; typed in `router.tsx`), the "Search engines discouraged" pill
+  (`reading.discourage_indexing`; text hidden below `lg`, `title` always), the ⌘K
+  trigger (an input-like button at `md`+, an icon below), the "New" split button
+  (`edit_own`; new post, menu: new page) and the account menu (`shell/user-menu.tsx`:
+  name, role, e-mail, theme and density radio groups, shortcuts, sign out).
+- `staticData.bare: true` renders a route under `_app` without the shell (the
+  styleguide, which has its own frame).
+- The document title is one `<title>` in `__root.tsx`: the deepest crumb, then
+  "FerriteCMS".
+- States: the router's `defaultErrorComponent` (`shell/error-boundary.tsx`) shows an
+  `ApiError` 403 as `ForbiddenState`, 404 as the not-found screen, anything else as
+  `ErrorState` with a retry (`router.invalidate()`); `defaultNotFoundComponent` and the
+  catch-all `routes/_app/$.tsx` show `shell/not-found.tsx` (pre-flight F20: no
+  `/not-found` route; the address stays as typed, and the guard runs first). `main.tsx`'s
+  `onCaughtError` does not log an `ApiError` an error component rendered (a handled
+  answer); everything else is still logged.
+- Toasts: the `<Toaster>` is mounted only in the shell, and the global error handler
+  does not toast `rate-limited`/`busy` on the sign-in, reset and forced-change screens,
+  which show their own countdown (sonner replays still-active toasts when a `<Toaster>`
+  mounts, so the handler, not only the mount point, has to hold back).
 
 ## 8. Design review checklist
 
