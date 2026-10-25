@@ -1,7 +1,7 @@
 //! The admin API's extension service: capability checks and audit over the
 //! [`ExtensionService`] writes (M2a-2 P8, P10; closes M1.5 R11).
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc};
 
 use ferrite_domain::{
     Artifact, ArtifactHash, FailureBucket, InstalledPlugin, InstalledTheme, NewAudit, Timestamp,
@@ -51,8 +51,9 @@ impl ExtensionAdmin {
     }
 
     /// How long each write waits for the `extensions` lock (see
-    /// [`ExtensionService::with_lock_wait`]).
-    pub fn with_lock_wait(mut self, wait: Duration) -> Self {
+    /// [`ExtensionService::with_lock_wait`]); a test seam.
+    #[cfg(feature = "test-seams")]
+    pub fn with_lock_wait(mut self, wait: std::time::Duration) -> Self {
         self.service = self.service.with_lock_wait(wait);
         self
     }

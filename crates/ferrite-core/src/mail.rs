@@ -210,11 +210,17 @@ pub struct MailQueue {
 
 impl MailQueue {
     pub fn new(mailer: Arc<dyn Mailer>) -> Self {
-        Self::with_limits(mailer, MAIL_IN_FLIGHT, MAIL_SEND_TIMEOUT)
+        Self::build(mailer, MAIL_IN_FLIGHT, MAIL_SEND_TIMEOUT)
     }
 
-    /// A queue with `capacity` (at least 1) concurrent sends of at most `timeout` each.
-    pub fn with_limits(mailer: Arc<dyn Mailer>, capacity: usize, timeout: Duration) -> Self {
+    /// A queue with `capacity` (at least 1) concurrent sends of at most `timeout` each;
+    /// a seam for this module's unit tests.
+    #[cfg(test)]
+    fn with_limits(mailer: Arc<dyn Mailer>, capacity: usize, timeout: Duration) -> Self {
+        Self::build(mailer, capacity, timeout)
+    }
+
+    fn build(mailer: Arc<dyn Mailer>, capacity: usize, timeout: Duration) -> Self {
         let capacity = capacity.clamp(1, Semaphore::MAX_PERMITS);
         Self {
             mailer,

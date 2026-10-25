@@ -76,7 +76,9 @@ impl ExtensionService {
     }
 
     /// How long each write waits for the `extensions` lock before failing with
-    /// `CoreError::Store(StoreError::Busy)` (default [`EXTENSIONS_LOCK_WAIT`]).
+    /// `CoreError::Store(StoreError::Busy)` (default [`EXTENSIONS_LOCK_WAIT`]); a test
+    /// seam (tests that hold the lock see `busy` quickly).
+    #[cfg(feature = "test-seams")]
     pub fn with_lock_wait(mut self, wait: Duration) -> Self {
         self.lock_wait = wait;
         self
