@@ -44,9 +44,25 @@ surface).
   - *A drop during the commit.* A client that goes away while the item's transaction
     commits frees the key (the request is treated as failed) although the item may be
     committed; a retry then uploads again.
-- OpenAPI 3.1 generated from code with `utoipa` (6.x) at `/api/v1/openapi.json`; the
-  admin's TypeScript client will be generated from it (`openapi-typescript` +
-  `openapi-fetch`) and checked in CI for drift (M2b).
+- OpenAPI 3.1 generated from code with `utoipa` (6.x) at `/api/v1/openapi.json`. As
+  built (M2b-1): the admin's types are generated from the checked-in
+  `crates/ferrite-http/openapi.json` by `pnpm -C admin api:gen` (`openapi-typescript`
+  7.13.0 with `--root-types`) into the committed `admin/src/api/schema.d.ts`, and
+  `pnpm -C admin api:check` regenerates to a temp file and fails with a diff when the
+  committed file differs (drift is a regenerate-and-diff, M2b P6; it runs in CI). Every
+  `$ref` in the spec must resolve (`openapi_json_is_valid_3_1`). The request layer
+  (`admin/src/api/`) is one `openapi-fetch` 0.17.0 client on the page's origin (the
+  generated paths carry `/api/v1`) with one middleware: `Accept: application/json` on
+  every request, `X-CSRF-Token` (held in memory only) on every request but `GET`/`HEAD`,
+  and an `application/problem+json` response thrown as `ApiError` (`status`, `problem`,
+  `slug`, `fieldErrors()`, `retryAfter`); a failed response without a problem document
+  becomes one too. Request bodies are not validated at runtime. The query client's
+  global `onError` sends `unauthenticated` to `/admin/login?next=<path and query>`
+  (never the fragment; not from the sign-in pages; once for parallel failures) and
+  `password-reset-required` to `/admin/change-password`, both through the router with
+  `ignoreBlocker` (never a full-page load), and shows `rate-limited`/`busy` as a toast
+  with the `Retry-After` seconds. Queries retry network errors and `503` twice (after
+  `Retry-After` when sent) and never another HTTP error; mutations never retry.
 
 ### As implemented (M2a-1 foundation, `crates/ferrite-http/src/api/`)
 

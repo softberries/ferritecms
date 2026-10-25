@@ -49,9 +49,45 @@ async fn openapi_json_is_valid_3_1(api: Api) -> Api {
     assert_eq!(schemes["bearer"]["scheme"], "bearer");
     assert!(doc["paths"]["/api/v1/meta"]["get"].is_object(), "{doc}");
     assert!(doc["paths"]["/api/v1/openapi.json"]["get"].is_object());
+    // Every `$ref` names a schema the document defines (the admin's client generator
+    // refuses a dangling one).
+    let mut dangling = Vec::new();
+    collect_dangling_refs(&doc, &doc["components"]["schemas"], &mut dangling);
+    assert_eq!(dangling, Vec::<String>::new(), "dangling $refs");
     // What is served is the document the snapshot holds.
     assert_eq!(doc, serde_json::to_value(api::openapi()).unwrap());
     api
+}
+
+fn collect_dangling_refs(
+    node: &serde_json::Value,
+    schemas: &serde_json::Value,
+    out: &mut Vec<String>,
+) {
+    match node {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                if key == "$ref"
+                    && let Some(r) = value.as_str()
+                {
+                    let known = r
+                        .strip_prefix("#/components/schemas/")
+                        .is_some_and(|name| schemas.get(name).is_some());
+                    if !known {
+                        out.push(r.to_owned());
+                    }
+                } else {
+                    collect_dangling_refs(value, schemas, out);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_dangling_refs(item, schemas, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 async fn meta_reports_the_site(api: Api) -> Api {

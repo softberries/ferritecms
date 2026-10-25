@@ -923,7 +923,14 @@
             "description": "Default `updated`.",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/ListOrder"
+              "type": "string",
+              "description": "`ORDER BY` of a list without `q`.",
+              "enum": [
+                "published",
+                "updated",
+                "title",
+                "menu"
+              ]
             }
           },
           {

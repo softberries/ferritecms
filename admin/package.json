@@ -13,7 +13,9 @@
     "typecheck": "tsc -b --noEmit",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "api:gen": "openapi-typescript ../crates/ferrite-http/openapi.json -o src/api/schema.d.ts --root-types",
+    "api:check": "node scripts/api-check.mjs"
   },
   "dependencies": {
     "@floating-ui/dom": "1.8.0",

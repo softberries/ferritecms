@@ -55,6 +55,21 @@ test("data_urls_fail_outside_svg", () => {
   ]);
 });
 
+test("eval_and_new_function_fail", () => {
+  const problems = checkDist(
+    dist({
+      ...GOOD,
+      "assets/index-B1x_9aQz.js": "const x = eval('1')",
+      "assets/chunk-D4r7_kLm.js": 'const f = new Function("return 1")',
+      "assets/ok-E5s8_mNp.js": "obj.eval(1); const evaluate = 2; Function.prototype.call",
+    }),
+  );
+  expect(problems).toEqual([
+    "assets/chunk-D4r7_kLm.js: uses eval or new Function (the CSP has no 'unsafe-eval')",
+    "assets/index-B1x_9aQz.js: uses eval or new Function (the CSP has no 'unsafe-eval')",
+  ]);
+});
+
 test("source_map_fails", () => {
   const problems = checkDist(dist({ ...GOOD, "assets/index-B1x_9aQz.js.map": "{}" }));
   expect(problems).toEqual(["assets/index-B1x_9aQz.js.map: source map in the build"]);

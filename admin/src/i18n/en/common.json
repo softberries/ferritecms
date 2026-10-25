@@ -5,5 +5,11 @@
   },
   "placeholder": {
     "body": "The admin is being built."
+  },
+  "errors": {
+    "rateLimited": "Too many requests. Try again in {{seconds}} s.",
+    "rateLimitedLater": "Too many requests. Try again in a moment.",
+    "busy": "The server is busy. Try again in {{seconds}} s.",
+    "busyLater": "The server is busy. Try again in a moment."
   }
 }

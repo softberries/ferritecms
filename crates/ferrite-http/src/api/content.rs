@@ -107,6 +107,7 @@ pub struct ContentListParams {
     /// `parent` (`422`); results come by relevance and `order` is ignored.
     pub q: Option<String>,
     /// Default `updated`.
+    #[param(inline)]
     pub order: Option<ListOrder>,
     /// 1..=200; default 50.
     pub limit: Option<u32>,
