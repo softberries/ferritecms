@@ -1,7 +1,8 @@
 // Colour maths for the token contrast gate (docs/design/11-admin-ui.md §3).
 //
-// `tokens.css` defines every colour as `oklch(L C H)` or `oklch(L C H / A)`, or as
-// `var(--other)`. `parseTokens` reads the `:root` (light) and `.dark` blocks; `.dark`
+// `tokens.css` defines every colour as OKLCH (`L C H` or `L C H / A`), as
+// `var(--other)`, or as `color-mix(in oklch, <colour> N%, transparent)` (the colour at
+// N % opacity). `parseTokens` reads the `:root` (light) and `.dark` blocks; `.dark`
 // sits on `<html>`, the same element as `:root`, so a `var()` reference resolves in the
 // mode it is read in. Ratios follow WCAG 2.x (relative luminance of gamma-encoded sRGB).
 
@@ -24,6 +25,7 @@ export interface Srgb {
 
 const OKLCH = /^oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*(?:\/\s*([\d.]+)(%?)\s*)?\)$/;
 const VAR = /^var\(\s*(--[\w-]+)\s*\)$/;
+const FADE = /^color-mix\(\s*in oklch\s*,\s*(.+?)\s+([\d.]+)%\s*,\s*transparent\s*\)$/;
 
 /** The custom properties of the first `<selector> { … }` block, in source order. */
 function block(css: string, selector: string): Map<string, string> {
@@ -55,15 +57,20 @@ export function parseTokens(css: string): Record<Mode, Record<string, Oklch>> {
   const light = block(css, ":root");
   const dark = new Map([...light, ...block(css, ".dark")]);
   const resolve = (vars: Map<string, string>): Record<string, Oklch> => {
-    const out: Record<string, Oklch> = {};
-    for (const name of vars.keys()) {
-      let value = vars.get(name);
-      for (let hops = 0; value !== undefined && hops < 8; hops++) {
-        const ref = VAR.exec(value);
-        if (!ref?.[1]) break;
-        value = vars.get(ref[1].slice(2));
+    const value = (v: string | undefined, depth: number): Oklch | undefined => {
+      if (v === undefined || depth > 8) return undefined;
+      const ref = VAR.exec(v);
+      if (ref?.[1]) return value(vars.get(ref[1].slice(2)), depth + 1);
+      const fade = FADE.exec(v);
+      if (fade?.[1] && fade[2]) {
+        const base = value(fade[1], depth + 1);
+        return base && { ...base, alpha: (base.alpha * Number(fade[2])) / 100 };
       }
-      const colour = value === undefined ? undefined : parseColour(value);
+      return parseColour(v);
+    };
+    const out: Record<string, Oklch> = {};
+    for (const [name, v] of vars) {
+      const colour = value(v, 0);
       if (colour) out[name] = colour;
     }
     return out;
@@ -90,8 +97,8 @@ const encode = (x: number) => (x <= 0.0031308 ? 12.92 * x : 1.055 * x ** (1 / 2.
 const decode = (x: number) => (x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4);
 const clamp = (x: number) => Math.min(1, Math.max(0, x));
 
-/** Whether the colour is inside the sRGB gamut (no browser gamut mapping involved). */
-export function inSrgbGamut(colour: Oklch, epsilon = 1e-3): boolean {
+/** Whether the colour is inside the sRGB gamut (`epsilon` only absorbs float noise). */
+export function inSrgbGamut(colour: Oklch, epsilon = 1e-6): boolean {
   return oklchToLinear(colour).every((x) => x >= -epsilon && x <= 1 + epsilon);
 }
 

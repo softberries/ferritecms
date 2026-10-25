@@ -55,12 +55,57 @@ test("theme_follows_the_system_unless_chosen", async ({ as }) => {
   await expect(html).toHaveClass(/\bdark\b/);
   const darkBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 
-  // A stored choice wins over the system scheme from the first frame.
+  // After a reload, a stored choice wins over the system scheme.
   await page.evaluate(() => localStorage.setItem("ferrite.admin.theme", "light"));
   await page.reload();
-  await expect(html).not.toHaveClass(/\bdark\b/);
+  await expect(html).toHaveClass("light");
   const lightBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   expect(lightBg).not.toBe(darkBg);
+});
+
+test("dark_os_first_paint_is_dark_before_js", async ({ browser, site, guard }) => {
+  // The frame before the module script runs: no JS at all, so <html> has no class and
+  // only tokens.css decides (11 §4). No storage state needed: index.html is public.
+  const background = async (colorScheme: "light" | "dark") => {
+    const ctx = await browser.newContext({
+      baseURL: site.url,
+      javaScriptEnabled: false,
+      colorScheme,
+    });
+    try {
+      const page = await ctx.newPage();
+      await page.goto("/admin/");
+      expect(await page.locator("html").getAttribute("class")).toBeNull();
+      return await page.evaluate(() => {
+        const s = getComputedStyle(document.body);
+        return {
+          bg: s.backgroundColor,
+          scheme: getComputedStyle(document.documentElement).colorScheme,
+        };
+      });
+    } finally {
+      await ctx.close();
+    }
+  };
+  const dark = await background("dark");
+  const light = await background("light");
+  expect(dark.scheme).toBe("dark");
+  expect(light.scheme).toBe("light");
+  expect(dark.bg).not.toBe(light.bg);
+
+  // Same colour as the JS-applied `.dark` background.
+  const ctx = await browser.newContext({ baseURL: site.url, colorScheme: "dark" });
+  await guard.watch(ctx);
+  try {
+    const page = await ctx.newPage();
+    await page.goto("/admin/");
+    await expect(page.locator("html")).toHaveClass("dark");
+    expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
+      dark.bg,
+    );
+  } finally {
+    await ctx.close();
+  }
 });
 
 test("compact_density_switches_the_variables", async ({ as }) => {

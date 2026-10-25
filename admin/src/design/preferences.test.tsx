@@ -58,10 +58,11 @@ describe("theme", () => {
       </ThemeProvider>,
     );
     expect(screen.getByRole("status")).toHaveTextContent("system/light");
-    expect(html).not.toHaveClass("dark");
+    // Exactly one class once JS runs (tokens.css's no-JS fallback keys off neither).
+    expect(html.className).toBe("light");
     act(() => scheme.set(true));
     expect(screen.getByRole("status")).toHaveTextContent("system/dark");
-    expect(html).toHaveClass("dark");
+    expect(html.className).toBe("dark");
   });
 
   it("chosen_theme_is_stored_and_wins_over_the_system", () => {
@@ -86,7 +87,7 @@ describe("theme", () => {
     localStorage.setItem(THEME_KEY, "dark");
     localStorage.setItem(DENSITY_KEY, "compact");
     applyStoredPreferences();
-    expect(html).toHaveClass("dark");
+    expect(html.className).toBe("dark");
     expect(html.dataset.density).toBe("compact");
   });
 

@@ -103,7 +103,7 @@ All colours are `oklch(L C H [/ A])`, light / dark. Neutrals have a cool graphit
 | `ring` | = `primary` | = `primary` |
 | `destructive` | 0.55 0.21 27 | 0.70 0.18 25 |
 | `success` | 0.52 0.13 150 | 0.74 0.14 150 |
-| `warning` | **0.55 0.12 70** (see changes) | 0.80 0.14 80 |
+| `warning` | **0.55 0.115 70** (see changes) | 0.80 0.14 80 |
 | `info` | 0.52 0.14 255 | 0.72 0.13 250 |
 
 Derived tokens (`var()` in `tokens.css`, so they follow the mode):
@@ -114,7 +114,9 @@ Derived tokens (`var()` in `tokens.css`, so they follow the mode):
   `muted`.
 - Content status: `status-draft` = `muted-foreground`, `status-pending` = `warning`,
   `status-scheduled` = `info`, `status-published` = `success`, `status-private` =
-  `foreground` at 70 % (`oklch(… / 0.7)`), `status-trash` = `destructive`. Status is
+  `foreground` at 70 % (`color-mix(in oklch, var(--foreground) 70%, transparent)`,
+  so it follows `foreground` in both modes; `status_private_derives_from_foreground`
+  checks it), `status-trash` = `destructive`. Status is
   never colour alone: the badge is a dot plus a label (Task 8 `StatusBadge`).
 - Charts: `chart-1` ember, `chart-2` info, `chart-3` success, `chart-4` warning,
   `chart-5` a violet 0.55 0.16 300 / 0.72 0.14 300. Series are also told apart by shape
@@ -133,8 +135,10 @@ Tailwind names: `bg-primary`, `text-success`, `text-status-published`,
 sRGB with Björn Ottosson's OKLab matrices, composites translucent colours over their
 background in gamma sRGB as browsers blend, and computes the WCAG 2.x ratio. Text
 pairs need ≥ 4.5:1 (1.4.3); `input`, `ring` and chart series need ≥ 3:1 (1.4.11). Every
-colour token must also lie inside the sRGB gamut (tolerance 0.001 in linear light), so
-no browser gamut mapping can move a ratio. Values computed 2026-10-25 from the
+colour token must also lie strictly inside the sRGB gamut (every linear channel in
+0..1; the 1e-6 tolerance only absorbs float noise), so no browser gamut mapping can
+move a ratio. The parser understands OKLCH values, `var()` references and
+`color-mix(in oklch, <colour> N%, transparent)` fades. Values computed 2026-10-25 from the
 shipped `tokens.css`:
 
 | Foreground | Background | Min | Light | Dark |
@@ -172,10 +176,11 @@ shipped `tokens.css`:
 carries meaning; anything a user must find (inputs, focus) uses `input` or `ring`.
 
 **Changes to the starting values:** one. Light `warning` 0.55 **0.13** 70 → 0.55
-**0.12** 70: at L 0.55, hue 70, chroma 0.13 lies outside sRGB (linear blue channel
-−0.010), so its rendered colour would depend on the browser's gamut mapping; 0.12 is
-the largest chroma (in steps of 0.005) inside the gamut test's tolerance. Its ratios
-do not move (4.84 on `background`, 4.98 on `card`). Every starting value passed its
+**0.115** 70: at L 0.55, hue 70, chroma 0.13 lies outside sRGB (linear blue channel
+−0.010), so its rendered colour would depend on the browser's gamut mapping; 0.115 is
+the largest chroma in steps of 0.005 that is strictly inside (0.12 still gives linear
+blue −0.0008; Task 7 first shipped 0.12 under a 0.001 tolerance, tightened in its fix
+round). Its ratios do not move (4.84 on `background`, 4.98 on `card`). Every starting value passed its
 contrast pair unchanged.
 
 ## 4. Spacing, radius, elevation, density
@@ -209,11 +214,27 @@ contrast pair unchanged.
   screens targets stay ≥ 44 px whatever the density (§8).
 - Theme: `ThemeProvider` / `useTheme()` (`@/design/theme`; `{ theme, resolvedTheme,
   setTheme }`, the shape the shadcn sonner wrapper expects, P9) with `light | dark |
-  system`; `system` follows `prefers-color-scheme` live. It toggles `.dark` on `<html>`
-  and stores the choice in `localStorage` (`ferrite.admin.theme`), also inside
-  try/catch. `main.tsx` calls `applyStoredPreferences()` as module code before the first
-  render, so the first frame already has the right theme and density (no inline
+  system`; `system` follows `prefers-color-scheme` live. Once JS runs, `<html>` carries
+  exactly one of `.light` / `.dark` (`applyTheme`), and the choice is stored in
+  `localStorage` (`ferrite.admin.theme`), also inside try/catch. `main.tsx` calls
+  `applyStoredPreferences()` as module code before the first render (no inline
   script; the CSP forbids one).
+- **First paint.** The stylesheet is render-blocking but the module script is
+  deferred, so the browser can paint before any JS runs. For that frame `<html>` has
+  no class, and `tokens.css` covers it on its own: `@media (prefers-color-scheme:
+  dark) { :root:not(.light):not(.dark) { color-scheme: dark; --background; --foreground } }`
+  with the `.dark` values (`dark_first_frame_matches_dark_tokens` keeps them equal;
+  E2E `dark_os_first_paint_is_dark_before_js` loads the page with JS disabled under
+  an emulated dark scheme). Only these tokens are needed: before React mounts, `#root`
+  is empty, so the canvas (`body` background) and `color-scheme` are all that paint.
+  The `dark:` variant (`.dark *`) does not match in that frame, and nothing uses it yet.
+  - Flash-free: `system` on any OS (the default), and an explicit choice that matches
+    the OS.
+  - Still flashes one frame: an explicit choice against the OS (stored `dark` on a light
+    OS, or `light` on a dark one), because `localStorage` is unreadable without JS.
+    Fixing it needs a server hint (for example a cookie that `index.html` serving turns
+    into a class); deferred.
+  - Density has no first-paint effect: nothing density-sized renders before React.
 
 ## 5. Motion
 
@@ -322,8 +343,10 @@ a failing test.
 - [ ] Loading skeletons, empty, error and permission-denied states present.
 - [ ] Dark mode at parity: no hard-coded colours; `grep -E "#[0-9a-f]{3,6}|rgb\(" src`
   finds none outside `tokens.css` (and the F30 chart selectors). The unit test
-  `no_raw_colours_outside_tokens` is stricter: it also catches `rgba(`, `hsl(` and
-  `hsla(`.
+  `no_raw_colours_outside_tokens` is stricter: it also catches `rgba(`, `hsl(`,
+  `hsla(`, `oklch(`, `oklab(`, `lab(`, `lch(`, `hwb(` and the mode-blind
+  `bg|text|border|ring|…-white|black` utilities (`bg-black/50` included; shadcn
+  overlays need `bg-foreground/…` or a token instead).
 - [ ] Mobile width without horizontal scroll and with ≥ 44 px touch targets.
 - [ ] Text never truncated without a tooltip or `title`.
 - [ ] Numbers tabular.

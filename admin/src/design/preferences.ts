@@ -58,9 +58,15 @@ export function resolveTheme(theme: ThemePreference): ResolvedTheme {
   return theme === "system" ? systemTheme() : theme;
 }
 
-/** Toggles `.dark` on <html> (tokens.css and the `dark:` variant key off it). */
+/**
+ * Sets exactly one of `.light` / `.dark` on <html> (tokens.css and the `dark:` variant
+ * key off `.dark`). No class at all means JS has not run yet; tokens.css then follows
+ * the system scheme on its own.
+ */
 export function applyTheme(theme: ResolvedTheme): void {
-  document.documentElement.classList.toggle("dark", theme === "dark");
+  const classes = document.documentElement.classList;
+  classes.toggle("dark", theme === "dark");
+  classes.toggle("light", theme === "light");
 }
 
 /** Sets `html[data-density]` (tokens.css switches the density variables on it). */

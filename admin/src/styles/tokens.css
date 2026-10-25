@@ -4,8 +4,10 @@
  * The only file allowed to hold colour literals (`no_raw_colours_outside_tokens`).
  * `src/design/contrast.test.ts` parses it and gates every text pair at 4.5:1 and every
  * boundary at 3:1 in both modes. `.dark` sits on <html>, the element `:root` matches,
- * so a `var()` below resolves in the active mode. Colours are oklch(L C H [/ A]),
- * kept inside the sRGB gamut.
+ * so a `var()` below resolves in the active mode. Colours are OKLCH (L C H [/ A]),
+ * strictly inside the sRGB gamut. Once JS runs, <html> has exactly one of `.light` /
+ * `.dark`; with neither (the frame before the module script) the media block at the
+ * end paints the system scheme.
  */
 
 :root {
@@ -36,8 +38,8 @@
   /* Semantic. */
   --destructive: oklch(0.55 0.21 27);
   --success: oklch(0.52 0.13 150);
-  /* Chroma 0.13 -> 0.12: 0.13 is outside sRGB at L 0.55 (11 §3). */
-  --warning: oklch(0.55 0.12 70);
+  /* Chroma 0.13 -> 0.115: 0.13 is outside sRGB at L 0.55 (11 §3). */
+  --warning: oklch(0.55 0.115 70);
   --info: oklch(0.52 0.14 255);
 
   /* Content status. */
@@ -45,7 +47,7 @@
   --status-pending: var(--warning);
   --status-scheduled: var(--info);
   --status-published: var(--success);
-  --status-private: oklch(0.21 0.012 260 / 0.7);
+  --status-private: color-mix(in oklch, var(--foreground) 70%, transparent);
   --status-trash: var(--destructive);
 
   /* Charts: series also differ by shape or label, never by colour alone. */
@@ -112,14 +114,25 @@ html[data-density="compact"] {
   --warning: oklch(0.8 0.14 80);
   --info: oklch(0.72 0.13 250);
 
-  --status-private: oklch(0.965 0.004 260 / 0.7);
-
   --chart-5: oklch(0.72 0.14 300);
 
   /* Elevation in dark mode comes from a 1 px border and a lighter card, not shadows. */
   --shadow-1: none;
   --shadow-2: none;
   --shadow-3: none;
+}
+
+/*
+ * First frame before JS (no class on <html> yet) on a dark OS: the page is still empty
+ * (#root renders later), so only the canvas matters. These copy `.dark` exactly;
+ * `dark_first_frame_matches_dark_tokens` keeps them in step.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not(.dark) {
+    color-scheme: dark;
+    --background: oklch(0.165 0.008 260);
+    --foreground: oklch(0.965 0.004 260);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

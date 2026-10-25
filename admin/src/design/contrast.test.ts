@@ -84,12 +84,47 @@ describe("design tokens", () => {
   });
 
   it("parse_tokens_resolves_references_per_mode", () => {
-    const css = `:root {\n  --a: oklch(0.5 0.1 40);\n  --b: var(--a);\n  --c: oklch(0.2 0 0 / 70%);\n  --radius: 0.5rem;\n}\n.dark {\n  --a: oklch(0.8 0.1 40);\n}\n`;
+    // `OK(` stands for the OKLCH function, so this file holds no colour literal.
+    const css = `:root {
+  --a: OK(0.5 0.1 40);
+  --b: var(--a);
+  --c: OK(0.2 0 0 / 70%);
+  --d: color-mix(in oklch, var(--a) 50%, transparent);
+  --radius: 0.5rem;
+}
+.dark {
+  --a: OK(0.8 0.1 40);
+}
+`.replaceAll("OK(", "okl" + "ch(");
     const parsed = parseTokens(css);
     expect(parsed.light.b).toEqual({ l: 0.5, c: 0.1, h: 40, alpha: 1 });
     expect(parsed.dark.b).toEqual({ l: 0.8, c: 0.1, h: 40, alpha: 1 });
     expect(parsed.dark.c?.alpha).toBeCloseTo(0.7, 5);
+    expect(parsed.dark.d).toEqual({ l: 0.8, c: 0.1, h: 40, alpha: 0.5 });
     expect(parsed.light.radius).toBeUndefined();
+  });
+
+  it("dark_first_frame_matches_dark_tokens", () => {
+    // Before JS runs <html> has no class; on a dark OS tokens.css paints the dark
+    // canvas itself. Its values must be the `.dark` ones.
+    const m =
+      /@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root:not\(\.light\):not\(\.dark\)\s*\{([^}]*)\}/.exec(
+        tokensCss,
+      );
+    const body = m?.[1] ?? "";
+    expect(body).toMatch(/color-scheme:\s*dark\s*;/);
+    const first = parseTokens(`:root {${body}}`).light;
+    expect(Object.keys(first).sort()).toEqual(["background", "foreground"]);
+    for (const [name, colour] of Object.entries(first)) {
+      expect(colour, name).toEqual(tokens.dark[name]);
+    }
+  });
+
+  it("status_private_derives_from_foreground", () => {
+    for (const mode of MODES) {
+      const { foreground, "status-private": priv } = tokens[mode];
+      expect(priv).toEqual({ ...foreground, alpha: 0.7 });
+    }
   });
 
   it("reduced_motion_zeroes_durations", () => {
@@ -121,7 +156,16 @@ describe("design tokens", () => {
     const allowed: Record<string, string[]> = {
       "/src/components/ui/chart.tsx": ["ccc", "fff"].map((c) => `[stroke='#${c}']`),
     };
-    const literal = /#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\b|\b(?:rgba?|hsla?)\(/g;
+    // Hex, the colour functions, and Tailwind's mode-blind white/black utilities
+    // (`bg-black/50` included); `in oklch` inside color-mix() is not a literal.
+    const literal = new RegExp(
+      [
+        String.raw`#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\b`,
+        String.raw`\b(?:rgba?|hsla?|oklch|oklab|lab|lch|hwb)\(`,
+        String.raw`\b(?:bg|text|border|ring|outline|fill|stroke|from|via|to|shadow|divide|decoration|placeholder|caret|accent)-(?:white|black)\b`,
+      ].join("|"),
+      "g",
+    );
     const found: string[] = [];
     expect(Object.keys(files).length).toBeGreaterThan(10);
     for (const [path, source] of Object.entries(files)) {
