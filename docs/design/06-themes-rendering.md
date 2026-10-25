@@ -338,6 +338,11 @@ dropped by the honeypot (the same answer, so a bot cannot tell); the `blog` them
 non-public or closed item is `404`. Every answer is `Cache-Control: no-store`. A pending
 comment is never shown, not even to its author (later); an approval, moderation or delete
 invalidates `post:<item>`, so cached pages show the change after the next poll.
+Moderation follows `comments.moderation` (07 §1 "Comments"): with the default `known`
+(M2a-2b R2, WordPress's default) a guest's first comment is held, and once an admin or
+editor approves it the same name and e-mail post directly (at most 2 links); `all` holds
+every form comment. Since form comments are anonymous, a moderator commenting through the
+theme is moderated like a guest.
 
 MiniJinja builtins that remain: `range` (≤ 100 000 items), `dict`, `namespace`, the standard
 filters and tests. `debug()` is removed. `site` exposes only the four whitelisted options and

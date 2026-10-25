@@ -141,6 +141,18 @@ adds two at this level:
   approval never covers other bytes or a wider grant, and a widening update without a
   new approval is refused while the old version keeps running.
 
+M2a-2b (media, comments, system API, hardening; [`m2a2b.md`](../superpowers/rulings/m2a2b.md))
+adds two at this level:
+
+- **M2a-2b R1 (applies WordPress familiarity):** uploads accept common documents (docx,
+  xlsx, pptx, odt, ods, odp, zip, txt, csv) next to images, audio, video, PDF and sanitised
+  SVG; the type comes from the content, and documents are always served download-only
+  (`attachment` + `nosniff`) so they cannot run in the site's origin (03 §3).
+- **M2a-2b P16 (applies principle 2):** the plugin `http` import connects only to the
+  addresses its own DNS lookup checked (every address public, `https` on 443, redirects
+  re-checked against the plugin's list per hop), so an allowlisted name cannot be pointed
+  at internal services (05 §6).
+
 ## Verified facts this design relies on
 
 Per project rules, claims about third-party libraries were checked on 2026-10-22.

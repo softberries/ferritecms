@@ -46,7 +46,7 @@ Controller rulings: [m1a](superpowers/rulings/m1a.md), [m1b](superpowers/rulings
   - [x] `media.variants` job calling `process_image` + writing `artifacts` rows and the `media.variants` mapping, with an image-processing concurrency semaphore (M1b ruling R4). Moved to **M2** (media service and uploads; needs the M1.5 job queue). Done in M2a-2b (`MediaVariantsHandler`, `media.image_workers`; design 03 §4).
   - [x] `/_media/<hash>/<name>` serving via `MediaStore::open_read` (streaming; ETag, 304, single ranges, 416, HEAD; `inline_safe` types inline, PDF with `Content-Security-Policy: sandbox`, everything else attachment + `nosniff`; published media only; design 03 §5). Upload limits for `put_stream` apply when uploads exist (M2).
   - [x] Install a process-default rustls `CryptoProvider` in `main` (both `ring` and `aws-lc-rs` are linked, so rustls panics building a client config without a default). Done in `crates/ferrite/src/main.rs` (`ring`).
-- [ ] Core services (`ferrite-core`):
+- [x] Core services (`ferrite-core`):
   - [x] Content: create/update with slug allocation and retry, revisions (keep 50), search indexing, status lifecycle (publish, unpublish, schedule, submit, trash, restore, delete, `publish_due`), permalink-change redirects (including descendants, rulings R1/R2), optimistic `version`.
   - [x] Roles and capabilities (`Actor`, `can`; design 07 §1), including the contributor rules (R8).
   - [x] Terms (`TaxonomyService`), options (`OptionService`), redirects (`RedirectService`, loop check), menus (`MenuService`).
@@ -55,13 +55,13 @@ Controller rulings: [m1a](superpowers/rulings/m1a.md), [m1b](superpowers/rulings
   - [x] Content types service (`ContentTypeService`: names checked against the router and permalinks, field schemas validated on every content write, `types.changed`; M2a-1, P18).
   - [x] Search query service for public search (`SiteReader::search`, published-only, capped at 200 matches, ruling R9). Admin search: `GET /api/v1/content/{type}?q=` (M2a-1).
   - [x] Users service (`UserService` with the operator path for the CLI; M2a-1, P14–P17).
-  - [ ] Media service (`media` rows, `media.variants`; M2a-2b). `SiteReader` reads media rows (`media_file`, featured and inline images).
+  - [x] Media service (`media` rows, `media.variants`; done in M2a-2b, `MediaService`). `SiteReader` reads media rows (`media_file`, featured and inline images).
 - [x] Transactional outbox (`events`) written by every invalidating write:
   - [x] Written in the same transaction by content, lifecycle, term, menu and options writes in `ferrite-core` (`events.rs`).
   - [x] Redirect writes emit informational `redirect:<source>` events (M1c-2 Task 3); the dependency-key contract is documented in `events.rs`.
   - [x] `theme.changed`, `plugins.changed` and `plugin.disabled` are emitted by `ExtensionService` and the shared failure counters (M1.5; design 04 §4 "Event kinds").
   - [x] `user:<id>` is emitted by `UserService` on display-name and status changes and deletes (M2a-1).
-  - Not yet emitted because no write path exists: `post:<media id>` for media-row writes outside `seed` (M2a-2b media service).
+  - [x] `post:<media id>` for media-row writes outside `seed`: emitted by `MediaService` in the same transaction (M2a-2b, M1c-2 R11).
 - [x] `ferrite serve`: router (pure, canonical paths, permalink matching), redirects before the cache, 404/410 shared pages, RSS feeds, sitemaps, `robots.txt`, `/healthz`, `/readyz`, bounded shutdown (M1c-2; design 06 §3, 09 §8).
 - [x] `ferrite seed demo` (posts, pages, terms, menus, sample image with variants; M1c-2).
 - [x] Theme engine: MiniJinja (fuel, output cap, no loader), hierarchy resolution (incl. front page, m1c2 R17), safe helpers, dependency recording; `blog` theme (M1c-2; design 06 §1–§4).
@@ -71,7 +71,7 @@ Controller rulings: [m1a](superpowers/rulings/m1a.md), [m1b](superpowers/rulings
   - [x] `ammonia` sanitising of `html` output (R22) and head→HTML rendering with escaping and `script-tag` checks (05 §7).
   - [x] `content.read` published-only, preview visibility scoped to the previewed item (05 §7a); `options.get` never returns `plugin.*` keys.
   - [x] Reject bare IPs and `localhost` in the http allowlist (manifest rule, M2a-2a P7, F5) and implement the real `mail` service (`notify-admins`, M2a-2a P17, P18).
-  - [ ] The real `http` import with the resolved-address SSRF / DNS-rebinding check (M2a-2b).
+  - [x] The real `http` import with the resolved-address SSRF / DNS-rebinding check (done in M2a-2b Task 11, P16; 05 §6).
   - [x] Type-scope `meta` and stop `"*"` meta grants exposing other plugins' `plugin.<other>.*` meta (M2a-2a P23).
   - [x] Admin approval flow for limits above host defaults, up to ceilings (M2a-2a P5; M2a P28).
   - [ ] Revisit the pooling allocator under concurrent load (M4).
@@ -143,7 +143,10 @@ Design: [07](design/07-admin-api.md). Split three ways (M2a P1), each with its o
 comments, system endpoints, hardening; itself split into **M2a-2a** and **M2a-2b**, M2a-2
 P1), **M2b** (admin SPA). Rulings:
 [`docs/superpowers/rulings/m2a.md`](superpowers/rulings/m2a.md) (M2a-1),
-[`docs/superpowers/rulings/m2a2.md`](superpowers/rulings/m2a2.md) (M2a-2a).
+[`docs/superpowers/rulings/m2a2.md`](superpowers/rulings/m2a2.md) (M2a-2a),
+[`docs/superpowers/rulings/m2a2b.md`](superpowers/rulings/m2a2b.md) (M2a-2b).
+
+**M2a (the M2 backend) is done** (M2a-1, M2a-2a, M2a-2b); next is M2b.
 
 ### M2a-1 — REST API core & auth (done)
 
@@ -204,32 +207,50 @@ the reset link points at the M2b admin page, which does not exist yet (F33); a c
 install of the same bytes can lose its blob (reinstall; M4 GC grace period); the route CSP's
 `form-action 'self'` was checked in Chrome only (R14).
 
-### M2a-2b — media, comments, system, hardening (next)
+### M2a-2b — media, comments, system, hardening (done)
 
-Outline in the M2a-2 plan ("Next plan: M2a-2b"); it gets its own plan.
+Plan: [`2026-10-24-m2a2b-media.md`](superpowers/plans/2026-10-24-m2a2b-media.md).
+Rulings: [`m2a2b.md`](superpowers/rulings/m2a2b.md).
 
-- [ ] Media service and uploads: `POST /media`, `media` row writes emit `post:<media id>` in the same transaction (M1c-2 R11); the `media.variants` job and its concurrency semaphore (moved from M1); upload limits on `put_stream`; `Idempotency-Key`; SVG sanitising on upload (SVG is not processed by `ferrite-media`; design 03 §5 requires sanitisation before inline serving). Migration `0006` (idempotency keys, the sanitised-SVG marker).
-- [ ] Comments: moderation endpoints, public `POST` (rate-limited, honeypot), comment settings.
-- [ ] System API: status (incl. the theme fallback flag), nodes, jobs (queued kinds no node knows stay queued, M1.5 P5; dead jobs with `last_error`, retry), per-plugin metrics (`GET /plugins/{name}/metrics`), metrics summary, audit log listing.
+- [x] Media service and uploads: `POST /media`, `media` row writes emit `post:<media id>` in the same transaction (M1c-2 R11); the `media.variants` job and its concurrency semaphore (moved from M1); upload limits on `put_stream`; `Idempotency-Key`; SVG sanitising on upload (SVG is not processed by `ferrite-media`; design 03 §5 requires sanitisation before inline serving). Migration `0006` (idempotency keys, the sanitised-SVG marker). Done in M2a-2b Tasks 1–6 (P2–P10): uploads typed from the first 8 KiB, documents (docx, xlsx, pptx, odt, ods, odp, zip, txt, csv) accepted and served download-only (R1, replacing P6; 03 §3), `media.max_upload` 256 MiB by default (at most 1 GiB), 8 uploads at once per node, `media.image_workers` slots taken without waiting (F17), the decoded-buffer cap (R12), `Idempotency-Key` with an ownership token (F5, R10; 07 §1).
+- [x] Comments: moderation endpoints, public `POST` (rate-limited, honeypot), comment settings. Done in M2a-2b Tasks 7–8 (P11–P14): plain text on posts, on by default with `comments.moderation = "known"` (R2, F19), 3/min and 20/h per address across nodes, the theme form `POST /_comment` and `comments(post)` (06 §4).
+- [x] System API: status (incl. the theme fallback flag), nodes, jobs (queued kinds no node knows stay queued, M1.5 P5; dead jobs with `last_error`, retry), per-plugin metrics (`GET /plugins/{name}/metrics`), metrics summary, audit log listing. Done in M2a-2b Tasks 9–10 (P15, P18–P20): `manage_system` + `system:*`, `nodes.meta.job_kinds`, node-local metrics (the registry and time series stay M4).
 - [x] Node-reported error text (`nodes.meta` plugin and theme `error`, shown to admins by `GET /plugins` and `GET /themes`, and next by the system API) is passed through verbatim, cut to 1 KiB; it can carry storage-backend error text (local paths, S3 endpoints). Sanitise it or document it as operator diagnostics with the system API (M2a-2a Task 4 review, minor 4). Done in M2a-2b Task 9: scrubbed at the source and again on read (P18, 04 §3, 07 §1).
 - [x] Hardening: sanitised `html` block nodes keep ammonia's default URL schemes, so `//evil` (scheme-relative), `ftp:` and `tel:` links pass (`ferrite-core/src/blocks`); decide an allowlist. Real `http` import (HTTPS only, allowlisted hosts, resolved-address SSRF checks, redirects to allowlisted hosts). Done in M2a-2b: the shared URL allowlist `ferrite_domain::html` for content blocks and plugin `html` in Task 12 (P21), the `http` import in Task 11 (P16).
-- [ ] Auth follow-ups from M2a-1:
+- [x] Auth follow-ups from M2a-1:
   - [x] `__Host-` prefix for the session cookie on `https` sites (defence against cookie tossing from a sibling subdomain; the cookie is `ferrite_session` today). Done in M2a-2b Task 12 (P23; the name follows `site.url`'s scheme, no transition read).
   - [x] Zeroize key material and passwords in memory (`SiteKey` is `Clone`; subkeys, HMAC blocks and password `String` copies stay in memory after use); parked from the M2a-1 Task 3 and Task 4 reviews (logs and `Debug` already redact them). Done in M2a-2b Task 12 (P24; serde_json buffers and argon2 internals are not wiped, 07 §2).
-  - [ ] Term archives for custom types: `SiteReader::term_archive_page` lists only `post` items, so a taxonomy used only on custom types has 404 term archives (pre-existing since M1c-2; M2a-1 ruling R18).
-- [ ] Deferred from M1c-2:
-  - [ ] Term rename and `permalink.*` option changes record no redirects (only content moves do).
-  - [ ] `ferrite seed demo` atomicity (each step is its own transaction; a failed run leaves a partial batch).
+  - [x] Term archives for custom types: `SiteReader::term_archive_page` lists only `post` items, so a taxonomy used only on custom types has 404 term archives (pre-existing since M1c-2; M2a-1 ruling R18). Done in M2a-2b Task 13 (P25: every public type of the taxonomy, `ContentQuery.kinds`).
+- [x] Deferred from M1c-2 (the two still open moved on, P26/P27):
+  - [x] Term rename records no redirect (only content moves do). Done in M2a-2b Task 13: a slug change of a term with a public archive records a 301. `permalink.*` option changes moved to M3 (P26).
+  - Moved to M4 (P27): `ferrite seed demo` atomicity.
   - [x] Redirect hit counting spawns one task per hit, unbounded: use a bounded channel or coalesce (M2a-2b Task 14: per-node buffer of ≤ 10 000 redirects, one `add_hits` per redirect every 10 s).
-  - [ ] `date` filter timezone support (`site.timezone`; today UTC).
-  - [ ] Theme `query(term=…)` is capped at `reading.per_page` (it reads page 1 of the term archive): add a term + limit reader.
-  - [ ] A child page with slug `page` is shadowed by pagination (`/parent/page/…`): reject it in slug validation.
-  - [ ] A legacy item holding a reserved slug is renamed on update; every top-level write does an extra `types().list()`.
+  - Moved to M4 (P27): `date` filter timezone support.
+  - [x] Theme `query(term=…)` is capped at `reading.per_page` (it reads page 1 of the term archive): add a term + limit reader. Done in M2a-2b Task 13 (`SiteReader::term_items`, exactly `limit` items).
+  - [x] A child page with slug `page` is shadowed by pagination (`/parent/page/…`): reject it in slug validation. Done in M2a-2b Task 13.
+  - [x] A legacy item holding a reserved slug is renamed on update; every top-level write does an extra `types().list()`. Done in M2a-2b Task 13 (an update keeping slug and parent never renames; one `types().list()` per write).
   - [x] Wire the `render.footer` filter into rendering (M2a-2b Task 14: once per page, `footer()` helper).
   - [x] Make the 60 s short TTL configurable (`cache.search_ttl` with `0` disabling it, 06 §6; `plugins.volatile_ttl`, 05 §7a; M2a-2b Task 14).
-- [ ] Deferred from the M2a-2a final review (ruling R22):
+- [x] Deferred from the M2a-2a final review (ruling R22):
   - [x] `meta.get` makes up to three primary-key reads per budget unit (`post_kind`, then `is_visible` and the meta read): charge 2 units, or fold the type check into the services read (M6). Done in M2a-2b Task 12: 2 units.
-  - [ ] Test seams (`Installer::with_theme_loaded`, `Installer::with_prepare`, `PluginReloader::with_prepare`, `NodeOptions::{served_flush, listen, boot_barrier}`, `SharedFailures::with_before_disable`) are `#[doc(hidden)] pub` runtime hooks: move all of them behind one dev-only cargo feature in one chore (M11).
+  - [x] Test seams (`Installer::with_theme_loaded`, `Installer::with_prepare`, `PluginReloader::with_prepare`, `NodeOptions::{served_flush, listen, boot_barrier}`, `SharedFailures::with_before_disable`) are `#[doc(hidden)] pub` runtime hooks: move all of them behind one dev-only cargo feature in one chore (M11). Done in M2a-2b Tasks 15–16: the `test-seams` feature, checked by `crates/ferrite/tests/seams.rs` (10 §2).
+
+**Exit:** media, comments and the system API work against a real `ferrite serve`: an
+upload with an `Idempotency-Key` sent twice gives one item, variants appear, a hostile SVG is
+served inline sanitised under the sandbox CSP, a theme-form comment is moderated over the API
+and shows on the page, system status and a dead-job retry, a plugin `http` fetch of an
+allowlisted host and a refused `127.0.0.1`; workspace tests on both backends.
+
+**Exit verified (2026-10-25):** [`docs/superpowers/m2a2b-exit.md`](superpowers/m2a2b-exit.md).
+
+Known limits (accepted in M2a-2b, see the rulings): a failed upload leaves its blob for M4's GC
+(P3); an upload is public by hash before the post that uses it is published (P5); a reused
+`Idempotency-Key` with another file is not detected, and a failed finish, an upload over 1 h or
+a drop during the commit can give a second item (P10, R10); the stored original keeps its EXIF,
+GPS included (R11); under `known` anyone who knows a guest's exact name and e-mail posts
+unmoderated as them (F19); a public thread shows the oldest 500 comments (M2b); metrics are
+node-local (P20); in Direct S3 mode the download-only and SVG CSP rules do not apply (F15); a
+listed host with one non-public address in its DNS answer is unreachable (P16).
 
 ### M2b — admin SPA
 
@@ -258,6 +279,7 @@ Design: [08](design/08-wp-import.md).
 - [ ] Media import via `MediaStore`, URL rewrite.
 - [ ] Gutenberg + classic → TipTap JSON; shortcode handling.
 - [ ] 301 redirects for old permalinks.
+- [ ] Deferred from M2a-2b (P26): redirects for `permalink.*` structure changes (today every published URL moves without a redirect; keep the previous structure and redirect by matching it, with the importer's redirect machinery), and `Idempotency-Key` on the import upload.
 - [ ] Yoast / Rank Math → SEO fields; ACF → custom fields (verify key names on real exports).
 - [ ] `import-report.html`; CLI + admin job.
 - [ ] Tests against 2–3 real WP exports.
@@ -279,10 +301,12 @@ Design: [09](design/09-operations.md).
   - [ ] Expose `copy_if_not_exists` and `conditional_put` in `S3Config` (today neither is set on the builder, so production S3 uses the head + copy fallback). Note the explicit-keys vs `from_env` difference: with explicit `access_key_id`/`secret_access_key` the builder reads no `AWS_*` environment (so `AWS_COPY_IF_NOT_EXISTS`, `AWS_CONDITIONAL_PUT`, session tokens and instance/web-identity credentials do not apply); only the no-keys path uses `from_env`. Also: `build_s3` replaces any client options read from the environment with its own timeouts.
   - [ ] Before `PublicUrlMode::Direct` ships: set `Content-Type` / `Cache-Control` attributes on the S3 path only (object_store's local backend rejects attributes, and the `Multipart` `copy_if_not_exists` mode does not copy attributes from the source object, so they must be set on the final object explicitly).
   - [ ] Artifacts GC (`artifacts.gc` job, `ferrite media gc`; design 03 §6).
+  - [ ] `ferrite media regenerate`: regenerate variants after a theme change adds sizes (M2a-2b P8, P27; older uploads fall back to the original for the new sizes).
   - [ ] Optional location-metadata stripping on upload: the stored original keeps its EXIF, GPS included, as WordPress does (M2a-2b R11); only variants are re-encoded without EXIF/XMP (03 §4).
 - [ ] `self-update` (signed), `rollback`, `rollback --schema`, `--restore-snapshot`.
 - [ ] ACME TLS (solo).
-- [ ] `/metrics`, `node_metrics`, dashboard charts wired.
+- [ ] `/metrics`, `node_metrics`, dashboard charts wired (the metrics registry and time series; M2a-2b P20 built only a node-local snapshot, 09 §6).
+- [ ] Deferred from M2a-2b (P27): `date` filter time zones (`site.timezone`; needs a tz database dependency, chosen with the static-build decisions: chrono-tz vs jiff; dates are UTC today) and `ferrite seed demo` atomicity (each step is its own transaction; `--force` adds a new batch rather than completing the failed one).
 - [ ] Release builds for all targets, published Docker image (a `Dockerfile` exists since M1.5, built in CI), systemd unit, cluster runbook.
 - [ ] Backward-compat CI job (from first tag).
 - [ ] Example plugins: SEO, privacy-friendly analytics, contact form; starter themes `docs`, `business`.
@@ -319,4 +343,6 @@ Design: [09](design/09-operations.md).
 - WP database user import with legacy password-hash verification.
 - Managed hosting offering.
 - An atomic KV increment import (`kv.incr`) for counters such as the `counter` example's (whose read-modify-write can lose counts under at-least-once delivery): a WIT change, so it needs a new world version (M2a-2a ruling R19).
+- Comments, later items (M2a-2b P29): comments on pages and custom types (a per-type flag), per-item closing, comment action hooks for plugins (e.g. anti-spam) and admin notification mails.
+- More upload types through a `media.extra_types` setting (M2a-2b P29; documents are accepted since R1), and `tel:` links through a URL-scheme setting (P21).
 - Passkeys (WebAuthn, `webauthn-rs`): deferred past M2 (M2a P3; the newest `webauthn-rs` was a pre-release and the ceremony needs the SPA). There is no `passkeys` table yet.

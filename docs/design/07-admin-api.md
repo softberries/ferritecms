@@ -123,7 +123,7 @@ importer. The admin SPA that uses them is M2b.
 | Users & tokens | `GET/POST /users`, `GET/PATCH/DELETE /users/{id}` (`DELETE ?reassign=<id>` moves the user's content), `POST /users/{id}/password`, `GET/POST /users/{id}/tokens`, `DELETE /users/{id}/tokens/{tid}` | M2a-1 | others: `manage_users` + `users:read`/`users:write`; oneself: own e-mail, display name and tokens (`users:read` to list tokens, `users:write` to change); own password via `POST /auth/password` |
 | Redirects | `GET/POST /redirects`, `GET/PATCH/DELETE /redirects/{id}`, `POST /redirects/import` (CSV), `GET /redirects/export` (CSV) | M2a-1 | `manage_redirects` (admins) + `redirects:read`/`redirects:write` |
 | Settings | `GET/PATCH /settings` (the allowlist `ferrite_core::settings::SETTINGS`) | M2a-1 | reads `settings:read`; writes `manage_settings` + `settings:write` |
-| Media | `POST /media` (multipart, streaming), `GET /media`, `GET/PATCH/DELETE /media/{id}` | M2a-2b | — |
+| Media | `POST /media` (multipart, streaming, `Idempotency-Key`), `GET /media?author&limit&cursor`, `GET/PATCH/DELETE /media/{id}` (`PATCH` title and alt with `If-Match`; `DELETE` trashes, `?force=true` deletes a trashed item; see **Media** below) | M2a-2b (built) | upload `upload_media` + `media:write`; reads `media:read` and `can_read` per item; edit, trash and delete the content role rules with `media:write` in place of `content:write` |
 | Comments | `GET /comments?status&item&limit&cursor`, `PATCH /comments/{id}` (`{ status }`), `DELETE /comments/{id}` (spam or trash only), public `POST /content/{type}/{id}/comments` (rate-limited, honeypot; see **Comments** below) | M2a-2b (built) | moderation `moderate_comments` + `comments:read`/`comments:write`; the submit: none, or a token with `comments:write` |
 | Themes | `GET /themes`, `POST /themes` (raw ustar bundle, `?activate=true`), `POST /themes/{name}/activate`, `GET/PATCH /themes/{name}/settings` (no delete, M2a-2 P30) | M2a-2a | reads `manage_themes` + `extensions:read` (`require_reader`); writes `manage_themes` + `extensions:write` |
 | Plugins | `GET /plugins`, `GET /plugins/{name}`, `POST /plugins/inspect` (multipart upload → permission report, nothing installed), `POST /plugins` (install with `approve` = the report's fingerprint), `POST /plugins/{name}/enable`, `POST /plugins/{name}/disable`, `DELETE /plugins/{name}` (`?purge=true`), `GET/PATCH /plugins/{name}/settings` | M2a-2a | reads `manage_plugins` + `extensions:read` (`require_reader`, so editors see no plugin list); writes `manage_plugins` + `extensions:write` |
@@ -157,6 +157,30 @@ is checked first and nothing is written if any fails (`422 validation`, one `err
 entry per bad line, at most 100). `GET /redirects/export` writes the same format; a
 field starting with `=`, `+`, `-`, `@`, a tab or CR gets a leading `'`, so a spreadsheet
 does not run it as a formula (R20).
+
+**Media (M2a-2b P3–P10, R1; 03 §3–§5).** `MediaService` (`ferrite_core::media`) holds the
+rights and the records; `ferrite_http::media::Uploader` stages the bytes outside any `Tx`.
+- **Upload** (`POST /media`, `multipart/form-data`): parts `file` (required), `title`
+  (≤ 200 characters) and `alt` (≤ 1 000), in any order. The caller is authorized and the
+  `Idempotency-Key` claimed before any of the body is read; a declared body over
+  `media.max_upload` + 1 MiB is `413` at once, and the file is cut at `media.max_upload`
+  (default 256 MiB, at most 1 GiB; an SVG at most 2 MiB) while it streams. The file name
+  must be 1–255 bytes without control or format characters (`422`, checked before the
+  file is read). The type comes from the content's first 8 KiB (03 §3 "Accepted upload
+  types"); anything else is `415` (`errors[0].field = file`), an SVG that cannot be made
+  safe `422`. At most 8 uploads stream at once per node (`503 busy`), and an upload that
+  receives nothing for `media.upload_idle_timeout` (default 30 s) is aborted (`400`). The
+  answer is `201` with `Location`, `ETag` and `MediaDto`; the item is published at once
+  (P5) and raster images get a `media.variants` job.
+- **`MediaDto`**: `id`, `title`, `alt`, `mime` (decided from the content), `bytes`,
+  `width`/`height` (set when the variants are made), `original_name`, `url`, `variants`
+  (`name`, `url`, `width`, `height`, `mime`; empty until made), `sanitized`, `status`,
+  `author_id`, `created_at`, `updated_at`, `version`.
+- **List and edit**: `GET /media` lists every status but trash, newest change first,
+  optionally by `author`; a role without `edit_others` sees its own items and public ones.
+  `PATCH` changes `title` and `alt` (`If-Match`; a trashed item is `422`); `DELETE`
+  (`If-Match`, `204`) trashes (its `/_media` URLs stop answering, since only public items
+  are served) and `?force=true` deletes a trashed item and its `media` row. The blobs stay for M4's GC (03 §6).
 
 **Comments (M2a-2b P11–P14, R2; F18–F22).** `CommentService` (`ferrite_core::comments`)
 holds the rules for both submit paths (this endpoint and the theme form `POST /_comment`).

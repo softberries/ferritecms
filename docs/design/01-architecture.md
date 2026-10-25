@@ -38,7 +38,8 @@ ferritecms/
 │   │                             #   M2a-2a: extension install/delete/purge (`ExtensionService`,
 │   │                             #   `ExtensionAdmin`), theme/plugin settings (`ext_settings`),
 │   │                             #   mail (`Mailer`, `MailQueue`), password reset, action jobs.
-│   │                             #   Depends on domain + store only; the media service is M2a-2b
+│   │                             #   M2a-2b: `MediaService`, `CommentService`, `SystemService`,
+│   │                             #   `diagnostics::scrub`. Depends on domain + store only
 │   ├── ferrite-cache/            # (built, M1c-2) page cache (moka) + dependency index + outbox
 │   │                             #   invalidation loop
 │   ├── ferrite-theme/            # (built, M1c-2) theme packages, hierarchy resolution, sandboxed
@@ -50,7 +51,10 @@ ferritecms/
 │   │                             #   M2a-1: REST API v1 in `src/api/`, previews, logged-in requests;
 │   │                             #   M2a-2a: extensions/settings/reset endpoints, the install
 │   │                             #   pipeline `extensions::Installer`, plugin routes `/_p/`,
-│   │                             #   SMTP mailer, `request.served` buffer; M2b: admin assets)
+│   │                             #   SMTP mailer, `request.served` buffer; M2a-2b: media,
+│   │                             #   comments and system endpoints, the uploader `media::Uploader`,
+│   │                             #   `Idempotency-Key`, the theme comment form `/_comment`, the
+│   │                             #   plugin `http` egress; M2b: admin assets)
 │   ├── ferrite-import-wp/        # (M3) WXR importer
 │   └── ferrite-sdk/              # (built, M0) guest SDK for Rust plugins (`export_plugin!` macro
 │                                 #   lives in the crate; there is no separate macros crate)
@@ -60,7 +64,7 @@ ferritecms/
 ├── themes/                       # (built) starter themes embedded in the binary: `blog`
 ├── plugins/examples/             # (built) hello, hello-v2 (manifest only), order-a, order-b,
 │                                 #   clock, html-inject, meta-writer, reader, router, notifier,
-│                                 #   counter, settings-probe, hostile/*; seo, analytics,
+│                                 #   counter, settings-probe, fetcher, hostile/*; seo, analytics,
 │                                 #   contact-form are M4
 ├── tests/                        # cross-crate integration tests (planned; per-crate tests/ exist)
 └── docs/

@@ -25,12 +25,17 @@ redirects/settings endpoints; previews; logged-in requests; `sessions.prune`) an
 approval fingerprint per install, delete with 30-day data retention, plugin routes under
 `/_p/`, theme and plugin settings with sealed secrets, `[mail]` + `notify-admins` +
 password reset by e-mail, `plugin.action` jobs, batched `request.served`, the per-node call
-cap and per-render budget) are done; the exits are written up in
-`docs/superpowers/m1-exit.md`, `m15-exit.md`, `m2a1-exit.md` and `m2a2a-exit.md` (each lists
-what was not verified). Open follow-ups stay listed in the roadmap. Next is M2a-2b (media,
-comments, system API, hardening), then M2b (admin SPA). Work top-down in
+cap and per-render budget) and M2a-2b (media uploads typed from their content, documents
+served download-only, `Idempotency-Key`, the `media.variants` job, SVG sanitising; comments
+with moderation and the theme form; the system API: status, nodes, audit, jobs with retry,
+metrics; the real plugin `http` import with resolved-address SSRF checks; the URL
+allowlist, the `__Host-` session cookie, zeroized keys; term archives for custom types; the
+`test-seams` feature) are done, so M2a (the M2 backend) is complete; the exits are written
+up in `docs/superpowers/m1-exit.md`, `m15-exit.md`, `m2a1-exit.md`, `m2a2a-exit.md` and
+`m2a2b-exit.md` (each lists what was not verified). Open follow-ups stay listed in the
+roadmap. Next is M2b (admin SPA, design system first). Work top-down in
 `docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/` (M2a-2a:
-`m2a2.md`).
+`m2a2.md`, M2a-2b: `m2a2b.md`).
 
 Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers)
 -> `ferrite-http` (public site, router, head, previews and logged-in requests, plugin
@@ -48,8 +53,7 @@ prune jobs) -> `ferrite-store` (traits); `ferrite-core` -> `ferrite-store` (trai
 `ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite);
 `ferrite-domain` (types), `ferrite-config`, `ferrite-sdk` (guest SDK). Starter theme:
 `themes/blog` (embedded). Test plugins: `plugins/examples/` (own workspace, built for
-`wasm32-wasip2`). Not built yet: media uploads, comments, the system API (M2a-2b), the
-admin SPA (M2b), import-wp (M3) (`docs/design/01-architecture.md` §1; API status per
+`wasm32-wasip2`). Not built yet: the admin SPA (M2b), import-wp (M3) (`docs/design/01-architecture.md` §1; API status per
 endpoint in 07 §1).
 
 Run a site locally:

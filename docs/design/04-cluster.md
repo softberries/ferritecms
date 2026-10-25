@@ -77,6 +77,11 @@ midpoint and logged when it goes above 2 s (and when it is back under 1.5 s); it
 reported as `nodes.meta.clock_skew_ms`. It is a warning only: every lease, `run_at` and
 heartbeat comparison uses the database clock.
 
+Since M2a-2b each node also reports `nodes.meta.job_kinds`: the job kinds its runner
+handles, sorted (`crates/ferrite/src/node.rs`, set from the handler list in `serve`). `GET
+/system/jobs` derives each job's `handled` flag from the live nodes' lists (P19), so a kind
+no live node knows stays visible as queued (M1.5 P5).
+
 Error texts a node reports in `nodes.meta` (`theme.error`, `plugins.<name>.error`,
 `plugins_error`, `permalinks_error`) are scrubbed before the heartbeat writes them
 (`ferrite_core::diagnostics::scrub`, M2a-2b P18, R16): URLs, paths (also with spaces),
@@ -246,7 +251,7 @@ are deleted by `sessions.prune` (§6); an expired row met on a request is delete
 | `plugin.action` | action hooks `post.saved` (content create/update/revision restore), `post.published` (every transition to published, the scheduler's included), `user.created` (API and CLI): core enqueues one job per enabled subscribed plugin row (`PluginRepo::action_subscribers`: name + `enabled` + the manifest's `hooks` keys, filtered in SQL) in the write's own `Tx` (no unique key, priority -1 so core jobs are claimed first, default attempts; payload `{"v":1,"plugin","hook","subject","payload"}` with ids only). The handler drops the action (done) when the row is missing or disabled (P29) or the plugin no longer handles the hook (F35), retries when the plugin is not loaded on the claiming node yet, is loaded there without a hook the stored row lists (the reload has not caught up), or is disabled on that host only, and retries a failed call (counted towards auto-disable). Each call holds one registry snapshot (R13). At most `min(cluster.workers − 1, plugins.max_concurrent_calls)` (at least 1) action jobs call plugins at once per node; one over that, or a call that gets no call permit in time, is released as `JobError::Busy` with the attempt refunded and due again in 1–5 s, never counted as a plugin failure (P22, R20(3); 05 §6). Delivery is at least once, so plugin actions must be idempotent (05 §4) | built (M2a-2a P20); batched `request.served` uses the same kind, one job per subscriber per flush (05 §4a, P21) |
 | `plugin.purge` | a plugin delete (API or CLI) enqueues it in the delete's `Tx`: `unique_key = "plugin.purge:<name>:<deleted_at unix micros>"`, due 30 days later, or 2 minutes later with `purge` (the immediate purge's final sweep); payload `{"v":1,"name","deleted_at","settings"}`. Deletes the plugin's KV and `plugin.<name>.settings.*` options and the deletion marker under the `extensions` lock, only if no row of that name exists and the marker still names that deletion (a reinstall keeps the data); a busy lock or store error is retried (05 §2, P9, F13–F16) | built (M2a-2a) |
 | `plugin.purge_sweep` | periodic, daily: enqueues a due `plugin.purge` for every deletion marker past the 30-day retention whose plugin is not installed (one per sweep run, keyed `…:sweep:<run micros>`), so a purge job that went dead is retried and settings keys a later version dropped are deleted too | built (M2a-2a) |
-| `media.variants` | image upload | M2a-2b |
+| `media.variants` | a raster upload (`MediaService::record_upload`) enqueues it in the upload's `Tx`: `unique_key = "media.variants:<item>:<artifact>"`, payload `{"v":1,"item","artifact"}`. One of the node's `media.image_workers` slots is taken without waiting (none free: `JobError::Busy`, attempt refunded, due again in 1–5 s); originals over 64 MiB get no variants; a bad payload or an image that does not decode is `Permanent` (dead at once, the original stays served); store and media errors retry (03 §4, P8, F17) | built (M2a-2b) |
 | `import.wordpress` | admin-triggered import; must override the handler timeout | M3 |
 | `artifacts.gc` | periodic | M4 |
 

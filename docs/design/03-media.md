@@ -183,6 +183,33 @@ sanitised bytes are stored as `image/svg+xml` (`SVG_MIME`) with `media.sanitized
 refused SVG is not stored. Bytes that are not detected as SVG follow `sniff_mime`, so a PNG
 named `.svg` is a PNG.
 
+### Accepted upload types (as built, M2a-2b P4, R1/F13)
+
+`POST /api/v1/media` (07 §1 "Media") decides the type from the content's first 8 KiB
+(`HEAD_BYTES`) before anything is stored, never from the client's `Content-Type`
+(`crates/ferrite-http/src/media.rs`). R1 replaced plan ruling P6 (which refused every
+document): WordPress users expect document uploads, and serving them download-only keeps
+them from running in the site's origin.
+
+| Head of the file | Stored as | Served by `/_media` (§5) |
+|---|---|---|
+| looks like SVG (`looks_like_svg`) | the sanitiser's output, `image/svg+xml`, `media.sanitized = true` (at most 2 MiB read) | inline with the SVG sandbox CSP |
+| sniffs as an `inline_safe` type: JPEG, PNG, GIF, WebP, MP3/Ogg/WAV, MP4/WebM, PDF | that type (raster images get a `media.variants` job) | inline; PDF with `Content-Security-Policy: sandbox` (F14) |
+| a ZIP (`PK\x03\x04`) named `.docx .xlsx .pptx .odt .ods .odp .zip` | the type of that extension | download only |
+| no known magic (or infer's weak MP3 match), named `.txt`/`.csv`, UTF-8 (BOM allowed) without NUL, first non-space character not `<` | `text/plain` / `text/csv` | download only |
+| anything else (HTML, XML, executables, a `.docx` that is not a ZIP, a `<`-led `.txt`, UTF-16 text, unknown magic) | refused, `415` | — |
+
+The file name only chooses within the ZIP and text classes; content decides the class.
+"Download only" is `application/octet-stream`, `Content-Disposition: attachment` and
+`X-Content-Type-Options: nosniff`, so a browser never renders or sniffs the file in the
+site's origin. A ZIP's entries are not inspected (an OOXML document with macros or a ZIP of
+executables is accepted and handed out as a download; scanning is the downloader's job).
+**CSV formula injection:** a CSV is stored as uploaded, so a cell starting with `=`, `+`,
+`-` or `@` runs as a formula when a visitor opens the download in a spreadsheet. FerriteCMS
+does not rewrite uploaded files (unlike the redirect export, 07 §1, which it writes itself);
+the download-only rule keeps the file out of the browser, not out of the spreadsheet.
+Further types (a `media.extra_types` setting) are a later item (P29).
+
 ### Local backend
 
 - Root: `data/media/` (configurable) via `LocalFileSystem::new_with_prefix`, same key layout.
