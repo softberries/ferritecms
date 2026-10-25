@@ -17,7 +17,7 @@ import { useTranslation } from "react-i18next";
 import { metaQuery } from "@/api/meta";
 import { settingsQuery } from "@/api/settings";
 import { typesQuery } from "@/api/types";
-import { type MeDto, ensureSession, useLogout, useMe } from "@/auth/session";
+import { type MeDto, enterShell, useLogout, useMe } from "@/auth/session";
 import { ErrorState } from "@/components/kit/error-state";
 import { SidebarInset, SidebarProvider, useSidebar } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
@@ -26,14 +26,14 @@ import { storeSidebarOpen, storedSidebarOpen } from "@/design/preferences";
 import { registerShortcut, useShortcut } from "@/lib/shortcuts";
 import { AppSidebar } from "@/shell/app-sidebar";
 import { CommandPalette } from "@/palette/palette";
-import { pushRecent, setRecentViewer } from "@/palette/recent";
+import { pushRecent } from "@/palette/recent";
 import { type NavSection, navFor, navItemAt } from "@/shell/nav";
 import { RouteTransition } from "@/shell/route-transition";
 import { ShortcutSheet } from "@/shell/shortcut-sheet";
 import { TopBar } from "@/shell/top-bar";
 
 export const Route = createFileRoute("/_app")({
-  beforeLoad: async (ctx) => ({ me: await ensureSession(ctx) }),
+  beforeLoad: async (ctx) => ({ me: await enterShell(ctx) }),
   component: AppLayout,
   errorComponent: AppError,
 });
@@ -85,7 +85,7 @@ function Shell({ me }: { me: MeDto }) {
   const signOut = () => {
     void logout();
   };
-  useRecentScreens(me, sections);
+  useRecentScreens(sections);
 
   return (
     <TooltipProvider delayDuration={400}>
@@ -148,10 +148,9 @@ function Shell({ me }: { me: MeDto }) {
  * Feeds the palette's Recent group: every screen of the nav the viewer lands on, however
  * they got there (sidebar, chord, palette, link). Items are pushed by whoever opens them.
  */
-function useRecentScreens(me: MeDto, sections: NavSection[]): void {
+function useRecentScreens(sections: NavSection[]): void {
   const leaf = useMatches({ select: (ms) => ms.at(-1)?.pathname ?? "" });
-  // Declared first, so the viewer is set before the push below runs.
-  useEffect(() => setRecentViewer(me.id), [me.id]);
+  // The viewer is already set: the `_app` guard (`enterShell`) sets it before rendering.
   useEffect(() => {
     const item = navItemAt(sections, leaf);
     if (item) pushRecent({ kind: "screen", id: item.id });

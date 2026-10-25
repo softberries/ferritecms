@@ -2,6 +2,7 @@ import { MutationObserver, type QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { confirmReset, login } from "./auth";
 import {
+  INLINE_ERRORS,
   NetworkError,
   createQueryClient,
   currentPath,
@@ -221,6 +222,31 @@ test("no_toast_on_auth_screens", async () => {
   window.history.replaceState(null, "", "/admin/");
   await mutate(client, () => patchContent("post", "x", 1, {}));
   expect(notify).toHaveBeenCalledOnce();
+});
+
+test("inline_error_queries_do_not_toast_but_still_redirect", async () => {
+  let answer = () => problem(429, "rate-limited", {}, { "Retry-After": "42" });
+  stubFetch(() => answer());
+  const { r, navigate, notify } = routing();
+  const client = createQueryClient(r);
+  await client
+    .fetchQuery({
+      queryKey: ["inline"],
+      queryFn: () => getContent("post", "x"),
+      meta: INLINE_ERRORS,
+    })
+    .catch(() => {});
+  expect(notify).not.toHaveBeenCalled();
+
+  answer = () => problem(401, "unauthenticated");
+  await client
+    .fetchQuery({
+      queryKey: ["inline-401"],
+      queryFn: () => getContent("post", "x"),
+      meta: INLINE_ERRORS,
+    })
+    .catch(() => {});
+  expect(navigate).toHaveBeenCalledWith("/login?next=%2Fadmin%2F");
 });
 
 test("no_retry_on_4xx", async () => {

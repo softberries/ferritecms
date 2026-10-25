@@ -3,8 +3,8 @@
 // viewer's last 8 screens and items, only before anything is typed), Go to (every nav
 // item and the `?` sheet), Create (one per content type the nav shows, with
 // `edit_own`), Content (live search, from 2 characters) and Preferences (theme,
-// density). cmdk's own filter ranks the static groups; content hits come from the
-// server already matched, so they keep the server's order below strong static matches.
+// density). cmdk's own filter ranks the rows inside the static groups; content hits come
+// from the server already matched, so they keep the server's order, in the last group.
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useMatches, useNavigate } from "@tanstack/react-router";
@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { INLINE_ERRORS } from "@/api/client";
 import { isContentStatus } from "@/api/content";
 import { qk } from "@/api/keys";
 import type { MeDto } from "@/auth/session";
@@ -143,6 +144,8 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
     enabled: active,
     // The last answer stays up while the next loads, so results never blink out.
     placeholderData: keepPreviousData,
+    // The footer and the empty state say it failed; no toast on top (review m2).
+    meta: INLINE_ERRORS,
   });
   const hits = active ? (search.data ?? []) : [];
   const pending = active && search.isFetching;
@@ -300,6 +303,11 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
             </CommandGroup>
           ) : null}
 
+          <PreferenceRows close={close} />
+
+          {/* Last: groups stay in render order (cmdk 1.1.1 sorts the rows inside a group;
+              its group sort looks groups up by id in `data-value`, which holds the
+              heading, so it never moves one), and the hits are the open-ended part. */}
           {hits.length > 0 ? (
             <CommandGroup
               heading={t("group.content")}
@@ -315,7 +323,10 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
                   value={`${CONTENT_VALUE}${hit.type}:${hit.id}`}
                   hit={hit}
                   slug={hit.slug}
+                  query={query}
                   typeItem={typeItem(hit.type)}
+                  // One type only: the icon and the heading say it; a chip per row is noise.
+                  showType={new Set(hits.map((h) => h.type)).size > 1}
                   onSelect={() => openHit(hit)}
                 />
               ))}
@@ -323,8 +334,6 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
           ) : slow ? (
             <SearchingRows />
           ) : null}
-
-          <PreferenceRows close={close} />
         </CommandList>
         {pending ? null : <EmptyState q={query} failed={search.isError} />}
       </div>
@@ -432,12 +441,23 @@ interface HitRowProps {
   value: string;
   hit: Pick<PaletteHit, "type" | "id" | "title" | "status">;
   slug?: string;
+  /** The search, whose words are marked in the title. */
+  query?: string;
   typeItem: NavItem | undefined;
+  showType?: boolean;
   onSelect: () => void;
 }
 
 /** A content item: title (slug), status dot and label, and its type. */
-function HitRow({ value, hit, slug, typeItem, onSelect }: HitRowProps) {
+function HitRow({
+  value,
+  hit,
+  slug,
+  query = "",
+  typeItem,
+  showType = true,
+  onSelect,
+}: HitRowProps) {
   const { t } = useTranslation("palette");
   const { t: tc } = useTranslation();
   const title = hit.title.trim() || t("hit.untitled");
@@ -447,7 +467,7 @@ function HitRow({ value, hit, slug, typeItem, onSelect }: HitRowProps) {
       <Tile icon={typeItem?.icon ?? ShapesIcon} />
       <span className="flex min-w-0 flex-1 items-baseline gap-2">
         <span className="truncate" title={title}>
-          {title}
+          <Highlight text={title} query={query} />
         </span>
         {slug ? (
           <span
@@ -465,13 +485,38 @@ function HitRow({ value, hit, slug, typeItem, onSelect }: HitRowProps) {
             <span>{tc(`status.${status}`)}</span>
           </span>
         ) : null}
-        {typeItem ? (
+        {typeItem && showType ? (
           <span className="rounded-sm border px-1.5 py-px text-[0.6875rem] leading-4 max-sm:hidden">
             {typeItem.label}
           </span>
         ) : null}
       </CommandShortcut>
     </CommandItem>
+  );
+}
+
+/**
+ * `text` with every word of `query` (2+ characters, any case) marked, so it shows why a
+ * title matched. A hit matched only in its body has nothing marked.
+ */
+function Highlight({ text, query }: { text: string; query: string }) {
+  const words = query
+    .split(/\s+/)
+    .filter((w) => Array.from(w).length >= 2)
+    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (words.length === 0) return text;
+  const parts = text.split(new RegExp(`(${words.join("|")})`, "gi"));
+  return parts.map((part, i) =>
+    i % 2 === 1 ? (
+      <mark
+        key={i}
+        className="rounded-xs bg-transparent font-semibold text-foreground underline decoration-primary/70 decoration-2 underline-offset-3"
+      >
+        {part}
+      </mark>
+    ) : (
+      part
+    ),
   );
 }
 

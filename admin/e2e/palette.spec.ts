@@ -17,6 +17,8 @@ const nav = (page: Page) => page.getByRole("navigation", { name: "Main" });
 const SEEDED = "Why WebAssembly sandboxes";
 /** Requests of the palette's search (`GET /content/{type}?q=…`). */
 const SEARCH = /\/api\/v1\/content\/[^/?]+\?(?:.*&)?q=/;
+/** `palette/sources.ts` `SEARCH_DEBOUNCE_MS` (the spec does not import app code). */
+const SEARCH_DEBOUNCE_MS = 150;
 
 async function openDashboard(page: Page): Promise<void> {
   await page.goto("/admin/");
@@ -84,7 +86,8 @@ test("search_finds_seeded_post", async ({ as, site }) => {
   await openPalette(page);
   // One character searches nothing.
   await page.keyboard.type("W");
-  await page.waitForTimeout(400);
+  // Well past the 150 ms debounce (`SEARCH_DEBOUNCE_MS`) plus a round trip: still nothing.
+  await page.waitForTimeout(SEARCH_DEBOUNCE_MS + 250);
   expect(searches).toEqual([]);
   await page.keyboard.type("ebAssembly");
 
@@ -125,8 +128,8 @@ test("create_new_post_from_palette", async ({ as, site }) => {
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(`${site.url}/admin/content/post/new`);
   // Reopened at once (while the closing animation runs), it starts empty.
-
   await openPalette(page);
+  await expect(input(page)).toHaveValue("");
   await page.keyboard.type("new page");
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(`${site.url}/admin/content/page/new`);
@@ -211,5 +214,11 @@ test("screens", async ({ as, snap, expectAccessible }) => {
   await input(page).fill("qqzzxv");
   await expect(palette(page).getByText("No results for “qqzzxv”")).toBeVisible();
   await snap(page, "palette-empty");
+  await expectAccessible(page);
+
+  // Preferences, with the current choices checked.
+  await input(page).fill("theme");
+  await expect(option(page, /System theme/)).toContainText("Current");
+  await snap(page, "palette-preferences");
   await expectAccessible(page);
 });

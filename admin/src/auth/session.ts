@@ -11,6 +11,7 @@ import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import type { SchemaMeDto } from "@/api/schema";
 import type { RouterContext } from "@/lib/router-context";
+import { setRecentViewer } from "@/palette/recent";
 
 export type MeDto = SchemaMeDto;
 
@@ -57,6 +58,17 @@ export async function ensureSession(ctx: GuardContext): Promise<MeDto> {
 }
 
 /**
+ * The `_app` guard: `ensureSession`, then the palette's Recent viewer, set here
+ * (synchronously, before any route under `_app` renders) so a child that pushes a
+ * Recent entry on mount always writes to the signed-in user's list.
+ */
+export async function enterShell(ctx: GuardContext): Promise<MeDto> {
+  const user = await ensureSession(ctx);
+  setRecentViewer(user.id);
+  return user;
+}
+
+/**
  * The signed-in user (a `must_reset` one included), or a redirect to `/login` with
  * `next`. It calls `me()` directly rather than through the query cache, so the global
  * error handler does not also redirect on the `401`; the result is put into the cache.
@@ -71,6 +83,7 @@ export async function loadSession({ context, location }: GuardContext): Promise<
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
       setCsrfToken(null);
+      setRecentViewer(null);
       queryClient.removeQueries({ queryKey: qk.me });
       throw redirect({ to: "/login", search: { next: adminPath(location) }, replace: true });
     }
@@ -102,7 +115,7 @@ export interface LogoutDeps {
 
 /**
  * Ends the session: posts the logout (a failure still signs out locally), clears the
- * query cache and the CSRF token, and navigates to `/login`.
+ * query cache, the CSRF token and the Recent viewer, and navigates to `/login`.
  */
 export async function logout({ queryClient, navigate }: LogoutDeps): Promise<void> {
   try {
@@ -111,6 +124,8 @@ export async function logout({ queryClient, navigate }: LogoutDeps): Promise<voi
     // The server session may already be gone (or unreachable); the local one ends anyway.
   }
   setCsrfToken(null);
+  // Nobody is signed in: Recent reads nothing and writes nothing until the next guard.
+  setRecentViewer(null);
   queryClient.clear();
   await navigate({ to: "/login", replace: true, state: { authNotice: "signed-out" } });
 }

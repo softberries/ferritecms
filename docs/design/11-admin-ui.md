@@ -281,8 +281,9 @@ contrast pair unchanged.
   inserted container's inline transform: `translateY(4px)` normally, none under reduced
   motion).
 - Meaning only: enter/exit of overlays, list insert/remove/reorder, the route change
-  (opacity plus 4 px y), the save-state indicator. Nothing loops, and nothing moves more
-  than 8 px except sheets.
+  (opacity plus 4 px y), the save-state indicator. Nothing loops, except loading
+  skeletons' pulse, which stops under reduced motion. Nothing moves more than 8 px
+  except sheets.
 - `prefers-reduced-motion: reduce`:
   - `tokens.css` sets every `--dur-*` to `0ms`;
   - `globals.css` sets `animation-duration` and `transition-duration` to `0.01ms`,
@@ -507,7 +508,9 @@ bar's trigger (`aria-haspopup="dialog"`, `aria-keyshortcuts`).
   screens and items, newest first, per viewer in `localStorage`
   `ferrite.admin.recent.<user id>`, read in try/catch; the shell pushes every nav screen
   the viewer lands on, the palette pushes each item it opens; the screen already open is
-  left out; only shown before anything is typed, so no row appears twice), **Go to**
+  left out; only shown before anything is typed, so no row appears twice; the `_app`
+  guard (`enterShell`) sets the viewer before any child renders and `logout()` (and a
+  `401` in the guard) clears it, so nothing is read or written while signed out), **Go to**
   (every `navFor` item with its chord, and the `?` sheet), **Create** (new post, new
   page, "New entry in <label>" per custom type the nav shows; only with `edit_own`; each
   goes to `/content/<type>/new`), **Content** (live search) and **Preferences** (theme
@@ -515,7 +518,14 @@ bar's trigger (`aria-haspopup="dialog"`, `aria-keyshortcuts`).
 - Filtering: cmdk's own `defaultFilter` ranks the static rows (each row's value is its
   label, with keywords such as "go to", "create", "theme"). Content hits are already
   matched by the server, so the palette's `filter` gives every one a fixed 0.5: they
-  keep the server's order and sort below a strong static match. `vimBindings` is off
+  keep the server's order. Groups stay in render order (cmdk 1.1.1 sorts rows inside
+  a group; its group sort looks groups up by id in `data-value`, which holds the
+  heading, so it never moves one), and Content renders last: a few exact static
+  matches ("theme", "new post") come first, then the open-ended hits. The query's words are
+  marked in hit titles (semibold, ember underline); the type chip shows only when the
+  hits span more than one type. The search query carries `meta: INLINE_ERRORS`
+  (`api/client.ts`): the global handler still redirects on `401`, but does not toast,
+  since the palette says the search failed itself. `vimBindings` is off
   (cmdk's Ctrl+K would swallow `mod+k` off Apple platforms); arrows loop.
 - Search (`palette/sources.ts` `searchContent(q, types, signal)`): from 2 characters
   (trimmed), it waits 150 ms (abortable), then sends one `GET /content/{type}?q=…&limit=8`

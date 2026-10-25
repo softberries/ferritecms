@@ -151,7 +151,8 @@ export function createErrorHandler(routing: ErrorRouting) {
   };
 
   return {
-    handle(error: unknown): void {
+    /** `inline`: the screen shows the error itself, so no toast (redirects still apply). */
+    handle(error: unknown, { inline = false }: { inline?: boolean } = {}): void {
       if (!(error instanceof ApiError)) return;
       const path = routing.currentPath();
       switch (error.slug) {
@@ -167,7 +168,7 @@ export function createErrorHandler(routing: ErrorRouting) {
         case "rate-limited":
           // Sign-in screens show their own countdown; a toast there would say it twice
           // (and sonner replays it once the shell's <Toaster> mounts).
-          if (onAuthScreen(path)) return;
+          if (inline || onAuthScreen(path)) return;
           routing.notify(
             error.slug,
             error.retryAfter === null
@@ -176,7 +177,7 @@ export function createErrorHandler(routing: ErrorRouting) {
           );
           return;
         case "busy":
-          if (onAuthScreen(path)) return;
+          if (inline || onAuthScreen(path)) return;
           routing.notify(
             error.slug,
             error.retryAfter === null
@@ -194,6 +195,12 @@ export function createErrorHandler(routing: ErrorRouting) {
   };
 }
 
+/**
+ * A query's `meta` for a screen that shows its own error message (the palette's search):
+ * the global handler still redirects on `401`/forced change but does not toast.
+ */
+export const INLINE_ERRORS = { inlineErrors: true } as const;
+
 /** The app's `QueryClient` with the global error handling and retry policy. */
 export function createQueryClient(routing: ErrorRouting): QueryClient {
   const errors = createErrorHandler(routing);
@@ -204,7 +211,12 @@ export function createQueryClient(routing: ErrorRouting): QueryClient {
     errors.reset();
   };
   return new QueryClient({
-    queryCache: new QueryCache({ onError, onSuccess }),
+    queryCache: new QueryCache({
+      onError: (error, query) => {
+        errors.handle(error, { inline: query.meta?.inlineErrors === true });
+      },
+      onSuccess,
+    }),
     mutationCache: new MutationCache({ onError, onSuccess }),
     defaultOptions: {
       queries: { retry: shouldRetry, retryDelay },
