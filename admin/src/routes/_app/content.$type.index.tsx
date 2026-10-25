@@ -48,7 +48,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { BulkBar } from "@/content/bulk-bar";
-import type { BulkAction } from "@/content/bulk";
+import { type BulkAction, trashUndoable } from "@/content/bulk";
 import { ListFilters } from "@/content/filters";
 import { type FailureReport, useListActions } from "@/content/list-actions";
 import {
@@ -183,11 +183,17 @@ function ContentList() {
         ids: Object.fromEntries(Object.entries(s.ids).filter(([id]) => !ok.includes(id))),
       })),
   });
-  const [confirmDelete, setConfirmDelete] = useState<ContentSummary[] | null>(null);
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
 
+  // Undo rather than confirm (07 §3): only a permanent delete, or a trash nothing could
+  // undo (e.g. a contributor's own drafts: never restorable by them), asks first.
   const run = (action: BulkAction, targets: ContentSummary[]) => {
     if (action === "delete") {
-      setConfirmDelete(targets.filter((i) => i.allowed.delete));
+      setConfirm({ kind: "delete", items: targets.filter((i) => i.allowed.delete) });
+      return;
+    }
+    if (action === "trash" && !trashUndoable(targets)) {
+      setConfirm({ kind: "trash", items: targets.filter((i) => i.allowed.trash) });
       return;
     }
     actions.run(action, targets);
@@ -303,12 +309,12 @@ function ContentList() {
         onAction={(action) => run(action, selected)}
         onClear={clearSelection}
       />
-      <DeleteDialog
-        items={confirmDelete}
-        onCancel={() => setConfirmDelete(null)}
-        onConfirm={(targets) => {
-          setConfirmDelete(null);
-          actions.run("delete", targets);
+      <ConfirmDialog
+        confirm={confirm}
+        onCancel={() => setConfirm(null)}
+        onConfirm={({ kind, items: targets }) => {
+          setConfirm(null);
+          actions.run(kind, targets);
         }}
       />
     </div>
@@ -499,33 +505,39 @@ function failureText(
   return error.problem.detail || error.problem.title;
 }
 
-/** Delete permanently: the only confirm on this screen (07 §3: undo rather than confirm). */
-function DeleteDialog({
-  items,
+/** What asks before it runs: a permanent delete, or a trash nothing could undo. */
+interface Confirm {
+  kind: "delete" | "trash";
+  items: ContentSummary[];
+}
+
+/** The two confirms of this screen (07 §3: undo rather than confirm everywhere else). */
+function ConfirmDialog({
+  confirm,
   onCancel,
   onConfirm,
 }: {
-  items: ContentSummary[] | null;
+  confirm: Confirm | null;
   onCancel: () => void;
-  onConfirm: (items: ContentSummary[]) => void;
+  onConfirm: (confirm: Confirm) => void;
 }) {
   const { t } = useTranslation("content");
-  const count = items?.length ?? 0;
-  const first = items?.[0];
+  const count = confirm?.items.length ?? 0;
+  const first = confirm?.items[0];
+  const kind = confirm?.kind ?? "delete";
+  const title = first ? first.title || t("row.untitled") : "";
   return (
     <AlertDialog
-      open={items !== null && count > 0}
+      open={confirm !== null && count > 0}
       onOpenChange={(o) => {
         if (!o) onCancel();
       }}
     >
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{t("delete.title", { count })}</AlertDialogTitle>
+          <AlertDialogTitle>{t(`${kind}.title`, { count })}</AlertDialogTitle>
           <AlertDialogDescription>
-            {count === 1 && first
-              ? t("delete.bodyOne", { title: first.title || t("row.untitled") })
-              : t("delete.bodyMany", { count })}
+            {count === 1 ? t(`${kind}.bodyOne`, { title }) : t(`${kind}.bodyMany`, { count })}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -538,10 +550,10 @@ function DeleteDialog({
             variant="destructive"
             className="bg-destructive text-background hover:bg-destructive/90 dark:bg-destructive dark:hover:bg-destructive/90"
             onClick={() => {
-              if (items) onConfirm(items);
+              if (confirm) onConfirm(confirm);
             }}
           >
-            {t("delete.confirm", { count })}
+            {t(`${kind}.confirm`, { count })}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>

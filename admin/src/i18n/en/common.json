@@ -58,6 +58,9 @@
     },
     "kbd": {
       "then": "then"
+    },
+    "time": {
+      "justNow": "just now"
     }
   }
 }

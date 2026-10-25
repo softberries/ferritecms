@@ -6,7 +6,7 @@
 import { AnimatePresence, useReducedMotion } from "motion/react";
 import * as m from "motion/react-m";
 import { RotateCcwIcon, SendIcon, Trash2Icon, XCircleIcon, XIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { useLayoutEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { KbdCombo } from "@/components/kit/kbd-combo";
 import { Button } from "@/components/ui/button";
@@ -32,11 +32,39 @@ const ICONS: Record<BulkAction, ReactNode> = {
 };
 const ORDER: BulkAction[] = ["publish", "restore", "trash", "delete"];
 
+/**
+ * The horizontal centre of the shell's `<main>` in viewport pixels (it moves when the
+ * sidebar collapses or the window resizes), so the fixed bar centres on the content,
+ * not on the viewport. `null` before it is measured (or outside the shell).
+ */
+function useMainCentre(active: boolean): number | null {
+  const [centre, setCentre] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!active) return;
+    const main = document.getElementById("main");
+    if (!main) return;
+    const measure = () => {
+      const r = main.getBoundingClientRect();
+      setCentre(Math.round(r.left + r.width / 2));
+    };
+    measure();
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    ro?.observe(main);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [active]);
+  return centre;
+}
+
 export function BulkBar({ selected, pending, onAction, onClear }: BulkBarProps) {
   const { t } = useTranslation("content");
   const reduce = useReducedMotion() ?? false;
   const open = selected.length > 0;
   const number = new Intl.NumberFormat(uiLocale());
+  const centre = useMainCentre(open);
 
   useShortcut({
     id: "list.clearSelection",
@@ -60,7 +88,8 @@ export function BulkBar({ selected, pending, onAction, onClear }: BulkBarProps) 
           animate={reduce ? { opacity: 1 } : { opacity: 1, y: 0 }}
           exit={reduce ? { opacity: 0 } : { opacity: 0, y: 8 }}
           transition={{ duration: MOTION.durBase, ease: MOTION.easeOut }}
-          className="fixed inset-x-3 bottom-3 z-40 flex items-center gap-1 rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-3 sm:inset-x-auto sm:bottom-6 sm:left-1/2 sm:-translate-x-1/2"
+          className="fixed inset-x-3 bottom-3 z-40 flex items-center gap-1 rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-3 sm:inset-x-auto sm:bottom-6 sm:left-(--bulk-bar-x) sm:-translate-x-1/2"
+          style={{ "--bulk-bar-x": centre === null ? "50%" : `${centre}px` } as CSSProperties}
         >
           <p
             className="flex items-center gap-2 px-2 text-sm font-medium whitespace-nowrap tabular-nums"

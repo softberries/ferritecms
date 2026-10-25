@@ -33,6 +33,12 @@ export interface BulkResult {
   failed: BulkFailure[];
 }
 
+/** Problems the global handler must see (sign in again, change password). */
+export const REDIRECTING: ReadonlySet<string> = new Set([
+  "unauthenticated",
+  "password-reset-required",
+]);
+
 /** How many requests a bulk action keeps in flight (P20). */
 export const BULK_CONCURRENCY = 4;
 
@@ -90,13 +96,27 @@ export function countAllowed(items: readonly BulkItem[], action: BulkAction): nu
   return items.reduce((n, item) => n + (item.allowed[action] ? 1 : 0), 0);
 }
 
+/**
+ * Whether trashing `items` can be undone from the admin: some item may be trashed and
+ * restored by this actor (`allowed.trash_undoable`, computed in core). When none can,
+ * the list asks before trashing instead (07 §3 "undo rather than confirm").
+ */
+export function trashUndoable(items: readonly BulkItem[]): boolean {
+  return items.some((item) => item.allowed.trash && item.allowed.trash_undoable);
+}
+
 /** An item as it was before the trash, and the trashed item the server returned. */
 export interface Trashed {
   before: Pick<SchemaContentSummaryDto, "id" | "status" | "scheduled_at">;
   after: SchemaContentDto;
 }
 
-/** The lifecycle calls an undo needs (`lifecycle` from `@/api/content`, bound to a type). */
+/** The trashed items Undo can bring back: those the actor may restore (`allowed.restore`). */
+export function undoableEntries(trashed: readonly Trashed[]): Trashed[] {
+  return trashed.filter((e) => e.after.allowed.restore);
+}
+
+/** The lifecycle calls an undo needs (`lifecycle` from `@/api/content`, on the item's type). */
 export interface UndoTransitions {
   restore: (id: string, version: number) => Promise<SchemaContentDto>;
   publish: (id: string, version: number) => Promise<SchemaContentDto>;
@@ -131,7 +151,9 @@ export async function undoTrash(
     if (!allowed) return { item: restored, notice: "notAllowed" };
     try {
       return { item: await call() };
-    } catch {
+    } catch (e) {
+      // Signing in again (or a forced password change) is the global handler's job.
+      if (e instanceof ApiError && REDIRECTING.has(e.slug)) throw e;
       return { item: restored, notice: "failed" };
     }
   };

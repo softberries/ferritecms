@@ -206,23 +206,27 @@ export function DataTable<T extends RowData>({
         aria-busy={loading || undefined}
         className="w-full caption-bottom border-separate border-spacing-0 text-base"
       >
-        <TableHeader className="sticky top-0 z-10 bg-card [&_tr]:border-b-0">
-          {headerGroups.map((group) => (
-            <TableRow key={group.id} className="hover:bg-transparent">
-              {group.headers.map((header) => (
-                <TableHead
-                  key={header.id}
-                  className={cn(
-                    "h-10 border-b px-3 text-sm font-medium text-muted-foreground first:rounded-tl-xl first:pl-4 last:rounded-tr-xl last:pr-4",
-                    cellClass(header.column.id),
-                  )}
-                >
-                  {header.isPlaceholder ? null : <table.FlexRender header={header} />}
-                </TableHead>
-              ))}
-            </TableRow>
-          ))}
-        </TableHeader>
+        {/* No header over an empty state: a lone "select all" and column names over
+            nothing read as broken. */}
+        {loading || rows.length > 0 ? (
+          <TableHeader className="sticky top-0 z-10 bg-card [&_tr]:border-b-0">
+            {headerGroups.map((group) => (
+              <TableRow key={group.id} className="hover:bg-transparent">
+                {group.headers.map((header) => (
+                  <TableHead
+                    key={header.id}
+                    className={cn(
+                      "h-10 border-b px-3 text-sm font-medium text-muted-foreground first:rounded-tl-xl first:pl-4 last:rounded-tr-xl last:pr-4",
+                      cellClass(header.column.id),
+                    )}
+                  >
+                    {header.isPlaceholder ? null : <table.FlexRender header={header} />}
+                  </TableHead>
+                ))}
+              </TableRow>
+            ))}
+          </TableHeader>
+        ) : null}
         <TableBody ref={body}>
           {loading ? (
             Array.from({ length: SKELETON_ROWS }, (_, i) => (

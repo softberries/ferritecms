@@ -41,6 +41,7 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { Kbd } from "@/components/ui/kbd";
+import { ScrollFade } from "@/components/kit/scroll-fade";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useShortcut } from "@/lib/shortcuts";
@@ -78,39 +79,44 @@ export function ListFilters({ label, search, taxonomies, onChange }: ListFilters
         value={search.q ?? ""}
         onSearch={(q) => onChange({ q: q || undefined })}
       />
-      <div className="flex flex-wrap items-center gap-2">
-        <Chip
-          pressed={search.mine === true}
-          disabledReason={disabled ? why : undefined}
-          onClick={() => onChange({ mine: search.mine ? undefined : true })}
-        >
-          <UserRoundIcon data-icon="inline-start" />
-          {t("filters.mine")}
-        </Chip>
-        {taxonomies.map((tax) => (
-          <TermPicker
-            key={tax.name}
-            taxonomy={tax}
-            selected={search.term}
+      {/* Phones: one row that scrolls sideways (with an edge fade), "Clear filters" first
+          so it is never off-screen; wider screens wrap. The padding keeps focus rings
+          inside the scroll container's clip. */}
+      <ScrollFade className="-m-1 min-w-0 p-1 md:overflow-visible">
+        <div className="flex w-max items-center gap-2 md:w-auto md:flex-wrap">
+          <Chip
+            pressed={search.mine === true}
             disabledReason={disabled ? why : undefined}
-            onSelect={(term) => onChange({ term })}
-          />
-        ))}
-        <OrderMenu
-          order={search.order ?? "updated"}
-          disabledReason={disabled ? t("filters.orderBySearch") : undefined}
-          onChange={(order) => onChange({ order: order === "updated" ? undefined : order })}
-        />
-        {hasFilters(search) ? (
-          <Button
-            variant="ghost"
-            className="text-muted-foreground"
-            onClick={() => onChange({ q: undefined, mine: undefined, term: undefined })}
+            onClick={() => onChange({ mine: search.mine ? undefined : true })}
           >
-            {t("filters.clear")}
-          </Button>
-        ) : null}
-      </div>
+            <UserRoundIcon data-icon="inline-start" />
+            {t("filters.mine")}
+          </Chip>
+          {taxonomies.map((tax) => (
+            <TermPicker
+              key={tax.name}
+              taxonomy={tax}
+              selected={search.term}
+              disabledReason={disabled ? why : undefined}
+              onSelect={(term) => onChange({ term })}
+            />
+          ))}
+          <OrderMenu
+            order={search.order ?? "updated"}
+            disabledReason={disabled ? t("filters.orderBySearch") : undefined}
+            onChange={(order) => onChange({ order: order === "updated" ? undefined : order })}
+          />
+          {hasFilters(search) ? (
+            <Button
+              variant="ghost"
+              className="text-muted-foreground max-md:order-first"
+              onClick={() => onChange({ q: undefined, mine: undefined, term: undefined })}
+            >
+              {t("filters.clear")}
+            </Button>
+          ) : null}
+        </div>
+      </ScrollFade>
     </div>
   );
 }
@@ -128,19 +134,29 @@ function SearchField({
   const { t } = useTranslation("content");
   const input = useRef<HTMLInputElement>(null);
   const [text, setText] = useState(value);
-  // The URL changed from elsewhere (a "Clear search" button, back/forward): follow it.
+  // The last query this field sent: when the URL catches up with it, keystrokes typed
+  // since then are kept. Any other URL change (a "Clear search" button, back/forward)
+  // replaces the text.
+  const [sent, setSent] = useState(value);
   const [synced, setSynced] = useState(value);
   if (value !== synced) {
     setSynced(value);
-    setText(value);
+    if (value !== sent) {
+      setSent(value);
+      setText(value);
+    }
   }
   const latest = useRef(onSearch);
   useEffect(() => {
     latest.current = onSearch;
   });
   useEffect(() => {
-    if (text.trim() === synced.trim()) return;
-    const id = window.setTimeout(() => latest.current(text.trim()), SEARCH_DEBOUNCE_MS);
+    const q = text.trim();
+    if (q === synced.trim()) return;
+    const id = window.setTimeout(() => {
+      setSent(q);
+      latest.current(q);
+    }, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(id);
   }, [text, synced]);
 

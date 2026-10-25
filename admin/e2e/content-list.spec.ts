@@ -208,8 +208,87 @@ test("trash_with_undo", async ({ as, site, backend }) => {
       "Published",
     );
     await expect.poll(async () => (await editor.get("post", created.id)).status).toBe("published");
+    // F36: publishing again keeps the first `published_at`.
+    expect(created.published_at).toBeTruthy();
+    expect((await editor.get("post", created.id)).published_at).toBe(created.published_at);
   } finally {
     await editor.dispose();
+  }
+});
+
+test("undo_after_leaving_the_list", async ({ as, site, backend }) => {
+  // The toast outlives the route: Undo must act on the post's own type, not the open one.
+  const editor = await ContentApi.as(backend, site.url, "editor");
+  const unique = word();
+  const title = `Leave ${unique} published`;
+  try {
+    const created = await editor.createIn("post", title, "published");
+    const page = await as("editor");
+    await openList(page, "post", "Posts", `?q=${unique}`);
+    await rowAction(page, "Posts", title, "Move to trash");
+    const toast = page.locator("[data-sonner-toast]").filter({ hasText: "1 item moved to trash" });
+    await expect(toast).toBeVisible();
+    const requests: string[] = [];
+    page.on("request", (r) => {
+      if (r.method() === "POST") requests.push(new URL(r.url()).pathname);
+    });
+    await page
+      .getByRole("navigation", { name: "Main" })
+      .getByRole("link", { name: "Pages" })
+      .click();
+    await expect(page.getByRole("heading", { level: 1, name: /^Pages/ })).toBeVisible();
+    await toast.getByRole("button", { name: "Undo" }).click();
+    await expect(
+      page.locator("[data-sonner-toast]").filter({ hasText: "1 item restored" }),
+    ).toBeVisible();
+    await expect.poll(async () => (await editor.get("post", created.id)).status).toBe("published");
+    expect(requests).toContain(`/api/v1/content/post/${created.id}/restore`);
+    expect(requests.some((p) => p.startsWith("/api/v1/content/page/"))).toBe(false);
+    await expect(page.locator("[data-slot=failure-report]")).toHaveCount(0);
+  } finally {
+    await editor.dispose();
+  }
+});
+
+test("contributor_trash_asks_first_and_offers_no_undo", async ({
+  as,
+  site,
+  backend,
+  snap,
+  expectAccessible,
+}) => {
+  // A contributor may trash their own drafts but never restore them (07 §1), so there is
+  // nothing to undo: the list asks first and the toast has no Undo.
+  const contributor = await ContentApi.as(backend, site.url, "contributor");
+  const editor = await ContentApi.as(backend, site.url, "editor");
+  const unique = word();
+  const title = `Contrib ${unique} draft`;
+  try {
+    const created = await contributor.createIn("post", title, "draft");
+    const page = await as("contributor");
+    await openList(page, "post", "Posts", `?q=${unique}`);
+    await rowAction(page, "Posts", title, "Move to trash");
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("Move to trash?");
+    await expect(dialog).toContainText("You won't be able to restore");
+    await snap(page, "content-list-trash-confirm");
+    await expectAccessible(page);
+    // Cancel leaves it alone.
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    expect((await editor.get("post", created.id)).status).toBe("draft");
+
+    await rowAction(page, "Posts", title, "Move to trash");
+    await page.getByRole("alertdialog").getByRole("button", { name: "Move to trash" }).click();
+    const toast = page.locator("[data-sonner-toast]").filter({ hasText: "1 item moved to trash" });
+    await expect(toast).toBeVisible();
+    await expect(toast).toContainText("an editor can");
+    await expect(toast.getByRole("button", { name: "Undo" })).toHaveCount(0);
+    await snap(page, "content-list-trash-no-undo");
+    await expect(rows(page, "Posts")).toHaveCount(0);
+    expect((await editor.get("post", created.id)).status).toBe("trash");
+  } finally {
+    await Promise.all([contributor.dispose(), editor.dispose()]);
   }
 });
 
@@ -347,7 +426,9 @@ test("infinite_paging", async ({ as, site, backend }) => {
     await page.locator("[data-slot=list-sentinel]").scrollIntoViewIfNeeded();
     await expect(rows(page, label)).toHaveCount(60);
     await expect(page.getByText("All 60 items")).toBeVisible();
-    expect(lists.some((u) => u.includes("cursor="))).toBe(true);
+    // Exactly one next-page request: the sentinel and the button never fetch twice.
+    await page.waitForLoadState("networkidle");
+    expect(lists.filter((u) => u.includes("cursor="))).toHaveLength(1);
   } finally {
     await admin.removeType(type);
     await Promise.all([admin.dispose(), editor.dispose()]);

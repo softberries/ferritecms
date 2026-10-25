@@ -168,6 +168,9 @@ pub struct AllowedActionsDto {
     pub restore: bool,
     /// `DELETE ?force=true`.
     pub delete: bool,
+    /// `DELETE` is allowed and `restore` would be once the item is trashed (the admin's
+    /// Undo after a trash).
+    pub trash_undoable: bool,
 }
 
 impl From<AllowedActions> for AllowedActionsDto {
@@ -181,6 +184,7 @@ impl From<AllowedActions> for AllowedActionsDto {
             trash: a.trash,
             restore: a.restore,
             delete: a.delete,
+            trash_undoable: a.trash_undoable,
         }
     }
 }

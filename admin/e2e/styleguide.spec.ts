@@ -142,7 +142,11 @@ test("styleguide_table_frame_and_mixed_checkbox", async ({ as }) => {
       return {
         overflowX: s.overflowX,
         spill: parent ? el.getBoundingClientRect().right - parent.right : 0,
-        sticky: getComputedStyle(el.querySelector("thead") as Element).position,
+        // The empty-state specimen has no header row (Task 13 fix round 1).
+        sticky: (() => {
+          const head = el.querySelector("thead");
+          return head ? getComputedStyle(head).position : "sticky";
+        })(),
       };
     });
     expect(box).toEqual({ overflowX: "auto", spill: 0, sticky: "sticky" });

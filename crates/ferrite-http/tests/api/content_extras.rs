@@ -31,6 +31,7 @@ fn allowed(names: &[&str]) -> Value {
         "trash",
         "restore",
         "delete",
+        "trash_undoable",
     ];
     all.iter()
         .map(|n| ((*n).to_owned(), Value::Bool(names.contains(n))))
@@ -63,7 +64,14 @@ async fn content_dto_has_author_and_allowed(api: Api) -> Api {
     assert_eq!(item["author"], author(ann.id.as_uuid(), "ann"));
     assert_eq!(
         item["allowed"],
-        allowed(&["edit", "publish", "schedule", "submit", "trash"])
+        allowed(&[
+            "edit",
+            "publish",
+            "schedule",
+            "submit",
+            "trash",
+            "trash_undoable"
+        ])
     );
     let path = format!("{POSTS}/{}", item["id"].as_str().unwrap());
 
@@ -72,7 +80,14 @@ async fn content_dto_has_author_and_allowed(api: Api) -> Api {
     assert_eq!(got["author"], author(ann.id.as_uuid(), "ann"));
     assert_eq!(
         got["allowed"],
-        allowed(&["edit", "publish", "schedule", "submit", "trash"])
+        allowed(&[
+            "edit",
+            "publish",
+            "schedule",
+            "submit",
+            "trash",
+            "trash_undoable"
+        ])
     );
 
     // Published: the contributor may read it but do nothing.
@@ -88,13 +103,14 @@ async fn content_dto_has_author_and_allowed(api: Api) -> Api {
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
     assert_eq!(
         r.json()["allowed"],
-        allowed(&["edit", "unpublish", "trash"])
+        allowed(&["edit", "unpublish", "trash", "trash_undoable"])
     );
     let got = c.get(&api, &path).await.json();
     assert_eq!(got["author"], author(ann.id.as_uuid(), "ann"));
     assert_eq!(got["allowed"], allowed(&[]));
 
-    // A contributor's own draft: edit, submit and trash, never publish.
+    // A contributor's own draft: edit, submit and trash, never publish; the trash cannot
+    // be undone (contributors never restore).
     let r = c
         .send(
             &api,
@@ -167,7 +183,7 @@ async fn list_items_have_author_and_allowed(api: Api) -> Api {
     assert_eq!(items[0]["author"], author(ann.id.as_uuid(), "ann"));
     assert_eq!(
         items[0]["allowed"],
-        allowed(&["edit", "unpublish", "trash"])
+        allowed(&["edit", "unpublish", "trash", "trash_undoable"])
     );
     assert_eq!(items[1]["title"], "By bob");
     assert_eq!(items[1]["author"], author(bob.id.as_uuid(), "bob"));

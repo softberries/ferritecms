@@ -105,7 +105,11 @@
       "notAllowed_other": "{{count}} are back as drafts: you can't restore their old status.",
       "failed_one": "{{count}} is back as a draft: its old status couldn't be restored.",
       "failed_other": "{{count}} are back as drafts: their old status couldn't be restored."
-    }
+    },
+    "trashedNoUndo_one": "You can't restore it yourself; an editor can, from the trash.",
+    "trashedNoUndo_other": "You can't restore them yourself; an editor can, from the trash.",
+    "trashedSomeUndo_one": "Undo restores {{count}} of {{total}}; an editor can restore the rest.",
+    "trashedSomeUndo_other": "Undo restores {{count}} of {{total}}; an editor can restore the rest."
   },
   "report": {
     "publish_one": "{{count}} of {{total}} couldn't be published",
@@ -164,7 +168,7 @@
     },
     "search": {
       "title": "No results for “{{q}}”",
-      "body": "Try fewer or different words. The search covers titles and text of every status but trash.",
+      "body": "Try fewer or different words. The search covers titles and text.",
       "action": "Clear search"
     },
     "filtered": {
@@ -177,5 +181,14 @@
     "search": "Focus the search",
     "trashSelection": "Move the selection to trash",
     "clearSelection": "Clear the selection"
+  },
+  "trash": {
+    "title_one": "Move to trash?",
+    "title_other": "Move {{count}} items to trash?",
+    "bodyOne": "You won't be able to restore “{{title}}” yourself. An editor can restore it from the trash.",
+    "bodyMany_one": "You won't be able to restore {{count}} item yourself. An editor can restore it from the trash.",
+    "bodyMany_other": "You won't be able to restore these {{count}} items yourself. An editor can restore them from the trash.",
+    "confirm_one": "Move to trash",
+    "confirm_other": "Move {{count}} to trash"
   }
 }

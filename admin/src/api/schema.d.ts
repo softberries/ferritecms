@@ -1033,6 +1033,11 @@ export interface components {
             submit: boolean;
             /** @description `DELETE` without `force`. */
             trash: boolean;
+            /**
+             * @description `DELETE` is allowed and `restore` would be once the item is trashed (the admin's
+             *     Undo after a trash).
+             */
+            trash_undoable: boolean;
             unpublish: boolean;
         };
         /** @description Who wrote an audit row. */

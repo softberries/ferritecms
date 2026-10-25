@@ -1,7 +1,15 @@
 import { describe, expect, test, vi } from "vitest";
 import { ApiError } from "@/api/problem";
 import type { SchemaAllowedActionsDto, SchemaContentDto } from "@/api/schema";
-import { type BulkItem, countAllowed, runBulk, undoTrash, type UndoTransitions } from "./bulk";
+import {
+  type BulkItem,
+  countAllowed,
+  runBulk,
+  trashUndoable,
+  undoTrash,
+  undoableEntries,
+  type UndoTransitions,
+} from "./bulk";
 
 const NONE: SchemaAllowedActionsDto = {
   delete: false,
@@ -11,6 +19,7 @@ const NONE: SchemaAllowedActionsDto = {
   schedule: false,
   submit: false,
   trash: false,
+  trash_undoable: false,
   unpublish: false,
 };
 
@@ -208,6 +217,33 @@ describe("undo_trash", () => {
       notice: "notAllowed",
     });
     expect(calls).toEqual(["restore x 7"]);
+  });
+
+  test("a sign-in problem while re-applying reaches the caller", async () => {
+    const { ops } = transitions(dto("draft", 8, { publish: true }));
+    const expired = problem("unauthenticated", 401);
+    ops.publish = () => Promise.reject(expired);
+    await expect(undoTrash(trashed("published"), ops, NOW)).rejects.toBe(expired);
+  });
+
+  test("trash is undoable only when some item may be restored afterwards", () => {
+    // A contributor's own drafts: trash yes, restore never (07 §1).
+    expect(trashUndoable([item("a", { trash: true }), item("b", { trash: true })])).toBe(false);
+    expect(
+      trashUndoable([item("a", { trash: true }), item("b", { trash: true, trash_undoable: true })]),
+    ).toBe(true);
+    // Undoable but not trashable is not counted.
+    expect(trashUndoable([item("a", { trash_undoable: true })])).toBe(false);
+  });
+
+  test("a mixed trash offers Undo only for the restorable items", () => {
+    const entry = (id: string, restore: boolean) => ({
+      before: { id, status: "draft", scheduled_at: null },
+      after: { ...dto("trash", 3, { restore }), id },
+    });
+    const mixed = [entry("a", true), entry("b", false), entry("c", true)];
+    expect(undoableEntries(mixed).map((e) => e.after.id)).toEqual(["a", "c"]);
+    expect(undoableEntries([entry("b", false)])).toEqual([]);
   });
 
   test("a failed re-apply keeps the restored draft", async () => {

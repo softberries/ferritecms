@@ -30,6 +30,10 @@ pub struct AllowedActions {
     /// Permanent `delete` of a trashed item. An item that still has children is
     /// refused by `delete` (`Invalid("has children")`) even when this is `true`.
     pub delete: bool,
+    /// `trash`, and `restore` would be allowed once trashed: the admin offers Undo after
+    /// a trash only then, and asks first otherwise (07 §3; contributors may trash their
+    /// own open items but never restore them).
+    pub trash_undoable: bool,
 }
 
 /// What `actor` may do with `item` as it is now (role, token scopes and status). A
@@ -47,5 +51,6 @@ pub fn allowed_actions(actor: &Actor, item: &ContentItem) -> AllowedActions {
         trash: may(Action::Trash),
         restore: may(Action::Restore),
         delete: deletable(item.status) && authorize_ownership(actor, item).is_ok(),
+        trash_undoable: may(Action::Trash) && authorize(actor, item, Action::Restore).is_ok(),
     }
 }

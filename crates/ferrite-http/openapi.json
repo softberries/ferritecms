@@ -8048,7 +8048,8 @@
           "submit",
           "trash",
           "restore",
-          "delete"
+          "delete",
+          "trash_undoable"
         ],
         "properties": {
           "delete": {
@@ -8074,6 +8075,10 @@
           "trash": {
             "type": "boolean",
             "description": "`DELETE` without `force`."
+          },
+          "trash_undoable": {
+            "type": "boolean",
+            "description": "`DELETE` is allowed and `restore` would be once the item is trashed (the admin's\nUndo after a trash)."
           },
           "unpublish": {
             "type": "boolean"

@@ -113,6 +113,7 @@ fn expected(role: Role, own: bool, status: ContentStatus) -> AllowedActions {
             trash: status != Trash,
             restore: status == Trash,
             delete: status == Trash,
+            trash_undoable: status != Trash,
         };
     }
     if role == Role::Contributor && own {
@@ -148,11 +149,16 @@ async fn run(
         "trash" => svc.trash(actor, id, v).await.map(drop),
         "restore" => svc.restore(actor, id, v).await.map(drop),
         "delete" => svc.delete(actor, id, v).await,
+        // Trash, then restore with the trashed version (the admin's Undo).
+        "trash_undoable" => {
+            let trashed = svc.trash(actor, id, v).await?;
+            svc.restore(actor, id, trashed.version).await.map(drop)
+        }
         other => panic!("unknown action {other}"),
     }
 }
 
-fn flags(a: AllowedActions) -> [(&'static str, bool); 8] {
+fn flags(a: AllowedActions) -> [(&'static str, bool); 9] {
     [
         ("edit", a.edit),
         ("publish", a.publish),
@@ -162,6 +168,7 @@ fn flags(a: AllowedActions) -> [(&'static str, bool); 8] {
         ("trash", a.trash),
         ("restore", a.restore),
         ("delete", a.delete),
+        ("trash_undoable", a.trash_undoable),
     ]
 }
 

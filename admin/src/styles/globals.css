@@ -26,6 +26,15 @@
   }
 }
 
+/* A scroll container without a visible scrollbar (cmdk's list, `ScrollFade`): the edge
+   fade is the scroll cue instead. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 /* `--shadow-1..3` and `--ease-*` keep their token names here, so Tailwind also writes
    `--x: var(--x)` into its theme layer; the unlayered tokens.css declaration wins the
    cascade, and the utilities read the token. */

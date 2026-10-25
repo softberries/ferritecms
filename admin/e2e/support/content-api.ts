@@ -16,6 +16,7 @@ export interface Item {
   status: string;
   version: number;
   parent_id?: string | null;
+  published_at?: string | null;
 }
 
 export class ContentApi {
