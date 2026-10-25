@@ -192,6 +192,22 @@ test("tiles_match_counts", async ({ as, site, backend }) => {
   );
 });
 
+test("settings_failure_keeps_the_dashboard", async ({ as, guard }) => {
+  // The header's site title is decoration: without settings the cards still load.
+  guard.allow(EXPECTED_FAILURES);
+  const page = await as("editor");
+  await page.route("**/api/v1/settings", fail500);
+  await openDashboard(page);
+  await loaded(page);
+  await expect(page.getByText("Here's what's happening on your site.")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Posts at a glance" })).toBeVisible();
+  await expect(page.getByTestId("activity-chart")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Recent drafts" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Needs attention" })).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.unrouteAll();
+});
+
 test("screens", async ({ as, guard, snap, expectAccessible }) => {
   test.setTimeout(300_000);
   guard.allow(EXPECTED_FAILURES);

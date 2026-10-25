@@ -165,20 +165,20 @@ function CacheRatio({
         <dd className="sr-only">
           {ratio === null ? t("health.cache.noLookups") : percent.format(ratio)}
         </dd>
-        <dt className="text-muted-foreground">{t("health.cache.hits")}</dt>
-        <dd className="text-right font-medium text-foreground tabular-nums">
+        <dt className="whitespace-nowrap text-muted-foreground">{t("health.cache.hits")}</dt>
+        <dd className="text-right font-medium whitespace-nowrap text-foreground tabular-nums">
           {number.format(hits)}
         </dd>
-        <dt className="text-muted-foreground">{t("health.cache.misses")}</dt>
-        <dd className="text-right font-medium text-foreground tabular-nums">
+        <dt className="whitespace-nowrap text-muted-foreground">{t("health.cache.misses")}</dt>
+        <dd className="text-right font-medium whitespace-nowrap text-foreground tabular-nums">
           {number.format(misses)}
         </dd>
-        <dt className="text-muted-foreground">{t("health.cache.entries")}</dt>
-        <dd className="text-right font-medium text-foreground tabular-nums">
+        <dt className="whitespace-nowrap text-muted-foreground">{t("health.cache.entries")}</dt>
+        <dd className="text-right font-medium whitespace-nowrap text-foreground tabular-nums">
           {number.format(entries)}
         </dd>
-        <dt className="text-muted-foreground">{t("health.cache.size")}</dt>
-        <dd className="text-right font-medium text-foreground tabular-nums">
+        <dt className="whitespace-nowrap text-muted-foreground">{t("health.cache.size")}</dt>
+        <dd className="text-right font-medium whitespace-nowrap text-foreground tabular-nums">
           {formatBytes(bytes)}
         </dd>
         {ratio === null ? (
@@ -251,16 +251,23 @@ function JobsBar({ counts }: { counts: Record<(typeof JOB_STATUSES)[number], num
   );
 }
 
-// Stack order, fixed (never cycled): chart-3 (success) and chart-4 (warning) are too
-// close for protan/tritan viewers when they touch, so they are kept apart. The dataviz
-// palette validator passes this order in both modes (adjacent CVD ΔE ≥ 11).
-const SERIES_COLOURS = [
+// Colours of the plugins' own series, in fixed order (never cycled): chart-3 (success)
+// and chart-4 (warning) are too close for protan/tritan viewers when they touch, so
+// chart-3 comes last; the dataviz palette validator passes this order in both modes
+// (adjacent CVD ΔE ≥ 11). The folded "Other plugins" series is neutral, never green
+// ("OK") on a failures chart.
+const OWN_COLOURS = [
   "var(--chart-1)",
   "var(--chart-2)",
   "var(--chart-4)",
   "var(--chart-5)",
   "var(--chart-3)",
 ];
+const OTHER_COLOUR = "var(--muted-foreground)";
+
+function seriesColour(plugin: string | null, index: number): string {
+  return plugin === null ? OTHER_COLOUR : (OWN_COLOURS[index] ?? OTHER_COLOUR);
+}
 
 /** Plugin failures per hour over 24 hours, stacked by plugin (every node's buckets). */
 function PluginFailures() {
@@ -283,7 +290,7 @@ function PluginFailures() {
   const config: ChartConfig = Object.fromEntries(
     (data?.series ?? []).map((s, i) => [
       s.key,
-      { label: s.plugin ?? t("health.failures.other"), color: SERIES_COLOURS[i] },
+      { label: s.plugin ?? t("health.failures.other"), color: seriesColour(s.plugin, i) },
     ]),
   );
   const hour = new Intl.DateTimeFormat(uiLocale(), { hour: "numeric" });
@@ -320,7 +327,7 @@ function PluginFailures() {
               <span
                 aria-hidden="true"
                 className="size-2.5 rounded-[3px]"
-                style={{ backgroundColor: SERIES_COLOURS[i] }}
+                style={{ backgroundColor: seriesColour(s.plugin, i) }}
               />
               <span className="text-muted-foreground">
                 {s.plugin ?? t("health.failures.other")}

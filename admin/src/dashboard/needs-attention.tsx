@@ -58,13 +58,17 @@ export function NeedsAttention({
   const verdict = status.data?.schema.verdict;
   const fallback = status.data?.theme.fallback_nodes ?? null;
 
-  // The open count across loaded checks, for the header line.
-  const open =
-    (pendingItems?.length ?? 0) +
-    (jobs.data?.items.length ?? 0) +
-    (disabled?.length ?? 0) +
-    (verdict && verdict !== "up_to_date" ? 1 : 0) +
-    (fallback && fallback.length > 0 ? 1 : 0);
+  // The true number of dead jobs: the status counts, else the (capped) page.
+  const deadCount = status.data?.jobs.dead ?? jobs.data?.items.length ?? 0;
+
+  // How many checks need attention (not entries), for the header line.
+  const open = [
+    (pendingItems?.length ?? 0) > 0,
+    (jobs.data?.items.length ?? 0) > 0,
+    (disabled?.length ?? 0) > 0,
+    verdict !== undefined && verdict !== "up_to_date",
+    (fallback?.length ?? 0) > 0,
+  ].filter(Boolean).length;
   const loading =
     (access.pending && pending.some((q) => q.isPending)) ||
     (access.system && (jobs.isPending || status.isPending)) ||
@@ -131,7 +135,9 @@ export function NeedsAttention({
             tone={jobs.data && jobs.data.items.length > 0 ? "bad" : "ok"}
             summary={
               jobs.data && jobs.data.items.length > 0
-                ? t("attention.jobs.some", { count: jobs.data.items.length })
+                ? t("attention.jobs.some", {
+                    count: Math.max(deadCount, jobs.data.items.length),
+                  })
                 : t("attention.jobs.none")
             }
           >
@@ -140,9 +146,9 @@ export function NeedsAttention({
                 key={job.id}
                 className="flex min-h-11 flex-col justify-center gap-0.5 px-2 py-1.5"
               >
-                <span className="flex items-center gap-2">
+                <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                   <code className="font-mono text-xs text-foreground">{job.kind}</code>
-                  <span className="text-xs text-muted-foreground tabular-nums">
+                  <span className="text-xs whitespace-nowrap text-muted-foreground tabular-nums">
                     {t("attention.jobs.attempts", {
                       count: job.attempts,
                       attempts: job.attempts,
@@ -152,7 +158,7 @@ export function NeedsAttention({
                   {job.finished_at ? (
                     <RelativeTime
                       at={job.finished_at}
-                      className="ml-auto text-xs text-muted-foreground"
+                      className="ml-auto text-xs whitespace-nowrap text-muted-foreground"
                     />
                   ) : null}
                 </span>

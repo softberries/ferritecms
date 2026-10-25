@@ -10,7 +10,10 @@
     "pending": "Pending review",
     "scheduled": "Scheduled",
     "caption": {
-      "published": "Last {{days}} days",
+      "publishedTotal": "All time",
+      "publishedRecent_one": "All time · {{formatted}} in the last {{days}} days",
+      "publishedRecent_other": "All time · {{formatted}} in the last {{days}} days",
+      "publishedCapped": "All time · {{formatted}}+ in the last {{days}} days",
       "draft": "Not yet published",
       "pending": "Waiting for an editor",
       "scheduled": "Publish on their date"
@@ -41,14 +44,15 @@
       "page": "Page"
     },
     "edited": "edited",
-    "continue": "Continue editing"
+    "continue": "Continue editing",
+    "all": "All drafts"
   },
   "attention": {
     "title": "Needs attention",
     "checking": "Checking…",
     "allClear": "All clear. Nothing is waiting for you.",
-    "open_one": "{{count}} thing is waiting for you.",
-    "open_other": "{{count}} things are waiting for you.",
+    "open_one": "{{count}} check needs your attention.",
+    "open_other": "{{count}} checks need your attention.",
     "failed": "Couldn't check {{label}}",
     "retry": "Retry",
     "pending": {

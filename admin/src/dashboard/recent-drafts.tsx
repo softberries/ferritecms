@@ -110,6 +110,17 @@ export function RecentDrafts({ me, canWrite }: { me: string; canWrite: boolean }
       title={t("drafts.title")}
       description={t("drafts.description")}
       busy={pending && !failed}
+      footer={
+        items.length > 0 ? (
+          <Link
+            to={"/content/post?status=draft" as "/"}
+            className="inline-flex min-h-6 items-center gap-1 font-medium text-primary hover:underline"
+          >
+            {t("drafts.all")}
+            <ArrowRightIcon aria-hidden="true" className="size-4" />
+          </Link>
+        ) : undefined
+      }
       className="lg:col-span-4"
     >
       {body}

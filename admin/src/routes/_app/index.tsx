@@ -1,8 +1,8 @@
 // The dashboard (07 §3, M2b P16/P17): post count tiles, publishing activity, the actor's
 // recent drafts, what needs attention and site health. Every card loads and fails on
 // its own; a card the actor may not see is not rendered, so its data is never
-// requested. The loader reads only the settings (the site title in the header, shared
-// with the shell's sidebar), so a failing settings read shows the shell's route states.
+// requested. There is no route loader: the header's site title comes from the settings
+// query the sidebar also reads, and without it the greeting names no site.
 
 import { createFileRoute } from "@tanstack/react-router";
 import { ExternalLinkIcon } from "lucide-react";
@@ -22,7 +22,6 @@ import { Tiles } from "@/dashboard/tiles";
 
 export const Route = createFileRoute("/_app/")({
   staticData: { crumb: (t) => t("crumbs.dashboard") },
-  loader: ({ context }) => context.queryClient.ensureQueryData(settingsQuery),
   component: Dashboard,
 });
 
@@ -30,7 +29,7 @@ function Dashboard() {
   const { t } = useTranslation("dashboard");
   const { me: guarded } = Route.useRouteContext();
   const me = useMe() ?? guarded;
-  const settings = Route.useLoaderData();
+  const settings = useQuery(settingsQuery);
   const site = useQuery(metaQuery);
   const caps = me.capabilities;
   const canWrite = caps.includes("edit_own");
@@ -38,7 +37,7 @@ function Dashboard() {
   const attention = hasAttention(access);
   const health = caps.includes("manage_system");
   const name = me.display_name || me.login;
-  const title = settings["site.title"];
+  const title = settings.data?.["site.title"];
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">

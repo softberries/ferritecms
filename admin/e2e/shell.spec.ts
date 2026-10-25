@@ -25,7 +25,10 @@ async function openDashboard(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
 }
 
-/** Answers `GET /settings` (read by the dashboard's loader) with a problem. */
+/**
+ * Answers `GET /settings` with a problem. `/admin/_probe` is the screen whose loader reads
+ * it (the dashboard has no loader; its cards fail on their own).
+ */
 function failSettings(status: 403 | 500) {
   return (route: Route) =>
     route.fulfill({
@@ -420,7 +423,7 @@ test("screens", async ({ as, guard, snap, expectAccessible }) => {
   await expectAccessible(page);
 
   await page.route("**/api/v1/settings", failSettings(403));
-  await page.goto("/admin/");
+  await page.goto("/admin/_probe");
   await expect(page.getByRole("heading", { name: "You don't have access to this" })).toBeVisible();
   await expect(nav(page)).toBeVisible();
   await snap(page, "shell-forbidden");
@@ -428,7 +431,7 @@ test("screens", async ({ as, guard, snap, expectAccessible }) => {
   await page.unroute("**/api/v1/settings");
 
   await page.route("**/api/v1/settings", failSettings(500));
-  await page.goto("/admin/");
+  await page.goto("/admin/_probe");
   const alert = page.getByRole("alert");
   await expect(alert).toContainText("The server could not answer.");
   await expect(nav(page)).toBeVisible();
@@ -437,7 +440,7 @@ test("screens", async ({ as, guard, snap, expectAccessible }) => {
   await page.unroute("**/api/v1/settings");
   // Retry recovers once the server answers.
   await alert.getByRole("button", { name: "Try again" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Route check" })).toBeVisible();
 
   // The mobile nav sheet, open (the desktop shots of this state show the plain shell).
   await page.setViewportSize(VIEWPORTS.mobile);

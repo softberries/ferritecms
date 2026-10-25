@@ -49,6 +49,33 @@ export async function settle(page: Page): Promise<void> {
   });
 }
 
+/**
+ * Fails when the page is wider than the viewport (11 §8: no horizontal scroll at any
+ * width), naming the width found and the widest element sticking out.
+ */
+export async function expectNoHorizontalOverflow(page: Page, where: string): Promise<void> {
+  const found = await page.evaluate(() => {
+    const doc = document.documentElement;
+    if (doc.scrollWidth <= window.innerWidth) return null;
+    let widest = "";
+    let right = 0;
+    for (const el of document.querySelectorAll<HTMLElement>("body *")) {
+      const r = el.getBoundingClientRect().right;
+      if (r > right) {
+        right = r;
+        widest = `${el.tagName.toLowerCase()}${el.className ? `.${String(el.className).split(" ").slice(0, 3).join(".")}` : ""}`;
+      }
+    }
+    return { scrollWidth: doc.scrollWidth, innerWidth: window.innerWidth, widest, right };
+  });
+  if (found) {
+    throw new Error(
+      `horizontal overflow at ${where}: scrollWidth ${found.scrollWidth} > innerWidth ` +
+        `${found.innerWidth} (widest: ${found.widest}, right edge ${Math.round(found.right)})`,
+    );
+  }
+}
+
 /** Four full-page screenshots of the page as it is now; restores viewport and scheme. */
 export async function snap(page: Page, name: string): Promise<void> {
   if (!NAME.test(name)) throw new Error(`snap name must match ${String(NAME)}: ${name}`);
@@ -61,6 +88,7 @@ export async function snap(page: Page, name: string): Promise<void> {
       for (const v of Object.keys(VIEWPORTS) as Viewport[]) {
         await page.setViewportSize(VIEWPORTS[v]);
         await settle(page);
+        await expectNoHorizontalOverflow(page, `${name} ${s} ${v}`);
         await page.screenshot({
           path: screenFile(name, s, v),
           fullPage: true,

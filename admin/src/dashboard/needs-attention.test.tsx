@@ -85,11 +85,21 @@ describe("needs-attention", () => {
     expect(within(card).getByText("Nothing waits for review")).toBeVisible();
     expect(within(card).getByText("Up to date (version 7)")).toBeVisible();
     expect(within(card).getByText("Every node serves the active theme")).toBeVisible();
-    expect(within(card).getByText("2 things are waiting for you.")).toBeVisible();
+    expect(within(card).getByText("2 checks need your attention.")).toBeVisible();
 
     const dead = seen.find((u) => u.pathname === "/api/v1/system/jobs");
     expect(dead?.searchParams.get("status")).toBe("dead");
     expect(dead?.searchParams.get("limit")).toBe("5");
+  });
+
+  it("counts every dead job, not just the listed page", async () => {
+    stubRoutes({
+      "/api/v1/system/jobs": () => json({ items: [DEAD_JOB], next_cursor: "more" }),
+      "/api/v1/system/status": () => json({ ...STATUS, jobs: { ...STATUS.jobs, dead: 7 } }),
+    });
+    renderWithRouter(<NeedsAttention access={attentionAccess(["manage_system"])} />);
+    expect(await screen.findByText("7 dead jobs")).toBeVisible();
+    expect(screen.getByText("1 check needs your attention.")).toBeVisible();
   });
 
   it("asks only for what the role may see", async () => {

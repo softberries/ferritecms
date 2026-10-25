@@ -161,7 +161,8 @@ export function ActivityChart({ canWrite }: { canWrite: boolean }) {
               <Area
                 key={s.key}
                 dataKey={s.key}
-                type="monotone"
+                // Steps: each day is one discrete count, not a curve between days.
+                type="step"
                 stroke={`var(--color-${s.key})`}
                 strokeWidth={2}
                 strokeDasharray={s.dash}
@@ -173,25 +174,29 @@ export function ActivityChart({ canWrite }: { canWrite: boolean }) {
             ))}
           </AreaChart>
         </ChartContainer>
-        <table className="sr-only">
-          <caption>{t("activity.tableCaption", { days: ACTIVITY_DAYS })}</caption>
-          <thead>
-            <tr>
-              <th scope="col">{t("activity.day")}</th>
-              <th scope="col">{t("activity.posts")}</th>
-              <th scope="col">{t("activity.pages")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.day}>
-                <th scope="row">{dayLabel(r.day, { month: "long", day: "numeric" })}</th>
-                <td>{r.posts}</td>
-                <td>{r.pages}</td>
+        {/* The wrapper is what clips: a table box ignores `width`/`overflow` and grows to
+            its content, so `sr-only` on the table itself widened the page (review). */}
+        <div className="sr-only">
+          <table>
+            <caption>{t("activity.tableCaption", { days: ACTIVITY_DAYS })}</caption>
+            <thead>
+              <tr>
+                <th scope="col">{t("activity.day")}</th>
+                <th scope="col">{t("activity.posts")}</th>
+                <th scope="col">{t("activity.pages")}</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.day}>
+                  <th scope="row">{dayLabel(r.day, { month: "long", day: "numeric" })}</th>
+                  <td>{r.posts}</td>
+                  <td>{r.pages}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         {capped ? (
           <p className="mt-3 text-xs text-muted-foreground">
             {t("activity.capped", {
