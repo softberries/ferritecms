@@ -810,7 +810,10 @@ value is passed on and the call counts as a failure (§8).
   `<iframe>`, `<form>`, `<svg>`, `<math>`, no `on*` handlers) with the URL policy content
   blocks use too (M2a-2b P21, `ferrite_domain::html`): absolute URLs only `http`, `https` or
   `mailto` (`ftp:`, `tel:`, `data:`, `javascript:` dropped), relative ones root-relative,
-  fragment, query or path-relative but never `//…`, with a backslash or a control character;
+  fragment, query or path-relative but never `//…`, with a backslash or a control
+  character, or starting with a space or C0 control (browsers strip those, so ` //host` is
+  protocol-relative); `cite` on `blockquote`/`q`/`del`/`ins` dropped (ammonia does not check
+  it as a URL);
   `rel="noopener noreferrer"` on every link, plus `a[target]`
   and `code[class]` restricted to `language-*` classes. Each non-raw plugin's whole output is
   re-sanitised after it runs, so markup a `raw` plugin added earlier in the chain survives

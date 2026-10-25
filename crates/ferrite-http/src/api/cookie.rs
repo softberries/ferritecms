@@ -43,12 +43,18 @@ fn cookie(value: &str, max_age: u64, secure: bool) -> HeaderValue {
     // case) clears the cookie instead of failing the response.
     HeaderValue::from_str(&text).unwrap_or_else(|_| {
         tracing::error!("session cookie value is not a valid header value");
-        HeaderValue::from_static(if secure {
-            "__Host-ferrite_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure"
-        } else {
-            "ferrite_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
-        })
+        HeaderValue::from_static(fallback_clear(secure))
     })
+}
+
+/// The clearing cookie as a literal (`from_static` needs one). It must match
+/// [`clear_cookie`] and the name constants; `fallback_matches_clear_cookie` checks it.
+fn fallback_clear(secure: bool) -> &'static str {
+    if secure {
+        "__Host-ferrite_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure"
+    } else {
+        "ferrite_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
+    }
 }
 
 /// The value of the first session cookie (the name for `secure`, see the module docs)
@@ -102,6 +108,19 @@ mod tests {
 
     fn read_session_cookie_http(h: &HeaderMap) -> Option<&str> {
         read_session_cookie(h, false)
+    }
+
+    /// Review m3: the literal fallback names the same cookie as the constants.
+    #[test]
+    fn fallback_matches_clear_cookie() {
+        for secure in [true, false] {
+            assert_eq!(clear_cookie(secure), fallback_clear(secure));
+            assert!(
+                fallback_clear(secure).starts_with(&format!("{}=;", session_cookie_name(secure)))
+            );
+        }
+        assert!(fallback_clear(true).starts_with(&format!("{HOST_SESSION_COOKIE}=")));
+        assert!(fallback_clear(false).starts_with(&format!("{SESSION_COOKIE}=")));
     }
 
     /// P23: an `https` site reads only `__Host-ferrite_session`, an `http` site only

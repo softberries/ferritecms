@@ -9,13 +9,23 @@
 /// `data:`, `javascript:` and every other scheme are dropped.
 pub const SAFE_URL_SCHEMES: [&str; 3] = ["http", "https", "mailto"];
 
+/// Elements whose `cite` attribute sanitisers drop: ammonia allows `cite` on them but
+/// does not treat it as a URL attribute, so it would bypass this policy (it is not
+/// navigable today, but nothing outside the policy should carry a URL).
+pub const CITE_TAGS: [&str; 4] = ["blockquote", "del", "ins", "q"];
+
 /// Whether a relative URL (one without a scheme) may stay in sanitised HTML: root-relative
 /// (`/x`), fragment (`#a`), query (`?q`) and path-relative (`x/y`) text. Refused:
 /// protocol-relative `//host…`, anything with a backslash (browsers read `\` as `/`, so
-/// `\\host` and `/\host` are protocol-relative too) and anything with a control
-/// character. The empty string is refused as well.
+/// `\\host` and `/\host` are protocol-relative too), anything with a control character,
+/// the empty string, and anything that starts with a space or a C0 control (U+0000 to
+/// U+0020): the WHATWG URL parser strips those before parsing, so ` //host` is
+/// protocol-relative in a browser. ammonia hands this function the raw attribute value
+/// (entities decoded, nothing trimmed), so `&#32;//host` arrives as ` //host`.
 pub fn relative_url_allowed(url: &str) -> bool {
-    !url.is_empty() && !url.starts_with("//") && !url.chars().any(|c| c == '\\' || c.is_control())
+    url.chars().next().is_some_and(|c| c > '\u{20}')
+        && !url.starts_with("//")
+        && !url.chars().any(|c| c == '\\' || c.is_control())
 }
 
 #[cfg(test)]
@@ -47,6 +57,11 @@ mod tests {
             "/x\u{0}",
             "/x\u{7f}",
             "/x\u{85}",
+            " //evil.example/x",
+            "  //evil.example/x",
+            "\u{1}//evil.example/x",
+            " /x",
+            " ",
         ] {
             assert!(!relative_url_allowed(bad), "{bad:?} allowed");
         }

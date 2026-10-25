@@ -719,8 +719,8 @@ impl AuthService {
         if user.totp_secret.is_some() {
             return Err(CoreError::Invalid("disable TOTP first".into()));
         }
-        let secret = random_bytes::<{ totp::SECRET_LEN }>()?;
-        let otp = totp::build(&secret, &self.issuer, &user.login)?;
+        let secret = Zeroizing::new(random_bytes::<{ totp::SECRET_LEN }>()?);
+        let otp = totp::build(secret.as_slice(), &self.issuer, &user.login)?;
         let otpauth_url = otp.to_url().map_err(|e| {
             tracing::error!(error = %e, "otpauth URL refused");
             CoreError::Invalid("TOTP parameters refused".into())
@@ -730,7 +730,7 @@ impl AuthService {
             ENROLL_PURPOSE,
             &Enrollment {
                 user: user.id,
-                secret: URL_SAFE_NO_PAD.encode(secret),
+                secret: URL_SAFE_NO_PAD.encode(secret.as_slice()),
                 exp,
             },
         )?;

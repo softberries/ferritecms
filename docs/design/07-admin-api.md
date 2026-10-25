@@ -462,14 +462,17 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   and outstanding reset links invalid.
 - **Zeroization** (M2a-2b P24, `zeroize`): `SiteKey` (every clone) and its subkeys, the
   HMAC key state (`hmac` and `sha2` with their `zeroize` features), the prepared HMAC key
-  block, opened TOTP secrets and `Secret` (password hashes, TOTP secrets, a new account's
-  password) are wiped when dropped. API password fields (login, password change, reset
+  block, opened TOTP secrets, a new enrollment's random secret, totp-rs's copies of the
+  secret (`Totp`, its builder; `totp-rs`'s `zeroize` feature) and `Secret` (password hashes,
+  TOTP secrets, a new account's password) are wiped when dropped. API password fields (login, password change, reset
   confirm, TOTP confirm and disable, user create, an admin's password set) are
   `api::dto::Password`: deserialised through a `String` held in `Zeroizing`, redacted in
   `Debug`, `format: password` in the OpenAPI document; hashing and verifying wipe the
   copies they hand to the blocking pool. **Not wiped**: serde_json's copy of the request
   body (and its scratch buffer for escaped strings), hyper's buffers, argon2's working
-  memory, the CLI's password strings, and copies the allocator made when a `String` grew.
+  memory, the CLI's password strings, a TOTP enrollment's secret as it is shown and sealed
+  (`secret_base32`, `otpauth_url`, the sealed-enrollment JSON), and copies the allocator
+  made when a `String` grew.
 - **Passkeys** (`webauthn-rs`): deferred past M2 (P3; the newest `webauthn-rs` is a
   pre-release, and the ceremony needs the SPA). There is no `passkeys` table.
 - **Audit log** (P22): user, token, TOTP, type/taxonomy and settings writes, extension

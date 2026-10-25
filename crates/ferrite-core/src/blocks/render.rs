@@ -1,7 +1,7 @@
 use super::text::collect_text;
 use super::url::{ImageSrc, image_src, safe_href};
 use super::{MAX_DEPTH, RenderCtx};
-use ferrite_domain::html::{SAFE_URL_SCHEMES, relative_url_allowed};
+use ferrite_domain::html::{CITE_TAGS, SAFE_URL_SCHEMES, relative_url_allowed};
 use html_escape::{encode_double_quoted_attribute, encode_text};
 use serde_json::{Map, Value};
 use std::borrow::Cow;
@@ -10,13 +10,17 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 
 /// The sanitiser for `html` nodes: ammonia's defaults with the shared URL policy
 /// (M2a-2b P21, [`ferrite_domain::html`]): only `http`, `https` and `mailto` absolute
-/// URLs, and relative URLs that [`relative_url_allowed`] accepts.
+/// URLs, relative URLs that [`relative_url_allowed`] accepts, and no `cite` (on
+/// [`CITE_TAGS`]; ammonia does not check it as a URL).
 ///
 /// [`relative_url_allowed`]: ferrite_domain::html::relative_url_allowed
 static HTML_SANITIZER: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
     let mut b = ammonia::Builder::default();
     b.url_schemes(SAFE_URL_SCHEMES.into_iter().collect())
         .url_relative(ammonia::UrlRelative::Custom(Box::new(keep_relative)));
+    for tag in CITE_TAGS {
+        b.rm_tag_attributes(tag, ["cite"]);
+    }
     b
 });
 
@@ -556,6 +560,15 @@ mod tests {
             "tel:+15550100",
             "javascript:alert(1)",
             "data:text/html,x",
+            // Leading space or C0 (browsers strip them; review I1), also as an entity.
+            " //evil.example/x",
+            "&#32;//evil.example/x",
+            "&#x20;&#x20;//evil.example/x",
+            "\t//evil.example/x",
+            " \\evil.example/x",
+            // Leading space before a scheme: ammonia's scheme check sees the trimmed URL.
+            " javascript:x",
+            " ftp://files.example/x",
         ] {
             let out = link(bad);
             assert!(
@@ -575,6 +588,17 @@ mod tests {
                 out.contains(&format!("href=\"{ok}\"")),
                 "{ok:?} dropped: {out}"
             );
+        }
+        // An allowed scheme after a leading space passes the scheme check (browsers strip
+        // the space, so it is the https link it looks like).
+        assert!(link(" https://ok.example/x").contains("href=\" https://ok.example/x\""));
+        // `cite` is not checked as a URL by ammonia, so it is dropped (review m5).
+        for tag in ["blockquote", "q", "del", "ins"] {
+            let d = doc(vec![json!({
+                "type": "html",
+                "attrs": {"html": format!("<{tag} cite=\"javascript:x\">c</{tag}>")}
+            })]);
+            assert_eq!(r(d), format!("<{tag}>c</{tag}>"));
         }
     }
 

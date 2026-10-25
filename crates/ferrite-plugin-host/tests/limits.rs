@@ -526,11 +526,15 @@ async fn slot_wait_counts_toward_the_route_deadline() -> TestResult {
     Ok(())
 }
 
-/// R24 N2: under contention a looping plugin is still counted. With one call slot, a
-/// looping route waits ~400 ms (40 % of its 1 s deadline) for the slot, then runs out of
-/// time: one recorded failure, not `Busy`. (The opposite branch, a wait that leaves
-/// less than half the deadline, never happens in the host — a wait is at most the
-/// deadline — and is pinned by the unit test `wait_that_left_under_half_is_busy`.)
+/// R24 N2, regression guard: under contention a looping plugin is still counted. With
+/// one call slot, a looping route waits ~400 ms (40 % of its 1 s deadline) for the slot,
+/// then runs out of time: one recorded failure, not `Busy`. At 40 % the wait does not
+/// cut the epoch deadline, so this passed before N2 too; it guards against a change that
+/// would make such a call `Busy`. The N2 change itself is pinned by the two
+/// `slot_wait_counts_toward_*` tests (wait cuts that ran at least half are failures),
+/// `call.rs`'s `wait_shortened_call_that_ran_half_is_a_failure`, and the opposite branch
+/// (a wait that leaves less than half, which the host never produces) by the unit test
+/// `wait_that_left_under_half_is_busy`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wait_shortened_slow_plugin_is_counted() -> TestResult {
     let cfg = HostConfig {

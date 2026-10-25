@@ -6,7 +6,7 @@
 
 use std::sync::LazyLock;
 
-use ferrite_domain::html::{SAFE_URL_SCHEMES, relative_url_allowed};
+use ferrite_domain::html::{CITE_TAGS, SAFE_URL_SCHEMES, relative_url_allowed};
 
 use crate::capability::FilterType;
 use crate::manifest::HtmlMode;
@@ -23,7 +23,8 @@ pub const MAX_ROUTE_HEADER_BYTES: usize = 4 * 1024;
 /// ammonia's defaults (no `<script>`/`<style>`/`<iframe>`/`<form>`/`<svg>`/`<math>`, no
 /// `on*` handlers) with the shared URL policy of content blocks (M2a-2b P21,
 /// [`ferrite_domain::html`]): absolute URLs only `http`, `https` or `mailto`; relative
-/// ones without `//`, a backslash or a control character;
+/// ones without `//`, a backslash, a control character or a leading space; no `cite`
+/// (on [`CITE_TAGS`], which ammonia does not check as a URL);
 /// `rel="noopener noreferrer"` on every link, plus two additions: `a[target]`, and
 /// `code[class]` restricted to `language-*` classes, so core's code-block classes
 /// survive a sanitising plugin.
@@ -45,6 +46,9 @@ static SANITIZER: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
             }
             Some(value.into())
         });
+    for tag in CITE_TAGS {
+        b.rm_tag_attributes(tag, ["cite"]);
+    }
     b
 });
 
@@ -505,6 +509,15 @@ mod tests {
             "tel:+15550100",
             "javascript:alert(1)",
             "data:text/html,x",
+            // Leading space or C0 (browsers strip them; review I1), also as an entity.
+            " //evil.example/x",
+            "&#32;//evil.example/x",
+            "&#x20;&#x20;//evil.example/x",
+            "\t//evil.example/x",
+            " \\evil.example/x",
+            // Leading space before a scheme: ammonia's scheme check sees the trimmed URL.
+            " javascript:x",
+            " ftp://files.example/x",
         ] {
             assert_eq!(link(bad), "<a rel=\"noopener noreferrer\">l</a>", "{bad:?}");
         }
@@ -519,6 +532,16 @@ mod tests {
                 link(ok),
                 format!("<a href=\"{ok}\" rel=\"noopener noreferrer\">l</a>"),
                 "{ok:?}"
+            );
+        }
+        assert_eq!(
+            link(" https://ok.example/x"),
+            "<a href=\" https://ok.example/x\" rel=\"noopener noreferrer\">l</a>"
+        );
+        for tag in ["blockquote", "q", "del", "ins"] {
+            assert_eq!(
+                sanitized(&format!("<{tag} cite=\"//evil.example/\">c</{tag}>")),
+                Ok(FilterValue::Html(format!("<{tag}>c</{tag}>")))
             );
         }
     }
