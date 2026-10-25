@@ -10,6 +10,7 @@ import type { Role } from "./users";
 
 export interface Item {
   id: string;
+  body?: unknown;
   type: string;
   title: string;
   slug: string;
@@ -85,7 +86,7 @@ export class ContentApi {
   async create(
     type: string,
     title: string,
-    extra: { parent_id?: string; terms?: string[] } = {},
+    extra: { parent_id?: string; terms?: string[]; body?: unknown } = {},
   ): Promise<Item> {
     return this.ok(
       await this.ctx.post(`/api/v1/content/${type}`, {

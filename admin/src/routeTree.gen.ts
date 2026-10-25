@@ -19,6 +19,8 @@ import { Route as AppSplatRouteImport } from './routes/_app/$'
 import { Route as AppStyleguideRouteImport } from './routes/_app/[_]styleguide'
 import { Route as LoginTotpRouteImport } from './routes/login_.totp'
 import { Route as AppContentTypeIndexRouteImport } from './routes/_app/content.$type.index'
+import { Route as AppContentTypeIdRouteImport } from './routes/_app/content.$type.$id'
+import { Route as AppContentTypeNewRouteImport } from './routes/_app/content.$type.new'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -69,6 +71,16 @@ const AppContentTypeIndexRoute = AppContentTypeIndexRouteImport.update({
   path: '/content/$type/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppContentTypeIdRoute = AppContentTypeIdRouteImport.update({
+  id: '/content/$type/$id',
+  path: '/content/$type/$id',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppContentTypeNewRoute = AppContentTypeNewRouteImport.update({
+  id: '/content/$type/new',
+  path: '/content/$type/new',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -79,6 +91,8 @@ export interface FileRoutesByFullPath {
   '/$': typeof AppSplatRoute
   '/_styleguide': typeof AppStyleguideRoute
   '/login/totp': typeof LoginTotpRoute
+  '/content/$type/$id': typeof AppContentTypeIdRoute
+  '/content/$type/new': typeof AppContentTypeNewRoute
   '/content/$type/': typeof AppContentTypeIndexRoute
 }
 export interface FileRoutesByTo {
@@ -90,6 +104,8 @@ export interface FileRoutesByTo {
   '/_styleguide': typeof AppStyleguideRoute
   '/login/totp': typeof LoginTotpRoute
   '/': typeof AppIndexRoute
+  '/content/$type/$id': typeof AppContentTypeIdRoute
+  '/content/$type/new': typeof AppContentTypeNewRoute
   '/content/$type': typeof AppContentTypeIndexRoute
 }
 export interface FileRoutesById {
@@ -103,6 +119,8 @@ export interface FileRoutesById {
   '/_app/_styleguide': typeof AppStyleguideRoute
   '/login_/totp': typeof LoginTotpRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/content/$type/$id': typeof AppContentTypeIdRoute
+  '/_app/content/$type/new': typeof AppContentTypeNewRoute
   '/_app/content/$type/': typeof AppContentTypeIndexRoute
 }
 export interface FileRouteTypes {
@@ -116,6 +134,8 @@ export interface FileRouteTypes {
     | '/$'
     | '/_styleguide'
     | '/login/totp'
+    | '/content/$type/$id'
+    | '/content/$type/new'
     | '/content/$type/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -127,6 +147,8 @@ export interface FileRouteTypes {
     | '/_styleguide'
     | '/login/totp'
     | '/'
+    | '/content/$type/$id'
+    | '/content/$type/new'
     | '/content/$type'
   id:
     | '__root__'
@@ -139,6 +161,8 @@ export interface FileRouteTypes {
     | '/_app/_styleguide'
     | '/login_/totp'
     | '/_app/'
+    | '/_app/content/$type/$id'
+    | '/_app/content/$type/new'
     | '/_app/content/$type/'
   fileRoutesById: FileRoutesById
 }
@@ -223,6 +247,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppContentTypeIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/content/$type/$id': {
+      id: '/_app/content/$type/$id'
+      path: '/content/$type/$id'
+      fullPath: '/content/$type/$id'
+      preLoaderRoute: typeof AppContentTypeIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/content/$type/new': {
+      id: '/_app/content/$type/new'
+      path: '/content/$type/new'
+      fullPath: '/content/$type/new'
+      preLoaderRoute: typeof AppContentTypeNewRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
@@ -230,6 +268,8 @@ interface AppRouteChildren {
   AppSplatRoute: typeof AppSplatRoute
   AppStyleguideRoute: typeof AppStyleguideRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppContentTypeIdRoute: typeof AppContentTypeIdRoute
+  AppContentTypeNewRoute: typeof AppContentTypeNewRoute
   AppContentTypeIndexRoute: typeof AppContentTypeIndexRoute
 }
 
@@ -237,6 +277,8 @@ const AppRouteChildren: AppRouteChildren = {
   AppSplatRoute: AppSplatRoute,
   AppStyleguideRoute: AppStyleguideRoute,
   AppIndexRoute: AppIndexRoute,
+  AppContentTypeIdRoute: AppContentTypeIdRoute,
+  AppContentTypeNewRoute: AppContentTypeNewRoute,
   AppContentTypeIndexRoute: AppContentTypeIndexRoute,
 }
 

@@ -12,6 +12,7 @@ import {
   PlusIcon,
   SearchIcon,
 } from "lucide-react";
+import { cn } from "cn";
 import { Fragment } from "react";
 import { useTranslation } from "react-i18next";
 import type { MeDto } from "@/auth/session";
@@ -50,6 +51,8 @@ export interface TopBarProps {
   onPalette: () => void;
   onShortcuts: () => void;
   onSignOut: () => void;
+  /** Out of the way (the editor's focus mode): slides up, fades and leaves the tab order. */
+  hidden?: boolean;
 }
 
 interface Crumb {
@@ -208,12 +211,24 @@ function NewButton() {
   );
 }
 
-export function TopBar({ me, discouraged, onPalette, onShortcuts, onSignOut }: TopBarProps) {
+export function TopBar({
+  me,
+  discouraged,
+  onPalette,
+  onShortcuts,
+  onSignOut,
+  hidden = false,
+}: TopBarProps) {
   const { t } = useTranslation();
   return (
     <header
       data-slot="top-bar"
-      className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background/85 px-3 backdrop-blur-md supports-backdrop-filter:bg-background/70 sm:gap-3 sm:px-4"
+      data-hidden={hidden || undefined}
+      inert={hidden || undefined}
+      className={cn(
+        "sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background/85 px-3 backdrop-blur-md transition-[margin,opacity] duration-(--dur-base) ease-out supports-backdrop-filter:bg-background/70 sm:gap-3 sm:px-4",
+        hidden && "pointer-events-none -mt-14 opacity-0",
+      )}
     >
       <Tooltip>
         <TooltipTrigger asChild>

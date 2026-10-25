@@ -3,7 +3,9 @@
 // remounts it (and plays the enter animation) while a search-param change (a list
 // filter) does not. Enter only, without `AnimatePresence` (ruling at Task 10 fix round
 // 1): an exiting copy would keep rendering the same `<Outlet>`, so the next route would
-// mount inside it, unmount with it and mount again. Under reduced motion only the
+// mount inside it, unmount with it and mount again. Routes that share a
+// `staticData.transitionKey` share the key (the editor's `new` → `$id` hand-over, which
+// should not flash). Under reduced motion only the
 // opacity changes (no transform at any frame).
 
 import { useMatches } from "@tanstack/react-router";
@@ -13,7 +15,12 @@ import type { ReactNode } from "react";
 import { MOTION } from "@/design/tokens";
 
 export function RouteTransition({ children }: { children: ReactNode }) {
-  const leaf = useMatches({ select: (matches) => matches[matches.length - 1]?.routeId ?? "" });
+  const leaf = useMatches({
+    select: (matches) => {
+      const last = matches[matches.length - 1];
+      return last?.staticData.transitionKey ?? last?.routeId ?? "";
+    },
+  });
   const reduce = useReducedMotion() ?? false;
   return (
     <m.div

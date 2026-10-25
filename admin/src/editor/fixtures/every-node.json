@@ -1,0 +1,190 @@
+{
+  "type": "doc",
+  "content": [
+    {
+      "type": "heading",
+      "attrs": { "level": 2 },
+      "content": [{ "type": "text", "text": "Heading two" }]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 3 },
+      "content": [{ "type": "text", "text": "Heading three" }]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 4 },
+      "content": [{ "type": "text", "text": "Heading four" }]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 5 },
+      "content": [{ "type": "text", "text": "Heading five" }]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 6 },
+      "content": [{ "type": "text", "text": "Heading six" }]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Plain, " },
+        { "type": "text", "text": "bold", "marks": [{ "type": "bold" }] },
+        { "type": "text", "text": ", " },
+        { "type": "text", "text": "italic", "marks": [{ "type": "italic" }] },
+        { "type": "text", "text": ", " },
+        { "type": "text", "text": "struck", "marks": [{ "type": "strike" }] },
+        { "type": "text", "text": ", " },
+        { "type": "text", "text": "code", "marks": [{ "type": "code" }] },
+        { "type": "text", "text": ", " },
+        { "type": "text", "text": "both", "marks": [{ "type": "bold" }, { "type": "italic" }] },
+        { "type": "hardBreak" },
+        {
+          "type": "text",
+          "text": "a link",
+          "marks": [{ "type": "link", "attrs": { "href": "https://example.com/a" } }]
+        },
+        { "type": "text", "text": " and " },
+        {
+          "type": "text",
+          "text": "a new tab",
+          "marks": [
+            { "type": "link", "attrs": { "href": "https://example.com/b", "target": "_blank" } }
+          ]
+        },
+        { "type": "text", "text": " and " },
+        {
+          "type": "text",
+          "text": "a bold local link",
+          "marks": [{ "type": "link", "attrs": { "href": "/about/" } }, { "type": "bold" }]
+        },
+        { "type": "text", "text": "." }
+      ]
+    },
+    {
+      "type": "bulletList",
+      "content": [
+        {
+          "type": "listItem",
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "One" }] }]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Two" }] },
+            {
+              "type": "bulletList",
+              "content": [
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{ "type": "text", "text": "Two and a half" }]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "orderedList",
+      "attrs": { "start": 3 },
+      "content": [
+        {
+          "type": "listItem",
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Third" }] }]
+        },
+        {
+          "type": "listItem",
+          "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Fourth" }] }]
+        }
+      ]
+    },
+    {
+      "type": "blockquote",
+      "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "A quote." }] }]
+    },
+    {
+      "type": "codeBlock",
+      "attrs": { "language": "rust" },
+      "content": [{ "type": "text", "text": "fn main() {\n    println!(\"hi\");\n}" }]
+    },
+    { "type": "horizontalRule" },
+    {
+      "type": "image",
+      "attrs": {
+        "src": "ferrite:media/0190f1c0-0000-7000-8000-000000000001",
+        "alt": "A gradient",
+        "title": "Gradient"
+      }
+    },
+    {
+      "type": "image",
+      "attrs": { "src": "/media/local.png", "alt": "Local", "title": "On this site" }
+    },
+    {
+      "type": "table",
+      "content": [
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableHeader",
+              "attrs": { "colspan": 1, "rowspan": 1 },
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Name" }] }]
+            },
+            {
+              "type": "tableHeader",
+              "attrs": { "colspan": 2, "rowspan": 1 },
+              "content": [
+                { "type": "paragraph", "content": [{ "type": "text", "text": "Values" }] }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableCell",
+              "attrs": { "colspan": 1, "rowspan": 2 },
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Tall" }] }]
+            },
+            {
+              "type": "tableCell",
+              "attrs": { "colspan": 1, "rowspan": 1 },
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "a" }] }]
+            },
+            {
+              "type": "tableCell",
+              "attrs": { "colspan": 1, "rowspan": 1 },
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "b" }] }]
+            }
+          ]
+        },
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableCell",
+              "attrs": { "colspan": 1, "rowspan": 1 },
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "c" }] }]
+            },
+            {
+              "type": "tableCell",
+              "attrs": { "colspan": 1, "rowspan": 1 },
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "d" }] }]
+            }
+          ]
+        }
+      ]
+    },
+    { "type": "html", "attrs": { "html": "<p class=\"note\">Raw <b>HTML</b></p>" } },
+    { "type": "paragraph", "content": [{ "type": "text", "text": "The end." }] }
+  ]
+}

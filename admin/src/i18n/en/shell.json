@@ -13,7 +13,9 @@
   "crumbs": {
     "dashboard": "Dashboard",
     "notFound": "Not found",
-    "content": "Content"
+    "content": "Content",
+    "new": "New",
+    "untitled": "Untitled"
   },
   "topBar": {
     "search": "Search or jump to…",

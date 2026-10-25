@@ -28,6 +28,8 @@ export interface AppSidebarProps {
   loading: boolean;
   siteTitle: string;
   siteUrl: string | null;
+  /** Slid fully out (the editor's focus mode) instead of collapsing to the icon rail. */
+  hidden?: boolean;
 }
 
 /** The path inside the admin (`/`, `/content/post`), whatever the router reports. */
@@ -47,7 +49,13 @@ function isActive(item: NavItem, pathname: string): boolean {
 const ROW =
   "h-control gap-2.5 px-2.5 text-sidebar-foreground/80 data-active:text-sidebar-accent-foreground data-active:[&>svg]:text-primary [&>svg]:text-muted-foreground hover:[&>svg]:text-sidebar-accent-foreground";
 
-export function AppSidebar({ sections, loading, siteTitle, siteUrl }: AppSidebarProps) {
+export function AppSidebar({
+  sections,
+  loading,
+  siteTitle,
+  siteUrl,
+  hidden = false,
+}: AppSidebarProps) {
   const { t } = useTranslation("shell");
   const { isMobile, setOpenMobile, state } = useSidebar();
   // Tooltips only name the icons of the collapsed rail. Elsewhere they would be hidden
@@ -60,7 +68,7 @@ export function AppSidebar({ sections, loading, siteTitle, siteUrl }: AppSidebar
   };
 
   return (
-    <Sidebar collapsible="icon">
+    <Sidebar collapsible={hidden ? "offcanvas" : "icon"} inert={hidden || undefined}>
       <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-2 py-0">
         <SidebarMenu>
           <SidebarMenuItem>

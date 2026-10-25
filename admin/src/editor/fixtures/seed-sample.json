@@ -1,0 +1,85 @@
+{
+  "type": "doc",
+  "content": [
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Every CMS starts with a hello world post. This is ours." }
+      ]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 2 },
+      "content": [{ "type": "text", "text": "What you get" }]
+    },
+    {
+      "type": "bulletList",
+      "content": [
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [{ "type": "text", "text": "A single binary and a single data folder" }]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [{ "type": "text", "text": "Plugins in a capability-scoped sandbox" }]
+            }
+          ]
+        },
+        {
+          "type": "listItem",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [{ "type": "text", "text": "Themes that are templates, not programs" }]
+            }
+          ]
+        }
+      ]
+    },
+    { "type": "paragraph", "content": [{ "type": "text", "text": "Try it on your own machine:" }] },
+    {
+      "type": "codeBlock",
+      "attrs": { "language": "sh" },
+      "content": [
+        {
+          "type": "text",
+          "text": "ferrite init --data ./site --url http://localhost:8080\nferrite seed demo --data ./site\nferrite serve --data ./site"
+        }
+      ]
+    },
+    {
+      "type": "blockquote",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "Plugins are untrusted. They get only what their manifest declares."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Read more in " },
+        {
+          "type": "text",
+          "text": "the about page",
+          "marks": [{ "type": "link", "attrs": { "href": "/about/" } }]
+        },
+        { "type": "text", "text": "." }
+      ]
+    }
+  ]
+}

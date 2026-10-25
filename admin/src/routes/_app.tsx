@@ -25,6 +25,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { storeSidebarOpen, storedSidebarOpen } from "@/design/preferences";
 import { registerShortcut, useShortcut } from "@/lib/shortcuts";
 import { AppSidebar } from "@/shell/app-sidebar";
+import { type ShellChrome, ShellChromeContext } from "@/shell/chrome-context";
 import { CommandPalette } from "@/palette/palette";
 import { pushRecent } from "@/palette/recent";
 import { type NavSection, navFor, navItemAt } from "@/shell/nav";
@@ -72,6 +73,9 @@ function Shell({ me }: { me: MeDto }) {
   const sections = useMemo(() => navFor(me, types.data ?? [], t), [me, types.data, t]);
 
   const [sidebarOpen, setSidebarOpen] = useState(storedSidebarOpen);
+  // The editor's focus mode: sidebar and top bar out of the way (11 §6 `mod+shift+f`).
+  const [focusMode, setFocusMode] = useState(false);
+  const chrome = useMemo<ShellChrome>(() => ({ focusMode, setFocusMode }), [focusMode]);
   const [palette, setPalette] = useState(false);
   const [sheet, setSheet] = useState(false);
   const openSheet = () => {
@@ -89,57 +93,65 @@ function Shell({ me }: { me: MeDto }) {
 
   return (
     <TooltipProvider delayDuration={400}>
-      {/* `--sticky-top`: the top bar's height (h-14), for sticky page parts (11 §4). */}
-      <SidebarProvider
-        open={sidebarOpen}
-        onOpenChange={(open) => {
-          storeSidebarOpen(open);
-          setSidebarOpen(open);
-        }}
-        className="[--sticky-top:3.5rem]"
-      >
-        <a
-          href="#main"
-          className="fixed top-2 left-2 z-50 -translate-y-16 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-2 focus-visible:translate-y-0"
+      <ShellChromeContext value={chrome}>
+        {/* `--sticky-top`: the top bar's height (h-14), for sticky page parts (11 §4); 0
+          while focus mode hides the bar. */}
+        <SidebarProvider
+          open={focusMode ? false : sidebarOpen}
+          onOpenChange={(open) => {
+            if (focusMode) setFocusMode(false);
+            storeSidebarOpen(open);
+            setSidebarOpen(open);
+          }}
+          className={focusMode ? "[--sticky-top:0px]" : "[--sticky-top:3.5rem]"}
+          data-focus-mode={focusMode || undefined}
         >
-          {t("skipToContent")}
-        </a>
-        <AppSidebar
-          sections={sections}
-          loading={canRead && types.isPending}
-          siteTitle={settings.data?.["site.title"] || tc("app.name")}
-          siteUrl={site.data?.site_url ?? null}
-        />
-        <SidebarInset className="min-w-0">
-          <TopBar
-            me={me}
-            discouraged={settings.data?.["reading.discourage_indexing"] === true}
-            onPalette={() => setPalette(true)}
-            onShortcuts={openSheet}
-            onSignOut={signOut}
+          <a
+            href="#main"
+            className="fixed top-2 left-2 z-50 -translate-y-16 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-2 focus-visible:translate-y-0"
+          >
+            {t("skipToContent")}
+          </a>
+          <AppSidebar
+            sections={sections}
+            loading={canRead && types.isPending}
+            siteTitle={settings.data?.["site.title"] || tc("app.name")}
+            siteUrl={site.data?.site_url ?? null}
+            hidden={focusMode}
           />
-          <main id="main" className="flex min-w-0 flex-1 flex-col px-page pt-6 pb-12">
-            <RouteTransition>
-              <Outlet />
-            </RouteTransition>
-          </main>
-        </SidebarInset>
-        <ShellShortcuts
-          sections={sections}
-          togglePalette={() => setPalette((open) => !open)}
-          openSheet={openSheet}
-          closeOverlays={closeOverlays}
-        />
-        <CommandPalette
-          open={palette}
-          onOpenChange={setPalette}
-          me={me}
-          sections={sections}
-          onShortcuts={openSheet}
-        />
-        <ShortcutSheet open={sheet} onOpenChange={setSheet} />
-        <Toaster position="bottom-right" />
-      </SidebarProvider>
+          <SidebarInset className="min-w-0">
+            <TopBar
+              hidden={focusMode}
+              me={me}
+              discouraged={settings.data?.["reading.discourage_indexing"] === true}
+              onPalette={() => setPalette(true)}
+              onShortcuts={openSheet}
+              onSignOut={signOut}
+            />
+            <main id="main" className="flex min-w-0 flex-1 flex-col px-page pt-6 pb-12">
+              <RouteTransition>
+                <Outlet />
+              </RouteTransition>
+            </main>
+          </SidebarInset>
+          <ShellShortcuts
+            sections={sections}
+            canCreate={me.capabilities.includes("edit_own")}
+            togglePalette={() => setPalette((open) => !open)}
+            openSheet={openSheet}
+            closeOverlays={closeOverlays}
+          />
+          <CommandPalette
+            open={palette}
+            onOpenChange={setPalette}
+            me={me}
+            sections={sections}
+            onShortcuts={openSheet}
+          />
+          <ShortcutSheet open={sheet} onOpenChange={setSheet} />
+          <Toaster position="bottom-right" />
+        </SidebarProvider>
+      </ShellChromeContext>
     </TooltipProvider>
   );
 }
@@ -160,11 +172,13 @@ function useRecentScreens(sections: NavSection[]): void {
 /** The shell's global bindings (11 §6): only those whose screens exist. */
 function ShellShortcuts({
   sections,
+  canCreate,
   togglePalette,
   openSheet,
   closeOverlays,
 }: {
   sections: NavSection[];
+  canCreate: boolean;
   togglePalette: () => void;
   openSheet: () => void;
   closeOverlays: () => void;
@@ -198,6 +212,29 @@ function ShellShortcuts({
     group: general,
     run: toggleSidebar,
   });
+
+  // `c p` / `c g`: a new post / page in the editor (only with `edit_own`).
+  useEffect(() => {
+    if (!canCreate) return;
+    const offs = (
+      [
+        ["c p", "post", t("topBar.newPost")],
+        ["c g", "page", t("topBar.newPage")],
+      ] as const
+    ).map(([keys, type, label]) =>
+      registerShortcut({
+        id: `create.${type}`,
+        keys,
+        label,
+        group: general,
+        run: () => {
+          closeOverlays();
+          void navigate({ to: "/content/$type/new", params: { type } });
+        },
+      }),
+    );
+    return () => offs.forEach((off) => off());
+  }, [canCreate, general, t, navigate, closeOverlays]);
 
   // `g <key>` for every nav item that has one.
   useEffect(() => {

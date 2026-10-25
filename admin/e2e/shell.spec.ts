@@ -162,6 +162,8 @@ test("shortcut_sheet_lists_bindings", async ({ as, snap, expectAccessible }) => 
     "Open the command palette",
     "Show keyboard shortcuts",
     "Collapse or expand the sidebar",
+    "New post",
+    "New page",
     "Go to Dashboard",
     "Go to Posts",
     "Go to Pages",

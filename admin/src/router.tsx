@@ -35,6 +35,11 @@ declare module "@tanstack/react-router" {
     crumb?: (t: TFunction<"shell">, loaderData?: unknown) => string;
     /** Rendered without the shell (the styleguide brings its own frame). */
     bare?: boolean;
+    /**
+     * Routes with the same key share one route transition: moving between them plays no
+     * enter animation (the editor's `new` → `$id` hand-over after the first save).
+     */
+    transitionKey?: string;
   }
 
   /** What the sign-in screens pass through history state (never through the URL). */
