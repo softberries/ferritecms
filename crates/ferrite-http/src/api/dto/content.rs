@@ -402,7 +402,7 @@ pub struct AutosaveDto {
     pub excerpt: Option<String>,
     /// `null`: unchanged.
     pub slug: Option<String>,
-    /// `null`: unchanged.
+    /// The working copy's parent; `null`: top level (not "unchanged").
     pub parent_id: Option<Uuid>,
     /// `null`: unchanged.
     pub menu_order: Option<i32>,
@@ -434,8 +434,9 @@ impl From<Autosave> for AutosaveDto {
 }
 
 /// `PUT /content/{type}/{id}/autosave`: replaces the caller's autosave (last write
-/// wins; no `If-Match`). Only text is checked (no NUL or control characters; the
-/// excerpt may hold tabs and line breaks): a draft may be incomplete.
+/// wins; no `If-Match`). Text is checked as a content write checks it (no NUL; the slug
+/// also no control characters) and `terms` holds at most 200 ids; the field schema,
+/// the parent and the terms are not checked: a draft may be incomplete.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct AutosaveInput {
     /// The item version the working copy was made from.
@@ -447,13 +448,14 @@ pub struct AutosaveInput {
     /// Absent or `null`: unchanged.
     #[serde(default)]
     pub slug: Option<String>,
-    /// Absent or `null`: unchanged.
+    /// The working copy's parent; absent or `null`: top level (not "unchanged"), so
+    /// always send it.
     #[serde(default)]
     pub parent_id: Option<Uuid>,
     /// Absent or `null`: unchanged.
     #[serde(default)]
     pub menu_order: Option<i32>,
-    /// Term ids in order; absent or `null`: unchanged.
+    /// Term ids in order (at most 200); absent or `null`: unchanged.
     #[serde(default)]
     pub terms: Option<Vec<Uuid>>,
     #[serde(deserialize_with = "not_null")]

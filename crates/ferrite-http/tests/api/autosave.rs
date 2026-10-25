@@ -7,7 +7,11 @@ use serde_json::{Value, json};
 
 use crate::{api_tests, harness::Api};
 
-api_tests!(autosave_flow, autosave_requires_csrf);
+api_tests!(
+    autosave_flow,
+    autosave_requires_csrf,
+    autosave_keeps_a_top_level_parent
+);
 
 const POSTS: &str = "/api/v1/content/post";
 
@@ -113,13 +117,25 @@ async fn autosave_flow(api: Api) -> Api {
     }
     e.get(&api, &slot).await.assert_problem(404, "not-found");
 
-    // Text is checked; the shape is required.
-    let bad = json!({"base_version": 2, "title": "a\u{7}b", "body": doc("x"), "fields": {}});
+    // Text is checked as a content write checks it: a vertical tab is kept, NUL is not.
+    let pasted = json!({"base_version": 2, "title": "a\u{b}b", "body": doc("x"), "fields": {}});
+    let r = a.send(&api, Method::PUT, &slot, Some(&pasted), None).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert_eq!(a.get(&api, &slot).await.json()["title"], "a\u{b}b");
+    let bad = json!({"base_version": 2, "title": "a\u{0}b", "body": doc("x"), "fields": {}});
     let p = a
         .send(&api, Method::PUT, &slot, Some(&bad), None)
         .await
         .assert_problem(422, "validation");
-    assert_eq!(p["errors"][0]["field"], "title", "{p}");
+    // Refused at the JSON edge, as for any content write.
+    assert!(p["detail"].as_str().unwrap().contains("NUL"), "{p}");
+    let bad =
+        json!({"base_version": 2, "title": "t", "slug": "a\u{7}b", "body": doc("x"), "fields": {}});
+    let p = a
+        .send(&api, Method::PUT, &slot, Some(&bad), None)
+        .await
+        .assert_problem(422, "validation");
+    assert_eq!(p["errors"][0]["field"], "slug", "{p}");
     for bad in [
         json!({"base_version": 2, "title": "t", "body": null, "fields": {}}),
         json!({"base_version": 2, "title": "t", "fields": {}}),
@@ -151,7 +167,9 @@ async fn autosave_flow(api: Api) -> Api {
     api.get(&slot).await.assert_problem(401, "unauthenticated");
     // A read-only token reads but does not write (F12).
     let ro = api.bearer(&ann, &["content:read"]).await;
-    ro.get(&api, &slot).await.assert_problem(404, "not-found");
+    let r = ro.get(&api, &slot).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert_eq!(r.json()["title"], "a\u{b}b");
     ro.send(&api, Method::PUT, &slot, Some(&second), None)
         .await
         .assert_problem(403, "forbidden");
@@ -192,5 +210,51 @@ async fn autosave_requires_csrf(api: Api) -> Api {
     a.csrf = token;
     let r = a.send(&api, Method::PUT, &slot, Some(&body), None).await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    api
+}
+
+/// Ruling R4: `parent_id` is the working copy's parent, so "move to the top level"
+/// survives a reload: `null` comes back as `null`, a parent as that parent.
+async fn autosave_keeps_a_top_level_parent(api: Api) -> Api {
+    api.user("eve", Role::Editor, false).await;
+    let mut e = api.logged_in("eve").await;
+    const PAGES: &str = "/api/v1/content/page";
+    let r = e.post(&api, PAGES, json!({"title": "Parent"})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
+    let parent = r.json()["id"].as_str().unwrap().to_owned();
+    let r = e
+        .post(&api, PAGES, json!({"title": "Child", "parent_id": parent}))
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
+    let child = r.json();
+    assert_eq!(child["parent_id"], parent.as_str());
+    let slot = format!("{PAGES}/{}/autosave", child["id"].as_str().unwrap());
+    let version = child["version"].as_i64().unwrap();
+
+    // Moved to the top level in the editor, then the page is reloaded.
+    let moved = json!({"base_version": version, "title": "Child", "parent_id": null,
+        "body": doc("c"), "fields": {}});
+    let r = e.send(&api, Method::PUT, &slot, Some(&moved), None).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert_eq!(r.json()["parent_id"], Value::Null);
+    let got = e.get(&api, &slot).await;
+    assert_eq!(got.status, StatusCode::OK, "{got:?}");
+    assert_eq!(got.json()["parent_id"], Value::Null);
+    // The item itself still has its parent until it is saved.
+    let item = e
+        .get(&api, &format!("{PAGES}/{}", child["id"].as_str().unwrap()))
+        .await
+        .json();
+    assert_eq!(item["parent_id"], parent.as_str());
+
+    // Back under the parent: stored as that parent.
+    let back = json!({"base_version": version, "title": "Child", "parent_id": parent,
+        "body": doc("c"), "fields": {}});
+    let r = e.send(&api, Method::PUT, &slot, Some(&back), None).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert_eq!(
+        e.get(&api, &slot).await.json()["parent_id"],
+        parent.as_str()
+    );
     api
 }

@@ -90,10 +90,12 @@ pub struct StatusCounts {
 }
 
 /// What [`ContentService::put_autosave`] stores: the editor's working copy of an item.
-/// `excerpt` `None` = derive from the body; `slug`, `parent_id`, `menu_order` and
-/// `terms` `None` = unchanged (F11). Only text is checked (no NUL, no control
-/// characters), never the field schema, the parent or the terms: a draft may be
-/// incomplete, and the real save checks it all.
+/// `excerpt` `None` = derive from the body; `parent_id` is the working copy's parent
+/// (`None` = top level; ruling R4); `slug`, `menu_order` and `terms` `None` = unchanged
+/// (F11). Text is checked as a content write checks it (no NUL; the slug also no
+/// control characters), and at most [`MAX_ID_FILTER`] terms; never the field schema,
+/// the parent or the terms themselves: a draft may be incomplete, and the real save
+/// checks it all.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AutosaveDraft {
     /// The item version the copy was made from.
@@ -101,6 +103,7 @@ pub struct AutosaveDraft {
     pub title: String,
     pub excerpt: Option<String>,
     pub slug: Option<String>,
+    /// The working copy's parent; `None` = top level (R4: not "unchanged").
     pub parent_id: Option<ContentId>,
     pub menu_order: Option<i32>,
     pub terms: Option<Vec<TermId>>,
@@ -108,20 +111,22 @@ pub struct AutosaveDraft {
     pub fields: serde_json::Value,
 }
 
-/// `InvalidField` when `value` holds NUL or a control character (`multiline`: tab,
-/// line feed and carriage return are allowed).
-fn check_draft_text(field: &'static str, value: &str, multiline: bool) -> Result<(), CoreError> {
-    let bad = value
-        .chars()
-        .any(|c| c.is_control() && !(multiline && matches!(c, '\t' | '\n' | '\r')));
-    if bad {
-        Err(CoreError::invalid_field(
+/// `InvalidField` when `value` holds NUL (any text a content write stores), or with
+/// `no_controls` any control character (the slug, which a real save refuses then).
+fn check_draft_text(field: &'static str, value: &str, no_controls: bool) -> Result<(), CoreError> {
+    if value.contains('\0') {
+        return Err(CoreError::invalid_field(
+            field,
+            format!("{field} must not contain NUL"),
+        ));
+    }
+    if no_controls && value.chars().any(char::is_control) {
+        return Err(CoreError::invalid_field(
             field,
             format!("{field} must not contain control characters"),
-        ))
-    } else {
-        Ok(())
+        ));
     }
+    Ok(())
 }
 
 /// `InvalidField` when the JSON `value` holds NUL in a string or a key.
@@ -459,10 +464,20 @@ impl ContentService {
         }
         check_draft_text("title", &draft.title, false)?;
         if let Some(excerpt) = &draft.excerpt {
-            check_draft_text("excerpt", excerpt, true)?;
+            check_draft_text("excerpt", excerpt, false)?;
         }
         if let Some(slug) = &draft.slug {
-            check_draft_text("slug", slug, false)?;
+            check_draft_text("slug", slug, true)?;
+        }
+        if draft
+            .terms
+            .as_ref()
+            .is_some_and(|t| t.len() > MAX_ID_FILTER)
+        {
+            return Err(CoreError::invalid_field(
+                "terms",
+                format!("at most {MAX_ID_FILTER} terms"),
+            ));
         }
         check_draft_json("body", &draft.body)?;
         check_draft_json("fields", &draft.fields)?;

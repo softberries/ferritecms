@@ -148,16 +148,18 @@ or null) is always allowed (F17).
 /content/{type}/{id}/autosave` takes `{ base_version, title, excerpt?, slug?, parent_id?,
 menu_order?, terms?, body, fields }` and stores it (`200` with `AutosaveDto`, the same
 members plus `saved_at`); there is no `If-Match` and the last write wins. `excerpt: null`
-means "derive from the body"; `slug`, `parent_id`, `menu_order` and `terms` absent or
-`null` mean "unchanged" (so the slot cannot express "move to the top level"; that edit
-is protected only by the leave guard until it is saved). Only text is checked (no NUL or
-control characters, the excerpt may hold tabs and line breaks; `422` with
-`errors[0].field`), never the field schema, the parent or the terms: a draft may be
-incomplete. A trashed item takes no autosave (`422`, "restore first"). `GET` returns it
+means "derive from the body"; `parent_id` is the working copy's parent and `null` (or
+absent) means top level, so the SPA always sends it (ruling R4); `slug`, `menu_order` and
+`terms` absent or `null` mean "unchanged" (F11). Text is checked as a content write
+checks it: no NUL anywhere, and no control characters in the slug (`422` with
+`errors[0].field`); `terms` holds at most 200 ids. The field schema, the parent and the
+terms are not checked: a draft may be incomplete. A trashed item takes no autosave (`422`, "restore first"). `GET` returns it
 (`404` when there is none); `DELETE` is `204` whether or not one existed. Writing needs
 `can_edit` on the item as stored now (with `content:write`); reading needs
 `content:read` and a role that may edit the item, as revisions do (R26), so a read-only
-token reads its owner's slot. The item itself must be readable (`404` otherwise). An
+token reads its owner's slot; without such a role the answer is `403`, where revisions
+answer `404`, because the item was already shown to be readable and the slot is the
+caller's own, so `403` reveals nothing (and `PUT`/`DELETE` answer `403` alike). The item itself must be readable (`404` otherwise). An
 autosave writes no revision, event, action job, search entry or cache invalidation. A
 real save of the item by the same user (`PATCH`, revision restore) deletes that user's
 slot in the same transaction; other users' slots stay. Deleting the item or the user

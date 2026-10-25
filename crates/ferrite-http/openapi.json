@@ -8222,7 +8222,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "`null`: unchanged."
+            "description": "The working copy's parent; `null`: top level (not \"unchanged\")."
           },
           "saved_at": {
             "type": "string",
@@ -8253,7 +8253,7 @@
       },
       "AutosaveInput": {
         "type": "object",
-        "description": "`PUT /content/{type}/{id}/autosave`: replaces the caller's autosave (last write\nwins; no `If-Match`). Only text is checked (no NUL or control characters; the\nexcerpt may hold tabs and line breaks): a draft may be incomplete.",
+        "description": "`PUT /content/{type}/{id}/autosave`: replaces the caller's autosave (last write\nwins; no `If-Match`). Text is checked as a content write checks it (no NUL; the slug\nalso no control characters) and `terms` holds at most 200 ids; the field schema,\nthe parent and the terms are not checked: a draft may be incomplete.",
         "required": [
           "base_version",
           "title",
@@ -8293,7 +8293,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Absent or `null`: unchanged."
+            "description": "The working copy's parent; absent or `null`: top level (not \"unchanged\"), so\nalways send it."
           },
           "slug": {
             "type": [
@@ -8311,7 +8311,7 @@
               "type": "string",
               "format": "uuid"
             },
-            "description": "Term ids in order; absent or `null`: unchanged."
+            "description": "Term ids in order (at most 200); absent or `null`: unchanged."
           },
           "title": {
             "type": "string"

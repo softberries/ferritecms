@@ -137,10 +137,35 @@ pub async fn autosave_roundtrip(db: &TestDb) {
     assert!(!svc.delete_autosave(&author, item.id).await.unwrap());
     assert_eq!(svc.get_autosave(&author, item.id).await.unwrap(), None);
 
-    // Text: no NUL, no control characters (tab and newlines only in the excerpt).
+    // Text as a content write takes it: control characters other than NUL are kept
+    // (text pasted from a word processor carries a vertical tab or a form feed).
+    let pasted = AutosaveDraft {
+        excerpt: Some("page\u{c}break".into()),
+        ..slot(item.version, "Vertical\u{b}tab")
+    };
+    svc.put_autosave(&author, item.id, pasted).await.unwrap();
+    let got = svc.get_autosave(&author, item.id).await.unwrap().unwrap();
+    assert_eq!(
+        (got.title.as_str(), got.excerpt.as_deref()),
+        ("Vertical\u{b}tab", Some("page\u{c}break"))
+    );
+    // The same title is accepted by the real save.
+    svc.update(&author, item.id, item.version, draft("Vertical\u{b}tab"))
+        .await
+        .unwrap();
+    // At most 200 terms.
+    let terms = |n: usize| AutosaveDraft {
+        terms: Some((0..n).map(|_| TermId::new()).collect()),
+        ..slot(1, "t")
+    };
+    svc.put_autosave(&author, item.id, terms(200))
+        .await
+        .unwrap();
+    svc.delete_autosave(&author, item.id).await.unwrap();
+    // Refused: NUL anywhere, control characters in the slug, too many terms.
     for (field, bad) in [
-        ("title", slot(1, "a\u{7}b")),
-        ("title", slot(1, "a\nb")),
+        ("title", slot(1, "a\0b")),
+        ("terms", terms(201)),
         (
             "excerpt",
             AutosaveDraft {
