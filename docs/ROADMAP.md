@@ -276,8 +276,10 @@ revision, reset a password through a real SMTP catcher; the workspace tests on b
 with and without `admin/dist`; the admin gates and E2E; the contact sheet against 11 §8;
 bundle sizes recorded; `docker build` serves `/admin/`.
 
-**Exit verified (2026-10-26):** [`docs/superpowers/m2b1-exit.md`](superpowers/m2b1-exit.md)
-(the manual flows were automated in Google Chrome; Safari is not verified).
+**Exit verified (2026-10-26), with gaps:** [`docs/superpowers/m2b1-exit.md`](superpowers/m2b1-exit.md)
+(the manual flows were automated in Google Chrome). **Not verified:** Safari, and the
+Docker image's admin stage (`docker build` serving `/admin/` has never run; the local engine
+was down). Before merging, CI must pass on the branch, its `docker` job included.
 
 Known limits (accepted in M2b-1, see the rulings): no media, users, settings or extension
 screens yet (P1); no page-view chart until M4 (P16); the editor refuses (opens read-only) any
@@ -305,7 +307,8 @@ one frame on load (11 §4); only Chromium is tested (P22).
   - [ ] The restore banner's Discard Undo toast is not dismissed on unmount, so Undo after leaving rewrites the discarded draft into that item's slot (Task 16).
   - [ ] `storeKept` may re-PUT the kept copy once more after `save()`'s own re-PUT (harmless except a needless stay on failure; Task 16).
   - [ ] The "Restoring…" toast lingers until the revisions list returns (`editor.tsx`, Task 17).
-  - [ ] The restore lock is taken only after an in-flight save or transition finishes, so text typed in that window is replaced silently; take the lock before awaiting (`editor-state.ts`, Task 17).
+  - [ ] Tests for the discard-then-reload-failure fallback and for the dismissal of the kept-copy Discard toast (Task 16).
+  - [ ] Phone status tabs: a neighbour tab can show only its bare count at the edge under the scroll fade (`content-list-trash` mobile; Task 18 contact sheet).
   - [ ] Tests for the focus fallback after opening the revisions drawer from the phone sheet (M6) and for the Undo-without-edit-rights message (M7) (Task 17).
   - [ ] Verify `⌘⌥R` on a macOS browser that reports AltGraph for Option (R18).
   - [ ] A server hint (for example a cookie read when `index.html` is served) so an explicit theme choice against the OS does not flash one frame (11 §4, Task 7).

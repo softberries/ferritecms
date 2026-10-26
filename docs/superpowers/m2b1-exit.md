@@ -134,7 +134,7 @@ the same screens; the final run supersedes them.
 | 11 §8 item | Result |
 |---|---|
 | 4 px grid | no misalignment seen |
-| One primary action per view | holds per view, with one ruling: the top bar's filled "New" split button appears with a screen's own primary (for example "New entry" on a list, "Publish…" in the editor). Ruling (Task 18; for the final review to confirm): the top-bar New is global chrome, not the view's primary action — 11 §7's shell has it on every screen — cost if wrong: restyle it as secondary |
+| One primary action per view | holds per view, with one ruling: the top bar's filled "New" split button appears with a screen's own primary (for example "New entry" on a list, "Publish…" in the editor). Ruling R20 (Task 18, confirmed by the final review): the top-bar New is global chrome, not the view's primary action — 11 §7's shell has it on every screen — and since the final fix wave it is an outline control, so each view has one filled primary |
 | Consistent page header | yes (title with count, description, actions, tabs) on dashboard and lists; the editor uses its own bar by design (11 §7) |
 | Loading, empty, error, permission-denied states | present: list skeletons, dashboard empty and error cards, search empty, trash empty, forbidden, not-found, error boundary, editor read-only and content-error |
 | Dark mode at parity | yes on every screen; `no_raw_colours_outside_tokens` passes in the unit suite |
@@ -208,7 +208,7 @@ P3's "about 0.8 MB of fonts" holds (781 088 bytes).
    and truncation `title`s were not measured again here (§4).
 5. **Parked review items stay open** (ROADMAP M2b-2/M2b-3 follow-ups): the restore banner's
    Discard Undo toast not dismissed on unmount; `storeKept`'s extra PUT; the lingering
-   "Restoring…" toast; the restore lock taken after an in-flight save; AltGraph for Option on
+   "Restoring…" toast; AltGraph for Option on
    macOS (R18); M5's `null`-valued custom field; M6/M7 untested; edits after Take theirs
    guarded only by `beforeunload` (R13; a local backup is the follow-up); core validating
    `body`'s root is `doc` on write; a palette snippet for body-only matches; a server theme
@@ -225,3 +225,22 @@ run was repeated so the embedded build is known to be the final one:
 $ CI=true FERRITE_TEST_PG_URL=postgres://ferrite@localhost:54329/ferrite_test cargo test --workspace --no-fail-fast
   79 test result lines, 2298 passed, 0 failed, 1 ignored; no SKIP
 ```
+
+## Final fix wave (after the whole-branch review)
+
+The final review (`.superpowers/sdd/2026-10-25-m2b1-foundation-and-writing/final-review.md`)
+asked for one fix wave before merging. Commits on `m2b-admin` after `4eb4874`:
+
+| Commit | What |
+|---|---|
+| `616571d` fix(admin): clear the query cache when another account signs in on the tab | I1: `startSession` (`auth/session.ts`) records whose data the cache holds and clears it when login, TOTP login or the guard's `me()` brings a different user id; the same user keeps it, and `pendingDrafts` (per user) is untouched, so a re-login still returns to the draft. Unit tests plus the E2E `another_account_on_the_same_tab_sees_none_of_the_first` (fails without the fix: B saw A's draft count). |
+| `889e1b0` fix(admin): a revision restore locks editing before waiting for a save in flight | `restoreRevisionNow` makes body and title read-only before awaiting the in-flight save or transition (writes stay open so that transition still runs); unit test. |
+| `f8d458a`, `5c4cefe` fix(admin): mod+s … | `⌘S` does nothing under a modal dialog (the conflict dialog: no second PATCH) but still fires there, so the browser's Save page never opens; popovers and the settings sheet still save. Unit test. |
+| `ebdf3fd` chore(admin): drop the unused kit.table.keyboardHint key | — |
+| `ffab788` style(admin): top-bar New is an outline control | R20. |
+| `203d87a` style(admin): Recent drafts card shrinks to its list | No empty block beside the chart with one or two drafts. |
+
+Gates after the wave: admin lint, typecheck, 264 unit tests, build; E2E 77/77 on SQLite and
+the Postgres smoke 3/3 against a fresh release build. No Rust changed, so the workspace
+run above stands. Still not verified: Safari, the Docker admin stage, and CI on the branch
+(items 1, 2 and 7 above).
