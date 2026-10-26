@@ -1,8 +1,8 @@
 // A word diff as text with marks (Task 17): added text underlined in `success`, removed
 // text struck through in `destructive`, each on a light tint. Neither mark is colour
-// only (an underline, a strike-through), and each says what it is to a screen reader:
-// an `aria-label` ("Added: …") and a visually hidden "added:" in front of the text, as
-// browsers do not expose a name on `<ins>`/`<del>` everywhere. Paragraph breaks are kept
+// only (an underline, a strike-through), and each says what it is to a screen reader
+// through a visually hidden "added:"/"removed:" in front of its text (ruling: no
+// `aria-label`, which ARIA 1.2 prohibits on the insertion/deletion roles). Paragraph breaks are kept
 // as paragraphs, and a change that is only a paragraph break shows as ¶.
 
 import { cn } from "cn";
@@ -57,38 +57,26 @@ export function RevisionDiff({ parts, className }: RevisionDiffProps) {
       </p>
     );
   }
-  /** What a mark's label calls its text (a bare line break or space is named). */
-  const spoken = (seg: Segment) =>
-    seg.pilcrow
-      ? t("revisions.diff.lineBreak")
-      : seg.text.trim() !== ""
-        ? seg.text.trim()
-        : t("revisions.diff.space");
-  const mark = (seg: Segment, key: number) => {
+  const mark = (seg: Segment, key: number, afterOther: boolean) => {
     const content = seg.pilcrow ? (
-      <span aria-hidden="true" className="px-0.5 text-muted-foreground">
-        ¶
-      </span>
+      <>
+        <span className="sr-only">{t("revisions.diff.lineBreak")}</span>
+        <span aria-hidden="true" className="px-0.5 text-muted-foreground">
+          ¶
+        </span>
+      </>
     ) : (
       seg.text
     );
+    // A removal right next to an addition ("~~guide~~notes") gets a hairline gap.
+    const gap = afterOther ? "ms-0.5" : undefined;
     return seg.kind === "added" ? (
-      <ins
-        key={key}
-        data-diff="added"
-        aria-label={t("revisions.diff.added", { text: spoken(seg) })}
-        className={ADDED_MARK}
-      >
+      <ins key={key} data-diff="added" className={cn(ADDED_MARK, gap)}>
         <span className="sr-only">{t("revisions.diff.addedSr")} </span>
         {content}
       </ins>
     ) : (
-      <del
-        key={key}
-        data-diff="removed"
-        aria-label={t("revisions.diff.removed", { text: spoken(seg) })}
-        className={REMOVED_MARK}
-      >
+      <del key={key} data-diff="removed" className={cn(REMOVED_MARK, gap)}>
         <span className="sr-only">{t("revisions.diff.removedSr")} </span>
         {content}
       </del>
@@ -101,9 +89,14 @@ export function RevisionDiff({ parts, className }: RevisionDiffProps) {
     >
       {paragraphs.map((para, i) => (
         <p key={i}>
-          {para.map((seg, j) =>
-            seg.kind === "same" ? <span key={j}>{seg.text}</span> : mark(seg, j),
-          )}
+          {para.map((seg, j) => {
+            const before = para[j - 1]?.kind;
+            return seg.kind === "same" ? (
+              <span key={j}>{seg.text}</span>
+            ) : (
+              mark(seg, j, before !== undefined && before !== "same" && before !== seg.kind)
+            );
+          })}
         </p>
       ))}
     </div>

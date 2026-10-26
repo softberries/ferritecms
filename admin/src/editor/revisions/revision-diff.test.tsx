@@ -12,6 +12,7 @@ import {
   groupByDay,
   initials,
   restoredFrom,
+  sameFields,
   undoTarget,
 } from "./revision-model";
 
@@ -42,11 +43,14 @@ describe("RevisionDiff", () => {
     // An underline and a strike-through, not only a tint.
     expect(ins).toHaveClass("underline");
     expect(del).toHaveClass("line-through");
-    // Reachable as "added"/"removed" text.
-    expect(ins).toHaveAttribute("aria-label", "Added: slow");
-    expect(del).toHaveAttribute("aria-label", "Removed: quick");
-    expect(ins).toHaveTextContent(/added/i);
-    expect(del).toHaveTextContent(/removed/i);
+    // Reachable as "added"/"removed" text: visually hidden, in front of the words (no
+    // `aria-label`, which ARIA 1.2 prohibits on these roles).
+    expect(ins?.querySelector(".sr-only")).toHaveTextContent("added:");
+    expect(del?.querySelector(".sr-only")).toHaveTextContent("removed:");
+    expect(ins).toHaveTextContent("added: slow");
+    expect(del).toHaveTextContent("removed: quick");
+    expect(ins).not.toHaveAttribute("aria-label");
+    expect(del).not.toHaveAttribute("aria-label");
     // Unchanged text is plain.
     expect(screen.getByText(/fox/)).not.toHaveClass("underline");
   });
@@ -58,7 +62,13 @@ describe("RevisionDiff", () => {
 
   test("whitespace_only_marks_are_labelled", () => {
     const { container } = render(<RevisionDiff parts={[{ kind: "added", text: "\n\n" }]} />);
-    expect(container.querySelector("ins")).toHaveAttribute("aria-label", "Added: line break");
+    expect(container.querySelector("ins")).toHaveTextContent("added: line break");
+  });
+
+  test("a_removal_next_to_an_addition_gets_a_gap", () => {
+    const { container } = render(<RevisionDiff parts={diffWords("the guide", "the notes")} />);
+    expect(container.querySelector("del")).not.toHaveClass("ms-0.5");
+    expect(container.querySelector("ins")).toHaveClass("ms-0.5");
   });
 
   test("paragraphs_and_a_lone_break_are_shown", () => {
@@ -72,11 +82,10 @@ describe("RevisionDiff", () => {
       />,
     );
     expect([...container.querySelectorAll("p")].map((p) => p.textContent)).toEqual([
-      "Oneadded: ¶",
+      "Oneadded: line break¶",
       "Two",
       "Three",
     ]);
-    expect(container.querySelector("ins")).toHaveAttribute("aria-label", "Added: line break");
   });
 });
 
@@ -121,6 +130,12 @@ describe("revision model", () => {
       ["yesterday", 1],
       ["earlier", 1],
     ]);
+  });
+
+  test("fields_compare_by_value", () => {
+    expect(sameFields({ a: 1, b: [2] }, { b: [2], a: 1 })).toBe(true);
+    expect(sameFields({}, null)).toBe(true);
+    expect(sameFields({ a: 1 }, { a: 2 })).toBe(false);
   });
 
   test("initials_of_names", () => {

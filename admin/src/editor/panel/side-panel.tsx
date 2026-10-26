@@ -140,7 +140,7 @@ function PanelBody({
   const types = useQuery(typesQuery);
   const taxonomies = useTypeTaxonomies(type);
   const hierarchical = types.data?.find((ty) => ty.name === type)?.hierarchical === true;
-  const disabled = doc.readOnly !== null;
+  const disabled = doc.readOnly !== null || doc.restoring;
   const canCreate = me?.capabilities.includes("manage_terms") === true;
   const siteUrl = site.data?.site_url ?? null;
 

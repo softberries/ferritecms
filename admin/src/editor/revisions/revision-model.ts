@@ -4,6 +4,7 @@
 
 import type { SchemaRevisionSummaryDto } from "@/api/schema";
 import { uiLocale } from "@/lib/locale";
+import { canonicalBody } from "../conflict";
 import { type DiffPart, diffRevision } from "../diff";
 import { wordCount } from "../word-count";
 
@@ -119,3 +120,8 @@ export const whenOf = (iso: string) =>
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(iso));
+
+/** Whether two `fields` objects hold the same values (key order and `null`s aside). */
+export function sameFields(a: unknown, b: unknown): boolean {
+  return canonicalBody(a ?? {}) === canonicalBody(b ?? {});
+}

@@ -11,7 +11,7 @@
 // the `412` conflict flow, the Undo toast).
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeftIcon, CheckIcon, HistoryIcon, RotateCcwIcon } from "lucide-react";
+import { ArrowLeftIcon, BracesIcon, CheckIcon, HistoryIcon, RotateCcwIcon } from "lucide-react";
 import { cn } from "cn";
 import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -49,6 +49,7 @@ import {
   groupByDay,
   initials,
   restoredFrom,
+  sameFields,
   timeOf,
   totalStats,
   whenOf,
@@ -65,6 +66,9 @@ export interface RevisionsDrawerProps {
   /** The revision being restored, else `null`. */
   restoring: string | null;
   onRestore: (revision: RevisionSummary) => void;
+  /** Where the focus goes on close when the element it came from is gone (the phone's
+   * settings sheet closed when the drawer opened). */
+  onFocusFallback?: () => void;
 }
 
 const sideOf = (r: { title: string; excerpt: string; body: unknown }): RevisionSide => ({
@@ -82,6 +86,7 @@ export function RevisionsDrawer({
   item,
   restoring,
   onRestore,
+  onFocusFallback,
 }: RevisionsDrawerProps) {
   const { t } = useTranslation("editor");
   // Where the focus was when the drawer opened (it is opened by a shortcut or the panel,
@@ -111,9 +116,12 @@ export function RevisionsDrawer({
         onCloseAutoFocus={(e) => {
           const back = opener.current;
           opener.current = null;
-          if (back?.isConnected) {
+          if (back?.isConnected && back !== document.body) {
             e.preventDefault();
             back.focus();
+          } else if (onFocusFallback) {
+            e.preventDefault();
+            onFocusFallback();
           }
         }}
         className="gap-0 p-0 duration-(--dur-slow) ease-(--ease-out) data-[side=right]:w-full data-[side=right]:sm:max-w-none data-[side=right]:lg:w-[min(76rem,calc(100vw-4rem))]"
@@ -422,7 +430,12 @@ function RevisionDetail({
     [full.data, prev.data],
   );
   const diff = mode === "previous" ? vsPrevious : vsCurrent;
-  const isCurrent = vsCurrent !== null && !anyChange(vsCurrent);
+  // Custom fields are restored too, so they count (shown as one line: the admin does not
+  // edit them yet).
+  const fieldsVsCurrent = full.data ? !sameFields(full.data.fields, item.fields) : false;
+  const fieldsVsPrevious =
+    full.data && prev.data ? !sameFields(full.data.fields, prev.data.fields) : false;
+  const isCurrent = vsCurrent !== null && !anyChange(vsCurrent) && !fieldsVsCurrent;
   const busy = restoring !== null;
   const name = authorName(revision);
 
@@ -523,7 +536,12 @@ function RevisionDetail({
           ) : !diff || !full.data ? (
             <DiffSkeleton />
           ) : (
-            <DiffBody diff={diff} mode={mode} isCurrent={isCurrent} />
+            <DiffBody
+              diff={diff}
+              mode={mode}
+              isCurrent={isCurrent}
+              fieldsDiffer={mode === "previous" ? fieldsVsPrevious : fieldsVsCurrent}
+            />
           )}
         </div>
       </div>
@@ -560,13 +578,16 @@ function DiffBody({
   diff,
   mode,
   isCurrent,
+  fieldsDiffer,
 }: {
   diff: RevisionDiffs;
   mode: CompareWith;
   isCurrent: boolean;
+  /** The custom fields differ from the compared version. */
+  fieldsDiffer: boolean;
 }) {
   const { t } = useTranslation("editor");
-  const same = !anyChange(diff);
+  const same = !anyChange(diff) && !fieldsDiffer;
   let note: ReactNode;
   if (same) {
     note = (
@@ -585,6 +606,15 @@ function DiffBody({
   return (
     <article data-slot="revision-text" className="flex flex-col gap-6">
       {note}
+      {fieldsDiffer ? (
+        <p
+          data-slot="revision-fields"
+          className="flex items-center gap-2 rounded-lg bg-info/10 px-3 py-2 text-sm text-foreground"
+        >
+          <BracesIcon aria-hidden="true" className="size-4 shrink-0 text-info" />
+          {mode === "current" ? t("revisions.fieldsDiffer") : t("revisions.fieldsChanged")}
+        </p>
+      ) : null}
       <Field label={t("revisions.fields.title")}>
         <RevisionDiff
           parts={diff.title}

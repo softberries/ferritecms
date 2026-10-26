@@ -193,3 +193,22 @@ test("alt_combinations_match_the_physical_key", () => {
   press("®", { metaKey: true, altKey: true, code: "KeyT" });
   expect(revisions).toHaveBeenCalledTimes(2);
 });
+
+test("physical_key_only_on_apple_and_never_with_altgraph", () => {
+  // Windows/Linux: Ctrl+Alt (or AltGr) + R typing "®" on US-International stays typing.
+  const revisions = bind("mod+alt+r");
+  press("®", { ctrlKey: true, altKey: true, code: "KeyR" });
+  expect(revisions).not.toHaveBeenCalled();
+  // Where Alt leaves the letter as it is, the key itself still matches.
+  press("r", { ctrlKey: true, altKey: true, code: "KeyR" });
+  expect(revisions).toHaveBeenCalledOnce();
+  // macOS with AltGraph reported (a layout using Option as AltGr): no mapping either.
+  platform("MacIntel");
+  press("®", {
+    metaKey: true,
+    altKey: true,
+    code: "KeyR",
+    modifierAltGraph: true,
+  });
+  expect(revisions).toHaveBeenCalledOnce();
+});

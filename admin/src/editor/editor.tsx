@@ -100,16 +100,23 @@ export interface Reopen {
 
 /** What the screen says after a revision restore remounted it. */
 export type RevisionNotice =
-  /** Revision `rid` (saved `at`) was restored: the toast offers Undo. */
-  | { kind: "restored"; rid: string; at: string }
+  /**
+   * Revision `rid` (saved `at`) was restored, giving the item `version`: the toast offers
+   * Undo while the item is still at that version.
+   */
+  | { kind: "restored"; rid: string; at: string; version: number }
   /** The Undo of a restore ran. */
   | { kind: "undone" };
 
-/** A revision to restore: `at` is when it was saved; `undo` when it is a restore's Undo. */
+/**
+ * A revision to restore: `at` is when it was saved; `undo` when it is a restore's Undo,
+ * which goes with the version the restore produced as its `If-Match` (`version`).
+ */
 interface RestoreTarget {
   rid: string;
   at: string;
   undo: boolean;
+  version?: number;
 }
 
 /** The kept Discard's toast (with Undo), dismissed when the screen goes. */
@@ -336,8 +343,14 @@ export function EditorScreen({
 
   const runRestore = async (target: RestoreTarget) => {
     setRestoring(target.rid);
+    // The editor is locked meanwhile; the toast says what is happening (the drawer is
+    // closed for an Undo).
+    toast.loading(t("revisions.restoring"), { id: REVISION_TOAST });
+    let failed = false;
     const next = await doc.restoreRevision(target.rid, {
+      ...(target.version === undefined ? {} : { version: target.version }),
       onError: (e) => {
+        failed = true;
         const detail =
           e instanceof ApiError
             ? e.problem.errors?.[0]?.detail || e.problem.detail || e.problem.title
@@ -348,6 +361,8 @@ export function EditorScreen({
       },
     });
     if (!next || !onReopen) {
+      // A 412 or a sign-in has its own message; only the progress toast goes.
+      if (!failed) toast.dismiss(REVISION_TOAST);
       setRestoring(null);
       return;
     }
@@ -358,7 +373,7 @@ export function EditorScreen({
       ...(doc.kept ? { kept: doc.kept } : {}),
       revision: target.undo
         ? { kind: "undone" }
-        : { kind: "restored", rid: target.rid, at: target.at },
+        : { kind: "restored", rid: target.rid, at: target.at, version: next.version },
     });
   };
   /** Restore (or Undo): unsaved edits would be replaced, so that asks first. */
@@ -375,6 +390,18 @@ export function EditorScreen({
   // to go back to (none when someone saved right after the restore).
   const [notice] = useState(() => revision ?? null);
   const noticeItem = item?.id;
+  // Undo only while the item is still what the restore made it: any save or transition
+  // after it ends the offer, so Undo never reverts work saved since (the `If-Match` of
+  // the Undo is the backstop: a change it missed answers 412).
+  const undoable = useRef(true);
+  const itemVersion = doc.item?.version;
+  useEffect(() => {
+    if (notice?.kind !== "restored" || itemVersion === undefined) return;
+    if (itemVersion !== notice.version && undoable.current) {
+      undoable.current = false;
+      toast.dismiss(REVISION_TOAST);
+    }
+  }, [notice, itemVersion]);
   useEffect(() => {
     if (!notice || !noticeItem) return;
     let live = true;
@@ -385,7 +412,7 @@ export function EditorScreen({
         .then((list) => undoTarget(list.items, notice.rid))
         .catch(() => null)
         .then((undo) => {
-          if (!live) return;
+          if (!live || !undoable.current) return;
           toast.success(t("revisions.restored"), {
             id: REVISION_TOAST,
             duration: UNDO_TOAST_MS,
@@ -396,7 +423,13 @@ export function EditorScreen({
               ? {
                   action: {
                     label: t("revisions.undo"),
-                    onClick: () => requestRestoreRef.current({ rid: undo, at: "", undo: true }),
+                    onClick: () =>
+                      requestRestoreRef.current({
+                        rid: undo,
+                        at: "",
+                        undo: true,
+                        version: notice.version,
+                      }),
                   },
                 }
               : {}),
@@ -658,6 +691,12 @@ export function EditorScreen({
           item={doc.item}
           restoring={restoring}
           onRestore={(r) => requestRestore({ rid: r.id, at: r.created_at, undo: false })}
+          onFocusFallback={() => {
+            // Opened from the phone's settings sheet (gone now): its button, else the body.
+            const toggle = document.querySelector<HTMLElement>("[data-slot=panel-toggle]");
+            if (toggle) toggle.focus();
+            else doc.editor.view.dom.focus();
+          }}
         />
       ) : null}
       <RestoreConfirmDialog
@@ -797,7 +836,12 @@ function EditorBar({
               type="button"
               variant="outline"
               // Nothing to save: disabled, like the panel's own save action.
-              disabled={doc.readOnly !== null || saving || (doc.item !== null && !doc.dirty)}
+              disabled={
+                doc.readOnly !== null ||
+                doc.restoring ||
+                saving ||
+                (doc.item !== null && !doc.dirty)
+              }
               aria-keyshortcuts="Meta+S Control+S"
               onClick={() => {
                 void doc.save();
@@ -911,7 +955,7 @@ function WritingSurface({
         rows={1}
         autoFocus={focusTitle}
         value={doc.title}
-        readOnly={!editable}
+        readOnly={!editable || doc.restoring}
         aria-label={t("title.label")}
         placeholder={t("title.placeholder")}
         onChange={(e) => doc.setTitle(e.target.value.replace(/\r?\n/g, " "))}

@@ -234,6 +234,17 @@ export interface ConflictContext {
   then?: Paused;
 }
 
+export interface RestoreRevisionOptions {
+  /** A failure that is not a `412` or a `401` (also: the account may no longer edit). */
+  onError?: (e: unknown) => void;
+  /**
+   * The `If-Match` to send instead of the item's version: an Undo sends the version the
+   * restore produced, so any save after it answers `412` (the conflict flow) instead of
+   * being reverted unseen.
+   */
+  version?: number;
+}
+
 export interface TransitionOptions {
   /** `schedule`: when, RFC 3339. */
   at?: string;
@@ -329,10 +340,12 @@ export interface EditorDocument {
    * `onConflict` (op `revision`), a `401` to `onUnauthenticated`, anything else to
    * `onError`; then it resolves to `null` and the screen goes on as it was.
    */
-  restoreRevision: (
-    rid: string,
-    options?: { onError?: (e: unknown) => void },
-  ) => Promise<ContentDto | null>;
+  restoreRevision: (rid: string, options?: RestoreRevisionOptions) => Promise<ContentDto | null>;
+  /**
+   * A revision restore is running: the body, the title and the panel are locked, and no
+   * save or transition starts (what is typed now would be replaced unseen).
+   */
+  restoring: boolean;
 }
 
 function bodyReadOnly(item: ContentDto | null, body: unknown): ReadOnlyReason | null {
@@ -759,6 +772,9 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     [queryClient, type],
   );
 
+  // A revision restore runs (`restoreRevision`): nothing else writes meanwhile.
+  const restoringRef = useRef(false);
+  const [revisionBusy, setRevisionBusy] = useState(false);
   const inflight = useRef<Promise<ContentDto | null> | null>(null);
   // One write at a time: a transition (its save and its lifecycle call) and a save never
   // overlap, so no request goes out with a version another one is about to replace.
@@ -770,7 +786,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
 
   const saveNow = useCallback(
     (then?: Transition): Promise<ContentDto | null> => {
-      if (readOnlyRef.current) return Promise.resolve(null);
+      if (readOnlyRef.current || restoringRef.current) return Promise.resolve(null);
       if (inflight.current) return inflight.current;
       const current = itemRef.current;
       if (current && !isDirtyNow()) {
@@ -896,7 +912,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
 
   const transition = useCallback(
     (action: Transition, options: TransitionOptions = {}): Promise<ContentDto | null> => {
-      if (readOnlyRef.current) return Promise.resolve(null);
+      if (readOnlyRef.current || restoringRef.current) return Promise.resolve(null);
       // A second transition while one runs (a shortcut) does nothing.
       if (transitioning.current) return Promise.resolve(null);
       const run = async (): Promise<ContentDto | null> => {
@@ -1043,18 +1059,40 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     if (isDirtyNow()) touch();
   }, [itemId, type, setKept, isDirtyNow, touch]);
 
+  const lock = useCallback(
+    (on: boolean) => {
+      restoringRef.current = on;
+      setRevisionBusy(on);
+      if (editor.isDestroyed) return;
+      if (on) editor.setEditable(false, false);
+      else if (readOnlyRef.current === null) editor.setEditable(true, false);
+    },
+    [editor],
+  );
+
   const restoreRevisionNow = useCallback(
-    async (rid: string, options: { onError?: (e: unknown) => void } = {}) => {
+    async (rid: string, options: RestoreRevisionOptions = {}) => {
+      if (restoringRef.current) return null;
       // A save or transition in flight lands first (its version is the one to match).
       await transitioning.current;
       await inflight.current;
       const current = itemRef.current;
-      if (!current || !current.allowed.edit) return null;
+      if (!current || !current.allowed.edit) {
+        // Nothing to restore over (the account may no longer edit it): said, not silent.
+        options.onError?.(null);
+        return null;
+      }
+      lock(true);
       const a = autosaver.current;
       // A running autosave lands first and none starts while the restore runs.
       const release = (await a?.hold()) ?? (() => undefined);
       try {
-        const next = await restoreRevision(type, current.id, rid, current.version);
+        const next = await restoreRevision(
+          type,
+          current.id,
+          rid,
+          options.version ?? current.version,
+        );
         // The server deleted this user's slot with the restore: the old working draft
         // must not go back there (not by the timer, not when the screen goes).
         a?.markClean();
@@ -1071,15 +1109,17 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
           }
         }
         adopt(next);
+        // Stays locked: the screen reopens on `next`.
         return next;
       } catch (e) {
+        lock(false);
         fail(e, "revision", options.onError, { then: "revision" });
         return null;
       } finally {
         release();
       }
     },
-    [type, adopt, fail],
+    [type, adopt, fail, lock],
   );
 
   // The indicator: an explicit save in flight or failed comes first; then, with
@@ -1140,5 +1180,6 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     transition,
     adopt,
     restoreRevision: restoreRevisionNow,
+    restoring: revisionBusy,
   };
 }

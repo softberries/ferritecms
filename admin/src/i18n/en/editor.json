@@ -425,13 +425,12 @@
     "failed": "Could not restore this version.",
     "failedWith": "Could not restore this version: {{detail}}",
     "diff": {
-      "added": "Added: {{text}}",
-      "removed": "Removed: {{text}}",
       "addedSr": "added:",
       "removedSr": "removed:",
       "empty": "Empty",
-      "lineBreak": "line break",
-      "space": "space"
-    }
+      "lineBreak": "line break"
+    },
+    "fieldsDiffer": "Custom fields differ from the current version; restoring brings these back too.",
+    "fieldsChanged": "This save also changed custom fields."
   }
 }

@@ -121,14 +121,11 @@ test("three_saves_three_revisions_with_diff", async ({
   // Restoring it brings "tomatoes and" back and removes "and peas".
   await expect(text.locator("ins[data-diff=added]", { hasText: "tomatoes" })).toBeVisible();
   await expect(text.locator("del[data-diff=removed]", { hasText: "peas" })).toBeVisible();
-  await expect(text.locator("ins", { hasText: "tomatoes" })).toHaveAttribute(
-    "aria-label",
-    /^Added: /,
+  // Screen readers hear "added:"/"removed:" in front of the words (hidden text).
+  await expect(text.locator("ins", { hasText: "tomatoes" }).locator(".sr-only")).toHaveText(
+    "added:",
   );
-  await expect(text.locator("del", { hasText: "peas" })).toHaveAttribute(
-    "aria-label",
-    /^Removed: /,
-  );
+  await expect(text.locator("del", { hasText: "peas" }).locator(".sr-only")).toHaveText("removed:");
   await expect(detail(page).locator("[data-slot=revision-stats]")).toBeVisible();
   await snap(page, "revisions-drawer");
   await expectAccessible(page);
@@ -264,6 +261,37 @@ test("restore_and_undo", async ({ as, site, backend, snap }) => {
   await expect(rows(page).nth(0).locator("[data-slot=revision-note]")).toContainText(
     "Restored from",
   );
+  await api.dispose();
+});
+
+test("undo_goes_after_a_later_save", async ({ as, site, backend }) => {
+  const api = await ContentApi.as(backend, site.url, "author");
+  const older = `Older words ${uid()}`;
+  const newer = `Newer words ${uid()}`;
+  const created = await api.create("post", `Undo guard ${uid()}`, { body: doc([older]) });
+  const item = await api.patch(created, { body: doc([newer]) });
+  const page = await as("author");
+  await openItem(page, "post", item.id);
+  await openDrawer(page);
+  await detail(page).getByRole("button", { name: "Restore this version" }).click();
+  const restoredToast = toast(page, "Version restored");
+  await expect(restoredToast.getByRole("button", { name: "Undo" })).toBeVisible();
+  await expect(body(page)).toContainText(older);
+
+  // An edit saved after the restore ends the Undo offer: nothing can revert it.
+  const tweak = `Tweaked after the restore ${uid()}`;
+  await body(page).click();
+  await page.keyboard.press(`${await mod(page)}+End`);
+  await page.keyboard.type(` ${tweak}`);
+  await page.keyboard.press(`${await mod(page)}+s`);
+  await expect(page.locator("[data-slot=editor-bar] [data-slot=save-state]")).toHaveAttribute(
+    "data-state",
+    "saved",
+  );
+  await expect(restoredToast).toHaveCount(0);
+  const stored = (await api.get("post", item.id)) as Stored;
+  expect(textOf(stored)).toContain(tweak);
+  expect(stored.version).toBe(item.version + 2);
   await api.dispose();
 });
 
