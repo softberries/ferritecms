@@ -2,19 +2,36 @@
 // an auto-growing field in Inter's display cut; the body at 17/28; a selection bubble and
 // a `/` insert menu; the word count and reading time at the foot; a focus mode
 // (`mod+shift+f`) that hides the shell. A thin bar above the column carries the way
-// back, the status, the save state and Save (`mod+s`). Read-only items get a banner and
-// no way to save (Review Focus 3).
+// back, the status, the save state, the panel toggle (`mod+.`) and Save (`mod+s`). The
+// side panel (`panel/`) holds status and publishing (the publish dialog, `mod+shift+p`),
+// the address, excerpt, terms, parent and the danger zone. Read-only items get a banner
+// and no way to save or change anything (Review Focus 3).
 
 import "@/styles/editor.css";
 import { Link } from "@tanstack/react-router";
 import { Selection } from "@tiptap/pm/state";
 import { EditorContent, type Editor } from "@tiptap/react";
-import { ArrowLeftIcon, MaximizeIcon, MinimizeIcon, ShieldAlertIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  MaximizeIcon,
+  MinimizeIcon,
+  PanelRightIcon,
+  ShieldAlertIcon,
+} from "lucide-react";
 import { cn } from "cn";
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { metaQuery } from "@/api/meta";
 import { isContentStatus } from "@/api/content";
 import { qk } from "@/api/keys";
 import type { MeDto } from "@/auth/session";
@@ -24,6 +41,7 @@ import { SaveState } from "@/components/kit/save-state";
 import { StatusBadge } from "@/components/kit/status-badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { storeEditorPanelOpen, storedEditorPanelOpen } from "@/design/preferences";
 import { uiLocale } from "@/lib/locale";
 import { useShortcut } from "@/lib/shortcuts";
 import { useShellChrome } from "@/shell/chrome-context";
@@ -33,8 +51,12 @@ import {
   type EditorDocument,
   type Handoff,
   type ReadOnlyReason,
+  type WriteOp,
   useEditorDocument,
 } from "./editor-state";
+import { useTermsById, useTypeTaxonomies, useWide } from "./panel/panel-state";
+import { PublishDialog, type PublishMode } from "./panel/publish-dialog";
+import { PANEL_ID, SidePanel } from "./panel/side-panel";
 import { blockText } from "./text";
 import { readingMinutes, wordCount } from "./word-count";
 
@@ -62,15 +84,80 @@ export function EditorScreen({ type, typeLabel, item, handoff, onCreated }: Edit
       // Task 16 replaces this with the side-by-side conflict dialog; the text stays.
       toast.error(t("save.conflict"), { id: "editor-save" });
     },
-    onSaveError: (e) => {
-      const detail = e instanceof ApiError ? e.problem.detail || e.problem.title : null;
-      toast.error(detail ? t("save.failedWith", { detail }) : t("save.failed"), {
+    onWriteError: (e, op: WriteOp) => {
+      const detail =
+        e instanceof ApiError
+          ? e.problem.errors?.[0]?.detail || e.problem.detail || e.problem.title
+          : null;
+      const key = op === "save" ? ("save" as const) : (`transition.${op}` as const);
+      toast.error(detail ? t(`${key}.failedWith`, { detail }) : t(`${key}.failed`), {
         id: "editor-save",
       });
     },
   });
   const { focusMode, setFocusMode } = useShellChrome();
   const group = t("shortcuts.group");
+
+  // The side panel: beside the text from 1024 px (open unless closed before), else a
+  // sheet (closed until asked for). Focus mode hides it.
+  const wide = useWide();
+  const [wideOpen, setWideOpen] = useState(storedEditorPanelOpen);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const panelOpen = wide ? wideOpen && !focusMode : sheetOpen;
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const setPanelOpen = useCallback(
+    (open: boolean) => {
+      if (wide) {
+        if (open && focusMode) setFocusMode(false);
+        setWideOpen(open);
+        storeEditorPanelOpen(open);
+        if (!open) toggleRef.current?.focus();
+      } else setSheetOpen(open);
+    },
+    [wide, focusMode, setFocusMode],
+  );
+  const [publishMode, setPublishMode] = useState<PublishMode | null>(null);
+  const canPublish =
+    doc.readOnly === null &&
+    doc.item !== null &&
+    (doc.item.allowed.publish || doc.item.allowed.schedule);
+  const taxonomies = useTypeTaxonomies(type, publishMode !== null);
+  const terms = useTermsById(publishMode !== null ? taxonomies : []);
+  const site = useQuery({ ...metaQuery, enabled: publishMode !== null });
+
+  useShortcut({
+    id: "editor.panel",
+    keys: "mod+.",
+    label: t("shortcuts.panel"),
+    group,
+    allowInInput: true,
+    run: () => setPanelOpen(!panelOpen),
+  });
+  useShortcut({
+    id: "editor.publish",
+    keys: "mod+shift+p",
+    label: t("shortcuts.publish"),
+    group,
+    allowInInput: true,
+    when: () => canPublish && document.querySelector('[role="dialog"]') === null,
+    run: () => setPublishMode("now"),
+  });
+  useShortcut({
+    id: "editor.panelClose",
+    keys: "esc",
+    label: t("shortcuts.panelClose"),
+    group,
+    allowInInput: true,
+    // The wide panel only (the sheet closes itself), and not over a dialog or a menu.
+    when: () =>
+      wide &&
+      panelOpen &&
+      !focusMode &&
+      document.querySelector(
+        '[role="dialog"], [role="alertdialog"], [data-radix-popper-content-wrapper]',
+      ) === null,
+    run: () => setPanelOpen(false),
+  });
 
   useShortcut({
     id: "editor.save",
@@ -115,10 +202,37 @@ export function EditorScreen({ type, typeLabel, item, handoff, onCreated }: Edit
         doc={doc}
         focusMode={focusMode}
         onFocusMode={setFocusMode}
+        panelOpen={panelOpen}
+        onPanel={() => setPanelOpen(!panelOpen)}
+        toggleRef={toggleRef}
       />
-      <div className="flex-1 px-page">
-        <WritingSurface doc={doc} typeLabel={typeLabel} focusMode={focusMode} />
+      <div className="flex flex-1 items-start">
+        <div className="min-w-0 flex-1 px-page">
+          <WritingSurface doc={doc} typeLabel={typeLabel} focusMode={focusMode} />
+        </div>
+        {focusMode && wide ? null : (
+          <SidePanel
+            doc={doc}
+            type={type}
+            typeLabel={typeLabel}
+            open={panelOpen}
+            onOpenChange={setPanelOpen}
+            wide={wide}
+            onPublish={(mode) => {
+              if (!wide) setSheetOpen(false);
+              setPublishMode(mode);
+            }}
+          />
+        )}
       </div>
+      <PublishDialog
+        doc={doc}
+        mode={canPublish ? publishMode : null}
+        onClose={() => setPublishMode(null)}
+        siteUrl={site.data?.site_url ?? null}
+        taxonomies={taxonomies}
+        terms={terms}
+      />
       <EditorFooter
         editor={doc.editor}
         {...(doc.readOnly?.kind === "invalid" ? { fixedText: blockText(doc.storedBody) } : {})}
@@ -133,12 +247,18 @@ function EditorBar({
   doc,
   focusMode,
   onFocusMode,
+  panelOpen,
+  onPanel,
+  toggleRef,
 }: {
   type: string;
   typeLabel: string;
   doc: EditorDocument;
   focusMode: boolean;
   onFocusMode: (on: boolean) => void;
+  panelOpen: boolean;
+  onPanel: () => void;
+  toggleRef: RefObject<HTMLButtonElement | null>;
 }) {
   const { t } = useTranslation("editor");
   const status = doc.item?.status;
@@ -190,6 +310,29 @@ function EditorBar({
           <TooltipContent side="bottom" className="flex items-center gap-2">
             {focusMode ? t("focus.exit") : t("focus.enter")}
             <KbdCombo keys="mod+shift+f" />
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              ref={toggleRef}
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-expanded={panelOpen}
+              aria-controls={panelOpen ? PANEL_ID : undefined}
+              aria-label={t("panel.toggle")}
+              aria-keyshortcuts="Meta+Period Control+Period"
+              data-slot="panel-toggle"
+              onClick={onPanel}
+              className={cn("text-muted-foreground", panelOpen && "bg-muted text-foreground")}
+            >
+              <PanelRightIcon />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="flex items-center gap-2">
+            {t("panel.toggle")}
+            <KbdCombo keys="mod+." />
           </TooltipContent>
         </Tooltip>
         <Tooltip>
@@ -343,9 +486,13 @@ function StoredText({ body }: { body: unknown }) {
     .filter((l) => l.trim() !== "");
   return (
     <div data-slot="stored-text" className="editor-body mt-4 sm:mt-6">
-      {lines.map((line, i) => (
-        <p key={i}>{line}</p>
-      ))}
+      {lines.length > 0 ? (
+        lines.map((line, i) => <p key={i}>{line}</p>)
+      ) : (
+        <p data-slot="stored-text-empty" className="text-muted-foreground italic">
+          {t("readOnly.noText")}
+        </p>
+      )}
       {me?.capabilities.includes("edit_others") ? (
         <details className="editor-stored-json">
           <summary>{t("readOnly.showJson")}</summary>

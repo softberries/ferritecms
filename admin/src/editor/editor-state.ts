@@ -1,25 +1,31 @@
 // The editor's document state: the TipTap editor bound to the core block model, the
-// title, the server's copy of the item, dirty tracking and `save()`. The writing surface
-// (`editor.tsx`) renders it; the side panel and publishing (Task 15), autosave, the 412
-// conflict dialog and the leave guard (Task 16) and revisions (Task 17) build on it.
+// title, the side panel's members (slug, excerpt, terms, parent, menu order), the
+// server's copy of the item, dirty tracking, `save()` and the lifecycle transitions.
+// Title, body and panel are one draft: `save()` PATCHes the members that changed, and a
+// transition with unsaved changes saves them first and then transitions with the
+// version the save returned (pre-flight F40). Every failed write goes through one place
+// (`onConflict` for a 412, `onWriteError` otherwise) so Task 16's conflict dialog plugs
+// in there. The writing surface (`editor.tsx`) and the side panel (`panel/`) render it;
+// autosave and the leave guard (Task 16) and revisions (Task 17) build on it.
 //
 // Read-only (Review Focus 3): a body with a node, mark or heading level the editor
 // cannot represent (`validateBody`), a body TipTap's content check refuses
 // (`onContentError`), an item the server does not let this account edit
 // (`allowed.edit`) and a trashed item all open with `editable: false`, and `save()` sends
 // nothing. An unsupported body is shown through `displayBody`, a display-only copy;
-// the stored body is never replaced by it.
+// the stored body is never replaced by it. A transition that leaves the item not
+// editable (`allowed.edit` false) turns the screen read-only from then on.
 
 import type { JSONContent } from "@tiptap/core";
 import { useEditor, type Editor } from "@tiptap/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NetworkError } from "@/api/client";
-import { createContent, patchContent } from "@/api/content";
+import { type LifecycleAction, createContent, lifecycle, patchContent } from "@/api/content";
 import { qk } from "@/api/keys";
 import { resolveMediaUrl } from "@/api/media";
 import { type ApiError, isProblem } from "@/api/problem";
-import type { SchemaContentDto, SchemaContentPatch } from "@/api/schema";
+import type { SchemaContentDto, SchemaContentInput, SchemaContentPatch } from "@/api/schema";
 import type { SaveStateValue } from "@/components/kit/save-state";
 import { pushRecent } from "@/palette/recent";
 import { displayBody, editorExtensions, validateBody } from "./schema";
@@ -37,6 +43,66 @@ export type ReadOnlyReason =
   | { kind: "forbidden" }
   | { kind: "trash" };
 
+/** The side panel's members of the draft (with title and body, one draft). */
+export interface MetaDraft {
+  slug: string;
+  /** The excerpt as shown; `""` means "derive it from the body" (`excerpt: null`, F39). */
+  excerpt: string;
+  /** Term ids, in order. */
+  terms: string[];
+  parent_id: string | null;
+  menu_order: number;
+}
+
+/** A transition the panel runs (`trash` goes through the list's undo logic instead). */
+export type Transition = Exclude<LifecycleAction, "trash" | "restore">;
+
+/** What a write was, for its error message. */
+export type WriteOp = "save" | Transition;
+
+/** The panel members as stored on `item` (a new item: empty). */
+export function metaOf(item: ContentDto | null): MetaDraft {
+  return item
+    ? {
+        slug: item.slug,
+        excerpt: item.excerpt,
+        terms: [...item.terms],
+        parent_id: item.parent_id ?? null,
+        menu_order: item.menu_order,
+      }
+    : { slug: "", excerpt: "", terms: [], parent_id: null, menu_order: 0 };
+}
+
+const sameTerms = (a: readonly string[], b: readonly string[]) =>
+  a.length === b.length && a.every((id, i) => id === b[i]);
+
+/**
+ * The PATCH members of `draft` that differ from `base`. An empty slug is never sent
+ * (the field puts the stored one back); an empty excerpt is sent as `null` (derive).
+ */
+export function metaChanges(draft: MetaDraft, base: MetaDraft): SchemaContentPatch {
+  const out: SchemaContentPatch = {};
+  const slug = draft.slug.trim();
+  if (slug !== "" && slug !== base.slug) out.slug = slug;
+  if (draft.excerpt !== base.excerpt) out.excerpt = draft.excerpt === "" ? null : draft.excerpt;
+  if (!sameTerms(draft.terms, base.terms)) out.terms = [...draft.terms];
+  if (draft.parent_id !== base.parent_id) out.parent_id = draft.parent_id;
+  if (draft.menu_order !== base.menu_order) out.menu_order = draft.menu_order;
+  return out;
+}
+
+/** The draft after a save: members unchanged since the request take the server's value
+ * (the normalised slug, the derived excerpt); members edited meanwhile stay. */
+function settleMeta(now: MetaDraft, sent: MetaDraft, stored: MetaDraft): MetaDraft {
+  return {
+    slug: now.slug === sent.slug ? stored.slug : now.slug,
+    excerpt: now.excerpt === sent.excerpt ? stored.excerpt : now.excerpt,
+    terms: sameTerms(now.terms, sent.terms) ? stored.terms : now.terms,
+    parent_id: now.parent_id === sent.parent_id ? stored.parent_id : now.parent_id,
+    menu_order: now.menu_order === sent.menu_order ? stored.menu_order : now.menu_order,
+  };
+}
+
 /** What a just-created item hands to its `/$id` screen (the route remounts the editor). */
 export interface Handoff {
   id: string;
@@ -46,6 +112,8 @@ export interface Handoff {
   focus: "title" | "body" | null;
   /** What the first save sent (the dirty baseline of the `/$id` screen). */
   saved: { title: string; body: string };
+  /** The panel members as they were (edits made while the first save was in flight). */
+  meta: MetaDraft;
 }
 
 let pendingHandoff: Handoff | null = null;
@@ -77,12 +145,20 @@ export interface EditorDocumentOptions {
   /** After the first save of a new item (the route navigates to its `/$id`). */
   onCreated?: (item: ContentDto, handoff: Handoff) => void;
   /**
-   * A `412`: someone saved in between. Task 16's conflict dialog replaces the default
-   * (the caller's toast); the user's text stays in the editor either way.
+   * A `412` on a save or a transition: someone saved in between. Task 16's conflict
+   * dialog replaces the default (the caller's toast); the user's text stays either way.
    */
-  onConflict?: (error: ApiError) => void;
-  /** Any other failed save (shown by the caller). */
-  onSaveError?: (error: unknown) => void;
+  onConflict?: (error: ApiError, op: WriteOp) => void;
+  /** Any other failed write (shown by the caller, unless the transition handles it). */
+  onWriteError?: (error: unknown, op: WriteOp) => void;
+}
+
+export interface TransitionOptions {
+  /** `schedule`: when, RFC 3339. */
+  at?: string;
+  /** Handles a failure of the transition itself (not a 412, not the save before it)
+   * instead of `onWriteError`; the publish dialog shows it in place. */
+  onError?: (error: unknown) => void;
 }
 
 export interface EditorDocument {
@@ -92,6 +168,11 @@ export interface EditorDocument {
   title: string;
   setTitle: (title: string) => void;
   readOnly: ReadOnlyReason | null;
+  /** The panel members as edited. */
+  meta: MetaDraft;
+  /** The panel members as the server holds them. */
+  savedMeta: MetaDraft;
+  setMeta: (patch: Partial<MetaDraft>) => void;
   /** The body as the server stored it (for the `invalid` plain-text view). */
   storedBody: unknown;
   /** Where the cursor goes when the screen opens (a hand-over keeps the user's place). */
@@ -107,11 +188,23 @@ export interface EditorDocument {
    * one request is in flight; a second call joins it.
    */
   save: () => Promise<ContentDto | null>;
+  /**
+   * Saves what changed (F40), then runs `action` with the version the save returned.
+   * Resolves to the item after it, or `null` when the save or the transition failed.
+   */
+  transition: (action: Transition, options?: TransitionOptions) => Promise<ContentDto | null>;
+  /** Takes the server's copy after a write made elsewhere (the trash in the panel). */
+  adopt: (item: ContentDto) => void;
 }
 
-function readOnlyFor(item: ContentDto | null, body: unknown): ReadOnlyReason | null {
+function bodyReadOnly(item: ContentDto | null, body: unknown): ReadOnlyReason | null {
+  if (item === null) return null;
   const check = validateBody(body);
-  if (!check.ok) return { kind: "unsupported", unknown: check.unknown };
+  return check.ok ? null : { kind: "unsupported", unknown: check.unknown };
+}
+
+/** What the item's status and `allowed` say now (they change with transitions). */
+function itemReadOnly(item: ContentDto | null): ReadOnlyReason | null {
   if (item?.status === "trash") return { kind: "trash" };
   if (item && !item.allowed.edit) return { kind: "forbidden" };
   return null;
@@ -130,11 +223,15 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   });
 
   const storedBody: unknown = opts.item?.body;
-  // Decided once per screen: what the item was when it opened.
-  const [initialReadOnly] = useState(() => readOnlyFor(opts.item, storedBody));
+  // The body is judged once per screen (what it was when it opened); status and
+  // `allowed` follow the item.
+  const [initialBodyReadOnly] = useState(() => bodyReadOnly(opts.item, storedBody));
+  const [initialReadOnly] = useState(() => initialBodyReadOnly ?? itemReadOnly(opts.item));
   const [contentError, setContentError] = useState(false);
-  const readOnly: ReadOnlyReason | null =
-    initialReadOnly ?? (contentError ? { kind: "invalid" } : null);
+  const readOnly: ReadOnlyReason | null = useMemo(
+    () => initialBodyReadOnly ?? (contentError ? { kind: "invalid" } : null) ?? itemReadOnly(item),
+    [initialBodyReadOnly, contentError, item],
+  );
   const readOnlyRef = useRef(readOnly);
   useEffect(() => {
     readOnlyRef.current = readOnly;
@@ -142,9 +239,20 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
 
   const [initialContent] = useState<JSONContent | undefined>(() => {
     if (handoff) return handoff.body;
-    if (initialReadOnly?.kind === "unsupported") return displayBody(storedBody) as JSONContent;
+    if (initialBodyReadOnly?.kind === "unsupported") {
+      return displayBody(storedBody) as JSONContent;
+    }
     const body = storedBody as JSONContent | null | undefined;
-    return body && typeof body === "object" && body.type === "doc" ? body : undefined;
+    // An empty document (`content: []`, what the API stores for an item created without
+    // a body) is not valid for the schema (`block+`); TipTap's own empty document stands
+    // in for it, and the baseline below is taken from that, so it is not "dirty".
+    return body &&
+      typeof body === "object" &&
+      body.type === "doc" &&
+      Array.isArray(body.content) &&
+      body.content.length > 0
+      ? body
+      : undefined;
   });
 
   // Built once: the editor is created once per screen.
@@ -154,8 +262,10 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
 
   const [title, setTitleState] = useState(handoff?.title ?? opts.item?.title ?? "");
   const titleRef = useRef(title);
-  const [dirty, setDirty] = useState(false);
-  const [saveState, setSaveState] = useState<SaveStateValue>("saved");
+  const [meta, setMetaState] = useState<MetaDraft>(() => handoff?.meta ?? metaOf(opts.item));
+  const metaRef = useRef(meta);
+  const [savedMeta, setSavedMeta] = useState<MetaDraft>(() => metaOf(opts.item));
+  const savedMetaRef = useRef(savedMeta);
   const [savedAt, setSavedAt] = useState<Date | null>(
     opts.item ? new Date(opts.item.updated_at) : null,
   );
@@ -195,13 +305,37 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   );
   const saved = useRef(baseline);
 
-  const recompute = useCallback(() => {
+  // A hand-over is dirty when the user typed while the first save was in flight.
+  const [dirty, setDirty] = useState(() =>
+    handoff
+      ? handoff.title !== handoff.saved.title ||
+        JSON.stringify(editor.getJSON()) !== handoff.saved.body ||
+        Object.keys(metaChanges(handoff.meta, metaOf(opts.item))).length > 0
+      : false,
+  );
+  const [saveState, setSaveState] = useState<SaveStateValue>(() => (dirty ? "dirty" : "saved"));
+
+  const isDirtyNow = useCallback(() => {
     const base = saved.current;
-    const isDirty =
-      titleRef.current !== base.title || JSON.stringify(editor.getJSON()) !== base.body;
+    return (
+      titleRef.current !== base.title ||
+      JSON.stringify(editor.getJSON()) !== base.body ||
+      Object.keys(metaChanges(metaRef.current, savedMetaRef.current)).length > 0
+    );
+  }, [editor]);
+
+  const recompute = useCallback(() => {
+    const isDirty = isDirtyNow();
     setDirty(isDirty);
     setSaveState((s) => (s === "saving" ? s : isDirty ? "dirty" : "saved"));
-  }, [editor]);
+  }, [isDirtyNow]);
+
+  // A transition can take the right to edit away (or the item into the trash).
+  useEffect(() => {
+    if (readOnly === null || editor.isDestroyed || !editor.isEditable) return;
+    editor.setEditable(false, false);
+    editor.view.dom.setAttribute("aria-readonly", "true");
+  }, [editor, readOnly]);
 
   useEffect(() => {
     const onUpdate = () => {
@@ -214,8 +348,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     };
   }, [editor]);
 
-  // A hand-over continues where the user was: same selection and focus, and dirty when
-  // they typed while the first save was in flight.
+  // A hand-over continues where the user was: same selection and focus.
   useEffect(() => {
     if (!handoff) return;
     if (handoff.selection) {
@@ -225,8 +358,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
       editor.commands.setTextSelection({ from, to });
     }
     if (handoff.focus === "body") editor.commands.focus();
-    recompute();
-  }, [editor, handoff, recompute]);
+  }, [editor, handoff]);
 
   // The palette's Recent group: this item, with its title as it is now.
   const id = item?.id;
@@ -250,6 +382,34 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     [recompute],
   );
 
+  const setMeta = useCallback(
+    (patch: Partial<MetaDraft>) => {
+      metaRef.current = { ...metaRef.current, ...patch };
+      setMetaState(metaRef.current);
+      recompute();
+    },
+    [recompute],
+  );
+
+  /** The server's copy of the item, everywhere (screen, cache, lists, counts). */
+  const adopt = useCallback(
+    (next: ContentDto) => {
+      itemRef.current = next;
+      setItem(next);
+      queryClient.setQueryData(qk.content.item(type, next.id), next);
+      void queryClient.invalidateQueries({ queryKey: qk.content.lists(type) });
+      void queryClient.invalidateQueries({ queryKey: qk.content.counts(type) });
+    },
+    [queryClient, type],
+  );
+
+  /** The one place a failed write goes: a 412 to the conflict handler (Task 16). */
+  const fail = useCallback((e: unknown, op: WriteOp, onError?: (e: unknown) => void) => {
+    if (isProblem(e, "precondition-failed")) latest.current.onConflict?.(e, op);
+    else if (onError) onError(e);
+    else latest.current.onWriteError?.(e, op);
+  }, []);
+
   const inflight = useRef<Promise<ContentDto | null> | null>(null);
 
   const save = useCallback((): Promise<ContentDto | null> => {
@@ -259,8 +419,12 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     const sentTitle = titleRef.current;
     const doc = editor.getJSON();
     const sentBody = JSON.stringify(doc);
+    const sentMeta = metaRef.current;
     const base = saved.current;
-    if (current && base.title === sentTitle && base.body === sentBody) {
+    const metaPatch = metaChanges(sentMeta, savedMetaRef.current);
+    const titleChanged = base.title !== sentTitle;
+    const bodyChanged = base.body !== sentBody;
+    if (current && !titleChanged && !bodyChanged && Object.keys(metaPatch).length === 0) {
       setDirty(false);
       setSaveState("saved");
       return Promise.resolve(current);
@@ -268,21 +432,31 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     setSaveState("saving");
     const run = async (): Promise<ContentDto | null> => {
       try {
-        const next = current
-          ? await patchContent(type, current.id, current.version, {
-              title: sentTitle,
-              body: asBody(doc),
-            })
-          : await createContent(type, { title: sentTitle, body: asBody(doc) });
-        itemRef.current = next;
+        let next: ContentDto;
+        if (current) {
+          // The changed members only.
+          const patch: SchemaContentPatch = { ...metaPatch };
+          if (titleChanged) patch.title = sentTitle;
+          if (bodyChanged) patch.body = asBody(doc);
+          next = await patchContent(type, current.id, current.version, patch);
+        } else {
+          const input: SchemaContentInput = { title: sentTitle, body: asBody(doc) };
+          if (metaPatch.slug !== undefined) input.slug = metaPatch.slug;
+          if (metaPatch.excerpt) input.excerpt = metaPatch.excerpt;
+          if (metaPatch.terms && metaPatch.terms.length > 0) input.terms = metaPatch.terms;
+          if (metaPatch.parent_id) input.parent_id = metaPatch.parent_id;
+          if (metaPatch.menu_order !== undefined) input.menu_order = metaPatch.menu_order;
+          next = await createContent(type, input);
+        }
         saved.current = { title: sentTitle, body: sentBody };
-        setItem(next);
-        queryClient.setQueryData(qk.content.item(type, next.id), next);
-        void queryClient.invalidateQueries({ queryKey: qk.content.lists(type) });
-        void queryClient.invalidateQueries({ queryKey: qk.content.counts(type) });
+        const stored = metaOf(next);
+        savedMetaRef.current = stored;
+        setSavedMeta(stored);
+        metaRef.current = settleMeta(metaRef.current, sentMeta, stored);
+        setMetaState(metaRef.current);
+        adopt(next);
         setSavedAt(new Date());
-        const still =
-          titleRef.current === sentTitle && JSON.stringify(editor.getJSON()) === sentBody;
+        const still = !isDirtyNow();
         setDirty(!still);
         setSaveState(still ? "saved" : "dirty");
         if (!current) {
@@ -299,13 +473,13 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
                 ? "title"
                 : null,
             saved: { title: sentTitle, body: sentBody },
+            meta: metaRef.current,
           });
         }
         return next;
       } catch (e) {
         setSaveState(e instanceof NetworkError ? "offline" : "error");
-        if (isProblem(e, "precondition-failed")) latest.current.onConflict?.(e);
-        else latest.current.onSaveError?.(e);
+        fail(e, "save");
         return null;
       } finally {
         inflight.current = null;
@@ -314,7 +488,32 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     const p = run();
     inflight.current = p;
     return p;
-  }, [editor, queryClient, type]);
+  }, [editor, type, adopt, fail, isDirtyNow]);
+
+  const transition = useCallback(
+    async (action: Transition, options: TransitionOptions = {}): Promise<ContentDto | null> => {
+      if (readOnlyRef.current) return null;
+      // Unsaved changes first (F40); a save that joined one already in flight may not
+      // hold the latest keystrokes, so save again while anything is still unsaved.
+      let current = await save();
+      if (current && isDirtyNow()) current = await save();
+      if (!current || itemRef.current === null) return null;
+      try {
+        const next =
+          action === "schedule"
+            ? await lifecycle(type, current.id, "schedule", current.version, {
+                at: options.at ?? "",
+              })
+            : await lifecycle(type, current.id, action, current.version);
+        adopt(next);
+        return next;
+      } catch (e) {
+        fail(e, action, options.onError);
+        return null;
+      }
+    },
+    [save, isDirtyNow, type, adopt, fail],
+  );
 
   const initialFocus = handoff ? handoff.focus : opts.item === null ? "title" : null;
   return {
@@ -323,11 +522,16 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     title,
     setTitle,
     readOnly,
+    meta,
+    savedMeta,
+    setMeta,
     storedBody,
     initialFocus,
     dirty,
     saveState,
     savedAt,
     save,
+    transition,
+    adopt,
   };
 }

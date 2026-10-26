@@ -40,8 +40,11 @@ export function stubRoutes(routes: Record<string, Handler>): URL[] {
   return seen;
 }
 
-export function renderWithRouter(ui: ReactNode): QueryClient {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+/** `queryClient`: one the test has seeded (e.g. with `qk.me`). */
+export function renderWithRouter(
+  ui: ReactNode,
+  queryClient: QueryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+): QueryClient {
   const router = createRouter({
     routeTree: createRootRoute({ component: () => ui }),
     basepath: "/admin",

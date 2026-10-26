@@ -83,6 +83,20 @@ export class ContentApi {
     );
   }
 
+  /** Trashes and then deletes `item` for good (best effort, like `removeType`). */
+  async purge(item: Item): Promise<void> {
+    const current = await this.get(item.type, item.id);
+    const trashed = current.status === "trash" ? current : await this.trash(current);
+    await this.ctx.delete(`/api/v1/content/${item.type}/${item.id}?force=true`, {
+      headers: this.headers(trashed.version),
+    });
+  }
+
+  /** Removes a term (best effort: a failure only leaves a stray term behind). */
+  async deleteTerm(id: string): Promise<void> {
+    await this.ctx.delete(`/api/v1/terms/${id}`, { headers: this.headers() });
+  }
+
   async create(
     type: string,
     title: string,

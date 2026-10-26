@@ -17,7 +17,8 @@
     "invalid": "This item's content does not match the structure this editor can edit, so its text is shown read-only instead. Nothing is lost: the stored content is unchanged.",
     "forbidden": "You can read this item but not edit it.",
     "trash": "This item is in the trash. Restore it to edit it.",
-    "showJson": "Show stored JSON"
+    "showJson": "Show stored JSON",
+    "noText": "This item has no text that can be shown."
   },
   "save": {
     "button": "Save",
@@ -39,7 +40,10 @@
     "group": "Editor",
     "save": "Save",
     "focus": "Focus mode",
-    "focusExit": "Leave focus mode"
+    "focusExit": "Leave focus mode",
+    "panel": "Toggle the side panel",
+    "publish": "Publish…",
+    "panelClose": "Close the side panel"
   },
   "bubble": {
     "label": "Format",
@@ -126,5 +130,153 @@
     "sourceLabel": "HTML source",
     "cancel": "Cancel",
     "apply": "Apply"
+  },
+  "transition": {
+    "publish": {
+      "failed": "Publishing failed. Your text is still here; try again.",
+      "failedWith": "Publishing failed: {{detail}}"
+    },
+    "schedule": {
+      "failed": "Scheduling failed. Your text is still here; try again.",
+      "failedWith": "Scheduling failed: {{detail}}"
+    },
+    "submit": {
+      "failed": "Submitting failed. Your text is still here; try again.",
+      "failedWith": "Submitting failed: {{detail}}"
+    },
+    "unpublish": {
+      "failed": "Unpublishing failed; try again.",
+      "failedWith": "Unpublishing failed: {{detail}}"
+    }
+  },
+  "panel": {
+    "title": "Settings",
+    "description": "Status, address, excerpt and terms of this item in {{label}}.",
+    "toggle": "Settings panel",
+    "close": "Close settings",
+    "newTab": "(opens in a new tab)",
+    "sections": {
+      "url": "Address and excerpt",
+      "parent": "Parent and order"
+    },
+    "status": {
+      "heading": "Status and publishing",
+      "status": "Status",
+      "notSaved": "Not saved yet",
+      "goesLive": "Goes live",
+      "published": "Published",
+      "author": "Author",
+      "waiting": "Waiting for review. An editor will publish it; you can still make changes."
+    },
+    "actions": {
+      "publish": "Publish…",
+      "schedule": "Schedule…",
+      "publishNow": "Publish now…",
+      "submit": "Submit for review",
+      "submitting": "Submitting…",
+      "saveDraft": "Save draft",
+      "saveChanges": "Save changes",
+      "update": "Update",
+      "saving": "Saving…",
+      "unpublish": "Unpublish",
+      "unschedule": "Unschedule",
+      "preview": "Preview"
+    },
+    "toast": {
+      "submit": "Submitted for review",
+      "unpublish": "Unpublished. It's a draft again.",
+      "unscheduled": "Unscheduled. It's a draft again.",
+      "publish": "Published",
+      "schedule": "Scheduled"
+    }
+  },
+  "publish": {
+    "title": "Ready to publish?",
+    "titleScheduled": "Publish it now instead?",
+    "description": "Check what goes out, then choose when.",
+    "summary": {
+      "title": "Title",
+      "address": "Address",
+      "none": "None",
+      "excerpt": "Excerpt",
+      "excerptDerived": "Taken from the start of the body"
+    },
+    "unsaved": "Your unsaved changes are saved first.",
+    "when": "When",
+    "now": "Now",
+    "nowHint": "Live as soon as you confirm",
+    "later": "Later",
+    "laterHint": "Pick a date and time",
+    "cancel": "Cancel",
+    "confirmNow": "Publish now",
+    "confirmSchedule": "Schedule for {{when}}",
+    "publishing": "Publishing…",
+    "scheduling": "Scheduling…",
+    "failed": "That didn't work. Try again.",
+    "failedWith": "That didn't work: {{detail}}",
+    "toast": {
+      "published": "Published",
+      "scheduled": "Scheduled for {{when}}",
+      "view": "View"
+    }
+  },
+  "schedule": {
+    "time": "Time",
+    "zone": "{{zone}} · {{offset}}",
+    "utc": "{{at}} UTC",
+    "past": "That time has passed. Pick one in the future.",
+    "invalid": "Pick a date and a time."
+  },
+  "slug": {
+    "label": "Slug",
+    "placeholderNew": "From the title",
+    "newHint": "Made from the title when you first save; you can change it here.",
+    "afterSave": "after you save",
+    "unknownUntilSave": "The address updates when you save.",
+    "invalid": "No spaces or / ? # % < > \" ' \\ ` in a slug.",
+    "copy": "Copy link",
+    "copied": "Link copied",
+    "copyFailed": "Couldn't copy the link."
+  },
+  "excerpt": {
+    "label": "Excerpt",
+    "placeholder": "Empty: taken from the start of the body",
+    "derive": "Derive from body",
+    "hint": "Shown in lists, feeds and search results.",
+    "willDerive": "Taken from the body again when you save.",
+    "count_one": "{{formatted}} character",
+    "count_other": "{{formatted}} characters"
+  },
+  "terms": {
+    "loading": "Loading…",
+    "failed": "Couldn't load these terms.",
+    "none": "No {{label}} yet.",
+    "noneChosen": "None",
+    "newTerm": "New in {{label}}",
+    "newName": "New term in {{label}}",
+    "newPlaceholder": "Name",
+    "add": "Add",
+    "addTo": "Add {{label}}…",
+    "search": "Find or type a new one…",
+    "empty": "No matching terms",
+    "emptyCreate": "No matching terms. Type a name to create one.",
+    "create": "Create “{{name}}”",
+    "remove": "Remove {{name}}",
+    "createFailed": "Couldn't create the term.",
+    "createFailedWith": "Couldn't create the term: {{detail}}"
+  },
+  "parent": {
+    "label": "Parent",
+    "none": "No parent (top level)",
+    "search": "Search…",
+    "loading": "Loading…",
+    "empty": "Nothing found",
+    "order": "Order",
+    "orderHint": "Lower numbers come first"
+  },
+  "danger": {
+    "heading": "Danger zone",
+    "hintUndo": "You can undo this right after.",
+    "hintNoUndo": "You won't be able to restore it yourself; an editor can."
   }
 }

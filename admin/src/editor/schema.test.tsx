@@ -4,9 +4,11 @@
 // schema holds exactly the supported sets.
 
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { qk } from "@/api/keys";
 import type { SchemaContentDto } from "@/api/schema";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { renderWithRouter, stubRoutes } from "@/test/render";
@@ -323,6 +325,32 @@ function itemWith(body: unknown, extra: Partial<SchemaContentDto> = {}): SchemaC
   };
 }
 
+const ME = {
+  id: "0190f1c0-0000-7000-8000-0000000000bb",
+  login: "me",
+  email: "me@example.test",
+  display_name: "Me",
+  role: "author",
+  must_reset: false,
+  totp_enabled: false,
+  capabilities: [] as string[],
+  scopes: [] as string[],
+};
+
+/** Renders the screen on a seeded `QueryClient`; `unmount` cleans up for the next case. */
+async function openScreenWith(item: SchemaContentDto, qc: QueryClient) {
+  const view = { unmount: () => {} };
+  renderWithRouter(
+    <TooltipProvider>
+      <EditorScreen type="post" typeLabel="Posts" item={item} />
+    </TooltipProvider>,
+    qc,
+  );
+  await screen.findByRole("textbox", { name: "Body" });
+  view.unmount = cleanup;
+  return view;
+}
+
 async function openScreen(item: SchemaContentDto): Promise<void> {
   renderWithRouter(
     <TooltipProvider>
@@ -408,6 +436,51 @@ describe("editor screen", () => {
     expect(seen).toEqual([]);
   });
 
+  test("stored_json_only_for_edit_others", async () => {
+    // Task 14 carry: an author (no `edit_others`) gets the text, never the raw JSON.
+    const broken = {
+      type: "doc",
+      content: [
+        {
+          type: "listItem",
+          content: [{ type: "paragraph", content: [{ type: "text", text: "A stray list item." }] }],
+        },
+      ],
+    };
+    for (const [capabilities, shown] of [
+      [["read_admin", "edit_own", "publish_own"], false],
+      [["read_admin", "edit_own", "edit_others"], true],
+    ] as const) {
+      stubRoutes({});
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      qc.setQueryData(qk.me, { ...ME, capabilities: [...capabilities] });
+      const { unmount } = await openScreenWith(itemWith(broken), qc);
+      const stored = await waitFor(() => {
+        const el = document.querySelector<HTMLElement>("[data-slot=stored-text]");
+        if (!el) throw new Error("no stored-text view");
+        return el;
+      });
+      expect(within(stored).getByText("A stray list item.")).toBeVisible();
+      expect(within(stored).queryByText("Show stored JSON") !== null).toBe(shown);
+      unmount();
+    }
+  });
+
+  test("invalid_body_without_text_says_so", async () => {
+    // Task 14 carry: no extractable text is an explicit message, not an empty area.
+    stubRoutes({});
+    const empty = {
+      type: "doc",
+      content: [{ type: "listItem", content: [{ type: "paragraph" }] }],
+    };
+    renderWithRouter(
+      <TooltipProvider>
+        <EditorScreen type="post" typeLabel="Posts" item={itemWith(empty)} />
+      </TooltipProvider>,
+    );
+    expect(await screen.findByText("This item has no text that can be shown.")).toBeVisible();
+  });
+
   test("unedited_open_and_save_sends_nothing", async () => {
     // A body without optional attributes: TipTap fills in defaults on load, but the
     // baseline is taken after that, so an untouched save writes nothing.
@@ -430,6 +503,21 @@ describe("editor screen", () => {
     );
     expect(screen.getByRole("note")).toHaveTextContent("You can read this item but not edit it.");
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  test("empty_stored_document_is_editable", async () => {
+    // What the API stores for an item created without a body: not `block+`, but empty,
+    // so it opens as an empty editable document and an untouched save sends nothing.
+    const seen = stubRoutes({});
+    await openScreen(itemWith({ type: "doc", content: [] }));
+    expect(screen.getByRole("textbox", { name: "Body" })).toHaveAttribute(
+      "contenteditable",
+      "true",
+    );
+    expect(screen.queryByRole("note")).toBeNull();
+    await userEvent.setup().keyboard("{Control>}s{/Control}{Meta>}s{/Meta}");
+    await act(() => Promise.resolve());
+    expect(seen).toEqual([]);
   });
 
   test("supported_item_is_editable", async () => {

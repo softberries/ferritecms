@@ -1,5 +1,5 @@
 // Per-viewer display preferences (docs/design/11-admin-ui.md §3, §4, §7): the colour
-// theme, the density and the sidebar state, kept in `localStorage`. Storage can be
+// theme, the density, the sidebar state and the editor panel's, kept in `localStorage`. Storage can be
 // missing or throw (private windows, blocked site data), so every access is guarded and
 // falls back to the default.
 
@@ -11,6 +11,8 @@ export const THEME_KEY = "ferrite.admin.theme";
 export const DENSITY_KEY = "ferrite.admin.density";
 /** The shell's sidebar: `expanded` (default) or `collapsed` to the icon rail. */
 export const SIDEBAR_KEY = "ferrite.admin.sidebar";
+/** The editor's side panel on wide screens: `open` (default) or `closed`. */
+export const EDITOR_PANEL_KEY = "ferrite.admin.editorPanel";
 export const DARK_QUERY = "(prefers-color-scheme: dark)";
 
 const THEMES: readonly ThemePreference[] = ["light", "dark", "system"];
@@ -57,6 +59,15 @@ export function storedSidebarOpen(): boolean {
 
 export function storeSidebarOpen(open: boolean): void {
   write(SIDEBAR_KEY, open ? "expanded" : "collapsed");
+}
+
+/** Whether the editor's side panel is open on wide screens (the default). */
+export function storedEditorPanelOpen(): boolean {
+  return read(EDITOR_PANEL_KEY) !== "closed";
+}
+
+export function storeEditorPanelOpen(open: boolean): void {
+  write(EDITOR_PANEL_KEY, open ? "open" : "closed");
 }
 
 /** The system scheme; light where `matchMedia` is unavailable. */

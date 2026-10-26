@@ -1,7 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api, unwrap } from "./client";
 import { qk } from "./keys";
-import type { SchemaTaxonomyDto, SchemaTermDto } from "./schema";
+import type { SchemaTaxonomyDto, SchemaTermDto, SchemaTermInput } from "./schema";
 
 export type TaxonomyDto = SchemaTaxonomyDto;
 export type TermDto = SchemaTermDto;
@@ -25,4 +25,14 @@ export function termsQuery(taxonomy: string) {
       ).items,
     staleTime: 60_000,
   });
+}
+
+/** `POST /taxonomies/{t}/terms`: a new term (needs `manage_terms`; the server checks). */
+export async function createTerm(taxonomy: string, input: SchemaTermInput): Promise<SchemaTermDto> {
+  return unwrap(
+    api.POST("/api/v1/taxonomies/{taxonomy}/terms", {
+      params: { path: { taxonomy } },
+      body: input,
+    }),
+  );
 }
