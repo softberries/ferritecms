@@ -176,17 +176,20 @@ function NewButton() {
   const { t } = useTranslation("shell");
   return (
     <div className="flex shrink-0 items-stretch" data-slot="new-split">
-      <Button asChild className="rounded-r-none pr-2.5 max-sm:px-2.5">
+      {/* Outline, not filled: the screen's own primary action stays the one filled
+          button of the view (rulings R20); the ember plus keeps it easy to find. */}
+      <Button asChild variant="outline" className="rounded-r-none pr-2.5 max-sm:px-2.5">
         <Link to={"/content/post/new" as "/"} aria-label={t("topBar.newPost")}>
-          <PlusIcon data-icon="inline-start" />
+          <PlusIcon data-icon="inline-start" className="text-primary" />
           <span className="max-sm:hidden">{t("topBar.new")}</span>
         </Link>
       </Button>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <Button
+            variant="outline"
             size="icon"
-            className="w-7 rounded-l-none border-l border-primary-foreground/25 pointer-coarse:w-9"
+            className="w-7 rounded-l-none border-l-0 pointer-coarse:w-9"
             aria-label={t("topBar.newMore")}
           >
             <ChevronDownIcon />
