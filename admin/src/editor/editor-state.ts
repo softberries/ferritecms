@@ -1030,9 +1030,9 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     if (isDirtyNow()) touch();
   }, [itemId, type, setKept, isDirtyNow, touch]);
 
-  const lock = useCallback(
+  /** The editing lock of a restore: the body and title are read-only while it is on. */
+  const lockEditing = useCallback(
     (on: boolean) => {
-      restoringRef.current = on;
       setRevisionBusy(on);
       if (editor.isDestroyed) return;
       if (on) editor.setEditable(false, false);
@@ -1040,15 +1040,34 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     },
     [editor],
   );
+  const lock = useCallback(
+    (on: boolean) => {
+      restoringRef.current = on;
+      lockEditing(on);
+    },
+    [lockEditing],
+  );
+  // A restore waiting for a write in flight (editing already locked, writes not yet).
+  const restoreWaiting = useRef(false);
 
   const restoreRevisionNow = useCallback(
     async (rid: string, options: RestoreRevisionOptions = {}) => {
-      if (restoringRef.current) return null;
-      // A save or transition in flight lands first (its version is the one to match).
-      await transitioning.current;
-      await inflight.current;
+      if (restoringRef.current || restoreWaiting.current) return null;
+      // Editing stops now, not after the wait below: text typed while a save lands would
+      // be replaced by the restore without a word. Writes stay open (`restoringRef` is
+      // not set yet), so a transition in flight still saves and runs to its end.
+      restoreWaiting.current = true;
+      lockEditing(true);
+      try {
+        // A save or transition in flight lands first (its version is the one to match).
+        await transitioning.current;
+        await inflight.current;
+      } finally {
+        restoreWaiting.current = false;
+      }
       const current = itemRef.current;
       if (!current || !current.allowed.edit) {
+        lockEditing(false);
         // Nothing to restore over (the account may no longer edit it): said, not silent.
         options.onError?.(null);
         return null;
@@ -1090,7 +1109,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
         release();
       }
     },
-    [type, adopt, fail, lock],
+    [type, adopt, fail, lock, lockEditing],
   );
 
   // The indicator: an explicit save in flight or failed comes first; then, with
