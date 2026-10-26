@@ -1,0 +1,25 @@
+{
+  "sortable": {
+    "handle": "Reorder {{label}}",
+    "actions": "Actions for {{label}}",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "indent": "Indent",
+    "outdent": "Outdent",
+    "instructions": "To pick up an item, press Space or Enter. Use the arrow keys to move it, then press Space or Enter to drop it, or Escape to cancel.",
+    "treeInstructions": "To pick up an item, press Space or Enter. Use the up and down arrow keys to move it, then press Space or Enter to drop it, or Escape to cancel. To change its level, use Indent and Outdent in its actions menu.",
+    "picked": "Picked up {{label}}, position {{position}} of {{count}}.",
+    "over": "{{label}} is over position {{position}} of {{count}}.",
+    "dropped": "{{label}} dropped at position {{position}} of {{count}}.",
+    "cancelled": "Reordering cancelled. {{label}} is back at position {{position}} of {{count}}.",
+    "moved": "{{label}} moved to position {{position}} of {{count}}.",
+    "movedRoot": "{{label}} is now at the top level, position {{position}} of {{count}}.",
+    "movedUnder": "{{label}} is now under {{parent}}, position {{position}} of {{count}}.",
+    "roleDescription": "sortable"
+  },
+  "dropZone": {
+    "overlay": "Drop files to upload",
+    "choose": "Choose files",
+    "hint": "or drag them here"
+  }
+}

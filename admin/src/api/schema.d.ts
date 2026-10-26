@@ -180,6 +180,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/comments/counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["count_comments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/comments/{id}": {
         parameters: {
             query?: never;
@@ -434,6 +450,22 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["update_media"];
+        trace?: never;
+    };
+    "/api/v1/media/{id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["restore_media"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/menus": {
@@ -1103,6 +1135,7 @@ export interface components {
             parent_id?: string | null;
             /** Format: date-time */
             saved_at: string;
+            seo?: components["schemas"]["SeoPatchDto"] | null;
             /** @description `null`: unchanged. */
             slug?: string | null;
             /** @description Term ids in order; `null`: unchanged. */
@@ -1112,8 +1145,10 @@ export interface components {
         /**
          * @description `PUT /content/{type}/{id}/autosave`: replaces the caller's autosave (last write
          *     wins; no `If-Match`). Text is checked as a content write checks it (no NUL; the slug
-         *     also no control characters) and `terms` holds at most 200 ids; the field schema,
-         *     the parent and the terms are not checked: a draft may be incomplete.
+         *     also no control characters; `seo` as a content write checks it, then stored as
+         *     sent), `body` must be a document (`type` `doc`) and `terms` holds at most 200 ids;
+         *     the field schema, the parent and the terms are not checked: a draft may be
+         *     incomplete.
          */
         AutosaveInput: {
             /**
@@ -1136,6 +1171,7 @@ export interface components {
              *     always send it.
              */
             parent_id?: string | null;
+            seo?: components["schemas"]["SeoPatchDto"] | null;
             /** @description Absent or `null`: unchanged. */
             slug?: string | null;
             /** @description Term ids in order (at most 200); absent or `null`: unchanged. */
@@ -1165,6 +1201,17 @@ export interface components {
              */
             misses: number;
         };
+        /** @description `GET /comments/counts`: comments per status. */
+        CommentCountsDto: {
+            /** Format: int64 */
+            approved: number;
+            /** Format: int64 */
+            pending: number;
+            /** Format: int64 */
+            spam: number;
+            /** Format: int64 */
+            trash: number;
+        };
         /** @description A comment as moderators see it (`GET /comments`, `PATCH /comments/{id}`). */
         CommentDto: {
             /** @description ASCII-lowercased. */
@@ -1183,6 +1230,8 @@ export interface components {
              *     apart, cannot be reversed without the key.
              */
             ip_hash?: string | null;
+            /** @description That item as read with the comment. */
+            item: components["schemas"]["CommentItemDto"];
             /**
              * Format: uuid
              * @description The content item commented on.
@@ -1200,6 +1249,21 @@ export interface components {
              * @description The signed-in commenter; `null` for a guest (and after the account is deleted).
              */
             user_id?: string | null;
+        };
+        /** @description The item a comment is on (`CommentDto.item`). */
+        CommentItemDto: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description The public path, only while the item has a public page now (published, its
+             *     publish time reached); `null` otherwise.
+             */
+            permalink: string | null;
+            /** @description `draft`, `pending`, `scheduled`, `published`, `private` or `trash`. */
+            status: string;
+            title: string;
+            /** @description The content type (`post`, `page`, …). */
+            type: string;
         };
         /** @description `GET /comments`. */
         CommentList: {
@@ -1294,6 +1358,8 @@ export interface components {
             published_at?: string | null;
             /** Format: date-time */
             scheduled_at?: string | null;
+            /** @description The SEO title and description (`content_meta` `seo.title`, `seo.description`). */
+            seo: components["schemas"]["SeoDto"];
             slug: string;
             /** @description `draft`, `pending`, `scheduled`, `published`, `private` or `trash`. */
             status: string;
@@ -1324,6 +1390,7 @@ export interface components {
              * @description Only for hierarchical types (pages).
              */
             parent_id?: string | null;
+            seo?: components["schemas"]["SeoPatchDto"] | null;
             /** @description Generated from the title when absent; a taken slug gets `-2`, `-3`, …. */
             slug?: string | null;
             /** @description Term ids, in order; duplicates are ignored. */
@@ -1350,6 +1417,11 @@ export interface components {
             menu_order?: number;
             /** Format: uuid */
             parent_id?: string | null;
+            /**
+             * @description Changes the SEO meta member by member; a change to it alone is a full save
+             *     (a new version and revision).
+             */
+            seo?: components["schemas"]["SeoPatchDto"];
             /** @description A taken slug gets `-2`, `-3`, …. */
             slug?: string;
             /** @description Replaces the item's terms; `[]` removes them all. */
@@ -1823,11 +1895,24 @@ export interface components {
          * @enum {string}
          */
         MenuItemKindDto: "item" | "term" | "url";
-        /** @description `GET /menus`: every menu, by name. */
+        /** @description `GET /menus`: every menu, by name, and the theme's menu locations. */
         MenuList: {
             items: components["schemas"]["MenuSummary"][];
+            /**
+             * @description The menu locations the theme this node serves declares, by name; empty when it
+             *     declares none.
+             */
+            locations: components["schemas"]["MenuLocationDto"][];
             /** @description Always `null`: one page holds every menu. */
             next_cursor?: string | null;
+        };
+        /** @description A menu location of the theme the answering node serves (its `[menus]` table). */
+        MenuLocationDto: {
+            label: string;
+            /** @description Whether a menu with this name exists. */
+            menu: boolean;
+            /** @description The location, and the name of the menu the theme shows there. */
+            name: string;
         };
         /** @description A menu's name and label. */
         MenuSummary: {
@@ -2237,6 +2322,26 @@ export interface components {
          * @enum {string}
          */
         SchemaVerdict: "up_to_date" | "needs_up" | "newer_schema_ok" | "incompatible";
+        /**
+         * @description An item's SEO meta. `title`, when set, is the whole `<title>` and `og:title` of the
+         *     item's page (no site suffix); `description` comes before the excerpt as the meta
+         *     description. `null`: not set.
+         */
+        SeoDto: {
+            description: string | null;
+            title: string | null;
+        };
+        /**
+         * @description A change to an item's SEO meta. Per member: absent keeps it, `null` or a string
+         *     that is blank after trimming deletes it, any other string sets it (trimmed). No NUL,
+         *     and no control characters once trimmed (an edge newline is trimmed, an inner one
+         *     refused); `title` at most 200 characters and `description` at most 500 (`422`,
+         *     `errors[0].field` = `seo.title` / `seo.description`).
+         */
+        SeoPatchDto: {
+            description?: string | null;
+            title?: string | null;
+        };
         /** @description One declared setting: what the admin renders a form field from (05 §4c, 06 §1). */
         SettingDefDto: {
             /** @description The declared default; `null` for none (always for `media` and `secret`). */
@@ -2268,6 +2373,12 @@ export interface components {
              *     them (as in WordPress); `"all"` closes that.
              */
             "comments.moderation"?: string | null;
+            /**
+             * Format: int64
+             * @description 1..=100 (default 50): top-level comment threads per public comment page
+             *     (`?cpage=N`); each thread shows with all its approved replies.
+             */
+            "comments.per_page"?: number | null;
             /**
              * @description The page permalink structure (default `/%parent_path%/%slug%/`; needs
              *     `%parent_path%`).
@@ -2653,7 +2764,9 @@ export type SchemaAuthorRefDto = components['schemas']['AuthorRefDto'];
 export type SchemaAutosaveDto = components['schemas']['AutosaveDto'];
 export type SchemaAutosaveInput = components['schemas']['AutosaveInput'];
 export type SchemaCacheStatsDto = components['schemas']['CacheStatsDto'];
+export type SchemaCommentCountsDto = components['schemas']['CommentCountsDto'];
 export type SchemaCommentDto = components['schemas']['CommentDto'];
+export type SchemaCommentItemDto = components['schemas']['CommentItemDto'];
 export type SchemaCommentList = components['schemas']['CommentList'];
 export type SchemaCommentModeration = components['schemas']['CommentModeration'];
 export type SchemaCommentPublicDto = components['schemas']['CommentPublicDto'];
@@ -2693,6 +2806,7 @@ export type SchemaMenuInput = components['schemas']['MenuInput'];
 export type SchemaMenuItemDto = components['schemas']['MenuItemDto'];
 export type SchemaMenuItemKindDto = components['schemas']['MenuItemKindDto'];
 export type SchemaMenuList = components['schemas']['MenuList'];
+export type SchemaMenuLocationDto = components['schemas']['MenuLocationDto'];
 export type SchemaMenuSummary = components['schemas']['MenuSummary'];
 export type SchemaMetaDto = components['schemas']['MetaDto'];
 export type SchemaMetricsSummaryDto = components['schemas']['MetricsSummaryDto'];
@@ -2728,6 +2842,8 @@ export type SchemaRoleDto = components['schemas']['RoleDto'];
 export type SchemaScheduleRequest = components['schemas']['ScheduleRequest'];
 export type SchemaSchemaStatusDto = components['schemas']['SchemaStatusDto'];
 export type SchemaSchemaVerdict = components['schemas']['SchemaVerdict'];
+export type SchemaSeoDto = components['schemas']['SeoDto'];
+export type SchemaSeoPatchDto = components['schemas']['SeoPatchDto'];
 export type SchemaSettingDefDto = components['schemas']['SettingDefDto'];
 export type SchemaSettingsDto = components['schemas']['SettingsDto'];
 export type SchemaSettingsPatch = components['schemas']['SettingsPatch'];
@@ -3268,7 +3384,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One page of comments, newest first */
+            /** @description One page of comments, newest first, each with its item */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3278,6 +3394,56 @@ export interface operations {
                 };
             };
             /** @description `validation` (`status`, `limit`, `cursor`) or `malformed-query` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`moderate_comments`, `comments:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    count_comments: {
+        parameters: {
+            query?: {
+                /** @description Only comments on this content item (an unknown item counts zero). */
+                item?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How many comments have each status (every status present) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommentCountsDto"];
+                };
+            };
+            /** @description `malformed-query`: `item` is not a UUID */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -3377,7 +3543,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The comment with its new status; its post's page is refreshed */
+            /** @description The comment with its new status and its item; its post's page is refreshed */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4846,12 +5012,25 @@ export interface operations {
     list_media: {
         parameters: {
             query?: {
-                /** @description 1..=200; default 50. */
-                limit?: number;
-                /** @description `next_cursor` of the previous page. */
-                cursor?: string;
+                /**
+                 * @description Full-text search over the title (the original file name is not searched).
+                 *     Blank is no search. Not combinable with `author` or `trash=true` (`422`, field
+                 *     `q`); results come by relevance.
+                 */
+                q?: string;
+                /** @description Only items of this kind; combines with `q` and `trash`. */
+                kind?: "image" | "video" | "audio" | "document";
                 /** @description Only items uploaded by this user. */
                 author?: string;
+                /** @description `true`: only trashed items; default `false` (every status but trash). */
+                trash?: boolean;
+                /** @description 1..=200; default 50. */
+                limit?: number;
+                /**
+                 * @description `next_cursor` of the previous page of the same query (a search page's cursor
+                 *     only continues a search).
+                 */
+                cursor?: string;
             };
             header?: never;
             path?: never;
@@ -4859,7 +5038,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One page of media items (every status but trash), newest change first */
+            /** @description One page of media items (every status but trash, or with `trash=true` only trashed items), newest change first; with `q` by relevance (a search page can be shorter than `limit` while `next_cursor` is set) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4868,7 +5047,7 @@ export interface operations {
                     "application/json": components["schemas"]["MediaList"];
                 };
             };
-            /** @description `validation` (`limit`, `cursor`) or `malformed-query` */
+            /** @description `validation` (`limit`, `cursor`) or `malformed-query` (an unknown `kind`, a `trash` other than `true`/`false`) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4888,6 +5067,15 @@ export interface operations {
             };
             /** @description `forbidden` (needs `media:read`) or `password-reset-required` */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: `q` with `author` or `trash=true` (`errors[0].field` = `q`) */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5227,6 +5415,94 @@ export interface operations {
             };
         };
     };
+    restore_media: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `"<version>"` */
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Restored from trash as published, its `published_at` kept, so its files are served again (`ETag`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaDto"];
+                };
+            };
+            /** @description `malformed-header` (`If-Match`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or `media:write`; contributors never restore), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-failed`: stale version (`current`) */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: not trashed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-required`: no `If-Match` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
     list_menus: {
         parameters: {
             query?: never;
@@ -5236,7 +5512,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every menu (name and label), by name */
+            /** @description Every menu (name and label), by name, and the menu locations of the theme this node serves */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6114,9 +6390,14 @@ export interface operations {
     list_redirects: {
         parameters: {
             query?: {
+                /**
+                 * @description Only redirects whose source or target holds this text, ignoring case (`%` and
+                 *     `_` match only themselves). Trimmed; 1 to 200 characters (`422`, field `q`).
+                 */
+                q?: string;
                 /** @description 1..=200; default 50. */
                 limit?: number;
-                /** @description `next_cursor` of the previous page. */
+                /** @description `next_cursor` of the previous page of the same query. */
                 cursor?: string;
             };
             header?: never;
@@ -6154,6 +6435,15 @@ export interface operations {
             };
             /** @description `forbidden` (`manage_redirects`, `redirects:read`) or `password-reset-required` */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: `q` blank or longer than 200 characters (`errors[0].field` = `q`) */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

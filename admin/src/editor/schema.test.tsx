@@ -302,6 +302,7 @@ function itemWith(body: unknown, extra: Partial<SchemaContentDto> = {}): SchemaC
     body,
     excerpt: "",
     fields: {},
+    seo: { title: null, description: null },
     terms: [],
     menu_order: 0,
     permalink: "/imported/",

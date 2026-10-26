@@ -1,10 +1,13 @@
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { CONTENT_STATUSES } from "@/api/content";
+import type { MediaDto } from "@/api/media";
 import { DataTable } from "./data-table";
 import { dataTableColumns, type RowSelectionState } from "./data-table-features";
+import { DropZone } from "./drop-zone";
+import { MediaThumb } from "./media-thumb";
 import { MetricTile } from "./metric-tile";
 import { SaveState } from "./save-state";
 import { StatusBadge } from "./status-badge";
@@ -120,5 +123,115 @@ describe("kit", () => {
     // The chart is decorative.
     const spark = container.querySelector("[data-slot=sparkline]");
     expect(spark).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("drop_zone_takes_files_and_ignores_other_drags", async () => {
+    const onFiles = vi.fn<(files: File[]) => void>();
+    const onRejected = vi.fn<(files: File[]) => void>();
+    const { container } = render(
+      <DropZone onFiles={onFiles} onRejected={onRejected} accept="image/*,.pdf">
+        <p>Library</p>
+      </DropZone>,
+    );
+    const zone = container.querySelector("[data-slot=drop-zone]") as HTMLElement;
+    const photo = new File(["x"], "photo.png", { type: "image/png" });
+    const doc = new File(["x"], "notes.pdf", { type: "application/pdf" });
+    const zip = new File(["x"], "site.zip", { type: "application/zip" });
+
+    // A drag of text (no files) is left alone: no overlay, no drop target.
+    const text = { types: ["text/plain"], files: [] };
+    expect(fireEvent.dragOver(zone, { dataTransfer: text })).toBe(true);
+    expect(screen.queryByText("Drop files to upload")).toBeNull();
+
+    const files = { types: ["Files"], files: [photo, doc, zip] };
+    fireEvent.dragEnter(zone, { dataTransfer: files });
+    expect(screen.getByText("Drop files to upload")).toBeInTheDocument();
+    // `preventDefault` on dragover is what makes the zone a drop target.
+    expect(fireEvent.dragOver(zone, { dataTransfer: files })).toBe(false);
+    fireEvent.drop(zone, { dataTransfer: files });
+    expect(onFiles).toHaveBeenCalledWith([photo, doc]);
+    expect(onRejected).toHaveBeenCalledWith([zip]);
+    expect(screen.queryByText("Drop files to upload")).toBeNull();
+
+    // The button opens the hidden picker; its choice goes the same way.
+    const user = userEvent.setup();
+    const input = container.querySelector("input[type=file]") as HTMLInputElement;
+    expect(input).toHaveAttribute("multiple");
+    expect(input).toHaveAttribute("accept", "image/*,.pdf");
+    const clicked = vi.spyOn(input, "click");
+    await user.click(screen.getByRole("button", { name: "Choose files" }));
+    expect(clicked).toHaveBeenCalled();
+    await user.upload(input, [photo]);
+    expect(onFiles).toHaveBeenLastCalledWith([photo]);
+  });
+
+  it("media_thumb_picks_the_smallest_variant_that_fills_the_box", () => {
+    const media = (over: Partial<MediaDto>): MediaDto => ({
+      id: "0190f1c0-0000-7000-8000-0000000000aa",
+      author_id: "0190f1c0-0000-7000-8000-0000000000bb",
+      alt: "A lighthouse at dusk",
+      title: "Lighthouse",
+      original_name: "lighthouse.jpg",
+      mime: "image/jpeg",
+      bytes: 1000,
+      sanitized: false,
+      status: "published",
+      url: "/media/lighthouse.jpg",
+      width: 2000,
+      height: 1500,
+      variants: [
+        { name: "large", url: "/media/l.jpg", width: 1024, height: 768, mime: "image/jpeg" },
+        { name: "thumbnail", url: "/media/t.jpg", width: 150, height: 150, mime: "image/jpeg" },
+        { name: "medium", url: "/media/m.jpg", width: 300, height: 225, mime: "image/jpeg" },
+      ],
+      version: 1,
+      created_at: "2026-10-01T10:00:00Z",
+      updated_at: "2026-10-01T10:00:00Z",
+      ...over,
+    });
+    const src = (size: "sm" | "md" | "lg", m = media({})) => {
+      const { container, unmount } = render(<MediaThumb media={m} size={size} />);
+      const img = container.querySelector("img");
+      const out = img?.getAttribute("src") ?? null;
+      unmount();
+      return out;
+    };
+    // sm 40 px, md 96 px: the 150 px thumbnail; lg 160 px: medium (its short side is 225).
+    expect(src("sm")).toBe("/media/t.jpg");
+    expect(src("md")).toBe("/media/t.jpg");
+    expect(src("lg")).toBe("/media/m.jpg");
+    // No variant big enough (or none made yet): the original.
+    expect(src("lg", media({ variants: [] }))).toBe("/media/lighthouse.jpg");
+    // SVG: the original, through <img> only.
+    expect(src("md", media({ mime: "image/svg+xml", url: "/media/logo.svg", variants: [] }))).toBe(
+      "/media/logo.svg",
+    );
+
+    render(<MediaThumb media={media({})} size="md" />);
+    expect(screen.getByRole("img", { name: "A lighthouse at dusk" })).toBeInTheDocument();
+    cleanup();
+
+    // No alt: the image is decorative and the title is the visible text.
+    const { container } = render(<MediaThumb media={media({ alt: "" })} size="md" />);
+    expect(container.querySelector("img")).toHaveAttribute("alt", "");
+    expect(screen.getByText("Lighthouse")).toBeVisible();
+    cleanup();
+
+    // Other kinds: no <img>, a type icon and the extension.
+    const pdf = render(
+      <MediaThumb
+        media={media({
+          mime: "application/pdf",
+          original_name: "report.pdf",
+          title: "Annual report",
+          alt: "",
+          variants: [],
+        })}
+        size="md"
+      />,
+    );
+    expect(pdf.container.querySelector("img")).toBeNull();
+    expect(screen.getByText("PDF")).toBeInTheDocument();
+    expect(screen.getByText("Annual report")).toBeInTheDocument();
   });
 });

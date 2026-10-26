@@ -16,6 +16,7 @@ const SECTIONS = [
   "navigation",
   "overlays",
   "patterns",
+  "ordering",
   "data",
   "charts",
 ] as const;
@@ -174,4 +175,102 @@ test("styleguide_table_frame_and_mixed_checkbox", async ({ as }) => {
       )
       .toBe(true);
   }
+});
+
+test("styleguide_ordering", async ({ as, snap, expectAccessible }) => {
+  // The kit's sortable list and tree (menus and keyboard, as screens will drive them, and a
+  // real pointer drag), the drop zone's overlay and its file filter.
+  const page = await as("admin");
+  await page.goto("/admin/_styleguide?section=ordering");
+  const tree = page.getByRole("list", { name: "Main menu" });
+  const treeStatus = page.locator("[data-slot=sortable-tree] ~ [data-slot=sortable-status]");
+  const rowOf = (list: typeof tree, label: string) =>
+    list
+      .locator("[data-sortable-row]")
+      .filter({ has: page.getByRole("button", { name: `Reorder ${label}`, exact: true }) });
+  const order = (list: typeof tree) =>
+    list
+      .getByRole("button", { name: /^Reorder / })
+      .evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")?.slice(8)));
+
+  // Tree: Blog up among the top level, from its menu; focus stays on its menu button.
+  // Each step waits for the menu to finish closing: reopening it during its exit
+  // animation is not a user's pace.
+  await page.getByRole("button", { name: "Actions for Blog" }).click();
+  await expect(page.getByRole("menu")).toBeVisible();
+  await snap(page, "styleguide-ordering-menu");
+  await expectAccessible(page);
+  await page.getByRole("menuitem", { name: "Move up" }).click();
+  await expect(page.getByRole("menu")).toBeHidden();
+  await expect
+    .poll(() => order(tree))
+    .toEqual(["Home", "Blog", "About", "Team", "History", "Contact"]);
+  await expect(treeStatus).toHaveText("Blog moved to position 2 of 4.");
+  await expect(page.getByRole("button", { name: "Actions for Blog" })).toBeFocused();
+
+  // Contact: indent under About (its previous sibling), then out again.
+  await page.getByRole("button", { name: "Actions for Contact" }).click();
+  await page.getByRole("menuitem", { name: "Indent" }).click();
+  await expect(page.getByRole("menu")).toBeHidden();
+  await expect(rowOf(tree, "Contact")).toHaveAttribute("aria-level", "2");
+  await expect(treeStatus).toHaveText("Contact is now under About, position 3 of 3.");
+  await page.getByRole("button", { name: "Actions for Contact" }).click();
+  // About's children sit at level 2 of the styleguide's maxDepth 2, so one more is allowed.
+  await expect(page.getByRole("menuitem", { name: "Indent" })).toBeEnabled();
+  await page.getByRole("menuitem", { name: "Outdent" }).click();
+  await expect(page.getByRole("menu")).toBeHidden();
+  await expect(rowOf(tree, "Contact")).toHaveAttribute("aria-level", "1");
+
+  // List: the keyboard (Space, ArrowDown, Space) moves Title below Subtitle.
+  const list = page.getByRole("list", { name: "Fields" });
+  await list.getByRole("button", { name: "Reorder Title" }).focus();
+  await page.keyboard.press("Space");
+  await expect(page.locator("body")).toContainText("Picked up Title, position 1 of 5.");
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator("body")).toContainText("Title is over position 2 of 5.");
+  await page.keyboard.press("Space");
+  await expect(page.locator("body")).toContainText("Title dropped at position 2 of 5.");
+  await expect
+    .poll(() => order(list))
+    .toEqual(["Subtitle", "Title", "Hero image", "Body", "Reading time"]);
+
+  // List: a pointer drag of Reading time to the top.
+  const handle = list.getByRole("button", { name: "Reorder Reading time" });
+  const from = await handle.boundingBox();
+  const to = await list.getByRole("button", { name: "Reorder Subtitle" }).boundingBox();
+  if (!from || !to) throw new Error("no layout");
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  // Past the 4 px activation distance, then in steps to above the first row.
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2 - 8, { steps: 2 });
+  await page.mouse.move(to.x + to.width / 2, to.y + 2, { steps: 12 });
+  await page.mouse.up();
+  await expect
+    .poll(() => order(list))
+    .toEqual(["Reading time", "Subtitle", "Title", "Hero image", "Body"]);
+
+  // Drop zone: a drag carrying files shows the overlay; the drop keeps what `accept` takes.
+  const zone = page.locator("[data-slot=drop-zone]");
+  const drag = (type: "dragenter" | "drop", names: string[]) =>
+    zone.evaluate(
+      (el, { type, names }) => {
+        const dt = new DataTransfer();
+        for (const name of names) {
+          const mime = name.endsWith(".png") ? "image/png" : "application/x-msdownload";
+          dt.items.add(new File(["x"], name, { type: mime }));
+        }
+        el.dispatchEvent(
+          new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }),
+        );
+      },
+      { type, names },
+    );
+  await drag("dragenter", ["photo.png"]);
+  await expect(page.getByText("Drop files to upload")).toBeVisible();
+  await snap(page, "styleguide-ordering-drop");
+  await expectAccessible(page);
+  await drag("drop", ["photo.png", "setup.exe"]);
+  await expect(page.getByText("Drop files to upload")).toBeHidden();
+  await expect(page.getByText("1 file ready to upload")).toBeVisible();
+  await expect(page.getByText("1 file is not a type this library takes")).toBeVisible();
 });

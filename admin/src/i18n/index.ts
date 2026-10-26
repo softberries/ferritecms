@@ -5,13 +5,14 @@ import common from "./en/common.json";
 import content from "./en/content.json";
 import dashboard from "./en/dashboard.json";
 import editor from "./en/editor.json";
+import kit from "./en/kit.json";
 import palette from "./en/palette.json";
 import shell from "./en/shell.json";
 import styleguide from "./en/styleguide.json";
 
 /** Every namespace, one per area of the admin. English only in M2b. */
 export const resources = {
-  en: { common, auth, shell, styleguide, palette, dashboard, content, editor },
+  en: { common, auth, shell, styleguide, palette, dashboard, content, editor, kit },
 } as const;
 
 export const defaultNS = "common";

@@ -8,6 +8,13 @@
     "overview": "Overview",
     "dashboard": "Dashboard",
     "content": "Content",
+    "media": "Media",
+    "comments": "Comments",
+    "structure": "Structure",
+    "contentTypes": "Content types",
+    "taxonomies": "Taxonomies",
+    "menus": "Menus",
+    "redirects": "Redirects",
     "viewSite": "View site"
   },
   "crumbs": {

@@ -10,6 +10,7 @@ export const SECTIONS = [
   "navigation",
   "overlays",
   "patterns",
+  "ordering",
   "data",
   "charts",
 ] as const;

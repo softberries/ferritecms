@@ -1,22 +1,30 @@
-// Kit patterns (page header, states, metric tiles), the data table and charts.
+// Kit patterns (page header, states, metric tiles), ordering and files (sortable list and
+// tree, drop zone, media thumbnails), the data table and charts.
 
 import { FileTextIcon, PencilIcon, PlusIcon, Trash2Icon, UploadIcon } from "lucide-react";
+import type { TFunction } from "i18next";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
 import type { ContentStatus } from "@/api/content";
+import type { MediaDto } from "@/api/media";
 import { ApiError } from "@/api/problem";
 import { DataTable } from "@/components/kit/data-table";
 import { dataTableColumns, type RowSelectionState } from "@/components/kit/data-table-features";
 import { EmptyState } from "@/components/kit/empty-state";
 import { ErrorState } from "@/components/kit/error-state";
+import { DropZone } from "@/components/kit/drop-zone";
 import { ForbiddenState } from "@/components/kit/forbidden-state";
 import { KbdCombo } from "@/components/kit/kbd-combo";
+import { MediaThumb } from "@/components/kit/media-thumb";
 import { MetricTile } from "@/components/kit/metric-tile";
 import { PageHeader } from "@/components/kit/page-header";
 import { RelativeTime } from "@/components/kit/relative-time";
 import { SaveState } from "@/components/kit/save-state";
+import { SortableList } from "@/components/kit/sortable-list";
+import { SortableTree } from "@/components/kit/sortable-tree";
+import type { TreeNode } from "@/components/kit/tree-model";
 import { Sparkline } from "@/components/kit/sparkline";
 import { StatusBadge } from "@/components/kit/status-badge";
 import { Button } from "@/components/ui/button";
@@ -152,6 +160,178 @@ export function PatternsSection() {
                 <KbdCombo keys="mod+shift+p" />
               </TooltipContent>
             </Tooltip>
+          </div>
+        </Specimen>
+      </Block>
+    </Section>
+  );
+}
+
+type FieldKey = "title" | "subtitle" | "hero" | "body" | "reading";
+const FIELDS: { key: FieldKey; type: string }[] = [
+  { key: "title", type: "text" },
+  { key: "subtitle", type: "text" },
+  { key: "hero", type: "media" },
+  { key: "body", type: "rich_text" },
+  { key: "reading", type: "number" },
+];
+
+type MenuKey = "home" | "about" | "team" | "history" | "blog" | "contact";
+const MENU: TreeNode<{ key: MenuKey; path: string }>[] = [
+  { id: "m1", parentId: null, data: { key: "home", path: "/" } },
+  { id: "m2", parentId: null, data: { key: "about", path: "/about/" } },
+  { id: "m3", parentId: "m2", data: { key: "team", path: "/about/team/" } },
+  { id: "m4", parentId: "m2", data: { key: "history", path: "/about/history/" } },
+  { id: "m5", parentId: null, data: { key: "blog", path: "/blog/" } },
+  { id: "m6", parentId: null, data: { key: "contact", path: "/contact/" } },
+];
+
+/** Sample media: the site mark (an SVG served with the admin) and other kinds. */
+function sampleMedia(t: TFunction<"styleguide">): MediaDto[] {
+  const base = {
+    author_id: "0190f1c0-0000-7000-8000-0000000000bb",
+    bytes: 2048,
+    sanitized: false,
+    status: "published",
+    variants: [],
+    version: 1,
+    created_at: "2026-10-01T10:00:00Z",
+    updated_at: "2026-10-01T10:00:00Z",
+  };
+  const logo = `${import.meta.env.BASE_URL}favicon.svg`;
+  return [
+    {
+      ...base,
+      id: "s1",
+      title: t("ordering.thumbs.logo"),
+      alt: t("ordering.thumbs.logoAlt"),
+      original_name: "favicon.svg",
+      mime: "image/svg+xml",
+      sanitized: true,
+      url: logo,
+    },
+    {
+      ...base,
+      id: "s2",
+      title: t("ordering.thumbs.logo"),
+      alt: "",
+      original_name: "mark.svg",
+      mime: "image/svg+xml",
+      sanitized: true,
+      url: logo,
+    },
+    {
+      ...base,
+      id: "s3",
+      title: t("ordering.thumbs.report"),
+      alt: "",
+      original_name: "annual-report-2026.pdf",
+      mime: "application/pdf",
+      url: "",
+    },
+    {
+      ...base,
+      id: "s4",
+      title: t("ordering.thumbs.clip"),
+      alt: "",
+      original_name: "launch.mp4",
+      mime: "video/mp4",
+      url: "",
+    },
+    {
+      ...base,
+      id: "s5",
+      title: t("ordering.thumbs.archive"),
+      alt: "",
+      original_name: "theme.zip",
+      mime: "application/zip",
+      url: "",
+    },
+    {
+      ...base,
+      id: "s6",
+      title: t("ordering.thumbs.podcast"),
+      alt: "",
+      original_name: "episode-12.mp3",
+      mime: "audio/mpeg",
+      url: "",
+    },
+  ];
+}
+
+export function OrderingSection() {
+  const { t } = useTranslation("styleguide");
+  const [fields, setFields] = useState(FIELDS);
+  const [menu, setMenu] = useState(MENU);
+  const media = useMemo(() => sampleMedia(t), [t]);
+  const [first, second, ...others] = media;
+  return (
+    <Section id="ordering">
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Block title={t("ordering.list.title")} description={t("ordering.list.body")}>
+          <SortableList
+            name={t("ordering.list.name")}
+            items={fields}
+            getId={(f) => f.key}
+            label={(f) => t(`ordering.list.fields.${f.key}`)}
+            onReorder={setFields}
+            render={(f) => (
+              <span className="flex min-w-0 items-baseline justify-between gap-3">
+                <span className="truncate font-medium">{t(`ordering.list.fields.${f.key}`)}</span>
+                <span className="shrink-0 font-mono text-xs text-muted-foreground">{f.type}</span>
+              </span>
+            )}
+          />
+        </Block>
+        <Block title={t("ordering.tree.title")} description={t("ordering.tree.body")}>
+          <SortableTree
+            name={t("ordering.tree.name")}
+            nodes={menu}
+            maxDepth={2}
+            label={(d) => t(`ordering.tree.items.${d.key}`)}
+            onChange={setMenu}
+            render={(n) => (
+              <span className="flex min-w-0 items-baseline justify-between gap-3">
+                <span className="truncate font-medium">
+                  {t(`ordering.tree.items.${n.data.key}`)}
+                </span>
+                <span
+                  className="hidden truncate font-mono text-xs text-muted-foreground sm:block"
+                  title={n.data.path}
+                >
+                  {n.data.path}
+                </span>
+              </span>
+            )}
+          />
+        </Block>
+      </div>
+
+      <Block title={t("ordering.drop.title")} description={t("ordering.drop.body")}>
+        <DropZone
+          accept="image/*,application/pdf,video/*,audio/*,.zip"
+          onFiles={(files) => toast.success(t("ordering.drop.chosen", { count: files.length }))}
+          onRejected={(files) => toast.error(t("ordering.drop.refused", { count: files.length }))}
+          className="rounded-xl border bg-card p-5"
+        >
+          <ul className="grid grid-cols-[repeat(auto-fill,minmax(6rem,1fr))] gap-4">
+            {media.map((item) => (
+              <li key={item.id}>
+                <MediaThumb media={item} size="md" />
+              </li>
+            ))}
+          </ul>
+        </DropZone>
+      </Block>
+
+      <Block title={t("ordering.thumbs.title")} description={t("ordering.thumbs.body")}>
+        <Specimen className="flex flex-wrap items-end gap-6">
+          {first ? <MediaThumb media={first} size="lg" /> : null}
+          {second ? <MediaThumb media={second} size="md" /> : null}
+          <div className="flex min-w-0 flex-col gap-2">
+            {others.map((item) => (
+              <MediaThumb key={item.id} media={item} size="sm" />
+            ))}
           </div>
         </Specimen>
       </Block>

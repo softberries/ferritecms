@@ -1,8 +1,10 @@
 // The sidebar's sections (and the palette's "Go to", "Create" and "Recent" groups). An item
 // shows only when `me.capabilities` holds what its API needs; the server still
 // enforces every call, the SPA only hides (constraints: capabilities in core).
-// Sections for Media, Comments, Appearance, Plugins, Users, Settings and System are
-// added when their screens exist (M2b-2/3).
+// M2b-2 screens (Media, Comments, Structure) each register a `ScreenEntry` in
+// `SCREEN_ENTRIES` when their route exists (ruling F-A); who sees an entry, where it goes
+// and its chord are fixed here in `SCREENS`. Appearance, Plugins, Users, Settings and
+// System follow in M2b-3.
 
 import {
   FileTextIcon,
@@ -13,7 +15,7 @@ import {
 } from "lucide-react";
 import type { ContentTypeDto } from "@/api/types";
 import type { MeDto } from "@/auth/session";
-import type { TFunction } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 import { i18n } from "@/i18n";
 
 export interface NavItem {
@@ -35,6 +37,45 @@ export interface NavSection {
   items: NavItem[];
 }
 
+type Can = (cap: string) => boolean;
+
+/** The M2b-2 screens a task can register, with the rule for who sees each. */
+const SCREENS = {
+  // Contributors too: the screen is read-only without `upload_media` (it decides).
+  media: { section: "content", show: (can: Can) => can("read_admin"), shortcut: "g m" },
+  comments: {
+    section: "content",
+    show: (can: Can) => can("moderate_comments"),
+    shortcut: "g c",
+  },
+  types: { section: "structure", show: (can: Can) => can("manage_settings") },
+  // `manage_terms` alone manages terms, not the taxonomies themselves (the screen decides).
+  taxonomies: {
+    section: "structure",
+    show: (can: Can) => can("manage_settings") || can("manage_terms"),
+  },
+  menus: { section: "structure", show: (can: Can) => can("manage_menus") },
+  redirects: { section: "structure", show: (can: Can) => can("manage_redirects") },
+} as const satisfies Record<
+  string,
+  { section: "content" | "structure"; show: (can: Can) => boolean; shortcut?: string }
+>;
+
+export type ScreenId = keyof typeof SCREENS;
+
+/** What a screen task registers once its route exists. */
+export interface ScreenEntry {
+  screen: ScreenId;
+  /** The screen's admin path (`/media`). */
+  to: string;
+  /** A key of the `shell` namespace (`nav.media`). */
+  label: ParseKeys<"shell">;
+  icon: LucideIcon;
+}
+
+/** The registered screens; empty until the M2b-2 screen tasks add theirs. */
+export const SCREEN_ENTRIES: ScreenEntry[] = [];
+
 /** Types the content screens list: everything but `media` (its own screen, M2b-2). */
 const NOT_CONTENT = new Set(["media"]);
 const BUILT_IN_ORDER = ["post", "page"];
@@ -47,8 +88,28 @@ export function navFor(
   me: MeDto,
   types: ContentTypeDto[],
   t: TFunction<"shell"> = i18n.getFixedT(null, "shell"),
+  entries: ScreenEntry[] = SCREEN_ENTRIES,
 ): NavSection[] {
-  const can = (cap: string) => me.capabilities.includes(cap);
+  const can: Can = (cap) => me.capabilities.includes(cap);
+  // Registered screens the viewer may see, in `SCREENS` order. Nothing without
+  // `read_admin`: every admin API refuses that viewer.
+  const screens = (section: "content" | "structure") =>
+    (Object.keys(SCREENS) as ScreenId[]).flatMap((id): NavItem[] => {
+      const rule: { section: string; show: (can: Can) => boolean; shortcut?: string } = SCREENS[id];
+      const entry = entries.find((e) => e.screen === id);
+      if (!entry || rule.section !== section || !can("read_admin") || !rule.show(can)) {
+        return [];
+      }
+      return [
+        {
+          id,
+          label: t(entry.label),
+          to: entry.to,
+          icon: entry.icon,
+          ...(rule.shortcut ? { shortcut: rule.shortcut } : {}),
+        },
+      ];
+    });
   const sections: NavSection[] = [
     {
       id: "overview",
@@ -82,9 +143,14 @@ export function navFor(
         ...(shortcut ? { shortcut } : {}),
       };
     });
+    items.push(...screens("content"));
     if (items.length > 0) {
       sections.push({ id: "content", label: t("nav.content"), items });
     }
+  }
+  const structure = screens("structure");
+  if (structure.length > 0) {
+    sections.push({ id: "structure", label: t("nav.structure"), items: structure });
   }
   return sections;
 }

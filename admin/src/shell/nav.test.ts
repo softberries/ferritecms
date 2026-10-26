@@ -1,7 +1,8 @@
 import { expect, test } from "vitest";
 import type { ContentTypeDto } from "@/api/types";
 import type { MeDto } from "@/auth/session";
-import { navFor, navItemAt } from "./nav";
+import { ShapesIcon } from "lucide-react";
+import { navFor, navItemAt, type ScreenEntry } from "./nav";
 
 const type = (name: string, label: string, built_in = false): ContentTypeDto => ({
   name,
@@ -65,7 +66,8 @@ test("author_sees_posts_pages_and_custom_types", () => {
 test("nothing_above_its_rights", () => {
   // Without `read_admin` the content APIs answer 403, so no content section.
   expect(shape(navFor(me("none", []), TYPES))).toEqual([["overview", [["Dashboard", "/"]]]]);
-  // Nothing beyond Overview and Content exists in M2b-1, whatever the role holds.
+  // Nothing beyond Overview and Content until a screen registers its entry, whatever
+  // the role holds.
   const admin = me("admin", [
     "read_admin",
     "edit_own",
@@ -99,4 +101,89 @@ test("content_items_name_their_type_and_paths_find_their_item", () => {
   expect(navItemAt(sections, "/content/page")?.id).toBe("content-page");
   expect(navItemAt(sections, "/content/page/")?.id).toBe("content-page");
   expect(navItemAt(sections, "/content/page/new")).toBeUndefined();
+});
+
+// M2b-2 screens (F-A): each screen task registers its entry; the rules for who sees it
+// and where it goes live in `navFor`. Every screen registered here, as the later tasks will.
+const ENTRIES: ScreenEntry[] = [
+  { screen: "redirects", to: "/redirects", label: "nav.redirects", icon: ShapesIcon },
+  { screen: "media", to: "/media", label: "nav.media", icon: ShapesIcon },
+  { screen: "menus", to: "/menus", label: "nav.menus", icon: ShapesIcon },
+  { screen: "comments", to: "/comments", label: "nav.comments", icon: ShapesIcon },
+  { screen: "taxonomies", to: "/taxonomies", label: "nav.taxonomies", icon: ShapesIcon },
+  { screen: "types", to: "/types", label: "nav.contentTypes", icon: ShapesIcon },
+];
+
+const CONTRIBUTOR = me("contributor", ["read_admin", "edit_own"]);
+const EDITOR = me("editor", [
+  "read_admin",
+  "edit_own",
+  "publish_own",
+  "upload_media",
+  "edit_others",
+  "publish_others",
+  "manage_terms",
+  "manage_menus",
+  "moderate_comments",
+]);
+const ADMIN = me("admin", [
+  ...EDITOR.capabilities,
+  "manage_users",
+  "manage_settings",
+  "manage_themes",
+  "manage_plugins",
+  "import",
+  "manage_redirects",
+  "manage_system",
+]);
+const TWO_TYPES = TYPES.slice(0, 2);
+
+test("screen_entries_by_role", () => {
+  const rows = (who: MeDto) => shape(navFor(who, TWO_TYPES, undefined, ENTRIES)).slice(1);
+  const content = [
+    ["Posts", "/content/post"],
+    ["Pages", "/content/page"],
+  ];
+  // Contributors and authors: Media (read-only for contributors, by the screen).
+  expect(rows(CONTRIBUTOR)).toEqual([["content", [...content, ["Media", "/media"]]]]);
+  expect(rows(AUTHOR)).toEqual([["content", [...content, ["Media", "/media"]]]]);
+  // Editors: Comments too, and the structure they manage: terms (Taxonomies) and menus.
+  expect(rows(EDITOR)).toEqual([
+    ["content", [...content, ["Media", "/media"], ["Comments", "/comments"]]],
+    [
+      "structure",
+      [
+        ["Taxonomies", "/taxonomies"],
+        ["Menus", "/menus"],
+      ],
+    ],
+  ]);
+  // Admins: everything, in the fixed order whatever the registration order.
+  expect(rows(ADMIN)).toEqual([
+    ["content", [...content, ["Media", "/media"], ["Comments", "/comments"]]],
+    [
+      "structure",
+      [
+        ["Content types", "/types"],
+        ["Taxonomies", "/taxonomies"],
+        ["Menus", "/menus"],
+        ["Redirects", "/redirects"],
+      ],
+    ],
+  ]);
+  // Without `read_admin` nothing past the dashboard, even registered.
+  expect(rows(me("none", []))).toEqual([]);
+  // The chords of 11 §6.
+  const items = navFor(ADMIN, TWO_TYPES, undefined, ENTRIES).flatMap((s) => s.items);
+  expect(items.find((i) => i.id === "media")?.shortcut).toBe("g m");
+  expect(items.find((i) => i.id === "comments")?.shortcut).toBe("g c");
+  expect(navItemAt(navFor(ADMIN, TWO_TYPES, undefined, ENTRIES), "/menus")?.id).toBe("menus");
+});
+
+test("screen_entries_need_no_content_types", () => {
+  // Media shows even before the types have loaded (or when none is listed).
+  expect(shape(navFor(AUTHOR, [], undefined, ENTRIES))).toEqual([
+    ["overview", [["Dashboard", "/"]]],
+    ["content", [["Media", "/media"]]],
+  ]);
 });

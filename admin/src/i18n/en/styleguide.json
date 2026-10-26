@@ -120,6 +120,10 @@
       "title": "Patterns",
       "lead": "The kit every screen is built from: the page header, metric tiles and the empty, error and permission states."
     },
+    "ordering": {
+      "title": "Ordering and files",
+      "lead": "Lists and trees reordered by drag or from each row's menu, the file drop zone and media thumbnails."
+    },
     "data": {
       "title": "Data table",
       "lead": "Lists with selection, keyboard movement, a sticky header and actions on hover, plus their loading and empty states."
@@ -438,6 +442,51 @@
       "body": "Status and save state on the left, one primary action on the right.",
       "preview": "Preview",
       "publish": "Publish"
+    }
+  },
+  "ordering": {
+    "list": {
+      "title": "Sortable list",
+      "body": "Drag the handle, or focus it and press Space, the arrows, then Space. The row menu moves it too.",
+      "name": "Fields",
+      "fields": {
+        "title": "Title",
+        "subtitle": "Subtitle",
+        "hero": "Hero image",
+        "body": "Body",
+        "reading": "Reading time"
+      }
+    },
+    "tree": {
+      "title": "Sortable tree",
+      "body": "Drag sideways to change the level, or use Indent and Outdent in the row menu. The dashed row shows where it lands.",
+      "name": "Main menu",
+      "items": {
+        "home": "Home",
+        "about": "About",
+        "team": "Team",
+        "history": "History",
+        "blog": "Blog",
+        "contact": "Contact"
+      }
+    },
+    "drop": {
+      "title": "Drop zone",
+      "body": "Drop files anywhere on the area, or choose them. Drags without files are ignored.",
+      "chosen_one": "{{count}} file ready to upload",
+      "chosen_other": "{{count}} files ready to upload",
+      "refused_one": "{{count}} file is not a type this library takes",
+      "refused_other": "{{count}} files are not a type this library takes"
+    },
+    "thumbs": {
+      "title": "Media thumbnails",
+      "body": "The smallest variant that fills the box; SVGs only as images; other kinds by icon and extension. Without alt text the title is shown.",
+      "logo": "Site logo",
+      "logoAlt": "The FerriteCMS mark, Fe on an ember square",
+      "report": "Annual report",
+      "clip": "Launch video",
+      "archive": "Theme sources",
+      "podcast": "Episode 12"
     }
   },
   "data": {

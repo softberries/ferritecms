@@ -306,8 +306,10 @@ alone). Local keys (the `DataTable` row keys, the editor's) stay in their compon
 Bound by the shell as of Task 10: `mod+k` (`allowInInput`), `?`, `mod+b` and `g d`;
 Task 13 adds `g p`/`g g` (nav items, `shell/nav.ts`) and, while a content list is open,
 `/`, `#` and `esc` (clear the selection; not while a menu or dialog is open); the rest
-arrive with their screens (`c p`/`c g` with the editor, Task 14; `g m`, `g s` in
-M2b-2/3). The `?` sheet lists whatever is
+arrive with their screens (`c p`/`c g` with the editor, Task 14; `g s` in M2b-3). M2b-2:
+`g m` (Media) and `g c` (Comments) are fixed in `navFor`'s screen rules and bind once
+the screen registers its nav entry; the comments queue binds `a`, `u`, `s` and `#`
+while it is open. The `?` sheet lists whatever is
 registered at the moment it opens.
 
 | Where | Keys | Action |
@@ -319,6 +321,7 @@ registered at the moment it opens.
 | Anywhere | `g p` | Posts |
 | Anywhere | `g g` | Pages |
 | Anywhere | `g m` | Media (M2b-2) |
+| Anywhere | `g c` | Comments (M2b-2) |
 | Anywhere | `g s` | Settings (M2b-3) |
 | Anywhere | `c p` / `c g` | New post / new page |
 | Lists | `j` / `k` | Move down / up |
@@ -327,6 +330,10 @@ registered at the moment it opens.
 | Lists | `/` | Focus search |
 | Lists | `#` | Trash the selection (with undo) |
 | Lists | `esc` | Clear the selection |
+| Comments queue | `a` / `u` | Approve / unapprove the selection (M2b-2) |
+| Comments queue | `s` | Mark the selection as spam (M2b-2) |
+| Comments queue | `#` | Trash the selection (M2b-2) |
+| Sortable rows (handle focused) | `space` / `enter`, arrows, `esc` | Pick up, move, drop; cancel |
 | Editor | `mod+s` | Save |
 | Editor | `mod+shift+p` | Publish dialog |
 | Editor | `mod+.` | Toggle the side panel |
@@ -339,7 +346,7 @@ The living styleguide is the lazy route `/admin/_styleguide` (P12; file
 `routes/_app/[_]styleguide.tsx`, F19; section modules in `routes/_app/-styleguide/`,
 which the router ignores). It is linked from nowhere (no nav or palette entry).
 `?section=<id>` shows one section (`colour type layout motion controls display
-navigation overlays patterns data charts`); without it, the whole page. It sits behind
+navigation overlays patterns ordering data charts`); without it, the whole page. It sits behind
 the `_app` login guard (Task 9, `routes/_app.tsx`). Colour values and contrast ratios on the page are computed from `tokens.css`
 itself (`?raw` + `parseTokens`), so the page cannot drift from the gate.
 
@@ -364,10 +371,17 @@ itself (`?raw` + `parseTokens`), so the page cannot drift from the gate.
   | `SaveState` | `state: saved \| saving \| dirty \| error \| offline, at?` | a polite `role="status"` region holds plain text; the visible label crossfades (Motion, 120 ms opacity) |
   | `RelativeTime` | `at` (RFC 3339) | `formatDistanceStrict` against a `now` that ticks every 30 s; "just now" within 45 s (Task 13 fix round 1); absolute time in `title` and `dateTime` |
   | `ScrollFade` | `activeSelector?, activeKey?` | a row that scrolls sideways without a scrollbar (`no-scrollbar`, `globals.css`), fading the edge that hides more; keeps the active element in view on change and on resize (status tabs, filter chips on phones; Task 13) |
+  | `SortableList<T>` | `items, getId, render, onReorder, label, name?, className?` | `@dnd-kit` classic API (`DndContext`, `SortableContext`, `useSortable`, `verticalListSortingStrategy`); `PointerSensor` starts after 4 px, `KeyboardSensor` with `sortableKeyboardCoordinates` (Space/Enter pick up and drop, arrows move, Esc cancels). Each row: a drag handle (`aria-label` "Reorder <label>"), the content, and a menu (`DropdownMenu modal={false}`, "Actions for <label>") with Move up / Move down, the touch and E2E path. `label(item)` names the item in every announcement (`DndContext` `accessibility.announcements` and `screenReaderInstructions`, through `t()`; never the id; "over" only when the target changes); menu moves are spoken by the list's own polite `role="status"` (`data-slot="sortable-status"`) and give focus back to the row's menu button. `onReorder` gets the whole list in its new order, once per move. Rows from a menu move travel with the layout spring (§5); while dragging, dnd-kit's transform moves them and Motion's layout is off; under reduced motion nothing animates. Handle and menu are `size-control` (44 px on touch screens), rows `min-h-row` |
+  | `SortableTree<T>` | `nodes: TreeNode<T>[], render, onChange(next, moved), maxDepth, label, canNest?, name?, className?` | the same row, sensors and announcements over `flatten(nodes)`, indented 24 px a level, `aria-level` on each row. While dragging, the row's descendants travel with it (hidden until the drop) and the row is drawn as a dashed guide at the projected depth (`projectDrop`: from the horizontal offset, between the next row's depth and the previous row's + 1, the subtree within `maxDepth`, skipping a parent `canNest` refuses). The menu adds Indent / Outdent (Indent off past `maxDepth` or under a parent that cannot nest); keyboard dragging only moves up and down. `onChange` gets every node and `{ id, parentId, index }` of the moved one |
+  | `tree-model.ts` | pure | `TreeNode<T>` (`id, parentId, data`; siblings in array order, an orphan counts as a root), `flatten` (depth-first, with `depth` and sibling `index`), `moveNode` (refuses a move into its own subtree or under an unknown parent by returning the input), `indent` (last child of the previous sibling), `outdent` (next sibling of the parent), `projectDrop(flat, activeId, overId, offsetX, indentPx = 24, maxDepth, canNest?)`, `subtreeIds`, `subtreeHeight` |
+  | `DropZone` | `onFiles, accept?, onRejected?, children, className?` | `dragenter`/`dragover`/`drop` on the whole area (a counter rides out child enter/leave), an overlay "Drop files to upload" (`aria-hidden`; the button is the accessible path) while files are over it; drags without `Files` are ignored (no `preventDefault`, so they are not drop targets). "Choose files" opens a hidden `<input type="file" multiple>` (reset after each choice). `accept` is the input's attribute and also filters drops (MIME, `type/*`, `.ext`); the rest go to `onRejected`. The server types uploads from their content anyway |
+  | `MediaThumb` | `media: MediaDto, size: sm \| md \| lg` | a 40 / 96 / 160 px square: the smallest variant whose short side fills the box at `devicePixelRatio`, else the original (raster images); SVG only as `<img src>` of the original; other kinds a lucide type icon with the extension (md/lg). `alt` is the item's alt text; without one the image is decorative (`alt=""`) and the title (else the file name) is the visible caption |
 
   `ContentStatus` and `CONTENT_STATUSES` live in `src/api/content.ts`. Kit and
   styleguide strings are in the `common` (`ui.*`, `status.*`, `kit.*`) and `styleguide`
-  namespaces.
+  namespaces; the M2b-2 kit (sortable list and tree, drop zone) has its own `kit`
+  namespace. `@dnd-kit` is imported only by the kit's sortable components, which only
+  lazy routes use, so it stays out of the entry chunk.
 
 Rules for generated files:
 
@@ -472,7 +486,13 @@ styleguide mounts its own for its toast specimens).
 
 - Nav (`shell/nav.ts` `navFor(me, types)`): Overview (Dashboard, `g d`), Content (Posts,
   Pages, then custom types by label, never `media`) when `me.capabilities` holds
-  `read_admin`. Rows are `h-control` (36 px comfortable, 30 px compact, 44 px under
+  `read_admin`. M2b-2 screens register a `ScreenEntry` (`screen`, `to`, `label` key,
+  `icon`) in `SCREEN_ENTRIES` once their route exists (ruling F-A); `SCREENS` fixes where
+  each goes and who sees it, all behind `read_admin`: Content gets Media (`read_admin`;
+  `g m`; read-only for contributors) and Comments (`moderate_comments`; `g c`; its
+  pending-count `badge` arrives with the queue), and a Structure section holds Content
+  types (`manage_settings`), Taxonomies (`manage_settings` or `manage_terms`), Menus
+  (`manage_menus`) and Redirects (`manage_redirects`), in that order. Rows are `h-control` (36 px comfortable, 30 px compact, 44 px under
   `pointer: coarse`); the top bar stays 56 px in both densities (it is `--sticky-top`).
   The active row is
   tinted (`sidebar-accent`) with its icon in `primary`. Tooltips name the icons only on

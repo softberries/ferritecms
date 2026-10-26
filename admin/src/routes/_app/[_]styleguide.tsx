@@ -24,7 +24,12 @@ import {
   MotionSection,
   TypeSection,
 } from "./-styleguide/foundations";
-import { ChartsSection, DataSection, PatternsSection } from "./-styleguide/patterns";
+import {
+  ChartsSection,
+  DataSection,
+  OrderingSection,
+  PatternsSection,
+} from "./-styleguide/patterns";
 import { SECTIONS, isSection, type SectionId } from "./-styleguide/sections";
 
 interface StyleguideSearch {
@@ -49,6 +54,7 @@ const RENDER: Record<SectionId, () => React.JSX.Element> = {
   navigation: NavigationSection,
   overlays: OverlaysSection,
   patterns: PatternsSection,
+  ordering: OrderingSection,
   data: DataSection,
   charts: ChartsSection,
 };

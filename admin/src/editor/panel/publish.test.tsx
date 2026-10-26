@@ -58,6 +58,7 @@ function itemWith(status: string, allowed: Partial<SchemaAllowedActionsDto>): Sc
     body: { type: "doc", content: [] },
     excerpt: "",
     fields: {},
+    seo: { title: null, description: null },
     terms: [],
     menu_order: 0,
     permalink: "/2026/10/spring-notes/",
