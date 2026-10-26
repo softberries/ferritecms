@@ -21,5 +21,12 @@
     "overlay": "Drop files to upload",
     "choose": "Choose files",
     "hint": "or drag them here"
+  },
+  "stale": {
+    "title": "Changed by someone else",
+    "body": "{{resource}} was changed since you opened it. Reload to see their version and drop your edits, or overwrite it with yours.",
+    "reload": "Reload",
+    "overwrite": "Overwrite",
+    "cancel": "Cancel"
   }
 }

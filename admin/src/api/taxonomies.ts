@@ -1,7 +1,13 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api, unwrap } from "./client";
 import { qk } from "./keys";
-import type { SchemaTaxonomyDto, SchemaTermDto, SchemaTermInput } from "./schema";
+import type {
+  SchemaTaxonomyDto,
+  SchemaTaxonomyInput,
+  SchemaTaxonomyPatch,
+  SchemaTermDto,
+  SchemaTermInput,
+} from "./schema";
 
 export type TaxonomyDto = SchemaTaxonomyDto;
 export type TermDto = SchemaTermDto;
@@ -35,4 +41,16 @@ export async function createTerm(taxonomy: string, input: SchemaTermInput): Prom
       body: input,
     }),
   );
+}
+
+export function createTaxonomy(body: SchemaTaxonomyInput): Promise<TaxonomyDto> {
+  return unwrap(api.POST("/api/v1/taxonomies", { body }));
+}
+
+export function patchTaxonomy(name: string, body: SchemaTaxonomyPatch): Promise<TaxonomyDto> {
+  return unwrap(api.PATCH("/api/v1/taxonomies/{name}", { params: { path: { name } }, body }));
+}
+
+export async function deleteTaxonomy(name: string): Promise<void> {
+  await unwrap(api.DELETE("/api/v1/taxonomies/{name}", { params: { path: { name } } }));
 }

@@ -1,5 +1,17 @@
 import type { operations } from "./schema";
 
+/** The filters of a media list (every query member but the page cursor and size). */
+export type MediaListFilters = Omit<
+  NonNullable<operations["list_media"]["parameters"]["query"]>,
+  "cursor" | "limit"
+>;
+
+/** The filters of the comments queue (every query member but the page cursor and size). */
+export type CommentFilters = Omit<
+  NonNullable<operations["list_comments"]["parameters"]["query"]>,
+  "cursor" | "limit"
+>;
+
 /** The filters of a content list (every query member but the page cursor). */
 export type ContentFilters = Omit<
   NonNullable<operations["list_content"]["parameters"]["query"]>,
@@ -48,6 +60,26 @@ export const qk = {
   },
   /** The palette's content search (`palette/sources.ts`): one entry per query. */
   paletteSearch: (q: string, types: readonly string[]) => ["palette-search", q, types] as const,
+  type: (name: string) => ["types", name] as const,
+  media: {
+    all: ["media"] as const,
+    list: (filters: MediaListFilters) => ["media", "list", filters] as const,
+    item: (id: string) => ["media", "item", id] as const,
+  },
+  comments: {
+    all: ["comments"] as const,
+    list: (filters: CommentFilters) => ["comments", "list", filters] as const,
+    /** Counts per status, of one content item when `item` is given. */
+    counts: (item?: string) => ["comments", "counts", item ?? null] as const,
+  },
+  menus: {
+    list: ["menus"] as const,
+    item: (name: string) => ["menus", name] as const,
+  },
+  redirects: {
+    all: ["redirects"] as const,
+    list: (q: string) => ["redirects", "list", q] as const,
+  },
   taxonomies: ["taxonomies"] as const,
   terms: (taxonomy: string) => ["taxonomies", taxonomy, "terms"] as const,
   system: {
