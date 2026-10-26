@@ -8243,6 +8243,17 @@
             "type": "string",
             "format": "date-time"
           },
+          "seo": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SeoPatchDto",
+                "description": "The SEO patch as sent; `null`: unchanged."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "slug": {
             "type": [
               "string",
@@ -8268,7 +8279,7 @@
       },
       "AutosaveInput": {
         "type": "object",
-        "description": "`PUT /content/{type}/{id}/autosave`: replaces the caller's autosave (last write\nwins; no `If-Match`). Text is checked as a content write checks it (no NUL; the slug\nalso no control characters) and `terms` holds at most 200 ids; the field schema,\nthe parent and the terms are not checked: a draft may be incomplete.",
+        "description": "`PUT /content/{type}/{id}/autosave`: replaces the caller's autosave (last write\nwins; no `If-Match`). Text is checked as a content write checks it (no NUL; the slug\nalso no control characters; `seo` as a content write checks it, then stored as\nsent), `body` must be a document (`type` `doc`) and `terms` holds at most 200 ids;\nthe field schema, the parent and the terms are not checked: a draft may be\nincomplete.",
         "required": [
           "base_version",
           "title",
@@ -8309,6 +8320,17 @@
             ],
             "format": "uuid",
             "description": "The working copy's parent; absent or `null`: top level (not \"unchanged\"), so\nalways send it."
+          },
+          "seo": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SeoPatchDto",
+                "description": "The working copy's SEO patch; absent or `null`: unchanged."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "slug": {
             "type": [
@@ -8634,7 +8656,8 @@
           "terms",
           "permalink",
           "author",
-          "allowed"
+          "allowed",
+          "seo"
         ],
         "properties": {
           "allowed": {
@@ -8694,6 +8717,10 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "seo": {
+            "$ref": "#/components/schemas/SeoDto",
+            "description": "The SEO title and description (`content_meta` `seo.title`, `seo.description`)."
           },
           "slug": {
             "type": "string"
@@ -8760,6 +8787,17 @@
             ],
             "format": "uuid",
             "description": "Only for hierarchical types (pages)."
+          },
+          "seo": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SeoPatchDto",
+                "description": "SEO title and description; absent or `null`: none."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "slug": {
             "type": [
@@ -8829,6 +8867,10 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "seo": {
+            "$ref": "#/components/schemas/SeoPatchDto",
+            "description": "Changes the SEO meta member by member; a change to it alone is a full save\n(a new version and revision)."
           },
           "slug": {
             "type": "string",
@@ -10862,6 +10904,42 @@
           "newer_schema_ok",
           "incompatible"
         ]
+      },
+      "SeoDto": {
+        "type": "object",
+        "description": "An item's SEO meta. `title`, when set, is the whole `<title>` and `og:title` of the\nitem's page (no site suffix); `description` comes before the excerpt as the meta\ndescription. `null`: not set.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SeoPatchDto": {
+        "type": "object",
+        "description": "A change to an item's SEO meta. Per member: absent keeps it, `null` or a string\nthat is blank after trimming deletes it, any other string sets it (trimmed). No\ncontrol characters; `title` at most 200 characters and `description` at most 500\n(`422`, `errors[0].field` = `seo.title` / `seo.description`).",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       },
       "SettingDefDto": {
         "type": "object",

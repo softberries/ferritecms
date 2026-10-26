@@ -51,6 +51,7 @@ fn draft(title: &str) -> ContentDraft {
         fields: json!({}),
         menu_order: 0,
         terms: Vec::new(),
+        seo: None,
     }
 }
 
@@ -67,6 +68,7 @@ fn slot(base_version: i64, title: &str) -> AutosaveDraft {
             {"type": "text", "text": title}
         ]}]}),
         fields: json!({}),
+        seo: None,
     }
 }
 

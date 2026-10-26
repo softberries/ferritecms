@@ -18,7 +18,7 @@ use ferrite_domain::{
 };
 use ferrite_store::{MAX_ID_FILTER, StoreError, validate_json};
 
-use super::{ContentDraft, ContentService, Edit, WALKED};
+use super::{ContentDraft, ContentService, Edit, Seo, SeoPatch, WALKED, check_body};
 use crate::{
     Actor, CoreError,
     actor::{Area, Capability, can, can_edit, can_read, require, require_read, role_can_edit},
@@ -91,11 +91,12 @@ pub struct StatusCounts {
 
 /// What [`ContentService::put_autosave`] stores: the editor's working copy of an item.
 /// `excerpt` `None` = derive from the body; `parent_id` is the working copy's parent
-/// (`None` = top level; ruling R4); `slug`, `menu_order` and `terms` `None` = unchanged
-/// (F11). Text is checked as a content write checks it (no NUL; the slug also no
-/// control characters), and at most [`MAX_ID_FILTER`] terms; never the field schema,
-/// the parent or the terms themselves: a draft may be incomplete, and the real save
-/// checks it all.
+/// (`None` = top level; ruling R4); `slug`, `menu_order`, `terms` and `seo` `None` =
+/// unchanged (F11). Text is checked as a content write checks it (no NUL; the slug
+/// also no control characters; `seo` as [`SeoPatch`] says, then stored as given), the
+/// body must be a document root, and at most [`MAX_ID_FILTER`] terms; never the field
+/// schema, the parent or the terms themselves: a draft may be incomplete, and the real
+/// save checks it all.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AutosaveDraft {
     /// The item version the copy was made from.
@@ -109,6 +110,7 @@ pub struct AutosaveDraft {
     pub terms: Option<Vec<TermId>>,
     pub body: serde_json::Value,
     pub fields: serde_json::Value,
+    pub seo: Option<SeoPatch>,
 }
 
 /// `InvalidField` when `value` holds NUL (any text a content write stores), or with
@@ -234,6 +236,12 @@ impl ContentService {
         }
     }
 
+    /// The SEO meta of item `id` (as [`get_for`](Self::get_for) checks it).
+    pub async fn seo_of(&self, actor: &Actor, id: ContentId) -> Result<Seo, CoreError> {
+        self.get_for(actor, id).await?;
+        Ok(Seo::load(self.store.read(), id).await?)
+    }
+
     /// The terms of item `id`, in their stored order (as [`get_for`](Self::get_for)
     /// checks it).
     pub async fn terms_of(&self, actor: &Actor, id: ContentId) -> Result<Vec<TermId>, CoreError> {
@@ -343,6 +351,7 @@ impl ContentService {
                 fields: rev.fields,
                 menu_order: current.menu_order,
                 terms,
+                seo: None,
             };
             self.update_in(
                 tx.as_ref(),
@@ -479,8 +488,12 @@ impl ContentService {
                 format!("at most {MAX_ID_FILTER} terms"),
             ));
         }
+        check_body(&draft.body)?;
         check_draft_json("body", &draft.body)?;
         check_draft_json("fields", &draft.fields)?;
+        if let Some(seo) = &draft.seo {
+            seo.check()?;
+        }
         let autosave = Autosave {
             item_id: id,
             user_id: actor.user,
@@ -493,6 +506,7 @@ impl ContentService {
             terms: draft.terms,
             body: draft.body,
             fields: draft.fields,
+            seo: draft.seo.as_ref().map(SeoPatch::to_json),
             saved_at: Timestamp::now(),
         };
         match self.store.read().autosaves().put(&autosave).await {

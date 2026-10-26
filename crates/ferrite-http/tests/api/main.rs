@@ -9,6 +9,7 @@ mod autosave;
 mod comments;
 mod content;
 mod content_extras;
+mod content_seo;
 mod foundation;
 mod idempotency;
 mod jobs;

@@ -195,6 +195,7 @@ pub(super) fn page(
         fields: json!({}),
         menu_order,
         terms: Vec::new(),
+        seo: None,
     }
 }
 
@@ -234,6 +235,22 @@ mod tests {
             assert!(p.tags.iter().all(|t| known.contains(t)), "{}", p.slug);
         }
         assert!(POSTS[0].featured, "the newest post shows the image");
+    }
+
+    /// Content writes refuse a body that is not a document (M2b-2 Task 1).
+    #[test]
+    fn demo_bodies_are_documents() {
+        for p in &POSTS {
+            assert!(
+                ferrite_core::blocks::is_document(&post_body(p)),
+                "{}",
+                p.slug
+            );
+        }
+        for slug in ["about", "team", "contact"] {
+            let draft = page("T", slug, None, 0);
+            assert!(ferrite_core::blocks::is_document(&draft.body), "{slug}");
+        }
     }
 
     #[test]

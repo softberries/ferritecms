@@ -1,4 +1,4 @@
-//! The per-user autosave slot (`0007_autosaves`) on Postgres.
+//! The per-user autosave slot (`0007_autosaves`, `seo` from `0008_autosave_seo`) on Postgres.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -11,7 +11,7 @@ use super::PgRepos;
 use crate::exec::{map_db_err, run};
 
 const COLUMNS: &str = "item_id, user_id, base_version, title, excerpt, slug, parent_id, \
-     menu_order, terms, body, fields, saved_at";
+     menu_order, terms, body, fields, seo, saved_at";
 
 fn autosave(row: &PgRow) -> Result<Autosave, StoreError> {
     let item: Uuid = row.try_get("item_id").map_err(map_db_err)?;
@@ -20,6 +20,7 @@ fn autosave(row: &PgRow) -> Result<Autosave, StoreError> {
     let terms: Option<Json<serde_json::Value>> = row.try_get("terms").map_err(map_db_err)?;
     let body: Json<serde_json::Value> = row.try_get("body").map_err(map_db_err)?;
     let fields: Json<serde_json::Value> = row.try_get("fields").map_err(map_db_err)?;
+    let seo: Option<Json<serde_json::Value>> = row.try_get("seo").map_err(map_db_err)?;
     let saved_at: DateTime<Utc> = row.try_get("saved_at").map_err(map_db_err)?;
     Ok(Autosave {
         item_id: ContentId::from_uuid(item),
@@ -33,6 +34,7 @@ fn autosave(row: &PgRow) -> Result<Autosave, StoreError> {
         terms: autosave_terms(terms.map(|t| t.0))?,
         body: body.0,
         fields: fields.0,
+        seo: seo.map(|s| s.0),
         saved_at: saved_at.into(),
     })
 }
@@ -43,14 +45,14 @@ impl AutosaveRepo for PgRepos {
         let terms = check_autosave(a)?;
         run!(&self.exec, |e| sqlx::query(
             "INSERT INTO autosaves (item_id, user_id, base_version, title, excerpt, slug, \
-               parent_id, menu_order, terms, body, fields, saved_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+               parent_id, menu_order, terms, body, fields, seo, saved_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
              ON CONFLICT (item_id, user_id) DO UPDATE SET \
                base_version = excluded.base_version, title = excluded.title, \
                excerpt = excluded.excerpt, slug = excluded.slug, \
                parent_id = excluded.parent_id, menu_order = excluded.menu_order, \
                terms = excluded.terms, body = excluded.body, fields = excluded.fields, \
-               saved_at = excluded.saved_at"
+               seo = excluded.seo, saved_at = excluded.saved_at"
         )
         .bind(a.item_id.as_uuid())
         .bind(a.user_id.as_uuid())
@@ -63,6 +65,7 @@ impl AutosaveRepo for PgRepos {
         .bind(terms.as_ref().map(Json))
         .bind(Json(&a.body))
         .bind(Json(&a.fields))
+        .bind(a.seo.as_ref().map(Json))
         .bind(DateTime::<Utc>::from(a.saved_at))
         .execute(e))
         .map(|_| ())

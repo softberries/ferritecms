@@ -15,11 +15,13 @@ backend_tests!(
     status_reports_pending_directives,
     migration_0006_roundtrip,
     migration_0007_roundtrip,
+    migration_0008_roundtrip,
 );
 
 backend_tests!(
     autosave_upsert_get_delete,
     autosave_cascades_with_item_and_user,
+    autosave_keeps_seo,
 );
 
 backend_tests!(

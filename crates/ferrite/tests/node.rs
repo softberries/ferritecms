@@ -871,6 +871,7 @@ async fn published_post(store: Arc<dyn Store>, slug: &str) -> ferrite_domain::Co
                 fields: json!({}),
                 menu_order: 0,
                 terms: Vec::new(),
+                seo: None,
             },
         )
         .await
@@ -1076,6 +1077,7 @@ async fn scheduled_post_publishes_via_job(db: Arc<TestDb>) {
                 fields: json!({}),
                 menu_order: 0,
                 terms: Vec::new(),
+                seo: None,
             },
         )
         .await

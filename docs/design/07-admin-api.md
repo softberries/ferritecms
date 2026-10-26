@@ -131,7 +131,7 @@ importer. The admin SPA that uses them is M2b.
 | Meta | `GET /meta`, `GET /openapi.json` (no auth) | M2a-1 | none |
 | Auth | `POST /auth/login`, `POST /auth/login/totp`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/password`, `POST /auth/totp/setup`, `POST /auth/totp/confirm`, `POST /auth/totp/disable` | M2a-1 | own account |
 | Auth: password reset by e-mail | `POST /auth/password-reset`, `POST /auth/password-reset/confirm` (no credentials; origin-checked like login) | M2a-2a (needs `[mail]`) | none (the sealed token is the credential) |
-| Content | `GET/POST /content/{type}`, `GET/PATCH/DELETE /content/{type}/{id}` (`DELETE` trashes; `?force=true` deletes a trashed item), `POST /content/{type}/{id}/publish`, `…/unpublish`, `…/submit`, `…/schedule`, `…/restore` (from trash); type `media` is 404 here (uploads are `/media`). Items and list entries carry `author` (`{id, login, display_name}`) and `allowed` (`{edit, publish, unpublish, schedule, submit, trash, restore, delete, trash_undoable}`, from core's `allowed_actions`; `trash_undoable`: trash is allowed and restore would be once trashed, the admin's Undo, M2b-1 Task 13 fix round 1); `GET /content/{type}/counts` → `{draft, pending, scheduled, published, private, trash}` (M2b P13, P14); `GET/PUT/DELETE /content/{type}/{id}/autosave`, the caller's own working copy (see **Autosave** below, P15) | M2a-1; `author`, `allowed`, `counts`, `autosave` M2b-1 | `read_admin` + `content:read` and `can_read`; writes `edit_own`/`edit_others`/`publish_*` + `content:write` |
+| Content | `GET/POST /content/{type}`, `GET/PATCH/DELETE /content/{type}/{id}` (`DELETE` trashes; `?force=true` deletes a trashed item), `POST /content/{type}/{id}/publish`, `…/unpublish`, `…/submit`, `…/schedule`, `…/restore` (from trash); type `media` is 404 here (uploads are `/media`). Items and list entries carry `author` (`{id, login, display_name}`) and `allowed` (`{edit, publish, unpublish, schedule, submit, trash, restore, delete, trash_undoable}`, from core's `allowed_actions`; `trash_undoable`: trash is allowed and restore would be once trashed, the admin's Undo, M2b-1 Task 13 fix round 1); `GET /content/{type}/counts` → `{draft, pending, scheduled, published, private, trash}` (M2b P13, P14); `GET/PUT/DELETE /content/{type}/{id}/autosave`, the caller's own working copy (see **Autosave** below, P15). Items (not list entries) carry `seo: {title, description}` (each a string or `null`; `content_meta` `seo.title`/`seo.description`, M2b P28); create and `PATCH` take `seo?: {title?, description?}`: absent keeps a member, `null` or a string blank after trimming deletes it, a string sets it trimmed (no control characters; title at most 200 and description at most 500 characters, else `422` with `errors[0].field` `seo.title`/`seo.description`), in the item's transaction; a `PATCH` of `seo` alone is a full save (`If-Match`, a new version and revision); revisions do not restore SEO (P13). Every create, `PATCH`, autosave `PUT` and revision restore refuses a `body` that is not an object with `"type": "doc"` (`422`, `errors[0].field` `body`); stored bodies are never rewritten (M2b-2 Task 1) | M2a-1; `author`, `allowed`, `counts`, `autosave` M2b-1; `seo`, body root check M2b-2 | `read_admin` + `content:read` and `can_read`; writes `edit_own`/`edit_others`/`publish_*` + `content:write` |
 | Revisions | `GET /content/{type}/{id}/revisions`, `GET …/revisions/{rid}`, `POST …/revisions/{rid}/restore` | M2a-1 | reads as content plus a role that may edit the item (R26, §1 "Reading revisions"); restore as a content update |
 | Content types | `GET/POST /types`, `GET/PATCH/DELETE /types/{name}` | M2a-1 | reads `content:read`; writes `manage_settings` + `settings:write` |
 | Taxonomies & terms | `GET/POST /taxonomies`, `GET/PATCH/DELETE /taxonomies/{name}`, `GET/POST /taxonomies/{taxonomy}/terms`, `GET/PATCH/DELETE /terms/{id}` | M2a-1 | taxonomy reads `content:read`, writes `manage_settings` + `settings:write`; term reads `terms:read`, writes `manage_terms` + `terms:write` |
@@ -162,13 +162,16 @@ or null) is always allowed (F17).
 **Autosave (M2b P15; F11, F12).** Each user has at most one autosave per item
 (`autosaves`, migration `0007`), kept apart from the item and its revisions. `PUT
 /content/{type}/{id}/autosave` takes `{ base_version, title, excerpt?, slug?, parent_id?,
-menu_order?, terms?, body, fields }` and stores it (`200` with `AutosaveDto`, the same
+menu_order?, terms?, body, fields, seo? }` and stores it (`200` with `AutosaveDto`, the same
 members plus `saved_at`); there is no `If-Match` and the last write wins. `excerpt: null`
 means "derive from the body"; `parent_id` is the working copy's parent and `null` (or
 absent) means top level, so the SPA always sends it (ruling R4); `slug`, `menu_order` and
-`terms` absent or `null` mean "unchanged" (F11). Text is checked as a content write
-checks it: no NUL anywhere, and no control characters in the slug (`422` with
-`errors[0].field`); `terms` holds at most 200 ids. The field schema, the parent and the
+`terms` absent or `null` mean "unchanged" (F11), and so does `seo` (the editor's SEO
+patch, `{title?, description?}`, `autosaves.seo` since migration `0008`, M2b-2 Task 1:
+checked as a content write checks it, then stored as sent, `null` members included). Text
+is checked as a content write checks it: no NUL anywhere, and no control characters in
+the slug (`422` with `errors[0].field`); the body must be a document (`type` `doc`,
+field `body`); `terms` holds at most 200 ids. The field schema, the parent and the
 terms are not checked: a draft may be incomplete. A trashed item takes no autosave (`422`, "restore first"). `GET` returns it
 (`204` with no body when there is none, M2b-1 Task 16: the editor asks on every open, and
 a `404` there would log a failed request each time); `DELETE` is `204` whether or not one existed. Writing needs

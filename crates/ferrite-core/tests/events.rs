@@ -55,6 +55,7 @@ fn draft(kind: &str, title: &str, parent: Option<ContentId>, terms: &[TermId]) -
         fields: json!({}),
         menu_order: 0,
         terms: terms.to_vec(),
+        seo: None,
     }
 }
 

@@ -1,4 +1,4 @@
-//! The per-user autosave slot (`0007_autosaves`) on SQLite.
+//! The per-user autosave slot (`0007_autosaves`, `seo` from `0008_autosave_seo`) on SQLite.
 
 use async_trait::async_trait;
 use ferrite_domain::{Autosave, ContentId, Timestamp, UserId};
@@ -13,7 +13,7 @@ use crate::{
 };
 
 const COLUMNS: &str = "item_id, user_id, base_version, title, excerpt, slug, parent_id, \
-     menu_order, terms, body, fields, saved_at";
+     menu_order, terms, body, fields, seo, saved_at";
 
 fn autosave(row: &SqliteRow) -> Result<Autosave, StoreError> {
     let item: Uuid = row.try_get("item_id").map_err(map_db_err)?;
@@ -22,6 +22,7 @@ fn autosave(row: &SqliteRow) -> Result<Autosave, StoreError> {
     let terms: Option<String> = row.try_get("terms").map_err(map_db_err)?;
     let body: String = row.try_get("body").map_err(map_db_err)?;
     let fields: String = row.try_get("fields").map_err(map_db_err)?;
+    let seo: Option<String> = row.try_get("seo").map_err(map_db_err)?;
     let saved_at: i64 = row.try_get("saved_at").map_err(map_db_err)?;
     Ok(Autosave {
         item_id: ContentId::from_uuid(item),
@@ -35,6 +36,7 @@ fn autosave(row: &SqliteRow) -> Result<Autosave, StoreError> {
         terms: autosave_terms(terms.as_deref().map(codec::json_from_db).transpose()?)?,
         body: codec::json_from_db(&body)?,
         fields: codec::json_from_db(&fields)?,
+        seo: seo.as_deref().map(codec::json_from_db).transpose()?,
         saved_at: Timestamp::from_micros(saved_at)?,
     })
 }
@@ -48,14 +50,14 @@ impl AutosaveRepo for SqliteRepos {
             .transpose()?;
         run!(&self.writer, |e| sqlx::query(
             "INSERT INTO autosaves (item_id, user_id, base_version, title, excerpt, slug, \
-               parent_id, menu_order, terms, body, fields, saved_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+               parent_id, menu_order, terms, body, fields, seo, saved_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT (item_id, user_id) DO UPDATE SET \
                base_version = excluded.base_version, title = excluded.title, \
                excerpt = excluded.excerpt, slug = excluded.slug, \
                parent_id = excluded.parent_id, menu_order = excluded.menu_order, \
                terms = excluded.terms, body = excluded.body, fields = excluded.fields, \
-               saved_at = excluded.saved_at"
+               seo = excluded.seo, saved_at = excluded.saved_at"
         )
         .bind(a.item_id.as_uuid())
         .bind(a.user_id.as_uuid())
@@ -68,6 +70,7 @@ impl AutosaveRepo for SqliteRepos {
         .bind(terms.as_deref())
         .bind(codec::json_to_db(&a.body)?)
         .bind(codec::json_to_db(&a.fields)?)
+        .bind(a.seo.as_ref().map(codec::json_to_db).transpose()?)
         .bind(a.saved_at.as_micros())
         .execute(e))
         .map(|_| ())

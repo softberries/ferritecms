@@ -25,6 +25,10 @@
 //!   `If-Match`, last write wins, never a revision. Reading needs a role that may edit
 //!   the item (as revisions), writing `can_edit` (F12). The caller's next real save of
 //!   the item deletes it.
+//! * Items carry `seo` (`content_meta` `seo.title`, `seo.description`; M2b P28); list
+//!   entries do not. `seo` in a create or `PATCH` changes them member by member, and a
+//!   change to `seo` alone is a full save under `If-Match`. Every write (and an autosave
+//!   `PUT`) refuses a `body` that is not a document (`type` `doc`; `422`, field `body`).
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -196,13 +200,16 @@ async fn load(api: &ApiState, actor: &Actor, kind: &str, id: Uuid) -> Result<Con
     Ok(item)
 }
 
-/// `item` with its terms, permalink, author and allowed actions.
+/// `item` with its terms, permalink, author, allowed actions and SEO meta.
 async fn dto(api: &ApiState, actor: &Actor, item: ContentItem) -> Result<ContentDto, Problem> {
     let terms = api.content.terms_of(actor, item.id).await?;
     let permalink = api.content.permalink(item.id).await?;
     let author = author_of(api, actor, item.author_id).await?;
     let allowed = allowed_actions(actor, &item);
-    Ok(ContentDto::new(item, terms, permalink, author, allowed))
+    let seo = api.content.seo_of(actor, item.id).await?;
+    Ok(ContentDto::new(
+        item, terms, permalink, author, allowed, seo,
+    ))
 }
 
 /// The authors of `ids` (one lookup), keyed by id.

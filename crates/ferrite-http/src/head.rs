@@ -27,7 +27,7 @@
 //! * Size and count caps (64 KiB, 256 metas, 64 links, 16 scripts) are enforced by the
 //!   plugin host on every plugin's output (05 §7), so the rendered head is bounded.
 
-use ferrite_core::PageItem;
+use ferrite_core::{PageItem, content::Seo};
 use ferrite_plugin_host::{FilterValue, Head, LinkTag, MetaTag, PluginHost, ScriptTag};
 use ferrite_store::Store;
 
@@ -35,9 +35,6 @@ use crate::plugins::{PluginRequest, RenderTrace, run_filter};
 
 /// Longest meta description derived from an excerpt, in characters.
 pub const DESCRIPTION_CHARS: usize = 160;
-/// Meta key holding an item's SEO description (JSON string), set by editors or an SEO
-/// plugin (`content.meta.write = ["seo.*"]`).
-pub const SEO_DESCRIPTION_META: &str = "seo.description";
 
 /// Site-wide inputs of the head.
 #[derive(Debug, Clone, Copy)]
@@ -58,9 +55,11 @@ pub struct HeadPage<'a> {
     pub path: &'a str,
 }
 
-/// Core head, plugin filter and rendering for one page. Reads the item's
-/// `seo.description` meta (falling back to its excerpt). Never fails: a store error or
-/// a failing plugin leaves the core tags, and either marks `trace` volatile.
+/// Core head, plugin filter and rendering for one page. Reads the item's SEO meta
+/// (`seo.title`, `seo.description`; one meta read, covered by the page's `post:<id>`
+/// dependency, which every content write invalidates). Never fails: a store error or a
+/// failing plugin leaves the core tags (without SEO meta), and either marks `trace`
+/// volatile.
 pub async fn page_head(
     host: &PluginHost,
     store: &dyn Store,
@@ -70,18 +69,18 @@ pub async fn page_head(
     trace: &mut RenderTrace,
 ) -> String {
     let seo = match page.item {
-        Some(item) => match seo_description(store, item).await {
+        Some(item) => match Seo::load(store.read(), item.item.id).await {
             Ok(seo) => seo,
             Err(e) => {
-                tracing::warn!(error = %e, "reading seo.description failed");
-                // May be transient: the excerpt fallback must not stay cached.
+                tracing::warn!(error = %e, "reading the SEO meta failed");
+                // May be transient: the fallbacks must not stay cached.
                 trace.volatile = true;
-                None
+                Seo::default()
             }
         },
-        None => None,
+        None => Seo::default(),
     };
-    let core = core_head(site, page, seo.as_deref());
+    let core = core_head(site, page, &seo);
     let head = match run_filter(
         host,
         "render.head",
@@ -98,39 +97,32 @@ pub async fn page_head(
     render_head(&head, site)
 }
 
-async fn seo_description(
-    store: &dyn Store,
-    item: &PageItem,
-) -> Result<Option<String>, ferrite_store::StoreError> {
-    Ok(store
-        .read()
-        .meta()
-        .get(item.item.id, SEO_DESCRIPTION_META)
-        .await?
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .filter(|s| !s.trim().is_empty()))
-}
-
-/// The core SEO head: title (`<item> – <site>` or the site title), meta description
-/// (`seo` text, else the excerpt cut to [`DESCRIPTION_CHARS`], else the site
-/// tagline on item-less pages), canonical link, and Open Graph title, description,
-/// URL, type (`article` for items, `website` otherwise) and image (featured media).
-pub fn core_head(site: HeadSite<'_>, page: HeadPage<'_>, seo: Option<&str>) -> Head {
+/// The core SEO head: title (the item's `seo.title` as the whole title, else
+/// `<item> – <site>`, else the site title), meta description (`seo.description`, else
+/// the excerpt, cut to [`DESCRIPTION_CHARS`], else the site tagline on item-less
+/// pages), canonical link, and Open Graph title (`seo.title`, else the item title,
+/// else the site title), description, URL, type (`article` for items, `website`
+/// otherwise) and image (featured media). `seo` is the item's SEO meta (ignored
+/// without an item); blank values count as unset.
+pub fn core_head(site: HeadSite<'_>, page: HeadPage<'_>, seo: &Seo) -> Head {
     let canonical = absolute(site.url, page.path);
     let item = page.item;
-    let title = match item.map(|i| i.item.title.trim()) {
-        Some(t) if !t.is_empty() => format!("{t} – {}", site.title),
-        _ => site.title.to_owned(),
+    let (seo_title, seo_description) = (
+        set_on(item, seo.title.as_deref()),
+        set_on(item, seo.description.as_deref()),
+    );
+    let item_title = item.map(|i| i.item.title.trim()).filter(|t| !t.is_empty());
+    let title = match (seo_title, item_title) {
+        (Some(s), _) => s.to_owned(),
+        (None, Some(t)) => format!("{t} – {}", site.title),
+        (None, None) => site.title.to_owned(),
     };
-    let description = match (seo, item) {
+    let description = match (seo_description, item) {
         (Some(s), _) => truncate(s),
         (None, Some(i)) => truncate(&i.item.excerpt),
         (None, None) => truncate(site.description),
     };
-    let og_title = item
-        .map(|i| i.item.title.trim())
-        .filter(|t| !t.is_empty())
-        .unwrap_or(site.title);
+    let og_title = seo_title.or(item_title).unwrap_or(site.title);
     let mut metas = Vec::new();
     if !description.is_empty() {
         metas.push(name_meta("description", &description));
@@ -158,6 +150,11 @@ pub fn core_head(site: HeadSite<'_>, page: HeadPage<'_>, seo: Option<&str>) -> H
         }],
         scripts: Vec::new(),
     }
+}
+
+/// An SEO value (trimmed) when the page shows an item and the value is not blank.
+fn set_on<'a>(item: Option<&PageItem>, value: Option<&'a str>) -> Option<&'a str> {
+    item.and(value).map(str::trim).filter(|s| !s.is_empty())
 }
 
 fn name_meta(name: &str, content: &str) -> MetaTag {

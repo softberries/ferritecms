@@ -300,6 +300,7 @@ async fn type_registration_reaches_every_node() {
                 fields: json!({}),
                 menu_order: 0,
                 terms: vec![systems.id],
+                seo: None,
             },
         )
         .await

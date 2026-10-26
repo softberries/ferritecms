@@ -250,6 +250,7 @@ fn two_processes_share_invalidation() {
             fields: item.fields.clone(),
             menu_order: item.menu_order,
             terms,
+            seo: None,
         };
         let svc = ContentService::new(store.clone(), Arc::new(PermalinkRules::default()));
         // Timed from the start of the save.

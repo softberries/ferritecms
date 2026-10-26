@@ -1,4 +1,4 @@
-use ferrite_core::{MediaPublic, PublicItem};
+use ferrite_core::{MediaPublic, PublicItem, content::Seo};
 use ferrite_domain::{ContentId, Timestamp};
 
 use super::*;
@@ -50,7 +50,11 @@ fn core_head_for_an_item() {
         height: None,
         variants: Vec::new(),
     });
-    let html = render(&core_head(SITE, page(Some(&it), "/hello/"), None));
+    let html = render(&core_head(
+        SITE,
+        page(Some(&it), "/hello/"),
+        &Seo::default(),
+    ));
     assert_eq!(
         html,
         "<title>Hello &quot;world&quot; – My &lt;Site&gt;</title>\n\
@@ -66,7 +70,7 @@ fn core_head_for_an_item() {
 
 #[test]
 fn core_head_without_item_uses_site() {
-    let h = core_head(SITE, page(None, "/category/news/"), None);
+    let h = core_head(SITE, page(None, "/category/news/"), &Seo::default());
     assert_eq!(h.title.as_deref(), Some("My <Site>"));
     let html = render(&h);
     assert!(html.contains("<meta name=\"description\" content=\"A tagline\">"));
@@ -77,7 +81,7 @@ fn core_head_without_item_uses_site() {
 #[test]
 fn untitled_item_gets_site_title() {
     let it = item("  ", "");
-    let h = core_head(SITE, page(Some(&it), "/hello/"), None);
+    let h = core_head(SITE, page(Some(&it), "/hello/"), &Seo::default());
     assert_eq!(h.title.as_deref(), Some("My <Site>"));
     assert!(
         !render(&h).contains("name=\"description\""),
@@ -85,18 +89,64 @@ fn untitled_item_gets_site_title() {
     );
 }
 
+fn seo(title: Option<&str>, description: Option<&str>) -> Seo {
+    Seo {
+        title: title.map(str::to_owned),
+        description: description.map(str::to_owned),
+    }
+}
+
 #[test]
 fn seo_description_wins_over_excerpt() {
     let it = item("T", "the excerpt");
-    let h = core_head(SITE, page(Some(&it), "/t/"), Some("from seo"));
-    assert!(render(&h).contains("<meta name=\"description\" content=\"from seo\">"));
+    let h = core_head(SITE, page(Some(&it), "/t/"), &seo(None, Some("from seo")));
+    let html = render(&h);
+    assert!(html.contains("<meta name=\"description\" content=\"from seo\">"));
+    assert!(html.contains("<meta property=\"og:description\" content=\"from seo\">"));
+    assert!(!html.contains("the excerpt"), "{html}");
+    // A blank one counts as unset: the excerpt again.
+    let h = core_head(SITE, page(Some(&it), "/t/"), &seo(None, Some("  ")));
+    assert!(render(&h).contains("<meta name=\"description\" content=\"the excerpt\">"));
+    // Without an item the tagline stays, whatever is passed.
+    let h = core_head(SITE, page(None, "/"), &seo(Some("X"), Some("from seo")));
+    assert_eq!(h.title.as_deref(), Some("My <Site>"));
+    assert!(render(&h).contains("<meta name=\"description\" content=\"A tagline\">"));
+}
+
+#[test]
+fn seo_title_replaces_title_and_og_title() {
+    let it = item("Item title", "e");
+    let h = core_head(
+        SITE,
+        page(Some(&it), "/t/"),
+        &seo(Some(" Search <title> "), None),
+    );
+    // The whole title: no site suffix.
+    assert_eq!(h.title.as_deref(), Some("Search <title>"));
+    let html = render(&h);
+    assert!(
+        html.starts_with("<title>Search &lt;title&gt;</title>\n"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<meta property=\"og:title\" content=\"Search &lt;title&gt;\">"),
+        "{html}"
+    );
+    // The description is unaffected: the excerpt.
+    assert!(
+        html.contains("<meta name=\"description\" content=\"e\">"),
+        "{html}"
+    );
+    // Blank: the item title with the suffix again.
+    let h = core_head(SITE, page(Some(&it), "/t/"), &seo(Some(" "), None));
+    assert_eq!(h.title.as_deref(), Some("Item title – My <Site>"));
 }
 
 #[test]
 fn excerpt_is_cut_to_160_chars() {
     let long = "é".repeat(200);
     let it = item("T", &format!("  {long}  "));
-    let h = core_head(SITE, page(Some(&it), "/t/"), None);
+    let h = core_head(SITE, page(Some(&it), "/t/"), &Seo::default());
     let d = &h.metas[0].content;
     assert_eq!(d.chars().count(), DESCRIPTION_CHARS);
     assert!(d.ends_with('…'));

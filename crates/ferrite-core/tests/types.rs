@@ -76,6 +76,7 @@ fn draft(kind: &str, title: &str, fields: Value) -> ContentDraft {
         fields,
         menu_order: 0,
         terms: Vec::new(),
+        seo: None,
     }
 }
 

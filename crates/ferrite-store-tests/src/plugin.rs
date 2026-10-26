@@ -478,7 +478,7 @@ pub async fn media_variants_backfill(db: &TestDb) {
         .unwrap();
     assert_eq!(
         store.migrate_down(2, true).await.unwrap(),
-        vec![7, 6, 5, 4, 3]
+        vec![8, 7, 6, 5, 4, 3]
     );
     assert!(
         !db.user_objects()
@@ -486,7 +486,10 @@ pub async fn media_variants_backfill(db: &TestDb) {
             .iter()
             .any(|o| o.contains("media_variants"))
     );
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![3, 4, 5, 6, 7]);
+    assert_eq!(
+        store.migrate_up(None).await.unwrap(),
+        vec![3, 4, 5, 6, 7, 8]
+    );
     let repo = store.read().media();
     let got = repo.find_by_artifact(&hash('b'), 10).await.unwrap();
     assert_eq!(got.iter().map(|m| m.item_id).collect::<Vec<_>>(), [item.id]);

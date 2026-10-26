@@ -419,6 +419,7 @@ pub fn post_draft(title: &str, slug: &str) -> ContentDraft {
         fields: json!({}),
         menu_order: 0,
         terms: Vec::new(),
+        seo: None,
     }
 }
 

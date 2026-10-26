@@ -440,6 +440,9 @@ pub fn check_autosave(a: &Autosave) -> Result<Option<Value>, StoreError> {
     }
     validate_json(&a.body)?;
     validate_json(&a.fields)?;
+    if let Some(seo) = &a.seo {
+        validate_json(seo)?;
+    }
     Ok(a.terms.as_ref().map(|terms| {
         Value::Array(
             terms

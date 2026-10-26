@@ -8,7 +8,7 @@
 use chrono::{DateTime, Utc};
 use ferrite_core::{
     ContentDraft,
-    content::{AllowedActions, AuthorRef, AutosaveDraft, StatusCounts},
+    content::{AllowedActions, AuthorRef, AutosaveDraft, Seo, SeoPatch, StatusCounts},
 };
 use ferrite_domain::{Autosave, ContentId, ContentItem, Revision, TermId, Timestamp};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -48,6 +48,8 @@ pub struct ContentDto {
     pub author: AuthorRefDto,
     /// What the caller may do with it now.
     pub allowed: AllowedActionsDto,
+    /// The SEO title and description (`content_meta` `seo.title`, `seo.description`).
+    pub seo: SeoDto,
 }
 
 impl ContentDto {
@@ -57,6 +59,7 @@ impl ContentDto {
         permalink: String,
         author: AuthorRef,
         allowed: AllowedActions,
+        seo: Seo,
     ) -> Self {
         Self {
             id: item.id.as_uuid(),
@@ -79,6 +82,48 @@ impl ContentDto {
             permalink,
             author: author.into(),
             allowed: allowed.into(),
+            seo: seo.into(),
+        }
+    }
+}
+
+/// An item's SEO meta. `title`, when set, is the whole `<title>` and `og:title` of the
+/// item's page (no site suffix); `description` comes before the excerpt as the meta
+/// description. `null`: not set.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SeoDto {
+    pub title: Option<String>,
+    pub description: Option<String>,
+}
+
+impl From<Seo> for SeoDto {
+    fn from(s: Seo) -> Self {
+        Self {
+            title: s.title,
+            description: s.description,
+        }
+    }
+}
+
+/// A change to an item's SEO meta. Per member: absent keeps it, `null` or a string
+/// that is blank after trimming deletes it, any other string sets it (trimmed). No
+/// control characters; `title` at most 200 characters and `description` at most 500
+/// (`422`, `errors[0].field` = `seo.title` / `seo.description`).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SeoPatchDto {
+    #[serde(default, deserialize_with = "nullable")]
+    #[schema(value_type = Option<String>, required = false)]
+    pub title: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable")]
+    #[schema(value_type = Option<String>, required = false)]
+    pub description: Option<Option<String>>,
+}
+
+impl From<SeoPatchDto> for SeoPatch {
+    fn from(p: SeoPatchDto) -> Self {
+        Self {
+            title: p.title,
+            description: p.description,
         }
     }
 }
@@ -247,6 +292,9 @@ pub struct ContentInput {
     /// Term ids, in order; duplicates are ignored.
     #[serde(default)]
     pub terms: Vec<Uuid>,
+    /// SEO title and description; absent or `null`: none.
+    #[serde(default)]
+    pub seo: Option<SeoPatchDto>,
 }
 
 impl ContentInput {
@@ -261,6 +309,7 @@ impl ContentInput {
             fields: self.fields,
             menu_order: self.menu_order,
             terms: term_ids(&self.terms),
+            seo: self.seo.map(Into::into),
         }
     }
 }
@@ -297,6 +346,11 @@ pub struct ContentPatch {
     #[serde(default, deserialize_with = "present")]
     #[schema(value_type = Vec<Uuid>, required = false)]
     pub terms: Option<Vec<Uuid>>,
+    /// Changes the SEO meta member by member; a change to it alone is a full save
+    /// (a new version and revision).
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = SeoPatchDto, required = false)]
+    pub seo: Option<SeoPatchDto>,
 }
 
 impl ContentPatch {
@@ -318,6 +372,7 @@ impl ContentPatch {
             fields: self.fields.unwrap_or_else(|| current.fields.clone()),
             menu_order: self.menu_order.unwrap_or(current.menu_order),
             terms: self.terms.map_or(terms, |t| term_ids(&t)),
+            seo: self.seo.map(Into::into),
         }
     }
 }
@@ -415,6 +470,9 @@ pub struct AutosaveDto {
     /// The block tree.
     pub body: serde_json::Value,
     pub fields: serde_json::Value,
+    /// The SEO patch as sent; `null`: unchanged.
+    #[schema(value_type = Option<SeoPatchDto>)]
+    pub seo: Option<serde_json::Value>,
     pub saved_at: DateTime<Utc>,
 }
 
@@ -432,6 +490,7 @@ impl From<Autosave> for AutosaveDto {
                 .map(|t| t.into_iter().map(|id| id.as_uuid()).collect()),
             body: a.body,
             fields: a.fields,
+            seo: a.seo,
             saved_at: time(a.saved_at),
         }
     }
@@ -439,8 +498,10 @@ impl From<Autosave> for AutosaveDto {
 
 /// `PUT /content/{type}/{id}/autosave`: replaces the caller's autosave (last write
 /// wins; no `If-Match`). Text is checked as a content write checks it (no NUL; the slug
-/// also no control characters) and `terms` holds at most 200 ids; the field schema,
-/// the parent and the terms are not checked: a draft may be incomplete.
+/// also no control characters; `seo` as a content write checks it, then stored as
+/// sent), `body` must be a document (`type` `doc`) and `terms` holds at most 200 ids;
+/// the field schema, the parent and the terms are not checked: a draft may be
+/// incomplete.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct AutosaveInput {
     /// The item version the working copy was made from.
@@ -468,6 +529,9 @@ pub struct AutosaveInput {
     #[serde(deserialize_with = "not_null")]
     #[schema(value_type = Object)]
     pub fields: serde_json::Value,
+    /// The working copy's SEO patch; absent or `null`: unchanged.
+    #[serde(default)]
+    pub seo: Option<SeoPatchDto>,
 }
 
 impl From<AutosaveInput> for AutosaveDraft {
@@ -482,6 +546,7 @@ impl From<AutosaveInput> for AutosaveDraft {
             terms: i.terms.as_deref().map(term_ids),
             body: i.body,
             fields: i.fields,
+            seo: i.seo.map(Into::into),
         }
     }
 }

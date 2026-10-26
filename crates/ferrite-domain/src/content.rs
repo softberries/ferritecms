@@ -90,8 +90,10 @@ pub struct Revision {
 /// A user's unsaved working copy of an item (the autosave slot, M2b P15): at most one per
 /// (item, user), never a revision. `base_version` is the item version the copy was made
 /// from. `excerpt` `None` means "derive from the body"; `parent_id` is the working
-/// copy's parent, `None` = top level (ruling R4); `slug`, `menu_order` and `terms`
-/// `None` mean "unchanged" (F11). Nothing in it is checked
+/// copy's parent, `None` = top level (ruling R4); `slug`, `menu_order`, `terms` and
+/// `seo` `None` mean "unchanged" (F11). `seo` is the SEO patch as the editor sent it (a
+/// JSON object with optional `title` and `description`, each a string or `null`; M2b-2
+/// Task 1). Nothing in it is checked
 /// against the type's field schema, the parent or the terms until it is really saved.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Autosave {
@@ -106,6 +108,7 @@ pub struct Autosave {
     pub terms: Option<Vec<TermId>>,
     pub body: Value,
     pub fields: Value,
+    pub seo: Option<Value>,
     pub saved_at: Timestamp,
 }
 

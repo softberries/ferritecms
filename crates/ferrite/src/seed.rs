@@ -168,6 +168,7 @@ async fn seed_demo(
             fields,
             menu_order: 0,
             terms: ids,
+            seo: None,
         };
         // Newest first, about nine days apart, at varied times of day.
         let age = i64::try_from(i)? * 9 * DAY_MICROS + i64::try_from(i % 4)? * 3_600_000_000;
@@ -383,6 +384,7 @@ async fn sample_image(
                 fields: json!({}),
                 menu_order: 0,
                 terms: Vec::new(),
+                seo: None,
             },
         )
         .await

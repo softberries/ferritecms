@@ -644,6 +644,7 @@ async fn non_media_item_is_not_found(db: &TestDb) {
                 fields: json!({}),
                 menu_order: 0,
                 terms: Vec::new(),
+                seo: None,
             },
         )
         .await
@@ -693,6 +694,7 @@ async fn non_media_item_is_not_found(db: &TestDb) {
                 fields: json!({}),
                 menu_order: 0,
                 terms: Vec::new(),
+                seo: None,
             },
         )
         .await

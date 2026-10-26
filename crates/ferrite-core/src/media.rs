@@ -181,6 +181,7 @@ impl MediaService {
             fields: serde_json::json!({}),
             menu_order: 0,
             terms: Vec::new(),
+            seo: None,
         };
         // One set of rules for the whole write (R10, F10).
         let rules = self.permalinks.pin();
@@ -346,6 +347,7 @@ impl MediaService {
                 fields: current.fields,
                 menu_order: current.menu_order,
                 terms,
+                seo: None,
             };
             // Rights, version and trash checks; its event names `post:<id>` (R11).
             let item = self

@@ -192,7 +192,8 @@ M2b-1 added (migration `0007_autosaves`, contract-tested on both backends):
   -> bool`. `Autosave { item_id, user_id, base_version, title, excerpt?, slug?,
   parent_id?, menu_order?, terms?, body, fields, saved_at }`; `terms` is stored as a JSON
   array of term ids. Core's `ContentService::update` deletes the saver's own row in its
-  transaction.
+  transaction. M2b-2 added `seo?` (migration `0008_autosave_seo`): the editor's SEO patch
+  as JSON, stored as given (NUL is `Invalid`), `None` = unchanged.
 
 `JobRepo` (`jobs()`) and
 `NodeRepo` (`nodes()`) exist since M1.5 (migration `0004_cluster`); see the cluster table
@@ -396,7 +397,8 @@ Notes:
 Same logical schema on both backends. Physical type mapping is in §5.
 Tables marked *not yet created* are planned; the milestone in the mark adds them in a
 new migration. Everything else exists in `0001_init` / `0002_search` / `0003_media_variants` /
-`0004_cluster` / `0005_auth` / `0006_media_comments` / `0007_autosaves` on both backends.
+`0004_cluster` / `0005_auth` / `0006_media_comments` / `0007_autosaves` / `0008_autosave_seo`
+on both backends.
 
 ### Content
 
@@ -404,9 +406,9 @@ new migration. Everything else exists in `0001_init` / `0002_search` / `0003_med
 |---|---|---|
 | `content_types` | `name` PK, `label`, `hierarchical`, `has_archive`, `fields` (json schema), `built_in`, `created_at` | `post`, `page`, `media` are built in |
 | `content_items` | `id` PK, `type` FK, `status`, `slug`, `parent_id`, `author_id`, `title`, `excerpt`, `body` (json blocks), `body_html` (cached render), `fields` (json, custom fields), `menu_order`, `published_at`, `scheduled_at`, `created_at`, `updated_at`, `version` | `UNIQUE(type, parent_id, slug)` with NULL-parent handling; `status ∈ {draft, pending, scheduled, published, private, trash}`; `version` for optimistic locking |
-| `content_meta` | `item_id` FK, `key`, `value` (json), PK(`item_id`,`key`) | Namespaced keys (`seo.title`, `plugin.<name>.*`) — plugin write scopes match on these |
+| `content_meta` | `item_id` FK, `key`, `value` (json), PK(`item_id`,`key`) | Namespaced keys (`seo.title`, `plugin.<name>.*`) — plugin write scopes match on these. `seo.title` / `seo.description` (JSON strings) are written by content writes in the item's transaction (M2b P28) and read by the head |
 | `revisions` | `id` PK, `item_id` FK, `author_id`, `created_at`, `title`, `excerpt`, `body`, `fields`, `meta` (json snapshot), `note` | Written on every save; retention configurable (default: keep 50 per item) |
-| `autosaves` *(since `0007_autosaves`)* | `item_id` → `content_items` `ON DELETE CASCADE` (`autosaves_item_id_fk`), `user_id` → `users` `ON DELETE CASCADE` (`autosaves_user_id_fk`), `base_version` bigint, `title`, `excerpt` null (= derive), `slug` null, `parent_id` null (no FK; the working copy's parent, `null` = top level, R4), `menu_order` int null, `terms` json array null (`null` = unchanged for `slug`, `menu_order` and `terms`, F11), `body` json, `fields` json, `saved_at`; PK (`item_id`, `user_id`) `autosaves_pkey`; index `autosaves_user_idx (user_id)` (users FK on delete) | The admin's per-user working copy (M2b P15): never a revision; the user's next real save of the item deletes it; at most one row per (item, user), so no retention job; the `0007` down drops it (lossy) |
+| `autosaves` *(since `0007_autosaves`)* | `item_id` → `content_items` `ON DELETE CASCADE` (`autosaves_item_id_fk`), `user_id` → `users` `ON DELETE CASCADE` (`autosaves_user_id_fk`), `base_version` bigint, `title`, `excerpt` null (= derive), `slug` null, `parent_id` null (no FK; the working copy's parent, `null` = top level, R4), `menu_order` int null, `terms` json array null (`null` = unchanged for `slug`, `menu_order`, `terms` and `seo`, F11), `body` json, `fields` json, `seo` json null *(since `0008_autosave_seo`: the editor's SEO patch `{title?, description?}` as sent)*, `saved_at`; PK (`item_id`, `user_id`) `autosaves_pkey`; index `autosaves_user_idx (user_id)` (users FK on delete) | The admin's per-user working copy (M2b P15): never a revision; the user's next real save of the item deletes it; at most one row per (item, user), so no retention job; the `0007` down drops it (lossy), the `0008` down drops `seo` (lossy) |
 | `taxonomies` | `name` PK, `label`, `hierarchical`, `content_types` (json list), `built_in` | `category`, `tag` built in |
 | `terms` | `id` PK, `taxonomy` FK, `slug`, `name`, `description`, `parent_id`, `UNIQUE(taxonomy, slug)` | |
 | `term_links` | `item_id` FK, `term_id` FK, `position`, PK(`item_id`,`term_id`) | |
@@ -554,6 +556,8 @@ crates/ferrite-store-sqlite/migrations/
     0006_media_comments.down.sql    #   media.sanitized, comments.by_account; comment and job indexes (P2)
     0007_autosaves.up.sql           # M2b-1, phase expand, lossy-down: the autosave slot (P15)
     0007_autosaves.down.sql
+    0008_autosave_seo.up.sql        # M2b-2, phase expand, lossy-down: autosaves.seo (P28)
+    0008_autosave_seo.down.sql
 crates/ferrite-store-postgres/migrations/
     0001_init.up.sql
     0001_init.down.sql
@@ -569,6 +573,8 @@ crates/ferrite-store-postgres/migrations/
     0006_media_comments.down.sql
     0007_autosaves.up.sql
     0007_autosaves.down.sql
+    0008_autosave_seo.up.sql
+    0008_autosave_seo.down.sql
 ```
 
 - sqlx reversible migrations, embedded with `sqlx::migrate!()`; sqlx's

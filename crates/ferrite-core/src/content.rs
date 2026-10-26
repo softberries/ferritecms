@@ -25,9 +25,11 @@ use crate::{
 mod admin;
 mod allowed;
 mod lifecycle;
+pub mod seo;
 
 pub use admin::{AdminQuery, AuthorRef, AutosaveDraft, MAX_REVISIONS_LISTED, StatusCounts};
 pub use allowed::{AllowedActions, allowed_actions};
+pub use seo::{Seo, SeoPatch};
 
 /// Unique index on (type, parent, slug); a violation of it means another writer took
 /// the slug between our lookup and our write.
@@ -65,6 +67,9 @@ pub struct ContentDraft {
     pub menu_order: i32,
     /// Replaces the item's terms in this order; duplicates are ignored.
     pub terms: Vec<TermId>,
+    /// Changes to the item's SEO meta, written in the same transaction; `None` keeps
+    /// them (M2b P28).
+    pub seo: Option<SeoPatch>,
 }
 
 /// Creates and edits content items.
@@ -120,6 +125,9 @@ impl ContentService {
     /// A parent is allowed only for hierarchical types; it must exist, have the same
     /// type and not be trashed. `draft.fields` must satisfy the type's field schema
     /// ([`fields::validate_item`]; a type without a schema takes any object).
+    /// `draft.body` must be a document root (`InvalidField { field: "body", .. }`, see
+    /// [`blocks::is_document`]); `draft.seo` is checked and written as [`SeoPatch`]
+    /// says, in the same transaction.
     pub async fn create(
         &self,
         actor: &Actor,
@@ -146,6 +154,7 @@ impl ContentService {
         actor: &Actor,
         draft: ContentDraft,
     ) -> Result<ContentItem, CoreError> {
+        check_draft(&draft)?;
         let base = base_slug(draft.slug.as_deref(), draft.parent_id, None, || {
             slug::slugify(&draft.title)
         })?;
@@ -167,6 +176,7 @@ impl ContentService {
         )
         .await?;
         let excerpt = excerpt_of(&draft);
+        let seo = draft.seo;
         let row = Row::New(NewContent {
             id: ContentId::new(),
             kind: draft.kind,
@@ -185,6 +195,9 @@ impl ContentService {
         });
         let saved = save_with_free_slug(tx, row, &base, None, &root).await?;
         set_terms(tx, saved.id, &terms).await?;
+        if let Some(seo) = &seo {
+            seo.apply(tx, saved.id).await?;
+        }
         let keys = invalidation_keys(&saved, &[], &terms, None, &[]);
         after_save(tx, actor, &saved, keys, None).await?;
         Ok(saved)
@@ -195,7 +208,9 @@ impl ContentService {
     /// `edit_own` (contributors: only while draft or pending), others' `edit_others`.
     /// A trashed item is `Invalid("restore first")`. The save deletes `actor`'s own
     /// autosave of the item in the same transaction (M2b P15); other users' stay. `draft.fields` is validated as on
-    /// create, also when a revision is restored.
+    /// create, also when a revision is restored, and so are `draft.body` (the root
+    /// check; a stored body is never rewritten) and `draft.seo`. A write that changes
+    /// only `seo` is a full update: version + 1, a revision, events, invalidation.
     ///
     /// `draft.slug = None` keeps the current slug; a slug that is taken gets `-N` as on
     /// create, and the reserved-slug and root-namespace rules of create apply (an item
@@ -263,6 +278,7 @@ impl ContentService {
         if draft.kind != current.kind {
             return Err(CoreError::Invalid("the content type cannot change".into()));
         }
+        check_draft(&draft)?;
         // Under the same parent the item's own slug is not a conflict, and keeping it is
         // never refused or renamed, even when a later rule reserves it.
         let own = (current.parent_id == draft.parent_id).then_some(current.slug.as_str());
@@ -283,6 +299,7 @@ impl ContentService {
         let old_terms: Vec<TermId> = old_term_rows.iter().map(|t| t.id).collect();
 
         let excerpt = excerpt_of(&draft);
+        let seo = draft.seo;
         let mut next = current.clone();
         next.title = draft.title;
         next.parent_id = draft.parent_id;
@@ -309,6 +326,9 @@ impl ContentService {
         let saved = save_with_free_slug(tx, Row::Existing(next), &base, own, &root).await?;
 
         set_terms(tx, id, &terms).await?;
+        if let Some(seo) = &seo {
+            seo.apply(tx, id).await?;
+        }
         let mut moved_descendants = Vec::new();
         let published = current.status == ContentStatus::Published;
         let moved = current.slug != saved.slug || current.parent_id != saved.parent_id;
@@ -759,6 +779,25 @@ async fn set_terms(repos: &dyn Repos, item: ContentId, terms: &[TermId]) -> Resu
             Err(CoreError::invalid_field("terms", "unknown term"))
         }
         other => Ok(other?),
+    }
+}
+
+/// The checks of a draft that need no reads: the body root and the SEO patch.
+fn check_draft(draft: &ContentDraft) -> Result<(), CoreError> {
+    check_body(&draft.body)?;
+    draft.seo.as_ref().map_or(Ok(()), SeoPatch::check)
+}
+
+/// `InvalidField { field: "body", .. }` unless `body` is a document root
+/// ([`blocks::is_document`]).
+pub(crate) fn check_body(body: &serde_json::Value) -> Result<(), CoreError> {
+    if blocks::is_document(body) {
+        Ok(())
+    } else {
+        Err(CoreError::invalid_field(
+            "body",
+            "the body must be a document (type doc)",
+        ))
     }
 }
 

@@ -75,6 +75,7 @@ async fn published(api: &Api, kind: &str, slug: &str) -> ContentId {
                 fields: json!({}),
                 menu_order: 0,
                 terms: Vec::new(),
+                seo: None,
             },
         )
         .await

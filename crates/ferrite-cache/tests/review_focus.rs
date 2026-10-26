@@ -78,6 +78,7 @@ fn draft(kind: &str, title: &str, slug: &str, terms: &[TermId]) -> ContentDraft 
         fields: json!({}),
         menu_order: 0,
         terms: terms.to_vec(),
+        seo: None,
     }
 }
 

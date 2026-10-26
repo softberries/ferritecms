@@ -371,7 +371,12 @@ recorded and whether a call was volatile or failed ([05 §7a](05-plugin-host.md#
 The core head (`crates/ferrite-http/src/head.rs`) has the title, a canonical link, Open Graph
 `og:title`/`og:description`/`og:url`/`og:type` (plus `og:image` for a featured image) and a
 meta description from the item's `seo.description` meta, else its excerpt cut to 160
-characters, else the site tagline.
+characters, else the site tagline. The title is the item's `seo.title` meta when set (the
+whole `<title>` and `og:title`, no site suffix; M2b P28), else `<item title> – <site
+title>` (`og:title` the item title), else the site title. Blank or non-string meta values
+count as unset. Both keys come from one meta read per item page, covered by the page's
+`post:<id>` dependency (every content write, an SEO-only one included, invalidates it);
+the keys and limits are core's (`ferrite_core::content::seo`).
 
 `render.footer` (Task 14) runs once per page, after the item filters and before the head,
 with the input `""`; every filter of the page (items, footer, head) shares the page's render

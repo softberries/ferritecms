@@ -1,4 +1,5 @@
-//! Contract tests for the per-user autosave slot (`0007_autosaves`, M2b Task 3, P15).
+//! Contract tests for the per-user autosave slot (`0007_autosaves`, M2b Task 3, P15;
+//! its `seo` member from `0008_autosave_seo`, M2b-2 Task 1).
 
 use ferrite_domain::{Autosave, ContentId, TermId, Timestamp, UserId};
 use ferrite_store::{Store, StoreError};
@@ -23,6 +24,7 @@ pub fn full_autosave(item: ContentId, user: UserId) -> Autosave {
         terms: Some(vec![TermId::new(), TermId::new()]),
         body: json!({"type": "doc", "content": [{"type": "paragraph"}]}),
         fields: json!({"subtitle": "s", "n": 1}),
+        seo: Some(json!({"title": "Search title", "description": null})),
         saved_at: Timestamp::from_micros(1_700_000_000_123_456).unwrap(),
     }
 }
@@ -67,6 +69,7 @@ pub async fn autosave_upsert_get_delete(db: &TestDb) {
         terms: None,
         body: json!({"type": "doc", "content": []}),
         fields: json!({}),
+        seo: None,
         saved_at: Timestamp::from_micros(1_700_000_001_000_000).unwrap(),
         ..full.clone()
     };
@@ -122,6 +125,10 @@ pub async fn autosave_upsert_get_delete(db: &TestDb) {
             fields: json!({"a\0b": 1}),
             ..full.clone()
         },
+        Autosave {
+            seo: Some(json!({"title": "a\0b"})),
+            ..full.clone()
+        },
     ] {
         assert!(invalid(slot.put(&bad).await), "{bad:?}");
     }
@@ -163,4 +170,33 @@ pub async fn autosave_cascades_with_item_and_user(db: &TestDb) {
     repos.users().delete(editor).await.unwrap();
     assert_eq!(slot.get(kept, editor).await.unwrap(), None);
     assert!(slot.get(kept, kept_author).await.unwrap().is_some());
+}
+
+/// The `seo` member (`0008_autosave_seo`) is stored as given: absent (`None`), an
+/// object with `null` members, and back to absent on the next `put`.
+pub async fn autosave_keeps_seo(db: &TestDb) {
+    let store = db.store();
+    let (item, author) = post(store).await;
+    let slot = store.read().autosaves();
+    let mut a = full_autosave(item, author);
+    for seo in [
+        Some(json!({"title": " as typed ", "description": "d"})),
+        Some(json!({"title": null})),
+        Some(json!({})),
+        None,
+    ] {
+        a.seo = seo;
+        slot.put(&a).await.unwrap();
+        assert_eq!(slot.get(item, author).await.unwrap().as_ref(), Some(&a));
+    }
+    // Inside a Tx too.
+    let tx = store.begin().await.unwrap();
+    a.seo = Some(json!({"description": "in tx"}));
+    tx.autosaves().put(&a).await.unwrap();
+    assert_eq!(
+        tx.autosaves().get(item, author).await.unwrap(),
+        Some(a.clone())
+    );
+    tx.commit().await.unwrap();
+    assert_eq!(slot.get(item, author).await.unwrap(), Some(a));
 }

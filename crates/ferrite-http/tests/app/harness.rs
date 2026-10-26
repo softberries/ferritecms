@@ -330,6 +330,7 @@ pub fn draft(
         fields: json!({}),
         menu_order: 0,
         terms: terms.to_vec(),
+        seo: None,
     }
 }
 

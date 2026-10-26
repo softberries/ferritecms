@@ -49,6 +49,7 @@ fn draft(kind: &str, slug: &str) -> ContentDraft {
         fields: json!({}),
         menu_order: 0,
         terms: Vec::new(),
+        seo: None,
     }
 }
 
