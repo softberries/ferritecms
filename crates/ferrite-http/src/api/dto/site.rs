@@ -321,6 +321,11 @@ pub struct SettingsDto {
     #[serde(rename = "comments.moderation")]
     #[schema(value_type = Option<String>)]
     pub comments_moderation: Value,
+    /// 1..=100 (default 50): top-level comment threads per public comment page
+    /// (`?cpage=N`); each thread shows with all its approved replies.
+    #[serde(rename = "comments.per_page")]
+    #[schema(value_type = Option<i64>)]
+    pub comments_per_page: Value,
 }
 
 impl SettingsDto {
@@ -338,6 +343,7 @@ impl SettingsDto {
             permalink_page: take("permalink.page"),
             comments_enabled: take("comments.enabled"),
             comments_moderation: take("comments.moderation"),
+            comments_per_page: take("comments.per_page"),
         }
     }
 }

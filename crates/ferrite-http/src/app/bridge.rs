@@ -242,8 +242,8 @@ impl HelperBridge for BlockingBridge {
     }
 
     /// [`SiteReader::comments`]: public posts only, approved comments only.
-    fn comments(&self, item: ContentId) -> Bridged<Option<CommentThread>> {
-        match self.run("comments", self.reader.comments(item)) {
+    fn comments(&self, item: ContentId, page: u32) -> Bridged<Option<CommentThread>> {
+        match self.run("comments", self.reader.comments(item, page)) {
             Some(read) => (read.value, read.deps),
             None => {
                 // The keys the read would have recorded, so the short-lived page still
@@ -252,6 +252,9 @@ impl HelperBridge for BlockingBridge {
                 deps.insert(ferrite_core::events::post_key(item));
                 deps.insert(ferrite_core::events::option_key(
                     ferrite_core::comments::ENABLED_OPTION,
+                ));
+                deps.insert(ferrite_core::events::option_key(
+                    ferrite_core::comments::PER_PAGE_OPTION,
                 ));
                 (None, deps)
             }

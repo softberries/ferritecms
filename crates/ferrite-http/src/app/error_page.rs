@@ -112,6 +112,7 @@ async fn render_missing(state: &Arc<AppState>, kind: Missing) -> CachedPage {
             path: String::new(),
             query_s: None,
             page: 1,
+            cpage: 1,
         },
         head_html,
         status,
@@ -165,6 +166,7 @@ pub(crate) async fn server_error(state: &Arc<AppState>) -> CachedPage {
             path: String::new(),
             query_s: None,
             page: 1,
+            cpage: 1,
         },
         ..RenderContext::default()
     };

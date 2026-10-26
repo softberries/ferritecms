@@ -39,6 +39,7 @@ fn ctx(theme: &Theme, path: &str) -> RenderContext {
             path: path.into(),
             query_s: None,
             page: 1,
+            cpage: 1,
         },
         status: 200,
         head_html: "<title>Head title</title>".into(),
@@ -853,7 +854,11 @@ impl HelperBridge for ThreadBridge {
     fn image(&self, _: ContentId, _: &str) -> Option<ImageRef> {
         None
     }
-    fn comments(&self, _: ContentId) -> Bridged<Option<ferrite_core::comments::CommentThread>> {
+    fn comments(
+        &self,
+        _: ContentId,
+        _: u32,
+    ) -> Bridged<Option<ferrite_core::comments::CommentThread>> {
         (self.0.clone(), DepKeys::default())
     }
 }
@@ -878,7 +883,16 @@ fn comments_section_form_and_states() {
         can_reply: true,
     };
     let thread = |open: bool, items: Vec<CommentPublic>| {
-        Arc::new(ThreadBridge(Some(CommentThread { open, items })))
+        Arc::new(ThreadBridge(Some(CommentThread {
+            open,
+            total: items.len() as u64,
+            items,
+            page: 1,
+            pages: 1,
+            per_page: 50,
+            prev_url: None,
+            next_url: None,
+        })))
     };
     let single = |bridge: Arc<ThreadBridge>, kind: &str| {
         let mut c = ctx(&t, "/hello/");
@@ -917,6 +931,10 @@ fn comments_section_form_and_states() {
 
     let html = single(thread(true, vec![one.clone()]), "post");
     assert!(html.contains("1 comment</h2>"), "{html}");
+    assert!(
+        !html.contains("comment-pages"),
+        "one page, no links: {html}"
+    );
     assert!(html.contains("<summary>Reply</summary>"));
     assert!(html.contains(&format!("name=\"parent\" value=\"{}\"", one.id)));
 
@@ -939,6 +957,43 @@ fn comments_section_form_and_states() {
     ] {
         assert!(!html.contains(gone), "{gone}: {html}");
     }
+
+    // A middle page of a long thread: the heading counts every approved comment, and
+    // the page links point both ways.
+    let paged = Arc::new(ThreadBridge(Some(CommentThread {
+        open: true,
+        items: vec![one.clone()],
+        total: 120,
+        page: 2,
+        pages: 3,
+        per_page: 50,
+        prev_url: Some("/hello/".into()),
+        next_url: Some("/hello/?cpage=3".into()),
+    })));
+    let html = single(paged, "post");
+    for needle in [
+        "120 comments</h2>",
+        "<nav class=\"pagination comment-pages\" aria-label=\"Comment pages\">",
+        "<a class=\"pagination__prev\" rel=\"prev\" href=\"&#x2f;hello&#x2f;\"><span aria-hidden=\"true\">←</span> Older comments</a>",
+        "<p class=\"pagination__status\">Page 2 of 3</p>",
+        "<a class=\"pagination__next\" rel=\"next\" href=\"&#x2f;hello&#x2f;?cpage=3\">Newer comments <span aria-hidden=\"true\">→</span></a>",
+    ] {
+        assert!(html.contains(needle), "missing {needle:?} in:\n{html}");
+    }
+    // The first page has no link back.
+    let first = Arc::new(ThreadBridge(Some(CommentThread {
+        open: true,
+        items: vec![one.clone()],
+        total: 120,
+        page: 1,
+        pages: 3,
+        per_page: 50,
+        prev_url: None,
+        next_url: Some("/hello/?cpage=2".into()),
+    })));
+    let html = single(first, "post");
+    assert!(!html.contains("rel=\"prev\""), "{html}");
+    assert!(html.contains("rel=\"next\""), "{html}");
 
     let html = single(thread(true, vec![one]), "page");
     assert!(!html.contains("class=\"comments"), "{html}");

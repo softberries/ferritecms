@@ -19,17 +19,22 @@ pub const MAX_SEARCH_CHARS: usize = 200;
 ///   parameter, so it is dropped. Routing paginates by path (`/page/N/`) and does not
 ///   read it; it is kept only so cache keys follow the allowlist contract.
 ///
+/// - `cpage`: the comment page of a single item (M2b-2 P34), a number in `2..=u32::MAX`
+///   without a leading zero; anything else (`1`, `0`, `abc`) is page 1, the same page as
+///   no parameter, so it is dropped. A page past the thread's last shows the last.
+///
 /// The first occurrence of a parameter wins.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NormalQuery {
     pub s: Option<String>,
     pub page: Option<u32>,
+    pub cpage: Option<u32>,
 }
 
 impl NormalQuery {
     pub fn parse(raw: Option<&str>) -> Self {
         let mut q = Self::default();
-        let (mut seen_s, mut seen_page) = (false, false);
+        let (mut seen_s, mut seen_page, mut seen_cpage) = (false, false, false);
         for pair in raw.unwrap_or("").split('&') {
             let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
             match key {
@@ -43,6 +48,10 @@ impl NormalQuery {
                     seen_page = true;
                     q.page = number(value, MAX_PAGE).filter(|n| *n > 1);
                 }
+                "cpage" if !seen_cpage => {
+                    seen_cpage = true;
+                    q.cpage = number(value, u32::MAX).filter(|n| *n > 1);
+                }
                 _ => {}
             }
         }
@@ -50,9 +59,13 @@ impl NormalQuery {
     }
 
     /// The parameters in canonical form for a cache key: sorted by name, values
-    /// percent-encoded like path segments (`page=2&s=a%20b`); empty when there are none.
+    /// percent-encoded like path segments (`cpage=3&page=2&s=a%20b`); empty when there
+    /// are none.
     pub fn cache_query(&self) -> String {
         let mut parts = Vec::new();
+        if let Some(cpage) = self.cpage {
+            parts.push(format!("cpage={cpage}"));
+        }
         if let Some(page) = self.page {
             parts.push(format!("page={page}"));
         }

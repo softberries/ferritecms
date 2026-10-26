@@ -159,8 +159,12 @@ M2a-2b added (migration `0006_media_comments`, contract-tested on both backends)
   `UPDATE … RETURNING`), `delete(id) -> bool` (replies cascade), `list(&CommentQuery {
   status, item, limit, cursor })` newest first (`created_at DESC, id DESC`, cursor tag
   `cm:created` = `COMMENT_CURSOR_TAG`; only the given filters are in the SQL, so each
-  shape has its index), `approved_for_item(item, limit ≤ MAX_ITEM_COMMENTS = 500)` oldest
-  first (`created_at, id`), and the R2 `known` checks (F19): `has_approved_from(email,
+  shape has its index), the public thread pages (M2b-2 P34; one `WITH RECURSIVE`
+  query each, on both backends): `approved_page(item, offset, roots)` (roots — approved
+  comments whose parent is null or not approved — `offset..offset + roots` in
+  `(created_at, id)` order, each followed by its approved descendants depth first, at most
+  `MAX_ITEM_COMMENTS = 500` rows, cut after the last whole root when possible),
+  `approved_totals(item) -> { comments, roots }` and `root_position(item, comment)`, and the R2 `known` checks (F19): `has_approved_from(email,
   name)` (an approved anonymous row, `user_id IS NULL` and not `by_account`, e-mail by
   `email_key`, name exact)
   and `has_approved_from_user(user)`. No CHECK on `status` (P2); core validates.

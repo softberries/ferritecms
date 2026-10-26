@@ -102,6 +102,7 @@ pub async fn settings_allowlist_and_validation(db: &TestDb) {
             "permalink.page",
             "comments.enabled",
             "comments.moderation",
+            "comments.per_page",
         ]
     );
 
@@ -121,6 +122,8 @@ pub async fn settings_allowlist_and_validation(db: &TestDb) {
         ("reading.discourage_indexing", json!(true)),
         ("permalink.post", json!("/%year%/%slug%/")),
         ("permalink.page", json!("/%parent_path%/%slug%/")),
+        ("comments.per_page", json!(1)),
+        ("comments.per_page", json!(100)),
     ];
     for (key, value) in ok {
         assert!(settings::validate(key, &value).is_ok(), "{key} = {value}");
@@ -146,6 +149,9 @@ pub async fn settings_allowlist_and_validation(db: &TestDb) {
         ("permalink.post", json!(1)),
         ("permalink.post", json!("no-slash")),
         ("permalink.page", json!("/%slug%/")),
+        ("comments.per_page", json!(0)),
+        ("comments.per_page", json!(101)),
+        ("comments.per_page", json!("50")),
     ];
     for (key, value) in bad {
         let (field, _) = invalid(settings::validate(key, &value));

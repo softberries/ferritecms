@@ -49,14 +49,14 @@ app_tests!(
 const FORM: &str = "application/x-www-form-urlencoded";
 
 /// A client address no other request of this binary uses.
-fn peer() -> SocketAddr {
+pub(crate) fn peer() -> SocketAddr {
     static NEXT: AtomicU32 = AtomicU32::new(1);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
     SocketAddr::new(Ipv4Addr::from(0xc633_0000 | n).into(), 40_000)
 }
 
 /// `app` serving the embedded `blog` theme (fresh state, empty cache).
-async fn blog(mut app: App) -> App {
+pub(crate) async fn blog(mut app: App) -> App {
     let theme = Arc::new(Theme::load(&ThemeSource::Embedded("blog")).expect("blog theme"));
     let state = App::build_state(
         &app.site,
@@ -94,7 +94,7 @@ fn body(pairs: &[(&str, &str)]) -> String {
 }
 
 /// The fields of a guest's comment on `post`.
-fn guest(post: ContentId, text: &str) -> Vec<(&'static str, String)> {
+pub(crate) fn guest(post: ContentId, text: &str) -> Vec<(&'static str, String)> {
     vec![
         ("post", post.to_string()),
         ("author", "Ann Guest".into()),
@@ -105,13 +105,13 @@ fn guest(post: ContentId, text: &str) -> Vec<(&'static str, String)> {
     ]
 }
 
-fn pairs(fields: &[(&'static str, String)]) -> String {
+pub(crate) fn pairs(fields: &[(&'static str, String)]) -> String {
     let v: Vec<(&str, &str)> = fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
     body(&v)
 }
 
 /// `POST /_comment` with `body`, from the site's origin and a fresh client address.
-fn form(body: String) -> Request<Body> {
+pub(crate) fn form(body: String) -> Request<Body> {
     form_from(body, Some(SITE_URL), None, Some(peer()))
 }
 

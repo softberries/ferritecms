@@ -11,6 +11,7 @@ pub mod autosave;
 pub mod batch;
 pub mod comment;
 pub mod comment_counts;
+pub mod comment_threads;
 pub mod constraints;
 pub mod content;
 pub mod counting;

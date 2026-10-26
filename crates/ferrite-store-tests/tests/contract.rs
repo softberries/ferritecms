@@ -1,9 +1,10 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
     auth::*, autosave::*, backend_tests, backend_tests_spawning, batch::*, comment::*,
-    comment_counts::*, constraints::*, content::*, event::*, idempotency::*, job::*, job_list::*,
-    lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*, notify::*,
-    plugin::*, plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*,
+    comment_counts::*, comment_threads::*, constraints::*, content::*, event::*, idempotency::*,
+    job::*, job_list::*, lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*,
+    notify::*, plugin::*, plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*,
+    user::*,
 };
 
 backend_tests!(
@@ -230,7 +231,10 @@ backend_tests!(
     comment_crud_and_status,
     comment_list_filters_and_pages,
     comment_counts_per_status_and_item,
-    approved_for_item_is_oldest_first_and_capped,
+    thread_pages_cover_every_comment,
+    approved_page_cuts_after_a_whole_root,
+    root_position_of_reply_is_its_root,
+    approved_totals_counts_all,
     has_approved_from_matches_exact_lowercase,
     idempotency_prune_in_batches,
     comment_list_uses_indexes,

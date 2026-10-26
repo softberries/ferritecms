@@ -309,7 +309,7 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 | `posts` | current listing: `items`, `page`, `per_page`, `total`, `pages`, `prev_page`, `next_page` | per item as `post`; the read adds `archive:<kind>` / `term:<id>` |
 | `archive` | listing routes only (R30): `kind` (`front`, `type`, `term`, `author`, `date`, `search`), `content_type`, `term`, `author`, `year`, `month` | `term:<id>` / `user:<id>` |
 | `pagination` | listing routes only (R30): `page`, `pages`, `prev_url`, `next_url` (ready-made, encoded links; `none` at either end) | — |
-| `request` | `path`, `s` (the search query), `page`, `status`, `preview` | — |
+| `request` | `path`, `s` (the search query), `page`, `status`, `preview` (the comment page `?cpage=N` is not exposed; `comments()` reads it) | — |
 | `menu(name)` | menu tree; links to non-public items, and to terms without a public item, removed. Item targets load in one batch (`SiteReader::links`: titles and URLs only, no body render); each term target is one existence probe (`SiteReader::term_link`) | `menu:<name>`, plus `post:<id>`/`term:<id>` for every target, removed ones included, and `archive:post` plus `archive:<kind>` per type of the taxonomy for term targets |
 | `related(post, n=3)` | public items of the same type sharing a term with `post`, newest first per term; `n` ≤ 10 | `archive:<kind>`, `post:<item>` |
 | `query(type=…, term="<tax>/<slug>", limit=10)` | public items, newest first; `limit` ≤ 50; with `term`, exactly up to `limit` items of `type` with the term in one query (`SiteReader::term_items`, any type the taxonomy applies to, not capped by `reading.per_page`); a type the taxonomy does not list gets none | `archive:<kind>`, `term:<id>` |
@@ -317,7 +317,7 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 | `image(media, size)` | the `size` variant of a public media item (the original for an unknown size) with `width`, `height` and a `srcset` of one candidate per width | `post:<media id>` |
 | `head()` | the pre-rendered `<head>` HTML (core SEO + `render.head` plugin filters, §5) | — |
 | `footer()` | the plugins' footer HTML (`render.footer`, §5; sanitised like `content.body`); `""` without footer plugins and on error pages. `blog` prints it just before `</body>` | — |
-| `comments(post)` | the public thread of a **public post** (other kinds, drafts, unknown ids: `none`), through `SiteReader::comments`: `open` (`comments.enabled`, default on; a closed thread still lists its comments, as WordPress does, and the theme hides the form), `count` (approved comments shown, ≤ 500), `items` in thread order (oldest first, each reply right after its parent), `action` (`/_comment`), `honeypot` (`website`). Each item: `id`, `parent_id`, `depth` (0 at the top level), `author_name` (plain text), `author_url` (`http(s)` only, else `none`), `html` (the plain-text body escaped by core into `<p>`/`<br>`, marked safe), `date` (RFC 3339), `can_reply` (a reply would be accepted: core's own depth rule over the stored chain, so it holds when a parent is hidden). Approved comments only; never an e-mail or address hash. One bridge call | `post:<id>`, `option:comments.enabled` |
+| `comments(post)` | one page of the public thread of a **public post** (other kinds, drafts, unknown ids: `none`), through `SiteReader::comments` (M2b-2 P34): the page is the request's `?cpage=N` on a single item (a positive integer, anything else is 1; past the last page shows the last). A page holds `comments.per_page` top-level threads (default 50, 1..=100), oldest first, each with all its approved replies; a **root** is an approved comment whose parent is null or not approved (a reply under a spam or held comment starts its own thread). At most 500 rows a page: past that the page ends after the last whole thread, or, when one thread alone is longer, inside it (depth first), and what is cut is on no page. `open` (`comments.enabled`, default on; a closed thread still lists its comments, as WordPress does, and the theme hides the form), `count` = `total` (every approved comment of the post, not only this page's), `page`, `pages` (at least 1), `per_page`, `prev_url` / `next_url` (the post's permalink, `?cpage=N` past page 1; `none` at either end), `items` in thread order (each reply right after its parent, siblings oldest first), `action` (`/_comment`), `honeypot` (`website`). Each item: `id`, `parent_id`, `depth` (0 at the top level), `author_name` (plain text), `author_url` (`http(s)` only, else `none`), `html` (the plain-text body escaped by core into `<p>`/`<br>`, marked safe), `date` (RFC 3339), `can_reply` (a reply would be accepted: core's own depth rule over the stored chain, so it holds when a parent is hidden). Approved comments only; never an e-mail or address hash. One bridge call | `post:<id>`, `option:comments.enabled`, `option:comments.per_page`; with more than one page the permalink's term and ancestor keys |
 | `plugin_route(name, path)` | `/_p/<name><path>` (05 §4b), each path segment percent-encoded; `""` unless `name` is a plugin name (`[a-z0-9-]{2,48}`) and `path` starts with `/` and has no `.`/`..` segment | — |
 | filters | `date(fmt)` (chrono strftime, UTC), `excerpt(n=55)` (plain text), `slugify` (core's slug function), `json` (safe in `<script>` and in **single-quoted** attributes only), MiniJinja's `urlencode`; `t` (i18n) is not built | — |
 
@@ -331,7 +331,9 @@ else `403`) and that every form comment is **anonymous** (the session cookie is 
 The body is at most 64 KiB (`413`), must be `application/x-www-form-urlencoded` (`415`),
 and the same per-IP limits as the API submit apply (3 a minute, 20 an hour, `429` with
 `Retry-After`; no client address `503`). Success is a `303` to the post's permalink (never a
-client-supplied URL) with `#comment-<id>` when approved, or `#comment-pending` when held or
+client-supplied URL) with `?cpage=N#comment-<id>` when approved (`N` the comment page that
+holds it: its thread's root position divided by `comments.per_page`, plus one; no query on
+page 1), or `#comment-pending` when held or
 dropped by the honeypot (the same answer, so a bot cannot tell); the `blog` theme shows its
 "awaiting moderation" notice under `:target`. Validation errors are a `422` and the limit a
 `429`, each a small built-in HTML page with the escaped message and a link back; an unknown,
@@ -402,7 +404,9 @@ are never cached.
   256 MiB); an entry weighs its body plus key, header, ETag and dependency-key bytes.
 - Key: `(host, path, normalised allowlisted query, variant)`. The host is always the
   configured `site.url` host, never the `Host` header (R25). The only allowlisted query
-  parameters are `s` and `page`. Variant: `anon`, or `user(<id>)` for logged-in requests
+  parameters are `s`, `page` and `cpage` (the comment page, M2b-2 P34; `cpage=1` and
+  anything that is not an integer of 2 or more are dropped, so they share page 1's entry),
+  normalised by `NormalQuery` in `ferrite-http`. Variant: `anon`, or `user(<id>)` for logged-in requests
   under `cache.logged_in = "per-user"` (P21; under the default `"bypass"` logged-in requests
   are not cached at all). Dependency invalidation ignores the variant, so an edit drops every
   user's copy too. **Invariant:** the variant is the user id alone, which is safe only

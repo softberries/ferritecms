@@ -103,6 +103,7 @@ fn request_info() {
             path: "/search/".into(),
             query_s: Some("<b>q</b>".into()),
             page: 0,
+            cpage: 0,
         },
         status: 404,
         preview: true,

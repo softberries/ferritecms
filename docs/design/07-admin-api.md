@@ -287,8 +287,16 @@ to an approved comment of the same post, at most 5 deep (`parent_id`).
   `SELECT` (an unknown item counts zero; same checks as the list). `PATCH` sets the status; `DELETE` removes a spam or
   trashed comment and its replies (else `422`, field `status`). An approved insert and every
   `PATCH`/`DELETE` write `invalidate([post:<item>])` in the same `Tx`. Not audited (P14).
-  Settings `comments.enabled` and `comments.moderation` show `null` until set (defaults are
-  core constants, F21).
+  Settings `comments.enabled`, `comments.moderation` and `comments.per_page` show `null`
+  until set (defaults are core constants, F21).
+- **Public pages (M2b-2 P34)**: the public site pages a post's thread by top-level threads,
+  `comments.per_page` (integer 1..=100, default 50) a page, oldest first, each with all its
+  approved replies; a reply whose parent is not approved starts its own thread. The page
+  is `?cpage=N` (in the page cache key; past the last shows the last), the theme's count is
+  every approved comment, and the theme form's `303` for an approved comment goes to
+  `?cpage=N#comment-<id>` on the page that holds it (06 §4). The store reads one page with
+  a recursive query (`CommentRepo::approved_page`, at most 500 rows), plus
+  `approved_totals` and `root_position`.
 
 **Extensions (M2a-2a; rulings in [`m2a2.md`](../superpowers/rulings/m2a2.md)).** Handlers
 authorize through `ExtensionAdmin` (`authorize_plugins` / `authorize_themes`) before any of

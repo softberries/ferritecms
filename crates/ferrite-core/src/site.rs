@@ -873,44 +873,82 @@ impl SiteReader {
         }))
     }
 
-    /// The public comment thread of item `id`, for the `comments()` template helper:
-    /// `None` unless `id` is a `post` that is public now (published,
-    /// `published_at <= now`); else its approved comments in thread order (at most
-    /// [`MAX_THREAD`](crate::comments::MAX_THREAD); never pending, spam or trash, never
-    /// an e-mail or address hash) and `open` = `comments.enabled`. A closed thread is
-    /// still listed. Records `post:<id>` and `option:comments.enabled` either way, so a
-    /// moderation (which invalidates `post:<item>`) or opening and closing comments
-    /// refreshes the page. Store calls: the item, the option, the approved rows, and for a
-    /// reply whose ancestors are hidden at most `MAX_COMMENT_DEPTH` lookups (`can_reply`).
+    /// Page `page` (1-based; 0 is 1, past the last is the last) of the public comment
+    /// thread of item `id`, for the `comments()` template helper (P34): `None` unless
+    /// `id` is a `post` that is public now (published, `published_at <= now`); else
+    /// `comments.per_page` top-level threads with their approved replies in thread order
+    /// (never pending, spam or trash, never an e-mail or address hash), `total` = every
+    /// approved comment, `open` = `comments.enabled`, and the links to the neighbouring
+    /// pages (the item's permalink, `?cpage=N` past page 1). A closed thread is still
+    /// listed. Records `post:<id>`, `option:comments.enabled` and
+    /// `option:comments.per_page` either way, so a moderation (which invalidates
+    /// `post:<item>`) or a change of either setting refreshes the page, plus the keys of
+    /// the permalink when the thread has more than one page. Store calls: the item, the
+    /// two options, the totals, the page's rows, the permalink's terms and ancestors
+    /// (only with more than one page), and for a reply whose ancestors are hidden at
+    /// most `MAX_COMMENT_DEPTH` lookups (`can_reply`).
     pub async fn comments(
         &self,
         id: ContentId,
+        page: u32,
     ) -> Result<SiteRead<Option<CommentThread>>, CoreError> {
         let now = (self.clock)();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         deps.insert(post_key(id));
         deps.insert(option_key(comments::ENABLED_OPTION));
-        let open_post = repos
+        deps.insert(option_key(comments::PER_PAGE_OPTION));
+        let item = repos
             .content()
             .get(id)
             .await?
-            .is_some_and(|i| i.kind == comments::COMMENT_KIND && is_public(&i, now));
-        if !open_post {
+            .filter(|i| i.kind == comments::COMMENT_KIND && is_public(i, now));
+        let Some(item) = item else {
             return Ok(public(None, deps));
-        }
-        let enabled = repos
-            .options()
+        };
+        let options = repos.options();
+        let enabled = options
             .get(comments::ENABLED_OPTION)
             .await?
             .map(|e| e.value);
-        let open = comments::settings_from(enabled.as_ref(), None).enabled;
-        let rows = repos
-            .comments()
-            .approved_for_item(id, comments::MAX_THREAD)
-            .await?;
+        let per_page = options
+            .get(comments::PER_PAGE_OPTION)
+            .await?
+            .map(|e| e.value);
+        let settings = comments::settings_from(enabled.as_ref(), None, per_page.as_ref());
+        let per_page = settings.per_page;
+        let totals = repos.comments().approved_totals(id).await?;
+        let pages =
+            u32::try_from(totals.roots.div_ceil(u64::from(per_page)).max(1)).unwrap_or(u32::MAX);
+        let page = page.clamp(1, pages);
+        let offset = (page - 1).saturating_mul(per_page);
+        let rows = repos.comments().approved_page(id, offset, per_page).await?;
         let items = comments::public_thread(repos, rows).await?;
-        Ok(public(Some(CommentThread { open, items }), deps))
+        let (mut prev_url, mut next_url) = (None, None);
+        if pages > 1 {
+            let rules = self.permalinks.pin();
+            let path = public_paths(repos, rules.as_ref(), vec![item], &mut deps)
+                .await?
+                .pop()
+                .map(|(_, path)| path);
+            if let Some(path) = path {
+                prev_url = (page > 1).then(|| comments::comment_page_url(&path, page - 1));
+                next_url = (page < pages).then(|| comments::comment_page_url(&path, page + 1));
+            }
+        }
+        Ok(public(
+            Some(CommentThread {
+                open: settings.enabled,
+                items,
+                total: totals.comments,
+                page,
+                pages,
+                per_page,
+                prev_url,
+                next_url,
+            }),
+            deps,
+        ))
     }
 
     /// Whether item `id` is public (and not media): one store call, no hydration. For

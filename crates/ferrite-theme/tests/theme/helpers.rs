@@ -288,6 +288,12 @@ fn comments_helper_shape() {
                     "<p>Re</p>",
                 ),
             ],
+            total: 7,
+            page: 2,
+            pages: 3,
+            per_page: 2,
+            prev_url: Some("/hello/".into()),
+            next_url: Some("/hello/?cpage=3".into()),
         }),
         deps: keys(&["option:comments.enabled".into()]),
         ..FakeBridge::default()
@@ -296,8 +302,10 @@ fn comments_helper_shape() {
     let post = item("post", "Hello");
     let id = post.item.id;
     c.item = Some(post);
+    c.request.cpage = 2;
     let out = render_with(
-        "{% set t = comments(post.id) %}{{ t.open }}|{{ t.count }}|{{ t.action }}|{{ t.honeypot }}\
+        "{% set t = comments(post.id) %}{{ t.open }}|{{ t.count }}|{{ t.total }}|{{ t.page }}/{{ t.pages }}\
+         |{{ t.prev_url }}|{{ t.next_url }}|{{ t.action }}|{{ t.honeypot }}\
          {% for i in t.items %}|{{ i.id }},{{ i.parent_id }},{{ i.depth }},{{ i.author_name }},\
          {{ i.author_url }},{{ i.html }},{{ i.date | date('%Y') }},{{ i.can_reply }}{% endfor %}",
         c.clone(),
@@ -306,12 +314,12 @@ fn comments_helper_shape() {
     assert_eq!(
         out.html,
         format!(
-            "True|2|&#x2f;_comment|website\
+            "True|7|7|2/3|&#x2f;hello&#x2f;|&#x2f;hello&#x2f;?cpage=3|&#x2f;_comment|website\
              |{a},None,0,&lt;b&gt;Ann&lt;&#x2f;b&gt;,https:&#x2f;&#x2f;a.example&#x2f;?x=1&amp;y,<p>Hi &amp; bye</p>,2024,True\
              |{b},{a},1,Bea,None,<p>Re</p>,2024,False"
         )
     );
-    assert_eq!(*bridge.comment_args.lock().unwrap(), vec![id]);
+    assert_eq!(*bridge.comment_args.lock().unwrap(), vec![(id, 2)]);
     assert!(out.deps.contains(&post_key(id)));
     assert!(out.deps.contains("option:comments.enabled"));
 

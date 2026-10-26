@@ -28,7 +28,9 @@
 //!    per-IP limits (3 a minute, 20 an hour, in the database), `comments.enabled` and
 //!    the item (public `post`), the fields, the honeypot, moderation.
 //!
-//! Answers: approved → `303 See Other` to `<permalink>#comment-<id>`; pending, or
+//! Answers: approved → `303 See Other` to `<permalink>?cpage=<N>#comment-<id>`, `N`
+//! the comment page that holds it ([`CommentService::page_of`]; no query on page 1);
+//! pending, or
 //! discarded by the honeypot → `303` to `<permalink>#comment-pending`, the same answer
 //! byte for byte (the theme shows its "awaiting moderation" notice under `:target`). The
 //! permalink comes from [`SiteReader`](ferrite_core::SiteReader), never from the
@@ -46,7 +48,10 @@ use axum::{
 };
 use ferrite_core::{
     CoreError,
-    comments::{COMMENT_KIND, CommentInput, CommentService, Commenter, HONEYPOT_FIELD, Submitted},
+    comments::{
+        COMMENT_KIND, CommentInput, CommentService, Commenter, HONEYPOT_FIELD, Submitted,
+        comment_page_url,
+    },
 };
 use ferrite_domain::{CommentId, CommentStatus, ContentId};
 use futures::StreamExt;
@@ -328,11 +333,9 @@ async fn submit(
     match service.submit(input, Commenter::Anonymous, ip).await {
         // A discard answers exactly as a held comment (F18).
         Ok(Submitted::Discarded(_)) => pending(state, post).await,
-        Ok(Submitted::Accepted(c)) if c.status == CommentStatus::Approved => see_other(&format!(
-            "{}#comment-{}",
-            permalink(state, post).await,
-            c.id
-        )),
+        Ok(Submitted::Accepted(c)) if c.status == CommentStatus::Approved => {
+            approved(state, service, post, c.id).await
+        }
         Ok(Submitted::Accepted(_)) => pending(state, post).await,
         Err(CoreError::NotFound) => not_found(),
         Err(
@@ -358,6 +361,25 @@ async fn submit(
             text(StatusCode::INTERNAL_SERVER_ERROR, "internal server error\n")
         }
     }
+}
+
+/// `303` to the comment page of `post` that holds approved comment `id` (P34), at its
+/// anchor. A failed lookup (logged) sends to page 1, which still shows the thread.
+async fn approved(
+    state: &AppState,
+    service: &CommentService,
+    post: ContentId,
+    id: CommentId,
+) -> Response<Body> {
+    let page = match service.page_of(post, id).await {
+        Ok(page) => page.unwrap_or(1),
+        Err(e) => {
+            tracing::warn!(error = %e, "comment page lookup failed; sent to page 1");
+            1
+        }
+    };
+    let url = comment_page_url(&permalink(state, post).await, page);
+    see_other(&format!("{url}#comment-{id}"))
 }
 
 async fn pending(state: &AppState, post: ContentId) -> Response<Body> {

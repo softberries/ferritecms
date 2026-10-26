@@ -12,6 +12,7 @@ mod harness;
 mod admin;
 mod assets;
 mod budget;
+mod comment_pages;
 mod comments;
 mod content;
 mod cost;

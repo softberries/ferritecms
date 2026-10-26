@@ -5,15 +5,16 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use ferrite_domain::{Comment, CommentId, CommentQuery, CommentStatus, ContentId, Page, UserId};
 use ferrite_store::{
-    CommentRepo, StoreError, check_comment, check_item_comments_limit, check_limit, comment_counts,
-    comment_cursor, email_key, encode_comment_cursor, validate_text,
+    ApprovedTotals, CommentRepo, MAX_ITEM_COMMENTS, StoreError, check_comment, check_comment_roots,
+    check_limit, comment_counts, comment_cursor, cut_comment_page, email_key,
+    encode_comment_cursor, validate_text,
 };
-use sqlx::AssertSqlSafe;
+use sqlx::{AssertSqlSafe, Row};
 
 use super::SqliteRepos;
 use crate::{
     codec::{self, COMMENT_COLUMNS},
-    exec::run,
+    exec::{map_db_err, run},
 };
 
 /// The moderation list (`CommentRepo::list`). Only the filters given are in the SQL, so
@@ -35,6 +36,35 @@ pub fn comment_list_sql(status: bool, item: bool, cursor: bool) -> String {
     sql.push_str(" ORDER BY created_at DESC, id DESC LIMIT ?");
     sql
 }
+
+/// `approved`: the approved comments of item `?1` (status `?2`), each with `is_root`
+/// (1 when its parent is null, itself, or not an approved comment of the item; P34).
+macro_rules! approved_cte {
+    () => {
+        "approved AS ( \
+           SELECT c.id, c.parent_id, c.created_at, \
+             CASE WHEN c.parent_id IS NULL OR c.parent_id = c.id OR NOT EXISTS ( \
+               SELECT 1 FROM comments p \
+               WHERE p.id = c.parent_id AND p.item_id = ?1 AND p.status = ?2) \
+             THEN 1 ELSE 0 END AS is_root \
+           FROM comments c WHERE c.item_id = ?1 AND c.status = ?2)"
+    };
+}
+
+/// See [`approved_cte`].
+const APPROVED_CTE: &str = approved_cte!();
+
+/// [`APPROVED_CTE`] plus `roots`: each root with its 0-based position `pos` in
+/// `(created_at, id)` order.
+const THREAD_CTES: &str = concat!(
+    approved_cte!(),
+    ", roots AS ( \
+       SELECT id, ROW_NUMBER() OVER (ORDER BY created_at, id) - 1 AS pos \
+       FROM approved WHERE is_root = 1)"
+);
+
+/// Most ancestors `root_position` walks (a cycle of approved comments ends there).
+const MAX_ANCESTORS: u32 = 1000;
 
 #[async_trait]
 impl CommentRepo for SqliteRepos {
@@ -146,21 +176,79 @@ impl CommentRepo for SqliteRepos {
         comment_counts(rows)
     }
 
-    async fn approved_for_item(
+    async fn approved_page(
         &self,
         item: ContentId,
-        limit: u32,
+        offset: u32,
+        roots: u32,
     ) -> Result<Vec<Comment>, StoreError> {
-        let limit = check_item_comments_limit(limit)?;
+        let roots = check_comment_roots(roots)?;
         let rows = run!(&self.reader, |e| sqlx::query(AssertSqlSafe(format!(
-            "SELECT {COMMENT_COLUMNS} FROM comments WHERE item_id = ? AND status = ? \
-             ORDER BY created_at, id LIMIT ?"
+            "WITH RECURSIVE {THREAD_CTES}, \
+             kin AS (SELECT id, parent_id, \
+               ROW_NUMBER() OVER (PARTITION BY parent_id ORDER BY created_at, id) AS sib \
+               FROM approved WHERE is_root = 0), \
+             thread_rows(id, pos, tpath) AS ( \
+               SELECT id, pos, '' FROM roots WHERE pos >= ?3 AND pos < ?3 + ?4 \
+               UNION ALL \
+               SELECT k.id, t.pos, t.tpath || printf('%010d', k.sib) \
+               FROM kin k JOIN thread_rows t ON k.parent_id = t.id) \
+             SELECT {COMMENT_COLUMNS}, root_pos FROM ( \
+               SELECT c.*, t.pos AS root_pos, t.tpath AS tpath \
+               FROM thread_rows t JOIN comments c ON c.id = t.id) \
+             ORDER BY root_pos, tpath LIMIT ?5"
         )))
         .bind(item.as_uuid())
         .bind(CommentStatus::Approved.as_str())
-        .bind(limit)
+        .bind(i64::from(offset))
+        .bind(roots)
+        .bind(i64::from(MAX_ITEM_COMMENTS) + 1)
         .fetch_all(e))?;
-        rows.iter().map(codec::comment).collect()
+        let rows = rows
+            .iter()
+            .map(|r| {
+                let root: i64 = r.try_get("root_pos").map_err(map_db_err)?;
+                Ok((codec::comment(r)?, root))
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        Ok(cut_comment_page(rows))
+    }
+
+    async fn approved_totals(&self, item: ContentId) -> Result<ApprovedTotals, StoreError> {
+        let (comments, roots): (i64, i64) = run!(&self.reader, |e| sqlx::query_as(AssertSqlSafe(
+            format!("WITH {APPROVED_CTE} SELECT COUNT(*), COALESCE(SUM(is_root), 0) FROM approved")
+        ))
+        .bind(item.as_uuid())
+        .bind(CommentStatus::Approved.as_str())
+        .fetch_one(e))?;
+        Ok(ApprovedTotals {
+            comments: u64::try_from(comments).unwrap_or(0),
+            roots: u64::try_from(roots).unwrap_or(0),
+        })
+    }
+
+    async fn root_position(
+        &self,
+        item: ContentId,
+        comment: CommentId,
+    ) -> Result<Option<u64>, StoreError> {
+        let pos: Option<i64> = run!(&self.reader, |e| sqlx::query_scalar(AssertSqlSafe(
+            format!(
+                "WITH RECURSIVE {THREAD_CTES}, \
+                 up(id, parent_id, is_root, n) AS ( \
+                   SELECT id, parent_id, is_root, 0 FROM approved WHERE id = ?3 \
+                   UNION ALL \
+                   SELECT a.id, a.parent_id, a.is_root, up.n + 1 \
+                   FROM approved a JOIN up ON a.id = up.parent_id \
+                   WHERE up.is_root = 0 AND up.n < {MAX_ANCESTORS}) \
+                 SELECT roots.pos FROM up JOIN roots ON roots.id = up.id WHERE up.is_root = 1"
+            )
+        ))
+        .bind(item.as_uuid())
+        .bind(CommentStatus::Approved.as_str())
+        .bind(comment.as_uuid())
+        .fetch_optional(e))?;
+        Ok(pos.and_then(|p| u64::try_from(p).ok()))
     }
 
     async fn has_approved_from(&self, email: &str, name: &str) -> Result<bool, StoreError> {

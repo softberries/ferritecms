@@ -300,47 +300,6 @@ pub async fn comment_list_filters_and_pages(db: &TestDb) {
     }
 }
 
-pub async fn approved_for_item_is_oldest_first_and_capped(db: &TestDb) {
-    let store = db.store();
-    let repo = store.read().comments();
-    let author = fixture_user(store).await;
-    let item = post(store, &author, "thread").await;
-    let other = post(store, &author, "other-thread").await;
-    let base = Timestamp::now().as_micros();
-    let mut approved = Vec::new();
-    for i in 0..6i64 {
-        // Inserted newest first, two per timestamp.
-        let status = if i % 3 == 2 {
-            CommentStatus::Pending
-        } else {
-            CommentStatus::Approved
-        };
-        let c = comment(item, status, at(base - (i / 2) * 1000));
-        repo.insert(&c).await.unwrap();
-        if status == CommentStatus::Approved {
-            approved.push(c);
-        }
-    }
-    repo.insert(&comment(other, CommentStatus::Approved, at(base)))
-        .await
-        .unwrap();
-    approved.sort_by_key(|c| (c.created_at, c.id.as_uuid()));
-
-    assert_eq!(repo.approved_for_item(item, 500).await.unwrap(), approved);
-    assert_eq!(
-        repo.approved_for_item(item, 2).await.unwrap(),
-        approved[..2]
-    );
-    assert!(
-        repo.approved_for_item(ContentId::new(), 10)
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    assert!(is_invalid(repo.approved_for_item(item, 0).await));
-    assert!(is_invalid(repo.approved_for_item(item, 501).await));
-}
-
 pub async fn has_approved_from_matches_exact_lowercase(db: &TestDb) {
     let store = db.store();
     let repo = store.read().comments();

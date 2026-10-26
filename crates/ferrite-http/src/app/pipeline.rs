@@ -252,6 +252,11 @@ async fn finish(
     let template = resolve_template(&key, |n| theme.has_template(n));
     let page = page_number(route);
     let search = matches!(route, Route::Search { .. });
+    // The comment page (P34) is read on single items only.
+    let cpage = match &item {
+        Some(_) => query.cpage.unwrap_or(1),
+        None => 1,
+    };
     let ctx = RenderContext {
         site,
         item,
@@ -262,6 +267,7 @@ async fn finish(
             path: path.to_owned(),
             query_s: query.s,
             page,
+            cpage,
         },
         head_html,
         footer_html,

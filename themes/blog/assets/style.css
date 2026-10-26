@@ -813,6 +813,10 @@ button:hover {
   overflow: hidden;
 }
 
+.comment-pages {
+  margin-block: var(--space-m);
+}
+
 .comments-closed {
   color: var(--muted);
 }

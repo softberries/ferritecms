@@ -1,4 +1,6 @@
-{#- The comment thread and form of a post (06 §4). Expects `post`. No script: the
+{#- The comment thread and form of a post (06 §4). Expects `post`. The thread shows
+    one page of top-level threads (`?cpage=N`); the heading counts every approved
+    comment, and "Older comments" / "Newer comments" link the pages. No script: the
     "awaiting moderation" notice shows under `:target` after the form's redirect to
     `#comment-pending`, and replies use a form inside `<details>`, offered where core
     would accept the reply (`can_reply`, its stored depth rule). -#}
@@ -33,7 +35,7 @@
 {%- if thread %}
 <section class="comments wrap wrap--prose" id="comments" aria-labelledby="comments-title">
   <h2 id="comments-title" class="section-title">
-    {%- if thread.count == 0 %}No comments yet{% elif thread.count == 1 %}1 comment{% else %}{{ thread.count }} comments{% endif -%}
+    {%- if thread.total == 0 %}No comments yet{% elif thread.total == 1 %}1 comment{% else %}{{ thread.total }} comments{% endif -%}
   </h2>
   {%- if thread.open %}
   <p id="comment-pending" class="comment-notice" role="status">Thank you. Your comment is awaiting moderation.</p>
@@ -75,6 +77,17 @@
     </ol></li>
   {%- endfor %}
   </ol>
+  {%- endif %}
+  {%- if thread.pages > 1 %}
+  <nav class="pagination comment-pages" aria-label="Comment pages">
+    {%- if thread.prev_url %}
+    <a class="pagination__prev" rel="prev" href="{{ thread.prev_url }}"><span aria-hidden="true">←</span> Older comments</a>
+    {%- endif %}
+    <p class="pagination__status">Page {{ thread.page }} of {{ thread.pages }}</p>
+    {%- if thread.next_url %}
+    <a class="pagination__next" rel="next" href="{{ thread.next_url }}">Newer comments <span aria-hidden="true">→</span></a>
+    {%- endif %}
+  </nav>
   {%- endif %}
   {%- if thread.open %}
   <h3 class="comment-form__title">Leave a comment</h3>

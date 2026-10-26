@@ -45,8 +45,10 @@
 //! helpers `menu(name)`, `related(post, n=3)`, `query(type=…, term=…, limit=10)`,
 //! `asset(path)`, `image(media, size)`, `head()`, `footer()` (the plugins'
 //! `render.footer` HTML, safe; empty without footer plugins), `plugin_route(name, path)` (a plugin
-//! route's URL, `/_p/<name><path>`), `comments(post)` (the public thread of a post or
-//! none: `open`, `count`, `items`, `action` = `/_comment`, `honeypot` = `website`; each
+//! route's URL, `/_p/<name><path>`), `comments(post)` (page `?cpage=N` of the public
+//! thread of a post, or none: `open`, `count` = `total` (every approved comment),
+//! `page`, `pages`, `per_page`, `prev_url`, `next_url` (the neighbouring comment pages
+//! or none), `items`, `action` = `/_comment`, `honeypot` = `website`; each
 //! item `id`, `parent_id`, `depth`, `author_name`, `author_url`, `html` (core-rendered,
 //! safe), `date`, `can_reply`). Custom filters: `date(fmt)`,
 //! `excerpt(n)`, `slugify`, `json`.
@@ -69,7 +71,8 @@
 //! `archive:<kind>` for `related`/`query`; `menu:<name>` for
 //! menus; `post:<media>` for `image()`; `post:<id>` for `comments()`; plus every key the
 //! [`HelperBridge`] reports for `related`, `query`, `menu` (menu targets, hidden ones
-//! included) and `comments` (`option:comments.enabled`). The keys
+//! included) and `comments` (`option:comments.enabled`, `option:comments.per_page`,
+//! the permalink's keys). The keys
 //! of the `SiteRead` that produced the context (ancestors, listings, options) are the
 //! caller's to merge, as are `plugins` and the theme-settings option.
 
@@ -139,6 +142,9 @@ pub struct RequestInfo {
     pub query_s: Option<String>,
     /// 1-based listing page.
     pub page: u32,
+    /// 1-based comment page of a single item (`?cpage=N`, P34); what `comments()`
+    /// shows. 0 is page 1.
+    pub cpage: u32,
 }
 
 /// `archive` in templates: what a listing route lists (ruling R30). Set by the caller
@@ -238,6 +244,7 @@ impl Renderer {
         let scope = Arc::new(Scope {
             bridge,
             hash: theme.hash().to_owned(),
+            cpage: ctx.request.cpage.max(1),
             max_calls: self.max_bridge_calls,
             state: Mutex::new(ScopeState::default()),
         });
@@ -395,6 +402,8 @@ impl io::Write for CappedSink {
 struct Scope {
     bridge: Arc<dyn HelperBridge>,
     hash: String,
+    /// The comment page `comments()` asks for ([`RequestInfo::cpage`]).
+    cpage: u32,
     max_calls: u32,
     state: Mutex<ScopeState>,
 }
@@ -638,9 +647,9 @@ fn image(scope: &Scope, media: &Value, size: Option<&str>) -> Value {
     found.map_or(Value::from(()), |r| Value::from(Serde(&r)))
 }
 
-/// `comments(post)`: the post's public thread, or none (not a public post, an unknown
-/// id, the call budget spent). Records `post:<id>`; the bridge adds
-/// `option:comments.enabled`.
+/// `comments(post)`: the request's page (`request.cpage`) of the post's public thread,
+/// or none (not a public post, an unknown id, the call budget spent). Records
+/// `post:<id>`; the bridge adds `option:comments.enabled` and `option:comments.per_page`.
 fn comments(scope: &Scope, item: &Value) -> Value {
     let Some(id) = content_id(item) else {
         return Value::from(());
@@ -649,12 +658,14 @@ fn comments(scope: &Scope, item: &Value) -> Value {
     if !scope.take_call("comments") {
         return Value::from(());
     }
-    let (thread, deps) = scope.bridge.comments(id);
+    let (thread, deps) = scope.bridge.comments(id, scope.cpage);
     scope.merge(deps);
     thread.map_or(Value::from(()), thread_value)
 }
 
-/// The template shape of a thread: `{ open, count, items, action, honeypot }`, each
+/// The template shape of a thread page: `{ open, count, total, page, pages, per_page,
+/// prev_url, next_url, items, action, honeypot }` (`count` = `total`, every approved
+/// comment of the post; `prev_url`/`next_url` the neighbouring comment pages or none), each
 /// item `{ id, parent_id, depth, author_name, author_url, html, date, can_reply }`. `html` is the
 /// core-rendered body (escaped plain text in `<p>`/`<br>`), marked safe; everything else
 /// is plain data, so auto-escaping applies. `author_url` is handed on only when it is
@@ -683,7 +694,13 @@ fn thread_value(t: CommentThread) -> Value {
         .collect();
     minijinja::context! {
         open => t.open,
-        count => items.len(),
+        count => t.total,
+        total => t.total,
+        page => t.page,
+        pages => t.pages,
+        per_page => t.per_page,
+        prev_url => t.prev_url,
+        next_url => t.next_url,
         items => items,
         action => COMMENT_FORM_PATH,
         honeypot => HONEYPOT_FIELD,

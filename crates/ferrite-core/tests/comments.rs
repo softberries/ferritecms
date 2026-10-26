@@ -14,11 +14,12 @@ use std::{
 
 use ferrite_core::{
     Actor, AuthService, ContentDraft, ContentService, CoreError, PermalinkRules, Scopes,
-    UserService,
+    SiteReader, UserService,
     auth::SiteKey,
     comments::{
-        COMMENT_HOUR_SCOPE, COMMENTS_ENABLED_DEFAULT, COMMENTS_MODERATION_DEFAULT, CommentInput,
-        CommentService, Commenter, MAX_COMMENT_BODY, Submitted, render_body,
+        COMMENT_HOUR_SCOPE, COMMENTS_ENABLED_DEFAULT, COMMENTS_MODERATION_DEFAULT,
+        COMMENTS_PER_PAGE_DEFAULT, CommentInput, CommentService, Commenter, MAX_COMMENT_BODY,
+        PER_PAGE_OPTION, Submitted, render_body,
     },
     events::post_key,
 };
@@ -771,7 +772,7 @@ async fn delete_only_spam_or_trash(db: &TestDb) {
     assert_eq!(s.count().await, 1);
 }
 
-async fn thread_depths_and_cap(db: &TestDb) {
+async fn thread_depths_and_pages(db: &TestDb) {
     let s = site(db).await;
     let post = s.published("post", "thread").await;
 
@@ -805,7 +806,14 @@ async fn thread_depths_and_cap(db: &TestDb) {
     for r in [&a, &d, &b, &gone, &e, &c, &held] {
         repo.insert(r).await.unwrap();
     }
-    let thread = s.comments.thread(post.id).await.unwrap();
+    let reader = reader(&s);
+    let thread = reader
+        .comments(post.id, 1)
+        .await
+        .unwrap()
+        .value
+        .unwrap()
+        .items;
     let shape: Vec<(CommentId, u8, Option<CommentId>)> = thread
         .iter()
         .map(|t| (t.id, t.depth, t.parent_id))
@@ -830,17 +838,79 @@ async fn thread_depths_and_cap(db: &TestDb) {
     );
     assert_eq!(first.date, a.created_at);
 
-    // At most 500 approved comments are shown (the oldest).
+    // Pages of top-level threads (P34): 601 roots, 50 a page by default, the real total.
     let other = s.published("post", "busy").await;
-    for n in 0..501 {
+    let mut rows = Vec::new();
+    for n in 0..601 {
         let mut r = row(None, 100 + n, CommentStatus::Approved);
         r.item_id = other.id;
         repo.insert(&r).await.unwrap();
+        rows.push(r);
     }
-    let thread = s.comments.thread(other.id).await.unwrap();
-    assert_eq!(thread.len(), 500);
-    assert_eq!(thread[0].date, at(100));
-    assert_eq!(thread[499].date, at(599));
+    let read = reader.comments(other.id, 1).await.unwrap();
+    assert!(read.deps.contains(&format!("option:{PER_PAGE_OPTION}")));
+    let first = read.value.unwrap();
+    assert_eq!(
+        (first.total, first.page, first.pages, first.per_page),
+        (601, 1, 13, COMMENTS_PER_PAGE_DEFAULT)
+    );
+    assert_eq!(first.items.len(), 50);
+    assert_eq!(first.items[0].date, at(100));
+    assert_eq!(
+        (first.prev_url.as_deref(), first.next_url.as_deref()),
+        (None, Some("/busy/?cpage=2"))
+    );
+    let second = reader.comments(other.id, 2).await.unwrap().value.unwrap();
+    assert_eq!(second.items[0].date, at(150));
+    assert_eq!(
+        (second.prev_url.as_deref(), second.next_url.as_deref()),
+        (Some("/busy/"), Some("/busy/?cpage=3"))
+    );
+    let last = reader.comments(other.id, 13).await.unwrap().value.unwrap();
+    assert_eq!(last.items.len(), 1);
+    assert_eq!(last.items[0].date, at(700));
+    assert_eq!(
+        (last.prev_url.as_deref(), last.next_url.as_deref()),
+        (Some("/busy/?cpage=12"), None)
+    );
+    // Past the end is the last page; 0 is the first.
+    let past = reader.comments(other.id, 99).await.unwrap().value.unwrap();
+    assert_eq!((past.page, past.items.clone()), (13, last.items.clone()));
+    let zero = reader.comments(other.id, 0).await.unwrap().value.unwrap();
+    assert_eq!((zero.page, zero.items), (1, first.items));
+
+    // `comments.per_page` and the page a comment is on.
+    s.set(PER_PAGE_OPTION, json!(2)).await;
+    let small = reader.comments(other.id, 1).await.unwrap().value.unwrap();
+    assert_eq!((small.pages, small.items.len()), (301, 2));
+    assert_eq!(
+        s.comments.page_of(other.id, rows[5].id).await.unwrap(),
+        Some(3)
+    );
+    assert_eq!(
+        s.comments.page_of(other.id, rows[0].id).await.unwrap(),
+        Some(1)
+    );
+    assert_eq!(s.comments.page_of(post.id, held.id).await.unwrap(), None);
+    // A thread with no comments has one empty page.
+    let empty = s.published("post", "empty").await;
+    let none = reader.comments(empty.id, 3).await.unwrap().value.unwrap();
+    assert_eq!(
+        (none.total, none.page, none.pages, none.items.len()),
+        (0, 1, 1, 0)
+    );
+    assert_eq!((none.prev_url, none.next_url), (None, None));
+}
+
+fn reader(s: &Site) -> SiteReader {
+    SiteReader::new(
+        s.store.clone(),
+        Arc::new(PermalinkRules::default()),
+        Arc::new(|hash: &ferrite_domain::ArtifactHash, name: &str| {
+            format!("/_media/{hash}/{name}")
+        }),
+        Arc::new(Timestamp::now),
+    )
 }
 
 #[test]
@@ -869,5 +939,5 @@ backend_tests!(
     honeypot_discards,
     comment_limits,
     delete_only_spam_or_trash,
-    thread_depths_and_cap,
+    thread_depths_and_pages,
 );

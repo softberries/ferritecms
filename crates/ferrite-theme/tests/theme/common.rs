@@ -135,7 +135,7 @@ pub struct FakeBridge {
     pub deps: DepKeys,
     /// What `comments()` returns, and the ids it was asked for.
     pub comments: Option<CommentThread>,
-    pub comment_args: Mutex<Vec<ContentId>>,
+    pub comment_args: Mutex<Vec<(ContentId, u32)>>,
 }
 
 impl HelperBridge for FakeBridge {
@@ -160,9 +160,9 @@ impl HelperBridge for FakeBridge {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.image.clone()
     }
-    fn comments(&self, item: ContentId) -> Bridged<Option<CommentThread>> {
+    fn comments(&self, item: ContentId, page: u32) -> Bridged<Option<CommentThread>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        self.comment_args.lock().unwrap().push(item);
+        self.comment_args.lock().unwrap().push((item, page));
         (self.comments.clone(), self.deps.clone())
     }
 }

@@ -617,10 +617,15 @@ fn search_query_is_capped() {
 
 #[test]
 fn normal_query() {
-    let q = NormalQuery::parse(Some("utm=1&s=a+b%20c&page=2&s=ignored"));
+    let q = NormalQuery::parse(Some("utm=1&s=a+b%20c&page=2&s=ignored&cpage=3&cpage=4"));
     assert_eq!(q.s.as_deref(), Some("a b c"));
     assert_eq!(q.page, Some(2));
-    assert_eq!(q.cache_query(), "page=2&s=a%20b%20c");
+    assert_eq!(q.cpage, Some(3));
+    assert_eq!(q.cache_query(), "cpage=3&page=2&s=a%20b%20c");
+    assert_eq!(
+        NormalQuery::parse(Some("cpage=4294967295")).cpage,
+        Some(u32::MAX)
+    );
     assert_eq!(NormalQuery::parse(None), NormalQuery::default());
     assert_eq!(NormalQuery::parse(Some("")).cache_query(), "");
     for raw in [
@@ -632,6 +637,12 @@ fn normal_query() {
         "s=",
         "s=%ff",
         "s=%00",
+        "cpage=1",
+        "cpage=0",
+        "cpage=01",
+        "cpage=abc",
+        "cpage=-2",
+        "cpage=4294967296",
     ] {
         assert_eq!(
             NormalQuery::parse(Some(raw)),

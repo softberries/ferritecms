@@ -47,7 +47,7 @@ use std::{
 use ferrite_domain::{
     Comment, CommentId, CommentQuery, CommentStatus, ContentId, ContentStatus, Page, Timestamp,
 };
-use ferrite_store::{MAX_ITEM_COMMENTS, Repos, Store, StoreError};
+use ferrite_store::{Repos, Store, StoreError};
 use html_escape::encode_text;
 use serde_json::Value;
 
@@ -71,6 +71,14 @@ pub const ENABLED_OPTION: &str = "comments.enabled";
 pub const MODERATION_OPTION: &str = "comments.moderation";
 /// The values of [`MODERATION_OPTION`].
 pub const MODERATION_CHOICES: [&str; 2] = ["all", "known"];
+/// The option holding how many top-level threads a public comment page shows (P34).
+pub const PER_PAGE_OPTION: &str = "comments.per_page";
+/// `comments.per_page` when unset (P34).
+pub const COMMENTS_PER_PAGE_DEFAULT: u32 = 50;
+/// The largest `comments.per_page`.
+pub const MAX_COMMENTS_PER_PAGE: u32 = 100;
+/// The query parameter of a public comment page (`?cpage=N`, P34).
+pub const COMMENT_PAGE_PARAM: &str = "cpage";
 
 /// Longest body, in characters.
 pub const MAX_COMMENT_BODY: usize = 10_000;
@@ -84,8 +92,6 @@ pub const MAX_COMMENT_URL: usize = 200;
 pub const MAX_COMMENT_DEPTH: u8 = 5;
 /// More links than this hold a comment for moderation under `known`.
 pub const MAX_KNOWN_LINKS: usize = 2;
-/// Most approved comments a thread shows (the oldest).
-pub const MAX_THREAD: u32 = MAX_ITEM_COMMENTS;
 /// The only content type that takes comments (P11; others later, P29).
 pub const COMMENT_KIND: &str = "post";
 /// Where the theme form posts (`POST /_comment`, P12).
@@ -175,7 +181,7 @@ pub struct CommentCounts {
 pub struct CommentPublic {
     pub id: CommentId,
     /// The comment replied to, `None` at the top level and for a reply whose parent is
-    /// not shown (no longer approved, or past the cap), which is shown at depth 0.
+    /// not approved (a root of its own thread, P34), which is shown at depth 0.
     pub parent_id: Option<CommentId>,
     /// 0 at the top level.
     pub depth: u8,
@@ -192,14 +198,29 @@ pub struct CommentPublic {
     pub can_reply: bool,
 }
 
-/// A post's public thread ([`SiteReader::comments`](crate::SiteReader::comments)).
+/// One page of a post's public thread
+/// ([`SiteReader::comments`](crate::SiteReader::comments), P34).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommentThread {
     /// `comments.enabled`: whether the form is shown. A closed thread still lists its
     /// approved comments (as WordPress does).
     pub open: bool,
-    /// The approved comments in thread order (at most [`MAX_THREAD`]).
+    /// The page's approved comments in thread order: `per_page` top-level threads, each
+    /// root followed by its approved replies (at most
+    /// [`MAX_ITEM_COMMENTS`](ferrite_store::MAX_ITEM_COMMENTS) rows).
     pub items: Vec<CommentPublic>,
+    /// Every approved comment of the post.
+    pub total: u64,
+    /// 1-based, at most `pages`.
+    pub page: u32,
+    /// At least 1.
+    pub pages: u32,
+    /// Top-level threads per page (`comments.per_page`).
+    pub per_page: u32,
+    /// The post's permalink for page `page - 1` ([`comment_page_url`]); `None` on page 1.
+    pub prev_url: Option<String>,
+    /// The post's permalink for page `page + 1`; `None` on the last page.
+    pub next_url: Option<String>,
 }
 
 /// How comments are moderated.
@@ -216,19 +237,50 @@ pub enum Moderation {
 pub struct CommentSettings {
     pub enabled: bool,
     pub moderation: Moderation,
+    /// Top-level threads per public page (1..=[`MAX_COMMENTS_PER_PAGE`]).
+    pub per_page: u32,
 }
 
-/// Reads `comments.enabled` and `comments.moderation` through `repos`; an unset (or,
-/// against the validator, malformed) value is the default.
+/// Reads `comments.enabled`, `comments.moderation` and `comments.per_page` through
+/// `repos`; an unset (or, against the validator, malformed) value is the default.
 pub async fn comment_settings(repos: &dyn Repos) -> Result<CommentSettings, CoreError> {
     let options = repos.options();
     let enabled = options.get(ENABLED_OPTION).await?.map(|e| e.value);
     let moderation = options.get(MODERATION_OPTION).await?.map(|e| e.value);
-    Ok(settings_from(enabled.as_ref(), moderation.as_ref()))
+    let per_page = options.get(PER_PAGE_OPTION).await?.map(|e| e.value);
+    Ok(settings_from(
+        enabled.as_ref(),
+        moderation.as_ref(),
+        per_page.as_ref(),
+    ))
 }
 
-/// [`CommentSettings`] from the two stored values.
-pub fn settings_from(enabled: Option<&Value>, moderation: Option<&Value>) -> CommentSettings {
+/// `comments.per_page` from its stored value: an integer in
+/// 1..=[`MAX_COMMENTS_PER_PAGE`], else [`COMMENTS_PER_PAGE_DEFAULT`].
+pub(crate) fn per_page_from(value: Option<&Value>) -> u32 {
+    value
+        .and_then(Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|n| (1..=MAX_COMMENTS_PER_PAGE).contains(n))
+        .unwrap_or(COMMENTS_PER_PAGE_DEFAULT)
+}
+
+/// The URL of comment page `page` of the item at `path`: `path` itself for page 1,
+/// else `path?cpage=N` (P34).
+pub fn comment_page_url(path: &str, page: u32) -> String {
+    if page <= 1 {
+        path.to_owned()
+    } else {
+        format!("{path}?{COMMENT_PAGE_PARAM}={page}")
+    }
+}
+
+/// [`CommentSettings`] from the three stored values.
+pub fn settings_from(
+    enabled: Option<&Value>,
+    moderation: Option<&Value>,
+    per_page: Option<&Value>,
+) -> CommentSettings {
     let enabled = enabled
         .and_then(Value::as_bool)
         .unwrap_or(COMMENTS_ENABLED_DEFAULT);
@@ -243,6 +295,7 @@ pub fn settings_from(enabled: Option<&Value>, moderation: Option<&Value>) -> Com
         } else {
             Moderation::Known
         },
+        per_page: per_page_from(per_page),
     }
 }
 
@@ -413,7 +466,7 @@ fn check_url(url: &str) -> Result<String, CoreError> {
     Ok(url.to_owned())
 }
 
-/// Records and moderates comments and builds a post's public thread.
+/// Records and moderates comments, and finds the public page that shows one.
 pub struct CommentService {
     store: Arc<dyn Store>,
     auth: Arc<AuthService>,
@@ -727,18 +780,19 @@ impl CommentService {
         finish(tx, done).await
     }
 
-    /// The approved comments of `item` as the public site shows them: the oldest
-    /// [`MAX_THREAD`], each reply right after its parent (depth first, oldest first), a
-    /// reply whose parent is not shown at depth 0. No visibility check: callers show it
-    /// only on a public post.
-    pub async fn thread(&self, item: ContentId) -> Result<Vec<CommentPublic>, CoreError> {
-        let rows = self
-            .store
-            .read()
-            .comments()
-            .approved_for_item(item, MAX_THREAD)
-            .await?;
-        public_thread(self.store.read(), rows).await
+    /// The public comment page (1-based, P34) that shows approved comment `comment` of
+    /// `item` under the current `comments.per_page`: its root's position divided by the
+    /// page size, plus one. `None` when it is not an approved comment of `item`. No
+    /// visibility check: for the redirect after a submit.
+    pub async fn page_of(
+        &self,
+        item: ContentId,
+        comment: CommentId,
+    ) -> Result<Option<u32>, CoreError> {
+        let repos = self.store.read();
+        let per_page = comment_settings(repos).await?.per_page;
+        let position = repos.comments().root_position(item, comment).await?;
+        Ok(position.map(|p| u32::try_from(p / u64::from(per_page) + 1).unwrap_or(u32::MAX)))
     }
 }
 
@@ -781,10 +835,10 @@ async fn reply_allowed(
     Ok(true)
 }
 
-/// Approved `rows` (oldest first) as the public thread, with
-/// [`can_reply`](CommentPublic::can_reply) from the stored chains. Chains inside
-/// `rows` cost no store call; a reply whose ancestors are not shown (trashed, spam,
-/// past the cap) costs at most [`MAX_COMMENT_DEPTH`] lookups.
+/// Approved `rows` (one [`approved_page`](ferrite_store::CommentRepo::approved_page))
+/// as the public thread, with [`can_reply`](CommentPublic::can_reply) from the stored
+/// chains. Chains inside `rows` cost no store call; a reply whose ancestors are not
+/// shown (trashed, spam, held) costs at most [`MAX_COMMENT_DEPTH`] lookups.
 pub(crate) async fn public_thread(
     repos: &dyn Repos,
     rows: Vec<Comment>,
@@ -800,8 +854,9 @@ pub(crate) async fn public_thread(
     Ok(thread_of(rows, &replyable))
 }
 
-/// `rows` (oldest first) in thread order with depths; `replyable` holds the ids a reply
-/// may go to.
+/// `rows` in thread order with depths (roots in the order given, each reply right after
+/// its parent, siblings in the order given); `replyable` holds the ids a reply may go
+/// to.
 fn thread_of(rows: Vec<Comment>, replyable: &HashSet<CommentId>) -> Vec<CommentPublic> {
     let index: HashMap<CommentId, usize> =
         rows.iter().enumerate().map(|(i, c)| (c.id, i)).collect();
@@ -868,6 +923,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn comment_page_urls() {
+        assert_eq!(comment_page_url("/hello/", 0), "/hello/");
+        assert_eq!(comment_page_url("/hello/", 1), "/hello/");
+        assert_eq!(comment_page_url("/hello/", 3), "/hello/?cpage=3");
+    }
+
+    #[test]
     fn links_are_counted_once_each() {
         assert_eq!(count_links("no links"), 0);
         assert_eq!(count_links("http://a https://b www.c"), 3);
@@ -914,24 +976,40 @@ mod tests {
 
     #[test]
     fn defaults_and_stored_settings() {
-        let d = settings_from(None, None);
+        let d = settings_from(None, None, None);
         assert_eq!(
             d,
             CommentSettings {
                 enabled: true,
-                moderation: Moderation::Known
+                moderation: Moderation::Known,
+                per_page: COMMENTS_PER_PAGE_DEFAULT,
             }
         );
         let s = settings_from(
             Some(&Value::Bool(false)),
             Some(&Value::String("all".into())),
+            Some(&Value::from(7)),
         );
         assert!(!s.enabled);
         assert_eq!(s.moderation, Moderation::All);
+        assert_eq!(s.per_page, 7);
         assert_eq!(
-            settings_from(None, Some(&Value::String("bogus".into()))).moderation,
+            settings_from(None, Some(&Value::String("bogus".into())), None).moderation,
             Moderation::Known
         );
+        for bad in [
+            Value::from(0),
+            Value::from(101),
+            Value::from(-1),
+            Value::from(2.5),
+            Value::from("5"),
+        ] {
+            assert_eq!(
+                settings_from(None, None, Some(&bad)).per_page,
+                COMMENTS_PER_PAGE_DEFAULT,
+                "{bad}"
+            );
+        }
     }
 
     #[test]

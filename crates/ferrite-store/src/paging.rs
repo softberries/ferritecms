@@ -392,18 +392,33 @@ fn micros_cursor(tag: &str, cursor: &str) -> Result<(i64, Uuid), StoreError> {
     }
 }
 
-/// Most approved comments `CommentRepo::approved_for_item` returns (M2a-2b: at most 500
-/// shown per item).
+/// Most rows `CommentRepo::approved_page` returns, and most roots it may be asked for.
 pub const MAX_ITEM_COMMENTS: u32 = 500;
 
-/// Validates an `approved_for_item` limit: 1..=[`MAX_ITEM_COMMENTS`].
-pub fn check_item_comments_limit(limit: u32) -> Result<i64, StoreError> {
-    if limit == 0 || limit > MAX_ITEM_COMMENTS {
+/// Validates an `approved_page` root count: 1..=[`MAX_ITEM_COMMENTS`].
+pub fn check_comment_roots(roots: u32) -> Result<i64, StoreError> {
+    if roots == 0 || roots > MAX_ITEM_COMMENTS {
         return Err(StoreError::Invalid(format!(
-            "limit must be between 1 and {MAX_ITEM_COMMENTS}"
+            "roots must be between 1 and {MAX_ITEM_COMMENTS}"
         )));
     }
-    Ok(i64::from(limit))
+    Ok(i64::from(roots))
+}
+
+/// Cuts `rows` of an `approved_page` query (fetched with a limit of
+/// [`MAX_ITEM_COMMENTS`]` + 1`, each with its root's position) to at most
+/// [`MAX_ITEM_COMMENTS`] rows: after the last whole root, or inside the first root when
+/// it alone is longer.
+pub fn cut_comment_page<T>(mut rows: Vec<(T, i64)>) -> Vec<T> {
+    let max = MAX_ITEM_COMMENTS as usize;
+    if rows.len() > max {
+        let partial = rows[max].1;
+        rows.truncate(max);
+        if rows.first().is_some_and(|(_, root)| *root != partial) {
+            rows.retain(|(_, root)| *root != partial);
+        }
+    }
+    rows.into_iter().map(|(row, _)| row).collect()
 }
 
 /// Validates a comment before any SQL: no NUL in any text.
@@ -822,9 +837,25 @@ mod tests {
         assert!(audit_cursor(&c).is_err());
         assert!(comment_cursor(&encode_audit_cursor(at, id)).is_err());
         assert!(comment_cursor(&Cursor::encode(COMMENT_CURSOR_TAG, &json!(i64::MIN), id)).is_err());
-        assert!(check_item_comments_limit(0).is_err());
-        assert_eq!(check_item_comments_limit(500).unwrap(), 500);
-        assert!(check_item_comments_limit(501).is_err());
+        assert!(check_comment_roots(0).is_err());
+        assert_eq!(check_comment_roots(500).unwrap(), 500);
+        assert!(check_comment_roots(501).is_err());
+        // The page cut: after the last whole root, else inside the first one.
+        let max = MAX_ITEM_COMMENTS as i64;
+        let rows = |roots: &[(i64, i64)]| -> Vec<(i64, i64)> {
+            roots
+                .iter()
+                .flat_map(|&(root, n)| (0..n).map(move |i| (root * 10_000 + i, root)))
+                .collect()
+        };
+        assert_eq!(cut_comment_page(rows(&[(0, 3), (1, 2)])).len(), 5);
+        assert_eq!(cut_comment_page(rows(&[(0, max)])).len(), 500);
+        assert_eq!(cut_comment_page(rows(&[(0, 300), (1, max)])).len(), 300);
+        assert_eq!(cut_comment_page(rows(&[(0, max + 1)])).len(), 500);
+        assert_eq!(
+            cut_comment_page(rows(&[(0, 250), (1, 250), (2, 1)])).len(),
+            500
+        );
 
         let hash = "a".repeat(64);
         check_key_hash(&hash).unwrap();

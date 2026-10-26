@@ -14,6 +14,7 @@
 //! | `permalink.post`, `permalink.page` | a permalink structure ([`PermalinkRules::from_options`]); the pair is checked against the registered types and taxonomies inside the write's transaction |
 //! | `comments.enabled` | boolean (default `true`, [`COMMENTS_ENABLED_DEFAULT`](crate::comments::COMMENTS_ENABLED_DEFAULT)) |
 //! | `comments.moderation` | `"all"` (every guest comment is held) or `"known"` (default, [`COMMENTS_MODERATION_DEFAULT`](crate::comments::COMMENTS_MODERATION_DEFAULT): a commenter with an approved comment posts directly; anyone who knows a regular guest's exact name and e-mail posts unmoderated as them, which `"all"` prevents) |
+//! | `comments.per_page` | integer 1..=100 (default 50, [`COMMENTS_PER_PAGE_DEFAULT`](crate::comments::COMMENTS_PER_PAGE_DEFAULT)): top-level comment threads per public page |
 //!
 //! A `null` value (or a missing key in the store) means the default.
 
@@ -24,7 +25,10 @@ use serde_json::{Map, Value};
 use crate::{
     Actor, CoreError,
     actor::{Area, require_read},
-    comments::{ENABLED_OPTION, MODERATION_CHOICES, MODERATION_OPTION},
+    comments::{
+        ENABLED_OPTION, MAX_COMMENTS_PER_PAGE, MODERATION_CHOICES, MODERATION_OPTION,
+        PER_PAGE_OPTION,
+    },
     permalink::{PAGE_OPTION, POST_OPTION, PermalinkRules},
 };
 
@@ -113,6 +117,13 @@ pub const SETTINGS: &[SettingDef] = &[
     SettingDef {
         key: MODERATION_OPTION,
         kind: SettingKind::Choice(&MODERATION_CHOICES),
+    },
+    SettingDef {
+        key: PER_PAGE_OPTION,
+        kind: SettingKind::Integer {
+            min: 1,
+            max: MAX_COMMENTS_PER_PAGE as i64,
+        },
     },
 ];
 

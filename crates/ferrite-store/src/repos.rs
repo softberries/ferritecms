@@ -873,6 +873,15 @@ pub trait AuditRepo: Send + Sync {
     async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<AuditEntry>, StoreError>;
 }
 
+/// An item's approved comments ([`CommentRepo::approved_totals`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ApprovedTotals {
+    /// Every approved comment.
+    pub comments: u64,
+    /// Approved comments whose parent is null or not approved (P34).
+    pub roots: u64,
+}
+
 /// Comments (M2a-2b P11). Core validates lengths, URLs, depth and the parent's status;
 /// the store refuses NUL in every text (`Invalid`) and folds `author_email` with
 /// [`email_key`](crate::email_key) on insert and lookup. `status` has no CHECK (P2):
@@ -905,13 +914,33 @@ pub trait CommentRepo: Send + Sync {
         &self,
         item: Option<ContentId>,
     ) -> Result<BTreeMap<CommentStatus, u64>, StoreError>;
-    /// Up to `limit` (1..=[`MAX_ITEM_COMMENTS`](crate::MAX_ITEM_COMMENTS)) approved
-    /// comments of `item`, oldest first (`created_at, id`).
-    async fn approved_for_item(
+    /// One page of `item`'s public thread (M2b-2 P34). A **root** is an approved comment
+    /// whose parent is null, itself, or not approved; roots are ordered
+    /// `(created_at, id)`. Returns roots `offset..offset + roots` (`roots`
+    /// 1..=[`MAX_ITEM_COMMENTS`](crate::MAX_ITEM_COMMENTS), else `Invalid`), each followed
+    /// by its approved descendants depth first, siblings oldest first (`created_at, id`):
+    /// the thread order. One recursive query. At most
+    /// [`MAX_ITEM_COMMENTS`](crate::MAX_ITEM_COMMENTS) rows: when the page holds more,
+    /// the cut falls after the last whole root, or, when the first root's thread alone
+    /// is longer, inside it (a depth-first prefix). A root whose thread is cut away is
+    /// on no page.
+    async fn approved_page(
         &self,
         item: ContentId,
-        limit: u32,
+        offset: u32,
+        roots: u32,
     ) -> Result<Vec<Comment>, StoreError>;
+    /// How many approved comments and roots (as [`approved_page`](Self::approved_page)
+    /// defines them) `item` has; zero for an unknown item.
+    async fn approved_totals(&self, item: ContentId) -> Result<ApprovedTotals, StoreError>;
+    /// The 0-based position among `item`'s roots of the root whose thread holds
+    /// `comment` (walking its approved ancestors); `None` when `comment` is not an
+    /// approved comment of `item` (or its chain reaches no root).
+    async fn root_position(
+        &self,
+        item: ContentId,
+        comment: CommentId,
+    ) -> Result<Option<u64>, StoreError>;
     /// Whether an anonymous commenter has an approved comment (R2 `known`, F19): an
     /// approved row inserted without `user_id` whose `author_email` equals
     /// `email_key(email)` and whose `author_name` equals `name` exactly (callers trim

@@ -41,11 +41,12 @@ pub trait HelperBridge: Send + Sync {
     /// The `size` variant of a public media item (the original for an unknown size).
     /// The renderer records `post:<media>`.
     fn image(&self, media: ContentId, size: &str) -> Option<ImageRef>;
-    /// The public comment thread of `item` (`SiteReader::comments`): `None` unless
-    /// `item` is a public post. Approved comments only, never an e-mail or address
-    /// hash. Keys: `post:<item>` and `option:comments.enabled`. The default has no data
-    /// (bridges without comments, such as error pages and tests).
-    fn comments(&self, _item: ContentId) -> Bridged<Option<CommentThread>> {
+    /// Page `page` (1-based, clamped to the last) of the public comment thread of
+    /// `item` (`SiteReader::comments`): `None` unless `item` is a public post. Approved
+    /// comments only, never an e-mail or address hash. Keys: `post:<item>`,
+    /// `option:comments.enabled` and `option:comments.per_page`. The default has no
+    /// data (bridges without comments, such as error pages and tests).
+    fn comments(&self, _item: ContentId, _page: u32) -> Bridged<Option<CommentThread>> {
         (None, DepKeys::default())
     }
 }
