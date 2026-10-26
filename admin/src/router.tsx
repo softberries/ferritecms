@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { type RouterHistory, createRouter } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
 import { routeTree } from "./routeTree.gen";
+import { parseSearch, stringifySearch } from "./lib/search-params";
 import { RouteError } from "./shell/error-boundary";
 import { NotFound } from "./shell/not-found";
 
@@ -10,6 +11,9 @@ export function createAppRouter(queryClient: QueryClient, history?: RouterHistor
     routeTree,
     basepath: "/admin",
     defaultPreload: "intent",
+    // Free text (`q`) stays a string (`lib/search-params.ts`).
+    parseSearch,
+    stringifySearch,
     // Inside the `_app` shell when the failing or missing route is under it (fuzzy
     // not-found mode, the default): the not-found screen is a component, not a
     // `/not-found` route (pre-flight F20).

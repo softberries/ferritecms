@@ -33,16 +33,16 @@ export interface ListSearch {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// The router's default parser JSON-decodes each value, so `q=2026` arrives as a number
-// and `mine=true` as a boolean; both spellings are accepted.
+// The router JSON-decodes each value but free text (`lib/search-params.ts`): `q` is the
+// text as typed, `mine=true` a boolean (the string spelling is accepted too).
 const schema = z.object({
   status: z
     .enum([...CONTENT_STATUSES, "all"])
     .optional()
     .catch(undefined),
   q: z
-    .union([z.string(), z.number()])
-    .transform((v) => String(v).trim())
+    .string()
+    .transform((v) => v.trim())
     .optional()
     .catch(undefined),
   mine: z

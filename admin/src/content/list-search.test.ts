@@ -6,6 +6,7 @@ import {
   parseListSearch,
   searchDisables,
 } from "./list-search";
+import { parseSearch, stringifySearch } from "@/lib/search-params";
 
 const TERM = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 const ME = "0190a1b2-0000-7000-8000-000000000001";
@@ -24,8 +25,8 @@ describe("list_search_test", () => {
       parseListSearch({ status: "draft", q: " wasm ", mine: true, term: TERM, order: "title" }),
     ).toEqual({ status: "draft", q: "wasm", mine: true, term: TERM, order: "title" });
     expect(parseListSearch({ status: "trash" })).toEqual({ status: "trash" });
-    // The router JSON-decodes values: a numeric search and a string boolean both work.
-    expect(parseListSearch({ q: 2026, mine: "true" })).toEqual({ q: "2026", mine: true });
+    // A string boolean works too.
+    expect(parseListSearch({ q: "2026", mine: "true" })).toEqual({ q: "2026", mine: true });
     expect(parseListSearch({ term: TERM.toUpperCase() })).toEqual({ term: TERM });
   });
 
@@ -67,5 +68,15 @@ describe("list_search_test", () => {
     expect(hasFilters({ mine: true })).toBe(true);
     expect(hasFilters({ q: "x" })).toBe(true);
     expect(hasFilters({ term: TERM })).toBe(true);
+  });
+});
+
+describe("free_text_search", () => {
+  test("numeric_looking_searches_stay_strings", () => {
+    for (const q of ["2024", "531038e6", "1e3"]) {
+      const parsed = parseListSearch(parseSearch(`?q=${q}`));
+      expect(parsed).toEqual({ q });
+      expect(parseListSearch(parseSearch(stringifySearch(parsed)))).toEqual({ q });
+    }
   });
 });

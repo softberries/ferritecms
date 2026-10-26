@@ -4,22 +4,10 @@
 // redirect dialog (the palette's "New redirect"). Both replace the history entry.
 
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { MAX_REDIRECT_QUERY } from "@/api/redirects";
 import { useMe } from "@/auth/session";
 import { ForbiddenState } from "@/components/kit/forbidden-state";
-import { type RedirectsSearch, RedirectsScreen } from "@/structure/redirects/redirects-table";
-
-/** `validateSearch`: valid members only, defaults omitted. The router JSON-decodes each
- * value, so `q=2026` arrives as a number. */
-function parseRedirectsSearch(raw: Record<string, unknown>): RedirectsSearch {
-  const out: RedirectsSearch = {};
-  if (typeof raw.q === "string" || typeof raw.q === "number") {
-    const q = Array.from(String(raw.q).trim()).slice(0, MAX_REDIRECT_QUERY).join("");
-    if (q) out.q = q;
-  }
-  if (raw.new === true || raw.new === "true") out.new = true;
-  return out;
-}
+import { parseRedirectsSearch } from "@/structure/redirects/redirects-search";
+import { RedirectsScreen } from "@/structure/redirects/redirects-table";
 
 export const Route = createFileRoute("/_app/structure/redirects")({
   validateSearch: parseRedirectsSearch,

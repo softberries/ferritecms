@@ -139,6 +139,27 @@ test("tabs_counts_and_filtering", async ({ as, site, backend }) => {
   }
 });
 
+test("numeric_search_survives_a_reload", async ({ as, site, backend }) => {
+  // The router keeps free text as typed (M2b-2 Task 14): `?q=2024` stays the text "2024",
+  // not a number, through a reload and in the request.
+  const admin = await ContentApi.as(backend, site.url, "admin");
+  const item = await admin.create("post", `Annual report 2024 ${uid()}`);
+  const page = await as("admin");
+  await openList(page, "post", "Posts", "?q=2024");
+  const search = page.getByRole("searchbox", { name: "Search posts" });
+  await expect(search).toHaveValue("2024");
+  const sent = page.waitForRequest(
+    (r) => r.url().includes("/api/v1/content/post?") && new URL(r.url()).searchParams.has("q"),
+  );
+  await page.reload();
+  expect(new URL((await sent).url()).searchParams.get("q")).toBe("2024");
+  await loaded(page, "Posts");
+  await expect(search).toHaveValue("2024");
+  expect(new URL(page.url()).search).toBe("?q=2024");
+  await expect(row(page, "Posts", item.title)).toBeVisible();
+  await admin.dispose();
+});
+
 test("author_counts_match_list", async ({ as, site, backend }) => {
   // `author2` (F35): no other test writes as this account.
   const admin = await ContentApi.as(backend, site.url, "admin");

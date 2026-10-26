@@ -8,6 +8,7 @@ import {
   rememberView,
   searchDisables,
 } from "./media-search";
+import { parseSearch, stringifySearch } from "@/lib/search-params";
 
 const ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 const ME = "0190a1b2-0000-7000-8000-000000000001";
@@ -32,8 +33,8 @@ describe("media_search_test", () => {
       trash: true,
       kind: "document",
     });
-    // The router JSON-decodes values: a numeric search still works.
-    expect(parseMediaSearch({ q: 2026, mine: "true" })).toEqual({ q: "2026", mine: true });
+    // A string boolean works too.
+    expect(parseMediaSearch({ q: "2026", mine: "true" })).toEqual({ q: "2026", mine: true });
     expect(parseMediaSearch({ id: ID.toUpperCase() })).toEqual({ id: ID });
   });
 
@@ -93,5 +94,15 @@ describe("media_search_test", () => {
     expect(effectiveView({})).toBe("grid");
     window.localStorage.setItem(MEDIA_VIEW_KEY, "bogus");
     expect(effectiveView({})).toBe("grid");
+  });
+});
+
+describe("free_text_search", () => {
+  test("numeric_looking_searches_stay_strings", () => {
+    for (const q of ["2024", "531038e6", "1e3"]) {
+      const parsed = parseMediaSearch(parseSearch(`?q=${q}`));
+      expect(parsed).toEqual({ q });
+      expect(parseMediaSearch(parseSearch(stringifySearch(parsed)))).toEqual({ q });
+    }
   });
 });

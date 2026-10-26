@@ -40,13 +40,13 @@ const flag = z
   .optional()
   .catch(undefined);
 
-// The router JSON-decodes each value, so `q=2026` arrives as a number and `mine=true` as
-// a boolean; both spellings are accepted.
+// The router JSON-decodes each value but free text (`lib/search-params.ts`): `q` is the
+// text as typed, `mine=true` a boolean (the string spelling is accepted too).
 const schema = z.object({
   view: z.enum(["grid", "list"]).optional().catch(undefined),
   q: z
-    .union([z.string(), z.number()])
-    .transform((v) => String(v).trim())
+    .string()
+    .transform((v) => v.trim())
     .optional()
     .catch(undefined),
   kind: z.enum(MEDIA_KINDS).optional().catch(undefined),
