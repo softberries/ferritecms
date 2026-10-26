@@ -22,6 +22,8 @@ import { Route as AppMediaIndexRouteImport } from './routes/_app/media.index'
 import { Route as AppContentTypeIndexRouteImport } from './routes/_app/content.$type.index'
 import { Route as AppContentTypeIdRouteImport } from './routes/_app/content.$type.$id'
 import { Route as AppContentTypeNewRouteImport } from './routes/_app/content.$type.new'
+import { Route as AppStructureTypesIndexRouteImport } from './routes/_app/structure.types.index'
+import { Route as AppStructureTypesNameRouteImport } from './routes/_app/structure.types.$name'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -87,6 +89,16 @@ const AppContentTypeNewRoute = AppContentTypeNewRouteImport.update({
   path: '/content/$type/new',
   getParentRoute: () => AppRoute,
 } as any)
+const AppStructureTypesIndexRoute = AppStructureTypesIndexRouteImport.update({
+  id: '/structure/types/',
+  path: '/structure/types/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppStructureTypesNameRoute = AppStructureTypesNameRouteImport.update({
+  id: '/structure/types/$name',
+  path: '/structure/types/$name',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -100,7 +112,9 @@ export interface FileRoutesByFullPath {
   '/media/': typeof AppMediaIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
+  '/structure/types/$name': typeof AppStructureTypesNameRoute
   '/content/$type/': typeof AppContentTypeIndexRoute
+  '/structure/types/': typeof AppStructureTypesIndexRoute
 }
 export interface FileRoutesByTo {
   '/change-password': typeof ChangePasswordRoute
@@ -114,7 +128,9 @@ export interface FileRoutesByTo {
   '/media': typeof AppMediaIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
+  '/structure/types/$name': typeof AppStructureTypesNameRoute
   '/content/$type': typeof AppContentTypeIndexRoute
+  '/structure/types': typeof AppStructureTypesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -130,7 +146,9 @@ export interface FileRoutesById {
   '/_app/media/': typeof AppMediaIndexRoute
   '/_app/content/$type/$id': typeof AppContentTypeIdRoute
   '/_app/content/$type/new': typeof AppContentTypeNewRoute
+  '/_app/structure/types/$name': typeof AppStructureTypesNameRoute
   '/_app/content/$type/': typeof AppContentTypeIndexRoute
+  '/_app/structure/types/': typeof AppStructureTypesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -146,7 +164,9 @@ export interface FileRouteTypes {
     | '/media/'
     | '/content/$type/$id'
     | '/content/$type/new'
+    | '/structure/types/$name'
     | '/content/$type/'
+    | '/structure/types/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/change-password'
@@ -160,7 +180,9 @@ export interface FileRouteTypes {
     | '/media'
     | '/content/$type/$id'
     | '/content/$type/new'
+    | '/structure/types/$name'
     | '/content/$type'
+    | '/structure/types'
   id:
     | '__root__'
     | '/_app'
@@ -175,7 +197,9 @@ export interface FileRouteTypes {
     | '/_app/media/'
     | '/_app/content/$type/$id'
     | '/_app/content/$type/new'
+    | '/_app/structure/types/$name'
     | '/_app/content/$type/'
+    | '/_app/structure/types/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -280,6 +304,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppContentTypeNewRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/structure/types/': {
+      id: '/_app/structure/types/'
+      path: '/structure/types'
+      fullPath: '/structure/types/'
+      preLoaderRoute: typeof AppStructureTypesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/structure/types/$name': {
+      id: '/_app/structure/types/$name'
+      path: '/structure/types/$name'
+      fullPath: '/structure/types/$name'
+      preLoaderRoute: typeof AppStructureTypesNameRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
@@ -290,7 +328,9 @@ interface AppRouteChildren {
   AppMediaIndexRoute: typeof AppMediaIndexRoute
   AppContentTypeIdRoute: typeof AppContentTypeIdRoute
   AppContentTypeNewRoute: typeof AppContentTypeNewRoute
+  AppStructureTypesNameRoute: typeof AppStructureTypesNameRoute
   AppContentTypeIndexRoute: typeof AppContentTypeIndexRoute
+  AppStructureTypesIndexRoute: typeof AppStructureTypesIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -300,7 +340,9 @@ const AppRouteChildren: AppRouteChildren = {
   AppMediaIndexRoute: AppMediaIndexRoute,
   AppContentTypeIdRoute: AppContentTypeIdRoute,
   AppContentTypeNewRoute: AppContentTypeNewRoute,
+  AppStructureTypesNameRoute: AppStructureTypesNameRoute,
   AppContentTypeIndexRoute: AppContentTypeIndexRoute,
+  AppStructureTypesIndexRoute: AppStructureTypesIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

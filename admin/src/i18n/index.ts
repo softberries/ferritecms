@@ -9,11 +9,24 @@ import kit from "./en/kit.json";
 import media from "./en/media.json";
 import palette from "./en/palette.json";
 import shell from "./en/shell.json";
+import structure from "./en/structure.json";
 import styleguide from "./en/styleguide.json";
 
 /** Every namespace, one per area of the admin. English only in M2b. */
 export const resources = {
-  en: { common, auth, shell, styleguide, palette, dashboard, content, editor, kit, media },
+  en: {
+    common,
+    auth,
+    shell,
+    styleguide,
+    palette,
+    dashboard,
+    content,
+    editor,
+    kit,
+    media,
+    structure,
+  },
 } as const;
 
 export const defaultNS = "common";

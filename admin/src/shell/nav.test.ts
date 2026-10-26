@@ -69,8 +69,8 @@ test("author_sees_posts_pages_and_custom_types", () => {
 test("nothing_above_its_rights", () => {
   // Without `read_admin` the content APIs answer 403, so no content section.
   expect(shape(navFor(me("none", []), TYPES))).toEqual([["overview", [["Dashboard", "/"]]]]);
-  // Nothing beyond Overview and Content until a screen registers its entry, whatever
-  // the role holds (so far only Media, in Content).
+  // Nothing beyond what the registered screens give, whatever the role holds (so far
+  // Media in Content and Content types in Structure).
   const admin = me("admin", [
     "read_admin",
     "edit_own",
@@ -89,7 +89,21 @@ test("nothing_above_its_rights", () => {
     "manage_redirects",
     "manage_system",
   ]);
-  expect(navFor(admin, TYPES).map((s) => s.id)).toEqual(["overview", "content"]);
+  expect(navFor(admin, TYPES).map((s) => s.id)).toEqual(["overview", "content", "structure"]);
+});
+
+test("content_types_is_registered", () => {
+  // Task 9 registers Content types under Structure: only `manage_settings` sees it.
+  const ADMIN_CAPS = me("admin", ["read_admin", "manage_settings"]);
+  const structure = navFor(ADMIN_CAPS, TYPES).find((s) => s.id === "structure");
+  expect(structure?.items.map((i) => [i.id, i.label, i.to])).toEqual([
+    ["types", "Content types", "/structure/types"],
+  ]);
+  expect(structure?.items[0]?.shortcut).toBeUndefined();
+  expect(navItemAt(navFor(ADMIN_CAPS, TYPES), "/structure/types")?.id).toBe("types");
+  // Editors manage terms and menus, not types.
+  const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
+  expect(navFor(editor, TYPES).map((s) => s.id)).toEqual(["overview", "content"]);
 });
 
 test("no_types_yet_means_no_content_section", () => {

@@ -68,6 +68,8 @@ export interface SortableListProps<T> {
   /** The list's accessible name. */
   name?: string;
   className?: string;
+  /** Extra classes for each row's frame (`items-start` for rows that grow tall). */
+  rowClassName?: string;
 }
 
 export function SortableList<T>({
@@ -78,6 +80,7 @@ export function SortableList<T>({
   label,
   name,
   className,
+  rowClassName,
 }: SortableListProps<T>) {
   const { t } = useTranslation("kit");
   const sensors = useSensors(
@@ -190,6 +193,7 @@ export function SortableList<T>({
                 label={label(item)}
                 layout={motionOn}
                 container={list}
+                {...(rowClassName ? { className: rowClassName } : {})}
                 actions={[
                   {
                     key: "up",
@@ -249,6 +253,8 @@ export interface SortableRowProps {
    * `inset` (the projected depth), so the pointer's x would offset it twice.
    */
   lockX?: boolean;
+  /** Extra classes for the row's frame. */
+  className?: string;
   children: ReactNode;
 }
 
@@ -263,6 +269,7 @@ export function SortableRow({
   inset = 0,
   placeholder = false,
   lockX = false,
+  className,
   children,
 }: SortableRowProps) {
   const { t } = useTranslation("kit");
@@ -311,6 +318,7 @@ export function SortableRow({
           "flex min-h-row items-center gap-1 rounded-lg border bg-card py-1 pr-1 pl-1 text-sm shadow-1",
           isDragging && "relative z-10 shadow-2",
           placeholder && "border-dashed border-primary/60 bg-primary/4 shadow-none",
+          className,
         )}
       >
         <Button

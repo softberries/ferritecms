@@ -7,6 +7,7 @@
 // System follow in M2b-3.
 
 import {
+  BlocksIcon,
   FileTextIcon,
   FilesIcon,
   ImageIcon,
@@ -81,6 +82,7 @@ export interface ScreenEntry {
  */
 export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
   { screen: "media", to: "/media", label: "nav.media", icon: ImageIcon },
+  { screen: "types", to: "/structure/types", label: "nav.contentTypes", icon: BlocksIcon },
 ] as const;
 
 /** Types the content screens list: everything but `media` (its own screen, M2b-2). */

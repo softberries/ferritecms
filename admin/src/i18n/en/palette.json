@@ -21,7 +21,9 @@
     "other": "New entry in {{label}}",
     "keywords": "create add write new",
     "upload": "Upload media",
-    "uploadKeywords": "upload media file image add"
+    "uploadKeywords": "upload media file image add",
+    "type": "New content type",
+    "typeKeywords": "create add new type schema fields structure"
   },
   "preferences": {
     "light": "Light theme",

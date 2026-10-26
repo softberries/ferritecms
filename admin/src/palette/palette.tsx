@@ -2,7 +2,8 @@
 // `CommandDialog` opened by `mod+k` and the top bar's trigger. Groups: Recent (the
 // viewer's last 8 screens and items, only before anything is typed), Go to (every nav
 // item and the `?` sheet), Create (one per content type the nav shows, with
-// `edit_own`, and Upload media with `upload_media`), Content (live search, from 2 characters) and Preferences (theme,
+// `edit_own`, Upload media with `upload_media`, and New content type when the nav has
+// Content types), Content (live search, from 2 characters) and Preferences (theme,
 // density). cmdk's own filter ranks the rows inside the static groups; content hits come
 // from the server already matched, so they keep the server's order, in the last group.
 
@@ -11,6 +12,7 @@ import { useMatches, useNavigate } from "@tanstack/react-router";
 import { Command as CommandPrimitive, defaultFilter, useCommandState } from "cmdk";
 import { cn } from "cn";
 import {
+  BlocksIcon,
   FilePlusIcon,
   FilesIcon,
   KeyboardIcon,
@@ -142,6 +144,8 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
   const mediaItem = me.capabilities.includes("upload_media")
     ? navItems.find((i) => i.id === "media")
     : undefined;
+  // "New content type" (Create): the nav shows Content types (`manage_settings`).
+  const typesItem = navItems.find((i) => i.id === "types");
 
   const query = q.trim();
   const active = searchable(query) && types.length > 0;
@@ -286,7 +290,7 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
             />
           </CommandGroup>
 
-          {createTypes.length > 0 || mediaItem ? (
+          {createTypes.length > 0 || mediaItem || typesItem ? (
             <CommandGroup heading={t("group.create")}>
               {createTypes.map((item) => {
                 const type = item.contentType ?? "";
@@ -317,6 +321,18 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
                     // The library opens its file chooser on arrival (`upload-intent.ts`).
                     requestUpload();
                     go(mediaItem.to);
+                  }}
+                />
+              ) : null}
+              {typesItem ? (
+                <Row
+                  value={t("create.type")}
+                  keywords={[t("create.typeKeywords")]}
+                  icon={BlocksIcon}
+                  label={t("create.type")}
+                  onSelect={() => {
+                    close();
+                    void navigate({ to: "/structure/types", search: { new: true } });
                   }}
                 />
               ) : null}
