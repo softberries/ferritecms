@@ -134,7 +134,7 @@ the same screens; the final run supersedes them.
 | 11 §8 item | Result |
 |---|---|
 | 4 px grid | no misalignment seen |
-| One primary action per view | holds per view, with one ruling: the top bar's filled "New" split button appears with a screen's own primary (for example "New entry" on a list, "Publish…" in the editor). Ruling R20 (Task 18, confirmed by the final review): the top-bar New is global chrome, not the view's primary action — 11 §7's shell has it on every screen — and since the final fix wave it is an outline control, so each view has one filled primary |
+| One primary action per view | holds per view, with one ruling: the top bar's "New" split button (filled until the final fix wave) appears with a screen's own primary (for example "New entry" on a list, "Publish…" in the editor). Ruling R20 (Task 18, confirmed by the final review): the top-bar New is global chrome, not the view's primary action — 11 §7's shell has it on every screen — and since the final fix wave it is an outline control, so each view has one filled primary |
 | Consistent page header | yes (title with count, description, actions, tabs) on dashboard and lists; the editor uses its own bar by design (11 §7) |
 | Loading, empty, error, permission-denied states | present: list skeletons, dashboard empty and error cards, search empty, trash empty, forbidden, not-found, error boundary, editor read-only and content-error |
 | Dark mode at parity | yes on every screen; `no_raw_colours_outside_tokens` passes in the unit suite |
