@@ -1,9 +1,10 @@
 // A file drop target (11 §7): the whole area takes dropped files, with an overlay while
 // files are dragged over it, plus a "Choose files" button for the keyboard and touch
-// screens (a hidden `<input type="file" multiple>`). Drags that carry no files (text,
-// links, a sortable row) are left alone. `accept` is the input's attribute and also
-// filters dropped files; the rest go to `onRejected`. The server decides the real type
-// from the content (07 §1), so this filter is only a convenience.
+// screens (a hidden `<input type="file">`, `multiple` unless `single`; its texts can be
+// replaced with `labels`). Drags that carry no files (text, links, a sortable row) are
+// left alone. `accept` is the input's attribute and also filters dropped files; the rest
+// go to `onRejected`. The server decides the real type from the content (07 §1), so this
+// filter is only a convenience.
 
 import { cn } from "cn";
 import { UploadIcon } from "lucide-react";
@@ -21,6 +22,10 @@ export interface DropZoneProps {
   /** Show the "Choose files" row (default); `false` when the screen has its own Upload
    * button (the media library). */
   chooser?: boolean;
+  /** One file at a time (the input's `multiple` off); a drop of several keeps the first. */
+  single?: boolean;
+  /** The chooser's button, hint and overlay texts, when "files to upload" is not it. */
+  labels?: { choose: string; hint: string; overlay: string };
   className?: string;
 }
 
@@ -48,6 +53,8 @@ export function DropZone({
   onRejected,
   children,
   chooser = true,
+  single = false,
+  labels,
   className,
 }: DropZoneProps) {
   const { t } = useTranslation("kit");
@@ -56,7 +63,8 @@ export function DropZone({
   const depth = useRef(0);
   const [over, setOver] = useState(false);
 
-  const take = (files: File[]) => {
+  const take = (all: File[]) => {
+    const files = single ? all.slice(0, 1) : all;
     const ok = files.filter((f) => accepts(accept, f));
     const refused = files.filter((f) => !accepts(accept, f));
     if (ok.length > 0) onFiles(ok);
@@ -96,13 +104,15 @@ export function DropZone({
         <div className="flex flex-wrap items-center gap-3">
           <Button variant="outline" onClick={() => input.current?.click()}>
             <UploadIcon data-icon="inline-start" />
-            {t("dropZone.choose")}
+            {labels?.choose ?? t("dropZone.choose")}
           </Button>
-          <span className="text-sm text-muted-foreground">{t("dropZone.hint")}</span>
+          <span className="text-sm text-muted-foreground">
+            {labels?.hint ?? t("dropZone.hint")}
+          </span>
           <input
             ref={input}
             type="file"
-            multiple
+            multiple={!single}
             hidden
             tabIndex={-1}
             {...(accept ? { accept } : {})}
@@ -123,7 +133,7 @@ export function DropZone({
           <span className="flex size-11 items-center justify-center rounded-lg border bg-card text-primary shadow-1">
             <UploadIcon className="size-5" />
           </span>
-          <span className="text-md font-medium">{t("dropZone.overlay")}</span>
+          <span className="text-md font-medium">{labels?.overlay ?? t("dropZone.overlay")}</span>
         </div>
       ) : null}
     </div>

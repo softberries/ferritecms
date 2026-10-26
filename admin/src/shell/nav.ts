@@ -15,6 +15,7 @@ import {
   ListTreeIcon,
   MessageSquareIcon,
   ShapesIcon,
+  SignpostIcon,
   TagsIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -89,6 +90,12 @@ export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
   { screen: "types", to: "/structure/types", label: "nav.contentTypes", icon: BlocksIcon },
   { screen: "taxonomies", to: "/structure/taxonomies", label: "nav.taxonomies", icon: TagsIcon },
   { screen: "menus", to: "/structure/menus", label: "nav.menus", icon: ListTreeIcon },
+  {
+    screen: "redirects",
+    to: "/structure/redirects",
+    label: "nav.redirects",
+    icon: SignpostIcon,
+  },
 ] as const;
 
 /** Types the content screens list: everything but `media` (its own screen, M2b-2). */

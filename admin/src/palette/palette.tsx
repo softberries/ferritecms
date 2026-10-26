@@ -4,9 +4,10 @@
 // item and the `?` sheet), Create (one per content type the nav shows, with
 // `edit_own`, Upload media with `upload_media`, New content type when the nav has
 // Content types, New taxonomy when it has Taxonomies and the viewer has
-// `manage_settings`, and New menu when it has Menus), Content (live search, from 2 characters) and Preferences (theme,
-// density). cmdk's own filter ranks the rows inside the static groups; content hits come
-// from the server already matched, so they keep the server's order, in the last group.
+// `manage_settings`, New menu when it has Menus and New redirect when it has
+// Redirects), Content (live search, from 2 characters) and Preferences (theme, density).
+// cmdk's own filter ranks the rows inside the static groups; content hits come from the
+// server already matched, so they keep the server's order, in the last group.
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useMatches, useNavigate } from "@tanstack/react-router";
@@ -25,6 +26,7 @@ import {
   SearchIcon,
   SearchXIcon,
   ShapesIcon,
+  SignpostIcon,
   SunIcon,
   TagsIcon,
   UploadIcon,
@@ -155,6 +157,8 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
     : undefined;
   // "New menu" (Create): the nav shows Menus (`manage_menus`).
   const menusItem = navItems.find((i) => i.id === "menus");
+  // "New redirect" (Create): the nav shows Redirects (`manage_redirects`).
+  const redirectsItem = navItems.find((i) => i.id === "redirects");
 
   const query = q.trim();
   const active = searchable(query) && types.length > 0;
@@ -299,7 +303,12 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
             />
           </CommandGroup>
 
-          {createTypes.length > 0 || mediaItem || typesItem || taxonomiesItem || menusItem ? (
+          {createTypes.length > 0 ||
+          mediaItem ||
+          typesItem ||
+          taxonomiesItem ||
+          menusItem ||
+          redirectsItem ? (
             <CommandGroup heading={t("group.create")}>
               {createTypes.map((item) => {
                 const type = item.contentType ?? "";
@@ -366,6 +375,18 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
                   onSelect={() => {
                     close();
                     void navigate({ to: "/structure/menus", search: { new: true } });
+                  }}
+                />
+              ) : null}
+              {redirectsItem ? (
+                <Row
+                  value={t("create.redirect")}
+                  keywords={[t("create.redirectKeywords")]}
+                  icon={SignpostIcon}
+                  label={t("create.redirect")}
+                  onSelect={() => {
+                    close();
+                    void navigate({ to: "/structure/redirects", search: { new: true } });
                   }}
                 />
               ) : null}

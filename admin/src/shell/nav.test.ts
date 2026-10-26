@@ -146,6 +146,26 @@ test("menus_is_registered", () => {
   expect(navItemAt(sections, "/structure/menus/")?.id).toBe("menus");
 });
 
+test("redirects_is_registered", () => {
+  // Task 13 registers Redirects under Structure, last: only `manage_redirects` sees it.
+  const ids = (who: MeDto) =>
+    navFor(who, TYPES)
+      .find((s) => s.id === "structure")
+      ?.items.map((i) => i.id) ?? [];
+  expect(
+    ids(me("admin", ["read_admin", "manage_settings", "manage_menus", "manage_redirects"])),
+  ).toEqual(["types", "taxonomies", "menus", "redirects"]);
+  expect(ids(me("admin", ["read_admin", "manage_redirects"]))).toEqual(["redirects"]);
+  expect(ids(me("editor", ["read_admin", "manage_menus"]))).not.toContain("redirects");
+  // Not without `read_admin`, whatever else the role holds.
+  expect(ids(me("odd", ["manage_redirects"]))).toEqual([]);
+  const sections = navFor(me("admin", ["read_admin", "manage_redirects"]), TYPES);
+  const redirects = sections.flatMap((s) => s.items).find((i) => i.id === "redirects");
+  expect(redirects).toMatchObject({ label: "Redirects", to: "/structure/redirects" });
+  expect(redirects?.shortcut).toBeUndefined();
+  expect(navItemAt(sections, "/structure/redirects/")?.id).toBe("redirects");
+});
+
 test("comments_is_registered", () => {
   // Task 12 registers Comments in Content, after Media: only `moderate_comments` sees it,
   // with `g c`.

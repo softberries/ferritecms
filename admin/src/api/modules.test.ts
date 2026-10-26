@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { importRedirects, listRedirects } from "./redirects";
+import { findRedirect, importRedirects, listRedirects } from "./redirects";
 import { listMedia, restoreMedia } from "./media";
 
 function stub() {
@@ -48,4 +48,31 @@ test("import_redirects_sends_csv", async () => {
   await importRedirects("a,b,301\n");
   expect(requests[0]!.headers.get("Content-Type")).toBe("text/csv");
   expect(await requests[0]!.text()).toBe("a,b,301\n");
+});
+
+test("find_redirect_pages_until_the_exact_source", async () => {
+  const requests: Request[] = [];
+  const pages = [
+    { items: [{ source: "/a/old" }, { source: "/old/" }], next_cursor: "c1" },
+    { items: [{ source: "/old" }], next_cursor: null },
+  ];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((r: Request) => {
+      requests.push(r);
+      const body = JSON.stringify(pages[requests.length - 1]);
+      return Promise.resolve(
+        new Response(body, { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    }),
+  );
+  expect(await findRedirect("/old")).toEqual({ source: "/old" });
+  const urls = requests.map((r) => new URL(r.url).searchParams);
+  expect(urls.map((u) => u.get("q"))).toEqual(["/old", "/old"]);
+  expect(urls.map((u) => u.get("cursor"))).toEqual([null, "c1"]);
+  // `q` is at most 200 characters: a longer source searches by its first 200.
+  requests.length = 0;
+  pages.splice(0, 2, { items: [], next_cursor: null });
+  expect(await findRedirect(`/${"x".repeat(300)}`)).toBeNull();
+  expect(new URL(requests[0]!.url).searchParams.get("q")).toHaveLength(200);
 });

@@ -20,6 +20,7 @@ import { Route as AppStyleguideRouteImport } from './routes/_app/[_]styleguide'
 import { Route as LoginTotpRouteImport } from './routes/login_.totp'
 import { Route as AppCommentsIndexRouteImport } from './routes/_app/comments.index'
 import { Route as AppMediaIndexRouteImport } from './routes/_app/media.index'
+import { Route as AppStructureRedirectsRouteImport } from './routes/_app/structure.redirects'
 import { Route as AppContentTypeIndexRouteImport } from './routes/_app/content.$type.index'
 import { Route as AppContentTypeIdRouteImport } from './routes/_app/content.$type.$id'
 import { Route as AppContentTypeNewRouteImport } from './routes/_app/content.$type.new'
@@ -84,6 +85,11 @@ const AppMediaIndexRoute = AppMediaIndexRouteImport.update({
   path: '/media/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppStructureRedirectsRoute = AppStructureRedirectsRouteImport.update({
+  id: '/structure/redirects',
+  path: '/structure/redirects',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppContentTypeIndexRoute = AppContentTypeIndexRouteImport.update({
   id: '/content/$type/',
   path: '/content/$type/',
@@ -141,6 +147,7 @@ export interface FileRoutesByFullPath {
   '/$': typeof AppSplatRoute
   '/_styleguide': typeof AppStyleguideRoute
   '/login/totp': typeof LoginTotpRoute
+  '/structure/redirects': typeof AppStructureRedirectsRoute
   '/comments/': typeof AppCommentsIndexRoute
   '/media/': typeof AppMediaIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
@@ -162,6 +169,7 @@ export interface FileRoutesByTo {
   '/_styleguide': typeof AppStyleguideRoute
   '/login/totp': typeof LoginTotpRoute
   '/': typeof AppIndexRoute
+  '/structure/redirects': typeof AppStructureRedirectsRoute
   '/comments': typeof AppCommentsIndexRoute
   '/media': typeof AppMediaIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
@@ -185,6 +193,7 @@ export interface FileRoutesById {
   '/_app/_styleguide': typeof AppStyleguideRoute
   '/login_/totp': typeof LoginTotpRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/structure/redirects': typeof AppStructureRedirectsRoute
   '/_app/comments/': typeof AppCommentsIndexRoute
   '/_app/media/': typeof AppMediaIndexRoute
   '/_app/content/$type/$id': typeof AppContentTypeIdRoute
@@ -208,6 +217,7 @@ export interface FileRouteTypes {
     | '/$'
     | '/_styleguide'
     | '/login/totp'
+    | '/structure/redirects'
     | '/comments/'
     | '/media/'
     | '/content/$type/$id'
@@ -229,6 +239,7 @@ export interface FileRouteTypes {
     | '/_styleguide'
     | '/login/totp'
     | '/'
+    | '/structure/redirects'
     | '/comments'
     | '/media'
     | '/content/$type/$id'
@@ -251,6 +262,7 @@ export interface FileRouteTypes {
     | '/_app/_styleguide'
     | '/login_/totp'
     | '/_app/'
+    | '/_app/structure/redirects'
     | '/_app/comments/'
     | '/_app/media/'
     | '/_app/content/$type/$id'
@@ -352,6 +364,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppMediaIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/structure/redirects': {
+      id: '/_app/structure/redirects'
+      path: '/structure/redirects'
+      fullPath: '/structure/redirects'
+      preLoaderRoute: typeof AppStructureRedirectsRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/content/$type/': {
       id: '/_app/content/$type/'
       path: '/content/$type'
@@ -422,6 +441,7 @@ interface AppRouteChildren {
   AppSplatRoute: typeof AppSplatRoute
   AppStyleguideRoute: typeof AppStyleguideRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppStructureRedirectsRoute: typeof AppStructureRedirectsRoute
   AppCommentsIndexRoute: typeof AppCommentsIndexRoute
   AppMediaIndexRoute: typeof AppMediaIndexRoute
   AppContentTypeIdRoute: typeof AppContentTypeIdRoute
@@ -439,6 +459,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppSplatRoute: AppSplatRoute,
   AppStyleguideRoute: AppStyleguideRoute,
   AppIndexRoute: AppIndexRoute,
+  AppStructureRedirectsRoute: AppStructureRedirectsRoute,
   AppCommentsIndexRoute: AppCommentsIndexRoute,
   AppMediaIndexRoute: AppMediaIndexRoute,
   AppContentTypeIdRoute: AppContentTypeIdRoute,

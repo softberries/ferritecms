@@ -478,5 +478,134 @@
       "apply": "Apply",
       "cancel": "Cancel"
     }
+  },
+  "redirects": {
+    "title": "Redirects",
+    "description": "Send visitors and search engines from old addresses to new ones. When a published item's address changes, its redirect is added here by itself.",
+    "searchLabel": "redirects",
+    "new": "New redirect",
+    "importAction": "Import",
+    "export": "Export",
+    "edit": "Edit",
+    "delete": "Delete",
+    "editOn": "Edit redirect from {{source}}",
+    "deleteOn": "Delete redirect from {{source}}",
+    "never": "Never",
+    "loadMore": "Load more",
+    "loadingMore": "Loading…",
+    "columns": {
+      "source": "From",
+      "target": "To",
+      "code": "Code",
+      "hits": "Hits",
+      "lastHit": "Last hit",
+      "origin": "Added by"
+    },
+    "origin": {
+      "manual": "Manual",
+      "import": "Import",
+      "slug-change": "Slug change"
+    },
+    "codes": {
+      "301": {
+        "label": "Moved permanently",
+        "hint": "Permanent: browsers and search engines remember the new address."
+      },
+      "302": {
+        "label": "Found (temporary)",
+        "hint": "Temporary: visitors go there for now, and the old address stays the one search engines keep."
+      },
+      "307": {
+        "label": "Temporary redirect",
+        "hint": "Temporary, and the request method is kept (a form post stays a post)."
+      },
+      "308": {
+        "label": "Permanent redirect",
+        "hint": "Permanent, and the request method is kept (a form post stays a post)."
+      },
+      "410": {
+        "label": "Gone",
+        "hint": "Visitors get the “gone” page instead of being sent on. The target is still required but not used."
+      }
+    },
+    "empty": {
+      "title": "No redirects yet",
+      "body": "Add one to send an old address somewhere new, or import a CSV file. Moved content adds its own."
+    },
+    "noMatch": {
+      "title": "No redirects match",
+      "body": "No source or target contains “{{q}}”.",
+      "clear": "Clear search"
+    },
+    "created": "Redirect from {{source}} created",
+    "replaced": "Redirect from {{source}} replaced",
+    "saved": "Redirect from {{source}} saved",
+    "deleted": "Redirect deleted",
+    "deletedHint": "Undo brings it back; its hit count starts again at 0.",
+    "undo": "Undo",
+    "restored": "Redirect from {{source}} restored",
+    "restoreFailed": "Could not restore the redirect from {{source}}",
+    "deleteFailed": "Could not delete the redirect from {{source}}",
+    "imported_one": "Imported {{count}} redirect",
+    "imported_other": "Imported {{count}} redirects",
+    "importedHint": "{{created}} new, {{updated}} replaced.",
+    "form": {
+      "newTitle": "New redirect",
+      "editTitle": "Edit redirect",
+      "description": "Visitors who open the From address are sent to the To address.",
+      "source": "From",
+      "sourceHint": "A path on this site, starting with /. It also matches with the trailing slash added or removed.",
+      "sourcePlaceholder": "/old-page/",
+      "target": "To",
+      "targetHint": "A path on this site, or a full address starting with https:// or http://.",
+      "targetPlaceholder": "/new-page/",
+      "code": "Response",
+      "exists": "A redirect from {{source}} already exists (to {{target}}, {{code}}).",
+      "existsHint": "Replace redirect changes its target and code; its hit count stays.",
+      "gone": "This redirect was deleted meanwhile. Close the dialog and create it again.",
+      "cancel": "Cancel",
+      "create": "Create redirect",
+      "replace": "Replace redirect",
+      "save": "Save",
+      "saving": "Saving…",
+      "errors": {
+        "source": {
+          "empty": "Enter the path to redirect from.",
+          "long": "At most {{max}} characters.",
+          "path": "Use a path starting with /, without spaces."
+        },
+        "target": {
+          "empty": "Enter where it should go.",
+          "long": "At most {{max}} characters.",
+          "target": "Use a path starting with / or an address starting with http:// or https://, without spaces."
+        }
+      }
+    },
+    "import": {
+      "title": "Import redirects",
+      "description": "A CSV file with one redirect per line: source,target,code. A first line source,target,code is skipped. Every line is checked first; if any is wrong, nothing is imported. An existing source gets the file's target and code.",
+      "choose": "Choose a CSV file",
+      "hint": "or drop it here (at most 1 MiB)",
+      "overlay": "Drop the CSV file",
+      "previewLabel": "What will be imported",
+      "rows_one": "{{formatted}} row",
+      "rows_other": "{{formatted}} rows",
+      "headerSkipped": "The header row is skipped",
+      "noRows": "The file holds no redirects.",
+      "sampleCaption": "The first rows of the file",
+      "more_one": "and {{formatted}} more row",
+      "more_other": "and {{formatted}} more rows",
+      "tooMany": "An import takes at most {{max}} rows. Split the file.",
+      "tooLarge": "{{name}} is larger than 1 MiB. Split it into smaller files.",
+      "unreadable": "{{name}} could not be read.",
+      "notCsv": "{{name}} is not a CSV file.",
+      "errorsTitle": "Nothing was imported. Fix these lines and import the file again.",
+      "line": "Line {{n}}",
+      "cancel": "Cancel",
+      "submitNone": "Import",
+      "submit_one": "Import {{count}} redirect",
+      "submit_other": "Import {{count}} redirects",
+      "importing": "Importing…"
+    }
   }
 }

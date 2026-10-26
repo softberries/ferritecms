@@ -27,7 +27,9 @@
     "taxonomy": "New taxonomy",
     "taxonomyKeywords": "create add new taxonomy categories tags terms structure",
     "menu": "New menu",
-    "menuKeywords": "create add new menu navigation links structure"
+    "menuKeywords": "create add new menu navigation links structure",
+    "redirect": "New redirect",
+    "redirectKeywords": "create add new redirect forward moved address url structure"
   },
   "preferences": {
     "light": "Light theme",

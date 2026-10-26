@@ -2,7 +2,8 @@
 // a request context on a harness account's shared session, plus helpers to create a
 // content type (admin only), taxonomies, terms and items in any status, and to remove a
 // type with everything in it afterwards, so the sidebar of later screenshots stays clean;
-// menus (read, replace, delete); and comments (list per item, moderate, delete).
+// menus (read, replace, delete); comments (list per item, moderate, delete); and
+// redirects (create, import, search, delete).
 
 import { expect, request as apiRequest, type APIRequestContext } from "@playwright/test";
 import type { FixtureFile } from "./files";
@@ -57,6 +58,17 @@ export interface Menu {
     parent_id?: string | null;
     position?: number;
   }[];
+}
+
+/** A redirect as `GET /redirects` lists it. */
+export interface Redirect {
+  id: string;
+  source: string;
+  target: string;
+  code: number;
+  hits: number;
+  last_hit_at?: string | null;
+  origin: "manual" | "import" | "slug-change";
 }
 
 /** A comment as `GET /comments` lists it (the members the specs read). */
@@ -394,6 +406,41 @@ export class ContentApi {
       await this.ctx.delete(`/api/v1/comments/${id}`, { headers: this.headers() }),
       `delete comment ${id}`,
     );
+  }
+
+  /** `POST /redirects`: creates the redirect for `source` or changes the one stored. */
+  async createRedirect(source: string, target: string, code = 301): Promise<Redirect> {
+    return this.ok(
+      await this.ctx.post("/api/v1/redirects", {
+        headers: this.headers(),
+        data: { source, target, code },
+      }),
+      `create redirect ${source}`,
+    );
+  }
+
+  /** `POST /redirects/import` with `csv` (every row or none). */
+  async importRedirects(csv: string): Promise<void> {
+    await this.ok(
+      await this.ctx.post("/api/v1/redirects/import", {
+        headers: { ...this.headers(), "Content-Type": "text/csv" },
+        data: csv,
+      }),
+      "import redirects",
+    );
+  }
+
+  /** Every redirect whose source or target holds `q` (one page of 200). */
+  async listRedirects(q: string): Promise<Redirect[]> {
+    const res = await this.ctx.get(`/api/v1/redirects?limit=200&q=${encodeURIComponent(q)}`);
+    return (await this.ok<{ items: Redirect[] }>(res, "list redirects")).items;
+  }
+
+  /** Deletes every redirect whose source or target holds `q` (a test's own, by its id). */
+  async deleteRedirects(q: string): Promise<void> {
+    for (const r of await this.listRedirects(q)) {
+      await this.ctx.delete(`/api/v1/redirects/${r.id}`, { headers: this.headers() });
+    }
   }
 
   async dispose(): Promise<void> {
