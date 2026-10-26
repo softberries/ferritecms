@@ -64,10 +64,10 @@ import { type Draft, newDraftKey, pendingDrafts } from "./autosave";
 import { EditorBubbleMenu } from "./bubble-menu";
 import { onPreconditionFailed } from "./conflict";
 import { ConflictDialog, type OpenConflict } from "./conflict-dialog";
+import type { Handoff } from "./handoff";
 import {
   type ContentDto,
   type EditorDocument,
-  type Handoff,
   type ReadOnlyReason,
   type RestoreSource,
   type WriteOp,

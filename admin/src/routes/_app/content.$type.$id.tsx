@@ -26,7 +26,8 @@ import {
   peekPendingDraft,
 } from "@/editor/autosave";
 import { EditorScreen, type Reopen, type RevisionNotice } from "@/editor/editor";
-import { type RestoreSource, clearHandoff, peekHandoff } from "@/editor/editor-state";
+import type { RestoreSource } from "@/editor/editor-state";
+import { clearHandoff, peekHandoff } from "@/editor/handoff";
 
 const NOT_EDITED = new Set(["media"]);
 

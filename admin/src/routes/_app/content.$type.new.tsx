@@ -20,7 +20,8 @@ import { useMe } from "@/auth/session";
 import { ForbiddenState } from "@/components/kit/forbidden-state";
 import { dropPendingDraft, newDraftKey, peekPendingDraft } from "@/editor/autosave";
 import { EditorScreen } from "@/editor/editor";
-import { type RestoreSource, handOff } from "@/editor/editor-state";
+import type { RestoreSource } from "@/editor/editor-state";
+import { handOff } from "@/editor/handoff";
 
 /** Types edited elsewhere (the media library, M2b-2). */
 const NOT_EDITED = new Set(["media"]);

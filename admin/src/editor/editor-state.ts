@@ -64,6 +64,7 @@ import {
   type Draft,
   createAutosaver,
 } from "./autosave";
+import type { Handoff } from "./handoff";
 import { displayBody, editorExtensions, validateBody } from "./schema";
 
 export type ContentDto = SchemaContentDto;
@@ -140,36 +141,6 @@ function settleMeta(now: MetaDraft, sent: MetaDraft, stored: MetaDraft): MetaDra
     parent_id: now.parent_id === sent.parent_id ? stored.parent_id : now.parent_id,
     menu_order: now.menu_order === sent.menu_order ? stored.menu_order : now.menu_order,
   };
-}
-
-/** What a just-created item hands to its `/$id` screen (the route remounts the editor). */
-export interface Handoff {
-  id: string;
-  title: string;
-  body: JSONContent;
-  selection: { from: number; to: number } | null;
-  focus: "title" | "body" | null;
-  /** What the first save sent (the dirty baseline of the `/$id` screen). */
-  saved: { title: string; body: string };
-  /** The panel members as they were (edits made while the first save was in flight). */
-  meta: MetaDraft;
-}
-
-let pendingHandoff: Handoff | null = null;
-
-/** Stashes the live editor state of a just-created item for its `/$id` screen. */
-export function handOff(h: Handoff): void {
-  pendingHandoff = h;
-}
-
-/** The waiting hand-over for `id`, else `null` (the `/$id` loader then skips its fetch). */
-export function peekHandoff(id: string): Handoff | null {
-  return pendingHandoff?.id === id ? pendingHandoff : null;
-}
-
-/** Drops the hand-over for `id` once its screen has mounted. */
-export function clearHandoff(id: string): void {
-  if (pendingHandoff?.id === id) pendingHandoff = null;
 }
 
 export interface EditorDocumentOptions {
