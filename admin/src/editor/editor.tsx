@@ -299,10 +299,12 @@ export function EditorScreen({
     label: t("shortcuts.save"),
     group,
     allowInInput: true,
-    // Not under a dialog (a second PATCH under the conflict dialog would replace its
-    // state). The binding still fires there, so the browser's own Save page never opens.
+    // Not under a modal dialog (a second PATCH under the conflict dialog would replace
+    // its state); popovers (terms, parent) and the settings sheet still save. The binding
+    // still fires under a dialog, so the browser's own Save page never opens.
     run: () => {
-      if (document.querySelector('[role="dialog"], [role="alertdialog"]') !== null) return;
+      const modal = '[data-slot="dialog-overlay"], [data-slot="alert-dialog-overlay"]';
+      if (document.querySelector(modal) !== null) return;
       void doc.save();
     },
   });
