@@ -103,3 +103,22 @@ full text of every F-finding and ruling is in the M2b-1 ledger
 - Ruling R18: shortcuts match the physical key while Alt is held only on Apple platforms and never with AltGraph — cost: a macOS browser reporting AltGraph for Option would break `⌘⌥R` (unverified).
 - Ruling R19: exit check 3 is automated with Playwright against a release build; Safari is listed as not verified, for the user — no human hands in an autonomous run — cost: a Safari-only bug found later.
 - Ruling R20: the top-bar "New" split button is global chrome (11 §7's shell has it on every screen), not a view's primary action; it is rendered as a secondary (outline) control with an ember plus, so each view keeps one filled primary ("New entry" on a list, "Publish…" in the editor) — cost: a slightly quieter global New.
+
+## M2b-2 plan rulings
+
+Plan: docs/superpowers/plans/2026-10-26-m2b2-media-and-content-modelling.md (15 tasks).
+
+- Plan ruling P27: M2b-2 is 15 tasks, five Rust API tasks first — every screen needs them — cost: screens wait for the API tasks.
+- Plan ruling P28: SEO is `content_meta` `seo.title`/`seo.description` exposed as a `seo` member on content DTOs; an SEO-only write is a full update; `seo.title` replaces the whole `<title>` — the head, SEO plugins and the WP importer share those keys — cost: a revision per SEO-only save; revisions do not restore SEO (P13).
+- Plan ruling P29: `@dnd-kit` classic (core 6.3.1, sortable 10.0.0, utilities 3.2.2), not `@dnd-kit/react` 0.x; every drag has a button/keyboard alternative — cost: a later migration to the new API.
+- Plan ruling P30: no `allowed` on media DTOs; media actions show by capability and ownership, the server's `403` decides — cost: a button that can fail with a clear message.
+- Plan ruling P31: last-write-wins resources get a client-side `staleGuard` re-read before writes, not version columns — cost: a race inside the check-then-write window loses one edit.
+- Plan ruling P32: uploads use `XMLHttpRequest` (progress) with a client queue of 3 and one `Idempotency-Key` per file across retries — cost: a second request path next to `openapi-fetch`.
+- Plan ruling P33: media get `POST /media/{id}/restore` and `GET /media?trash=true` — the content routes 404 for `media` and the library's Undo and Trash need them — cost: two more endpoints.
+- Plan ruling P34: comment pages are pages of top-level threads (roots oldest first, `comments.per_page` default 50), `?cpage=N` in the cache key, past the end → last page; a reply under an unapproved parent is a root — cost: one huge thread makes a long page.
+- Plan ruling P35: terms have no manual order (siblings by name; a drag changes only the parent); term and type deletes confirm instead of Undo — cost: no custom category order.
+- Plan ruling P36: types without a schema show no fields section (raw object kept; only `featured_image`) — cost: such types' fields are API-only.
+- Plan ruling P37: relation fields search every type the nav shows (`FieldDef` has no target type) — cost: a relation can point at an unintended type.
+- Plan ruling P38: menu and redirect deletes offer Undo (re-PUT / re-POST; redirect hits restart at 0); type deletes confirm — cost: an undone redirect loses its hits.
+- Plan ruling P39: on save the editor drops only top-level field keys the schema no longer has, after listing them — cost: that field's stored value is deleted with the save.
+- Plan ruling P40: the R13 local backup is `localStorage` per item and user, only while a kept copy holds the slot, cleared on save, discard and logout — cost: unsaved text stays in the browser until then.
