@@ -17,9 +17,11 @@ $ ferrite import wordpress export.xml --uploads ./wp-content/uploads --data ./si
 - **Moves your WordPress content** — posts, pages, media, taxonomies, users and 301
   redirects from a WXR export.
 
-> Status: in development, not released. The server, the REST API and the first admin
-> screens (sign-in, dashboard, content list, editor) are built; the WordPress importer
-> shown above is not yet (M3). See [`docs/BRIEF.md`](docs/BRIEF.md) and
+> Status: in development, not released. The server, the REST API and the admin's writing
+> and content-modelling screens (sign-in, dashboard, content list, editor, media library,
+> content types, taxonomies, menus, comments, redirects) are built; the administration
+> screens (users, themes, plugins, settings, system) are next, and the WordPress importer
+> shown above is not yet built (M3). See [`docs/BRIEF.md`](docs/BRIEF.md) and
 > [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 The admin is a React app in `admin/` that the binary embeds: build it with

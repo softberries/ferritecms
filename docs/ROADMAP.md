@@ -148,7 +148,7 @@ P1), **M2b** (admin SPA; itself split into **M2b-1**, **M2b-2** and **M2b-3**, M
 [`docs/superpowers/rulings/m2b.md`](superpowers/rulings/m2b.md) (M2b).
 
 **M2a (the M2 backend) is done** (M2a-1, M2a-2a, M2a-2b). **M2b-1** (admin foundation and
-writing) is done; next is M2b-2.
+writing) and **M2b-2** (media and content modelling) are done; next is M2b-3.
 
 ### M2a-1 — REST API core & auth (done)
 
@@ -288,21 +288,52 @@ stale after body edits until derived again (F39); after Take theirs, new edits a
 by `beforeunload` until saved (R13); an explicit dark or light choice against the OS flashes
 one frame on load (11 §4); only Chromium is tested (P22).
 
-#### M2b-2 — media and content modelling
+#### M2b-2 — media and content modelling (done)
 
-- [ ] Screens: media library (grid/list, drag-and-drop upload with progress and `Idempotency-Key`, alt text, variants), media in the editor (featured image, inline `ferrite:media/<id>` images, picker), custom fields generated from the type schema, SEO fields, content types and the field builder, taxonomies and term trees, menus (drag-and-drop tree, `@dnd-kit`), the comment moderation queue, redirects (table, CSV import/export, hits).
-- [ ] Comment pagination (M2a-2b Task 8 review): a public thread shows the oldest 500 approved comments (`MAX_THREAD`), so later ones never appear, their `303 #comment-<id>` lands on a missing anchor and `count` reads 500; page the thread (WordPress `comment-page-N`) and give the real total.
-- [ ] Follow-ups from M2b-1:
-  - [ ] Core validates that a written `body`'s root is `doc` (the API accepts any object; the editor checks it, M2b-1 Task 14 review): defence in depth.
-  - [ ] A local backup of unsaved edits while a kept copy (Take theirs) occupies the autosave slot, so a crash in that window loses nothing (R13).
-  - [ ] The fields editor: a revision that differs only by a `null`-valued custom field counts as unchanged in the revisions drawer (Task 17 review M5 residual).
-  - [ ] The publish dialog opened (`mod+shift+p`) while the first save moves a new item from `/new` to `/$id` closes with the old screen (seen in the M2b-1 exit; the shortcut is lost, nothing else).
+Plan: [`2026-10-26-m2b2-media-and-content-modelling.md`](superpowers/plans/2026-10-26-m2b2-media-and-content-modelling.md).
+
+- [x] Screens: media library (grid/list, drag-and-drop upload with progress and `Idempotency-Key`, alt text, variants), media in the editor (featured image, inline `ferrite:media/<id>` images, picker), custom fields generated from the type schema, SEO fields, content types and the field builder, taxonomies and term trees, menus (drag-and-drop tree, `@dnd-kit`), the comment moderation queue, redirects (table, CSV import/export, hits). Done in M2b-2 Tasks 5–13 (07 §3 per screen); API gaps closed first in Tasks 1–3 (SEO as `seo` on content DTOs, with `0008_autosave_seo` for the autosave slot, P28; media `q`, `kind`, `trash` and restore, P33; comment `item` and counts, redirect `q`, menu `locations`) and Task 14 (`GET /content/refs`, R33).
+- [x] Comment pagination (M2a-2b Task 8 review): a public thread shows the oldest 500 approved comments (`MAX_THREAD`), so later ones never appear, their `303 #comment-<id>` lands on a missing anchor and `count` reads 500; page the thread (WordPress `comment-page-N`) and give the real total. Done in M2b-2 Task 4: pages of top-level threads, `comments.per_page` (default 50), `?cpage=N`, the real total, the `303` to the page that holds the comment (P34, R25).
+- [x] Follow-ups from M2b-1:
+  - [x] Core validates that a written `body`'s root is `doc` (the API accepts any object; the editor checks it, M2b-1 Task 14 review): defence in depth. Done in Task 1, for a body that is sent or restored (R21).
+  - [x] A local backup of unsaved edits while a kept copy (Take theirs) occupies the autosave slot, so a crash in that window loses nothing (R13). Done in Task 14 (`localStorage`, P40).
+  - [x] The fields editor: a revision that differs only by a `null`-valued custom field counts as unchanged in the revisions drawer (Task 17 review M5 residual). Done in Task 8 (`null` differs from absent).
+  - [x] The publish dialog opened (`mod+shift+p`) while the first save moves a new item from `/new` to `/$id` closes with the old screen (seen in the M2b-1 exit; the shortcut is lost, nothing else). Done in Task 14 (the hand-over opens it on `/$id`).
+
+**Exit:** a fresh `init` + `seed demo` + `serve` on a release build: upload images and a PDF by
+drag and drop, set alt text, see variants; set a featured image and an inline image and
+publish; define a type with every field kind, write an item, change the schema and save the
+item again; build a category tree; build the primary menu and see it on the site; moderate
+comments from the queue and see the public page; page a thread past 50 threads; import and
+export redirects and follow one; the workspace tests on both backends with and without
+`admin/dist`; the admin gates and E2E; the contact sheet against 11 §8; bundle sizes against
+the M2b-1 baseline.
+
+**Exit verified (2026-10-26), with gaps:** [`docs/superpowers/m2b2-exit.md`](superpowers/m2b2-exit.md)
+(the flows were automated in Google Chrome). **Not verified:** Safari. The first full E2E run
+failed one test on a race between parallel tests (a relation search hitting a type another
+test had just deleted; the second run passed); recorded there, not fixed. Before merging, CI
+must pass on the branch.
+
+Known limits (accepted in M2b-2, see the rulings): inline images are served as the original
+file, without variants or `srcset` (R28); a relation field can point at an item of any type
+the nav shows (P37); terms have no manual order (P35); a term with sub-terms cannot be
+deleted until they are moved (R31); custom fields of a type without a schema are API-only
+(P36); a schema change deletes a removed field's stored values when each item is next saved
+(P39, R29); last-write-wins resources are guarded only by a client-side re-read (P31); a
+restored media item comes back published even if it was unpublished before it was trashed
+(R23); there is no search inside the media Trash (R22); a media search filtered by kind can
+return short pages (R24); a comment page whose threads exceed 2 000 rows does not show its
+latest replies (R25); moderators' comments and replies are not rate limited (R34); menu
+custom links cannot be `mailto:` (R32); `refs` is a reserved type and taxonomy name (R36); an
+undone redirect delete restarts its hits at 0 (P38); numbers take only `.` as the decimal
+separator (R30).
 
 #### M2b-3 — administration, extensions and the M2 exit
 
 - [ ] Screens: own account (password, TOTP enrolment with QR code, own tokens), users (roles, tokens, TOTP), settings, themes (upload, activate, settings form from `theme.toml [settings]`), plugins (install flow with the permission report and fingerprint approval, enable/disable, delete/purge, settings with write-only secrets, per-plugin metrics charts), system (status, schema, backends, nodes reading `nodes.meta` incl. theme/plugin state, jobs with dead-job retry (deferred from M1.5), audit log). Import ships with M3, backups with M4 (P25).
 - [ ] Playwright E2E against a real binary on both backends; Vitest component tests; a CI admin job (`pnpm install --frozen-lockfile`, lint, test, build). M2b-1 built Vitest, the CI `admin` job (lint, typecheck, test, `api:check`, build, E2E; 10 §3) and Chromium E2E against the release binary (every spec on SQLite, a smoke project on Postgres; P22); open: every spec on both backends, Firefox and WebKit, Safari checked by hand until then.
-- [ ] A bundle-size budget in CI, from the M2b-1 baseline (m2b1-exit.md "Bundle sizes").
+- [ ] A bundle-size budget in CI, from the M2b-1 baseline (m2b1-exit.md "Bundle sizes") and the M2b-2 numbers (m2b2-exit.md §5).
 - [ ] Follow-ups from M2b-1 (parked review minors):
   - [ ] The restore banner's Discard Undo toast is not dismissed on unmount, so Undo after leaving rewrites the discarded draft into that item's slot (Task 16).
   - [ ] `storeKept` may re-PUT the kept copy once more after `save()`'s own re-PUT (harmless except a needless stay on failure; Task 16).
@@ -313,6 +344,13 @@ one frame on load (11 §4); only Chromium is tested (P22).
   - [ ] Verify `⌘⌥R` on a macOS browser that reports AltGraph for Option (R18).
   - [ ] A server hint (for example a cookie read when `index.html` is served) so an explicit theme choice against the OS does not flash one frame (11 §4, Task 7).
   - [ ] Palette: a snippet for hits that match only in the body (Task 11 review m5).
+- [ ] Follow-ups from M2b-2:
+  - [ ] Responsive images for inline `ferrite:media/<id>` images: the renderer serves the original; give it the variants and a `srcset` like the theme's `image()` helper (R28).
+  - [ ] `FieldDef` target types for relation fields, so a relation searches and accepts only the intended types (P37; a schema change).
+  - [ ] A migration path for a type or taxonomy named `refs` created before M2b-2 (R36).
+  - [ ] Media restore re-publishes an item that was unpublished before it was trashed (R23): restore its previous status instead.
+  - [ ] Moderators' comments and replies are not rate limited (R34): decide whether a separate, higher limit is wanted.
+  - [ ] The review minors M2b-2 left open (listed in [`m2b2-exit.md`](superpowers/m2b2-exit.md), "Open review minors").
 - [ ] Docs and the M2 exit.
 
 ### Done from the earlier M2 deferred lists

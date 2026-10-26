@@ -115,10 +115,35 @@ Plan: docs/superpowers/plans/2026-10-26-m2b2-media-and-content-modelling.md (15 
 - Plan ruling P31: last-write-wins resources get a client-side `staleGuard` re-read before writes, not version columns — cost: a race inside the check-then-write window loses one edit.
 - Plan ruling P32: uploads use `XMLHttpRequest` (progress) with a client queue of 3 and one `Idempotency-Key` per file across retries — cost: a second request path next to `openapi-fetch`.
 - Plan ruling P33: media get `POST /media/{id}/restore` and `GET /media?trash=true` — the content routes 404 for `media` and the library's Undo and Trash need them — cost: two more endpoints.
-- Plan ruling P34: comment pages are pages of top-level threads (roots oldest first, `comments.per_page` default 50), `?cpage=N` in the cache key, past the end → last page; a reply under an unapproved parent is a root — cost: one huge thread makes a long page.
+- Plan ruling P34: comment pages are pages of top-level threads (roots oldest first, `comments.per_page` default 50), `?cpage=N` in the cache key, past the end → last page; a reply under an unapproved parent is a root — cost: one huge thread makes a long page; as built: amended by R25 (page row budget).
 - Plan ruling P35: terms have no manual order (siblings by name; a drag changes only the parent); term and type deletes confirm instead of Undo — cost: no custom category order.
 - Plan ruling P36: types without a schema show no fields section (raw object kept; only `featured_image`) — cost: such types' fields are API-only.
 - Plan ruling P37: relation fields search every type the nav shows (`FieldDef` has no target type) — cost: a relation can point at an unintended type.
 - Plan ruling P38: menu and redirect deletes offer Undo (re-PUT / re-POST; redirect hits restart at 0); type deletes confirm — cost: an undone redirect loses its hits.
 - Plan ruling P39: on save the editor drops only top-level field keys the schema no longer has, after listing them — cost: that field's stored value is deleted with the save.
 - Plan ruling P40: the R13 local backup is `localStorage` per item and user, only while a kept copy holds the slot, cleared on save, discard and logout — cost: unsaved text stays in the browser until then.
+
+## M2b-2 pre-flight findings
+
+- F-A: screen tasks register their own nav entries; Task 5 builds only `navFor`'s section definitions and capability rules (no entry for a route that does not exist yet).
+- F-B: the SEO tests assert whatever status a `PATCH` without `If-Match` already answers; no behaviour change.
+- F-D: Task 8 (picker, featured and inline images, fields, SEO, revisions) stays one task but may land in several commits, reviewed as one range.
+
+## M2b-2 controller rulings
+
+- Ruling R21: core's `body` root check (`"type": "doc"`) applies only to a body the request sends or restores (create, `PATCH` with `body`, autosave, revision restore), never to a stored body a `PATCH` leaves alone — the brief refuses a sent body and never rewrites stored ones; blocking SEO-only edits of legacy items would be a gap — cost: a legacy non-`doc` body stays in place (the editor opens it read-only).
+- Ruling R22: `GET /media` with `q` and `trash=true` is `422` (field `q`); trashed items stay out of the search index — no lifecycle change for a rarely needed search — cost: no search inside the media Trash view.
+- Ruling R23: media restore is the content lifecycle's restore (trash → draft, R8) plus a publish in one `Tx`, `published_at` kept — reuses the lifecycle — cost: plugins see a second `post.published` for a restored upload, and an item unpublished before it was trashed comes back published.
+- Ruling R24: media `kind` with `q` is applied to the loaded search hits (the list path filters in the store) — the search path has no store-side kind filter — cost: a search page can be shorter than `limit` while `next_cursor` is set.
+- Ruling R25: a comment page always holds every one of its roots; the page's row budget is 2 000 (`MAX_PAGE_ROWS`), and past it only replies are cut (roots first, then descendants in thread order) — Review Focus 5 is binding over P34's "cut after a whole root", which could leave later roots on no page — cost: on a page whose threads exceed 2 000 rows the latest replies are not shown, and a reply's `303` lands on a page without its anchor only then.
+- Ruling R26: Media and Comments are items of the Content section; Structure is its own section (Content types, Taxonomies, Menus, Redirects) — WordPress/Ghost grouping, one line to change — cost: none material.
+- Ruling R27: `MediaDto` gains `author` (`AuthorRefDto`, as content's P13), so the library names uploaders without `manage_users` — same reasoning as P13 — cost: one `get_many` of users per media page.
+- Ruling R28: inline images render the original `/_media/<hash>/<name>`, as the core renderer does; the plan's "variant URL" was wrong and the renderer is unchanged in M2b-2 — cost: no responsive `srcset` for inline images until the renderer gains it (follow-up).
+- Ruling R29: P39 extends to repeater rows: a save drops sub-keys a row's schema no longer has, at any depth, listed beforehand in the stale notice as `chapters[].extra` — same reasoning as P39 — cost: those sub-values are deleted on save.
+- Ruling R30: number fields accept only `.` as the decimal separator; a comma is refused with a field message — the admin is English-only and no wrong value is stored silently — cost: users type 1500, not 1,500.
+- Ruling R31: term delete follows core: a term with sub-terms cannot be deleted; the dialog names the count and points to Move to… — core is the authority; the brief assumed WordPress's "children move up" — cost: users move sub-terms first.
+- Ruling R32: the menu editor's depth limit is the public renderer's `MAX_MENU_DEPTH` (16 levels; core has none), and custom links follow core's `is_allowed_url` (no `mailto:`) — core and the site renderer are the authority — cost: no `mailto:` links until core allows them.
+- Ruling R33: `GET /content/refs?ids=…` names items by id across types (readable items only, `{id, type, title, status, permalink}`), used by relation fields, menu targets and the comments queue's item chip — removes the type-by-type `404` probing in three screens — cost: one more endpoint.
+- Ruling R34: a signed-in commenter whose role holds `moderate_comments` is exempt from the per-address comment rate limit (decided in core) — a moderator replying to a batch from the queue would hit `429` — cost: a compromised moderator session can post comments without that limit (moderators' comments are approved anyway).
+- Ruling R35: free-text search parameters (`q`) stay strings app-wide (a router-level codec), so a search for `2024` or `531038e6` survives a reload — TanStack Router JSON-decodes search values — cost: one shared codec to keep.
+- Ruling R36: `refs` is a reserved type and taxonomy name — the static `/content/refs` route would shadow a type's list — cost: a pre-existing type or taxonomy named `refs` has no migration path (follow-up).

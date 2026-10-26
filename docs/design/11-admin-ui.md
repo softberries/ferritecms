@@ -306,10 +306,14 @@ alone). Local keys (the `DataTable` row keys, the editor's) stay in their compon
 Bound by the shell as of Task 10: `mod+k` (`allowInInput`), `?`, `mod+b` and `g d`;
 Task 13 adds `g p`/`g g` (nav items, `shell/nav.ts`) and, while a content list is open,
 `/`, `#` and `esc` (clear the selection; not while a menu or dialog is open); the rest
-arrive with their screens (`c p`/`c g` with the editor, Task 14; `g s` in M2b-3). M2b-2:
-`g m` (Media) and `g c` (Comments) are fixed in `navFor`'s screen rules and bind once
-the screen registers its nav entry; the comments queue binds `a`, `u`, `s` and `#`
-while it is open. The `?` sheet lists whatever is
+arrive with their screens (`c p`/`c g` with the editor, Task 14; `g s` in M2b-3). As
+built in M2b-2: `g m` (Media, Task 7) and `g c` (Comments, Task 12) come from `navFor`'s
+screen rules and bind once the nav entry is registered (both are); the comments queue
+binds `a`, `u`, `s` and `#` (group "Comments queue", off while a dialog or menu is open)
+while it is open; the media library and the redirects list focus their search with `/`
+(the shared `SearchField`), and their tables, like the other lists, take the
+`DataTable` keys; the type form, the menu editor and the media detail save on `mod+s`.
+The Structure screens have no chord. The `?` sheet lists whatever is
 registered at the moment it opens.
 
 | Where | Keys | Action |
@@ -376,6 +380,28 @@ itself (`?raw` + `parseTokens`), so the page cannot drift from the gate.
   | `tree-model.ts` | pure | `TreeNode<T>` (`id, parentId, data`; siblings in array order, an orphan counts as a root), `flatten` (depth-first, with `depth` and sibling `index`), `moveNode` (refuses a move into its own subtree or under an unknown parent by returning the input), `indent` (last child of the previous sibling), `outdent` (next sibling of the parent), `projectDrop(flat, activeId, overId, offsetX, indentPx = 24, maxDepth, canNest?)` (`null` for an unknown id or when even the lowest level the neighbours allow sits under a parent `canNest` refuses), `subtreeIds`, `subtreeHeight` |
   | `DropZone` | `onFiles, accept?, onRejected?, children, chooser?, className?` | `dragenter`/`dragover`/`drop` on the whole area (a counter rides out child enter/leave), an overlay "Drop files to upload" (`aria-hidden`; the button is the accessible path) while files are over it; drags without `Files` are ignored (no `preventDefault`, so they are not drop targets). "Choose files" opens a hidden `<input type="file" multiple>` (reset after each choice). `accept` is the input's attribute and also filters drops (MIME, `type/*`, `.ext`); the rest go to `onRejected`. The server types uploads from their content anyway. `chooser={false}` hides the "Choose files" row for a screen with its own Upload button (the media library) |
   | `MediaThumb` | `media: MediaDto, size: sm \| md \| lg, caption?, fill?` | a 40 / 96 / 160 px square: the smallest variant whose short side fills the box at `devicePixelRatio`, else the original (raster images); SVG only as `<img src>` of the original; other kinds a lucide type icon with the extension (md/lg). `alt` is the item's alt text; without one the image is decorative (`alt=""`) and the title (else the file name) is the visible caption (`caption={false}` leaves it to the screen, as the media grid does). `fill` makes the box a square of the parent's width (a grid tile), choosing the picture for 208 px. A trashed item shows its type icon (its URLs answer 404 while trashed) |
+
+  Added by the M2b-2 screens (Tasks 7–13), as built:
+
+  - `SortableList`: `rowClassName` (e.g. `items-start`, so a tall open row keeps its
+    handle at the top); `RowAction.overlay` runs a menu action from the menu's
+    `onCloseAutoFocus`, so a dialog or sheet it opens keeps the focus.
+  - `SortableTree`: `unordered` (terms: a move that keeps the parent is no move, and the
+    announcements name only the parent), `actions` (replaces the default menu),
+    `leadingActions`/`trailingActions` (items around Move up/down and Indent/Outdent:
+    menus put Edit before and Remove after).
+  - `DataTable`: `openOnClick` (default `true`; the comments queue opens rows only with
+    `enter`), `align: "middle" | "top"` (body cells only), `data-row-id` on rows.
+  - `DropZone`: `single` and `labels` (the redirects import).
+  - `StaleDialog` and `useStaleAsk(resource)` (`kit/`), the `ask` of `staleGuard`
+    (`lib/stale-guard.ts`, P31): "Changed by someone else" with Reload / Overwrite /
+    Cancel, used by the type, taxonomy, term, menu and redirect forms.
+  - `tab-styles.ts` (`TAB_LIST`, `tabLinkClass`, `tabCountClass`): the link-tab row of the
+    content status tabs and the comment tabs. `SelectionBar` (`content/bulk-bar.tsx`) is
+    the generic floating selection bar under `BulkBar` and the comments queue.
+  - Outside the kit: `openMediaPicker({ kind?, title })` (`media/media-picker.tsx`,
+    `MediaPickerHost` mounted once in `routes/_app.tsx`) resolves to the chosen
+    `MediaDto` or `null`; the media grid takes `single` for it.
 
   `ContentStatus` and `CONTENT_STATUSES` live in `src/api/content.ts`. Kit and
   styleguide strings are in the `common` (`ui.*`, `status.*`, `kit.*`) and `styleguide`
@@ -489,11 +515,14 @@ styleguide mounts its own for its toast specimens).
   `read_admin`. M2b-2 screens add a `ScreenEntry` (`screen`, `to`, `label` key,
   `icon`) to the readonly `SCREEN_ENTRIES` literal in `nav.ts` once their route exists
   (never at runtime) (ruling F-A); `SCREENS` fixes where
-  each goes and who sees it, all behind `read_admin`: Content gets Media (`read_admin`;
-  `g m`; read-only for contributors) and Comments (`moderate_comments`; `g c`; its
-  pending-count `badge` arrives with the queue), and a Structure section holds Content
+  each goes and who sees it, all behind `read_admin` (R26): Content gets Media
+  (`read_admin`; `g m`; read-only for contributors) and Comments (`moderate_comments`;
+  `g c`; a pending-count badge, added by `withBadges` for the sidebar only, `aria-hidden`
+  with an sr-only "(n waiting)" on the link), and a Structure section holds Content
   types (`manage_settings`), Taxonomies (`manage_settings` or `manage_terms`), Menus
-  (`manage_menus`) and Redirects (`manage_redirects`), in that order. Rows are `h-control` (36 px comfortable, 30 px compact, 44 px under
+  (`manage_menus`) and Redirects (`manage_redirects`), in that order; all six entries are
+  registered as of M2b-2. The palette's Create group adds "Upload media", "New content
+  type", "New taxonomy", "New menu" and "New redirect" where the viewer may. Rows are `h-control` (36 px comfortable, 30 px compact, 44 px under
   `pointer: coarse`); the top bar stays 56 px in both densities (it is `--sticky-top`).
   The active row is
   tinted (`sidebar-accent`) with its icon in `primary`. Tooltips name the icons only on

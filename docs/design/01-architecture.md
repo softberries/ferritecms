@@ -61,12 +61,13 @@ ferritecms/
 │                                 #   lives in the crate; there is no separate macros crate)
 ├── wit/                          # WIT packages (source of truth for plugin API)
 │   └── ferrite-plugin@0.1.0/
-├── admin/                        # (built, M2b-1) admin SPA: one pnpm package (not a workspace),
+├── admin/                        # (built, M2b-1 and M2b-2) admin SPA: one pnpm package (not a workspace),
 │                                 #   Vite + React + TS; `pnpm build` writes dist/, which
 │                                 #   ferrite-http embeds (placeholder page without it; 07 §3).
 │                                 #   src/ (routes/, api/ with the generated schema.d.ts, editor/,
 │                                 #   components/ui + kit, design/, shell/, palette/, dashboard/,
-│                                 #   content/, i18n/), e2e/ (Playwright + support), scripts/
+│                                 #   content/, media/, comments/, structure/, i18n/), e2e/
+│                                 #   (Playwright + support), scripts/
 ├── themes/                       # (built) starter themes embedded in the binary: `blog`
 ├── plugins/examples/             # (built) hello, hello-v2 (manifest only), order-a, order-b,
 │                                 #   clock, html-inject, meta-writer, reader, router, notifier,

@@ -36,10 +36,16 @@ up in `docs/superpowers/m1-exit.md`, `m15-exit.md`, `m2a1-exit.md`, `m2a2a-exit.
 and writing: embedded `/admin/` with its CSP, design system (11-admin-ui), sign-in/TOTP/
 reset screens, shell, `⌘K` palette, dashboard, content list, TipTap editor with publishing,
 autosave slot, 412 conflict UI and revisions; API additions `allowed`, `author`, counts,
-`0007_autosaves`) is done too (`m2b1-exit.md`). Open follow-ups stay listed in the
-roadmap. Next is M2b-2 (media and content modelling), then M2b-3. Work top-down in
+`0007_autosaves`) is done too (`m2b1-exit.md`), and so is M2b-2 (media and content
+modelling: media library with drag-and-drop uploads, media picker, featured and inline
+images, custom fields from the type schema, SEO fields, content types with the field
+builder, taxonomy term trees, menus with `@dnd-kit`, the comment moderation queue,
+redirects with CSV; public comment pages (`?cpage=N`); API additions `seo`, media
+`q`/`kind`/`trash`/restore, comment `item` and counts, menu `locations`,
+`GET /content/refs`, `0008_autosave_seo`; `m2b2-exit.md`). Open follow-ups stay listed in
+the roadmap. Next is M2b-3 (administration, extensions and the M2 exit). Work top-down in
 `docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/` (M2a-2a:
-`m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`).
+`m2a2.md`, M2a-2b: `m2a2b.md`, M2b-1 and M2b-2: `m2b.md`).
 
 Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers)
 -> `ferrite-http` (public site, router, head, previews and logged-in requests, plugin
@@ -59,8 +65,8 @@ prune jobs) -> `ferrite-store` (traits); `ferrite-core` -> `ferrite-store` (trai
 `themes/blog` (embedded). Test plugins: `plugins/examples/` (own workspace, built for
 `wasm32-wasip2`). Admin SPA: `admin/` (pnpm, Vite + React + TS; `pnpm build` writes
 `admin/dist/`, which `ferrite-http`'s `admin` module embeds; without it the binary serves a
-placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: the rest of
-the admin screens (M2b-2, M2b-3), import-wp (M3) (`docs/design/01-architecture.md` §1; API
+placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: the account,
+users, themes, plugins, system and settings screens (M2b-3), import-wp (M3) (`docs/design/01-architecture.md` §1; API
 status per endpoint in 07 §1, admin status per screen in 07 §3).
 
 Run a site locally: build the admin first (`pnpm -C admin install && pnpm -C admin build`;
