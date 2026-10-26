@@ -263,7 +263,10 @@ to an approved comment of the same post, at most 5 deep (`parent_id`).
   resolves needs its `X-CSRF-Token` (`403 csrf`) — a cookie that does not resolve is a guest.
   With an account the name and e-mail are the account's. No client address is `503 busy`.
   Per client address (IPv6 /64) 3 a minute and 20 an hour, counted in the database first, so
-  the limit holds across nodes (`429` + `Retry-After`). Bidi controls (U+202A–U+202E,
+  the limit holds across nodes (`429` + `Retry-After`); a signed-in commenter whose role
+  holds `moderate_comments` (session, or a token with `comments:write`) is not counted, so
+  replies from the moderation queue are never refused (decided in core; M2b-2 Task 14).
+  Bidi controls (U+202A–U+202E,
   U+2066–U+2069) are refused in names (R13; also in account display names). `201` =
   approved, `202` = held; a filled honeypot (`website`) on input that passes every check
   also answers `202`, with the same headers and body as a held comment under an id that is

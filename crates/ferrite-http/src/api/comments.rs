@@ -230,7 +230,7 @@ pub async fn delete_comment(
         (status = 404, description = "`not-found`: no such public post, or comments are off", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 413, description = "`too-large`: the body is over 64 KiB", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 422, description = "`validation` (`errors[0].field`: `body`, `author_name`, `author_email`, `author_url` or `parent_id`)", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 429, description = "`rate-limited`: 3 a minute or 20 an hour per client address (`Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 429, description = "`rate-limited`: 3 a minute or 20 an hour per client address (`Retry-After`); a signed-in moderator is not counted", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 503, description = "`busy`: the client address is unknown", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]

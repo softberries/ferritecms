@@ -2078,7 +2078,7 @@
             }
           },
           "429": {
-            "description": "`rate-limited`: 3 a minute or 20 an hour per client address (`Retry-After`)",
+            "description": "`rate-limited`: 3 a minute or 20 an hour per client address (`Retry-After`); a signed-in moderator is not counted",
             "content": {
               "application/problem+json": {
                 "schema": {

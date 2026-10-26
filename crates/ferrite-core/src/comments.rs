@@ -14,7 +14,10 @@
 //! [`MAX_COMMENT_DEPTH`] deep.
 //!
 //! **Spam (P13).** Per client address (IPv6 per /64) 3 a minute and 20 an hour, counted
-//! in the database before anything else (R6), so the limits hold across nodes. A filled
+//! in the database before anything else (R6), so the limits hold across nodes. A
+//! signed-in commenter whose role holds `moderate_comments` (a session, or a token with
+//! `comments:write`) is not counted (M2b-2 Task 14: replies from the moderation queue);
+//! guests and other roles are. A filled
 //! honeypot on input that passes every check is [`Submitted::Discarded`]: nothing is
 //! written, and the caller answers exactly as for a pending comment (F18); invalid input
 //! is refused whether or not the honeypot is filled. A discard is faster than a real
@@ -490,7 +493,7 @@ impl CommentService {
 
     /// Submits a comment from `ip` (see the module docs), in this order: a signed-in
     /// commenter's `comments:write` scope (`Forbidden`); the per-IP limits
-    /// (`RateLimited`, outside any `Tx`); `comments.enabled`, then the item (public now,
+    /// (`RateLimited`, outside any `Tx`; not for a signed-in moderator); `comments.enabled`, then the item (public now,
     /// of kind `post` and of `input.kind`; else `NotFound`); the fields (`InvalidField`
     /// `body`, `author_name`, `author_email`, `author_url`, `parent_id`); the honeypot
     /// (`Discarded` with the would-be pending comment, nothing written); the status;
@@ -504,12 +507,16 @@ impl CommentService {
         if let Commenter::User(actor) = &who {
             require_scope(actor, Some(Scope::write(Area::Comments)))?;
         }
-        self.auth
-            .hit_limit(COMMENT_MINUTE_SCOPE, Some(ip), COMMENTS_PER_MINUTE, MINUTE)
-            .await?;
-        self.auth
-            .hit_limit(COMMENT_HOUR_SCOPE, Some(ip), COMMENTS_PER_HOUR, HOUR)
-            .await?;
+        let moderator =
+            matches!(&who, Commenter::User(actor) if can(actor.role, Capability::ModerateComments));
+        if !moderator {
+            self.auth
+                .hit_limit(COMMENT_MINUTE_SCOPE, Some(ip), COMMENTS_PER_MINUTE, MINUTE)
+                .await?;
+            self.auth
+                .hit_limit(COMMENT_HOUR_SCOPE, Some(ip), COMMENTS_PER_HOUR, HOUR)
+                .await?;
+        }
 
         let repos = self.store.read();
         let settings = comment_settings(repos).await?;

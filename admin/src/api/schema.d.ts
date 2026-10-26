@@ -4438,7 +4438,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `rate-limited`: 3 a minute or 20 an hour per client address (`Retry-After`) */
+            /** @description `rate-limited`: 3 a minute or 20 an hour per client address (`Retry-After`); a signed-in moderator is not counted */
             429: {
                 headers: {
                     [name: string]: unknown;

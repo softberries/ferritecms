@@ -931,6 +931,88 @@ fn render_body_escapes_and_breaks() {
     assert_eq!(render_body(""), "");
 }
 
+/// Task 14 B: a moderator's comments (replies from the admin queue above all) are not
+/// counted against the per-address limits, and do not use up the address's allowance.
+async fn moderator_replies_are_not_rate_limited(db: &TestDb) {
+    let s = site(db).await;
+    let post = s.published("post", "moderator-limits").await;
+    let first = s.accepted(input(post.id)).await;
+    s.approve(first.id).await;
+    let ip = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 20));
+    let editor = actor(s.store.as_ref(), Role::Editor).await;
+    align_to_window(
+        s.store.as_ref(),
+        Duration::from_secs(60),
+        Duration::from_secs(20),
+    )
+    .await;
+    for _ in 0..5 {
+        let mut reply = input(post.id);
+        reply.parent = Some(first.id);
+        let got = s
+            .comments
+            .submit(reply, Commenter::User(editor), ip)
+            .await
+            .unwrap();
+        assert!(matches!(got, Submitted::Accepted(c) if c.status == CommentStatus::Approved));
+    }
+    // A token of a moderator's role with `comments:write` too.
+    let token = editor
+        .with_scopes(ferrite_core::Scopes::from_strs(&["comments:write".to_owned()]).unwrap());
+    s.comments
+        .submit(input(post.id), Commenter::User(token), ip)
+        .await
+        .unwrap();
+    // The address still has its whole allowance for everyone else.
+    for _ in 0..3 {
+        s.comments
+            .submit(input(post.id), Commenter::Anonymous, ip)
+            .await
+            .unwrap();
+    }
+    assert!(matches!(
+        s.comments
+            .submit(input(post.id), Commenter::Anonymous, ip)
+            .await,
+        Err(CoreError::RateLimited { .. })
+    ));
+}
+
+/// Task 14 B: guests and signed-in commenters without `moderate_comments` keep the limits.
+async fn guest_still_rate_limited(db: &TestDb) {
+    let s = site(db).await;
+    let post = s.published("post", "guest-limits").await;
+    let author = actor(s.store.as_ref(), Role::Author).await;
+    align_to_window(
+        s.store.as_ref(),
+        Duration::from_secs(60),
+        Duration::from_secs(20),
+    )
+    .await;
+    for (ip, who) in [
+        (IpAddr::V4(Ipv4Addr::new(198, 51, 100, 21)), None),
+        (IpAddr::V4(Ipv4Addr::new(198, 51, 100, 22)), Some(author)),
+    ] {
+        let commenter = || match &who {
+            Some(a) => Commenter::User(*a),
+            None => Commenter::Anonymous,
+        };
+        for _ in 0..3 {
+            s.comments
+                .submit(input(post.id), commenter(), ip)
+                .await
+                .unwrap();
+        }
+        assert!(
+            matches!(
+                s.comments.submit(input(post.id), commenter(), ip).await,
+                Err(CoreError::RateLimited { .. })
+            ),
+            "{who:?}"
+        );
+    }
+}
+
 backend_tests!(
     submit_rules,
     moderation_decides_status,
@@ -938,6 +1020,8 @@ backend_tests!(
     approval_invalidates_the_post,
     honeypot_discards,
     comment_limits,
+    moderator_replies_are_not_rate_limited,
+    guest_still_rate_limited,
     delete_only_spam_or_trash,
     thread_depths_and_pages,
 );
