@@ -19,7 +19,9 @@
     "post": "New post",
     "page": "New page",
     "other": "New entry in {{label}}",
-    "keywords": "create add write new"
+    "keywords": "create add write new",
+    "upload": "Upload media",
+    "uploadKeywords": "upload media file image add"
   },
   "preferences": {
     "light": "Light theme",

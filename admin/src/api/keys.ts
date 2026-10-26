@@ -64,6 +64,10 @@ export const qk = {
   media: {
     all: ["media"] as const,
     list: (filters: MediaListFilters) => ["media", "list", filters] as const,
+    /** The library's pages (`useInfiniteQuery` over `next_cursor`); under `lists`. */
+    infinite: (filters: MediaListFilters) => ["media", "list", "infinite", filters] as const,
+    /** Every media list (refetch after an upload, an edit or a trash). */
+    lists: ["media", "list"] as const,
     item: (id: string) => ["media", "item", id] as const,
   },
   comments: {
@@ -87,6 +91,8 @@ export const qk = {
     metrics: ["system", "metrics"] as const,
     jobs: (filters: JobFilters) => ["system", "jobs", filters] as const,
   },
+  /** One user as `GET /users/{id}` answers (`manage_users` for another user). */
+  user: (id: string) => ["users", "item", id] as const,
   plugins: ["plugins"] as const,
   pluginMetrics: (name: string) => ["plugins", name, "metrics"] as const,
 } as const;

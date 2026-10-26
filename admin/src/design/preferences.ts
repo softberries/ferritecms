@@ -13,6 +13,8 @@ export const DENSITY_KEY = "ferrite.admin.density";
 export const SIDEBAR_KEY = "ferrite.admin.sidebar";
 /** The editor's side panel on wide screens: `open` (default) or `closed`. */
 export const EDITOR_PANEL_KEY = "ferrite.admin.editorPanel";
+/** The media library's view: `grid` (default) or `list`. */
+export const MEDIA_VIEW_KEY = "ferrite.admin.mediaView";
 export const DARK_QUERY = "(prefers-color-scheme: dark)";
 
 const THEMES: readonly ThemePreference[] = ["light", "dark", "system"];
@@ -68,6 +70,14 @@ export function storedEditorPanelOpen(): boolean {
 
 export function storeEditorPanelOpen(open: boolean): void {
   write(EDITOR_PANEL_KEY, open ? "open" : "closed");
+}
+
+export function storedMediaView(): "grid" | "list" {
+  return read(MEDIA_VIEW_KEY) === "list" ? "list" : "grid";
+}
+
+export function storeMediaView(view: "grid" | "list"): void {
+  write(MEDIA_VIEW_KEY, view);
 }
 
 /** The system scheme; light where `matchMedia` is unavailable. */

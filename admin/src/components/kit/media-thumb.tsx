@@ -2,7 +2,8 @@
 // variant whose short side fills the box at the screen's pixel ratio, else the
 // original; SVGs only ever through `<img src>` (never inlined); other kinds a type icon
 // with the file's extension. The image's `alt` is the item's alt text; without one the
-// image is decorative (`alt=""`) and the title is shown as text beside or under it.
+// image is decorative (`alt=""`) and the title is shown as text beside or under it. A
+// trashed item shows its type icon: its URLs are not served while it is in the trash.
 
 import { cn } from "cn";
 import {
@@ -27,12 +28,22 @@ const BOX: Record<MediaThumbSize, { px: number; box: string; figure: string }> =
 export interface MediaThumbProps {
   media: MediaDto;
   size: MediaThumbSize;
+  /** Show the title under an image without alt text (default); `false` when the screen
+   * prints the title itself (the media grid). */
+  caption?: boolean;
+  /** Fill the parent's width as a square (a grid tile) instead of the fixed box; the
+   * picture is then chosen for a box of `FILL_PX`. */
+  fill?: boolean;
   className?: string;
 }
 
+/** The box a filling thumb chooses its picture for (the media grid's widest tile). */
+const FILL_PX = 208;
+
 /** The URL to show in a `px`-wide square box, or `null` for a kind with no picture. */
 function thumbUrl(media: MediaDto, px: number): string | null {
-  if (!media.mime.startsWith("image/")) return null;
+  // A trashed item is not served (its URLs answer 404 until it is restored).
+  if (media.status === "trash" || !media.mime.startsWith("image/")) return null;
   if (media.mime === "image/svg+xml") return media.url;
   const need = px * (typeof window === "undefined" ? 1 : window.devicePixelRatio || 1);
   const fits = media.variants
@@ -60,17 +71,26 @@ function extension(media: MediaDto): string {
   return (ext ?? "").slice(0, 5).toUpperCase();
 }
 
-export function MediaThumb({ media, size, className }: MediaThumbProps) {
+export function MediaThumb({
+  media,
+  size,
+  caption = true,
+  fill = false,
+  className,
+}: MediaThumbProps) {
   const { px, box, figure } = BOX[size];
-  const src = thumbUrl(media, px);
+  const src = thumbUrl(media, fill ? FILL_PX : px);
   const alt = media.alt.trim();
   const title = media.title.trim() || media.original_name;
   return (
-    <figure data-slot="media-thumb" className={cn("m-0 flex min-w-0 gap-2", figure, className)}>
+    <figure
+      data-slot="media-thumb"
+      className={cn("m-0 flex min-w-0 gap-2", fill ? "w-full flex-col" : figure, className)}
+    >
       <div
         className={cn(
           "relative flex shrink-0 flex-col items-center justify-center gap-1 overflow-hidden rounded-md border bg-muted text-muted-foreground",
-          box,
+          fill ? "aspect-square w-full" : box,
         )}
         {...(src === null && alt ? { role: "img", "aria-label": alt } : {})}
       >
@@ -86,14 +106,17 @@ export function MediaThumb({ media, size, className }: MediaThumbProps) {
           />
         ) : (
           <>
-            <KindIcon mime={media.mime} className={size === "sm" ? "size-4" : "size-6"} />
+            <KindIcon
+              mime={media.mime}
+              className={fill ? "size-8" : size === "sm" ? "size-4" : "size-6"}
+            />
             {size === "sm" ? null : (
               <span className="font-mono text-xs font-medium tabular-nums">{extension(media)}</span>
             )}
           </>
         )}
       </div>
-      {alt ? null : (
+      {alt || !caption ? null : (
         <figcaption className="min-w-0 truncate text-sm" title={title}>
           {title}
         </figcaption>

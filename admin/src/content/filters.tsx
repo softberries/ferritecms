@@ -4,6 +4,7 @@
 // search is not combinable with Mine or a term (07 §1), and the server orders search
 // results by relevance, so while one runs those chips are shown disabled with a tooltip
 // that says why (they stay in the URL and come back when the search is cleared).
+// `SearchField` and `Chip` are shared with the media library's toolbar.
 
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
@@ -122,7 +123,7 @@ export function ListFilters({ label, search, taxonomies, onChange }: ListFilters
 }
 
 /** The search box: local text, the URL updated `SEARCH_DEBOUNCE_MS` after the last key. */
-function SearchField({
+export function SearchField({
   label,
   value,
   onSearch,
@@ -220,7 +221,7 @@ type ChipProps = Omit<ComponentProps<"button">, "disabled"> & {
 };
 
 /** A filter chip: dashed while empty, tinted when it narrows the list. */
-const Chip = forwardRef<HTMLButtonElement, ChipProps>(function Chip(
+export const Chip = forwardRef<HTMLButtonElement, ChipProps>(function Chip(
   { pressed, disabledReason, dashed, className, onClick, children, ...props },
   ref,
 ) {

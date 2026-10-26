@@ -9,6 +9,7 @@
 import {
   FileTextIcon,
   FilesIcon,
+  ImageIcon,
   LayoutDashboardIcon,
   ShapesIcon,
   type LucideIcon,
@@ -78,7 +79,9 @@ export interface ScreenEntry {
  * adds its route; nothing is registered at runtime (a lazy route module would register
  * too late for the sidebar and the palette).
  */
-export const SCREEN_ENTRIES: readonly ScreenEntry[] = [] as const;
+export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
+  { screen: "media", to: "/media", label: "nav.media", icon: ImageIcon },
+] as const;
 
 /** Types the content screens list: everything but `media` (its own screen, M2b-2). */
 const NOT_CONTENT = new Set(["media"]);

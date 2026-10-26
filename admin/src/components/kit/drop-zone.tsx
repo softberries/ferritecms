@@ -18,6 +18,9 @@ export interface DropZoneProps {
   /** Dropped files `accept` does not match. */
   onRejected?: (files: File[]) => void;
   children: ReactNode;
+  /** Show the "Choose files" row (default); `false` when the screen has its own Upload
+   * button (the media library). */
+  chooser?: boolean;
   className?: string;
 }
 
@@ -39,7 +42,14 @@ function accepts(accept: string | undefined, file: File): boolean {
 
 const carriesFiles = (e: DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
 
-export function DropZone({ onFiles, accept, onRejected, children, className }: DropZoneProps) {
+export function DropZone({
+  onFiles,
+  accept,
+  onRejected,
+  children,
+  chooser = true,
+  className,
+}: DropZoneProps) {
   const { t } = useTranslation("kit");
   const input = useRef<HTMLInputElement>(null);
   // dragenter/dragleave fire for every child crossed; count them.
@@ -82,26 +92,28 @@ export function DropZone({ onFiles, accept, onRejected, children, className }: D
         take(Array.from(e.dataTransfer.files));
       }}
     >
-      <div className="flex flex-wrap items-center gap-3">
-        <Button variant="outline" onClick={() => input.current?.click()}>
-          <UploadIcon data-icon="inline-start" />
-          {t("dropZone.choose")}
-        </Button>
-        <span className="text-sm text-muted-foreground">{t("dropZone.hint")}</span>
-        <input
-          ref={input}
-          type="file"
-          multiple
-          hidden
-          tabIndex={-1}
-          {...(accept ? { accept } : {})}
-          onChange={(e) => {
-            take(Array.from(e.currentTarget.files ?? []));
-            // The same file chosen again is a new choice.
-            e.currentTarget.value = "";
-          }}
-        />
-      </div>
+      {chooser ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="outline" onClick={() => input.current?.click()}>
+            <UploadIcon data-icon="inline-start" />
+            {t("dropZone.choose")}
+          </Button>
+          <span className="text-sm text-muted-foreground">{t("dropZone.hint")}</span>
+          <input
+            ref={input}
+            type="file"
+            multiple
+            hidden
+            tabIndex={-1}
+            {...(accept ? { accept } : {})}
+            onChange={(e) => {
+              take(Array.from(e.currentTarget.files ?? []));
+              // The same file chosen again is a new choice.
+              e.currentTarget.value = "";
+            }}
+          />
+        </div>
+      ) : null}
       {children}
       {over ? (
         <div

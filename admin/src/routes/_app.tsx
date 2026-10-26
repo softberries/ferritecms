@@ -149,7 +149,13 @@ function Shell({ me }: { me: MeDto }) {
             onShortcuts={openSheet}
           />
           <ShortcutSheet open={sheet} onOpenChange={setSheet} />
-          <Toaster position="bottom-right" />
+          {/* Toasts sit above a floating panel that sets `--toast-lift` (the media
+              library's upload tray), never on top of it. */}
+          <Toaster
+            position="bottom-right"
+            offset={{ bottom: "calc(24px + var(--toast-lift, 0px))" }}
+            mobileOffset={{ bottom: "calc(16px + var(--toast-lift, 0px))" }}
+          />
         </SidebarProvider>
       </ShellChromeContext>
     </TooltipProvider>

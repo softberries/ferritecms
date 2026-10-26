@@ -1,0 +1,205 @@
+{
+  "title": "Media",
+  "upload": "Upload",
+  "searchLabel": "media",
+  "mine": "Mine",
+  "mineBySearch": "A search covers every uploader. Clear it to use this filter.",
+  "clearFilters": "Clear filters",
+  "loadMore": "Load more",
+  "loadingMore": "Loading more…",
+  "end_one": "{{formatted}} file",
+  "end_other": "All {{formatted}} files",
+  "newTab": "(opens in a new tab)",
+  "trash": {
+    "title": "Trash",
+    "description": "Files in the trash are no longer served on the site. Restore them, or delete them for good.",
+    "toggle": "Trash"
+  },
+  "kind": {
+    "label": "Kind",
+    "all": "All",
+    "image": "Images",
+    "video": "Video",
+    "audio": "Audio",
+    "document": "Documents"
+  },
+  "view": {
+    "label": "View",
+    "grid": "Grid view",
+    "list": "List view"
+  },
+  "grid": {
+    "label": "Media files",
+    "loading": "Loading media",
+    "select": "Select {{title}}"
+  },
+  "columns": {
+    "preview": "Preview",
+    "title": "Title",
+    "type": "Type",
+    "size": "Size",
+    "dimensions": "Dimensions",
+    "author": "Uploaded by",
+    "uploaded": "Uploaded"
+  },
+  "empty": {
+    "search": {
+      "title": "No files match “{{q}}”",
+      "body": "Search looks at titles, not file names. Try another word.",
+      "action": "Clear search"
+    },
+    "filtered": {
+      "title": "No files match these filters",
+      "body": "Clear the filters to see every file."
+    },
+    "trashFiltered": {
+      "title": "Nothing in the trash matches these filters"
+    },
+    "trash": {
+      "title": "The trash is empty",
+      "body": "Files you move to the trash wait here until you restore or delete them."
+    },
+    "none": {
+      "title": "No media yet",
+      "body": "Drop files anywhere on this page, or choose them to upload.",
+      "bodyReadOnly": "Images and files your team uploads show up here.",
+      "action": "Choose files"
+    }
+  },
+  "confirm": {
+    "cancel": "Cancel",
+    "delete": {
+      "title_one": "Delete this file permanently?",
+      "title_other": "Delete {{count}} files permanently?",
+      "bodyOne": "“{{title}}” will be deleted for good. Pages that use it will show a missing file. This cannot be undone.",
+      "bodyMany_one": "{{count}} file will be deleted for good. This cannot be undone.",
+      "bodyMany_other": "{{count}} files will be deleted for good. Pages that use them will show missing files. This cannot be undone.",
+      "confirm_one": "Delete permanently",
+      "confirm_other": "Delete {{count}} permanently"
+    },
+    "trash": {
+      "title_one": "Move this file to the trash?",
+      "title_other": "Move {{count}} files to the trash?",
+      "bodyOne": "You cannot restore “{{title}}” yourself afterwards.",
+      "bodyMany_one": "You cannot restore {{count}} file yourself afterwards.",
+      "bodyMany_other": "You cannot restore these {{count}} files yourself afterwards.",
+      "confirm_one": "Move to trash",
+      "confirm_other": "Move {{count}} to trash"
+    }
+  },
+  "toast": {
+    "trash_one": "{{count}} file moved to the trash",
+    "trash_other": "{{count}} files moved to the trash",
+    "restore_one": "{{count}} file restored",
+    "restore_other": "{{count}} files restored",
+    "delete_one": "{{count}} file deleted permanently",
+    "delete_other": "{{count}} files deleted permanently",
+    "undone_one": "{{count}} file restored",
+    "undone_other": "{{count}} files restored",
+    "undoLabel": "Undo",
+    "network": "The connection dropped. Check it and try again.",
+    "failed": {
+      "trash_one": "{{count}} file was not moved to the trash",
+      "trash_other": "{{count}} files were not moved to the trash",
+      "restore_one": "{{count}} file was not restored",
+      "restore_other": "{{count}} files were not restored",
+      "delete_one": "{{count}} file was not deleted",
+      "delete_other": "{{count}} files were not deleted",
+      "undo_one": "{{count}} file could not be brought back",
+      "undo_other": "{{count}} files could not be brought back"
+    }
+  },
+  "shortcuts": {
+    "group": "Media",
+    "save": "Save title and alt text",
+    "trashSelection": "Move the selection to the trash"
+  },
+  "author": {
+    "you": "You",
+    "other": "Another user"
+  },
+  "detail": {
+    "loadingTitle": "Loading file…",
+    "description": "Details of a media file",
+    "edit": "Title and alt text",
+    "title": "Title",
+    "alt": "Alt text",
+    "altHint": "Describe the image for people who cannot see it. Leave empty for decoration.",
+    "altHintFile": "A short description of the file, for themes that show it as a link or an icon.",
+    "facts": "Details",
+    "download": "Download",
+    "trashed": "Not served on the site while it is in the trash.",
+    "sanitized": "Sanitised on upload: scripts and outside references were removed.",
+    "copyUrl": "Copy URL",
+    "copied": "URL copied",
+    "copyFailed": "The URL could not be copied",
+    "conflict": {
+      "title": "Someone else changed this file",
+      "body": "{{field}} now shows their version. Edit it again if yours should win."
+    },
+    "saveFailed": "It could not be saved.",
+    "notSaved": "{{field}} was not saved",
+    "saving": "Saving…"
+  },
+  "facts": {
+    "type": "Type",
+    "size": "Size",
+    "dimensions": "Dimensions",
+    "originalName": "Original name",
+    "uploadedBy": "Uploaded by",
+    "uploaded": "Uploaded",
+    "url": "URL",
+    "unknown": "Not known"
+  },
+  "variants": {
+    "title": "Variants",
+    "none": "Only raster images (JPEG, PNG, GIF, WebP) get resized variants.",
+    "making": "Variants are being made…",
+    "late": "The variants are not ready yet. Check again in a while.",
+    "size": "{{width}} × {{height}}",
+    "open": "Open",
+    "openWhich": "the {{name}} variant"
+  },
+  "actions": {
+    "trash": "Move to trash",
+    "restore": "Restore",
+    "delete": "Delete permanently"
+  },
+  "tray": {
+    "uploading": "Uploading: {{done}} of {{total}} done",
+    "someFailed_one": "{{count}} upload failed",
+    "someFailed_other": "{{count}} uploads failed",
+    "done_one": "{{count}} file uploaded",
+    "done_other": "{{count}} files uploaded",
+    "expand": "Show uploads",
+    "collapse": "Hide uploads",
+    "close": "Close uploads",
+    "overall": "Overall upload progress",
+    "cancel": "Cancel the upload of {{name}}",
+    "retry": "Retry",
+    "retryName": "Retry the upload of {{name}}",
+    "open": "Open",
+    "openName": "Open {{name}}",
+    "progress": "Upload of {{name}}",
+    "network": "The connection dropped. Check it and retry.",
+    "failed": "The upload failed.",
+    "state": {
+      "queued": "Waiting",
+      "retrying": "Retrying soon",
+      "uploading": "Uploading",
+      "done": "Done",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "announce": {
+      "done": "{{name}} uploaded",
+      "failed": "{{name}} failed: {{reason}}"
+    }
+  },
+  "leave": {
+    "title": "Uploads are still running",
+    "body": "Leaving this page cancels the files that have not finished uploading.",
+    "stay": "Stay",
+    "leave": "Leave and cancel"
+  }
+}

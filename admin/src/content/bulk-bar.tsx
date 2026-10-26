@@ -14,11 +14,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { MOTION } from "@/design/tokens";
 import { uiLocale } from "@/lib/locale";
 import { useShortcut } from "@/lib/shortcuts";
-import { type BulkAction, countAllowed } from "./bulk";
-import type { ContentSummary } from "./list-columns";
+import { type BulkAction, type BulkItem, countAllowed } from "./bulk";
 
 export interface BulkBarProps {
-  selected: ContentSummary[];
+  /** Content items, or anything with their `allowed` (media items, `media/rights.ts`). */
+  selected: readonly BulkItem[];
   pending: BulkAction | "undo" | null;
   onAction: (action: BulkAction) => void;
   onClear: () => void;

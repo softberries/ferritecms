@@ -2,7 +2,7 @@
 // `CommandDialog` opened by `mod+k` and the top bar's trigger. Groups: Recent (the
 // viewer's last 8 screens and items, only before anything is typed), Go to (every nav
 // item and the `?` sheet), Create (one per content type the nav shows, with
-// `edit_own`), Content (live search, from 2 characters) and Preferences (theme,
+// `edit_own`, and Upload media with `upload_media`), Content (live search, from 2 characters) and Preferences (theme,
 // density). cmdk's own filter ranks the rows inside the static groups; content hits come
 // from the server already matched, so they keep the server's order, in the last group.
 
@@ -22,6 +22,7 @@ import {
   SearchXIcon,
   ShapesIcon,
   SunIcon,
+  UploadIcon,
   XIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -46,6 +47,7 @@ import { DialogClose } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDensity, type Density } from "@/design/density";
 import { useTheme, type ThemePreference } from "@/design/theme";
+import { requestUpload } from "@/media/upload-intent";
 import { navItemAt, type NavItem, type NavSection } from "@/shell/nav";
 import { listRecent, pushRecent, recentId, type RecentEntry } from "./recent";
 import { searchContent, searchable, type PaletteHit } from "./sources";
@@ -135,6 +137,11 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
   const typeItems = useMemo(() => navItems.filter((i) => i.contentType), [navItems]);
   const types = useMemo(() => typeItems.flatMap((i) => i.contentType ?? []), [typeItems]);
   const typeItem = (type: string) => typeItems.find((i) => i.contentType === type);
+  const createTypes = me.capabilities.includes("edit_own") ? typeItems : [];
+  // "Upload media" (Create): the Media screen is in the nav and the viewer may upload.
+  const mediaItem = me.capabilities.includes("upload_media")
+    ? navItems.find((i) => i.id === "media")
+    : undefined;
 
   const query = q.trim();
   const active = searchable(query) && types.length > 0;
@@ -279,9 +286,9 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
             />
           </CommandGroup>
 
-          {me.capabilities.includes("edit_own") && typeItems.length > 0 ? (
+          {createTypes.length > 0 || mediaItem ? (
             <CommandGroup heading={t("group.create")}>
-              {typeItems.map((item) => {
+              {createTypes.map((item) => {
                 const type = item.contentType ?? "";
                 const label =
                   type === "post"
@@ -300,6 +307,19 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
                   />
                 );
               })}
+              {mediaItem ? (
+                <Row
+                  value={t("create.upload")}
+                  keywords={[t("create.uploadKeywords")]}
+                  icon={UploadIcon}
+                  label={t("create.upload")}
+                  onSelect={() => {
+                    // The library opens its file chooser on arrival (`upload-intent.ts`).
+                    requestUpload();
+                    go(mediaItem.to);
+                  }}
+                />
+              ) : null}
             </CommandGroup>
           ) : null}
 

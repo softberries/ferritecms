@@ -50,16 +50,19 @@ test("author_sees_posts_pages_and_custom_types", () => {
         // Custom types by label; never `media` (its own screen, M2b-2).
         ["Events", "/content/event"],
         ["Recipes", "/content/recipe"],
+        // Registered screens follow the types (Task 7: Media).
+        ["Media", "/media"],
       ],
     ],
   ]);
   expect(navFor(AUTHOR, TYPES)[0]?.items[0]?.shortcut).toBe("g d");
-  // 11 §6: the lists' chords; custom types have none.
+  // 11 §6: the lists' chords; custom types have none; `g m` Media.
   expect(navFor(AUTHOR, TYPES)[1]?.items.map((i) => i.shortcut)).toEqual([
     "g p",
     "g g",
     undefined,
     undefined,
+    "g m",
   ]);
 });
 
@@ -67,7 +70,7 @@ test("nothing_above_its_rights", () => {
   // Without `read_admin` the content APIs answer 403, so no content section.
   expect(shape(navFor(me("none", []), TYPES))).toEqual([["overview", [["Dashboard", "/"]]]]);
   // Nothing beyond Overview and Content until a screen registers its entry, whatever
-  // the role holds.
+  // the role holds (so far only Media, in Content).
   const admin = me("admin", [
     "read_admin",
     "edit_own",
@@ -90,13 +93,27 @@ test("nothing_above_its_rights", () => {
 });
 
 test("no_types_yet_means_no_content_section", () => {
-  expect(navFor(AUTHOR, []).map((s) => s.id)).toEqual(["overview"]);
+  expect(navFor(AUTHOR, [], undefined, []).map((s) => s.id)).toEqual(["overview"]);
+});
+
+test("media_is_registered", () => {
+  // Task 7 registers Media: every `read_admin` role sees it, with `g m`.
+  const media = navFor(me("contributor", ["read_admin", "edit_own"]), [])
+    .flatMap((s) => s.items)
+    .find((i) => i.id === "media");
+  expect(media).toMatchObject({ label: "Media", to: "/media", shortcut: "g m" });
+  expect(navItemAt(navFor(AUTHOR, TYPES), "/media")?.id).toBe("media");
+  expect(
+    navFor(me("none", []), TYPES)
+      .flatMap((s) => s.items)
+      .map((i) => i.id),
+  ).toEqual(["dashboard"]);
 });
 
 test("content_items_name_their_type_and_paths_find_their_item", () => {
   const sections = navFor(AUTHOR, TYPES);
   const content = sections.find((s) => s.id === "content")?.items ?? [];
-  expect(content.map((i) => i.contentType)).toEqual(["post", "page", "event", "recipe"]);
+  expect(content.map((i) => i.contentType)).toEqual(["post", "page", "event", "recipe", undefined]);
   expect(navItemAt(sections, "/")?.id).toBe("dashboard");
   expect(navItemAt(sections, "/content/page")?.id).toBe("content-page");
   expect(navItemAt(sections, "/content/page/")?.id).toBe("content-page");

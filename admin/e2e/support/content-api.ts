@@ -4,6 +4,7 @@
 // type with everything in it afterwards, so the sidebar of later screenshots stays clean.
 
 import { expect, request as apiRequest, type APIRequestContext } from "@playwright/test";
+import type { FixtureFile } from "./files";
 import type { Backend } from "./server";
 import { authFile } from "./server";
 import type { Role } from "./users";
@@ -18,6 +19,20 @@ export interface Item {
   version: number;
   parent_id?: string | null;
   published_at?: string | null;
+}
+
+/** A media item as `GET /media/{id}` answers (the members the specs read). */
+export interface Media {
+  id: string;
+  title: string;
+  alt: string;
+  mime: string;
+  original_name: string;
+  status: string;
+  version: number;
+  sanitized: boolean;
+  author_id: string;
+  variants: { name: string; url: string; width: number; height: number }[];
 }
 
 export class ContentApi {
@@ -204,6 +219,57 @@ export class ContentApi {
       await this.ctx.delete(`/api/v1/taxonomies/${tax}`, { headers: this.headers() });
     }
     await this.ctx.delete(`/api/v1/types/${name}`, { headers: this.headers() });
+  }
+
+  /** `POST /media` (multipart) with an optional title and alt text. */
+  async upload(file: FixtureFile, extra: { title?: string; alt?: string } = {}): Promise<Media> {
+    return this.ok(
+      await this.ctx.post("/api/v1/media", {
+        headers: this.headers(),
+        multipart: {
+          ...(extra.title ? { title: extra.title } : {}),
+          ...(extra.alt ? { alt: extra.alt } : {}),
+          file: { name: file.name, mimeType: file.mimeType, buffer: file.buffer },
+        },
+      }),
+      `upload ${file.name}`,
+    );
+  }
+
+  async getMedia(id: string): Promise<Media> {
+    return this.ok(await this.ctx.get(`/api/v1/media/${id}`), `get media ${id}`);
+  }
+
+  /** The status of a media item, or 404 once it is gone. */
+  async mediaStatus(id: string): Promise<number> {
+    return (await this.ctx.get(`/api/v1/media/${id}`)).status();
+  }
+
+  /** `GET /media` with `query` (one page). */
+  async listMedia(query: Record<string, string>): Promise<Media[]> {
+    const res = await this.ctx.get(`/api/v1/media?${new URLSearchParams(query).toString()}`);
+    return (await this.ok<{ items: Media[] }>(res, "list media")).items;
+  }
+
+  async trashMedia(media: Media): Promise<void> {
+    await this.ok(
+      await this.ctx.delete(`/api/v1/media/${media.id}`, { headers: this.headers(media.version) }),
+      `trash media ${media.id}`,
+    );
+  }
+
+  /** Trashes (if needed) and deletes a media item for good; best effort. */
+  async purgeMedia(id: string): Promise<void> {
+    const res = await this.ctx.get(`/api/v1/media/${id}`);
+    if (!res.ok()) return;
+    let media = (await res.json()) as Media;
+    if (media.status !== "trash") {
+      await this.ctx.delete(`/api/v1/media/${id}`, { headers: this.headers(media.version) });
+      media = (await (await this.ctx.get(`/api/v1/media/${id}`)).json()) as Media;
+    }
+    await this.ctx.delete(`/api/v1/media/${id}?force=true`, {
+      headers: this.headers(media.version),
+    });
   }
 
   async dispose(): Promise<void> {
