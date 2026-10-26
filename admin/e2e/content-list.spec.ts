@@ -574,9 +574,18 @@ test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
     for (const name of ["Draft", "Pending", "Scheduled", "Published", "Private", "Trash"]) {
       await tab(page, name).click();
       await loaded(page, label);
-      // Rows enter with a Motion (JS) fade that `snap`'s settle cannot see.
-      const first = rows(page, label).first();
-      if ((await first.count()) > 0) await expect(first).toHaveCSS("opacity", "1");
+      // Rows enter and leave with Motion (JS) animations that `snap`'s settle cannot
+      // see: wait until the leaving rows are gone and the rest stand still.
+      await expect
+        .poll(() =>
+          rows(page, label).evaluateAll((trs) =>
+            trs.every((tr) => {
+              const cs = getComputedStyle(tr);
+              return cs.opacity === "1" && cs.transform === "none";
+            }),
+          ),
+        )
+        .toBe(true);
       await snap(page, `content-list-${name.toLowerCase()}`);
       await expectAccessible(page);
     }
