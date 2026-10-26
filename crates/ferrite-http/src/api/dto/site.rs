@@ -135,12 +135,35 @@ pub struct MenuSummary {
     pub label: String,
 }
 
-/// `GET /menus`: every menu, by name.
+/// A menu location of the theme the answering node serves (its `[menus]` table).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MenuLocationDto {
+    /// The location, and the name of the menu the theme shows there.
+    pub name: String,
+    pub label: String,
+    /// Whether a menu with this name exists.
+    pub menu: bool,
+}
+
+impl From<ferrite_core::MenuLocation> for MenuLocationDto {
+    fn from(l: ferrite_core::MenuLocation) -> Self {
+        Self {
+            name: l.name,
+            label: l.label,
+            menu: l.menu,
+        }
+    }
+}
+
+/// `GET /menus`: every menu, by name, and the theme's menu locations.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct MenuList {
     pub items: Vec<MenuSummary>,
     /// Always `null`: one page holds every menu.
     pub next_cursor: Option<String>,
+    /// The menu locations the theme this node serves declares, by name; empty when it
+    /// declares none.
+    pub locations: Vec<MenuLocationDto>,
 }
 
 /// How a redirect came to be.

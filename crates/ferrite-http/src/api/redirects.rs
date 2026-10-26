@@ -15,6 +15,8 @@
 //!   `source,target,code`. All rows are checked first and nothing is written if any
 //!   fails: `422 validation` with one `errors` entry per bad line,
 //!   `{ field: "line <n>", detail }` (at most [`MAX_LINE_ERRORS`] entries).
+//! * `GET /redirects?q` searches: a case-insensitive substring of source or target
+//!   (wildcards literal), trimmed, 1..=200 characters (`422` field `q`, checked in core).
 //! * `GET /redirects/export` is every redirect as `text/csv` (`source,target,code`
 //!   with a header row, by source), the format the import reads (see
 //!   [`csv`] for quoting and the formula guard).
@@ -29,15 +31,17 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use ferrite_core::{CoreError, MAX_IMPORT_ROWS};
-use ferrite_domain::{MAX_PAGE, RedirectId};
+use ferrite_domain::{MAX_PAGE, RedirectId, RedirectQuery};
 use ferrite_store::REDIRECT_CURSOR_TAG;
+use serde::Deserialize;
+use utoipa::IntoParams;
 use uuid::Uuid;
 
 use super::{
     ApiState, Authed, BASE,
     csv::{self, CsvRecord},
     dto::site::{ImportReportDto, RedirectDto, RedirectInput, RedirectList, RedirectPatch},
-    extract::{ApiJson, ApiPath, ApiQuery, PageParams, created_at, invalid_cursor},
+    extract::{ApiJson, ApiPath, ApiQuery, DEFAULT_LIMIT, check_limit, created_at, invalid_cursor},
     list,
     problem::{Problem, ProblemDocument},
 };
@@ -54,34 +58,55 @@ pub const MAX_LINE_ERRORS: usize = 100;
 /// The CSV columns, and the optional header row.
 const HEADER: [&str; 3] = ["source", "target", "code"];
 
+/// The query of `GET /redirects`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct RedirectListParams {
+    /// Only redirects whose source or target holds this text, ignoring case (`%` and
+    /// `_` match only themselves). Trimmed; 1 to 200 characters (`422`, field `q`).
+    pub q: Option<String>,
+    /// 1..=200; default 50.
+    pub limit: Option<u32>,
+    /// `next_cursor` of the previous page of the same query.
+    pub cursor: Option<String>,
+}
+
 #[utoipa::path(
     get,
     path = "/redirects",
     tag = "redirects",
     operation_id = "list_redirects",
     security(("session" = []), ("bearer" = [])),
-    params(PageParams),
+    params(RedirectListParams),
     responses(
         (status = 200, description = "One page of redirects, by source", body = RedirectList),
         (status = 400, description = "`validation`: `limit` or `cursor`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (`manage_redirects`, `redirects:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: `q` blank or longer than 200 characters (`errors[0].field` = `q`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn list_redirects(
     State(api): State<Arc<ApiState>>,
     Authed(who): Authed,
-    ApiQuery(page): ApiQuery<PageParams>,
+    ApiQuery(params): ApiQuery<RedirectListParams>,
 ) -> Result<Json<RedirectList>, Problem> {
-    let limit = page.limit()?;
-    if let Some(c) = &page.cursor
+    let limit = check_limit(params.limit, DEFAULT_LIMIT, MAX_PAGE)?;
+    if let Some(c) = &params.cursor
         && ferrite_store::text_cursor(REDIRECT_CURSOR_TAG, c).is_err()
     {
         return Err(invalid_cursor());
     }
     let found = api
         .redirects
-        .list(&who.actor, limit, page.cursor.as_deref())
+        .list(
+            &who.actor,
+            RedirectQuery {
+                q: params.q,
+                limit,
+                cursor: params.cursor,
+            },
+        )
         .await?;
     let (items, next_cursor) = list::items(found, RedirectDto::from);
     Ok(Json(RedirectList { items, next_cursor }))
@@ -302,7 +327,14 @@ pub async fn export_redirects(
     loop {
         let page = api
             .redirects
-            .list(&who.actor, MAX_PAGE, cursor.as_deref())
+            .list(
+                &who.actor,
+                RedirectQuery {
+                    q: None,
+                    limit: MAX_PAGE,
+                    cursor: cursor.take(),
+                },
+            )
             .await?;
         for r in &page.items {
             out.push_str(&csv::write_row(&[

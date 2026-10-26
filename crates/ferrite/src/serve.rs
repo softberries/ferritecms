@@ -443,7 +443,11 @@ async fn boot(
     ))));
     // One comment service per node: the API submit and moderation, and the theme form
     // (`POST /_comment`, P12).
-    let comments = Arc::new(CommentService::new(store.clone(), auth.clone()));
+    let comments = Arc::new(CommentService::new(
+        store.clone(),
+        auth.clone(),
+        dyn_permalinks.clone(),
+    ));
     let state = Arc::new(
         AppState::new(AppParts {
             store: store.clone(),

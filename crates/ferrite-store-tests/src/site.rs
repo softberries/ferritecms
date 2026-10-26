@@ -2,7 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use ferrite_domain::{Redirect, RedirectId, RedirectOrigin, Timestamp};
+use ferrite_domain::{Redirect, RedirectId, RedirectOrigin, RedirectQuery, Timestamp};
 use ferrite_store::StoreError;
 use serde_json::json;
 
@@ -461,7 +461,7 @@ pub async fn redirects_list_paginates_in_binary_order(db: &TestDb) {
     let mut cursor: Option<String> = None;
     let mut pages = 0;
     loop {
-        let page = redirects.list(3, cursor.as_deref()).await.unwrap();
+        let page = redirects.list(&page_of(3, cursor.clone())).await.unwrap();
         pages += 1;
         seen.extend(page.items.iter().map(|r| r.source_path.clone()));
         match page.next_cursor {
@@ -471,21 +471,81 @@ pub async fn redirects_list_paginates_in_binary_order(db: &TestDb) {
     }
     assert_eq!(seen, ["/B", "/a", "/a/b", "/é"]);
     assert_eq!(pages, 2);
-    let all = redirects.list(4, None).await.unwrap();
+    let all = redirects.list(&page_of(4, None)).await.unwrap();
     assert_eq!(all.items.len(), 4);
     assert!(all.next_cursor.is_none());
     assert!(matches!(
-        redirects.list(0, None).await,
+        redirects.list(&page_of(0, None)).await,
         Err(StoreError::Invalid(_))
     ));
     assert!(matches!(
-        redirects.list(201, None).await,
+        redirects.list(&page_of(201, None)).await,
         Err(StoreError::Invalid(_))
     ));
     assert!(matches!(
-        redirects.list(2, Some("???")).await,
+        redirects.list(&page_of(2, Some("???".into()))).await,
         Err(StoreError::Invalid(_))
     ));
+}
+
+fn page_of(limit: u32, cursor: Option<String>) -> RedirectQuery {
+    RedirectQuery {
+        q: None,
+        limit,
+        cursor,
+    }
+}
+
+/// The sources `q` matches, by source, paging two at a time.
+async fn matching(db: &TestDb, q: &str) -> Vec<String> {
+    let redirects = db.store().read().redirects();
+    let mut seen = Vec::new();
+    let mut query = RedirectQuery {
+        q: Some(q.into()),
+        limit: 2,
+        cursor: None,
+    };
+    loop {
+        let page = redirects.list(&query).await.unwrap();
+        seen.extend(page.items.into_iter().map(|r| r.source_path));
+        match page.next_cursor {
+            Some(c) => query.cursor = Some(c),
+            None => return seen,
+        }
+    }
+}
+
+/// `q` is a case-insensitive substring of `source` or `target`; `%`, `_` and `\` in it
+/// match only themselves (M2b-2 Task 3).
+pub async fn redirect_search_escapes_wildcards(db: &TestDb) {
+    let redirects = db.store().read().redirects();
+    for (source, target) in [
+        ("/50%_off", "/sale"),
+        ("/50xxoff", "/sale"),
+        ("/500-off", "/sale"),
+        ("/back\\slash", "/t"),
+        ("/backxslash", "/t"),
+        ("/news", "https://Example.COM/News/Latest"),
+        ("/olds", "/archive"),
+        ("/z-last", "/archive/OLD-stuff"),
+    ] {
+        redirects
+            .upsert(&redirect(source, target, 301))
+            .await
+            .unwrap();
+    }
+    assert_eq!(matching(db, "50%_off").await, ["/50%_off"]);
+    assert_eq!(matching(db, "%").await, ["/50%_off"]);
+    assert_eq!(matching(db, "_").await, ["/50%_off"]);
+    assert_eq!(matching(db, "\\").await, ["/back\\slash"]);
+    // Case-insensitive, on the target as well as the source.
+    assert_eq!(matching(db, "example.com/news").await, ["/news"]);
+    assert_eq!(matching(db, "OLD").await, ["/olds", "/z-last"]);
+    assert_eq!(
+        matching(db, "/sale").await,
+        ["/50%_off", "/500-off", "/50xxoff"]
+    );
+    assert!(matching(db, "nothing-here").await.is_empty());
 }
 
 pub async fn redirects_list_by_target(db: &TestDb) {
@@ -747,14 +807,24 @@ pub async fn text_lookups_reject_nul(db: &TestDb) {
     invalid(
         repos
             .redirects()
-            .list(
+            .list(&page_of(
                 10,
-                Some(&encode_text_cursor(
+                Some(encode_text_cursor(
                     REDIRECT_CURSOR_TAG,
                     BAD,
                     uuid::Uuid::now_v7(),
                 )),
-            )
+            ))
+            .await,
+    );
+    invalid(
+        repos
+            .redirects()
+            .list(&RedirectQuery {
+                q: Some(BAD.into()),
+                limit: 10,
+                cursor: None,
+            })
             .await,
     );
     // Users.

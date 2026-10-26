@@ -12,7 +12,7 @@ use ferrite_core::{
     events::{ALL_KEY, OPTIONS_CHANGED, option_key, redirect_key},
     settings::{self, SETTINGS},
 };
-use ferrite_domain::{NewUser, RedirectOrigin, Role, UserId, UserStatus};
+use ferrite_domain::{NewUser, RedirectOrigin, RedirectQuery, Role, UserId, UserStatus};
 use ferrite_store::Store;
 use ferrite_store_tests::{TestDb, backend_tests};
 use serde_json::{Value, json};
@@ -606,7 +606,33 @@ pub async fn redirect_update_moves_source(db: &TestDb) {
         .await
         .with_scopes(Scopes::from_strs(&["redirects:read".to_owned()]).unwrap());
     assert_eq!(svc.get(&reader, r.id).await.unwrap().id, r.id);
-    assert!(!svc.list(&reader, 10, None).await.unwrap().items.is_empty());
+    let page = |q: Option<&str>| RedirectQuery {
+        q: q.map(str::to_owned),
+        limit: 10,
+        cursor: None,
+    };
+    assert!(
+        !svc.list(&reader, page(None))
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    // `q` is trimmed and must then be 1..=200 characters.
+    assert_eq!(
+        svc.list(&reader, page(Some("  LEGACY ")))
+            .await
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+    for bad in ["   ", &"a".repeat(201)] {
+        assert!(matches!(
+            svc.list(&reader, page(Some(bad))).await,
+            Err(CoreError::InvalidField { field: "q", .. })
+        ));
+    }
     assert!(matches!(
         svc.update(&reader, r.id, "/q", "/r", 301).await,
         Err(CoreError::Forbidden("redirects:write"))

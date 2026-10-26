@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use ferrite_core::{Actor, ContentDraft, ContentService, PermalinkRules};
 use ferrite_domain::{
-    ContentId, ContentStatus, NewContent, NewUser, Role, Term, TermId, Timestamp, UserId,
-    UserStatus,
+    ContentId, ContentStatus, NewContent, NewUser, RedirectQuery, Role, Term, TermId, Timestamp,
+    UserId, UserStatus,
 };
 use ferrite_store::Store;
 use ferrite_store_tests::{TestDb, backend_tests};
@@ -89,17 +89,16 @@ async fn redirect_target(store: &dyn Store, source: &str) -> Option<String> {
 
 async fn redirect_count(store: &dyn Store) -> usize {
     let mut n = 0;
-    let mut cursor: Option<String> = None;
+    let mut query = RedirectQuery {
+        q: None,
+        limit: 200,
+        cursor: None,
+    };
     loop {
-        let page = store
-            .read()
-            .redirects()
-            .list(200, cursor.as_deref())
-            .await
-            .unwrap();
+        let page = store.read().redirects().list(&query).await.unwrap();
         n += page.items.len();
         match page.next_cursor {
-            Some(c) => cursor = Some(c),
+            Some(c) => query.cursor = Some(c),
             None => return n,
         }
     }

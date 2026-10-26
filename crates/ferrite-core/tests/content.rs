@@ -10,8 +10,8 @@ use ferrite_core::{
     events::{archive_key, post_key, term_key},
 };
 use ferrite_domain::{
-    ContentId, ContentItem, ContentStatus, NewUser, Redirect, RedirectId, RedirectOrigin, Role,
-    SearchQuery, Term, TermId, Timestamp, UserId, UserStatus,
+    ContentId, ContentItem, ContentStatus, NewUser, Redirect, RedirectId, RedirectOrigin,
+    RedirectQuery, Role, SearchQuery, Term, TermId, Timestamp, UserId, UserStatus,
 };
 use ferrite_store::{Store, StoreError};
 use ferrite_store_tests::{
@@ -550,7 +550,10 @@ pub async fn slug_change_chain(db: &TestDb) {
     let before = store
         .read()
         .redirects()
-        .list(200, None)
+        .list(&RedirectQuery {
+            limit: 200,
+            ..RedirectQuery::default()
+        })
         .await
         .unwrap()
         .items;
@@ -561,7 +564,10 @@ pub async fn slug_change_chain(db: &TestDb) {
         store
             .read()
             .redirects()
-            .list(200, None)
+            .list(&RedirectQuery {
+                limit: 200,
+                ..RedirectQuery::default()
+            })
             .await
             .unwrap()
             .items,
@@ -900,7 +906,15 @@ pub async fn update_pins_permalinks_once(db: &TestDb) {
     let saved = svc.update(&admin, item.id, item.version, d).await.unwrap();
     assert_eq!(saved.title, "Pinned, retitled");
     assert_eq!(saved.slug, item.slug);
-    let redirects = store.read().redirects().list(100, None).await.unwrap();
+    let redirects = store
+        .read()
+        .redirects()
+        .list(&RedirectQuery {
+            limit: 100,
+            ..RedirectQuery::default()
+        })
+        .await
+        .unwrap();
     assert!(redirects.items.is_empty(), "{:?}", redirects.items);
     assert_eq!(
         swapping.calls.load(std::sync::atomic::Ordering::SeqCst),

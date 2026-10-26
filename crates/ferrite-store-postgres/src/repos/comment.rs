@@ -1,13 +1,15 @@
 //! Comments (`comments` since `0001`, indexes from `0006_media_comments`) on Postgres.
 
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ferrite_domain::{
     Comment, CommentId, CommentQuery, CommentStatus, ContentId, Page, Timestamp, UserId,
 };
 use ferrite_store::{
-    CommentRepo, StoreError, check_comment, check_item_comments_limit, check_limit, comment_cursor,
-    email_key, encode_comment_cursor, validate_text,
+    CommentRepo, StoreError, check_comment, check_item_comments_limit, check_limit, comment_counts,
+    comment_cursor, email_key, encode_comment_cursor, validate_text,
 };
 use sqlx::AssertSqlSafe;
 
@@ -138,6 +140,24 @@ impl CommentRepo for PgRepos {
             None
         };
         Ok(Page { items, next_cursor })
+    }
+
+    async fn counts(
+        &self,
+        item: Option<ContentId>,
+    ) -> Result<BTreeMap<CommentStatus, u64>, StoreError> {
+        let rows: Vec<(String, i64)> = match item {
+            Some(item) => run!(&self.exec, |e| sqlx::query_as(
+                "SELECT status, COUNT(*) FROM comments WHERE item_id = $1 GROUP BY status"
+            )
+            .bind(item.as_uuid())
+            .fetch_all(e))?,
+            None => run!(&self.exec, |e| sqlx::query_as(
+                "SELECT status, COUNT(*) FROM comments GROUP BY status"
+            )
+            .fetch_all(e))?,
+        };
+        comment_counts(rows)
     }
 
     async fn approved_for_item(

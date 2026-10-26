@@ -1,10 +1,12 @@
 //! Comments (`comments` since `0001`, indexes from `0006_media_comments`) on SQLite.
 
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use ferrite_domain::{Comment, CommentId, CommentQuery, CommentStatus, ContentId, Page, UserId};
 use ferrite_store::{
-    CommentRepo, StoreError, check_comment, check_item_comments_limit, check_limit, comment_cursor,
-    email_key, encode_comment_cursor, validate_text,
+    CommentRepo, StoreError, check_comment, check_item_comments_limit, check_limit, comment_counts,
+    comment_cursor, email_key, encode_comment_cursor, validate_text,
 };
 use sqlx::AssertSqlSafe;
 
@@ -124,6 +126,24 @@ impl CommentRepo for SqliteRepos {
             None
         };
         Ok(Page { items, next_cursor })
+    }
+
+    async fn counts(
+        &self,
+        item: Option<ContentId>,
+    ) -> Result<BTreeMap<CommentStatus, u64>, StoreError> {
+        let rows: Vec<(String, i64)> = match item {
+            Some(item) => run!(&self.reader, |e| sqlx::query_as(
+                "SELECT status, COUNT(*) FROM comments WHERE item_id = ? GROUP BY status"
+            )
+            .bind(item.as_uuid())
+            .fetch_all(e))?,
+            None => run!(&self.reader, |e| sqlx::query_as(
+                "SELECT status, COUNT(*) FROM comments GROUP BY status"
+            )
+            .fetch_all(e))?,
+        };
+        comment_counts(rows)
     }
 
     async fn approved_for_item(

@@ -17,6 +17,32 @@ const MAX_LABEL_LEN: usize = 200;
 /// Most items one menu holds (each is checked inside the write's transaction).
 pub const MAX_MENU_ITEMS: usize = 500;
 
+/// A menu location a theme declares (its `[menus]` table), and whether a menu fills it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MenuLocation {
+    pub name: String,
+    pub label: String,
+    /// A menu named `name` exists (the theme shows it there).
+    pub menu: bool,
+}
+
+/// The `declared` locations (name, label) in the given order, each with whether one of
+/// `menus` (name, label; from [`MenuService::list_for`]) has its name. Core knows no
+/// theme: the caller passes the locations of the theme it serves.
+pub fn menu_locations<'a>(
+    declared: impl IntoIterator<Item = (&'a str, &'a str)>,
+    menus: &[(String, String)],
+) -> Vec<MenuLocation> {
+    declared
+        .into_iter()
+        .map(|(name, label)| MenuLocation {
+            name: name.to_owned(),
+            label: label.to_owned(),
+            menu: menus.iter().any(|(m, _)| m == name),
+        })
+        .collect()
+}
+
 /// Reads and edits menus (writes need `manage_menus`).
 pub struct MenuService {
     store: Arc<dyn Store>,
@@ -193,7 +219,29 @@ fn is_allowed_url(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_allowed_url;
+    use super::{MenuLocation, is_allowed_url, menu_locations};
+
+    #[test]
+    fn locations_mark_existing_menus() {
+        let menus = [
+            ("primary".to_owned(), "Main".to_owned()),
+            ("sidebar".to_owned(), "Side".to_owned()),
+        ];
+        let got = menu_locations([("footer", "Footer"), ("primary", "Primary")], &menus);
+        let loc = |name: &str, label: &str, menu| MenuLocation {
+            name: name.into(),
+            label: label.into(),
+            menu,
+        };
+        assert_eq!(
+            got,
+            [
+                loc("footer", "Footer", false),
+                loc("primary", "Primary", true)
+            ]
+        );
+        assert!(menu_locations([], &menus).is_empty());
+    }
 
     #[test]
     fn url_rules() {

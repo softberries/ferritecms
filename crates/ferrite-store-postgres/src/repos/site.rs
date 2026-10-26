@@ -2,11 +2,11 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use ferrite_domain::{OptionEntry, Page, Redirect, RedirectId, Timestamp};
+use ferrite_domain::{OptionEntry, Page, Redirect, RedirectId, RedirectQuery, Timestamp};
 use ferrite_store::{
     MAX_REDIRECTS_BY_TARGET, OptionRepo, REDIRECT_CURSOR_TAG, RedirectRepo, SchemaMetaRepo,
-    StoreError, check_limit, check_redirect_code, encode_text_cursor, text_cursor, validate_json,
-    validate_text,
+    StoreError, check_limit, check_redirect_code, encode_text_cursor, like_contains, text_cursor,
+    validate_json, validate_text,
 };
 use sqlx::types::Json;
 
@@ -182,19 +182,28 @@ impl RedirectRepo for PgRepos {
         rows.iter().map(codec::redirect).collect()
     }
 
-    async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<Redirect>, StoreError> {
-        let limit = check_limit(limit)?;
-        let after = cursor
+    async fn list(&self, query: &RedirectQuery) -> Result<Page<Redirect>, StoreError> {
+        let limit = check_limit(query.limit)?;
+        let after = query
+            .cursor
+            .as_deref()
             .map(|c| text_cursor(REDIRECT_CURSOR_TAG, c))
             .transpose()?;
+        if let Some(q) = &query.q {
+            validate_text("redirect query", q)?;
+        }
+        let pattern = query.q.as_deref().map(like_contains);
         let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {REDIRECT_COLUMNS} FROM redirects \
-             WHERE $1::text IS NULL OR (source_path COLLATE \"C\", id) > ($1::text, $2::uuid) \
+             WHERE ($1::text IS NULL OR (source_path COLLATE \"C\", id) > ($1::text, $2::uuid)) \
+             AND ($4::text IS NULL OR source_path ILIKE $4 ESCAPE '\\' \
+                  OR target ILIKE $4 ESCAPE '\\') \
              ORDER BY source_path COLLATE \"C\", id LIMIT $3"
         )))
         .bind(after.as_ref().map(|(k, _)| k.as_str()))
         .bind(after.as_ref().map(|(_, id)| *id))
         .bind(i64::from(limit) + 1)
+        .bind(pattern.as_deref())
         .fetch_all(e))?;
         let mut items = rows
             .iter()

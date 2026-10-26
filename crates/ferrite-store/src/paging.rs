@@ -1,10 +1,10 @@
 //! Keyset-pagination helpers shared by the backends so cursors mean the same thing everywhere.
 
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use ferrite_domain::{
-    Autosave, Comment, ContentId, ContentItem, ContentOrder, ContentQuery, Cursor, IdempotencyKey,
-    Job, MAX_PAGE, NewAudit, NewJob, NewNode, RateHit, TermId, Timestamp,
+    Autosave, Comment, CommentStatus, ContentId, ContentItem, ContentOrder, ContentQuery, Cursor,
+    IdempotencyKey, Job, MAX_PAGE, NewAudit, NewJob, NewNode, RateHit, TermId, Timestamp,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -702,9 +702,51 @@ pub fn text_cursor(tag: &str, cursor: &str) -> Result<(String, Uuid), StoreError
     }
 }
 
+/// `CommentRepo::counts` from `(status, count)` rows: every [`CommentStatus`] a key,
+/// zero when it has no row; an unknown status is a `Database` error (as when decoding a
+/// comment).
+pub fn comment_counts(
+    rows: impl IntoIterator<Item = (String, i64)>,
+) -> Result<BTreeMap<CommentStatus, u64>, StoreError> {
+    let mut out: BTreeMap<CommentStatus, u64> =
+        CommentStatus::ALL.iter().map(|s| (*s, 0)).collect();
+    for (status, n) in rows {
+        let status: CommentStatus = status
+            .parse()
+            .map_err(|e| StoreError::Database(format!("corrupt comment status: {e}")))?;
+        let n = u64::try_from(n)
+            .map_err(|_| StoreError::Database(format!("negative comment count {n}")))?;
+        out.insert(status, n);
+    }
+    Ok(out)
+}
+
+/// The `LIKE … ESCAPE '\'` pattern that matches `q` anywhere in a value: `\`, `%` and
+/// `_` in `q` are escaped, so they match only themselves (both backends use the same
+/// escape character).
+pub fn like_contains(q: &str) -> String {
+    let mut out = String::with_capacity(q.len() + 2);
+    out.push('%');
+    for c in q.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn like_contains_escapes_wildcards() {
+        assert_eq!(like_contains("50%_off"), "%50\\%\\_off%");
+        assert_eq!(like_contains("a\\b"), "%a\\\\b%");
+        assert_eq!(like_contains("é"), "%é%");
+    }
 
     #[test]
     fn job_backoff_values() {

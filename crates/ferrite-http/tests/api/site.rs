@@ -63,7 +63,9 @@ async fn menus_put_get_delete(api: Api) -> Api {
     let (_, b) = admin(&api).await;
     let r = b.get(&api, MENUS).await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
-    assert_eq!(r.json(), json!({"items": [], "next_cursor": null}));
+    let list = r.json();
+    assert_eq!(list["items"], json!([]));
+    assert_eq!(list["next_cursor"], Value::Null);
 
     // The public header shows menu `primary`; a PUT flushes the cached home page.
     let mut poller = api.poller().await;

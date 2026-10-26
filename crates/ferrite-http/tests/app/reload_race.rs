@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use axum::http::StatusCode;
 use ferrite_cache::PageCache;
 use ferrite_core::PermalinkRules;
-use ferrite_domain::{ContentType, Page, Redirect, RedirectId, Timestamp};
+use ferrite_domain::{ContentType, Page, Redirect, RedirectId, RedirectQuery, Timestamp};
 use ferrite_http::{AppParts, AppState, HttpConfig, RouteTable, build_app, load_route_table};
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
@@ -84,8 +84,8 @@ impl RedirectRepo for HookRedirects {
     async fn delete(&self, id: RedirectId) -> Result<(), StoreError> {
         self.inner.read().redirects().delete(id).await
     }
-    async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<Redirect>, StoreError> {
-        self.inner.read().redirects().list(limit, cursor).await
+    async fn list(&self, query: &RedirectQuery) -> Result<Page<Redirect>, StoreError> {
+        self.inner.read().redirects().list(query).await
     }
     async fn list_by_target(&self, target: &str) -> Result<Vec<Redirect>, StoreError> {
         self.inner.read().redirects().list_by_target(target).await

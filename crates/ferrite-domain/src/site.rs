@@ -34,3 +34,14 @@ pub struct Redirect {
     /// Time of the last counted hit (`RedirectRepo::add_hits`, never moved back); `None` if never hit.
     pub last_hit_at: Option<Timestamp>,
 }
+
+/// A redirect listing: by source (binary order), optionally searched.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RedirectQuery {
+    /// A case-insensitive substring of `source_path` or `target`; `%`, `_` and `\`
+    /// match only themselves. Core trims it and allows 1..=200 characters.
+    pub q: Option<String>,
+    /// 1..=[`MAX_PAGE`](crate::MAX_PAGE).
+    pub limit: u32,
+    pub cursor: Option<String>,
+}

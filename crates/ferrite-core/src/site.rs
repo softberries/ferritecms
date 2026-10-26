@@ -62,7 +62,7 @@ use crate::{
     events::{archive_key, option_key, post_key, term_key, user_key},
     permalink::{PermalinkInput, Permalinks, primary_term},
 };
-use hydrate::{Hydrator, Nodes, chain, unique};
+use hydrate::{Hydrator, Nodes, chain, load_ancestors, unique};
 pub use model::{
     DepKeys, FeedSource, FrontPage, ItemLink, Listing, MediaFile, MediaPublic, MediaVariant,
     PageItem, Previewed, PublicItem, SiteRead, SitemapEntry, SitemapPage, TermPublic, UserPublic,
@@ -109,6 +109,52 @@ pub const SEARCH_CAP: usize = 200;
 /// [`can_read`] (admin reads, previews) both use it.
 pub(crate) fn is_public(item: &ContentItem, now: Timestamp) -> bool {
     item.status == ContentStatus::Published && item.published_at.is_some_and(|t| t <= now)
+}
+
+/// Whether `item` has a public page at `now`: public ([`is_public`]) and not a media
+/// item (media are served as files, never as pages).
+pub(crate) fn has_public_page(item: &ContentItem, now: Timestamp) -> bool {
+    item.kind != MEDIA_KIND && is_public(item, now)
+}
+
+/// Each of `items` (callers pass items with a public page only) with its path under
+/// `rules`: terms (for the primary term) in one call per 200 ids, and ancestors
+/// (hierarchical types) one `get_many` per level; none for no items. Records the keys
+/// of the terms and ancestors the paths use in `deps`.
+pub(crate) async fn public_paths(
+    repos: &dyn Repos,
+    rules: &dyn Permalinks,
+    items: Vec<ContentItem>,
+    deps: &mut DepKeys,
+) -> Result<Vec<(ContentItem, String)>, CoreError> {
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut terms = HashMap::new();
+    for chunk in unique(items.iter().map(|i| i.id)).chunks(MAX_ID_FILTER) {
+        terms.extend(repos.terms().for_items(chunk).await?);
+    }
+    let mut nodes = Nodes::new();
+    load_ancestors(repos, &items, &mut nodes).await?;
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let item_terms = terms.remove(&item.id).unwrap_or_default();
+        for t in &item_terms {
+            deps.insert(term_key(t.id));
+        }
+        let ancestors = chain(&nodes, item.parent_id);
+        for (id, _) in &ancestors {
+            deps.insert(post_key(*id));
+        }
+        let input = PermalinkInput {
+            item,
+            ancestors,
+            primary_term: primary_term(item_terms),
+        };
+        let url = rules.path(&input);
+        out.push((input.item, url));
+    }
+    Ok(out)
 }
 
 /// The published-only read facade; see the module docs.
@@ -565,14 +611,13 @@ impl SiteReader {
         let mut q = published(now);
         q.kind = Some(kind.to_owned());
         q.cursor = cursor.map(str::to_owned);
-        let hydrator = self.hydrator(repos, now, rules);
         let mut nodes = Nodes::new();
         let file_len = self.sitemap_file_len;
         while out.entries.len() < file_len {
             q.limit = u32::try_from((file_len - out.entries.len()).min(MAX_PAGE as usize))
                 .unwrap_or(MAX_PAGE);
             let page = repos.content().list(&q).await?;
-            hydrator.load_ancestors(&page.items, &mut nodes).await?;
+            load_ancestors(repos, &page.items, &mut nodes).await?;
             let ids: Vec<ContentId> = page.items.iter().map(|i| i.id).collect();
             let mut terms = if ids.is_empty() {
                 Default::default()
@@ -666,7 +711,7 @@ impl SiteReader {
             .content()
             .get(id)
             .await?
-            .filter(|i| i.kind != MEDIA_KIND && kind_ok(&i.kind) && is_public(i, now))
+            .filter(|i| kind_ok(&i.kind) && has_public_page(i, now))
         else {
             return Ok(public(None, deps));
         };
@@ -705,44 +750,22 @@ impl SiteReader {
                     .get_many(chunk)
                     .await?
                     .into_iter()
-                    .filter(|i| i.kind != MEDIA_KIND && is_public(i, now)),
+                    .filter(|i| has_public_page(i, now)),
             );
         }
-        let mut out = HashMap::new();
-        if items.is_empty() {
-            return Ok(public(out, deps));
-        }
-        let mut terms = HashMap::new();
-        for chunk in unique(items.iter().map(|i| i.id)).chunks(MAX_ID_FILTER) {
-            terms.extend(repos.terms().for_items(chunk).await?);
-        }
-        let mut nodes = Nodes::new();
-        self.hydrator(repos, now, rules)
-            .load_ancestors(&items, &mut nodes)
-            .await?;
-        for item in items {
-            let item_terms = terms.remove(&item.id).unwrap_or_default();
-            for t in &item_terms {
-                deps.insert(term_key(t.id));
-            }
-            let ancestors = chain(&nodes, item.parent_id);
-            for (id, _) in &ancestors {
-                deps.insert(post_key(*id));
-            }
-            let input = PermalinkInput {
-                item,
-                ancestors,
-                primary_term: primary_term(item_terms),
-            };
-            let url = rules.path(&input);
-            out.insert(
-                input.item.id,
-                ItemLink {
-                    title: input.item.title,
-                    url,
-                },
-            );
-        }
+        let out = public_paths(repos, rules, items, &mut deps)
+            .await?
+            .into_iter()
+            .map(|(item, url)| {
+                (
+                    item.id,
+                    ItemLink {
+                        title: item.title,
+                        url,
+                    },
+                )
+            })
+            .collect();
         Ok(public(out, deps))
     }
 

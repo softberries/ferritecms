@@ -1,9 +1,9 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
     auth::*, autosave::*, backend_tests, backend_tests_spawning, batch::*, comment::*,
-    constraints::*, content::*, event::*, idempotency::*, job::*, job_list::*, lock::*, menu::*,
-    migration_dirs, migration_files, migrations::*, node::*, notify::*, plugin::*,
-    plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*,
+    comment_counts::*, constraints::*, content::*, event::*, idempotency::*, job::*, job_list::*,
+    lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*, notify::*,
+    plugin::*, plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*,
 };
 
 backend_tests!(
@@ -115,6 +115,7 @@ backend_tests!(
     redirects_upsert_get_hit,
     redirect_add_hits,
     redirects_list_paginates_in_binary_order,
+    redirect_search_escapes_wildcards,
     redirects_list_by_target,
     text_writes_reject_nul,
     text_lookups_reject_nul,
@@ -228,6 +229,7 @@ backend_tests!(
 backend_tests!(
     comment_crud_and_status,
     comment_list_filters_and_pages,
+    comment_counts_per_status_and_item,
     approved_for_item_is_oldest_first_and_capped,
     has_approved_from_matches_exact_lowercase,
     idempotency_prune_in_batches,

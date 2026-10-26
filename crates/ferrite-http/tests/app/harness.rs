@@ -159,6 +159,7 @@ impl App {
         .with_comments(Arc::new(CommentService::new(
             site.store.clone(),
             Self::auth(site),
+            Arc::new(PermalinkRules::default()),
         )))
     }
 

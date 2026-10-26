@@ -5,6 +5,7 @@
 //! never carries either. Ids are UUID strings and times RFC 3339 UTC (`…Z`).
 
 use chrono::{DateTime, Utc};
+use ferrite_core::comments::{CommentCounts, CommentItem, QueuedComment};
 use ferrite_domain::Comment;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -16,6 +17,8 @@ pub struct CommentDto {
     pub id: Uuid,
     /// The content item commented on.
     pub item_id: Uuid,
+    /// That item as read with the comment.
+    pub item: CommentItemDto,
     /// The comment replied to.
     pub parent_id: Option<Uuid>,
     /// The signed-in commenter; `null` for a guest (and after the account is deleted).
@@ -35,11 +38,13 @@ pub struct CommentDto {
     pub created_at: DateTime<Utc>,
 }
 
-impl From<Comment> for CommentDto {
-    fn from(c: Comment) -> Self {
+impl From<QueuedComment> for CommentDto {
+    fn from(q: QueuedComment) -> Self {
+        let c = q.comment;
         Self {
             id: c.id.as_uuid(),
             item_id: c.item_id.as_uuid(),
+            item: q.item.into(),
             parent_id: c.parent_id.map(|p| p.as_uuid()),
             user_id: c.user_id.map(|u| u.as_uuid()),
             author_name: c.author_name,
@@ -49,6 +54,54 @@ impl From<Comment> for CommentDto {
             status: c.status.as_str().to_owned(),
             ip_hash: c.ip_hash,
             created_at: c.created_at.as_datetime(),
+        }
+    }
+}
+
+/// The item a comment is on (`CommentDto.item`).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CommentItemDto {
+    pub id: Uuid,
+    /// The content type (`post`, `page`, …).
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub title: String,
+    /// The public path, only while the item has a public page now (published, its
+    /// publish time reached); `null` otherwise.
+    #[schema(required = true)]
+    pub permalink: Option<String>,
+    /// `draft`, `pending`, `scheduled`, `published`, `private` or `trash`.
+    pub status: String,
+}
+
+impl From<CommentItem> for CommentItemDto {
+    fn from(i: CommentItem) -> Self {
+        Self {
+            id: i.id.as_uuid(),
+            kind: i.kind,
+            title: i.title,
+            permalink: i.permalink,
+            status: i.status.as_str().to_owned(),
+        }
+    }
+}
+
+/// `GET /comments/counts`: comments per status.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CommentCountsDto {
+    pub pending: u64,
+    pub approved: u64,
+    pub spam: u64,
+    pub trash: u64,
+}
+
+impl From<CommentCounts> for CommentCountsDto {
+    fn from(c: CommentCounts) -> Self {
+        Self {
+            pending: c.pending,
+            approved: c.approved,
+            spam: c.spam,
+            trash: c.trash,
         }
     }
 }

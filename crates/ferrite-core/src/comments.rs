@@ -44,7 +44,9 @@ use std::{
     time::Duration,
 };
 
-use ferrite_domain::{Comment, CommentId, CommentQuery, CommentStatus, ContentId, Page, Timestamp};
+use ferrite_domain::{
+    Comment, CommentId, CommentQuery, CommentStatus, ContentId, ContentStatus, Page, Timestamp,
+};
 use ferrite_store::{MAX_ITEM_COMMENTS, Repos, Store, StoreError};
 use html_escape::encode_text;
 use serde_json::Value;
@@ -54,7 +56,8 @@ use crate::{
     actor::{Area, Capability, Scope, can, require, require_reader, require_scope},
     events::{self, post_key},
     is_bidi_control,
-    site::is_public,
+    permalink::Permalinks,
+    site::{DepKeys, has_public_page, is_public, public_paths},
     tx::finish,
 };
 
@@ -136,6 +139,35 @@ pub enum Submitted {
     /// is what a pending one would have been (status `pending`, a fresh id that is
     /// never stored), so the caller answers exactly as for a pending comment (F18).
     Discarded(Comment),
+}
+
+/// The item a comment is on, as the moderation queue shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentItem {
+    pub id: ContentId,
+    /// The content type.
+    pub kind: String,
+    pub title: String,
+    /// The item's public path, only while it has a public page now (published, its
+    /// publish time reached, not media); `None` otherwise.
+    pub permalink: Option<String>,
+    pub status: ContentStatus,
+}
+
+/// A comment with its item ([`CommentService::list`], [`CommentService::moderate`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueuedComment {
+    pub comment: Comment,
+    pub item: CommentItem,
+}
+
+/// How many comments have each status ([`CommentService::counts`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CommentCounts {
+    pub pending: u64,
+    pub approved: u64,
+    pub spam: u64,
+    pub trash: u64,
 }
 
 /// An approved comment as the public site shows it: no e-mail, no address hash.
@@ -385,11 +417,21 @@ fn check_url(url: &str) -> Result<String, CoreError> {
 pub struct CommentService {
     store: Arc<dyn Store>,
     auth: Arc<AuthService>,
+    /// For the item paths of the moderation queue.
+    permalinks: Arc<dyn Permalinks>,
 }
 
 impl CommentService {
-    pub fn new(store: Arc<dyn Store>, auth: Arc<AuthService>) -> Self {
-        Self { store, auth }
+    pub fn new(
+        store: Arc<dyn Store>,
+        auth: Arc<AuthService>,
+        permalinks: Arc<dyn Permalinks>,
+    ) -> Self {
+        Self {
+            store,
+            auth,
+            permalinks,
+        }
     }
 
     /// Submits a comment from `ip` (see the module docs), in this order: a signed-in
@@ -543,25 +585,102 @@ impl CommentService {
     }
 
     /// The moderation queue: comments newest first, filtered by status and item
-    /// (`moderate_comments`, then `comments:read`).
+    /// (`moderate_comments`, then `comments:read`), each with its item
+    /// ([`CommentItem`]): one `get_many` for the page's items, then the paths of the
+    /// public ones.
     pub async fn list(
         &self,
         actor: &Actor,
         query: CommentQuery,
-    ) -> Result<Page<Comment>, CoreError> {
+    ) -> Result<Page<QueuedComment>, CoreError> {
         require_reader(actor, Capability::ModerateComments)?;
-        Ok(self.store.read().comments().list(&query).await?)
+        let page = self.store.read().comments().list(&query).await?;
+        Ok(Page {
+            items: self.with_items(page.items).await?,
+            next_cursor: page.next_cursor,
+        })
+    }
+
+    /// How many comments have each status, over every comment or `item`'s
+    /// (`moderate_comments`, then `comments:read`). An unknown item counts zero.
+    pub async fn counts(
+        &self,
+        actor: &Actor,
+        item: Option<ContentId>,
+    ) -> Result<CommentCounts, CoreError> {
+        require_reader(actor, Capability::ModerateComments)?;
+        let by_status = self.store.read().comments().counts(item).await?;
+        let n = |s| by_status.get(&s).copied().unwrap_or(0);
+        Ok(CommentCounts {
+            pending: n(CommentStatus::Pending),
+            approved: n(CommentStatus::Approved),
+            spam: n(CommentStatus::Spam),
+            trash: n(CommentStatus::Trash),
+        })
+    }
+
+    /// The items of `comments` (at most [`MAX_ID_FILTER`](ferrite_store::MAX_ID_FILTER)
+    /// distinct ones, as a page holds), read outside any `Tx`: one `get_many`, then the
+    /// paths of those with a public page now.
+    async fn items_of(
+        &self,
+        comments: &[Comment],
+    ) -> Result<HashMap<ContentId, CommentItem>, CoreError> {
+        if comments.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let repos = self.store.read();
+        let mut ids: Vec<ContentId> = comments.iter().map(|c| c.item_id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        let items = repos.content().get_many(&ids).await?;
+        let now = Timestamp::now();
+        let shown: Vec<_> = items
+            .iter()
+            .filter(|i| has_public_page(i, now))
+            .cloned()
+            .collect();
+        // One set of rules for the whole page (R10); the cache keys are not needed.
+        let rules = self.permalinks.pin();
+        let paths: HashMap<ContentId, String> =
+            public_paths(repos, rules.as_ref(), shown, &mut DepKeys::default())
+                .await?
+                .into_iter()
+                .map(|(item, path)| (item.id, path))
+                .collect();
+        Ok(items
+            .into_iter()
+            .map(|i| {
+                let item = CommentItem {
+                    id: i.id,
+                    permalink: paths.get(&i.id).cloned(),
+                    kind: i.kind,
+                    title: i.title,
+                    status: i.status,
+                };
+                (item.id, item)
+            })
+            .collect())
+    }
+
+    /// `comments` with their items ([`items_of`](Self::items_of)).
+    async fn with_items(&self, comments: Vec<Comment>) -> Result<Vec<QueuedComment>, CoreError> {
+        let items = self.items_of(&comments).await?;
+        comments
+            .into_iter()
+            .map(|comment| queued(comment, &items))
+            .collect()
     }
 
     /// Sets comment `id`'s status (`moderate_comments`, then `comments:write`) and
-    /// invalidates its item's page, in one `Tx`. Missing is `NotFound`. Not audited
-    /// (P14).
+    /// invalidates its item's page, in one `Tx`; returns the comment with its item (read
+    /// after the commit). Missing is `NotFound`. Not audited (P14).
     pub async fn moderate(
         &self,
         actor: &Actor,
         id: CommentId,
         status: CommentStatus,
-    ) -> Result<Comment, CoreError> {
+    ) -> Result<QueuedComment, CoreError> {
         require(actor, Capability::ModerateComments)?;
         let tx = self.store.begin().await?;
         let done = async {
@@ -576,7 +695,9 @@ impl CommentService {
             Ok(comment)
         }
         .await;
-        finish(tx, done).await
+        let comment = finish(tx, done).await?;
+        let items = self.items_of(std::slice::from_ref(&comment)).await?;
+        queued(comment, &items)
     }
 
     /// Deletes comment `id` and its replies (`moderate_comments`, then
@@ -619,6 +740,21 @@ impl CommentService {
             .await?;
         public_thread(self.store.read(), rows).await
     }
+}
+
+/// `comment` with its item from `items`. The comments' foreign key keeps every item: one
+/// missing (deleted between the two reads) is an internal error, never a made-up item.
+fn queued(
+    comment: Comment,
+    items: &HashMap<ContentId, CommentItem>,
+) -> Result<QueuedComment, CoreError> {
+    let item = items.get(&comment.item_id).cloned().ok_or_else(|| {
+        CoreError::Store(StoreError::Database(format!(
+            "comment {} is on item {}, which does not exist",
+            comment.id, comment.item_id
+        )))
+    })?;
+    Ok(QueuedComment { comment, item })
 }
 
 /// Whether a reply to a comment whose parent is `up` is within [`MAX_COMMENT_DEPTH`]:

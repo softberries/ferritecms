@@ -33,6 +33,45 @@ const MAX_FIELD_DEPTH: usize = 64;
 /// Content items already known by id, as (parent, slug): seeds the ancestor walk.
 pub(super) type Nodes = HashMap<ContentId, (Option<ContentId>, String)>;
 
+/// Adds every missing ancestor of `items` to `nodes`, one level per query.
+pub(super) async fn load_ancestors(
+    repos: &dyn Repos,
+    items: &[ContentItem],
+    nodes: &mut Nodes,
+) -> Result<(), CoreError> {
+    for i in items {
+        nodes
+            .entry(i.id)
+            .or_insert_with(|| (i.parent_id, i.slug.clone()));
+    }
+    let mut missing: Vec<ContentId> = unique(
+        items
+            .iter()
+            .filter_map(|i| i.parent_id)
+            .filter(|p| !nodes.contains_key(p)),
+    );
+    for _ in 0..MAX_PARENT_DEPTH {
+        if missing.is_empty() {
+            break;
+        }
+        let mut next = Vec::new();
+        for chunk in missing.chunks(MAX_ID_FILTER) {
+            for p in repos.content().get_many(chunk).await? {
+                if let Some(gp) = p.parent_id
+                    && !nodes.contains_key(&gp)
+                {
+                    next.push(gp);
+                }
+                nodes.insert(p.id, (p.parent_id, p.slug));
+            }
+        }
+        // A row read in this level can already be the grandparent of another one.
+        next.retain(|id| !nodes.contains_key(id));
+        missing = unique(next);
+    }
+    Ok(())
+}
+
 pub(super) struct Hydrator<'a> {
     pub repos: &'a dyn Repos,
     pub permalinks: &'a dyn Permalinks,
@@ -76,7 +115,7 @@ impl Hydrator<'_> {
                 );
             }
         }
-        self.load_ancestors(&items, &mut nodes).await?;
+        load_ancestors(self.repos, &items, &mut nodes).await?;
         let refs: Vec<MediaRefs> = items.iter().map(MediaRefs::of).collect();
         let refd = self
             .load_refs(unique(refs.iter().flat_map(MediaRefs::all)))
@@ -133,45 +172,6 @@ impl Hydrator<'_> {
             });
         }
         Ok(out)
-    }
-
-    /// Adds every missing ancestor of `items` to `nodes`, one level per query.
-    pub async fn load_ancestors(
-        &self,
-        items: &[ContentItem],
-        nodes: &mut Nodes,
-    ) -> Result<(), CoreError> {
-        for i in items {
-            nodes
-                .entry(i.id)
-                .or_insert_with(|| (i.parent_id, i.slug.clone()));
-        }
-        let mut missing: Vec<ContentId> = unique(
-            items
-                .iter()
-                .filter_map(|i| i.parent_id)
-                .filter(|p| !nodes.contains_key(p)),
-        );
-        for _ in 0..MAX_PARENT_DEPTH {
-            if missing.is_empty() {
-                break;
-            }
-            let mut next = Vec::new();
-            for chunk in missing.chunks(MAX_ID_FILTER) {
-                for p in self.repos.content().get_many(chunk).await? {
-                    if let Some(gp) = p.parent_id
-                        && !nodes.contains_key(&gp)
-                    {
-                        next.push(gp);
-                    }
-                    nodes.insert(p.id, (p.parent_id, p.slug));
-                }
-            }
-            // A row read in this level can already be the grandparent of another one.
-            next.retain(|id| !nodes.contains_key(id));
-            missing = unique(next);
-        }
-        Ok(())
     }
 
     /// Looks up the referenced `ids`: which are non-public content items, and the

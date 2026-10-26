@@ -777,7 +777,7 @@ pub async fn redirect_resolve(db: &TestDb) {
     assert!(stored.last_hit_at.is_some());
 
     // list / delete.
-    let page = svc.list(&admin, 100, None).await.unwrap();
+    let page = svc.list(&admin, redirect_page(100)).await.unwrap();
     assert_eq!(page.items.len(), 4);
     svc.delete(&admin, r.id).await.unwrap();
     // Only the exact "/old/" redirect is left; "/old" reaches it by slash toggle.
@@ -804,7 +804,13 @@ pub async fn redirect_validation(db: &TestDb) {
             "{s} -> {t} {code}"
         );
     }
-    assert!(svc.list(&admin, 10, None).await.unwrap().items.is_empty());
+    assert!(
+        svc.list(&admin, redirect_page(10))
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
 }
 
 pub async fn redirect_loops_and_chains(db: &TestDb) {
@@ -891,7 +897,7 @@ pub async fn redirect_permissions(db: &TestDb) {
             "manage_redirects"
         ));
         assert!(is_forbidden(
-            svc.list(&who, 10, None).await,
+            svc.list(&who, redirect_page(10)).await,
             "manage_redirects"
         ));
     }
@@ -1156,3 +1162,12 @@ backend_tests!(
 );
 
 backend_tests_spawning!(term_slug_retry, term_parallel_same_name);
+
+/// The first page of every redirect, `limit` long.
+fn redirect_page(limit: u32) -> ferrite_domain::RedirectQuery {
+    ferrite_domain::RedirectQuery {
+        q: None,
+        limit,
+        cursor: None,
+    }
+}

@@ -13,10 +13,12 @@
 //!   passes every check (F18; invalid input is `422` either way). A discard answers
 //!   faster than a stored comment (accepted: the field is no secret). No `Location`: a
 //!   comment has no single-resource endpoint.
-//! * `GET /comments`, `PATCH /comments/{id}` and `DELETE /comments/{id}` are the
-//!   moderation endpoints (`moderate_comments`; reads `comments:read`, writes
-//!   `comments:write`). `DELETE` takes only spam or trashed comments. No `If-Match`
-//!   (P11): last write wins. Moderation is not audited (P14).
+//! * `GET /comments`, `GET /comments/counts`, `PATCH /comments/{id}` and
+//!   `DELETE /comments/{id}` are the moderation endpoints (`moderate_comments`; reads
+//!   `comments:read`, writes `comments:write`). A listed or moderated comment carries
+//!   its item (`item`: type, title, status, and the permalink while the item is public).
+//!   `DELETE` takes only spam or trashed comments. No `If-Match` (P11): last write
+//!   wins. Moderation is not audited (P14).
 
 use std::sync::Arc;
 
@@ -34,7 +36,10 @@ use uuid::Uuid;
 
 use super::{
     ApiState, Authed, ClientInfo, MaybeAuthed,
-    dto::comments::{CommentDto, CommentList, CommentModeration, CommentPublicDto, CommentSubmit},
+    dto::comments::{
+        CommentCountsDto, CommentDto, CommentList, CommentModeration, CommentPublicDto,
+        CommentSubmit,
+    },
     extract::{
         ApiJson, ApiPath, ApiQuery, DEFAULT_LIMIT, check_limit, invalid_cursor, invalid_param,
     },
@@ -66,7 +71,7 @@ pub struct CommentListParams {
     security(("session" = []), ("bearer" = [])),
     params(CommentListParams),
     responses(
-        (status = 200, description = "One page of comments, newest first", body = CommentList),
+        (status = 200, description = "One page of comments, newest first, each with its item", body = CommentList),
         (status = 400, description = "`validation` (`status`, `limit`, `cursor`) or `malformed-query`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (`moderate_comments`, `comments:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
@@ -114,6 +119,40 @@ pub async fn list_comments(
     }))
 }
 
+/// The query of `GET /comments/counts`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct CommentCountsParams {
+    /// Only comments on this content item (an unknown item counts zero).
+    pub item: Option<Uuid>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/comments/counts",
+    tag = "comments",
+    operation_id = "count_comments",
+    security(("session" = []), ("bearer" = [])),
+    params(CommentCountsParams),
+    responses(
+        (status = 200, description = "How many comments have each status (every status present)", body = CommentCountsDto),
+        (status = 400, description = "`malformed-query`: `item` is not a UUID", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`moderate_comments`, `comments:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn count_comments(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiQuery(params): ApiQuery<CommentCountsParams>,
+) -> Result<Json<CommentCountsDto>, Problem> {
+    let counts = api
+        .comments
+        .counts(&who.actor, params.item.map(ContentId::from_uuid))
+        .await?;
+    Ok(Json(counts.into()))
+}
+
 #[utoipa::path(
     patch,
     path = "/comments/{id}",
@@ -123,7 +162,7 @@ pub async fn list_comments(
     params(("id" = Uuid, Path)),
     request_body = CommentModeration,
     responses(
-        (status = 200, description = "The comment with its new status; its post's page is refreshed", body = CommentDto),
+        (status = 200, description = "The comment with its new status and its item; its post's page is refreshed", body = CommentDto),
         (status = 400, description = "`malformed-json`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (`moderate_comments`, `comments:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),

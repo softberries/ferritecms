@@ -6,7 +6,7 @@ use std::{
 };
 
 use ferrite_domain::{
-    MAX_PAGE, Page, REDIRECT_CODES, Redirect, RedirectId, RedirectOrigin, Timestamp,
+    MAX_PAGE, Page, REDIRECT_CODES, Redirect, RedirectId, RedirectOrigin, RedirectQuery, Timestamp,
 };
 use ferrite_store::{MAX_REDIRECTS_BY_TARGET, Repos, Store};
 
@@ -21,6 +21,8 @@ use crate::{
 const MAX_HOPS: usize = 10;
 /// Longest source or target accepted.
 const MAX_URL_LEN: usize = 2048;
+/// Longest search text [`RedirectService::list`] takes, in characters (after trimming).
+pub const MAX_REDIRECT_QUERY: usize = 200;
 /// Most rows one [`RedirectService::import`] takes.
 pub const MAX_IMPORT_ROWS: usize = 10_000;
 
@@ -77,15 +79,27 @@ impl RedirectService {
         Ok(self.store.read().redirects().add_hits(id, n, at).await?)
     }
 
-    /// Lists redirects with cursor pagination.
+    /// Lists redirects by source with cursor pagination. `query.q` is trimmed and must
+    /// then be 1..=[`MAX_REDIRECT_QUERY`] characters (`InvalidField` `q`); it matches
+    /// `source` or `target` as a case-insensitive substring, wildcards literal
+    /// ([`RedirectRepo::list`](ferrite_store::RedirectRepo::list)).
     pub async fn list(
         &self,
         actor: &Actor,
-        limit: u32,
-        cursor: Option<&str>,
+        mut query: RedirectQuery,
     ) -> Result<Page<Redirect>, CoreError> {
         require_view(actor)?;
-        Ok(self.store.read().redirects().list(limit, cursor).await?)
+        if let Some(q) = query.q.take() {
+            let q = q.trim();
+            if q.is_empty() || q.chars().count() > MAX_REDIRECT_QUERY {
+                return Err(CoreError::invalid_field(
+                    "q",
+                    format!("q must be 1 to {MAX_REDIRECT_QUERY} characters"),
+                ));
+            }
+            query.q = Some(q.to_owned());
+        }
+        Ok(self.store.read().redirects().list(&query).await?)
     }
 
     /// Redirect `id` (see the type docs for the read check; missing: `NotFound`).
@@ -349,12 +363,16 @@ impl RedirectService {
     async fn all_targets(&self) -> Result<HashMap<String, String>, CoreError> {
         let repo = self.store.read().redirects();
         let mut map = HashMap::new();
-        let mut cursor: Option<String> = None;
+        let mut query = RedirectQuery {
+            q: None,
+            limit: MAX_PAGE,
+            cursor: None,
+        };
         loop {
-            let page = repo.list(MAX_PAGE, cursor.as_deref()).await?;
+            let page = repo.list(&query).await?;
             map.extend(page.items.into_iter().map(|r| (r.source_path, r.target)));
             match page.next_cursor {
-                Some(c) => cursor = Some(c),
+                Some(c) => query.cursor = Some(c),
                 None => return Ok(map),
             }
         }

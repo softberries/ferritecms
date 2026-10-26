@@ -635,7 +635,7 @@
         ],
         "responses": {
           "200": {
-            "description": "One page of comments, newest first",
+            "description": "One page of comments, newest first, each with its item",
             "content": {
               "application/json": {
                 "schema": {
@@ -646,6 +646,76 @@
           },
           "400": {
             "description": "`validation` (`status`, `limit`, `cursor`) or `malformed-query`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`moderate_comments`, `comments:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/comments/counts": {
+      "get": {
+        "tags": [
+          "comments"
+        ],
+        "operationId": "count_comments",
+        "parameters": [
+          {
+            "name": "item",
+            "in": "query",
+            "description": "Only comments on this content item (an unknown item counts zero).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How many comments have each status (every status present)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentCountsDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-query`: `item` is not a UUID",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -784,7 +854,7 @@
         },
         "responses": {
           "200": {
-            "description": "The comment with its new status; its post's page is refreshed",
+            "description": "The comment with its new status and its item; its post's page is refreshed",
             "content": {
               "application/json": {
                 "schema": {
@@ -3620,7 +3690,7 @@
         "operationId": "list_menus",
         "responses": {
           "200": {
-            "description": "Every menu (name and label), by name",
+            "description": "Every menu (name and label), by name, and the menu locations of the theme this node serves",
             "content": {
               "application/json": {
                 "schema": {
@@ -4756,6 +4826,15 @@
         "operationId": "list_redirects",
         "parameters": [
           {
+            "name": "q",
+            "in": "query",
+            "description": "Only redirects whose source or target holds this text, ignoring case (`%` and\n`_` match only themselves). Trimmed; 1 to 200 characters (`422`, field `q`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "description": "1..=200; default 50.",
@@ -4769,7 +4848,7 @@
           {
             "name": "cursor",
             "in": "query",
-            "description": "`next_cursor` of the previous page.",
+            "description": "`next_cursor` of the previous page of the same query.",
             "required": false,
             "schema": {
               "type": "string"
@@ -4809,6 +4888,16 @@
           },
           "403": {
             "description": "`forbidden` (`manage_redirects`, `redirects:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: `q` blank or longer than 200 characters (`errors[0].field` = `q`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -8553,12 +8642,45 @@
           }
         }
       },
+      "CommentCountsDto": {
+        "type": "object",
+        "description": "`GET /comments/counts`: comments per status.",
+        "required": [
+          "pending",
+          "approved",
+          "spam",
+          "trash"
+        ],
+        "properties": {
+          "approved": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "pending": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "spam": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "trash": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "CommentDto": {
         "type": "object",
         "description": "A comment as moderators see it (`GET /comments`, `PATCH /comments/{id}`).",
         "required": [
           "id",
           "item_id",
+          "item",
           "author_name",
           "author_email",
           "author_url",
@@ -8597,6 +8719,10 @@
             ],
             "description": "Keyed hash of the client address (HMAC under the site key): tells commenters\napart, cannot be reversed without the key."
           },
+          "item": {
+            "$ref": "#/components/schemas/CommentItemDto",
+            "description": "That item as read with the comment."
+          },
           "item_id": {
             "type": "string",
             "format": "uuid",
@@ -8621,6 +8747,41 @@
             ],
             "format": "uuid",
             "description": "The signed-in commenter; `null` for a guest (and after the account is deleted)."
+          }
+        }
+      },
+      "CommentItemDto": {
+        "type": "object",
+        "description": "The item a comment is on (`CommentDto.item`).",
+        "required": [
+          "id",
+          "type",
+          "title",
+          "permalink",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "permalink": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The public path, only while the item has a public page now (published, its\npublish time reached); `null` otherwise."
+          },
+          "status": {
+            "type": "string",
+            "description": "`draft`, `pending`, `scheduled`, `published`, `private` or `trash`."
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "The content type (`post`, `page`, …)."
           }
         }
       },
@@ -10139,9 +10300,10 @@
       },
       "MenuList": {
         "type": "object",
-        "description": "`GET /menus`: every menu, by name.",
+        "description": "`GET /menus`: every menu, by name, and the theme's menu locations.",
         "required": [
-          "items"
+          "items",
+          "locations"
         ],
         "properties": {
           "items": {
@@ -10150,12 +10312,41 @@
               "$ref": "#/components/schemas/MenuSummary"
             }
           },
+          "locations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuLocationDto"
+            },
+            "description": "The menu locations the theme this node serves declares, by name; empty when it\ndeclares none."
+          },
           "next_cursor": {
             "type": [
               "string",
               "null"
             ],
             "description": "Always `null`: one page holds every menu."
+          }
+        }
+      },
+      "MenuLocationDto": {
+        "type": "object",
+        "description": "A menu location of the theme the answering node serves (its `[menus]` table).",
+        "required": [
+          "name",
+          "label",
+          "menu"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "menu": {
+            "type": "boolean",
+            "description": "Whether a menu with this name exists."
+          },
+          "name": {
+            "type": "string",
+            "description": "The location, and the name of the menu the theme shows there."
           }
         }
       },

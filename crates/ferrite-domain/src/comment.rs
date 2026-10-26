@@ -6,6 +6,7 @@ use crate::{CommentId, ContentId, Timestamp, UserId, string_enum};
 
 string_enum!(
     /// Moderation state of a comment. Only `approved` comments are shown on the site.
+    #[derive(PartialOrd, Ord)]
     CommentStatus {
         Pending => "pending",
         Approved => "approved",

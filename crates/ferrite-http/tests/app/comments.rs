@@ -21,7 +21,7 @@ use axum::{
     http::{Method, Request, StatusCode, header},
 };
 use ferrite_core::{
-    OptionService,
+    OptionService, PermalinkRules,
     comments::{CommentInput, CommentService, Commenter, Submitted},
 };
 use ferrite_domain::{Comment, CommentId, CommentQuery, CommentStatus, ContentId};
@@ -73,7 +73,11 @@ async fn blog(mut app: App) -> App {
 
 /// A comment service over the app's store (the same key, so the same address hashes).
 fn service(app: &App) -> CommentService {
-    CommentService::new(app.site.store.clone(), App::auth(&app.site))
+    CommentService::new(
+        app.site.store.clone(),
+        App::auth(&app.site),
+        Arc::new(PermalinkRules::default()),
+    )
 }
 
 fn enc(s: &str) -> String {

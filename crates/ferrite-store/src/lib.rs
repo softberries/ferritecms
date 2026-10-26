@@ -34,10 +34,11 @@ pub use paging::{
     check_idempotency, check_idempotency_outcome, check_item_comments_limit, check_job_duration,
     check_job_kind, check_job_query, check_key_hash, check_len, check_limit, check_new_audit,
     check_new_job, check_new_node, check_node_meta, check_prune_limit, check_rate_bucket,
-    check_rate_window, comment_cursor, content_cursor, content_list_plan, content_sort_key,
-    encode_audit_cursor, encode_comment_cursor, encode_content_cursor, encode_job_cursor,
-    encode_text_cursor, idempotency_status, job_backoff, job_cursor, rate_hit, sanitize_job_error,
-    slug_has_prefix, slug_prefix_bounds, sort_claimed, text_cursor,
+    check_rate_window, comment_counts, comment_cursor, content_cursor, content_list_plan,
+    content_sort_key, encode_audit_cursor, encode_comment_cursor, encode_content_cursor,
+    encode_job_cursor, encode_text_cursor, idempotency_status, job_backoff, job_cursor,
+    like_contains, rate_hit, sanitize_job_error, slug_has_prefix, slug_prefix_bounds, sort_claimed,
+    text_cursor,
 };
 pub use repos::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, CommentRepo, ContentRepo,

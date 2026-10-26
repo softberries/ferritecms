@@ -295,7 +295,11 @@ impl Api {
         let api = Arc::new(
             ApiState::new(ApiParts {
                 store: store.clone(),
-                comments: Arc::new(CommentService::new(store.clone(), auth.clone())),
+                comments: Arc::new(CommentService::new(
+                    store.clone(),
+                    auth.clone(),
+                    Arc::new(PermalinkRules::default()),
+                )),
                 system: Arc::new(SystemService::new(store.clone())),
                 site: app.clone(),
                 node: node_info(store.as_ref(), &media.config),
@@ -483,7 +487,11 @@ impl Api {
         let api = Arc::new(
             ApiState::new(ApiParts {
                 store: store.clone(),
-                comments: Arc::new(CommentService::new(store.clone(), auth.clone())),
+                comments: Arc::new(CommentService::new(
+                    store.clone(),
+                    auth.clone(),
+                    Arc::new(PermalinkRules::default()),
+                )),
                 system: Arc::new(SystemService::new(store.clone())),
                 site: self.app.clone(),
                 node: NodeInfo {

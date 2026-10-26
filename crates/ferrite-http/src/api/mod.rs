@@ -116,6 +116,7 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
             comments::MAX_COMMENT_REQUEST,
         ))
         .routes(routes!(comments::list_comments))
+        .routes(routes!(comments::count_comments))
         .routes(routes!(
             comments::moderate_comment,
             comments::delete_comment

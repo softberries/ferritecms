@@ -9,8 +9,9 @@ use ferrite_domain::{
     CommentId, CommentQuery, CommentStatus, ContentId, ContentItem, ContentQuery, ContentType,
     Event, FailureBucket, IdemBegin, IdempotencyKey, InstalledPlugin, InstalledTheme, Job, JobId,
     JobLease, JobQuery, JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob, NewNode,
-    NewUser, Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId, Revision, RevisionId,
-    SearchQuery, Secret, Session, Taxonomy, Term, TermId, Timestamp, User, UserId,
+    NewUser, Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId, RedirectQuery,
+    Revision, RevisionId, SearchQuery, Secret, Session, Taxonomy, Term, TermId, Timestamp, User,
+    UserId,
 };
 
 use crate::{Channel, LockGuard, StoreError, Subscription, migrate::MigrationStatus};
@@ -349,8 +350,13 @@ pub trait RedirectRepo: Send + Sync {
     async fn upsert(&self, redirect: &Redirect) -> Result<Redirect, StoreError>;
     /// Deletes a redirect (missing: no-op).
     async fn delete(&self, id: RedirectId) -> Result<(), StoreError>;
-    /// Lists redirects with cursor pagination.
-    async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<Redirect>, StoreError>;
+    /// Lists redirects by `source_path` (binary order, then id) with cursor pagination
+    /// (tag [`REDIRECT_CURSOR_TAG`](crate::REDIRECT_CURSOR_TAG)); `limit` 1..=200. With
+    /// `q`, only rows whose `source_path` or `target` holds `q` as a case-insensitive
+    /// substring (`LIKE`/`ILIKE … ESCAPE '\'` over [`like_contains`](crate::like_contains):
+    /// `%`, `_` and `\` match only themselves; SQLite folds ASCII case only). NUL in `q`
+    /// is `Invalid`; its length is core's to check.
+    async fn list(&self, query: &RedirectQuery) -> Result<Page<Redirect>, StoreError>;
     /// Redirects whose `target` equals `target` exactly (case-sensitive), ordered by
     /// `source_path` in binary order, at most
     /// [`MAX_REDIRECTS_BY_TARGET`](crate::MAX_REDIRECTS_BY_TARGET).
@@ -892,6 +898,13 @@ pub trait CommentRepo: Send + Sync {
     /// and/or item, with cursor pagination (tag
     /// [`COMMENT_CURSOR_TAG`](crate::COMMENT_CURSOR_TAG)); `limit` 1..=200.
     async fn list(&self, query: &CommentQuery) -> Result<Page<Comment>, StoreError>;
+    /// How many comments have each status, over every comment or `item`'s: every
+    /// [`CommentStatus`] is a key (zero when none). One grouped `SELECT`; a row with an
+    /// unknown status is a `Database` error, as on [`get`](Self::get).
+    async fn counts(
+        &self,
+        item: Option<ContentId>,
+    ) -> Result<BTreeMap<CommentStatus, u64>, StoreError>;
     /// Up to `limit` (1..=[`MAX_ITEM_COMMENTS`](crate::MAX_ITEM_COMMENTS)) approved
     /// comments of `item`, oldest first (`created_at, id`).
     async fn approved_for_item(

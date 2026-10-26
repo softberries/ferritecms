@@ -3,12 +3,14 @@
 //! Handlers only translate: `MenuService` checks `manage_menus` for writes and
 //! `menus:read` for reads (F16), validates the tree and emits `menu:<name>`, which
 //! flushes the public pages that show the menu. No `If-Match` (P11): `PUT` replaces the
-//! whole menu, last write wins.
+//! whole menu, last write wins. `GET /menus` also lists the menu locations of the theme
+//! this node serves now (its `[menus]` table, after any hot swap), each with whether a
+//! menu of that name exists.
 
 use std::sync::Arc;
 
 use axum::{Json, extract::State, http::StatusCode};
-use ferrite_core::CoreError;
+use ferrite_core::{CoreError, menu_locations};
 use ferrite_domain::{Menu, MenuItem};
 
 use super::{
@@ -25,7 +27,7 @@ use super::{
     operation_id = "list_menus",
     security(("session" = []), ("bearer" = [])),
     responses(
-        (status = 200, description = "Every menu (name and label), by name", body = MenuList),
+        (status = 200, description = "Every menu (name and label), by name, and the menu locations of the theme this node serves", body = MenuList),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (needs `menus:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
     ),
@@ -35,12 +37,22 @@ pub async fn list_menus(
     Authed(who): Authed,
 ) -> Result<Json<MenuList>, Problem> {
     let menus = api.menus.list_for(&who.actor).await?;
+    let theme = api.site.theme.load();
+    let locations = menu_locations(
+        theme
+            .manifest()
+            .menus
+            .iter()
+            .map(|(name, label)| (name.as_str(), label.as_str())),
+        &menus,
+    );
     Ok(Json(MenuList {
         items: menus
             .into_iter()
             .map(|(name, label)| MenuSummary { name, label })
             .collect(),
         next_cursor: None,
+        locations: locations.into_iter().map(Into::into).collect(),
     }))
 }
 

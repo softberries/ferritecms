@@ -10,6 +10,7 @@ pub mod auth;
 pub mod autosave;
 pub mod batch;
 pub mod comment;
+pub mod comment_counts;
 pub mod constraints;
 pub mod content;
 pub mod counting;

@@ -47,7 +47,11 @@ async fn site(db: &TestDb) -> Site {
     let admin = actor(store.as_ref(), Role::Admin).await;
     Site {
         content: ContentService::new(store.clone(), Arc::new(PermalinkRules::default())),
-        comments: CommentService::new(store.clone(), auth.clone()),
+        comments: CommentService::new(
+            store.clone(),
+            auth.clone(),
+            Arc::new(PermalinkRules::default()),
+        ),
         store,
         auth,
         admin,
@@ -129,6 +133,7 @@ impl Site {
             .moderate(&self.admin, id, CommentStatus::Approved)
             .await
             .unwrap()
+            .comment
     }
 
     async fn count(&self) -> usize {
@@ -652,6 +657,14 @@ async fn approval_invalidates_the_post(db: &TestDb) {
     );
     let page = s.comments.list(&read_only, all).await.unwrap();
     assert_eq!(page.items.len(), 1);
+    // The counts take the same checks.
+    forbidden(s.comments.counts(&author, None).await, "moderate_comments");
+    forbidden(s.comments.counts(&no_scope, None).await, "comments:read");
+    let counts = s.comments.counts(&read_only, None).await.unwrap();
+    assert_eq!(
+        counts.pending + counts.approved + counts.spam + counts.trash,
+        1
+    );
 }
 
 async fn honeypot_discards(db: &TestDb) {

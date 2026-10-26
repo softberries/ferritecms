@@ -49,7 +49,7 @@ pub use setting::{
     MAX_SETTING_SECRET, MAX_SETTING_TEXT, MAX_SETTING_TEXTAREA, SettingType, check_setting_value,
     empty_setting_value, is_color,
 };
-pub use site::{OptionEntry, REDIRECT_CODES, Redirect, RedirectOrigin};
+pub use site::{OptionEntry, REDIRECT_CODES, Redirect, RedirectOrigin, RedirectQuery};
 pub use taxonomy::{Taxonomy, Term};
 pub use time::Timestamp;
 pub use user::{NewUser, Role, User, UserStatus};
