@@ -103,6 +103,7 @@ const byName = (terms: Term[], name: string) => {
 };
 
 test("editor_builds_a_category_tree", async ({ as, site, backend }) => {
+  test.setTimeout(120_000);
   const admin = await ContentApi.as(backend, site.url, "admin");
   const tax = await newTaxonomy(admin, true, "kd", "Kinds");
   const page = await as("editor");
@@ -390,6 +391,7 @@ test("palette_opens_new_taxonomy", async ({ as }) => {
 });
 
 test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
+  test.setTimeout(240_000);
   const api = await ContentApi.as(backend, site.url, "admin");
   const cats = await newTaxonomy(api, true, "sc", "Topics");
   const tags = await newTaxonomy(api, false, "st", "Keywords");

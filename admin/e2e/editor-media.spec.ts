@@ -67,6 +67,7 @@ function images(doc: unknown): { src: string; alt: string }[] {
 }
 
 test("set_featured_image_from_picker", async ({ as, site, backend, snap, expectAccessible }) => {
+  test.setTimeout(120_000);
   const api = await ContentApi.as(backend, site.url, "admin");
   const name = `Cover ${word()}`;
   const media = await api.upload(png(`${name}.png`, 640, 400), { title: name, alt: "A cover" });

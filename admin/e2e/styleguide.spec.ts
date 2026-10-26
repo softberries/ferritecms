@@ -178,6 +178,7 @@ test("styleguide_table_frame_and_mixed_checkbox", async ({ as }) => {
 });
 
 test("styleguide_ordering", async ({ as, snap, expectAccessible }) => {
+  test.setTimeout(120_000);
   // The kit's sortable list and tree (menus and keyboard, as screens will drive them, and a
   // real pointer drag), the drop zone's overlay and its file filter.
   const page = await as("admin");

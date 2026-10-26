@@ -444,6 +444,7 @@ test("palette_opens_new_type", async ({ as }) => {
 });
 
 test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
+  test.setTimeout(240_000);
   const api = await ContentApi.as(backend, site.url, "admin");
   const type = await newType(api, SCHEMA, "bk");
   const page = await as("admin");

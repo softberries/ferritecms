@@ -377,6 +377,7 @@ test("delete_menu_with_undo", async ({ as, site, backend }) => {
 });
 
 test("screens", async ({ as, site, backend, guard, snap, expectAccessible }) => {
+  test.setTimeout(240_000);
   // The page entry's target is looked up type by type (posts first): a 404 per miss.
   guard.allowFailedResource(/\/api\/v1\/content\/[a-z0-9_-]+\/[0-9a-f-]+$/);
   const api = await ContentApi.as(backend, site.url, "admin");

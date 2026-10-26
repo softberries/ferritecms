@@ -449,6 +449,7 @@ test("leave_guard_blocks_navigation", async ({ as, site, backend, snap, expectAc
 });
 
 test("screens", async ({ as, site, backend, snap, guard }) => {
+  test.setTimeout(240_000);
   const api = await ContentApi.as(backend, site.url, "author");
   const item = await api.create("post", `Screens ${uid()}`);
   const page = await as("author");

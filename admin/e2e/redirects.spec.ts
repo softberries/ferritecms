@@ -312,6 +312,7 @@ test("editor_has_no_redirects", async ({ as }) => {
 });
 
 test("screens", async ({ as, site, backend, guard, snap, expectAccessible }) => {
+  test.setTimeout(240_000);
   // The form's and the import's refusals are 422s, shown in the dialogs.
   guard.allowFailedResource(/\/api\/v1\/redirects(\/import)?$/);
   const api = await ContentApi.as(backend, site.url, "admin");

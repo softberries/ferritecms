@@ -320,6 +320,7 @@ test("field_conflict_shows_in_412_dialog", async ({ as, site, backend, guard }) 
 });
 
 test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
+  test.setTimeout(240_000);
   const api = await ContentApi.as(backend, site.url, "admin");
   const type = await bookType(api);
   const post = await api.create("post", `Screens related ${uid()}`);

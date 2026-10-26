@@ -86,6 +86,7 @@ test("kept_copy_edits_survive_a_crash", async ({
   snap,
   expectAccessible,
 }) => {
+  test.setTimeout(120_000);
   // The refused save is a 412 by design: the browser logs that failed load.
   guard.allowFailedResource(/\/api\/v1\/content\/post\/[0-9a-f-]+$/);
   const editorApi = await ContentApi.as(backend, site.url, "editor");

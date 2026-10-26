@@ -943,17 +943,22 @@ function EditorBar({
         asChild
         variant="ghost"
         size="sm"
-        className={cn("-ml-2 gap-1.5 text-muted-foreground", focusMode && "invisible")}
+        // The back link gives way first on a narrow bar: its label truncates (down to the
+        // arrow alone) so the save state and Save always fit, whatever the font metrics.
+        className={cn(
+          "-ml-2 min-w-0 shrink gap-1.5 text-muted-foreground",
+          focusMode && "invisible",
+        )}
       >
         <Link to={`/content/${type}` as "/"}>
           <ArrowLeftIcon data-icon="inline-start" />
-          <span className="max-w-40 truncate">{typeLabel}</span>
+          <span className="max-w-40 min-w-0 truncate">{typeLabel}</span>
         </Link>
       </Button>
       {status && isContentStatus(status) && !focusMode && wide ? (
         <StatusBadge status={status} />
       ) : null}
-      <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
         {showState && !doc.readOnly ? (
           <SaveState state={doc.indicator} {...(doc.indicatorAt ? { at: doc.indicatorAt } : {})} />
         ) : null}

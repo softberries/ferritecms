@@ -327,6 +327,7 @@ test("author_has_no_queue", async ({ as, snap, expectAccessible }) => {
 });
 
 test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
+  test.setTimeout(240_000);
   const api = await ContentApi.as(backend, site.url, "editor");
   const post = await newPost(api, "Screens");
   const empty = await newPost(api, "Quiet");

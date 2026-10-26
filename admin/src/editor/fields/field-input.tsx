@@ -61,15 +61,16 @@ export function FieldShell({
   const error = errorFor(path);
   const label = def.label?.trim() || def.name;
   const describedBy = error ? `${hintId} ${errorId}` : hintId;
+  // A long label breaks anywhere rather than pushing the row past a phone's width.
   const head = (
     <div className="flex min-w-0 items-baseline justify-between gap-3">
       {as === "group" ? (
-        <span id={labelId} className="text-sm leading-none font-medium">
+        <span id={labelId} className="min-w-0 text-sm leading-none font-medium wrap-anywhere">
           {label}
           {def.required ? <Required /> : null}
         </span>
       ) : (
-        <Label htmlFor={id} id={labelId}>
+        <Label htmlFor={id} id={labelId} className="min-w-0 wrap-anywhere">
           {label}
           {def.required ? <Required /> : null}
         </Label>

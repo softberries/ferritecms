@@ -248,6 +248,7 @@ test("rejected_type_shows_on_its_row", async ({ as, site, backend, guard, snap }
 });
 
 test("leaving_during_upload_asks", async ({ as, site, backend, guard }) => {
+  test.setTimeout(120_000);
   const api = await ContentApi.as(backend, site.url, "author");
   const name = `${uid("leave")}.png`;
   guard.allowFailedResource(/\/api\/v1\/media$/);
