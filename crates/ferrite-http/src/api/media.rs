@@ -115,14 +115,44 @@ pub struct MediaListParams {
     pub cursor: Option<String>,
 }
 
-fn dto(api: &ApiState, m: MediaItem) -> MediaDto {
-    MediaDto::new(m, &api.media)
+/// The items with their uploaders (one author lookup for all of them). Items reference
+/// existing users (foreign keys), so a missing uploader is a `500`.
+async fn dtos(
+    api: &ApiState,
+    actor: &Actor,
+    items: Vec<MediaItem>,
+) -> Result<Vec<MediaDto>, Problem> {
+    let ids: Vec<UserId> = items.iter().map(|m| m.item.author_id).collect();
+    let authors = api.media_service.authors(actor, &ids).await?;
+    items
+        .into_iter()
+        .map(|m| {
+            let author = authors.get(&m.item.author_id).cloned().ok_or_else(|| {
+                tracing::error!(user = %m.item.author_id, "uploader not found");
+                Problem::internal()
+            })?;
+            Ok(MediaDto::new(m, &api.media, author))
+        })
+        .collect()
+}
+
+async fn dto(api: &ApiState, actor: &Actor, m: MediaItem) -> Result<MediaDto, Problem> {
+    dtos(api, actor, vec![m])
+        .await?
+        .pop()
+        .ok_or_else(Problem::internal)
 }
 
 /// `status` with `ETag` and the item.
-fn respond(api: &ApiState, m: MediaItem, status: StatusCode) -> Response {
+async fn respond(
+    api: &ApiState,
+    actor: &Actor,
+    m: MediaItem,
+    status: StatusCode,
+) -> Result<Response, Problem> {
     let tag = etag(m.item.version);
-    (status, [(header::ETAG, tag)], Json(dto(api, m))).into_response()
+    let body = dto(api, actor, m).await?;
+    Ok((status, [(header::ETAG, tag)], Json(body)).into_response())
 }
 
 /// The problem of a failed write to item `id`: a version conflict is `412` with the
@@ -133,8 +163,12 @@ async fn write_problem(api: &ApiState, actor: &Actor, id: ContentId, e: CoreErro
     if !conflict {
         return problem;
     }
-    match api.media_service.get(actor, id).await {
-        Ok(m) => match serde_json::to_value(dto(api, m)) {
+    let current = match api.media_service.get(actor, id).await {
+        Ok(m) => dto(api, actor, m).await,
+        Err(e) => Err(Problem::from(e)),
+    };
+    match current {
+        Ok(m) => match serde_json::to_value(m) {
             Ok(value) => problem.with_current(value),
             Err(e) => {
                 tracing::error!(error = %e, "cannot serialize the current media item");
@@ -188,7 +222,7 @@ pub async fn list_media(
     }
     let page = api.media_service.list(&who.actor, query).await?;
     Ok(Json(MediaList {
-        items: page.items.into_iter().map(|m| dto(&api, m)).collect(),
+        items: dtos(&api, &who.actor, page.items).await?,
         next_cursor: page.next_cursor,
     }))
 }
@@ -337,7 +371,7 @@ async fn upload(
     drop(staged);
     let location = format!("{BASE}/media/{}", item.item.id);
     let (status, headers) = created(&location, etag(item.item.version));
-    let body = serde_json::to_value(dto(api, item)).map_err(|e| {
+    let body = serde_json::to_value(dto(api, actor, item).await?).map_err(|e| {
         tracing::error!(error = %e, "cannot serialize an uploaded media item");
         Problem::internal()
     })?;
@@ -367,7 +401,7 @@ pub async fn get_media(
         .media_service
         .get(&who.actor, ContentId::from_uuid(id))
         .await?;
-    Ok(respond(&api, m, StatusCode::OK))
+    respond(&api, &who.actor, m, StatusCode::OK).await
 }
 
 #[utoipa::path(
@@ -403,7 +437,7 @@ pub async fn update_media(
         alt: patch.alt,
     };
     match api.media_service.update(actor, id, version, patch).await {
-        Ok(m) => Ok(respond(&api, m, StatusCode::OK)),
+        Ok(m) => respond(&api, actor, m, StatusCode::OK).await,
         Err(e) => Err(write_problem(&api, actor, id, e).await),
     }
 }
@@ -473,7 +507,7 @@ pub async fn restore_media(
     let actor = &who.actor;
     let id = ContentId::from_uuid(id);
     match api.media_service.restore(actor, id, version).await {
-        Ok(m) => Ok(respond(&api, m, StatusCode::OK)),
+        Ok(m) => respond(&api, actor, m, StatusCode::OK).await,
         Err(e) => Err(write_problem(&api, actor, id, e).await),
     }
 }

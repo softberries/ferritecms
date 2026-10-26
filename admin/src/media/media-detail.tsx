@@ -40,7 +40,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useShortcut } from "@/lib/shortcuts";
-import { useAuthorName } from "./author";
+import { authorName } from "./author";
 import { dimensions, displayTitle, formatBytes, isRaster, typeLabel } from "./format";
 import type { MediaAction } from "./media-actions";
 import { canEditMedia, canRestoreMedia } from "./rights";
@@ -141,7 +141,7 @@ function Detail({
   const title = displayTitle(media);
   const size = formatBytes(media.bytes);
   const dims = dimensions(media);
-  const author = useAuthorName(me, media.author_id);
+  const author = authorName(media);
   const fields = useFields(media, editable);
 
   useShortcut({
@@ -322,7 +322,11 @@ function Actions({
   if (!onAction || !canEditMedia(me, media)) return null;
   const trashed = media.status === "trash";
   return (
-    <div className="flex flex-wrap gap-2 border-t pt-5">
+    // Kept in view at the sheet's bottom edge, however long the details above are.
+    <div
+      data-slot="media-detail-actions"
+      className="sticky bottom-0 -mx-5 -mb-5 flex flex-wrap gap-2 border-t bg-popover px-5 py-4"
+    >
       {trashed ? (
         <>
           {canRestoreMedia(me, media) ? (

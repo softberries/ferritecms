@@ -274,7 +274,6 @@ export function MediaLibrary({ search, me, setSearch }: MediaLibraryProps) {
       ) : (
         <MediaTable
           items={items}
-          me={me}
           label={t("grid.label")}
           loading={list.isPending}
           empty={empty}

@@ -380,6 +380,15 @@ impl ContentService {
         ids: &[UserId],
     ) -> Result<HashMap<UserId, AuthorRef>, CoreError> {
         require_read(actor, Area::Content)?;
+        self.lookup_authors(ids).await
+    }
+
+    /// [`authors`](Self::authors) without the read check, for services that checked
+    /// their own area first ([`MediaService::authors`](crate::MediaService::authors)).
+    pub(crate) async fn lookup_authors(
+        &self,
+        ids: &[UserId],
+    ) -> Result<HashMap<UserId, AuthorRef>, CoreError> {
         let mut unique = ids.to_vec();
         unique.sort_unstable();
         unique.dedup();

@@ -23,7 +23,7 @@ import { Button } from "@/components/ui/button";
 import { useLeaveGuard } from "@/editor/leave-guard";
 import { uiLocale } from "@/lib/locale";
 import type { UploadEntry, UploadQueue } from "./upload-queue";
-import { uploadErrorText } from "./use-upload-queue";
+import { uploadFailure } from "./upload-errors";
 
 export interface UploadTrayProps {
   queue: UploadQueue;
@@ -179,6 +179,9 @@ function Row({
   const fraction = entry.total > 0 ? Math.min(1, entry.loaded / entry.total) : 0;
   const percent = new Intl.NumberFormat(uiLocale(), { style: "percent" }).format(fraction);
   const running = entry.state === "uploading" || entry.state === "queued";
+  // A failed row, or one waiting for its automatic retry, says why.
+  const failure =
+    entry.state === "failed" || (entry.waiting && entry.error) ? uploadFailure(entry.error) : null;
   const status =
     entry.state === "uploading"
       ? percent
@@ -217,16 +220,29 @@ function Row({
             <XIcon />
           </Button>
         ) : entry.state === "failed" ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="pointer-coarse:h-11"
-            aria-label={t("tray.retryName", { name })}
-            onClick={() => queue.retry(entry.id)}
-          >
-            <RotateCwIcon data-icon="inline-start" />
-            {t("tray.retry")}
-          </Button>
+          <>
+            {failure?.retry ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="pointer-coarse:h-11"
+                aria-label={t("tray.retryName", { name })}
+                onClick={() => queue.retry(entry.id)}
+              >
+                <RotateCwIcon data-icon="inline-start" />
+                {t("tray.retry")}
+              </Button>
+            ) : null}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="pointer-coarse:size-11"
+              aria-label={t("tray.dismiss", { name })}
+              onClick={() => queue.cancel(entry.id)}
+            >
+              <XIcon />
+            </Button>
+          </>
         ) : entry.state === "done" && entry.media ? (
           <Button
             variant="ghost"
@@ -247,10 +263,20 @@ function Row({
           label={t("tray.progress", { name })}
         />
       ) : null}
-      {entry.state === "failed" || (entry.waiting && entry.error) ? (
-        <p data-slot="upload-error" className="text-sm break-words text-destructive">
-          {uploadErrorText(entry.error, t)}
-        </p>
+      {failure ? (
+        <div className="flex flex-col gap-0.5">
+          <p data-slot="upload-error" className="text-sm break-words text-destructive">
+            {t(`tray.reason.${failure.kind}`)}
+          </p>
+          {failure.detail ? (
+            <p
+              data-slot="upload-error-detail"
+              className="text-xs break-words text-muted-foreground"
+            >
+              {failure.detail}
+            </p>
+          ) : null}
+        </div>
       ) : null}
     </li>
   );
@@ -300,7 +326,7 @@ function useAnnouncement(entries: readonly UploadEntry[]): string {
       if (e.state === "failed") {
         next = t("tray.announce.failed", {
           name: e.file.name,
-          reason: uploadErrorText(e.error, t),
+          reason: t(`tray.reason.${uploadFailure(e.error).kind}`),
         });
       }
     }

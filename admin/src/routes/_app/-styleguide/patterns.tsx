@@ -190,6 +190,7 @@ const MENU: TreeNode<{ key: MenuKey; path: string }>[] = [
 function sampleMedia(t: TFunction<"styleguide">): MediaDto[] {
   const base = {
     author_id: "0190f1c0-0000-7000-8000-0000000000bb",
+    author: { id: "0190f1c0-0000-7000-8000-0000000000bb", login: "ada", display_name: "Ada" },
     bytes: 2048,
     sanitized: false,
     status: "published",

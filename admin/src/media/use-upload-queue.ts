@@ -4,8 +4,7 @@
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { MediaDto } from "@/api/media";
-import { ApiError } from "@/api/problem";
-import { UploadNetworkError, uploadMedia } from "@/api/upload";
+import { uploadMedia } from "@/api/upload";
 import { type UploadEntry, type UploadQueue, createUploadQueue } from "./upload-queue";
 
 /** At most this many uploads run at once from one tab (Global Constraints). */
@@ -37,16 +36,4 @@ export function useUploadQueue(onDone: (media: MediaDto) => void): {
   const snapshot = useCallback(() => queue.entries(), [queue]);
   const entries = useSyncExternalStore(subscribe, snapshot);
   return { queue, entries };
-}
-
-/** What a failed (or retrying) row says: the problem's detail, else why. */
-export function uploadErrorText(
-  error: unknown,
-  t: (key: "tray.network" | "tray.failed") => string,
-): string {
-  if (error instanceof ApiError) {
-    return error.fieldErrors().file ?? (error.problem.detail || error.problem.title);
-  }
-  if (error instanceof UploadNetworkError) return t("tray.network");
-  return t("tray.failed");
 }

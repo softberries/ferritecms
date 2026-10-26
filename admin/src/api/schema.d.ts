@@ -1768,6 +1768,8 @@ export interface components {
         MediaDto: {
             /** @description Alternative text. */
             alt: string;
+            /** @description Who uploaded it (the same as `author_id`, with the login and display name). */
+            author: components["schemas"]["AuthorRefDto"];
             /** Format: uuid */
             author_id: string;
             /** Format: int64 */

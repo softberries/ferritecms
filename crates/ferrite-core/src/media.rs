@@ -30,7 +30,7 @@ use serde_json::Value;
 use crate::{
     Actor, ContentDraft, ContentService, CoreError, Permalinks,
     actor::{Area, Capability, Scope, Scopes, can, can_read, require, require_read, require_scope},
-    content::{Edit, WALKED},
+    content::{AuthorRef, Edit, WALKED},
     events,
     jobs::{MEDIA_VARIANTS_VERSION, MediaVariants, media_variants_job},
     site::MEDIA_KIND,
@@ -237,6 +237,19 @@ impl MediaService {
         }
         .await;
         finish(tx, done).await
+    }
+
+    /// The login and display name of each user in `ids` (`media:read`), keyed by id;
+    /// unknown ids are left out. Meant for the uploaders of items the actor has already
+    /// read (as [`ContentService::authors`] for content; logins and display names are
+    /// public on author archives). One `get_many` per `MAX_ID_FILTER` ids.
+    pub async fn authors(
+        &self,
+        actor: &Actor,
+        ids: &[UserId],
+    ) -> Result<HashMap<UserId, AuthorRef>, CoreError> {
+        require_read(actor, Area::Media)?;
+        self.content.lookup_authors(ids).await
     }
 
     /// Media item `id` in any status, if `actor` may read it (`media:read`, then

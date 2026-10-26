@@ -169,6 +169,7 @@ describe("kit", () => {
     const media = (over: Partial<MediaDto>): MediaDto => ({
       id: "0190f1c0-0000-7000-8000-0000000000aa",
       author_id: "0190f1c0-0000-7000-8000-0000000000bb",
+      author: { id: "0190f1c0-0000-7000-8000-0000000000bb", login: "ada", display_name: "Ada" },
       alt: "A lighthouse at dusk",
       title: "Lighthouse",
       original_name: "lighthouse.jpg",

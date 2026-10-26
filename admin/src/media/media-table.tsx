@@ -5,7 +5,6 @@
 import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { MediaDto } from "@/api/media";
-import type { MeDto } from "@/auth/session";
 import { DataTable } from "@/components/kit/data-table";
 import {
   type DataTableColumn,
@@ -14,7 +13,7 @@ import {
 } from "@/components/kit/data-table-features";
 import { MediaThumb } from "@/components/kit/media-thumb";
 import { RelativeTime } from "@/components/kit/relative-time";
-import { useAuthorName } from "./author";
+import { authorName } from "./author";
 import { dimensions, displayTitle, formatBytes, typeLabel } from "./format";
 
 const COLUMN_CLASSES: Record<string, string> = {
@@ -28,7 +27,6 @@ const COLUMN_CLASSES: Record<string, string> = {
 
 export interface MediaTableProps {
   items: MediaDto[];
-  me: MeDto;
   label: string;
   loading: boolean;
   empty: ReactNode;
@@ -40,7 +38,6 @@ export interface MediaTableProps {
 
 export function MediaTable({
   items,
-  me,
   label,
   loading,
   empty,
@@ -49,7 +46,7 @@ export function MediaTable({
   onOpen,
   className,
 }: MediaTableProps) {
-  const columns = useColumns(me);
+  const columns = useColumns();
   return (
     <DataTable
       label={label}
@@ -68,7 +65,7 @@ export function MediaTable({
   );
 }
 
-function useColumns(me: MeDto): DataTableColumn<MediaDto>[] {
+function useColumns(): DataTableColumn<MediaDto>[] {
   const { t } = useTranslation("media");
   return useMemo(() => {
     const col = dataTableColumns<MediaDto>();
@@ -138,7 +135,14 @@ function useColumns(me: MeDto): DataTableColumn<MediaDto>[] {
       col.display({
         id: "author",
         header: () => t("columns.author"),
-        cell: (c) => <AuthorCell me={me} authorId={c.row.original.author_id} />,
+        cell: (c) => {
+          const name = authorName(c.row.original);
+          return (
+            <span className="block max-w-36 truncate" title={name}>
+              {name}
+            </span>
+          );
+        },
       }),
       col.display({
         id: "uploaded",
@@ -146,14 +150,5 @@ function useColumns(me: MeDto): DataTableColumn<MediaDto>[] {
         cell: (c) => <RelativeTime at={c.row.original.created_at} className="whitespace-nowrap" />,
       }),
     ]);
-  }, [me, t]);
-}
-
-function AuthorCell({ me, authorId }: { me: MeDto; authorId: string }) {
-  const name = useAuthorName(me, authorId);
-  return (
-    <span className="block max-w-36 truncate" title={name}>
-      {name}
-    </span>
-  );
+  }, [t]);
 }

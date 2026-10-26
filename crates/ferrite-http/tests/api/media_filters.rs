@@ -9,7 +9,11 @@ use crate::{
     harness::{Api, Bearer, Part, Resp},
 };
 
-api_tests!(media_filters_query_params, media_restore_needs_if_match);
+api_tests!(
+    media_filters_query_params,
+    media_restore_needs_if_match,
+    media_dto_has_author
+);
 
 fn png(tag: &str) -> Vec<u8> {
     let mut v = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -254,5 +258,97 @@ async fn media_restore_needs_if_match(api: Api) -> Api {
         )
         .await
         .assert_problem(404, "not-found");
+    api
+}
+
+/// The uploader as `{id, login, display_name}` on every media response: upload (`201`),
+/// get, list, patch and restore (M2b-2 Task 7 fix round, like content's `author`).
+async fn media_dto_has_author(api: Api) -> Api {
+    let admin_user = api.user("admin", Role::Admin, false).await;
+    let admin = api.bearer(&admin_user, &["*"]).await;
+    let author_user = api.user("writer", Role::Author, false).await;
+    let author = api.bearer(&author_user, &["*"]).await;
+    let expect = |v: &Value, login: &str, id: String| {
+        assert_eq!(v["author"]["login"], login, "{v}");
+        assert_eq!(v["author"]["display_name"], login, "{v}");
+        assert_eq!(v["author"]["id"], id.as_str(), "{v}");
+        assert_eq!(v["author_id"], id.as_str(), "{v}");
+    };
+    let writer_id = author_user.id.to_string();
+    let admin_id = admin_user.id.to_string();
+
+    let mine = created(
+        &author
+            .upload(&api, &[Part::file("mine.png", "image/png", &png("m"))])
+            .await,
+    );
+    expect(&mine, "writer", writer_id.clone());
+    let theirs = created(
+        &admin
+            .upload(
+                &api,
+                &[Part::file("theirs.pdf", "application/pdf", &pdf("t"))],
+            )
+            .await,
+    );
+    expect(&theirs, "admin", admin_id.clone());
+    let id = mine["id"].as_str().unwrap().to_owned();
+
+    // Get, by the uploader and by another user.
+    for who in [&author, &admin] {
+        let r = who.get(&api, &format!("/api/v1/media/{id}")).await;
+        assert_eq!(r.status.as_u16(), 200, "{r:?}");
+        expect(&r.json(), "writer", writer_id.clone());
+    }
+    // A list page holds each item's own uploader.
+    let r = admin.get(&api, "/api/v1/media").await;
+    assert_eq!(r.status.as_u16(), 200, "{r:?}");
+    let items = r.json()["items"].as_array().unwrap().clone();
+    assert_eq!(items.len(), 2);
+    for item in &items {
+        if item["id"] == id.as_str() {
+            expect(item, "writer", writer_id.clone());
+        } else {
+            expect(item, "admin", admin_id.clone());
+        }
+    }
+    // Patch, trash and restore answer with the uploader too.
+    let r = admin
+        .send(
+            &api,
+            Method::PATCH,
+            &format!("/api/v1/media/{id}"),
+            Some(&serde_json::json!({ "alt": "edited by the admin" })),
+            mine["version"].as_i64(),
+        )
+        .await;
+    assert_eq!(r.status.as_u16(), 200, "{r:?}");
+    let patched = r.json();
+    expect(&patched, "writer", writer_id.clone());
+    let r = author
+        .send(
+            &api,
+            Method::DELETE,
+            &format!("/api/v1/media/{id}"),
+            None,
+            patched["version"].as_i64(),
+        )
+        .await;
+    assert_eq!(r.status.as_u16(), 204, "{r:?}");
+    let trashed = author
+        .get(&api, &format!("/api/v1/media/{id}"))
+        .await
+        .json();
+    let r = author
+        .send(
+            &api,
+            Method::POST,
+            &format!("/api/v1/media/{id}/restore"),
+            None,
+            trashed["version"].as_i64(),
+        )
+        .await;
+    assert_eq!(r.status.as_u16(), 200, "{r:?}");
+    expect(&r.json(), "writer", writer_id);
     api
 }

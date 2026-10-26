@@ -36,6 +36,8 @@ export function VariantsList({ media, polling }: VariantsListProps) {
       </p>
     );
   }
+  // A trashed item's files are not served: sizes only, no links.
+  const trashed = media.status === "trash";
   const sorted = [...media.variants].sort((a, b) => a.width * a.height - b.width * b.height);
   return (
     <ul aria-label={t("variants.title")} className="flex flex-col divide-y rounded-lg border">
@@ -47,18 +49,20 @@ export function VariantsList({ media, polling }: VariantsListProps) {
           <span className="text-muted-foreground tabular-nums">
             {t("variants.size", { width: v.width, height: v.height })}
           </span>
-          <a
-            href={v.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex min-h-11 items-center gap-1 rounded-sm font-medium underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground"
-          >
-            {t("variants.open")}
-            <span className="sr-only">
-              {t("variants.openWhich", { name: v.name })} {t("newTab")}
-            </span>
-            <ExternalLinkIcon aria-hidden="true" className="size-3.5" />
-          </a>
+          {trashed ? null : (
+            <a
+              href={v.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-h-11 items-center gap-1 rounded-sm font-medium underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground"
+            >
+              {t("variants.open")}
+              <span className="sr-only">
+                {t("variants.openWhich", { name: v.name })} {t("newTab")}
+              </span>
+              <ExternalLinkIcon aria-hidden="true" className="size-3.5" />
+            </a>
+          )}
         </li>
       ))}
     </ul>

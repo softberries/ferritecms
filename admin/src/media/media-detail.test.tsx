@@ -47,6 +47,7 @@ const ITEM: MediaDto = {
   sanitized: false,
   status: "published",
   author_id: ME.id,
+  author: { id: ME.id, login: "author", display_name: "Ada Author" },
   created_at: "2026-10-20T10:00:00Z",
   updated_at: "2026-10-20T10:00:00Z",
   version: 3,
@@ -130,10 +131,19 @@ describe("media_detail_test", () => {
   });
 
   test("a viewer who may not edit sees the values read-only", async () => {
-    stubRoutes({ [PATH]: () => json({ ...ITEM, author_id: "someone-else" }) });
+    stubRoutes({
+      [PATH]: () =>
+        json({
+          ...ITEM,
+          author_id: "someone-else",
+          author: { id: "someone-else", login: "bo", display_name: "Bo Other" },
+        }),
+    });
     renderWithRouter(<MediaDetail id={ITEM.id} me={ME} onClose={() => {}} onAction={() => {}} />);
     const alt = await screen.findByRole("textbox", { name: "Alt text" });
     expect(alt).toHaveAttribute("readonly");
+    // The uploader by name (`MediaDto.author`).
+    expect(screen.getByText("Bo Other")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Move to trash" })).toBeNull();
   });
 });

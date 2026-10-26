@@ -23,7 +23,7 @@ const word = () =>
 
 // Not by role: the open detail sheet hides the page from the accessibility tree.
 const heading = (page: Page) => page.locator("#main h1");
-const grid = (page: Page) => page.getByRole("list", { name: "Media files" });
+const grid = (page: Page) => page.getByRole("listbox", { name: "Media files" });
 const tile = (page: Page, text: string): Locator =>
   grid(page).locator("[data-tile]").filter({ hasText: text });
 const tray = (page: Page) => page.locator("[data-slot=upload-tray]");
@@ -32,6 +32,16 @@ const trayRow = (page: Page, name: string) =>
 const detail = (page: Page) => page.locator("[data-slot=media-detail]");
 const bulkBar = (page: Page) => page.getByRole("region", { name: "Selection" });
 const fileInput = (page: Page) => page.locator("[data-slot=media-file-input]");
+/** Selects a tile with its (pointer-only) check box. */
+async function pick(page: Page, text: string): Promise<void> {
+  await tile(page, text).hover();
+  await tile(page, text).locator("[data-slot=tile-check]").click();
+  await expect(tile(page, text)).toHaveAttribute("aria-selected", "true");
+}
+/** Scrolls the open detail sheet to its end (variants and actions). */
+async function sheetToEnd(page: Page): Promise<void> {
+  await detail(page).evaluate((el) => el.scrollTo({ top: el.scrollHeight }));
+}
 const searchBox = (page: Page) => page.getByRole("searchbox", { name: "Search media" });
 
 /** `POST /api/v1/media` requests only. */
@@ -216,10 +226,15 @@ test("rejected_type_shows_on_its_row", async ({ as, site, backend, guard, snap }
     const problem = (await (await refused).json()) as { detail: string };
     const row = trayRow(page, bad);
     await expect(row).toHaveAttribute("data-state", "failed");
-    await expect(row.locator("[data-slot=upload-error]")).toHaveText(problem.detail);
+    // A plain sentence, the server's detail under it, and no Retry: it would fail again.
+    await expect(row.locator("[data-slot=upload-error]")).toHaveText(
+      "This file type isn't supported.",
+    );
+    await expect(row.locator("[data-slot=upload-error-detail]")).toHaveText(problem.detail);
     // The other file is not held up by it, and a 415 is never retried by itself.
     await expect(trayRow(page, good)).toHaveAttribute("data-state", "done");
-    await expect(row.getByRole("button", { name: `Retry the upload of ${bad}` })).toBeVisible();
+    await expect(row.getByRole("button", { name: `Retry the upload of ${bad}` })).toHaveCount(0);
+    await expect(row.getByRole("button", { name: `Dismiss ${bad}` })).toBeVisible();
     await expect(tray(page).getByRole("heading")).toHaveText("1 upload failed");
     await snap(page, "media-tray-failed");
     expect(await byName(api, bad)).toHaveLength(0);
@@ -382,12 +397,13 @@ test("trash_with_undo", async ({ as, site, backend }) => {
     const page = await as("author");
     await openLibrary(page, `?q=${w}`);
     await expect(grid(page).locator("[data-tile]")).toHaveCount(2);
-    for (const title of [`${w} one`, `${w} two`]) {
-      await tile(page, title).hover();
-      await tile(page, title)
-        .getByRole("checkbox", { name: `Select ${title}` })
-        .check();
-    }
+    // By pointer, then by keyboard (Space on the focused option), as assistive tech sees it.
+    await pick(page, `${w} one`);
+    const two = tile(page, `${w} two`);
+    await expect(two).toHaveAttribute("aria-selected", "false");
+    await two.focus();
+    await page.keyboard.press("Space");
+    await expect(two).toHaveAttribute("aria-selected", "true");
     await expect(bulkBar(page)).toContainText("2 selected");
     await bulkBar(page).getByRole("button", { name: "Move to trash" }).click();
     const toast = page
@@ -583,10 +599,7 @@ test("screens", async ({ as, site, backend, guard, snap, expectAccessible }) => 
     await page.getByRole("radio", { name: "Grid view" }).click();
 
     // A selection shows the bar.
-    await tile(page, `${w} landscape 1`).hover();
-    await tile(page, `${w} landscape 1`)
-      .getByRole("checkbox", { name: `Select ${w} landscape 1` })
-      .check();
+    await pick(page, `${w} landscape 1`);
     await expect(bulkBar(page)).toBeVisible();
     await expectAccessible(page);
     await snap(page, "media-selection");
@@ -605,6 +618,9 @@ test("screens", async ({ as, site, backend, guard, snap, expectAccessible }) => 
     await expect(detail(page).getByRole("list", { name: "Variants" })).toBeVisible();
     await expectAccessible(page);
     await snap(page, "media-detail-image");
+    await sheetToEnd(page);
+    await expect(detail(page).getByRole("button", { name: "Move to trash" })).toBeInViewport();
+    await snap(page, "media-detail-image-end");
 
     await openLibrary(page, `?id=${doc.id}`);
     await expect(detail(page).getByRole("link", { name: "Download" })).toBeVisible();
@@ -617,9 +633,31 @@ test("screens", async ({ as, site, backend, guard, snap, expectAccessible }) => 
     await expectAccessible(page);
     await snap(page, "media-detail-svg");
 
+    // The Trash view with trashed files, a selection and its bulk bar, and a trashed
+    // file's detail with Restore and Delete permanently.
+    const binned = [
+      await api.upload(png(`${uid("s")}.png`, 600, 400), { title: `${w} old banner` }),
+      await api.upload(pdf(`${uid("s")}.pdf`), { title: `${w} old brochure` }),
+    ];
+    created.push(...binned);
+    for (const m of binned) await api.trashMedia(m);
     await openLibrary(page, "?trash=true");
+    await expect(tile(page, `${w} old banner`)).toBeVisible();
     await expectAccessible(page);
     await snap(page, "media-trash");
+    await pick(page, `${w} old banner`);
+    await expect(bulkBar(page).getByRole("button", { name: "Restore" })).toBeVisible();
+    await expect(bulkBar(page).getByRole("button", { name: "Delete permanently" })).toBeVisible();
+    await expectAccessible(page);
+    await snap(page, "media-trash-selection");
+    await page.keyboard.press("Escape");
+    const trashed = binned[0];
+    if (!trashed) throw new Error("fixtures missing");
+    await openLibrary(page, `?trash=true&id=${trashed.id}`);
+    await sheetToEnd(page);
+    await expect(detail(page).getByRole("button", { name: "Restore" })).toBeInViewport();
+    await expectAccessible(page);
+    await snap(page, "media-detail-trashed");
 
     // The states the shared site never shows on its own, from a stubbed list.
     const list = (url: URL) => url.pathname === "/api/v1/media";

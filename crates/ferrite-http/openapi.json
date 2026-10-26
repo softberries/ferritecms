@@ -10010,6 +10010,7 @@
           "sanitized",
           "status",
           "author_id",
+          "author",
           "created_at",
           "updated_at",
           "version"
@@ -10018,6 +10019,10 @@
           "alt": {
             "type": "string",
             "description": "Alternative text."
+          },
+          "author": {
+            "$ref": "#/components/schemas/AuthorRefDto",
+            "description": "Who uploaded it (the same as `author_id`, with the login and display name)."
           },
           "author_id": {
             "type": "string",

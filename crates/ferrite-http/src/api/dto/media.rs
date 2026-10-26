@@ -5,12 +5,14 @@
 //! URL in direct mode).
 
 use chrono::{DateTime, Utc};
-use ferrite_core::MediaItem;
+use ferrite_core::{MediaItem, content::AuthorRef};
 use ferrite_domain::ArtifactHash;
 use ferrite_media::MediaStore;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
+
+use super::content::AuthorRefDto;
 use uuid::Uuid;
 
 /// A media item (`GET`, and every write's result).
@@ -37,6 +39,8 @@ pub struct MediaDto {
     /// `published` from the upload on; `trash` once trashed.
     pub status: String,
     pub author_id: Uuid,
+    /// Who uploaded it (the same as `author_id`, with the login and display name).
+    pub author: AuthorRefDto,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     /// What `ETag` carries and `If-Match` must send back.
@@ -55,8 +59,8 @@ pub struct MediaVariantDto {
 }
 
 impl MediaDto {
-    /// `m` with its URLs from `store`.
-    pub fn new(m: MediaItem, store: &MediaStore) -> Self {
+    /// `m` with its URLs from `store` and its uploader.
+    pub fn new(m: MediaItem, store: &MediaStore, author: AuthorRef) -> Self {
         let MediaItem { item, media } = m;
         let name = media.original_name;
         let mut variants: Vec<MediaVariantDto> = media
@@ -83,6 +87,7 @@ impl MediaDto {
             sanitized: media.sanitized,
             status: item.status.as_str().to_owned(),
             author_id: item.author_id.as_uuid(),
+            author: author.into(),
             created_at: item.created_at.as_datetime(),
             updated_at: item.updated_at.as_datetime(),
             version: item.version,

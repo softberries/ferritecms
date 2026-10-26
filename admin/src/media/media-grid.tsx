@@ -1,18 +1,20 @@
 // The library's grid: responsive square tiles (`MediaThumb md` filling the tile), the
 // title and type below, a selection checkbox that shows on hover or focus (always on
-// touch screens and while anything is selected). Keys as in the `DataTable`: `j`/`k`
-// (and the arrows, up/down by a row of tiles) move, `x` selects, `enter` opens. Tiles
+// touch screens and while anything is selected). A multi-select listbox for assistive
+// tech: each tile is an option with `aria-selected`. Keys as in the `DataTable`:
+// `j`/`k` (and the arrows, up/down by a row of tiles) move, `x` or Space selects,
+// `enter` opens. Tiles
 // enter, leave and move with the layout spring (11 §5); none under reduced motion.
 
 import { cn } from "cn";
+import { CheckIcon } from "lucide-react";
 import { AnimatePresence, useReducedMotion } from "motion/react";
 import * as m from "motion/react-m";
-import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { MediaDto } from "@/api/media";
 import type { RowSelectionState } from "@/components/kit/data-table-features";
 import { MediaThumb } from "@/components/kit/media-thumb";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MOTION } from "@/design/tokens";
 import { dimensions, displayTitle, typeLabel } from "./format";
@@ -47,6 +49,7 @@ export function MediaGrid({
   const { t } = useTranslation("media");
   const reduce = useReducedMotion() ?? false;
   const list = useRef<HTMLUListElement>(null);
+  const hintId = useId();
   const [active, setActive] = useState(0);
   const current = Math.min(active, Math.max(items.length - 1, 0));
   const anySelected = Object.values(selection.state).some(Boolean);
@@ -95,6 +98,7 @@ export function MediaGrid({
         focusTile(index - columns());
         break;
       case "x":
+      case " ":
         e.preventDefault();
         toggle(item.id);
         break;
@@ -125,7 +129,17 @@ export function MediaGrid({
 
   return (
     <div data-slot="media-grid" className={cn("flex flex-col gap-4", className)}>
-      <ul ref={list} aria-label={label} className={GRID}>
+      <p id={hintId} className="sr-only">
+        {t("grid.hint")}
+      </p>
+      <ul
+        ref={list}
+        role="listbox"
+        aria-multiselectable="true"
+        aria-label={label}
+        aria-describedby={hintId}
+        className={GRID}
+      >
         <AnimatePresence initial={false}>
           {items.map((item, index) => {
             const title = displayTitle(item);
@@ -135,6 +149,8 @@ export function MediaGrid({
               <m.li
                 key={item.id}
                 data-tile=""
+                role="option"
+                aria-selected={selected}
                 data-state={selected ? "selected" : undefined}
                 tabIndex={index === current ? 0 : -1}
                 aria-label={title}
@@ -143,7 +159,7 @@ export function MediaGrid({
                 }}
                 onKeyDown={(e) => onKeyDown(e, item, index)}
                 onClick={(e) => {
-                  if ((e.target as HTMLElement).closest("[role=checkbox]")) return;
+                  if ((e.target as HTMLElement).closest("[data-slot=tile-check]")) return;
                   onOpen(item);
                 }}
                 className="group/tile relative flex min-w-0 cursor-pointer flex-col gap-2 rounded-xl p-1.5 transition-colors hover:bg-muted/60 data-[state=selected]:bg-primary/6"
@@ -168,21 +184,32 @@ export function MediaGrid({
                   )}
                 >
                   <MediaThumb media={item} size="md" fill caption={false} />
-                  <div
+                  {/* A pointer target only: assistive tech selects the option itself
+                      (`aria-selected`, Space or `x`), so no nested control. At least
+                      44 px on touch screens, where it is the way to select. */}
+                  <span
+                    aria-hidden="true"
+                    data-slot="tile-check"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggle(item.id);
+                    }}
                     className={cn(
-                      "absolute top-2 left-2 flex rounded-md bg-background/90 p-1 shadow-1 transition-opacity",
+                      "absolute top-0 left-0 flex size-10 cursor-pointer items-start justify-start p-2 transition-opacity pointer-coarse:size-14",
                       selected || anySelected
                         ? "opacity-100"
                         : "opacity-0 group-hover/tile:opacity-100 group-focus-within/tile:opacity-100 pointer-coarse:opacity-100",
                     )}
                   >
-                    <Checkbox
-                      aria-label={t("grid.select", { title })}
-                      checked={selected}
-                      onCheckedChange={() => toggle(item.id)}
-                      className="pointer-coarse:size-6"
-                    />
-                  </div>
+                    <span className="flex rounded-md bg-background/90 p-1 shadow-1">
+                      <span
+                        data-checked={selected || undefined}
+                        className="flex size-4 items-center justify-center rounded-[4px] border border-input bg-background text-primary-foreground data-checked:border-primary data-checked:bg-primary pointer-coarse:size-6"
+                      >
+                        {selected ? <CheckIcon className="size-3.5 pointer-coarse:size-4" /> : null}
+                      </span>
+                    </span>
+                  </span>
                 </div>
                 <div className="flex min-w-0 flex-col gap-0.5 px-0.5">
                   <span

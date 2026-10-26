@@ -31,7 +31,7 @@
   "grid": {
     "label": "Media files",
     "loading": "Loading media",
-    "select": "Select {{title}}"
+    "hint": "Space or X selects a file, Enter opens its details."
   },
   "columns": {
     "preview": "Preview",
@@ -114,10 +114,6 @@
     "save": "Save title and alt text",
     "trashSelection": "Move the selection to the trash"
   },
-  "author": {
-    "you": "You",
-    "other": "Another user"
-  },
   "detail": {
     "loadingTitle": "Loading file…",
     "description": "Details of a media file",
@@ -181,8 +177,17 @@
     "open": "Open",
     "openName": "Open {{name}}",
     "progress": "Upload of {{name}}",
-    "network": "The connection dropped. Check it and retry.",
-    "failed": "The upload failed.",
+    "dismiss": "Dismiss {{name}}",
+    "reason": {
+      "network": "The connection dropped. Check it and retry.",
+      "busy": "The server is busy right now. Retry in a moment.",
+      "server": "The server could not store the file. Retry, or try again later.",
+      "type": "This file type isn't supported.",
+      "size": "This file is too large to upload.",
+      "invalid": "The file was refused: check its name.",
+      "forbidden": "You are not allowed to upload files.",
+      "unknown": "The upload failed. Retry, or try again later."
+    },
     "state": {
       "queued": "Waiting",
       "retrying": "Retrying soon",

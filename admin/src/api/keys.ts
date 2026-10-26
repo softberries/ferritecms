@@ -91,8 +91,6 @@ export const qk = {
     metrics: ["system", "metrics"] as const,
     jobs: (filters: JobFilters) => ["system", "jobs", filters] as const,
   },
-  /** One user as `GET /users/{id}` answers (`manage_users` for another user). */
-  user: (id: string) => ["users", "item", id] as const,
   plugins: ["plugins"] as const,
   pluginMetrics: (name: string) => ["plugins", name, "metrics"] as const,
 } as const;
