@@ -236,8 +236,7 @@
       "published": "Published",
       "scheduled": "Scheduled for {{when}}",
       "view": "View"
-    },
-    "saveFirst": "Save the draft first; then you can publish it."
+    }
   },
   "schedule": {
     "time": "Time",
@@ -378,7 +377,11 @@
     "replace": "Replace my edits",
     "cancel": "Cancel",
     "keptDiscarded": "Kept version discarded",
-    "keptUnstored": "Your version could not be kept as an autosave; it is only on this page."
+    "keptUnstored": "Your version could not be kept as an autosave; it is only on this page.",
+    "backupBefore": "Unsaved edits from this browser,",
+    "backupHint": "They were made over your kept version and never saved. Restore them to keep working, or discard them.",
+    "restoreBackup": "Restore edits",
+    "backupDiscarded": "Edits from this browser discarded"
   },
   "leave": {
     "title": "Leave with unsaved changes?",

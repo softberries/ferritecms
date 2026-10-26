@@ -12,6 +12,7 @@ import { ApiError } from "@/api/problem";
 import type { SchemaMeDto } from "@/api/schema";
 import type { RouterContext } from "@/lib/router-context";
 import { pendingDrafts } from "@/editor/autosave";
+import { clearAllBackups } from "@/editor/local-backup";
 import { setRecentViewer } from "@/palette/recent";
 
 export type MeDto = SchemaMeDto;
@@ -135,9 +136,12 @@ export interface LogoutDeps {
 
 /**
  * Ends the session: posts the logout (a failure still signs out locally), clears the
- * query cache, the CSRF token, the Recent viewer and the editor's kept drafts, and navigates to `/login`.
+ * query cache, the CSRF token, the Recent viewer, the editor's kept drafts and the
+ * account's local backups (`editor/local-backup.ts`), and navigates to `/login`.
  */
 export async function logout({ queryClient, navigate }: LogoutDeps): Promise<void> {
+  // Whose session it was (read before the cache goes).
+  const user = queryClient.getQueryData<MeDto>(qk.me)?.id;
   try {
     await apiLogout();
   } catch {
@@ -149,6 +153,8 @@ export async function logout({ queryClient, navigate }: LogoutDeps): Promise<voi
   // Drafts kept for a sign-in after a 401 belong to this account: an explicit sign-out
   // ends them (the autosave slot on the server still holds what reached it).
   pendingDrafts.clear();
+  // Unsaved edits kept in this browser are this account's: they go with the session.
+  if (user !== undefined) clearAllBackups(user);
   queryClient.clear();
   cacheOwners.delete(queryClient);
   await navigate({ to: "/login", replace: true, state: { authNotice: "signed-out" } });

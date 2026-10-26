@@ -4,7 +4,9 @@
 // from an older version says the item changed since; saving it goes through the
 // conflict dialog. After Take theirs the banner offers the user's own version, kept in
 // the slot, back (Restore) or away (Discard). While it is kept, new edits are not
-// autosaved over it (the banner says so); restoring over new edits asks once.
+// autosaved over it (the banner says so); restoring over new edits asks once. Those
+// edits are backed up in this browser (`local-backup.ts`); after a crash the screen
+// offers that backup as a second choice ("Unsaved edits from this browser, <time>").
 
 import { HistoryIcon } from "lucide-react";
 import { useState } from "react";
@@ -30,6 +32,14 @@ export type RestoreBannerProps =
       edited: boolean;
       /** The slot holds it (false: writing it back failed, it is on this page only). */
       stored: boolean;
+      busy: boolean;
+      onRestore: () => void;
+      onDiscard: () => void;
+    }
+  | {
+      /** This browser's backup of edits made over a kept copy (offered on opening). */
+      mode: "backup";
+      at: string;
       busy: boolean;
       onRestore: () => void;
       onDiscard: () => void;
@@ -68,6 +78,13 @@ export function RestoreBanner(props: RestoreBannerProps) {
                     : t("restore.safe")}
               </p>
             </>
+          ) : props.mode === "backup" ? (
+            <>
+              <p className="font-medium text-foreground">
+                {t("restore.backupBefore")} <RelativeTime at={props.at} />
+              </p>
+              <p className="text-muted-foreground">{t("restore.backupHint")}</p>
+            </>
           ) : (
             <>
               <p className="font-medium text-foreground">
@@ -97,6 +114,16 @@ export function RestoreBanner(props: RestoreBannerProps) {
             }}
           >
             {replacing ? t("restore.replace") : t("restore.restore")}
+          </Button>
+        ) : props.mode === "backup" ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={props.busy}
+            onClick={props.onRestore}
+          >
+            {t("restore.restoreBackup")}
           </Button>
         ) : null}
         {replacing ? (

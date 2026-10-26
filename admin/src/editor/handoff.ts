@@ -17,6 +17,11 @@ export interface Handoff {
   saved: { title: string; body: string };
   /** The panel members as they were (edits made while the first save was in flight). */
   meta: MetaDraft;
+  /**
+   * `mod+shift+p` was pressed on `/new` before the first save moved the item to `/$id`:
+   * the publish dialog opens there (M2b-1 exit finding; the key press is not lost).
+   */
+  openPublishDialog: boolean;
 }
 
 let pendingHandoff: Handoff | null = null;

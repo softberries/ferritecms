@@ -8,7 +8,10 @@
 // item, the screen opens with it and the restore banner. A draft kept over a sign-in
 // (`pendingDrafts`, after a 401) wins over the slot: it is newer, and it is written to
 // the slot as the screen opens. Discard, Take theirs, Restore and a revision restore
-// (Task 17) remount the screen with a new starting point (`onReopen`).
+// (Task 17) remount the screen with a new starting point (`onReopen`). The first start
+// also reads this browser's local backup of the item (edits made over a kept copy that
+// never reached the server, `editor/local-backup.ts`); the screen offers it when it
+// differs from both the item and the slot.
 
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
@@ -28,6 +31,7 @@ import {
 import { EditorScreen, type Reopen, type RevisionNotice } from "@/editor/editor";
 import type { RestoreSource } from "@/editor/editor-state";
 import { clearHandoff, peekHandoff } from "@/editor/handoff";
+import { type Backup, readBackup } from "@/editor/local-backup";
 
 const NOT_EDITED = new Set(["media"]);
 
@@ -85,6 +89,8 @@ interface Start {
   item: SchemaContentDto;
   restore: RestoreSource | null;
   kept: Draft | null;
+  /** This browser's backup of the item (the first start only). */
+  backup: Backup | null;
   /** A revision restore remounted the screen (its toast, with Undo). */
   revision: RevisionNotice | null;
   /** Bumped on every reopen: the key that remounts the screen. */
@@ -113,7 +119,8 @@ function ItemEditor() {
       : data.autosave
         ? { draft: draftOfAutosave(data.autosave), at: data.autosave.saved_at }
         : null;
-    return { item: data.item, restore, kept: null, revision: null, epoch: 0, from: data };
+    const backup = userId === undefined ? null : readBackup({ item: id, user: userId });
+    return { item: data.item, restore, kept: null, backup, revision: null, epoch: 0, from: data };
   }, [data, userId]);
   const start = reopened?.from === data ? reopened : initial;
   const onReopen = (next: Reopen) => {
@@ -122,6 +129,7 @@ function ItemEditor() {
       item: next.item,
       restore: next.restore ?? null,
       kept: next.kept ?? null,
+      backup: null,
       revision: next.revision ?? null,
       epoch: start.epoch + 1,
       from: data,
@@ -161,6 +169,7 @@ function ItemScreen({
       handoff={handoff}
       restore={start.restore}
       kept={start.kept}
+      backup={start.backup}
       revision={start.revision}
       onReopen={onReopen}
     />

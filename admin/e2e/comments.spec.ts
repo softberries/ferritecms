@@ -414,8 +414,9 @@ test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
   await expect(page.getByText("Comment deleted", { exact: true })).toBeVisible();
   await expect(queue(page).getByText("Trash is empty")).toBeVisible();
 
-  // An item without comments: the empty Pending tab.
-  await openQueue(page, empty, undefined, "one item");
+  // An item without comments: the empty Pending tab; the chip still names the item
+  // (`GET /content/refs`, M2b-2 Task 14).
+  await openQueue(page, empty, undefined, empty.title);
   await expect(queue(page).getByText("Nothing waits for moderation")).toBeVisible();
   await snap(page, "comments-empty-pending");
   await expectAccessible(page);

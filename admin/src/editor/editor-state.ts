@@ -84,6 +84,7 @@ import {
   valuesOf,
 } from "./fields/fields-model";
 import type { Handoff } from "./handoff";
+import { type Backup, type BackupKey, clearBackup, writeBackup } from "./local-backup";
 import { ImageUploads } from "./insert-image";
 import { displayBody, editorExtensions, validateBody } from "./schema";
 
@@ -238,6 +239,16 @@ export interface EditorDocumentOptions {
    */
   kept?: Draft | null;
   /**
+   * Whose screen it is (`me.id`): the key of the local backup (`local-backup.ts`) that
+   * holds new edits while a kept copy occupies the slot. `null`: no backup.
+   */
+  backupUser?: string | null;
+  /**
+   * This browser's backup of the item as found when the screen opened: offered (as
+   * `backup`) when it differs from both the item and the slot, dropped when it does not.
+   */
+  backup?: Backup | null;
+  /**
    * The type's field schema (`null`: none, the fields are kept as stored). Read when a
    * save starts, so a refreshed schema applies from the next save on.
    */
@@ -260,6 +271,12 @@ export interface RestoreSource {
    */
   flush?: boolean;
   onStored?: () => void;
+  /**
+   * This browser's backup, opened under a kept copy (`kept`): it is in neither the slot
+   * nor the item, so it is no "restored" draft (the kept banner shows) and the local
+   * backup goes on holding it.
+   */
+  local?: boolean;
 }
 
 /** What the restore banner says about the draft the screen opened with. */
@@ -365,6 +382,10 @@ export interface EditorDocument {
   storeKept: () => Promise<boolean>;
   /** Deletes the kept copy; the working draft is autosaved from then on. */
   discardKept: () => Promise<void>;
+  /** This browser's backup when it differs from the item and the slot (offered), else `null`. */
+  backup: Backup | null;
+  /** Deletes the local backup and stops offering it. */
+  dropBackup: () => void;
   /**
    * Saves title and body: `POST` for a new item, else `PATCH` with `If-Match`. Resolves
    * to the saved item (its `version` is the new ETag), the current one when nothing
@@ -615,7 +636,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   );
   const [saveState, setSaveState] = useState<SaveStateValue>(() => (dirty ? "dirty" : "saved"));
   const [restored, setRestored] = useState<Restored | null>(() =>
-    restoring && dirty
+    restoring && dirty && !restoring.local
       ? {
           at: restoring.at,
           stale: opts.item !== null && restoring.draft.base_version < opts.item.version,
@@ -664,14 +685,16 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   const [autoState, setAutoState] = useState<AutosaveState>("saved");
   // A draft restored from the slot is already there.
   const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(() =>
-    restoring && !restoring.flush ? new Date(restoring.at) : null,
+    restoring && !restoring.flush && !restoring.local ? new Date(restoring.at) : null,
   );
   const itemId = opts.item?.id ?? null;
   const autosaves = itemId !== null && initialReadOnly === null;
   // A kept draft that differs from the item goes to the slot at once; one that does not
   // is done with, and a slot that equals the item is removed quietly (no banner).
   const [restoreFlush] = useState(() => (restoring?.flush && restored ? restoring : null));
-  const [restoreDone] = useState(() => (restoring && !restored ? restoring : null));
+  const [restoreDone] = useState(() =>
+    restoring && !restored && !restoring.local ? restoring : null,
+  );
   useEffect(() => {
     if (!restoreDone) return;
     if (restoreDone.flush) restoreDone.onStored?.();
@@ -736,12 +759,67 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     };
   }, [autosaves, itemId, type, draftNow, restoreFlush]);
 
-  /** A change of the draft: the slot follows it (never on a read-only screen). */
-  const touch = useCallback(() => {
-    if (readOnlyRef.current === null && keptRef.current === null) {
-      autosaver.current?.markDirty(draftNow);
+  // --- Local backup (R13, P40) ----------------------------------------------------
+
+  const backupUser = opts.backupUser ?? null;
+  const backupKey = useMemo<BackupKey | null>(
+    () => (itemId !== null && backupUser !== null ? { item: itemId, user: backupUser } : null),
+    [itemId, backupUser],
+  );
+  // The backup found on opening: offered only when it is neither the item nor the slot
+  // (what the screen restored, or the kept copy) and this screen may edit it.
+  const [backupCheck] = useState(() => {
+    const b = opts.backup ?? null;
+    if (!b || handoff || initialReadOnly !== null || !validateBody(b.draft.body).ok) {
+      return { offered: null, redundant: false };
     }
-  }, [draftNow]);
+    const shape = (d: Draft) => ({
+      title: d.title,
+      body: normalizedBody(editor, d.body),
+      meta: metaOfDraft(d, opts.item),
+    });
+    const mine = shape(b.draft);
+    const same = (other: { title: string; body: string; meta: MetaDraft }) =>
+      other.title === mine.title &&
+      other.body === mine.body &&
+      Object.keys(metaChanges(other.meta, mine.meta)).length === 0 &&
+      Object.keys(metaChanges(mine.meta, other.meta)).length === 0;
+    const slots = [opts.restore?.draft, opts.kept].flatMap((d) => (d ? [shape(d)] : []));
+    const item = {
+      title: opts.item?.title ?? "",
+      body: normalizedBody(editor, storedBody),
+      meta: metaOf(opts.item),
+    };
+    const redundant = same(item) || slots.some(same);
+    return { offered: redundant ? null : b, redundant };
+  });
+  const [backup, setBackupState] = useState<Backup | null>(backupCheck.offered);
+  const backupRef = useRef(backup);
+  const setBackup = useCallback((b: Backup | null) => {
+    backupRef.current = b;
+    setBackupState(b);
+  }, []);
+  useEffect(() => {
+    // Nothing in it that the item or the slot does not hold already.
+    if (backupCheck.redundant && backupKey) clearBackup(backupKey);
+  }, [backupCheck, backupKey]);
+  const dropBackup = useCallback(() => {
+    if (backupKey) clearBackup(backupKey);
+    setBackup(null);
+  }, [backupKey, setBackup]);
+
+  /**
+   * A change of the draft: the slot follows it (never on a read-only screen); while a
+   * kept copy holds the slot, the local backup does (cleared when nothing is unsaved).
+   */
+  const touch = useCallback(() => {
+    if (readOnlyRef.current !== null) return;
+    if (keptRef.current === null) autosaver.current?.markDirty(draftNow);
+    else if (backupKey) {
+      if (isDirtyNow()) writeBackup(backupKey, draftNow());
+      else clearBackup(backupKey);
+    }
+  }, [draftNow, backupKey, isDirtyNow]);
 
   const recompute = useCallback(() => {
     const isDirty = isDirtyNow();
@@ -951,8 +1029,10 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
           setSaveState(still ? "saved" : "dirty");
           // The server deleted the slot: nothing to write, except edits made meanwhile
           // (now relative to the new version). A kept copy goes back at once (still
-          // held, so nothing can come between).
+          // held, so nothing can come between). The working draft's local backup is
+          // saved now too (one still on offer is another draft: it stays).
           autosaver.current?.markClean();
+          if (backupKey && backupRef.current === null) clearBackup(backupKey);
           const keptCopy = keptRef.current;
           if (keptCopy && current) {
             try {
@@ -984,6 +1064,8 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
                   : null,
               saved: { title: sentTitle, body: sentBody },
               meta: metaRef.current,
+              // The screen sets it when the publish dialog was asked for meanwhile.
+              openPublishDialog: false,
             });
           }
           return next;
@@ -1018,7 +1100,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
       inflight.current = p;
       return p;
     },
-    [editor, type, adopt, fail, isDirtyNow, touch, queryClient],
+    [editor, type, adopt, fail, isDirtyNow, touch, queryClient, backupKey],
   );
 
   /** A save waits for a transition in flight, then saves what is still unsaved. */
@@ -1122,6 +1204,9 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
 
   const discard = useCallback(async (): Promise<void> => {
     const a = autosaver.current;
+    // The edits go: so does their local backup (unless it is still on offer, a choice of
+    // its own with its own Discard: then it stays for the next visit).
+    if (backupKey && backupRef.current === null) clearBackup(backupKey);
     if (itemId === null || keptRef.current !== null) {
       // No slot (a new item), or the slot holds the kept copy, not these edits: it
       // stays (only its own Discard removes it). The edits are dropped with the screen.
@@ -1140,7 +1225,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     } finally {
       release();
     }
-  }, [itemId, type]);
+  }, [itemId, type, backupKey]);
 
   const storeKept = useCallback(async (): Promise<boolean> => {
     const copy = keptRef.current;
@@ -1172,9 +1257,10 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     } finally {
       release();
     }
-    // The slot is free: the working draft goes there from now on.
+    // The slot is free: the working draft goes there from now on (not to the backup).
+    if (backupKey) clearBackup(backupKey);
     if (isDirtyNow()) touch();
-  }, [itemId, type, setKept, isDirtyNow, touch]);
+  }, [itemId, type, setKept, isDirtyNow, touch, backupKey]);
 
   /** The editing lock of a restore: the body and title are read-only while it is on. */
   const lockEditing = useCallback(
@@ -1233,6 +1319,8 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
         // must not go back there (not by the timer, not when the screen goes).
         a?.markClean();
         a?.dispose();
+        // The working draft (and so its local backup) is replaced by the revision.
+        if (backupKey && backupRef.current === null) clearBackup(backupKey);
         baseVersion.current = next.version;
         const keptCopy = keptRef.current;
         if (keptCopy) {
@@ -1255,7 +1343,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
         release();
       }
     },
-    [type, adopt, fail, lock, lockEditing],
+    [type, adopt, fail, lock, lockEditing, backupKey],
   );
 
   // The indicator: an explicit save in flight or failed comes first; then, with
@@ -1313,6 +1401,8 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     keptUnstored,
     storeKept,
     discardKept,
+    backup,
+    dropBackup,
     save,
     transition,
     adopt,

@@ -86,6 +86,7 @@ import { FieldsSection } from "./fields/fields-section";
 import { CARD_THRESHOLD, fieldsFor, fieldsPlacement } from "./fields/fields-model";
 import { pickAndInsertImage, useImageDrops } from "./insert-image";
 import { LeaveDialog } from "./leave-dialog";
+import type { Backup } from "./local-backup";
 import { useLeaveGuard } from "./leave-guard";
 import { RestoreBanner } from "./restore-banner";
 import { RestoreConfirmDialog, RevisionsDrawer } from "./revisions/revisions-drawer";
@@ -146,6 +147,8 @@ export interface EditorScreenProps {
   restore?: RestoreSource | null;
   /** After Take theirs: the user's version, kept in the slot. */
   kept?: Draft | null;
+  /** This browser's backup of the item, found when the screen opened (offered if it differs). */
+  backup?: Backup | null;
   /** After a new item's first save (the route moves to its `/$id`). */
   onCreated?: (item: ContentDto, handoff: Handoff) => void;
   /** Remounts the screen with another starting point (see `Reopen`). */
@@ -161,6 +164,7 @@ export function EditorScreen({
   handoff,
   restore,
   kept: keptInitially,
+  backup,
   onCreated,
   onReopen,
   revision,
@@ -168,7 +172,12 @@ export function EditorScreen({
   const { t } = useTranslation("editor");
   const queryClient = useQueryClient();
   const [conflict, setConflict] = useState<OpenConflict | null>(null);
-  const [publishMode, setPublishMode] = useState<PublishMode | null>(null);
+  // A hand-over from `/new` whose publish dialog was asked for opens with it.
+  const [publishMode, setPublishMode] = useState<PublishMode | null>(() =>
+    handoff?.openPublishDialog ? "now" : null,
+  );
+  // `mod+shift+p` on a new item: its first save runs and the dialog opens on `/$id`.
+  const publishAfterCreate = useRef(false);
   const [revisionsOpen, setRevisionsOpen] = useState(false);
   const types = useQuery(typesQuery);
   const typeDto = types.data?.find((ty) => ty.name === type);
@@ -215,11 +224,18 @@ export function EditorScreen({
     handoff: handoff ?? null,
     restore: restore ?? null,
     kept: keptInitially ?? null,
+    backupUser: queryClient.getQueryData<MeDto>(qk.me)?.id ?? null,
+    backup: backup ?? null,
     placeholder: t("body.placeholder"),
     bodyLabel: t("body.label"),
     fieldDefs,
     onInvalid: showInvalid,
-    ...(onCreated ? { onCreated } : {}),
+    ...(onCreated
+      ? {
+          onCreated: (created: ContentDto, h: Handoff) =>
+            onCreated(created, { ...h, openPublishDialog: publishAfterCreate.current }),
+        }
+      : {}),
     onConflict: (e, op, context) => {
       // The user's text stays in the editor whatever happens next (Review Focus 3).
       const then = context.then ?? (op === "save" ? undefined : op);
@@ -311,9 +327,16 @@ export function EditorScreen({
       (canPublish || (doc.item === null && doc.readOnly === null)) &&
       document.querySelector('[role="dialog"]') === null,
     run: () => {
-      // A new item has no `allowed` yet: it is saved as a draft first.
-      if (canPublish) setPublishMode("now");
-      else toast.info(t("publish.saveFirst"), { id: "editor-transition" });
+      if (canPublish) {
+        setPublishMode("now");
+        return;
+      }
+      // A new item has no `allowed` yet: it is saved as a draft first (or the save in
+      // flight is joined), and the dialog opens on its `/$id` screen.
+      publishAfterCreate.current = true;
+      void doc.save().then((created) => {
+        if (!created) publishAfterCreate.current = false;
+      });
     },
   });
   useShortcut({
@@ -605,12 +628,60 @@ export function EditorScreen({
         onRestore={() => {
           const copy = doc.kept;
           // The slot already holds it, but written again: the reopened screen then
-          // knows the slot holds exactly what it shows.
-          if (doc.item && copy)
+          // knows the slot holds exactly what it shows. The edits it replaces go, and
+          // with them their local backup.
+          if (doc.item && copy) {
+            doc.dropBackup();
             onReopen?.({ item: doc.item, restore: { draft: copy, at: keptAt, flush: true } });
+          }
         }}
         onDiscard={() => {
           if (doc.kept) void discardKept(doc.kept);
+        }}
+      />
+    ) : null;
+
+  /**
+   * This browser's backup brings back edits made over a kept copy: what the slot holds
+   * stays kept (written there first when it is this screen's working draft) and the
+   * backup becomes the working draft, as it was before the page went away.
+   */
+  const restoreBackup = async (b: Backup) => {
+    if (!doc.item) return;
+    setBannerBusy(true);
+    try {
+      const slot = doc.kept ?? (doc.isDirtyNow() ? doc.draft() : null);
+      if (slot && !doc.kept) await doc.keepInSlot(slot);
+      onReopen?.(
+        slot
+          ? { item: doc.item, kept: slot, restore: { draft: b.draft, at: b.saved_at, local: true } }
+          : {
+              item: doc.item,
+              // Written to the slot as the screen opens; then the backup is not needed.
+              restore: { draft: b.draft, at: b.saved_at, flush: true, onStored: doc.dropBackup },
+            },
+      );
+    } catch (e) {
+      // A lost session was handed on by `keepInSlot` (the draft is kept for the sign-in).
+      if (!isProblem(e, "unauthenticated") && !isProblem(e, "password-reset-required")) {
+        toast.error(t("restore.undoFailed"), { id: "editor-restore" });
+      }
+    } finally {
+      setBannerBusy(false);
+    }
+  };
+  const backupBanner =
+    doc.backup && doc.item && doc.readOnly === null ? (
+      <RestoreBanner
+        mode="backup"
+        at={doc.backup.saved_at}
+        busy={bannerBusy}
+        onRestore={() => {
+          if (doc.backup) void restoreBackup(doc.backup);
+        }}
+        onDiscard={() => {
+          doc.dropBackup();
+          toast.success(t("restore.backupDiscarded"), { id: "editor-restore" });
         }}
       />
     ) : null;
@@ -645,7 +716,14 @@ export function EditorScreen({
             doc={doc}
             typeLabel={typeLabel}
             focusMode={focusMode}
-            banner={banner}
+            banner={
+              banner || backupBanner ? (
+                <>
+                  {banner}
+                  {backupBanner}
+                </>
+              ) : null
+            }
             fieldsCard={placement === "card" && !focusMode}
           />
         </div>

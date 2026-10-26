@@ -20,7 +20,8 @@ const SPEC = 16;
 const title = (page: Page) => page.getByRole("textbox", { name: "Title", exact: true });
 const body = (page: Page) => page.getByRole("textbox", { name: "Body" });
 const indicator = (page: Page) => page.locator("[data-slot=editor-bar] [data-slot=save-state]");
-const banner = (page: Page) => page.locator("[data-slot=restore-banner]");
+/** The restore banner (the local backup's offer, `editor-followups.spec.ts`, aside). */
+const banner = (page: Page) => page.locator("[data-slot=restore-banner]:not([data-mode=backup])");
 const conflict = (page: Page) => page.locator("[data-slot=conflict-dialog]");
 const leaveDialog = (page: Page) => page.locator("[data-slot=leave-dialog]");
 
@@ -248,6 +249,8 @@ test.describe("kept_copy_survives_new_edits", () => {
     expect(prompts).toEqual(["beforeunload"]);
     await expect(banner(b)).toHaveAttribute("data-mode", "restored");
     await expect(body(b)).toContainText(first.mine);
+    // The new edits were backed up in this browser (M2b-2 Task 14): offered beside it.
+    await expect(b.locator("[data-slot=restore-banner][data-mode=backup]")).toBeVisible();
     await banner(b).getByRole("button", { name: "Discard" }).click();
     await expect(banner(b)).toHaveCount(0);
     await editorApi.dispose();
