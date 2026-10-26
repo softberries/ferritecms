@@ -32,10 +32,14 @@ metrics; the real plugin `http` import with resolved-address SSRF checks; the UR
 allowlist, the `__Host-` session cookie, zeroized keys; term archives for custom types; the
 `test-seams` feature) are done, so M2a (the M2 backend) is complete; the exits are written
 up in `docs/superpowers/m1-exit.md`, `m15-exit.md`, `m2a1-exit.md`, `m2a2a-exit.md` and
-`m2a2b-exit.md` (each lists what was not verified). Open follow-ups stay listed in the
-roadmap. Next is M2b (admin SPA, design system first). Work top-down in
+`m2a2b-exit.md` (each lists what was not verified). M2b-1 (the admin SPA's foundation
+and writing: embedded `/admin/` with its CSP, design system (11-admin-ui), sign-in/TOTP/
+reset screens, shell, `⌘K` palette, dashboard, content list, TipTap editor with publishing,
+autosave slot, 412 conflict UI and revisions; API additions `allowed`, `author`, counts,
+`0007_autosaves`) is done too (`m2b1-exit.md`). Open follow-ups stay listed in the
+roadmap. Next is M2b-2 (media and content modelling), then M2b-3. Work top-down in
 `docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/` (M2a-2a:
-`m2a2.md`, M2a-2b: `m2a2b.md`).
+`m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`).
 
 Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers)
 -> `ferrite-http` (public site, router, head, previews and logged-in requests, plugin
@@ -53,10 +57,14 @@ prune jobs) -> `ferrite-store` (traits); `ferrite-core` -> `ferrite-store` (trai
 `ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite);
 `ferrite-domain` (types), `ferrite-config`, `ferrite-sdk` (guest SDK). Starter theme:
 `themes/blog` (embedded). Test plugins: `plugins/examples/` (own workspace, built for
-`wasm32-wasip2`). Not built yet: the admin SPA (M2b), import-wp (M3) (`docs/design/01-architecture.md` §1; API status per
-endpoint in 07 §1).
+`wasm32-wasip2`). Admin SPA: `admin/` (pnpm, Vite + React + TS; `pnpm build` writes
+`admin/dist/`, which `ferrite-http`'s `admin` module embeds; without it the binary serves a
+placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: the rest of
+the admin screens (M2b-2, M2b-3), import-wp (M3) (`docs/design/01-architecture.md` §1; API
+status per endpoint in 07 §1, admin status per screen in 07 §3).
 
-Run a site locally:
+Run a site locally: build the admin first (`pnpm -C admin install && pnpm -C admin build`;
+needs Node >= 24.18 and pnpm 10.28.2; skip it for the placeholder page), then
 `cargo run -p ferrite -- init --data /tmp/site --url http://localhost:8080` (for a solo site
 it also creates the site key `<data>/secret.key`), then optionally
 `cargo run -p ferrite -- seed demo --data /tmp/site` (sample content), then an account:
@@ -65,7 +73,9 @@ it also creates the site key `<data>/secret.key`), then optionally
 reads one from stdin instead; seed's own `admin` has no password until
 `user reset-password --data /tmp/site --login admin`), then
 `cargo run -p ferrite -- serve --data /tmp/site` (prints `Listening on http://…`; stop with
-Ctrl-C/SIGTERM). The API is at `http://localhost:8080/api/v1` (spec at
+Ctrl-C/SIGTERM). The admin is at `http://localhost:8080/admin/`; for admin work run
+`pnpm -C admin dev` (Vite on `:5173`, `http://localhost:5173/admin/`, proxying `/api` and
+`/_preview` to `FERRITE_DEV_URL`, default `http://localhost:8080`). The API is at `http://localhost:8080/api/v1` (spec at
 `/api/v1/openapi.json`): log in with `POST /api/v1/auth/login` and an `Origin:
 http://localhost:8080` header, then send the cookie plus `X-CSRF-Token` on writes, or use a
 bearer token from `POST /api/v1/users/{id}/tokens`. `cargo run -p ferrite -- migrate status

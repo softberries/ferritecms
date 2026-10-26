@@ -141,12 +141,14 @@ simulated in process, P25).
 Design: [07](design/07-admin-api.md). Split three ways (M2a P1), each with its own plan:
 **M2a-1** (REST API core and auth), **M2a-2** (extensions, plugin API extras, media,
 comments, system endpoints, hardening; itself split into **M2a-2a** and **M2a-2b**, M2a-2
-P1), **M2b** (admin SPA). Rulings:
+P1), **M2b** (admin SPA; itself split into **M2b-1**, **M2b-2** and **M2b-3**, M2b P1). Rulings:
 [`docs/superpowers/rulings/m2a.md`](superpowers/rulings/m2a.md) (M2a-1),
 [`docs/superpowers/rulings/m2a2.md`](superpowers/rulings/m2a2.md) (M2a-2a),
-[`docs/superpowers/rulings/m2a2b.md`](superpowers/rulings/m2a2b.md) (M2a-2b).
+[`docs/superpowers/rulings/m2a2b.md`](superpowers/rulings/m2a2b.md) (M2a-2b),
+[`docs/superpowers/rulings/m2b.md`](superpowers/rulings/m2b.md) (M2b).
 
-**M2a (the M2 backend) is done** (M2a-1, M2a-2a, M2a-2b); next is M2b.
+**M2a (the M2 backend) is done** (M2a-1, M2a-2a, M2a-2b). **M2b-1** (admin foundation and
+writing) is done; next is M2b-2.
 
 ### M2a-1 — REST API core & auth (done)
 
@@ -203,7 +205,7 @@ Known limits (accepted in M2a-2a, see the rulings): component compile time is un
 (only two compiles per node run at once; 05 §6); no fairness inside the render budget (a
 slow early plugin can starve later ones; 05 §6); delivery of actions is at least once
 (plugins must be idempotent); `request.served` events are lost on a crash (up to 10 s);
-the reset link points at the M2b admin page, which does not exist yet (F33); a concurrent
+the reset link points at the M2b admin page (F33; built in M2b-1); a concurrent
 install of the same bytes can lose its blob (reinstall; M4 GC grace period); the route CSP's
 `form-action 'self'` was checked in Chrome only (R14).
 
@@ -254,14 +256,61 @@ listed host with one non-public address in its DNS answer is unreachable (P16).
 
 ### M2b — admin SPA
 
-- [ ] Design system first (product requirement): a state-of-the-art admin, clearly better than the WordPress admin. Study the best admin UIs (Linear, Vercel, Stripe Dashboard, Ghost) and borrow their ideas. Pick deliberate typography (a quality UI font plus a mono, self-hosted), design tokens (color, spacing, radius, shadows), dark mode, a motion language, a command palette and keyboard shortcuts. Treat design quality as a review gate, with Playwright screenshots of every screen in light and dark mode.
-- [ ] Admin SPA scaffold: Vite + React + TS, shadcn/ui, TanStack Router/Query, Motion, API client generated from `crates/ferrite-http/openapi.json` (CI drift check), embedded via `rust-embed` (`/admin/*` with SPA fallback, hashed assets `immutable`, a placeholder page when `admin/dist` is missing, the admin CSP; 07 §3).
-- [ ] Screens: dashboard (Recharts), content list + TipTap editor + revisions + autosave + the 412 conflict UI, media library, content types/field builder, taxonomies, menus, users (roles, tokens, TOTP), comments, redirects, settings, import, system (nodes, jobs, backups).
-- [ ] Themes + plugins screens incl. permission report and per-plugin metrics.
-- [ ] The password-reset page (`/admin/reset-password#token=…`, M2a-2a F33): read the token from the fragment, then strip it from the URL and history (`history.replaceState`) and never put it in a URL the page builds; send `Referrer-Policy: no-referrer` (Task 10 review).
-- [ ] Admin "Nodes" and "Jobs" screens reading `nodes` (incl. `nodes.meta` theme/plugin state) and `jobs` (deferred from M1.5).
+Three sub-plans (M2b P1), each with its own plan and exit: **M2b-1** foundation and writing,
+**M2b-2** media and content modelling, **M2b-3** administration, extensions and the M2 exit.
+Rulings: [`m2b.md`](superpowers/rulings/m2b.md). The design language is
+[11-admin-ui.md](design/11-admin-ui.md); status per screen is in 07 §3.
+
+#### M2b-1 — foundation and writing (done)
+
+Plan: [`2026-10-25-m2b1-foundation-and-writing.md`](superpowers/plans/2026-10-25-m2b1-foundation-and-writing.md).
+
+- [x] Design system first (product requirement): a state-of-the-art admin, clearly better than the WordPress admin. Study the best admin UIs (Linear, Vercel, Stripe Dashboard, Ghost) and borrow their ideas. Pick deliberate typography (a quality UI font plus a mono, self-hosted), design tokens (color, spacing, radius, shadows), dark mode, a motion language, a command palette and keyboard shortcuts. Treat design quality as a review gate, with Playwright screenshots of every screen in light and dark mode. Done in M2b-1 Tasks 7, 8, 10 and 11: Inter Variable + Geist Mono Variable (P3), the ember accent on graphite tokens with a contrast test (P4), two densities, the motion language (11 §5), the living styleguide at `/admin/_styleguide` (P12), `⌘K` palette and the keyboard map (11 §6); every UI task's contact sheet checked against 11 §8.
+- [x] Admin SPA scaffold: Vite + React + TS, shadcn/ui, TanStack Router/Query, Motion, API client generated from `crates/ferrite-http/openapi.json` (CI drift check), embedded via `rust-embed` (`/admin/*` with SPA fallback, hashed assets `immutable`, a placeholder page when `admin/dist` is missing, the admin CSP; 07 §3). Done in M2b-1 Tasks 1 and 4–6.
+- [x] The password-reset page (`/admin/reset-password#token=…`, M2a-2a F33): read the token from the fragment, then strip it from the URL and history (`history.replaceState`) and never put it in a URL the page builds; send `Referrer-Policy: no-referrer` (Task 10 review). Done in M2b-1 Tasks 1 and 9 (`no-referrer` on every admin response, P24).
+- [x] Screens, the writing part: dashboard (Recharts; M2b-1 Task 12), content list (Task 13), TipTap editor with the publishing panel, autosave, the 412 conflict UI and revisions (Tasks 14–17). API gaps closed in core: author references and allowed actions on content DTOs (P13), status counts (P14), the autosave slot `0007_autosaves` (P15).
+
+**Exit:** a fresh `init` + `seed demo` + `serve` on a release build: sign in as each role,
+write and publish a post, schedule one, resolve a conflict between two windows, restore a
+revision, reset a password through a real SMTP catcher; the workspace tests on both backends
+with and without `admin/dist`; the admin gates and E2E; the contact sheet against 11 §8;
+bundle sizes recorded; `docker build` serves `/admin/`.
+
+**Exit verified (2026-10-26):** [`docs/superpowers/m2b1-exit.md`](superpowers/m2b1-exit.md)
+(the manual flows were automated in Google Chrome; Safari is not verified).
+
+Known limits (accepted in M2b-1, see the rulings): no media, users, settings or extension
+screens yet (P1); no page-view chart until M4 (P16); the editor refuses (opens read-only) any
+node or mark the core renderer does not know, h1 included (P18, P19); a derived excerpt goes
+stale after body edits until derived again (F39); after Take theirs, new edits are guarded only
+by `beforeunload` until saved (R13); an explicit dark or light choice against the OS flashes
+one frame on load (11 §4); only Chromium is tested (P22).
+
+#### M2b-2 — media and content modelling
+
+- [ ] Screens: media library (grid/list, drag-and-drop upload with progress and `Idempotency-Key`, alt text, variants), media in the editor (featured image, inline `ferrite:media/<id>` images, picker), custom fields generated from the type schema, SEO fields, content types and the field builder, taxonomies and term trees, menus (drag-and-drop tree, `@dnd-kit`), the comment moderation queue, redirects (table, CSV import/export, hits).
 - [ ] Comment pagination (M2a-2b Task 8 review): a public thread shows the oldest 500 approved comments (`MAX_THREAD`), so later ones never appear, their `303 #comment-<id>` lands on a missing anchor and `count` reads 500; page the thread (WordPress `comment-page-N`) and give the real total.
-- [ ] Playwright E2E against a real binary on both backends; Vitest component tests; a CI admin job (`pnpm install --frozen-lockfile`, lint, test, build).
+- [ ] Follow-ups from M2b-1:
+  - [ ] Core validates that a written `body`'s root is `doc` (the API accepts any object; the editor checks it, M2b-1 Task 14 review): defence in depth.
+  - [ ] A local backup of unsaved edits while a kept copy (Take theirs) occupies the autosave slot, so a crash in that window loses nothing (R13).
+  - [ ] The fields editor: a revision that differs only by a `null`-valued custom field counts as unchanged in the revisions drawer (Task 17 review M5 residual).
+  - [ ] The publish dialog opened (`mod+shift+p`) while the first save moves a new item from `/new` to `/$id` closes with the old screen (seen in the M2b-1 exit; the shortcut is lost, nothing else).
+
+#### M2b-3 — administration, extensions and the M2 exit
+
+- [ ] Screens: own account (password, TOTP enrolment with QR code, own tokens), users (roles, tokens, TOTP), settings, themes (upload, activate, settings form from `theme.toml [settings]`), plugins (install flow with the permission report and fingerprint approval, enable/disable, delete/purge, settings with write-only secrets, per-plugin metrics charts), system (status, schema, backends, nodes reading `nodes.meta` incl. theme/plugin state, jobs with dead-job retry (deferred from M1.5), audit log). Import ships with M3, backups with M4 (P25).
+- [ ] Playwright E2E against a real binary on both backends; Vitest component tests; a CI admin job (`pnpm install --frozen-lockfile`, lint, test, build). M2b-1 built Vitest, the CI `admin` job (lint, typecheck, test, `api:check`, build, E2E; 10 §3) and Chromium E2E against the release binary (every spec on SQLite, a smoke project on Postgres; P22); open: every spec on both backends, Firefox and WebKit, Safari checked by hand until then.
+- [ ] A bundle-size budget in CI, from the M2b-1 baseline (m2b1-exit.md "Bundle sizes").
+- [ ] Follow-ups from M2b-1 (parked review minors):
+  - [ ] The restore banner's Discard Undo toast is not dismissed on unmount, so Undo after leaving rewrites the discarded draft into that item's slot (Task 16).
+  - [ ] `storeKept` may re-PUT the kept copy once more after `save()`'s own re-PUT (harmless except a needless stay on failure; Task 16).
+  - [ ] The "Restoring…" toast lingers until the revisions list returns (`editor.tsx`, Task 17).
+  - [ ] The restore lock is taken only after an in-flight save or transition finishes, so text typed in that window is replaced silently; take the lock before awaiting (`editor-state.ts`, Task 17).
+  - [ ] Tests for the focus fallback after opening the revisions drawer from the phone sheet (M6) and for the Undo-without-edit-rights message (M7) (Task 17).
+  - [ ] Verify `⌘⌥R` on a macOS browser that reports AltGraph for Option (R18).
+  - [ ] A server hint (for example a cookie read when `index.html` is served) so an explicit theme choice against the OS does not flash one frame (11 §4, Task 7).
+  - [ ] Palette: a snippet for hits that match only in the body (Task 11 review m5).
+- [ ] Docs and the M2 exit.
 
 ### Done from the earlier M2 deferred lists
 
