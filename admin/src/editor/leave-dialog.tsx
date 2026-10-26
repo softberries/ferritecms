@@ -22,6 +22,10 @@ export interface LeaveDialogProps {
   autosaved: boolean;
   /** A kept copy (after Take theirs) holds the slot: Discard leaves it there. */
   kept: boolean;
+  /** A kept copy could not be stored in the slot: it is only on this page. */
+  keptOnlyHere: boolean;
+  /** Why the last Save or Discard did not leave (the dialog stays open). */
+  error: string | null;
   /** Saves; the navigation goes on only when nothing is left unsaved. */
   onSave: () => Promise<void>;
   onDiscard: () => Promise<void>;
@@ -33,6 +37,8 @@ export function LeaveDialog({
   isNew,
   autosaved,
   kept,
+  keptOnlyHere,
+  error,
   onSave,
   onDiscard,
   onStay,
@@ -60,13 +66,20 @@ export function LeaveDialog({
           <AlertDialogDescription>
             {isNew
               ? t("leave.descriptionNew")
-              : kept
-                ? t("leave.descriptionKept")
-                : autosaved
-                  ? t("leave.descriptionAutosaved")
-                  : t("leave.description")}
+              : keptOnlyHere
+                ? t("leave.descriptionKeptOnlyHere")
+                : kept
+                  ? t("leave.descriptionKept")
+                  : autosaved
+                    ? t("leave.descriptionAutosaved")
+                    : t("leave.description")}
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {error ? (
+          <p role="alert" data-slot="leave-error" className="text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
         <AlertDialogFooter>
           <Button
             type="button"

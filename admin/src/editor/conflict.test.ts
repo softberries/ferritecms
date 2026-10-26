@@ -5,9 +5,9 @@
 
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Link } from "@tanstack/react-router";
+import { Link, useLocation } from "@tanstack/react-router";
 import { Fragment, createElement } from "react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import type { SchemaContentDto } from "@/api/schema";
@@ -515,5 +515,99 @@ describe("conflict", () => {
     await waitFor(() => expect(order).toEqual(["PATCH", "PUT"]));
     expect(puts[0]).toMatchObject({ title: "My kept title", base_version: 4 });
     expect(screen.getByText("Your version is kept as an autosave.")).toBeInTheDocument();
+  });
+
+  describe("a_kept_copy_only_on_this_page", () => {
+    beforeAll(() => {
+      globalThis.ResizeObserver ??= class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      } as unknown as typeof ResizeObserver;
+    });
+
+    /**
+     * Take-theirs state, an edit, Save: the PATCH works but the kept copy's re-PUT fails
+     * (503), so it is only on this page. Then a navigation away. `later` answers the next
+     * slot PUTs (the retries).
+     */
+    async function setup(later: "fail" | "ok") {
+      const item = itemWith({ version: 5, title: "Their title" });
+      const mine = draftOf(itemWith({ title: "My kept title" }));
+      const puts: unknown[] = [];
+      let first = true;
+      stubRoutes({
+        [`/api/v1/content/post/${ID}`]: () => json({ ...item, title: "Their title!", version: 6 }),
+        [SLOT]: async (_url, req) => {
+          puts.push(await req.json());
+          const fail = first || later === "fail";
+          first = false;
+          return fail
+            ? new Response(
+                JSON.stringify({
+                  type: "https://ferritecms.dev/problems/busy",
+                  title: "Busy",
+                  status: 503,
+                  detail: "try again",
+                }),
+                { status: 503, headers: { "Content-Type": "application/problem+json" } },
+              )
+            : json({ ...(puts.at(-1) as object), saved_at: "2026-10-01T10:06:00Z" });
+        },
+      });
+      function Where() {
+        return createElement("output", { "data-testid": "where" }, useLocation().pathname);
+      }
+      renderWithRouter(
+        createElement(
+          TooltipProvider,
+          null,
+          createElement(
+            Fragment,
+            null,
+            createElement(EditorScreen, { type: "post", typeLabel: "Posts", item, kept: mine }),
+            createElement(Link, { to: "/elsewhere" }, "Elsewhere"),
+            createElement(Where),
+          ),
+        ),
+      );
+      await screen.findByRole("textbox", { name: "Body" });
+      const user = userEvent.setup();
+      await user.type(screen.getByRole("textbox", { name: "Title" }), "!");
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await screen.findByText(/only on this page/, undefined, { timeout: 3000 });
+      expect(puts).toHaveLength(1);
+      // Clean now, but the copy is not stored: leaving asks, and says so truthfully.
+      await user.click(screen.getByRole("link", { name: "Elsewhere" }));
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog).toHaveTextContent(
+        "could not be stored as an autosave and is only on this page",
+      );
+      expect(dialog).not.toHaveTextContent("stays kept as an autosave");
+      return { user, dialog, puts, mine };
+    }
+
+    const where = () => screen.getByTestId("where").textContent;
+
+    for (const button of ["Save and leave", "Discard changes"]) {
+      test(`${button}_stays_when_the_copy_still_cannot_be_stored`, async () => {
+        const { user, dialog, puts, mine } = await setup("fail");
+        await user.click(within(dialog).getByRole("button", { name: button }));
+        await within(dialog).findByText(/still could not be stored/);
+        // Retried, and nobody left.
+        expect(puts).toHaveLength(2);
+        expect(puts[1]).toMatchObject({ title: mine.title });
+        expect(where()).not.toBe("/elsewhere");
+        expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+      });
+
+      test(`${button}_stores_the_copy_then_leaves`, async () => {
+        const { user, dialog, puts, mine } = await setup("ok");
+        await user.click(within(dialog).getByRole("button", { name: button }));
+        await waitFor(() => expect(where()).toBe("/elsewhere"));
+        expect(puts).toHaveLength(2);
+        expect(puts[1]).toMatchObject({ title: mine.title, base_version: 4 });
+      });
+    }
   });
 });

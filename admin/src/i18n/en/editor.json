@@ -365,6 +365,8 @@
     "save": "Save and leave",
     "saving": "Saving…",
     "descriptionAutosaved": "Your latest changes are kept as an autosave, but not saved to this item yet.",
-    "descriptionKept": "Discarding drops only your edits since you took the newer version. Your own version stays kept as an autosave."
+    "descriptionKept": "Discarding drops only your edits since you took the newer version. Your own version stays kept as an autosave.",
+    "descriptionKeptOnlyHere": "Your own version (kept when you took the newer one) could not be stored as an autosave and is only on this page. Save and leave, or Discard changes, stores it first.",
+    "keptFailed": "Your own version still could not be stored, so you stay on this page. Try again, or copy your text first."
   }
 }

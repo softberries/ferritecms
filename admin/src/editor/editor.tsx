@@ -284,6 +284,7 @@ export function EditorScreen({
 
   // Leaving with changes the item does not hold asks first; closing the tab only while
   // the slot does not hold them either (F38).
+  const [leaveError, setLeaveError] = useState<string | null>(null);
   const guard = useLeaveGuard((doc.dirty && doc.readOnly === null) || doc.keptUnstored, {
     unload: doc.unprotected,
   });
@@ -477,14 +478,34 @@ export function EditorScreen({
         open={guard.blocked}
         isNew={doc.item === null}
         autosaved={!doc.unprotected}
-        kept={doc.kept !== null}
-        onStay={guard.stay}
+        kept={doc.kept !== null && !doc.keptUnstored}
+        keptOnlyHere={doc.keptUnstored}
+        error={leaveError}
+        onStay={() => {
+          setLeaveError(null);
+          guard.stay();
+        }}
         onSave={async () => {
+          setLeaveError(null);
           const saved = await doc.save();
-          if (saved && !doc.isDirtyNow()) guard.leave();
-          else guard.stay();
+          if (!saved || doc.isDirtyNow()) {
+            guard.stay();
+            return;
+          }
+          // A kept copy only on this page goes to the slot before leaving, or nobody leaves.
+          if (!(await doc.storeKept())) {
+            setLeaveError(t("leave.keptFailed"));
+            return;
+          }
+          guard.leave();
         }}
         onDiscard={async () => {
+          setLeaveError(null);
+          // Discard drops the new edits, never the kept copy: it is stored first.
+          if (!(await doc.storeKept())) {
+            setLeaveError(t("leave.keptFailed"));
+            return;
+          }
           try {
             await doc.discard();
           } catch {

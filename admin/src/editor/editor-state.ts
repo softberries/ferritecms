@@ -291,6 +291,11 @@ export interface EditorDocument {
   kept: Draft | null;
   /** The kept copy is only in memory (writing it back to the slot failed). */
   keptUnstored: boolean;
+  /**
+   * Writes a kept copy that is only on this page to the slot again. `true` when the slot
+   * holds it (or there is none to store), `false` when it still failed.
+   */
+  storeKept: () => Promise<boolean>;
   /** Deletes the kept copy; the working draft is autosaved from then on. */
   discardKept: () => Promise<void>;
   /**
@@ -802,6 +807,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
           if (keptCopy && current) {
             try {
               await putAutosave(type, current.id, autosaveInput(keptCopy));
+              setKeptStored(true);
             } catch (e) {
               // Still in memory: the banner says it is only on this page, and leaving or
               // closing the tab asks first.
@@ -976,6 +982,26 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     }
   }, [itemId, type]);
 
+  const storeKept = useCallback(async (): Promise<boolean> => {
+    const copy = keptRef.current;
+    if (copy === null || keptStored || itemId === null) return true;
+    const a = autosaver.current;
+    const release = (await a?.hold()) ?? (() => undefined);
+    try {
+      await putAutosave(type, itemId, autosaveInput(copy));
+      setKeptStored(true);
+      return true;
+    } catch (e) {
+      if (needsSignIn(e)) {
+        a?.dispose();
+        latest.current.onUnauthenticated?.(e, copy);
+      }
+      return false;
+    } finally {
+      release();
+    }
+  }, [keptStored, itemId, type]);
+
   const discardKept = useCallback(async (): Promise<void> => {
     if (itemId === null) return;
     const a = autosaver.current;
@@ -1042,6 +1068,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     discard,
     kept,
     keptUnstored,
+    storeKept,
     discardKept,
     save,
     transition,

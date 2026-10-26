@@ -111,6 +111,7 @@ function fakeDoc(
     discard: vi.fn(() => Promise.resolve()),
     kept: null,
     keptUnstored: false,
+    storeKept: vi.fn(() => Promise.resolve(true)),
     discardKept: vi.fn(() => Promise.resolve()),
     save: vi.fn(() => Promise.resolve(item)),
     transition: vi.fn(() => Promise.resolve(item)),
