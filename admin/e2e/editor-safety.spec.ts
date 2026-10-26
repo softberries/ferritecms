@@ -177,6 +177,79 @@ test("conflict_keeps_my_text", async ({ as, site, backend, snap, expectAccessibl
   await adminApi.dispose();
 });
 
+/** A on `a` saves a new title, B on `b` saves over the old version and takes theirs. */
+async function takeTheirsOn(
+  a: Page,
+  b: Page,
+  editorApi: ContentApi,
+): Promise<{ item: Item; mine: string; theirs: string }> {
+  const item = await editorApi.create("post", `Kept ${uid()}`);
+  await openItem(a, "post", item.id);
+  await openItem(b, "post", item.id);
+  const theirs = `Their kept ${uid()}`;
+  await title(a).fill(theirs);
+  await a.keyboard.press(`${await mod(a)}+s`);
+  await expect(indicator(a)).toHaveAttribute("data-state", "saved");
+  const mine = `My kept paragraph ${uid()}`;
+  await typeAtEnd(b, mine);
+  await b.keyboard.press(`${await mod(b)}+s`);
+  await conflict(b).getByRole("button", { name: "Take theirs" }).click();
+  await expect(banner(b)).toHaveAttribute("data-mode", "kept");
+  return { item, mine, theirs };
+}
+
+test("kept_copy_survives_new_edits", async ({ as, site, backend, guard }) => {
+  guard.allowFailedResource(/\/api\/v1\/content\/post\/[0-9a-f-]+$/);
+  const editorApi = await ContentApi.as(backend, site.url, "editor");
+  const adminApi = await ContentApi.as(backend, site.url, "admin");
+  const a = await as("editor");
+  const b = await as("admin");
+
+  // Take theirs, edit, reload: the edits are not autosaved over the kept copy, so the
+  // reload asks first; after it the kept copy is still there and comes back.
+  const first = await takeTheirsOn(a, b, editorApi);
+  const newer = `Newer edit ${uid()}`;
+  await typeAtEnd(b, newer);
+  await expect(banner(b)).toContainText("not autosaved while your version is kept");
+  await b.waitForTimeout(12_000);
+  await expect(indicator(b)).toHaveAttribute("data-state", "dirty");
+  let slot = await slotOf(adminApi, first.item);
+  expect(bodyText(slot.json)).toContain(first.mine);
+  expect(bodyText(slot.json)).not.toContain(newer);
+  const prompts: string[] = [];
+  b.on("dialog", (d) => {
+    prompts.push(d.type());
+    void d.accept();
+  });
+  await b.reload();
+  expect(prompts).toEqual(["beforeunload"]);
+  await expect(banner(b)).toHaveAttribute("data-mode", "restored");
+  await expect(body(b)).toContainText(first.mine);
+  await banner(b).getByRole("button", { name: "Discard" }).click();
+  await expect(banner(b)).toHaveCount(0);
+
+  // Take theirs, edit, Discard the kept copy: the slot then takes the new edits, and a
+  // reload (not asked about) brings those back.
+  const second = await takeTheirsOn(a, b, editorApi);
+  const kept = `Edit to keep ${uid()}`;
+  await typeAtEnd(b, kept);
+  await banner(b).getByRole("button", { name: "Discard" }).click();
+  await expect(banner(b)).toHaveCount(0);
+  await expect(indicator(b)).toHaveAttribute("data-state", "autosaved", AUTOSAVE);
+  slot = await slotOf(adminApi, second.item);
+  expect(bodyText(slot.json)).toContain(kept);
+  expect(bodyText(slot.json)).not.toContain(second.mine);
+  await b.reload();
+  expect(prompts).toEqual(["beforeunload"]);
+  await expect(banner(b)).toHaveAttribute("data-mode", "restored");
+  await expect(body(b)).toContainText(kept);
+  await expect(title(b)).toHaveValue(second.theirs);
+  await banner(b).getByRole("button", { name: "Discard" }).click();
+  await expect(banner(b)).toHaveCount(0);
+  await editorApi.dispose();
+  await adminApi.dispose();
+});
+
 test("session_expiry_mid_edit_keeps_the_draft", async ({ browser, site, backend, guard, snap }) => {
   // An account of its own: its session is ended on purpose (F23).
   const admin = await ContentApi.as(backend, site.url, "admin");

@@ -3,9 +3,11 @@
 // calmly: "Unsaved changes from 4 minutes ago were restored", with Discard. A draft made
 // from an older version says the item changed since; saving it goes through the
 // conflict dialog. After Take theirs the banner offers the user's own version, kept in
-// the slot, back (Restore) or away (Discard).
+// the slot, back (Restore) or away (Discard). While it is kept, new edits are not
+// autosaved over it (the banner says so); restoring over new edits asks once.
 
 import { HistoryIcon } from "lucide-react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RelativeTime } from "@/components/kit/relative-time";
 import { Button } from "@/components/ui/button";
@@ -16,12 +18,16 @@ export type RestoreBannerProps =
       mode: "restored";
       at: string;
       stale: boolean;
+      /** A new item: the draft is held on this page only (there is no slot yet). */
+      inMemory?: boolean;
       busy: boolean;
       onDiscard: () => void;
     }
   | {
       /** The user took the saved version; theirs is kept in the slot. */
       mode: "kept";
+      /** The working draft has edits of its own (Restore would replace them). */
+      edited: boolean;
       busy: boolean;
       onRestore: () => void;
       onDiscard: () => void;
@@ -29,6 +35,8 @@ export type RestoreBannerProps =
 
 export function RestoreBanner(props: RestoreBannerProps) {
   const { t } = useTranslation("editor");
+  const [confirming, setConfirming] = useState(false);
+  const replacing = props.mode === "kept" && props.edited && confirming;
   return (
     <div
       data-slot="restore-banner"
@@ -51,13 +59,23 @@ export function RestoreBanner(props: RestoreBannerProps) {
                 {t("restore.restoredAfter")}
               </p>
               <p className="text-muted-foreground">
-                {props.stale ? t("restore.stale") : t("restore.safe")}
+                {props.stale
+                  ? t("restore.stale")
+                  : props.inMemory
+                    ? t("restore.safeInMemory")
+                    : t("restore.safe")}
               </p>
             </>
           ) : (
             <>
               <p className="font-medium text-foreground">{t("restore.kept")}</p>
-              <p className="text-muted-foreground">{t("restore.keptHint")}</p>
+              <p className="text-muted-foreground">
+                {replacing
+                  ? t("restore.replaceEdits")
+                  : props.edited
+                    ? t("restore.keptEdited")
+                    : t("restore.keptHint")}
+              </p>
             </>
           )}
         </div>
@@ -69,9 +87,17 @@ export function RestoreBanner(props: RestoreBannerProps) {
             variant="outline"
             size="sm"
             disabled={props.busy}
-            onClick={props.onRestore}
+            onClick={() => {
+              if (props.edited && !confirming) setConfirming(true);
+              else props.onRestore();
+            }}
           >
-            {t("restore.restore")}
+            {replacing ? t("restore.replace") : t("restore.restore")}
+          </Button>
+        ) : null}
+        {replacing ? (
+          <Button type="button" variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+            {t("restore.cancel")}
           </Button>
         ) : null}
         <Button
@@ -80,6 +106,7 @@ export function RestoreBanner(props: RestoreBannerProps) {
           size="sm"
           className="text-muted-foreground"
           disabled={props.busy}
+          hidden={replacing}
           onClick={props.onDiscard}
         >
           {t("restore.discard")}

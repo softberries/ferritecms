@@ -187,6 +187,12 @@ export interface EditorDocumentOptions {
   onUnauthenticated?: (error: ApiError, draft: Draft) => void;
   /** A draft to open with instead of the stored item (the restore banner, Task 16). */
   restore?: RestoreSource | null;
+  /**
+   * The user's own version, kept in the slot after Take theirs. While it is there the
+   * working draft is not autosaved (it would replace it); the tab asks before closing
+   * instead, and an explicit save puts the kept copy back after the `PATCH` cleared it.
+   */
+  kept?: Draft | null;
 }
 
 /** A working draft the screen opens with: the autosave slot, or one kept over a sign-in. */
@@ -271,10 +277,20 @@ export interface EditorDocument {
   keepMine: (theirs: ContentDto) => Promise<ContentDto | null>;
   /** Takes `theirs` as the new base without saving (the draft already equals it). */
   rebase: (theirs: ContentDto) => void;
-  /** Writes `draft` to the slot now (Take theirs keeps mine there). */
-  keepInSlot: (draft: Draft) => Promise<void>;
-  /** Drops the working draft's changes from the slot (the leave guard's Discard). */
+  /**
+   * Writes `draft` to the slot now (Take theirs keeps mine there). `asKept`: it is the
+   * kept copy of this screen again (the kept Discard's Undo): autosave stops.
+   */
+  keepInSlot: (draft: Draft, options?: { asKept?: boolean }) => Promise<void>;
+  /**
+   * Drops the working draft's changes from the slot for good (the leave guard's and the
+   * restore banner's Discard): nothing is written to it afterwards from this screen.
+   */
   discard: () => Promise<void>;
+  /** The kept copy in the slot (after Take theirs), else `null`. */
+  kept: Draft | null;
+  /** Deletes the kept copy; the working draft is autosaved from then on. */
+  discardKept: () => Promise<void>;
   /**
    * Saves title and body: `POST` for a new item, else `PATCH` with `If-Match`. Resolves
    * to the saved item (its `version` is the new ETag), the current one when nothing
@@ -528,6 +544,13 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   // --- Autosave ------------------------------------------------------------------
 
   const autosaver = useRef<Autosaver | null>(null);
+  // The kept copy occupies the slot: the working draft is not written over it.
+  const [kept, setKeptState] = useState<Draft | null>(opts.kept ?? null);
+  const keptRef = useRef(kept);
+  const setKept = useCallback((d: Draft | null) => {
+    keptRef.current = d;
+    setKeptState(d);
+  }, []);
   const [autoState, setAutoState] = useState<AutosaveState>("saved");
   // A draft restored from the slot is already there.
   const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(() =>
@@ -605,7 +628,9 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
 
   /** A change of the draft: the slot follows it (never on a read-only screen). */
   const touch = useCallback(() => {
-    if (readOnlyRef.current === null) autosaver.current?.markDirty(draftNow);
+    if (readOnlyRef.current === null && keptRef.current === null) {
+      autosaver.current?.markDirty(draftNow);
+    }
   }, [draftNow]);
 
   const recompute = useCallback(() => {
@@ -766,8 +791,17 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
           setDirty(!still);
           setSaveState(still ? "saved" : "dirty");
           // The server deleted the slot: nothing to write, except edits made meanwhile
-          // (now relative to the new version).
+          // (now relative to the new version). A kept copy goes back at once (still
+          // held, so nothing can come between).
           autosaver.current?.markClean();
+          const keptCopy = keptRef.current;
+          if (keptCopy && current) {
+            try {
+              await putAutosave(type, current.id, autosaveInput(keptCopy));
+            } catch {
+              // Not lost: the banner still holds it in memory and offers it.
+            }
+          }
           if (!still) touch();
           if (!current) {
             const { from, to } = editor.state.selection;
@@ -788,7 +822,14 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
           }
           return next;
         } catch (e) {
-          setSaveState(e instanceof NetworkError ? "offline" : "error");
+          // A conflict is a decision to make, not a failure: the dialog says so.
+          setSaveState(
+            e instanceof NetworkError
+              ? "offline"
+              : isProblem(e, "precondition-failed")
+                ? "dirty"
+                : "error",
+          );
           const waitingFor = then ?? waiting.current ?? undefined;
           fail(e, "save", undefined, waitingFor ? { then: waitingFor } : {});
           return null;
@@ -878,7 +919,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   );
 
   const keepInSlot = useCallback(
-    async (d: Draft): Promise<void> => {
+    async (d: Draft, options: { asKept?: boolean } = {}): Promise<void> => {
       if (itemId === null) return;
       const a = autosaver.current;
       const release = (await a?.hold()) ?? (() => undefined);
@@ -886,23 +927,47 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
         await putAutosave(type, itemId, autosaveInput(d));
         // The slot holds this draft: nothing left to write when the screen goes.
         a?.markClean();
+        if (options.asKept) setKept(d);
+      } catch (e) {
+        if (needsSignIn(e)) {
+          a?.dispose();
+          latest.current.onUnauthenticated?.(e, d);
+        }
+        throw e;
       } finally {
         release();
       }
     },
-    [itemId, type],
+    [itemId, type, setKept],
   );
 
   const discard = useCallback(async (): Promise<void> => {
-    autosaver.current?.markClean();
+    const a = autosaver.current;
+    a?.markClean();
     if (itemId === null) return;
-    const release = (await autosaver.current?.hold()) ?? (() => undefined);
+    // A running PUT lands first; none starts while the DELETE runs, and none after it.
+    const release = (await a?.hold()) ?? (() => undefined);
     try {
       await deleteAutosave(type, itemId);
     } finally {
+      a?.dispose();
       release();
     }
   }, [itemId, type]);
+
+  const discardKept = useCallback(async (): Promise<void> => {
+    if (itemId === null) return;
+    const a = autosaver.current;
+    const release = (await a?.hold()) ?? (() => undefined);
+    try {
+      await deleteAutosave(type, itemId);
+      setKept(null);
+    } finally {
+      release();
+    }
+    // The slot is free: the working draft goes there from now on.
+    if (isDirtyNow()) touch();
+  }, [itemId, type, setKept, isDirtyNow, touch]);
 
   // The indicator: an explicit save in flight or failed comes first; then, with
   // changes the item does not hold, what the slot holds.
@@ -913,7 +978,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   } else if (!dirty) {
     indicator = "saved";
     indicatorAt = savedAt;
-  } else if (!autosaves) {
+  } else if (!autosaves || kept) {
     indicator = "dirty";
   } else if (autoState === "saved") {
     indicator = autoSavedAt ? "autosaved" : "dirty";
@@ -922,7 +987,9 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     indicator = autoState;
   }
   const unprotected =
-    dirty && readOnly === null && !(autosaves && autoState === "saved" && autoSavedAt !== null);
+    dirty &&
+    readOnly === null &&
+    !(autosaves && kept === null && autoState === "saved" && autoSavedAt !== null);
 
   const initialFocus = handoff ? handoff.focus : opts.item === null ? "title" : null;
   return {
@@ -950,6 +1017,8 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     rebase,
     keepInSlot,
     discard,
+    kept,
+    discardKept,
     save,
     transition,
     adopt,

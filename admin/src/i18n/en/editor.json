@@ -326,6 +326,13 @@
       "schedule": "Scheduling was paused so nothing goes live by surprise. Schedule again once you have chosen.",
       "submit": "Submitting for review was paused. Submit again once you have chosen.",
       "unpublish": "Unpublishing was paused. Unpublish again once you have chosen."
+    },
+    "changed": "This item was saved elsewhere; you are on its latest version now.",
+    "changedThen": {
+      "publish": "This item was saved elsewhere, so it was not published. You are on its latest version now; publish again when ready.",
+      "schedule": "This item was saved elsewhere, so it was not scheduled. You are on its latest version now; schedule again when ready.",
+      "submit": "This item was saved elsewhere, so it was not submitted. You are on its latest version now; submit again when ready.",
+      "unpublish": "This item was saved elsewhere, so it was not unpublished. You are on its latest version now; try again when ready."
     }
   },
   "restore": {
@@ -340,7 +347,13 @@
     "discarded": "Restored changes discarded",
     "undo": "Undo",
     "undoFailed": "Could not bring the changes back.",
-    "discardFailed": "Could not discard the changes. They are still kept; try again."
+    "discardFailed": "Could not discard the changes. They are still kept; try again.",
+    "safeInMemory": "They are held on this page until you save; leaving asks first.",
+    "keptEdited": "Your new edits are not autosaved while your version is kept here. Save them, or discard the kept version to autosave again.",
+    "replaceEdits": "Restoring your version replaces the edits you made since. Restore anyway?",
+    "replace": "Replace my edits",
+    "cancel": "Cancel",
+    "keptDiscarded": "Kept version discarded"
   },
   "leave": {
     "title": "Leave with unsaved changes?",
@@ -349,6 +362,7 @@
     "stay": "Stay",
     "discard": "Discard changes",
     "save": "Save and leave",
-    "saving": "Saving…"
+    "saving": "Saving…",
+    "descriptionAutosaved": "Your latest changes are kept as an autosave, but not saved to this item yet."
   }
 }

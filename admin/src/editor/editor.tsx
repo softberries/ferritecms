@@ -39,7 +39,7 @@ import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { reportApiError } from "@/api/client";
 import { metaQuery } from "@/api/meta";
-import { deleteAutosave, getContent, isContentStatus, putAutosave } from "@/api/content";
+import { getContent, isContentStatus, putAutosave } from "@/api/content";
 import { qk } from "@/api/keys";
 import type { MeDto } from "@/auth/session";
 import { ApiError, isProblem } from "@/api/problem";
@@ -122,6 +122,7 @@ export function EditorScreen({
     item,
     handoff: handoff ?? null,
     restore: restore ?? null,
+    kept: keptInitially ?? null,
     placeholder: t("body.placeholder"),
     bodyLabel: t("body.label"),
     ...(onCreated ? { onCreated } : {}),
@@ -132,6 +133,17 @@ export function EditorScreen({
       setPublishMode(null);
       if (!state) {
         toast.error(t("save.conflict"), { id: "editor-save" });
+        return;
+      }
+      if (!doc.isDirtyNow()) {
+        // Nothing was changed here (a transition met someone else's save): there is
+        // no "mine" to keep. The screen moves to their version and says so.
+        toast.info(then ? t(`conflict.changedThen.${then}`) : t("conflict.changed"), {
+          id: "editor-save",
+        });
+        if (onReopen) {
+          onReopen({ item: state.theirs, ...(doc.kept ? { kept: doc.kept } : {}) });
+        } else doc.rebase(state.theirs);
         return;
       }
       if (state.fields.length === 0) {
@@ -272,13 +284,22 @@ export function EditorScreen({
   const guard = useLeaveGuard(doc.dirty && doc.readOnly === null, { unload: doc.unprotected });
 
   // The restore banner's state: the restored draft (from the document), or the user's own
-  // version kept in the slot after Take theirs.
-  const [kept, setKept] = useState<Draft | null>(keptInitially ?? null);
+  // version kept in the slot after Take theirs (`doc.kept`), and when it was kept.
+  const [keptAt] = useState(() => new Date().toISOString());
   const [bannerBusy, setBannerBusy] = useState(false);
   const [restoredShown, setRestoredShown] = useState(true);
 
-  /** Drops the slot (Discard), with Undo putting `draft` back. */
-  const discardSlot = async (draft: Draft, reopenWith: ContentDto | null) => {
+  const failedDiscard = (e: unknown) => {
+    if (isProblem(e, "unauthenticated")) reportApiError(e);
+    else toast.error(t("restore.discardFailed"), { id: "editor-restore" });
+  };
+
+  /**
+   * The restored draft's Discard: the slot goes for good (`doc.discard` holds the
+   * autosaver, lets a running PUT land first and writes nothing after), then the screen
+   * reopens on the stored item. Undo puts `draft` back.
+   */
+  const discardRestored = async (draft: Draft) => {
     if (!doc.item) {
       // A new item has no slot: back to an empty screen.
       onReopen?.({ item: null });
@@ -287,8 +308,8 @@ export function EditorScreen({
     const id = doc.item.id;
     setBannerBusy(true);
     try {
-      await deleteAutosave(type, id);
-      const fresh = reopenWith ?? (await getContent(type, id));
+      await doc.discard();
+      const fresh = await getContent(type, id);
       toast.success(t("restore.discarded"), {
         id: "editor-restore",
         action: {
@@ -303,11 +324,33 @@ export function EditorScreen({
           },
         },
       });
-      if (reopenWith) setKept(null);
-      else onReopen?.({ item: fresh });
+      onReopen?.({ item: fresh });
     } catch (e) {
-      if (isProblem(e, "unauthenticated")) reportApiError(e);
-      else toast.error(t("restore.discardFailed"), { id: "editor-restore" });
+      setRestoredShown(true);
+      failedDiscard(e);
+    } finally {
+      setBannerBusy(false);
+    }
+  };
+
+  /** The kept copy's Discard; the working draft is autosaved from then on. Undo keeps it again. */
+  const discardKept = async (copy: Draft) => {
+    setBannerBusy(true);
+    try {
+      await doc.discardKept();
+      toast.success(t("restore.keptDiscarded"), {
+        id: "editor-restore",
+        action: {
+          label: t("restore.undo"),
+          onClick: () => {
+            void doc
+              .keepInSlot(copy, { asKept: true })
+              .catch(() => toast.error(t("restore.undoFailed"), { id: "editor-restore" }));
+          },
+        },
+      });
+    } catch (e) {
+      failedDiscard(e);
     } finally {
       setBannerBusy(false);
     }
@@ -319,22 +362,27 @@ export function EditorScreen({
         mode="restored"
         at={doc.restored.at}
         stale={doc.restored.stale}
+        inMemory={doc.item === null}
         busy={bannerBusy}
         onDiscard={() => {
           setRestoredShown(false);
-          void discardSlot(doc.draft(), null);
+          void discardRestored(doc.draft());
         }}
       />
-    ) : kept && doc.item && doc.readOnly === null ? (
+    ) : doc.kept && doc.item && doc.readOnly === null ? (
       <RestoreBanner
         mode="kept"
         busy={bannerBusy}
+        edited={doc.dirty}
         onRestore={() => {
-          if (doc.item)
-            onReopen?.({ item: doc.item, restore: { draft: kept, at: new Date().toISOString() } });
+          const copy = doc.kept;
+          // The slot already holds it, but written again: the reopened screen then
+          // knows the slot holds exactly what it shows.
+          if (doc.item && copy)
+            onReopen?.({ item: doc.item, restore: { draft: copy, at: keptAt, flush: true } });
         }}
         onDiscard={() => {
-          void discardSlot(kept, doc.item);
+          if (doc.kept) void discardKept(doc.kept);
         }}
       />
     ) : null;
@@ -410,6 +458,7 @@ export function EditorScreen({
       <LeaveDialog
         open={guard.blocked}
         isNew={doc.item === null}
+        autosaved={!doc.unprotected}
         onStay={guard.stay}
         onSave={async () => {
           const saved = await doc.save();

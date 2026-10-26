@@ -109,6 +109,8 @@ function fakeDoc(
     rebase: vi.fn(),
     keepInSlot: vi.fn(() => Promise.resolve()),
     discard: vi.fn(() => Promise.resolve()),
+    kept: null,
+    discardKept: vi.fn(() => Promise.resolve()),
     save: vi.fn(() => Promise.resolve(item)),
     transition: vi.fn(() => Promise.resolve(item)),
     adopt: vi.fn(),

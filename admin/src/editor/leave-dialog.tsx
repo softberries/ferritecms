@@ -18,13 +18,22 @@ export interface LeaveDialogProps {
   open: boolean;
   /** The item is not created yet: discarding drops it entirely. */
   isNew: boolean;
+  /** The autosave slot holds the changes (said, so leaving is less of a worry). */
+  autosaved: boolean;
   /** Saves; the navigation goes on only when nothing is left unsaved. */
   onSave: () => Promise<void>;
   onDiscard: () => Promise<void>;
   onStay: () => void;
 }
 
-export function LeaveDialog({ open, isNew, onSave, onDiscard, onStay }: LeaveDialogProps) {
+export function LeaveDialog({
+  open,
+  isNew,
+  autosaved,
+  onSave,
+  onDiscard,
+  onStay,
+}: LeaveDialogProps) {
   const { t } = useTranslation("editor");
   const [busy, setBusy] = useState<"save" | "discard" | null>(null);
   const run = async (which: "save" | "discard") => {
@@ -46,7 +55,11 @@ export function LeaveDialog({ open, isNew, onSave, onDiscard, onStay }: LeaveDia
         <AlertDialogHeader>
           <AlertDialogTitle>{t("leave.title")}</AlertDialogTitle>
           <AlertDialogDescription>
-            {isNew ? t("leave.descriptionNew") : t("leave.description")}
+            {isNew
+              ? t("leave.descriptionNew")
+              : autosaved
+                ? t("leave.descriptionAutosaved")
+                : t("leave.description")}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

@@ -3,17 +3,18 @@
 // the `If-Match`, Take theirs keeping mine in the autosave slot first, and a transition
 // that waited for the refused save not running behind the user's back (Task 15 carry).
 
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import type { SchemaContentDto } from "@/api/schema";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { json, renderWithRouter, stubRoutes } from "@/test/render";
 import type { Draft } from "./autosave";
 import { canonicalBody, differingFields, onPreconditionFailed } from "./conflict";
-import { EditorScreen } from "./editor";
+import { EditorScreen, type EditorScreenProps } from "./editor";
 
 const ID = "0190f1c0-0000-7000-8000-0000000000aa";
 
@@ -94,18 +95,31 @@ function conflictResponse(current: SchemaContentDto): Response {
   );
 }
 
-function openScreen(item: SchemaContentDto) {
-  renderWithRouter(
+function openScreen(item: SchemaContentDto, extra: Partial<EditorScreenProps> = {}) {
+  const qc = renderWithRouter(
     createElement(
       TooltipProvider,
       null,
-      createElement(EditorScreen, { type: "post", typeLabel: "Posts", item }),
+      createElement(EditorScreen, { type: "post", typeLabel: "Posts", item, ...extra }),
     ),
   );
-  return screen.findByRole("textbox", { name: "Body" });
+  return screen.findByRole("textbox", { name: "Body" }).then(() => qc);
+}
+
+const SLOT = `/api/v1/content/post/${ID}/autosave`;
+
+/** Records the autosave slot's requests (`PUT` bodies, `DELETE`s). */
+function slotRoute(log: { method: string; body: unknown }[]) {
+  return async (_url: URL, req: Request) => {
+    const body: unknown = req.method === "PUT" ? await req.json() : null;
+    log.push({ method: req.method, body });
+    if (req.method === "DELETE") return new Response(null, { status: 204 });
+    return json({ ...(body as object), saved_at: "2026-10-01T10:06:00Z" });
+  };
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -191,7 +205,7 @@ describe("conflict", () => {
         return json({ ...theirs, title: "My title", version: 6 });
       },
     });
-    await openScreen(item);
+    const qc = await openScreen(item);
     const user = userEvent.setup();
     const title = screen.getByRole("textbox", { name: "Title" });
     await user.clear(title);
@@ -227,6 +241,11 @@ describe("conflict", () => {
       body: para("The first paragraph."),
     });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // Children show this item as their parent: the reference follows the save (carry c).
+    expect(qc.getQueryData(qk.content.parentRef("post", ID))).toEqual({
+      title: "My title",
+      slug: "spring-notes",
+    });
   });
 
   test("take_theirs_keeps_mine_in_the_slot", async () => {
@@ -304,5 +323,98 @@ describe("conflict", () => {
     expect(seen.map((u) => u.pathname).filter((p) => p.startsWith("/api/v1/content/"))).toEqual([
       `/api/v1/content/post/${ID}`,
     ]);
+  });
+
+  test("a_transition_412_without_edits_moves_to_their_version", async () => {
+    // Nothing typed here: someone else saved, then Publish meets the newer version. There
+    // is no "mine" to keep, so no dialog: the screen moves to theirs and says so.
+    const item = itemWith();
+    const theirs = itemWith({ version: 5, title: "Their title" });
+    const seen = stubRoutes({
+      "/api/v1/taxonomies": () => json({ items: [] }),
+      "/api/v1/meta": () => json({ api: "v1", version: "0", site_url: "http://localhost" }),
+      [`/api/v1/content/post/${ID}/publish`]: () => conflictResponse(theirs),
+    });
+    const reopen = vi.fn();
+    await openScreen(item, { onReopen: reopen });
+    const user = userEvent.setup();
+    const bar = screen.getByRole("region", { name: "Publishing" });
+    await user.click(within(bar).getByRole("button", { name: "Publish…" }));
+    const publish = await screen.findByRole("dialog");
+    await user.click(within(publish).getByRole("button", { name: "Publish now" }));
+    await waitFor(() => expect(reopen).toHaveBeenCalledWith({ item: theirs }));
+    expect(document.querySelector("[data-slot=conflict-dialog]")).toBeNull();
+    expect(seen.filter((u) => u.pathname.startsWith("/api/v1/content/")).length).toBe(1);
+  });
+
+  test("the_kept_copy_is_not_autosaved_over_until_discarded", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const item = itemWith({ version: 5, title: "Their title" });
+    const mine = draftOf(itemWith({ title: "My kept title" }));
+    const slot: { method: string; body: unknown }[] = [];
+    stubRoutes({ [SLOT]: slotRoute(slot) });
+    await openScreen(item, { kept: mine });
+    const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+    expect(screen.getByText("Your version is kept as an autosave.")).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Title" }), " edited");
+    await act(() => vi.advanceTimersByTimeAsync(25_000));
+    // The kept copy stays the slot's: nothing was written over it, and the tab would ask.
+    expect(slot).toEqual([]);
+    expect(document.querySelector("[data-slot=editor-bar] [data-slot=save-state]")).toHaveAttribute(
+      "data-state",
+      "dirty",
+    );
+    expect(screen.getByText(/not autosaved while your version is kept/)).toBeInTheDocument();
+
+    // Discard the kept copy: the slot is deleted, then the new edits go there.
+    await user.click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(slot.map((r) => r.method)).toEqual(["DELETE"]));
+    await act(() => vi.advanceTimersByTimeAsync(11_000));
+    await waitFor(() => expect(slot.map((r) => r.method)).toEqual(["DELETE", "PUT"]));
+    expect(slot[1]?.body).toMatchObject({ title: "Their title edited", base_version: 5 });
+  });
+
+  test("restoring_the_kept_copy_over_new_edits_asks_and_flushes", async () => {
+    const item = itemWith({ version: 5, title: "Their title" });
+    const mine = draftOf(itemWith({ title: "My kept title" }));
+    stubRoutes({});
+    const reopen = vi.fn();
+    await openScreen(item, { kept: mine, onReopen: reopen });
+    const user = userEvent.setup();
+    await user.type(screen.getByRole("textbox", { name: "Title" }), "!");
+    await user.click(screen.getByRole("button", { name: "Restore mine" }));
+    // Asked first: the edits since would be replaced.
+    expect(reopen).not.toHaveBeenCalled();
+    expect(screen.getByText(/replaces the edits you made since/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Replace my edits" }));
+    expect(reopen).toHaveBeenCalledWith({
+      item,
+      restore: expect.objectContaining({ draft: mine, flush: true }) as unknown,
+    });
+  });
+
+  test("discarding_a_restored_draft_sticks", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const item = itemWith();
+    const restored = draftOf(item, { title: "Restored title" });
+    const slot: { method: string; body: unknown }[] = [];
+    stubRoutes({
+      [SLOT]: slotRoute(slot),
+      [`/api/v1/content/post/${ID}`]: () => json(item),
+    });
+    const reopen = vi.fn();
+    await openScreen(item, {
+      restore: { draft: restored, at: "2026-10-01T10:04:00Z" },
+      onReopen: reopen,
+    });
+    const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+    // An edit after the restore: the autosaver has something pending.
+    await user.type(screen.getByRole("textbox", { name: "Title" }), "!");
+    await user.click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(reopen).toHaveBeenCalledWith({ item }));
+    // The screen goes (the route reopens it); nothing writes the discarded draft back.
+    cleanup();
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(slot.map((r) => r.method)).toEqual(["DELETE"]);
   });
 });
