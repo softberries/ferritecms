@@ -348,8 +348,17 @@ test("delete_menu_with_undo", async ({ as, site, backend }) => {
   const page = await as("admin");
   try {
     await openMenu(page, menu.name);
-    await header(page).getByRole("button", { name: "Delete menu" }).click();
     const dialog = page.locator("[data-slot=delete-menu-dialog]");
+    const unsaved = "Your unsaved changes to it are discarded too.";
+    await header(page).getByRole("button", { name: "Delete menu" }).click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog).not.toContainText(unsaved);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    // With unsaved edits, the confirm says they go too (final review B8).
+    await rowMenu(page, "Kept", "Remove");
+    await header(page).getByRole("button", { name: "Delete menu" }).click();
+    await expect(dialog).toContainText(unsaved);
     await dialog.getByRole("button", { name: "Delete menu" }).click();
     await expect(page).toHaveURL(/\/admin\/structure\/menus$/);
     expect(await api.getMenu(menu.name)).toBeNull();

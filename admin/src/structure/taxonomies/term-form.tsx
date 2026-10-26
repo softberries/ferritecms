@@ -13,6 +13,7 @@ import { useId, useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { cn } from "cn";
+import { reportApiError } from "@/api/client";
 import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import { type TaxonomyDto, type TermDto, createTerm } from "@/api/taxonomies";
@@ -302,6 +303,7 @@ function TermFormBody({
       void qc.invalidateQueries({ queryKey: key });
       onClose();
     } catch (err) {
+      reportApiError(err);
       const fields = err instanceof ApiError ? err.fieldErrors() : {};
       setServerErrors(fields);
       if (!fields.name && !fields.slug && !fields.parent_id) {
@@ -451,6 +453,7 @@ export function DeleteTermDialog({
       toast.success(t("taxonomies.terms.delete.deleted", { name: term.name }));
       onClose();
     } catch (err) {
+      reportApiError(err);
       toast.error(t("taxonomies.terms.delete.failed", { name: term.name }), {
         description: deleteRefusal(err, t),
       });

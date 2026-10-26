@@ -10,6 +10,7 @@ import { ListTreeIcon, MapPinIcon, PencilIcon, PlusIcon } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { reportApiError } from "@/api/client";
 import { qk } from "@/api/keys";
 import { type MenuDto, listMenus, menusQuery, putMenu } from "@/api/menus";
 import { ApiError } from "@/api/problem";
@@ -75,6 +76,7 @@ export function MenusList({ creating, setCreating }: MenusListProps) {
       void qc.invalidateQueries({ queryKey: qk.menus.list });
       toast.success(t("menus.create.created", { label }));
     } catch (e) {
+      reportApiError(e);
       // Someone made it meanwhile: open theirs.
       if (!(e instanceof MenuExists)) {
         toast.error(t("menus.create.failed"), { description: problemText(e) });
@@ -181,7 +183,7 @@ export function MenusList({ creating, setCreating }: MenusListProps) {
   }
 
   return (
-    <div data-slot="menus-screen" className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+    <div data-slot="menus-screen" className="mx-auto flex w-full max-w-6xl flex-col gap-6">
       <PageHeader
         title={
           <span className="flex items-baseline gap-2.5">
@@ -352,6 +354,7 @@ function NewMenuDialog({
       onOpenChange(false);
       onCreated(menu);
     } catch (err) {
+      reportApiError(err);
       if (err instanceof MenuExists) {
         setServerErrors({ name: t("menus.create.errors.taken", { name: shownName }) });
       } else if (err instanceof ApiError && err.status === 422) {

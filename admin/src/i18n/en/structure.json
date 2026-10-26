@@ -4,7 +4,6 @@
     "description": "The kinds of content this site has, and the fields each one's items carry.",
     "new": "New type",
     "label": "Content types",
-    "count": "{{count}} types",
     "columns": {
       "label": "Type",
       "hierarchical": "Hierarchy",
@@ -58,9 +57,7 @@
     "builtIn": "Built-in type: it cannot be deleted, but its label, archive and fields can change.",
     "save": "Save changes",
     "saving": "Saving…",
-    "saved": "Saved",
     "savedToast": "{{label}} saved",
-    "unsaved": "Unsaved changes",
     "notSaved": "Not saved",
     "invalid": "Fix the marked fields to save",
     "reloaded": "Reloaded: you now see their version",
@@ -85,7 +82,6 @@
     "count": "{{count}} / {{max}}",
     "required": "Required",
     "untitled": "New field",
-    "edit": "Edit {{label}}",
     "hasErrors": "Has problems",
     "new": "New",
     "kindChanged": "Kind changed"
@@ -402,7 +398,6 @@
       },
       "targetLoading": "Loading…",
       "targetMissing": "Missing: deleted, trashed or not readable. Remove it to save.",
-      "titleFollows": "Shows the title",
       "problems": {
         "tooMany": "A menu holds at most {{max}} items; this one has {{count}}.",
         "tooDeep": "Nested deeper than the site shows ({{max}} levels): outdent it.",
@@ -425,6 +420,7 @@
       "button": "Delete menu",
       "confirmTitle": "Delete {{label}}?",
       "confirmBody": "The menu and its items go. Undo brings them back for a few seconds.",
+      "confirmUnsaved": "Your unsaved changes to it are discarded too.",
       "confirmLocation": "The theme stops showing a menu in {{location}}.",
       "confirm": "Delete menu",
       "cancel": "Cancel",

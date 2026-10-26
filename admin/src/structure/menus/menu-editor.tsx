@@ -24,6 +24,7 @@ import { useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { reportApiError } from "@/api/client";
 import { qk } from "@/api/keys";
 import { type MenuDto, deleteMenu, getMenu, menusQuery, putMenu } from "@/api/menus";
 import { ApiError } from "@/api/problem";
@@ -186,6 +187,7 @@ export function MenuEditor({ initial }: { initial: MenuDto }) {
       void router.invalidate();
       toast.success(t("menus.editor.saved", { label: saved.label || saved.name }));
     } catch (e) {
+      reportApiError(e);
       const message = problemText(e);
       setFailure(message);
       toast.error(t("menus.editor.notSaved"), { description: message });
@@ -264,6 +266,7 @@ export function MenuEditor({ initial }: { initial: MenuDto }) {
       });
       void navigate({ to: "/structure/menus", ignoreBlocker: true });
     } catch (e) {
+      reportApiError(e);
       toast.error(t("menus.delete.failed"), { description: problemText(e) });
     } finally {
       setDeleting(false);
@@ -477,6 +480,8 @@ export function MenuEditor({ initial }: { initial: MenuDto }) {
                 ? `${t("menus.delete.confirmLocation", { location: location.label || location.name })} `
                 : null}
               {t("menus.delete.confirmBody")}
+              {/* Undo brings back the stored menu, not the edits open here. */}
+              {dirty ? ` ${t("menus.delete.confirmUnsaved")}` : null}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

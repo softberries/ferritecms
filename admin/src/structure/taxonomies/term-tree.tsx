@@ -17,6 +17,7 @@ import {
 import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { reportApiError } from "@/api/client";
 import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import type { TaxonomyDto, TermDto } from "@/api/taxonomies";
@@ -60,6 +61,7 @@ function useMoveTerm(taxonomy: string) {
           list?.map((x) => (x.id === saved.id ? saved : x)),
         );
       } catch (err) {
+        reportApiError(err);
         // Only this term goes back; other moves may have landed since.
         qc.setQueryData<TermDto[]>(key, (list) => list && withParent(list, term.id, was));
         const parent = all.find((x) => x.id === parentId)?.name ?? "";

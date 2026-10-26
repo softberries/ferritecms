@@ -22,7 +22,7 @@ function CommentsRoute() {
   const me = useMe() ?? guarded;
   if (!me.capabilities.includes("moderate_comments")) {
     return (
-      <div className="mx-auto w-full max-w-5xl">
+      <div className="mx-auto w-full max-w-6xl">
         <ForbiddenState />
       </div>
     );

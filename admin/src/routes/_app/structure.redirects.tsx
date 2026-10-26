@@ -22,7 +22,7 @@ function RedirectsRoute() {
   const me = useMe() ?? guarded;
   if (!me.capabilities.includes("manage_redirects")) {
     return (
-      <div className="mx-auto w-full max-w-4xl">
+      <div className="mx-auto w-full max-w-6xl">
         <ForbiddenState />
       </div>
     );

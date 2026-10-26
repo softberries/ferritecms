@@ -115,8 +115,6 @@ export function AppSidebar({
                       isActive={isActive(item, pathname)}
                       className={ROW}
                     >
-                      {/* Content routes arrive with Tasks 13–14; until then the
-                          not-found screen answers inside the shell. */}
                       <Link to={item.to as "/"} onClick={close}>
                         <item.icon />
                         <span>{item.label}</span>

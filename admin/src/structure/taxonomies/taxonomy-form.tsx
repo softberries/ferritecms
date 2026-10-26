@@ -12,6 +12,7 @@ import { CircleAlertIcon, Trash2Icon } from "lucide-react";
 import { useId, useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { reportApiError } from "@/api/client";
 import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import {
@@ -217,6 +218,7 @@ function NewTaxonomyForm({ onDone }: { onDone: () => void }) {
       onDone();
       void navigate({ to: "/structure/taxonomies/$name", params: { name: created.name } });
     } catch (err) {
+      reportApiError(err);
       const fields = err instanceof ApiError ? err.fieldErrors() : {};
       setServerErrors(fields);
       if (!fields.name && !fields.label && !fields.content_types) setFailure(problemText(err));
@@ -415,11 +417,13 @@ function TaxonomySettingsForm({
       }
       const saved = await patchTaxonomy(base.name, { label: label.trim(), content_types: types });
       void qc.invalidateQueries({ queryKey: qk.taxonomies });
-      // The screen's header, the crumb and the document title follow.
-      void router.invalidate();
+      // The screen's header, the crumb and the document title follow. Awaited: the
+      // dialog's next opening starts from the saved taxonomy (no false stale prompt).
+      await router.invalidate();
       toast.success(t("form.savedToast", { label: saved.label }));
       onDone();
     } catch (err) {
+      reportApiError(err);
       const fields = err instanceof ApiError ? err.fieldErrors() : {};
       setServerErrors(fields);
       if (!fields.label && !fields.content_types) setFailure(problemText(err));
@@ -439,6 +443,7 @@ function TaxonomySettingsForm({
       onDone();
       void navigate({ to: "/structure/taxonomies" });
     } catch (err) {
+      reportApiError(err);
       setDeleteError(refusal(err, t));
     } finally {
       setBusy(false);

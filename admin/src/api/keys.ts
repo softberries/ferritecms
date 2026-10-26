@@ -62,10 +62,8 @@ export const qk = {
   contentRef: (id: string) => ["content-ref", id] as const,
   /** The palette's content search (`palette/sources.ts`): one entry per query. */
   paletteSearch: (q: string, types: readonly string[]) => ["palette-search", q, types] as const,
-  type: (name: string) => ["types", name] as const,
   media: {
     all: ["media"] as const,
-    list: (filters: MediaListFilters) => ["media", "list", filters] as const,
     /** The library's pages (`useInfiniteQuery` over `next_cursor`); under `lists`. */
     infinite: (filters: MediaListFilters) => ["media", "list", "infinite", filters] as const,
     /** Every media list (refetch after an upload, an edit or a trash). */
@@ -77,14 +75,11 @@ export const qk = {
     list: (filters: CommentFilters) => ["comments", "list", filters] as const,
     /** The queue's pages (`useInfiniteQuery` over `next_cursor`); under `list`. */
     infinite: (filters: CommentFilters) => ["comments", "list", "infinite", filters] as const,
-    /** Every comment list (refetch after a moderation). */
-    lists: ["comments", "list"] as const,
     /** Counts per status, of one content item when `item` is given. */
     counts: (item?: string) => ["comments", "counts", item ?? null] as const,
   },
   menus: {
     list: ["menus"] as const,
-    item: (name: string) => ["menus", name] as const,
   },
   redirects: {
     all: ["redirects"] as const,

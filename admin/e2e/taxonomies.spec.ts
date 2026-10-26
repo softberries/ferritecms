@@ -319,6 +319,29 @@ test("term_stale_guard", async ({ as, site, backend }) => {
   }
 });
 
+test("settings_saved_then_reopened_save_without_a_stale_prompt", async ({ as, site, backend }) => {
+  // The dialog's next opening starts from the saved taxonomy (final review B7).
+  const api = await ContentApi.as(backend, site.url, "admin");
+  const tax = await newTaxonomy(api, false, "rs", "Resave");
+  const page = await as("admin");
+  const dialog = page.locator("[data-slot=taxonomy-settings-dialog]");
+  try {
+    await openTaxonomy(page, tax.name);
+    for (const label of [`First ${uid()}`, `Second ${uid()}`]) {
+      await header(page).getByRole("button", { name: "Settings" }).click();
+      await dialog.getByRole("textbox", { name: "Label" }).fill(label);
+      await dialog.getByRole("button", { name: "Save changes" }).click();
+      await expect(dialog).toHaveCount(0);
+      await expect(page.locator("[data-slot=stale-dialog]")).toHaveCount(0);
+      await expect(header(page)).toContainText(label);
+    }
+  } finally {
+    await page.context().close();
+    await api.removeTaxonomy(tax.name);
+    await api.dispose();
+  }
+});
+
 test("admin_creates_taxonomy_for_a_custom_type", async ({ as, site, backend }) => {
   const api = await ContentApi.as(backend, site.url, "admin");
   const s = short();

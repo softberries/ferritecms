@@ -25,7 +25,6 @@
     "replyToUnknown": "Reply to another comment",
     "view": "View",
     "newTab": "(opens in a new tab)",
-    "edit": "Open {{title}} in the editor",
     "showMore": "Show more",
     "showLess": "Show less",
     "address": "Address {{hash}}: a keyed hash of the commenter's IP address (the same address gives the same hash)",
@@ -114,9 +113,7 @@
   },
   "list": {
     "loadMore": "Load more",
-    "loadingMore": "Loading…",
-    "end_one": "{{formatted}} comment",
-    "end_other": "All {{formatted}} comments shown"
+    "loadingMore": "Loading…"
   },
   "shortcuts": {
     "group": "Comments queue",

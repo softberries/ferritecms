@@ -25,7 +25,7 @@ function MenusRoute() {
   const me = useMe() ?? guarded;
   if (!me.capabilities.includes("manage_menus")) {
     return (
-      <div className="mx-auto w-full max-w-4xl">
+      <div className="mx-auto w-full max-w-6xl">
         <ForbiddenState />
       </div>
     );

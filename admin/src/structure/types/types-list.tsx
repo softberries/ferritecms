@@ -10,6 +10,7 @@ import { BlocksIcon, PlusIcon } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { reportApiError } from "@/api/client";
 import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import { type ContentTypeDto, createType, typesQuery } from "@/api/types";
@@ -252,6 +253,7 @@ function NewTypeForm({ onDone }: { onDone: () => void }) {
       onDone();
       void navigate({ to: "/structure/types/$name", params: { name: created.name } });
     } catch (err) {
+      reportApiError(err);
       if (err instanceof ApiError) {
         const fields = err.fieldErrors();
         setServerErrors(fields);

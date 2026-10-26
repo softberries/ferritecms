@@ -13,6 +13,7 @@ import { CircleAlertIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { reportApiError } from "@/api/client";
 import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import { type ContentTypeDto, deleteType, getType, patchType } from "@/api/types";
@@ -194,6 +195,7 @@ export function TypeForm({ initial }: { initial: ContentTypeDto }) {
       void router.invalidate();
       toast.success(t("form.savedToast", { label: saved.label }));
     } catch (e) {
+      reportApiError(e);
       const message = e instanceof ApiError ? e.problem.detail || e.problem.title : null;
       const fieldErrors = e instanceof ApiError ? e.fieldErrors() : {};
       if (fieldErrors.label) setLabelServerError(fieldErrors.label);
@@ -214,6 +216,7 @@ export function TypeForm({ initial }: { initial: ContentTypeDto }) {
       toast.success(t("delete.deleted", { label: base.label }));
       void navigate({ to: "/structure/types", ignoreBlocker: true });
     } catch (e) {
+      reportApiError(e);
       setDeleteError(refusal(e, t));
     } finally {
       setDeleting(false);
@@ -284,6 +287,43 @@ export function TypeForm({ initial }: { initial: ContentTypeDto }) {
       />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:grid-rows-[auto_1fr]">
+        {/* The builder first in the markup: phones and the keyboard reach it first; the
+            grid places it on the left on wide screens. */}
+        <Card
+          data-slot="type-fields"
+          className="lg:col-start-1 lg:row-span-2 lg:row-start-1 lg:self-start"
+        >
+          <CardHeader>
+            <CardTitle role="heading" aria-level={2} className="text-md">
+              {t("builder.title")}
+            </CardTitle>
+            <CardDescription>{t("builder.description")}</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            {base.fields == null && rows.length === 0 ? (
+              <p className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+                {t("builder.noSchema")}
+              </p>
+            ) : null}
+            {failure ? (
+              <p
+                role="alert"
+                data-slot="save-failure"
+                className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/8 px-3 py-2 text-sm text-foreground"
+              >
+                <CircleAlertIcon
+                  aria-hidden="true"
+                  className="mt-0.5 size-4 shrink-0 text-destructive"
+                />
+                {failure}
+              </p>
+            ) : null}
+            <BuilderContext value={builder}>
+              <FieldBuilder rows={rows} onChange={setRows} depth={0} parent={null} />
+            </BuilderContext>
+          </CardContent>
+        </Card>
+
         <Card data-slot="type-settings" className="lg:col-start-2 lg:row-start-1">
           <CardHeader>
             <CardTitle role="heading" aria-level={2} className="text-md">
@@ -330,41 +370,6 @@ export function TypeForm({ initial }: { initial: ContentTypeDto }) {
                 {t("form.builtIn")}
               </p>
             ) : null}
-          </CardContent>
-        </Card>
-
-        <Card
-          data-slot="type-fields"
-          className="lg:col-start-1 lg:row-span-2 lg:row-start-1 lg:self-start"
-        >
-          <CardHeader>
-            <CardTitle role="heading" aria-level={2} className="text-md">
-              {t("builder.title")}
-            </CardTitle>
-            <CardDescription>{t("builder.description")}</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            {base.fields == null && rows.length === 0 ? (
-              <p className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
-                {t("builder.noSchema")}
-              </p>
-            ) : null}
-            {failure ? (
-              <p
-                role="alert"
-                data-slot="save-failure"
-                className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/8 px-3 py-2 text-sm text-foreground"
-              >
-                <CircleAlertIcon
-                  aria-hidden="true"
-                  className="mt-0.5 size-4 shrink-0 text-destructive"
-                />
-                {failure}
-              </p>
-            ) : null}
-            <BuilderContext value={builder}>
-              <FieldBuilder rows={rows} onChange={setRows} depth={0} parent={null} />
-            </BuilderContext>
           </CardContent>
         </Card>
 

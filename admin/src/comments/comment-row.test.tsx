@@ -75,7 +75,7 @@ describe("comment_row_test", () => {
       />,
     );
     const mail = await screen.findByRole("link", { name: "ada@example.test" });
-    expect(mail).toHaveAttribute("href", "mailto:ada@example.test");
+    expect(mail).toHaveAttribute("href", "mailto:ada%40example.test");
     const hash = screen.getByText("01234567");
     expect(hash).toHaveAttribute("title", expect.stringContaining(COMMENT.ip_hash ?? ""));
     expect(screen.getByRole("link", { name: "First post" })).toHaveAttribute(
@@ -84,6 +84,16 @@ describe("comment_row_test", () => {
     );
     expect(screen.getByRole("link", { name: /View/ })).toHaveAttribute("href", "/first-post/");
     expect(screen.getByText("Reply to Grace")).toBeVisible();
+  });
+
+  test("a commenter's address cannot add recipients or text to the e-mail", async () => {
+    const email = "ada@example.test?bcc=eve@example.test&body=Hi";
+    row({ author_email: email });
+    const mail = await screen.findByRole("link", { name: email });
+    const href = mail.getAttribute("href") ?? "";
+    expect(href).toBe(`mailto:${encodeURIComponent(email)}`);
+    // One address part: no query (`?`) and no second header (`&`).
+    expect(href).not.toMatch(/[?&]/);
   });
 
   test("no View link without a public page, and an unknown parent still says it is a reply", async () => {

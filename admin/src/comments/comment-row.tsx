@@ -67,7 +67,7 @@ export function CommentRow({
           </Badge>
         ) : null}
         <a
-          href={`mailto:${comment.author_email}`}
+          href={`mailto:${encodeURIComponent(comment.author_email)}`}
           className="max-w-full truncate font-mono text-xs text-muted-foreground hover:text-foreground hover:underline"
           title={comment.author_email}
         >

@@ -64,6 +64,7 @@ import { Button } from "@/components/ui/button";
 import { REDIRECTING } from "@/content/bulk";
 import { SelectionBar, type SelectionAction } from "@/content/bulk-bar";
 import { contentTargetQuery } from "@/content/find-item";
+import { UNDO_TOAST_MS } from "@/content/list-actions";
 import { editPath } from "@/content/list-columns";
 import { DESTRUCTIVE } from "@/lib/destructive";
 import { uiLocale } from "@/lib/locale";
@@ -97,9 +98,6 @@ const PARENT_LOOKUP_LIMIT = 200;
 function listData(results: UseQueryResult<SchemaCommentList>[]) {
   return results.map((r) => r.data);
 }
-
-/** How long the Undo toast stays (as the content list's). */
-export const UNDO_TOAST_MS = 10_000;
 
 const ICONS: Record<CommentAction, LucideIcon> = {
   approve: CheckIcon,
@@ -475,7 +473,7 @@ export function CommentsQueue({ search, setSearch }: CommentsQueueProps) {
   const pending = counts.data?.pending;
 
   return (
-    <div data-slot="comments-queue" className="mx-auto flex w-full max-w-5xl flex-col gap-5">
+    <div data-slot="comments-queue" className="mx-auto flex w-full max-w-6xl flex-col gap-5">
       <PageHeader
         title={
           <span className="flex items-baseline gap-2.5">

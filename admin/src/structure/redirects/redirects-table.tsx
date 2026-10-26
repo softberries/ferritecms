@@ -44,6 +44,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SearchField } from "@/content/filters";
+import { UNDO_TOAST_MS } from "@/content/list-actions";
 import { uiLocale } from "@/lib/locale";
 import { problemText } from "../taxonomies/terms-model";
 import { isRedirectCode } from "./codes";
@@ -52,8 +53,6 @@ import { RedirectFormDialog, type RedirectFormState } from "./redirect-form";
 
 /** Redirects a page holds. */
 const PAGE_SIZE = 50;
-/** How long the Undo toast stays (as the other lists'). */
-const UNDO_TOAST_MS = 10_000;
 
 export interface RedirectsSearch {
   q?: string;
