@@ -45,8 +45,7 @@
       "selectAll": "Select all rows",
       "selectRow": "Select row",
       "loading": "Loading",
-      "actions": "Row actions",
-      "keyboardHint": "j / k to move, x to select, Enter to open"
+      "actions": "Row actions"
     },
     "save": {
       "saved": "Saved",
