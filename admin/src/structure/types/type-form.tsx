@@ -49,7 +49,7 @@ import { FieldBuilder } from "./field-builder";
 import { FormField, SwitchRow } from "./form-field";
 import { type SchemaChange, describeChange, isEmptyChange } from "./schema-change";
 import { MAX_TYPE_LABEL, labelProblem } from "./type-rules";
-import { DESTRUCTIVE } from "../shared";
+import { DESTRUCTIVE } from "@/lib/destructive";
 
 const MODAL = '[data-slot="dialog-overlay"], [data-slot="alert-dialog-overlay"]';
 

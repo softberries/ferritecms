@@ -1,0 +1,128 @@
+{
+  "title": "Comments",
+  "description": "Approve, answer and clear out what readers write.",
+  "tabs": {
+    "label": "Comment status",
+    "pending": "Pending",
+    "approved": "Approved",
+    "spam": "Spam",
+    "trash": "Trash"
+  },
+  "filter": {
+    "label": "Only comments on",
+    "anItem": "one item",
+    "clear": "Show comments on every item",
+    "only": "Only comments on {{title}}"
+  },
+  "table": {
+    "label": "{{status}} comments",
+    "column": "Comment"
+  },
+  "row": {
+    "untitled": "Untitled",
+    "on": "On",
+    "replyTo": "Reply to {{name}}",
+    "replyToUnknown": "Reply to another comment",
+    "view": "View",
+    "newTab": "(opens in a new tab)",
+    "edit": "Open {{title}} in the editor",
+    "showMore": "Show more",
+    "showLess": "Show less",
+    "address": "Address {{hash}}: a keyed hash of the commenter's IP address (the same address gives the same hash)",
+    "account": "Account",
+    "website": "Website: {{url}}"
+  },
+  "actions": {
+    "label": "Actions for the comment by {{name}}",
+    "on": "{{action}}: comment by {{name}}",
+    "approve": "Approve",
+    "unapprove": "Unapprove",
+    "notSpam": "Not spam",
+    "restore": "Restore",
+    "spam": "Spam",
+    "trash": "Trash",
+    "reply": "Reply",
+    "approveReply": "Approve and reply",
+    "delete": "Delete permanently"
+  },
+  "toast": {
+    "approved_one": "Comment approved",
+    "approved_other": "{{count}} comments approved",
+    "pending_one": "Comment moved to Pending",
+    "pending_other": "{{count}} comments moved to Pending",
+    "spam_one": "Comment marked as spam",
+    "spam_other": "{{count}} comments marked as spam",
+    "trash_one": "Comment moved to trash",
+    "trash_other": "{{count}} comments moved to trash",
+    "undo": "Undo",
+    "undone_one": "Undone",
+    "undone_other": "Undone for {{count}} comments",
+    "deleted_one": "Comment deleted",
+    "deleted_other": "{{count}} comments deleted",
+    "replied": "Reply posted",
+    "approvedReplied": "Comment approved and reply posted"
+  },
+  "report": {
+    "title_one": "{{count}} of {{total}} comments could not be changed",
+    "title_other": "{{count}} of {{total}} comments could not be changed",
+    "gone": "It no longer exists.",
+    "network": "No answer from the server.",
+    "dismiss": "Dismiss"
+  },
+  "delete": {
+    "title_one": "Delete this comment permanently?",
+    "title_other": "Delete {{count}} comments permanently?",
+    "body_one": "The comment by {{name}} and every reply to it are removed for good. This cannot be undone.",
+    "body_other": "These {{count}} comments and every reply to them are removed for good. This cannot be undone.",
+    "confirm_one": "Delete permanently",
+    "confirm_other": "Delete {{count}} permanently",
+    "cancel": "Cancel"
+  },
+  "reply": {
+    "label": "Reply to {{name}}",
+    "placeholder": "Write a reply…",
+    "hint": "Posted under your name and shown at once.",
+    "hintApprove": "Approves the comment first, then posts your reply under your name.",
+    "send": "Post reply",
+    "cancel": "Cancel",
+    "sending": "Posting…",
+    "empty": "Write something first.",
+    "closed": "This post does not take comments now (it is not public, or comments are off).",
+    "approvedOnly": "The comment is approved, but the reply was not posted: {{detail}}"
+  },
+  "empty": {
+    "pending": {
+      "title": "Nothing waits for moderation",
+      "body": "New comments that need a look land here."
+    },
+    "approved": {
+      "title": "No approved comments",
+      "body": "Approved comments show on the site, and here."
+    },
+    "spam": {
+      "title": "No spam",
+      "body": "Comments marked as spam stay here until you delete them."
+    },
+    "trash": {
+      "title": "Trash is empty",
+      "body": "Trashed comments stay here until you delete them."
+    },
+    "filtered": {
+      "body": "Nothing with this status on this item.",
+      "action": "Show every item"
+    }
+  },
+  "list": {
+    "loadMore": "Load more",
+    "loadingMore": "Loading…",
+    "end_one": "{{formatted}} comment",
+    "end_other": "All {{formatted}} comments shown"
+  },
+  "shortcuts": {
+    "group": "Comments queue",
+    "approve": "Approve the selection or the focused comment",
+    "unapprove": "Unapprove the selection or the focused comment",
+    "spam": "Mark the selection or the focused comment as spam",
+    "trash": "Trash the selection or the focused comment"
+  }
+}

@@ -168,6 +168,7 @@ test("shortcut_sheet_lists_bindings", async ({ as, snap, expectAccessible }) => 
     "Go to Posts",
     "Go to Pages",
     "Go to Media",
+    "Go to Comments",
   ]);
   await expect(sheet.getByRole("heading", { name: "General" })).toBeVisible();
   await expect(sheet.getByRole("heading", { name: "Go to" })).toBeVisible();

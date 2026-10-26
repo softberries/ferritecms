@@ -14,6 +14,7 @@ import {
 } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { commentCountsQuery } from "@/api/comments";
 import { metaQuery } from "@/api/meta";
 import { settingsQuery } from "@/api/settings";
 import { typesQuery } from "@/api/types";
@@ -29,7 +30,7 @@ import { type ShellChrome, ShellChromeContext } from "@/shell/chrome-context";
 import { MediaPickerHost } from "@/media/media-picker";
 import { CommandPalette } from "@/palette/palette";
 import { pushRecent } from "@/palette/recent";
-import { type NavSection, navFor, navItemAt } from "@/shell/nav";
+import { type NavSection, navFor, navItemAt, withBadges } from "@/shell/nav";
 import { RouteTransition } from "@/shell/route-transition";
 import { ShortcutSheet } from "@/shell/shortcut-sheet";
 import { TopBar } from "@/shell/top-bar";
@@ -72,6 +73,21 @@ function Shell({ me }: { me: MeDto }) {
   const site = useQuery(metaQuery);
   // `t` changes with the language, so the nav relabels with it.
   const sections = useMemo(() => navFor(me, types.data ?? [], t), [me, types.data, t]);
+  // The pending comments on the Comments item, for those who moderate (the nav shows the
+  // item only to them); refreshed after every moderation (`qk.comments.all`) and each
+  // minute. Only the sidebar gets the badges: the chords, palette and Recent use
+  // `sections`, so a new count never re-registers them.
+  const canModerate = canRead && me.capabilities.includes("moderate_comments");
+  const commentCounts = useQuery({
+    ...commentCountsQuery(),
+    enabled: canModerate,
+    refetchInterval: 60_000,
+  });
+  const pendingComments = canModerate ? commentCounts.data?.pending : undefined;
+  const badged = useMemo(
+    () => withBadges(sections, { comments: pendingComments }),
+    [sections, pendingComments],
+  );
 
   const [sidebarOpen, setSidebarOpen] = useState(storedSidebarOpen);
   // The editor's focus mode: sidebar and top bar out of the way (11 §6 `mod+shift+f`).
@@ -114,7 +130,7 @@ function Shell({ me }: { me: MeDto }) {
             {t("skipToContent")}
           </a>
           <AppSidebar
-            sections={sections}
+            sections={badged}
             loading={canRead && types.isPending}
             siteTitle={settings.data?.["site.title"] || tc("app.name")}
             siteUrl={site.data?.site_url ?? null}

@@ -13,6 +13,7 @@ import {
   ImageIcon,
   LayoutDashboardIcon,
   ListTreeIcon,
+  MessageSquareIcon,
   ShapesIcon,
   TagsIcon,
   type LucideIcon,
@@ -84,6 +85,7 @@ export interface ScreenEntry {
  */
 export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
   { screen: "media", to: "/media", label: "nav.media", icon: ImageIcon },
+  { screen: "comments", to: "/comments", label: "nav.comments", icon: MessageSquareIcon },
   { screen: "types", to: "/structure/types", label: "nav.contentTypes", icon: BlocksIcon },
   { screen: "taxonomies", to: "/structure/taxonomies", label: "nav.taxonomies", icon: TagsIcon },
   { screen: "menus", to: "/structure/menus", label: "nav.menus", icon: ListTreeIcon },
@@ -172,4 +174,23 @@ export function navFor(
 export function navItemAt(sections: NavSection[], pathname: string): NavItem | undefined {
   const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
   return sections.flatMap((s) => s.items).find((item) => item.to === (path || "/"));
+}
+
+/**
+ * `sections` with a count badge on the items named in `badges` (by item id; the shell
+ * passes the pending comments as `comments`). A zero or absent count shows none.
+ */
+export function withBadges(
+  sections: NavSection[],
+  badges: Partial<Record<string, number>>,
+): NavSection[] {
+  const any = Object.values(badges).some((n) => n !== undefined && n > 0);
+  if (!any) return sections;
+  return sections.map((section) => ({
+    ...section,
+    items: section.items.map((item) => {
+      const n = badges[item.id];
+      return n !== undefined && n > 0 ? { ...item, badge: n } : item;
+    }),
+  }));
 }

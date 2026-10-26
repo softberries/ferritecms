@@ -2,7 +2,7 @@
 // a request context on a harness account's shared session, plus helpers to create a
 // content type (admin only), taxonomies, terms and items in any status, and to remove a
 // type with everything in it afterwards, so the sidebar of later screenshots stays clean;
-// and menus (read, replace, delete).
+// menus (read, replace, delete); and comments (list per item, moderate, delete).
 
 import { expect, request as apiRequest, type APIRequestContext } from "@playwright/test";
 import type { FixtureFile } from "./files";
@@ -57,6 +57,18 @@ export interface Menu {
     parent_id?: string | null;
     position?: number;
   }[];
+}
+
+/** A comment as `GET /comments` lists it (the members the specs read). */
+export interface QueuedComment {
+  id: string;
+  author_name: string;
+  author_email: string;
+  author_url: string;
+  body: string;
+  status: string;
+  parent_id?: string | null;
+  item: { id: string; type: string; title: string; permalink: string | null; status: string };
 }
 
 export class ContentApi {
@@ -360,6 +372,28 @@ export class ContentApi {
   /** Deletes menu `name` (best effort: a missing one is fine). */
   async deleteMenu(name: string): Promise<void> {
     await this.ctx.delete(`/api/v1/menus/${name}`, { headers: this.headers() });
+  }
+
+  /** The comments of item `item` in `status` (needs `moderate_comments`). */
+  async listComments(item: string, status: string): Promise<QueuedComment[]> {
+    const res = await this.ctx.get(`/api/v1/comments?item=${item}&status=${status}&limit=200`);
+    return (await this.ok<{ items: QueuedComment[] }>(res, "list comments")).items;
+  }
+
+  /** `PATCH /comments/{id}` with `status`. */
+  async moderateComment(id: string, status: string): Promise<QueuedComment> {
+    return this.ok(
+      await this.ctx.patch(`/api/v1/comments/${id}`, { headers: this.headers(), data: { status } }),
+      `moderate comment ${id}`,
+    );
+  }
+
+  /** `DELETE /comments/{id}` (spam or trash only; its replies go too). */
+  async deleteComment(id: string): Promise<void> {
+    await this.ok(
+      await this.ctx.delete(`/api/v1/comments/${id}`, { headers: this.headers() }),
+      `delete comment ${id}`,
+    );
   }
 
   async dispose(): Promise<void> {

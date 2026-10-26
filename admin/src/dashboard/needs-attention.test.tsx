@@ -139,4 +139,29 @@ describe("needs-attention", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
     expect(await screen.findByText("No dead jobs")).toBeVisible();
   });
+
+  it("pending_comments_link_to_the_queue", async () => {
+    const seen = stubRoutes({
+      "/api/v1/comments/counts": () => json({ pending: 3, approved: 9, spam: 1, trash: 0 }),
+    });
+    renderWithRouter(<NeedsAttention access={attentionAccess(["moderate_comments"])} />);
+    const card = await screen.findByRole("region", { name: "Needs attention" });
+    expect(await within(card).findByText("3 comments wait for moderation")).toBeVisible();
+    expect(within(card).getByRole("link", { name: "Moderate comments" })).toHaveAttribute(
+      "href",
+      "/admin/comments",
+    );
+    expect(within(card).getByText("1 check needs your attention.")).toBeVisible();
+    expect(seen.map((u) => `${u.pathname}${u.search}`)).toEqual(["/api/v1/comments/counts"]);
+  });
+
+  it("no_pending_comments_is_all_clear", async () => {
+    stubRoutes({
+      "/api/v1/comments/counts": () => json({ pending: 0, approved: 2, spam: 0, trash: 0 }),
+    });
+    renderWithRouter(<NeedsAttention access={attentionAccess(["moderate_comments"])} />);
+    expect(await screen.findByText("No comments wait for moderation")).toBeVisible();
+    expect(screen.getByText("All clear. Nothing is waiting for you.")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Moderate comments" })).toBeNull();
+  });
 });

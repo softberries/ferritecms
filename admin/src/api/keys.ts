@@ -73,6 +73,10 @@ export const qk = {
   comments: {
     all: ["comments"] as const,
     list: (filters: CommentFilters) => ["comments", "list", filters] as const,
+    /** The queue's pages (`useInfiniteQuery` over `next_cursor`); under `list`. */
+    infinite: (filters: CommentFilters) => ["comments", "list", "infinite", filters] as const,
+    /** Every comment list (refetch after a moderation). */
+    lists: ["comments", "list"] as const,
     /** Counts per status, of one content item when `item` is given. */
     counts: (item?: string) => ["comments", "counts", item ?? null] as const,
   },

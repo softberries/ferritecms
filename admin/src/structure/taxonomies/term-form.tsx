@@ -52,7 +52,8 @@ import { staleGuard } from "@/lib/stale-guard";
 import { FormField } from "../types/form-field";
 import { returnToRowMenu } from "./row-focus";
 import { childCount, parentChoices, problemText } from "./terms-model";
-import { DESTRUCTIVE, without } from "../shared";
+import { DESTRUCTIVE } from "@/lib/destructive";
+import { without } from "../shared";
 
 const TOP = "__top";
 

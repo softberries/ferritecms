@@ -4,12 +4,18 @@
 // panel to point at. The other filters are kept when the tab changes.
 
 import { Link } from "@tanstack/react-router";
-import { cn } from "cn";
 import { useTranslation } from "react-i18next";
 import type { SchemaContentCountsDto } from "@/api/schema";
 import { ScrollFade } from "@/components/kit/scroll-fade";
+import { TAB_LIST, tabCountClass, tabLinkClass } from "@/components/kit/tab-styles";
 import { uiLocale } from "@/lib/locale";
-import { type ListSearch, STATUS_TABS, type StatusTab, tabCount } from "./list-search";
+import {
+  type ListSearch,
+  STATUS_TABS,
+  type StatusTab,
+  parseListSearch,
+  tabCount,
+} from "./list-search";
 
 export interface StatusTabsProps {
   type: string;
@@ -24,9 +30,7 @@ export function StatusTabs({ type, search, counts }: StatusTabsProps) {
   return (
     <nav aria-label={t("tabs.label")}>
       <ScrollFade activeSelector={`[data-tab="${current}"]`} activeKey={current}>
-        {/* The rule under the tabs is an inset shadow, so the active underline covers it
-          inside the scrolling row. */}
-        <ul className="flex w-max min-w-full gap-1 shadow-[inset_0_-1px_0_var(--border)]">
+        <ul className={TAB_LIST}>
           {STATUS_TABS.map((tab) => {
             const active = tab === current;
             const count = counts ? tabCount(counts, tab) : undefined;
@@ -35,30 +39,18 @@ export function StatusTabs({ type, search, counts }: StatusTabsProps) {
                 <Link
                   to="/content/$type"
                   params={{ type }}
-                  search={(prev: ListSearch) => withStatus(prev, tab)}
+                  search={(prev: Record<string, unknown>) => withStatus(parseListSearch(prev), tab)}
                   // The router marks a link current on a partial search match, which
                   // would make All current on every tab; only the exact URL counts, and
                   // `active` (from the parsed `status`) decides `aria-current`.
                   activeOptions={{ exact: true, includeSearch: true }}
                   aria-current={active ? "page" : undefined}
                   data-tab={tab}
-                  className={cn(
-                    "relative flex h-control items-center gap-2 rounded-t-md px-2.5 text-sm font-medium whitespace-nowrap -outline-offset-2 transition-colors",
-                    "after:absolute after:inset-x-1.5 after:bottom-0 after:h-0.5 after:rounded-full after:transition-colors",
-                    active
-                      ? "text-foreground after:bg-primary"
-                      : "text-muted-foreground after:bg-transparent hover:text-foreground hover:after:bg-border",
-                  )}
+                  className={tabLinkClass(active)}
                 >
                   {t(`tabs.${tab}`)}
                   {count !== undefined ? (
-                    <span
-                      data-slot="tab-count"
-                      className={cn(
-                        "min-w-5 rounded-full px-1.5 text-center text-xs leading-5 tabular-nums",
-                        active ? "bg-primary/10 text-foreground" : "bg-muted text-muted-foreground",
-                      )}
-                    >
+                    <span data-slot="tab-count" className={tabCountClass(active)}>
                       {number.format(count)}
                     </span>
                   ) : null}

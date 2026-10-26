@@ -1,5 +1,6 @@
 // Needs attention: what waits for the actor, as a list of checks. Pending review for
-// roles with `edit_others`; for `manage_system` dead jobs, the schema verdict and theme
+// roles with `edit_others`; pending comments for `moderate_comments` (linking to the
+// queue); for `manage_system` dead jobs, the schema verdict and theme
 // fallback nodes (`GET /system/status`); for `manage_plugins` plugins disabled by
 // failures. A check the actor may not see is not requested at all, and each check
 // loads and fails on its own. System entries are plain text until M2b-3 adds their
@@ -11,6 +12,7 @@ import { CircleAlertIcon, CircleCheckIcon, RotateCwIcon, TriangleAlertIcon } fro
 import { cn } from "cn";
 import { Children, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { commentCountsQuery } from "@/api/comments";
 import { listContent } from "@/api/content";
 import { qk } from "@/api/keys";
 import { pluginsQuery } from "@/api/plugins";
@@ -44,6 +46,7 @@ export function NeedsAttention({
       enabled: access.pending,
     })),
   });
+  const comments = useQuery({ ...commentCountsQuery(), enabled: access.comments });
   const jobs = useQuery({ ...jobsQuery(DEAD), enabled: access.system });
   const status = useQuery({ ...systemStatusQuery, enabled: access.system });
   const plugins = useQuery({ ...pluginsQuery, enabled: access.plugins });
@@ -54,6 +57,7 @@ export function NeedsAttention({
         CARD_LIMIT,
       )
     : null;
+  const pendingComments = comments.data?.pending ?? 0;
   const disabled = plugins.data?.filter((p) => !p.enabled && p.disabled_reason) ?? null;
   const verdict = status.data?.schema.verdict;
   const fallback = status.data?.theme.fallback_nodes ?? null;
@@ -64,6 +68,7 @@ export function NeedsAttention({
   // How many checks need attention (not entries), for the header line.
   const open = [
     (pendingItems?.length ?? 0) > 0,
+    pendingComments > 0,
     (jobs.data?.items.length ?? 0) > 0,
     (disabled?.length ?? 0) > 0,
     verdict !== undefined && verdict !== "up_to_date",
@@ -71,6 +76,7 @@ export function NeedsAttention({
   ].filter(Boolean).length;
   const loading =
     (access.pending && pending.some((q) => q.isPending)) ||
+    (access.comments && comments.isPending) ||
     (access.system && (jobs.isPending || status.isPending)) ||
     (access.plugins && plugins.isPending);
 
@@ -128,6 +134,26 @@ export function NeedsAttention({
               </li>
             ))}
           </Check>
+        ) : null}
+
+        {access.comments ? (
+          <Check
+            label={t("attention.comments.label")}
+            query={comments}
+            tone={pendingComments > 0 ? "warn" : "ok"}
+            summary={
+              pendingComments > 0
+                ? t("attention.comments.some", { count: pendingComments })
+                : t("attention.comments.none")
+            }
+            action={
+              pendingComments > 0 ? (
+                <Link to="/comments" className="text-sm font-medium text-primary hover:underline">
+                  {t("attention.comments.all")}
+                </Link>
+              ) : null
+            }
+          />
         ) : null}
 
         {access.system ? (

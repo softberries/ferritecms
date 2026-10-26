@@ -18,6 +18,7 @@ import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppSplatRouteImport } from './routes/_app/$'
 import { Route as AppStyleguideRouteImport } from './routes/_app/[_]styleguide'
 import { Route as LoginTotpRouteImport } from './routes/login_.totp'
+import { Route as AppCommentsIndexRouteImport } from './routes/_app/comments.index'
 import { Route as AppMediaIndexRouteImport } from './routes/_app/media.index'
 import { Route as AppContentTypeIndexRouteImport } from './routes/_app/content.$type.index'
 import { Route as AppContentTypeIdRouteImport } from './routes/_app/content.$type.$id'
@@ -72,6 +73,11 @@ const LoginTotpRoute = LoginTotpRouteImport.update({
   id: '/login_/totp',
   path: '/login/totp',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppCommentsIndexRoute = AppCommentsIndexRouteImport.update({
+  id: '/comments/',
+  path: '/comments/',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppMediaIndexRoute = AppMediaIndexRouteImport.update({
   id: '/media/',
@@ -135,6 +141,7 @@ export interface FileRoutesByFullPath {
   '/$': typeof AppSplatRoute
   '/_styleguide': typeof AppStyleguideRoute
   '/login/totp': typeof LoginTotpRoute
+  '/comments/': typeof AppCommentsIndexRoute
   '/media/': typeof AppMediaIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
@@ -155,6 +162,7 @@ export interface FileRoutesByTo {
   '/_styleguide': typeof AppStyleguideRoute
   '/login/totp': typeof LoginTotpRoute
   '/': typeof AppIndexRoute
+  '/comments': typeof AppCommentsIndexRoute
   '/media': typeof AppMediaIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
@@ -177,6 +185,7 @@ export interface FileRoutesById {
   '/_app/_styleguide': typeof AppStyleguideRoute
   '/login_/totp': typeof LoginTotpRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/comments/': typeof AppCommentsIndexRoute
   '/_app/media/': typeof AppMediaIndexRoute
   '/_app/content/$type/$id': typeof AppContentTypeIdRoute
   '/_app/content/$type/new': typeof AppContentTypeNewRoute
@@ -199,6 +208,7 @@ export interface FileRouteTypes {
     | '/$'
     | '/_styleguide'
     | '/login/totp'
+    | '/comments/'
     | '/media/'
     | '/content/$type/$id'
     | '/content/$type/new'
@@ -219,6 +229,7 @@ export interface FileRouteTypes {
     | '/_styleguide'
     | '/login/totp'
     | '/'
+    | '/comments'
     | '/media'
     | '/content/$type/$id'
     | '/content/$type/new'
@@ -240,6 +251,7 @@ export interface FileRouteTypes {
     | '/_app/_styleguide'
     | '/login_/totp'
     | '/_app/'
+    | '/_app/comments/'
     | '/_app/media/'
     | '/_app/content/$type/$id'
     | '/_app/content/$type/new'
@@ -326,6 +338,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginTotpRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/comments/': {
+      id: '/_app/comments/'
+      path: '/comments'
+      fullPath: '/comments/'
+      preLoaderRoute: typeof AppCommentsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/media/': {
       id: '/_app/media/'
       path: '/media'
@@ -403,6 +422,7 @@ interface AppRouteChildren {
   AppSplatRoute: typeof AppSplatRoute
   AppStyleguideRoute: typeof AppStyleguideRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppCommentsIndexRoute: typeof AppCommentsIndexRoute
   AppMediaIndexRoute: typeof AppMediaIndexRoute
   AppContentTypeIdRoute: typeof AppContentTypeIdRoute
   AppContentTypeNewRoute: typeof AppContentTypeNewRoute
@@ -419,6 +439,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppSplatRoute: AppSplatRoute,
   AppStyleguideRoute: AppStyleguideRoute,
   AppIndexRoute: AppIndexRoute,
+  AppCommentsIndexRoute: AppCommentsIndexRoute,
   AppMediaIndexRoute: AppMediaIndexRoute,
   AppContentTypeIdRoute: AppContentTypeIdRoute,
   AppContentTypeNewRoute: AppContentTypeNewRoute,

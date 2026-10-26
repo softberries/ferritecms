@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import type { ContentTypeDto } from "@/api/types";
 import type { MeDto } from "@/auth/session";
 import { ShapesIcon } from "lucide-react";
-import { navFor, navItemAt, type ScreenEntry } from "./nav";
+import { navFor, navItemAt, withBadges, type ScreenEntry } from "./nav";
 
 const type = (name: string, label: string, built_in = false): ContentTypeDto => ({
   name,
@@ -144,6 +144,38 @@ test("menus_is_registered", () => {
   const menus = sections.flatMap((s) => s.items).find((i) => i.id === "menus");
   expect(menus).toMatchObject({ label: "Menus", to: "/structure/menus" });
   expect(navItemAt(sections, "/structure/menus/")?.id).toBe("menus");
+});
+
+test("comments_is_registered", () => {
+  // Task 12 registers Comments in Content, after Media: only `moderate_comments` sees it,
+  // with `g c`.
+  const editor = me("editor", ["read_admin", "edit_others", "moderate_comments"]);
+  const items = navFor(editor, TYPES).flatMap((s) => s.items);
+  const comments = items.find((i) => i.id === "comments");
+  expect(comments).toMatchObject({ label: "Comments", to: "/comments", shortcut: "g c" });
+  expect(items.map((i) => i.id).slice(-2)).toEqual(["media", "comments"]);
+  expect(navItemAt(navFor(editor, TYPES), "/comments/")?.id).toBe("comments");
+  expect(
+    navFor(AUTHOR, TYPES)
+      .flatMap((s) => s.items)
+      .map((i) => i.id),
+  ).not.toContain("comments");
+});
+
+test("badges_go_on_their_items", () => {
+  const editor = me("editor", ["read_admin", "moderate_comments"]);
+  const sections = navFor(editor, TYPES);
+  const badged = withBadges(sections, { comments: 3 });
+  const badgeOf = (s: typeof sections, id: string) =>
+    s.flatMap((x) => x.items).find((i) => i.id === id)?.badge;
+  expect(badgeOf(badged, "comments")).toBe(3);
+  expect(badgeOf(badged, "media")).toBeUndefined();
+  // Zero or unknown: no badge; the input is not changed.
+  expect(badgeOf(withBadges(sections, { comments: 0 }), "comments")).toBeUndefined();
+  expect(badgeOf(withBadges(sections, {}), "comments")).toBeUndefined();
+  expect(badgeOf(sections, "comments")).toBeUndefined();
+  // Nothing to badge: the same sections.
+  expect(withBadges(sections, {})).toBe(sections);
 });
 
 test("no_types_yet_means_no_content_section", () => {

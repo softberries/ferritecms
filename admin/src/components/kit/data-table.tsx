@@ -34,8 +34,13 @@ export interface DataTableProps<T extends RowData> {
   getRowId: (row: T) => string;
   /** Adds the checkbox column and `x`. */
   selection?: DataTableSelection;
-  /** `enter` on a row, or a click on it outside its controls. */
+  /** `enter` on a row, or (with `openOnClick`) a click on it outside its controls. */
   onRowOpen?: (row: T) => void;
+  /** A click on a row outside its controls opens it too (default); off for rows whose
+   * text people select or read (the comments queue). */
+  openOnClick?: boolean;
+  /** Cells sit at the row's middle (default) or top (tall rows of text). */
+  align?: "middle" | "top";
   loading: boolean;
   /** Shown in place of the rows when `data` is empty (usually an `EmptyState`). */
   empty: ReactNode;
@@ -69,6 +74,8 @@ export function DataTable<T extends RowData>({
   getRowId,
   selection,
   onRowOpen,
+  openOnClick = true,
+  align = "middle",
   loading,
   empty,
   rowActions,
@@ -189,8 +196,15 @@ export function DataTable<T extends RowData>({
   const headerGroups = table.getHeaderGroups();
   const leafIds = table.getAllLeafColumns().map((c) => c.id);
   const colCount = allColumns.length;
-  const cellClass = (id: string) =>
-    cn(id === SELECT && "w-10 pr-0", id === ACTIONS && "w-px text-right", columnClassName?.[id]);
+  // `body`: a row's cell (the header row stays centred whatever `align` says).
+  const cellClass = (id: string, body = false) =>
+    cn(
+      id === SELECT && "w-10 pr-0",
+      id === ACTIONS && "w-px text-right",
+      body && align === "top" && "align-top",
+      body && align === "top" && id === SELECT && "pt-3.5",
+      columnClassName?.[id],
+    );
 
   return (
     <m.div
@@ -262,6 +276,7 @@ export function DataTable<T extends RowData>({
                   key={row.id}
                   data-slot="table-row"
                   data-row=""
+                  data-row-id={row.id}
                   data-state={row.getIsSelected() ? "selected" : undefined}
                   tabIndex={index === current ? 0 : -1}
                   onFocus={(e) => {
@@ -269,14 +284,14 @@ export function DataTable<T extends RowData>({
                   }}
                   onKeyDown={(e) => onRowKeyDown(e, row, index)}
                   onClick={(e) => {
-                    if (!onRowOpen) return;
+                    if (!onRowOpen || !openOnClick) return;
                     if ((e.target as HTMLElement).closest(INTERACTIVE)) return;
                     onRowOpen(row.original);
                   }}
                   className={cn(
                     ROW,
                     "group/row h-row -outline-offset-2",
-                    onRowOpen && "cursor-pointer",
+                    onRowOpen && openOnClick && "cursor-pointer",
                   )}
                   {...(motionOn
                     ? {
@@ -296,7 +311,7 @@ export function DataTable<T extends RowData>({
                       key={cell.id}
                       className={cn(
                         "border-b px-3 py-0 group-last/row:border-b-0 first:pl-4 last:pr-4",
-                        cellClass(cell.column.id),
+                        cellClass(cell.column.id, true),
                       )}
                     >
                       <table.FlexRender cell={cell} />

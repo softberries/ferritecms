@@ -120,10 +120,16 @@ export function AppSidebar({
                       <Link to={item.to as "/"} onClick={close}>
                         <item.icon />
                         <span>{item.label}</span>
+                        {item.badge ? (
+                          <span className="sr-only">{t("nav.badge", { count: item.badge })}</span>
+                        ) : null}
                       </Link>
                     </SidebarMenuButton>
                     {item.badge ? (
-                      <SidebarMenuBadge className="top-2! pointer-coarse:top-3!">
+                      <SidebarMenuBadge
+                        aria-hidden="true"
+                        className="top-2! tabular-nums pointer-coarse:top-3!"
+                      >
                         {item.badge}
                       </SidebarMenuBadge>
                     ) : null}

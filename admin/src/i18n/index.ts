@@ -1,6 +1,7 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import auth from "./en/auth.json";
+import comments from "./en/comments.json";
 import common from "./en/common.json";
 import content from "./en/content.json";
 import dashboard from "./en/dashboard.json";
@@ -26,6 +27,7 @@ export const resources = {
     kit,
     media,
     structure,
+    comments,
   },
 } as const;
 

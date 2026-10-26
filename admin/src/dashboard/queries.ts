@@ -31,23 +31,27 @@ export function newest(
 
 export interface AttentionAccess {
   pending: boolean;
+  /** Pending comments (`moderate_comments`). */
+  comments: boolean;
   system: boolean;
   plugins: boolean;
 }
 
 /**
  * Which checks of Needs attention the actor may see, from `me.capabilities` (the server
- * decides; the SPA only hides): pending review needs `edit_others`, dead jobs, schema
+ * decides; the SPA only hides): pending review needs `edit_others`, pending comments
+ * `moderate_comments` (`GET /comments/counts`), dead jobs, schema
  * and theme `manage_system` (`/system/*`), disabled plugins `manage_plugins`.
  */
 export function attentionAccess(capabilities: readonly string[]): AttentionAccess {
   return {
     pending: capabilities.includes("edit_others"),
+    comments: capabilities.includes("moderate_comments"),
     system: capabilities.includes("manage_system"),
     plugins: capabilities.includes("manage_plugins"),
   };
 }
 
 export function hasAttention(access: AttentionAccess): boolean {
-  return access.pending || access.system || access.plugins;
+  return access.pending || access.comments || access.system || access.plugins;
 }

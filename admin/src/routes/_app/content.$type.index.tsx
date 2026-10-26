@@ -223,7 +223,8 @@ function ContentList() {
     void navigate({
       to: "/content/$type",
       params: { type },
-      search: (prev: ListSearch) => parseListSearch({ ...prev, ...patch }),
+      // `prev` is typed as every route's search; it is this route's, parsed again.
+      search: (prev: Record<string, unknown>) => parseListSearch({ ...prev, ...patch }),
       replace: true,
     });
   };

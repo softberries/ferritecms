@@ -1,5 +1,6 @@
+import { queryOptions } from "@tanstack/react-query";
 import { api, unwrap } from "./client";
-import type { CommentFilters } from "./keys";
+import { type CommentFilters, qk } from "./keys";
 import type {
   SchemaCommentCountsDto,
   SchemaCommentDto,
@@ -28,6 +29,15 @@ export function commentCounts(item?: string): Promise<SchemaCommentCountsDto> {
   return unwrap(
     api.GET("/api/v1/comments/counts", { params: { query: item === undefined ? {} : { item } } }),
   );
+}
+
+/** The counts per status (of one item when given); the nav badge, the dashboard, the tabs. */
+export function commentCountsQuery(item?: string) {
+  return queryOptions({
+    queryKey: qk.comments.counts(item),
+    queryFn: () => commentCounts(item),
+    staleTime: 30_000,
+  });
 }
 
 /** `status`: `pending`, `approved`, `spam` or `trash`. */

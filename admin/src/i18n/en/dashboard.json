@@ -62,6 +62,13 @@
       "none": "Nothing waits for review",
       "all": "View all"
     },
+    "comments": {
+      "label": "Comments",
+      "some_one": "{{count}} comment waits for moderation",
+      "some_other": "{{count}} comments wait for moderation",
+      "none": "No comments wait for moderation",
+      "all": "Moderate comments"
+    },
     "jobs": {
       "label": "Background jobs",
       "some_one": "{{count}} dead job",

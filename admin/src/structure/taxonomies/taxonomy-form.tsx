@@ -51,7 +51,8 @@ import { nameFromLabel } from "../types/builder-model";
 import { FormField, SwitchRow } from "../types/form-field";
 import { MAX_TYPE_LABEL, MAX_TYPE_NAME, labelProblem, validTypeName } from "../types/type-rules";
 import { problemText } from "./terms-model";
-import { DESTRUCTIVE, without } from "../shared";
+import { DESTRUCTIVE } from "@/lib/destructive";
+import { without } from "../shared";
 
 /** Core keeps at most this many content types per taxonomy (`check_content_types`). */
 export const MAX_TAXONOMY_TYPES = 20;

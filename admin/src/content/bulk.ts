@@ -57,19 +57,35 @@ export function asApiError(error: unknown): ApiError {
  * Runs `run` for every item `allowed[action]` permits, `concurrency` at a time; the
  * others are skipped (in neither list).
  */
-export async function runBulk<T extends BulkItem>(
+export function runBulk<T extends BulkItem>(
   items: readonly T[],
   action: BulkAction,
   run: (item: T) => Promise<unknown>,
   concurrency: number = BULK_CONCURRENCY,
 ): Promise<BulkResult> {
-  const eligible = items.filter((item) => item.allowed[action]);
+  return fanOut(
+    items.filter((item) => item.allowed[action]),
+    run,
+    concurrency,
+  );
+}
+
+/**
+ * Runs `run` for every item, `concurrency` at a time, and collects which succeeded and
+ * which failed (with their problem), both in the order of `items`. The fan-out of
+ * `runBulk`, for lists whose items carry no `allowed` (comments, `comments/moderate.ts`).
+ */
+export async function fanOut<T extends { id: string }>(
+  items: readonly T[],
+  run: (item: T) => Promise<unknown>,
+  concurrency: number = BULK_CONCURRENCY,
+): Promise<BulkResult> {
   const outcome: ({ ok: true } | { ok: false; error: ApiError } | undefined)[] = [];
   let next = 0;
   const worker = async () => {
-    while (next < eligible.length) {
+    while (next < items.length) {
       const index = next++;
-      const item = eligible[index];
+      const item = items[index];
       if (item === undefined) return;
       try {
         await run(item);
@@ -80,10 +96,10 @@ export async function runBulk<T extends BulkItem>(
     }
   };
   await Promise.all(
-    Array.from({ length: Math.max(1, Math.min(concurrency, eligible.length)) }, worker),
+    Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, worker),
   );
   const result: BulkResult = { ok: [], failed: [] };
-  eligible.forEach((item, i) => {
+  items.forEach((item, i) => {
     const o = outcome[i];
     if (o?.ok) result.ok.push(item.id);
     else if (o) result.failed.push({ id: item.id, error: o.error });

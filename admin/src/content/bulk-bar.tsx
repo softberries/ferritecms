@@ -1,4 +1,4 @@
-// The selection bar: floats at the bottom of the screen while rows are selected (Linear,
+// The selection bar (`SelectionBar`, any list; `BulkBar` fills it for content): floats at the bottom of the screen while rows are selected (Linear,
 // Stripe). It names the count and offers each bulk action the selection allows, with how
 // many items it will touch when that is fewer than the selection ("Publish 2"). Esc
 // clears the selection. It slides 8 px and fades (11 §5); under reduced motion it fades.
@@ -61,8 +61,60 @@ function useMainCentre(active: boolean): number | null {
 
 export function BulkBar({ selected, pending, onAction, onClear }: BulkBarProps) {
   const { t } = useTranslation("content");
+  const number = new Intl.NumberFormat(uiLocale());
+  const actions: SelectionAction[] = ORDER.flatMap((action) => {
+    const n = countAllowed(selected, action);
+    if (n === 0) return [];
+    return [
+      {
+        id: action,
+        label:
+          n === selected.length
+            ? t(`bulk.${action}`)
+            : t(`bulk.${action}Some`, { count: n, formatted: number.format(n) }),
+        icon: ICONS[action],
+        destructive: action === "trash" || action === "delete",
+        busy: pending === action,
+        onClick: () => onAction(action),
+      },
+    ];
+  });
+  return (
+    <SelectionBar
+      count={selected.length}
+      actions={actions}
+      disabled={pending !== null}
+      onClear={onClear}
+    />
+  );
+}
+
+/** One button of the selection bar. */
+export interface SelectionAction {
+  id: string;
+  /** Already translated; the button's name (shown from `sm` up). */
+  label: string;
+  icon: ReactNode;
+  destructive?: boolean;
+  /** This action is running (`aria-busy`). */
+  busy?: boolean;
+  onClick: () => void;
+}
+
+export interface SelectionBarProps {
+  /** How many rows are selected; the bar shows while it is above zero. */
+  count: number;
+  actions: readonly SelectionAction[];
+  /** Every action is off (one is running). */
+  disabled: boolean;
+  onClear: () => void;
+}
+
+/** The floating bar itself, for any list (`BulkBar` for content, the comments queue). */
+export function SelectionBar({ count, actions, disabled, onClear }: SelectionBarProps) {
+  const { t } = useTranslation("content");
   const reduce = useReducedMotion() ?? false;
-  const open = selected.length > 0;
+  const open = count > 0;
   const number = new Intl.NumberFormat(uiLocale());
   const centre = useMainCentre(open);
 
@@ -99,39 +151,29 @@ export function BulkBar({ selected, pending, onAction, onClear }: BulkBarProps) 
               aria-hidden="true"
               className="flex h-6 min-w-6 items-center justify-center rounded-md bg-primary px-1.5 text-xs text-primary-foreground"
             >
-              {number.format(selected.length)}
+              {number.format(count)}
             </span>
             <span aria-hidden="true">{t("bulk.selectedShort")}</span>
-            <span className="sr-only">{t("bulk.selected", { count: selected.length })}</span>
+            <span className="sr-only">{t("bulk.selected", { count })}</span>
           </p>
           <span aria-hidden="true" className="mx-1 h-5 w-px bg-border" />
           <div className="flex min-w-0 flex-1 items-center gap-1">
-            {ORDER.map((action) => {
-              const n = countAllowed(selected, action);
-              if (n === 0) return null;
-              const label =
-                n === selected.length
-                  ? t(`bulk.${action}`)
-                  : t(`bulk.${action}Some`, { count: n, formatted: number.format(n) });
-              return (
-                <Button
-                  key={action}
-                  variant="ghost"
-                  disabled={pending !== null}
-                  aria-busy={pending === action || undefined}
-                  aria-label={label}
-                  onClick={() => onAction(action)}
-                  className={
-                    action === "trash" || action === "delete"
-                      ? "text-destructive hover:text-destructive"
-                      : undefined
-                  }
-                >
-                  {ICONS[action]}
-                  <span className="max-sm:sr-only">{label}</span>
-                </Button>
-              );
-            })}
+            {actions.map((action) => (
+              <Button
+                key={action.id}
+                variant="ghost"
+                disabled={disabled}
+                aria-busy={action.busy || undefined}
+                aria-label={action.label}
+                onClick={action.onClick}
+                className={
+                  action.destructive ? "text-destructive hover:text-destructive" : undefined
+                }
+              >
+                {action.icon}
+                <span className="max-sm:sr-only">{action.label}</span>
+              </Button>
+            ))}
           </div>
           <Tooltip>
             <TooltipTrigger asChild>

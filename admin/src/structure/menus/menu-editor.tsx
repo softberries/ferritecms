@@ -51,7 +51,7 @@ import { useLeaveGuard } from "@/editor/leave-guard";
 import { useShortcut } from "@/lib/shortcuts";
 import { stableEqual, staleGuard } from "@/lib/stale-guard";
 import { problemText } from "../taxonomies/terms-model";
-import { DESTRUCTIVE } from "../shared";
+import { DESTRUCTIVE } from "@/lib/destructive";
 import { FormField } from "../types/form-field";
 import { AddItems } from "./add-items";
 import {

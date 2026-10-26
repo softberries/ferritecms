@@ -15,7 +15,9 @@
     "taxonomies": "Taxonomies",
     "menus": "Menus",
     "redirects": "Redirects",
-    "viewSite": "View site"
+    "viewSite": "View site",
+    "badge_one": "({{count}} waiting)",
+    "badge_other": "({{count}} waiting)"
   },
   "crumbs": {
     "dashboard": "Dashboard",
