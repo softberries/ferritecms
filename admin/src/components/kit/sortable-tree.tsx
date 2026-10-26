@@ -87,6 +87,8 @@ export function SortableTree<T>({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [offsetX, setOffsetX] = useState(0);
+  // A keyboard drag only moves up and down: its x follows the rows' indents, not intent.
+  const keyboardDrag = useRef(false);
   const [status, setStatus] = useState("");
   const list = useRef<HTMLUListElement>(null);
   const lastOver = useRef<UniqueIdentifier | null>(null);
@@ -194,11 +196,12 @@ export function SortableTree<T>({
         announcements,
         screenReaderInstructions: { draggable: t("sortable.treeInstructions") },
       }}
-      onDragStart={({ active }: DragStartEvent) => {
+      onDragStart={({ active, activatorEvent }: DragStartEvent) => {
+        keyboardDrag.current = activatorEvent instanceof KeyboardEvent;
         setActiveId(String(active.id));
         setOverId(String(active.id));
       }}
-      onDragMove={({ delta }: DragMoveEvent) => setOffsetX(delta.x)}
+      onDragMove={({ delta }: DragMoveEvent) => setOffsetX(keyboardDrag.current ? 0 : delta.x)}
       onDragOver={({ over }: DragOverEvent) => setOverId(over ? String(over.id) : null)}
       onDragEnd={() => {
         if (activeId !== null && projection) {
@@ -241,6 +244,7 @@ export function SortableTree<T>({
                 container={list}
                 inset={depth * INDENT_PX}
                 placeholder={active}
+                lockX
                 rowProps={{ "aria-level": node.depth + 1 }}
                 actions={[
                   {

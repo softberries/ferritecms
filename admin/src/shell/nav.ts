@@ -73,8 +73,12 @@ export interface ScreenEntry {
   icon: LucideIcon;
 }
 
-/** The registered screens; empty until the M2b-2 screen tasks add theirs. */
-export const SCREEN_ENTRIES: ScreenEntry[] = [];
+/**
+ * The registered screens. Each M2b-2 screen task adds its entry to this literal when it
+ * adds its route; nothing is registered at runtime (a lazy route module would register
+ * too late for the sidebar and the palette).
+ */
+export const SCREEN_ENTRIES: readonly ScreenEntry[] = [] as const;
 
 /** Types the content screens list: everything but `media` (its own screen, M2b-2). */
 const NOT_CONTENT = new Set(["media"]);
@@ -88,7 +92,7 @@ export function navFor(
   me: MeDto,
   types: ContentTypeDto[],
   t: TFunction<"shell"> = i18n.getFixedT(null, "shell"),
-  entries: ScreenEntry[] = SCREEN_ENTRIES,
+  entries: readonly ScreenEntry[] = SCREEN_ENTRIES,
 ): NavSection[] {
   const can: Can = (cap) => me.capabilities.includes(cap);
   // Registered screens the viewer may see, in `SCREENS` order. Nothing without

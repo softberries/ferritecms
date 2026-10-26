@@ -244,6 +244,11 @@ export interface SortableRowProps {
   inset?: number;
   /** Shown as the drop target (the tree's indent guide). */
   placeholder?: boolean;
+  /**
+   * Drop the horizontal part of dnd-kit's transform: the tree places its dragged row by
+   * `inset` (the projected depth), so the pointer's x would offset it twice.
+   */
+  lockX?: boolean;
   children: ReactNode;
 }
 
@@ -257,6 +262,7 @@ export function SortableRow({
   rowProps,
   inset = 0,
   placeholder = false,
+  lockX = false,
   children,
 }: SortableRowProps) {
   const { t } = useTranslation("kit");
@@ -270,7 +276,7 @@ export function SortableRow({
     isDragging,
   } = useSortable({ id, attributes: { roleDescription: t("sortable.roleDescription") } });
   const style: CSSProperties = {
-    transform: CSS.Translate.toString(transform),
+    transform: CSS.Translate.toString(lockX && transform ? { ...transform, x: 0 } : transform),
     transition,
     marginInlineStart: inset,
   };

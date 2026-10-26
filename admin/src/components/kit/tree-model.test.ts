@@ -117,5 +117,15 @@ describe("tree_model", () => {
       index: 1,
       depth: 0,
     });
+    // e over d must land at depth 1 (d, the next row, is at 1), whose parent is a; when a
+    // refuses children there is no allowed level, so there is no move.
+    expect(projectDrop(flat, "e", "d", 0, 24, Infinity, (id) => id !== "a")).toBeNull();
+    // Where a lower level is allowed it is used: b (with c) over d, after d, may go to
+    // the root instead of under a.
+    expect(projectDrop(flat, "b", "d", 0, 24, 2, (id) => id !== "a")).toEqual({
+      parentId: null,
+      index: 1,
+      depth: 0,
+    });
   });
 });

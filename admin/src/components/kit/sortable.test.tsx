@@ -26,7 +26,9 @@ function stubLayout() {
     const row = el.closest("[data-sortable-row]");
     if (!row?.parentElement) return new DOMRect(0, 0, 0, 0);
     const rows = Array.from(row.parentElement.querySelectorAll(":scope > [data-sortable-row]"));
-    return new DOMRect(0, rows.indexOf(row) * ROW_H, 320, ROW_H);
+    // A tree row starts one 24 px indent further right per level, as on screen.
+    const level = Number(row.getAttribute("aria-level") ?? "1");
+    return new DOMRect((level - 1) * 24, rows.indexOf(row) * ROW_H, 320, ROW_H);
   };
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
     return rectOf(this);
@@ -157,5 +159,46 @@ describe("sortable", () => {
     await user.click(within(menu).getByRole("menuitem", { name: "Move up" }));
     const moved = onChange.mock.calls[1]?.[0] ?? [];
     expect(moved.filter((n) => n.parentId === "n2").map((n) => n.data)).toEqual(["Blog", "Team"]);
+  });
+
+  it("sortable_tree_keyboard_drag_keeps_the_level", async () => {
+    // Home, About (Team, History), Blog. Home goes down past the nested rows, which start
+    // 24 px further right; the keyboard only moves rows up and down, so Home stays a root.
+    const nodes: TreeNode<string>[] = [
+      { id: "n1", parentId: null, data: "Home" },
+      { id: "n2", parentId: null, data: "About" },
+      { id: "n3", parentId: "n2", data: "Team" },
+      { id: "n4", parentId: "n2", data: "History" },
+      { id: "n5", parentId: null, data: "Blog" },
+    ];
+    const onChange = vi.fn<(next: TreeNode<string>[]) => void>();
+    const user = userEvent.setup();
+    render(
+      <SortableTree
+        nodes={nodes}
+        label={(d) => d}
+        render={(n) => <span>{n.data}</span>}
+        onChange={onChange}
+        maxDepth={2}
+      />,
+    );
+    screen.getByRole("button", { name: "Reorder Home" }).focus();
+    await user.keyboard("[Space]");
+    await tick();
+    for (let i = 0; i < 3; i++) {
+      await user.keyboard("[ArrowDown]");
+      await tick();
+    }
+    await user.keyboard("[Space]");
+    await tick();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = onChange.mock.calls[0]?.[0] ?? [];
+    // Between History and Blog, at the top level.
+    expect(next.find((n) => n.id === "n1")?.parentId).toBeNull();
+    expect(next.filter((n) => n.parentId === null).map((n) => n.data)).toEqual([
+      "About",
+      "Home",
+      "Blog",
+    ]);
   });
 });

@@ -134,7 +134,8 @@ export function outdent<T>(nodes: TreeNode<T>[], id: string): TreeNode<T>[] {
  * node's own depth), clamped between the next row's depth and the previous row's depth
  * + 1, and so that the node's subtree stays within `maxDepth` (when the two disagree,
  * `maxDepth` wins). `canNest(parentId)` refuses a parent; the depth then steps back
- * toward the minimum. `null` for an unknown id.
+ * toward the minimum, and when no allowed level is left the result is `null` (no move),
+ * as for an unknown id.
  */
 export function projectDrop<T>(
   flat: FlatNode<T>[],
@@ -191,6 +192,8 @@ export function projectDrop<T>(
     depth = d;
   }
   const parentId = parentAt(depth);
+  // Even the lowest level the neighbours allow sits under a refused parent: no move.
+  if (parentId !== null && canNest && !canNest(parentId)) return null;
   const index = moved
     .slice(0, to)
     .filter((n) => n.parentId === parentId && n.depth === depth).length;

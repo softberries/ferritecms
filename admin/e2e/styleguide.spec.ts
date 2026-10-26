@@ -221,6 +221,26 @@ test("styleguide_ordering", async ({ as, snap, expectAccessible }) => {
   await expect(page.getByRole("menu")).toBeHidden();
   await expect(rowOf(tree, "Contact")).toHaveAttribute("aria-level", "1");
 
+  // Tree: a pointer drag of Contact 30 px to the right projects one level deeper (under
+  // About, after History). The dashed guide sits exactly one indent (24 px) in: the
+  // pointer's x moves it only through the projected depth, never on top of it.
+  const frame = rowOf(tree, "Contact").locator(":scope > div");
+  const before = await frame.boundingBox();
+  const grip = await tree.getByRole("button", { name: "Reorder Contact" }).boundingBox();
+  if (!before || !grip) throw new Error("no layout");
+  const [gx, gy] = [grip.x + grip.width / 2, grip.y + grip.height / 2];
+  await page.mouse.move(gx, gy);
+  await page.mouse.down();
+  await page.mouse.move(gx + 6, gy, { steps: 2 });
+  await page.mouse.move(gx + 30, gy, { steps: 6 });
+  const guide = tree.locator("[data-placeholder]");
+  await expect(guide).toHaveCSS("margin-inline-start", "24px");
+  await expect
+    .poll(async () => Math.round((await guide.boundingBox())?.x ?? 0))
+    .toBe(Math.round(before.x + 24));
+  await page.mouse.up();
+  await expect(rowOf(tree, "Contact")).toHaveAttribute("aria-level", "2");
+
   // List: the keyboard (Space, ArrowDown, Space) moves Title below Subtitle.
   const list = page.getByRole("list", { name: "Fields" });
   await list.getByRole("button", { name: "Reorder Title" }).focus();
