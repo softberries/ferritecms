@@ -574,6 +574,9 @@ test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
     for (const name of ["Draft", "Pending", "Scheduled", "Published", "Private", "Trash"]) {
       await tab(page, name).click();
       await loaded(page, label);
+      // Rows enter with a Motion (JS) fade that `snap`'s settle cannot see.
+      const first = rows(page, label).first();
+      if ((await first.count()) > 0) await expect(first).toHaveCSS("opacity", "1");
       await snap(page, `content-list-${name.toLowerCase()}`);
       await expectAccessible(page);
     }
