@@ -212,6 +212,22 @@ export interface paths {
         patch: operations["moderate_comment"];
         trace?: never;
     };
+    "/api/v1/content/refs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["content_refs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/content/{type}": {
         parameters: {
             query?: never;
@@ -1427,6 +1443,28 @@ export interface components {
             /** @description Replaces the item's terms; `[]` removes them all. */
             terms?: string[];
             title?: string;
+        };
+        /** @description An item named by id (`GET /content/refs`). */
+        ContentRefDto: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description The public path; `null` unless the item has a public page now (published, not
+             *     future-dated, not media).
+             */
+            permalink?: string | null;
+            /** @description `draft`, `pending`, `scheduled`, `published`, `private` or `trash`. */
+            status: string;
+            title: string;
+            /** @description The content type (`post`, `page`, `media`, …). */
+            type: string;
+        };
+        /**
+         * @description `GET /content/refs`: the requested items the caller may read, in no particular
+         *     order; unknown and unreadable ids are absent.
+         */
+        ContentRefList: {
+            items: components["schemas"]["ContentRefDto"][];
         };
         /** @description A list entry: the item's columns without `body`. */
         ContentSummaryDto: {
@@ -2778,6 +2816,8 @@ export type SchemaContentDto = components['schemas']['ContentDto'];
 export type SchemaContentInput = components['schemas']['ContentInput'];
 export type SchemaContentList = components['schemas']['ContentList'];
 export type SchemaContentPatch = components['schemas']['ContentPatch'];
+export type SchemaContentRefDto = components['schemas']['ContentRefDto'];
+export type SchemaContentRefList = components['schemas']['ContentRefList'];
 export type SchemaContentSummaryDto = components['schemas']['ContentSummaryDto'];
 export type SchemaContentTypeDto = components['schemas']['ContentTypeDto'];
 export type SchemaContentTypeInput = components['schemas']['ContentTypeInput'];
@@ -3591,6 +3631,65 @@ export interface operations {
                 };
             };
             /** @description `validation`: an unknown `status` */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    content_refs: {
+        parameters: {
+            query: {
+                /** @description Comma-separated item ids, 1..=200. */
+                ids: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The requested items the caller may read (as the lists decide; media items only with `media:read`), in no particular order; unknown and unreadable ids are absent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContentRefList"];
+                };
+            };
+            /** @description `validation` (`ids`: not a UUID) or `malformed-query` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (needs `content:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: not 1..=200 ids (`ids`) */
             422: {
                 headers: {
                     [name: string]: unknown;

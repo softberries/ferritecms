@@ -924,6 +924,85 @@
         ]
       }
     },
+    "/api/v1/content/refs": {
+      "get": {
+        "tags": [
+          "content"
+        ],
+        "operationId": "content_refs",
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "query",
+            "description": "Comma-separated item ids, 1..=200.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requested items the caller may read (as the lists decide; media items only with `media:read`), in no particular order; unknown and unreadable ids are absent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentRefList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation` (`ids`: not a UUID) or `malformed-query`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (needs `content:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: not 1..=200 ids (`ids`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/content/{type}": {
       "get": {
         "tags": [
@@ -9209,6 +9288,55 @@
           },
           "title": {
             "type": "string"
+          }
+        }
+      },
+      "ContentRefDto": {
+        "type": "object",
+        "description": "An item named by id (`GET /content/refs`).",
+        "required": [
+          "id",
+          "type",
+          "title",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "permalink": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The public path; `null` unless the item has a public page now (published, not\nfuture-dated, not media)."
+          },
+          "status": {
+            "type": "string",
+            "description": "`draft`, `pending`, `scheduled`, `published`, `private` or `trash`."
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "The content type (`post`, `page`, `media`, …)."
+          }
+        }
+      },
+      "ContentRefList": {
+        "type": "object",
+        "description": "`GET /content/refs`: the requested items the caller may read, in no particular\norder; unknown and unreadable ids are absent.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContentRefDto"
+            }
           }
         }
       },

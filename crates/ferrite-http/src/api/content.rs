@@ -21,6 +21,11 @@
 //!   (`ferrite_core::content::allowed_actions`, M2b P13); revisions carry `author`.
 //! * `GET /content/{type}/counts` counts items per status as the list's visibility rule
 //!   allows (P14). The static `counts` segment wins over `{id}` in the router.
+//! * `GET /content/refs?ids=…` names items by id across types (relation fields, menu
+//!   targets, filter chips): the ids the caller may read come back with type, title,
+//!   status and permalink; unknown and unreadable ids are absent, never an error.
+//!   1..=200 ids (`422`, field `ids`); a malformed id is `400`. The static `refs`
+//!   segment wins over `{type}` in the router, and core reserves `refs` as a type name.
 //! * `…/{id}/autosave` is the caller's own unsaved working copy of the item (P15): no
 //!   `If-Match`, last write wins, never a revision. Reading needs a role that may edit
 //!   the item (as revisions), writing `can_edit` (F12). The caller's next real save of
@@ -56,8 +61,8 @@ use super::{
     ApiState, Authed, BASE,
     dto::content::{
         AutosaveDto, AutosaveInput, ContentCountsDto, ContentDto, ContentInput, ContentList,
-        ContentPatch, ContentSummaryDto, RevisionDto, RevisionList, RevisionSummaryDto,
-        ScheduleRequest,
+        ContentPatch, ContentRefList, ContentSummaryDto, RevisionDto, RevisionList,
+        RevisionSummaryDto, ScheduleRequest,
     },
     extract::{
         ApiJson, ApiPath, ApiQuery, DEFAULT_LIMIT, IfMatch, check_limit, created, etag,
@@ -319,6 +324,48 @@ pub async fn list_content(
     });
     let items = items.into_iter().collect::<Result<_, _>>()?;
     Ok(Json(ContentList { items, next_cursor }))
+}
+
+/// The query of `GET /content/refs`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ContentRefsParams {
+    /// Comma-separated item ids, 1..=200.
+    pub ids: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/content/refs",
+    tag = "content",
+    operation_id = "content_refs",
+    security(("session" = []), ("bearer" = [])),
+    params(ContentRefsParams),
+    responses(
+        (status = 200, description = "The requested items the caller may read (as the lists decide; media items only with `media:read`), in no particular order; unknown and unreadable ids are absent", body = ContentRefList),
+        (status = 400, description = "`validation` (`ids`: not a UUID) or `malformed-query`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (needs `content:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: not 1..=200 ids (`ids`)", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn content_refs(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiQuery(params): ApiQuery<ContentRefsParams>,
+) -> Result<Json<ContentRefList>, Problem> {
+    let ids = params
+        .ids
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse::<Uuid>().map(ContentId::from_uuid))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| invalid_param("ids", "ids must be UUIDs", "comma-separated UUIDs"))?;
+    let refs = api.content.refs(&who.actor, &ids).await?;
+    Ok(Json(ContentRefList {
+        items: refs.into_iter().map(Into::into).collect(),
+    }))
 }
 
 #[utoipa::path(

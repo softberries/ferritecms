@@ -8,7 +8,7 @@
 //! `type.delete`). Reads need `require_read(Content)` (F16).
 //!
 //! **Names** (types and taxonomies alike, [`check_type_name`]): `[a-z][a-z0-9_-]{0,31}`,
-//! not a [`slug::RESERVED`] or [`slug::ROUTE_WORDS`] word, not four digits, not the name
+//! not a [`slug::RESERVED`], [`slug::ROUTE_WORDS`] or [`API_WORDS`] word, not four digits, not the name
 //! of an existing type or taxonomy, and not the slug of an existing top-level post or
 //! page (their paths start with `/<slug>/`, which the new `/<name>/` prefix would
 //! shadow, F26). A name its own registry already holds is a conflict
@@ -320,6 +320,10 @@ impl Change {
     }
 }
 
+/// Names the REST API uses as static segments beside `/content/{type}`
+/// (`GET /content/refs`), so no type (nor, sharing the rules, taxonomy) may take them.
+pub const API_WORDS: &[&str] = &["refs"];
+
 /// The pure name rules of the module docs (`InvalidField { field: "name", .. }`).
 pub(crate) fn check_type_name(name: &str) -> Result<(), CoreError> {
     let mut bytes = name.bytes();
@@ -336,6 +340,12 @@ pub(crate) fn check_type_name(name: &str) -> Result<(), CoreError> {
         return Err(CoreError::invalid_field(
             NAME,
             "name is reserved by the router",
+        ));
+    }
+    if API_WORDS.contains(&name) {
+        return Err(CoreError::invalid_field(
+            NAME,
+            "name is reserved by the API",
         ));
     }
     Ok(())
@@ -472,6 +482,7 @@ mod tests {
             "author",
             "page",
             "search",
+            "refs",
         ] {
             assert!(
                 matches!(

@@ -10,9 +10,11 @@ use std::sync::{
 
 use ferrite_core::{
     Actor, ContentDraft, ContentService, CoreError, PermalinkRules,
-    content::{AllowedActions, AuthorRef, StatusCounts, allowed_actions},
+    content::{AllowedActions, AuthorRef, ContentRef, StatusCounts, allowed_actions},
 };
-use ferrite_domain::{ContentItem, ContentStatus, NewUser, Role, Timestamp, UserId, UserStatus};
+use ferrite_domain::{
+    ContentId, ContentItem, ContentStatus, NewUser, Role, Timestamp, UserId, UserStatus,
+};
 use ferrite_store::Store;
 use ferrite_store_tests::{TestDb, backend_tests};
 use serde_json::json;
@@ -312,9 +314,110 @@ pub async fn authors_resolve_logins(db: &TestDb) {
     assert!(svc.authors(&a, &[]).await.unwrap().is_empty());
 }
 
+pub async fn refs_respect_can_read(db: &TestDb) {
+    let svc = service(db);
+    let store = db.store();
+    let author = actor(store, Role::Author).await;
+    let other = actor(store, Role::Author).await;
+    let editor = actor(store, Role::Editor).await;
+    let own_draft = item(db, &svc, &author, ContentStatus::Draft).await;
+    let others_draft = item(db, &svc, &other, ContentStatus::Draft).await;
+    let others_public = item(db, &svc, &other, ContentStatus::Published).await;
+    let media = svc
+        .create(
+            &other,
+            ContentDraft {
+                kind: "media".into(),
+                ..draft("A picture")
+            },
+        )
+        .await
+        .unwrap();
+    let mut media = media;
+    media.status = ContentStatus::Published;
+    media.published_at = Some(at(-HOUR));
+    let media = store.read().content().update(&media).await.unwrap();
+    let missing = ContentId::new();
+    let ids = [
+        own_draft.id,
+        others_draft.id,
+        others_public.id,
+        media.id,
+        missing,
+        own_draft.id,
+    ];
+
+    let refs = |list: Vec<ContentRef>| {
+        let mut ids: Vec<ContentId> = list.iter().map(|r| r.id).collect();
+        ids.sort_unstable();
+        ids
+    };
+    let sorted = |mut v: Vec<ContentId>| {
+        v.sort_unstable();
+        v
+    };
+
+    // An author gets its own draft and others' public items, never others' drafts.
+    let got = svc.refs(&author, &ids).await.unwrap();
+    assert_eq!(
+        refs(got.clone()),
+        sorted(vec![own_draft.id, others_public.id, media.id])
+    );
+    let public = got.iter().find(|r| r.id == others_public.id).unwrap();
+    assert_eq!(public.kind, "post");
+    assert_eq!(public.title, others_public.title);
+    assert_eq!(public.status, ContentStatus::Published);
+    assert_eq!(
+        public.permalink.as_deref(),
+        Some(format!("/{}/", others_public.slug).as_str())
+    );
+    // Not public: no permalink. Media are files, never pages.
+    let own = got.iter().find(|r| r.id == own_draft.id).unwrap();
+    assert_eq!(own.permalink, None);
+    let pic = got.iter().find(|r| r.id == media.id).unwrap();
+    assert_eq!(
+        (pic.kind.as_str(), pic.permalink.as_deref()),
+        ("media", None)
+    );
+
+    // An editor reads everything that exists.
+    assert_eq!(
+        refs(svc.refs(&editor, &ids).await.unwrap()),
+        sorted(vec![
+            own_draft.id,
+            others_draft.id,
+            others_public.id,
+            media.id
+        ])
+    );
+    // Media need `media:read` too.
+    let content_only =
+        editor.with_scopes(ferrite_core::Scopes::from_strs(&["content:read".to_owned()]).unwrap());
+    assert_eq!(
+        refs(svc.refs(&content_only, &ids).await.unwrap()),
+        sorted(vec![own_draft.id, others_draft.id, others_public.id])
+    );
+    // 1..=200 ids, else `ids`.
+    let many: Vec<ContentId> = (0..201).map(|_| ContentId::new()).collect();
+    for bad in [&[][..], &many[..]] {
+        assert!(matches!(
+            svc.refs(&editor, bad).await,
+            Err(CoreError::InvalidField { field: "ids", .. })
+        ));
+    }
+    // Without `content:read`, nothing.
+    let no_scope =
+        editor.with_scopes(ferrite_core::Scopes::from_strs(&["users:read".to_owned()]).unwrap());
+    assert!(matches!(
+        svc.refs(&no_scope, &ids).await,
+        Err(CoreError::Forbidden(_))
+    ));
+}
+
 backend_tests!(
     allowed_actions_matrix,
     allowed_actions_follow_token_scopes,
     counts_respect_can_read,
+    refs_respect_can_read,
     authors_resolve_logins,
 );

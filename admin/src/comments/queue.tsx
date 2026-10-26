@@ -63,6 +63,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { REDIRECTING } from "@/content/bulk";
 import { SelectionBar, type SelectionAction } from "@/content/bulk-bar";
+import { contentTargetQuery } from "@/content/find-item";
 import { editPath } from "@/content/list-columns";
 import { DESTRUCTIVE } from "@/lib/destructive";
 import { uiLocale } from "@/lib/locale";
@@ -176,16 +177,13 @@ export function CommentsQueue({ search, setSearch }: CommentsQueueProps) {
     return map;
   }, [loaded, parentLists]);
 
-  // The item's title for the filter chip: from the rows, else from any comment on it.
-  const itemProbe = useQuery({
-    queryKey: qk.comments.list({ item: search.item ?? "" }),
-    queryFn: ({ signal }) => listComments({ item: search.item ?? "", limit: 1 }, { signal }),
+  // The item's title for the filter chip: from the rows, else the item named by id.
+  const itemRef = useQuery({
+    ...contentTargetQuery(search.item ?? ""),
     enabled: search.item !== undefined && !loaded.some((c) => c.item_id === search.item),
-    staleTime: 60_000,
   });
   const itemTitle =
-    loaded.find((c) => c.item_id === search.item)?.item.title ??
-    itemProbe.data?.items[0]?.item.title;
+    loaded.find((c) => c.item_id === search.item)?.item.title ?? itemRef.data?.title;
 
   // Selection belongs to one tab and filter.
   const scope = JSON.stringify(filters);

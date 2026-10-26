@@ -9,6 +9,7 @@ import type {
   SchemaContentInput,
   SchemaContentList,
   SchemaContentPatch,
+  SchemaContentRefDto,
   SchemaRevisionDto,
   SchemaRevisionList,
   SchemaScheduleRequest,
@@ -54,6 +55,16 @@ export function listContent(
 
 export function getContent(type: string, id: string): Promise<SchemaContentDto> {
   return unwrap(api.GET("/api/v1/content/{type}/{id}", { params: { path: { type, id } } }));
+}
+
+/**
+ * `GET /content/refs`: the items of `ids` (1..=200) the caller may read, with type,
+ * title, status and permalink; unknown and unreadable ids are absent.
+ */
+export function getContentRefs(ids: readonly string[]): Promise<SchemaContentRefDto[]> {
+  return unwrap(
+    api.GET("/api/v1/content/refs", { params: { query: { ids: ids.join(",") } } }),
+  ).then((list) => list.items);
 }
 
 export function createContent(type: string, body: SchemaContentInput): Promise<SchemaContentDto> {

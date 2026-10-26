@@ -58,6 +58,8 @@ export const qk = {
       ["content", type, "item", id, "revisions", rid] as const,
     autosave: (type: string, id: string) => ["content", type, "item", id, "autosave"] as const,
   },
+  /** An item named by id alone (`content/find-item.ts`, `GET /content/refs`). */
+  contentRef: (id: string) => ["content-ref", id] as const,
   /** The palette's content search (`palette/sources.ts`): one entry per query. */
   paletteSearch: (q: string, types: readonly string[]) => ["palette-search", q, types] as const,
   type: (name: string) => ["types", name] as const,

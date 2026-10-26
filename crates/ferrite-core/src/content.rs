@@ -27,7 +27,9 @@ mod allowed;
 mod lifecycle;
 pub mod seo;
 
-pub use admin::{AdminQuery, AuthorRef, AutosaveDraft, MAX_REVISIONS_LISTED, StatusCounts};
+pub use admin::{
+    AdminQuery, AuthorRef, AutosaveDraft, ContentRef, MAX_REFS, MAX_REVISIONS_LISTED, StatusCounts,
+};
 pub use allowed::{AllowedActions, allowed_actions};
 pub use seo::{Seo, SeoPatch};
 

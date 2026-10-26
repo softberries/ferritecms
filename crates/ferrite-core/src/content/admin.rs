@@ -20,8 +20,9 @@ use ferrite_store::{MAX_ID_FILTER, StoreError, validate_json};
 
 use super::{ContentDraft, ContentService, Edit, Seo, SeoPatch, WALKED, check_body};
 use crate::{
-    Actor, CoreError,
+    Actor, CoreError, DepKeys,
     actor::{Area, Capability, can, can_edit, can_read, require, require_read, role_can_edit},
+    site::{MEDIA_KIND, has_public_page, public_paths},
     tx::finish,
 };
 
@@ -75,6 +76,22 @@ pub struct AuthorRef {
     pub id: UserId,
     pub login: String,
     pub display_name: String,
+}
+
+/// Most ids one [`ContentService::refs`] call takes.
+pub const MAX_REFS: usize = 200;
+
+/// An item as a reference to it shows ([`ContentService::refs`]): what the admin needs
+/// to name an item it holds only the id of (relation fields, menu targets, filters).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentRef {
+    pub id: ContentId,
+    pub kind: String,
+    pub title: String,
+    pub status: ContentStatus,
+    /// The item's public path; `None` unless it has a public page now (published, not
+    /// future-dated, not media).
+    pub permalink: Option<String>,
 }
 
 /// How many items of one type are in each status, as the actor may read them
@@ -407,6 +424,63 @@ impl ContentService {
             }
         }
         Ok(out)
+    }
+
+    /// The items of `ids` that `actor` may read, as [`ContentRef`]s in no particular
+    /// order (needs `require_read(Content)`): the same visibility as
+    /// [`list`](Self::list) (`readable_by`, then [`can_read`]), any status and type,
+    /// media items only when `actor` may also read media (`media:read`). Unknown and
+    /// unreadable ids are simply absent, repeated ids answered once. 1..=[`MAX_REFS`]
+    /// ids, else `InvalidField { field: "ids" }`. One content query, plus the
+    /// permalink reads ([`site::public_paths`](crate::site)) for items with a public
+    /// page.
+    pub async fn refs(
+        &self,
+        actor: &Actor,
+        ids: &[ContentId],
+    ) -> Result<Vec<ContentRef>, CoreError> {
+        require_read(actor, Area::Content)?;
+        if ids.is_empty() || ids.len() > MAX_REFS {
+            return Err(CoreError::invalid_field(
+                "ids",
+                format!("1 to {MAX_REFS} ids"),
+            ));
+        }
+        let mut unique = ids.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        let now = Timestamp::now();
+        let media = require_read(actor, Area::Media).is_ok();
+        let repos = self.store.read();
+        let items: Vec<ContentItem> = repos
+            .content()
+            .list(&ContentQuery {
+                readable_by: readable_by(actor, now),
+                limit: MAX_REFS as u32,
+                ids: unique,
+                ..ContentQuery::default()
+            })
+            .await?
+            .items
+            .into_iter()
+            .filter(|i| can_read(actor, i, now) && (media || i.kind != MEDIA_KIND))
+            .collect();
+        let (paged, rest): (Vec<_>, Vec<_>) =
+            items.into_iter().partition(|i| has_public_page(i, now));
+        let rules = self.permalinks.pin();
+        let paths = public_paths(repos, rules.as_ref(), paged, &mut DepKeys::default()).await?;
+        let to_ref = |item: ContentItem, permalink| ContentRef {
+            id: item.id,
+            kind: item.kind,
+            title: item.title,
+            status: item.status,
+            permalink,
+        };
+        Ok(paths
+            .into_iter()
+            .map(|(item, path)| to_ref(item, Some(path)))
+            .chain(rest.into_iter().map(|item| to_ref(item, None)))
+            .collect())
     }
 
     /// How many items of type `kind` are in each status, counting only what `actor` may

@@ -1,7 +1,7 @@
 // A `relation` field: a combobox searching `GET /content/{type}?q=` across every content
 // type the sidebar shows (the schema names no target type, P37), each result with its
-// type and status. The value is the item's UUID. The chosen item is looked up by id in
-// those types (the first that has it); one that is gone or unreadable shows
+// type and status. The value is the item's UUID. The chosen item is named by id
+// (`GET /content/refs`, any type); one that is gone or unreadable shows
 // "Unknown item <short id>" and keeps the value until another is chosen or it is cleared.
 
 import { keepPreviousData, useQueries, useQuery } from "@tanstack/react-query";
@@ -23,9 +23,9 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   type ContentTarget,
-  type TypeRef,
   contentTargetQuery,
   useNavContentTypes,
+  useTypeLabel,
 } from "@/content/find-item";
 import type { ControlIds } from "./fields-context";
 import { uuidOf } from "./fields-model";
@@ -34,14 +34,6 @@ import { uuidOf } from "./fields-model";
 const SEARCH_DEBOUNCE_MS = 150;
 /** Results per type. */
 const PER_TYPE = 8;
-
-/** The item `id` in the first of `types` that has it; `null` when none does. */
-function useTarget(id: string | null, types: TypeRef[]) {
-  return useQuery({
-    ...contentTargetQuery(id ?? "", types),
-    enabled: id !== null && types.length > 0,
-  });
-}
 
 export function RelationField({
   ids,
@@ -56,6 +48,7 @@ export function RelationField({
 }) {
   const { t } = useTranslation("editor");
   const types = useNavContentTypes();
+  const typeLabel = useTypeLabel();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [q, setQ] = useState("");
@@ -66,7 +59,7 @@ export function RelationField({
 
   const stored = typeof value === "string" ? value : null;
   const id = uuidOf(stored);
-  const target = useTarget(id, types);
+  const target = useQuery({ ...contentTargetQuery(id ?? ""), enabled: id !== null });
   // Just picked: known before the lookup answers.
   const [picked, setPicked] = useState<ContentTarget | null>(null);
   const shown = picked?.id === id ? picked : (target.data ?? null);
@@ -122,7 +115,9 @@ export function RelationField({
                 {label}
               </span>
               {shown ? (
-                <span className="shrink-0 text-xs text-muted-foreground">{shown.type.label}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {typeLabel(shown.type)}
+                </span>
               ) : null}
             </span>
             <ChevronsUpDownIcon data-icon="inline-end" className="text-muted-foreground" />
@@ -156,7 +151,7 @@ export function RelationField({
                         key={c.id}
                         value={c.id}
                         onSelect={() =>
-                          choose({ id: c.id, title: c.title, status: c.status, type })
+                          choose({ id: c.id, title: c.title, status: c.status, type: type.name })
                         }
                       >
                         <span className="min-w-0 flex-1 truncate" title={c.title}>

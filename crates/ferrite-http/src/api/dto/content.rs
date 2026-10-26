@@ -8,7 +8,7 @@
 use chrono::{DateTime, Utc};
 use ferrite_core::{
     ContentDraft,
-    content::{AllowedActions, AuthorRef, AutosaveDraft, Seo, SeoPatch, StatusCounts},
+    content::{AllowedActions, AuthorRef, AutosaveDraft, ContentRef, Seo, SeoPatch, StatusCounts},
 };
 use ferrite_domain::{Autosave, ContentId, ContentItem, Revision, TermId, Timestamp};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -260,6 +260,40 @@ impl From<StatusCounts> for ContentCountsDto {
             trash: c.trash,
         }
     }
+}
+
+/// An item named by id (`GET /content/refs`).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ContentRefDto {
+    pub id: Uuid,
+    /// The content type (`post`, `page`, `media`, …).
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub title: String,
+    /// `draft`, `pending`, `scheduled`, `published`, `private` or `trash`.
+    pub status: String,
+    /// The public path; `null` unless the item has a public page now (published, not
+    /// future-dated, not media).
+    pub permalink: Option<String>,
+}
+
+impl From<ContentRef> for ContentRefDto {
+    fn from(r: ContentRef) -> Self {
+        Self {
+            id: r.id.as_uuid(),
+            kind: r.kind,
+            title: r.title,
+            status: r.status.as_str().to_owned(),
+            permalink: r.permalink,
+        }
+    }
+}
+
+/// `GET /content/refs`: the requested items the caller may read, in no particular
+/// order; unknown and unreadable ids are absent.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ContentRefList {
+    pub items: Vec<ContentRefDto>,
 }
 
 /// `GET /content/{type}`.

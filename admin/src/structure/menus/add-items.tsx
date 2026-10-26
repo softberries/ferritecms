@@ -123,7 +123,7 @@ function ContentTab({ onAdd, room, disabled }: AddItemsProps) {
   const add = () => {
     const targets = [...picked.values()];
     for (const target of targets) {
-      qc.setQueryData(contentTargetQuery(target.id, types).queryKey, target);
+      qc.setQueryData(contentTargetQuery(target.id).queryKey, target);
     }
     onAdd(targets.map((x) => ({ kind: "item", targetId: x.id, url: null, label: "" })));
     setPicked(new Map());
@@ -156,7 +156,12 @@ function ContentTab({ onAdd, room, disabled }: AddItemsProps) {
             <h3 className="px-1 pt-1 text-xs font-medium text-muted-foreground">{type.label}</h3>
             <ul className="flex flex-col">
               {items.map((c) => {
-                const target: ContentTarget = { id: c.id, title: c.title, status: c.status, type };
+                const target: ContentTarget = {
+                  id: c.id,
+                  title: c.title,
+                  status: c.status,
+                  type: type.name,
+                };
                 return (
                   <PickRow
                     key={c.id}

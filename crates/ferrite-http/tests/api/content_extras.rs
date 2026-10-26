@@ -12,6 +12,7 @@ api_tests!(
     content_dto_has_author_and_allowed,
     list_items_have_author_and_allowed,
     counts_endpoint_shape_and_routing,
+    content_refs_endpoint,
     revisions_carry_author,
 );
 
@@ -256,6 +257,131 @@ async fn counts_endpoint_shape_and_routing(api: Api) -> Api {
     api.get(&format!("{POSTS}/counts"))
         .await
         .assert_problem(401, "unauthenticated");
+    api
+}
+
+async fn content_refs_endpoint(api: Api) -> Api {
+    let ann = api.user("ann", Role::Author, false).await;
+    let bob = api.user("bob", Role::Author, false).await;
+    let eve = api.user("eve", Role::Editor, false).await;
+    let (a, b, e) = (
+        api.bearer(&ann, &["*"]).await,
+        api.bearer(&bob, &["*"]).await,
+        api.bearer(&eve, &["*"]).await,
+    );
+    let create = async |t: &crate::harness::Bearer, title: &str| {
+        let r = t
+            .send(
+                &api,
+                Method::POST,
+                POSTS,
+                Some(&json!({"title": title, "slug": title.to_lowercase()})),
+                None,
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
+        r.json()["id"].as_str().unwrap().to_owned()
+    };
+    let mine = create(&a, "Mine").await;
+    let draft = create(&b, "Draft").await;
+    let public = create(&b, "Public").await;
+    let r = b
+        .send(
+            &api,
+            Method::POST,
+            &format!("{POSTS}/{public}/publish"),
+            None,
+            Some(1),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let missing = Uuid::new_v4();
+    let url = format!("/api/v1/content/refs?ids={mine},{draft},{public},{missing}");
+
+    let sorted = |v: Value| {
+        let mut items = v["items"].as_array().unwrap().clone();
+        items.sort_by_key(|i| i["title"].as_str().unwrap().to_owned());
+        Value::Array(items)
+    };
+    let r = a.get(&api, &url).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert_eq!(
+        sorted(r.json()),
+        json!([
+            {"id": mine, "type": "post", "title": "Mine", "status": "draft", "permalink": null},
+            {"id": public, "type": "post", "title": "Public", "status": "published", "permalink": "/public/"},
+        ])
+    );
+    // The editor reads the other author's draft too.
+    let titles: Vec<Value> = sorted(e.get(&api, &url).await.json())
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["title"].clone())
+        .collect();
+    assert_eq!(titles, [json!("Draft"), json!("Mine"), json!("Public")]);
+
+    // 1..=200 ids; a malformed id is a bad query value.
+    let many: Vec<String> = (0..201).map(|_| Uuid::new_v4().to_string()).collect();
+    let prob = e
+        .get(
+            &api,
+            &format!("/api/v1/content/refs?ids={}", many.join(",")),
+        )
+        .await
+        .assert_problem(422, "validation");
+    assert_eq!(prob["errors"][0]["field"], "ids");
+    let prob = e
+        .get(&api, "/api/v1/content/refs?ids=")
+        .await
+        .assert_problem(422, "validation");
+    assert_eq!(prob["errors"][0]["field"], "ids");
+    let prob = e
+        .get(&api, &format!("/api/v1/content/refs?ids={mine},nope"))
+        .await
+        .assert_problem(400, "validation");
+    assert_eq!(prob["errors"][0]["field"], "ids");
+
+    // Every role holds `read_admin`, so the 403 is a token without `content:read`;
+    // then no credentials.
+    api.bearer(&eve, &["users:read"])
+        .await
+        .get(&api, &url)
+        .await
+        .assert_problem(403, "forbidden");
+    api.get(&url).await.assert_problem(401, "unauthenticated");
+
+    // Routing: `refs` is not a type, the list of a real type still answers, and `refs`
+    // cannot be registered as one.
+    assert_eq!(a.get(&api, POSTS).await.status, StatusCode::OK);
+    let r = e
+        .send(
+            &api,
+            Method::POST,
+            "/api/v1/types",
+            Some(&json!({"name": "refs", "label": "Refs"})),
+            None,
+        )
+        .await;
+    assert_eq!(
+        r.status,
+        StatusCode::FORBIDDEN,
+        "editors cannot register types: {r:?}"
+    );
+    let root = api.user("root", Role::Admin, false).await;
+    let prob = api
+        .bearer(&root, &["*"])
+        .await
+        .send(
+            &api,
+            Method::POST,
+            "/api/v1/types",
+            Some(&json!({"name": "refs", "label": "Refs"})),
+            None,
+        )
+        .await
+        .assert_problem(422, "validation");
+    assert_eq!(prob["errors"][0]["field"], "name");
     api
 }
 

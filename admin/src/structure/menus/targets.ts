@@ -1,5 +1,5 @@
-// What a menu entry links to, for its row: a content item's title and type (looked up in
-// the sidebar's types, `content/find-item.ts`), a term's name and taxonomy, or a custom
+// What a menu entry links to, for its row: a content item's title and type (named by id,
+// any type, `content/find-item.ts`), a term's name and taxonomy, or a custom
 // link's address. Entries added in this session seed these queries with what Add items
 // already knows, so they show without a round trip.
 
@@ -9,7 +9,7 @@ import { ApiError } from "@/api/problem";
 import type { TermDto } from "@/api/taxonomies";
 import { taxonomiesQuery } from "@/api/taxonomies";
 import { getTerm } from "@/api/terms";
-import { contentTargetQuery, useNavContentTypes } from "@/content/find-item";
+import { contentTargetQuery, useTypeLabel } from "@/content/find-item";
 import type { MenuNode } from "./menu-model";
 
 /** `GET /terms/{id}`; `null` once the server says it is gone. */
@@ -36,7 +36,7 @@ export type Target =
 
 /** Each entry's target by entry id (custom links have none). */
 export function useTargets(nodes: readonly MenuNode[]): Map<string, Target> {
-  const types = useNavContentTypes();
+  const typeLabel = useTypeLabel();
   const taxonomies = useQuery(taxonomiesQuery);
   const items = useMemo(
     () => [
@@ -54,20 +54,20 @@ export function useTargets(nodes: readonly MenuNode[]): Map<string, Target> {
     ],
     [nodes],
   );
-  const itemResults = useQueries({ queries: items.map((id) => contentTargetQuery(id, types)) });
+  const itemResults = useQueries({ queries: items.map((id) => contentTargetQuery(id)) });
   const termResults = useQueries({ queries: terms.map((id) => termTargetQuery(id)) });
 
   return useMemo(() => {
     const byTarget = new Map<string, Target>();
     items.forEach((id, i) => {
       const r = itemResults[i];
-      if (!r || r.isPending || types.length === 0) byTarget.set(id, { state: "loading" });
+      if (!r || r.isPending) byTarget.set(id, { state: "loading" });
       else if (r.isError) byTarget.set(id, { state: "failed" });
       else if (r.data) {
         byTarget.set(id, {
           state: "found",
           title: r.data.title,
-          kind: r.data.type.label,
+          kind: typeLabel(r.data.type),
           status: r.data.status,
         });
       } else byTarget.set(id, { state: "missing" });
@@ -91,5 +91,5 @@ export function useTargets(nodes: readonly MenuNode[]): Map<string, Target> {
       if (target) out.set(n.id, target);
     }
     return out;
-  }, [nodes, items, terms, itemResults, termResults, taxonomies.data, types.length]);
+  }, [nodes, items, terms, itemResults, termResults, taxonomies.data, typeLabel]);
 }
