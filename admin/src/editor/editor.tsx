@@ -923,8 +923,14 @@ function WritingSurface({
     return () => dom.removeEventListener("keydown", onKey);
   }, [editor]);
 
-  // A new item opens with the cursor in the title.
+  // A new item opens with the cursor in the title, unless a dialog (the command palette
+  // opened while this screen loaded) already holds the focus.
   const [focusTitle] = useState(() => doc.initialFocus === "title");
+  useEffect(() => {
+    if (!focusTitle) return;
+    if (document.activeElement?.closest("[role=dialog], [role=alertdialog]")) return;
+    title.current?.focus();
+  }, [focusTitle]);
 
   const onTitleKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     const el = e.currentTarget;
@@ -953,7 +959,6 @@ function WritingSurface({
         ref={title}
         data-slot="editor-title"
         rows={1}
-        autoFocus={focusTitle}
         value={doc.title}
         readOnly={!editable || doc.restoring}
         aria-label={t("title.label")}
