@@ -123,7 +123,9 @@ export function RecentDrafts({ me, canWrite }: { me: string; canWrite: boolean }
           </Link>
         ) : undefined
       }
-      className="lg:col-span-4"
+      // With drafts the card is as tall as its list (a short list beside the chart would
+      // leave an empty block); empty, loading or failed, it fills the row.
+      className={items.length > 0 ? "lg:col-span-4 lg:self-start" : "lg:col-span-4"}
     >
       {body}
     </Panel>
