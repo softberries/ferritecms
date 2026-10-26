@@ -974,9 +974,9 @@ fn comments_section_form_and_states() {
     for needle in [
         "120 comments</h2>",
         "<nav class=\"pagination comment-pages\" aria-label=\"Comment pages\">",
-        "<a class=\"pagination__prev\" rel=\"prev\" href=\"&#x2f;hello&#x2f;\"><span aria-hidden=\"true\">←</span> Older comments</a>",
+        "<a class=\"pagination__prev\" rel=\"prev\" href=\"&#x2f;hello&#x2f;#comments\"><span aria-hidden=\"true\">←</span> Older comments</a>",
         "<p class=\"pagination__status\">Page 2 of 3</p>",
-        "<a class=\"pagination__next\" rel=\"next\" href=\"&#x2f;hello&#x2f;?cpage=3\">Newer comments <span aria-hidden=\"true\">→</span></a>",
+        "<a class=\"pagination__next\" rel=\"next\" href=\"&#x2f;hello&#x2f;?cpage=3#comments\">Newer comments <span aria-hidden=\"true\">→</span></a>",
     ] {
         assert!(html.contains(needle), "missing {needle:?} in:\n{html}");
     }
