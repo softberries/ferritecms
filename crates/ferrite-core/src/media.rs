@@ -22,7 +22,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ContentId, ContentItem, ContentOrder, ContentQuery,
-    Media, Page, ReadableBy, Timestamp, UserId,
+    ContentStatus, Media, MediaKind, Page, ReadableBy, SearchQuery, Timestamp, UserId,
 };
 use ferrite_store::Store;
 use serde_json::Value;
@@ -82,6 +82,21 @@ pub struct MediaQuery {
     /// `next_cursor` of the previous page.
     pub cursor: Option<String>,
     pub author: Option<UserId>,
+    /// Full-text search over the title (the original file name is not indexed). Blank
+    /// text is no search; not combinable with `author` or `trash` (`InvalidField` `q`;
+    /// trashed items are not in the index). Results come by relevance.
+    pub q: Option<String>,
+    /// Only items of this kind (by their `media.mime`); combines with `q`.
+    pub kind: Option<MediaKind>,
+    /// Only trashed items (else every status but trash).
+    pub trash: bool,
+}
+
+impl MediaQuery {
+    /// The search text, if any (trimmed, blank = none).
+    pub fn search_text(&self) -> Option<&str> {
+        self.q.as_deref().map(str::trim).filter(|q| !q.is_empty())
+    }
 }
 
 /// The editable fields of a media item; `None` keeps the value.
@@ -241,10 +256,15 @@ impl MediaService {
         Ok(MediaItem { item, media })
     }
 
-    /// One page of media items in every status but trash, newest update first
-    /// (`media:read`). Without `edit_others` in its role, `actor` sees only items
-    /// publicly visible now and its own, as [`ContentService::list`] does. Items
-    /// without a `media` row are left out (the page can then be shorter than `limit`).
+    /// One page of media items, newest update first (`media:read`): every status but
+    /// trash, or with [`MediaQuery::trash`] only trashed items. Without `edit_others`
+    /// in its role, `actor` sees only items publicly visible now and its own, as
+    /// [`ContentService::list`] does. [`MediaQuery::kind`] filters by the `media` row's
+    /// type in the store query, so pages stay exact. With search text the ids come from
+    /// the search index (kind `media`, the same statuses and visibility, best match
+    /// first) and the items are loaded in that order, dropping any whose status,
+    /// visibility or kind does not match (a page can then be shorter than `limit`); the
+    /// search cursor is passed through. Items without a `media` row are left out.
     pub async fn list(
         &self,
         actor: &Actor,
@@ -256,21 +276,67 @@ impl MediaService {
             user: actor.user,
             now,
         });
+        let statuses = if query.trash {
+            vec![ContentStatus::Trash]
+        } else {
+            WALKED.to_vec()
+        };
         let repos = self.store.read();
-        let page = repos
-            .content()
-            .list(&ContentQuery {
-                kind: Some(MEDIA_KIND.into()),
-                statuses: WALKED.to_vec(),
-                author: query.author,
-                readable_by,
-                order: ContentOrder::UpdatedDesc,
-                limit: query.limit,
-                cursor: query.cursor,
-                ..ContentQuery::default()
-            })
-            .await?;
-        let ids: Vec<ContentId> = page.items.iter().map(|i| i.id).collect();
+        let (items, next_cursor) = match query.search_text() {
+            None => {
+                let page = repos
+                    .content()
+                    .list(&ContentQuery {
+                        kind: Some(MEDIA_KIND.into()),
+                        statuses,
+                        author: query.author,
+                        readable_by,
+                        media_kind: query.kind,
+                        order: ContentOrder::UpdatedDesc,
+                        limit: query.limit,
+                        cursor: query.cursor,
+                        ..ContentQuery::default()
+                    })
+                    .await?;
+                (page.items, page.next_cursor)
+            }
+            Some(q) => {
+                if query.author.is_some() || query.trash {
+                    return Err(CoreError::invalid_field(
+                        "q",
+                        "q cannot be combined with author or trash",
+                    ));
+                }
+                let hits = repos
+                    .search()
+                    .search(&SearchQuery {
+                        q: q.to_owned(),
+                        kinds: vec![MEDIA_KIND.into()],
+                        statuses: statuses.clone(),
+                        readable_by,
+                        limit: query.limit,
+                        cursor: query.cursor.clone(),
+                    })
+                    .await?;
+                // An empty id set short-circuits (M1c-1 R3).
+                let items = if hits.items.is_empty() {
+                    Vec::new()
+                } else {
+                    repos.content().get_many(&hits.items).await?
+                };
+                // The rows may have changed since the search read them.
+                let items = items
+                    .into_iter()
+                    .filter(|i| {
+                        i.kind == MEDIA_KIND
+                            && statuses.contains(&i.status)
+                            && can_read(actor, i, now)
+                    })
+                    .collect();
+                (items, hits.next_cursor)
+            }
+        };
+        let ids: Vec<ContentId> = items.iter().map(|i| i.id).collect();
         // An empty id set short-circuits (M1c-1 R3); a page holds at most `MAX_PAGE`
         // (= `MAX_ID_FILTER`) ids.
         let mut rows: HashMap<ContentId, Media> = if ids.is_empty() {
@@ -284,18 +350,18 @@ impl MediaService {
                 .map(|m| (m.item_id, m))
                 .collect()
         };
-        let items = page
-            .items
+        let items = items
             .into_iter()
             .filter_map(|item| {
                 let media = rows.remove(&item.id)?;
+                // Search hits are filtered by kind here; store lists already are.
+                if query.kind.is_some_and(|k| !k.matches(&media.mime)) {
+                    return None;
+                }
                 Some(MediaItem { item, media })
             })
             .collect();
-        Ok(Page {
-            items,
-            next_cursor: page.next_cursor,
-        })
+        Ok(Page { items, next_cursor })
     }
 
     /// Changes the title and/or alt text of media item `id`, which must still be at
@@ -396,6 +462,49 @@ impl MediaService {
         self.content
             .trash(&content_writer(actor), id, expected_version)
             .await
+    }
+
+    /// Restores trashed media item `id` as **published**, the status uploads have
+    /// (M2a-2b P5), in one `Tx`: the content lifecycle's restore (trash -> draft, with
+    /// `media:write` in place of `content:write` and its role rules, R8: `edit_own` for
+    /// the author, `edit_others` otherwise, never contributors; the item is indexed for
+    /// search again), then the publish (`publish_own` / `publish_others`; the
+    /// `published_at` of the upload is kept, so the item is public again and its
+    /// `/_media` URLs answer). Each step emits its own `invalidate` event with
+    /// `post:<id>`, and the publish queues the `post.published` action jobs again, as an
+    /// upload does. A stale version is `Conflict`, an item not in trash `Invalid`, a
+    /// missing or non-media item `NotFound`.
+    pub async fn restore(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+        expected_version: i64,
+    ) -> Result<MediaItem, CoreError> {
+        require_scope(actor, Some(Scope::write(Area::Media)))?;
+        let writer = content_writer(actor);
+        // One set of rules for the whole write (R10).
+        let rules = self.permalinks.pin();
+        let tx = self.store.begin().await?;
+        let done = async {
+            let kind = tx.content().get(id).await?.map(|i| i.kind);
+            if kind.as_deref() != Some(MEDIA_KIND) {
+                return Err(CoreError::NotFound);
+            }
+            let item = ContentService::restore_in(
+                tx.as_ref(),
+                rules.as_ref(),
+                &writer,
+                id,
+                expected_version,
+            )
+            .await?;
+            let item =
+                ContentService::publish_in(tx.as_ref(), rules.as_ref(), &writer, item).await?;
+            let media = tx.media().get(id).await?.ok_or(CoreError::NotFound)?;
+            Ok(MediaItem { item, media })
+        }
+        .await;
+        finish(tx, done).await
     }
 
     /// Permanently deletes trashed media item `id` ([`ContentService::delete`], with

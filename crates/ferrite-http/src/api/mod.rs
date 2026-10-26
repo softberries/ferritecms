@@ -177,6 +177,7 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
             media::update_media,
             media::delete_media
         ))
+        .routes(routes!(media::restore_media))
         .merge(uploads(
             routes!(plugins::list_plugins, plugins::install_plugin),
             plugins::MAX_UPLOAD_BODY,

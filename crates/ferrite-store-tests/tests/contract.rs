@@ -90,6 +90,7 @@ backend_tests!(
     slugs_with_prefix_matches,
     slugs_with_prefix_limit_1000,
     content_query_kinds,
+    media_kind_filters_list_and_count,
 );
 
 backend_tests!(

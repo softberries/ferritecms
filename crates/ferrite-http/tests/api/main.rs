@@ -14,6 +14,7 @@ mod foundation;
 mod idempotency;
 mod jobs;
 mod media;
+mod media_filters;
 mod plugins;
 mod reset;
 mod settings_ext;

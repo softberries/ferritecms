@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use ferrite_domain::{
-    ContentId, ContentItem, ContentQuery, ContentType, NewContent, Page, ParentFilter, Revision,
-    RevisionId, Timestamp, UserId,
+    ContentId, ContentItem, ContentQuery, ContentType, MediaKind, NewContent, Page, ParentFilter,
+    Revision, RevisionId, Timestamp, UserId,
 };
 use ferrite_store::{
     ContentRepo, ContentTypeRepo, ListPart, MAX_ID_FILTER, MAX_META_KEYS, MAX_SLUG_PREFIX_RESULTS,
@@ -438,6 +438,22 @@ fn push_filters(qb: &mut QueryBuilder<Sqlite>, query: &ContentQuery) {
     }
     if let Some(t) = query.published_before {
         qb.push(" AND published_at < ").push_bind(t.as_micros());
+    }
+    if let Some(kind) = query.media_kind {
+        qb.push(" AND id IN (SELECT item_id FROM media WHERE ")
+            .push(media_kind_sql(kind))
+            .push(")");
+    }
+}
+
+/// The `media` row predicate of a [`MediaKind`] (by the type's top-level part; the
+/// same text on both backends).
+fn media_kind_sql(kind: MediaKind) -> &'static str {
+    match kind {
+        MediaKind::Image => "substr(mime, 1, 6) = 'image/'",
+        MediaKind::Video => "substr(mime, 1, 6) = 'video/'",
+        MediaKind::Audio => "substr(mime, 1, 6) = 'audio/'",
+        MediaKind::Document => "substr(mime, 1, 6) NOT IN ('image/', 'video/', 'audio/')",
     }
 }
 

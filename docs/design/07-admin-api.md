@@ -139,7 +139,7 @@ importer. The admin SPA that uses them is M2b.
 | Users & tokens | `GET/POST /users`, `GET/PATCH/DELETE /users/{id}` (`DELETE ?reassign=<id>` moves the user's content), `POST /users/{id}/password`, `GET/POST /users/{id}/tokens`, `DELETE /users/{id}/tokens/{tid}` | M2a-1 | others: `manage_users` + `users:read`/`users:write`; oneself: own e-mail, display name and tokens (`users:read` to list tokens, `users:write` to change); own password via `POST /auth/password` |
 | Redirects | `GET/POST /redirects`, `GET/PATCH/DELETE /redirects/{id}`, `POST /redirects/import` (CSV), `GET /redirects/export` (CSV) | M2a-1 | `manage_redirects` (admins) + `redirects:read`/`redirects:write` |
 | Settings | `GET/PATCH /settings` (the allowlist `ferrite_core::settings::SETTINGS`) | M2a-1 | reads `settings:read`; writes `manage_settings` + `settings:write` |
-| Media | `POST /media` (multipart, streaming, `Idempotency-Key`), `GET /media?author&limit&cursor`, `GET/PATCH/DELETE /media/{id}` (`PATCH` title and alt with `If-Match`; `DELETE` trashes, `?force=true` deletes a trashed item; see **Media** below) | M2a-2b (built) | upload `upload_media` + `media:write`; reads `media:read` and `can_read` per item; edit, trash and delete the content role rules with `media:write` in place of `content:write` |
+| Media | `POST /media` (multipart, streaming, `Idempotency-Key`), `GET /media?q&kind&author&trash&limit&cursor`, `GET/PATCH/DELETE /media/{id}` (`PATCH` title and alt with `If-Match`; `DELETE` trashes, `?force=true` deletes a trashed item), `POST /media/{id}/restore` (`If-Match`; from trash to published); see **Media** below | M2a-2b (built); `q`, `kind`, `trash`, restore M2b-2 (P33) | upload `upload_media` + `media:write`; reads `media:read` and `can_read` per item; edit, trash, restore and delete the content role rules with `media:write` in place of `content:write` (restore also `publish_own`/`publish_others`) |
 | Comments | `GET /comments?status&item&limit&cursor`, `PATCH /comments/{id}` (`{ status }`), `DELETE /comments/{id}` (spam or trash only), public `POST /content/{type}/{id}/comments` (rate-limited, honeypot; see **Comments** below) | M2a-2b (built) | moderation `moderate_comments` + `comments:read`/`comments:write`; the submit: none, or a token with `comments:write` |
 | Themes | `GET /themes`, `POST /themes` (raw ustar bundle, `?activate=true`), `POST /themes/{name}/activate`, `GET/PATCH /themes/{name}/settings` (no delete, M2a-2 P30) | M2a-2a | reads `manage_themes` + `extensions:read` (`require_reader`); writes `manage_themes` + `extensions:write` |
 | Plugins | `GET /plugins`, `GET /plugins/{name}`, `POST /plugins/inspect` (multipart upload → permission report, nothing installed), `POST /plugins` (install with `approve` = the report's fingerprint), `POST /plugins/{name}/enable`, `POST /plugins/{name}/disable`, `DELETE /plugins/{name}` (`?purge=true`), `GET/PATCH /plugins/{name}/settings` | M2a-2a | reads `manage_plugins` + `extensions:read` (`require_reader`, so editors see no plugin list); writes `manage_plugins` + `extensions:write` |
@@ -220,6 +220,26 @@ rights and the records; `ferrite_http::media::Uploader` stages the bytes outside
   `author_id`, `created_at`, `updated_at`, `version`.
 - **List and edit**: `GET /media` lists every status but trash, newest change first,
   optionally by `author`; a role without `edit_others` sees its own items and public ones.
+  `trash=true` lists only trashed items instead (same visibility rule). `kind`
+  (`image`, `video`, `audio`, `document`) keeps the items whose `media.mime` starts with
+  `image/` (SVG included), `video/` or `audio/`, `document` being every other type; an
+  unknown value is `400 malformed-query`. It is a sub-select on `media` in the store's
+  list, so pages and cursors stay exact (M2b-2 Task 2). `q` searches the search index,
+  which holds a media item's **title** only (its body is empty; the original file name
+  is not indexed, so `q` never matches it), best match first, with the search cursor;
+  blank `q` is no search. `q` with `author` or with `trash=true` is `422` with
+  `errors[0].field` `q` (trashed items leave the index, so a trash search could find
+  nothing); `kind` combines with `q`, but is applied to the loaded hits, so a search page
+  can be shorter than `limit` while `next_cursor` is set. A list cursor and a search
+  cursor are not interchangeable (`400`, field `cursor`).
+  `POST /media/{id}/restore` (`If-Match`, `200 MediaDto` with `ETag`) restores a trashed
+  item in one `Tx` through the content lifecycle's restore (R8: `edit_own` for the
+  author, `edit_others` otherwise, never contributors; indexed for search again) and
+  then publishes it (`publish_own`/`publish_others`), so it ends `published` (the status
+  uploads have, P5) with its `published_at` kept and its `/_media` URLs answer again.
+  Each step emits its own `invalidate` event, and the publish queues the `post.published`
+  action jobs again, as an upload does. A non-trashed item is `422`, a stale version `412`
+  with `current`.
   `PATCH` changes `title` and `alt` (`If-Match`; a trashed item is `422`); `DELETE`
   (`If-Match`, `204`) trashes (its `/_media` URLs stop answering, since only public items
   are served) and `?force=true` deletes a trashed item and its `media` row. The blobs stay for M4's GC (03 §6).

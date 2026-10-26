@@ -18,6 +18,9 @@
 //! * Writes to an item (`PATCH`, `DELETE`) need `If-Match: "<version>"` (`428`
 //!   without it; a stale one is `412` with `current`). `DELETE` trashes;
 //!   `DELETE ?force=true` deletes a trashed item for good. Both answer `204`.
+//!   `POST /media/{id}/restore` (also `If-Match`) restores a trashed item as published
+//!   (M2b P33) and answers `200` with the item.
+//! * `GET /media` takes `q` (search over titles), `kind`, `author` and `trash`.
 //! * A malformed id, an item of another type and one the caller may not read are
 //!   `404`.
 
@@ -32,10 +35,10 @@ use axum::{
 use ferrite_core::{
     Actor, CoreError, MediaItem, MediaPatch, MediaQuery, NewUpload, check_file_name,
 };
-use ferrite_domain::{ContentId, ContentOrder, MAX_PAGE, UserId};
+use ferrite_domain::{ContentId, ContentOrder, MAX_PAGE, MediaKind, UserId};
 use serde::Deserialize;
 use serde_json::Value;
-use utoipa::IntoParams;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::{
@@ -64,16 +67,52 @@ const TITLE_PART: usize = ferrite_core::MAX_MEDIA_TITLE * 4;
 /// Largest `alt` part in bytes: 1 000 characters of up to 4 bytes.
 const ALT_PART: usize = ferrite_core::MAX_MEDIA_ALT * 4;
 
+/// The kind of a media item, from its type.
+#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaKindParam {
+    /// `image/…` (SVG included).
+    Image,
+    /// `video/…`.
+    Video,
+    /// `audio/…`.
+    Audio,
+    /// Every other type (PDF, office documents, archives, …).
+    Document,
+}
+
+impl From<MediaKindParam> for MediaKind {
+    fn from(k: MediaKindParam) -> Self {
+        match k {
+            MediaKindParam::Image => MediaKind::Image,
+            MediaKindParam::Video => MediaKind::Video,
+            MediaKindParam::Audio => MediaKind::Audio,
+            MediaKindParam::Document => MediaKind::Document,
+        }
+    }
+}
+
 /// The query of `GET /media`.
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct MediaListParams {
-    /// 1..=200; default 50.
-    pub limit: Option<u32>,
-    /// `next_cursor` of the previous page.
-    pub cursor: Option<String>,
+    /// Full-text search over the title (the original file name is not searched).
+    /// Blank is no search. Not combinable with `author` or `trash=true` (`422`, field
+    /// `q`); results come by relevance.
+    pub q: Option<String>,
+    /// Only items of this kind; combines with `q` and `trash`.
+    #[param(inline)]
+    pub kind: Option<MediaKindParam>,
     /// Only items uploaded by this user.
     pub author: Option<Uuid>,
+    /// `true`: only trashed items; default `false` (every status but trash).
+    #[serde(default)]
+    pub trash: bool,
+    /// 1..=200; default 50.
+    pub limit: Option<u32>,
+    /// `next_cursor` of the previous page of the same query (a search page's cursor
+    /// only continues a search).
+    pub cursor: Option<String>,
 }
 
 fn dto(api: &ApiState, m: MediaItem) -> MediaDto {
@@ -115,10 +154,11 @@ async fn write_problem(api: &ApiState, actor: &Actor, id: ContentId, e: CoreErro
     security(("session" = []), ("bearer" = [])),
     params(MediaListParams),
     responses(
-        (status = 200, description = "One page of media items (every status but trash), newest change first", body = MediaList),
-        (status = 400, description = "`validation` (`limit`, `cursor`) or `malformed-query`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 200, description = "One page of media items (every status but trash, or with `trash=true` only trashed items), newest change first; with `q` by relevance (a search page can be shorter than `limit` while `next_cursor` is set)", body = MediaList),
+        (status = 400, description = "`validation` (`limit`, `cursor`) or `malformed-query` (an unknown `kind`, a `trash` other than `true`/`false`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (needs `media:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: `q` with `author` or `trash=true` (`errors[0].field` = `q`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn list_media(
@@ -127,22 +167,26 @@ pub async fn list_media(
     ApiQuery(params): ApiQuery<MediaListParams>,
 ) -> Result<Json<MediaList>, Problem> {
     let limit = check_limit(params.limit, DEFAULT_LIMIT, MAX_PAGE)?;
-    if let Some(c) = &params.cursor
-        && ferrite_store::content_cursor(ContentOrder::UpdatedDesc, c).is_err()
-    {
-        return Err(invalid_cursor());
+    let query = MediaQuery {
+        limit,
+        cursor: params.cursor,
+        author: params.author.map(UserId::from_uuid),
+        q: params.q,
+        kind: params.kind.map(MediaKind::from),
+        trash: params.trash,
+    };
+    if let Some(c) = &query.cursor {
+        // The store decodes it again; decoding here makes a bad one a 400 naming it.
+        let valid = if query.search_text().is_some() {
+            ferrite_store::rank_cursor(c).is_ok()
+        } else {
+            ferrite_store::content_cursor(ContentOrder::UpdatedDesc, c).is_ok()
+        };
+        if !valid {
+            return Err(invalid_cursor());
+        }
     }
-    let page = api
-        .media_service
-        .list(
-            &who.actor,
-            MediaQuery {
-                limit,
-                cursor: params.cursor,
-                author: params.author.map(UserId::from_uuid),
-            },
-        )
-        .await?;
+    let page = api.media_service.list(&who.actor, query).await?;
     Ok(Json(MediaList {
         items: page.items.into_iter().map(|m| dto(&api, m)).collect(),
         next_cursor: page.next_cursor,
@@ -398,6 +442,38 @@ pub async fn delete_media(
     };
     match result {
         Ok(()) => Ok(StatusCode::NO_CONTENT.into_response()),
+        Err(e) => Err(write_problem(&api, actor, id, e).await),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/media/{id}/restore",
+    tag = "media",
+    operation_id = "restore_media",
+    security(("session" = []), ("bearer" = [])),
+    params(("id" = Uuid, Path), ("If-Match" = String, Header, description = "`\"<version>\"`")),
+    responses(
+        (status = 200, description = "Restored from trash as published, its `published_at` kept, so its files are served again (`ETag`)", body = MediaDto),
+        (status = 400, description = "`malformed-header` (`If-Match`)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (capability or `media:write`; contributors never restore), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 412, description = "`precondition-failed`: stale version (`current`)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: not trashed", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 428, description = "`precondition-required`: no `If-Match`", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn restore_media(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(id): ApiPath<Uuid>,
+    IfMatch(version): IfMatch,
+) -> Result<Response, Problem> {
+    let actor = &who.actor;
+    let id = ContentId::from_uuid(id);
+    match api.media_service.restore(actor, id, version).await {
+        Ok(m) => Ok(respond(&api, m, StatusCode::OK)),
         Err(e) => Err(write_problem(&api, actor, id, e).await),
     }
 }

@@ -254,6 +254,18 @@ impl ContentService {
         transition_item(repos, rules, actor, item, version, Action::Publish).await
     }
 
+    /// [`restore`](Self::restore) of item `id` inside the caller's `repos` with the
+    /// caller's pinned `rules`: the same checks (R8), search entry and `invalidate` event.
+    pub(crate) async fn restore_in(
+        repos: &dyn Repos,
+        rules: &dyn Permalinks,
+        actor: &Actor,
+        id: ContentId,
+        expected_version: i64,
+    ) -> Result<ContentItem, CoreError> {
+        transition_in(repos, rules, actor, id, expected_version, Action::Restore).await
+    }
+
     async fn transition(
         &self,
         actor: &Actor,

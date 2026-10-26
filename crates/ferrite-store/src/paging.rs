@@ -62,6 +62,9 @@ pub fn check_id_list(what: &str, ids: &[ContentId]) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// The content type of media items, the only one [`ContentQuery::media_kind`] applies to.
+const MEDIA_KIND: &str = "media";
+
 /// Most kinds a content query's `kinds` filter accepts.
 pub const MAX_CONTENT_KINDS: usize = 20;
 
@@ -82,6 +85,14 @@ pub fn check_content_filters(query: &ContentQuery) -> Result<(), StoreError> {
     }
     for kind in &query.kinds {
         validate_text("content kind", kind)?;
+    }
+    if query.media_kind.is_some()
+        && (query.kind.as_deref().is_some_and(|k| k != MEDIA_KIND)
+            || query.kinds.iter().any(|k| k != MEDIA_KIND))
+    {
+        return Err(StoreError::Invalid(
+            "media_kind only applies to kind media".into(),
+        ));
     }
     check_id_list("ids", &query.ids)?;
     check_id_list("exclude", &query.exclude)

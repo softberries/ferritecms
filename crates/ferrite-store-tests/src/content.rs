@@ -1,8 +1,9 @@
 //! Content type, content item and meta contract tests.
 
 use ferrite_domain::{
-    ContentId, ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, ParentFilter,
-    ReadableBy, Revision, RevisionId, Timestamp, User,
+    Artifact, ArtifactHash, ArtifactKind, ContentId, ContentItem, ContentOrder, ContentQuery,
+    ContentStatus, ContentType, Media, MediaKind, ParentFilter, ReadableBy, Revision, RevisionId,
+    Timestamp, User,
 };
 use ferrite_store::{Store, StoreError};
 use serde_json::json;
@@ -1357,6 +1358,130 @@ pub async fn content_query_kinds(db: &TestDb) {
         },
         ContentQuery {
             kinds: vec!["a\u{0}".into()],
+            ..Default::default()
+        },
+    ] {
+        assert!(matches!(
+            store.read().content().list(&bad).await,
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            store.read().content().count(&bad).await,
+            Err(StoreError::Invalid(_))
+        ));
+    }
+}
+
+/// `media_kind` keeps the media items whose `media.mime` is of that kind (M2b-2 Task 2):
+/// an SVG is an image, anything not image, video or audio a document; `list` and
+/// `count` agree, and pages stay exact.
+pub async fn media_kind_filters_list_and_count(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    let mut post = new_post(&author, "a-post");
+    post.status = ContentStatus::Published;
+    insert(store, &post).await;
+    let files = [
+        ("png", "image/png"),
+        ("svg", "image/svg+xml"),
+        ("pdf", "application/pdf"),
+        ("mp4", "video/mp4"),
+        ("mp3", "audio/mpeg"),
+    ];
+    for (i, (slug, mime)) in files.into_iter().enumerate() {
+        let mut n = new_post(&author, slug);
+        n.kind = "media".into();
+        n.status = ContentStatus::Published;
+        n.published_at = Some(micros(1_000 + i as i64));
+        let item = insert(store, &n).await;
+        let hash = ArtifactHash::parse(&format!("{:064x}", i + 1)).unwrap();
+        store
+            .read()
+            .artifacts()
+            .insert_if_absent(&Artifact {
+                hash: hash.clone(),
+                kind: ArtifactKind::Media,
+                bytes: 1,
+                mime: mime.into(),
+                created_at: Timestamp::now(),
+            })
+            .await
+            .unwrap();
+        store
+            .read()
+            .media()
+            .insert(&Media {
+                item_id: item.id,
+                artifact_hash: hash,
+                mime: mime.into(),
+                bytes: 1,
+                width: None,
+                height: None,
+                alt: String::new(),
+                original_name: format!("f.{slug}"),
+                variants: json!({}),
+                sanitized: mime == "image/svg+xml",
+            })
+            .await
+            .unwrap();
+    }
+    // A media item without a `media` row never matches a kind.
+    let mut orphan = new_post(&author, "orphan");
+    orphan.kind = "media".into();
+    insert(store, &orphan).await;
+
+    for (kind, want) in [
+        (MediaKind::Image, vec!["svg", "png"]),
+        (MediaKind::Video, vec!["mp4"]),
+        (MediaKind::Audio, vec!["mp3"]),
+        (MediaKind::Document, vec!["pdf"]),
+    ] {
+        let q = ContentQuery {
+            kind: Some("media".into()),
+            media_kind: Some(kind),
+            limit: 1,
+            ..Default::default()
+        };
+        let got: Vec<String> = pages(store, q.clone()).await.concat();
+        assert_eq!(got, want, "{kind}");
+        assert_eq!(
+            store.read().content().count(&q).await.unwrap(),
+            want.len() as u64,
+            "{kind}"
+        );
+        // Without `kind` the sub-select alone keeps media items.
+        let q = ContentQuery {
+            media_kind: Some(kind),
+            limit: 50,
+            ..Default::default()
+        };
+        assert_eq!(pages(store, q.clone()).await.concat(), want, "{kind}");
+        assert_eq!(
+            store.read().content().count(&q).await.unwrap(),
+            want.len() as u64
+        );
+    }
+    // Other filters still apply.
+    let q = ContentQuery {
+        kind: Some("media".into()),
+        media_kind: Some(MediaKind::Image),
+        published_before: Some(micros(1_001)),
+        limit: 50,
+        ..Default::default()
+    };
+    assert_eq!(pages(store, q.clone()).await.concat(), ["png"]);
+    assert_eq!(store.read().content().count(&q).await.unwrap(), 1);
+
+    // A non-media kind with `media_kind` is Invalid.
+    for bad in [
+        ContentQuery {
+            kind: Some("post".into()),
+            media_kind: Some(MediaKind::Image),
+            ..Default::default()
+        },
+        ContentQuery {
+            kinds: vec!["media".into(), "post".into()],
+            media_kind: Some(MediaKind::Document),
             ..Default::default()
         },
     ] {

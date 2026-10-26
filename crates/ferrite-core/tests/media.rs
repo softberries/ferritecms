@@ -625,6 +625,9 @@ fn query(limit: u32) -> MediaQuery {
         limit,
         cursor: None,
         author: None,
+        q: None,
+        kind: None,
+        trash: false,
     }
 }
 

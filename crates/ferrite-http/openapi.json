@@ -2927,6 +2927,50 @@
         "operationId": "list_media",
         "parameters": [
           {
+            "name": "q",
+            "in": "query",
+            "description": "Full-text search over the title (the original file name is not searched).\nBlank is no search. Not combinable with `author` or `trash=true` (`422`, field\n`q`); results come by relevance.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Only items of this kind; combines with `q` and `trash`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "The kind of a media item, from its type.",
+              "enum": [
+                "image",
+                "video",
+                "audio",
+                "document"
+              ]
+            }
+          },
+          {
+            "name": "author",
+            "in": "query",
+            "description": "Only items uploaded by this user.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "trash",
+            "in": "query",
+            "description": "`true`: only trashed items; default `false` (every status but trash).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "description": "1..=200; default 50.",
@@ -2940,26 +2984,16 @@
           {
             "name": "cursor",
             "in": "query",
-            "description": "`next_cursor` of the previous page.",
+            "description": "`next_cursor` of the previous page of the same query (a search page's cursor\nonly continues a search).",
             "required": false,
             "schema": {
               "type": "string"
-            }
-          },
-          {
-            "name": "author",
-            "in": "query",
-            "description": "Only items uploaded by this user.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
             }
           }
         ],
         "responses": {
           "200": {
-            "description": "One page of media items (every status but trash), newest change first",
+            "description": "One page of media items (every status but trash, or with `trash=true` only trashed items), newest change first; with `q` by relevance (a search page can be shorter than `limit` while `next_cursor` is set)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2969,7 +3003,7 @@
             }
           },
           "400": {
-            "description": "`validation` (`limit`, `cursor`) or `malformed-query`",
+            "description": "`validation` (`limit`, `cursor`) or `malformed-query` (an unknown `kind`, a `trash` other than `true`/`false`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2990,6 +3024,16 @@
           },
           "403": {
             "description": "`forbidden` (needs `media:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: `q` with `author` or `trash=true` (`errors[0].field` = `q`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3421,6 +3465,124 @@
           },
           "422": {
             "description": "`validation`: `title` or `alt` too long or with control characters, or the item is trashed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`precondition-required`: no `If-Match`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/media/{id}/restore": {
+      "post": {
+        "tags": [
+          "media"
+        ],
+        "operationId": "restore_media",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "`\"<version>\"`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Restored from trash as published, its `published_at` kept, so its files are served again (`ETag`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-header` (`If-Match`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (capability or `media:write`; contributors never restore), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "`precondition-failed`: stale version (`current`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: not trashed",
             "content": {
               "application/problem+json": {
                 "schema": {

@@ -15,6 +15,30 @@ string_enum!(
     }
 );
 
+string_enum!(
+    /// The kind of a media item, from its `media.mime`: `image/…`, `video/…`, `audio/…`,
+    /// and `document` for every other type ([`ContentQuery::media_kind`]).
+    MediaKind {
+        Image => "image",
+        Video => "video",
+        Audio => "audio",
+        Document => "document",
+    }
+);
+
+impl MediaKind {
+    /// Whether a media item of type `mime` is of this kind (the stores' filter, in Rust).
+    pub fn matches(self, mime: &str) -> bool {
+        let top = |p: &str| mime.starts_with(p);
+        match self {
+            MediaKind::Image => top("image/"),
+            MediaKind::Video => top("video/"),
+            MediaKind::Audio => top("audio/"),
+            MediaKind::Document => !(top("image/") || top("video/") || top("audio/")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContentType {
     pub name: String,
@@ -164,6 +188,10 @@ pub struct ContentQuery {
     pub published_after: Option<Timestamp>,
     /// `published_at < t` (exclusive); items without a publish time never match.
     pub published_before: Option<Timestamp>,
+    /// Only media items of this kind (a sub-select on `media`, so items without a
+    /// `media` row never match); `Invalid` together with a [`ContentQuery::kind`] or a
+    /// [`ContentQuery::kinds`] entry other than `media`.
+    pub media_kind: Option<MediaKind>,
     pub order: ContentOrder,
     /// Capped at [`crate::MAX_PAGE`] by the stores.
     pub limit: u32,
@@ -184,6 +212,7 @@ impl Default for ContentQuery {
             exclude: Vec::new(),
             published_after: None,
             published_before: None,
+            media_kind: None,
             order: ContentOrder::default(),
             limit: 20,
             cursor: None,
