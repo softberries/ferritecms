@@ -43,7 +43,8 @@
     "focusExit": "Leave focus mode",
     "panel": "Toggle the side panel",
     "publish": "Publish…",
-    "panelClose": "Close the side panel"
+    "panelClose": "Close the side panel",
+    "revisions": "Version history"
   },
   "bubble": {
     "label": "Format",
@@ -325,14 +326,16 @@
       "publish": "Publishing was paused so nothing goes live by surprise. Publish again once you have chosen.",
       "schedule": "Scheduling was paused so nothing goes live by surprise. Schedule again once you have chosen.",
       "submit": "Submitting for review was paused. Submit again once you have chosen.",
-      "unpublish": "Unpublishing was paused. Unpublish again once you have chosen."
+      "unpublish": "Unpublishing was paused. Unpublish again once you have chosen.",
+      "revision": "The version was not restored. Choose which text to keep, then restore it again if you still want to."
     },
     "changed": "This item was saved elsewhere; you are on its latest version now.",
     "changedThen": {
       "publish": "This item was saved elsewhere, so it was not published. You are on its latest version now; publish again when ready.",
       "schedule": "This item was saved elsewhere, so it was not scheduled. You are on its latest version now; schedule again when ready.",
       "submit": "This item was saved elsewhere, so it was not submitted. You are on its latest version now; submit again when ready.",
-      "unpublish": "This item was saved elsewhere, so it was not unpublished. You are on its latest version now; try again when ready."
+      "unpublish": "This item was saved elsewhere, so it was not unpublished. You are on its latest version now; try again when ready.",
+      "revision": "This item was saved elsewhere, so the version was not restored. You are on its latest version now; restore again when ready."
     }
   },
   "restore": {
@@ -368,5 +371,67 @@
     "descriptionKept": "Discarding drops only your edits since you took the newer version. Your own version stays kept as an autosave.",
     "descriptionKeptOnlyHere": "Your own version (kept when you took the newer one) could not be stored as an autosave and is only on this page. Save and leave, or Discard changes, stores it first.",
     "keptFailed": "Your own version still could not be stored, so you stay on this page. Try again, or copy your text first."
+  },
+  "revisions": {
+    "entry": "Revisions ({{n}})",
+    "entryLoading": "Revisions",
+    "entryHint": "See what changed and bring back an earlier version",
+    "title": "Version history",
+    "description": "Every save of this item, newest first. Pick one to see what changed.",
+    "count_one": "{{count}} saved version",
+    "count_other": "{{count}} saved versions",
+    "list": "Saved versions",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "current": "Current",
+    "restoredFrom": "Restored from {{when}}",
+    "restoredFromUnknown": "Restored from an older version",
+    "by": "by {{name}}",
+    "savedBy": "Saved by {{name}}",
+    "compare": "Compare with",
+    "compareCurrent": "Current",
+    "comparePrevious": "Previous save",
+    "explainCurrent": "Compared with the current version: underlined text comes back if you restore this one, struck-through text goes.",
+    "explainPrevious": "What this save changed: underlined text was added, struck-through text removed.",
+    "noPrevious": "This is the oldest saved version; there is nothing before it to compare with.",
+    "same": "This version is the same as the current one.",
+    "samePrevious": "This save changed nothing in the title, excerpt or text.",
+    "added_one": "{{count}} word added",
+    "added_other": "{{count}} words added",
+    "removed_one": "{{count}} word removed",
+    "removed_other": "{{count}} words removed",
+    "fields": {
+      "title": "Title",
+      "excerpt": "Excerpt",
+      "body": "Text"
+    },
+    "legendAdded": "Added",
+    "legendRemoved": "Removed",
+    "restore": "Restore this version",
+    "restoring": "Restoring…",
+    "isCurrent": "This is the current version",
+    "back": "All versions",
+    "empty": "No saved versions yet. Every save adds one.",
+    "kept": "The last 50 saves are kept.",
+    "confirmTitle": "Replace your unsaved edits?",
+    "confirmDescription": "Restoring this version replaces the edits you have not saved yet. The current saved version stays in the history.",
+    "confirmReplace": "Replace my edits",
+    "confirmCancel": "Cancel",
+    "restored": "Version restored",
+    "restoredDescription": "The text from {{when}} is back.",
+    "undo": "Undo",
+    "undone": "Restore undone",
+    "undoUnavailable": "Undo is not available: the item changed after the restore.",
+    "failed": "Could not restore this version.",
+    "failedWith": "Could not restore this version: {{detail}}",
+    "diff": {
+      "added": "Added: {{text}}",
+      "removed": "Removed: {{text}}",
+      "addedSr": "added:",
+      "removedSr": "removed:",
+      "empty": "Empty",
+      "lineBreak": "line break",
+      "space": "space"
+    }
   }
 }

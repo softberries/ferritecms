@@ -116,6 +116,7 @@ function fakeDoc(
     save: vi.fn(() => Promise.resolve(item)),
     transition: vi.fn(() => Promise.resolve(item)),
     adopt: vi.fn(),
+    restoreRevision: vi.fn(() => Promise.resolve(item)),
     editor: {} as EditorDocument["editor"],
     ...extra,
   };

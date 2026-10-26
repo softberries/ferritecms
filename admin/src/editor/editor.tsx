@@ -12,6 +12,13 @@
 // conflict dialog (and a transition that waited for the save says it did not run);
 // leaving with unsaved changes asks (Save / Discard / Stay); a `401` keeps the draft in
 // `pendingDrafts` and goes to sign in, and the screen takes it back afterwards.
+//
+// Revisions (Task 17): the drawer (`mod+alt+r`, or the panel's "Revisions (n)") lists the
+// saves; Restore asks first only when there are unsaved edits (they would be replaced),
+// writes the revision back (`doc.restoreRevision`; a `412` opens the conflict dialog) and
+// remounts the screen on the restored item. The new screen shows the toast with Undo, so
+// the Undo always acts on the screen that is there (and goes with it): it restores the
+// revision that was current before (the one after the restore's own snapshot).
 
 import "@/styles/editor.css";
 import { Link } from "@tanstack/react-router";
@@ -39,7 +46,7 @@ import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { reportApiError } from "@/api/client";
 import { metaQuery } from "@/api/meta";
-import { getContent, isContentStatus, putAutosave } from "@/api/content";
+import { getContent, isContentStatus, listRevisions, putAutosave } from "@/api/content";
 import { qk } from "@/api/keys";
 import type { MeDto } from "@/auth/session";
 import { ApiError, isProblem } from "@/api/problem";
@@ -51,6 +58,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { storeEditorPanelOpen, storedEditorPanelOpen } from "@/design/preferences";
 import { uiLocale } from "@/lib/locale";
 import { useShortcut } from "@/lib/shortcuts";
+import { UNDO_TOAST_MS } from "@/content/list-actions";
 import { useShellChrome } from "@/shell/chrome-context";
 import { type Draft, newDraftKey, pendingDrafts } from "./autosave";
 import { EditorBubbleMenu } from "./bubble-menu";
@@ -69,6 +77,8 @@ import {
 import { LeaveDialog } from "./leave-dialog";
 import { useLeaveGuard } from "./leave-guard";
 import { RestoreBanner } from "./restore-banner";
+import { RestoreConfirmDialog, RevisionsDrawer } from "./revisions/revisions-drawer";
+import { undoTarget, whenOf } from "./revisions/revision-model";
 import { useTermsById, useTypeTaxonomies, useWide } from "./panel/panel-state";
 import { PublishDialog, type PublishMode } from "./panel/publish-dialog";
 import { PublishBar } from "./panel/publish-bar";
@@ -84,10 +94,28 @@ export interface Reopen {
   restore?: RestoreSource;
   /** The user's own version, kept in the slot after Take theirs (the banner offers it). */
   kept?: Draft;
+  /** A revision restore (or its Undo) remounted the screen: it says so, with Undo. */
+  revision?: RevisionNotice;
+}
+
+/** What the screen says after a revision restore remounted it. */
+export type RevisionNotice =
+  /** Revision `rid` (saved `at`) was restored: the toast offers Undo. */
+  | { kind: "restored"; rid: string; at: string }
+  /** The Undo of a restore ran. */
+  | { kind: "undone" };
+
+/** A revision to restore: `at` is when it was saved; `undo` when it is a restore's Undo. */
+interface RestoreTarget {
+  rid: string;
+  at: string;
+  undo: boolean;
 }
 
 /** The kept Discard's toast (with Undo), dismissed when the screen goes. */
 const KEPT_TOAST = "editor-kept";
+/** The revision restore's toast (with Undo), dismissed when the screen goes. */
+const REVISION_TOAST = "editor-revision";
 
 export interface EditorScreenProps {
   type: string;
@@ -104,6 +132,8 @@ export interface EditorScreenProps {
   onCreated?: (item: ContentDto, handoff: Handoff) => void;
   /** Remounts the screen with another starting point (see `Reopen`). */
   onReopen?: (next: Reopen) => void;
+  /** The screen was remounted by a revision restore (or its Undo). */
+  revision?: RevisionNotice | null;
 }
 
 export function EditorScreen({
@@ -115,11 +145,13 @@ export function EditorScreen({
   kept: keptInitially,
   onCreated,
   onReopen,
+  revision,
 }: EditorScreenProps) {
   const { t } = useTranslation("editor");
   const queryClient = useQueryClient();
   const [conflict, setConflict] = useState<OpenConflict | null>(null);
   const [publishMode, setPublishMode] = useState<PublishMode | null>(null);
+  const [revisionsOpen, setRevisionsOpen] = useState(false);
   const doc: EditorDocument = useEditorDocument({
     type,
     item,
@@ -134,6 +166,7 @@ export function EditorScreen({
       const then = context.then ?? (op === "save" ? undefined : op);
       const state = onPreconditionFailed(e, doc.draft());
       setPublishMode(null);
+      setRevisionsOpen(false);
       if (!state) {
         toast.error(t("save.conflict"), { id: "editor-save" });
         return;
@@ -176,6 +209,8 @@ export function EditorScreen({
         e instanceof ApiError
           ? e.problem.errors?.[0]?.detail || e.problem.detail || e.problem.title
           : null;
+      // A revision restore handles its own failures in place (`onError`).
+      if (op === "revision") return;
       const key = op === "save" ? ("save" as const) : (`transition.${op}` as const);
       toast.error(detail ? t(`${key}.failedWith`, { detail }) : t(`${key}.failed`), {
         id: "editor-save",
@@ -281,6 +316,99 @@ export function EditorScreen({
   });
   // Leaving the editor leaves focus mode.
   useEffect(() => () => setFocusMode(false), [setFocusMode]);
+
+  // Revisions: only for an item the server lets this account edit (R26; the API
+  // answers 404 otherwise).
+  const canRevisions = doc.item !== null && doc.item.allowed.edit;
+  const [restoring, setRestoring] = useState<string | null>(null);
+  const [confirmRestore, setConfirmRestore] = useState<RestoreTarget | null>(null);
+  useShortcut({
+    id: "editor.revisions",
+    keys: "mod+alt+r",
+    label: t("shortcuts.revisions"),
+    group,
+    allowInInput: true,
+    when: () =>
+      canRevisions &&
+      (revisionsOpen || document.querySelector('[role="dialog"], [role="alertdialog"]') === null),
+    run: () => setRevisionsOpen(!revisionsOpen),
+  });
+
+  const runRestore = async (target: RestoreTarget) => {
+    setRestoring(target.rid);
+    const next = await doc.restoreRevision(target.rid, {
+      onError: (e) => {
+        const detail =
+          e instanceof ApiError
+            ? e.problem.errors?.[0]?.detail || e.problem.detail || e.problem.title
+            : null;
+        toast.error(detail ? t("revisions.failedWith", { detail }) : t("revisions.failed"), {
+          id: REVISION_TOAST,
+        });
+      },
+    });
+    if (!next || !onReopen) {
+      setRestoring(null);
+      return;
+    }
+    // The slot is gone and the autosaver stopped: the screen reopens on the restored
+    // item, which then offers Undo.
+    onReopen({
+      item: next,
+      ...(doc.kept ? { kept: doc.kept } : {}),
+      revision: target.undo
+        ? { kind: "undone" }
+        : { kind: "restored", rid: target.rid, at: target.at },
+    });
+  };
+  /** Restore (or Undo): unsaved edits would be replaced, so that asks first. */
+  const requestRestore = (target: RestoreTarget) => {
+    if (doc.readOnly === null && doc.isDirtyNow()) setConfirmRestore(target);
+    else void runRestore(target);
+  };
+  const requestRestoreRef = useRef(requestRestore);
+  useEffect(() => {
+    requestRestoreRef.current = requestRestore;
+  });
+
+  // After a restore remounted the screen: the toast, with Undo when there is a revision
+  // to go back to (none when someone saved right after the restore).
+  const [notice] = useState(() => revision ?? null);
+  const noticeItem = item?.id;
+  useEffect(() => {
+    if (!notice || !noticeItem) return;
+    let live = true;
+    if (notice.kind === "undone") {
+      toast.success(t("revisions.undone"), { id: REVISION_TOAST });
+    } else {
+      void listRevisions(type, noticeItem, { limit: 2 })
+        .then((list) => undoTarget(list.items, notice.rid))
+        .catch(() => null)
+        .then((undo) => {
+          if (!live) return;
+          toast.success(t("revisions.restored"), {
+            id: REVISION_TOAST,
+            duration: UNDO_TOAST_MS,
+            description: undo
+              ? t("revisions.restoredDescription", { when: whenOf(notice.at) })
+              : t("revisions.undoUnavailable"),
+            ...(undo
+              ? {
+                  action: {
+                    label: t("revisions.undo"),
+                    onClick: () => requestRestoreRef.current({ rid: undo, at: "", undo: true }),
+                  },
+                }
+              : {}),
+          });
+        });
+    }
+    // The Undo belongs to this screen: it goes with it.
+    return () => {
+      live = false;
+      toast.dismiss(REVISION_TOAST);
+    };
+  }, [notice, noticeItem, type, t]);
 
   // Leaving with changes the item does not hold asks first; closing the tab only while
   // the slot does not hold them either (F38).
@@ -446,6 +574,14 @@ export function EditorScreen({
               if (!wide) setSheetOpen(false);
               setPublishMode(mode);
             }}
+            {...(canRevisions
+              ? {
+                  onRevisions: () => {
+                    if (!wide) setSheetOpen(false);
+                    setRevisionsOpen(true);
+                  },
+                }
+              : {})}
           />
         )}
       </div>
@@ -512,6 +648,25 @@ export function EditorScreen({
             // The slot stays: the next visit offers it back, nothing is lost.
           }
           guard.leave();
+        }}
+      />
+      {doc.item && canRevisions ? (
+        <RevisionsDrawer
+          open={revisionsOpen}
+          onOpenChange={setRevisionsOpen}
+          type={type}
+          item={doc.item}
+          restoring={restoring}
+          onRestore={(r) => requestRestore({ rid: r.id, at: r.created_at, undo: false })}
+        />
+      ) : null}
+      <RestoreConfirmDialog
+        open={confirmRestore !== null}
+        onCancel={() => setConfirmRestore(null)}
+        onConfirm={() => {
+          const target = confirmRestore;
+          setConfirmRestore(null);
+          if (target) void runRestore(target);
         }}
       />
       <PublishDialog

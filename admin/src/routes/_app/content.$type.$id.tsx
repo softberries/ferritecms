@@ -7,8 +7,8 @@
 // The loader also reads the caller's autosave slot (Task 16): when it differs from the
 // item, the screen opens with it and the restore banner. A draft kept over a sign-in
 // (`pendingDrafts`, after a 401) wins over the slot: it is newer, and it is written to
-// the slot as the screen opens. Discard, Take theirs and Restore remount the screen with
-// a new starting point (`onReopen`).
+// the slot as the screen opens. Discard, Take theirs, Restore and a revision restore
+// (Task 17) remount the screen with a new starting point (`onReopen`).
 
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
@@ -25,7 +25,7 @@ import {
   loadAutosave,
   peekPendingDraft,
 } from "@/editor/autosave";
-import { EditorScreen, type Reopen } from "@/editor/editor";
+import { EditorScreen, type Reopen, type RevisionNotice } from "@/editor/editor";
 import { type RestoreSource, clearHandoff, peekHandoff } from "@/editor/editor-state";
 
 const NOT_EDITED = new Set(["media"]);
@@ -84,6 +84,8 @@ interface Start {
   item: SchemaContentDto;
   restore: RestoreSource | null;
   kept: Draft | null;
+  /** A revision restore remounted the screen (its toast, with Undo). */
+  revision: RevisionNotice | null;
   /** Bumped on every reopen: the key that remounts the screen. */
   epoch: number;
   /** The loader result this start belongs to (a new load starts over). */
@@ -110,7 +112,7 @@ function ItemEditor() {
       : data.autosave
         ? { draft: draftOfAutosave(data.autosave), at: data.autosave.saved_at }
         : null;
-    return { item: data.item, restore, kept: null, epoch: 0, from: data };
+    return { item: data.item, restore, kept: null, revision: null, epoch: 0, from: data };
   }, [data, userId]);
   const start = reopened?.from === data ? reopened : initial;
   const onReopen = (next: Reopen) => {
@@ -119,6 +121,7 @@ function ItemEditor() {
       item: next.item,
       restore: next.restore ?? null,
       kept: next.kept ?? null,
+      revision: next.revision ?? null,
       epoch: start.epoch + 1,
       from: data,
     });
@@ -157,6 +160,7 @@ function ItemScreen({
       handoff={handoff}
       restore={start.restore}
       kept={start.kept}
+      revision={start.revision}
       onReopen={onReopen}
     />
   );

@@ -8,6 +8,12 @@
 // in there. The writing surface (`editor.tsx`) and the side panel (`panel/`) render it;
 // revisions (Task 17) build on it.
 //
+// Revisions (Task 17): `restoreRevision` writes an earlier revision back (`POST
+// …/revisions/{rid}/restore` with `If-Match`), through the same failure path as a save
+// (a `412` reaches the conflict dialog). The server deletes the user's autosave slot with
+// it, so on success the autosaver is marked clean and stopped: the screen then reopens on
+// the restored item, and nothing of the old working draft is written to the slot again.
+//
 // Autosave (Task 16): every change of an existing, editable item marks the autosaver
 // (`autosave.ts`) dirty; it writes the working draft to the item's slot every 10 s. An
 // explicit save holds it around the `PATCH` (no `PUT` can land after the `PATCH` that
@@ -38,6 +44,7 @@ import {
   lifecycle,
   patchContent,
   putAutosave,
+  restoreRevision,
 } from "@/api/content";
 import { qk } from "@/api/keys";
 import { resolveMediaUrl } from "@/api/media";
@@ -86,8 +93,11 @@ export interface MetaDraft {
 /** A transition the panel runs (`trash` goes through the list's undo logic instead). */
 export type Transition = Exclude<LifecycleAction, "trash" | "restore">;
 
+/** What a `412` interrupted beyond the write itself: a transition, or a revision restore. */
+export type Paused = Transition | "revision";
+
 /** What a write was, for its error message. */
-export type WriteOp = "save" | Transition;
+export type WriteOp = "save" | Paused;
 
 /** The panel members as stored on `item` (a new item: empty). */
 export function metaOf(item: ContentDto | null): MetaDraft {
@@ -221,7 +231,7 @@ export interface ConflictContext {
    * The transition that was waiting for this save (F40), or the one refused itself. It
    * does not run: the conflict dialog says so, and the user runs it again once decided.
    */
-  then?: Transition;
+  then?: Paused;
 }
 
 export interface TransitionOptions {
@@ -312,6 +322,17 @@ export interface EditorDocument {
   transition: (action: Transition, options?: TransitionOptions) => Promise<ContentDto | null>;
   /** Takes the server's copy after a write made elsewhere (the trash in the panel). */
   adopt: (item: ContentDto) => void;
+  /**
+   * Restores revision `rid` over the item (after a save or transition in flight). On
+   * success the slot is gone and the autosaver stopped: the caller reopens the screen on
+   * the item it resolves to (a kept copy is written back first). A `412` goes to
+   * `onConflict` (op `revision`), a `401` to `onUnauthenticated`, anything else to
+   * `onError`; then it resolves to `null` and the screen goes on as it was.
+   */
+  restoreRevision: (
+    rid: string,
+    options?: { onError?: (e: unknown) => void },
+  ) => Promise<ContentDto | null>;
 }
 
 function bodyReadOnly(item: ContentDto | null, body: unknown): ReadOnlyReason | null {
@@ -726,6 +747,12 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
         title: next.title,
         slug: next.slug,
       });
+      // Every save adds a revision (the panel's "Revisions (n)", the drawer's list).
+      // `exact`: a revision itself never changes.
+      void queryClient.invalidateQueries({
+        queryKey: qk.content.revisions(type, next.id),
+        exact: true,
+      });
       void queryClient.invalidateQueries({ queryKey: qk.content.lists(type) });
       void queryClient.invalidateQueries({ queryKey: qk.content.counts(type) });
     },
@@ -1016,6 +1043,45 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     if (isDirtyNow()) touch();
   }, [itemId, type, setKept, isDirtyNow, touch]);
 
+  const restoreRevisionNow = useCallback(
+    async (rid: string, options: { onError?: (e: unknown) => void } = {}) => {
+      // A save or transition in flight lands first (its version is the one to match).
+      await transitioning.current;
+      await inflight.current;
+      const current = itemRef.current;
+      if (!current || !current.allowed.edit) return null;
+      const a = autosaver.current;
+      // A running autosave lands first and none starts while the restore runs.
+      const release = (await a?.hold()) ?? (() => undefined);
+      try {
+        const next = await restoreRevision(type, current.id, rid, current.version);
+        // The server deleted this user's slot with the restore: the old working draft
+        // must not go back there (not by the timer, not when the screen goes).
+        a?.markClean();
+        a?.dispose();
+        baseVersion.current = next.version;
+        const keptCopy = keptRef.current;
+        if (keptCopy) {
+          // The kept copy (after Take theirs) was in that slot: it goes back, as after a save.
+          try {
+            await putAutosave(type, current.id, autosaveInput(keptCopy));
+          } catch (e) {
+            setKeptStored(false);
+            if (needsSignIn(e)) latest.current.onUnauthenticated?.(e, keptCopy);
+          }
+        }
+        adopt(next);
+        return next;
+      } catch (e) {
+        fail(e, "revision", options.onError, { then: "revision" });
+        return null;
+      } finally {
+        release();
+      }
+    },
+    [type, adopt, fail],
+  );
+
   // The indicator: an explicit save in flight or failed comes first; then, with
   // changes the item does not hold, what the slot holds.
   let indicator: SaveStateValue;
@@ -1073,5 +1139,6 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     save,
     transition,
     adopt,
+    restoreRevision: restoreRevisionNow,
   };
 }

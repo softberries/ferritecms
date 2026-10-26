@@ -25,7 +25,7 @@ import {
 import { parentRefQuery } from "@/content/parent-ref";
 import type { ConflictField, ConflictState } from "./conflict";
 import { type DiffPart, diffRevision } from "./diff";
-import type { Transition } from "./editor-state";
+import type { Paused } from "./editor-state";
 import { useTermsById, useTypeTaxonomies } from "./panel/panel-state";
 
 /** Unchanged text longer than this is shortened to its ends (the change is the point). */
@@ -33,7 +33,7 @@ const CONTEXT_CHARS = 160;
 
 export interface OpenConflict extends ConflictState {
   /** The transition that did not run because of the conflict. */
-  then?: Transition;
+  then?: Paused;
 }
 
 export interface ConflictDialogProps {

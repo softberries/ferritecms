@@ -179,3 +179,17 @@ test("use_shortcut_registers_while_mounted_and_reads_the_latest_run", () => {
   unmount();
   expect(listShortcuts()).toEqual([]);
 });
+
+test("alt_combinations_match_the_physical_key", () => {
+  platform("MacIntel");
+  const revisions = bind("mod+alt+r");
+  // macOS: ⌘⌥R arrives as "®"; the code names the key.
+  press("®", { metaKey: true, altKey: true, code: "KeyR" });
+  expect(revisions).toHaveBeenCalledOnce();
+  press("r", { metaKey: true, altKey: true, code: "KeyR" });
+  expect(revisions).toHaveBeenCalledTimes(2);
+  // Without Option, or on another key, nothing.
+  press("r", { metaKey: true, code: "KeyR" });
+  press("®", { metaKey: true, altKey: true, code: "KeyT" });
+  expect(revisions).toHaveBeenCalledTimes(2);
+});

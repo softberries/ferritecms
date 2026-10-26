@@ -71,6 +71,9 @@ const NAMED: Record<string, string> = {
 };
 
 function eventKey(e: KeyboardEvent): string {
+  // With Option held, macOS composes another character (⌥R is "®"): a letter or digit
+  // key is then named by the physical key, so `mod+alt+r` still matches.
+  if (e.altKey && /^(Key[A-Z]|Digit[0-9])$/.test(e.code)) return e.code.slice(-1).toLowerCase();
   const key = e.key.toLowerCase();
   return NAMED[key] ?? key;
 }

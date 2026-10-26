@@ -196,3 +196,23 @@ export function restoreRevision(
     }),
   );
 }
+
+/** At most this many revisions are kept and listed (07 §1). */
+export const MAX_REVISIONS = 50;
+
+/** The item's revisions, newest first (all that are kept); the panel count and the drawer. */
+export function revisionsQuery(type: string, id: string) {
+  return queryOptions({
+    queryKey: qk.content.revisions(type, id),
+    queryFn: () => listRevisions(type, id, { limit: MAX_REVISIONS }),
+  });
+}
+
+/** One revision with its content; revisions never change, so it is never refetched. */
+export function revisionQuery(type: string, id: string, rid: string) {
+  return queryOptions({
+    queryKey: qk.content.revision(type, id, rid),
+    queryFn: () => getRevision(type, id, rid),
+    staleTime: Infinity,
+  });
+}
