@@ -26,9 +26,8 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { countsQuery, getContent, listContent } from "@/api/content";
+import { countsQuery, listContent } from "@/api/content";
 import { qk } from "@/api/keys";
-import type { SchemaContentDto } from "@/api/schema";
 import { taxonomiesQuery } from "@/api/taxonomies";
 import { type ContentTypeDto, typesQuery } from "@/api/types";
 import { useMe } from "@/auth/session";
@@ -50,11 +49,16 @@ import { Button } from "@/components/ui/button";
 import { BulkBar } from "@/content/bulk-bar";
 import { type BulkAction, trashUndoable } from "@/content/bulk";
 import { ListFilters } from "@/content/filters";
+import {
+  type ParentRef,
+  type ParentState,
+  parentRefQuery,
+  parentState,
+} from "@/content/parent-ref";
 import { type FailureReport, useListActions } from "@/content/list-actions";
 import {
   COLUMN_CLASSES,
   type ContentSummary,
-  type ParentRef,
   type RowAction,
   editPath,
   useListColumns,
@@ -96,8 +100,8 @@ export const Route = createFileRoute("/_app/content/$type/")({
 });
 
 /** One parent per missing id, fetched once (`combine` keeps the result stable). */
-function combineParents(results: UseQueryResult<SchemaContentDto>[]) {
-  return results.map((r) => r.data);
+function combineParents(results: UseQueryResult<ParentRef | null>[]) {
+  return results.map((r) => ({ data: r.data, isPending: r.isPending, isError: r.isError }));
 }
 
 function ContentList() {
@@ -150,20 +154,22 @@ function ContentList() {
       ),
     ];
   }, [items, hierarchical]);
+  // A parent this viewer may not read settles as "not available" (`parent-ref.ts`).
   const fetchedParents = useQueries({
-    queries: missingParents.map((id) => ({
-      queryKey: qk.content.item(type, id),
-      queryFn: () => getContent(type, id),
-      staleTime: 60_000,
-    })),
+    queries: missingParents.map((id) => parentRefQuery(type, id)),
     combine: combineParents,
   });
   const parents = useMemo(() => {
-    const map = new Map<string, ParentRef>();
-    for (const item of items) map.set(item.id, { title: item.title, slug: item.slug });
-    for (const p of fetchedParents) if (p) map.set(p.id, { title: p.title, slug: p.slug });
+    const map = new Map<string, ParentState>();
+    for (const item of items) {
+      map.set(item.id, { kind: "found", ref: { title: item.title, slug: item.slug } });
+    }
+    missingParents.forEach((id, i) => {
+      const q = fetchedParents[i];
+      if (q) map.set(id, parentState(id, q));
+    });
     return map;
-  }, [items, fetchedParents]);
+  }, [items, missingParents, fetchedParents]);
 
   // Selection belongs to one list: another type or filter starts empty.
   const scope = JSON.stringify([type, filters]);

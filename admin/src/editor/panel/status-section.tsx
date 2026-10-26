@@ -3,16 +3,16 @@
 // (`statusActions`, Review Focus 4); Publish and Schedule open the publish dialog, the
 // rest run here. A transition with unsaved changes saves them first (F40).
 
-import { ClockIcon, ExternalLinkIcon, SendIcon, UndoDotIcon } from "lucide-react";
-import { useState } from "react";
+import { ExternalLinkIcon, UndoDotIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
 import { isContentStatus } from "@/api/content";
 import { RelativeTime } from "@/components/kit/relative-time";
 import { StatusBadge } from "@/components/kit/status-badge";
 import { Button } from "@/components/ui/button";
-import type { EditorDocument, Transition } from "../editor-state";
-import { type PanelAction, formatWhen, statusActions } from "./publishing";
+import type { EditorDocument } from "../editor-state";
+import { ActionButton } from "./action-button";
+import { useActionRunner } from "./actions";
+import { formatWhen, statusActions } from "./publishing";
 
 export interface StatusSectionProps {
   doc: EditorDocument;
@@ -30,101 +30,8 @@ function initials(name: string): string {
 export function StatusSection({ doc, onPublish }: StatusSectionProps) {
   const { t } = useTranslation("editor");
   const { item } = doc;
-  const [busy, setBusy] = useState<Transition | null>(null);
+  const { label, run, busy } = useActionRunner(doc);
   const actions = statusActions(item, doc.readOnly !== null);
-  const saving = doc.saveState === "saving" || busy !== null;
-  const status = item?.status ?? "draft";
-
-  const run = async (action: Transition) => {
-    setBusy(action);
-    try {
-      const next = await doc.transition(action);
-      if (next) {
-        toast.success(
-          t(
-            `panel.toast.${action === "unpublish" && status === "scheduled" ? "unscheduled" : action}`,
-          ),
-          {
-            id: "editor-transition",
-          },
-        );
-      }
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const label = (action: PanelAction): string => {
-    switch (action) {
-      case "save":
-        if (item === null || status === "draft") return t("panel.actions.saveDraft");
-        if (status === "pending") return t("panel.actions.saveChanges");
-        return t("panel.actions.update");
-      case "unpublish":
-        return status === "scheduled"
-          ? t("panel.actions.unschedule")
-          : t("panel.actions.unpublish");
-      default:
-        return t(`panel.actions.${action}`);
-    }
-  };
-
-  const button = (action: PanelAction, variant: "default" | "outline", wide: boolean) => {
-    const common = {
-      type: "button" as const,
-      variant,
-      className: wide ? "w-full" : "flex-1",
-      "data-action": action,
-    };
-    switch (action) {
-      case "publish":
-      case "publishNow":
-        return (
-          <Button key={action} {...common} disabled={saving} onClick={() => onPublish("now")}>
-            {label(action)}
-          </Button>
-        );
-      case "schedule":
-        return (
-          <Button key={action} {...common} disabled={saving} onClick={() => onPublish("schedule")}>
-            <ClockIcon data-icon="inline-start" />
-            {label(action)}
-          </Button>
-        );
-      case "submit":
-        return (
-          <Button
-            key={action}
-            {...common}
-            disabled={saving}
-            onClick={() => {
-              void run("submit");
-            }}
-          >
-            <SendIcon data-icon="inline-start" />
-            {busy === "submit" ? t("panel.actions.submitting") : label(action)}
-          </Button>
-        );
-      case "save":
-        return (
-          <Button
-            key={action}
-            {...common}
-            // Nothing to save: a quiet outline, not a dimmed filled button.
-            variant={item !== null && !doc.dirty ? "outline" : variant}
-            disabled={saving || (item !== null && !doc.dirty)}
-            aria-keyshortcuts="Meta+S Control+S"
-            onClick={() => {
-              void doc.save();
-            }}
-          >
-            {doc.saveState === "saving" ? t("panel.actions.saving") : label(action)}
-          </Button>
-        );
-      default:
-        return null;
-    }
-  };
 
   const [first, ...rest] = actions.primary;
   const author = item?.author;
@@ -188,9 +95,28 @@ export function StatusSection({ doc, onPublish }: StatusSectionProps) {
       ) : null}
       {first || actions.secondary.length > 0 ? (
         <div data-slot="panel-actions" className="flex flex-col gap-2">
-          {first ? button(first, "default", true) : null}
+          {first ? (
+            <ActionButton
+              doc={doc}
+              action={first}
+              variant="default"
+              className="w-full"
+              onPublish={onPublish}
+            />
+          ) : null}
           {rest.length > 0 ? (
-            <div className="flex gap-2">{rest.map((a) => button(a, "outline", false))}</div>
+            <div className="flex gap-2">
+              {rest.map((a) => (
+                <ActionButton
+                  key={a}
+                  doc={doc}
+                  action={a}
+                  variant="outline"
+                  className="flex-1"
+                  onPublish={onPublish}
+                />
+              ))}
+            </div>
           ) : null}
           {actions.secondary.length > 0 ? (
             <div className="flex flex-wrap gap-1">
@@ -216,7 +142,7 @@ export function StatusSection({ doc, onPublish }: StatusSectionProps) {
                     variant="ghost"
                     size="sm"
                     className="text-muted-foreground"
-                    disabled={saving}
+                    disabled={busy}
                     data-action={a}
                     onClick={() => {
                       void run("unpublish");

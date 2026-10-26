@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { isContentStatus } from "@/api/content";
 import type { SchemaContentSummaryDto } from "@/api/schema";
 import { StatusBadge } from "@/components/kit/status-badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /** The status badge, with the scheduled time under it for scheduled items. */
 export function StatusCell({ item }: { item: SchemaContentSummaryDto }) {
@@ -24,5 +25,28 @@ export function StatusCell({ item }: { item: SchemaContentSummaryDto }) {
         </time>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A parent the viewer may not read (someone else's draft above a published child): a
+ * muted label, with why in a tooltip (and for screen readers in the label itself).
+ */
+export function UnavailableParent({ className }: { className?: string }) {
+  const { t } = useTranslation("content");
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          data-slot="parent-unavailable"
+          className={className ?? "text-muted-foreground italic"}
+        >
+          {t("row.parentUnavailable")}
+          <span className="sr-only">. {t("row.parentUnavailableWhy")}</span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{t("row.parentUnavailableWhy")}</TooltipContent>
+    </Tooltip>
   );
 }

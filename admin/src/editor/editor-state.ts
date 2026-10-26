@@ -148,9 +148,15 @@ export interface EditorDocumentOptions {
    * A `412` on a save or a transition: someone saved in between. Task 16's conflict
    * dialog replaces the default (the caller's toast); the user's text stays either way.
    */
-  onConflict?: (error: ApiError, op: WriteOp) => void;
+  onConflict?: (error: ApiError, op: WriteOp, context: ConflictContext) => void;
   /** Any other failed write (shown by the caller, unless the transition handles it). */
   onWriteError?: (error: unknown, op: WriteOp) => void;
+}
+
+/** What a 412 interrupted beyond the write itself. */
+export interface ConflictContext {
+  /** The transition that was waiting for this save (F40): the user's intent to keep. */
+  then?: Transition;
 }
 
 export interface TransitionOptions {
@@ -173,6 +179,8 @@ export interface EditorDocument {
   /** The panel members as the server holds them. */
   savedMeta: MetaDraft;
   setMeta: (patch: Partial<MetaDraft>) => void;
+  /** The transition in flight (its save included), else `null`. */
+  pending: Transition | null;
   /** The body as the server stored it (for the `invalid` plain-text view). */
   storedBody: unknown;
   /** Where the cursor goes when the screen opens (a hand-over keeps the user's place). */
@@ -404,115 +412,142 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   );
 
   /** The one place a failed write goes: a 412 to the conflict handler (Task 16). */
-  const fail = useCallback((e: unknown, op: WriteOp, onError?: (e: unknown) => void) => {
-    if (isProblem(e, "precondition-failed")) latest.current.onConflict?.(e, op);
-    else if (onError) onError(e);
-    else latest.current.onWriteError?.(e, op);
-  }, []);
+  const fail = useCallback(
+    (e: unknown, op: WriteOp, onError?: (e: unknown) => void, context: ConflictContext = {}) => {
+      if (isProblem(e, "precondition-failed")) latest.current.onConflict?.(e, op, context);
+      else if (onError) onError(e);
+      else latest.current.onWriteError?.(e, op);
+    },
+    [],
+  );
 
   const inflight = useRef<Promise<ContentDto | null> | null>(null);
+  // One write at a time: a transition (its save and its lifecycle call) and a save never
+  // overlap, so no request goes out with a version another one is about to replace.
+  const transitioning = useRef<Promise<ContentDto | null> | null>(null);
+  const [pending, setPending] = useState<Transition | null>(null);
 
-  const save = useCallback((): Promise<ContentDto | null> => {
-    if (readOnlyRef.current) return Promise.resolve(null);
-    if (inflight.current) return inflight.current;
-    const current = itemRef.current;
-    const sentTitle = titleRef.current;
-    const doc = editor.getJSON();
-    const sentBody = JSON.stringify(doc);
-    const sentMeta = metaRef.current;
-    const base = saved.current;
-    const metaPatch = metaChanges(sentMeta, savedMetaRef.current);
-    const titleChanged = base.title !== sentTitle;
-    const bodyChanged = base.body !== sentBody;
-    if (current && !titleChanged && !bodyChanged && Object.keys(metaPatch).length === 0) {
-      setDirty(false);
-      setSaveState("saved");
-      return Promise.resolve(current);
-    }
-    setSaveState("saving");
-    const run = async (): Promise<ContentDto | null> => {
-      try {
-        let next: ContentDto;
-        if (current) {
-          // The changed members only.
-          const patch: SchemaContentPatch = { ...metaPatch };
-          if (titleChanged) patch.title = sentTitle;
-          if (bodyChanged) patch.body = asBody(doc);
-          next = await patchContent(type, current.id, current.version, patch);
-        } else {
-          const input: SchemaContentInput = { title: sentTitle, body: asBody(doc) };
-          if (metaPatch.slug !== undefined) input.slug = metaPatch.slug;
-          if (metaPatch.excerpt) input.excerpt = metaPatch.excerpt;
-          if (metaPatch.terms && metaPatch.terms.length > 0) input.terms = metaPatch.terms;
-          if (metaPatch.parent_id) input.parent_id = metaPatch.parent_id;
-          if (metaPatch.menu_order !== undefined) input.menu_order = metaPatch.menu_order;
-          next = await createContent(type, input);
-        }
-        saved.current = { title: sentTitle, body: sentBody };
-        const stored = metaOf(next);
-        savedMetaRef.current = stored;
-        setSavedMeta(stored);
-        metaRef.current = settleMeta(metaRef.current, sentMeta, stored);
-        setMetaState(metaRef.current);
-        adopt(next);
-        setSavedAt(new Date());
-        const still = !isDirtyNow();
-        setDirty(!still);
-        setSaveState(still ? "saved" : "dirty");
-        if (!current) {
-          const { from, to } = editor.state.selection;
-          const active = document.activeElement;
-          latest.current.onCreated?.(next, {
-            id: next.id,
-            title: titleRef.current,
-            body: editor.getJSON(),
-            selection: { from, to },
-            focus: editor.isFocused
-              ? "body"
-              : active instanceof HTMLTextAreaElement && active.dataset.slot === "editor-title"
-                ? "title"
-                : null,
-            saved: { title: sentTitle, body: sentBody },
-            meta: metaRef.current,
-          });
-        }
-        return next;
-      } catch (e) {
-        setSaveState(e instanceof NetworkError ? "offline" : "error");
-        fail(e, "save");
-        return null;
-      } finally {
-        inflight.current = null;
+  const saveNow = useCallback(
+    (then?: Transition): Promise<ContentDto | null> => {
+      if (readOnlyRef.current) return Promise.resolve(null);
+      if (inflight.current) return inflight.current;
+      const current = itemRef.current;
+      const sentTitle = titleRef.current;
+      const doc = editor.getJSON();
+      const sentBody = JSON.stringify(doc);
+      const sentMeta = metaRef.current;
+      const base = saved.current;
+      const metaPatch = metaChanges(sentMeta, savedMetaRef.current);
+      const titleChanged = base.title !== sentTitle;
+      const bodyChanged = base.body !== sentBody;
+      if (current && !titleChanged && !bodyChanged && Object.keys(metaPatch).length === 0) {
+        setDirty(false);
+        setSaveState("saved");
+        return Promise.resolve(current);
       }
-    };
-    const p = run();
-    inflight.current = p;
-    return p;
-  }, [editor, type, adopt, fail, isDirtyNow]);
+      setSaveState("saving");
+      const run = async (): Promise<ContentDto | null> => {
+        try {
+          let next: ContentDto;
+          if (current) {
+            // The changed members only.
+            const patch: SchemaContentPatch = { ...metaPatch };
+            if (titleChanged) patch.title = sentTitle;
+            if (bodyChanged) patch.body = asBody(doc);
+            next = await patchContent(type, current.id, current.version, patch);
+          } else {
+            const input: SchemaContentInput = { title: sentTitle, body: asBody(doc) };
+            if (metaPatch.slug !== undefined) input.slug = metaPatch.slug;
+            if (metaPatch.excerpt) input.excerpt = metaPatch.excerpt;
+            if (metaPatch.terms && metaPatch.terms.length > 0) input.terms = metaPatch.terms;
+            if (metaPatch.parent_id) input.parent_id = metaPatch.parent_id;
+            if (metaPatch.menu_order !== undefined) input.menu_order = metaPatch.menu_order;
+            next = await createContent(type, input);
+          }
+          saved.current = { title: sentTitle, body: sentBody };
+          const stored = metaOf(next);
+          savedMetaRef.current = stored;
+          setSavedMeta(stored);
+          metaRef.current = settleMeta(metaRef.current, sentMeta, stored);
+          setMetaState(metaRef.current);
+          adopt(next);
+          setSavedAt(new Date());
+          const still = !isDirtyNow();
+          setDirty(!still);
+          setSaveState(still ? "saved" : "dirty");
+          if (!current) {
+            const { from, to } = editor.state.selection;
+            const active = document.activeElement;
+            latest.current.onCreated?.(next, {
+              id: next.id,
+              title: titleRef.current,
+              body: editor.getJSON(),
+              selection: { from, to },
+              focus: editor.isFocused
+                ? "body"
+                : active instanceof HTMLTextAreaElement && active.dataset.slot === "editor-title"
+                  ? "title"
+                  : null,
+              saved: { title: sentTitle, body: sentBody },
+              meta: metaRef.current,
+            });
+          }
+          return next;
+        } catch (e) {
+          setSaveState(e instanceof NetworkError ? "offline" : "error");
+          fail(e, "save", undefined, then ? { then } : {});
+          return null;
+        } finally {
+          inflight.current = null;
+        }
+      };
+      const p = run();
+      inflight.current = p;
+      return p;
+    },
+    [editor, type, adopt, fail, isDirtyNow],
+  );
+
+  /** A save waits for a transition in flight, then saves what is still unsaved. */
+  const save = useCallback((): Promise<ContentDto | null> => {
+    const running = transitioning.current;
+    return running ? running.then(() => saveNow()) : saveNow();
+  }, [saveNow]);
 
   const transition = useCallback(
-    async (action: Transition, options: TransitionOptions = {}): Promise<ContentDto | null> => {
-      if (readOnlyRef.current) return null;
-      // Unsaved changes first (F40); a save that joined one already in flight may not
-      // hold the latest keystrokes, so save again while anything is still unsaved.
-      let current = await save();
-      if (current && isDirtyNow()) current = await save();
-      if (!current || itemRef.current === null) return null;
-      try {
-        const next =
-          action === "schedule"
-            ? await lifecycle(type, current.id, "schedule", current.version, {
-                at: options.at ?? "",
-              })
-            : await lifecycle(type, current.id, action, current.version);
-        adopt(next);
-        return next;
-      } catch (e) {
-        fail(e, action, options.onError);
-        return null;
-      }
+    (action: Transition, options: TransitionOptions = {}): Promise<ContentDto | null> => {
+      if (readOnlyRef.current) return Promise.resolve(null);
+      // A second transition while one runs (a shortcut) does nothing.
+      if (transitioning.current) return Promise.resolve(null);
+      const run = async (): Promise<ContentDto | null> => {
+        // Unsaved changes first (F40); a save that joined one already in flight may
+        // not hold the latest keystrokes, so save again while anything is unsaved.
+        let current = await saveNow(action);
+        if (current && isDirtyNow()) current = await saveNow(action);
+        if (!current || itemRef.current === null) return null;
+        try {
+          const next =
+            action === "schedule"
+              ? await lifecycle(type, current.id, "schedule", current.version, {
+                  at: options.at ?? "",
+                })
+              : await lifecycle(type, current.id, action, current.version);
+          adopt(next);
+          return next;
+        } catch (e) {
+          fail(e, action, options.onError);
+          return null;
+        }
+      };
+      setPending(action);
+      const p = run().finally(() => {
+        transitioning.current = null;
+        setPending(null);
+      });
+      transitioning.current = p;
+      return p;
     },
-    [save, isDirtyNow, type, adopt, fail],
+    [saveNow, isDirtyNow, type, adopt, fail],
   );
 
   const initialFocus = handoff ? handoff.focus : opts.item === null ? "title" : null;
@@ -525,6 +560,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     meta,
     savedMeta,
     setMeta,
+    pending,
     storedBody,
     initialFocus,
     dirty,

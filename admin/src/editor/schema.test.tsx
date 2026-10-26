@@ -11,7 +11,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { qk } from "@/api/keys";
 import type { SchemaContentDto } from "@/api/schema";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { renderWithRouter, stubRoutes } from "@/test/render";
+import { json, renderWithRouter, stubRoutes } from "@/test/render";
 import { EditorScreen } from "./editor";
 import {
   SUPPORTED_MARKS,
@@ -337,9 +337,8 @@ const ME = {
   scopes: [] as string[],
 };
 
-/** Renders the screen on a seeded `QueryClient`; `unmount` cleans up for the next case. */
-async function openScreenWith(item: SchemaContentDto, qc: QueryClient) {
-  const view = { unmount: () => {} };
+/** Renders the screen on a seeded `QueryClient`. */
+async function openScreenWith(item: SchemaContentDto, qc: QueryClient): Promise<void> {
   renderWithRouter(
     <TooltipProvider>
       <EditorScreen type="post" typeLabel="Posts" item={item} />
@@ -347,8 +346,6 @@ async function openScreenWith(item: SchemaContentDto, qc: QueryClient) {
     qc,
   );
   await screen.findByRole("textbox", { name: "Body" });
-  view.unmount = cleanup;
-  return view;
 }
 
 async function openScreen(item: SchemaContentDto): Promise<void> {
@@ -454,7 +451,7 @@ describe("editor screen", () => {
       stubRoutes({});
       const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
       qc.setQueryData(qk.me, { ...ME, capabilities: [...capabilities] });
-      const { unmount } = await openScreenWith(itemWith(broken), qc);
+      await openScreenWith(itemWith(broken), qc);
       const stored = await waitFor(() => {
         const el = document.querySelector<HTMLElement>("[data-slot=stored-text]");
         if (!el) throw new Error("no stored-text view");
@@ -462,7 +459,7 @@ describe("editor screen", () => {
       });
       expect(within(stored).getByText("A stray list item.")).toBeVisible();
       expect(within(stored).queryByText("Show stored JSON") !== null).toBe(shown);
-      unmount();
+      cleanup();
     }
   });
 
@@ -486,8 +483,8 @@ describe("editor screen", () => {
     // baseline is taken after that, so an untouched save writes nothing.
     const seen = stubRoutes({});
     await openScreen(itemWith(minimalAttrs));
-    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
-    await userEvent.setup().click(screen.getByRole("button", { name: "Save" }));
+    // Nothing to save: the button says so, and `mod+s` sends nothing either.
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     await userEvent.setup().keyboard("{Control>}s{/Control}{Meta>}s{/Meta}");
     await act(() => Promise.resolve());
     expect(seen).toEqual([]);
@@ -528,6 +525,41 @@ describe("editor screen", () => {
       "true",
     );
     expect(screen.queryByRole("note")).toBeNull();
+    // Enabled once there is something to save.
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    await userEvent.setup().type(screen.getByRole("textbox", { name: "Title" }), "!");
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  test("read_only_after_a_transition_takes_edit_away", async () => {
+    // The phone publish bar (jsdom is narrow) shows the primary action from `allowed`;
+    // when the server's answer to Submit says the item is no longer editable, the
+    // screen turns read-only at once (the deterministic other half of the E2E's
+    // contributor case, where the server keeps `edit`).
+    const item = itemWith(seedSample, {
+      allowed: { ...itemWith(seedSample).allowed, publish: false, schedule: false, submit: true },
+    });
+    const seen = stubRoutes({
+      [`/api/v1/content/post/${item.id}/submit`]: () =>
+        json({
+          ...item,
+          status: "pending",
+          version: item.version + 1,
+          allowed: { ...item.allowed, edit: false, submit: false, trash: false },
+        }),
+    });
+    await openScreen(item);
+    const bar = screen.getByRole("region", { name: "Publishing" });
+    expect(within(bar).queryByRole("button", { name: /^Publish/ })).toBeNull();
+    await userEvent.setup().click(within(bar).getByRole("button", { name: "Submit for review" }));
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Body" })).toHaveAttribute(
+        "contenteditable",
+        "false",
+      ),
+    );
+    expect(screen.getByRole("note")).toHaveTextContent("You can read this item but not edit it.");
+    expect(within(bar).getByText("Pending review")).toBeVisible();
+    expect(seen.map((u) => u.pathname)).toEqual([`/api/v1/content/post/${item.id}/submit`]);
   });
 });

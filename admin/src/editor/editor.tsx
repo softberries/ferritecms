@@ -56,6 +56,7 @@ import {
 } from "./editor-state";
 import { useTermsById, useTypeTaxonomies, useWide } from "./panel/panel-state";
 import { PublishDialog, type PublishMode } from "./panel/publish-dialog";
+import { PublishBar } from "./panel/publish-bar";
 import { PANEL_ID, SidePanel } from "./panel/side-panel";
 import { blockText } from "./text";
 import { readingMinutes, wordCount } from "./word-count";
@@ -139,8 +140,14 @@ export function EditorScreen({ type, typeLabel, item, handoff, onCreated }: Edit
     label: t("shortcuts.publish"),
     group,
     allowInInput: true,
-    when: () => canPublish && document.querySelector('[role="dialog"]') === null,
-    run: () => setPublishMode("now"),
+    when: () =>
+      (canPublish || (doc.item === null && doc.readOnly === null)) &&
+      document.querySelector('[role="dialog"]') === null,
+    run: () => {
+      // A new item has no `allowed` yet: it is saved as a draft first.
+      if (canPublish) setPublishMode("now");
+      else toast.info(t("publish.saveFirst"), { id: "editor-transition" });
+    },
   });
   useShortcut({
     id: "editor.panelClose",
@@ -205,6 +212,7 @@ export function EditorScreen({ type, typeLabel, item, handoff, onCreated }: Edit
         panelOpen={panelOpen}
         onPanel={() => setPanelOpen(!panelOpen)}
         toggleRef={toggleRef}
+        wide={wide}
       />
       <div className="flex flex-1 items-start">
         <div className="min-w-0 flex-1 px-page">
@@ -233,10 +241,19 @@ export function EditorScreen({ type, typeLabel, item, handoff, onCreated }: Edit
         taxonomies={taxonomies}
         terms={terms}
       />
-      <EditorFooter
-        editor={doc.editor}
-        {...(doc.readOnly?.kind === "invalid" ? { fixedText: blockText(doc.storedBody) } : {})}
-      />
+      {wide || focusMode ? (
+        <EditorFooter
+          editor={doc.editor}
+          {...(doc.readOnly?.kind === "invalid" ? { fixedText: blockText(doc.storedBody) } : {})}
+        />
+      ) : (
+        <PublishBar
+          doc={doc}
+          onSettings={() => setSheetOpen(true)}
+          settingsOpen={sheetOpen}
+          onPublish={setPublishMode}
+        />
+      )}
     </div>
   );
 }
@@ -250,6 +267,7 @@ function EditorBar({
   panelOpen,
   onPanel,
   toggleRef,
+  wide,
 }: {
   type: string;
   typeLabel: string;
@@ -259,6 +277,8 @@ function EditorBar({
   panelOpen: boolean;
   onPanel: () => void;
   toggleRef: RefObject<HTMLButtonElement | null>;
+  /** Below 1024 px the status and the settings button live in the publish bar. */
+  wide: boolean;
 }) {
   const { t } = useTranslation("editor");
   const status = doc.item?.status;
@@ -283,8 +303,8 @@ function EditorBar({
           <span className="max-w-40 truncate">{typeLabel}</span>
         </Link>
       </Button>
-      {status && isContentStatus(status) && !focusMode ? (
-        <StatusBadge status={status} className="max-sm:hidden" />
+      {status && isContentStatus(status) && !focusMode && wide ? (
+        <StatusBadge status={status} />
       ) : null}
       <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
         {showState && !doc.readOnly ? (
@@ -312,35 +332,38 @@ function EditorBar({
             <KbdCombo keys="mod+shift+f" />
           </TooltipContent>
         </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              ref={toggleRef}
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-expanded={panelOpen}
-              aria-controls={panelOpen ? PANEL_ID : undefined}
-              aria-label={t("panel.toggle")}
-              aria-keyshortcuts="Meta+Period Control+Period"
-              data-slot="panel-toggle"
-              onClick={onPanel}
-              className={cn("text-muted-foreground", panelOpen && "bg-muted text-foreground")}
-            >
-              <PanelRightIcon />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="flex items-center gap-2">
-            {t("panel.toggle")}
-            <KbdCombo keys="mod+." />
-          </TooltipContent>
-        </Tooltip>
+        {wide ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                ref={toggleRef}
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-expanded={panelOpen}
+                aria-controls={panelOpen ? PANEL_ID : undefined}
+                aria-label={t("panel.toggle")}
+                aria-keyshortcuts="Meta+Period Control+Period"
+                data-slot="panel-toggle"
+                onClick={onPanel}
+                className={cn("text-muted-foreground", panelOpen && "bg-muted text-foreground")}
+              >
+                <PanelRightIcon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="flex items-center gap-2">
+              {t("panel.toggle")}
+              <KbdCombo keys="mod+." />
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
               type="button"
               variant="outline"
-              disabled={doc.readOnly !== null || saving}
+              // Nothing to save: disabled, like the panel's own save action.
+              disabled={doc.readOnly !== null || saving || (doc.item !== null && !doc.dirty)}
               aria-keyshortcuts="Meta+S Control+S"
               onClick={() => {
                 void doc.save();

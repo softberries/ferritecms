@@ -96,6 +96,8 @@ function PublishDialogBody({
         month: "short",
         hour: "2-digit",
         minute: "2-digit",
+        // 24 h, as the time field shows it.
+        hourCycle: "h23",
       }).format(new Date(at))
     : "";
 

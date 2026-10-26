@@ -218,7 +218,8 @@
       "published": "Published",
       "scheduled": "Scheduled for {{when}}",
       "view": "View"
-    }
+    },
+    "saveFirst": "Save the draft first; then you can publish it."
   },
   "schedule": {
     "time": "Time",
@@ -272,11 +273,17 @@
     "loading": "Loading…",
     "empty": "Nothing found",
     "order": "Order",
-    "orderHint": "Lower numbers come first"
+    "orderHint": "Lower numbers come first",
+    "unavailable": "Parent not available",
+    "unavailableHint": "You may not have access to the current parent. It stays as it is unless you pick another."
   },
   "danger": {
     "heading": "Danger zone",
     "hintUndo": "You can undo this right after.",
     "hintNoUndo": "You won't be able to restore it yourself; an editor can."
+  },
+  "publishBar": {
+    "label": "Publishing",
+    "settings": "Settings"
   }
 }

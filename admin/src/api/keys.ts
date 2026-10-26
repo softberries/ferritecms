@@ -38,6 +38,9 @@ export const qk = {
       ["content", type, "list", "published-since", days] as const,
     item: (type: string, id: string) => ["content", type, "item", id] as const,
     counts: (type: string) => ["content", type, "counts"] as const,
+    /** A parent's title and slug as the viewer may see them (`content/parent-ref.ts`);
+     * `null` once the server said it is not readable. */
+    parentRef: (type: string, id: string) => ["content", type, "parent-ref", id] as const,
     revisions: (type: string, id: string) => ["content", type, "item", id, "revisions"] as const,
     revision: (type: string, id: string, rid: string) =>
       ["content", type, "item", id, "revisions", rid] as const,

@@ -132,8 +132,9 @@ const TIME_RE = /^(\d{2}):(\d{2})$/;
 /**
  * The instant `wall` names in `timeZone`, as RFC 3339 UTC (`2026-11-03T08:30:00Z`):
  * the time the user chose stays the time on their clock, whatever the offset that day.
- * `null` when the date or time is not well formed. A time skipped by a daylight-saving
- * change resolves to the instant just after the gap.
+ * `null` when the date or time is not well formed. A time a daylight-saving change
+ * skips moves forward by the gap (02:30 → 03:30); a time that happens twice takes the
+ * later (standard-time) instant.
  */
 export function wallClockToUtc(wall: WallClock, timeZone: string): string | null {
   const d = DATE_RE.exec(wall.date);

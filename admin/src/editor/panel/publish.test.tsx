@@ -83,6 +83,7 @@ function fakeDoc(
     meta,
     savedMeta: meta,
     setMeta: vi.fn(),
+    pending: null,
     storedBody: item?.body,
     initialFocus: null,
     dirty: false,
@@ -208,10 +209,7 @@ describe("publish", () => {
     const dialog = screen.getByRole("dialog");
     const user = userEvent.setup();
     // Today at 00:00 has passed.
-    const today = new Date();
-    const cell = dialog.querySelector<HTMLElement>(`[data-day="${today.toLocaleDateString()}"]`);
-    if (!cell) throw new Error("no cell for today");
-    await user.click(cell);
+    await pickDay(dialog, user, new Date());
     const time = within(dialog).getByLabelText("Time");
     await user.clear(time);
     await user.type(time, "00:00");
@@ -221,9 +219,7 @@ describe("publish", () => {
     await user.click(confirm);
     expect(doc.transition).not.toHaveBeenCalled();
     // A future time is accepted and sent as RFC 3339 UTC.
-    await user.click(
-      dialog.querySelector<HTMLElement>(`[data-day="${tomorrow().toLocaleDateString()}"]`) ?? cell,
-    );
+    await pickDay(dialog, user, tomorrow());
     await user.clear(time);
     await user.type(time, "09:30");
     expect(within(dialog).queryByRole("alert")).toBeNull();
@@ -284,6 +280,15 @@ describe("publish", () => {
     expect(wallClockToUtc({ date: "2026-10-25", time: "12:00" }, "Europe/Warsaw")).toBe(
       "2026-10-25T11:00:00Z",
     );
+    // The edges: a time the spring change skips (Warsaw 29 Mar 2026, 02:00 → 03:00)
+    // moves forward by the gap (02:30 → 03:30 CEST); an ambiguous one in the autumn
+    // (25 Oct 2026, 02:30 happens twice) takes the later, standard-time instant.
+    expect(wallClockToUtc({ date: "2026-03-29", time: "02:30" }, "Europe/Warsaw")).toBe(
+      "2026-03-29T01:30:00Z",
+    );
+    expect(wallClockToUtc({ date: "2026-10-25", time: "02:30" }, "Europe/Warsaw")).toBe(
+      "2026-10-25T01:30:00Z",
+    );
     // And back again.
     for (const [zone, wall] of [
       ["Europe/Warsaw", { date: "2026-11-03", time: "09:30" }],
@@ -332,6 +337,31 @@ describe("publish", () => {
     expect(formatWhen("2026-11-03T08:30:00Z")).toMatch(/2026/);
   });
 });
+
+/**
+ * Clicks `day` in the calendar, moving a month either way when it is not in the shown
+ * grid (the picker opens on tomorrow's month; today or tomorrow can sit across a month
+ * boundary).
+ */
+async function pickDay(
+  dialog: HTMLElement,
+  user: ReturnType<typeof userEvent.setup>,
+  day: Date,
+): Promise<void> {
+  const find = () => dialog.querySelector<HTMLElement>(`[data-day="${day.toLocaleDateString()}"]`);
+  for (const nav of [null, ".rdp-button_next", ".rdp-button_previous", ".rdp-button_previous"]) {
+    if (nav) {
+      const button = dialog.querySelector<HTMLElement>(nav);
+      if (button && button.getAttribute("aria-disabled") !== "true") await user.click(button);
+    }
+    const cell = find();
+    if (cell) {
+      await user.click(cell);
+      return;
+    }
+  }
+  throw new Error(`no calendar cell for ${day.toDateString()}`);
+}
 
 function tomorrow(): Date {
   const d = new Date();

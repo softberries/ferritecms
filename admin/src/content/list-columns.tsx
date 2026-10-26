@@ -14,15 +14,10 @@ import type { SchemaContentSummaryDto } from "@/api/schema";
 import { dataTableColumns } from "@/components/kit/data-table-features";
 import { RelativeTime } from "@/components/kit/relative-time";
 import { StatusDot } from "@/components/kit/status-badge";
-import { StatusCell } from "./list-cells";
+import { StatusCell, UnavailableParent } from "./list-cells";
+import type { ParentState } from "./parent-ref";
 
 export type ContentSummary = SchemaContentSummaryDto;
-
-/** What a parent cell needs: the parent's title and slug, once known. */
-export interface ParentRef {
-  title: string;
-  slug: string;
-}
 
 /** A row action the list carries out (the route owns the requests and the undo). */
 export type RowAction = "trash" | "restore" | "delete";
@@ -52,8 +47,8 @@ function initials(name: string): string {
 export interface ListColumnsOptions {
   type: string;
   hierarchical: boolean;
-  /** Parents by id: from the loaded rows, or fetched one by one. */
-  parents: ReadonlyMap<string, ParentRef>;
+  /** Parents by id: from the loaded rows, or resolved one by one (`parent-ref.ts`). */
+  parents: ReadonlyMap<string, ParentState>;
 }
 
 export function useListColumns({ type, hierarchical, parents }: ListColumnsOptions) {
@@ -67,7 +62,7 @@ export function useListColumns({ type, hierarchical, parents }: ListColumnsOptio
         cell: (c) => {
           const item = c.row.original;
           const parent = item.parent_id ? parents.get(item.parent_id) : undefined;
-          const slug = parent ? `${parent.slug}/${item.slug}` : item.slug;
+          const slug = parent?.kind === "found" ? `${parent.ref.slug}/${item.slug}` : item.slug;
           const title = item.title || t("row.untitled");
           const date = shownDate(item);
           return (
@@ -117,12 +112,19 @@ export function useListColumns({ type, hierarchical, parents }: ListColumnsOptio
                   );
                 }
                 const parent = parents.get(id);
-                return parent ? (
-                  <span className="block max-w-48 truncate" title={parent.title}>
-                    {parent.title || t("row.untitled")}
+                if (parent?.kind === "found") {
+                  return (
+                    <span className="block max-w-48 truncate" title={parent.ref.title}>
+                      {parent.ref.title || t("row.untitled")}
+                    </span>
+                  );
+                }
+                if (parent?.kind === "unavailable") return <UnavailableParent />;
+                return (
+                  <span className="text-muted-foreground">
+                    <span aria-hidden="true">…</span>
+                    <span className="sr-only">{t("row.parentLoading")}</span>
                   </span>
-                ) : (
-                  <span className="text-muted-foreground">…</span>
                 );
               },
             }),

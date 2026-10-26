@@ -2,13 +2,15 @@
 // `GET /content/{type}?q=` (debounced; without a query, the first 50 by title), never
 // offering the item itself or its descendants as far as the loaded list shows (the
 // server refuses a cycle anyway); "No parent" moves it to the top level. The order is
-// `menu_order` (lower first).
+// `menu_order` (lower first), kept as typed until it is a whole number. A parent the
+// viewer may not read shows as "not available" and stays unless another is picked.
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ChevronsUpDownIcon, CornerDownRightIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { getContent, listContent } from "@/api/content";
+import { cn } from "cn";
+import { listContent } from "@/api/content";
 import { qk } from "@/api/keys";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +24,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { parentRefQuery, parentState } from "@/content/parent-ref";
 import type { EditorDocument } from "../editor-state";
 import { notAParent } from "./publishing";
 
@@ -61,20 +64,40 @@ export function ParentField({
     staleTime: 30_000,
   });
   const parentId = doc.meta.parent_id;
-  const parent = useQuery({
-    queryKey: qk.content.item(type, parentId ?? ""),
-    queryFn: () => getContent(type, parentId ?? ""),
+  // The same resolver as the list's parent cell: a parent this viewer may not read
+  // settles as "not available" and the item keeps it unless another one is picked.
+  const parentQuery = useQuery({
+    ...parentRefQuery(type, parentId ?? ""),
     enabled: parentId !== null,
-    staleTime: 60_000,
   });
   const items = useMemo(() => candidates.data?.items ?? [], [candidates.data]);
   const excluded = useMemo(() => notAParent(doc.item?.id ?? null, items), [doc.item?.id, items]);
   const choices = items.filter((i) => !excluded.has(i.id));
+  const listed = items.find((i) => i.id === parentId);
+  const parent = parentState(
+    parentId,
+    parentQuery,
+    listed ? { title: listed.title, slug: listed.slug } : undefined,
+  );
   const parentTitle =
-    parentId === null
+    parent.kind === "none"
       ? t("parent.none")
-      : (items.find((i) => i.id === parentId)?.title ?? parent.data?.title ?? "…") ||
-        t("title.untitled");
+      : parent.kind === "found"
+        ? parent.ref.title || t("title.untitled")
+        : parent.kind === "unavailable"
+          ? t("parent.unavailable")
+          : t("parent.loading");
+
+  // The order as typed: only a whole number reaches the draft; anything else is put back
+  // to the draft's value when the field is left.
+  const order = doc.meta.menu_order;
+  const [orderText, setOrderText] = useState(String(order));
+  const [orderSynced, setOrderSynced] = useState(order);
+  if (order !== orderSynced) {
+    setOrderSynced(order);
+    if (Number.parseInt(orderText, 10) !== order) setOrderText(String(order));
+  }
+  const orderValid = /^-?\d+$/.test(orderText.trim());
 
   return (
     <div className="flex flex-col gap-3">
@@ -97,7 +120,14 @@ export function ParentField({
               data-slot="parent-trigger"
               className="h-8 justify-between font-normal"
             >
-              <span id={`${labelId}-value`} className="truncate">
+              <span
+                id={`${labelId}-value`}
+                className={cn(
+                  "truncate",
+                  (parent.kind === "unavailable" || parent.kind === "loading") &&
+                    "text-muted-foreground italic",
+                )}
+              >
                 {parentTitle}
               </span>
               <ChevronsUpDownIcon data-icon="inline-end" className="text-muted-foreground" />
@@ -149,6 +179,11 @@ export function ParentField({
             </Command>
           </PopoverContent>
         </Popover>
+        {parent.kind === "unavailable" ? (
+          <p data-slot="parent-unavailable" className="text-xs text-muted-foreground">
+            {t("parent.unavailableHint")}
+          </p>
+        ) : null}
       </div>
       <div className="flex items-center justify-between gap-3">
         <div className="flex flex-col">
@@ -157,14 +192,22 @@ export function ParentField({
         </div>
         <Input
           id={orderId}
-          type="number"
+          type="text"
           inputMode="numeric"
-          step={1}
           disabled={disabled}
-          value={String(doc.meta.menu_order)}
+          value={orderText}
+          aria-invalid={orderValid ? undefined : true}
           onChange={(e) => {
-            const n = Number.parseInt(e.target.value, 10);
-            doc.setMeta({ menu_order: Number.isFinite(n) ? n : 0 });
+            const text = e.target.value;
+            setOrderText(text);
+            if (/^-?\d+$/.test(text.trim())) {
+              const n = Number.parseInt(text, 10);
+              setOrderSynced(n);
+              doc.setMeta({ menu_order: n });
+            }
+          }}
+          onBlur={() => {
+            if (!orderValid) setOrderText(String(order));
           }}
           className="h-8 w-20 text-right tabular-nums"
         />

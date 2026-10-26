@@ -56,7 +56,10 @@
     "updated": "Last updated",
     "menu": "Actions for {{title}}",
     "actionOn": "{{action}}: {{title}}",
-    "newTab": "(opens in a new tab)"
+    "newTab": "(opens in a new tab)",
+    "parentUnavailable": "Parent not available",
+    "parentUnavailableWhy": "You may not have access to the parent item.",
+    "parentLoading": "Loading the parent"
   },
   "actions": {
     "edit": "Edit",

@@ -75,15 +75,15 @@ test("contributor_can_submit_not_publish", async ({
   // The submit carries the version the PATCH returned.
   expect(writes[1]?.headers()["if-match"]).toBe((await writes[0]?.response())?.headers().etag);
   await expect(panel(page).locator("[data-slot=status-badge]")).toHaveText("Pending review");
-  // Still no way to publish; read-only exactly when the server says so.
+  // Still no way to publish. The server keeps `edit` for a contributor's own pending item
+  // (07 §1), so the editor stays editable and says it waits for review; the read-only
+  // branch (`edit` false after a transition) is the unit test
+  // `read_only_after_a_transition_takes_edit_away`.
   await expect(page.getByRole("button", { name: /^Publish/ })).toHaveCount(0);
-  await expect(body(page)).toHaveAttribute(
-    "contenteditable",
-    stored.allowed.edit ? "true" : "false",
-  );
-  if (stored.allowed.edit) {
-    await expect(panel(page).getByText("Waiting for review")).toBeVisible();
-  }
+  expect(stored.allowed.edit).toBe(true);
+  await expect(body(page)).toHaveAttribute("contenteditable", "true");
+  await expect(panel(page).getByText("Waiting for review")).toBeVisible();
+  await expect(page.getByRole("note")).toHaveCount(0);
   await contributor.dispose();
 });
 
@@ -142,10 +142,6 @@ test("editor_schedules", async ({ as, site, backend }) => {
       .textContent();
     return Number((text ?? "").replace(/\D/g, ""));
   };
-  await page.goto("/admin/");
-  await expect(page.locator("[data-slot=tile-skeleton]")).toHaveCount(0);
-  const before = await tile();
-
   await openItem(page, "post", item.id);
   await page.keyboard.press(`${await mod(page)}+Shift+p`);
   await expect(dialog(page)).toBeVisible();
@@ -191,11 +187,17 @@ test("editor_schedules", async ({ as, site, backend }) => {
         const shown = await tile();
         const res = await page.request.get("/api/v1/content/post/counts");
         const counts = (await res.json()) as { scheduled: number };
-        return shown === counts.scheduled && shown > before ? "changed" : { shown, before, counts };
+        return shown === counts.scheduled ? "equal" : { shown, counts };
       },
       { timeout: 30_000 },
     )
-    .toBe("changed");
+    .toBe("equal");
+  // …and the count includes this post.
+  const listed = await page.request.get(`/api/v1/content/post?status=scheduled&q=${unique}`);
+  expect(((await listed.json()) as { items: { id: string }[] }).items.map((i) => i.id)).toEqual([
+    item.id,
+  ]);
+  await editor.purge(item);
   await editor.dispose();
 });
 
@@ -276,6 +278,107 @@ test("trash_from_editor_with_undo", async ({ as, site, backend }) => {
   await editor.dispose();
 });
 
+test("unreadable_parent_settles", async ({ as, site, backend, guard, snap, expectAccessible }) => {
+  // A state the server allows: children (one published, one the author's own draft)
+  // under someone else's draft parent, which the author may not read (404). On its own
+  // type, removed afterwards, so no other spec's list meets it.
+  const admin = await ContentApi.as(backend, site.url, "admin");
+  const author = await ContentApi.as(backend, site.url, "author");
+  const type = uid("t").slice(0, 32);
+  const label = `Docs ${type.slice(-6)}`;
+  await admin.createType(type, label, true);
+  try {
+    const parent = await admin.create(type, `Hidden parent ${uid("").slice(-6)}`);
+    const published = await admin.createIn(type, `Public child ${uid("").slice(-6)}`, "published", {
+      parent_id: parent.id,
+    });
+    const mine = await author.create(type, `My child ${uid("").slice(-6)}`, {
+      parent_id: parent.id,
+    });
+    // The browser logs its own line for exactly this lookup; nothing else may fail.
+    const lookup = new RegExp(`/api/v1/content/${type}/${parent.id}$`);
+    guard.allowFailedResource(lookup);
+    const page = await as("author");
+    const lookups: string[] = [];
+    page.on("request", (r) => {
+      if (lookup.test(r.url())) lookups.push(r.url());
+    });
+
+    // The list: a settled, muted "Parent not available" for both children, asked once.
+    await page.goto(`/admin/content/${type}`);
+    const rows = page.getByRole("table", { name: label }).locator("tbody tr[data-row]");
+    await expect(rows).toHaveCount(2);
+    for (const title of [published.title, mine.title]) {
+      await expect(
+        rows.filter({ hasText: title }).locator("[data-slot=parent-unavailable]"),
+      ).toHaveText(/^Parent not available/);
+    }
+    await expect(rows.getByText("…")).toHaveCount(0);
+    expect(lookups).toHaveLength(1);
+    await snap(page, "content-list-parent-unavailable");
+    await expectAccessible(page);
+
+    // The editor: the field says so, and a save keeps the parent.
+    await openItem(page, type, mine.id);
+    const trigger = panel(page).locator("[data-slot=parent-trigger]");
+    await expect(trigger).toContainText("Parent not available");
+    await expect(panel(page).locator("p[data-slot=parent-unavailable]")).toBeVisible();
+    await snap(page, "editor-panel-parent-unavailable");
+    await expectAccessible(page);
+    const name = `Renamed ${uid("").slice(-6)}`;
+    await title(page).fill(name);
+    const patch = page.waitForRequest((r) => r.method() === "PATCH" && r.url().includes(mine.id));
+    await page.keyboard.press(`${await mod(page)}+s`);
+    expect(JSON.parse((await patch).postData() ?? "{}")).toEqual({ title: name });
+    await expect(page.locator("[data-slot=save-state]")).toHaveAttribute("data-state", "saved");
+    expect((await admin.get(type, mine.id)).parent_id).toBe(parent.id);
+
+    // …and another parent can still be chosen (here: none).
+    await trigger.click();
+    await page.getByRole("option", { name: "No parent (top level)" }).click();
+    await expect(trigger).toContainText("No parent (top level)");
+    await page.keyboard.press(`${await mod(page)}+s`);
+    await expect(page.locator("[data-slot=save-state]")).toHaveAttribute("data-state", "saved");
+    expect((await admin.get(type, mine.id)).parent_id ?? null).toBeNull();
+  } finally {
+    await admin.removeType(type);
+    await Promise.all([admin.dispose(), author.dispose()]);
+  }
+});
+
+test("phone_publish_bar", async ({ as, site, backend }) => {
+  // Below 1024 px the panel is a sheet, so the status and the primary action live in a
+  // bar at the foot of the editor (same `allowed` rules, same F40 flow).
+  const author = await ContentApi.as(backend, site.url, "author");
+  const contributor = await ContentApi.as(backend, site.url, "contributor");
+  const post = await author.create("post", `Phone ${uid()}`);
+  const draft = await contributor.create("post", `Phone contrib ${uid()}`);
+  try {
+    const page = await as("author");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openItem(page, "post", post.id, false);
+    const bar = page.getByRole("region", { name: "Publishing" });
+    await expect(bar).toContainText("Draft");
+    await bar.getByRole("button", { name: "Publish…" }).click();
+    await dialog(page).getByRole("button", { name: "Publish now" }).click();
+    await expect(toast(page, "Published")).toBeVisible();
+    await expect(bar).toContainText("Published");
+    await expect(bar.getByRole("button", { name: "Update" })).toBeDisabled();
+    expect((await author.get("post", post.id)).status).toBe("published");
+    await bar.getByRole("button", { name: "Settings" }).click();
+    await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+
+    const other = await as("contributor");
+    await other.setViewportSize({ width: 390, height: 844 });
+    await openItem(other, "post", draft.id, false);
+    const cbar = other.getByRole("region", { name: "Publishing" });
+    await expect(cbar.getByRole("button", { name: "Submit for review" })).toBeVisible();
+    await expect(cbar.getByRole("button", { name: /^Publish/ })).toHaveCount(0);
+  } finally {
+    await Promise.all([author.dispose(), contributor.dispose()]);
+  }
+});
+
 test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
   test.setTimeout(300_000);
   for (const role of ["admin", "editor", "author"] as const) {
@@ -329,7 +432,10 @@ test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
       await page.setViewportSize({ width: 390, height: 844 });
       await openItem(page, "post", item.id, false);
       await expect(panel(page)).toHaveCount(0);
-      await page.getByRole("button", { name: "Settings panel" }).click();
+      await page
+        .getByRole("region", { name: "Publishing" })
+        .getByRole("button", { name: "Settings" })
+        .click();
       await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
       await snap(page, "editor-panel-sheet");
       await expectAccessible(page);

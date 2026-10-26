@@ -8,7 +8,8 @@
 // - `expectAccessible(page)`: axe in the current colour scheme, then the other.
 // - `guard` (automatic): fails the test on any `securitypolicyviolation`, page error or
 //   `console.error` in any page of the test (Review Focus 2). `guard.allow(re)` accepts
-//   console errors a test expects (for example the browser's log line for a deliberate 401).
+//   console errors a test expects (for example the browser's log line for a deliberate 401);
+//   `guard.allowFailedResource(url)` accepts only the browser's failed-load line of one URL.
 
 import AxeBuilder from "@axe-core/playwright";
 import {
@@ -30,6 +31,12 @@ export const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]
 export interface Guard {
   /** Console errors matching `re` do not fail the test. */
   allow(re: RegExp): void;
+  /**
+   * The browser's own "Failed to load resource" line for a request whose URL matches
+   * `url` (a 404 the page expects and handles) does not fail the test; any other
+   * console error still does.
+   */
+  allowFailedResource(url: RegExp): void;
   /** Watches a context this test created itself (`as`/`freshSession` do it already). */
   watch(context: BrowserContext): Promise<void>;
 }
@@ -60,6 +67,7 @@ export const test = base.extend<Fixtures & Options>({
     async ({ context }, use) => {
       const problems: string[] = [];
       const allowed: RegExp[] = [];
+      const allowedResources: RegExp[] = [];
       const watched = new WeakSet<BrowserContext>();
       const watchPage = (page: Page) => {
         page.on("pageerror", (e) => problems.push(`pageerror: ${e.message}`));
@@ -68,12 +76,21 @@ export const test = base.extend<Fixtures & Options>({
           const text = msg.text();
           if (allowed.some((re) => re.test(text))) return;
           const at = msg.location();
+          if (
+            text.startsWith("Failed to load resource") &&
+            allowedResources.some((re) => re.test(at.url))
+          ) {
+            return;
+          }
           problems.push(`console.error: ${text}${at.url ? ` (${at.url}:${at.lineNumber})` : ""}`);
         });
       };
       const guard: Guard = {
         allow: (re) => {
           allowed.push(re);
+        },
+        allowFailedResource: (url) => {
+          allowedResources.push(url);
         },
         watch: async (ctx) => {
           if (watched.has(ctx)) return;
