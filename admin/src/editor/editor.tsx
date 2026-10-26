@@ -6,6 +6,12 @@
 // side panel (`panel/`) holds status and publishing (the publish dialog, `mod+shift+p`),
 // the address, excerpt, terms, parent and the danger zone. Read-only items get a banner
 // and no way to save or change anything (Review Focus 3).
+//
+// Editor safety (Task 16, Review Focus 3): the save indicator shows the autosave slot as
+// well as the item; a restored draft opens with the restore banner; a `412` opens the
+// conflict dialog (and a transition that waited for the save says it did not run);
+// leaving with unsaved changes asks (Save / Discard / Stay); a `401` keeps the draft in
+// `pendingDrafts` and goes to sign in, and the screen takes it back afterwards.
 
 import "@/styles/editor.css";
 import { Link } from "@tanstack/react-router";
@@ -31,11 +37,12 @@ import {
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { reportApiError } from "@/api/client";
 import { metaQuery } from "@/api/meta";
-import { isContentStatus } from "@/api/content";
+import { deleteAutosave, getContent, isContentStatus, putAutosave } from "@/api/content";
 import { qk } from "@/api/keys";
 import type { MeDto } from "@/auth/session";
-import { ApiError } from "@/api/problem";
+import { ApiError, isProblem } from "@/api/problem";
 import { KbdCombo } from "@/components/kit/kbd-combo";
 import { SaveState } from "@/components/kit/save-state";
 import { StatusBadge } from "@/components/kit/status-badge";
@@ -45,21 +52,39 @@ import { storeEditorPanelOpen, storedEditorPanelOpen } from "@/design/preference
 import { uiLocale } from "@/lib/locale";
 import { useShortcut } from "@/lib/shortcuts";
 import { useShellChrome } from "@/shell/chrome-context";
+import { type Draft, newDraftKey, pendingDrafts } from "./autosave";
 import { EditorBubbleMenu } from "./bubble-menu";
+import { onPreconditionFailed } from "./conflict";
+import { ConflictDialog, type OpenConflict } from "./conflict-dialog";
 import {
   type ContentDto,
   type EditorDocument,
   type Handoff,
   type ReadOnlyReason,
+  type RestoreSource,
   type WriteOp,
+  autosaveInput,
   useEditorDocument,
 } from "./editor-state";
+import { LeaveDialog } from "./leave-dialog";
+import { useLeaveGuard } from "./leave-guard";
+import { RestoreBanner } from "./restore-banner";
 import { useTermsById, useTypeTaxonomies, useWide } from "./panel/panel-state";
 import { PublishDialog, type PublishMode } from "./panel/publish-dialog";
 import { PublishBar } from "./panel/publish-bar";
 import { PANEL_ID, SidePanel } from "./panel/side-panel";
 import { blockText } from "./text";
-import { readingMinutes, wordCount } from "./word-count";
+import { WordStats } from "./word-stats";
+
+/** What the screen reopens with (the route remounts it): Discard, Take theirs, Restore. */
+export interface Reopen {
+  /** The item to show (`null`: a new, empty one). */
+  item: ContentDto | null;
+  /** A working draft to open with (the restore banner says so). */
+  restore?: RestoreSource;
+  /** The user's own version, kept in the slot after Take theirs (the banner offers it). */
+  kept?: Draft;
+}
 
 export interface EditorScreenProps {
   type: string;
@@ -68,22 +93,68 @@ export interface EditorScreenProps {
   /** `null` for a new item (created on the first save). */
   item: ContentDto | null;
   handoff?: Handoff | null;
+  /** A working draft to open with instead of the item (the autosave slot, a kept draft). */
+  restore?: RestoreSource | null;
+  /** After Take theirs: the user's version, kept in the slot. */
+  kept?: Draft | null;
   /** After a new item's first save (the route moves to its `/$id`). */
   onCreated?: (item: ContentDto, handoff: Handoff) => void;
+  /** Remounts the screen with another starting point (see `Reopen`). */
+  onReopen?: (next: Reopen) => void;
 }
 
-export function EditorScreen({ type, typeLabel, item, handoff, onCreated }: EditorScreenProps) {
+export function EditorScreen({
+  type,
+  typeLabel,
+  item,
+  handoff,
+  restore,
+  kept: keptInitially,
+  onCreated,
+  onReopen,
+}: EditorScreenProps) {
   const { t } = useTranslation("editor");
-  const doc = useEditorDocument({
+  const queryClient = useQueryClient();
+  const [conflict, setConflict] = useState<OpenConflict | null>(null);
+  const [publishMode, setPublishMode] = useState<PublishMode | null>(null);
+  const doc: EditorDocument = useEditorDocument({
     type,
     item,
     handoff: handoff ?? null,
+    restore: restore ?? null,
     placeholder: t("body.placeholder"),
     bodyLabel: t("body.label"),
     ...(onCreated ? { onCreated } : {}),
-    onConflict: () => {
-      // Task 16 replaces this with the side-by-side conflict dialog; the text stays.
-      toast.error(t("save.conflict"), { id: "editor-save" });
+    onConflict: (e, op, context) => {
+      // The user's text stays in the editor whatever happens next (Review Focus 3).
+      const then = context.then ?? (op === "save" ? undefined : op);
+      const state = onPreconditionFailed(e, doc.draft());
+      setPublishMode(null);
+      if (!state) {
+        toast.error(t("save.conflict"), { id: "editor-save" });
+        return;
+      }
+      if (state.fields.length === 0) {
+        // Nothing of the draft differs from the newer version: take it as the base.
+        doc.rebase(state.theirs);
+        toast.info(then ? t("conflict.sameThen") : t("conflict.same"), { id: "editor-save" });
+        return;
+      }
+      setConflict({ ...state, ...(then ? { then } : {}) });
+    },
+    onUnauthenticated: (e, draft) => {
+      // Kept in memory for after the sign-in (never lost, F37); the global handler then
+      // goes to `/login?next=<this screen>` through the router, past the leave guard.
+      // Whose draft it is (read now: the guard has always loaded the account).
+      const me = queryClient.getQueryData<MeDto>(qk.me);
+      if (me) {
+        pendingDrafts.set(item ? item.id : newDraftKey(type), {
+          userId: me.id,
+          draft,
+          at: new Date().toISOString(),
+        });
+      }
+      reportApiError(e);
     },
     onWriteError: (e, op: WriteOp) => {
       const detail =
@@ -117,7 +188,6 @@ export function EditorScreen({ type, typeLabel, item, handoff, onCreated }: Edit
     },
     [wide, focusMode, setFocusMode],
   );
-  const [publishMode, setPublishMode] = useState<PublishMode | null>(null);
   const canPublish =
     doc.readOnly === null &&
     doc.item !== null &&
@@ -197,6 +267,85 @@ export function EditorScreen({ type, typeLabel, item, handoff, onCreated }: Edit
   // Leaving the editor leaves focus mode.
   useEffect(() => () => setFocusMode(false), [setFocusMode]);
 
+  // Leaving with changes the item does not hold asks first; closing the tab only while
+  // the slot does not hold them either (F38).
+  const guard = useLeaveGuard(doc.dirty && doc.readOnly === null, { unload: doc.unprotected });
+
+  // The restore banner's state: the restored draft (from the document), or the user's own
+  // version kept in the slot after Take theirs.
+  const [kept, setKept] = useState<Draft | null>(keptInitially ?? null);
+  const [bannerBusy, setBannerBusy] = useState(false);
+  const [restoredShown, setRestoredShown] = useState(true);
+
+  /** Drops the slot (Discard), with Undo putting `draft` back. */
+  const discardSlot = async (draft: Draft, reopenWith: ContentDto | null) => {
+    if (!doc.item) {
+      // A new item has no slot: back to an empty screen.
+      onReopen?.({ item: null });
+      return;
+    }
+    const id = doc.item.id;
+    setBannerBusy(true);
+    try {
+      await deleteAutosave(type, id);
+      const fresh = reopenWith ?? (await getContent(type, id));
+      toast.success(t("restore.discarded"), {
+        id: "editor-restore",
+        action: {
+          label: t("restore.undo"),
+          onClick: () => {
+            void putAutosave(type, id, autosaveInput(draft))
+              .then(() => getContent(type, id))
+              .then((now) =>
+                onReopen?.({ item: now, restore: { draft, at: new Date().toISOString() } }),
+              )
+              .catch(() => toast.error(t("restore.undoFailed"), { id: "editor-restore" }));
+          },
+        },
+      });
+      if (reopenWith) setKept(null);
+      else onReopen?.({ item: fresh });
+    } catch (e) {
+      if (isProblem(e, "unauthenticated")) reportApiError(e);
+      else toast.error(t("restore.discardFailed"), { id: "editor-restore" });
+    } finally {
+      setBannerBusy(false);
+    }
+  };
+
+  const banner =
+    doc.restored && restoredShown && doc.readOnly === null ? (
+      <RestoreBanner
+        mode="restored"
+        at={doc.restored.at}
+        stale={doc.restored.stale}
+        busy={bannerBusy}
+        onDiscard={() => {
+          setRestoredShown(false);
+          void discardSlot(doc.draft(), null);
+        }}
+      />
+    ) : kept && doc.item && doc.readOnly === null ? (
+      <RestoreBanner
+        mode="kept"
+        busy={bannerBusy}
+        onRestore={() => {
+          if (doc.item)
+            onReopen?.({ item: doc.item, restore: { draft: kept, at: new Date().toISOString() } });
+        }}
+        onDiscard={() => {
+          void discardSlot(kept, doc.item);
+        }}
+      />
+    ) : null;
+
+  const takeTheirs = async (open: OpenConflict) => {
+    // Mine goes to the slot first: Take theirs never loses it (Restore brings it back).
+    await doc.keepInSlot(open.mine);
+    setConflict(null);
+    onReopen?.({ item: open.theirs, kept: open.mine });
+  };
+
   return (
     <div
       data-slot="editor-screen"
@@ -216,7 +365,7 @@ export function EditorScreen({ type, typeLabel, item, handoff, onCreated }: Edit
       />
       <div className="flex flex-1 items-start">
         <div className="min-w-0 flex-1 px-page">
-          <WritingSurface doc={doc} typeLabel={typeLabel} focusMode={focusMode} />
+          <WritingSurface doc={doc} typeLabel={typeLabel} focusMode={focusMode} banner={banner} />
         </div>
         {focusMode && wide ? null : (
           <SidePanel
@@ -233,6 +382,49 @@ export function EditorScreen({ type, typeLabel, item, handoff, onCreated }: Edit
           />
         )}
       </div>
+      <ConflictDialog
+        type={type}
+        conflict={conflict}
+        onKeepMine={async () => {
+          const open = conflict;
+          if (!open) return;
+          const next = await doc.keepMine(open.theirs);
+          // Closed unless the save met yet another newer version (a new conflict).
+          setConflict((c) => (c === open ? null : c));
+          if (next) {
+            toast.success(open.then ? t("conflict.keptThen") : t("conflict.kept"), {
+              id: "editor-save",
+            });
+          }
+        }}
+        onTakeTheirs={async () => {
+          if (conflict) await takeTheirs(conflict);
+        }}
+        onCopyMine={async () => {
+          if (!conflict) return;
+          await navigator.clipboard.writeText(blockText(conflict.mine.body));
+          toast.success(t("conflict.copied"), { id: "editor-copy" });
+          await takeTheirs(conflict);
+        }}
+      />
+      <LeaveDialog
+        open={guard.blocked}
+        isNew={doc.item === null}
+        onStay={guard.stay}
+        onSave={async () => {
+          const saved = await doc.save();
+          if (saved && !doc.isDirtyNow()) guard.leave();
+          else guard.stay();
+        }}
+        onDiscard={async () => {
+          try {
+            await doc.discard();
+          } catch {
+            // The slot stays: the next visit offers it back, nothing is lost.
+          }
+          guard.leave();
+        }}
+      />
       <PublishDialog
         doc={doc}
         mode={canPublish ? publishMode : null}
@@ -252,6 +444,7 @@ export function EditorScreen({ type, typeLabel, item, handoff, onCreated }: Edit
           onSettings={() => setSheetOpen(true)}
           settingsOpen={sheetOpen}
           onPublish={setPublishMode}
+          {...(doc.readOnly?.kind === "invalid" ? { fixedText: blockText(doc.storedBody) } : {})}
         />
       )}
     </div>
@@ -283,7 +476,7 @@ function EditorBar({
   const { t } = useTranslation("editor");
   const status = doc.item?.status;
   const saving = doc.saveState === "saving";
-  const showState = doc.item !== null || doc.dirty || doc.saveState !== "saved";
+  const showState = doc.item !== null || doc.dirty || doc.indicator !== "saved";
   return (
     <div
       data-slot="editor-bar"
@@ -308,10 +501,7 @@ function EditorBar({
       ) : null}
       <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
         {showState && !doc.readOnly ? (
-          <SaveState
-            state={doc.saveState}
-            {...(doc.savedAt && doc.saveState === "saved" ? { at: doc.savedAt } : {})}
-          />
+          <SaveState state={doc.indicator} {...(doc.indicatorAt ? { at: doc.indicatorAt } : {})} />
         ) : null}
         <Tooltip>
           <TooltipTrigger asChild>
@@ -411,10 +601,13 @@ function WritingSurface({
   doc,
   typeLabel,
   focusMode,
+  banner,
 }: {
   doc: EditorDocument;
   typeLabel: string;
   focusMode: boolean;
+  /** The restore banner, when there is one. */
+  banner: ReactNode;
 }) {
   const { t } = useTranslation("editor");
   const { editor, readOnly } = doc;
@@ -467,7 +660,7 @@ function WritingSurface({
           ? t("heading.edit", { title: doc.title || t("title.untitled") })
           : t("heading.new", { label: typeLabel })}
       </h1>
-      {readOnly ? <ReadOnlyBanner reason={readOnly} /> : null}
+      {readOnly ? <ReadOnlyBanner reason={readOnly} /> : banner}
       <textarea
         ref={title}
         data-slot="editor-title"
@@ -527,38 +720,13 @@ function StoredText({ body }: { body: unknown }) {
   );
 }
 
-/** Words and reading time, recounted at most once a frame while the body changes. */
-function useWordCount(editor: Editor): number {
-  const [words, setWords] = useState(() => wordCount(blockText(editor.getJSON())));
-  useEffect(() => {
-    let frame = 0;
-    const onUpdate = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => setWords(wordCount(blockText(editor.getJSON()))));
-    };
-    editor.on("update", onUpdate);
-    return () => {
-      cancelAnimationFrame(frame);
-      editor.off("update", onUpdate);
-    };
-  }, [editor]);
-  return words;
-}
-
 function EditorFooter({ editor, fixedText }: { editor: Editor; fixedText?: string }) {
-  const { t } = useTranslation("editor");
-  const live = useWordCount(editor);
-  const words = fixedText === undefined ? live : wordCount(fixedText);
-  const minutes = readingMinutes(words);
-  const n = new Intl.NumberFormat(uiLocale());
   return (
     <div
       data-slot="editor-footer"
       className="sticky bottom-0 flex h-10 items-center justify-end gap-3 px-page text-xs text-muted-foreground tabular-nums max-xl:bg-background"
     >
-      <span>{t("footer.words", { count: words, formatted: n.format(words) })}</span>
-      <span aria-hidden="true">·</span>
-      <span>{t("footer.minutes", { count: minutes, formatted: n.format(minutes) })}</span>
+      <WordStats editor={editor} {...(fixedText === undefined ? {} : { fixedText })} />
     </div>
   );
 }

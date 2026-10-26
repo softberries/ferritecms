@@ -425,6 +425,8 @@ test("keyboard_list_navigation", async ({ as, site, backend }) => {
     await all.nth(1).focus();
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(`${site.url}/admin/content/${type}/${one.id}`);
+    // Loaded (the item and its autosave slot) before the type is removed below.
+    await expect(page.getByRole("textbox", { name: "Body" })).toBeVisible();
   } finally {
     await admin.removeType(type);
     await Promise.all([admin.dispose(), editor.dispose()]);

@@ -3927,6 +3927,13 @@ export interface operations {
                     "application/json": components["schemas"]["AutosaveDto"];
                 };
             };
+            /** @description You have no autosave of the item */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description `unauthenticated` */
             401: {
                 headers: {
@@ -3945,7 +3952,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `not-found`: no such item that you may read, or no autosave of yours */
+            /** @description `not-found`: no such item that you may read */
             404: {
                 headers: {
                     [name: string]: unknown;

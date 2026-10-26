@@ -201,9 +201,26 @@ export function createErrorHandler(routing: ErrorRouting) {
  */
 export const INLINE_ERRORS = { inlineErrors: true } as const;
 
+/** The app's handler for writes made outside the query cache (set by `createQueryClient`). */
+let outsideHandler: ((error: unknown) => void) | null = null;
+
+/**
+ * Hands a failure of a write made outside TanStack Query (the editor's save and
+ * autosave) to the global handler: a `401` goes to login with `next`, a forced change to
+ * the change-password screen. No toast: the caller shows its own message. The handler
+ * only navigates; it never clears the editor's `pendingDrafts` (the editor puts its
+ * draft there before calling this, F37).
+ */
+export function reportApiError(error: unknown): void {
+  outsideHandler?.(error);
+}
+
 /** The app's `QueryClient` with the global error handling and retry policy. */
 export function createQueryClient(routing: ErrorRouting): QueryClient {
   const errors = createErrorHandler(routing);
+  outsideHandler = (error) => {
+    errors.handle(error, { inline: true });
+  };
   const onError = (error: unknown) => {
     errors.handle(error);
   };

@@ -51,10 +51,22 @@
     "save": {
       "saved": "Saved",
       "savedAt": "Saved at {{time}}",
+      "autosaved": "Autosaved",
+      "autosavedAt": "Autosaved at {{time}}",
       "saving": "Saving…",
       "dirty": "Unsaved changes",
       "error": "Couldn't save",
-      "offline": "Offline, waiting to reconnect"
+      "offline": "Offline, waiting to reconnect",
+      "short": {
+        "saved": "Saved",
+        "savedAt": "Saved {{time}}",
+        "autosaved": "Autosaved",
+        "autosavedAt": "Autosaved {{time}}",
+        "saving": "Saving…",
+        "dirty": "Unsaved",
+        "error": "Not saved",
+        "offline": "Offline"
+      }
     },
     "kbd": {
       "then": "then"

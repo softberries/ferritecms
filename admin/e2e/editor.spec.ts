@@ -209,6 +209,11 @@ test("focus_mode", async ({ as }) => {
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press("g");
   await page.keyboard.press("d");
+  // The typed title is unsaved: the leave guard asks first (Task 16); discard it.
+  await page
+    .locator("[data-slot=leave-dialog]")
+    .getByRole("button", { name: "Discard changes" })
+    .click();
   await expect(page).toHaveURL(/\/admin\/$/);
   await expect(topBar).not.toHaveAttribute("data-hidden");
 });

@@ -1595,6 +1595,9 @@
               }
             }
           },
+          "204": {
+            "description": "You have no autosave of the item"
+          },
           "401": {
             "description": "`unauthenticated`",
             "content": {
@@ -1616,7 +1619,7 @@
             }
           },
           "404": {
-            "description": "`not-found`: no such item that you may read, or no autosave of yours",
+            "description": "`not-found`: no such item that you may read",
             "content": {
               "application/problem+json": {
                 "schema": {

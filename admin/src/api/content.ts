@@ -139,11 +139,15 @@ export function countsQuery(type: string) {
   });
 }
 
-/** The caller's autosave of the item; a `not-found` `ApiError` when there is none. */
-export function getAutosave(type: string, id: string): Promise<SchemaAutosaveDto> {
-  return unwrap(
+/**
+ * The caller's autosave of the item, or `null` when there is none (`204`); a `not-found`
+ * `ApiError` when the item is not readable.
+ */
+export async function getAutosave(type: string, id: string): Promise<SchemaAutosaveDto | null> {
+  const slot = await unwrap(
     api.GET("/api/v1/content/{type}/{id}/autosave", { params: { path: { type, id } } }),
   );
+  return slot ?? null;
 }
 
 export function putAutosave(

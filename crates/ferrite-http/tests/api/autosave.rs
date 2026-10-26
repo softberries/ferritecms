@@ -5,7 +5,10 @@ use axum::http::{Method, StatusCode};
 use ferrite_domain::Role;
 use serde_json::{Value, json};
 
-use crate::{api_tests, harness::Api};
+use crate::{
+    api_tests,
+    harness::{Api, Resp},
+};
 
 api_tests!(
     autosave_flow,
@@ -21,7 +24,13 @@ fn doc(text: &str) -> Value {
     ]}]})
 }
 
-/// PUT → GET → PATCH the item → GET 404, per user; validation and visibility.
+/// No autosave of the caller's: `204` with no body (not a `404`, which is for an item
+/// the caller may not read), so the admin's editor never logs a failed request.
+fn assert_no_slot(r: &Resp) {
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{r:?}");
+}
+
+/// PUT → GET → PATCH the item → GET 204 (none), per user; validation and visibility.
 async fn autosave_flow(api: Api) -> Api {
     let ann = api.user("ann", Role::Author, false).await;
     api.user("bob", Role::Author, false).await;
@@ -38,7 +47,7 @@ async fn autosave_flow(api: Api) -> Api {
     let path = format!("{POSTS}/{id}");
     let slot = format!("{path}/autosave");
 
-    a.get(&api, &slot).await.assert_problem(404, "not-found");
+    assert_no_slot(&a.get(&api, &slot).await);
 
     // No If-Match: per user, last write wins.
     let term = uuid::Uuid::now_v7();
@@ -106,7 +115,7 @@ async fn autosave_flow(api: Api) -> Api {
         )
         .await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
-    a.get(&api, &slot).await.assert_problem(404, "not-found");
+    assert_no_slot(&a.get(&api, &slot).await);
     let r = e.get(&api, &slot).await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
     assert_eq!(r.json()["title"], "Eve's");
@@ -115,7 +124,7 @@ async fn autosave_flow(api: Api) -> Api {
         let r = e.send(&api, Method::DELETE, &slot, None, None).await;
         assert_eq!(r.status, StatusCode::NO_CONTENT, "{r:?}");
     }
-    e.get(&api, &slot).await.assert_problem(404, "not-found");
+    assert_no_slot(&e.get(&api, &slot).await);
 
     // Text is checked as a content write checks it: a vertical tab is kept, NUL is not.
     let pasted = json!({"base_version": 2, "title": "a\u{b}b", "body": doc("x"), "fields": {}});
@@ -206,7 +215,7 @@ async fn autosave_requires_csrf(api: Api) -> Api {
     a.send(&api, Method::DELETE, &slot, None, None)
         .await
         .assert_problem(403, "csrf");
-    a.get(&api, &slot).await.assert_problem(404, "not-found");
+    assert_no_slot(&a.get(&api, &slot).await);
     a.csrf = token;
     let r = a.send(&api, Method::PUT, &slot, Some(&body), None).await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");

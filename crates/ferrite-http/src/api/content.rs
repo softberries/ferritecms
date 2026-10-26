@@ -752,7 +752,8 @@ pub async fn restore_revision(
     params(("type" = String, Path), ("id" = Uuid, Path)),
     responses(
         (status = 200, description = "The caller's autosave of the item", body = AutosaveDto),
-        (status = 404, description = "`not-found`: no such item that you may read, or no autosave of yours", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 204, description = "You have no autosave of the item"),
+        (status = 404, description = "`not-found`: no such item that you may read", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (your role may not edit the item, or no `content:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
     ),
@@ -761,12 +762,13 @@ pub async fn get_autosave(
     State(api): State<Arc<ApiState>>,
     Authed(who): Authed,
     ApiPath((kind, id)): ApiPath<(String, Uuid)>,
-) -> Result<Json<AutosaveDto>, Problem> {
+) -> Result<Response, Problem> {
     let id = load(&api, &who.actor, &kind, id).await?.id;
-    match api.content.get_autosave(&who.actor, id).await? {
-        Some(a) => Ok(Json(a.into())),
-        None => Err(Problem::not_found()),
-    }
+    // None is an answer, not an error: `204` (the editor asks on every open).
+    Ok(match api.content.get_autosave(&who.actor, id).await? {
+        Some(a) => Json(AutosaveDto::from(a)).into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    })
 }
 
 #[utoipa::path(

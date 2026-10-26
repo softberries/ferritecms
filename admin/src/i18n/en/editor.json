@@ -24,7 +24,7 @@
     "button": "Save",
     "failed": "Saving failed. Your text is still here; try again.",
     "failedWith": "Saving failed: {{detail}} Your text is still here.",
-    "conflict": "Someone else saved this item in the meantime. Your text is still here; reload to see their version."
+    "conflict": "Someone else saved this item in the meantime, and the newer version could not be loaded. Your text is still here; copy it before reloading."
   },
   "focus": {
     "enter": "Focus mode",
@@ -285,5 +285,70 @@
   "publishBar": {
     "label": "Publishing",
     "settings": "Settings"
+  },
+  "conflict": {
+    "title": "This item changed while you were editing",
+    "descriptionBefore": "Someone saved a newer version",
+    "descriptionAfter": ". Your text is safe. Compare the two and choose which one to keep.",
+    "theirs": "Saved version (newer)",
+    "mine": "Your version",
+    "fields": {
+      "title": "Title",
+      "excerpt": "Excerpt",
+      "body": "Body",
+      "slug": "Address",
+      "terms": "Categories and tags",
+      "parent": "Parent",
+      "menuOrder": "Order"
+    },
+    "empty": "Empty",
+    "none": "None",
+    "unknownTerm": "Unknown term",
+    "onlyTheirsSr": "Only in the saved version: ",
+    "onlyMineSr": "Only in your version: ",
+    "legendTheirs": "Only in the saved version",
+    "legendMine": "Only in your version",
+    "explain": "Keep mine saves your version over the newer one. Take theirs opens the newer version; yours stays as an autosave you can restore. Copy my text puts your body text on the clipboard, then takes theirs.",
+    "keepMine": "Keep mine",
+    "takeTheirs": "Take theirs",
+    "copyMine": "Copy my text",
+    "saving": "Saving…",
+    "taking": "Opening…",
+    "failed": "That did not work. Your text is still here; try again.",
+    "copyFailed": "Could not copy to the clipboard. Your text is still here.",
+    "copied": "Your text is on the clipboard",
+    "kept": "Your version is saved",
+    "keptThen": "Your version is saved. Run the action again when you are ready.",
+    "same": "This item was saved elsewhere with the same content; you are on the latest version now.",
+    "sameThen": "This item was saved elsewhere; you are on the latest version now. Try again.",
+    "paused": {
+      "publish": "Publishing was paused so nothing goes live by surprise. Publish again once you have chosen.",
+      "schedule": "Scheduling was paused so nothing goes live by surprise. Schedule again once you have chosen.",
+      "submit": "Submitting for review was paused. Submit again once you have chosen.",
+      "unpublish": "Unpublishing was paused. Unpublish again once you have chosen."
+    }
+  },
+  "restore": {
+    "restoredBefore": "Unsaved changes from",
+    "restoredAfter": "were restored.",
+    "safe": "They were kept as an autosave. Save to update the item, or discard them.",
+    "stale": "This item has changed since then. When you save, you will choose which version to keep.",
+    "kept": "Your version is kept as an autosave.",
+    "keptHint": "You are looking at the newer saved version. Restore yours to keep working on it.",
+    "restore": "Restore mine",
+    "discard": "Discard",
+    "discarded": "Restored changes discarded",
+    "undo": "Undo",
+    "undoFailed": "Could not bring the changes back.",
+    "discardFailed": "Could not discard the changes. They are still kept; try again."
+  },
+  "leave": {
+    "title": "Leave with unsaved changes?",
+    "description": "Your latest changes are not saved to this item yet.",
+    "descriptionNew": "This item has not been saved yet. If you leave without saving, it is lost.",
+    "stay": "Stay",
+    "discard": "Discard changes",
+    "save": "Save and leave",
+    "saving": "Saving…"
   }
 }

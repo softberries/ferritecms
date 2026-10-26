@@ -6,7 +6,17 @@
 // version the save returned (pre-flight F40). Every failed write goes through one place
 // (`onConflict` for a 412, `onWriteError` otherwise) so Task 16's conflict dialog plugs
 // in there. The writing surface (`editor.tsx`) and the side panel (`panel/`) render it;
-// autosave and the leave guard (Task 16) and revisions (Task 17) build on it.
+// revisions (Task 17) build on it.
+//
+// Autosave (Task 16): every change of an existing, editable item marks the autosaver
+// (`autosave.ts`) dirty; it writes the working draft to the item's slot every 10 s. An
+// explicit save holds it around the `PATCH` (no `PUT` can land after the `PATCH` that
+// cleared the slot) and marks it clean after. The save indicator folds both together:
+// "Saved" (the item holds it), "Autosaved" (the slot holds it), "Unsaved changes"
+// (neither, yet). A restored draft (the slot, or one kept across a sign-in) opens as
+// the working draft; one made from an older version saves with that version, so the
+// server answers `412` and the conflict dialog decides. A `401` hands the draft to
+// `onUnauthenticated` (it is kept for after the sign-in) instead of an error message.
 //
 // Read-only (Review Focus 3): a body with a node, mark or heading level the editor
 // cannot represent (`validateBody`), a body TipTap's content check refuses
@@ -21,13 +31,32 @@ import { useEditor, type Editor } from "@tiptap/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NetworkError } from "@/api/client";
-import { type LifecycleAction, createContent, lifecycle, patchContent } from "@/api/content";
+import {
+  type LifecycleAction,
+  createContent,
+  deleteAutosave,
+  lifecycle,
+  patchContent,
+  putAutosave,
+} from "@/api/content";
 import { qk } from "@/api/keys";
 import { resolveMediaUrl } from "@/api/media";
 import { type ApiError, isProblem } from "@/api/problem";
-import type { SchemaContentDto, SchemaContentInput, SchemaContentPatch } from "@/api/schema";
+import type {
+  SchemaAutosaveInput,
+  SchemaContentDto,
+  SchemaContentInput,
+  SchemaContentPatch,
+} from "@/api/schema";
 import type { SaveStateValue } from "@/components/kit/save-state";
 import { pushRecent } from "@/palette/recent";
+import {
+  AUTOSAVE_INTERVAL_MS,
+  type AutosaveState,
+  type Autosaver,
+  type Draft,
+  createAutosaver,
+} from "./autosave";
 import { displayBody, editorExtensions, validateBody } from "./schema";
 
 export type ContentDto = SchemaContentDto;
@@ -151,11 +180,41 @@ export interface EditorDocumentOptions {
   onConflict?: (error: ApiError, op: WriteOp, context: ConflictContext) => void;
   /** Any other failed write (shown by the caller, unless the transition handles it). */
   onWriteError?: (error: unknown, op: WriteOp) => void;
+  /**
+   * The session ended (`401`) or must change its password, during a save or an
+   * autosave: `draft` is the working draft to keep for after the sign-in (F37).
+   */
+  onUnauthenticated?: (error: ApiError, draft: Draft) => void;
+  /** A draft to open with instead of the stored item (the restore banner, Task 16). */
+  restore?: RestoreSource | null;
+}
+
+/** A working draft the screen opens with: the autosave slot, or one kept over a sign-in. */
+export interface RestoreSource {
+  draft: Draft;
+  /** When it was made (RFC 3339): the banner's "from …". */
+  at: string;
+  /**
+   * The slot does not hold it yet (a draft kept over a sign-in): it is written there at
+   * once, and `onStored` runs when that landed.
+   */
+  flush?: boolean;
+  onStored?: () => void;
+}
+
+/** What the restore banner says about the draft the screen opened with. */
+export interface Restored {
+  at: string;
+  /** Made from an older version than the item's: saving goes through the conflict flow. */
+  stale: boolean;
 }
 
 /** What a 412 interrupted beyond the write itself. */
 export interface ConflictContext {
-  /** The transition that was waiting for this save (F40): the user's intent to keep. */
+  /**
+   * The transition that was waiting for this save (F40), or the one refused itself. It
+   * does not run: the conflict dialog says so, and the user runs it again once decided.
+   */
   then?: Transition;
 }
 
@@ -186,9 +245,36 @@ export interface EditorDocument {
   /** Where the cursor goes when the screen opens (a hand-over keeps the user's place). */
   initialFocus: "title" | "body" | null;
   dirty: boolean;
+  /** The explicit save's state (`saving` only while a `PATCH`/`POST` runs). */
   saveState: SaveStateValue;
   /** When the last save landed (or the item was last updated). */
   savedAt: Date | null;
+  /** The save indicator: the explicit save and the autosave slot together. */
+  indicator: SaveStateValue;
+  /** When the indicator's state happened (the last save or autosave), else `null`. */
+  indicatorAt: Date | null;
+  /**
+   * Changes that neither the item nor the slot holds yet: only then does closing or
+   * reloading the tab ask first (F38).
+   */
+  unprotected: boolean;
+  /** The screen opened with a restored draft that differs from the item, else `null`. */
+  restored: Restored | null;
+  /** The working draft as the slot would take it now. */
+  draft: () => Draft;
+  /** Whether anything differs from the item right now (not waiting for a render). */
+  isDirtyNow: () => boolean;
+  /**
+   * The conflict dialog's Keep mine: takes `theirs` as the new base (its version is the
+   * `If-Match`) and saves the draft over it. Resolves like `save()`.
+   */
+  keepMine: (theirs: ContentDto) => Promise<ContentDto | null>;
+  /** Takes `theirs` as the new base without saving (the draft already equals it). */
+  rebase: (theirs: ContentDto) => void;
+  /** Writes `draft` to the slot now (Take theirs keeps mine there). */
+  keepInSlot: (draft: Draft) => Promise<void>;
+  /** Drops the working draft's changes from the slot (the leave guard's Discard). */
+  discard: () => Promise<void>;
   /**
    * Saves title and body: `POST` for a new item, else `PATCH` with `If-Match`. Resolves
    * to the saved item (its `version` is the new ETag), the current one when nothing
@@ -220,6 +306,72 @@ function itemReadOnly(item: ContentDto | null): ReadOnlyReason | null {
 
 const asBody = (doc: JSONContent) => doc as unknown as NonNullable<SchemaContentPatch["body"]>;
 
+/**
+ * What the editor opens `body` with: the stored document, or `undefined` (TipTap's own
+ * empty document) for an empty one (`content: []`, what the API stores for an item
+ * created without a body; not valid for the schema's `block+`).
+ */
+function editorContentOf(body: unknown): JSONContent | undefined {
+  const b = body as JSONContent | null | undefined;
+  return b &&
+    typeof b === "object" &&
+    b.type === "doc" &&
+    Array.isArray(b.content) &&
+    b.content.length > 0
+    ? b
+    : undefined;
+}
+
+/**
+ * `body` as the editor would hold it after loading it (JSON text, attribute defaults
+ * filled in): the dirty baseline of a body the editor does not show (an item under a
+ * restored draft, the server's copy after a conflict). `""` when the schema refuses it,
+ * so any draft counts as changed against it.
+ */
+function normalizedBody(editor: Editor, body: unknown): string {
+  try {
+    const content = editorContentOf(body);
+    const node = content
+      ? editor.schema.nodeFromJSON(content)
+      : editor.schema.topNodeType.createAndFill();
+    return node ? JSON.stringify(node.toJSON()) : "";
+  } catch {
+    return "";
+  }
+}
+
+/** The panel members of a restored draft over `item` (`null` members: as stored). */
+function metaOfDraft(draft: Draft, item: ContentDto | null): MetaDraft {
+  const stored = metaOf(item);
+  return {
+    slug: draft.slug ?? stored.slug,
+    // `null`: derive from the body, which the field shows as empty (F39).
+    excerpt: draft.excerpt ?? "",
+    terms: draft.terms ? [...draft.terms] : stored.terms,
+    parent_id: draft.parent_id,
+    menu_order: draft.menu_order ?? stored.menu_order,
+  };
+}
+
+/** A draft as `PUT …/autosave` takes it. */
+export function autosaveInput(d: Draft): SchemaAutosaveInput {
+  return {
+    base_version: d.base_version,
+    title: d.title,
+    excerpt: d.excerpt,
+    body: d.body as SchemaAutosaveInput["body"],
+    fields: (d.fields ?? {}) as SchemaAutosaveInput["fields"],
+    slug: d.slug,
+    parent_id: d.parent_id,
+    menu_order: d.menu_order,
+    terms: d.terms,
+  };
+}
+
+/** A failure that sends the user to sign in (or to change the password) first. */
+const needsSignIn = (e: unknown): e is ApiError =>
+  isProblem(e, "unauthenticated") || isProblem(e, "password-reset-required");
+
 export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   const { type, handoff } = opts;
   const queryClient = useQueryClient();
@@ -245,22 +397,23 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     readOnlyRef.current = readOnly;
   });
 
+  // A restored draft opens only on an editable screen, and only with a body this editor
+  // can represent (it came from this editor; anything else stays in the slot untouched).
+  const [restoring] = useState<RestoreSource | null>(() => {
+    const r = opts.restore ?? null;
+    if (!r || handoff || initialReadOnly !== null) return null;
+    return validateBody(r.draft.body).ok ? r : null;
+  });
+
   const [initialContent] = useState<JSONContent | undefined>(() => {
     if (handoff) return handoff.body;
+    if (restoring) return editorContentOf(restoring.draft.body);
     if (initialBodyReadOnly?.kind === "unsupported") {
       return displayBody(storedBody) as JSONContent;
     }
-    const body = storedBody as JSONContent | null | undefined;
-    // An empty document (`content: []`, what the API stores for an item created without
-    // a body) is not valid for the schema (`block+`); TipTap's own empty document stands
-    // in for it, and the baseline below is taken from that, so it is not "dirty".
-    return body &&
-      typeof body === "object" &&
-      body.type === "doc" &&
-      Array.isArray(body.content) &&
-      body.content.length > 0
-      ? body
-      : undefined;
+    // TipTap's own empty document stands in for an empty one; the baseline below is
+    // taken from that, so it is not "dirty".
+    return editorContentOf(storedBody);
   });
 
   // Built once: the editor is created once per screen.
@@ -268,14 +421,26 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     editorExtensions({ placeholder: opts.placeholder, resolveMedia: resolveMediaUrl }),
   );
 
-  const [title, setTitleState] = useState(handoff?.title ?? opts.item?.title ?? "");
+  const [title, setTitleState] = useState(
+    handoff?.title ?? restoring?.draft.title ?? opts.item?.title ?? "",
+  );
   const titleRef = useRef(title);
-  const [meta, setMetaState] = useState<MetaDraft>(() => handoff?.meta ?? metaOf(opts.item));
+  const [meta, setMetaState] = useState<MetaDraft>(
+    () =>
+      handoff?.meta ?? (restoring ? metaOfDraft(restoring.draft, opts.item) : metaOf(opts.item)),
+  );
   const metaRef = useRef(meta);
   const [savedMeta, setSavedMeta] = useState<MetaDraft>(() => metaOf(opts.item));
   const savedMetaRef = useRef(savedMeta);
   const [savedAt, setSavedAt] = useState<Date | null>(
     opts.item ? new Date(opts.item.updated_at) : null,
+  );
+  // The `If-Match` of the next save: the item's version, or the older one a restored
+  // draft was made from (so the server answers 412 and the conflict dialog decides).
+  const baseVersion = useRef(
+    restoring && opts.item && restoring.draft.base_version < opts.item.version
+      ? restoring.draft.base_version
+      : (opts.item?.version ?? 0),
   );
 
   const editor = useEditor({
@@ -306,22 +471,34 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
 
   // The baseline (what the server holds, as JSON text): the body as TipTap holds it
   // after load, its attribute defaults included, so opening and saving untouched is not
-  // "dirty"; after a hand-over, what the first save sent.
-  const [baseline] = useState(
-    () =>
-      handoff?.saved ?? { title: opts.item?.title ?? "", body: JSON.stringify(editor.getJSON()) },
-  );
+  // "dirty"; after a hand-over, what the first save sent; under a restored draft, the
+  // item's body as TipTap would hold it.
+  const [baseline] = useState(() => {
+    if (handoff) return handoff.saved;
+    const itemTitle = opts.item?.title ?? "";
+    if (restoring) return { title: itemTitle, body: normalizedBody(editor, storedBody) };
+    return { title: itemTitle, body: JSON.stringify(editor.getJSON()) };
+  });
   const saved = useRef(baseline);
 
-  // A hand-over is dirty when the user typed while the first save was in flight.
+  // A hand-over is dirty when the user typed while the first save was in flight; a
+  // restored draft when it differs from the item.
   const [dirty, setDirty] = useState(() =>
-    handoff
-      ? handoff.title !== handoff.saved.title ||
-        JSON.stringify(editor.getJSON()) !== handoff.saved.body ||
-        Object.keys(metaChanges(handoff.meta, metaOf(opts.item))).length > 0
+    handoff || restoring
+      ? title !== baseline.title ||
+        JSON.stringify(editor.getJSON()) !== baseline.body ||
+        Object.keys(metaChanges(meta, savedMeta)).length > 0
       : false,
   );
   const [saveState, setSaveState] = useState<SaveStateValue>(() => (dirty ? "dirty" : "saved"));
+  const [restored, setRestored] = useState<Restored | null>(() =>
+    restoring && dirty
+      ? {
+          at: restoring.at,
+          stale: opts.item !== null && restoring.draft.base_version < opts.item.version,
+        }
+      : null,
+  );
 
   const isDirtyNow = useCallback(() => {
     const base = saved.current;
@@ -331,6 +508,105 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
       Object.keys(metaChanges(metaRef.current, savedMetaRef.current)).length > 0
     );
   }, [editor]);
+
+  /** The working draft, as the slot (and the conflict dialog) take it. */
+  const draftNow = useCallback(
+    (): Draft => ({
+      base_version: baseVersion.current,
+      title: titleRef.current,
+      excerpt: metaRef.current.excerpt === "" ? null : metaRef.current.excerpt,
+      body: editor.getJSON(),
+      fields: itemRef.current?.fields ?? {},
+      slug: metaRef.current.slug.trim() === "" ? null : metaRef.current.slug.trim(),
+      parent_id: metaRef.current.parent_id,
+      menu_order: metaRef.current.menu_order,
+      terms: [...metaRef.current.terms],
+    }),
+    [editor],
+  );
+
+  // --- Autosave ------------------------------------------------------------------
+
+  const autosaver = useRef<Autosaver | null>(null);
+  const [autoState, setAutoState] = useState<AutosaveState>("saved");
+  // A draft restored from the slot is already there.
+  const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(() =>
+    restoring && !restoring.flush ? new Date(restoring.at) : null,
+  );
+  const itemId = opts.item?.id ?? null;
+  const autosaves = itemId !== null && initialReadOnly === null;
+  // A kept draft that differs from the item goes to the slot at once; one that does not
+  // is done with, and a slot that equals the item is removed quietly (no banner).
+  const [restoreFlush] = useState(() => (restoring?.flush && restored ? restoring : null));
+  const [restoreDone] = useState(() => (restoring && !restored ? restoring : null));
+  useEffect(() => {
+    if (!restoreDone) return;
+    if (restoreDone.flush) restoreDone.onStored?.();
+    else if (itemId !== null && autosaves) void deleteAutosave(type, itemId).catch(() => undefined);
+  }, [restoreDone, itemId, autosaves, type]);
+
+  const fail = useCallback(
+    (e: unknown, op: WriteOp, onError?: (e: unknown) => void, context: ConflictContext = {}) => {
+      if (needsSignIn(e)) {
+        // Not an error to show: the draft is kept and the user signs in again (F37). The
+        // slot cannot be written without a session: the autosaver stops.
+        autosaver.current?.dispose();
+        latest.current.onUnauthenticated?.(e, draftNow());
+      } else if (isProblem(e, "precondition-failed")) {
+        latest.current.onConflict?.(e, op, context);
+      } else if (onError) onError(e);
+      else latest.current.onWriteError?.(e, op);
+    },
+    [draftNow],
+  );
+
+  useEffect(() => {
+    if (!autosaves || itemId === null) return;
+    const a = createAutosaver({
+      intervalMs: AUTOSAVE_INTERVAL_MS,
+      save: async (d) => {
+        await putAutosave(type, itemId, autosaveInput(d));
+      },
+      onError: (e) => {
+        if (!needsSignIn(e)) return;
+        a.dispose();
+        latest.current.onUnauthenticated?.(e, draftNow());
+      },
+    });
+    autosaver.current = a;
+    const off = a.state.subscribe((s) => {
+      setAutoState(s);
+      const at = a.savedAt();
+      if (s === "saved" && at !== null) setAutoSavedAt(new Date(at));
+    });
+    // A draft kept over a sign-in goes to the slot at once (then the banner is true).
+    if (restoreFlush) {
+      a.markDirty(draftNow);
+      void a.flush().then(() => {
+        if (a.state.get() === "saved") restoreFlush.onStored?.();
+      });
+    }
+    return () => {
+      off();
+      if (autosaver.current === a) autosaver.current = null;
+      // Leaving the screen writes what the slot does not hold yet (a lazy draft is read
+      // now, while the editor still exists), then stops.
+      const s = a.state.get();
+      if (s !== "saved" && s !== "error") {
+        try {
+          a.markDirty(draftNow());
+        } catch {
+          // The editor is gone: nothing newer than the last write to keep.
+        }
+      }
+      void a.flush().finally(() => a.dispose());
+    };
+  }, [autosaves, itemId, type, draftNow, restoreFlush]);
+
+  /** A change of the draft: the slot follows it (never on a read-only screen). */
+  const touch = useCallback(() => {
+    if (readOnlyRef.current === null) autosaver.current?.markDirty(draftNow);
+  }, [draftNow]);
 
   const recompute = useCallback(() => {
     const isDirty = isDirtyNow();
@@ -349,12 +625,13 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     const onUpdate = () => {
       setDirty(true);
       setSaveState((s) => (s === "saving" ? s : "dirty"));
+      touch();
     };
     editor.on("update", onUpdate);
     return () => {
       editor.off("update", onUpdate);
     };
-  }, [editor]);
+  }, [editor, touch]);
 
   // A hand-over continues where the user was: same selection and focus.
   useEffect(() => {
@@ -386,8 +663,9 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
         setDirty(true);
         setSaveState((s) => (s === "saving" ? s : "dirty"));
       } else recompute();
+      touch();
     },
-    [recompute],
+    [recompute, touch],
   );
 
   const setMeta = useCallback(
@@ -395,36 +673,38 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
       metaRef.current = { ...metaRef.current, ...patch };
       setMetaState(metaRef.current);
       recompute();
+      touch();
     },
-    [recompute],
+    [recompute, touch],
   );
 
-  /** The server's copy of the item, everywhere (screen, cache, lists, counts). */
+  /** The server's copy of the item, everywhere (screen, cache, lists, counts, parents). */
   const adopt = useCallback(
     (next: ContentDto) => {
+      // In step with the item (no older restored base waiting for the conflict flow):
+      // the next save goes with this version.
+      if (baseVersion.current === itemRef.current?.version) baseVersion.current = next.version;
       itemRef.current = next;
       setItem(next);
       queryClient.setQueryData(qk.content.item(type, next.id), next);
+      // Children show this item as their parent by title (Task 15 carry): keep it fresh.
+      queryClient.setQueryData(qk.content.parentRef(type, next.id), {
+        title: next.title,
+        slug: next.slug,
+      });
       void queryClient.invalidateQueries({ queryKey: qk.content.lists(type) });
       void queryClient.invalidateQueries({ queryKey: qk.content.counts(type) });
     },
     [queryClient, type],
   );
 
-  /** The one place a failed write goes: a 412 to the conflict handler (Task 16). */
-  const fail = useCallback(
-    (e: unknown, op: WriteOp, onError?: (e: unknown) => void, context: ConflictContext = {}) => {
-      if (isProblem(e, "precondition-failed")) latest.current.onConflict?.(e, op, context);
-      else if (onError) onError(e);
-      else latest.current.onWriteError?.(e, op);
-    },
-    [],
-  );
-
   const inflight = useRef<Promise<ContentDto | null> | null>(null);
   // One write at a time: a transition (its save and its lifecycle call) and a save never
   // overlap, so no request goes out with a version another one is about to replace.
   const transitioning = useRef<Promise<ContentDto | null> | null>(null);
+  // The transition waiting for the save in flight, also when it joined a save that was
+  // already running (its 412 must still name it, Task 15 carry).
+  const waiting = useRef<Transition | null>(null);
   const [pending, setPending] = useState<Transition | null>(null);
 
   const saveNow = useCallback(
@@ -432,29 +712,37 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
       if (readOnlyRef.current) return Promise.resolve(null);
       if (inflight.current) return inflight.current;
       const current = itemRef.current;
-      const sentTitle = titleRef.current;
-      const doc = editor.getJSON();
-      const sentBody = JSON.stringify(doc);
-      const sentMeta = metaRef.current;
-      const base = saved.current;
-      const metaPatch = metaChanges(sentMeta, savedMetaRef.current);
-      const titleChanged = base.title !== sentTitle;
-      const bodyChanged = base.body !== sentBody;
-      if (current && !titleChanged && !bodyChanged && Object.keys(metaPatch).length === 0) {
+      if (current && !isDirtyNow()) {
         setDirty(false);
         setSaveState("saved");
         return Promise.resolve(current);
       }
       setSaveState("saving");
       const run = async (): Promise<ContentDto | null> => {
+        // A running autosave lands first and none starts until this save is done: no
+        // `PUT` can recreate the slot after the `PATCH` cleared it (Task 3 carry).
+        const release = (await autosaver.current?.hold()) ?? (() => undefined);
+        // What is sent: the draft as it is now (keystrokes during the wait included).
+        const sentTitle = titleRef.current;
+        const doc = editor.getJSON();
+        const sentBody = JSON.stringify(doc);
+        const sentMeta = metaRef.current;
+        const base = saved.current;
+        const metaPatch = metaChanges(sentMeta, savedMetaRef.current);
         try {
           let next: ContentDto;
           if (current) {
             // The changed members only.
             const patch: SchemaContentPatch = { ...metaPatch };
-            if (titleChanged) patch.title = sentTitle;
-            if (bodyChanged) patch.body = asBody(doc);
-            next = await patchContent(type, current.id, current.version, patch);
+            if (base.title !== sentTitle) patch.title = sentTitle;
+            if (base.body !== sentBody) patch.body = asBody(doc);
+            // Undone while the autosave landed: nothing to write after all.
+            if (Object.keys(patch).length === 0) {
+              setDirty(false);
+              setSaveState("saved");
+              return current;
+            }
+            next = await patchContent(type, current.id, baseVersion.current, patch);
           } else {
             const input: SchemaContentInput = { title: sentTitle, body: asBody(doc) };
             if (metaPatch.slug !== undefined) input.slug = metaPatch.slug;
@@ -464,6 +752,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
             if (metaPatch.menu_order !== undefined) input.menu_order = metaPatch.menu_order;
             next = await createContent(type, input);
           }
+          baseVersion.current = next.version;
           saved.current = { title: sentTitle, body: sentBody };
           const stored = metaOf(next);
           savedMetaRef.current = stored;
@@ -472,9 +761,14 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
           setMetaState(metaRef.current);
           adopt(next);
           setSavedAt(new Date());
+          setRestored(null);
           const still = !isDirtyNow();
           setDirty(!still);
           setSaveState(still ? "saved" : "dirty");
+          // The server deleted the slot: nothing to write, except edits made meanwhile
+          // (now relative to the new version).
+          autosaver.current?.markClean();
+          if (!still) touch();
           if (!current) {
             const { from, to } = editor.state.selection;
             const active = document.activeElement;
@@ -495,9 +789,11 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
           return next;
         } catch (e) {
           setSaveState(e instanceof NetworkError ? "offline" : "error");
-          fail(e, "save", undefined, then ? { then } : {});
+          const waitingFor = then ?? waiting.current ?? undefined;
+          fail(e, "save", undefined, waitingFor ? { then: waitingFor } : {});
           return null;
         } finally {
+          release();
           inflight.current = null;
         }
       };
@@ -505,7 +801,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
       inflight.current = p;
       return p;
     },
-    [editor, type, adopt, fail, isDirtyNow],
+    [editor, type, adopt, fail, isDirtyNow, touch],
   );
 
   /** A save waits for a transition in flight, then saves what is still unsaved. */
@@ -522,8 +818,14 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
       const run = async (): Promise<ContentDto | null> => {
         // Unsaved changes first (F40); a save that joined one already in flight may
         // not hold the latest keystrokes, so save again while anything is unsaved.
-        let current = await saveNow(action);
-        if (current && isDirtyNow()) current = await saveNow(action);
+        waiting.current = action;
+        let current: ContentDto | null;
+        try {
+          current = await saveNow(action);
+          if (current && isDirtyNow()) current = await saveNow(action);
+        } finally {
+          waiting.current = null;
+        }
         if (!current || itemRef.current === null) return null;
         try {
           const next =
@@ -532,10 +834,11 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
                   at: options.at ?? "",
                 })
               : await lifecycle(type, current.id, action, current.version);
+          baseVersion.current = next.version;
           adopt(next);
           return next;
         } catch (e) {
-          fail(e, action, options.onError);
+          fail(e, action, options.onError, { then: action });
           return null;
         }
       };
@@ -549,6 +852,77 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     },
     [saveNow, isDirtyNow, type, adopt, fail],
   );
+
+  /** `theirs` becomes what the draft is compared with and saved over. */
+  const rebase = useCallback(
+    (theirs: ContentDto) => {
+      baseVersion.current = theirs.version;
+      saved.current = { title: theirs.title, body: normalizedBody(editor, theirs.body) };
+      const stored = metaOf(theirs);
+      savedMetaRef.current = stored;
+      setSavedMeta(stored);
+      adopt(theirs);
+      setSavedAt(new Date(theirs.updated_at));
+      setRestored(null);
+      recompute();
+    },
+    [editor, adopt, recompute],
+  );
+
+  const keepMine = useCallback(
+    (theirs: ContentDto): Promise<ContentDto | null> => {
+      rebase(theirs);
+      return saveNow();
+    },
+    [rebase, saveNow],
+  );
+
+  const keepInSlot = useCallback(
+    async (d: Draft): Promise<void> => {
+      if (itemId === null) return;
+      const a = autosaver.current;
+      const release = (await a?.hold()) ?? (() => undefined);
+      try {
+        await putAutosave(type, itemId, autosaveInput(d));
+        // The slot holds this draft: nothing left to write when the screen goes.
+        a?.markClean();
+      } finally {
+        release();
+      }
+    },
+    [itemId, type],
+  );
+
+  const discard = useCallback(async (): Promise<void> => {
+    autosaver.current?.markClean();
+    if (itemId === null) return;
+    const release = (await autosaver.current?.hold()) ?? (() => undefined);
+    try {
+      await deleteAutosave(type, itemId);
+    } finally {
+      release();
+    }
+  }, [itemId, type]);
+
+  // The indicator: an explicit save in flight or failed comes first; then, with
+  // changes the item does not hold, what the slot holds.
+  let indicator: SaveStateValue;
+  let indicatorAt: Date | null = null;
+  if (saveState === "saving" || saveState === "error" || saveState === "offline") {
+    indicator = saveState;
+  } else if (!dirty) {
+    indicator = "saved";
+    indicatorAt = savedAt;
+  } else if (!autosaves) {
+    indicator = "dirty";
+  } else if (autoState === "saved") {
+    indicator = autoSavedAt ? "autosaved" : "dirty";
+    indicatorAt = autoSavedAt;
+  } else {
+    indicator = autoState;
+  }
+  const unprotected =
+    dirty && readOnly === null && !(autosaves && autoState === "saved" && autoSavedAt !== null);
 
   const initialFocus = handoff ? handoff.focus : opts.item === null ? "title" : null;
   return {
@@ -566,6 +940,16 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     dirty,
     saveState,
     savedAt,
+    indicator,
+    indicatorAt,
+    unprotected,
+    restored,
+    draft: draftNow,
+    isDirtyNow,
+    keepMine,
+    rebase,
+    keepInSlot,
+    discard,
     save,
     transition,
     adopt,

@@ -473,7 +473,7 @@ export function ControlsSection() {
   );
 }
 
-const SAVE_STATES: SaveStateValue[] = ["saved", "saving", "dirty", "error", "offline"];
+const SAVE_STATES: SaveStateValue[] = ["saved", "autosaved", "saving", "dirty", "error", "offline"];
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 
 export function DisplaySection() {
@@ -509,7 +509,9 @@ export function DisplaySection() {
                 <span className="font-mono text-xs text-muted-foreground">{s}</span>
                 <SaveState
                   state={s}
-                  {...(s === "saved" ? { at: new Date(2026, 9, 25, 14, 2) } : {})}
+                  {...(s === "saved" || s === "autosaved"
+                    ? { at: new Date(2026, 9, 25, 14, 2) }
+                    : {})}
                 />
               </div>
             ))}
