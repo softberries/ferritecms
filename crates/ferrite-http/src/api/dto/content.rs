@@ -274,6 +274,7 @@ pub struct ContentRefDto {
     pub status: String,
     /// The public path; `null` unless the item has a public page now (published, not
     /// future-dated, not media).
+    #[schema(required = true)]
     pub permalink: Option<String>,
 }
 

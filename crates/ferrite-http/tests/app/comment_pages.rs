@@ -59,7 +59,7 @@ fn anchor(id: CommentId) -> String {
 }
 
 /// 600 approved comments: the heading says 600 (not the old cap of 500), and the
-/// first page links to the next.
+/// first page links to the next (at the `#comments` section).
 async fn count_is_the_real_total(app: App) -> App {
     let app = blog(app).await;
     let post = app.post("Hello", "hello", &[]).await;
@@ -70,7 +70,7 @@ async fn count_is_the_real_total(app: App) -> App {
     assert!(html.contains(">600 comments</h2>"), "{html}");
     assert!(html.contains("Page 1 of 12"), "{html}");
     assert!(
-        html.contains("rel=\"next\" href=\"&#x2f;hello&#x2f;?cpage=2\""),
+        html.contains("rel=\"next\" href=\"&#x2f;hello&#x2f;?cpage=2#comments\""),
         "{html}"
     );
     assert!(!html.contains("rel=\"prev\""), "{html}");
@@ -79,7 +79,7 @@ async fn count_is_the_real_total(app: App) -> App {
     assert!(last.body.contains(&anchor(ids[599])), "{}", last.body);
     assert!(
         last.body
-            .contains("rel=\"prev\" href=\"&#x2f;hello&#x2f;?cpage=11\"")
+            .contains("rel=\"prev\" href=\"&#x2f;hello&#x2f;?cpage=11#comments\"")
     );
     app
 }

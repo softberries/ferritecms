@@ -56,7 +56,7 @@ use serde_json::Value;
 
 use crate::{
     Actor, AuthService, CoreError,
-    actor::{Area, Capability, Scope, can, require, require_reader, require_scope},
+    actor::{Area, Capability, Scope, can, require, require_read, require_reader, require_scope},
     events::{self, post_key},
     is_bidi_control,
     permalink::Permalinks,
@@ -657,7 +657,7 @@ impl CommentService {
         require_reader(actor, Capability::ModerateComments)?;
         let page = self.store.read().comments().list(&query).await?;
         Ok(Page {
-            items: self.with_items(page.items).await?,
+            items: self.with_items(actor, page.items).await?,
             next_cursor: page.next_cursor,
         })
     }
@@ -682,9 +682,12 @@ impl CommentService {
 
     /// The items of `comments` (at most [`MAX_ID_FILTER`](ferrite_store::MAX_ID_FILTER)
     /// distinct ones, as a page holds), read outside any `Tx`: one `get_many`, then the
-    /// paths of those with a public page now.
+    /// paths of those with a public page now. An item without a public page keeps its
+    /// title only for an `actor` who may read content ([`require_read`]`(Content)`): a
+    /// `comments:read` token without `content:read` sees its id, type and status only.
     async fn items_of(
         &self,
+        actor: &Actor,
         comments: &[Comment],
     ) -> Result<HashMap<ContentId, CommentItem>, CoreError> {
         if comments.is_empty() {
@@ -696,6 +699,7 @@ impl CommentService {
         ids.dedup();
         let items = repos.content().get_many(&ids).await?;
         let now = Timestamp::now();
+        let reads_content = require_read(actor, Area::Content).is_ok();
         let shown: Vec<_> = items
             .iter()
             .filter(|i| has_public_page(i, now))
@@ -712,11 +716,17 @@ impl CommentService {
         Ok(items
             .into_iter()
             .map(|i| {
+                let permalink = paths.get(&i.id).cloned();
+                let title = if reads_content || has_public_page(&i, now) {
+                    i.title
+                } else {
+                    String::new()
+                };
                 let item = CommentItem {
                     id: i.id,
-                    permalink: paths.get(&i.id).cloned(),
+                    permalink,
                     kind: i.kind,
-                    title: i.title,
+                    title,
                     status: i.status,
                 };
                 (item.id, item)
@@ -725,8 +735,12 @@ impl CommentService {
     }
 
     /// `comments` with their items ([`items_of`](Self::items_of)).
-    async fn with_items(&self, comments: Vec<Comment>) -> Result<Vec<QueuedComment>, CoreError> {
-        let items = self.items_of(&comments).await?;
+    async fn with_items(
+        &self,
+        actor: &Actor,
+        comments: Vec<Comment>,
+    ) -> Result<Vec<QueuedComment>, CoreError> {
+        let items = self.items_of(actor, &comments).await?;
         comments
             .into_iter()
             .map(|comment| queued(comment, &items))
@@ -757,7 +771,7 @@ impl CommentService {
         }
         .await;
         let comment = finish(tx, done).await?;
-        let items = self.items_of(std::slice::from_ref(&comment)).await?;
+        let items = self.items_of(actor, std::slice::from_ref(&comment)).await?;
         queued(comment, &items)
     }
 

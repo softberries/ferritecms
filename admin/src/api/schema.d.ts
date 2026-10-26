@@ -1277,6 +1277,10 @@ export interface components {
             permalink: string | null;
             /** @description `draft`, `pending`, `scheduled`, `published`, `private` or `trash`. */
             status: string;
+            /**
+             * @description `""` for an item without a public page when the caller may not read content
+             *     (a token without `content:read`).
+             */
             title: string;
             /** @description The content type (`post`, `page`, …). */
             type: string;
@@ -1452,7 +1456,7 @@ export interface components {
              * @description The public path; `null` unless the item has a public page now (published, not
              *     future-dated, not media).
              */
-            permalink?: string | null;
+            permalink: string | null;
             /** @description `draft`, `pending`, `scheduled`, `published`, `private` or `trash`. */
             status: string;
             title: string;

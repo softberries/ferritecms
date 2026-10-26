@@ -65,6 +65,8 @@ pub struct CommentItemDto {
     /// The content type (`post`, `page`, …).
     #[serde(rename = "type")]
     pub kind: String,
+    /// `""` for an item without a public page when the caller may not read content
+    /// (a token without `content:read`).
     pub title: String,
     /// The public path, only while the item has a public page now (published, its
     /// publish time reached); `null` otherwise.

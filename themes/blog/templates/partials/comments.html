@@ -81,11 +81,11 @@
   {%- if thread.pages > 1 %}
   <nav class="pagination comment-pages" aria-label="Comment pages">
     {%- if thread.prev_url %}
-    <a class="pagination__prev" rel="prev" href="{{ thread.prev_url }}"><span aria-hidden="true">←</span> Older comments</a>
+    <a class="pagination__prev" rel="prev" href="{{ thread.prev_url }}#comments"><span aria-hidden="true">←</span> Older comments</a>
     {%- endif %}
     <p class="pagination__status">Page {{ thread.page }} of {{ thread.pages }}</p>
     {%- if thread.next_url %}
-    <a class="pagination__next" rel="next" href="{{ thread.next_url }}">Newer comments <span aria-hidden="true">→</span></a>
+    <a class="pagination__next" rel="next" href="{{ thread.next_url }}#comments">Newer comments <span aria-hidden="true">→</span></a>
     {%- endif %}
   </nav>
   {%- endif %}

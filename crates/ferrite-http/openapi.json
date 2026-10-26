@@ -8856,7 +8856,8 @@
             "description": "`draft`, `pending`, `scheduled`, `published`, `private` or `trash`."
           },
           "title": {
-            "type": "string"
+            "type": "string",
+            "description": "`\"\"` for an item without a public page when the caller may not read content\n(a token without `content:read`)."
           },
           "type": {
             "type": "string",
@@ -9298,7 +9299,8 @@
           "id",
           "type",
           "title",
-          "status"
+          "status",
+          "permalink"
         ],
         "properties": {
           "id": {

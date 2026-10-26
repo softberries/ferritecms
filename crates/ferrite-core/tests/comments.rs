@@ -1013,6 +1013,47 @@ async fn guest_still_rate_limited(db: &TestDb) {
     }
 }
 
+/// The queue shows a non-public item's title only to a reader of content: a
+/// `comments:read` token without `content:read` sees id, type and status, an empty
+/// title and no permalink (final review R2).
+async fn queue_hides_private_titles_without_content_read(db: &TestDb) {
+    let s = site(db).await;
+    let public = s.published("post", "open-item").await;
+    let hidden = s.published("post", "hidden-item").await;
+    s.accepted(input(public.id)).await;
+    s.accepted(input(hidden.id)).await;
+    s.content
+        .unpublish(&s.admin, hidden.id, hidden.version)
+        .await
+        .unwrap();
+    let all = CommentQuery {
+        limit: 50,
+        ..Default::default()
+    };
+    let comments_only = s
+        .admin
+        .with_scopes(Scopes::from_strs(&["comments:read".to_owned()]).unwrap());
+    let both = s.admin.with_scopes(
+        Scopes::from_strs(&["comments:read".to_owned(), "content:read".to_owned()]).unwrap(),
+    );
+    let item_of = |items: &[ferrite_core::comments::QueuedComment], id: ContentId| {
+        items.iter().find(|q| q.item.id == id).unwrap().item.clone()
+    };
+
+    let page = s.comments.list(&comments_only, all.clone()).await.unwrap();
+    let h = item_of(&page.items, hidden.id);
+    assert_eq!(h.title, "");
+    assert_eq!(h.permalink, None);
+    assert_eq!(h.kind, "post");
+    assert_eq!(h.status, ferrite_domain::ContentStatus::Draft);
+    let p = item_of(&page.items, public.id);
+    assert_eq!(p.title, "Title open-item");
+    assert!(p.permalink.is_some());
+
+    let page = s.comments.list(&both, all).await.unwrap();
+    assert_eq!(item_of(&page.items, hidden.id).title, "Title hidden-item");
+}
+
 backend_tests!(
     submit_rules,
     moderation_decides_status,
@@ -1024,4 +1065,5 @@ backend_tests!(
     guest_still_rate_limited,
     delete_only_spam_or_trash,
     thread_depths_and_pages,
+    queue_hides_private_titles_without_content_read,
 );

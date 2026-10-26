@@ -304,7 +304,7 @@ pub async fn root_position_of_reply_is_its_root(db: &TestDb) {
     let under_held = comment(item, Some(held.id), CommentStatus::Approved, 180);
     let c = comment(item, None, CommentStatus::Approved, 200);
     let elsewhere = comment(other, None, CommentStatus::Approved, 0);
-    // Inserted newest first.
+    // Inserted oldest first.
     let rows = [
         a.clone(),
         b.clone(),
