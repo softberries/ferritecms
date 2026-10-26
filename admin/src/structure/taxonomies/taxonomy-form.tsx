@@ -51,17 +51,13 @@ import { nameFromLabel } from "../types/builder-model";
 import { FormField, SwitchRow } from "../types/form-field";
 import { MAX_TYPE_LABEL, MAX_TYPE_NAME, labelProblem, validTypeName } from "../types/type-rules";
 import { problemText } from "./terms-model";
+import { DESTRUCTIVE, without } from "../shared";
 
-const DESTRUCTIVE =
-  "bg-destructive text-background hover:bg-destructive/90 dark:bg-destructive dark:hover:bg-destructive/90";
 /** Core keeps at most this many content types per taxonomy (`check_content_types`). */
 export const MAX_TAXONOMY_TYPES = 20;
 /** Listed elsewhere (the media library); kept when stored, never offered. */
 const NOT_OFFERED = new Set(["media"]);
 const BUILT_IN_ORDER = ["post", "page"];
-
-const without = (errs: Record<string, string>, key: string) =>
-  Object.fromEntries(Object.entries(errs).filter(([k]) => k !== key));
 
 /** The types a taxonomy can apply to: built-ins first (post, page), then by label. */
 function offeredTypes(types: readonly ContentTypeDto[]): ContentTypeDto[] {

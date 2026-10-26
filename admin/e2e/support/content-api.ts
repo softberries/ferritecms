@@ -1,7 +1,8 @@
 // Content set-up through the API for specs that need their own data (E2E data hygiene):
 // a request context on a harness account's shared session, plus helpers to create a
 // content type (admin only), taxonomies, terms and items in any status, and to remove a
-// type with everything in it afterwards, so the sidebar of later screenshots stays clean.
+// type with everything in it afterwards, so the sidebar of later screenshots stays clean;
+// and menus (read, replace, delete).
 
 import { expect, request as apiRequest, type APIRequestContext } from "@playwright/test";
 import type { FixtureFile } from "./files";
@@ -41,6 +42,21 @@ export interface Term {
   slug: string;
   description: string;
   parent_id?: string | null;
+}
+
+/** A menu as `GET /menus/{name}` answers. */
+export interface Menu {
+  name: string;
+  label: string;
+  items: {
+    id: string;
+    kind: "item" | "term" | "url";
+    target_id?: string | null;
+    url?: string | null;
+    label?: string;
+    parent_id?: string | null;
+    position?: number;
+  }[];
 }
 
 export class ContentApi {
@@ -324,6 +340,26 @@ export class ContentApi {
     await this.ctx.delete(`/api/v1/media/${id}?force=true`, {
       headers: this.headers(media.version),
     });
+  }
+
+  /** `GET /menus/{name}`; `null` when there is none. */
+  async getMenu(name: string): Promise<Menu | null> {
+    const res = await this.ctx.get(`/api/v1/menus/${name}`);
+    if (res.status() === 404) return null;
+    return this.ok<Menu>(res, `get menu ${name}`);
+  }
+
+  /** `PUT /menus/{name}`: creates the menu or replaces its whole tree. */
+  async putMenu(name: string, menu: { label: string; items: Menu["items"] }): Promise<Menu> {
+    return this.ok(
+      await this.ctx.put(`/api/v1/menus/${name}`, { headers: this.headers(), data: menu }),
+      `put menu ${name}`,
+    );
+  }
+
+  /** Deletes menu `name` (best effort: a missing one is fine). */
+  async deleteMenu(name: string): Promise<void> {
+    await this.ctx.delete(`/api/v1/menus/${name}`, { headers: this.headers() });
   }
 
   async dispose(): Promise<void> {

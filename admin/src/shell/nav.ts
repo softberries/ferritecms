@@ -12,6 +12,7 @@ import {
   FilesIcon,
   ImageIcon,
   LayoutDashboardIcon,
+  ListTreeIcon,
   ShapesIcon,
   TagsIcon,
   type LucideIcon,
@@ -85,6 +86,7 @@ export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
   { screen: "media", to: "/media", label: "nav.media", icon: ImageIcon },
   { screen: "types", to: "/structure/types", label: "nav.contentTypes", icon: BlocksIcon },
   { screen: "taxonomies", to: "/structure/taxonomies", label: "nav.taxonomies", icon: TagsIcon },
+  { screen: "menus", to: "/structure/menus", label: "nav.menus", icon: ListTreeIcon },
 ] as const;
 
 /** Types the content screens list: everything but `media` (its own screen, M2b-2). */

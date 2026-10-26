@@ -8,7 +8,8 @@
 // and down). Motion and announcements as in `SortableList`. An `unordered` tree (terms,
 // P35) keeps its siblings in the caller's order (by name): a move there is a new parent
 // only, and the caller gives the row menu (`actions`, e.g. Move to…) in place of Move up /
-// Move down / Indent / Outdent.
+// Move down / Indent / Outdent. An ordered tree may add its own items around those
+// (`leadingActions`, `trailingActions`; menus: Edit before, Remove after).
 
 import {
   DndContext,
@@ -77,6 +78,10 @@ export interface SortableTreeProps<T> {
   unordered?: boolean;
   /** The row menu in place of Move up / Move down / Indent / Outdent. */
   actions?: (node: FlatNode<T>) => RowAction[];
+  /** Row menu items before Move up / Move down / Indent / Outdent (e.g. Edit). */
+  leadingActions?: (node: FlatNode<T>) => RowAction[];
+  /** Row menu items after them (e.g. Remove). */
+  trailingActions?: (node: FlatNode<T>) => RowAction[];
 }
 
 export function SortableTree<T>({
@@ -90,6 +95,8 @@ export function SortableTree<T>({
   className,
   unordered = false,
   actions,
+  leadingActions,
+  trailingActions,
 }: SortableTreeProps<T>) {
   const { t } = useTranslation("kit");
   const sensors = useSensors(
@@ -281,6 +288,7 @@ export function SortableTree<T>({
                   actions
                     ? actions(node)
                     : [
+                        ...(leadingActions?.(node) ?? []),
                         {
                           key: "up",
                           label: t("sortable.moveUp"),
@@ -324,6 +332,7 @@ export function SortableTree<T>({
                           disabled: node.parentId === null,
                           run: () => commit(outdent(nodes, node.id), node.id),
                         },
+                        ...(trailingActions?.(node) ?? []),
                       ]
                 }
               >

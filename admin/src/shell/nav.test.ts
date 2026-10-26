@@ -70,7 +70,7 @@ test("nothing_above_its_rights", () => {
   // Without `read_admin` the content APIs answer 403, so no content section.
   expect(shape(navFor(me("none", []), TYPES))).toEqual([["overview", [["Dashboard", "/"]]]]);
   // Nothing beyond what the registered screens give, whatever the role holds (so far
-  // Media in Content, Content types and Taxonomies in Structure).
+  // Media in Content, Content types, Taxonomies and Menus in Structure).
   const admin = me("admin", [
     "read_admin",
     "edit_own",
@@ -108,7 +108,7 @@ test("content_types_is_registered", () => {
     navFor(editor, TYPES)
       .find((s) => s.id === "structure")
       ?.items.map((i) => i.id),
-  ).toEqual(["taxonomies"]);
+  ).toEqual(["taxonomies", "menus"]);
 });
 
 test("taxonomies_is_registered", () => {
@@ -124,6 +124,26 @@ test("taxonomies_is_registered", () => {
   const sections = navFor(me("editor", ["read_admin", "manage_terms"]), TYPES);
   expect(navItemAt(sections, "/structure/taxonomies")?.id).toBe("taxonomies");
   expect(navItemAt(sections, "/structure/taxonomies/")?.id).toBe("taxonomies");
+});
+
+test("menus_is_registered", () => {
+  // Task 11 registers Menus under Structure, after Taxonomies: only `manage_menus` sees it.
+  const ids = (who: MeDto) =>
+    navFor(who, TYPES)
+      .find((s) => s.id === "structure")
+      ?.items.map((i) => i.id) ?? [];
+  expect(ids(me("editor", ["read_admin", "manage_menus"]))).toEqual(["menus"]);
+  expect(ids(me("admin", ["read_admin", "manage_settings", "manage_menus"]))).toEqual([
+    "types",
+    "taxonomies",
+    "menus",
+  ]);
+  expect(ids(me("admin", ["read_admin", "manage_settings"]))).not.toContain("menus");
+  expect(ids(AUTHOR)).toEqual([]);
+  const sections = navFor(me("editor", ["read_admin", "manage_menus"]), TYPES);
+  const menus = sections.flatMap((s) => s.items).find((i) => i.id === "menus");
+  expect(menus).toMatchObject({ label: "Menus", to: "/structure/menus" });
+  expect(navItemAt(sections, "/structure/menus/")?.id).toBe("menus");
 });
 
 test("no_types_yet_means_no_content_section", () => {

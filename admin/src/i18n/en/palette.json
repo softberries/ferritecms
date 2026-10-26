@@ -25,7 +25,9 @@
     "type": "New content type",
     "typeKeywords": "create add new type schema fields structure",
     "taxonomy": "New taxonomy",
-    "taxonomyKeywords": "create add new taxonomy categories tags terms structure"
+    "taxonomyKeywords": "create add new taxonomy categories tags terms structure",
+    "menu": "New menu",
+    "menuKeywords": "create add new menu navigation links structure"
   },
   "preferences": {
     "light": "Light theme",

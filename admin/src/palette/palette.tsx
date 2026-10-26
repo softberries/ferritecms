@@ -3,8 +3,8 @@
 // viewer's last 8 screens and items, only before anything is typed), Go to (every nav
 // item and the `?` sheet), Create (one per content type the nav shows, with
 // `edit_own`, Upload media with `upload_media`, New content type when the nav has
-// Content types, and New taxonomy when it has Taxonomies and the viewer has
-// `manage_settings`), Content (live search, from 2 characters) and Preferences (theme,
+// Content types, New taxonomy when it has Taxonomies and the viewer has
+// `manage_settings`, and New menu when it has Menus), Content (live search, from 2 characters) and Preferences (theme,
 // density). cmdk's own filter ranks the rows inside the static groups; content hits come
 // from the server already matched, so they keep the server's order, in the last group.
 
@@ -17,6 +17,7 @@ import {
   FilePlusIcon,
   FilesIcon,
   KeyboardIcon,
+  ListTreeIcon,
   MonitorIcon,
   MoonIcon,
   Rows3Icon,
@@ -152,6 +153,8 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
   const taxonomiesItem = me.capabilities.includes("manage_settings")
     ? navItems.find((i) => i.id === "taxonomies")
     : undefined;
+  // "New menu" (Create): the nav shows Menus (`manage_menus`).
+  const menusItem = navItems.find((i) => i.id === "menus");
 
   const query = q.trim();
   const active = searchable(query) && types.length > 0;
@@ -296,7 +299,7 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
             />
           </CommandGroup>
 
-          {createTypes.length > 0 || mediaItem || typesItem || taxonomiesItem ? (
+          {createTypes.length > 0 || mediaItem || typesItem || taxonomiesItem || menusItem ? (
             <CommandGroup heading={t("group.create")}>
               {createTypes.map((item) => {
                 const type = item.contentType ?? "";
@@ -351,6 +354,18 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
                   onSelect={() => {
                     close();
                     void navigate({ to: "/structure/taxonomies", search: { new: true } });
+                  }}
+                />
+              ) : null}
+              {menusItem ? (
+                <Row
+                  value={t("create.menu")}
+                  keywords={[t("create.menuKeywords")]}
+                  icon={ListTreeIcon}
+                  label={t("create.menu")}
+                  onSelect={() => {
+                    close();
+                    void navigate({ to: "/structure/menus", search: { new: true } });
                   }}
                 />
               ) : null}

@@ -286,4 +286,61 @@ describe("sortable", () => {
       "Apples is now under Fruit.",
     );
   });
+
+  it("sortable_tree_leading_and_trailing_actions_wrap_the_moves", async () => {
+    // Menus: Edit before Move up / Move down / Indent / Outdent, Remove after them.
+    const nodes: TreeNode<string>[] = [
+      { id: "n1", parentId: null, data: "Home" },
+      { id: "n2", parentId: null, data: "Blog" },
+    ];
+    const edit = vi.fn<(id: string) => void>();
+    const remove = vi.fn<(id: string) => void>();
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SortableTree
+        nodes={nodes}
+        label={(d) => d}
+        render={(n) => <span>{n.data}</span>}
+        onChange={onChange}
+        maxDepth={2}
+        leadingActions={(node) => [
+          {
+            key: "edit",
+            label: "Edit",
+            icon: PencilIcon,
+            disabled: false,
+            run: () => edit(node.id),
+          },
+        ]}
+        trailingActions={(node) => [
+          {
+            key: "remove",
+            label: "Remove",
+            icon: PencilIcon,
+            disabled: false,
+            separated: true,
+            run: () => remove(node.id),
+          },
+        ]}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Actions for Blog" }));
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((i) => i.textContent),
+    ).toEqual(["Edit", "Move up", "Move down", "Indent", "Outdent", "Remove"]);
+    await user.click(within(menu).getByRole("menuitem", { name: "Remove" }));
+    expect(remove).toHaveBeenCalledWith("n2");
+    // The moves still work beside them.
+    await user.click(screen.getByRole("button", { name: "Actions for Blog" }));
+    await user.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Indent" }),
+    );
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0]?.[1]).toMatchObject({ id: "n2", parentId: "n1" });
+    expect(edit).not.toHaveBeenCalled();
+  });
 });

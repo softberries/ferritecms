@@ -315,5 +315,168 @@
         "refusedChildren": "It has sub-terms now: move or delete them first."
       }
     }
+  },
+  "menus": {
+    "title": "Menus",
+    "description": "Navigation for the site. The theme shows a menu in each of its locations; a menu named like a location is the one shown there.",
+    "new": "New menu",
+    "loading": "Loading…",
+    "locations": {
+      "title": "Theme locations",
+      "hint": "Places the active theme shows a menu.",
+      "none": "The active theme declares no menu locations, so it shows none of these menus.",
+      "shows": "Shows {{label}}",
+      "empty": "Nothing shown here yet",
+      "create": "Create menu",
+      "createFor": "Create a menu for {{label}}",
+      "edit": "Edit menu",
+      "editNamed": "Edit {{label}}"
+    },
+    "others": {
+      "title": "Other menus",
+      "hint": "Not in a location of the active theme; another theme may show them.",
+      "none": "No other menus."
+    },
+    "unlabelled": "Untitled menu",
+    "empty": {
+      "title": "No menus yet",
+      "body": "A menu is a list of links to pages, terms and other addresses, nested as deep as the theme shows."
+    },
+    "create": {
+      "title": "New menu",
+      "description": "A menu named like a theme location is shown there. The name cannot change later.",
+      "label": "Label",
+      "labelHint": "How the admin lists it, e.g. Social links",
+      "name": "Name",
+      "nameHint": "Lower-case, without spaces or / ? # % < > \" ' \\ `, at most {{max}} characters.",
+      "submit": "Create menu",
+      "cancel": "Cancel",
+      "created": "{{label}} created",
+      "failed": "The menu was not created",
+      "errors": {
+        "empty": "Enter a name.",
+        "tooLong": "At most {{max}} characters.",
+        "chars": "Use no spaces and none of / ? # % < > \" ' \\ `, and not . or ..",
+        "form": "Use lower case, without spaces around it.",
+        "taken": "A menu named {{name}} already exists.",
+        "label": "At most {{max}} characters."
+      }
+    },
+    "editor": {
+      "location": "Shown in {{location}}",
+      "noLocation": "In no theme location",
+      "settings": "Menu",
+      "label": "Label",
+      "labelHint": "For the admin; the site shows the items.",
+      "name": "Name",
+      "nameFixed": "The name decides the theme location and cannot change.",
+      "items": "Items",
+      "itemCount_one": "{{count}} item",
+      "itemCount_other": "{{count}} items",
+      "treeLabel": "Items of {{label}}",
+      "treeHint": "Drag an item by its handle, sideways to nest it, or use its menu to move, indent and outdent.",
+      "empty": {
+        "title": "No items yet",
+        "body": "Add pages, posts, terms or custom links from Add items. They appear here in the order the site shows them."
+      },
+      "save": "Save",
+      "saving": "Saving…",
+      "saved": "{{label}} saved",
+      "notSaved": "The menu was not saved",
+      "discard": "Discard",
+      "discarded": "Changes discarded",
+      "reloaded": "Reloaded the latest version",
+      "goneElsewhere": "{{label}} was deleted by someone else",
+      "invalid": "Fix the marked items first",
+      "edit": "Edit",
+      "remove": "Remove",
+      "removed": "Removed {{label}}",
+      "removedChildren_one": "Removed {{label}}; its {{count}} sub-item moved up",
+      "removedChildren_other": "Removed {{label}}; its {{count}} sub-items moved up",
+      "undo": "Undo",
+      "restored": "{{label}} is back",
+      "kind": {
+        "item": "Content",
+        "term": "Term",
+        "url": "Custom link"
+      },
+      "targetLoading": "Loading…",
+      "targetMissing": "Missing: deleted, trashed or not readable. Remove it to save.",
+      "titleFollows": "Shows the title",
+      "problems": {
+        "tooMany": "A menu holds at most {{max}} items; this one has {{count}}.",
+        "tooDeep": "Nested deeper than the site shows ({{max}} levels): outdent it.",
+        "labelTooLong": "Label longer than {{max}} characters.",
+        "badUrl": "Not an address the site links to: use http://, https:// or a path starting with /."
+      },
+      "leave": {
+        "title": "Leave without saving?",
+        "body": "Your changes to this menu are not saved and will be lost.",
+        "stay": "Stay",
+        "leave": "Leave"
+      },
+      "shortcuts": {
+        "group": "Menu editor",
+        "save": "Save the menu"
+      },
+      "targetFailed": "Could not be looked up."
+    },
+    "delete": {
+      "button": "Delete menu",
+      "confirmTitle": "Delete {{label}}?",
+      "confirmBody": "The menu and its items go. Undo brings them back for a few seconds.",
+      "confirmLocation": "The theme stops showing a menu in {{location}}.",
+      "confirm": "Delete menu",
+      "cancel": "Cancel",
+      "deleted": "{{label}} deleted",
+      "failed": "The menu was not deleted",
+      "undoFailed": "{{label}} could not be restored"
+    },
+    "add": {
+      "title": "Add items",
+      "description": "New items go to the end; drag them into place.",
+      "tabs": {
+        "content": "Content",
+        "terms": "Terms",
+        "link": "Custom link"
+      },
+      "search": "Search content",
+      "searchPlaceholder": "Search titles and text…",
+      "recent": "Recently updated",
+      "results": "Results",
+      "noResults": "Nothing matches “{{q}}”.",
+      "noContent": "No content yet.",
+      "failed": "The content could not be loaded.",
+      "untitled": "Untitled",
+      "taxonomy": "Taxonomy",
+      "filterTerms": "Filter {{label}}",
+      "filterPlaceholder": "Filter terms…",
+      "noTerms": "No terms in {{label}} yet.",
+      "noTermMatch": "No terms match “{{q}}”.",
+      "noTaxonomies": "No taxonomies.",
+      "add_one": "Add {{count}} item",
+      "add_other": "Add {{count}} items",
+      "addNone": "Add to menu",
+      "added_one": "Added {{count}} item to the menu.",
+      "added_other": "Added {{count}} items to the menu.",
+      "full": "A menu holds at most {{max}} items; {{left}} more fit.",
+      "url": "Address",
+      "urlHint": "http://, https:// or a path on this site starting with /",
+      "urlInvalid": "Use http://, https:// or a path starting with / (no spaces).",
+      "linkLabel": "Label",
+      "linkLabelHint": "Empty: the site shows the address.",
+      "addLink": "Add link"
+    },
+    "item": {
+      "title": "Edit menu item",
+      "description": "Changes stay in the draft until you save the menu.",
+      "label": "Label",
+      "labelHint": "Empty: the site shows {{title}}.",
+      "labelHintLink": "Empty: the site shows the address.",
+      "target": "Links to",
+      "url": "Address",
+      "apply": "Apply",
+      "cancel": "Cancel"
+    }
   }
 }

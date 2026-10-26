@@ -6,13 +6,10 @@
 
 import { keepPreviousData, useQueries, useQuery } from "@tanstack/react-query";
 import { ChevronsUpDownIcon, LinkIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { getContent, isContentStatus, listContent } from "@/api/content";
+import { isContentStatus, listContent } from "@/api/content";
 import { qk } from "@/api/keys";
-import { ApiError } from "@/api/problem";
-import { typesQuery } from "@/api/types";
-import { useMe } from "@/auth/session";
 import { StatusBadge } from "@/components/kit/status-badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,7 +21,12 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { navFor } from "@/shell/nav";
+import {
+  type ContentTarget,
+  type TypeRef,
+  contentTargetQuery,
+  useNavContentTypes,
+} from "@/content/find-item";
 import type { ControlIds } from "./fields-context";
 import { uuidOf } from "./fields-model";
 
@@ -33,51 +35,11 @@ const SEARCH_DEBOUNCE_MS = 150;
 /** Results per type. */
 const PER_TYPE = 8;
 
-interface TypeRef {
-  name: string;
-  label: string;
-}
-
-/** The content types the sidebar shows this viewer, in its order. */
-function useRelationTypes(): TypeRef[] {
-  const me = useMe();
-  const types = useQuery(typesQuery);
-  return useMemo(() => {
-    if (!me || !types.data) return [];
-    const labels = new Map(types.data.map((ty) => [ty.name, ty.label]));
-    return navFor(me, types.data)
-      .flatMap((s) => s.items)
-      .flatMap((i) =>
-        i.contentType ? [{ name: i.contentType, label: labels.get(i.contentType) ?? i.label }] : [],
-      );
-  }, [me, types.data]);
-}
-
-interface Target {
-  id: string;
-  title: string;
-  status: string;
-  type: TypeRef;
-}
-
 /** The item `id` in the first of `types` that has it; `null` when none does. */
 function useTarget(id: string | null, types: TypeRef[]) {
   return useQuery({
-    queryKey: ["content", "relation", id ?? "", types.map((t) => t.name).join(",")],
-    queryFn: async (): Promise<Target | null> => {
-      for (const type of types) {
-        try {
-          const item = await getContent(type.name, id ?? "");
-          return { id: item.id, title: item.title, status: item.status, type };
-        } catch (e) {
-          if (e instanceof ApiError && (e.status === 404 || e.status === 400)) continue;
-          throw e;
-        }
-      }
-      return null;
-    },
+    ...contentTargetQuery(id ?? "", types),
     enabled: id !== null && types.length > 0,
-    staleTime: 60_000,
   });
 }
 
@@ -93,7 +55,7 @@ export function RelationField({
   disabled: boolean;
 }) {
   const { t } = useTranslation("editor");
-  const types = useRelationTypes();
+  const types = useNavContentTypes();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [q, setQ] = useState("");
@@ -106,7 +68,7 @@ export function RelationField({
   const id = uuidOf(stored);
   const target = useTarget(id, types);
   // Just picked: known before the lookup answers.
-  const [picked, setPicked] = useState<Target | null>(null);
+  const [picked, setPicked] = useState<ContentTarget | null>(null);
   const shown = picked?.id === id ? picked : (target.data ?? null);
 
   const filters = q ? { q, limit: PER_TYPE } : { order: "updated" as const, limit: PER_TYPE };
@@ -121,7 +83,7 @@ export function RelationField({
   });
   const fetching = results.some((r) => r.isFetching);
 
-  const choose = (next: Target | null) => {
+  const choose = (next: ContentTarget | null) => {
     setPicked(next);
     onChange(next ? next.id : null);
     setOpen(false);

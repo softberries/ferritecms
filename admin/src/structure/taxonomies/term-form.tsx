@@ -52,13 +52,9 @@ import { staleGuard } from "@/lib/stale-guard";
 import { FormField } from "../types/form-field";
 import { returnToRowMenu } from "./row-focus";
 import { childCount, parentChoices, problemText } from "./terms-model";
+import { DESTRUCTIVE, without } from "../shared";
 
-const DESTRUCTIVE =
-  "bg-destructive text-background hover:bg-destructive/90 dark:bg-destructive dark:hover:bg-destructive/90";
 const TOP = "__top";
-
-const without = (errs: Record<string, string>, key: string) =>
-  Object.fromEntries(Object.entries(errs).filter(([k]) => k !== key));
 
 export type TermSheetState =
   { kind: "create"; parentId: string | null } | { kind: "edit"; term: TermDto } | null;

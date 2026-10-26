@@ -49,9 +49,8 @@ import { FieldBuilder } from "./field-builder";
 import { FormField, SwitchRow } from "./form-field";
 import { type SchemaChange, describeChange, isEmptyChange } from "./schema-change";
 import { MAX_TYPE_LABEL, labelProblem } from "./type-rules";
+import { DESTRUCTIVE } from "../shared";
 
-const DESTRUCTIVE =
-  "bg-destructive text-background hover:bg-destructive/90 dark:bg-destructive dark:hover:bg-destructive/90";
 const MODAL = '[data-slot="dialog-overlay"], [data-slot="alert-dialog-overlay"]';
 
 /** The server's reason for refusing a delete, in the screen's words when it is a known one. */

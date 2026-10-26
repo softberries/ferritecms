@@ -33,9 +33,7 @@ import { Switch } from "@/components/ui/switch";
 import { nameFromLabel } from "./builder-model";
 import { FormField, SwitchRow } from "./form-field";
 import { MAX_TYPE_LABEL, MAX_TYPE_NAME, labelProblem, validTypeName } from "./type-rules";
-
-const without = (errs: Record<string, string>, key: string) =>
-  Object.fromEntries(Object.entries(errs).filter(([k]) => k !== key));
+import { without } from "../shared";
 
 /** Listed elsewhere (the media library). */
 const NOT_LISTED = new Set(["media"]);
