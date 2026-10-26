@@ -15,6 +15,10 @@
     "moved": "{{label}} moved to position {{position}} of {{count}}.",
     "movedRoot": "{{label}} is now at the top level, position {{position}} of {{count}}.",
     "movedUnder": "{{label}} is now under {{parent}}, position {{position}} of {{count}}.",
+    "unorderedTreeInstructions": "To pick up an item, press Space or Enter. Use the up and down arrow keys to move it next to its new parent's children, then press Space or Enter to drop it, or Escape to cancel. To pick a parent by name, use Move to… in its actions menu.",
+    "nowRoot": "{{label}} is now at the top level.",
+    "nowUnder": "{{label}} is now under {{parent}}.",
+    "stayed": "{{label}} stays under the same parent.",
     "roleDescription": "sortable"
   },
   "dropZone": {

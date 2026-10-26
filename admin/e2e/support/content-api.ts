@@ -35,6 +35,14 @@ export interface Media {
   variants: { name: string; url: string; width: number; height: number }[];
 }
 
+export interface Term {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  parent_id?: string | null;
+}
+
 export class ContentApi {
   private constructor(
     readonly ctx: APIRequestContext,
@@ -91,24 +99,64 @@ export class ContentApi {
     );
   }
 
-  async createTaxonomy(name: string, label: string, contentTypes: string[]): Promise<void> {
+  async createTaxonomy(
+    name: string,
+    label: string,
+    contentTypes: string[],
+    hierarchical = false,
+  ): Promise<void> {
     await this.ok(
       await this.ctx.post("/api/v1/taxonomies", {
         headers: this.headers(),
-        data: { name, label, content_types: contentTypes },
+        data: { name, label, content_types: contentTypes, hierarchical },
       }),
       `create taxonomy ${name}`,
     );
   }
 
-  async createTerm(taxonomy: string, name: string): Promise<{ id: string; name: string }> {
+  async createTerm(
+    taxonomy: string,
+    name: string,
+    extra: { parent_id?: string; description?: string } = {},
+  ): Promise<Term> {
     return this.ok(
       await this.ctx.post(`/api/v1/taxonomies/${taxonomy}/terms`, {
         headers: this.headers(),
-        data: { name },
+        data: { name, ...extra },
       }),
       `create term ${name}`,
     );
+  }
+
+  /** `PATCH /terms/{id}` (merged into the stored term). */
+  async patchTerm(id: string, data: Record<string, unknown>): Promise<Term> {
+    return this.ok(
+      await this.ctx.patch(`/api/v1/terms/${id}`, { headers: this.headers(), data }),
+      `patch term ${id}`,
+    );
+  }
+
+  async listTerms(taxonomy: string): Promise<Term[]> {
+    const res = await this.ctx.get(`/api/v1/taxonomies/${taxonomy}/terms`);
+    return (await this.ok<{ items: Term[] }>(res, `terms of ${taxonomy}`)).items;
+  }
+
+  /**
+   * Deletes taxonomy `name` with its terms (sub-terms first: a term with sub-terms
+   * cannot be deleted). Best effort: a failure only leaves a stray taxonomy behind.
+   */
+  async removeTaxonomy(name: string): Promise<void> {
+    for (let round = 0; round < 64; round++) {
+      const res = await this.ctx.get(`/api/v1/taxonomies/${name}/terms`);
+      if (!res.ok()) break;
+      const terms = ((await res.json()) as { items: Term[] }).items;
+      if (terms.length === 0) break;
+      const parents = new Set(terms.flatMap((t) => (t.parent_id ? [t.parent_id] : [])));
+      for (const term of terms.filter((t) => !parents.has(t.id))) {
+        await this.ctx.delete(`/api/v1/terms/${term.id}`, { headers: this.headers() });
+      }
+    }
+    await this.ctx.delete(`/api/v1/taxonomies/${name}`, { headers: this.headers() });
   }
 
   /** Trashes and then deletes `item` for good (best effort, like `removeType`). */
@@ -223,14 +271,7 @@ export class ContentApi {
         });
       }
     }
-    for (const tax of taxonomies) {
-      const res = await this.ctx.get(`/api/v1/taxonomies/${tax}/terms`);
-      const terms = res.ok() ? ((await res.json()) as { items: { id: string }[] }).items : [];
-      for (const term of terms) {
-        await this.ctx.delete(`/api/v1/terms/${term.id}`, { headers: this.headers() });
-      }
-      await this.ctx.delete(`/api/v1/taxonomies/${tax}`, { headers: this.headers() });
-    }
+    for (const tax of taxonomies) await this.removeTaxonomy(tax);
     await this.ctx.delete(`/api/v1/types/${name}`, { headers: this.headers() });
   }
 

@@ -2,8 +2,9 @@
 // `CommandDialog` opened by `mod+k` and the top bar's trigger. Groups: Recent (the
 // viewer's last 8 screens and items, only before anything is typed), Go to (every nav
 // item and the `?` sheet), Create (one per content type the nav shows, with
-// `edit_own`, Upload media with `upload_media`, and New content type when the nav has
-// Content types), Content (live search, from 2 characters) and Preferences (theme,
+// `edit_own`, Upload media with `upload_media`, New content type when the nav has
+// Content types, and New taxonomy when it has Taxonomies and the viewer has
+// `manage_settings`), Content (live search, from 2 characters) and Preferences (theme,
 // density). cmdk's own filter ranks the rows inside the static groups; content hits come
 // from the server already matched, so they keep the server's order, in the last group.
 
@@ -24,6 +25,7 @@ import {
   SearchXIcon,
   ShapesIcon,
   SunIcon,
+  TagsIcon,
   UploadIcon,
   XIcon,
   type LucideIcon,
@@ -146,6 +148,10 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
     : undefined;
   // "New content type" (Create): the nav shows Content types (`manage_settings`).
   const typesItem = navItems.find((i) => i.id === "types");
+  // "New taxonomy" (Create): `manage_terms` alone sees Taxonomies but cannot create one.
+  const taxonomiesItem = me.capabilities.includes("manage_settings")
+    ? navItems.find((i) => i.id === "taxonomies")
+    : undefined;
 
   const query = q.trim();
   const active = searchable(query) && types.length > 0;
@@ -290,7 +296,7 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
             />
           </CommandGroup>
 
-          {createTypes.length > 0 || mediaItem || typesItem ? (
+          {createTypes.length > 0 || mediaItem || typesItem || taxonomiesItem ? (
             <CommandGroup heading={t("group.create")}>
               {createTypes.map((item) => {
                 const type = item.contentType ?? "";
@@ -333,6 +339,18 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
                   onSelect={() => {
                     close();
                     void navigate({ to: "/structure/types", search: { new: true } });
+                  }}
+                />
+              ) : null}
+              {taxonomiesItem ? (
+                <Row
+                  value={t("create.taxonomy")}
+                  keywords={[t("create.taxonomyKeywords")]}
+                  icon={TagsIcon}
+                  label={t("create.taxonomy")}
+                  onSelect={() => {
+                    close();
+                    void navigate({ to: "/structure/taxonomies", search: { new: true } });
                   }}
                 />
               ) : null}

@@ -22,6 +22,8 @@ import { Route as AppMediaIndexRouteImport } from './routes/_app/media.index'
 import { Route as AppContentTypeIndexRouteImport } from './routes/_app/content.$type.index'
 import { Route as AppContentTypeIdRouteImport } from './routes/_app/content.$type.$id'
 import { Route as AppContentTypeNewRouteImport } from './routes/_app/content.$type.new'
+import { Route as AppStructureTaxonomiesIndexRouteImport } from './routes/_app/structure.taxonomies.index'
+import { Route as AppStructureTaxonomiesNameRouteImport } from './routes/_app/structure.taxonomies.$name'
 import { Route as AppStructureTypesIndexRouteImport } from './routes/_app/structure.types.index'
 import { Route as AppStructureTypesNameRouteImport } from './routes/_app/structure.types.$name'
 
@@ -89,6 +91,18 @@ const AppContentTypeNewRoute = AppContentTypeNewRouteImport.update({
   path: '/content/$type/new',
   getParentRoute: () => AppRoute,
 } as any)
+const AppStructureTaxonomiesIndexRoute =
+  AppStructureTaxonomiesIndexRouteImport.update({
+    id: '/structure/taxonomies/',
+    path: '/structure/taxonomies/',
+    getParentRoute: () => AppRoute,
+  } as any)
+const AppStructureTaxonomiesNameRoute =
+  AppStructureTaxonomiesNameRouteImport.update({
+    id: '/structure/taxonomies/$name',
+    path: '/structure/taxonomies/$name',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppStructureTypesIndexRoute = AppStructureTypesIndexRouteImport.update({
   id: '/structure/types/',
   path: '/structure/types/',
@@ -112,8 +126,10 @@ export interface FileRoutesByFullPath {
   '/media/': typeof AppMediaIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
+  '/structure/taxonomies/$name': typeof AppStructureTaxonomiesNameRoute
   '/structure/types/$name': typeof AppStructureTypesNameRoute
   '/content/$type/': typeof AppContentTypeIndexRoute
+  '/structure/taxonomies/': typeof AppStructureTaxonomiesIndexRoute
   '/structure/types/': typeof AppStructureTypesIndexRoute
 }
 export interface FileRoutesByTo {
@@ -128,8 +144,10 @@ export interface FileRoutesByTo {
   '/media': typeof AppMediaIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
+  '/structure/taxonomies/$name': typeof AppStructureTaxonomiesNameRoute
   '/structure/types/$name': typeof AppStructureTypesNameRoute
   '/content/$type': typeof AppContentTypeIndexRoute
+  '/structure/taxonomies': typeof AppStructureTaxonomiesIndexRoute
   '/structure/types': typeof AppStructureTypesIndexRoute
 }
 export interface FileRoutesById {
@@ -146,8 +164,10 @@ export interface FileRoutesById {
   '/_app/media/': typeof AppMediaIndexRoute
   '/_app/content/$type/$id': typeof AppContentTypeIdRoute
   '/_app/content/$type/new': typeof AppContentTypeNewRoute
+  '/_app/structure/taxonomies/$name': typeof AppStructureTaxonomiesNameRoute
   '/_app/structure/types/$name': typeof AppStructureTypesNameRoute
   '/_app/content/$type/': typeof AppContentTypeIndexRoute
+  '/_app/structure/taxonomies/': typeof AppStructureTaxonomiesIndexRoute
   '/_app/structure/types/': typeof AppStructureTypesIndexRoute
 }
 export interface FileRouteTypes {
@@ -164,8 +184,10 @@ export interface FileRouteTypes {
     | '/media/'
     | '/content/$type/$id'
     | '/content/$type/new'
+    | '/structure/taxonomies/$name'
     | '/structure/types/$name'
     | '/content/$type/'
+    | '/structure/taxonomies/'
     | '/structure/types/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -180,8 +202,10 @@ export interface FileRouteTypes {
     | '/media'
     | '/content/$type/$id'
     | '/content/$type/new'
+    | '/structure/taxonomies/$name'
     | '/structure/types/$name'
     | '/content/$type'
+    | '/structure/taxonomies'
     | '/structure/types'
   id:
     | '__root__'
@@ -197,8 +221,10 @@ export interface FileRouteTypes {
     | '/_app/media/'
     | '/_app/content/$type/$id'
     | '/_app/content/$type/new'
+    | '/_app/structure/taxonomies/$name'
     | '/_app/structure/types/$name'
     | '/_app/content/$type/'
+    | '/_app/structure/taxonomies/'
     | '/_app/structure/types/'
   fileRoutesById: FileRoutesById
 }
@@ -304,6 +330,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppContentTypeNewRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/structure/taxonomies/': {
+      id: '/_app/structure/taxonomies/'
+      path: '/structure/taxonomies'
+      fullPath: '/structure/taxonomies/'
+      preLoaderRoute: typeof AppStructureTaxonomiesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/structure/taxonomies/$name': {
+      id: '/_app/structure/taxonomies/$name'
+      path: '/structure/taxonomies/$name'
+      fullPath: '/structure/taxonomies/$name'
+      preLoaderRoute: typeof AppStructureTaxonomiesNameRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/structure/types/': {
       id: '/_app/structure/types/'
       path: '/structure/types'
@@ -328,8 +368,10 @@ interface AppRouteChildren {
   AppMediaIndexRoute: typeof AppMediaIndexRoute
   AppContentTypeIdRoute: typeof AppContentTypeIdRoute
   AppContentTypeNewRoute: typeof AppContentTypeNewRoute
+  AppStructureTaxonomiesNameRoute: typeof AppStructureTaxonomiesNameRoute
   AppStructureTypesNameRoute: typeof AppStructureTypesNameRoute
   AppContentTypeIndexRoute: typeof AppContentTypeIndexRoute
+  AppStructureTaxonomiesIndexRoute: typeof AppStructureTaxonomiesIndexRoute
   AppStructureTypesIndexRoute: typeof AppStructureTypesIndexRoute
 }
 
@@ -340,8 +382,10 @@ const AppRouteChildren: AppRouteChildren = {
   AppMediaIndexRoute: AppMediaIndexRoute,
   AppContentTypeIdRoute: AppContentTypeIdRoute,
   AppContentTypeNewRoute: AppContentTypeNewRoute,
+  AppStructureTaxonomiesNameRoute: AppStructureTaxonomiesNameRoute,
   AppStructureTypesNameRoute: AppStructureTypesNameRoute,
   AppContentTypeIndexRoute: AppContentTypeIndexRoute,
+  AppStructureTaxonomiesIndexRoute: AppStructureTaxonomiesIndexRoute,
   AppStructureTypesIndexRoute: AppStructureTypesIndexRoute,
 }
 

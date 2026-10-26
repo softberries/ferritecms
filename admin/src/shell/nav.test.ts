@@ -70,7 +70,7 @@ test("nothing_above_its_rights", () => {
   // Without `read_admin` the content APIs answer 403, so no content section.
   expect(shape(navFor(me("none", []), TYPES))).toEqual([["overview", [["Dashboard", "/"]]]]);
   // Nothing beyond what the registered screens give, whatever the role holds (so far
-  // Media in Content and Content types in Structure).
+  // Media in Content, Content types and Taxonomies in Structure).
   const admin = me("admin", [
     "read_admin",
     "edit_own",
@@ -98,12 +98,32 @@ test("content_types_is_registered", () => {
   const structure = navFor(ADMIN_CAPS, TYPES).find((s) => s.id === "structure");
   expect(structure?.items.map((i) => [i.id, i.label, i.to])).toEqual([
     ["types", "Content types", "/structure/types"],
+    ["taxonomies", "Taxonomies", "/structure/taxonomies"],
   ]);
   expect(structure?.items[0]?.shortcut).toBeUndefined();
   expect(navItemAt(navFor(ADMIN_CAPS, TYPES), "/structure/types")?.id).toBe("types");
   // Editors manage terms and menus, not types.
   const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
-  expect(navFor(editor, TYPES).map((s) => s.id)).toEqual(["overview", "content"]);
+  expect(
+    navFor(editor, TYPES)
+      .find((s) => s.id === "structure")
+      ?.items.map((i) => i.id),
+  ).toEqual(["taxonomies"]);
+});
+
+test("taxonomies_is_registered", () => {
+  // Task 10 registers Taxonomies under Structure: `manage_settings` (the taxonomies
+  // themselves) or `manage_terms` (their terms) sees it.
+  const ids = (who: MeDto) =>
+    navFor(who, TYPES)
+      .find((s) => s.id === "structure")
+      ?.items.map((i) => i.id) ?? [];
+  expect(ids(me("admin", ["read_admin", "manage_settings"]))).toContain("taxonomies");
+  expect(ids(me("editor", ["read_admin", "manage_terms"]))).toEqual(["taxonomies"]);
+  expect(ids(AUTHOR)).toEqual([]);
+  const sections = navFor(me("editor", ["read_admin", "manage_terms"]), TYPES);
+  expect(navItemAt(sections, "/structure/taxonomies")?.id).toBe("taxonomies");
+  expect(navItemAt(sections, "/structure/taxonomies/")?.id).toBe("taxonomies");
 });
 
 test("no_types_yet_means_no_content_section", () => {

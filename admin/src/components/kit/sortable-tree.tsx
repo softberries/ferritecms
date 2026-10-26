@@ -5,7 +5,10 @@
 // (`projectDrop`, 24 px a level), clamped by the neighbours and `maxDepth`. Each row's
 // menu has Move up / Move down (among its siblings) and Indent / Outdent: the keyboard
 // and touch way to change the order and the level (keyboard dragging only moves rows up
-// and down). Motion and announcements as in `SortableList`.
+// and down). Motion and announcements as in `SortableList`. An `unordered` tree (terms,
+// P35) keeps its siblings in the caller's order (by name): a move there is a new parent
+// only, and the caller gives the row menu (`actions`, e.g. Move to…) in place of Move up /
+// Move down / Indent / Outdent.
 
 import {
   DndContext,
@@ -30,7 +33,7 @@ import { ArrowDownIcon, ArrowUpIcon, IndentIcon, OutdentIcon } from "lucide-reac
 import { useReducedMotion } from "motion/react";
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { SortableRow } from "./sortable-list";
+import { SortableRow, type RowAction } from "./sortable-list";
 import { DRAG_DISTANCE_PX, useSettling } from "./sortable-shared";
 import {
   flatten,
@@ -67,6 +70,13 @@ export interface SortableTreeProps<T> {
   /** The tree's accessible name. */
   name?: string;
   className?: string;
+  /**
+   * Siblings have no order of their own (the caller sorts them): a drop or a menu action
+   * that keeps the parent is no move, and what is announced names the parent only.
+   */
+  unordered?: boolean;
+  /** The row menu in place of Move up / Move down / Indent / Outdent. */
+  actions?: (node: FlatNode<T>) => RowAction[];
 }
 
 export function SortableTree<T>({
@@ -78,6 +88,8 @@ export function SortableTree<T>({
   canNest,
   name,
   className,
+  unordered = false,
+  actions,
 }: SortableTreeProps<T>) {
   const { t } = useTranslation("kit");
   const sensors = useSensors(
@@ -124,6 +136,11 @@ export function SortableTree<T>({
     const after = flatten(next);
     const self = after.find((n) => n.id === id);
     if (!self) return "";
+    if (unordered) {
+      return self.parentId === null
+        ? t("sortable.nowRoot", { label: nameOf(id) })
+        : t("sortable.nowUnder", { label: nameOf(id), parent: nameOf(self.parentId) });
+    }
     const count = after.filter((n) => n.parentId === self.parentId).length;
     const values = { label: nameOf(id), position: self.index + 1, count };
     if (!levelChanged) return t("sortable.moved", values);
@@ -137,7 +154,9 @@ export function SortableTree<T>({
     const before = flat.find((n) => n.id === id);
     const after = flatten(next).find((n) => n.id === id);
     if (!before || !after) return;
-    if (before.parentId === after.parentId && before.index === after.index) return;
+    if (before.parentId === after.parentId && (unordered || before.index === after.index)) {
+      return;
+    }
     setStatus(describe(next, id, before.parentId !== after.parentId));
     onChange(next, { id, parentId: after.parentId, index: after.index });
   };
@@ -170,6 +189,14 @@ export function SortableTree<T>({
     },
     onDragEnd: ({ active }) => {
       if (!projection) return undefined;
+      if (unordered) {
+        const label = nameOf(active.id);
+        const before = flat.find((n) => n.id === String(active.id));
+        if (before?.parentId === projection.parentId) return t("sortable.stayed", { label });
+        return projection.parentId === null
+          ? t("sortable.nowRoot", { label })
+          : t("sortable.nowUnder", { label, parent: nameOf(projection.parentId) });
+      }
       const values = {
         label: nameOf(active.id),
         position: projection.index + 1,
@@ -194,7 +221,11 @@ export function SortableTree<T>({
       collisionDetection={closestCenter}
       accessibility={{
         announcements,
-        screenReaderInstructions: { draggable: t("sortable.treeInstructions") },
+        screenReaderInstructions: {
+          draggable: unordered
+            ? t("sortable.unorderedTreeInstructions")
+            : t("sortable.treeInstructions"),
+        },
       }}
       onDragStart={({ active, activatorEvent }: DragStartEvent) => {
         keyboardDrag.current = activatorEvent instanceof KeyboardEvent;
@@ -246,51 +277,55 @@ export function SortableTree<T>({
                 placeholder={active}
                 lockX
                 rowProps={{ "aria-level": node.depth + 1 }}
-                actions={[
-                  {
-                    key: "up",
-                    label: t("sortable.moveUp"),
-                    icon: ArrowUpIcon,
-                    disabled: node.index === 0,
-                    run: () =>
-                      commit(
-                        moveNode(nodes, node.id, {
-                          parentId: node.parentId,
-                          index: node.index - 1,
-                        }),
-                        node.id,
-                      ),
-                  },
-                  {
-                    key: "down",
-                    label: t("sortable.moveDown"),
-                    icon: ArrowDownIcon,
-                    disabled: node.index === siblings - 1,
-                    run: () =>
-                      commit(
-                        moveNode(nodes, node.id, {
-                          parentId: node.parentId,
-                          index: node.index + 1,
-                        }),
-                        node.id,
-                      ),
-                  },
-                  {
-                    key: "indent",
-                    label: t("sortable.indent"),
-                    icon: IndentIcon,
-                    disabled: !canIndent,
-                    separated: true,
-                    run: () => commit(indent(nodes, node.id), node.id),
-                  },
-                  {
-                    key: "outdent",
-                    label: t("sortable.outdent"),
-                    icon: OutdentIcon,
-                    disabled: node.parentId === null,
-                    run: () => commit(outdent(nodes, node.id), node.id),
-                  },
-                ]}
+                actions={
+                  actions
+                    ? actions(node)
+                    : [
+                        {
+                          key: "up",
+                          label: t("sortable.moveUp"),
+                          icon: ArrowUpIcon,
+                          disabled: node.index === 0,
+                          run: () =>
+                            commit(
+                              moveNode(nodes, node.id, {
+                                parentId: node.parentId,
+                                index: node.index - 1,
+                              }),
+                              node.id,
+                            ),
+                        },
+                        {
+                          key: "down",
+                          label: t("sortable.moveDown"),
+                          icon: ArrowDownIcon,
+                          disabled: node.index === siblings - 1,
+                          run: () =>
+                            commit(
+                              moveNode(nodes, node.id, {
+                                parentId: node.parentId,
+                                index: node.index + 1,
+                              }),
+                              node.id,
+                            ),
+                        },
+                        {
+                          key: "indent",
+                          label: t("sortable.indent"),
+                          icon: IndentIcon,
+                          disabled: !canIndent,
+                          separated: true,
+                          run: () => commit(indent(nodes, node.id), node.id),
+                        },
+                        {
+                          key: "outdent",
+                          label: t("sortable.outdent"),
+                          icon: OutdentIcon,
+                          disabled: node.parentId === null,
+                          run: () => commit(outdent(nodes, node.id), node.id),
+                        },
+                      ]
+                }
               >
                 {render(node)}
               </SortableRow>

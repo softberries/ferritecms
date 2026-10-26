@@ -232,6 +232,11 @@ export interface RowAction {
   run: () => void;
   /** Starts a new group in the menu. */
   separated?: boolean;
+  /**
+   * Opens a dialog or sheet: runs once the menu has closed and let go of focus, so the
+   * overlay takes it (focus does not return to the menu button).
+   */
+  overlay?: boolean;
 }
 
 export interface SortableRowProps {
@@ -286,6 +291,18 @@ export function SortableRow({
     transform: CSS.Translate.toString(lockX && transform ? { ...transform, x: 0 } : transform),
     transition,
     marginInlineStart: inset,
+  };
+  // An overlay action waits for the menu to close (`RowAction.overlay`).
+  const pending = useRef<(() => void) | null>(null);
+  const closed = (e: Event) => {
+    const run = pending.current;
+    pending.current = null;
+    if (run) {
+      e.preventDefault();
+      run();
+      return;
+    }
+    refocus(e);
   };
   // A menu move re-inserts the row in the DOM, which drops focus if it lands after
   // Radix has focused the trigger; focus this row's menu button a frame later instead.
@@ -344,9 +361,19 @@ export function SortableRow({
               <MoreHorizontalIcon />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-44" onCloseAutoFocus={refocus}>
+          <DropdownMenuContent align="end" className="w-44" onCloseAutoFocus={closed}>
             {actions.map((a) => (
-              <RowMenuItem key={a.key} action={a} />
+              <RowMenuItem
+                key={a.key}
+                action={a}
+                onSelect={
+                  a.overlay
+                    ? () => {
+                        pending.current = a.run;
+                      }
+                    : a.run
+                }
+              />
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
@@ -355,12 +382,12 @@ export function SortableRow({
   );
 }
 
-function RowMenuItem({ action }: { action: RowAction }) {
+function RowMenuItem({ action, onSelect }: { action: RowAction; onSelect: () => void }) {
   const Icon = action.icon;
   return (
     <>
       {action.separated ? <DropdownMenuSeparator /> : null}
-      <DropdownMenuItem disabled={action.disabled} onSelect={action.run}>
+      <DropdownMenuItem disabled={action.disabled} onSelect={onSelect}>
         <Icon />
         {action.label}
       </DropdownMenuItem>

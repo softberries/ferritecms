@@ -13,6 +13,7 @@ import {
   ImageIcon,
   LayoutDashboardIcon,
   ShapesIcon,
+  TagsIcon,
   type LucideIcon,
 } from "lucide-react";
 import type { ContentTypeDto } from "@/api/types";
@@ -83,6 +84,7 @@ export interface ScreenEntry {
 export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
   { screen: "media", to: "/media", label: "nav.media", icon: ImageIcon },
   { screen: "types", to: "/structure/types", label: "nav.contentTypes", icon: BlocksIcon },
+  { screen: "taxonomies", to: "/structure/taxonomies", label: "nav.taxonomies", icon: TagsIcon },
 ] as const;
 
 /** Types the content screens list: everything but `media` (its own screen, M2b-2). */

@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PencilIcon } from "lucide-react";
 import { SortableList } from "./sortable-list";
 import { SortableTree } from "./sortable-tree";
 import type { TreeNode } from "./tree-model";
@@ -200,5 +201,89 @@ describe("sortable", () => {
       "Home",
       "Blog",
     ]);
+  });
+
+  it("sortable_tree_unordered_moves_only_change_the_parent", async () => {
+    // Terms (P35): siblings have no order, so a drop that keeps the parent is no move, and
+    // the menu is the caller's own.
+    const nodes: TreeNode<string>[] = [
+      { id: "n1", parentId: null, data: "Apples" },
+      { id: "n2", parentId: null, data: "Fruit" },
+      { id: "n3", parentId: "n2", data: "Kiwi" },
+      { id: "n4", parentId: null, data: "Pears" },
+    ];
+    const onChange = vi.fn<(next: TreeNode<string>[], moved: { id: string }) => void>();
+    const edit = vi.fn<(id: string) => void>();
+    const moveTo = vi.fn<(id: string) => void>();
+    const user = userEvent.setup();
+    render(
+      <SortableTree
+        nodes={nodes}
+        label={(d) => d}
+        render={(n) => <span>{n.data}</span>}
+        onChange={onChange}
+        maxDepth={8}
+        unordered
+        actions={(node) => [
+          {
+            key: "edit",
+            label: "Edit",
+            icon: PencilIcon,
+            disabled: false,
+            run: () => edit(node.id),
+          },
+          {
+            key: "move",
+            label: "Move to…",
+            icon: PencilIcon,
+            disabled: false,
+            overlay: true,
+            run: () => moveTo(node.id),
+          },
+        ]}
+      />,
+    );
+    // The caller's menu replaces Move up / Move down / Indent / Outdent.
+    await user.click(screen.getByRole("button", { name: "Actions for Pears" }));
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((i) => i.textContent),
+    ).toEqual(["Edit", "Move to…"]);
+    await user.click(within(menu).getByRole("menuitem", { name: "Edit" }));
+    expect(edit).toHaveBeenCalledWith("n4");
+    // An overlay action runs once the menu has closed (so the overlay gets focus).
+    await user.click(screen.getByRole("button", { name: "Actions for Pears" }));
+    const again = await screen.findByRole("menu");
+    await user.click(within(again).getByRole("menuitem", { name: "Move to…" }));
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await waitFor(() => expect(moveTo).toHaveBeenCalledWith("n4"));
+
+    // Pears up past Kiwi, still at the top level: only the order would change, no move.
+    screen.getByRole("button", { name: "Reorder Pears" }).focus();
+    await user.keyboard("[Space]");
+    await tick();
+    await user.keyboard("[ArrowUp]");
+    await tick();
+    await user.keyboard("[ArrowUp]");
+    await tick();
+    await user.keyboard("[Space]");
+    await tick();
+    expect(onChange).not.toHaveBeenCalled();
+
+    // Apples down onto Fruit's first child: it lands under Fruit.
+    screen.getByRole("button", { name: "Reorder Apples" }).focus();
+    await user.keyboard("[Space]");
+    await tick();
+    await user.keyboard("[ArrowDown]");
+    await tick();
+    await user.keyboard("[Space]");
+    await tick();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0]?.[1]).toMatchObject({ id: "n1", parentId: "n2" });
+    expect(document.querySelector("[data-slot=sortable-status]")).toHaveTextContent(
+      "Apples is now under Fruit.",
+    );
   });
 });

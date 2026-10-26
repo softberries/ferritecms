@@ -11,6 +11,11 @@ export async function listTerms(taxonomy: string): Promise<SchemaTermDto[]> {
   return list.items;
 }
 
+/** `GET /terms/{id}`: the term as stored now (the stale guard's re-read). */
+export function getTerm(id: string): Promise<SchemaTermDto> {
+  return unwrap(api.GET("/api/v1/terms/{id}", { params: { path: { id } } }));
+}
+
 export function patchTerm(id: string, body: SchemaTermPatch): Promise<SchemaTermDto> {
   return unwrap(api.PATCH("/api/v1/terms/{id}", { params: { path: { id } }, body }));
 }

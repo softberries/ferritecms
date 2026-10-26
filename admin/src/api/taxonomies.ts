@@ -43,6 +43,11 @@ export async function createTerm(taxonomy: string, input: SchemaTermInput): Prom
   );
 }
 
+/** `GET /taxonomies/{name}` (the taxonomy screen's loader and the stale guard's re-read). */
+export function getTaxonomy(name: string): Promise<TaxonomyDto> {
+  return unwrap(api.GET("/api/v1/taxonomies/{name}", { params: { path: { name } } }));
+}
+
 export function createTaxonomy(body: SchemaTaxonomyInput): Promise<TaxonomyDto> {
   return unwrap(api.POST("/api/v1/taxonomies", { body }));
 }

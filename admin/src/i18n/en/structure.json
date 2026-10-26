@@ -180,5 +180,140 @@
     "optionDuplicate": "This option is already listed",
     "noSubFields": "A repeater needs at least one sub-field",
     "depth": "Repeaters nest at most {{max}} deep"
+  },
+  "taxonomies": {
+    "title": "Taxonomies",
+    "description": "The ways content is grouped, such as categories and tags, and the types each one applies to.",
+    "descriptionTerms": "The ways content is grouped, such as categories and tags. Open one to manage its terms.",
+    "new": "New taxonomy",
+    "label": "Taxonomies",
+    "loading": "Loading…",
+    "countFailed": "The terms could not be loaded",
+    "termCount_one": "{{count}} term",
+    "termCount_other": "{{count}} terms",
+    "noTypes": "No types",
+    "nested": "Nested",
+    "flat": "Flat",
+    "appliesTo": "Applies to {{types}}",
+    "appliesToNone": "Applies to no content type yet",
+    "columns": {
+      "label": "Taxonomy",
+      "hierarchical": "Structure",
+      "types": "Content types",
+      "terms": "Terms"
+    },
+    "empty": {
+      "title": "No taxonomies yet",
+      "body": "Add a taxonomy to group content in a new way, such as genres for books or venues for events."
+    },
+    "create": {
+      "title": "New taxonomy",
+      "description": "The name is part of every term's address and cannot change later.",
+      "submit": "Create taxonomy",
+      "created": "{{label}} created"
+    },
+    "form": {
+      "label": "Label",
+      "labelHint": "Plural, as the admin shows it, e.g. Genres",
+      "name": "Name",
+      "nameHint": "Lower-case letters, digits, - and _, starting with a letter, at most {{max}} characters. Term archives live at /{{name}}/…",
+      "nameFixed": "The name is part of every term's address and cannot change.",
+      "hierarchical": "Terms can have a parent",
+      "hierarchicalHint": "Like categories: terms nest under other terms. Without it, terms are flat like tags. Cannot change later.",
+      "structure": "Structure",
+      "structureFixed": "Set when the taxonomy was created; it cannot change.",
+      "types": "Content types",
+      "typesHint": "The editor offers this taxonomy for items of the checked types (at most {{max}})."
+    },
+    "settings": {
+      "button": "Settings",
+      "title": "{{label}} settings",
+      "description": "Its label and the content types it applies to."
+    },
+    "delete": {
+      "button": "Delete taxonomy",
+      "builtIn": "Built-in taxonomies cannot be deleted.",
+      "hasTerms": "It still has terms: delete them first.",
+      "termsLeft_one": "It still has {{count}} term. A taxonomy can only be deleted once it has none: delete the term first.",
+      "termsLeft_other": "It still has {{count}} terms. A taxonomy can only be deleted once it has none: delete its terms first.",
+      "refused": "Not deleted. {{reason}}",
+      "deleted": "{{label}} deleted",
+      "confirmTitle": "Delete {{label}}?",
+      "confirmBody": "The taxonomy goes for good and the editor stops offering it. This cannot be undone.",
+      "confirm": "Delete taxonomy",
+      "close": "Close"
+    },
+    "terms": {
+      "new": "New term",
+      "treeLabel": "Terms",
+      "treeHint": "Drag a term next to another term's children to move it there, or use Move to… in its menu. Terms under the same parent are listed alphabetically.",
+      "topLevel": "Top level",
+      "unknownParent": "A term no longer listed",
+      "parent": "Parent",
+      "parentSearch": "Search terms…",
+      "parentEmpty": "No term matches.",
+      "parentHint": "Its sub-terms move with it.",
+      "newTitle": "New term in {{label}}",
+      "newDescription": "Terms group items; each term has its own archive page.",
+      "editTitle": "Edit {{name}}",
+      "editDescription": "Changes apply to every item filed under this term.",
+      "name": "Name",
+      "nameEmpty": "Give the term a name",
+      "slug": "Slug",
+      "slugPlaceholder": "Derived from the name",
+      "slugHintNew": "Leave empty to derive it from the name. A slug in use gets -2, -3, … added.",
+      "slugHintEdit": "The archive is at /{{taxonomy}}/slug/. A new slug moves it, and a public archive's old address redirects to the new one. Empty keeps the current slug.",
+      "description": "Description",
+      "descriptionHint": "Themes may show it on the term's archive page.",
+      "create": "Create term",
+      "created": "{{name}} created",
+      "saved": "{{name}} saved",
+      "gone": "This term was deleted by someone else.",
+      "childCount_one": "{{count}} sub-term",
+      "childCount_other": "{{count}} sub-terms",
+      "filterPlaceholder": "Filter terms…",
+      "filterLabel": "Filter {{label}}",
+      "clearFilter": "Clear the filter",
+      "filtered": "Showing {{shown}} of {{total}}",
+      "deleteNamed": "Delete {{name}}",
+      "columns": {
+        "name": "Name",
+        "slug": "Slug",
+        "description": "Description"
+      },
+      "noMatch": {
+        "title": "No terms match “{{q}}”",
+        "body": "The filter looks at names, slugs and descriptions."
+      },
+      "empty": {
+        "title": "No terms yet",
+        "bodyNested": "Add the first term of {{label}}; terms can nest under one another.",
+        "bodyFlat": "Add the first term of {{label}}, or create terms while writing in the editor."
+      },
+      "menu": {
+        "edit": "Edit",
+        "addChild": "Add sub-term",
+        "moveTo": "Move to…",
+        "delete": "Delete"
+      },
+      "move": {
+        "title": "Move {{name}}",
+        "description": "Choose its new parent. Terms under the same parent are listed alphabetically.",
+        "submit": "Move",
+        "failed": "{{name}} was not moved",
+        "cycle": "{{parent}} is now under {{name}}, so {{name}} cannot go under it. The tree shows the current state."
+      },
+      "delete": {
+        "title": "Delete {{name}}?",
+        "body": "Items filed under it lose this term. This cannot be undone.",
+        "blockedTitle": "{{name}} has sub-terms",
+        "hasChildren_one": "A term with sub-terms cannot be deleted. Move its {{count}} sub-term to another parent (Move to…) or delete it first.",
+        "hasChildren_other": "A term with sub-terms cannot be deleted. Move its {{count}} sub-terms to another parent (Move to…) or delete them first.",
+        "confirm": "Delete term",
+        "deleted": "{{name}} deleted",
+        "failed": "{{name}} was not deleted",
+        "refusedChildren": "It has sub-terms now: move or delete them first."
+      }
+    }
   }
 }

@@ -23,7 +23,9 @@
     "upload": "Upload media",
     "uploadKeywords": "upload media file image add",
     "type": "New content type",
-    "typeKeywords": "create add new type schema fields structure"
+    "typeKeywords": "create add new type schema fields structure",
+    "taxonomy": "New taxonomy",
+    "taxonomyKeywords": "create add new taxonomy categories tags terms structure"
   },
   "preferences": {
     "light": "Light theme",
