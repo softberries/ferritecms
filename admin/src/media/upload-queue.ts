@@ -4,7 +4,11 @@
 // by **Retry**) is the same upload to the server: a response lost on the way back
 // cannot create a second item (Review Focus 1). A `503 busy` or a network failure is
 // retried once by itself after `Retry-After` (else 2 s), without holding a slot while it
-// waits; any other failure waits for **Retry**. `cancel` aborts a running upload or drops
+// waits. A `409 conflict` (the same key's earlier request, cut off by a dropped
+// connection, still runs on the server) is waited out the same way, apart from that one
+// retry and at most `IN_PROGRESS_WAITS` times in a row, so the retry after a network
+// failure still gets the server's answer for the key; any other failure waits for
+// **Retry**. `cancel` aborts a running upload or drops
 // a queued one. Framework-free: the tray reads it through `subscribe` + `entries`.
 
 import type { MediaDto } from "@/api/media";
@@ -13,6 +17,9 @@ import { UploadNetworkError, type uploadMedia } from "@/api/upload";
 
 /** How long an automatic retry waits when the server sent no `Retry-After`. */
 export const BUSY_RETRY_DEFAULT_MS = 2_000;
+
+/** How many `409 conflict` answers in a row are waited out before the row fails. */
+export const IN_PROGRESS_WAITS = 6;
 
 export type UploadState = "queued" | "uploading" | "done" | "failed" | "cancelled";
 
@@ -26,7 +33,7 @@ export interface UploadEntry {
   total: number;
   error?: ApiError | Error;
   media?: MediaDto;
-  /** Queued again after a `503 busy` or a network failure, until its wait ends. */
+  /** Queued again after a `503 busy`, a `409 conflict` or a network failure, until its wait ends. */
   waiting?: boolean;
 }
 
@@ -53,6 +60,11 @@ export interface UploadQueue {
   dispose(): void;
 }
 
+/** Whether the key's earlier request still runs on the server (`409 conflict`). */
+function inProgress(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409 && error.slug === "conflict";
+}
+
 /** Whether a failure is retried once by itself. */
 function transient(error: unknown): boolean {
   return (
@@ -76,6 +88,8 @@ interface Runtime {
   timer?: ReturnType<typeof setTimeout>;
   /** Automatic retries used (at most one per failure streak). */
   autoRetried: boolean;
+  /** `409 conflict` answers waited out in a row ([`IN_PROGRESS_WAITS`]). */
+  inProgressWaits: number;
 }
 
 export function createUploadQueue(opts: UploadQueueOptions): UploadQueue {
@@ -127,6 +141,7 @@ export function createUploadQueue(opts: UploadQueueOptions): UploadQueue {
         (media) => {
           if (find(row.id)?.state !== "uploading") return;
           rt.autoRetried = false;
+          rt.inProgressWaits = 0;
           const total = find(row.id)?.total ?? row.file.size;
           patch(row.id, { state: "done", media, loaded: total });
           opts.onDone(media);
@@ -137,8 +152,12 @@ export function createUploadQueue(opts: UploadQueueOptions): UploadQueue {
           // A cancel already settled the row.
           if (find(row.id)?.state !== "uploading" || isAbort(error)) return;
           const err = error instanceof Error ? error : new Error(String(error));
-          if (transient(error) && !rt.autoRetried) {
-            rt.autoRetried = true;
+          const waitOut = inProgress(error)
+            ? rt.inProgressWaits < IN_PROGRESS_WAITS
+            : transient(error) && !rt.autoRetried;
+          if (waitOut) {
+            if (inProgress(error)) rt.inProgressWaits += 1;
+            else rt.autoRetried = true;
             const wait =
               error instanceof ApiError && error.retryAfter !== null
                 ? error.retryAfter * 1000
@@ -153,6 +172,7 @@ export function createUploadQueue(opts: UploadQueueOptions): UploadQueue {
             }, wait);
           } else {
             rt.autoRetried = false;
+            rt.inProgressWaits = 0;
             patch(row.id, { state: "failed", error: err });
           }
           pump();
@@ -166,7 +186,7 @@ export function createUploadQueue(opts: UploadQueueOptions): UploadQueue {
       for (const file of files) {
         seq += 1;
         const id = `upload-${seq}`;
-        runtime.set(id, { autoRetried: false });
+        runtime.set(id, { autoRetried: false, inProgressWaits: 0 });
         rows.push({
           id,
           file,

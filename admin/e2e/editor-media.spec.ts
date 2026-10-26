@@ -351,3 +351,135 @@ test("leaving_during_a_drop_upload_asks", async ({ as, site, backend, guard }) =
     await api.dispose();
   }
 });
+
+/** Holds every `POST /media` until `release()` is called, then lets them through. */
+async function holdUploadsUntilReleased(page: Page): Promise<{ release: () => void }> {
+  let release = () => {};
+  const released = new Promise<void>((r) => {
+    release = r;
+  });
+  await page.route("**/api/v1/media", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await released;
+    await route.continue();
+  });
+  return { release: () => release() };
+}
+
+test("first_save_while_a_drop_uploads_keeps_the_image", async ({ as, site, backend }) => {
+  // A running drop upload survives the hand-over from `/new` to `/$id` (final review A1),
+  // and its image lands without taking the focus from the title (A2).
+  const api = await ContentApi.as(backend, site.url, "admin");
+  const name = `handover-${word()}`;
+  const page = await as("admin");
+  let id: string | null = null;
+  let mediaId: string | null = null;
+  try {
+    await page.goto("/admin/content/post/new");
+    await title(page).fill(`Hand-over ${uid()}`);
+    await body(page).click();
+    await page.keyboard.type("Before the image.");
+    const held = await holdUploadsUntilReleased(page);
+    await dropOnBody(page, "Before the image.", [png(`${name}.png`, 240, 160)]);
+    const placeholders = body(page).locator("[data-slot=editor-upload-placeholder]");
+    await expect(placeholders).toHaveCount(1);
+
+    // The first save moves the item to `/$id`; the upload still runs there.
+    await page.keyboard.press(`${await mod(page)}+s`);
+    await expect(page).toHaveURL(/\/admin\/content\/post\/[0-9a-f-]{36}$/);
+    id = /\/post\/([0-9a-f-]{36})$/.exec(page.url())?.[1] ?? null;
+    await expect(indicator(page)).toHaveAttribute("data-state", "saved");
+    await expect(placeholders).toHaveCount(1);
+
+    // Typing in the title while the upload finishes: the focus stays there.
+    await title(page).click();
+    await page.keyboard.press("End");
+    held.release();
+    const figure = body(page).locator("[data-slot=editor-image]");
+    await expect(figure).toHaveAttribute("data-state", "ready");
+    await expect(placeholders).toHaveCount(0);
+    await expect(title(page)).toBeFocused();
+    await page.keyboard.type(" typed on");
+    await expect(title(page)).toHaveValue(/ typed on$/);
+    // Where it was dropped: before the paragraph.
+    const order = await body(page)
+      .locator(":scope > *")
+      .evaluateAll((els) =>
+        els.map((e) =>
+          e.matches("[data-slot=editor-image]") || e.querySelector("[data-slot=editor-image]")
+            ? "image"
+            : e.textContent,
+        ),
+      );
+    expect(order).toEqual(["image", "Before the image."]);
+
+    await page.keyboard.press(`${await mod(page)}+s`);
+    await expect(indicator(page)).toHaveAttribute("data-state", "saved");
+    const listed = await api.listMedia({ q: name });
+    expect(listed).toHaveLength(1);
+    mediaId = (listed[0] as Media).id;
+    if (!id) throw new Error("no item id in the address");
+    const saved = (await api.get("post", id)) as Stored;
+    expect(images(saved.body).map((i) => i.src)).toEqual([`ferrite:media/${mediaId}`]);
+  } finally {
+    await page.context().close();
+    if (id) await api.purge(await api.get("post", id));
+    if (mediaId) await api.purgeMedia(mediaId);
+    await api.dispose();
+  }
+});
+
+test("take_theirs_while_a_drop_uploads_keeps_the_image", async ({ as, site, backend, guard }) => {
+  // A reopen of the screen (Take theirs) while a drop upload runs: the upload goes on and
+  // its image lands at the end of the reopened body (final review A1).
+  guard.allowFailedResource(/\/api\/v1\/content\/post\/[0-9a-f-]+$/);
+  const api = await ContentApi.as(backend, site.url, "admin");
+  const name = `reopen-${word()}`;
+  const item = await api.create("post", `Reopen ${uid()}`, { body: paragraph("Here.") });
+  const page = await as("admin");
+  let mediaId: string | null = null;
+  try {
+    await openItem(page, "post", item.id);
+    // Someone else saves meanwhile.
+    const theirs = `Their title ${uid()}`;
+    await api.patch(item, { title: theirs });
+    const held = await holdUploadsUntilReleased(page);
+    await dropOnBody(page, "Here.", [png(`${name}.png`, 240, 160)]);
+    const placeholders = body(page).locator("[data-slot=editor-upload-placeholder]");
+    await expect(placeholders).toHaveCount(1);
+    await body(page).getByText("Here.").click();
+    await page.keyboard.press("End");
+    await page.keyboard.type(" Mine.");
+    await page.keyboard.press(`${await mod(page)}+s`);
+    const dialog = page.locator("[data-slot=conflict-dialog]");
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Take theirs" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(title(page)).toHaveValue(theirs);
+    // The reopened screen shows the running upload again.
+    await expect(placeholders).toHaveCount(1);
+
+    held.release();
+    const figure = body(page).locator("[data-slot=editor-image]");
+    await expect(figure).toHaveAttribute("data-state", "ready");
+    await expect(placeholders).toHaveCount(0);
+    const order = await body(page)
+      .locator(":scope > *")
+      .evaluateAll((els) =>
+        els.map((e) =>
+          e.matches("[data-slot=editor-image]") || e.querySelector("[data-slot=editor-image]")
+            ? "image"
+            : e.textContent,
+        ),
+      );
+    expect(order).toEqual(["Here.", "image"]);
+    const listed = await api.listMedia({ q: name });
+    expect(listed).toHaveLength(1);
+    mediaId = (listed[0] as Media).id;
+  } finally {
+    await page.context().close();
+    await api.purge(item);
+    if (mediaId) await api.purgeMedia(mediaId);
+    await api.dispose();
+  }
+});

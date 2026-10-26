@@ -1,22 +1,27 @@
 // Images from the media library in a body (07 §3 Editor): the slash menu's "Image" and
 // the editor bar's button open the media picker (images only) and insert
 // `image { src: "ferrite:media/<id>", alt: <the item's alt text>, title: null }`, which
-// the site resolves to a variant URL. Image files dropped on the body upload through the
-// same queue as the library (at most 3 at once, one `Idempotency-Key` per file); each
-// shows a placeholder where it was dropped, which follows the edits made meanwhile, and
-// becomes the image when its upload is done. A failed upload says why in a toast and its
-// placeholder goes. External `https:` images already in a body are left as they are.
+// the site resolves to the original file's URL (only the admin's image node shows a
+// variant). Image files dropped on the body upload through a queue like the library's
+// (at most 3 at once, one `Idempotency-Key` per file) that lives with the route
+// (`body-uploads.ts`); each shows a placeholder where it was dropped, which follows the
+// edits made meanwhile, and becomes the image when its upload is done, without moving
+// the caret or the focus. A screen that remounts while uploads run shows them again (at
+// the same place after a new item's first save, else at the end of the body). A failed
+// upload says why in a toast and its placeholder goes. External `https:` images already
+// in a body are left as they are.
 
 import { Extension, type Editor, type JSONContent } from "@tiptap/core";
 import { Plugin, PluginKey, type EditorState } from "@tiptap/pm/state";
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import type { MediaDto } from "@/api/media";
 import { i18n } from "@/i18n";
 import { openMediaPicker } from "@/media/media-picker";
 import { uploadFailure } from "@/media/upload-errors";
-import { useUploadQueue } from "@/media/use-upload-queue";
+import type { UploadQueue } from "@/media/upload-queue";
+import type { CarriedUploads } from "./body-uploads";
 
 export const MEDIA_SRC_PREFIX = "ferrite:media/";
 
@@ -28,12 +33,20 @@ export function imageNodeOf(media: Pick<MediaDto, "id" | "alt">): JSONContent {
   return { type: "image", attrs: { src: mediaSrc(media.id), alt: media.alt, title: null } };
 }
 
-/** Inserts `media` at `pos`, else at the selection. */
-export function insertMediaImage(editor: Editor, media: MediaDto, pos?: number): boolean {
+/** Inserts `media` at the selection (the picker's choice: the body takes the focus). */
+export function insertMediaImage(editor: Editor, media: MediaDto): boolean {
   if (editor.isDestroyed || !editor.isEditable) return false;
-  const node = imageNodeOf(media);
-  const chain = editor.chain().focus();
-  return (pos === undefined ? chain.insertContent(node) : chain.insertContentAt(pos, node)).run();
+  return editor.chain().focus().insertContent(imageNodeOf(media)).run();
+}
+
+/**
+ * Inserts a dropped file's finished upload at `pos`, leaving the selection and the focus
+ * where they are (the user may be typing elsewhere, the title included).
+ */
+export function insertDroppedImage(editor: Editor, media: MediaDto, pos: number): boolean {
+  if (editor.isDestroyed || !editor.isEditable) return false;
+  const at = Math.max(0, Math.min(pos, editor.state.doc.content.size));
+  return editor.commands.insertContentAt(at, imageNodeOf(media), { updateSelection: false });
 }
 
 /** Opens the picker for an image and inserts the chosen one at the selection. */
@@ -148,40 +161,78 @@ export const ImageUploads = Extension.create({
 });
 
 /**
- * The upload side of image files dropped on `editor`'s body. Each file gets a
- * placeholder; a finished upload is inserted where its placeholder is now. The queue
- * lives as long as the screen; the number still running is returned for the editor's
- * leave guard, which asks before leaving cancels them (never silently). Without
- * `canUpload` a drop calls `onForbidden` instead (the server would refuse it, P30).
+ * The upload side of image files dropped on `editor`'s body, through the route's
+ * `queue` (every entry in it is a drop on this item's body). Each running upload shows
+ * a placeholder; a finished one is inserted where its placeholder is now and leaves the
+ * queue. A screen that mounts while uploads run shows them again: at `carried` (a new
+ * item's hand-over, the same body), else at the end of the body; one that finished
+ * between two screens is inserted there too. `handOver` stops this screen (the next one
+ * takes over) and says where the placeholders are. The number still running is
+ * returned for the leave guard, which asks before leaving cancels them (never
+ * silently). Without `canUpload` a drop calls `onForbidden` instead (the server would
+ * refuse it, P30).
  */
 export function useImageDrops(
   editor: Editor,
-  { canUpload, onForbidden }: { canUpload: boolean; onForbidden: () => void },
-): { uploading: number } {
-  const tracked = useRef(new Set<string>());
-  const noop = useCallback(() => undefined, []);
-  const { queue, entries } = useUploadQueue(noop);
+  {
+    queue,
+    carried,
+    canUpload,
+    onForbidden,
+  }: {
+    queue: UploadQueue;
+    carried: Record<string, number | null> | null;
+    canUpload: boolean;
+    onForbidden: () => void;
+  },
+): { uploading: number; handOver: () => CarriedUploads } {
+  // The uploads with a placeholder in this screen's body.
+  const shown = useRef(new Set<string>());
+  // Handed over: the next screen inserts the images.
+  const detached = useRef(false);
+  const subscribe = useCallback((fn: () => void) => queue.subscribe(fn), [queue]);
+  const snapshot = useCallback(() => queue.entries(), [queue]);
+  const entries = useSyncExternalStore(subscribe, snapshot);
+  const carriedRef = useRef(carried);
   useEffect(() => {
-    if (editor.isDestroyed) return;
+    if (editor.isDestroyed || detached.current) return;
+    /** Where an upload this screen never showed goes (`null`: nowhere). */
+    const placeOf = (id: string): number | null => {
+      const from = carriedRef.current;
+      if (from && id in from) return from[id] ?? null;
+      return editor.state.doc.content.size;
+    };
+    let settled = false;
     for (const e of entries) {
-      if (!tracked.current.has(e.id)) continue;
-      if (e.state === "done" && e.media) {
-        tracked.current.delete(e.id);
+      if (e.state === "queued" || e.state === "uploading") {
+        if (shown.current.has(e.id)) continue;
+        const pos = placeOf(e.id);
+        if (pos === null) continue;
+        shown.current.add(e.id);
+        addUploadPlaceholder(editor.view, e.id, pos, e.file.name);
+        continue;
+      }
+      const had = shown.current.delete(e.id);
+      if (had) {
+        // Read before the placeholder goes.
         const pos = placeholderPos(editor.state, e.id);
         removeUploadPlaceholder(editor.view, e.id);
-        if (pos !== null) insertMediaImage(editor, e.media, pos);
-      } else if (e.state === "failed" || e.state === "cancelled") {
-        tracked.current.delete(e.id);
-        removeUploadPlaceholder(editor.view, e.id);
-        if (e.state === "failed") {
-          const failure = uploadFailure(e.error);
-          toast.error(i18n.t("editor:image.uploadFailed", { name: e.file.name }), {
-            description: i18n.t(`media:tray.reason.${failure.kind}`),
-          });
-          queue.cancel(e.id);
-        }
+        if (e.state === "done" && e.media && pos !== null) insertDroppedImage(editor, e.media, pos);
+      } else if (e.state === "done" && e.media) {
+        const pos = placeOf(e.id);
+        if (pos !== null) insertDroppedImage(editor, e.media, pos);
       }
+      if (e.state === "failed") {
+        const failure = uploadFailure(e.error);
+        toast.error(i18n.t("editor:image.uploadFailed", { name: e.file.name }), {
+          description: i18n.t(`media:tray.reason.${failure.kind}`),
+        });
+        queue.cancel(e.id);
+      }
+      settled = true;
     }
+    // Done, failed and cancelled entries are dealt with: they leave the queue.
+    if (settled) queue.clearDone();
   }, [entries, editor, queue]);
   const forbidden = useRef(onForbidden);
   useEffect(() => {
@@ -199,15 +250,26 @@ export function useImageDrops(
       const before = new Set(queue.entries().map((e) => e.id));
       queue.add(files);
       for (const e of queue.entries()) {
-        if (before.has(e.id)) continue;
-        tracked.current.add(e.id);
+        if (before.has(e.id) || shown.current.has(e.id)) continue;
+        shown.current.add(e.id);
         addUploadPlaceholder(editor.view, e.id, pos, e.file.name);
       }
     };
     dom.addEventListener(IMAGE_DROP_EVENT, onDrop);
     return () => dom.removeEventListener(IMAGE_DROP_EVENT, onDrop);
   }, [editor, queue, canUpload]);
+  const handOver = useCallback((): CarriedUploads => {
+    detached.current = true;
+    const at: Record<string, number | null> = {};
+    for (const e of queue.entries()) {
+      if (e.state !== "queued" && e.state !== "uploading") continue;
+      at[e.id] =
+        shown.current.has(e.id) && !editor.isDestroyed ? placeholderPos(editor.state, e.id) : null;
+    }
+    return { queue, at };
+  }, [editor, queue]);
   return {
     uploading: entries.filter((e) => e.state === "queued" || e.state === "uploading").length,
+    handOver,
   };
 }

@@ -4,6 +4,7 @@
 // every admin page.
 
 import type { JSONContent } from "@tiptap/core";
+import type { CarriedUploads } from "./body-uploads";
 import type { MetaDraft } from "./editor-state";
 
 /** What a just-created item hands to its `/$id` screen (the route remounts the editor). */
@@ -22,6 +23,8 @@ export interface Handoff {
    * the publish dialog opens there (M2b-1 exit finding; the key press is not lost).
    */
   openPublishDialog: boolean;
+  /** Images dropped on the body still uploading: the `/$id` route takes their queue. */
+  uploads?: CarriedUploads;
 }
 
 let pendingHandoff: Handoff | null = null;

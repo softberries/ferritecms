@@ -10,6 +10,7 @@ describe("upload_failure", () => {
   test("transient and unknown failures offer Retry", () => {
     expect(uploadFailure(new UploadNetworkError())).toEqual({ kind: "network", retry: true });
     expect(uploadFailure(problem(503, "busy"))).toMatchObject({ kind: "busy", retry: true });
+    expect(uploadFailure(problem(409, "conflict"))).toMatchObject({ kind: "busy", retry: true });
     expect(uploadFailure(problem(429, "rate-limited"))).toMatchObject({
       kind: "busy",
       retry: true,

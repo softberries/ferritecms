@@ -84,9 +84,11 @@ import {
 } from "./editor-state";
 import { FieldsSection } from "./fields/fields-section";
 import { CARD_THRESHOLD, fieldsFor, fieldsPlacement } from "./fields/fields-model";
+import { useBodyUploads } from "./body-uploads";
 import { pickAndInsertImage, useImageDrops } from "./insert-image";
 import { LeaveDialog } from "./leave-dialog";
 import type { Backup } from "./local-backup";
+import type { UploadQueue } from "@/media/upload-queue";
 import { useLeaveGuard } from "./leave-guard";
 import { RestoreBanner } from "./restore-banner";
 import { RestoreConfirmDialog, RevisionsDrawer } from "./revisions/revisions-drawer";
@@ -160,6 +162,11 @@ export interface EditorScreenProps {
   onReopen?: (next: Reopen) => void;
   /** The screen was remounted by a revision restore (or its Undo). */
   revision?: RevisionNotice | null;
+  /**
+   * The route's queue of images dropped on the body (`body-uploads.ts`): it outlives the
+   * screen's remounts. Without it (tests) the screen keeps its own.
+   */
+  uploads?: UploadQueue;
 }
 
 export function EditorScreen({
@@ -173,6 +180,7 @@ export function EditorScreen({
   onCreated,
   onReopen: reopenScreen,
   revision,
+  uploads,
 }: EditorScreenProps) {
   const { t } = useTranslation("editor");
   const queryClient = useQueryClient();
@@ -246,7 +254,12 @@ export function EditorScreen({
     ...(onCreated
       ? {
           onCreated: (created: ContentDto, h: Handoff) =>
-            onCreated(created, { ...h, openPublishDialog: publishAfterCreate.current }),
+            onCreated(created, {
+              ...h,
+              openPublishDialog: publishAfterCreate.current,
+              // Running drop uploads go on on the `/$id` screen.
+              uploads: drops.handOver(),
+            }),
         }
       : {}),
     onConflict: (e, op, context) => {
@@ -309,10 +322,14 @@ export function EditorScreen({
 
   const me = queryClient.getQueryData<MeDto>(qk.me);
   const canUploadMedia = me?.capabilities.includes("upload_media") === true;
-  const { uploading } = useImageDrops(doc.editor, {
+  const ownUploads = useBodyUploads(null);
+  const drops = useImageDrops(doc.editor, {
+    queue: uploads ?? ownUploads.queue,
+    carried: handoff?.uploads?.at ?? null,
     canUpload: canUploadMedia,
     onForbidden: () => toast.error(t("image.uploadForbidden"), { id: "editor-drop" }),
   });
+  const { uploading } = drops;
   const placement = fieldsPlacement(doc.fieldDefs, doc.meta.fields, wide);
   const canPublish =
     doc.readOnly === null &&

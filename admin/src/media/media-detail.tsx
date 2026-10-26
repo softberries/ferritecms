@@ -16,7 +16,7 @@ import {
   Trash2Icon,
   XCircleIcon,
 } from "lucide-react";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { INLINE_ERRORS, reportApiError } from "@/api/client";
@@ -80,12 +80,17 @@ export function MediaDetail({ id, me, onClose, onAction }: MediaDetailProps) {
     },
   });
   const media = item.data;
+  // The fields' saveAll: closing the sheet (Esc, the close button, outside) saves a
+  // typed Title or Alt text first, as leaving the field would (no blur fires on removal).
+  const saveAll = useRef<(() => Promise<void>) | null>(null);
 
   return (
     <Sheet
       open
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (open) return;
+        void saveAll.current?.();
+        onClose();
       }}
     >
       <SheetContent
@@ -94,7 +99,13 @@ export function MediaDetail({ id, me, onClose, onAction }: MediaDetailProps) {
         className="w-full gap-0 overflow-y-auto p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-lg"
       >
         {media ? (
-          <Detail media={media} me={me} polling={!expired} onAction={onAction} />
+          <Detail
+            media={media}
+            me={me}
+            polling={!expired}
+            onAction={onAction}
+            saveAllRef={saveAll}
+          />
         ) : (
           <>
             <SheetHeader className="border-b p-5 pr-12">
@@ -129,11 +140,13 @@ function Detail({
   me,
   polling,
   onAction,
+  saveAllRef,
 }: {
   media: MediaDto;
   me: MeDto;
   polling: boolean;
   onAction: MediaDetailProps["onAction"];
+  saveAllRef: RefObject<(() => Promise<void>) | null>;
 }) {
   const { t } = useTranslation("media");
   const trashed = media.status === "trash";
@@ -143,6 +156,9 @@ function Detail({
   const dims = dimensions(media);
   const author = authorName(media);
   const fields = useFields(media, editable);
+  useEffect(() => {
+    saveAllRef.current = fields.saveAll;
+  });
 
   useShortcut({
     id: "media.save",

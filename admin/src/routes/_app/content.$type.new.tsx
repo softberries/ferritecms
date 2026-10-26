@@ -1,7 +1,8 @@
 // /admin/content/$type/new: a new item in the writing surface. Nothing is stored until
 // the first save (`mod+s` or Save): that `POST`s the draft and replaces the address with
 // the item's `/$id`, handing the live editor state over so writing continues where it
-// was (the two routes share one route transition, so nothing flashes).
+// was (the two routes share one route transition, so nothing flashes). Images dropped on
+// the body that are still uploading go with it (their queue, `body-uploads.ts`).
 //
 // A new item has no autosave slot (no id yet): the leave guard protects its draft until
 // the first save. A `401` on that save keeps the draft (`pendingDrafts`, key
@@ -19,6 +20,7 @@ import { typesQuery } from "@/api/types";
 import { useMe } from "@/auth/session";
 import { ForbiddenState } from "@/components/kit/forbidden-state";
 import { dropPendingDraft, newDraftKey, peekPendingDraft } from "@/editor/autosave";
+import { useBodyUploads } from "@/editor/body-uploads";
 import { EditorScreen } from "@/editor/editor";
 import type { RestoreSource } from "@/editor/editor-state";
 import { handOff } from "@/editor/handoff";
@@ -43,12 +45,20 @@ export const Route = createFileRoute("/_app/content/$type/new")({
 
 function NewItem() {
   const { type } = Route.useParams();
+  // Another type is another screen (its own draft and drop uploads).
+  return <NewItemOf key={type} type={type} />;
+}
+
+function NewItemOf({ type }: { type: string }) {
   const { label } = Route.useLoaderData();
   const { me: guarded } = Route.useRouteContext();
   const me = useMe() ?? guarded;
   const navigate = useNavigate();
   const router = useRouter();
   const newPath = useLocation({ select: (l) => l.pathname });
+  // Images dropped on the body: the queue outlives the screen's remounts and goes with
+  // the hand-over to `/$id` (A1).
+  const uploads = useBodyUploads(null);
   // A draft kept over a sign-in (read once; Discard starts an empty screen).
   const [pending] = useState(() => peekPendingDraft(newDraftKey(type), me.id));
   const [start, setStart] = useState<{ epoch: number; restore: RestoreSource | null }>(() => ({
@@ -71,10 +81,12 @@ function NewItem() {
       typeLabel={label}
       item={null}
       restore={start.restore}
+      uploads={uploads.queue}
       onReopen={() => setStart((s) => ({ epoch: s.epoch + 1, restore: null }))}
       onCreated={(item, handoff) => {
         // Moved on while the first save was in flight: the draft exists, stay where they are.
         if (router.state.location.pathname !== newPath) return;
+        uploads.keep();
         handOff(handoff);
         void navigate({
           to: "/content/$type/$id",

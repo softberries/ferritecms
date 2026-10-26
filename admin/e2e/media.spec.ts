@@ -326,6 +326,17 @@ test("edit_alt_text", async ({ as, site, backend }) => {
     await expect(detail(page).getByRole("textbox", { name: "Alt text" })).toHaveValue(
       "A gradient from ember to night blue",
     );
+
+    // Escape closes the sheet and still saves what was typed (final review A6).
+    const typed = detail(page).getByRole("textbox", { name: "Alt text" });
+    await typed.fill("Saved on Escape");
+    const savedOnClose = page.waitForResponse(
+      (r) => r.request().method() === "PATCH" && r.url().endsWith(`/api/v1/media/${media.id}`),
+    );
+    await page.keyboard.press("Escape");
+    await expect(detail(page)).toHaveCount(0);
+    expect((await savedOnClose).status()).toBe(200);
+    expect((await api.getMedia(media.id)).alt).toBe("Saved on Escape");
   } finally {
     await api.purgeMedia(media.id);
     await api.dispose();

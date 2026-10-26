@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { MediaDto } from "@/api/media";
 import { ApiError } from "@/api/problem";
 import { UploadNetworkError, type UploadOptions } from "@/api/upload";
-import { BUSY_RETRY_DEFAULT_MS, createUploadQueue, type UploadEntry } from "./upload-queue";
+import {
+  BUSY_RETRY_DEFAULT_MS,
+  createUploadQueue,
+  IN_PROGRESS_WAITS,
+  type UploadEntry,
+} from "./upload-queue";
 
 /** One call of the fake `uploadMedia`, settled by the test. */
 interface Call {
@@ -153,6 +158,45 @@ describe("upload_queue_test", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(calls).toHaveLength(4);
     expect(BUSY_RETRY_DEFAULT_MS).toBe(2_000);
+  });
+
+  test("in_progress_conflict_waits_retry_after", async () => {
+    const { upload, calls } = fakeUpload();
+    const q = createUploadQueue({ upload, concurrency: 3, onDone: () => {} });
+    q.add([file("a.png")]);
+    await flush();
+    // The connection drops; the automatic retry finds the first request still running.
+    calls[0]?.reject(new UploadNetworkError());
+    await flush();
+    await vi.advanceTimersByTimeAsync(BUSY_RETRY_DEFAULT_MS);
+    expect(calls).toHaveLength(2);
+    calls[1]?.reject(problem(409, "conflict", 5));
+    await flush();
+    expect(q.entries()[0]?.state).toBe("queued");
+    expect(q.entries()[0]?.waiting).toBe(true);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toHaveLength(3);
+    // Every attempt is the same upload to the server.
+    expect(new Set(calls.map((c) => c.opts.key)).size).toBe(1);
+    calls[2]?.resolve(media("m-1"));
+    await flush();
+    expect(q.entries()[0]?.state).toBe("done");
+
+    // A key that stays in progress fails after `IN_PROGRESS_WAITS` waits.
+    q.add([file("b.png")]);
+    await flush();
+    for (let i = 0; i < IN_PROGRESS_WAITS; i++) {
+      calls.at(-1)?.reject(problem(409, "conflict", 5));
+      await flush();
+      expect(q.entries()[1]?.state).toBe("queued");
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    calls.at(-1)?.reject(problem(409, "conflict", 5));
+    await flush();
+    expect(q.entries()[1]?.state).toBe("failed");
+    expect(calls).toHaveLength(3 + IN_PROGRESS_WAITS + 1);
   });
 
   test("a waiting retry frees its slot", async () => {

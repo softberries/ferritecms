@@ -11,7 +11,8 @@
 // (Task 17) remount the screen with a new starting point (`onReopen`). The first start
 // also reads this browser's local backup of the item (edits made over a kept copy that
 // never reached the server, `editor/local-backup.ts`); the screen offers it when it
-// differs from both the item and the slot.
+// differs from both the item and the slot. Images dropped on the body upload through a
+// queue that lives here, above the remounted screen (`body-uploads.ts`).
 
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
@@ -28,10 +29,12 @@ import {
   loadAutosave,
   peekPendingDraft,
 } from "@/editor/autosave";
+import { useBodyUploads } from "@/editor/body-uploads";
 import { EditorScreen, type Reopen, type RevisionNotice } from "@/editor/editor";
 import type { RestoreSource } from "@/editor/editor-state";
 import { clearHandoff, peekHandoff } from "@/editor/handoff";
 import { type Backup, readBackup } from "@/editor/local-backup";
+import type { UploadQueue } from "@/media/upload-queue";
 
 const NOT_EDITED = new Set(["media"]);
 
@@ -100,9 +103,18 @@ interface Start {
 }
 
 function ItemEditor() {
-  const { type } = Route.useParams();
   const data = Route.useLoaderData();
+  // Another item is another screen (its own drop uploads and reopen state).
+  return <ItemEditorOf key={data.item.id} data={data} />;
+}
+
+function ItemEditorOf({ data }: { data: ItemLoaderData }) {
+  const { type } = Route.useParams();
   const me = useMe();
+  // Images dropped on the body: the queue outlives the screen's remounts (every reopen),
+  // and a just-created item takes over its `/new` screen's queue (A1).
+  const [adopted] = useState(() => peekHandoff(data.item.id)?.uploads?.queue ?? null);
+  const uploads = useBodyUploads(adopted);
   const [reopened, setReopened] = useState<Start | null>(null);
   const userId = me?.id;
   // The first start, from the loader: a draft kept over a sign-in, else the slot.
@@ -142,6 +154,7 @@ function ItemEditor() {
       type={type}
       label={data.label}
       start={start}
+      uploads={uploads.queue}
       onReopen={onReopen}
     />
   );
@@ -151,11 +164,13 @@ function ItemScreen({
   type,
   label,
   start,
+  uploads,
   onReopen,
 }: {
   type: string;
   label: string;
   start: Start;
+  uploads: UploadQueue;
   onReopen: (next: Reopen) => void;
 }) {
   const { item } = start;
@@ -172,6 +187,7 @@ function ItemScreen({
       kept={start.kept}
       backup={start.backup}
       revision={start.revision}
+      uploads={uploads}
       onReopen={onReopen}
     />
   );
