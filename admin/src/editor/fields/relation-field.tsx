@@ -4,11 +4,11 @@
 // (`GET /content/refs`, any type); one that is gone or unreadable shows
 // "Unknown item <short id>" and keeps the value until another is chosen or it is cleared.
 
-import { keepPreviousData, useQueries, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronsUpDownIcon, LinkIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { isContentStatus, listContent } from "@/api/content";
+import { isContentStatus, listContentOfType } from "@/api/content";
 import { qk } from "@/api/keys";
 import { StatusBadge } from "@/components/kit/status-badge";
 import { Button } from "@/components/ui/button";
@@ -64,11 +64,15 @@ export function RelationField({
   const [picked, setPicked] = useState<ContentTarget | null>(null);
   const shown = picked?.id === id ? picked : (target.data ?? null);
 
+  const qc = useQueryClient();
+  // A type deleted meanwhile lists nothing; the sidebar's types are read again.
+  const typesGone = () => void qc.invalidateQueries({ queryKey: qk.types });
   const filters = q ? { q, limit: PER_TYPE } : { order: "updated" as const, limit: PER_TYPE };
   const results = useQueries({
     queries: types.map((type) => ({
       queryKey: qk.content.list(type.name, filters),
-      queryFn: ({ signal }: { signal: AbortSignal }) => listContent(type.name, filters, { signal }),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        listContentOfType(type.name, filters, { signal, onGone: typesGone }),
       enabled: open,
       placeholderData: keepPreviousData,
       staleTime: 30_000,

@@ -9,7 +9,7 @@ import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstac
 import { PlusIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { isContentStatus, listContent } from "@/api/content";
+import { isContentStatus, listContentOfType } from "@/api/content";
 import { qk } from "@/api/keys";
 import { type TermDto, taxonomiesQuery, termsQuery } from "@/api/taxonomies";
 import { StatusBadge } from "@/components/kit/status-badge";
@@ -98,10 +98,13 @@ function ContentTab({ onAdd, room, disabled }: AddItemsProps) {
   const [picked, setPicked] = useState<ReadonlyMap<string, ContentTarget>>(new Map());
 
   const filters = q ? { q, limit: PER_TYPE } : { order: "updated" as const, limit: PER_TYPE };
+  // A type deleted meanwhile lists nothing; the sidebar's types are read again.
+  const typesGone = () => void qc.invalidateQueries({ queryKey: qk.types });
   const results = useQueries({
     queries: types.map((type) => ({
       queryKey: qk.content.list(type.name, filters),
-      queryFn: ({ signal }: { signal: AbortSignal }) => listContent(type.name, filters, { signal }),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        listContentOfType(type.name, filters, { signal, onGone: typesGone }),
       placeholderData: keepPreviousData,
       staleTime: 30_000,
     })),

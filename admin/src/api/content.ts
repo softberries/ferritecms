@@ -1,6 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api, unwrap } from "./client";
 import { qk } from "./keys";
+import { isProblem } from "./problem";
 import type {
   SchemaAutosaveDto,
   SchemaAutosaveInput,
@@ -51,6 +52,26 @@ export function listContent(
       ...(options.signal ? { signal: options.signal } : {}),
     }),
   );
+}
+
+/**
+ * `listContent` for one type of a fan-out over every type the sidebar shows (the
+ * palette, the relation field, the menu editor): a type deleted since the types were
+ * read answers `404 not-found`; it lists nothing and `onGone` runs (the caller reads the
+ * types again). Any other failure rejects as before.
+ */
+export async function listContentOfType(
+  type: string,
+  query: ContentListQuery,
+  options: { signal?: AbortSignal; onGone: () => void },
+): Promise<SchemaContentList> {
+  try {
+    return await listContent(type, query, options.signal ? { signal: options.signal } : {});
+  } catch (e) {
+    if (!isProblem(e, "not-found")) throw e;
+    options.onGone();
+    return { items: [], next_cursor: null };
+  }
 }
 
 export function getContent(type: string, id: string): Promise<SchemaContentDto> {

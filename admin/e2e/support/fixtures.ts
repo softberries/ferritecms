@@ -10,6 +10,7 @@
 //   `console.error` in any page of the test (Review Focus 2). `guard.allow(re)` accepts
 //   console errors a test expects (for example the browser's log line for a deliberate 401);
 //   `guard.allowFailedResource(url)` accepts only the browser's failed-load line of one URL.
+//   A 404 of a custom type's list or counts is always accepted (`CUSTOM_TYPE_LIST`).
 
 import AxeBuilder from "@axe-core/playwright";
 import {
@@ -34,6 +35,16 @@ export { expect };
 export type { Role };
 
 export const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
+
+/**
+ * The list or counts of a custom content type (`/api/v1/content/<type>` or
+ * `/counts`, never `post` or `page`). Tests run in parallel against one site, so a type
+ * another test deletes can still be in an open page's types: its fan-out request (the
+ * palette, the relation field, the menu editor) answers 404, which the page handles
+ * (no results, the types read again) but the browser logs. Accepted in every test.
+ */
+const CUSTOM_TYPE_LIST =
+  /\/api\/v1\/content\/(?!(?:post|page)(?:[/?]|$))[a-z][a-z0-9_]*(?:\/counts)?(?:\?|$)/;
 
 export interface Guard {
   /** Console errors matching `re` do not fail the test. */
@@ -86,6 +97,13 @@ export const test = base.extend<Fixtures & Options>({
           if (
             text.startsWith("Failed to load resource") &&
             allowedResources.some((re) => re.test(at.url))
+          ) {
+            return;
+          }
+          if (
+            text.startsWith("Failed to load resource") &&
+            text.includes("status of 404") &&
+            CUSTOM_TYPE_LIST.test(at.url)
           ) {
             return;
           }

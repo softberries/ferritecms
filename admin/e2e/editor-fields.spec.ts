@@ -209,9 +209,7 @@ test("repeater_reorder_by_keyboard", async ({ as, site, backend }) => {
   }
 });
 
-test("relation_picks_a_post", async ({ as, site, backend, expectAccessible, guard }) => {
-  // A target that is gone is looked up in every type (each answers 404): by design.
-  guard.allowFailedResource(/\/api\/v1\/content\/[a-z0-9_-]+\/[0-9a-f-]+$/);
+test("relation_picks_a_post", async ({ as, site, backend, expectAccessible }) => {
   const api = await ContentApi.as(backend, site.url, "admin");
   const type = await bookType(api);
   const post = await api.createIn("post", `Linked ${uid()}`, "published");

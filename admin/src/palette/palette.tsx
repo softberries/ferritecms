@@ -9,7 +9,7 @@
 // cmdk's own filter ranks the rows inside the static groups; content hits come from the
 // server already matched, so they keep the server's order, in the last group.
 
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMatches, useNavigate } from "@tanstack/react-router";
 import { Command as CommandPrimitive, defaultFilter, useCommandState } from "cmdk";
 import { cn } from "cn";
@@ -162,9 +162,12 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
 
   const query = q.trim();
   const active = searchable(query) && types.length > 0;
+  const qc = useQueryClient();
   const search = useQuery({
     queryKey: qk.paletteSearch(query, types),
-    queryFn: ({ signal }) => searchContent(query, types, signal),
+    // A type deleted meanwhile: the sidebar's types are read again.
+    queryFn: ({ signal }) =>
+      searchContent(query, types, signal, () => void qc.invalidateQueries({ queryKey: qk.types })),
     enabled: active,
     // The last answer stays up while the next loads, so results never blink out.
     placeholderData: keepPreviousData,

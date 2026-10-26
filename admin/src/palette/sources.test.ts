@@ -193,3 +193,25 @@ test("every_type_failing_rejects", async () => {
   await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS);
   expect(await outcome).toMatchObject({ status: 500 });
 });
+
+test("a_type_deleted_meanwhile_has_no_hits_and_reports_it", async () => {
+  // Another tab deleted the type after the sidebar read the types: its list is a 404.
+  stubFetch((r) =>
+    typeOf(r) === "recipe"
+      ? new Response(
+          JSON.stringify({
+            type: "https://ferritecms.dev/problems/not-found",
+            title: "Not found",
+            status: 404,
+            detail: "",
+          }),
+          { status: 404, headers: { "Content-Type": "application/problem+json" } },
+        )
+      : list([summary("post", "p1", "Hello world")]),
+  );
+  const gone = vi.fn();
+  const done = searchContent("hello", ["post", "recipe"], new AbortController().signal, gone);
+  await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS);
+  expect((await done).map((h) => h.id)).toEqual(["p1"]);
+  expect(gone).toHaveBeenCalledTimes(1);
+});

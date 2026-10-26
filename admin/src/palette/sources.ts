@@ -3,7 +3,7 @@
 // caller aborts the previous round on every keystroke (TanStack Query does it when the
 // query key changes), so a round that is still waiting sends nothing.
 
-import { listContent } from "@/api/content";
+import { listContentOfType } from "@/api/content";
 
 /** How long a round waits before it sends anything (constraints: exact values). */
 export const SEARCH_DEBOUNCE_MS = 150;
@@ -56,19 +56,22 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
 
 /**
  * Searches every type in `types` for `q`. Hits come in `types` order, and each type's
- * hits in the server's order (relevance). A type that fails is left out; if every type
- * fails, the first error is thrown. An abort rejects with an `AbortError`.
+ * hits in the server's order (relevance). A type deleted meanwhile has no hits and calls
+ * `onGone`; a type that fails is left out; if every type fails, the first error is thrown. An abort rejects with an `AbortError`.
  */
 export async function searchContent(
   q: string,
   types: string[],
   signal: AbortSignal,
+  onGone: () => void = () => undefined,
 ): Promise<PaletteHit[]> {
   const query = q.trim();
   if (!searchable(query) || types.length === 0) return [];
   await wait(SEARCH_DEBOUNCE_MS, signal);
   const rounds = await Promise.allSettled(
-    types.map((type) => listContent(type, { q: query, limit: SEARCH_LIMIT }, { signal })),
+    types.map((type) =>
+      listContentOfType(type, { q: query, limit: SEARCH_LIMIT }, { signal, onGone }),
+    ),
   );
   if (signal.aborted) throw abortError(signal);
 
