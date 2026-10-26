@@ -10908,6 +10908,10 @@
       "SeoDto": {
         "type": "object",
         "description": "An item's SEO meta. `title`, when set, is the whole `<title>` and `og:title` of the\nitem's page (no site suffix); `description` comes before the excerpt as the meta\ndescription. `null`: not set.",
+        "required": [
+          "title",
+          "description"
+        ],
         "properties": {
           "description": {
             "type": [
@@ -10925,7 +10929,7 @@
       },
       "SeoPatchDto": {
         "type": "object",
-        "description": "A change to an item's SEO meta. Per member: absent keeps it, `null` or a string\nthat is blank after trimming deletes it, any other string sets it (trimmed). No\ncontrol characters; `title` at most 200 characters and `description` at most 500\n(`422`, `errors[0].field` = `seo.title` / `seo.description`).",
+        "description": "A change to an item's SEO meta. Per member: absent keeps it, `null` or a string\nthat is blank after trimming deletes it, any other string sets it (trimmed). No NUL,\nand no control characters once trimmed (an edge newline is trimmed, an inner one\nrefused); `title` at most 200 characters and `description` at most 500 (`422`,\n`errors[0].field` = `seo.title` / `seo.description`).",
         "properties": {
           "description": {
             "type": [

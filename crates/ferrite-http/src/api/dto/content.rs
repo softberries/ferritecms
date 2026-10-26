@@ -92,7 +92,9 @@ impl ContentDto {
 /// description. `null`: not set.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SeoDto {
+    #[schema(required = true)]
     pub title: Option<String>,
+    #[schema(required = true)]
     pub description: Option<String>,
 }
 
@@ -106,9 +108,10 @@ impl From<Seo> for SeoDto {
 }
 
 /// A change to an item's SEO meta. Per member: absent keeps it, `null` or a string
-/// that is blank after trimming deletes it, any other string sets it (trimmed). No
-/// control characters; `title` at most 200 characters and `description` at most 500
-/// (`422`, `errors[0].field` = `seo.title` / `seo.description`).
+/// that is blank after trimming deletes it, any other string sets it (trimmed). No NUL,
+/// and no control characters once trimmed (an edge newline is trimmed, an inner one
+/// refused); `title` at most 200 characters and `description` at most 500 (`422`,
+/// `errors[0].field` = `seo.title` / `seo.description`).
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SeoPatchDto {
     #[serde(default, deserialize_with = "nullable")]

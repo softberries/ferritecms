@@ -27,8 +27,9 @@
 //!   the item deletes it.
 //! * Items carry `seo` (`content_meta` `seo.title`, `seo.description`; M2b P28); list
 //!   entries do not. `seo` in a create or `PATCH` changes them member by member, and a
-//!   change to `seo` alone is a full save under `If-Match`. Every write (and an autosave
-//!   `PUT`) refuses a `body` that is not a document (`type` `doc`; `422`, field `body`).
+//!   change to `seo` alone is a full save under `If-Match`. A `body` that is sent (create,
+//!   `PATCH`, autosave `PUT`) or restored from a revision must be a document (`type`
+//!   `doc`; `422`, field `body`); a `PATCH` without `body` keeps the stored one as is.
 
 use std::{collections::HashMap, sync::Arc};
 

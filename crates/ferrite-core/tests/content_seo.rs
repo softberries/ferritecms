@@ -400,7 +400,56 @@ pub async fn body_root_must_be_doc(db: &TestDb) {
     assert_eq!((now.version, &now.body), (item.version, &item.body));
 }
 
+/// A PATCH that sends no body (here title and SEO only) of an item whose stored body is
+/// not a document succeeds and leaves that body as stored; only a sent body is checked.
+pub async fn patch_without_body_keeps_legacy_body(db: &TestDb) {
+    let svc = service(db);
+    let author = actor(db.store(), Role::Author).await;
+    let item = svc.create(&author, draft("Legacy")).await.unwrap();
+    // Written before the check existed (straight through the store).
+    let legacy = json!({"type": "paragraph", "content": [{"type": "text", "text": "old"}]});
+    let mut row = item.clone();
+    row.body = legacy.clone();
+    let item = db.store().read().content().update(&row).await.unwrap();
+    assert_eq!(item.body, legacy);
+
+    // What the API's PATCH builds without `body`: the stored body carried over.
+    let saved = svc
+        .update(
+            &author,
+            item.id,
+            item.version,
+            ContentDraft {
+                body: item.body.clone(),
+                ..same("Legacy renamed", Some(set(Some("Search title"), None)))
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(saved.version, item.version + 1);
+    assert_eq!(saved.title, "Legacy renamed");
+    assert_eq!(svc.get(item.id).await.unwrap().body, legacy);
+    assert_eq!(
+        svc.seo_of(&author, item.id).await.unwrap().title.as_deref(),
+        Some("Search title")
+    );
+    // A body that is sent is still checked.
+    let r = svc
+        .update(
+            &author,
+            item.id,
+            saved.version,
+            ContentDraft {
+                body: json!({"type": "heading"}),
+                ..same("Legacy renamed", None)
+            },
+        )
+        .await;
+    assert_eq!(field(r), "body");
+}
+
 backend_tests!(
+    patch_without_body_keeps_legacy_body,
     seo_roundtrip_and_delete,
     seo_limits_and_controls,
     seo_only_patch_bumps_version,

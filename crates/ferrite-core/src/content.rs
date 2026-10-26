@@ -154,7 +154,8 @@ impl ContentService {
         actor: &Actor,
         draft: ContentDraft,
     ) -> Result<ContentItem, CoreError> {
-        check_draft(&draft)?;
+        check_body(&draft.body)?;
+        check_seo(&draft)?;
         let base = base_slug(draft.slug.as_deref(), draft.parent_id, None, || {
             slug::slugify(&draft.title)
         })?;
@@ -208,8 +209,10 @@ impl ContentService {
     /// `edit_own` (contributors: only while draft or pending), others' `edit_others`.
     /// A trashed item is `Invalid("restore first")`. The save deletes `actor`'s own
     /// autosave of the item in the same transaction (M2b P15); other users' stay. `draft.fields` is validated as on
-    /// create, also when a revision is restored, and so are `draft.body` (the root
-    /// check; a stored body is never rewritten) and `draft.seo`. A write that changes
+    /// create, also when a revision is restored, and so is `draft.seo`. `draft.body` gets
+    /// the root check only when it differs from the stored body (a body the caller
+    /// sends, or a restored revision's); an unchanged one is kept as stored, even one
+    /// that predates the check. A write that changes
     /// only `seo` is a full update: version + 1, a revision, events, invalidation.
     ///
     /// `draft.slug = None` keeps the current slug; a slug that is taken gets `-N` as on
@@ -278,7 +281,12 @@ impl ContentService {
         if draft.kind != current.kind {
             return Err(CoreError::Invalid("the content type cannot change".into()));
         }
-        check_draft(&draft)?;
+        // Only a body the caller sends is checked: one equal to the stored body (a PATCH
+        // without `body`) is kept as stored, even when it predates the root check.
+        if draft.body != current.body {
+            check_body(&draft.body)?;
+        }
+        check_seo(&draft)?;
         // Under the same parent the item's own slug is not a conflict, and keeping it is
         // never refused or renamed, even when a later rule reserves it.
         let own = (current.parent_id == draft.parent_id).then_some(current.slug.as_str());
@@ -782,9 +790,8 @@ async fn set_terms(repos: &dyn Repos, item: ContentId, terms: &[TermId]) -> Resu
     }
 }
 
-/// The checks of a draft that need no reads: the body root and the SEO patch.
-fn check_draft(draft: &ContentDraft) -> Result<(), CoreError> {
-    check_body(&draft.body)?;
+/// [`SeoPatch::check`] of `draft.seo`, if any.
+fn check_seo(draft: &ContentDraft) -> Result<(), CoreError> {
     draft.seo.as_ref().map_or(Ok(()), SeoPatch::check)
 }
 

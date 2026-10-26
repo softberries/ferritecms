@@ -53,8 +53,9 @@ impl Seo {
 
 /// A change to an item's SEO meta. Per member: `None` keeps the stored row,
 /// `Some(None)` or a string that is blank after trimming deletes it, any other string
-/// sets it (trimmed). A string must not hold control characters (NUL included) and,
-/// trimmed, be at most [`MAX_SEO_TITLE`] / [`MAX_SEO_DESCRIPTION`] characters, else
+/// sets it (trimmed). A string must not hold NUL, nor control characters once trimmed
+/// (a trailing newline is trimmed away, one inside the text is refused), and, trimmed,
+/// be at most [`MAX_SEO_TITLE`] / [`MAX_SEO_DESCRIPTION`] characters, else
 /// `InvalidField` naming `seo.title` / `seo.description`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SeoPatch {
@@ -112,8 +113,8 @@ impl SeoPatch {
     }
 }
 
-/// One member of a [`SeoPatch`]: no control characters, at most `max` characters once
-/// trimmed.
+/// One member of a [`SeoPatch`]: no NUL; once trimmed, no control characters and at
+/// most `max` characters.
 fn check_member(
     field: &'static str,
     member: &Option<Option<String>>,
@@ -128,7 +129,8 @@ fn check_member(
             format!("{field} must not contain NUL"),
         ));
     }
-    if text.chars().any(char::is_control) {
+    // Checked on the trimmed text: an edge newline (a textarea's) is trimmed away.
+    if text.trim().chars().any(char::is_control) {
         return Err(CoreError::invalid_field(
             field,
             format!("{field} must not contain control characters"),
@@ -188,6 +190,25 @@ mod tests {
             .check()
             .is_ok()
         );
+    }
+
+    #[test]
+    fn edge_controls_are_trimmed_interior_ones_refused() {
+        // A textarea's trailing newline (or a leading tab) is trimmed, not refused.
+        for ok in ["text\n", "text\r\n", "\ttext", " text \n"] {
+            let p = SeoPatch {
+                description: Some(Some(ok.into())),
+                title: Some(Some(ok.into())),
+            };
+            assert!(p.check().is_ok(), "{ok:?}");
+        }
+        for bad in ["two\nlines", "a\tb", "a\u{1b}b"] {
+            let p = SeoPatch {
+                title: Some(Some(format!("{bad}\n"))),
+                ..SeoPatch::default()
+            };
+            assert_eq!(field(p.check()), Some("seo.title"), "{bad:?}");
+        }
     }
 
     #[test]
