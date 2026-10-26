@@ -76,8 +76,18 @@ export async function expectNoHorizontalOverflow(page: Page, where: string): Pro
   }
 }
 
+export interface SnapOptions {
+  /**
+   * Runs after each viewport and scheme change, before the capture: put the screen in
+   * the state to show at that width (open a sheet, scroll a section into view).
+   */
+  prepare?: (viewport: Viewport) => Promise<void>;
+  /** `false`: the viewport only (screens built on sticky, viewport-tall columns). */
+  fullPage?: boolean;
+}
+
 /** Four full-page screenshots of the page as it is now; restores viewport and scheme. */
-export async function snap(page: Page, name: string): Promise<void> {
+export async function snap(page: Page, name: string, options: SnapOptions = {}): Promise<void> {
   if (!NAME.test(name)) throw new Error(`snap name must match ${String(NAME)}: ${name}`);
   mkdirSync(SCREENS_DIR, { recursive: true });
   const size = page.viewportSize();
@@ -88,10 +98,14 @@ export async function snap(page: Page, name: string): Promise<void> {
       for (const v of Object.keys(VIEWPORTS) as Viewport[]) {
         await page.setViewportSize(VIEWPORTS[v]);
         await settle(page);
+        if (options.prepare) {
+          await options.prepare(v);
+          await settle(page);
+        }
         await expectNoHorizontalOverflow(page, `${name} ${s} ${v}`);
         await page.screenshot({
           path: screenFile(name, s, v),
-          fullPage: true,
+          fullPage: options.fullPage ?? true,
           animations: "disabled",
         });
       }

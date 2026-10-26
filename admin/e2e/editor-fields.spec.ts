@@ -6,7 +6,8 @@
 // longer has listed and dropped; and the review screens. Every type and item is created
 // by the test itself (E2E data hygiene) and removed at the end.
 
-import type { Locator, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { showSection } from "./support/editor-snap";
 import { ContentApi, type Item } from "./support/content-api";
 import { png } from "./support/files";
 import { mod } from "./support/keys";
@@ -64,17 +65,6 @@ async function bookType(api: ContentApi): Promise<{ name: string; label: string 
   return { name, label };
 }
 
-/** Scrolls the side panel (only) so `section` is at its top; the window stays put, so a
- * full-page review screenshot is not cut. */
-async function scrollPanelTo(section: Locator): Promise<void> {
-  await section.evaluate((el) => {
-    const scroller = el.closest(".overflow-y-auto");
-    if (!scroller) return;
-    scroller.scrollTop +=
-      el.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 16;
-  });
-}
-
 async function openItem(page: Page, type: string, id: string): Promise<void> {
   await page.goto(`/admin/content/${type}/${id}`);
   await expect(title(page)).toBeVisible();
@@ -103,7 +93,12 @@ test("fill_every_field_kind_and_reload", async ({ as, site, backend }) => {
     await c.getByRole("textbox", { name: /^Subtitle/ }).fill("A subtitle");
     await c.getByRole("textbox", { name: "Blurb" }).click();
     await page.keyboard.type("A rich blurb.");
+    // Only a point separates decimals: a comma is refused, never guessed at.
     await c.getByRole("textbox", { name: "Price" }).fill("12,5");
+    await expect(field(c, "fields.price").locator("[data-slot=field-error]")).toHaveText(
+      "Use a point (.) for decimals, without thousands separators",
+    );
+    await c.getByRole("textbox", { name: "Price" }).fill("12.5");
     // The date: a day in the calendar and a 24-hour time.
     await c.getByRole("button", { name: "Release" }).click();
     const calendar = page.locator("[data-slot=calendar]");
@@ -267,8 +262,7 @@ test("seo_fields_reach_the_head", async ({ as, site, backend, snap, expectAccess
     await expect(seo.locator("[data-slot=seo-title-count]")).toHaveText(
       `${[...seoTitle].length} / 60`,
     );
-    await scrollPanelTo(seo);
-    await snap(page, "editor-seo-preview");
+    await snap(page, "editor-seo-preview", showSection(page, "panel-seo"));
     await expectAccessible(page);
 
     await save(page);
@@ -354,22 +348,32 @@ test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
     await openItem(page, type.name, item.id);
     await expect(card(page)).toBeVisible();
     await expect(card(page).getByRole("button", { name: "Related" })).toContainText(post.title);
-    await snap(page, "editor-fields-card");
+    await snap(page, "editor-fields-card", showSection(page, "fields-card", true));
     await expectAccessible(page);
 
-    // Required and invalid: the save is refused here and the fields say why.
+    // Required and invalid: the save is refused here and the fields say why, also from
+    // focus mode (which hides the card): it ends and the first field gets the cursor.
     await card(page)
       .getByRole("textbox", { name: /^Subtitle/ })
       .fill("");
     await card(page).getByRole("textbox", { name: "Price" }).fill("cheap");
+    await title(page).click();
+    await page.keyboard.press(`${await mod(page)}+Shift+f`);
+    await expect(page.locator("[data-slot=editor-screen]")).toHaveAttribute(
+      "data-focus-mode",
+      "true",
+    );
+    await expect(card(page)).toHaveCount(0);
     await page.keyboard.press(`${await mod(page)}+s`);
+    await expect(page.locator("[data-slot=editor-screen]")).not.toHaveAttribute("data-focus-mode");
+    await expect(card(page).getByRole("textbox", { name: /^Subtitle/ })).toBeFocused();
     await expect(
       field(card(page), "fields.subtitle").locator("[data-slot=field-error]"),
     ).toHaveText("Required");
     await expect(field(card(page), "fields.price").locator("[data-slot=field-error]")).toHaveText(
       "Must be a number",
     );
-    await snap(page, "editor-fields-invalid");
+    await snap(page, "editor-fields-invalid", showSection(page, "fields-card", true));
     await expectAccessible(page);
     // Back as stored: nothing unsaved before the reload below.
     await card(page)
@@ -379,16 +383,28 @@ test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
     await expect(indicator(page)).toHaveAttribute("data-state", "saved");
 
     // A field removed from the type: listed, and dropped by the next save.
-    await api.patchType(type.name, { fields: SCHEMA.filter((f) => f.name !== "genre") });
+    // A sub-field removed from a repeater, too.
+    await api.patchType(type.name, {
+      fields: SCHEMA.filter((f) => f.name !== "genre").map((f) =>
+        f.name === "chapters"
+          ? { ...f, fields: (f.fields ?? []).filter((sub) => sub.name !== "notes") }
+          : f,
+      ),
+    });
     await page.reload();
     const stale = page.locator("[data-slot=stale-keys]");
     await expect(stale).toContainText("Not in the type any more: genre, removed when you save");
-    await snap(page, "editor-fields-stale");
+    await expect(stale).toContainText(
+      "Not in the type any more: chapters[].notes, removed when you save",
+    );
+    await snap(page, "editor-fields-stale", showSection(page, "fields-card", true));
     await expectAccessible(page);
     await title(page).fill(`${item.title} (renamed)`);
     await save(page);
     await expect(stale).toHaveCount(0);
-    expect(((await api.get(type.name, item.id)) as Stored).fields).not.toHaveProperty("genre");
+    const after = ((await api.get(type.name, item.id)) as Stored).fields;
+    expect(after).not.toHaveProperty("genre");
+    expect(after.chapters).toEqual([{ title: "The beginning" }, { title: "The middle" }]);
   } finally {
     await page.context().close();
     await api.removeType(type.name);

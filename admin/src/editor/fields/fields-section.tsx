@@ -46,15 +46,29 @@ export function FieldsSection({ doc, card = false }: { doc: EditorDocument; card
     }),
     [errorFor, clearFieldError, doc.readOnly, doc.restoring],
   );
-  const general = fieldErrors.fields;
+  // Messages no input shows (a value of the featured image, a `fields` refusal without a
+  // path): listed at the top, so a refused save always says why.
+  const inputs = defs.map((d) => `fields.${d.name}`);
+  const shownAt = (path: string) =>
+    inputs.some((p) => path === p || path.startsWith(`${p}[`) || path.startsWith(`${p}.`));
+  const general = [
+    ...Object.entries(fieldErrors)
+      .filter(([p]) => p.startsWith("fields") && !shownAt(p))
+      .map(([, m]) => sentence(m)),
+    ...Object.entries(issues)
+      .filter(([p]) => !shownAt(p) && !(p in fieldErrors))
+      .map(([p, issue]) => `${p.replace(/^fields\./, "")}: ${issueMessage(issue)}`),
+  ];
 
   const body = (
     <FieldsContext value={context}>
       <div className="flex flex-col gap-5">
-        {general ? (
-          <p role="alert" className="text-sm text-destructive">
-            {sentence(general)}
-          </p>
+        {general.length > 0 ? (
+          <ul role="alert" data-slot="fields-general-errors" className="text-sm text-destructive">
+            {general.map((m) => (
+              <li key={m}>{m}</li>
+            ))}
+          </ul>
         ) : null}
         {stale.length > 0 ? <StaleNotice names={stale} /> : null}
         {defs.map((def) => (

@@ -1,6 +1,7 @@
 // The leave guard's question (`leave-guard.ts`): unsaved changes and a navigation
 // waiting. Save (and then leave), Discard (leave without them, the autosave slot
-// cleared) or Stay. Stay is the safe default (it has the focus).
+// cleared) or Stay. Stay is the safe default (it has the focus). Images dropped on the
+// body that are still uploading are said too: leaving cancels them.
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -24,6 +25,10 @@ export interface LeaveDialogProps {
   kept: boolean;
   /** A kept copy could not be stored in the slot: it is only on this page. */
   keptOnlyHere: boolean;
+  /** Images still uploading (leaving cancels them). */
+  uploading?: number;
+  /** There are changes to save (else only uploads hold the screen). */
+  changes?: boolean;
   /** Why the last Save or Discard did not leave (the dialog stays open). */
   error: string | null;
   /** Saves; the navigation goes on only when nothing is left unsaved. */
@@ -38,6 +43,8 @@ export function LeaveDialog({
   autosaved,
   kept,
   keptOnlyHere,
+  uploading = 0,
+  changes = true,
   error,
   onSave,
   onDiscard,
@@ -62,17 +69,26 @@ export function LeaveDialog({
     >
       <AlertDialogContent data-slot="leave-dialog" className="sm:max-w-md">
         <AlertDialogHeader>
-          <AlertDialogTitle>{t("leave.title")}</AlertDialogTitle>
+          <AlertDialogTitle>
+            {changes ? t("leave.title") : t("leave.uploadingTitle")}
+          </AlertDialogTitle>
+          {uploading > 0 && changes ? (
+            <p data-slot="leave-uploading" className="text-sm font-medium text-foreground">
+              {t("leave.uploading", { count: uploading })}
+            </p>
+          ) : null}
           <AlertDialogDescription>
-            {isNew
-              ? t("leave.descriptionNew")
-              : keptOnlyHere
-                ? t("leave.descriptionKeptOnlyHere")
-                : kept
-                  ? t("leave.descriptionKept")
-                  : autosaved
-                    ? t("leave.descriptionAutosaved")
-                    : t("leave.description")}
+            {!changes
+              ? t("leave.uploading", { count: uploading })
+              : isNew
+                ? t("leave.descriptionNew")
+                : keptOnlyHere
+                  ? t("leave.descriptionKeptOnlyHere")
+                  : kept
+                    ? t("leave.descriptionKept")
+                    : autosaved
+                      ? t("leave.descriptionAutosaved")
+                      : t("leave.description")}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {error ? (
@@ -99,17 +115,19 @@ export function LeaveDialog({
               void run("discard");
             }}
           >
-            {t("leave.discard")}
+            {changes ? t("leave.discard") : t("leave.cancelUploads")}
           </Button>
-          <Button
-            type="button"
-            disabled={busy !== null}
-            onClick={() => {
-              void run("save");
-            }}
-          >
-            {busy === "save" ? t("leave.saving") : t("leave.save")}
-          </Button>
+          {changes ? (
+            <Button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => {
+                void run("save");
+              }}
+            >
+              {busy === "save" ? t("leave.saving") : t("leave.save")}
+            </Button>
+          ) : null}
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

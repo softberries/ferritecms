@@ -20,7 +20,14 @@ import {
   type Page,
 } from "@playwright/test";
 import { authFile, siteInfo, type Backend, type SiteInfo } from "./server";
-import { currentScheme, settle, snap as takeSnap, VIEWPORTS, type Scheme } from "./snap";
+import {
+  currentScheme,
+  settle,
+  snap as takeSnap,
+  VIEWPORTS,
+  type Scheme,
+  type SnapOptions,
+} from "./snap";
 import { account, type Role } from "./users";
 
 export { expect };
@@ -50,7 +57,7 @@ interface Fixtures {
   guard: Guard;
   as: (role: Role) => Promise<Page>;
   freshSession: (role: Role, forwardedFor: string) => Promise<Page>;
-  snap: (page: Page, name: string) => Promise<void>;
+  snap: (page: Page, name: string, options?: SnapOptions) => Promise<void>;
   expectAccessible: (page: Page) => Promise<void>;
 }
 
@@ -161,10 +168,10 @@ export const test = base.extend<Fixtures & Options>({
   },
 
   snap: async ({ backend }, use) => {
-    await use(async (page, name) => {
+    await use(async (page, name, options) => {
       // One set of review screenshots per run; the Postgres smoke project only checks
       // behaviour.
-      if (backend === "sqlite") await takeSnap(page, name);
+      if (backend === "sqlite") await takeSnap(page, name, options);
     });
   },
 

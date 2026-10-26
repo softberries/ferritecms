@@ -27,7 +27,13 @@ export const MAX_ROWS = 200;
 /** How deep repeaters nest (a repeater inside a repeater, no further). */
 export const MAX_REPEATER_DEPTH = 2;
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** The forms `Uuid::parse_str` takes: hyphenated, simple, braced and URN. */
+const UUID_FORMS = [
+  /^([0-9a-f]{8})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{12})$/i,
+  /^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/i,
+  /^\{([0-9a-f]{8})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{12})\}$/i,
+  /^urn:uuid:([0-9a-f]{8})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{12})$/i,
+];
 /** RFC 3339 date-time (chrono's `parse_from_rfc3339`: `T`, `t` or a space between). */
 const RFC3339 =
   /^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(\.\d+)?([Zz]|[+-](\d{2}):(\d{2}))$/;
@@ -35,7 +41,17 @@ const RFC3339 =
 export const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-export const isUuid = (v: unknown): v is string => typeof v === "string" && UUID.test(v);
+/** `v` as a lower-case hyphenated UUID when core would read it as one, else `null`. */
+export function uuidOf(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  for (const re of UUID_FORMS) {
+    const m = re.exec(v);
+    if (m) return m.slice(1).join("-").toLowerCase();
+  }
+  return null;
+}
+
+export const isUuid = (v: unknown): v is string => uuidOf(v) !== null;
 
 /** The type's schema, or `null` when it has none (its items take any object). */
 export function fieldsFor(type: ContentTypeDto): FieldDef[] | null {
@@ -57,16 +73,50 @@ export function emptyRow(defs: readonly FieldDef[]): FieldValues {
   return Object.fromEntries(defs.map((d) => [d.name, emptyValue(d)]));
 }
 
-/** Top-level keys the schema does not have (`featured_image` is always allowed). */
+/**
+ * Stored keys the schema does not have: top-level names, and inside repeater rows at any
+ * depth as `chapters[].extra` (once per name). `featured_image` is always allowed.
+ */
 export function staleKeys(defs: readonly FieldDef[], value: FieldValues): string[] {
-  const names = new Set(defs.map((d) => d.name));
-  return Object.keys(value).filter((k) => k !== FEATURED_IMAGE && !names.has(k));
+  const out: string[] = [];
+  const walk = (level: readonly FieldDef[], obj: FieldValues, prefix: string, top: boolean) => {
+    const names = new Set(level.map((d) => d.name));
+    for (const k of Object.keys(obj)) {
+      if (top && k === FEATURED_IMAGE) continue;
+      if (!names.has(k) && !out.includes(`${prefix}${k}`)) out.push(`${prefix}${k}`);
+    }
+    for (const d of level) {
+      const rows = obj[d.name];
+      if (d.kind !== "repeater" || !Array.isArray(rows)) continue;
+      for (const row of rows) {
+        if (isObject(row)) walk(d.fields ?? [], row, `${prefix}${d.name}[].`, false);
+      }
+    }
+  };
+  walk(defs, value, "", true);
+  return out;
 }
 
-/** What a save sends: `value` without exactly its `staleKeys`. */
+/** What a save sends: `value` without its stale keys, at every level (P39). */
 export function toSave(defs: readonly FieldDef[], value: FieldValues): FieldValues {
-  const stale = new Set(staleKeys(defs, value));
-  return Object.fromEntries(Object.entries(value).filter(([k]) => !stale.has(k)));
+  const clean = (level: readonly FieldDef[], obj: FieldValues, top: boolean): FieldValues => {
+    const out: FieldValues = {};
+    for (const [k, v] of Object.entries(obj)) {
+      const def = level.find((d) => d.name === k);
+      if (!def) {
+        if (top && k === FEATURED_IMAGE) out[k] = v;
+        continue;
+      }
+      out[k] =
+        def.kind === "repeater" && Array.isArray(v)
+          ? (v as unknown[]).map((row) =>
+              isObject(row) ? clean(def.fields ?? [], row, false) : row,
+            )
+          : v;
+    }
+    return out;
+  };
+  return clean(defs, value, true);
 }
 
 /** JSON with sorted keys; `null` kept (unlike absent), so `{a: null}` ≠ `{}`. */
@@ -91,6 +141,7 @@ export type IssueCode =
   | "textLong"
   | "richText"
   | "number"
+  | "numberComma"
   | "bool"
   | "date"
   | "select"
@@ -117,13 +168,15 @@ export function isRfc3339(s: string): boolean {
   return d <= new Date(Date.UTC(y, mo, 0)).getUTCDate();
 }
 
-/** `1 234,5` and `1234.5` both read as 1234.5; anything else stays text (and is refused). */
+/**
+ * A number as typed: only `.` separates decimals. A comma (decimal or thousands) is never
+ * guessed at: the text is kept and refused with its own message.
+ */
 export function parseNumber(text: string): number | string | null {
-  const s = text.trim().replace(/[\s\u00a0\u202f]/g, "");
+  const s = text.trim();
   if (s === "") return null;
-  const normal = s.includes(".") ? s.replace(/,/g, "") : s.replace(",", ".");
-  if (!/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(normal)) return text;
-  const n = Number(normal);
+  if (!/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(s)) return text;
+  const n = Number(s);
   return Number.isFinite(n) ? n : text;
 }
 
@@ -154,7 +207,8 @@ function checkValue(def: FieldDef, v: unknown, at: string, out: Record<string, F
       if (!isObject(v)) put("richText");
       return;
     case "number":
-      if (typeof v !== "number" || !Number.isFinite(v)) put("number");
+      if (typeof v === "string" && v.includes(",")) put("numberComma");
+      else if (typeof v !== "number" || !Number.isFinite(v)) put("number");
       return;
     case "bool":
       if (typeof v !== "boolean") put("bool");
@@ -258,7 +312,10 @@ export function serverFieldErrors(error: unknown): Record<string, string> {
       const message = m?.[2] ?? e.detail;
       if (!(path in out)) out[path] = message;
     } else if (e.field.startsWith("fields") || e.field.startsWith("seo.")) {
-      if (!(e.field in out)) out[e.field] = e.detail;
+      // Core starts the message with the path too (`seo.title: …`).
+      const prefix = `${e.field}: `;
+      const message = e.detail.startsWith(prefix) ? e.detail.slice(prefix.length) : e.detail;
+      if (!(e.field in out)) out[e.field] = message;
     }
   }
   return out;

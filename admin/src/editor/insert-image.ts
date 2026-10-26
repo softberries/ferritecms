@@ -150,13 +150,14 @@ export const ImageUploads = Extension.create({
 /**
  * The upload side of image files dropped on `editor`'s body. Each file gets a
  * placeholder; a finished upload is inserted where its placeholder is now. The queue
- * lives as long as the screen (leaving cancels what has not finished). Without
+ * lives as long as the screen; the number still running is returned for the editor's
+ * leave guard, which asks before leaving cancels them (never silently). Without
  * `canUpload` a drop calls `onForbidden` instead (the server would refuse it, P30).
  */
 export function useImageDrops(
   editor: Editor,
   { canUpload, onForbidden }: { canUpload: boolean; onForbidden: () => void },
-): void {
+): { uploading: number } {
   const tracked = useRef(new Set<string>());
   const noop = useCallback(() => undefined, []);
   const { queue, entries } = useUploadQueue(noop);
@@ -206,4 +207,7 @@ export function useImageDrops(
     dom.addEventListener(IMAGE_DROP_EVENT, onDrop);
     return () => dom.removeEventListener(IMAGE_DROP_EVENT, onDrop);
   }, [editor, queue, canUpload]);
+  return {
+    uploading: entries.filter((e) => e.state === "queued" || e.state === "uploading").length,
+  };
 }

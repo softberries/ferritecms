@@ -228,6 +228,10 @@
     "select": "Select",
     "selectName": "Select {{name}}",
     "cancel": "Cancel",
-    "noneSelected": "Nothing selected"
+    "noneSelected": "Nothing selected",
+    "uploadsTitle": "Uploads are still running",
+    "uploadsBody": "Closing now cancels the uploads that have not finished. Files already uploaded stay in the library.",
+    "keepUploading": "Keep uploading",
+    "cancelUploads": "Cancel uploads"
   }
 }

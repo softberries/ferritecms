@@ -131,6 +131,38 @@ describe("fields_form_test", () => {
     });
   });
 
+  test("stale_row_keys_are_listed_and_dropped", async () => {
+    // A repeater lost a sub-field: its rows still hold it.
+    const defs = [def("chapters", "repeater", { fields: [def("title", "text")] })];
+    const { patches, seen } = routes((body) =>
+      json(item(body.fields as Record<string, unknown>, 4)),
+    );
+    renderWithRouter(
+      <Harness
+        start={item({
+          chapters: [
+            { title: "One", pages: 12 },
+            { title: "Two", pages: 3 },
+          ],
+        })}
+        defs={defs}
+      />,
+    );
+    const notice = await screen.findByRole("note");
+    expect(notice).toHaveTextContent(
+      "Not in the type any more: chapters[].pages, removed when you save",
+    );
+    act(() => d().setTitle("Renamed"));
+    let result: unknown = null;
+    await act(async () => {
+      result = await d().save();
+    });
+    // Saved (nothing refused, nothing unexplained), without the stale sub-key.
+    expect(result).not.toBeNull();
+    expect(seen.filter((u) => u.pathname === PATH)).toHaveLength(1);
+    expect(patches[0]?.fields).toEqual({ chapters: [{ title: "One" }, { title: "Two" }] });
+  });
+
   test("required_blocks_save", async () => {
     const defs = [def("isbn", "text", { required: true }), def("pages", "number")];
     const { seen } = routes(() => json(item({}, 4)));

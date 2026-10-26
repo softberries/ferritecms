@@ -391,7 +391,11 @@
     "descriptionAutosaved": "Your latest changes are kept as an autosave, but not saved to this item yet.",
     "descriptionKept": "Discarding drops only your edits since you took the newer version. Your own version stays kept as an autosave.",
     "descriptionKeptOnlyHere": "Your own version (kept when you took the newer one) could not be stored as an autosave and is only on this page. Save and leave, or Discard changes, stores it first.",
-    "keptFailed": "Your own version still could not be stored, so you stay on this page. Try again, or copy your text first."
+    "keptFailed": "Your own version still could not be stored, so you stay on this page. Try again, or copy your text first.",
+    "uploading_one": "An image is still uploading: leaving cancels it.",
+    "uploading_other": "{{count}} images are still uploading: leaving cancels them.",
+    "uploadingTitle": "Images are still uploading",
+    "cancelUploads": "Leave and cancel uploads"
   },
   "revisions": {
     "entry": "Revisions ({{n}})",
@@ -478,7 +482,8 @@
       "array": "Must be a list of rows",
       "rows": "At most {{rows}} rows",
       "row": "Must be a row of fields",
-      "unknown": "Not a field of this row"
+      "unknown": "Not a field of this row",
+      "numberComma": "Use a point (.) for decimals, without thousands separators"
     },
     "heading": "Fields",
     "nameHint": "Field name:",

@@ -9,12 +9,13 @@
 // decides again).
 //
 // `openMediaPicker` works from anywhere (an editor command, a field); `MediaPickerHost`,
-// mounted once in the shell, shows the dialog. The promise settles once the dialog has
+// mounted once in the shell, shows the dialog. Closing it while its uploads run asks
+// first (Keep uploading / Cancel uploads): an upload is never cancelled silently. The promise settles once the dialog has
 // closed and returned focus, so the caller can move focus on (into the editor).
 
 import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { ImageIcon, LibraryIcon, SearchXIcon, UploadIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { qk } from "@/api/keys";
 import { type MediaDto, listMedia } from "@/api/media";
@@ -24,6 +25,15 @@ import { DropZone } from "@/components/kit/drop-zone";
 import { EmptyState } from "@/components/kit/empty-state";
 import { ErrorState } from "@/components/kit/error-state";
 import { MediaThumb } from "@/components/kit/media-thumb";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -61,6 +71,8 @@ export function MediaPickerHost() {
   const [closing, setClosing] = useState<number | null>(null);
   const chosen = useRef<MediaDto | null>(null);
   const open = request !== null && closing !== request.id;
+  // The body's guarded close: it asks first while uploads run (set by the body).
+  const guarded = useRef<((media: MediaDto | null) => void) | null>(null);
   const close = (media: MediaDto | null) => {
     if (!request) return;
     chosen.current = media;
@@ -70,7 +82,7 @@ export function MediaPickerHost() {
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) close(null);
+        if (!next) (guarded.current ?? close)(null);
       }}
     >
       {request ? (
@@ -85,7 +97,7 @@ export function MediaPickerHost() {
             window.setTimeout(() => settlePicker(id, media), 0);
           }}
         >
-          <PickerBody key={request.id} request={request} onChoose={close} />
+          <PickerBody key={request.id} request={request} onChoose={close} guardRef={guarded} />
         </DialogContent>
       ) : null}
     </Dialog>
@@ -96,10 +108,13 @@ type Tab = "library" | "upload";
 
 function PickerBody({
   request,
-  onChoose,
+  onChoose: choose,
+  guardRef,
 }: {
   request: PickerRequest;
   onChoose: (media: MediaDto | null) => void;
+  /** Receives the close that asks first while uploads run. */
+  guardRef: RefObject<((media: MediaDto | null) => void) | null>;
 }) {
   const { t } = useTranslation("media");
   const me = useMe();
@@ -150,6 +165,20 @@ function PickerBody({
   }, [active, done, failed]);
 
   const what = images ? t("picker.images") : t("picker.files");
+
+  // Closing cancels the uploads still running: never silently (Keep uploading / Cancel
+  // uploads), also when an item is chosen meanwhile.
+  const [asking, setAsking] = useState<{ media: MediaDto | null } | null>(null);
+  const onChoose = (media: MediaDto | null) => {
+    if (active) setAsking({ media });
+    else choose(media);
+  };
+  useEffect(() => {
+    guardRef.current = onChoose;
+    return () => {
+      guardRef.current = null;
+    };
+  });
 
   return (
     <Tabs
@@ -306,6 +335,35 @@ function PickerBody({
           </Button>
         </div>
       </div>
+      <AlertDialog
+        open={asking !== null}
+        onOpenChange={(open) => {
+          if (!open) setAsking(null);
+        }}
+      >
+        <AlertDialogContent data-slot="picker-uploads-dialog" className="sm:max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("picker.uploadsTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("picker.uploadsBody")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel autoFocus onClick={() => setAsking(null)}>
+              {t("picker.keepUploading")}
+            </AlertDialogCancel>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                const pending = asking;
+                setAsking(null);
+                queue.dispose();
+                choose(pending?.media ?? null);
+              }}
+            >
+              {t("picker.cancelUploads")}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Tabs>
   );
 }

@@ -37,7 +37,7 @@ export function RepeaterField({
   depth: number;
 }) {
   const { t } = useTranslation("editor");
-  const { disabled } = useFieldsContext();
+  const { disabled, errorFor } = useFieldsContext();
   const subs = useMemo(() => def.fields ?? [], [def.fields]);
   const rows: unknown[] = Array.isArray(value) ? value : [];
   // Stable keys for the rows (the values have none), kept in step with their order.
@@ -120,6 +120,15 @@ export function RepeaterField({
                         <Trash2Icon />
                       </Button>
                     </div>
+                    <RowErrors
+                      messages={[
+                        errorFor(rowPath),
+                        // Keys the row's schema does not have (a server message at them).
+                        ...Object.keys(obj)
+                          .filter((k) => !subs.some((f) => f.name === k))
+                          .map((k) => errorFor(`${rowPath}.${k}`)),
+                      ]}
+                    />
                     {subs.map((sub) => (
                       <FieldInput
                         key={sub.name}
@@ -154,5 +163,18 @@ export function RepeaterField({
         </div>
       )}
     </FieldShell>
+  );
+}
+
+/** A row's own messages (not a row of fields, a key its schema lacks): shown in the row. */
+function RowErrors({ messages }: { messages: (string | undefined)[] }) {
+  const shown = messages.filter((m): m is string => m !== undefined);
+  if (shown.length === 0) return null;
+  return (
+    <ul data-slot="row-errors" className="text-sm text-destructive">
+      {shown.map((m) => (
+        <li key={m}>{m}</li>
+      ))}
+    </ul>
   );
 }

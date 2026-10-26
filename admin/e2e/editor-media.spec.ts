@@ -4,7 +4,8 @@
 // inserted where they were dropped, and the alt text edited on the image. Every item and
 // file is created by the test itself (E2E data hygiene) and removed at the end.
 
-import type { JSHandle, Locator, Page } from "@playwright/test";
+import type { JSHandle, Page } from "@playwright/test";
+import { showSection } from "./support/editor-snap";
 import { ContentApi, type Item, type Media } from "./support/content-api";
 import { png, type FixtureFile } from "./support/files";
 import { mod } from "./support/keys";
@@ -24,17 +25,6 @@ const word = () =>
   `w${uid("")
     .replace(/[^a-z0-9]/g, "")
     .slice(-10)}`;
-
-/** Scrolls the side panel (only) so `section` is at its top; the window stays put, so a
- * full-page review screenshot is not cut. */
-async function scrollPanelTo(section: Locator): Promise<void> {
-  await section.evaluate((el) => {
-    const scroller = el.closest(".overflow-y-auto");
-    if (!scroller) return;
-    scroller.scrollTop +=
-      el.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 16;
-  });
-}
 
 async function openItem(page: Page, type: string, id: string): Promise<void> {
   await page.goto(`/admin/content/${type}/${id}`);
@@ -96,7 +86,7 @@ test("set_featured_image_from_picker", async ({ as, site, backend, snap, expectA
     await picker(page).getByRole("searchbox").fill(name);
     const tile = picker(page).locator("[data-tile]").filter({ hasText: name });
     await tile.click();
-    await snap(page, "editor-media-picker");
+    await snap(page, "editor-media-picker", { fullPage: false });
     await expectAccessible(page);
     // Enter on the tile chooses it.
     await tile.focus();
@@ -109,8 +99,7 @@ test("set_featured_image_from_picker", async ({ as, site, backend, snap, expectA
     await expect(indicator(page)).toHaveAttribute("data-state", "saved");
     const stored = (await api.get("post", item.id)) as Stored;
     expect(stored.fields.featured_image).toBe(media.id);
-    await scrollPanelTo(featured);
-    await snap(page, "editor-featured-image");
+    await snap(page, "editor-featured-image", showSection(page, "panel-featured"));
     await expectAccessible(page);
 
     // Remove: `null` (kept as a value).
@@ -279,6 +268,86 @@ test("edit_image_alt", async ({ as, site, backend, expectAccessible }) => {
     await page.context().close();
     await api.purge(item);
     await api.purgeMedia(media.id);
+    await api.dispose();
+  }
+});
+
+/** Holds every `POST /media` until the test ends (the upload stays running). */
+async function holdUploads(page: Page): Promise<void> {
+  await page.route("**/api/v1/media", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await new Promise((r) => setTimeout(r, 60_000));
+    await route.abort().catch(() => {});
+  });
+}
+
+test("closing_the_picker_during_an_upload_asks", async ({ as, site, backend, guard }) => {
+  guard.allowFailedResource(/\/api\/v1\/media$/);
+  const api = await ContentApi.as(backend, site.url, "admin");
+  const item = await api.create("post", `Picker upload ${uid()}`);
+  const page = await as("admin");
+  try {
+    await openItem(page, "post", item.id);
+    await holdUploads(page);
+    await panel(page).getByRole("button", { name: "Set featured image" }).click();
+    await picker(page).getByRole("tab", { name: "Upload" }).click();
+    const name = `${uid("held")}.png`;
+    await picker(page)
+      .locator("input[type=file]")
+      .setInputFiles({ name, mimeType: "image/png", buffer: png(name, 200, 120).buffer });
+    await expect(
+      picker(page).locator("[data-slot=upload-row]").filter({ hasText: name }),
+    ).toHaveAttribute("data-state", "uploading");
+
+    // Esc asks first; Keep uploading keeps the picker and the upload.
+    const ask = page.locator("[data-slot=picker-uploads-dialog]");
+    await page.keyboard.press("Escape");
+    await expect(ask).toBeVisible();
+    await expect(ask).toContainText("Uploads are still running");
+    await ask.getByRole("button", { name: "Keep uploading" }).click();
+    await expect(ask).toHaveCount(0);
+    await expect(picker(page)).toBeVisible();
+    await expect(
+      picker(page).locator("[data-slot=upload-row]").filter({ hasText: name }),
+    ).toHaveAttribute("data-state", "uploading");
+
+    // Cancel asks too; Cancel uploads closes it.
+    await picker(page).getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(ask).toBeVisible();
+    await ask.getByRole("button", { name: "Cancel uploads" }).click();
+    await expect(picker(page)).toHaveCount(0);
+  } finally {
+    await page.context().close();
+    await api.purge(item);
+    await api.dispose();
+  }
+});
+
+test("leaving_during_a_drop_upload_asks", async ({ as, site, backend, guard }) => {
+  guard.allowFailedResource(/\/api\/v1\/media$/);
+  const api = await ContentApi.as(backend, site.url, "admin");
+  const item = await api.create("post", `Drop leave ${uid()}`, { body: paragraph("Here.") });
+  const page = await as("admin");
+  try {
+    await openItem(page, "post", item.id);
+    await holdUploads(page);
+    await dropOnBody(page, "Here.", [png(`${uid("held")}.png`, 200, 120)]);
+    await expect(body(page).locator("[data-slot=editor-upload-placeholder]")).toHaveCount(1);
+
+    const dialog = page.locator("[data-slot=leave-dialog]");
+    await page.getByRole("link", { name: "Pages" }).first().click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("Images are still uploading");
+    await dialog.getByRole("button", { name: "Stay" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(body(page).locator("[data-slot=editor-upload-placeholder]")).toHaveCount(1);
+
+    await page.getByRole("link", { name: "Pages" }).first().click();
+    await dialog.getByRole("button", { name: "Leave and cancel uploads" }).click();
+    await expect(page).toHaveURL(/\/admin\/content\/page$/);
+  } finally {
+    await page.context().close();
+    await api.purge(item);
     await api.dispose();
   }
 });

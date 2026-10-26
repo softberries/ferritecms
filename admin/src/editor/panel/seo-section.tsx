@@ -26,6 +26,9 @@ const SEO_LIMITS = {
 
 const chars = (s: string) => [...s].length;
 
+/** A server message as a sentence (core starts it in lower case). */
+const sentence = (s: string | undefined) => (s ? s[0]!.toUpperCase() + s.slice(1) : undefined);
+
 export function SeoSection({
   doc,
   siteUrl,
@@ -73,7 +76,7 @@ export function SeoSection({
         value={seo.title}
         disabled={disabled}
         placeholder={doc.title.trim() || t("seo.titlePlaceholder")}
-        error={doc.fieldErrors["seo.title"]}
+        error={sentence(doc.fieldErrors["seo.title"])}
         onChange={(title) => set({ title })}
       />
       <SeoInput
@@ -81,7 +84,7 @@ export function SeoSection({
         value={seo.description}
         disabled={disabled}
         placeholder={doc.meta.excerpt.trim() || t("seo.descriptionPlaceholder")}
-        error={doc.fieldErrors["seo.description"]}
+        error={sentence(doc.fieldErrors["seo.description"])}
         onChange={(description) => set({ description })}
       />
       <div className="flex flex-col gap-1.5">

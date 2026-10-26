@@ -26,7 +26,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { navFor } from "@/shell/nav";
 import type { ControlIds } from "./fields-context";
-import { isUuid } from "./fields-model";
+import { uuidOf } from "./fields-model";
 
 /** How long the search waits after the last keystroke. */
 const SEARCH_DEBOUNCE_MS = 150;
@@ -103,7 +103,7 @@ export function RelationField({
   }, [search]);
 
   const stored = typeof value === "string" ? value : null;
-  const id = stored !== null && isUuid(stored) ? stored.toLowerCase() : null;
+  const id = uuidOf(stored);
   const target = useTarget(id, types);
   // Just picked: known before the lookup answers.
   const [picked, setPicked] = useState<Target | null>(null);

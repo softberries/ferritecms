@@ -14,7 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { displayTitle, typeLabel } from "@/media/format";
 import { openMediaPicker } from "@/media/media-picker";
 import type { ControlIds } from "./fields-context";
-import { isUuid } from "./fields-model";
+import { uuidOf } from "./fields-model";
 import { useMediaItem } from "./media-ref";
 
 export interface MediaChoiceProps {
@@ -42,7 +42,7 @@ export function MediaChoice({
   large = false,
 }: MediaChoiceProps) {
   const { t } = useTranslation("editor");
-  const id = value !== null && isUuid(value) ? value.toLowerCase() : null;
+  const id = uuidOf(value);
   const item = useMediaItem(id);
   const pick = async () => {
     const media = await openMediaPicker({ ...(kind ? { kind } : {}), title: pickTitle });

@@ -10,10 +10,12 @@ import {
   emptyValue,
   fieldIssues,
   fieldsFor,
+  parseNumber,
   sameValue,
   serverFieldErrors,
   staleKeys,
   toSave,
+  uuidOf,
   validateFields,
 } from "./fields-model";
 
@@ -46,33 +48,77 @@ describe("fields_model_test", () => {
     expect(fieldsFor(type([def("a", "text")]))?.map((d) => d.name)).toEqual(["a"]);
   });
 
-  test("stale_keys_are_top_level_keys_not_in_the_schema", () => {
+  test("stale_keys_are_keys_not_in_the_schema_at_any_level", () => {
     const defs = [def("subtitle", "text"), def("pages", "number")];
     expect(staleKeys(defs, { subtitle: "x", isbn: "1", featured_image: ID, old: null })).toEqual([
       "isbn",
       "old",
     ]);
     expect(staleKeys(defs, {})).toEqual([]);
+    // Inside repeater rows, at any depth, once per name.
+    const nested = [
+      def("chapters", "repeater", {
+        fields: [def("t", "text"), def("notes", "repeater", { fields: [def("n", "text")] })],
+      }),
+    ];
+    expect(
+      staleKeys(nested, {
+        chapters: [
+          { t: "One", extra: 1, notes: [{ n: "a", gone: 2 }] },
+          { t: "Two", extra: 3 },
+          "not a row",
+        ],
+      }),
+    ).toEqual(["chapters[].extra", "chapters[].notes[].gone"]);
   });
 
   test("to_save_drops_exactly_the_stale_keys_and_keeps_nulls", () => {
     const defs = [
       def("subtitle", "text"),
-      def("chapters", "repeater", { fields: [def("t", "text")] }),
+      def("chapters", "repeater", {
+        fields: [def("t", "text"), def("notes", "repeater", { fields: [def("n", "text")] })],
+      }),
     ];
     const value = {
       subtitle: null,
-      chapters: [{ t: "One", extra: 1 }],
+      chapters: [{ t: "One", extra: 1, notes: [{ n: null, gone: 2 }] }, "not a row"],
       featured_image: null,
       gone: "x",
     };
     expect(toSave(defs, value)).toEqual({
       subtitle: null,
-      chapters: [{ t: "One", extra: 1 }],
+      chapters: [{ t: "One", notes: [{ n: null }] }, "not a row"],
       featured_image: null,
     });
     // Nothing stale: the same content.
     expect(toSave(defs, { subtitle: "a" })).toEqual({ subtitle: "a" });
+    // What is left after dropping is valid (no unknown-key issue that no input shows).
+    expect(validateFields(defs, toSave(defs, { chapters: [{ t: "x", extra: 1 }] }))).toEqual({});
+  });
+
+  test("numbers_take_only_a_point_as_decimal_separator", () => {
+    expect(parseNumber("12.5")).toBe(12.5);
+    expect(parseNumber(" -3 ")).toBe(-3);
+    expect(parseNumber("")).toBeNull();
+    // A comma is never read as a decimal (or thousands) separator.
+    expect(parseNumber("1,500")).toBe("1,500");
+    expect(parseNumber("12,5")).toBe("12,5");
+    expect(fieldIssues([def("n", "number")], { n: "1,500" })["fields.n"]?.code).toBe("numberComma");
+    expect(validateFields([def("n", "number")], { n: "12,5" })["fields.n"]).toMatch(/point/);
+    expect(fieldIssues([def("n", "number")], { n: "abc" })["fields.n"]?.code).toBe("number");
+  });
+
+  test("uuids_in_every_form_core_accepts", () => {
+    const simple = ID.replace(/-/g, "");
+    for (const v of [ID, ID.toUpperCase(), simple, `{${ID}}`, `urn:uuid:${ID}`]) {
+      expect(validateFields([def("r", "relation")], { r: v, featured_image: v }), v).toEqual({});
+    }
+    for (const v of ["x", `${ID}0`, `{${ID}`, `urn:${ID}`]) {
+      expect(fieldIssues([def("r", "relation")], { r: v })["fields.r"]?.code, v).toBe("uuid");
+    }
+    expect(uuidOf(`{${ID.toUpperCase()}}`)).toBe(ID);
+    expect(uuidOf(simple)).toBe(ID);
+    expect(uuidOf("x")).toBeNull();
   });
 
   test("same_value_tells_null_from_absent_and_ignores_key_order", () => {
@@ -202,7 +248,7 @@ describe("fields_model_test", () => {
     });
     expect(serverFieldErrors(error)).toEqual({
       "fields.chapters[2].title": "required",
-      "seo.title": "seo.title: control characters are not allowed",
+      "seo.title": "control characters are not allowed",
       fields: "fields must be an object",
     });
     expect(serverFieldErrors(new Error("x"))).toEqual({});

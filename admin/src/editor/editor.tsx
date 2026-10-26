@@ -197,6 +197,8 @@ export function EditorScreen({
   /** A save refused for field values: the panel opens on the first field that says why. */
   const showInvalid = (source: "client" | "server") => {
     if (source === "client") toast.error(t("fields.blocked"), { id: "editor-save" });
+    // Focus mode hides the card and the panel: the field must be reachable.
+    if (focusMode) setFocusMode(false);
     // Unless every field is in the card (an SEO message from the server is in the panel).
     if (!fieldsInCard || source === "server") setPanelOpen(true);
     window.setTimeout(() => {
@@ -278,7 +280,7 @@ export function EditorScreen({
 
   const me = queryClient.getQueryData<MeDto>(qk.me);
   const canUploadMedia = me?.capabilities.includes("upload_media") === true;
-  useImageDrops(doc.editor, {
+  const { uploading } = useImageDrops(doc.editor, {
     canUpload: canUploadMedia,
     onForbidden: () => toast.error(t("image.uploadForbidden"), { id: "editor-drop" }),
   });
@@ -489,9 +491,12 @@ export function EditorScreen({
   // Leaving with changes the item does not hold asks first; closing the tab only while
   // the slot does not hold them either (F38).
   const [leaveError, setLeaveError] = useState<string | null>(null);
-  const guard = useLeaveGuard((doc.dirty && doc.readOnly === null) || doc.keptUnstored, {
-    unload: doc.unprotected,
-  });
+  // Images dropped on the body that are still uploading count too: leaving cancels them,
+  // so it asks first (never silently).
+  const guard = useLeaveGuard(
+    (doc.dirty && doc.readOnly === null) || doc.keptUnstored || uploading > 0,
+    { unload: doc.unprotected || uploading > 0 },
+  );
 
   // The restore banner's state: the restored draft (from the document), or the user's own
   // version kept in the slot after Take theirs (`doc.kept`), and when it was kept.
@@ -699,6 +704,8 @@ export function EditorScreen({
         autosaved={!doc.unprotected}
         kept={doc.kept !== null && !doc.keptUnstored}
         keptOnlyHere={doc.keptUnstored}
+        uploading={uploading}
+        changes={(doc.dirty && doc.readOnly === null) || doc.keptUnstored}
         error={leaveError}
         onStay={() => {
           setLeaveError(null);
