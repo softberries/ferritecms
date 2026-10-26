@@ -159,6 +159,8 @@ export function createErrorHandler(routing: ErrorRouting) {
         case "unauthenticated":
           if (SIGN_IN_PAGES.some((page) => isOn(path, page))) return;
           setCsrfToken(null);
+          // The cache stays: the same user signing back in keeps it. A different user
+          // gets it cleared when their session starts (`startSession`).
           redirect(`/login?${new URLSearchParams({ next: path }).toString()}`);
           return;
         case "password-reset-required":

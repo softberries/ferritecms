@@ -90,8 +90,27 @@ export async function loadSession({ context, location }: GuardContext): Promise<
     }
     throw e;
   }
-  queryClient.setQueryData(qk.me, user);
+  startSession(queryClient, user);
   return user;
+}
+
+/** Whose data each query client holds: the id of the last user a session started for. */
+const cacheOwners = new WeakMap<QueryClient, string>();
+
+/**
+ * Puts a user whose session just started or was confirmed (login, TOTP login, the
+ * guard's `me()`) into the cache. When it is a different user from the one the cache
+ * was filled for (a session expired and someone else signed in on this tab), the whole
+ * cache is cleared first: lists, counts, `allowed` flags, parent titles and settings
+ * were all read as the previous account. The same user keeps the cache, and
+ * `pendingDrafts` (scoped per user) is never touched here, so a re-login returns to the
+ * draft it left.
+ */
+export function startSession(queryClient: QueryClient, user: MeDto): void {
+  const owner = cacheOwners.get(queryClient);
+  if (owner !== undefined && owner !== user.id) queryClient.clear();
+  cacheOwners.set(queryClient, user.id);
+  queryClient.setQueryData(qk.me, user);
 }
 
 /** The cached user while it is fresh and its CSRF token is held, else `undefined`. */
@@ -131,6 +150,7 @@ export async function logout({ queryClient, navigate }: LogoutDeps): Promise<voi
   // ends them (the autosave slot on the server still holds what reached it).
   pendingDrafts.clear();
   queryClient.clear();
+  cacheOwners.delete(queryClient);
   await navigate({ to: "/login", replace: true, state: { authNotice: "signed-out" } });
 }
 

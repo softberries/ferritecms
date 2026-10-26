@@ -1,6 +1,7 @@
 // The sign-in screens under the real server: password and TOTP login, logout, the
 // forced password change (Review Focus 4), `next` (Review Focus 5) and the reset link's
-// token (Review Focus 1). Login contexts of this file use spec number 9
+// token (Review Focus 1), and a second account signing in on a tab whose session ended
+// seeing nothing of the first (the query cache is cleared on a change of user). Login contexts of this file use spec number 9
 // (`forwardedFor(9, n)`, F24); every test signs in with its own account or a fresh
 // session, never a shared storage state that it then ends (F23).
 
@@ -12,6 +13,7 @@ import {
   type Page,
   type Route,
 } from "@playwright/test";
+import { ContentApi } from "./support/content-api";
 import { expect, test, type Guard } from "./support/fixtures";
 import { authFile, type SiteInfo } from "./support/server";
 import { mailbox } from "./support/smtp-sink";
@@ -448,3 +450,99 @@ test("screens", async ({ browser, site, guard, as, snap, expectAccessible }) => 
   await snap(editor, "auth-change-error");
   await expectAccessible(editor);
 });
+
+test("another_account_on_the_same_tab_sees_none_of_the_first", async ({
+  browser,
+  site,
+  backend,
+  guard,
+}) => {
+  guard.allow(EXPECTED_FAILURES);
+  // The ended session answers 401: the browser logs those failed loads.
+  guard.allowFailedResource(/\/api\/v1\//);
+  const admin = await ContentApi.as(backend, site.url, "admin");
+  const type = uid("t").slice(0, 32);
+  const label = `Switch ${type.slice(-6)}`;
+  const password = "e2e-switch-pass-0009";
+  const makeAuthor = async (name: string) => {
+    const login = uid(name).replace(/[^a-z0-9-]/g, "");
+    const res = await admin.ctx.post("/api/v1/users", {
+      headers: { "X-CSRF-Token": await csrfOfApi(admin) },
+      data: { login, email: `${login}@example.test`, display_name: name, role: "author", password },
+    });
+    expect(res.status(), await res.text()).toBe(201);
+    return login;
+  };
+  try {
+    await admin.createType(type, label);
+    const alice = await makeAuthor("alice");
+    const bob = await makeAuthor("bob");
+
+    const page = await anonymousPage(browser, site, guard, 10);
+    const ctx = page.context();
+    const res = await ctx.request.post("/api/v1/auth/login", {
+      headers: { Origin: site.url },
+      data: { login: alice, password },
+    });
+    expect(res.status()).toBe(200);
+    const csrf = ((await res.json()) as { csrf_token: string }).csrf_token;
+    const secret = `Alice only ${uid()}`;
+    const made = await ctx.request.post(`/api/v1/content/${type}`, {
+      headers: { Origin: site.url, "X-CSRF-Token": csrf },
+      data: { title: secret },
+    });
+    expect(made.status(), await made.text()).toBe(201);
+
+    // Alice's list and counts are in the tab's cache.
+    const tabs = page.getByRole("navigation", { name: "Status" });
+    const tab = (name: string) => tabs.getByRole("link", { name: new RegExp(`^${name}\\b`) });
+    const count = (name: string) => tab(name).locator("[data-slot=tab-count]");
+    await page.goto(`/admin/content/${type}`);
+    await expect(page.getByRole("link", { name: secret, exact: true })).toBeVisible();
+    await expect(count("Draft")).toHaveText("1");
+
+    // Her session ends elsewhere (same cookie, another context).
+    const other = await apiRequest.newContext({
+      baseURL: site.url,
+      storageState: await ctx.storageState(),
+      extraHTTPHeaders: { Origin: site.url, "X-Forwarded-For": forwardedFor(SPEC, 10) },
+    });
+    expect(
+      (await other.post("/api/v1/auth/logout", { headers: { "X-CSRF-Token": csrf } })).status(),
+    ).toBe(204);
+    await other.dispose();
+
+    // The next request in the tab is refused: on to sign in, without a reload.
+    await tab("Draft").click();
+    await expect(page).toHaveURL(/\/admin\/login\?next=/);
+    // From here on, record whether anything of Alice's is ever drawn.
+    await page.evaluate((text) => {
+      const w = window as unknown as { leaked: boolean };
+      w.leaked = false;
+      new MutationObserver(() => {
+        if (document.body.textContent?.includes(text)) w.leaked = true;
+      }).observe(document.body, { childList: true, subtree: true, characterData: true });
+    }, secret);
+    await signIn(page, bob, password);
+
+    await expect(page).toHaveURL(new RegExp(`/admin/content/${type}\\?status=draft$`));
+    await expect(page.getByRole("table", { name: label })).not.toHaveAttribute("aria-busy", "true");
+    await expect(count("Draft")).toHaveText("0");
+    await expect(count("All")).toHaveText("0");
+    await tab("All").click();
+    await expect(page.getByRole("table", { name: label })).not.toHaveAttribute("aria-busy", "true");
+    await expect(count("All")).toHaveText("0");
+    await expect(page.getByText(secret)).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as { leaked: boolean }).leaked)).toBe(
+      false,
+    );
+  } finally {
+    await admin.removeType(type);
+    await admin.dispose();
+  }
+});
+
+async function csrfOfApi(api: ContentApi): Promise<string> {
+  const me = await api.ctx.get("/api/v1/auth/me");
+  return ((await me.json()) as { csrf_token: string }).csrf_token;
+}

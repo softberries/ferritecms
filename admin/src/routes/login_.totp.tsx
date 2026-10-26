@@ -24,12 +24,12 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { loginTotp } from "@/api/auth";
-import { qk } from "@/api/keys";
 import { isProblem } from "@/api/problem";
 import type { SchemaLoginResponse } from "@/api/schema";
 import { AuthLayout, FormAlert, SubmitButton } from "@/auth/auth-layout";
 import { type FormFailure, genericFailure } from "@/auth/errors";
 import { nextSearch, routerHref, safeNext } from "@/auth/next";
+import { startSession } from "@/auth/session";
 
 /** The challenge's lifetime (07 §2). */
 const CHALLENGE_MS = 5 * 60_000;
@@ -88,7 +88,7 @@ function TotpPage() {
     mutationFn: loginTotp,
     onSuccess: async (r: SchemaLoginResponse) => {
       if (r.status !== "session") return;
-      queryClient.setQueryData(qk.me, r.user);
+      startSession(queryClient, r.user);
       if (r.user.must_reset) {
         await navigate({ to: "/change-password", search: next ? { next } : {}, replace: true });
       } else {

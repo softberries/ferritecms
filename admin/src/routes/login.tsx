@@ -23,7 +23,7 @@ import { type FormFailure, genericFailure } from "@/auth/errors";
 import { fieldMessage, loginSchema } from "@/auth/schemas";
 import { nextSearch, routerHref, safeNext } from "@/auth/next";
 import { FormPasswordField } from "@/auth/password-field";
-import type { MeDto } from "@/auth/session";
+import { type MeDto, startSession } from "@/auth/session";
 
 export const Route = createFileRoute("/login")({
   validateSearch: nextSearch,
@@ -64,7 +64,7 @@ function LoginPage() {
         });
         return;
       }
-      queryClient.setQueryData(qk.me, r.user);
+      startSession(queryClient, r.user);
       if (r.user.must_reset) {
         await navigate({ to: "/change-password", search: next ? { next } : {}, replace: true });
       } else {

@@ -5,8 +5,11 @@ import type { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQueryClient } from "@/api/client";
 import { getCsrfToken, setCsrfToken } from "@/api/csrf";
+import { qk } from "@/api/keys";
 import { App } from "@/app";
+import { pendingDrafts } from "@/editor/autosave";
 import { createAppRouter } from "@/router";
+import { startSession } from "./session";
 
 const PROBLEM = "https://ferritecms.dev/problems/";
 
@@ -204,5 +207,75 @@ describe("ensure_session_guard", () => {
     expect(router.state.location.pathname).toBe("/change-password");
     // The guard waited for the token before letting anything write.
     expect(getCsrfToken()).toBe("csrf-1");
+  });
+});
+
+describe("account_change_clears_the_cache", () => {
+  const BOB = {
+    ...ME,
+    id: "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c",
+    login: "bob",
+    csrf_token: "csrf-2",
+  };
+  const COUNTS = { all: 3, draft: 2 };
+  const LIST = { items: [{ id: "x", title: "Alice's draft", allowed: { publish: true } }] };
+
+  /** A client whose cache was filled while Alice was signed in, then her session ended. */
+  function aliceCache(qc: QueryClient) {
+    startSession(qc, ME);
+    qc.setQueryData(qk.content.counts("post"), COUNTS);
+    qc.setQueryData(qk.content.list("post", {}), LIST);
+    qc.removeQueries({ queryKey: qk.me });
+  }
+
+  async function signInAs(user: typeof ME) {
+    const u = userEvent.setup();
+    stubApi([() => json({ status: "session", user, csrf_token: user.csrf_token })]);
+    const view = renderAt("/admin/login?next=%2Fadmin%2F_styleguide");
+    aliceCache(view.queryClient);
+    pendingDrafts.set("draft-key", { userId: ME.id } as never);
+    await u.type(await screen.findByLabelText("Login or e-mail"), user.login);
+    await u.type(screen.getByLabelText("Password"), "correct-horse-battery");
+    await u.click(screen.getByRole("button", { name: "Sign in" }));
+    await waitFor(() => {
+      expect(view.router.state.location.pathname).toBe("/_styleguide");
+    });
+    return view.queryClient;
+  }
+
+  afterEach(() => {
+    pendingDrafts.clear();
+  });
+
+  it("another user signing in drops the previous account's lists and counts", async () => {
+    const qc = await signInAs(BOB);
+    expect(qc.getQueryData(qk.content.counts("post"))).toBeUndefined();
+    expect(qc.getQueryData(qk.content.list("post", {}))).toBeUndefined();
+    expect(qc.getQueryData(qk.me)).toEqual(BOB);
+    // The kept drafts are per user and stay for Alice.
+    expect(pendingDrafts.has("draft-key")).toBe(true);
+  });
+
+  it("the same user signing back in keeps the cache", async () => {
+    const qc = await signInAs(ME);
+    expect(qc.getQueryData(qk.content.counts("post"))).toEqual(COUNTS);
+    expect(qc.getQueryData(qk.content.list("post", {}))).toEqual(LIST);
+    expect(pendingDrafts.has("draft-key")).toBe(true);
+  });
+
+  it("startSession clears only on a change of user", () => {
+    const qc = createQueryClient({
+      navigate: () => undefined,
+      currentPath: () => "/",
+      notify: () => undefined,
+    });
+    clients.push(qc);
+    startSession(qc, ME);
+    qc.setQueryData(qk.settings, { title: "A" });
+    startSession(qc, ME);
+    expect(qc.getQueryData(qk.settings)).toEqual({ title: "A" });
+    startSession(qc, BOB);
+    expect(qc.getQueryData(qk.settings)).toBeUndefined();
+    expect(qc.getQueryData(qk.me)).toEqual(BOB);
   });
 });
