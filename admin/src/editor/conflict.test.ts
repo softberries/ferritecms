@@ -5,7 +5,8 @@
 
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createElement } from "react";
+import { Link } from "@tanstack/react-router";
+import { Fragment, createElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
@@ -416,5 +417,103 @@ describe("conflict", () => {
     cleanup();
     await act(() => vi.advanceTimersByTimeAsync(30_000));
     expect(slot.map((r) => r.method)).toEqual(["DELETE"]);
+  });
+
+  test("a_failed_discard_keeps_the_autosaver_and_the_draft", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const item = itemWith();
+    const restored = draftOf(item, { title: "Restored title" });
+    const slot: { method: string; body: unknown }[] = [];
+    const record = slotRoute(slot);
+    stubRoutes({
+      // The DELETE fails (the server is busy); PUTs work.
+      [SLOT]: (url, req) =>
+        req.method === "DELETE"
+          ? (slot.push({ method: "DELETE", body: null }),
+            new Response(
+              JSON.stringify({
+                type: "https://ferritecms.dev/problems/busy",
+                title: "Busy",
+                status: 503,
+                detail: "try again",
+              }),
+              { status: 503, headers: { "Content-Type": "application/problem+json" } },
+            ))
+          : record(url, req),
+    });
+    const reopen = vi.fn();
+    await openScreen(item, {
+      restore: { draft: restored, at: "2026-10-01T10:04:00Z" },
+      onReopen: reopen,
+    });
+    const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+    await user.click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(slot.map((r) => r.method)).toEqual(["DELETE"]));
+    // Nothing was discarded: the screen stays, with the banner and the restored text.
+    expect(reopen).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(document.querySelector("[data-slot=restore-banner]")).not.toBeNull(),
+    );
+    expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Restored title");
+    // And the autosaver still works: an edit is written to the slot at the next tick.
+    await user.type(screen.getByRole("textbox", { name: "Title" }), "!");
+    await act(() => vi.advanceTimersByTimeAsync(11_000));
+    await waitFor(() => expect(slot.map((r) => r.method)).toEqual(["DELETE", "PUT"]));
+    expect(slot[1]?.body).toMatchObject({ title: "Restored title!" });
+  });
+
+  test("leaving_with_discard_keeps_the_kept_copy", async () => {
+    const item = itemWith({ version: 5, title: "Their title" });
+    const mine = draftOf(itemWith({ title: "My kept title" }));
+    const slot: { method: string; body: unknown }[] = [];
+    stubRoutes({ [SLOT]: slotRoute(slot) });
+    renderWithRouter(
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(
+          Fragment,
+          null,
+          createElement(EditorScreen, { type: "post", typeLabel: "Posts", item, kept: mine }),
+          createElement(Link, { to: "/elsewhere" }, "Elsewhere"),
+        ),
+      ),
+    );
+    await screen.findByRole("textbox", { name: "Body" });
+    const user = userEvent.setup();
+    await user.type(screen.getByRole("textbox", { name: "Title" }), " edited");
+    await user.click(screen.getByRole("link", { name: "Elsewhere" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("Your own version stays kept as an autosave.");
+    await user.click(within(dialog).getByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    // The slot (the kept copy) is untouched: no DELETE, no PUT.
+    expect(slot).toEqual([]);
+  });
+
+  test("an_explicit_save_puts_the_kept_copy_back", async () => {
+    const item = itemWith({ version: 5, title: "Their title" });
+    const mine = draftOf(itemWith({ title: "My kept title" }));
+    const order: string[] = [];
+    const puts: unknown[] = [];
+    stubRoutes({
+      [`/api/v1/content/post/${ID}`]: () => {
+        order.push("PATCH");
+        return json({ ...item, title: "Their title!", version: 6 });
+      },
+      [SLOT]: async (_url, req) => {
+        order.push(req.method);
+        puts.push(await req.json());
+        return json({ ...(puts.at(-1) as object), saved_at: "2026-10-01T10:06:00Z" });
+      },
+    });
+    await openScreen(item, { kept: mine });
+    const user = userEvent.setup();
+    await user.type(screen.getByRole("textbox", { name: "Title" }), "!");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    // The PATCH cleared the slot on the server; the kept copy goes straight back.
+    await waitFor(() => expect(order).toEqual(["PATCH", "PUT"]));
+    expect(puts[0]).toMatchObject({ title: "My kept title", base_version: 4 });
+    expect(screen.getByText("Your version is kept as an autosave.")).toBeInTheDocument();
   });
 });

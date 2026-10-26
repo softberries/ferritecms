@@ -246,6 +246,24 @@ test("kept_copy_survives_new_edits", async ({ as, site, backend, guard }) => {
   await expect(title(b)).toHaveValue(second.theirs);
   await banner(b).getByRole("button", { name: "Discard" }).click();
   await expect(banner(b)).toHaveCount(0);
+
+  // Take theirs, edit, leave with Discard changes: only the new edits go; the kept copy
+  // stays in the slot, and coming back brings it back (made from the older version).
+  const third = await takeTheirsOn(a, b, editorApi);
+  await typeAtEnd(b, `Dropped on leave ${uid()}`);
+  await b.locator("[data-slot=editor-bar]").getByRole("link", { name: "Posts" }).click();
+  await expect(leaveDialog(b)).toContainText("Your own version stays kept as an autosave.");
+  await leaveDialog(b).getByRole("button", { name: "Discard changes" }).click();
+  await expect(b).toHaveURL(/\/admin\/content\/post$/);
+  slot = await slotOf(adminApi, third.item);
+  expect(slot.status).toBe(200);
+  expect(bodyText(slot.json)).toContain(third.mine);
+  await openItem(b, "post", third.item.id);
+  await expect(banner(b)).toHaveAttribute("data-mode", "restored");
+  await expect(banner(b)).toContainText("has changed since then");
+  await expect(body(b)).toContainText(third.mine);
+  await banner(b).getByRole("button", { name: "Discard" }).click();
+  await expect(banner(b)).toHaveCount(0);
   await editorApi.dispose();
   await adminApi.dispose();
 });

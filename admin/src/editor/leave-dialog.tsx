@@ -20,6 +20,8 @@ export interface LeaveDialogProps {
   isNew: boolean;
   /** The autosave slot holds the changes (said, so leaving is less of a worry). */
   autosaved: boolean;
+  /** A kept copy (after Take theirs) holds the slot: Discard leaves it there. */
+  kept: boolean;
   /** Saves; the navigation goes on only when nothing is left unsaved. */
   onSave: () => Promise<void>;
   onDiscard: () => Promise<void>;
@@ -30,6 +32,7 @@ export function LeaveDialog({
   open,
   isNew,
   autosaved,
+  kept,
   onSave,
   onDiscard,
   onStay,
@@ -57,9 +60,11 @@ export function LeaveDialog({
           <AlertDialogDescription>
             {isNew
               ? t("leave.descriptionNew")
-              : autosaved
-                ? t("leave.descriptionAutosaved")
-                : t("leave.description")}
+              : kept
+                ? t("leave.descriptionKept")
+                : autosaved
+                  ? t("leave.descriptionAutosaved")
+                  : t("leave.description")}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

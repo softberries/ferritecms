@@ -353,7 +353,8 @@
     "replaceEdits": "Restoring your version replaces the edits you made since. Restore anyway?",
     "replace": "Replace my edits",
     "cancel": "Cancel",
-    "keptDiscarded": "Kept version discarded"
+    "keptDiscarded": "Kept version discarded",
+    "keptUnstored": "Your version could not be kept as an autosave; it is only on this page."
   },
   "leave": {
     "title": "Leave with unsaved changes?",
@@ -363,6 +364,7 @@
     "discard": "Discard changes",
     "save": "Save and leave",
     "saving": "Saving…",
-    "descriptionAutosaved": "Your latest changes are kept as an autosave, but not saved to this item yet."
+    "descriptionAutosaved": "Your latest changes are kept as an autosave, but not saved to this item yet.",
+    "descriptionKept": "Discarding drops only your edits since you took the newer version. Your own version stays kept as an autosave."
   }
 }

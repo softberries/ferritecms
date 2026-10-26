@@ -28,6 +28,8 @@ export type RestoreBannerProps =
       mode: "kept";
       /** The working draft has edits of its own (Restore would replace them). */
       edited: boolean;
+      /** The slot holds it (false: writing it back failed, it is on this page only). */
+      stored: boolean;
       busy: boolean;
       onRestore: () => void;
       onDiscard: () => void;
@@ -68,7 +70,9 @@ export function RestoreBanner(props: RestoreBannerProps) {
             </>
           ) : (
             <>
-              <p className="font-medium text-foreground">{t("restore.kept")}</p>
+              <p className="font-medium text-foreground">
+                {props.stored ? t("restore.kept") : t("restore.keptUnstored")}
+              </p>
               <p className="text-muted-foreground">
                 {replacing
                   ? t("restore.replaceEdits")

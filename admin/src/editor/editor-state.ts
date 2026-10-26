@@ -289,6 +289,8 @@ export interface EditorDocument {
   discard: () => Promise<void>;
   /** The kept copy in the slot (after Take theirs), else `null`. */
   kept: Draft | null;
+  /** The kept copy is only in memory (writing it back to the slot failed). */
+  keptUnstored: boolean;
   /** Deletes the kept copy; the working draft is autosaved from then on. */
   discardKept: () => Promise<void>;
   /**
@@ -547,6 +549,8 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   // The kept copy occupies the slot: the working draft is not written over it.
   const [kept, setKeptState] = useState<Draft | null>(opts.kept ?? null);
   const keptRef = useRef(kept);
+  // Whether the slot really holds the kept copy (a failed re-PUT leaves it in memory only).
+  const [keptStored, setKeptStored] = useState(true);
   const setKept = useCallback((d: Draft | null) => {
     keptRef.current = d;
     setKeptState(d);
@@ -798,8 +802,14 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
           if (keptCopy && current) {
             try {
               await putAutosave(type, current.id, autosaveInput(keptCopy));
-            } catch {
-              // Not lost: the banner still holds it in memory and offers it.
+            } catch (e) {
+              // Still in memory: the banner says it is only on this page, and leaving or
+              // closing the tab asks first.
+              setKeptStored(false);
+              if (needsSignIn(e)) {
+                autosaver.current?.dispose();
+                latest.current.onUnauthenticated?.(e, keptCopy);
+              }
             }
           }
           if (!still) touch();
@@ -927,7 +937,10 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
         await putAutosave(type, itemId, autosaveInput(d));
         // The slot holds this draft: nothing left to write when the screen goes.
         a?.markClean();
-        if (options.asKept) setKept(d);
+        if (options.asKept) {
+          setKept(d);
+          setKeptStored(true);
+        }
       } catch (e) {
         if (needsSignIn(e)) {
           a?.dispose();
@@ -943,14 +956,22 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
 
   const discard = useCallback(async (): Promise<void> => {
     const a = autosaver.current;
-    a?.markClean();
-    if (itemId === null) return;
-    // A running PUT lands first; none starts while the DELETE runs, and none after it.
+    if (itemId === null || keptRef.current !== null) {
+      // No slot (a new item), or the slot holds the kept copy, not these edits: it
+      // stays (only its own Discard removes it). The edits are dropped with the screen.
+      a?.markClean();
+      a?.dispose();
+      return;
+    }
+    // A running PUT lands first; none starts while the DELETE runs. Only once the DELETE
+    // succeeded is the autosaver done; a failed one leaves it as it was (still dirty and
+    // guarded), so nothing the user types next goes unsaved.
     const release = (await a?.hold()) ?? (() => undefined);
     try {
       await deleteAutosave(type, itemId);
-    } finally {
+      a?.markClean();
       a?.dispose();
+    } finally {
       release();
     }
   }, [itemId, type]);
@@ -986,10 +1007,12 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   } else {
     indicator = autoState;
   }
+  const keptUnstored = kept !== null && !keptStored;
   const unprotected =
-    dirty &&
-    readOnly === null &&
-    !(autosaves && kept === null && autoState === "saved" && autoSavedAt !== null);
+    keptUnstored ||
+    (dirty &&
+      readOnly === null &&
+      !(autosaves && kept === null && autoState === "saved" && autoSavedAt !== null));
 
   const initialFocus = handoff ? handoff.focus : opts.item === null ? "title" : null;
   return {
@@ -1018,6 +1041,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     keepInSlot,
     discard,
     kept,
+    keptUnstored,
     discardKept,
     save,
     transition,

@@ -86,6 +86,9 @@ export interface Reopen {
   kept?: Draft;
 }
 
+/** The kept Discard's toast (with Undo), dismissed when the screen goes. */
+const KEPT_TOAST = "editor-kept";
+
 export interface EditorScreenProps {
   type: string;
   /** The type's label (`Posts`), for the way back. */
@@ -281,13 +284,24 @@ export function EditorScreen({
 
   // Leaving with changes the item does not hold asks first; closing the tab only while
   // the slot does not hold them either (F38).
-  const guard = useLeaveGuard(doc.dirty && doc.readOnly === null, { unload: doc.unprotected });
+  const guard = useLeaveGuard((doc.dirty && doc.readOnly === null) || doc.keptUnstored, {
+    unload: doc.unprotected,
+  });
 
   // The restore banner's state: the restored draft (from the document), or the user's own
   // version kept in the slot after Take theirs (`doc.kept`), and when it was kept.
   const [keptAt] = useState(() => new Date().toISOString());
   const [bannerBusy, setBannerBusy] = useState(false);
   const [restoredShown, setRestoredShown] = useState(true);
+
+  // The kept Discard's Undo belongs to this screen: it must not run once the screen has
+  // gone (the next one may have autosaved newer edits into the slot).
+  useEffect(
+    () => () => {
+      toast.dismiss(KEPT_TOAST);
+    },
+    [],
+  );
 
   const failedDiscard = (e: unknown) => {
     if (isProblem(e, "unauthenticated")) reportApiError(e);
@@ -309,7 +323,9 @@ export function EditorScreen({
     setBannerBusy(true);
     try {
       await doc.discard();
-      const fresh = await getContent(type, id);
+      // The slot is gone; a failed reload of the item still leaves this screen (on the
+      // copy it has), so no screen goes on without a working autosaver.
+      const fresh = await getContent(type, id).catch(() => doc.item);
       toast.success(t("restore.discarded"), {
         id: "editor-restore",
         action: {
@@ -326,6 +342,7 @@ export function EditorScreen({
       });
       onReopen?.({ item: fresh });
     } catch (e) {
+      // Nothing changed: the restored draft is still the working draft and still guarded.
       setRestoredShown(true);
       failedDiscard(e);
     } finally {
@@ -339,7 +356,7 @@ export function EditorScreen({
     try {
       await doc.discardKept();
       toast.success(t("restore.keptDiscarded"), {
-        id: "editor-restore",
+        id: KEPT_TOAST,
         action: {
           label: t("restore.undo"),
           onClick: () => {
@@ -373,6 +390,7 @@ export function EditorScreen({
       <RestoreBanner
         mode="kept"
         busy={bannerBusy}
+        stored={!doc.keptUnstored}
         edited={doc.dirty}
         onRestore={() => {
           const copy = doc.kept;
@@ -459,6 +477,7 @@ export function EditorScreen({
         open={guard.blocked}
         isNew={doc.item === null}
         autosaved={!doc.unprotected}
+        kept={doc.kept !== null}
         onStay={guard.stay}
         onSave={async () => {
           const saved = await doc.save();
