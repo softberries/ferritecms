@@ -89,7 +89,7 @@ interface Start {
   item: SchemaContentDto;
   restore: RestoreSource | null;
   kept: Draft | null;
-  /** This browser's backup of the item (the first start only). */
+  /** This browser's backup of the item: read on the first start, then carried while on offer. */
   backup: Backup | null;
   /** A revision restore remounted the screen (its toast, with Undo). */
   revision: RevisionNotice | null;
@@ -129,7 +129,8 @@ function ItemEditor() {
       item: next.item,
       restore: next.restore ?? null,
       kept: next.kept ?? null,
-      backup: null,
+      // A backup still on offer stays offered (the screen passes it on).
+      backup: next.backup ?? null,
       revision: next.revision ?? null,
       epoch: start.epoch + 1,
       from: data,

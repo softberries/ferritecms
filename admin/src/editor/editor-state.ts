@@ -386,6 +386,8 @@ export interface EditorDocument {
   backup: Backup | null;
   /** Deletes the local backup and stops offering it. */
   dropBackup: () => void;
+  /** The backup on offer right now (a reopened screen offers it again), else `null`. */
+  backupNow: () => Backup | null;
   /**
    * Saves title and body: `POST` for a new item, else `PATCH` with `If-Match`. Resolves
    * to the saved item (its `version` is the new ETag), the current one when nothing
@@ -807,6 +809,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     if (backupKey) clearBackup(backupKey);
     setBackup(null);
   }, [backupKey, setBackup]);
+  const backupNow = useCallback(() => backupRef.current, []);
 
   /**
    * A change of the draft: the slot follows it (never on a read-only screen); while a
@@ -815,7 +818,8 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   const touch = useCallback(() => {
     if (readOnlyRef.current !== null) return;
     if (keptRef.current === null) autosaver.current?.markDirty(draftNow);
-    else if (backupKey) {
+    // A backup still on offer is not written over: the user has not chosen yet.
+    else if (backupKey && backupRef.current === null) {
       if (isDirtyNow()) writeBackup(backupKey, draftNow());
       else clearBackup(backupKey);
     }
@@ -1403,6 +1407,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     discardKept,
     backup,
     dropBackup,
+    backupNow,
     save,
     transition,
     adopt,

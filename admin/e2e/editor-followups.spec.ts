@@ -42,23 +42,15 @@ const backupsOf = (page: Page, id: string) =>
     return out.join("\n");
   }, id);
 
-test("kept_copy_edits_survive_a_crash", async ({
-  as,
-  site,
-  backend,
-  guard,
-  snap,
-  expectAccessible,
-}) => {
-  // The refused save is a 412 by design: the browser logs that failed load.
-  guard.allowFailedResource(/\/api\/v1\/content\/post\/[0-9a-f-]+$/);
-  const editorApi = await ContentApi.as(backend, site.url, "editor");
+/**
+ * A on `a` saves a new title; B on `b` saves over the old version, takes theirs (mine is
+ * kept), types new edits (backed up in the browser) and the tab goes away without a word.
+ * Returns a fresh page of B's context on the item.
+ */
+async function crashAfterTakeTheirs(a: Page, b: Page, editorApi: ContentApi) {
   const item = await editorApi.create("post", `Crash ${uid()}`);
-  const a = await as("editor");
-  const b = await as("admin");
   await openItem(a, "post", item.id);
   await openItem(b, "post", item.id);
-  // A saves a new title; B saves over the old version and takes theirs (mine is kept).
   const theirs = `Their crash title ${uid()}`;
   await title(a).fill(theirs);
   await a.keyboard.press(`${await mod(a)}+s`);
@@ -74,7 +66,7 @@ test("kept_copy_edits_survive_a_crash", async ({
   await typeAtEnd(b, newer);
   await expect.poll(() => backupsOf(b, item.id)).toContain(newer);
 
-  // The tab goes away without a word (no save, no beforeunload).
+  // No save, no beforeunload.
   const context = b.context();
   await b.close({ runBeforeUnload: false });
   const c = await context.newPage();
@@ -82,12 +74,57 @@ test("kept_copy_edits_survive_a_crash", async ({
   // The slot (mine) opens as before; this browser's backup is offered beside it.
   await expect(banner(c, "restored")).toBeVisible();
   await expect(body(c)).toContainText(mine);
-  const offer = banner(c, "backup");
-  await expect(offer).toContainText("Unsaved edits from this browser");
+  await expect(banner(c, "backup")).toContainText("Unsaved edits from this browser");
+  return { item, theirs, mine, newer, c };
+}
+
+test("kept_copy_edits_survive_a_crash", async ({
+  as,
+  site,
+  backend,
+  guard,
+  snap,
+  expectAccessible,
+}) => {
+  // The refused save is a 412 by design: the browser logs that failed load.
+  guard.allowFailedResource(/\/api\/v1\/content\/post\/[0-9a-f-]+$/);
+  const editorApi = await ContentApi.as(backend, site.url, "editor");
+  const { item, theirs, mine, newer, c } = await crashAfterTakeTheirs(
+    await as("editor"),
+    await as("admin"),
+    editorApi,
+  );
   await snap(c, "editor-backup-offer");
   await expectAccessible(c);
 
-  await offer.getByRole("button", { name: "Restore edits" }).click();
+  // Discarding the restored draft is not a choice about the backup: it stays offered.
+  await banner(c, "restored").getByRole("button", { name: "Discard" }).click();
+  await expect(banner(c, "restored")).toHaveCount(0);
+  await expect(body(c)).not.toContainText(mine);
+  await expect(banner(c, "backup")).toBeVisible();
+  expect(await backupsOf(c, item.id)).toContain(newer);
+
+  // Restored with no slot left: the edits become the working draft (and the slot's).
+  await banner(c, "backup").getByRole("button", { name: "Restore edits" }).click();
+  await expect(body(c)).toContainText(newer);
+  await expect(title(c)).toHaveValue(theirs);
+  await expect(banner(c, "backup")).toHaveCount(0);
+  await expect.poll(() => backupsOf(c, item.id)).toBe("");
+  await c.keyboard.press(`${await mod(c)}+s`);
+  await expect(indicator(c)).toHaveAttribute("data-state", "saved");
+  expect(JSON.stringify((await editorApi.get("post", item.id)).body)).toContain(newer);
+  await editorApi.dispose();
+});
+
+test("restoring_the_backup_keeps_the_kept_copy", async ({ as, site, backend, guard }) => {
+  guard.allowFailedResource(/\/api\/v1\/content\/post\/[0-9a-f-]+$/);
+  const editorApi = await ContentApi.as(backend, site.url, "editor");
+  const { item, theirs, mine, newer, c } = await crashAfterTakeTheirs(
+    await as("editor"),
+    await as("admin"),
+    editorApi,
+  );
+  await banner(c, "backup").getByRole("button", { name: "Restore edits" }).click();
   await expect(body(c)).toContainText(newer);
   await expect(body(c)).not.toContainText(mine);
   await expect(title(c)).toHaveValue(theirs);
@@ -100,6 +137,7 @@ test("kept_copy_edits_survive_a_crash", async ({
   await expect(indicator(c)).toHaveAttribute("data-state", "saved");
   expect(JSON.stringify((await editorApi.get("post", item.id)).body)).toContain(newer);
   await expect.poll(() => backupsOf(c, item.id)).toBe("");
+  await expect(banner(c, "kept")).toBeVisible();
   await editorApi.dispose();
 });
 

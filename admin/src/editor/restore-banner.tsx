@@ -107,6 +107,7 @@ export function RestoreBanner(props: RestoreBannerProps) {
             type="button"
             variant="outline"
             size="sm"
+            className="pointer-coarse:h-control"
             disabled={props.busy}
             onClick={() => {
               if (props.edited && !confirming) setConfirming(true);
@@ -120,6 +121,7 @@ export function RestoreBanner(props: RestoreBannerProps) {
             type="button"
             variant="outline"
             size="sm"
+            className="pointer-coarse:h-control"
             disabled={props.busy}
             onClick={props.onRestore}
           >
@@ -127,7 +129,13 @@ export function RestoreBanner(props: RestoreBannerProps) {
           </Button>
         ) : null}
         {replacing ? (
-          <Button type="button" variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="pointer-coarse:h-control"
+            onClick={() => setConfirming(false)}
+          >
             {t("restore.cancel")}
           </Button>
         ) : null}
@@ -135,7 +143,7 @@ export function RestoreBanner(props: RestoreBannerProps) {
           type="button"
           variant="ghost"
           size="sm"
-          className="text-muted-foreground"
+          className="text-muted-foreground pointer-coarse:h-control"
           disabled={props.busy}
           hidden={replacing}
           onClick={props.onDiscard}

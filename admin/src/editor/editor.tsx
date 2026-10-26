@@ -108,6 +108,11 @@ export interface Reopen {
   kept?: Draft;
   /** A revision restore (or its Undo) remounted the screen: it says so, with Undo. */
   revision?: RevisionNotice;
+  /**
+   * This browser's backup still on offer (it stays offered until restored or discarded);
+   * absent: the screen's offer, if any, is carried over; `null`: none.
+   */
+  backup?: Backup | null;
 }
 
 /** What the screen says after a revision restore remounted it. */
@@ -166,15 +171,16 @@ export function EditorScreen({
   kept: keptInitially,
   backup,
   onCreated,
-  onReopen,
+  onReopen: reopenScreen,
   revision,
 }: EditorScreenProps) {
   const { t } = useTranslation("editor");
   const queryClient = useQueryClient();
   const [conflict, setConflict] = useState<OpenConflict | null>(null);
   // A hand-over from `/new` whose publish dialog was asked for opens with it.
+  // Only when the account may publish or schedule it (else nothing would show).
   const [publishMode, setPublishMode] = useState<PublishMode | null>(() =>
-    handoff?.openPublishDialog ? "now" : null,
+    handoff?.openPublishDialog && (item?.allowed.publish || item?.allowed.schedule) ? "now" : null,
   );
   // `mod+shift+p` on a new item: its first save runs and the dialog opens on `/$id`.
   const publishAfterCreate = useRef(false);
@@ -218,6 +224,13 @@ export function EditorScreen({
       first?.scrollIntoView({ block: "center" });
     }, 120);
   };
+  // Every reopen carries a backup still on offer (only its Restore or Discard ends it).
+  const onReopen = reopenScreen
+    ? (next: Reopen) => {
+        const offered = next.backup === undefined ? doc.backupNow() : next.backup;
+        reopenScreen(offered ? { ...next, backup: offered } : next);
+      }
+    : undefined;
   const doc: EditorDocument = useEditorDocument({
     type,
     item,
@@ -654,11 +667,17 @@ export function EditorScreen({
       if (slot && !doc.kept) await doc.keepInSlot(slot);
       onReopen?.(
         slot
-          ? { item: doc.item, kept: slot, restore: { draft: b.draft, at: b.saved_at, local: true } }
+          ? {
+              item: doc.item,
+              kept: slot,
+              restore: { draft: b.draft, at: b.saved_at, local: true },
+              backup: null,
+            }
           : {
               item: doc.item,
               // Written to the slot as the screen opens; then the backup is not needed.
               restore: { draft: b.draft, at: b.saved_at, flush: true, onStored: doc.dropBackup },
+              backup: null,
             },
       );
     } catch (e) {
