@@ -531,6 +531,41 @@ describe("editor screen", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
   });
 
+  test("mod_s_under_the_conflict_dialog_sends_nothing", async () => {
+    // A 412 opens the conflict dialog; ⌘S/Ctrl+S under it must not PATCH again (a second
+    // 412 would replace the dialog's state).
+    const item = itemWith(seedSample);
+    const theirs = { ...item, title: "Their title", version: item.version + 1 };
+    let patches = 0;
+    stubRoutes({
+      [`/api/v1/content/post/${item.id}`]: (_url, req) => {
+        if (req.method !== "PATCH") throw new Error(`unexpected ${req.method}`);
+        patches += 1;
+        return new Response(
+          JSON.stringify({
+            type: "https://ferritecms.dev/problems/precondition-failed",
+            title: "precondition-failed",
+            status: 412,
+            detail: "",
+            current: theirs,
+          }),
+          { status: 412, headers: { "Content-Type": "application/problem+json" } },
+        );
+      },
+      [`/api/v1/content/post/${item.id}/autosave`]: () => new Response(null, { status: 204 }),
+    });
+    await openScreen(item);
+    const user = userEvent.setup();
+    await user.type(screen.getByRole("textbox", { name: "Title" }), " mine");
+    await user.keyboard("{Control>}s{/Control}");
+    expect(await screen.findByRole("dialog")).toBeVisible();
+    expect(patches).toBe(1);
+    await user.keyboard("{Control>}s{/Control}{Meta>}s{/Meta}");
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+    expect(patches).toBe(1);
+    expect(screen.getByRole("dialog")).toBeVisible();
+  });
+
   test("read_only_after_a_transition_takes_edit_away", async () => {
     // The phone publish bar (jsdom is narrow) shows the primary action from `allowed`;
     // when the server's answer to Submit says the item is no longer editable, the

@@ -299,7 +299,10 @@ export function EditorScreen({
     label: t("shortcuts.save"),
     group,
     allowInInput: true,
+    // Not under a dialog (a second PATCH under the conflict dialog would replace its
+    // state). The binding still fires there, so the browser's own Save page never opens.
     run: () => {
+      if (document.querySelector('[role="dialog"], [role="alertdialog"]') !== null) return;
       void doc.save();
     },
   });
