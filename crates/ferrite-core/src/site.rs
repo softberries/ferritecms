@@ -53,7 +53,9 @@ use ferrite_domain::{
     ArtifactHash, ContentId, ContentItem, ContentQuery, ContentStatus, MAX_PAGE, SearchQuery,
     Taxonomy, TermId, Timestamp,
 };
-use ferrite_store::{MAX_CONTENT_KINDS, MAX_ID_FILTER, MAX_SEARCH_KINDS, Repos, Store};
+use ferrite_store::{
+    MAX_CONTENT_KINDS, MAX_ID_FILTER, MAX_PAGE_ROWS, MAX_SEARCH_KINDS, Repos, Store,
+};
 
 use crate::{
     Actor, Capability, CoreError, MAX_PARENT_DEPTH,
@@ -922,7 +924,10 @@ impl SiteReader {
             u32::try_from(totals.roots.div_ceil(u64::from(per_page)).max(1)).unwrap_or(u32::MAX);
         let page = page.clamp(1, pages);
         let offset = (page - 1).saturating_mul(per_page);
-        let rows = repos.comments().approved_page(id, offset, per_page).await?;
+        let rows = repos
+            .comments()
+            .approved_page(id, offset, per_page, MAX_PAGE_ROWS)
+            .await?;
         let items = comments::public_thread(repos, rows).await?;
         let (mut prev_url, mut next_url) = (None, None);
         if pages > 1 {

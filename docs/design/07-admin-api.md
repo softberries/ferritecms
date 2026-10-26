@@ -295,7 +295,8 @@ to an approved comment of the same post, at most 5 deep (`parent_id`).
   is `?cpage=N` (in the page cache key; past the last shows the last), the theme's count is
   every approved comment, and the theme form's `303` for an approved comment goes to
   `?cpage=N#comment-<id>` on the page that holds it (06 §4). The store reads one page with
-  a recursive query (`CommentRepo::approved_page`, at most 500 rows), plus
+  a recursive query (`CommentRepo::approved_page`: every root of the page, replies cut
+  past 2,000 rows), plus
   `approved_totals` and `root_position`.
 
 **Extensions (M2a-2a; rulings in [`m2a2.md`](../superpowers/rulings/m2a2.md)).** Handlers

@@ -914,21 +914,21 @@ pub trait CommentRepo: Send + Sync {
         &self,
         item: Option<ContentId>,
     ) -> Result<BTreeMap<CommentStatus, u64>, StoreError>;
-    /// One page of `item`'s public thread (M2b-2 P34). A **root** is an approved comment
-    /// whose parent is null, itself, or not approved; roots are ordered
+    /// One page of `item`'s public thread (M2b-2 P34, amended). A **root** is an
+    /// approved comment whose parent is null, itself, or not approved; roots are ordered
     /// `(created_at, id)`. Returns roots `offset..offset + roots` (`roots`
-    /// 1..=[`MAX_ITEM_COMMENTS`](crate::MAX_ITEM_COMMENTS), else `Invalid`), each followed
-    /// by its approved descendants depth first, siblings oldest first (`created_at, id`):
-    /// the thread order. One recursive query. At most
-    /// [`MAX_ITEM_COMMENTS`](crate::MAX_ITEM_COMMENTS) rows: when the page holds more,
-    /// the cut falls after the last whole root, or, when the first root's thread alone
-    /// is longer, inside it (a depth-first prefix). A root whose thread is cut away is
-    /// on no page.
+    /// 1..=[`MAX_PAGE_ROOTS`](crate::MAX_PAGE_ROOTS)), each followed by its approved
+    /// descendants depth first, siblings oldest first (`created_at, id`): the thread
+    /// order. At most `max_rows` rows (`roots..=`[`MAX_PAGE_ROWS`](crate::MAX_PAGE_ROWS),
+    /// else `Invalid`): every root of the page is always returned, and only replies are
+    /// cut, keeping those first in the page's thread order, so a shown reply's parent
+    /// is shown too. One recursive query.
     async fn approved_page(
         &self,
         item: ContentId,
         offset: u32,
         roots: u32,
+        max_rows: u32,
     ) -> Result<Vec<Comment>, StoreError>;
     /// How many approved comments and roots (as [`approved_page`](Self::approved_page)
     /// defines them) `item` has; zero for an unknown item.

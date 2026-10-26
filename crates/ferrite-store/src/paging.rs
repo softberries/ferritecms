@@ -392,33 +392,29 @@ fn micros_cursor(tag: &str, cursor: &str) -> Result<(i64, Uuid), StoreError> {
     }
 }
 
-/// Most rows `CommentRepo::approved_page` returns, and most roots it may be asked for.
-pub const MAX_ITEM_COMMENTS: u32 = 500;
+/// Most roots (top-level threads) `CommentRepo::approved_page` may be asked for.
+pub const MAX_PAGE_ROOTS: u32 = 500;
 
-/// Validates an `approved_page` root count: 1..=[`MAX_ITEM_COMMENTS`].
-pub fn check_comment_roots(roots: u32) -> Result<i64, StoreError> {
-    if roots == 0 || roots > MAX_ITEM_COMMENTS {
+/// The row budget of one public comment page (`CommentRepo::approved_page`, amended
+/// P34): a page always holds every one of its roots, then their replies in thread order
+/// (depth first, oldest first) until it holds this many rows; later replies are not
+/// shown.
+pub const MAX_PAGE_ROWS: u32 = 2_000;
+
+/// Validates an `approved_page` request: `roots` 1..=[`MAX_PAGE_ROOTS`] and `max_rows`
+/// `roots..=`[`MAX_PAGE_ROWS`] (the roots always fit). Returns both as `i64` binds.
+pub fn check_comment_page(roots: u32, max_rows: u32) -> Result<(i64, i64), StoreError> {
+    if roots == 0 || roots > MAX_PAGE_ROOTS {
         return Err(StoreError::Invalid(format!(
-            "roots must be between 1 and {MAX_ITEM_COMMENTS}"
+            "roots must be between 1 and {MAX_PAGE_ROOTS}"
         )));
     }
-    Ok(i64::from(roots))
-}
-
-/// Cuts `rows` of an `approved_page` query (fetched with a limit of
-/// [`MAX_ITEM_COMMENTS`]` + 1`, each with its root's position) to at most
-/// [`MAX_ITEM_COMMENTS`] rows: after the last whole root, or inside the first root when
-/// it alone is longer.
-pub fn cut_comment_page<T>(mut rows: Vec<(T, i64)>) -> Vec<T> {
-    let max = MAX_ITEM_COMMENTS as usize;
-    if rows.len() > max {
-        let partial = rows[max].1;
-        rows.truncate(max);
-        if rows.first().is_some_and(|(_, root)| *root != partial) {
-            rows.retain(|(_, root)| *root != partial);
-        }
+    if max_rows < roots || max_rows > MAX_PAGE_ROWS {
+        return Err(StoreError::Invalid(format!(
+            "max_rows must be between roots ({roots}) and {MAX_PAGE_ROWS}"
+        )));
     }
-    rows.into_iter().map(|(row, _)| row).collect()
+    Ok((i64::from(roots), i64::from(max_rows)))
 }
 
 /// Validates a comment before any SQL: no NUL in any text.
@@ -837,25 +833,12 @@ mod tests {
         assert!(audit_cursor(&c).is_err());
         assert!(comment_cursor(&encode_audit_cursor(at, id)).is_err());
         assert!(comment_cursor(&Cursor::encode(COMMENT_CURSOR_TAG, &json!(i64::MIN), id)).is_err());
-        assert!(check_comment_roots(0).is_err());
-        assert_eq!(check_comment_roots(500).unwrap(), 500);
-        assert!(check_comment_roots(501).is_err());
-        // The page cut: after the last whole root, else inside the first one.
-        let max = MAX_ITEM_COMMENTS as i64;
-        let rows = |roots: &[(i64, i64)]| -> Vec<(i64, i64)> {
-            roots
-                .iter()
-                .flat_map(|&(root, n)| (0..n).map(move |i| (root * 10_000 + i, root)))
-                .collect()
-        };
-        assert_eq!(cut_comment_page(rows(&[(0, 3), (1, 2)])).len(), 5);
-        assert_eq!(cut_comment_page(rows(&[(0, max)])).len(), 500);
-        assert_eq!(cut_comment_page(rows(&[(0, 300), (1, max)])).len(), 300);
-        assert_eq!(cut_comment_page(rows(&[(0, max + 1)])).len(), 500);
-        assert_eq!(
-            cut_comment_page(rows(&[(0, 250), (1, 250), (2, 1)])).len(),
-            500
-        );
+        assert!(check_comment_page(0, 10).is_err());
+        assert_eq!(check_comment_page(500, 2_000).unwrap(), (500, 2_000));
+        assert!(check_comment_page(501, 2_000).is_err());
+        assert_eq!(check_comment_page(3, 3).unwrap(), (3, 3));
+        assert!(check_comment_page(3, 2).is_err());
+        assert!(check_comment_page(3, 2_001).is_err());
 
         let hash = "a".repeat(64);
         check_key_hash(&hash).unwrap();

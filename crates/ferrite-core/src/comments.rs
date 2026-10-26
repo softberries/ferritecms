@@ -205,9 +205,10 @@ pub struct CommentThread {
     /// `comments.enabled`: whether the form is shown. A closed thread still lists its
     /// approved comments (as WordPress does).
     pub open: bool,
-    /// The page's approved comments in thread order: `per_page` top-level threads, each
-    /// root followed by its approved replies (at most
-    /// [`MAX_ITEM_COMMENTS`](ferrite_store::MAX_ITEM_COMMENTS) rows).
+    /// The page's approved comments in thread order: all `per_page` top-level threads
+    /// of the page, each root followed by its approved replies; past
+    /// [`MAX_PAGE_ROWS`](ferrite_store::MAX_PAGE_ROWS) rows only replies are cut (the
+    /// latest in thread order).
     pub items: Vec<CommentPublic>,
     /// Every approved comment of the post.
     pub total: u64,

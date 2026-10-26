@@ -8,16 +8,15 @@ use ferrite_domain::{
     Comment, CommentId, CommentQuery, CommentStatus, ContentId, Page, Timestamp, UserId,
 };
 use ferrite_store::{
-    ApprovedTotals, CommentRepo, MAX_ITEM_COMMENTS, StoreError, check_comment, check_comment_roots,
-    check_limit, comment_counts, comment_cursor, cut_comment_page, email_key,
-    encode_comment_cursor, validate_text,
+    ApprovedTotals, CommentRepo, StoreError, check_comment, check_comment_page, check_limit,
+    comment_counts, comment_cursor, email_key, encode_comment_cursor, validate_text,
 };
-use sqlx::{AssertSqlSafe, Row};
+use sqlx::AssertSqlSafe;
 
 use super::PgRepos;
 use crate::{
     codec::{self, COMMENT_COLUMNS},
-    exec::{map_db_err, run},
+    exec::run,
 };
 
 /// The moderation list (`CommentRepo::list`). Only the filters given are in the SQL, so
@@ -195,37 +194,35 @@ impl CommentRepo for PgRepos {
         item: ContentId,
         offset: u32,
         roots: u32,
+        max_rows: u32,
     ) -> Result<Vec<Comment>, StoreError> {
-        let roots = check_comment_roots(roots)?;
+        let (roots, max_rows) = check_comment_page(roots, max_rows)?;
+        // Every root of the page (`d = 0`), then replies numbered in the page's thread
+        // order while they fit the budget left after the roots.
         let rows = run!(&self.exec, |e| sqlx::query(AssertSqlSafe(format!(
             "WITH RECURSIVE {THREAD_CTES}, \
              kin AS (SELECT id, parent_id, \
                ROW_NUMBER() OVER (PARTITION BY parent_id ORDER BY created_at, id) AS sib \
                FROM approved WHERE is_root = 0), \
-             thread_rows(id, pos, tpath) AS ( \
-               SELECT id, pos, ARRAY[]::bigint[] FROM roots WHERE pos >= $3 AND pos < $3 + $4 \
+             thread_rows(id, pos, tpath, d) AS ( \
+               SELECT id, pos, ARRAY[]::bigint[], 0 FROM roots WHERE pos >= $3 AND pos < $3 + $4 \
                UNION ALL \
-               SELECT k.id, t.pos, t.tpath || k.sib \
+               SELECT k.id, t.pos, t.tpath || k.sib, t.d + 1 \
                FROM kin k JOIN thread_rows t ON k.parent_id = t.id) \
-             SELECT {COMMENT_COLUMNS}, root_pos FROM ( \
-               SELECT c.*, t.pos AS root_pos, t.tpath AS tpath \
+             SELECT {COMMENT_COLUMNS} FROM ( \
+               SELECT c.*, t.pos AS root_pos, t.tpath AS tpath, t.d AS d, \
+                 ROW_NUMBER() OVER (PARTITION BY t.d = 0 ORDER BY t.pos, t.tpath) AS n \
                FROM thread_rows t JOIN comments c ON c.id = t.id) AS page \
-             ORDER BY root_pos, tpath LIMIT $5"
+             WHERE d = 0 OR n <= $5 - (SELECT COUNT(*) FROM thread_rows WHERE d = 0) \
+             ORDER BY root_pos, tpath"
         )))
         .bind(item.as_uuid())
         .bind(CommentStatus::Approved.as_str())
         .bind(i64::from(offset))
         .bind(roots)
-        .bind(i64::from(MAX_ITEM_COMMENTS) + 1)
+        .bind(max_rows)
         .fetch_all(e))?;
-        let rows = rows
-            .iter()
-            .map(|r| {
-                let root: i64 = r.try_get("root_pos").map_err(map_db_err)?;
-                Ok((codec::comment(r)?, root))
-            })
-            .collect::<Result<Vec<_>, StoreError>>()?;
-        Ok(cut_comment_page(rows))
+        rows.iter().map(codec::comment).collect()
     }
 
     async fn approved_totals(&self, item: ContentId) -> Result<ApprovedTotals, StoreError> {

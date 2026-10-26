@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use ferrite_domain::{Comment, CommentId, CommentStatus, ContentId, Timestamp, User};
-use ferrite_store::{ApprovedTotals, MAX_ITEM_COMMENTS, Store, StoreError};
+use ferrite_store::{ApprovedTotals, MAX_PAGE_ROOTS, MAX_PAGE_ROWS, Store, StoreError};
 
 use crate::{
     TestDb,
@@ -153,7 +153,10 @@ pub async fn thread_pages_cover_every_comment(db: &TestDb) {
     let repo = store.read().comments();
     let mut seen = Vec::new();
     for (page, want_roots) in [(0u32, 50usize), (1, 50), (2, 21)] {
-        let got = repo.approved_page(item, page * 50, 50).await.unwrap();
+        let got = repo
+            .approved_page(item, page * 50, 50, MAX_PAGE_ROWS)
+            .await
+            .unwrap();
         let want: Vec<Comment> = expected
             .iter()
             .skip(page as usize * 50)
@@ -164,7 +167,12 @@ pub async fn thread_pages_cover_every_comment(db: &TestDb) {
         assert_eq!(got, want, "page {page}");
         seen.extend(got.into_iter().map(|c| c.id));
     }
-    assert!(repo.approved_page(item, 150, 50).await.unwrap().is_empty());
+    assert!(
+        repo.approved_page(item, 150, 50, MAX_PAGE_ROWS)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     let all: Vec<CommentId> = expected.iter().flatten().map(|c| c.id).collect();
     assert_eq!(seen.len(), all.len(), "no comment twice");
@@ -173,11 +181,13 @@ pub async fn thread_pages_cover_every_comment(db: &TestDb) {
         all.into_iter().collect::<HashSet<_>>()
     );
     assert_eq!(
-        repo.approved_page(other, 0, 50).await.unwrap(),
+        repo.approved_page(other, 0, 50, MAX_PAGE_ROWS)
+            .await
+            .unwrap(),
         threads(&others).concat()
     );
     assert!(
-        repo.approved_page(ContentId::new(), 0, 50)
+        repo.approved_page(ContentId::new(), 0, 50, MAX_PAGE_ROWS)
             .await
             .unwrap()
             .is_empty()
@@ -185,64 +195,95 @@ pub async fn thread_pages_cover_every_comment(db: &TestDb) {
     // Inside a Tx too.
     let tx = store.begin().await.unwrap();
     assert_eq!(
-        tx.comments().approved_page(item, 100, 50).await.unwrap(),
+        tx.comments()
+            .approved_page(item, 100, 50, MAX_PAGE_ROWS)
+            .await
+            .unwrap(),
         expected[100..].concat()
     );
     tx.rollback().await.unwrap();
 
-    assert!(is_invalid(repo.approved_page(item, 0, 0).await));
     assert!(is_invalid(
-        repo.approved_page(item, 0, MAX_ITEM_COMMENTS + 1).await
+        repo.approved_page(item, 0, 0, MAX_PAGE_ROWS).await
     ));
+    assert!(is_invalid(
+        repo.approved_page(item, 0, MAX_PAGE_ROOTS + 1, MAX_PAGE_ROWS)
+            .await
+    ));
+    assert!(is_invalid(repo.approved_page(item, 0, 50, 0).await));
+    assert!(is_invalid(
+        repo.approved_page(item, 0, 50, MAX_PAGE_ROWS + 1).await
+    ));
+    assert!(is_invalid(repo.approved_page(item, 0, 50, 49).await));
 }
 
-/// At most `MAX_ITEM_COMMENTS` rows: past it the cut falls after a whole root, unless
-/// the first root alone is longer (then its thread is cut, depth first).
-pub async fn approved_page_cuts_after_a_whole_root(db: &TestDb) {
+/// A page always holds every one of its roots (amended P34): past the row budget only
+/// replies are cut, in thread order (depth first, oldest first), so the kept replies
+/// are a prefix of the page's thread order; the next page is unaffected.
+pub async fn approved_page_keeps_every_root(db: &TestDb) {
     let store = db.store();
     let author = fixture_user(store).await;
-    let item = post(store, &author, "two-big-threads").await;
-    let single = post(store, &author, "one-huge-thread").await;
+    let item = post(store, &author, "busy-threads").await;
 
+    // 6 roots, each with 9 replies (every third one opening a deeper level): 60 rows.
     let mut rows = Vec::new();
-    for r in 0..2i64 {
-        let root = comment(item, None, CommentStatus::Approved, r * 1_000_000);
-        rows.push(root.clone());
-        for n in 1..300 {
-            rows.push(comment(
-                item,
-                Some(root.id),
-                CommentStatus::Approved,
-                r * 1_000_000 + n,
-            ));
+    for r in 0..6i64 {
+        let t = r * 1_000_000;
+        let root = comment(item, None, CommentStatus::Approved, t);
+        let mut parent = root.id;
+        rows.push(root);
+        for n in 1..10 {
+            let c = comment(item, Some(parent), CommentStatus::Approved, t + n);
+            if n % 3 == 0 {
+                parent = c.id;
+            }
+            rows.push(c);
         }
     }
     insert_all(store, &rows).await;
     let expected = threads(&rows);
     let repo = store.read().comments();
-    let got = repo.approved_page(item, 0, 2).await.unwrap();
-    assert_eq!(got, expected[0], "the second root's thread does not fit");
-    assert_eq!(
-        repo.approved_page(item, 1, 1).await.unwrap(),
-        expected[1],
-        "alone it fits"
-    );
 
-    let root = comment(single, None, CommentStatus::Approved, 0);
-    let mut huge = vec![root.clone()];
-    let mut parent = root.id;
-    for n in 1..550 {
-        // Every tenth reply opens a deeper level, so the cut is a depth-first prefix.
-        let c = comment(single, Some(parent), CommentStatus::Approved, n);
-        if n % 10 == 0 {
-            parent = c.id;
+    // Pages of 3 roots (30 rows each) with a budget of 12 rows.
+    for page in 0..2u32 {
+        let mine = &expected[page as usize * 3..page as usize * 3 + 3];
+        let got = repo.approved_page(item, page * 3, 3, 12).await.unwrap();
+        assert_eq!(got.len(), 12, "page {page}: the budget is used up");
+        let roots: Vec<CommentId> = mine.iter().map(|t| t[0].id).collect();
+        for root in &roots {
+            assert!(got.iter().any(|c| c.id == *root), "root {root} kept");
         }
-        huge.push(c);
+        // Thread order of the whole page, roots always kept, replies a prefix.
+        let order: Vec<&Comment> = mine.iter().flatten().collect();
+        let replies: Vec<&Comment> = order
+            .iter()
+            .copied()
+            .filter(|c| !roots.contains(&c.id))
+            .collect();
+        let want: Vec<CommentId> = order
+            .iter()
+            .filter(|c| roots.contains(&c.id) || replies[..9].iter().any(|r| r.id == c.id))
+            .map(|c| c.id)
+            .collect();
+        let got_ids: Vec<CommentId> = got.iter().map(|c| c.id).collect();
+        assert_eq!(got_ids, want, "page {page}");
+        // Every reply shown has its parent shown.
+        for c in &got {
+            if let Some(p) = c.parent_id {
+                assert!(got_ids.contains(&p), "{} without its parent", c.id);
+            }
+        }
     }
-    insert_all(store, &huge).await;
-    let got = repo.approved_page(single, 0, 1).await.unwrap();
-    assert_eq!(got.len(), MAX_ITEM_COMMENTS as usize);
-    assert_eq!(got[..], threads(&huge)[0][..MAX_ITEM_COMMENTS as usize]);
+    // A budget equal to the roots shows the roots alone; a large one shows everything.
+    let bare = repo.approved_page(item, 0, 3, 3).await.unwrap();
+    assert_eq!(
+        bare.iter().map(|c| c.id).collect::<Vec<_>>(),
+        expected[..3].iter().map(|t| t[0].id).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        repo.approved_page(item, 3, 3, MAX_PAGE_ROWS).await.unwrap(),
+        expected[3..].concat()
+    );
 }
 
 /// The 0-based position of the root whose thread holds a comment; `None` for a comment
@@ -298,7 +339,7 @@ pub async fn root_position_of_reply_is_its_root(db: &TestDb) {
 
     // Each position is where `approved_page` puts the comment.
     for (id, p) in [(b2.id, 1u32), (x.id, 2), (under_held.id, 3)] {
-        let page = repo.approved_page(item, p, 1).await.unwrap();
+        let page = repo.approved_page(item, p, 1, MAX_PAGE_ROWS).await.unwrap();
         assert!(page.iter().any(|c| c.id == id), "{id} at {p}");
     }
 }
