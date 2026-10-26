@@ -164,6 +164,30 @@ describe("conflict", () => {
     ).toEqual(["terms"]);
   });
 
+  test("fields_and_seo_differences_are_listed", () => {
+    const theirs = itemWith({
+      fields: { price: 3, subtitle: null },
+      seo: { title: "Theirs", description: null },
+    });
+    // No SEO in the draft (an old slot) and the same fields: nothing differs.
+    expect(differingFields(theirs, draftOf(theirs, { seo: null }))).toEqual([]);
+    // A blank SEO member is "not set"; key order does not matter.
+    expect(
+      differingFields(
+        theirs,
+        draftOf(theirs, {
+          fields: { subtitle: null, price: 3 },
+          seo: { title: "Theirs", description: "  " },
+        }),
+      ),
+    ).toEqual([]);
+    // `null` and absent are different values.
+    expect(differingFields(theirs, draftOf(theirs, { fields: { price: 3 } }))).toEqual(["fields"]);
+    expect(
+      differingFields(theirs, draftOf(theirs, { seo: { title: "Mine", description: null } })),
+    ).toEqual(["seo"]);
+  });
+
   test("bodies_compare_without_editor_defaults", () => {
     // TipTap fills in null attribute defaults the stored copy may not have (F32).
     const stored = {

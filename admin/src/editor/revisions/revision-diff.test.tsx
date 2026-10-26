@@ -11,8 +11,9 @@ import {
   diffStats,
   groupByDay,
   initials,
+  fieldChanges,
+  fieldText,
   restoredFrom,
-  sameFields,
   undoTarget,
 } from "./revision-model";
 
@@ -132,10 +133,32 @@ describe("revision model", () => {
     ]);
   });
 
-  test("fields_compare_by_value", () => {
-    expect(sameFields({ a: 1, b: [2] }, { b: [2], a: 1 })).toBe(true);
-    expect(sameFields({}, null)).toBe(true);
-    expect(sameFields({ a: 1 }, { a: 2 })).toBe(false);
+  test("fields_compare_by_value_per_field", () => {
+    expect(fieldChanges({ a: 1, b: [2] }, { b: [2], a: 1 })).toEqual([]);
+    expect(fieldChanges({}, null)).toEqual([]);
+    expect(fieldChanges({ a: 1 }, { a: 2 })).toEqual([{ name: "a", before: 1, after: 2 }]);
+    // `null` and absent are different (the M2b-1 Task 17 residual): both listed.
+    expect(fieldChanges({ a: null, c: "x" }, { c: "x", d: null })).toEqual([
+      { name: "a", before: null },
+      { name: "d", after: null },
+    ]);
+  });
+
+  test("field_values_as_text", () => {
+    expect(fieldText(undefined)).toBe("Not set");
+    expect(fieldText(null)).toBe("Empty");
+    expect(fieldText("Hello")).toBe("Hello");
+    expect(fieldText(1.5)).toBe("1.5");
+    expect(fieldText(true)).toBe("Yes");
+    expect(fieldText(false)).toBe("No");
+    expect(
+      fieldText({
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text: "Rich" }] }],
+      }),
+    ).toBe("Rich");
+    expect(fieldText([{ t: "One" }, { t: "Two" }])).toBe('2 rows: [{"t":"One"},{"t":"Two"}]');
+    expect(fieldText("x".repeat(300))).toHaveLength(161);
   });
 
   test("initials_of_names", () => {

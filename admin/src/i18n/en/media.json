@@ -206,5 +206,28 @@
     "body": "Leaving this page cancels the files that have not finished uploading.",
     "stay": "Stay",
     "leave": "Leave and cancel"
+  },
+  "picker": {
+    "images": "images",
+    "files": "files",
+    "description": "Choose one of your {{what}}, or upload a new one.",
+    "descriptionNoUpload": "Choose one of your {{what}}.",
+    "library": "Library",
+    "upload": "Upload",
+    "gridLabel": "Choose from your {{what}}",
+    "noMatchTitle": "Nothing found",
+    "noMatchBody": "No file matches “{{q}}”.",
+    "emptyTitle": "No {{what}} yet",
+    "emptyBody": "Upload one to use it here.",
+    "emptyBodyNoUpload": "Someone who can upload files has to add one first.",
+    "loadMore": "Load more",
+    "loadingMore": "Loading…",
+    "dropImages": "Drop images here, or choose them. They are added to the library.",
+    "dropFiles": "Drop files here, or choose them. They are added to the library.",
+    "uploads": "Uploads",
+    "select": "Select",
+    "selectName": "Select {{name}}",
+    "cancel": "Cancel",
+    "noneSelected": "Nothing selected"
   }
 }

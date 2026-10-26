@@ -19,6 +19,12 @@
 // remounts the screen on the restored item. The new screen shows the toast with Undo, so
 // the Undo always acts on the screen that is there (and goes with it): it restores the
 // revision that was current before (the one after the restore's own snapshot).
+//
+// Media, fields and SEO (M2b-2 Task 8): the bar's image button and the slash menu's
+// "Image" insert from the media picker; image files dropped on the body upload and land
+// where they were dropped; the custom fields sit in the panel, or in a card under the
+// body on wide screens when the type has more than 4; a save refused for field values
+// opens the panel and puts the cursor on the first field that says why.
 
 import "@/styles/editor.css";
 import { Link } from "@tanstack/react-router";
@@ -26,6 +32,7 @@ import { Selection } from "@tiptap/pm/state";
 import { EditorContent, type Editor } from "@tiptap/react";
 import {
   ArrowLeftIcon,
+  ImagePlusIcon,
   MaximizeIcon,
   MinimizeIcon,
   PanelRightIcon,
@@ -48,6 +55,7 @@ import { reportApiError } from "@/api/client";
 import { metaQuery } from "@/api/meta";
 import { getContent, isContentStatus, listRevisions, putAutosave } from "@/api/content";
 import { qk } from "@/api/keys";
+import { typesQuery } from "@/api/types";
 import type { MeDto } from "@/auth/session";
 import { ApiError, isProblem } from "@/api/problem";
 import { KbdCombo } from "@/components/kit/kbd-combo";
@@ -74,6 +82,9 @@ import {
   autosaveInput,
   useEditorDocument,
 } from "./editor-state";
+import { FieldsSection } from "./fields/fields-section";
+import { CARD_THRESHOLD, fieldsFor, fieldsPlacement } from "./fields/fields-model";
+import { pickAndInsertImage, useImageDrops } from "./insert-image";
 import { LeaveDialog } from "./leave-dialog";
 import { useLeaveGuard } from "./leave-guard";
 import { RestoreBanner } from "./restore-banner";
@@ -159,6 +170,43 @@ export function EditorScreen({
   const [conflict, setConflict] = useState<OpenConflict | null>(null);
   const [publishMode, setPublishMode] = useState<PublishMode | null>(null);
   const [revisionsOpen, setRevisionsOpen] = useState(false);
+  const types = useQuery(typesQuery);
+  const typeDto = types.data?.find((ty) => ty.name === type);
+  const fieldDefs = typeDto ? fieldsFor(typeDto) : null;
+  const { focusMode, setFocusMode } = useShellChrome();
+
+  // The side panel: beside the text from 1024 px (open unless closed before), else a
+  // sheet (closed until asked for). Focus mode hides it.
+  const wide = useWide();
+  const [wideOpen, setWideOpen] = useState(storedEditorPanelOpen);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const panelOpen = wide ? wideOpen && !focusMode : sheetOpen;
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const setPanelOpen = useCallback(
+    (open: boolean) => {
+      if (wide) {
+        if (open && focusMode) setFocusMode(false);
+        setWideOpen(open);
+        storeEditorPanelOpen(open);
+        if (!open) toggleRef.current?.focus();
+      } else setSheetOpen(open);
+    },
+    [wide, focusMode, setFocusMode, setSheetOpen],
+  );
+  const fieldsInCard = wide && (fieldDefs?.length ?? 0) > CARD_THRESHOLD;
+  /** A save refused for field values: the panel opens on the first field that says why. */
+  const showInvalid = (source: "client" | "server") => {
+    if (source === "client") toast.error(t("fields.blocked"), { id: "editor-save" });
+    // Unless every field is in the card (an SEO message from the server is in the panel).
+    if (!fieldsInCard || source === "server") setPanelOpen(true);
+    window.setTimeout(() => {
+      const first = document.querySelector<HTMLElement>(
+        "[data-slot=panel-fields] [aria-invalid=true], [data-slot=fields-card] [aria-invalid=true], [data-slot=panel-seo] [aria-invalid=true]",
+      );
+      first?.focus();
+      first?.scrollIntoView({ block: "center" });
+    }, 120);
+  };
   const doc: EditorDocument = useEditorDocument({
     type,
     item,
@@ -167,6 +215,8 @@ export function EditorScreen({
     kept: keptInitially ?? null,
     placeholder: t("body.placeholder"),
     bodyLabel: t("body.label"),
+    fieldDefs,
+    onInvalid: showInvalid,
     ...(onCreated ? { onCreated } : {}),
     onConflict: (e, op, context) => {
       // The user's text stays in the editor whatever happens next (Review Focus 3).
@@ -224,27 +274,15 @@ export function EditorScreen({
       });
     },
   });
-  const { focusMode, setFocusMode } = useShellChrome();
   const group = t("shortcuts.group");
 
-  // The side panel: beside the text from 1024 px (open unless closed before), else a
-  // sheet (closed until asked for). Focus mode hides it.
-  const wide = useWide();
-  const [wideOpen, setWideOpen] = useState(storedEditorPanelOpen);
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const panelOpen = wide ? wideOpen && !focusMode : sheetOpen;
-  const toggleRef = useRef<HTMLButtonElement>(null);
-  const setPanelOpen = useCallback(
-    (open: boolean) => {
-      if (wide) {
-        if (open && focusMode) setFocusMode(false);
-        setWideOpen(open);
-        storeEditorPanelOpen(open);
-        if (!open) toggleRef.current?.focus();
-      } else setSheetOpen(open);
-    },
-    [wide, focusMode, setFocusMode],
-  );
+  const me = queryClient.getQueryData<MeDto>(qk.me);
+  const canUploadMedia = me?.capabilities.includes("upload_media") === true;
+  useImageDrops(doc.editor, {
+    canUpload: canUploadMedia,
+    onForbidden: () => toast.error(t("image.uploadForbidden"), { id: "editor-drop" }),
+  });
+  const placement = fieldsPlacement(doc.fieldDefs, doc.meta.fields, wide);
   const canPublish =
     doc.readOnly === null &&
     doc.item !== null &&
@@ -598,7 +636,13 @@ export function EditorScreen({
       />
       <div className="flex flex-1 items-start">
         <div className="min-w-0 flex-1 px-page">
-          <WritingSurface doc={doc} typeLabel={typeLabel} focusMode={focusMode} banner={banner} />
+          <WritingSurface
+            doc={doc}
+            typeLabel={typeLabel}
+            focusMode={focusMode}
+            banner={banner}
+            fieldsCard={placement === "card" && !focusMode}
+          />
         </div>
         {focusMode && wide ? null : (
           <SidePanel
@@ -608,6 +652,7 @@ export function EditorScreen({
             open={panelOpen}
             onOpenChange={setPanelOpen}
             wide={wide}
+            fieldsHere={placement === "panel"}
             onPublish={(mode) => {
               if (!wide) setSheetOpen(false);
               setPublishMode(mode);
@@ -791,6 +836,26 @@ function EditorBar({
         {showState && !doc.readOnly ? (
           <SaveState state={doc.indicator} {...(doc.indicatorAt ? { at: doc.indicatorAt } : {})} />
         ) : null}
+        {doc.readOnly === null && !focusMode ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={t("image.insert")}
+                data-slot="insert-image"
+                disabled={doc.restoring}
+                onClick={() => void pickAndInsertImage(doc.editor)}
+                // Phones insert images from the `/` menu: the bar has no room.
+                className="text-muted-foreground max-sm:hidden"
+              >
+                <ImagePlusIcon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t("image.insert")}</TooltipContent>
+          </Tooltip>
+        ) : null}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -895,12 +960,15 @@ function WritingSurface({
   typeLabel,
   focusMode,
   banner,
+  fieldsCard,
 }: {
   doc: EditorDocument;
   typeLabel: string;
   focusMode: boolean;
   /** The restore banner, when there is one. */
   banner: ReactNode;
+  /** The custom fields as a card under the body (wide screens, more than 4 fields). */
+  fieldsCard: boolean;
 }) {
   const { t } = useTranslation("editor");
   const { editor, readOnly } = doc;
@@ -981,6 +1049,7 @@ function WritingSurface({
         hidden={readOnly?.kind === "invalid"}
       />
       {editable ? <EditorBubbleMenu editor={editor} layoutKey={focusMode} /> : null}
+      {fieldsCard ? <FieldsSection doc={doc} card /> : null}
     </article>
   );
 }

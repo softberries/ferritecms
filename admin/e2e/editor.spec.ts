@@ -14,7 +14,7 @@ import { uid } from "./support/uid";
 const fixture = (name: string): unknown =>
   JSON.parse(readFileSync(join(import.meta.dirname, "../src/editor/fixtures", name), "utf8"));
 
-const title = (page: Page) => page.getByRole("textbox", { name: "Title" });
+const title = (page: Page) => page.getByRole("textbox", { name: "Title", exact: true });
 const body = (page: Page) => page.getByRole("textbox", { name: "Body" });
 const slashMenu = (page: Page) => page.getByRole("listbox", { name: "Insert a block" });
 const bubble = (page: Page) => page.getByRole("toolbar", { name: "Format" });
@@ -28,7 +28,7 @@ async function openNew(page: Page, type = "post"): Promise<void> {
 
 async function openItem(page: Page, type: string, id: string): Promise<void> {
   await page.goto(`/admin/content/${type}/${id}`);
-  await expect(page.getByRole("textbox", { name: "Title" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Title", exact: true })).toBeVisible();
 }
 
 /** Selects `text` inside the body (a mouse drag over its characters' box). */

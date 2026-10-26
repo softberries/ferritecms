@@ -339,7 +339,13 @@ const ME = {
 };
 
 /** Renders the screen on a seeded `QueryClient`. */
+/** The types the route's loader has cached before the screen opens. */
+const TYPES = [
+  { name: "post", label: "Posts", built_in: true, hierarchical: false, has_archive: true },
+];
+
 async function openScreenWith(item: SchemaContentDto, qc: QueryClient): Promise<void> {
+  if (qc.getQueryData(qk.types) === undefined) qc.setQueryData(qk.types, TYPES);
   renderWithRouter(
     <TooltipProvider>
       <EditorScreen type="post" typeLabel="Posts" item={item} />
@@ -350,12 +356,7 @@ async function openScreenWith(item: SchemaContentDto, qc: QueryClient): Promise<
 }
 
 async function openScreen(item: SchemaContentDto): Promise<void> {
-  renderWithRouter(
-    <TooltipProvider>
-      <EditorScreen type="post" typeLabel="Posts" item={item} />
-    </TooltipProvider>,
-  );
-  await screen.findByRole("textbox", { name: "Body" });
+  await openScreenWith(item, new QueryClient({ defaultOptions: { queries: { retry: false } } }));
 }
 
 describe("editor screen", () => {
@@ -411,10 +412,13 @@ describe("editor screen", () => {
     };
     expect(validateBody(broken)).toEqual({ ok: true });
     const seen = stubRoutes({});
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(qk.types, TYPES);
     renderWithRouter(
       <TooltipProvider>
         <EditorScreen type="post" typeLabel="Posts" item={itemWith(broken)} />
       </TooltipProvider>,
+      qc,
     );
     // The plain-text view shows the text; the editor itself is hidden.
     const stored = await waitFor(() => {

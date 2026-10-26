@@ -8,6 +8,13 @@
 // in there. The writing surface (`editor.tsx`) and the side panel (`panel/`) render it;
 // revisions (Task 17) build on it.
 //
+// Custom fields and SEO (M2b-2 Task 8) are panel members too: `meta.fields` (the item's
+// `fields` object as edited, `featured_image` included) and `meta.seo` (title and
+// description as typed). With a field schema (`fieldDefs`), a save sends the fields
+// without the keys the schema no longer has (`toSave`, P39) and is refused here, before
+// any request, while a field is invalid (a required one empty: Review Focus 2); the
+// server's `422` paths land in `fieldErrors` for the inputs to show.
+//
 // Revisions (Task 17): `restoreRevision` writes an earlier revision back (`POST
 // …/revisions/{rid}/restore` with `If-Match`), through the same failure path as a save
 // (a `412` reaches the conflict dialog). The server deletes the user's autosave slot with
@@ -49,11 +56,13 @@ import {
 import { qk } from "@/api/keys";
 import { resolveMediaUrl } from "@/api/media";
 import { type ApiError, isProblem } from "@/api/problem";
+import { typesQuery } from "@/api/types";
 import type {
   SchemaAutosaveInput,
   SchemaContentDto,
   SchemaContentInput,
   SchemaContentPatch,
+  SchemaSeoPatchDto,
 } from "@/api/schema";
 import type { SaveStateValue } from "@/components/kit/save-state";
 import { pushRecent } from "@/palette/recent";
@@ -64,7 +73,18 @@ import {
   type Draft,
   createAutosaver,
 } from "./autosave";
+import {
+  type FieldDef,
+  type FieldValues,
+  fieldIssues,
+  isObject,
+  sameValue,
+  serverFieldErrors,
+  toSave,
+  valuesOf,
+} from "./fields/fields-model";
 import type { Handoff } from "./handoff";
+import { ImageUploads } from "./insert-image";
 import { displayBody, editorExtensions, validateBody } from "./schema";
 
 export type ContentDto = SchemaContentDto;
@@ -89,6 +109,16 @@ export interface MetaDraft {
   terms: string[];
   parent_id: string | null;
   menu_order: number;
+  /** The item's custom fields as edited (`featured_image` included). */
+  fields: FieldValues;
+  /** The SEO title and description as typed; `""` means not set. */
+  seo: SeoDraft;
+}
+
+/** The SEO members of the draft (`""`: not set; the server trims what is sent). */
+export interface SeoDraft {
+  title: string;
+  description: string;
 }
 
 /** A transition the panel runs (`trash` goes through the list's undo logic instead). */
@@ -109,9 +139,28 @@ export function metaOf(item: ContentDto | null): MetaDraft {
         terms: [...item.terms],
         parent_id: item.parent_id ?? null,
         menu_order: item.menu_order,
+        fields: { ...valuesOf(item.fields) },
+        seo: { title: item.seo?.title ?? "", description: item.seo?.description ?? "" },
       }
-    : { slug: "", excerpt: "", terms: [], parent_id: null, menu_order: 0 };
+    : {
+        slug: "",
+        excerpt: "",
+        terms: [],
+        parent_id: null,
+        menu_order: 0,
+        fields: {},
+        seo: { title: "", description: "" },
+      };
 }
+
+/** A typed SEO value as the API takes it: blank is `null` (delete). */
+const seoValue = (s: string): string | null => (s.trim() === "" ? null : s);
+
+/** The SEO members as the slot and the conflict dialog take them. */
+export const seoOfDraft = (seo: SeoDraft) => ({
+  title: seoValue(seo.title),
+  description: seoValue(seo.description),
+});
 
 const sameTerms = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && a.every((id, i) => id === b[i]);
@@ -128,6 +177,14 @@ export function metaChanges(draft: MetaDraft, base: MetaDraft): SchemaContentPat
   if (!sameTerms(draft.terms, base.terms)) out.terms = [...draft.terms];
   if (draft.parent_id !== base.parent_id) out.parent_id = draft.parent_id;
   if (draft.menu_order !== base.menu_order) out.menu_order = draft.menu_order;
+  if (!sameValue(draft.fields, base.fields))
+    out.fields = draft.fields as SchemaContentPatch["fields"];
+  const seo: SchemaSeoPatchDto = {};
+  if (draft.seo.title !== base.seo.title) seo.title = seoValue(draft.seo.title);
+  if (draft.seo.description !== base.seo.description) {
+    seo.description = seoValue(draft.seo.description);
+  }
+  if (Object.keys(seo).length > 0) out.seo = seo;
   return out;
 }
 
@@ -140,6 +197,12 @@ function settleMeta(now: MetaDraft, sent: MetaDraft, stored: MetaDraft): MetaDra
     terms: sameTerms(now.terms, sent.terms) ? stored.terms : now.terms,
     parent_id: now.parent_id === sent.parent_id ? stored.parent_id : now.parent_id,
     menu_order: now.menu_order === sent.menu_order ? stored.menu_order : now.menu_order,
+    fields: now.fields === sent.fields ? stored.fields : now.fields,
+    seo: {
+      title: now.seo.title === sent.seo.title ? stored.seo.title : now.seo.title,
+      description:
+        now.seo.description === sent.seo.description ? stored.seo.description : now.seo.description,
+    },
   };
 }
 
@@ -174,6 +237,16 @@ export interface EditorDocumentOptions {
    * instead, and an explicit save puts the kept copy back after the `PATCH` cleared it.
    */
   kept?: Draft | null;
+  /**
+   * The type's field schema (`null`: none, the fields are kept as stored). Read when a
+   * save starts, so a refreshed schema applies from the next save on.
+   */
+  fieldDefs?: FieldDef[] | null;
+  /**
+   * A save was refused because of field values: by the check here (`client`, nothing was
+   * sent) or by the server's `422` (`server`, which `onWriteError` reports too).
+   */
+  onInvalid?: (source: "client" | "server") => void;
 }
 
 /** A working draft the screen opens with: the autosave slot, or one kept over a sign-in. */
@@ -236,6 +309,8 @@ export interface EditorDocument {
   /** The panel members as the server holds them. */
   savedMeta: MetaDraft;
   setMeta: (patch: Partial<MetaDraft>) => void;
+  /** Sets one top-level custom field (`featured_image` included) in the draft. */
+  setField: (name: string, value: unknown) => void;
   /** The transition in flight (its save included), else `null`. */
   pending: Transition | null;
   /** The body as the server stored it (for the `invalid` plain-text view). */
@@ -317,6 +392,14 @@ export interface EditorDocument {
    * save or transition starts (what is typed now would be replaced unseen).
    */
   restoring: boolean;
+  /** The type's field schema, as passed (`null`: none). */
+  fieldDefs: FieldDef[] | null;
+  /** The server's last `422` messages by input path (`fields.price`, `seo.title`). */
+  fieldErrors: Record<string, string>;
+  /** Drops the server's message of `path` (its input changed). */
+  clearFieldError: (path: string) => void;
+  /** A save was refused for field values since the last successful save. */
+  saveAttempted: boolean;
 }
 
 function bodyReadOnly(item: ContentDto | null, body: unknown): ReadOnlyReason | null {
@@ -378,6 +461,16 @@ function metaOfDraft(draft: Draft, item: ContentDto | null): MetaDraft {
     terms: draft.terms ? [...draft.terms] : stored.terms,
     parent_id: draft.parent_id,
     menu_order: draft.menu_order ?? stored.menu_order,
+    fields: isObject(draft.fields) ? { ...draft.fields } : stored.fields,
+    seo: draft.seo
+      ? {
+          title: draft.seo.title === undefined ? stored.seo.title : (draft.seo.title ?? ""),
+          description:
+            draft.seo.description === undefined
+              ? stored.seo.description
+              : (draft.seo.description ?? ""),
+        }
+      : stored.seo,
   };
 }
 
@@ -393,6 +486,7 @@ export function autosaveInput(d: Draft): SchemaAutosaveInput {
     parent_id: d.parent_id,
     menu_order: d.menu_order,
     terms: d.terms,
+    ...(d.seo ? { seo: d.seo } : {}),
   };
 }
 
@@ -445,9 +539,10 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   });
 
   // Built once: the editor is created once per screen.
-  const [extensions] = useState(() =>
-    editorExtensions({ placeholder: opts.placeholder, resolveMedia: resolveMediaUrl }),
-  );
+  const [extensions] = useState(() => [
+    ...editorExtensions({ placeholder: opts.placeholder, resolveMedia: resolveMediaUrl }),
+    ImageUploads,
+  ]);
 
   const [title, setTitleState] = useState(
     handoff?.title ?? restoring?.draft.title ?? opts.item?.title ?? "",
@@ -544,7 +639,8 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
       title: titleRef.current,
       excerpt: metaRef.current.excerpt === "" ? null : metaRef.current.excerpt,
       body: editor.getJSON(),
-      fields: itemRef.current?.fields ?? {},
+      fields: metaRef.current.fields,
+      seo: seoOfDraft(metaRef.current.seo),
       slug: metaRef.current.slug.trim() === "" ? null : metaRef.current.slug.trim(),
       parent_id: metaRef.current.parent_id,
       menu_order: metaRef.current.menu_order,
@@ -717,6 +813,13 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     [recompute, touch],
   );
 
+  const setField = useCallback(
+    (name: string, value: unknown) => {
+      setMeta({ fields: { ...metaRef.current.fields, [name]: value } });
+    },
+    [setMeta],
+  );
+
   /** The server's copy of the item, everywhere (screen, cache, lists, counts, parents). */
   const adopt = useCallback(
     (next: ContentDto) => {
@@ -743,6 +846,19 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     [queryClient, type],
   );
 
+  // The server's `422` messages by input path, and whether a save was refused for field
+  // values (required fields then show their message even before they are touched).
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [saveAttempted, setSaveAttempted] = useState(false);
+  const clearFieldError = useCallback((path: string) => {
+    setFieldErrors((errors) => {
+      if (!(path in errors)) return errors;
+      const next = { ...errors };
+      delete next[path];
+      return next;
+    });
+  }, []);
+
   // A revision restore runs (`restoreRevision`): nothing else writes meanwhile.
   const restoringRef = useRef(false);
   const [revisionBusy, setRevisionBusy] = useState(false);
@@ -765,6 +881,15 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
         setSaveState("saved");
         return Promise.resolve(current);
       }
+      // Field values core would refuse: nothing is sent, the inputs say why (a required
+      // field left empty included, Review Focus 2).
+      const defs = latest.current.fieldDefs ?? null;
+      if (defs && Object.keys(fieldIssues(defs, toSave(defs, metaRef.current.fields))).length > 0) {
+        setSaveAttempted(true);
+        setSaveState("error");
+        latest.current.onInvalid?.("client");
+        return Promise.resolve(null);
+      }
       setSaveState("saving");
       const run = async (): Promise<ContentDto | null> => {
         // A running autosave lands first and none starts until this save is done: no
@@ -777,6 +902,13 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
         const sentMeta = metaRef.current;
         const base = saved.current;
         const metaPatch = metaChanges(sentMeta, savedMetaRef.current);
+        if (defs) {
+          // Keys the schema no longer has are dropped (P39): every write is checked
+          // against the schema, so they go with the next save, whatever it changes.
+          const clean = toSave(defs, sentMeta.fields);
+          if (sameValue(clean, savedMetaRef.current.fields)) delete metaPatch.fields;
+          else metaPatch.fields = clean as SchemaContentPatch["fields"];
+        }
         try {
           let next: ContentDto;
           if (current) {
@@ -798,6 +930,8 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
             if (metaPatch.terms && metaPatch.terms.length > 0) input.terms = metaPatch.terms;
             if (metaPatch.parent_id) input.parent_id = metaPatch.parent_id;
             if (metaPatch.menu_order !== undefined) input.menu_order = metaPatch.menu_order;
+            if (metaPatch.fields) input.fields = metaPatch.fields;
+            if (metaPatch.seo) input.seo = metaPatch.seo;
             next = await createContent(type, input);
           }
           baseVersion.current = next.version;
@@ -810,6 +944,8 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
           adopt(next);
           setSavedAt(new Date());
           setRestored(null);
+          setFieldErrors({});
+          setSaveAttempted(false);
           const still = !isDirtyNow();
           setDirty(!still);
           setSaveState(still ? "saved" : "dirty");
@@ -860,6 +996,16 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
                 ? "dirty"
                 : "error",
           );
+          const errors = serverFieldErrors(e);
+          if (Object.keys(errors).length > 0) {
+            setFieldErrors(errors);
+            setSaveAttempted(true);
+            latest.current.onInvalid?.("server");
+            // The schema may have changed since the screen read it.
+            if (Object.keys(errors).some((p) => p.startsWith("fields"))) {
+              void queryClient.invalidateQueries({ queryKey: typesQuery.queryKey });
+            }
+          }
           const waitingFor = then ?? waiting.current ?? undefined;
           fail(e, "save", undefined, waitingFor ? { then: waitingFor } : {});
           return null;
@@ -872,7 +1018,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
       inflight.current = p;
       return p;
     },
-    [editor, type, adopt, fail, isDirtyNow, touch],
+    [editor, type, adopt, fail, isDirtyNow, touch, queryClient],
   );
 
   /** A save waits for a transition in flight, then saves what is still unsaved. */
@@ -1146,6 +1292,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     meta,
     savedMeta,
     setMeta,
+    setField,
     pending,
     storedBody,
     initialFocus,
@@ -1171,5 +1318,9 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     adopt,
     restoreRevision: restoreRevisionNow,
     restoring: revisionBusy,
+    fieldDefs: opts.fieldDefs ?? null,
+    fieldErrors,
+    clearFieldError,
+    saveAttempted,
   };
 }

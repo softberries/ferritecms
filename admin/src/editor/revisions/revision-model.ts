@@ -4,8 +4,10 @@
 
 import type { SchemaRevisionSummaryDto } from "@/api/schema";
 import { uiLocale } from "@/lib/locale";
-import { canonicalBody } from "../conflict";
+import { i18n } from "@/i18n";
 import { type DiffPart, diffRevision } from "../diff";
+import { isObject, sameValue, valuesOf } from "../fields/fields-model";
+import { blockText } from "../text";
 import { wordCount } from "../word-count";
 
 export type RevisionSummary = SchemaRevisionSummaryDto;
@@ -121,7 +123,47 @@ export const whenOf = (iso: string) =>
     minute: "2-digit",
   }).format(new Date(iso));
 
-/** Whether two `fields` objects hold the same values (key order and `null`s aside). */
-export function sameFields(a: unknown, b: unknown): boolean {
-  return canonicalBody(a ?? {}) === canonicalBody(b ?? {});
+/** One custom field that differs; a missing side is a field the version does not have. */
+export interface FieldChange {
+  name: string;
+  before?: unknown;
+  after?: unknown;
+}
+
+/**
+ * The top-level custom fields that differ between `before` and `after`, by name. `null`
+ * and absent are different values (a cleared field against one never set).
+ */
+export function fieldChanges(before: unknown, after: unknown): FieldChange[] {
+  const a = valuesOf(before);
+  const b = valuesOf(after);
+  const names = [...new Set([...Object.keys(a), ...Object.keys(b)])].sort();
+  const out: FieldChange[] = [];
+  for (const name of names) {
+    const inA = Object.hasOwn(a, name);
+    const inB = Object.hasOwn(b, name);
+    if (inA && inB && sameValue(a[name], b[name])) continue;
+    out.push({ name, ...(inA ? { before: a[name] } : {}), ...(inB ? { after: b[name] } : {}) });
+  }
+  return out;
+}
+
+/** Longest value text a change line shows. */
+const VALUE_CHARS = 160;
+
+/** A field value as one line of text: absent, empty, yes/no, a rich text's words, JSON. */
+export function fieldText(v: unknown): string {
+  const t = i18n.getFixedT(null, "editor");
+  let text: string;
+  if (v === undefined) return t("revisions.fieldValue.absent");
+  if (v === null) return t("revisions.fieldValue.empty");
+  if (typeof v === "boolean")
+    return v ? t("revisions.fieldValue.yes") : t("revisions.fieldValue.no");
+  if (typeof v === "string") text = v;
+  else if (typeof v === "number") text = String(v);
+  else if (isObject(v) && v.type === "doc") text = blockText(v).replace(/\s+/g, " ").trim();
+  else if (Array.isArray(v)) {
+    text = t("revisions.fieldValue.rows", { count: v.length, json: JSON.stringify(v) });
+  } else text = JSON.stringify(v);
+  return text.length > VALUE_CHARS ? `${text.slice(0, VALUE_CHARS)}…` : text;
 }

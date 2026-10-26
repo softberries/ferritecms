@@ -463,3 +463,43 @@ img.ProseMirror-separator {
   font-size: 0.8125rem;
   white-space: pre;
 }
+
+/* --- Image alt text and upload placeholders (M2b-2) ------------------------------------ */
+
+.editor-figure {
+  position: relative;
+}
+
+.editor-image-alt {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 1;
+}
+
+.editor-upload-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 1rem 0;
+  border: 1px dashed var(--primary);
+  border-radius: var(--radius);
+  padding: 1rem 1.125rem;
+  color: var(--muted-foreground);
+  background: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+/* A `rich_text` custom field: the body's typography at the size of a form field. Its
+   frame (in the component) carries the focus ring. */
+.editor-body.editor-body-compact {
+  font-size: 0.9375rem;
+  line-height: 1.5rem;
+  min-height: 4.5rem;
+  padding: 0.375rem 0;
+}
+
+.editor-body.editor-body-compact > * + * {
+  margin-top: 0.75em;
+}

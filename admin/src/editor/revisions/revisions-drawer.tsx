@@ -48,8 +48,10 @@ import {
   fmt,
   groupByDay,
   initials,
+  type FieldChange,
+  fieldChanges,
+  fieldText,
   restoredFrom,
-  sameFields,
   timeOf,
   totalStats,
   whenOf,
@@ -430,12 +432,17 @@ function RevisionDetail({
     [full.data, prev.data],
   );
   const diff = mode === "previous" ? vsPrevious : vsCurrent;
-  // Custom fields are restored too, so they count (shown as one line: the admin does not
-  // edit them yet).
-  const fieldsVsCurrent = full.data ? !sameFields(full.data.fields, item.fields) : false;
-  const fieldsVsPrevious =
-    full.data && prev.data ? !sameFields(full.data.fields, prev.data.fields) : false;
-  const isCurrent = vsCurrent !== null && !anyChange(vsCurrent) && !fieldsVsCurrent;
+  // Custom fields are restored too, so they count, listed per field (`null` and absent
+  // are different values). From the compared version to this revision.
+  const fieldsVsCurrent = useMemo(
+    () => (full.data ? fieldChanges(item.fields, full.data.fields) : []),
+    [full.data, item.fields],
+  );
+  const fieldsVsPrevious = useMemo(
+    () => (full.data && prev.data ? fieldChanges(prev.data.fields, full.data.fields) : []),
+    [full.data, prev.data],
+  );
+  const isCurrent = vsCurrent !== null && !anyChange(vsCurrent) && fieldsVsCurrent.length === 0;
   const busy = restoring !== null;
   const name = authorName(revision);
 
@@ -540,9 +547,15 @@ function RevisionDetail({
               diff={diff}
               mode={mode}
               isCurrent={isCurrent}
-              fieldsDiffer={mode === "previous" ? fieldsVsPrevious : fieldsVsCurrent}
+              fields={mode === "previous" ? fieldsVsPrevious : fieldsVsCurrent}
             />
           )}
+          <p
+            data-slot="revision-seo-note"
+            className="mt-8 border-t pt-3 text-xs text-muted-foreground"
+          >
+            {t("revisions.seoNote")}
+          </p>
         </div>
       </div>
 
@@ -578,15 +591,16 @@ function DiffBody({
   diff,
   mode,
   isCurrent,
-  fieldsDiffer,
+  fields,
 }: {
   diff: RevisionDiffs;
   mode: CompareWith;
   isCurrent: boolean;
-  /** The custom fields differ from the compared version. */
-  fieldsDiffer: boolean;
+  /** The custom fields that differ from the compared version. */
+  fields: FieldChange[];
 }) {
   const { t } = useTranslation("editor");
+  const fieldsDiffer = fields.length > 0;
   const same = !anyChange(diff) && !fieldsDiffer;
   let note: ReactNode;
   if (same) {
@@ -607,13 +621,29 @@ function DiffBody({
     <article data-slot="revision-text" className="flex flex-col gap-6">
       {note}
       {fieldsDiffer ? (
-        <p
+        <div
           data-slot="revision-fields"
-          className="flex items-center gap-2 rounded-lg bg-info/10 px-3 py-2 text-sm text-foreground"
+          className="flex flex-col gap-2 rounded-lg bg-info/10 px-3 py-2.5 text-sm text-foreground"
         >
-          <BracesIcon aria-hidden="true" className="size-4 shrink-0 text-info" />
-          {mode === "current" ? t("revisions.fieldsDiffer") : t("revisions.fieldsChanged")}
-        </p>
+          <p className="flex items-center gap-2">
+            <BracesIcon aria-hidden="true" className="size-4 shrink-0 text-info" />
+            {mode === "current" ? t("revisions.fieldsDiffer") : t("revisions.fieldsChanged")}
+          </p>
+          <ul className="flex flex-col gap-1 pl-6">
+            {fields.map((f) => (
+              <li key={f.name} data-slot="revision-field" className="min-w-0 break-words">
+                <span className="font-mono text-xs font-medium">{f.name}</span>
+                <span className="text-muted-foreground">: </span>
+                <span className="text-muted-foreground">{fieldText(f.before)}</span>
+                <span aria-hidden="true" className="px-1 text-muted-foreground">
+                  →
+                </span>
+                <span className="sr-only">{t("revisions.fieldTo")}</span>
+                <span>{fieldText(f.after)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
       <Field label={t("revisions.fields.title")}>
         <RevisionDiff

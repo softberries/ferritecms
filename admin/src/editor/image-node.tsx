@@ -2,15 +2,21 @@
 // React node view: `ferrite:media/<uuid>` resolves through `GET /media/{id}` to the
 // variant URL; a local path or http(s) URL shows as is; anything the site would drop,
 // a missing or trashed media item, or a file that fails to load shows a broken-image
-// state with the stored `src`, so nothing is silently lost. Inserting images arrives
-// with the media picker (M2b-2); M2b-1 displays and keeps them.
+// state with the stored `src`, so nothing is silently lost. Images are inserted from the
+// media picker (`insert-image.ts`, M2b-2). On an editable screen a small "Alt text" button
+// on the image opens a popover that edits `alt`; empty is allowed and marks the image
+// decorative, which the button then says.
 
 import { Image, type ImageOptions } from "@tiptap/extension-image";
 import { NodeViewWrapper, ReactNodeViewRenderer, type ReactNodeViewProps } from "@tiptap/react";
-import { ImageOffIcon } from "lucide-react";
+import { ImageOffIcon, TextIcon } from "lucide-react";
 import { cn } from "cn";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Textarea } from "@/components/ui/textarea";
 
 const MEDIA_PREFIX = "ferrite:media/";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -61,7 +67,7 @@ function useImageUrl(src: unknown, resolve: (id: string) => Promise<string | nul
   return resolved.url === null ? { state: "broken" } : { state: "ready", url: resolved.url };
 }
 
-function ImageView({ node, selected, extension }: ReactNodeViewProps) {
+function ImageView({ node, selected, extension, editor, updateAttributes }: ReactNodeViewProps) {
   const { t } = useTranslation("editor");
   const options = extension.options as MediaImageOptions;
   const attrs = node.attrs as { src?: unknown; alt?: unknown; title?: unknown };
@@ -104,7 +110,99 @@ function ImageView({ node, selected, extension }: ReactNodeViewProps) {
           onError={() => setFailed(shown.url)}
         />
       )}
+      {editor.isEditable ? (
+        <AltEditor alt={alt} onChange={(next) => updateAttributes({ alt: next })} />
+      ) : null}
     </NodeViewWrapper>
+  );
+}
+
+/**
+ * The alt text button over the image and its popover: Done (or Enter) applies, Esc
+ * leaves the text as it was. Empty is allowed: the image is then decorative.
+ */
+function AltEditor({ alt, onChange }: { alt: string; onChange: (alt: string) => void }) {
+  const { t } = useTranslation("editor");
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState(alt);
+  const cancelled = useRef(false);
+  const fieldId = useId();
+  const hintId = useId();
+  const decorative = alt.trim() === "";
+  const apply = () => {
+    const next = text.replace(/\s+/g, " ").trim();
+    if (next !== alt) onChange(next);
+  };
+  return (
+    <div className="editor-image-alt" contentEditable={false} data-slot="image-alt">
+      <Popover
+        open={open}
+        onOpenChange={(next) => {
+          if (next) {
+            setText(alt);
+            cancelled.current = false;
+          } else if (!cancelled.current) apply();
+          setOpen(next);
+        }}
+      >
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-xs shadow-1 pointer-coarse:h-11"
+            aria-label={
+              decorative
+                ? `${t("image.altEdit")} (${t("image.decorative")})`
+                : `${t("image.altEdit")}: ${alt}`
+            }
+          >
+            <TextIcon data-icon="inline-start" />
+            {decorative ? t("image.decorative") : t("image.alt")}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="end"
+          className="flex w-80 flex-col gap-2"
+          onEscapeKeyDown={() => {
+            cancelled.current = true;
+          }}
+        >
+          <Label htmlFor={fieldId}>{t("image.altLabel")}</Label>
+          <Textarea
+            id={fieldId}
+            value={text}
+            rows={3}
+            aria-describedby={hintId}
+            maxLength={1000}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                setOpen(false);
+                apply();
+              }
+            }}
+            className="min-h-20 text-sm"
+          />
+          <p id={hintId} className="text-xs text-muted-foreground">
+            {t("image.altHint")}
+          </p>
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                setOpen(false);
+                apply();
+              }}
+            >
+              {t("image.altDone")}
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 }
 

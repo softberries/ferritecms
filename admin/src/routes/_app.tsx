@@ -26,6 +26,7 @@ import { storeSidebarOpen, storedSidebarOpen } from "@/design/preferences";
 import { registerShortcut, useShortcut } from "@/lib/shortcuts";
 import { AppSidebar } from "@/shell/app-sidebar";
 import { type ShellChrome, ShellChromeContext } from "@/shell/chrome-context";
+import { MediaPickerHost } from "@/media/media-picker";
 import { CommandPalette } from "@/palette/palette";
 import { pushRecent } from "@/palette/recent";
 import { type NavSection, navFor, navItemAt } from "@/shell/nav";
@@ -149,6 +150,7 @@ function Shell({ me }: { me: MeDto }) {
             onShortcuts={openSheet}
           />
           <ShortcutSheet open={sheet} onOpenChange={setSheet} />
+          <MediaPickerHost />
           {/* Toasts sit above a floating panel that sets `--toast-lift` (the media
               library's upload tray), never on top of it. */}
           <Toaster

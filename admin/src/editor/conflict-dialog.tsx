@@ -23,7 +23,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { parentRefQuery } from "@/content/parent-ref";
-import type { ConflictField, ConflictState } from "./conflict";
+import { type ConflictField, type ConflictState, seoText } from "./conflict";
+import { fieldChanges, fieldText } from "./revisions/revision-model";
 import { type DiffPart, diffRevision } from "./diff";
 import type { Paused } from "./editor-state";
 import { useTermsById, useTypeTaxonomies } from "./panel/panel-state";
@@ -188,6 +189,8 @@ const FIELD_LABEL = {
   terms: "conflict.fields.terms",
   parent: "conflict.fields.parent",
   menu_order: "conflict.fields.menuOrder",
+  fields: "conflict.fields.fields",
+  seo: "conflict.fields.seo",
 } as const satisfies Record<ConflictField, string>;
 
 function FieldDiff({
@@ -230,6 +233,35 @@ function FieldDiff({
       left = <span className="tabular-nums">{theirs.menu_order}</span>;
       right = <span className="tabular-nums">{mine.menu_order ?? theirs.menu_order}</span>;
       break;
+    case "fields": {
+      // Only the custom fields that differ, by name.
+      const changes = fieldChanges(theirs.fields, mine.fields);
+      left = <FieldValues rows={changes.map((c) => ({ name: c.name, value: c.before }))} />;
+      right = <FieldValues rows={changes.map((c) => ({ name: c.name, value: c.after }))} />;
+      break;
+    }
+    case "seo": {
+      const mineSeo = mine.seo ?? {};
+      // A member the draft leaves out keeps the stored one; `null` is "not set".
+      const minePart = (v: string | null | undefined, stored: string | null) =>
+        v === undefined ? stored : seoText(v);
+      const rows = (side: "theirs" | "mine") => [
+        {
+          name: t("conflict.seoTitle"),
+          value: side === "theirs" ? theirs.seo.title : minePart(mineSeo.title, theirs.seo.title),
+        },
+        {
+          name: t("conflict.seoDescription"),
+          value:
+            side === "theirs"
+              ? theirs.seo.description
+              : minePart(mineSeo.description, theirs.seo.description),
+        },
+      ];
+      left = <FieldValues rows={rows("theirs")} plain />;
+      right = <FieldValues rows={rows("mine")} plain />;
+      break;
+    }
   }
   const label = t(FIELD_LABEL[field]);
   return (
@@ -242,6 +274,28 @@ function FieldDiff({
         <Side kind="mine">{right}</Side>
       </div>
     </section>
+  );
+}
+
+/** Named values, one per line (`name: value`); `plain` names are words, not field names. */
+function FieldValues({
+  rows,
+  plain = false,
+}: {
+  rows: { name: string; value: unknown }[];
+  plain?: boolean;
+}) {
+  return (
+    <dl className="flex flex-col gap-1">
+      {rows.map((r) => (
+        <div key={r.name} className="flex min-w-0 flex-wrap gap-x-1.5">
+          <dt className={cn("text-muted-foreground", !plain && "font-mono text-xs leading-6")}>
+            {r.name}
+          </dt>
+          <dd className="min-w-0 break-words">{fieldText(r.value)}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 

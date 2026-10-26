@@ -20,7 +20,7 @@ type Stored = Item & {
 
 const panel = (page: Page) => page.locator("[data-slot=editor-panel]");
 const body = (page: Page) => page.getByRole("textbox", { name: "Body" });
-const title = (page: Page) => page.getByRole("textbox", { name: "Title" });
+const title = (page: Page) => page.getByRole("textbox", { name: "Title", exact: true });
 const dialog = (page: Page) => page.locator("[data-slot=publish-dialog]");
 const toast = (page: Page, text: string | RegExp) =>
   page.locator("[data-sonner-toast]").filter({ hasText: text });

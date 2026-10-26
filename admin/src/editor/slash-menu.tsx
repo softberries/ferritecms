@@ -1,6 +1,6 @@
 // The `/` insert menu (11 §1, after Notion and Ghost): typing `/` at the start of a line
 // or after a space opens a list of blocks, filtered by what follows; ↑/↓ move, Enter or
-// Tab inserts, Esc closes. Built on `@tiptap/suggestion` with managed positioning
+// Tab inserts, Esc closes. "Image" opens the media picker (M2b-2). Built on `@tiptap/suggestion` with managed positioning
 // (`props.mount`). Focus stays in the editor, which points at the highlighted option
 // through `aria-activedescendant`.
 
@@ -18,6 +18,7 @@ import {
   Heading2Icon,
   Heading3Icon,
   Heading4Icon,
+  ImageIcon,
   ListIcon,
   ListOrderedIcon,
   SeparatorHorizontalIcon,
@@ -30,6 +31,7 @@ import { cn } from "cn";
 import { useEffect, useImperativeHandle, useState, type Ref } from "react";
 import { useTranslation } from "react-i18next";
 import { i18n } from "@/i18n";
+import { pickAndInsertImage } from "./insert-image";
 
 export const slashMenuKey = new PluginKey("slashMenu");
 
@@ -42,6 +44,7 @@ type SlashId =
   | "quote"
   | "codeBlock"
   | "table"
+  | "image"
   | "divider"
   | "html";
 
@@ -81,6 +84,15 @@ const ITEMS: SlashItem[] = [
     id: "table",
     icon: TableIcon,
     run: (e, r) => chain(e, r).insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
+  },
+  {
+    id: "image",
+    icon: ImageIcon,
+    run: (e, r) => {
+      // The `/` text goes now; the image lands at the cursor once one is chosen.
+      chain(e, r).run();
+      void pickAndInsertImage(e);
+    },
   },
   {
     id: "divider",

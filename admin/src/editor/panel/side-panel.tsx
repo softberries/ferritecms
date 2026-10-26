@@ -6,12 +6,15 @@
 // fields only call `setMeta`, saving is the editor's. Read-only screens show the values
 // without a way to change them. Under the status, "Revisions (n)" opens the revisions
 // drawer (Task 17), for items the server lets this account edit (`allowed.edit`).
+// M2b-2: the featured image, the custom fields (unless they are a card under the body)
+// and SEO with its search preview.
 
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRightIcon, HistoryIcon, XIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { revisionsQuery } from "@/api/content";
 import { metaQuery } from "@/api/meta";
+import { settingsQuery } from "@/api/settings";
 import { typesQuery } from "@/api/types";
 import { useMe } from "@/auth/session";
 import { KbdCombo } from "@/components/kit/kbd-combo";
@@ -25,10 +28,13 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import type { EditorDocument } from "../editor-state";
+import { FieldsSection } from "../fields/fields-section";
 import { DangerZone } from "./danger-zone";
 import { ExcerptField } from "./excerpt-field";
+import { FeaturedImage } from "./featured-image";
 import { useTypeTaxonomies } from "./panel-state";
 import { ParentField } from "./parent-field";
+import { SeoSection } from "./seo-section";
 import { SlugField } from "./slug-field";
 import { StatusSection } from "./status-section";
 import { TermsSection } from "./terms-section";
@@ -48,6 +54,8 @@ export interface SidePanelProps {
   onPublish: (mode: "now" | "schedule") => void;
   /** Opens the revisions drawer; without it there is no "Revisions" entry. */
   onRevisions?: () => void;
+  /** The custom fields go in the panel (else nowhere, or a card under the body). */
+  fieldsHere: boolean;
 }
 
 export function SidePanel({
@@ -59,6 +67,7 @@ export function SidePanel({
   wide,
   onPublish,
   onRevisions,
+  fieldsHere,
 }: SidePanelProps) {
   const { t } = useTranslation("editor");
   if (wide) {
@@ -90,6 +99,7 @@ export function SidePanel({
             doc={doc}
             type={type}
             onPublish={onPublish}
+            fieldsHere={fieldsHere}
             {...(onRevisions ? { onRevisions } : {})}
           />
         </div>
@@ -115,6 +125,7 @@ export function SidePanel({
             doc={doc}
             type={type}
             onPublish={onPublish}
+            fieldsHere={fieldsHere}
             {...(onRevisions ? { onRevisions } : {})}
           />
         </div>
@@ -128,11 +139,13 @@ function PanelBody({
   type,
   onPublish,
   onRevisions,
+  fieldsHere,
 }: {
   doc: EditorDocument;
   type: string;
   onPublish: (mode: "now" | "schedule") => void;
   onRevisions?: () => void;
+  fieldsHere: boolean;
 }) {
   const { t } = useTranslation("editor");
   const me = useMe();
@@ -143,6 +156,9 @@ function PanelBody({
   const disabled = doc.readOnly !== null || doc.restoring;
   const canCreate = me?.capabilities.includes("manage_terms") === true;
   const siteUrl = site.data?.site_url ?? null;
+  const settings = useQuery(settingsQuery);
+  const siteName =
+    settings.data?.["site.title"] || (siteUrl ? new URL(siteUrl).host : t("seo.siteFallback"));
 
   return (
     <div data-slot="panel-body" className="flex flex-col gap-5 px-5 pt-1 pb-8">
@@ -158,6 +174,8 @@ function PanelBody({
         <SlugField doc={doc} siteUrl={siteUrl} disabled={disabled} />
         <ExcerptField doc={doc} disabled={disabled} />
       </section>
+      <Separator />
+      <FeaturedImage doc={doc} disabled={disabled} />
       {taxonomies.length > 0 ? (
         <>
           <Separator />
@@ -184,6 +202,14 @@ function PanelBody({
           </section>
         </>
       ) : null}
+      {fieldsHere ? (
+        <>
+          <Separator />
+          <FieldsSection doc={doc} />
+        </>
+      ) : null}
+      <Separator />
+      <SeoSection doc={doc} siteUrl={siteUrl} siteName={siteName} disabled={disabled} />
       {doc.item?.allowed.trash && !disabled ? (
         <>
           <Separator />

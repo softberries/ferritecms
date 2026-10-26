@@ -106,6 +106,11 @@
       "hint": "Three by three, with a header row",
       "keywords": "grid rows columns"
     },
+    "image": {
+      "label": "Image",
+      "hint": "From the media library",
+      "keywords": "picture photo media img upload"
+    },
     "divider": {
       "label": "Divider",
       "hint": "A horizontal rule",
@@ -120,7 +125,19 @@
   "image": {
     "broken": "Image not found",
     "brokenLabel": "Missing image {{alt}}",
-    "loading": "Loading image"
+    "loading": "Loading image",
+    "pickTitle": "Insert an image",
+    "uploading": "Uploading {{name}}…",
+    "uploadFailed": "{{name}} was not uploaded",
+    "insert": "Insert image",
+    "alt": "Alt text",
+    "altLabel": "Alternative text",
+    "altHint": "Describe what the image shows for people who cannot see it. Leave it empty if the image is only decorative.",
+    "altDone": "Done",
+    "decorative": "Decorative",
+    "altEdit": "Edit the alt text",
+    "altMissing": "No alt text",
+    "uploadForbidden": "You are not allowed to upload files."
   },
   "html": {
     "label": "HTML",
@@ -300,7 +317,9 @@
       "slug": "Address",
       "terms": "Categories and tags",
       "parent": "Parent",
-      "menuOrder": "Order"
+      "menuOrder": "Order",
+      "fields": "Custom fields",
+      "seo": "SEO"
     },
     "empty": "Empty",
     "none": "None",
@@ -336,7 +355,9 @@
       "submit": "This item was saved elsewhere, so it was not submitted. You are on its latest version now; submit again when ready.",
       "unpublish": "This item was saved elsewhere, so it was not unpublished. You are on its latest version now; try again when ready.",
       "revision": "This item was saved elsewhere, so the version was not restored. You are on its latest version now; restore again when ready."
-    }
+    },
+    "seoTitle": "Title",
+    "seoDescription": "Description"
   },
   "restore": {
     "restoredBefore": "Unsaved changes from",
@@ -431,6 +452,85 @@
       "lineBreak": "line break"
     },
     "fieldsDiffer": "Custom fields differ from the current version; restoring brings these back too.",
-    "fieldsChanged": "This save also changed custom fields."
+    "fieldsChanged": "This save also changed custom fields.",
+    "fieldValue": {
+      "absent": "Not set",
+      "empty": "Empty",
+      "yes": "Yes",
+      "no": "No",
+      "rows_one": "{{count}} row: {{json}}",
+      "rows_other": "{{count}} rows: {{json}}"
+    },
+    "fieldTo": " becomes ",
+    "seoNote": "SEO title and description are not kept in revisions: restoring leaves them as they are."
+  },
+  "fields": {
+    "errors": {
+      "required": "Required",
+      "text": "Must be text",
+      "textLong": "At most {{max}} characters",
+      "richText": "Must be formatted text",
+      "number": "Must be a number",
+      "bool": "Must be on or off",
+      "date": "Must be a date and time",
+      "select": "Must be one of the choices",
+      "uuid": "Must point at an item",
+      "array": "Must be a list of rows",
+      "rows": "At most {{rows}} rows",
+      "row": "Must be a row of fields",
+      "unknown": "Not a field of this row"
+    },
+    "heading": "Fields",
+    "nameHint": "Field name:",
+    "required": "(required)",
+    "selectPlaceholder": "Choose…",
+    "selectNone": "None",
+    "datePlaceholder": "Pick a date and time",
+    "clear": "Clear",
+    "done": "Done",
+    "richUnsupported": "This text holds content the editor cannot show. It is kept as stored.",
+    "relationPlaceholder": "Choose an item…",
+    "relationLoading": "Loading…",
+    "relationUnknown": "Unknown item {{id}}",
+    "relationSearch": "Search posts, pages and more…",
+    "relationEmpty": "Nothing found",
+    "relationClear": "Clear the link",
+    "mediaMissing": "File not found ({{id}})",
+    "mediaLoading": "Loading…",
+    "replace": "Replace",
+    "remove": "Remove",
+    "pickFile": "Choose a file",
+    "chooseFile": "Choose a file",
+    "rowLabel": "{{label}}, row {{n}}",
+    "rowsLabel": "Rows of {{label}}",
+    "row": "Row {{n}}",
+    "removeRow": "Remove {{row}}",
+    "noRows": "No rows yet.",
+    "addRow": "Add row",
+    "rowCount": "{{count}} of {{max}} rows",
+    "staleBefore": "Not in the type any more: ",
+    "staleAfter": ", removed when you save",
+    "staleHint": "The value stays stored until this item is saved.",
+    "blocked": "Not saved: check the highlighted fields.",
+    "rowLabelNamed": "{{label}}, row {{n}}: {{preview}}"
+  },
+  "featured": {
+    "heading": "Featured image",
+    "set": "Set featured image",
+    "pickTitle": "Set featured image"
+  },
+  "seo": {
+    "heading": "SEO",
+    "title": "SEO title",
+    "description": "Meta description",
+    "titlePlaceholder": "The item title",
+    "descriptionPlaceholder": "The excerpt",
+    "soft": "Often cut off in search results after about {{n}} characters",
+    "count": "{{n}} / {{soft}}",
+    "reset": "Reset to defaults",
+    "preview": "Search result preview",
+    "previewNoUrl": "The address is known after the first save",
+    "previewNoDescription": "No description: search engines pick text from the page.",
+    "siteFallback": "Your site"
   }
 }

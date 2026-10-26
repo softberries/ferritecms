@@ -132,7 +132,7 @@ export function UploadTray({ queue, entries, raised = false, onOpen }: UploadTra
             className="max-h-[min(18rem,40svh)] overflow-y-auto border-t"
           >
             {entries.map((entry) => (
-              <Row key={entry.id} entry={entry} queue={queue} onOpen={onOpen} />
+              <UploadRow key={entry.id} entry={entry} queue={queue} onOpen={onOpen} />
             ))}
           </ul>
         </section>
@@ -165,14 +165,22 @@ export function UploadTray({ queue, entries, raised = false, onOpen }: UploadTra
   );
 }
 
-function Row({
+/**
+ * One file of the queue: name, state, progress, the failure's reason and Retry/Cancel;
+ * once done, `openLabel` (default "Open") hands the item to `onOpen`. Also the media
+ * picker's upload list.
+ */
+export function UploadRow({
   entry,
   queue,
   onOpen,
+  openLabel,
 }: {
   entry: UploadEntry;
   queue: UploadQueue;
   onOpen: (media: MediaDto) => void;
+  /** The done row's button and its accessible name (`name` is the file's). */
+  openLabel?: { text: string; name: (name: string) => string };
 }) {
   const { t } = useTranslation("media");
   const name = entry.file.name;
@@ -248,12 +256,12 @@ function Row({
             variant="ghost"
             size="sm"
             className="pointer-coarse:h-11"
-            aria-label={t("tray.openName", { name })}
+            aria-label={openLabel ? openLabel.name(name) : t("tray.openName", { name })}
             onClick={() => {
               if (entry.media) onOpen(entry.media);
             }}
           >
-            {t("tray.open")}
+            {openLabel ? openLabel.text : t("tray.open")}
           </Button>
         ) : null}
       </div>

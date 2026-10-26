@@ -67,14 +67,27 @@ export class ContentApi {
     return (res.status() === 204 ? undefined : await res.json()) as T;
   }
 
-  /** A content type named `name` (needs `manage_settings`). */
-  async createType(name: string, label: string, hierarchical = false): Promise<void> {
+  /** A content type named `name` (needs `manage_settings`), with a field schema if given. */
+  async createType(
+    name: string,
+    label: string,
+    hierarchical = false,
+    fields?: unknown[],
+  ): Promise<void> {
     await this.ok(
       await this.ctx.post("/api/v1/types", {
         headers: this.headers(),
-        data: { name, label, hierarchical, has_archive: false },
+        data: { name, label, hierarchical, has_archive: false, ...(fields ? { fields } : {}) },
       }),
       `create type ${name}`,
+    );
+  }
+
+  /** `PATCH /types/{name}` (a new schema, a label). */
+  async patchType(name: string, data: Record<string, unknown>): Promise<void> {
+    await this.ok(
+      await this.ctx.patch(`/api/v1/types/${name}`, { headers: this.headers(), data }),
+      `patch type ${name}`,
     );
   }
 
@@ -115,7 +128,7 @@ export class ContentApi {
   async create(
     type: string,
     title: string,
-    extra: { parent_id?: string; terms?: string[]; body?: unknown } = {},
+    extra: { parent_id?: string; terms?: string[]; body?: unknown; fields?: unknown } = {},
   ): Promise<Item> {
     return this.ok(
       await this.ctx.post(`/api/v1/content/${type}`, {

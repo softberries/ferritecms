@@ -17,7 +17,7 @@ import { forwardedFor } from "./support/users";
 /** This spec's `X-Forwarded-For` block (F24). */
 const SPEC = 16;
 
-const title = (page: Page) => page.getByRole("textbox", { name: "Title" });
+const title = (page: Page) => page.getByRole("textbox", { name: "Title", exact: true });
 const body = (page: Page) => page.getByRole("textbox", { name: "Body" });
 const indicator = (page: Page) => page.locator("[data-slot=editor-bar] [data-slot=save-state]");
 const banner = (page: Page) => page.locator("[data-slot=restore-banner]");

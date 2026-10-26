@@ -312,7 +312,7 @@ test("edit_alt_text", async ({ as, site, backend }) => {
     expect((await api.getMedia(media.id)).alt).toBe("A gradient from ember to night blue");
 
     // `mod+s` saves the title.
-    const title = detail(page).getByRole("textbox", { name: "Title" });
+    const title = detail(page).getByRole("textbox", { name: "Title", exact: true });
     await title.fill("Renamed by the keyboard");
     const savedTitle = page.waitForResponse(
       (r) => r.request().method() === "PATCH" && r.url().endsWith(`/api/v1/media/${media.id}`),

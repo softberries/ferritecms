@@ -84,6 +84,7 @@ function fakeDoc(
     meta,
     savedMeta: meta,
     setMeta: vi.fn(),
+    setField: vi.fn(),
     pending: null,
     storedBody: item?.body,
     initialFocus: null,
@@ -119,6 +120,10 @@ function fakeDoc(
     adopt: vi.fn(),
     restoreRevision: vi.fn(() => Promise.resolve(item)),
     restoring: false,
+    fieldDefs: null,
+    fieldErrors: {},
+    clearFieldError: vi.fn(),
+    saveAttempted: false,
     editor: {} as EditorDocument["editor"],
     ...extra,
   };

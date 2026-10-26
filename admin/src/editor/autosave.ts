@@ -37,6 +37,8 @@ export interface Draft {
   parent_id: string | null;
   menu_order: number | null;
   terms: string[] | null;
+  /** The SEO members (`null` inside: not set); absent or `null`: unchanged. */
+  seo?: { title?: string | null; description?: string | null } | null;
 }
 
 /** What the slot is doing (the editor folds it into its save indicator). */
@@ -243,6 +245,7 @@ export function draftOfAutosave(slot: SchemaAutosaveDto): Draft {
     parent_id: slot.parent_id ?? null,
     menu_order: slot.menu_order ?? null,
     terms: slot.terms ?? null,
+    seo: slot.seo ?? null,
   };
 }
 
