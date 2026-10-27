@@ -84,6 +84,7 @@ jobs:
       - run: pnpm -C admin test
       - run: pnpm -C admin api:check
       - run: pnpm -C admin build
+      - run: pnpm -C admin bundle:check
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip2
