@@ -56,9 +56,9 @@ const OPTION_PAGE: u32 = 200;
 const PLUGIN_OPTION_PREFIX: &str = "plugin.";
 /// Last segment of the deletion marker option.
 const DELETED_AT: &str = "deleted_at";
-/// Last segment of the option a `purge=true` delete writes beside the deletion marker:
-/// the same deletion's time, once its data is erased (the marker stays for the delete's
-/// final sweep, F16), so the deletion is not listed as retained.
+/// Last segment of the option the immediate erase of a `purge=true` delete writes in its
+/// own transaction: that deletion's time. The deletion marker stays for the delete's
+/// final sweep (F16); with this beside it the deletion is not listed as retained.
 const ERASED_AT: &str = "erased_at";
 
 /// A deleted plugin whose KV and settings are still kept
@@ -252,6 +252,17 @@ impl ExtensionService {
         }
     }
 
+    /// A `purge=true` delete whose immediate erase never ran (it failed), as
+    /// [`remove_plugin`](Self::remove_plugin) leaves it then; a test seam.
+    #[cfg(feature = "test-seams")]
+    pub async fn delete_plugin_without_erase(
+        &self,
+        name: &str,
+        deleted_at: Timestamp,
+    ) -> Result<InstalledPlugin, CoreError> {
+        self.delete_plugin_with(name, deleted_at, true, None).await
+    }
+
     /// [`delete_plugin`](Self::delete_plugin) at `deleted_at`; with `purge_now` the
     /// purge job is due [`PLUGIN_PURGE_GRACE`] after the deletion instead of the
     /// retention: it sweeps KV a node wrote before it reloaded, and finishes the purge
@@ -388,7 +399,11 @@ impl ExtensionService {
         if marker.and_then(|m| m.value.as_i64()) != Some(deleted_at.as_micros()) {
             return Ok(false);
         }
-        self.erase_locked(name, settings, keep_marker, None).await?;
+        // Keeping the marker (the immediate erase of a `purge=true` delete), the erase
+        // records itself in its own transaction: only then is the deletion no longer
+        // listed as retained.
+        self.erase_locked(name, settings, keep_marker.then_some(deleted_at), None)
+            .await?;
         Ok(true)
     }
 
@@ -454,17 +469,18 @@ impl ExtensionService {
             return Err(CoreError::NotFound);
         }
         let settings = stored_setting_keys(repos, name).await?;
-        self.erase_locked(name, &settings, false, audit).await
+        self.erase_locked(name, &settings, None, audit).await
     }
 
-    /// Deletes `name`'s KV, its `settings` options and (unless `keep_marker`) its
-    /// deletion marker, appending `audit` with the options. The caller holds the
-    /// `extensions` lock and has checked that no plugin `name` is installed.
+    /// Deletes `name`'s KV, its `settings` options and its deletion marker, appending
+    /// `audit` with the options; with `keep_marker` (the deletion's time) the marker
+    /// stays and the erase is recorded as `plugin.<name>.erased_at` instead. The caller
+    /// holds the `extensions` lock and has checked that no plugin `name` is installed.
     async fn erase_locked(
         &self,
         name: &str,
         settings: &[String],
-        keep_marker: bool,
+        keep_marker: Option<Timestamp>,
         audit: Option<NewAudit>,
     ) -> Result<(), CoreError> {
         let repos = self.store.read();
@@ -622,18 +638,10 @@ async fn write_delete_plugin(
         .events()
         .append(&events::options_changed(&marker))
         .await?;
+    // An earlier `purge=true` deletion's record; this deletion's is written by its
+    // own erase, once that has run.
     let erased = erased_marker(name);
-    if purge_now {
-        repos
-            .options()
-            .set(&erased, &json!(deleted_at.as_micros()), false)
-            .await?;
-        repos
-            .events()
-            .append(&events::options_changed(&erased))
-            .await?;
-    } else if repos.options().get(&erased).await?.is_some() {
-        // An earlier `purge=true` deletion's, not this one's.
+    if repos.options().get(&erased).await?.is_some() {
         delete_option(repos, &erased).await?;
     }
     let mut job = plugin_purge_job(&PluginPurge {
@@ -656,21 +664,29 @@ async fn write_delete_plugin(
     Ok(row)
 }
 
-/// Deletes the purged plugin's settings options and (unless `keep_marker`) its
-/// deletion marker.
+/// Deletes the purged plugin's settings options and its deletion marker; with
+/// `keep_marker` (the deletion's time) the marker stays and `erased_at` records it.
 async fn delete_options(
     repos: &dyn Repos,
     name: &str,
     settings: &[String],
-    keep_marker: bool,
+    keep_marker: Option<Timestamp>,
 ) -> Result<(), CoreError> {
     for key in settings {
         delete_option(repos, &crate::ext_settings::plugin_option(name, key)).await?;
     }
-    if keep_marker {
+    let erased = erased_marker(name);
+    if let Some(deleted_at) = keep_marker {
+        repos
+            .options()
+            .set(&erased, &json!(deleted_at.as_micros()), false)
+            .await?;
+        repos
+            .events()
+            .append(&events::options_changed(&erased))
+            .await?;
         return Ok(());
     }
-    let erased = erased_marker(name);
     if repos.options().get(&erased).await?.is_some() {
         delete_option(repos, &erased).await?;
     }
