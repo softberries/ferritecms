@@ -212,7 +212,15 @@ function Control({
     case "rich_text":
       return <RichTextField ids={ids} value={value} onChange={onChange} disabled={disabled} />;
     case "relation":
-      return <RelationField ids={ids} value={value} onChange={onChange} disabled={disabled} />;
+      return (
+        <RelationField
+          ids={ids}
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          targets={def.types}
+        />
+      );
     case "media":
       return <MediaField ids={ids} value={value} onChange={onChange} disabled={disabled} />;
     case "repeater":

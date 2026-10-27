@@ -17,7 +17,14 @@ const def = (name: string, kind: FieldKind = "text", extra: Partial<FieldDef> = 
   ...extra,
 });
 
-const NONE = { removed: [], renamed: [], newlyRequired: [], kindChanged: [] };
+const NONE = {
+  removed: [],
+  renamed: [],
+  newlyRequired: [],
+  kindChanged: [],
+  optionsRemoved: [],
+  targetsNarrowed: [],
+};
 
 test("no_change", () => {
   const schema = [def("a"), def("b", "number")];
@@ -106,6 +113,7 @@ test("repeater_sub_fields_use_the_editors_paths", () => {
     }),
   ];
   expect(describeChange(before, after)).toEqual({
+    ...NONE,
     removed: ["chapters[].notes[].by"],
     renamed: [["chapters[].title", "chapters[].heading"]],
     newlyRequired: ["chapters[].heading"],
@@ -113,4 +121,39 @@ test("repeater_sub_fields_use_the_editors_paths", () => {
   });
   // A whole repeater removed is one entry, not one per sub-field.
   expect(describeChange(before, [])).toEqual({ ...NONE, removed: ["chapters"] });
+});
+
+test("removed_select_options_are_named", () => {
+  // M2b-2 type builder minor: an item holding a removed option cannot be saved until
+  // another is chosen (core checks the value against the options).
+  const before = [def("genre", "select", { options: ["fiction", "essay", "poetry"] })];
+  const after = [def("genre", "select", { options: ["fiction", "poetry", "drama"] })];
+  const out = describeChange(before, after);
+  expect(out).toEqual({ ...NONE, optionsRemoved: [["genre", ["essay"]]] });
+  expect(isEmptyChange(out)).toBe(false);
+  // Inside a repeater, with the editor's path; a kind change is named as that instead.
+  expect(
+    describeChange(
+      [def("rows", "repeater", { fields: [def("s", "select", { options: ["a", "b"] })] })],
+      [def("rows", "repeater", { fields: [def("s", "select", { options: ["a"] })] })],
+    ),
+  ).toEqual({ ...NONE, optionsRemoved: [["rows[].s", ["b"]]] });
+  expect(describeChange(before, [def("genre")])).toEqual({ ...NONE, kindChanged: ["genre"] });
+});
+
+test("narrowed_relation_targets_are_named", () => {
+  // A relation that points at fewer types: an item whose value is of a type no longer
+  // listed cannot be saved until it is changed (core refuses it at the field).
+  const rel = (types: string[]) => [def("related", "relation", types.length ? { types } : {})];
+  expect(describeChange(rel([]), rel(["post"]))).toEqual({
+    ...NONE,
+    targetsNarrowed: ["related"],
+  });
+  expect(describeChange(rel(["post", "page"]), rel(["post"]))).toEqual({
+    ...NONE,
+    targetsNarrowed: ["related"],
+  });
+  // Wider (another type, or any type) is no change for stored values.
+  expect(describeChange(rel(["post"]), rel(["post", "page"]))).toEqual(NONE);
+  expect(describeChange(rel(["post"]), rel([]))).toEqual(NONE);
 });

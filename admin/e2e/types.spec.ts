@@ -19,6 +19,7 @@ interface FieldDef {
   required?: boolean;
   options?: string[];
   fields?: FieldDef[];
+  types?: string[];
 }
 interface TypeDto {
   name: string;
@@ -285,6 +286,17 @@ test("removing_a_field_warns_and_items_still_save", async ({
     await expect(dialog).toContainText(
       "existing values stay stored until each item is saved, and are then removed",
     );
+    // The last chip is whole: the list's scroller does not clip its border (M2b-2 minor).
+    const clipped = await dialog
+      .locator("code")
+      .last()
+      .evaluate((chip) => {
+        const scroller = chip.closest("section")?.parentElement;
+        if (!scroller) return null;
+        return chip.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom;
+      });
+    expect(clipped).not.toBeNull();
+    expect(clipped as number).toBeLessThanOrEqual(0);
     await snap(page, "types-schema-change-removed", { fullPage: false });
     await expectAccessible(page);
     await dialog.getByRole("button", { name: "Save changes" }).click();
@@ -312,6 +324,74 @@ test("removing_a_field_warns_and_items_still_save", async ({
   } finally {
     await page.context().close();
     await api.removeType(type.name);
+    await api.dispose();
+  }
+});
+
+test("relation_limited_to_types", async ({ as, site, backend, snap, expectAccessible }) => {
+  // P52: the builder sets a relation's target types (here: pages only), the change says
+  // that stored values may now be refused, and the editor's picker searches only pages.
+  const api = await ContentApi.as(backend, site.url, "admin");
+  const type = await newType(api, [{ name: "related", label: "Related", kind: "relation" }]);
+  const token = uid("shelf");
+  const post = await api.createIn("post", `Post ${token}`, "published");
+  const target = await api.createIn("page", `Page ${token}`, "published");
+  const item = await api.create(type.name, `Book ${uid()}`);
+  const page = await as("admin");
+  try {
+    await openType(page, type.name);
+    const related = row(fieldsCard(page), "related");
+    await summary(related).click();
+    const targets = related.getByRole("group", { name: "Can point at" });
+    await expect(targets).toBeVisible();
+    // Every content type but media.
+    await expect(targets.getByRole("checkbox", { name: /Media/ })).toHaveCount(0);
+    await targets.getByRole("checkbox", { name: /Pages/ }).click();
+    await snap(page, "types-relation-targets", FULL_PAGE(page));
+    await expectAccessible(page);
+    await saveButton(page).click();
+    const dialog = changeDialog(page);
+    await expect(dialog.locator("[data-change=targetsNarrowed]")).toContainText("related");
+    await expect(dialog.locator("[data-change=targetsNarrowed]")).toContainText(
+      "cannot be saved until the relation is changed",
+    );
+    await snap(page, "types-schema-change-narrowed", { fullPage: false });
+    await expectAccessible(page);
+    await dialog.getByRole("button", { name: "Save changes" }).click();
+    await expect(saveState(page)).toHaveAttribute("data-state", "saved");
+    expect((await getTypeDto(api, type.name)).fields?.[0]?.types).toEqual(["page"]);
+
+    // The editor's picker searches pages only.
+    const searched: string[] = [];
+    page.on("request", (r) => {
+      const url = new URL(r.url());
+      if (url.searchParams.get("q") === token) searched.push(url.pathname);
+    });
+    await page.goto(`/admin/content/${type.name}/${item.id}`);
+    await expect(page.getByRole("textbox", { name: "Title", exact: true })).toBeVisible();
+    const trigger = page.locator("[data-slot=relation-trigger]");
+    await trigger.click();
+    const answered = page.waitForResponse((r) => new URL(r.url()).searchParams.get("q") === token);
+    await page.getByPlaceholder("Search posts, pages and more…").fill(token);
+    await answered;
+    const option = page.getByRole("option", { name: new RegExp(target.title) });
+    await expect(option).toBeVisible();
+    await expect(page.getByRole("option", { name: new RegExp(post.title) })).toHaveCount(0);
+    expect(searched).toEqual(["/api/v1/content/page"]);
+    await expectAccessible(page);
+    await option.click();
+    await expect(trigger).toContainText(target.title);
+    await page.keyboard.press(`${await mod(page)}+s`);
+    await expect(page.locator("[data-slot=editor-bar] [data-slot=save-state]")).toHaveAttribute(
+      "data-state",
+      "saved",
+    );
+    expect(((await api.get(type.name, item.id)) as Stored).fields.related).toBe(target.id);
+  } finally {
+    await page.context().close();
+    await api.removeType(type.name);
+    await api.purge(post);
+    await api.purge(target);
     await api.dispose();
   }
 });
@@ -388,13 +468,13 @@ test("delete_type_with_content_is_refused_with_reason", async ({
     await snap(page, "types-delete-refused");
     await expectAccessible(page);
 
-    // A built-in type: the server's reason too.
+    // A built-in type: the confirm says it cannot be deleted and offers only Close.
     await openType(page, "post");
     await danger.getByRole("button", { name: "Delete type" }).click();
-    await confirm.getByRole("button", { name: "Delete type" }).click();
-    await expect(danger.locator("[data-slot=delete-refused]")).toContainText(
-      "It is a built-in type.",
-    );
+    await expect(confirm).toContainText("Built-in types cannot be deleted.");
+    await expect(confirm.getByRole("button", { name: "Delete type" })).toHaveCount(0);
+    await confirm.getByRole("button", { name: "Close" }).click();
+    await expect(confirm).toHaveCount(0);
     expect((await api.ctx.get("/api/v1/types/post")).status()).toBe(200);
 
     // Without its items the type goes, and the list no longer has it.

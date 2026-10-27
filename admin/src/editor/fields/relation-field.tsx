@@ -1,12 +1,13 @@
-// A `relation` field: a combobox searching `GET /content/{type}?q=` across every content
-// type the sidebar shows (the schema names no target type, P37), each result with its
-// type and status. The value is the item's UUID. The chosen item is named by id
+// A `relation` field: a combobox searching `GET /content/{type}?q=` (one request per
+// type, the results grouped by type in the sidebar's order) across the content types the
+// field lists (`FieldDef.types`, P52), or every type the sidebar shows when it lists none,
+// each result with its type and status. The value is the item's UUID. The chosen item is named by id
 // (`GET /content/refs`, any type); one that is gone or unreadable shows
 // "Unknown item <short id>" and keeps the value until another is chosen or it is cleared.
 
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronsUpDownIcon, LinkIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isContentStatus, listContentOfType } from "@/api/content";
 import { qk } from "@/api/keys";
@@ -28,6 +29,7 @@ import {
   useTypeLabel,
 } from "@/content/find-item";
 import type { ControlIds } from "./fields-context";
+import { searchTypes } from "./fields-model";
 import { uuidOf } from "@/lib/values";
 
 /** How long the search waits after the last keystroke. */
@@ -40,14 +42,18 @@ export function RelationField({
   value,
   onChange,
   disabled,
+  targets,
 }: {
   ids: ControlIds;
   value: unknown;
   onChange: (value: unknown) => void;
   disabled: boolean;
+  /** The types the field may point at (`FieldDef.types`; empty or absent: any). */
+  targets?: readonly string[] | undefined;
 }) {
   const { t } = useTranslation("editor");
-  const types = useNavContentTypes();
+  const nav = useNavContentTypes();
+  const types = useMemo(() => searchTypes(nav, targets), [nav, targets]);
   const typeLabel = useTypeLabel();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");

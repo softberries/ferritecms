@@ -13,6 +13,7 @@ import {
   checkBuilder,
   errorKey,
   fromSchema,
+  serverFieldError,
   nameFromLabel,
   newRow,
   toSchema,
@@ -218,5 +219,53 @@ describe("builder_model_test", () => {
     const sub = row("Bad", "text");
     const r = row("r", "repeater", { fields: [sub] });
     expect(Object.keys(checkBuilder([r]))).toEqual([errorKey(sub.key, "name")]);
+  });
+
+  test("relation_types_round_trip_and_go_only_with_a_relation", () => {
+    // P52: a relation's target types; empty (any type) is left out, as the server does.
+    const schema = [
+      def("related", "relation", { types: ["post", "page"] }),
+      def("other", "relation"),
+    ];
+    const rows = fromSchema(schema);
+    expect(rows[0]?.types).toEqual(["post", "page"]);
+    expect(toSchema(rows)).toEqual(schema);
+    // A relation turned into text keeps its types in the builder, the schema sends none.
+    const text = { ...rows[0]!, kind: "text" as const };
+    expect(toSchema([text])[0]).not.toHaveProperty("types");
+    expect(toSchema([{ ...text, kind: "relation" }])[0]?.types).toEqual(["post", "page"]);
+  });
+
+  test("relation_types_must_be_registered_and_not_media", () => {
+    const registered = ["post", "page", "book", "media"];
+    const ok = row("rel", "relation", { types: ["post", "book"] });
+    expect(checkBuilder([ok], registered)).toEqual({});
+    const unknown = row("rel", "relation", { types: ["post", "gone"] });
+    expect(checkBuilder([unknown], registered)[errorKey(unknown.key, "types")]).toMatch(/gone/);
+    const media = row("rel", "relation", { types: ["media"] });
+    expect(checkBuilder([media], registered)[errorKey(media.key, "types")]).toMatch(/media/i);
+    // Nested too; without the registry (not loaded yet) the server decides.
+    const sub = row("rel", "relation", { types: ["gone"] });
+    expect(checkBuilder([row("r", "repeater", { fields: [sub] })], registered)).toHaveProperty([
+      errorKey(sub.key, "types"),
+    ]);
+    expect(checkBuilder([unknown])).toEqual({});
+    // Types of another kind are not checked (the schema leaves them out).
+    expect(checkBuilder([row("t", "text", { types: ["gone"] })], registered)).toEqual({});
+  });
+
+  test("a_server_types_refusal_lands_at_its_field", () => {
+    const sub = row("related", "relation", { types: ["gone"] });
+    const rows = [row("title", "text"), row("chapters", "repeater", { fields: [sub] })];
+    expect(
+      serverFieldError(rows, 'fields.chapters.related: type "gone" is not a content type'),
+    ).toEqual({
+      key: errorKey(sub.key, "types"),
+      message: 'type "gone" is not a content type',
+    });
+    // Anything else (another member, an unknown path) stays a message for the whole form.
+    expect(serverFieldError(rows, "fields.title: a select needs 1 to 100 options")).toBeNull();
+    expect(serverFieldError(rows, "fields.nope: type x is not a content type")).toBeNull();
+    expect(serverFieldError(rows, "label is too long")).toBeNull();
   });
 });

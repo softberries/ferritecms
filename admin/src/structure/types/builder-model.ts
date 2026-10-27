@@ -2,10 +2,12 @@
 // `FieldDef`s (`{ "fields": [ … ] }` on the wire; `null`, no schema, is an empty builder);
 // the builder edits rows that also carry a stable key, what the field was when last saved
 // and whether its name still follows its label. `toSchema` sends options only for a
-// `select` and sub-fields only for a `repeater`, so a kind switched back and forth keeps
-// them in the builder. `checkBuilder` mirrors core's schema rules
-// (`crates/ferrite-core/src/fields.rs`: `check_level`, `check_options`, `valid_name`) for
-// immediate feedback; the server checks again.
+// `select`, sub-fields only for a `repeater` and target types only for a `relation` (and
+// only when it lists any: empty is any type, P52), so a kind switched back and forth
+// keeps them in the builder. `checkBuilder` mirrors core's schema rules
+// (`crates/ferrite-core/src/fields.rs`: `check_level`, `check_options`, `valid_name`,
+// `check_relation_types`) for immediate feedback; the server checks again, and
+// `serverFieldError` puts its refusal of a relation's types at that field.
 
 import {
   FEATURED_IMAGE,
@@ -52,6 +54,8 @@ export interface BuilderRow {
   options: OptionRow[];
   /** Kept while the kind is not `repeater`; sent only for one. */
   fields: BuilderRow[];
+  /** A relation's target types (empty: any type). Kept while the kind is not `relation`. */
+  types: string[];
   /** The field's name and kind when last saved; `null` for a field added since. */
   saved: { name: string; kind: FieldKind } | null;
   /** The name follows the label (a new field whose name was never typed). */
@@ -72,6 +76,7 @@ export function newRow(): BuilderRow {
     required: false,
     options: [],
     fields: [],
+    types: [],
     saved: null,
     autoName: true,
   };
@@ -87,6 +92,7 @@ export function fromSchema(value: readonly FieldDef[] | null | undefined): Build
     required: d.required ?? false,
     options: (d.options ?? []).map((v) => ({ key: newKey("o"), value: v })),
     fields: fromSchema(d.fields),
+    types: [...(d.types ?? [])],
     saved: { name: d.name, kind: d.kind },
     autoName: false,
   }));
@@ -101,6 +107,7 @@ export function toSchema(rows: readonly BuilderRow[]): FieldDef[] {
     required: r.required,
     options: r.kind === "select" ? r.options.map((o) => o.value) : [],
     fields: r.kind === "repeater" ? toSchema(r.fields) : [],
+    ...(r.kind === "relation" && r.types.length > 0 ? { types: [...r.types] } : {}),
   }));
 }
 
@@ -133,7 +140,10 @@ export function nameFromLabel(label: string, max = MAX_NAME): string {
 export const validName = (name: string) =>
   /^[a-z][a-z0-9_]*$/.test(name) && name.length <= MAX_NAME;
 
-export type ErrorMember = "name" | "label" | "kind" | "options" | "option" | "fields";
+export type ErrorMember = "name" | "label" | "kind" | "options" | "option" | "fields" | "types";
+
+/** What a relation cannot point at (`fields.rs`: media is picked by `media` fields). */
+const MEDIA_TYPE = "media";
 
 /**
  * Where an error of `checkBuilder` is: `<row key>:<member>`, an option's as
@@ -148,8 +158,15 @@ const chars = (s: string) => [...s].length;
 const msg = (key: string, values: Record<string, unknown> = {}) =>
   i18n.t(`structure:errors.${key}` as "structure:errors.name", values);
 
-/** Every problem of the rows, by `errorKey` (empty: core would take the schema). */
-export function checkBuilder(rows: readonly BuilderRow[]): Record<string, string> {
+/**
+ * Every problem of the rows, by `errorKey` (empty: core would take the schema).
+ * `registered`: the content types' names, to check relation target types against (not
+ * checked without it).
+ */
+export function checkBuilder(
+  rows: readonly BuilderRow[],
+  registered?: readonly string[],
+): Record<string, string> {
   const out: Record<string, string> = {};
   const put = (key: string, message: string) => {
     if (!(key in out)) out[key] = message;
@@ -168,6 +185,7 @@ export function checkBuilder(rows: readonly BuilderRow[]): Record<string, string
       if (chars(r.label.trim()) > MAX_LABEL)
         put(errorKey(r.key, "label"), msg("label", { max: MAX_LABEL }));
       if (r.kind === "select") options(r);
+      if (r.kind === "relation") targets(r);
       if (r.kind === "repeater") {
         if (depth + 1 > MAX_REPEATER_DEPTH) {
           put(errorKey(r.key, "kind"), msg("depth", { max: MAX_REPEATER_DEPTH }));
@@ -193,8 +211,41 @@ export function checkBuilder(rows: readonly BuilderRow[]): Record<string, string
       seen.add(o.value);
     }
   };
+  const targets = (r: BuilderRow) => {
+    const key = errorKey(r.key, "types");
+    r.types.forEach((type, i) => {
+      if (r.types.indexOf(type) < i) put(key, msg("typeTwice", { type }));
+      else if (type === MEDIA_TYPE) put(key, msg("typeMedia"));
+      else if (registered && !registered.includes(type)) put(key, msg("typeUnknown", { type }));
+    });
+  };
   level(rows, null, 0);
   return out;
+}
+
+/** The server's refusals that belong to a relation's target types (`fields.rs`). */
+const TYPES_REFUSAL =
+  /is not a content type|cannot point at media|is listed twice|only relation fields have types/;
+
+/**
+ * Where the server's `422` message about a relation's types goes (`fields.<path>: …`,
+ * the path by field names, a repeater's sub-fields one more segment), as an `errorKey`
+ * with the message after the path; `null` for any other message (the form shows it).
+ */
+export function serverFieldError(
+  rows: readonly BuilderRow[],
+  message: string,
+): { key: string; message: string } | null {
+  const m = /^fields((?:\.[a-z][a-z0-9_]*)+): (.+)$/s.exec(message);
+  if (!m?.[1] || !m[2] || !TYPES_REFUSAL.test(m[2])) return null;
+  let level: readonly BuilderRow[] = rows;
+  let found: BuilderRow | undefined;
+  for (const name of m[1].slice(1).split(".")) {
+    found = level.find((r) => r.name === name);
+    if (!found) return null;
+    level = found.fields;
+  }
+  return found ? { key: errorKey(found.key, "types"), message: m[2] } : null;
 }
 
 /** Whether `key`'s row (or anything inside it) has an error in `errors`. */

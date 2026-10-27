@@ -292,3 +292,14 @@ export function serverFieldErrors(error: unknown): Record<string, string> {
   }
   return out;
 }
+
+/**
+ * The types a relation searches: the sidebar's (`nav`, in its order), only those the
+ * field lists when it lists any (`targets`; empty or absent: any type).
+ */
+export function searchTypes<T extends { name: string }>(
+  nav: readonly T[],
+  targets: readonly string[] | undefined,
+): T[] {
+  return targets && targets.length > 0 ? nav.filter((ty) => targets.includes(ty.name)) : [...nav];
+}

@@ -1,22 +1,26 @@
 // A content type's screen (07 §3 Content types): its settings (label, archive; name and
 // hierarchy are fixed once created), the field builder and deleting the type. Saving
 // checks the builder against core's schema rules first, then names what the change does
-// to stored items (`describeChange`, Review Focus 2) and asks, then re-reads the type
-// (`staleGuard`, Review Focus 4: someone else's change asks Reload / Overwrite) and sends
-// one `PATCH /types/{name}` with the whole `fields` list when it changed. The server
-// decides what a built-in type allows and whether a type can be deleted; its reason is
-// shown. Leaving with unsaved changes asks first.
+// to stored items (`describeChange`, Review Focus 2; each kind of change says what it does)
+// and asks, then re-reads the type (`staleGuard`, Review Focus 4: someone else's change
+// asks Reload / Overwrite) and sends one `PATCH /types/{name}` with the whole `fields` list
+// when it changed. A relation's target types are checked against the registered types
+// here; the server's refusal of them is shown at that field. The server decides what a
+// built-in type allows and whether a type can be deleted; its reason is shown (a built-in
+// type's delete says it cannot be done instead of offering it). Leaving with unsaved
+// changes asks first.
 
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { CircleAlertIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
+import { type TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { reportApiError } from "@/api/client";
 import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
-import { type ContentTypeDto, deleteType, getType, patchType } from "@/api/types";
+import { type ContentTypeDto, deleteType, getType, patchType, typesQuery } from "@/api/types";
 import { PageHeader } from "@/components/kit/page-header";
 import { SaveState, type SaveStateValue } from "@/components/kit/save-state";
 import { useStaleAsk } from "@/components/kit/use-stale-ask";
@@ -44,6 +48,7 @@ import {
   fromSchema,
   markSaved,
   pathToFirstError,
+  serverFieldError,
   toSchema,
 } from "./builder-model";
 import { FieldBuilder } from "./field-builder";
@@ -51,18 +56,19 @@ import { FormField, SwitchRow } from "@/components/kit/form-field";
 import { type SchemaChange, describeChange, isEmptyChange } from "./schema-change";
 import { MAX_TYPE_LABEL, labelProblem } from "./type-rules";
 import { DESTRUCTIVE } from "@/lib/destructive";
+import { uiLocale } from "@/lib/locale";
 
 const MODAL = '[data-slot="dialog-overlay"], [data-slot="alert-dialog-overlay"]';
 
 /** The server's reason for refusing a delete, in the screen's words when it is a known one. */
-function refusal(
-  error: unknown,
-  t: (key: "delete.reasons.builtIn" | "delete.reasons.hasContent") => string,
-): string {
+function refusal(error: unknown, t: TFunction<"structure">): string {
   if (!(error instanceof ApiError)) return error instanceof Error ? error.message : String(error);
   const detail = error.problem.detail ?? "";
   if (detail === "built-in type") return t("delete.reasons.builtIn");
   if (detail === "type has content") return t("delete.reasons.hasContent");
+  // `types.rs`: another type's relation field lists this one (P52).
+  const target = /^type is a relation target of type "(.+)"$/.exec(detail);
+  if (target?.[1]) return t("delete.reasons.relationTarget", { type: target[1] });
   return detail || error.problem.title;
 }
 
@@ -74,7 +80,15 @@ export function TypeForm({ initial }: { initial: ContentTypeDto }) {
   const [base, setBase] = useState(initial);
   const [label, setLabel] = useState(initial.label);
   const [hasArchive, setHasArchive] = useState(initial.has_archive);
-  const [rows, setRows] = useState<BuilderRow[]>(() => fromSchema(initial.fields));
+  const [rows, setRowsState] = useState<BuilderRow[]>(() => fromSchema(initial.fields));
+  // The server's refusal of a relation's types, at that field, until the rows change.
+  const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
+  const setRows = useCallback((next: BuilderRow[] | ((rows: BuilderRow[]) => BuilderRow[])) => {
+    setRowsState(next);
+    setServerErrors({});
+  }, []);
+  const allTypes = useQuery(typesQuery);
+  const registered = useMemo(() => allTypes.data?.map((ty) => ty.name), [allTypes.data]);
   const [attempted, setAttempted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
@@ -95,16 +109,19 @@ export function TypeForm({ initial }: { initial: ContentTypeDto }) {
   const fieldsChanged = !stableEqual(schema, baseSchema);
   const dirty = label !== base.label || hasArchive !== base.has_archive || fieldsChanged;
 
-  const allErrors = useMemo(() => checkBuilder(rows), [rows]);
+  const allErrors = useMemo(() => checkBuilder(rows, registered), [rows, registered]);
   // Before the first save attempt only a name typed wrong shows (feedback while typing);
-  // after it, every problem.
+  // after it, every problem. The server's own always shows.
   const errors = useMemo(() => {
-    if (attempted) return allErrors;
+    if (attempted) return { ...serverErrors, ...allErrors };
     const empty = t("errors.nameEmpty");
-    return Object.fromEntries(
-      Object.entries(allErrors).filter(([k, m]) => k.endsWith(":name") && m !== empty),
-    );
-  }, [allErrors, attempted, t]);
+    return {
+      ...serverErrors,
+      ...Object.fromEntries(
+        Object.entries(allErrors).filter(([k, m]) => k.endsWith(":name") && m !== empty),
+      ),
+    };
+  }, [allErrors, serverErrors, attempted, t]);
   const labelError =
     labelServerError ??
     (attempted ? labelProblem(label, t("create.errors.label", { max: MAX_TYPE_LABEL })) : null);
@@ -198,8 +215,13 @@ export function TypeForm({ initial }: { initial: ContentTypeDto }) {
       reportApiError(e);
       const message = e instanceof ApiError ? e.problem.detail || e.problem.title : null;
       const fieldErrors = e instanceof ApiError ? e.fieldErrors() : {};
+      const atField = fieldErrors.fields ? serverFieldError(rows, fieldErrors.fields) : null;
       if (fieldErrors.label) setLabelServerError(fieldErrors.label);
-      else setFailure(e instanceof ApiError && e.status === 404 ? t("form.notFound") : message);
+      else if (atField) {
+        const errs = { [atField.key]: atField.message };
+        setServerErrors(errs);
+        showFirstError(errs, false);
+      } else setFailure(e instanceof ApiError && e.status === 404 ? t("form.notFound") : message);
       toast.error(t("form.notSaved"), message ? { description: message } : {});
     } finally {
       setSaving(false);
@@ -419,14 +441,18 @@ export function TypeForm({ initial }: { initial: ContentTypeDto }) {
           <AlertDialogHeader>
             <AlertDialogTitle>{t("delete.confirmTitle", { label: base.label })}</AlertDialogTitle>
             <AlertDialogDescription>
-              {t("delete.confirmBody", { name: base.name })}
+              {base.built_in ? t("delete.builtIn") : t("delete.confirmBody", { name: base.name })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{t("delete.cancel")}</AlertDialogCancel>
-            <Button variant="destructive" className={DESTRUCTIVE} onClick={() => void remove()}>
-              {t("delete.confirm")}
-            </Button>
+            <AlertDialogCancel>
+              {base.built_in ? t("delete.close") : t("delete.cancel")}
+            </AlertDialogCancel>
+            {base.built_in ? null : (
+              <Button variant="destructive" className={DESTRUCTIVE} onClick={() => void remove()}>
+                {t("delete.confirm")}
+              </Button>
+            )}
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -457,19 +483,49 @@ function ChangeDialog({
   onAnswer: (ok: boolean) => void;
 }) {
   const { t } = useTranslation("structure");
-  const groups: { key: keyof SchemaChange; title: string; items: string[] }[] = change
-    ? (
-        [
-          { key: "removed", title: t("change.removed"), items: change.removed },
-          {
-            key: "renamed",
-            title: t("change.renamed"),
-            items: change.renamed.map(([from, to]) => t("change.renamedPair", { from, to })),
-          },
-          { key: "newlyRequired", title: t("change.newlyRequired"), items: change.newlyRequired },
-          { key: "kindChanged", title: t("change.kindChanged"), items: change.kindChanged },
-        ] as const satisfies readonly { key: keyof SchemaChange; title: string; items: string[] }[]
-      ).filter((g) => g.items.length > 0)
+  const list = new Intl.ListFormat(uiLocale(), { type: "conjunction" });
+  // Each kind of change with what it does to stored items, in its own words.
+  const groups: { key: keyof SchemaChange; title: string; hint: string; items: string[] }[] = change
+    ? [
+        {
+          key: "removed" as const,
+          title: t("change.removed"),
+          hint: t("change.removedHint"),
+          items: change.removed,
+        },
+        {
+          key: "renamed" as const,
+          title: t("change.renamed"),
+          hint: t("change.renamedHint"),
+          items: change.renamed.map(([from, to]) => t("change.renamedPair", { from, to })),
+        },
+        {
+          key: "newlyRequired" as const,
+          title: t("change.newlyRequired"),
+          hint: t("change.newlyRequiredHint"),
+          items: change.newlyRequired,
+        },
+        {
+          key: "kindChanged" as const,
+          title: t("change.kindChanged"),
+          hint: t("change.kindChangedHint"),
+          items: change.kindChanged,
+        },
+        {
+          key: "optionsRemoved" as const,
+          title: t("change.optionsRemoved"),
+          hint: t("change.optionsRemovedHint"),
+          items: change.optionsRemoved.map(([field, options]) =>
+            t("change.optionsRemovedItem", { field, options: list.format(options) }),
+          ),
+        },
+        {
+          key: "targetsNarrowed" as const,
+          title: t("change.targetsNarrowed"),
+          hint: t("change.targetsNarrowedHint"),
+          items: change.targetsNarrowed,
+        },
+      ].filter((g) => g.items.length > 0)
     : [];
   return (
     <AlertDialog
@@ -483,14 +539,17 @@ function ChangeDialog({
           <AlertDialogTitle>{t("change.title")}</AlertDialogTitle>
           <AlertDialogDescription>{t("change.body")}</AlertDialogDescription>
         </AlertDialogHeader>
-        <div className="flex max-h-[50vh] flex-col gap-3 overflow-y-auto text-sm">
+        <div className="flex max-h-[50vh] flex-col gap-4 overflow-y-auto text-sm">
           {groups.map((g) => (
             <section key={g.key} data-change={g.key} className="flex flex-col gap-1.5">
               <h3 className="font-medium text-foreground">{g.title}</h3>
+              <p className="text-muted-foreground">{g.hint}</p>
               <ul className="flex flex-wrap gap-1.5">
                 {g.items.map((item) => (
-                  <li key={item}>
-                    <code className="rounded-md border bg-muted px-1.5 py-0.5 font-mono text-xs break-all">
+                  <li key={item} className="max-w-full">
+                    {/* A block of its own: an inline chip's padding and border stood out of
+                        its line box, and the scroller clipped the last row's. */}
+                    <code className="inline-block max-w-full rounded-md border bg-muted px-1.5 py-0.5 font-mono text-xs break-all">
                       {item}
                     </code>
                   </li>
