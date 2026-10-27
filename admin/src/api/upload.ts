@@ -1,6 +1,7 @@
 import { getCsrfToken } from "./csrf";
 import { reportApiError } from "./client";
 import type { MediaDto } from "./media";
+import type { PermissionReportDto, PluginDto, PluginFiles } from "./plugins";
 import type { ThemeDto } from "./themes";
 import { ApiError, parseRetryAfter, type Problem } from "./problem";
 
@@ -155,6 +156,58 @@ export function uploadTheme(
     url: "/api/v1/themes?activate=false",
     headers: { "Content-Type": "application/x-tar" },
     body,
+    onProgress: (loaded, total) => {
+      opts.onProgress(loaded, total);
+    },
+    signal: opts.signal,
+  });
+}
+
+function pluginParts(files: PluginFiles, approve?: string): FormData {
+  const form = new FormData();
+  form.append("manifest", files.manifest, fileName(files.manifest, "ferrite-plugin.toml"));
+  form.append("component", files.component, fileName(files.component, "plugin.wasm"));
+  if (approve !== undefined) form.append("approve", approve);
+  return form;
+}
+
+function fileName(blob: Blob, fallback: string): string {
+  return blob instanceof File && blob.name ? blob.name : fallback;
+}
+
+/**
+ * `POST /api/v1/plugins/inspect` (see `send`): the two parts, `manifest` and
+ * `component`; the permission report, nothing stored.
+ */
+export function inspectPluginUpload(
+  files: PluginFiles,
+  opts: Pick<UploadOptions, "onProgress" | "signal">,
+): Promise<PermissionReportDto> {
+  return send<PermissionReportDto>({
+    url: "/api/v1/plugins/inspect",
+    headers: {},
+    body: pluginParts(files),
+    onProgress: (loaded, total) => {
+      opts.onProgress(loaded, total);
+    },
+    signal: opts.signal,
+  });
+}
+
+/**
+ * `POST /api/v1/plugins` (see `send`): the same two parts plus `approve`, the inspected
+ * report's fingerprint. Files changed since: `422` field `approve` with the new `report`
+ * in the problem. A new plugin arrives disabled.
+ */
+export function installPluginUpload(
+  files: PluginFiles,
+  approve: string,
+  opts: Pick<UploadOptions, "onProgress" | "signal">,
+): Promise<PluginDto> {
+  return send<PluginDto>({
+    url: "/api/v1/plugins",
+    headers: {},
+    body: pluginParts(files, approve),
     onProgress: (loaded, total) => {
       opts.onProgress(loaded, total);
     },

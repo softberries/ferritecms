@@ -15,6 +15,7 @@ import {
   ListTreeIcon,
   MessageSquareIcon,
   PaletteIcon,
+  PlugIcon,
   SettingsIcon,
   ShapesIcon,
   SignpostIcon,
@@ -112,6 +113,7 @@ export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
   },
   { screen: "users", to: "/users", label: "nav.users", icon: UsersIcon },
   { screen: "appearance", to: "/appearance/themes", label: "nav.appearance", icon: PaletteIcon },
+  { screen: "plugins", to: "/plugins", label: "nav.plugins", icon: PlugIcon },
   { screen: "settings", to: "/settings", label: "nav.settings", icon: SettingsIcon },
 ] as const;
 

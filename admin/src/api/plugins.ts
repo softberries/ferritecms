@@ -47,6 +47,14 @@ export function getPlugin(name: string): Promise<PluginDto> {
   return unwrap(api.GET("/api/v1/plugins/{name}", { params: { path: { name } } }));
 }
 
+export function pluginQuery(name: string) {
+  return queryOptions({
+    queryKey: qk.plugin(name),
+    queryFn: () => getPlugin(name),
+    staleTime: 30_000,
+  });
+}
+
 /** The two files of a plugin upload: `ferrite-plugin.toml` and its component. */
 export interface PluginFiles {
   manifest: Blob;

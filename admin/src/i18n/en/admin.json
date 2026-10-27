@@ -634,5 +634,183 @@
       "staleKey": "Theme {{name}}",
       "loading": "Loading the theme's settings"
     }
+  },
+  "plugins": {
+    "title": "Plugins",
+    "description": "Extensions that run in a sandbox, each with only the access it was approved for.",
+    "enable": "Enable",
+    "enabling": "Enabling…",
+    "disable": "Disable",
+    "disabling": "Disabling…",
+    "report": {
+      "factsLabel": "What is being installed",
+      "plugin": "Plugin",
+      "version": "Version",
+      "publisher": "Publisher",
+      "unverified": "{{publisher}} (not verified)",
+      "artifact": "Component SHA-256",
+      "canTitle": "This plugin can:",
+      "nothing": "This plugin asks for no access to the site.",
+      "highRisk": "High risk",
+      "mediumRisk": "Sees traffic",
+      "new": "New",
+      "newDetail": "(new)",
+      "detail": "Covers",
+      "limitsTitle": "Limits per call",
+      "limit": "Limit",
+      "requested": "Asks for",
+      "siteDefault": "Site default",
+      "aboveDefault": "Above the default",
+      "limitName": {
+        "memory": "Memory",
+        "fuel": "Fuel (work)"
+      }
+    },
+    "install": {
+      "action": "Install plugin",
+      "title": "Install a plugin",
+      "description": "A plugin is its ferrite-plugin.toml and one .wasm component. You see what it asks for before anything is installed.",
+      "stepsLabel": "Steps",
+      "step": {
+        "pick": "Choose files",
+        "report": "Review access",
+        "done": "Installed"
+      },
+      "drop": "Drop ferrite-plugin.toml and the .wasm file here",
+      "dropHint": "Or choose each file. The component may be up to 32 MiB.",
+      "overlay": "Drop to pick these files",
+      "manifest": "Manifest (ferrite-plugin.toml)",
+      "component": "Component (.wasm)",
+      "chooseManifest": "Choose manifest",
+      "chooseComponent": "Choose component",
+      "replaceFile": "Choose another",
+      "none": "No file chosen",
+      "cancel": "Cancel",
+      "check": "Check permissions",
+      "checking": "Checking…",
+      "back": "Back",
+      "approve": "Approve and install",
+      "installing": "Installing…",
+      "progress": "Upload progress",
+      "changed": "The files changed after the check, so nothing was installed. This is what they ask for now: review it and approve again.",
+      "update": "This updates the installed {{name}} (version {{version}}); it stays enabled or disabled as it is.",
+      "updateNoVersion": "This updates the installed {{name}}; it stays enabled or disabled as it is.",
+      "nothingNew": "It asks for nothing new.",
+      "somethingNew_one": "It asks for {{count}} new permission, marked New.",
+      "somethingNew_other": "It asks for {{count}} new permissions, marked New.",
+      "doneDisabled": "{{name}} {{version}} is installed and disabled.",
+      "doneEnabled": "{{name}} {{version}} is installed and enabled.",
+      "doneHint": "It runs on the site once you enable it.",
+      "doneEnabledHint": "The update was already enabled, so it runs as soon as each node loads it.",
+      "open": "Open {{name}}",
+      "close": "Close",
+      "installed": "Plugin {{name}} installed",
+      "enabled": "{{name}} is enabled"
+    },
+    "list": "Installed plugins",
+    "rowMenu": "Actions for {{name}}",
+    "by": "By {{publisher}} (not verified)",
+    "disabled": "{{name}} is disabled",
+    "broken": "This plugin does not load: its stored manifest or grant no longer reads. Install it again, or delete it.",
+    "disabledReason": "Disabled automatically after repeated failures: {{reason}}. Enabling it starts its failure count over.",
+    "state": {
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "broken": "Broken"
+    },
+    "columns": {
+      "plugin": "Plugin",
+      "state": "State",
+      "failures": "Failures, 24 h",
+      "nodes": "Nodes"
+    },
+    "empty": {
+      "title": "No plugins installed",
+      "body": "Plugins add features in a sandbox, with only the access you approve. Install one from its manifest and .wasm file."
+    },
+    "facts": {
+      "version": "Version {{version}}",
+      "publisher": "By {{publisher}} (not verified)",
+      "license": "Licence {{license}}",
+      "updated": "Updated"
+    },
+    "nodes": {
+      "title": "Nodes",
+      "description": "The live nodes that loaded this plugin.",
+      "none": "No live node has loaded it yet: it is disabled, or the nodes have not reported.",
+      "noneShort": "None yet",
+      "dot": "{{node}}: {{status}}",
+      "status": {
+        "loaded": "Loaded",
+        "failed": "Failed",
+        "disabled": "Disabled"
+      }
+    },
+    "permissions": {
+      "title": "Permissions",
+      "description": "What this plugin was approved for when it was installed.",
+      "broken": "The stored grant does not read, so nothing is shown."
+    },
+    "settings": {
+      "action": "Settings",
+      "title": "Settings",
+      "description": "Options the plugin declares in its manifest. Secrets are never shown again once saved.",
+      "none": "This plugin declares no settings.",
+      "staleKey": "Plugin {{name}}",
+      "loading": "Loading the plugin's settings",
+      "invalid_one": "{{count}} stored value no longer fits this version and reads as its default until you save it again.",
+      "invalid_other": "{{count}} stored values no longer fit this version and read as their defaults until you save them again."
+    },
+    "metrics": {
+      "failuresTitle": "Failures, last {{hours}} hours",
+      "allNodes": "All nodes",
+      "noFailures": "No failures in the last {{hours}} hours.",
+      "otherHooks": "Other hooks",
+      "failuresSummary_one": "{{count}} failure in the last {{hours}} hours.",
+      "failuresSummary_other": "{{count}} failures in the last {{hours}} hours.",
+      "callsTitle": "Calls by hook",
+      "thisNode": "This node, since {{time}}",
+      "noCalls": "No calls on this node since it started.",
+      "hook": "Hook",
+      "calls": "Calls",
+      "failures": "Failures",
+      "busy": "Busy",
+      "budgetCut": "Budget cuts",
+      "average": "Average",
+      "p95": "p95",
+      "max": "Longest",
+      "ms": "{{ms}} ms",
+      "p95Le": "≤ {{ms}} ms",
+      "p95Over": "> {{ms}} ms"
+    },
+    "delete": {
+      "action": "Delete",
+      "title": "Delete {{name}}?",
+      "body": "Its hooks and routes stop at once on every node.",
+      "keepBody": "Keep its data, and its stored data, settings and secrets stay for 30 days: a plugin named {{name}} installed in that time picks them up again, whoever publishes it. Erase them if you do not plan to reinstall it.",
+      "cancel": "Cancel",
+      "keep": "Delete, keep data for 30 days",
+      "erase": "Delete and erase data",
+      "deleting": "Deleting…",
+      "doneKept": "{{name}} deleted; its data is kept for 30 days",
+      "doneErased": "{{name}} deleted and its data erased"
+    },
+    "retained": {
+      "title": "Retained data",
+      "description": "Data, settings and secrets of deleted plugins, kept for 30 days. Installing a plugin of the same name before then picks them up again.",
+      "name": "Plugin",
+      "deleted": "Deleted",
+      "erasedAfter": "Erased after",
+      "actions": "Actions",
+      "erase": "Erase now",
+      "eraseOn": "Erase the data of {{name}} now",
+      "confirmTitle": "Erase the data of {{name}}?",
+      "confirmBody": "Its stored data, settings and secrets are deleted now. This cannot be undone.",
+      "confirm": "Erase",
+      "erasing": "Erasing…",
+      "cancel": "Cancel",
+      "erased": "The data of {{name}} was erased",
+      "erasedOn": "Erased after {{date}}"
+    }
   }
 }

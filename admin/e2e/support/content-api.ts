@@ -92,6 +92,13 @@ export interface ThemeInfo {
   nodes: { node_name: string; name: string; fallback: boolean }[];
 }
 
+export interface PluginInfo {
+  name: string;
+  version: string;
+  enabled: boolean;
+  nodes: { name: string; status: string }[];
+}
+
 export class ContentApi {
   private constructor(
     readonly ctx: APIRequestContext,
@@ -522,6 +529,74 @@ export class ContentApi {
       }),
       `patch ${name} settings`,
     );
+  }
+
+  /** `GET /plugins`: every installed plugin. */
+  async listPlugins(): Promise<PluginInfo[]> {
+    return (
+      await this.ok<{ items: PluginInfo[] }>(await this.ctx.get("/api/v1/plugins"), "plugins")
+    ).items;
+  }
+
+  /** Inspect, then install exactly that upload (`approve` = its fingerprint); disabled. */
+  async installPlugin(manifest: string, component: Buffer): Promise<PluginInfo> {
+    const parts = {
+      manifest: {
+        name: "ferrite-plugin.toml",
+        mimeType: "application/toml",
+        buffer: Buffer.from(manifest),
+      },
+      component: { name: "plugin.wasm", mimeType: "application/wasm", buffer: component },
+    };
+    const report = await this.ok<{ fingerprint: string }>(
+      await this.ctx.post("/api/v1/plugins/inspect", { headers: this.headers(), multipart: parts }),
+      "inspect plugin",
+    );
+    return this.ok(
+      await this.ctx.post("/api/v1/plugins", {
+        headers: this.headers(),
+        multipart: { ...parts, approve: report.fingerprint },
+      }),
+      "install plugin",
+    );
+  }
+
+  async enablePlugin(name: string): Promise<PluginInfo> {
+    return this.ok(
+      await this.ctx.post(`/api/v1/plugins/${name}/enable`, { headers: this.headers() }),
+      `enable ${name}`,
+    );
+  }
+
+  /** `GET /plugins/{name}/settings`: values, and which secrets are set. */
+  async pluginSettings(
+    name: string,
+  ): Promise<{ values: Record<string, unknown>; secrets: Record<string, boolean> }> {
+    return this.ok(await this.ctx.get(`/api/v1/plugins/${name}/settings`), `${name} settings`);
+  }
+
+  /** `GET /plugins/retained`: deleted plugins whose data is kept. */
+  async retainedPlugins(): Promise<{ name: string; purge_after: string }[]> {
+    return (
+      await this.ok<{ items: { name: string; purge_after: string }[] }>(
+        await this.ctx.get("/api/v1/plugins/retained"),
+        "retained plugins",
+      )
+    ).items;
+  }
+
+  /**
+   * Removes every trace of the plugin `name`: deletes it with `purge=true` if installed,
+   * else erases its retained data if any (a test's `finally`).
+   */
+  async removePlugin(name: string): Promise<void> {
+    const del = await this.ctx.delete(`/api/v1/plugins/${name}?purge=true`, {
+      headers: this.headers(),
+    });
+    if (del.status() === 204) return;
+    expect(del.status(), `delete ${name}: ${await del.text()}`).toBe(404);
+    const purge = await this.ctx.post(`/api/v1/plugins/${name}/purge`, { headers: this.headers() });
+    expect([204, 404], `purge ${name}: ${await purge.text()}`).toContain(purge.status());
   }
 
   async dispose(): Promise<void> {

@@ -1,0 +1,32 @@
+# The admin E2E fixture (M2b-3 Task 10, `admin/e2e/plugins.spec.ts`): a plugin with a
+# settings form of every simple kind plus a `secret`, a permission report with high-risk
+# items and a limit above the site default, and a `render.head` hook so the Plugins
+# screen's metrics have calls to show. The spec installs this component under unique
+# names, writing its own copy of this manifest with `name` changed.
+[plugin]
+name        = "admin-e2e"
+version     = "0.1.0"
+publisher   = "ferritecms.dev"
+description = "Adds a greeting meta tag to every page. Used by the admin's end-to-end tests."
+license     = "MIT"
+homepage    = "https://example.com/admin-e2e"
+world       = "ferrite:plugin/plugin@0.1.0"
+
+[capabilities]
+content.read      = ["post", "page"]
+content.meta.read = ["*"]
+kv                = true
+http              = ["api.example.com"]
+render.head       = true
+
+[hooks]
+"render.head" = 40
+
+[settings]
+greeting = { type = "text", label = "Greeting", default = "Hello" }
+loud     = { type = "bool", label = "Shout the greeting", default = false }
+tone     = { type = "select", label = "Tone", options = ["warm", "formal"], default = "warm" }
+api_key  = { type = "secret", label = "API key" }
+
+[limits]
+memory = "48MB"

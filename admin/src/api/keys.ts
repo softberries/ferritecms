@@ -120,7 +120,9 @@ export const qk = {
   sessions: ["sessions"] as const,
   themes: ["themes"] as const,
   themeSettings: (name: string) => ["themes", name, "settings"] as const,
+  /** Every plugin key: the list, each plugin, its metrics and settings. */
   plugins: ["plugins"] as const,
+  plugin: (name: string) => ["plugins", name, "item"] as const,
   pluginMetrics: (name: string) => ["plugins", name, "metrics"] as const,
   pluginSettings: (name: string) => ["plugins", name, "settings"] as const,
   /** Deleted plugins whose data is kept (its own root, apart from per-plugin keys). */

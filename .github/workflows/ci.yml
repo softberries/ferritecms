@@ -93,8 +93,16 @@ jobs:
       - run: pnpm -C admin api:check
       - run: pnpm -C admin build
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            plugins
       - run: cargo build --release --locked -p ferrite
+      # The Plugins spec installs this example plugin (`admin/e2e/support/plugin-fixture.ts`).
+      - run: cargo build --manifest-path plugins/Cargo.toml --target wasm32-wasip2 --release --locked -p admin-e2e
       - run: pnpm -C admin exec playwright install --with-deps chromium
       - run: pnpm -C admin e2e
         env:
