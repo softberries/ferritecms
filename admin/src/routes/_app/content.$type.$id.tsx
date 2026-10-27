@@ -160,6 +160,10 @@ function ItemEditorOf({ data }: { data: ItemLoaderData }) {
       from: data,
     });
   };
+  // The epoch starts at 0 again for a new loader result: no remount when the screen was
+  // never reopened (it holds the user's draft; the editor reads its props once), a
+  // remount on the fresh load otherwise. The loader runs again only on `invalidate()`,
+  // which nothing calls while this screen is up (`shouldReload: false`).
   return (
     <ItemScreen
       key={`${start.item.id}:${start.epoch}`}

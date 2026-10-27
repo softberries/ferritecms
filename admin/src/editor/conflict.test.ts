@@ -17,6 +17,7 @@ import { json, renderWithRouter, stubRoutes } from "@/test/render";
 import type { Draft } from "./autosave";
 import { canonicalBody, differingFields, onPreconditionFailed } from "./conflict";
 import { EditorScreen, type EditorScreenProps } from "./editor";
+import { newBodyUploadQueue } from "./body-uploads";
 
 const ID = "0190f1c0-0000-7000-8000-0000000000aa";
 
@@ -103,7 +104,13 @@ function openScreen(item: SchemaContentDto, extra: Partial<EditorScreenProps> = 
     createElement(
       TooltipProvider,
       null,
-      createElement(EditorScreen, { type: "post", typeLabel: "Posts", item, ...extra }),
+      createElement(EditorScreen, {
+        uploads: newBodyUploadQueue(),
+        type: "post",
+        typeLabel: "Posts",
+        item,
+        ...extra,
+      }),
     ),
   );
   return screen.findByRole("textbox", { name: "Body" }).then(() => qc);
@@ -291,7 +298,13 @@ describe("conflict", () => {
       createElement(
         TooltipProvider,
         null,
-        createElement(EditorScreen, { type: "post", typeLabel: "Posts", item, onReopen: reopen }),
+        createElement(EditorScreen, {
+          uploads: newBodyUploadQueue(),
+          type: "post",
+          typeLabel: "Posts",
+          item,
+          onReopen: reopen,
+        }),
       ),
     );
     await screen.findByRole("textbox", { name: "Body" });
@@ -609,7 +622,13 @@ describe("conflict", () => {
         createElement(
           Fragment,
           null,
-          createElement(EditorScreen, { type: "post", typeLabel: "Posts", item, kept: mine }),
+          createElement(EditorScreen, {
+            uploads: newBodyUploadQueue(),
+            type: "post",
+            typeLabel: "Posts",
+            item,
+            kept: mine,
+          }),
           createElement(Link, { to: "/elsewhere" }, "Elsewhere"),
         ),
       ),
@@ -700,7 +719,13 @@ describe("conflict", () => {
           createElement(
             Fragment,
             null,
-            createElement(EditorScreen, { type: "post", typeLabel: "Posts", item, kept: mine }),
+            createElement(EditorScreen, {
+              uploads: newBodyUploadQueue(),
+              type: "post",
+              typeLabel: "Posts",
+              item,
+              kept: mine,
+            }),
             createElement(Link, { to: "/elsewhere" }, "Elsewhere"),
             createElement(Where),
           ),

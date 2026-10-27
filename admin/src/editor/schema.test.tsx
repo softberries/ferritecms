@@ -13,6 +13,7 @@ import type { SchemaContentDto } from "@/api/schema";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { json, renderWithRouter, stubRoutes } from "@/test/render";
 import { EditorScreen } from "./editor";
+import { newBodyUploadQueue } from "./body-uploads";
 import {
   SUPPORTED_MARKS,
   SUPPORTED_NODES,
@@ -348,7 +349,7 @@ async function openScreenWith(item: SchemaContentDto, qc: QueryClient): Promise<
   if (qc.getQueryData(qk.types) === undefined) qc.setQueryData(qk.types, TYPES);
   renderWithRouter(
     <TooltipProvider>
-      <EditorScreen type="post" typeLabel="Posts" item={item} />
+      <EditorScreen uploads={newBodyUploadQueue()} type="post" typeLabel="Posts" item={item} />
     </TooltipProvider>,
     qc,
   );
@@ -416,7 +417,12 @@ describe("editor screen", () => {
     qc.setQueryData(qk.types, TYPES);
     renderWithRouter(
       <TooltipProvider>
-        <EditorScreen type="post" typeLabel="Posts" item={itemWith(broken)} />
+        <EditorScreen
+          uploads={newBodyUploadQueue()}
+          type="post"
+          typeLabel="Posts"
+          item={itemWith(broken)}
+        />
       </TooltipProvider>,
       qc,
     );
@@ -477,7 +483,12 @@ describe("editor screen", () => {
     };
     renderWithRouter(
       <TooltipProvider>
-        <EditorScreen type="post" typeLabel="Posts" item={itemWith(empty)} />
+        <EditorScreen
+          uploads={newBodyUploadQueue()}
+          type="post"
+          typeLabel="Posts"
+          item={itemWith(empty)}
+        />
       </TooltipProvider>,
     );
     expect(await screen.findByText("This item has no text that can be shown.")).toBeVisible();

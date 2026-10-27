@@ -12,6 +12,7 @@ import type { SchemaContentDto, SchemaRevisionDto } from "@/api/schema";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { json, renderWithRouter, stubRoutes } from "@/test/render";
 import { EditorScreen, type EditorScreenProps } from "../editor";
+import { newBodyUploadQueue } from "../body-uploads";
 
 const ID = "0190f1c0-0000-7000-8000-0000000000aa";
 const R0 = "0190f1c2-6d2e-7a51-9a3b-1c2d3e4f5a60";
@@ -77,7 +78,13 @@ function openScreen(item: SchemaContentDto, extra: Partial<EditorScreenProps> = 
     createElement(
       TooltipProvider,
       null,
-      createElement(EditorScreen, { type: "post", typeLabel: "Posts", item, ...extra }),
+      createElement(EditorScreen, {
+        uploads: newBodyUploadQueue(),
+        type: "post",
+        typeLabel: "Posts",
+        item,
+        ...extra,
+      }),
       createElement(Toaster),
     ),
   );

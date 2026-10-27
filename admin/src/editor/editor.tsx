@@ -84,7 +84,6 @@ import {
 } from "./editor-state";
 import { FieldsSection } from "./fields/fields-section";
 import { CARD_THRESHOLD, fieldsFor, fieldsPlacement } from "./fields/fields-model";
-import { useBodyUploads } from "./body-uploads";
 import { pickAndInsertImage, useImageDrops } from "./insert-image";
 import { LeaveDialog } from "./leave-dialog";
 import type { Backup } from "./local-backup";
@@ -181,9 +180,9 @@ export interface EditorScreenProps {
   discarded?: Draft | null;
   /**
    * The route's queue of images dropped on the body (`body-uploads.ts`): it outlives the
-   * screen's remounts. Without it (tests) the screen keeps its own.
+   * screen's remounts.
    */
-  uploads?: UploadQueue;
+  uploads: UploadQueue;
 }
 
 export function EditorScreen({
@@ -340,9 +339,8 @@ export function EditorScreen({
 
   const me = queryClient.getQueryData<MeDto>(qk.me);
   const canUploadMedia = me?.capabilities.includes("upload_media") === true;
-  const ownUploads = useBodyUploads(null);
   const drops = useImageDrops(doc.editor, {
-    queue: uploads ?? ownUploads.queue,
+    queue: uploads,
     carried: handoff?.uploads?.at ?? null,
     canUpload: canUploadMedia,
     onForbidden: () => toast.error(t("image.uploadForbidden"), { id: "editor-drop" }),
@@ -1001,7 +999,7 @@ function EditorBar({
           focusMode && "invisible",
         )}
       >
-        <Link to={`/content/${type}` as "/"}>
+        <Link to={`/content/${type}` as "/"} title={typeLabel}>
           <ArrowLeftIcon data-icon="inline-start" />
           <span className="max-w-40 min-w-0 truncate">{typeLabel}</span>
         </Link>
