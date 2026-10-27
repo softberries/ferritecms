@@ -3,7 +3,21 @@ import { reportApiError } from "./client";
 import type { MediaDto } from "./media";
 import type { PermissionReportDto, PluginDto, PluginFiles } from "./plugins";
 import type { ThemeDto } from "./themes";
-import { ApiError, parseRetryAfter, type Problem } from "./problem";
+import { ApiError, isProblemDocument, parseRetryAfter } from "./problem";
+
+/**
+ * The server accepted the upload (`2xx`) but its reply is not readable JSON (a proxy
+ * rewrote it, say). Not an `ApiError`: nothing was refused. A retry with the same
+ * `Idempotency-Key` gets the stored item.
+ */
+export class UploadReplyError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`upload answered ${status} with an unreadable body`);
+    this.name = "UploadReplyError";
+    this.status = status;
+  }
+}
 
 /** The upload got no response (offline, connection reset). */
 export class UploadNetworkError extends Error {
@@ -31,16 +45,8 @@ function failure(xhr: XMLHttpRequest): ApiError {
   const type = (xhr.getResponseHeader("Content-Type") ?? "").toLowerCase();
   if (type.startsWith("application/problem+json")) {
     try {
-      const body = JSON.parse(xhr.responseText) as Partial<Problem> | null;
-      if (
-        body &&
-        typeof body.type === "string" &&
-        typeof body.status === "number" &&
-        typeof body.title === "string" &&
-        typeof body.detail === "string"
-      ) {
-        return new ApiError(body as Problem, retryAfter);
-      }
+      const body: unknown = JSON.parse(xhr.responseText);
+      if (isProblemDocument(body)) return new ApiError(body, retryAfter);
     } catch {
       // falls through to the synthetic problem
     }
@@ -67,8 +73,9 @@ interface SendOptions {
 /**
  * A `POST` over `XMLHttpRequest` (`fetch` has no upload progress) with the session's
  * CSRF token. A problem response rejects with `ApiError` (a `401` also goes to the global
- * handler, as for the client); no response rejects with `UploadNetworkError`; `signal`
- * aborting rejects with an `AbortError`.
+ * handler, as for the client); a `2xx` whose body is not JSON with `UploadReplyError`; no
+ * response rejects with `UploadNetworkError`; `signal` aborting rejects with an
+ * `AbortError`.
  */
 function send<T>(opts: SendOptions): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -101,7 +108,7 @@ function send<T>(opts: SendOptions): Promise<T> {
         try {
           resolve(JSON.parse(xhr.responseText) as T);
         } catch {
-          reject(failure(xhr));
+          reject(new UploadReplyError(xhr.status));
         }
         return;
       }

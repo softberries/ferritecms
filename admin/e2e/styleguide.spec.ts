@@ -195,6 +195,12 @@ test("styleguide_ordering", async ({ as, snap, expectAccessible }) => {
       .getByRole("button", { name: /^Reorder / })
       .evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")?.slice(8)));
 
+  // Text truncated with an ellipsis says itself in a `title` (11 §8).
+  const untitled = await page
+    .locator("main .truncate")
+    .evaluateAll((els) => els.filter((el) => !el.closest("[title]")).map((el) => el.outerHTML));
+  expect(untitled).toEqual([]);
+
   // Tree: Blog up among the top level, from its menu; focus stays on its menu button.
   // Each step waits for the menu to finish closing: reopening it during its exit
   // animation is not a user's pace.

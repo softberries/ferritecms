@@ -460,6 +460,7 @@
       "results": "Results",
       "noResults": "Nothing matches “{{q}}”.",
       "noContent": "No content yet.",
+      "noTypes": "No content types to link to. Use a custom link instead.",
       "failed": "The content could not be loaded.",
       "untitled": "Untitled",
       "taxonomy": "Taxonomy",

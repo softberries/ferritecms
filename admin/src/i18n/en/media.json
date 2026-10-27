@@ -205,7 +205,7 @@
     "title": "Uploads are still running",
     "body": "Leaving this page cancels the files that have not finished uploading.",
     "stay": "Stay",
-    "leave": "Leave and cancel"
+    "leave": "Leave and cancel uploads"
   },
   "picker": {
     "images": "images",

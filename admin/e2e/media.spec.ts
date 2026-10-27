@@ -285,7 +285,7 @@ test("leaving_during_upload_asks", async ({ as, site, backend, guard }) => {
     await page.locator("body").press("g");
     await page.locator("body").press("d");
     await expect(dialog).toBeVisible();
-    await dialog.getByRole("button", { name: "Leave and cancel" }).click();
+    await dialog.getByRole("button", { name: "Leave and cancel uploads", exact: true }).click();
     await expect(page).toHaveURL(/\/admin\/?$/);
     expect(await byName(api, name)).toHaveLength(0);
   } finally {
@@ -409,6 +409,11 @@ test("trash_with_undo", async ({ as, site, backend }) => {
     const page = await as("author");
     await openLibrary(page, `?q=${w}`);
     await expect(grid(page).locator("[data-tile]")).toHaveCount(2);
+    // Hidden (no hover, focus or selection), the check takes no clicks: the tile does.
+    await page.mouse.move(0, 0);
+    const check = tile(page, `${w} one`).locator("[data-slot=tile-check]");
+    await expect(check).toHaveCSS("opacity", "0");
+    await expect(check).toHaveCSS("pointer-events", "none");
     // By pointer, then by keyboard (Space on the focused option), as assistive tech sees it.
     await pick(page, `${w} one`);
     const two = tile(page, `${w} two`);
@@ -466,6 +471,10 @@ test("trash_view_restore_and_delete", async ({ as, site, backend, snap, expectAc
     await expect(tile(page, `${w} keep`)).toHaveCount(0);
     expect((await api.getMedia(keep.id)).status).toBe("published");
 
+    // The restore's toast is gone before the next screen is taken (the pointer off the
+    // toaster, which pauses its timer on hover).
+    await page.mouse.move(0, 0);
+    await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 15_000 });
     await tile(page, `${w} drop`).click();
     await detail(page).getByRole("button", { name: "Delete permanently" }).click();
     const confirm = page.getByRole("alertdialog");
@@ -632,7 +641,13 @@ test("screens", async ({ as, site, backend, guard, snap, expectAccessible }) => 
     await snap(page, "media-detail-image");
     await sheetToEnd(page);
     await expect(detail(page).getByRole("button", { name: "Move to trash" })).toBeInViewport();
-    await snap(page, "media-detail-image-end");
+    // At the end at every width and scheme (a resize can move the sheet's scroll).
+    await snap(page, "media-detail-image-end", {
+      prepare: async () => {
+        await sheetToEnd(page);
+        await expect(detail(page).getByRole("button", { name: "Move to trash" })).toBeInViewport();
+      },
+    });
 
     await openLibrary(page, `?id=${doc.id}`);
     await expect(detail(page).getByRole("link", { name: "Download" })).toBeVisible();
@@ -706,6 +721,9 @@ test("screens", async ({ as, site, backend, guard, snap, expectAccessible }) => 
     await page.route(list, (route) => route.fulfill(problem(403, "forbidden", "Not allowed.")));
     await page.goto("/admin/media");
     await expect(page.getByRole("heading", { name: /permission|access|allowed/i })).toBeVisible();
+    // The state alone, as on the other screens: no header actions or filters.
+    await expect(page.getByRole("button", { name: "Upload" })).toHaveCount(0);
+    await expect(searchBox(page)).toHaveCount(0);
     await expectAccessible(page);
     await snap(page, "media-forbidden");
 

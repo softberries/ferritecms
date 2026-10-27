@@ -4,6 +4,7 @@
 // whose parent is missing is a root; a cycle in the data (two concurrent moves, plan
 // ruling P2) is cut at its first term by name rather than lost.
 
+import { defaultFilter } from "cmdk";
 import { ApiError } from "@/api/problem";
 import type { TermDto } from "@/api/taxonomies";
 import { flatten, type TreeNode } from "@/components/kit/tree-model";
@@ -114,3 +115,11 @@ export const problemText = (e: unknown) =>
     : e instanceof Error
       ? e.message
       : String(e);
+
+/**
+ * The parent combobox's filter: cmdk's scoring over an option's keywords (name and
+ * slug) only. Each option's `value` is the term's id, which a search must never match.
+ */
+export function parentFilter(_value: string, search: string, keywords?: string[]): number {
+  return defaultFilter("", search, keywords);
+}

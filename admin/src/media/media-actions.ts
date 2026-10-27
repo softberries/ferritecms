@@ -74,6 +74,9 @@ export function useMediaActions(options: { onDone?: (ok: string[]) => void } = {
   /** "N moved to trash", with Undo for the ones this viewer may restore. */
   const trashToast = (trashed: MediaBulkItem[]) => {
     const count = trashed.length;
+    // `allowed` was computed before the trash, when `restore` (trashed items only) was
+    // false; `trash_undoable` already said this viewer may restore it, so Undo sets
+    // `restore` for `runBulk`'s filter rather than waiting for a refetch.
     const undoable = trashed
       .filter((i) => i.allowed.trash_undoable)
       .map((i) => ({ ...i, allowed: { ...i.allowed, restore: true } }));

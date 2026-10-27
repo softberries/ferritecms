@@ -241,8 +241,18 @@ test("keyboard_moderation", async ({ as, site, backend }) => {
   await page.keyboard.press("Escape");
   await expect(sheet).toBeHidden();
 
-  // `a` approves the focused row; focus moves on to the next one.
+  // `j` and `k` move the focus down and up the rows.
   await row(page, c).focus();
+  await page.keyboard.press("j");
+  await expect(row(page, b)).toBeFocused();
+  await page.keyboard.press("j");
+  await expect(row(page, a)).toBeFocused();
+  await page.keyboard.press("k");
+  await expect(row(page, b)).toBeFocused();
+  await page.keyboard.press("k");
+  await expect(row(page, c)).toBeFocused();
+
+  // `a` approves the focused row; focus moves on to the next one.
   await page.keyboard.press("a");
   await expect(row(page, c)).toHaveCount(0);
   await expect(row(page, b)).toBeFocused();
@@ -264,7 +274,7 @@ test("keyboard_moderation", async ({ as, site, backend }) => {
     ])
     .toEqual([[ids[2]], [ids[1]], [ids[0]]]);
 
-  // `u` unapproves; `j` moves; `enter` opens the item in the editor.
+  // `u` unapproves; `enter` opens the item in the editor.
   await openQueue(page, post, "approved");
   await row(page, c).focus();
   await page.keyboard.press("u");

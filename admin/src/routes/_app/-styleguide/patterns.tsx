@@ -278,7 +278,9 @@ export function OrderingSection() {
             onReorder={setFields}
             render={(f) => (
               <span className="flex min-w-0 items-baseline justify-between gap-3">
-                <span className="truncate font-medium">{t(`ordering.list.fields.${f.key}`)}</span>
+                <span className="truncate font-medium" title={t(`ordering.list.fields.${f.key}`)}>
+                  {t(`ordering.list.fields.${f.key}`)}
+                </span>
                 <span className="shrink-0 font-mono text-xs text-muted-foreground">{f.type}</span>
               </span>
             )}
@@ -293,7 +295,10 @@ export function OrderingSection() {
             onChange={setMenu}
             render={(n) => (
               <span className="flex min-w-0 items-baseline justify-between gap-3">
-                <span className="truncate font-medium">
+                <span
+                  className="truncate font-medium"
+                  title={t(`ordering.tree.items.${n.data.key}`)}
+                >
                   {t(`ordering.tree.items.${n.data.key}`)}
                 </span>
                 <span

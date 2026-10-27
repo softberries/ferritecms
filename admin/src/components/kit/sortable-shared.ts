@@ -2,9 +2,6 @@
 
 import { useCallback, useState } from "react";
 
-/** 11 §5: the layout spring (list insert, remove, reorder). */
-export const LAYOUT_SPRING = { type: "spring", stiffness: 520, damping: 42, mass: 1 } as const;
-
 /** Pointer drags start after 4 px, so a click on the handle stays a click. */
 export const DRAG_DISTANCE_PX = 4;
 

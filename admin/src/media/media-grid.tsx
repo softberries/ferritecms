@@ -18,10 +18,9 @@ import type { MediaDto } from "@/api/media";
 import type { RowSelectionState } from "@/components/kit/data-table-features";
 import { MediaThumb } from "@/components/kit/media-thumb";
 import { Skeleton } from "@/components/ui/skeleton";
-import { MOTION } from "@/design/tokens";
+import { LAYOUT_SPRING, MOTION } from "@/design/tokens";
 import { dimensions, displayTitle, typeLabel } from "./format";
 
-const LAYOUT_SPRING = { type: "spring", stiffness: 520, damping: 42, mass: 1 } as const;
 const SKELETON_TILES = 12;
 const GRID =
   "grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-4 sm:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))]";
@@ -213,7 +212,9 @@ export function MediaGrid({
                         "absolute top-0 left-0 flex size-10 cursor-pointer items-start justify-start p-2 transition-opacity pointer-coarse:size-14",
                         selected || anySelected
                           ? "opacity-100"
-                          : "opacity-0 group-hover/tile:opacity-100 group-focus-within/tile:opacity-100 pointer-coarse:opacity-100",
+                          : // Hidden, it takes no clicks either (a fine pointer
+                            // without hover would select instead of opening).
+                            "pointer-events-none opacity-0 group-hover/tile:pointer-events-auto group-hover/tile:opacity-100 group-focus-within/tile:pointer-events-auto group-focus-within/tile:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100",
                       )}
                     >
                       <span className="flex rounded-md bg-background/90 p-1 shadow-1">

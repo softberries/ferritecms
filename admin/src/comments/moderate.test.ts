@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { moderateComment } from "@/api/comments";
 import { ApiError } from "@/api/problem";
 import {
   type CommentAction,
@@ -98,4 +99,13 @@ describe("moderate_test", () => {
     expect(result.ok).toEqual(["b"]);
     expect(result.failed.map((f) => f.id)).toEqual(["a"]);
   });
+});
+
+test("moderate_comment_takes_only_a_comment_status", () => {
+  // Compile-time: `tsc` (the typecheck gate) refuses anything but the four statuses.
+  const wrong = () =>
+    // @ts-expect-error "approve" is an action, not a status
+    moderateComment("id", "approve");
+  const right = () => moderateComment("id", "approved");
+  expect([typeof wrong, typeof right]).toEqual(["function", "function"]);
 });

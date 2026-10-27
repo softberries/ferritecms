@@ -67,7 +67,7 @@ export function isProblem(e: unknown, slug: string): e is ApiError {
 }
 
 /** `true` for an object with a problem document's required members. */
-function isProblemDocument(v: unknown): v is Problem {
+export function isProblemDocument(v: unknown): v is Problem {
   if (typeof v !== "object" || v === null) return false;
   const p = v as Record<string, unknown>;
   return (

@@ -71,6 +71,33 @@ async function addTerm(page: Page, name: string): Promise<void> {
   await expect(sheet(page)).toHaveCount(0);
 }
 
+/**
+ * Starts recording the text of the overlay `slot` at the moment it begins to close
+ * (`data-state=closed`, its exit animation): it must not morph into another state.
+ */
+async function watchClosing(page: Page, slot: string): Promise<void> {
+  await page.evaluate((slot) => {
+    const w = window as unknown as { __closing?: string[] };
+    w.__closing = [];
+    const seen = new MutationObserver(() => {
+      const el = document.querySelector(`[data-slot="${slot}"][data-state="closed"]`);
+      if (!el) return;
+      w.__closing?.push(el.textContent ?? "");
+      seen.disconnect();
+    });
+    seen.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["data-state"],
+    });
+  }, slot);
+}
+
+/** The closing overlay's text that `watchClosing` recorded (`null`: none seen). */
+const closingText = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __closing?: string[] }).__closing?.[0] ?? null);
+
 /** A row menu item, waiting for the menu to close again. */
 async function rowMenu(page: Page, name: string, item: string): Promise<void> {
   await page.getByRole("button", { name: `Actions for ${name}`, exact: true }).click();
@@ -160,7 +187,10 @@ test("editor_builds_a_category_tree", async ({ as, site, backend }) => {
     await expect(deleteDialog(page)).toContainText("Fruit has sub-terms");
     await expect(deleteDialog(page)).toContainText("Move its 2 sub-terms");
     await expect(deleteDialog(page).getByRole("button", { name: "Delete term" })).toHaveCount(0);
+    // While it closes it still names Fruit (no "Delete “”?" frame).
+    await watchClosing(page, "delete-term-dialog");
     await deleteDialog(page).getByRole("button", { name: "Close" }).click();
+    await expect.poll(() => closingText(page)).toContain("Fruit has sub-terms");
     await expect(
       page.getByRole("button", { name: "Actions for Fruit", exact: true }),
     ).toBeFocused();
@@ -170,12 +200,19 @@ test("editor_builds_a_category_tree", async ({ as, site, backend }) => {
     await expect(sheet(page).getByRole("button", { name: /^Parent/ })).toContainText("Fruit");
     await expect(sheet(page).getByRole("textbox", { name: "Name" })).toBeFocused();
     await page.keyboard.type("Quince");
+    // The sheet keeps its form while it closes (it does not become an empty "New term").
+    await watchClosing(page, "term-sheet");
     await sheet(page).getByRole("button", { name: "Create term" }).click();
+    await expect.poll(() => closingText(page)).toContain("Create term");
     await expect.poll(() => shape(list)).toEqual(["1:Fruit", "2:Apples", "2:Pears", "2:Quince"]);
     await rowMenu(page, "Quince", "Delete");
     await expect(deleteDialog(page)).toContainText("Items filed under it lose this term");
     await deleteDialog(page).getByRole("button", { name: "Delete term" }).click();
     await expect.poll(() => shape(list)).toEqual(["1:Fruit", "2:Apples", "2:Pears"]);
+    // Focus lands on the row now last in its place (Pears), not on `body`.
+    await expect(
+      page.getByRole("button", { name: "Actions for Pears", exact: true }),
+    ).toBeFocused();
     expect((await admin.listTerms(tax.name)).map((t) => t.name)).not.toContain("Quince");
   } finally {
     await page.context().close();

@@ -749,7 +749,7 @@ export function EditorScreen({
     } catch (e) {
       // A lost session was handed on by `keepInSlot` (the draft is kept for the sign-in).
       if (!isProblem(e, "unauthenticated") && !isProblem(e, "password-reset-required")) {
-        toast.error(t("restore.undoFailed"), { id: "editor-restore" });
+        toast.error(t("restore.backupFailed"), { id: "editor-restore" });
       }
     } finally {
       setBannerBusy(false);

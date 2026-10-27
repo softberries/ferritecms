@@ -247,6 +247,10 @@ function MoveToDialog({
   onMove: (term: TermDto, parentId: string | null) => void;
 }) {
   const { t } = useTranslation("structure");
+  // The last term, so the dialog keeps its title while it closes.
+  const [shown, setShown] = useState<TermDto | null>(term);
+  if (term !== null && term !== shown) setShown(term);
+  const named = term ?? shown;
   return (
     <Dialog open={term !== null} onOpenChange={(o) => (o ? undefined : onClose())}>
       <DialogContent
@@ -256,7 +260,7 @@ function MoveToDialog({
       >
         <DialogHeader>
           <DialogTitle className="break-words">
-            {t("taxonomies.terms.move.title", { name: term?.name ?? "" })}
+            {t("taxonomies.terms.move.title", { name: named?.name ?? "" })}
           </DialogTitle>
           <DialogDescription>{t("taxonomies.terms.move.description")}</DialogDescription>
         </DialogHeader>

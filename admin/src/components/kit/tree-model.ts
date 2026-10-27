@@ -133,9 +133,9 @@ export function outdent<T>(nodes: TreeNode<T>[], id: string): TreeNode<T>[] {
  * `flat`. The depth follows the horizontal offset (`offsetX / indentPx` levels from the
  * node's own depth), clamped between the next row's depth and the previous row's depth
  * + 1, and so that the node's subtree stays within `maxDepth` (when the two disagree,
- * `maxDepth` wins). `canNest(parentId)` refuses a parent; the depth then steps back
- * toward the minimum, and when no allowed level is left the result is `null` (no move),
- * as for an unknown id.
+ * `maxDepth` wins). `canNest(parent)` (the same predicate as `SortableTree`'s) refuses
+ * a parent; the depth then steps back toward the minimum, and when no allowed level is
+ * left the result is `null` (no move), as for an unknown id.
  */
 export function projectDrop<T>(
   flat: FlatNode<T>[],
@@ -144,7 +144,7 @@ export function projectDrop<T>(
   offsetX: number,
   indentPx = 24,
   maxDepth = Number.POSITIVE_INFINITY,
-  canNest?: (parentId: string) => boolean,
+  canNest?: (parent: TreeNode<T>) => boolean,
 ): DropProjection | null {
   const active = flat.find((n) => n.id === activeId);
   if (!active) return null;
@@ -181,19 +181,21 @@ export function projectDrop<T>(
         .find((n) => n.depth === d)?.parentId ?? null
     );
   };
+  // A parent the caller refuses (an id not in `flat` is refused too).
+  const refused = (id: string | null) => {
+    if (id === null || !canNest) return false;
+    const node = flat.find((n) => n.id === id);
+    return node === undefined || !canNest(node);
+  };
   if (canNest) {
     const lowest = Math.min(min, depth);
     let d = depth;
-    while (d > lowest) {
-      const parent = parentAt(d);
-      if (parent === null || canNest(parent)) break;
-      d--;
-    }
+    while (d > lowest && refused(parentAt(d))) d--;
     depth = d;
   }
   const parentId = parentAt(depth);
   // Even the lowest level the neighbours allow sits under a refused parent: no move.
-  if (parentId !== null && canNest && !canNest(parentId)) return null;
+  if (refused(parentId)) return null;
   const index = moved
     .slice(0, to)
     .filter((n) => n.parentId === parentId && n.depth === depth).length;

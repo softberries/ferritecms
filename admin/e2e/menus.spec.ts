@@ -118,6 +118,8 @@ test("build_primary_menu_and_see_it_on_the_site", async ({ as, site, backend }) 
     await address.fill("javascript:alert(1)");
     await addPanel(page).getByRole("button", { name: "Add link" }).click();
     await expect(addPanel(page)).toContainText("Use http://, https:// or a path starting with /");
+    // The error replaces the hint, which says the same rule.
+    await expect(addPanel(page)).not.toContainText("or a path on this site starting with /");
     await address.fill(`https://example.com/${s}`);
     await addPanel(page).getByRole("textbox", { name: "Label" }).fill(`Elsewhere ${s}`);
     await addPanel(page).getByRole("button", { name: "Add link" }).click();
@@ -423,6 +425,9 @@ test("screens", async ({ as, site, backend, guard, snap, expectAccessible }) => 
     await expect(page).toHaveURL(new RegExp(`/admin/structure/menus/legal-${s}$`));
     await expect(page.locator("[data-slot=menu-items] [data-slot=empty-state]")).toBeVisible();
     await expect(addPanel(page).getByRole("checkbox").first()).toBeVisible();
+    // The "… created" toast is gone first: on phones it covers the Add items card.
+    await page.mouse.move(0, 0);
+    await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 15_000 });
     await snap(page, "menus-editor-empty");
     await expectAccessible(page);
 

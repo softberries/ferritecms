@@ -98,3 +98,6 @@ export const MOTION = {
   durBase: 0.18,
   easeOut: [0.22, 1, 0.36, 1] as [number, number, number, number],
 } as const;
+
+/** 11 §5: the layout spring (list and grid insert, remove, reorder). */
+export const LAYOUT_SPRING = { type: "spring", stiffness: 520, damping: 42, mass: 1 } as const;

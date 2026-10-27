@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { setCsrfToken } from "./csrf";
 import { ApiError } from "./problem";
-import { UploadNetworkError, uploadMedia, uploadTheme } from "./upload";
+import { UploadNetworkError, UploadReplyError, uploadMedia, uploadTheme } from "./upload";
 
 class FakeXhr {
   static last: FakeXhr;
@@ -136,6 +136,26 @@ test("non_problem_failure_is_an_api_error", async () => {
   const e = (await promise.catch((x: unknown) => x)) as ApiError;
   expect(e).toBeInstanceOf(ApiError);
   expect(e.status).toBe(502);
+});
+
+test("unreadable_2xx_body_is_not_an_api_error", async () => {
+  const { promise, xhr } = start();
+  xhr.status = 201;
+  xhr.responseText = "<html>proxy</html>";
+  xhr.onload?.();
+  const error = await promise.catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(UploadReplyError);
+  expect(error).not.toBeInstanceOf(ApiError);
+  expect((error as UploadReplyError).status).toBe(201);
+});
+
+test("problem_without_required_members_is_synthetic", async () => {
+  const { promise, xhr } = start();
+  xhr.statusText = "Bad Gateway";
+  xhr.respond(502, { title: "only a title" }, { "Content-Type": "application/problem+json" });
+  const error = (await promise.catch((e: unknown) => e)) as ApiError;
+  expect(error).toBeInstanceOf(ApiError);
+  expect(error.problem).toMatchObject({ type: "about:blank", status: 502, title: "Bad Gateway" });
 });
 
 test("abort_rejects_with_abort_error", async () => {

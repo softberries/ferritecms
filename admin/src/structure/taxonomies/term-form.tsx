@@ -51,8 +51,8 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { staleGuard } from "@/lib/stale-guard";
 import { FormField } from "@/components/kit/form-field";
-import { returnToRowMenu } from "./row-focus";
-import { childCount, parentChoices, problemText } from "./terms-model";
+import { neighbourTarget, returnToRowMenu } from "./row-focus";
+import { childCount, parentChoices, parentFilter, problemText } from "./terms-model";
 import { DESTRUCTIVE } from "@/lib/destructive";
 import { without } from "../shared";
 
@@ -116,7 +116,7 @@ export function TermParentPicker({
           </Button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-(--radix-popover-trigger-width) min-w-64 p-0">
-          <Command>
+          <Command filter={parentFilter}>
             <CommandInput placeholder={t("taxonomies.terms.parentSearch")} />
             <CommandList>
               <CommandEmpty>{t("taxonomies.terms.parentEmpty")}</CommandEmpty>
@@ -185,7 +185,12 @@ export function TermSheet({
   onClose: () => void;
 }) {
   const { t } = useTranslation("structure");
-  const editing = state?.kind === "edit" ? state.term : null;
+  // The last state, so the sheet keeps its title while it closes (it does not morph
+  // into "New term").
+  const [shown, setShown] = useState<TermSheetState>(state);
+  if (state !== null && state !== shown) setShown(state);
+  const current = state ?? shown;
+  const editing = current?.kind === "edit" ? current.term : null;
   return (
     <Sheet open={state !== null} onOpenChange={(o) => (o ? undefined : onClose())}>
       <SheetContent
@@ -204,12 +209,12 @@ export function TermSheet({
             {editing ? t("taxonomies.terms.editDescription") : t("taxonomies.terms.newDescription")}
           </SheetDescription>
         </SheetHeader>
-        {state ? (
+        {current ? (
           <TermFormBody
-            key={state.kind === "edit" ? state.term.id : `new:${state.parentId ?? ""}`}
+            key={current.kind === "edit" ? current.term.id : `new:${current.parentId ?? ""}`}
             taxonomy={taxonomy}
             terms={terms}
-            state={state}
+            state={current}
             onClose={onClose}
           />
         ) : null}
@@ -440,12 +445,20 @@ export function DeleteTermDialog({
   const { t } = useTranslation("structure");
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
-  const children = term ? childCount(terms, term.id) : 0;
+  // The last term, so the dialog keeps its text while it closes.
+  const [shown, setShown] = useState<TermDto | null>(term);
+  if (term !== null && term !== shown) setShown(term);
+  const named = term ?? shown;
+  const children = named ? childCount(terms, named.id) : 0;
   const key = qk.terms(taxonomy.name);
+
+  // Where focus goes once the deleted term's row is gone.
+  const [fallback, setFallback] = useState<string | null>(null);
 
   const remove = async () => {
     if (!term) return;
     setBusy(true);
+    setFallback(neighbourTarget(term.id));
     try {
       await deleteTerm(term.id);
       qc.setQueryData<TermDto[]>(key, (list) => list?.filter((x) => x.id !== term.id));
@@ -466,12 +479,15 @@ export function DeleteTermDialog({
 
   return (
     <AlertDialog open={term !== null} onOpenChange={(o) => (o ? undefined : onClose())}>
-      <AlertDialogContent data-slot="delete-term-dialog" onCloseAutoFocus={returnToRowMenu(origin)}>
+      <AlertDialogContent
+        data-slot="delete-term-dialog"
+        onCloseAutoFocus={returnToRowMenu(origin ?? named?.id ?? null, fallback)}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle className={cn("break-words")}>
             {children > 0
-              ? t("taxonomies.terms.delete.blockedTitle", { name: term?.name ?? "" })
-              : t("taxonomies.terms.delete.title", { name: term?.name ?? "" })}
+              ? t("taxonomies.terms.delete.blockedTitle", { name: named?.name ?? "" })
+              : t("taxonomies.terms.delete.title", { name: named?.name ?? "" })}
           </AlertDialogTitle>
           <AlertDialogDescription>
             {children > 0
