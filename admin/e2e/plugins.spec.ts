@@ -57,8 +57,8 @@ async function inspectInDialog(page: Page, manifest: string): Promise<void> {
 test("install_inspect_approve_enable", async ({ as, site, backend, snap, expectAccessible }) => {
   const api = await ContentApi.as(backend, site.url, "admin");
   const plugin = name();
-  const page = await as("admin");
   try {
+    const page = await as("admin");
     await openList(page);
     await inspectInDialog(page, fixtureManifest(plugin));
     const report = dialog(page).locator("[data-slot=permission-report]");
@@ -116,10 +116,10 @@ test("install_inspect_approve_enable", async ({ as, site, backend, snap, expectA
 test("untouched_secret_is_kept", async ({ as, site, backend, snap, expectAccessible }) => {
   const api = await ContentApi.as(backend, site.url, "admin");
   const plugin = name();
-  await api.installPlugin(fixtureManifest(plugin), fixtureComponent());
   const secret = `e2e-secret-${uid("s")}`;
-  const page = await as("admin");
   try {
+    await api.installPlugin(fixtureManifest(plugin), fixtureComponent());
+    const page = await as("admin");
     await openDetail(page, plugin);
     const form = detail(page).locator("[data-slot=settings-form]");
     const key = form.locator("[data-slot=setting][data-key=api_key]");
@@ -170,10 +170,10 @@ test("delete_keep_vs_erase", async ({ as, site, backend, snap, expectAccessible 
   const api = await ContentApi.as(backend, site.url, "admin");
   const kept = name();
   const erased = name();
-  await api.installPlugin(fixtureManifest(kept), fixtureComponent());
-  await api.installPlugin(fixtureManifest(erased), fixtureComponent());
-  const page = await as("admin");
   try {
+    await api.installPlugin(fixtureManifest(kept), fixtureComponent());
+    await api.installPlugin(fixtureManifest(erased), fixtureComponent());
+    const page = await as("admin");
     // From the plugin's page: keep the data.
     await openDetail(page, kept);
     await detail(page).getByRole("button", { name: "Delete" }).click();
@@ -228,11 +228,11 @@ test("hostile_manifest_renders_as_text", async ({ as, site, backend }) => {
     license: "<i>MIT</i>",
     homepage: "https://example.com/?q=<b>x</b>",
   };
-  const page = await as("admin");
-  page.on("dialog", (d) => {
-    throw new Error(`a dialog opened: ${d.message()}`);
-  });
   try {
+    const page = await as("admin");
+    page.on("dialog", (d) => {
+      throw new Error(`a dialog opened: ${d.message()}`);
+    });
     // The report of the upload shows the manifest's text as text.
     await openList(page);
     await inspectInDialog(page, fixtureManifest(plugin, fields));
@@ -272,10 +272,10 @@ test("hostile_manifest_renders_as_text", async ({ as, site, backend }) => {
 test("metrics_table_shows_this_node", async ({ as, site, backend, snap, expectAccessible }) => {
   const api = await ContentApi.as(backend, site.url, "admin");
   const plugin = name();
-  await api.installPlugin(fixtureManifest(plugin), fixtureComponent());
-  await api.enablePlugin(plugin);
-  const page = await as("admin");
   try {
+    await api.installPlugin(fixtureManifest(plugin), fixtureComponent());
+    await api.enablePlugin(plugin);
+    const page = await as("admin");
     await expect
       .poll(
         async () =>
@@ -320,15 +320,15 @@ test("plugins_screens", async ({ as, site, backend, snap, expectAccessible }) =>
   const api = await ContentApi.as(backend, site.url, "admin");
   const shown = name();
   const gone = name();
-  await api.installPlugin(fixtureManifest(shown), fixtureComponent());
-  await api.enablePlugin(shown);
-  await api.installPlugin(fixtureManifest(gone), fixtureComponent());
-  const del = await api.ctx.delete(`/api/v1/plugins/${gone}`, {
-    headers: { "X-CSRF-Token": await csrf(api) },
-  });
-  expect(del.status()).toBe(204);
-  const page = await as("admin");
   try {
+    await api.installPlugin(fixtureManifest(shown), fixtureComponent());
+    await api.enablePlugin(shown);
+    await api.installPlugin(fixtureManifest(gone), fixtureComponent());
+    const del = await api.ctx.delete(`/api/v1/plugins/${gone}`, {
+      headers: { "X-CSRF-Token": await csrf(api) },
+    });
+    expect(del.status()).toBe(204);
+    const page = await as("admin");
     // The node has loaded it, so the row shows its dot.
     await expect
       .poll(

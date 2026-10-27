@@ -8,7 +8,7 @@
 //      approved again. A new plugin arrives disabled; the last step offers Enable.
 // Both requests run over an XHR with a progress bar (the component may be 32 MiB).
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { cn } from "cn";
 import { CheckIcon, FileCodeIcon, FileCogIcon, PackagePlusIcon } from "lucide-react";
@@ -21,6 +21,7 @@ import {
   pluginsQuery,
 } from "@/api/plugins";
 import { reportApiError } from "@/api/client";
+import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import { inspectPluginUpload, installPluginUpload } from "@/api/upload";
 import { Alert } from "@/auth/auth-layout";
@@ -121,6 +122,7 @@ function InstallBody({
   onEnabled: (plugin: PluginDto) => void;
 }) {
   const { t } = useTranslation("admin");
+  const queryClient = useQueryClient();
   const installed = useQuery(pluginsQuery);
   const [manifest, setManifest] = useState<File | null>(null);
   const [component, setComponent] = useState<File | null>(null);
@@ -131,8 +133,18 @@ function InstallBody({
   const abort = useRef<AbortController | null>(null);
   const busy = progress !== null || enabling;
 
-  // Leaving the dialog ends a request in flight.
-  useEffect(() => () => abort.current?.abort(), []);
+  // Leaving the dialog ends a request in flight. The server may still finish an
+  // install it had received, so the list (and retained data it may take back) is read
+  // again.
+  useEffect(
+    () => () => {
+      if (!abort.current) return;
+      abort.current.abort();
+      void queryClient.invalidateQueries({ queryKey: qk.plugins, exact: true });
+      void queryClient.invalidateQueries({ queryKey: qk.pluginsRetained });
+    },
+    [queryClient],
+  );
 
   const run = async <T,>(call: (signal: AbortSignal) => Promise<T>): Promise<T | undefined> => {
     const controller = new AbortController();

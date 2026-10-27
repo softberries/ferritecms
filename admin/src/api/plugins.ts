@@ -4,10 +4,8 @@ import { qk } from "./keys";
 import type {
   SchemaPermissionReportDto,
   SchemaPluginDto,
-  SchemaPluginInspectUpload,
   SchemaPluginMetricsDto,
   SchemaPluginSettingsDto,
-  SchemaPluginUpload,
   SchemaRetainedPluginDto,
   SchemaSettingsPatch,
 } from "./schema";
@@ -59,39 +57,6 @@ export function pluginQuery(name: string) {
 export interface PluginFiles {
   manifest: Blob;
   component: Blob;
-}
-
-function pluginForm(files: PluginFiles, approve?: string): FormData {
-  const form = new FormData();
-  form.append("manifest", files.manifest);
-  form.append("component", files.component);
-  if (approve !== undefined) form.append("approve", approve);
-  return form;
-}
-
-/** `POST /plugins/inspect` (multipart): the permission report; nothing is stored. */
-export function inspectPlugin(files: PluginFiles): Promise<PermissionReportDto> {
-  return unwrap(
-    api.POST("/api/v1/plugins/inspect", {
-      // The browser sets the multipart `Content-Type` with its boundary.
-      body: pluginForm(files) as unknown as SchemaPluginInspectUpload,
-      bodySerializer: (b) => b as unknown as FormData,
-    }),
-  );
-}
-
-/**
- * `POST /plugins` (multipart): installs exactly what was inspected, `approve` being the
- * report's `fingerprint`. Files changed meanwhile: `422` field `approve`, with the new
- * `report` in the problem. A new plugin arrives disabled.
- */
-export function installPlugin(files: PluginFiles & { approve: string }): Promise<PluginDto> {
-  return unwrap(
-    api.POST("/api/v1/plugins", {
-      body: pluginForm(files, files.approve) as unknown as SchemaPluginUpload,
-      bodySerializer: (b) => b as unknown as FormData,
-    }),
-  );
 }
 
 export function enablePlugin(name: string): Promise<PluginDto> {

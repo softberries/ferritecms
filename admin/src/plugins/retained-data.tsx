@@ -11,6 +11,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { reportApiError } from "@/api/client";
 import { qk } from "@/api/keys";
+import { ApiError } from "@/api/problem";
 import { purgePlugin, retainedPluginsQuery } from "@/api/plugins";
 import { Alert } from "@/auth/auth-layout";
 import { ErrorState } from "@/components/kit/error-state";
@@ -47,6 +48,13 @@ export function RetainedData() {
       toast.success(t("plugins.retained.erased", { name }));
       void queryClient.invalidateQueries({ queryKey: qk.pluginsRetained });
     } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        // Erased meanwhile (another admin, or the 30-day job): nothing is left to do.
+        setErasing(null);
+        toast.info(t("plugins.retained.alreadyErased", { name }));
+        void queryClient.invalidateQueries({ queryKey: qk.pluginsRetained });
+        return;
+      }
       reportApiError(error);
       setFailure(problemText(error));
     } finally {

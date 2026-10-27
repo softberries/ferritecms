@@ -1,7 +1,9 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { PermissionReportDto, PluginDto } from "@/api/plugins";
+import { type PermissionReportDto, type PluginDto, pluginsQuery } from "@/api/plugins";
 import { json, renderWithRouter, stubRoutes } from "@/test/render";
 import { permission, plugin, report } from "./fixtures";
 import { InstallPluginDialog } from "./install-flow";
@@ -10,6 +12,8 @@ interface Reply {
   status: number;
   body: unknown;
   type?: string;
+  /** Never answers (a request still running). */
+  hang?: boolean;
 }
 
 /** An `XMLHttpRequest` that answers each `send` with the next queued reply. */
@@ -37,6 +41,7 @@ class FakeXhr {
     FakeXhr.sent.push({ url: this.url, body });
     const reply = FakeXhr.replies.shift();
     if (!reply) throw new Error(`no reply queued for ${this.url}`);
+    if (reply.hang) return;
     setTimeout(() => {
       this.status = reply.status;
       this.responseText = JSON.stringify(reply.body);
@@ -192,4 +197,27 @@ test("refused_inspect_shows_the_server_problems", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Check permissions" }));
   const alert = await within(dialog).findByRole("alert");
   expect(alert).toHaveTextContent("plugin.name: must match [a-z0-9-]");
+});
+
+test("closing_during_install_refreshes_the_list", async () => {
+  // The server may finish an install the closed dialog no longer waits for.
+  const seen = stubRoutes({ "/api/v1/plugins": () => json({ items: [] }) });
+  FakeXhr.replies.push({ status: 200, body: report() }, { status: 0, body: null, hang: true });
+  function Harness() {
+    const [open, setOpen] = useState(true);
+    // The screen behind the dialog shows the list.
+    useQuery(pluginsQuery);
+    return <InstallPluginDialog open={open} onOpenChange={setOpen} onInstalled={() => {}} />;
+  }
+  renderWithRouter(<Harness />);
+  await screen.findByRole("dialog", { name: "Install a plugin" });
+  await pickBoth();
+  await userEvent.click(screen.getByRole("button", { name: "Check permissions" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Approve and install" }));
+  await waitFor(() => expect(FakeXhr.sent).toHaveLength(2));
+  const lists = () => seen.filter((u) => u.pathname === "/api/v1/plugins").length;
+  const before = lists();
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(lists()).toBeGreaterThan(before));
 });

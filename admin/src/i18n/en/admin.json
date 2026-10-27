@@ -787,7 +787,7 @@
       "action": "Delete",
       "title": "Delete {{name}}?",
       "body": "Its hooks and routes stop at once on every node.",
-      "keepBody": "Keep its data, and its stored data, settings and secrets stay for 30 days: a plugin named {{name}} installed in that time picks them up again, whoever publishes it. Erase them if you do not plan to reinstall it.",
+      "keepBody": "If you keep its data, its stored data, settings and secrets stay for 30 days: a plugin named {{name}} installed in that time picks them up again, whoever publishes it. Erase them if you do not plan to reinstall it.",
       "cancel": "Cancel",
       "keep": "Delete, keep data for 30 days",
       "erase": "Delete and erase data",
@@ -810,7 +810,8 @@
       "erasing": "Erasing…",
       "cancel": "Cancel",
       "erased": "The data of {{name}} was erased",
-      "erasedOn": "Erased after {{date}}"
+      "erasedOn": "Erased after {{date}}",
+      "alreadyErased": "The data of {{name}} was already erased"
     }
   }
 }

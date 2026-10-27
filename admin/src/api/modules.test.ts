@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { findRedirect, importRedirects, listRedirects } from "./redirects";
 import { listMedia, restoreMedia } from "./media";
 import { listAudit } from "./audit";
-import { deletePlugin, inspectPlugin, installPlugin, patchPluginSettings } from "./plugins";
+import { deletePlugin, patchPluginSettings } from "./plugins";
 import { installTheme, patchThemeSettings } from "./themes";
 import { deleteUser, listUsers } from "./users";
 import { createToken } from "./tokens";
@@ -113,28 +113,6 @@ test("settings_patches_send_only_the_given_keys", async () => {
   ]);
   expect(await requests[0]!.json()).toEqual({ api_key: null, title: "x" });
   expect(await requests[1]!.json()).toEqual({ accent });
-});
-
-test("plugin_uploads_are_multipart", async () => {
-  // jsdom's FormData and Blob are not the ones Node's `Request` takes; borrow Node's
-  // (browsers have one kind).
-  const nodeForm = await new Response(new URLSearchParams("a=1")).formData();
-  vi.stubGlobal("FormData", nodeForm.constructor);
-  const NodeBlob = (await new Response("x").blob()).constructor as typeof Blob;
-  const requests = stub();
-  const manifest = new NodeBlob(["name = 'seo'"]);
-  const component = new NodeBlob([new Uint8Array([0, 97, 115, 109])]);
-  await inspectPlugin({ manifest, component });
-  await installPlugin({ manifest, component, approve: "f1" });
-  for (const r of requests) {
-    expect(r.headers.get("Content-Type")).toMatch(/^multipart\/form-data; boundary=/);
-  }
-  const inspected = await requests[0]!.formData();
-  expect([...inspected.keys()]).toEqual(["manifest", "component"]);
-  const installed = await requests[1]!.formData();
-  expect([...installed.keys()]).toEqual(["manifest", "component", "approve"]);
-  expect(installed.get("approve")).toBe("f1");
-  expect(new URL(requests[1]!.url).pathname).toBe("/api/v1/plugins");
 });
 
 test("delete_plugin_purges_only_when_asked", async () => {
