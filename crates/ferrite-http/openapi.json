@@ -10225,7 +10225,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The content types a `relation` may point at: distinct registered type names,\nnever `media`; empty means any type. Empty for every other kind. A relation\nvalue whose item has another type is refused (`422`, `errors[0].field` at the\nvalue's path, such as `fields.chapters[1].related`); a missing item is accepted."
+            "description": "The content types a `relation` may point at: distinct registered type names,\nnever `media`; empty means any type. Empty for every other kind. A relation\nvalue whose item has another type is refused (`422`, `errors[0].field` at the\nvalue's path, such as `fields.chapters[1].related`); a missing item is accepted.\nLeft out of an answer when empty, as the stored schema leaves it out."
           }
         }
       },

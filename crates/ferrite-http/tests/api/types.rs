@@ -626,7 +626,8 @@ async fn relation_types_over_http(api: Api) -> Api {
     let r = b.send(&api, Method::POST, TYPES, Some(&body), None).await;
     assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
     let created = r.json();
-    assert_eq!(created["fields"][0]["types"], json!([]));
+    // No target types: the key is left out, as before P52.
+    assert!(created["fields"][0].get("types").is_none(), "{created}");
     assert_eq!(created["fields"][1]["types"], json!(["page"]));
     assert_eq!(
         created["fields"][2]["fields"][0]["types"],

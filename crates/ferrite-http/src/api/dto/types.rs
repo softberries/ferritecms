@@ -93,7 +93,8 @@ pub struct FieldDefDto {
     /// never `media`; empty means any type. Empty for every other kind. A relation
     /// value whose item has another type is refused (`422`, `errors[0].field` at the
     /// value's path, such as `fields.chapters[1].related`); a missing item is accepted.
-    #[serde(default)]
+    /// Left out of an answer when empty, as the stored schema leaves it out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub types: Vec<String>,
 }
 
