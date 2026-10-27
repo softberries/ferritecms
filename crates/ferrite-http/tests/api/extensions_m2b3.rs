@@ -171,6 +171,28 @@ async fn plugin_dto_has_manifest_facts(api: Api) -> Api {
     assert_plugin_facts(&c.get(&api, &format!("{PLUGINS}/hello")).await.json());
     let list = c.get(&api, PLUGINS).await.json();
     assert_plugin_facts(&list["items"][0]);
+
+    // An upload's homepage must be http(s)://.
+    for bad in ["javascript:alert(1)", "data:text/html,<b>x</b>"] {
+        let hostile = manifest.replace("https://example.dev/hello", bad);
+        let p = inspect(&mut c, &api, &hostile, &wasm)
+            .await
+            .assert_problem(422, "validation");
+        assert_eq!(p["errors"][0]["field"], "plugin.homepage", "{p}");
+    }
+    // A stored row with another scheme (written before the rule) still loads, and the
+    // DTO never offers it as a link.
+    let plugins = api.store.read().plugins();
+    let mut row = plugins.get("hello").await.unwrap().unwrap();
+    row.manifest["plugin"]["homepage"] = json!("javascript:alert(1)");
+    plugins.upsert(&row).await.unwrap();
+    let list = c.get(&api, PLUGINS).await.json();
+    assert_eq!(list["items"][0]["homepage"], Value::Null, "{list}");
+    assert_eq!(list["items"][0]["publisher"], "ferritecms.dev", "{list}");
+    assert!(
+        list["items"][0]["report"].is_object(),
+        "the row still loads: {list}"
+    );
     api
 }
 

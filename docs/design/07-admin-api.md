@@ -333,8 +333,10 @@ appends an audit row (`plugin.install|enable|disable|delete|purge|settings`,
   (an update too); a new plugin is installed disabled, a replaced one keeps its state.
 - **`PluginDto`**: `name`, `version`, `enabled`, `disabled_reason`, `installed_at`,
   `updated_at`, `description`, `publisher`, `license`, `homepage` (from the stored
-  manifest's `[plugin]` table, `null` when unset; author text: shown as text, a homepage
-  linked only when `http:`/`https:`, the publisher unverified; M2b-3), `report` (the row's report against its own grant, so `added` is empty for
+  manifest's `[plugin]` table, `null` when unset; author text: shown as text, the
+  publisher unverified; M2b-3; `homepage` is always an `http(s)://` URL or `null`: an
+  upload with another scheme is refused as `plugin.homepage`, and a row stored before
+  that rule keeps loading but shows `null`), `report` (the row's report against its own grant, so `added` is empty for
   a row installed with approval; `null` if the stored manifest or grant no longer parses)
   and `nodes` (each node with a heartbeat in the last 30 s: `node`, `name`, `version`,
   `status` = `loaded|failed|disabled`, `error`: the node's diagnostic, scrubbed of paths,
@@ -351,7 +353,15 @@ appends an audit row (`plugin.install|enable|disable|delete|purge|settings`,
   `plugin.purge {name}`; `204`. A plugin of that name installed is `422 validation`,
   `errors[0].field = "name"` (delete it with `purge=true`); no marker is `404`. A delete
   with `purge=true` keeps its marker until its final sweep (`PLUGIN_PURGE_GRACE`, 2
-  minutes), so it is listed for those minutes. `retained` is a reserved plugin name (R9).
+  minutes), so it is listed for those minutes. **`retained` is a reserved plugin name**
+  (the R9 rule: `/plugins/retained` is a static route, so a manifest naming a plugin
+  `retained`, like `inspect`, is refused as `plugin.name`). **Known window:** this purge
+  deletes the marker, so the delete's job no longer sweeps. A node that has not yet
+  reloaded after the delete (it reloads on `plugins.changed`, normally within a second)
+  can still write KV after an immediate purge. That KV then has no marker, nothing erases
+  it, and a later install of the same name finds it. `DELETE ?purge=true` has no such
+  window: its job sweeps again after `PLUGIN_PURGE_GRACE`. Purging a few minutes after the
+  delete avoids it.
 - **Theme uploads** are the raw deterministic ustar bundle (`Content-Type:
   application/x-tar`, else `415`; at most `ferrite_theme::MAX_BUNDLE_BYTES`, else `413`),
   unpacked in memory and compiled before anything is stored; a theme that does not load is

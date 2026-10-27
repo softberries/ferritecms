@@ -127,7 +127,7 @@ impl PluginFacts {
             description: meta.description.clone(),
             publisher: Some(meta.publisher.clone()),
             license: meta.license.clone(),
-            homepage: meta.homepage.clone(),
+            homepage: web_url(meta.homepage.as_deref()),
         }
     }
 
@@ -144,9 +144,16 @@ impl PluginFacts {
             description: text("description"),
             publisher: text("publisher"),
             license: text("license"),
-            homepage: text("homepage"),
+            homepage: web_url(text("homepage").as_deref()),
         }
     }
+}
+
+/// `url` if it is an `http(s)://` URL (`ferrite_domain::is_web_url`), else `None`: a row
+/// stored before uploads were checked never hands the admin another scheme to link.
+fn web_url(url: Option<&str>) -> Option<String> {
+    url.filter(|u| ferrite_domain::is_web_url(u))
+        .map(str::to_owned)
 }
 
 /// The report of a plugin upload, as the admin approves it (`POST /plugins/inspect`,
@@ -163,7 +170,7 @@ pub struct PermissionReportDto {
     pub publisher: Option<String>,
     /// The manifest's `plugin.license` (text).
     pub license: Option<String>,
-    /// The manifest's `plugin.homepage` (text; link it only if it is `http:`/`https:`).
+    /// The manifest's `plugin.homepage`: an `http://` or `https://` URL (else `null`).
     pub homepage: Option<String>,
 }
 
@@ -227,8 +234,8 @@ pub struct PluginDto {
     pub publisher: Option<String>,
     /// The stored manifest's `plugin.license` (text).
     pub license: Option<String>,
-    /// The stored manifest's `plugin.homepage` (text; link it only if it is
-    /// `http:`/`https:`).
+    /// The stored manifest's `plugin.homepage`: an `http://` or `https://` URL (a stored
+    /// value of another form is `null`).
     pub homepage: Option<String>,
     /// The report of the stored grant: `added` is what it does not cover (empty for a
     /// plugin installed with approval), `fingerprint` the approved one. It has no

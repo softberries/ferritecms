@@ -2204,7 +2204,7 @@ export interface components {
         PermissionReportDto: components["schemas"]["GrantReportDto"] & {
             /** @description The manifest's `plugin.description` (text). */
             description?: string | null;
-            /** @description The manifest's `plugin.homepage` (text; link it only if it is `http:`/`https:`). */
+            /** @description The manifest's `plugin.homepage`: an `http://` or `https://` URL (else `null`). */
             homepage?: string | null;
             /** @description The manifest's `plugin.license` (text). */
             license?: string | null;
@@ -2221,8 +2221,8 @@ export interface components {
             disabled_reason?: string | null;
             enabled: boolean;
             /**
-             * @description The stored manifest's `plugin.homepage` (text; link it only if it is
-             *     `http:`/`https:`).
+             * @description The stored manifest's `plugin.homepage`: an `http://` or `https://` URL (a stored
+             *     value of another form is `null`).
              */
             homepage?: string | null;
             /** Format: date-time */

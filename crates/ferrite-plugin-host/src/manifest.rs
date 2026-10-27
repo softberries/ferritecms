@@ -219,14 +219,17 @@ impl Manifest {
             ));
         }
         match src.parse() {
-            Ok(table) => Manifest::from_table(table),
+            Ok(table) => Manifest::from_table(table, true),
             Err(e) => Err(ManifestError::single("", format!("invalid TOML: {e}"))),
         }
     }
 
     /// Validate a parsed table (see [`Manifest::parse`]).
-    fn from_table(mut table: toml::Table) -> Result<Manifest, ManifestError> {
-        let mut cx = Cx::default();
+    fn from_table(mut table: toml::Table, upload: bool) -> Result<Manifest, ManifestError> {
+        let mut cx = Cx {
+            upload,
+            ..Cx::default()
+        };
 
         let plugin = match cx.section(&mut table, "plugin") {
             Some(mut t) => parse_plugin(&mut cx, &mut t),
@@ -288,7 +291,7 @@ impl Manifest {
     pub fn from_json(json: &Value) -> Result<Manifest, ManifestError> {
         let table: toml::Table = serde_json::from_value(json.clone())
             .map_err(|e| ManifestError::single("", format!("not a TOML table: {e}")))?;
-        Manifest::from_table(table)
+        Manifest::from_table(table, false)
     }
 }
 
@@ -341,6 +344,9 @@ const HTTP_METHODS: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"
 #[derive(Default)]
 struct Cx {
     problems: Vec<ManifestProblem>,
+    /// An upload ([`Manifest::parse`]): rules added after rows were stored apply only
+    /// here, so a stored row keeps loading ([`Manifest::from_json`]).
+    upload: bool,
 }
 
 fn join(base: &str, key: &str) -> String {
@@ -511,6 +517,20 @@ fn parse_plugin(cx: &mut Cx, t: &mut toml::Table) -> Option<PluginMeta> {
     }
     if matches!(&publisher, Some(p) if p.trim().is_empty()) {
         cx.push("plugin.publisher", "must not be empty");
+    }
+    // M2b-3: the admin links it. Uploads only: a row stored before keeps loading, and
+    // its DTO shows such a homepage as `null`.
+    if cx.upload
+        && let Some(url) = &homepage
+        && !ferrite_domain::is_web_url(url)
+    {
+        cx.push(
+            "plugin.homepage",
+            format!(
+                "must be an http:// or https:// URL (at most {} bytes, no spaces)",
+                ferrite_domain::MAX_WEB_URL
+            ),
+        );
     }
 
     Some(PluginMeta {
@@ -1052,6 +1072,35 @@ world = "ferrite:plugin/plugin@0.1.0"
         // A name that only contains a reserved word is fine.
         let src = MINIMAL.replace("\"mini\"", "\"inspector\"");
         assert!(Manifest::parse(&src).is_ok());
+    }
+
+    /// M2b-3: an uploaded manifest's homepage must be `http(s)://`; a stored row that
+    /// predates the rule still loads.
+    #[test]
+    fn homepage_must_be_http_on_upload() {
+        let src =
+            |url: &str| MINIMAL.replace("[plugin]\n", &format!("[plugin]\nhomepage = {url:?}\n"));
+        let ok = Manifest::parse(&src("https://example.dev/mini")).expect("parses");
+        assert_eq!(
+            ok.plugin.homepage.as_deref(),
+            Some("https://example.dev/mini")
+        );
+        for bad in [
+            "javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "ftp://example.dev",
+            "https://",
+        ] {
+            assert_eq!(
+                paths(Manifest::parse(&src(bad))),
+                ["plugin.homepage"],
+                "{bad}"
+            );
+            let table: toml::Table = src(bad).parse().unwrap();
+            let stored = serde_json::to_value(table).unwrap();
+            let m = Manifest::from_json(&stored).expect("a stored row keeps loading");
+            assert_eq!(m.plugin.homepage.as_deref(), Some(bad));
+        }
     }
 
     #[test]

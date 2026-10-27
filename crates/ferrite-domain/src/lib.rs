@@ -18,6 +18,7 @@ mod setting;
 mod site;
 mod taxonomy;
 mod time;
+mod url;
 mod user;
 
 pub use auth::{
@@ -52,6 +53,7 @@ pub use setting::{
 pub use site::{OptionEntry, REDIRECT_CODES, Redirect, RedirectOrigin, RedirectQuery};
 pub use taxonomy::{Taxonomy, Term};
 pub use time::Timestamp;
+pub use url::{MAX_WEB_URL, is_web_url};
 pub use user::{NewUser, Role, User, UserQuery, UserStatus};
 
 /// Maximum page size accepted by list queries.

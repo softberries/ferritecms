@@ -50,7 +50,8 @@ show_author  = { type = "bool", default = true }
 `author`, `license`, `homepage` and `description` are free text shown by the admin
 (`GET /themes`, 07 §1) as text; `homepage` must be an `http://` or `https://` URL with a
 host part, no whitespace and at most 2048 bytes, else `theme.toml` is refused (M2b-3), so
-the admin can link it.
+the admin can link it. The rule is `ferrite_domain::is_web_url`, shared with the plugin
+manifest's `plugin.homepage` (05 §3).
 
 Setting kinds are the plugin manifest's minus `secret` (`text`, `textarea`, `bool`, `number`,
 `select`, `color`, `media`), because every setting value is visible to templates

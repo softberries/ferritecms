@@ -198,6 +198,11 @@ require their matching capability (e.g. `render.head` hook needs `render.head = 
 
 As built (M2a-2a), `Manifest::parse` also enforces:
 
+- **Homepage (M2b-3).** `plugin.homepage` must be an `http://` or `https://` URL with a
+  host part, no whitespace and at most 2048 bytes (`ferrite_domain::is_web_url`, the
+  theme rule too), else `plugin.homepage` is a problem. Only uploads (`Manifest::parse`)
+  are checked: a row stored earlier still loads (`Manifest::from_json`), and the admin
+  API shows a homepage of another form as `null`.
 - **Size and name.** A manifest over 64 KiB (`MAX_MANIFEST_BYTES`) is refused unparsed.
   The plugin names `inspect` and `retained` (M2b-3) are reserved (`RESERVED_PLUGIN_NAMES`;
   `/plugins/inspect` and `/plugins/retained` are API routes, ruling R9).

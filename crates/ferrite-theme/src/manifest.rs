@@ -112,8 +112,6 @@ struct RawSetting {
 }
 
 const MAX_NAME: usize = 64;
-/// Longest `homepage`.
-const MAX_HOMEPAGE: usize = 2048;
 
 /// Parses `theme.toml`; every problem found is returned.
 pub(crate) fn parse(src: &str) -> Result<ThemeManifest, Vec<String>> {
@@ -126,11 +124,12 @@ pub(crate) fn parse(src: &str) -> Result<ThemeManifest, Vec<String>> {
         ));
     }
     if let Some(url) = &raw.theme.homepage
-        && !is_web_url(url)
+        && !ferrite_domain::is_web_url(url)
     {
         problems.push(format!(
             "theme.toml: theme.homepage {url:?} must be an http:// or https:// URL \
-             (at most {MAX_HOMEPAGE} bytes, no spaces)"
+             (at most {} bytes, no spaces)",
+            ferrite_domain::MAX_WEB_URL
         ));
     }
     for name in raw.menus.keys() {
@@ -234,21 +233,6 @@ fn empty_value(spec: &SettingSpec) -> serde_json::Value {
 /// API validates with: text lengths, select options, colour shape, media ids, no NUL.
 fn valid_value(kind: SettingKind, options: &[String], v: &serde_json::Value) -> bool {
     ferrite_domain::check_setting_value(kind.setting_type(), options, v).is_ok()
-}
-
-/// An `http://` or `https://` URL with something after the scheme, no whitespace or
-/// control characters, at most [`MAX_HOMEPAGE`] bytes: what the admin may render as a
-/// link.
-fn is_web_url(url: &str) -> bool {
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"));
-    url.len() <= MAX_HOMEPAGE
-        && rest.is_some_and(|r| {
-            !r.is_empty()
-                && !r.starts_with('/')
-                && !r.chars().any(|c| c.is_whitespace() || c.is_control())
-        })
 }
 
 fn is_name(s: &str, underscore: bool) -> bool {

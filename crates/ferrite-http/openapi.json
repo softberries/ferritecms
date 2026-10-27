@@ -11249,7 +11249,7 @@
                   "string",
                   "null"
                 ],
-                "description": "The manifest's `plugin.homepage` (text; link it only if it is `http:`/`https:`)."
+                "description": "The manifest's `plugin.homepage`: an `http://` or `https://` URL (else `null`)."
               },
               "license": {
                 "type": [
@@ -11308,7 +11308,7 @@
               "string",
               "null"
             ],
-            "description": "The stored manifest's `plugin.homepage` (text; link it only if it is\n`http:`/`https:`)."
+            "description": "The stored manifest's `plugin.homepage`: an `http://` or `https://` URL (a stored\nvalue of another form is `null`)."
           },
           "installed_at": {
             "type": "string",
