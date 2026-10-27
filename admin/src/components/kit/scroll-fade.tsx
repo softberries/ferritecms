@@ -15,9 +15,15 @@ export interface ScrollFadeProps {
   className?: string;
 }
 
-const FADE = "2rem";
-/** `FADE` in pixels (the root font size is 16 px). */
-const FADE_PX = 32;
+/** The fade's width, in rem (the mask below and `reveal`'s margins). */
+const FADE_REM = 2;
+const FADE = `${FADE_REM}rem`;
+
+/** `FADE` in pixels, from the root font size (a user's larger default text widens it). */
+function fadePx(): number {
+  const root = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+  return FADE_REM * (Number.isFinite(root) && root > 0 ? root : 16);
+}
 
 /** Sets the room past the row's end (see `reveal`). */
 function setRoom(el: HTMLElement, room: { current: number }, px: number): void {
@@ -53,7 +59,7 @@ export function ScrollFade({ children, activeSelector, activeKey, className }: S
       el.scrollLeft = 0;
       return;
     }
-    const fade = FADE_PX;
+    const fade = fadePx();
     const fits = (at: number) =>
       (at === 0 || left >= at + fade) && right <= at + width - (at >= max ? 0 : fade);
     const current = el.scrollLeft;

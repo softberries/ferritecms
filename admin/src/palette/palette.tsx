@@ -607,11 +607,18 @@ function HitRow({
         {snippet !== null ? (
           <span
             data-slot="palette-snippet"
-            className="truncate text-xs text-muted-foreground"
+            // Phones: the label on its own line and up to two lines of the text (no hover
+            // for the `title`); wider: one truncated line.
+            className="text-xs text-muted-foreground max-sm:flex max-sm:flex-col sm:truncate"
             title={snippet || undefined}
           >
             <span className="font-medium">{t("hit.inText")}</span>
-            {snippet ? ` · ${snippet}` : null}
+            {snippet ? (
+              <span className="max-sm:line-clamp-2">
+                <span className="max-sm:hidden"> · </span>
+                {snippet}
+              </span>
+            ) : null}
           </span>
         ) : null}
       </span>

@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { moderateComment } from "@/api/comments";
+import { json, stubRoutes } from "@/test/render";
 import { ApiError } from "@/api/problem";
 import {
   type CommentAction,
@@ -101,11 +102,21 @@ describe("moderate_test", () => {
   });
 });
 
-test("moderate_comment_takes_only_a_comment_status", () => {
+test("moderate_comment_takes_only_a_comment_status", async () => {
   // Compile-time: `tsc` (the typecheck gate) refuses anything but the four statuses.
-  const wrong = () =>
+  // Never called; it only has to type-check as an error.
+  void (() =>
     // @ts-expect-error "approve" is an action, not a status
-    moderateComment("id", "approve");
-  const right = () => moderateComment("id", "approved");
-  expect([typeof wrong, typeof right]).toEqual(["function", "function"]);
+    moderateComment("id", "approve"));
+  // At run time the status goes out as the PATCH body.
+  const bodies: unknown[] = [];
+  stubRoutes({
+    "/api/v1/comments/c1": async (_url, req) => {
+      bodies.push(await req.json());
+      return json({ id: "c1", status: "approved" });
+    },
+  });
+  await moderateComment("c1", "approved");
+  expect(bodies).toEqual([{ status: "approved" }]);
+  vi.unstubAllGlobals();
 });

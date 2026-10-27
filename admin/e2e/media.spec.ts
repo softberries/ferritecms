@@ -294,6 +294,57 @@ test("leaving_during_upload_asks", async ({ as, site, backend, guard }) => {
   }
 });
 
+test("forbidden_keeps_running_uploads", async ({ as, site, backend, guard }) => {
+  test.setTimeout(120_000);
+  const api = await ContentApi.as(backend, site.url, "author");
+  const name = `${uid("held")}.png`;
+  guard.allowFailedResource(/\/api\/v1\/media(\?|$)/);
+  try {
+    const page = await as("author");
+    await openLibrary(page);
+    await page.route("**/api/v1/media", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      await new Promise((r) => setTimeout(r, 60_000));
+      await route.abort().catch(() => {});
+    });
+    await fileInput(page).setInputFiles({
+      name,
+      mimeType: "image/png",
+      buffer: png(name, 600, 400).buffer,
+    });
+    await expect(trayRow(page, name)).toHaveAttribute("data-state", "uploading");
+    // The list is refused now (a changed role, say): the forbidden state replaces the
+    // library, but the running upload keeps its tray and its leave guard.
+    await page.route(
+      (url) => url.pathname === "/api/v1/media",
+      (route) =>
+        route.request().method() === "GET"
+          ? route.fulfill({
+              status: 403,
+              contentType: "application/problem+json",
+              body: JSON.stringify({
+                type: "https://ferritecms.dev/problems/forbidden",
+                title: "Forbidden",
+                status: 403,
+                detail: "Not allowed.",
+              }),
+            })
+          : route.fallback(),
+    );
+    await searchBox(page).fill(`nothing${uid("q").slice(-6)}`);
+    await expect(page.getByRole("heading", { name: /access/i })).toBeVisible();
+    await expect(trayRow(page, name)).toHaveAttribute("data-state", "uploading");
+    const dialog = page.locator("[data-slot=upload-leave-dialog]");
+    await page.getByRole("link", { name: "Dashboard" }).first().click();
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Stay" }).click();
+    await expect(page).toHaveURL(/\/admin\/media/);
+  } finally {
+    for (const m of await byName(api, name)) await api.purgeMedia(m.id);
+    await api.dispose();
+  }
+});
+
 test("edit_alt_text", async ({ as, site, backend }) => {
   const api = await ContentApi.as(backend, site.url, "author");
   const media = await api.upload(png(`${uid("alt")}.png`, 120, 80), { title: `Alt ${uid()}` });

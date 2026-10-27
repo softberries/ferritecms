@@ -481,7 +481,11 @@ export function DeleteTermDialog({
     <AlertDialog open={term !== null} onOpenChange={(o) => (o ? undefined : onClose())}>
       <AlertDialogContent
         data-slot="delete-term-dialog"
-        onCloseAutoFocus={returnToRowMenu(origin ?? named?.id ?? null, fallback)}
+        onCloseAutoFocus={(e) => {
+          returnToRowMenu(origin ?? named?.id ?? null, fallback)(e);
+          // Used once: the next opening starts without it.
+          setFallback(null);
+        }}
       >
         <AlertDialogHeader>
           <AlertDialogTitle className={cn("break-words")}>

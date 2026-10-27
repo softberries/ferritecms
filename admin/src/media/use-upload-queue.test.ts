@@ -9,13 +9,15 @@ vi.mock("@/api/upload", async (importOriginal) => ({
   uploadMedia: () => new Promise<MediaDto>((resolve) => finish.push(resolve)),
 }));
 
-test("on_done_is_the_latest_callback_called_once", async () => {
+test("on_done_is_registered_once_and_the_latest_is_called", async () => {
   const first = vi.fn();
   const second = vi.fn();
   const { result, rerender } = renderHook(({ onDone }) => useUploadQueue(onDone), {
     initialProps: { onDone: first },
   });
   const queue = result.current.queue;
+  // Registrations from here on: a new callback each render must not re-register.
+  const adds = vi.spyOn(Set.prototype, "add");
   act(() => {
     queue.add([new File(["x"], "a.png", { type: "image/png" })]);
   });
@@ -23,6 +25,8 @@ test("on_done_is_the_latest_callback_called_once", async () => {
   rerender({ onDone: second });
   rerender({ onDone: second });
   expect(result.current.queue).toBe(queue);
+  expect(adds.mock.calls.filter(([v]) => typeof v === "function")).toEqual([]);
+  adds.mockRestore();
   const media = { id: "m1" } as MediaDto;
   await act(async () => {
     finish[0]?.(media);

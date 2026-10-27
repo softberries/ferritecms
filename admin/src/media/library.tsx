@@ -167,12 +167,16 @@ export function MediaLibrary({ search, me, setSearch }: MediaLibraryProps) {
   const number = new Intl.NumberFormat(uiLocale());
   const count = list.data ? `${number.format(items.length)}${list.hasNextPage ? "+" : ""}` : null;
   // Refused by the server: the state alone, as other screens show it (no header, upload
-  // or filters that could only fail again).
+  // or filters that could only fail again). Uploads already running keep their tray and
+  // its leave guard.
   if (list.error instanceof ApiError && list.error.status === 403) {
     return (
-      <div className="mx-auto w-full max-w-7xl">
-        <ForbiddenState />
-      </div>
+      <>
+        <div className="mx-auto w-full max-w-7xl">
+          <ForbiddenState />
+        </div>
+        <UploadTray queue={queue} entries={entries} raised={false} onOpen={open} />
+      </>
     );
   }
 

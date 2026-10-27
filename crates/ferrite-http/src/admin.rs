@@ -17,7 +17,8 @@
 //! - Any other path is the file if it exists and its last segment has an extension
 //!   (`favicon.svg`, `robots.txt`); a missing path whose extension is in the content-type
 //!   table is `404`; everything else is `index.html` (the SPA fallback), or the
-//!   placeholder when no `index.html` is embedded.
+//!   placeholder when no `index.html` is embedded. `/admin/index.html` itself is served
+//!   as the fallback is (themed, below), so without a build it is the placeholder (`200`).
 //!
 //! Headers: `assets/*` are `Cache-Control: public, max-age=31536000, immutable` (their
 //! names carry a content hash); `index.html`, the placeholder and other root files are

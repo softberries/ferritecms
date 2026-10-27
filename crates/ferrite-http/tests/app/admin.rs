@@ -374,7 +374,13 @@ async fn admin_path_traversal_is_404(app: App) -> App {
 
 async fn placeholder_without_dist(app: App) -> App {
     let app = app.with_admin(App::config(), empty()).await;
-    for path in ["/admin/", "/admin/content/post", "/admin/reset-password"] {
+    // `/admin/index.html` is the fallback too (the placeholder here, not a 404).
+    for path in [
+        "/admin/",
+        "/admin/content/post",
+        "/admin/reset-password",
+        "/admin/index.html",
+    ] {
         let r = app.get(path).await;
         assert_eq!(r.status, StatusCode::OK, "{path}");
         assert!(

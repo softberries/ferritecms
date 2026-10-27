@@ -1,10 +1,11 @@
 // Custom fields and SEO in the editor under the real server (M2b-2 Task 8; 07 §3
 // Editor, Review Focus 2): a type created over the API with every field kind, each input
 // filled and still there after a reload; repeater rows reordered from the keyboard; a
-// relation picking a post; SEO title and description reaching the published page's head;
-// a field change by someone else in the 412 dialog; stored values a changed schema no
-// longer has listed and dropped; and the review screens. Every type and item is created
-// by the test itself (E2E data hygiene) and removed at the end.
+// relation searching the test's own types and picking an item; SEO title and
+// description reaching the published page's head; a field change by someone else in the
+// 412 dialog; stored values a changed schema no longer has listed and dropped; and the
+// review screens. Every type and item is created by the test itself (E2E data hygiene)
+// and removed at the end.
 
 import type { Page, Response } from "@playwright/test";
 import { showSection } from "./support/editor-snap";
@@ -27,8 +28,8 @@ const SCHEMA = [
   { name: "release", label: "Release", kind: "date" },
   { name: "in_print", label: "In print", kind: "bool" },
   { name: "genre", label: "Genre", kind: "select", options: ["fiction", "essay"] },
-  // Posts only: a search across every type would also ask the types other tests create
-  // and delete in parallel (a `404` race, m2b2-exit §2); `post` is never deleted.
+  // Limited (`bookType` sets the types): a search across every type would also ask the
+  // types other tests create and delete in parallel (a `404` race, m2b2-exit §2).
   { name: "related", label: "Related", kind: "relation", types: ["post"] },
   { name: "cover", label: "Cover file", kind: "media" },
   {
@@ -56,14 +57,25 @@ const conflict = (page: Page) => page.locator("[data-slot=conflict-dialog]");
 const field = (scope: ReturnType<Page["locator"]>, path: string) =>
   scope.locator(`[data-slot=field][data-path="${path}"]`);
 
-/** A fresh type with every kind (and its own label), for one test. */
-async function bookType(api: ContentApi): Promise<{ name: string; label: string }> {
-  const short = uid("")
+/** A short unique word for type names and labels. */
+const short = () =>
+  uid("")
     .replace(/[^a-z0-9]/g, "")
     .slice(-8);
-  const name = `bk${short}`;
-  const label = `Books ${short}`;
-  await api.createType(name, label, false, SCHEMA);
+
+/**
+ * A fresh type with every kind (and its own label), for one test. Its relation field
+ * points at `targets` (`post` by default, which is never deleted).
+ */
+async function bookType(
+  api: ContentApi,
+  targets: string[] = ["post"],
+): Promise<{ name: string; label: string }> {
+  const s = short();
+  const name = `bk${s}`;
+  const label = `Books ${s}`;
+  const schema = SCHEMA.map((f) => (f.name === "related" ? { ...f, types: targets } : f));
+  await api.createType(name, label, false, schema);
   return { name, label };
 }
 
@@ -211,10 +223,24 @@ test("repeater_reorder_by_keyboard", async ({ as, site, backend }) => {
   }
 });
 
-test("relation_picks_a_post", async ({ as, site, backend, expectAccessible }) => {
+test("relation_searches_its_types_and_picks_an_item", async ({
+  as,
+  site,
+  backend,
+  expectAccessible,
+}) => {
+  // Two types of the test's own, so the search spans several types (results grouped by
+  // type) without asking any type another test may delete meanwhile.
   const api = await ContentApi.as(backend, site.url, "admin");
-  const type = await bookType(api);
-  const post = await api.createIn("post", `Linked ${uid()}`, "published");
+  const s = short();
+  const notes = { name: `rn${s}`, label: `Notes ${s}` };
+  const clips = { name: `rc${s}`, label: `Clips ${s}` };
+  await api.createType(notes.name, notes.label);
+  await api.createType(clips.name, clips.label);
+  const type = await bookType(api, [notes.name, clips.name]);
+  const word = `Linked ${uid()}`;
+  const note = await api.createIn(notes.name, `${word} note`, "published");
+  const clip = await api.create(clips.name, `${word} clip`);
   const item = await api.create(type.name, `Book ${uid()}`, { fields: { subtitle: "S" } });
   const page = await as("admin");
   try {
@@ -222,25 +248,37 @@ test("relation_picks_a_post", async ({ as, site, backend, expectAccessible }) =>
     const trigger = card(page).getByRole("button", { name: "Related" });
     await expect(trigger).toContainText("Choose an item");
     await trigger.click();
-    await page.getByPlaceholder("Search Posts…").fill(post.title);
+    // The search names the types it covers (in the sidebar's order).
+    const a = notes.label;
+    const b = clips.label;
+    await page.getByPlaceholder(new RegExp(`^Search (${a} or ${b}|${b} or ${a})…$`)).fill(word);
     // Results by type, each with its status.
-    const option = page.getByRole("option", { name: new RegExp(post.title) });
-    await expect(option).toContainText("Published");
+    const inNotes = page.getByRole("group", { name: notes.label });
+    const inClips = page.getByRole("group", { name: clips.label });
+    await expect(inNotes.getByRole("option", { name: new RegExp(note.title) })).toContainText(
+      "Published",
+    );
+    await expect(inClips.getByRole("option", { name: new RegExp(clip.title) })).toContainText(
+      "Draft",
+    );
     await expectAccessible(page);
-    await option.click();
-    await expect(trigger).toContainText(post.title);
+    await inNotes.getByRole("option", { name: new RegExp(note.title) }).click();
+    await expect(trigger).toContainText(note.title);
     await save(page);
-    expect(((await api.get(type.name, item.id)) as Stored).fields.related).toBe(post.id);
+    expect(((await api.get(type.name, item.id)) as Stored).fields.related).toBe(note.id);
 
     // A target that is gone keeps the value and says so.
-    await api.purge(post);
+    await api.purge(note);
     await page.reload();
     await expect(card(page).getByRole("button", { name: "Related" })).toContainText(
-      `Unknown item ${post.id.slice(0, 8)}`,
+      `Unknown item ${note.id.slice(0, 8)}`,
     );
   } finally {
     await page.context().close();
+    // The book type names the others in its relation: it goes first.
     await api.removeType(type.name);
+    await api.removeType(notes.name);
+    await api.removeType(clips.name);
     await api.dispose();
   }
 });
