@@ -4,8 +4,10 @@
 // arrive with Tasks 14–15, so opening a hit or "New post" is checked by its URL.
 
 import type { Page, Route } from "@playwright/test";
+import { ContentApi } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
 import { mod } from "./support/keys";
+import { uid } from "./support/uid";
 
 const palette = (page: Page) => page.getByRole("dialog", { name: "Command palette" });
 const input = (page: Page) => palette(page).getByRole("combobox");
@@ -118,6 +120,48 @@ test("search_finds_seeded_post", async ({ as, site }) => {
   await expect(
     palette(page).getByRole("group", { name: "Recent" }).getByRole("option").first(),
   ).toContainText(SEEDED);
+});
+
+test("body_only_hit_shows_snippet", async ({ as, site, backend, snap, expectAccessible }) => {
+  // A hit the server matched in its text, not its title, says so and shows the start of
+  // its excerpt (plain text, at most 120 characters).
+  const api = await ContentApi.as(backend, site.url, "admin");
+  const word = `zq${uid("")
+    .replace(/[^a-z0-9]/g, "")
+    .slice(-8)}`;
+  const text = `Quiet notes on <b>${word}</b> and harbour light. ${"Long sentence. ".repeat(12)}`;
+  const item = await api.create("post", `Notes ${uid()}`, {
+    body: {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    },
+  });
+  const page = await as("admin");
+  try {
+    await openDashboard(page);
+    await openPalette(page);
+    await page.keyboard.type(word);
+    const hit = option(page, new RegExp(item.title));
+    await expect(hit).toBeVisible();
+    const snippet = hit.locator("[data-slot=palette-snippet]");
+    await expect(snippet).toContainText("Matches in text");
+    await expect(snippet).toContainText(`Quiet notes on <b>${word}</b> and harbour light.`);
+    expect(await snippet.locator("b").count()).toBe(0);
+    const shown = (await snippet.textContent()) ?? "";
+    expect(Array.from(shown.replace(/^Matches in text · /, "")).length).toBeLessThanOrEqual(121);
+    await expectAccessible(page);
+    await snap(page, "palette-body-hit");
+    // A title hit has no snippet.
+    await input(page).fill(item.title);
+    await expect(option(page, new RegExp(item.title))).toBeVisible();
+    await expect(
+      option(page, new RegExp(item.title)).locator("[data-slot=palette-snippet]"),
+    ).toHaveCount(0);
+  } finally {
+    await page.context().close();
+    await api.purge(item);
+    await api.dispose();
+  }
 });
 
 test("create_new_post_from_palette", async ({ as, site }) => {

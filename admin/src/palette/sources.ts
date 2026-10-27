@@ -11,6 +11,8 @@ export const SEARCH_DEBOUNCE_MS = 150;
 export const SEARCH_MIN_CHARS = 2;
 /** Hits per type. */
 export const SEARCH_LIMIT = 8;
+/** Characters of the excerpt a hit matched only in its text shows. */
+export const SNIPPET_CHARS = 120;
 
 /**
  * One content hit. Summaries carry no permalink (pre-flight F6), so the palette shows
@@ -22,6 +24,34 @@ export interface PaletteHit {
   title: string;
   status: string;
   slug: string;
+  /** Plain text (the item's excerpt); shown for a hit its title does not explain. */
+  excerpt: string;
+}
+
+/** The words of `query` the palette marks and matches: 2+ characters, regex-escaped. */
+export function queryWords(query: string): string[] {
+  return query
+    .split(/\s+/)
+    .filter((w) => Array.from(w).length >= 2)
+    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+}
+
+/**
+ * For a hit whose title holds none of the query's words (the server matched its text):
+ * the first `SNIPPET_CHARS` characters of its excerpt, as plain text ("" when it has
+ * none). `null` when the title explains the hit, or the query has no word to judge by.
+ */
+export function bodySnippet(
+  hit: Pick<PaletteHit, "title" | "excerpt">,
+  query: string,
+): string | null {
+  const words = queryWords(query);
+  if (words.length === 0) return null;
+  if (new RegExp(words.join("|"), "i").test(hit.title)) return null;
+  const chars = Array.from(hit.excerpt.replace(/\s+/g, " ").trim());
+  return chars.length > SNIPPET_CHARS
+    ? `${chars.slice(0, SNIPPET_CHARS).join("").trimEnd()}…`
+    : chars.join("");
 }
 
 /** Whether `q` is long enough to search for. */
@@ -91,6 +121,7 @@ export async function searchContent(
         title: item.title,
         status: item.status,
         slug: item.slug,
+        excerpt: item.excerpt,
       });
     }
   }

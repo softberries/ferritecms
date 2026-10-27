@@ -47,6 +47,7 @@
   },
   "hit": {
     "untitled": "Untitled",
+    "inText": "Matches in text",
     "screen": "Screen"
   },
   "status": {

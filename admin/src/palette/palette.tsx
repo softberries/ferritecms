@@ -59,7 +59,7 @@ import { useTheme, type ThemePreference } from "@/design/theme";
 import { requestUpload } from "@/media/upload-intent";
 import { navItemAt, type NavItem, type NavSection } from "@/shell/nav";
 import { listRecent, pushRecent, recentId, type RecentEntry } from "./recent";
-import { searchContent, searchable, type PaletteHit } from "./sources";
+import { bodySnippet, queryWords, searchContent, searchable, type PaletteHit } from "./sources";
 
 export interface CommandPaletteProps {
   open: boolean;
@@ -441,6 +441,7 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
                   hit={hit}
                   slug={hit.slug}
                   query={query}
+                  snippet={bodySnippet(hit, query)}
                   typeItem={typeItem(hit.type)}
                   // One type only: the icon and the heading say it; a chip per row is noise.
                   showType={new Set(hits.map((h) => h.type)).size > 1}
@@ -560,6 +561,8 @@ interface HitRowProps {
   slug?: string;
   /** The search, whose words are marked in the title. */
   query?: string;
+  /** A hit matched only in its text: the excerpt's start (`bodySnippet`). */
+  snippet?: string | null;
   typeItem: NavItem | undefined;
   showType?: boolean;
   onSelect: () => void;
@@ -571,6 +574,7 @@ function HitRow({
   hit,
   slug,
   query = "",
+  snippet = null,
   typeItem,
   showType = true,
   onSelect,
@@ -580,18 +584,34 @@ function HitRow({
   const title = hit.title.trim() || t("hit.untitled");
   const status = isContentStatus(hit.status) ? hit.status : null;
   return (
-    <CommandItem value={value} onSelect={onSelect} className={ROW}>
+    <CommandItem
+      value={value}
+      onSelect={onSelect}
+      className={cn(ROW, snippet !== null && "h-auto min-h-10 py-1.5 pointer-coarse:h-auto")}
+    >
       <Tile icon={typeItem?.icon ?? ShapesIcon} />
-      <span className="flex min-w-0 flex-1 items-baseline gap-2">
-        <span className="truncate" title={title}>
-          <Highlight text={title} query={query} />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="truncate" title={title}>
+            <Highlight text={title} query={query} />
+          </span>
+          {slug ? (
+            <span
+              className="min-w-0 shrink truncate font-mono text-xs text-muted-foreground max-sm:hidden"
+              title={`/${slug}`}
+            >
+              /{slug}
+            </span>
+          ) : null}
         </span>
-        {slug ? (
+        {snippet !== null ? (
           <span
-            className="min-w-0 shrink truncate font-mono text-xs text-muted-foreground max-sm:hidden"
-            title={`/${slug}`}
+            data-slot="palette-snippet"
+            className="truncate text-xs text-muted-foreground"
+            title={snippet || undefined}
           >
-            /{slug}
+            <span className="font-medium">{t("hit.inText")}</span>
+            {snippet ? ` · ${snippet}` : null}
           </span>
         ) : null}
       </span>
@@ -617,10 +637,7 @@ function HitRow({
  * title matched. A hit matched only in its body has nothing marked.
  */
 function Highlight({ text, query }: { text: string; query: string }) {
-  const words = query
-    .split(/\s+/)
-    .filter((w) => Array.from(w).length >= 2)
-    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const words = queryWords(query);
   if (words.length === 0) return text;
   const parts = text.split(new RegExp(`(${words.join("|")})`, "gi"));
   return parts.map((part, i) =>

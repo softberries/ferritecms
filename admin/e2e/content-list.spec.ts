@@ -314,7 +314,7 @@ test("contributor_trash_asks_first_and_offers_no_undo", async ({
   }
 });
 
-test("phone_tabs_keep_the_current_tab_in_view", async ({ as, site, backend }) => {
+test("phone_tabs_keep_the_current_tab_in_view", async ({ as, site, backend, snap }) => {
   const admin = await ContentApi.as(backend, site.url, "admin");
   const type = typeName();
   const label = `Phone ${type.slice(-6)}`;
@@ -335,6 +335,24 @@ test("phone_tabs_keep_the_current_tab_in_view", async ({ as, site, backend }) =>
     await loaded(page, label);
     await expect(tabs(page).locator("[aria-current=page]")).toHaveCount(1);
     await expect.poll(() => inView("Trash")).toBe(true);
+    // The row starts at a tab's edge: no neighbour shows only its tail (its bare count)
+    // under the start fade.
+    const cut = () =>
+      tabs(page)
+        .locator("[data-slot=scroll-fade]")
+        .evaluate((row) => {
+          const edge = row.getBoundingClientRect().left;
+          return Array.from(row.querySelectorAll("li"))
+            .map((li) => li.getBoundingClientRect())
+            .filter((r) => r.left < edge - 0.5 && r.right > edge + 0.5).length;
+        });
+    await expect.poll(cut).toBe(0);
+    expect(
+      await tabs(page)
+        .locator("[data-slot=scroll-fade]")
+        .evaluate((row) => row.scrollLeft > 0),
+    ).toBe(true);
+    await snap(page, "content-list-phone-tabs-trash");
     // And back to All from the strip itself.
     await tab(page, "All").click();
     await expect(tabs(page).locator("[aria-current=page]")).toHaveCount(1);

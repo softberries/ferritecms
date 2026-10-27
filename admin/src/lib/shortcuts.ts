@@ -74,11 +74,14 @@ function eventKey(e: KeyboardEvent): string {
   // With Option held, macOS composes another character (⌥R is "®"): a letter or digit
   // key is then named by the physical key, so `mod+alt+r` still matches. Only there:
   // elsewhere Alt (and AltGr, which arrives as Ctrl+Alt on Windows) types real letters
-  // on many layouts (Polish ą, ę, ś…), which a shortcut must never swallow.
+  // on many layouts (Polish ą, ę, ś…), which a shortcut must never swallow. A Mac has
+  // no AltGr key, but a browser may report Option as AltGraph (R18): with ⌘ held the
+  // chord is a command and types nothing, so the physical key applies then too; Option
+  // alone with AltGraph reported is left to type.
   if (
     e.altKey &&
     isApplePlatform() &&
-    !e.getModifierState("AltGraph") &&
+    (e.metaKey || !e.getModifierState("AltGraph")) &&
     /^(Key[A-Z]|Digit[0-9])$/.test(e.code)
   ) {
     return e.code.slice(-1).toLowerCase();
