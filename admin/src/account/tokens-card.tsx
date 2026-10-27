@@ -200,7 +200,7 @@ function TokenRow({ token, onRevoke }: { token: TokenDto; onRevoke: () => void }
 }
 
 /** The expiry date; `labelled` says what the date is (the phone layout has no column). */
-function Expiry({ token, labelled = false }: { token: TokenDto; labelled?: boolean }) {
+export function Expiry({ token, labelled = false }: { token: TokenDto; labelled?: boolean }) {
   const { t } = useTranslation("admin");
   if (!token.expires_at) {
     return <>{labelled ? t("account.tokens.neverExpires") : t("account.tokens.never")}</>;
@@ -219,7 +219,7 @@ function Expiry({ token, labelled = false }: { token: TokenDto; labelled?: boole
   );
 }
 
-function RevokeDialog({
+export function RevokeDialog({
   token,
   userId,
   onClose,

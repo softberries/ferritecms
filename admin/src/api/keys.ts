@@ -109,6 +109,10 @@ export const qk = {
   /** Every users list and user (`["users"]` covers them all). */
   usersAll: ["users"] as const,
   users: (filters: UserFilters) => ["users", "list", filters] as const,
+  /** Every users list (refetch after a create, an edit or a delete). */
+  usersLists: ["users", "list"] as const,
+  /** The users screen's pages (`useInfiniteQuery` over `next_cursor`); under `usersLists`. */
+  usersInfinite: (filters: UserFilters) => ["users", "list", "infinite", filters] as const,
   user: (id: string) => ["users", "item", id] as const,
   /** Under the user, so invalidating `user(id)` refetches the tokens too. */
   tokens: (userId: string) => ["users", "item", userId, "tokens"] as const,

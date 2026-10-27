@@ -17,6 +17,7 @@ import {
   ShapesIcon,
   SignpostIcon,
   TagsIcon,
+  UsersIcon,
   type LucideIcon,
 } from "lucide-react";
 import type { ContentTypeDto } from "@/api/types";
@@ -107,6 +108,7 @@ export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
     label: "nav.redirects",
     icon: SignpostIcon,
   },
+  { screen: "users", to: "/users", label: "nav.users", icon: UsersIcon },
 ] as const;
 
 /** Types the content screens list: everything but `media` (its own screen, M2b-2). */

@@ -89,7 +89,26 @@ test("nothing_above_its_rights", () => {
     "manage_redirects",
     "manage_system",
   ]);
-  expect(navFor(admin, TYPES).map((s) => s.id)).toEqual(["overview", "content", "structure"]);
+  expect(navFor(admin, TYPES).map((s) => s.id)).toEqual([
+    "overview",
+    "content",
+    "structure",
+    "admin",
+  ]);
+});
+
+test("users_is_registered", () => {
+  // M2b-3 Task 7 registers Users under Administration: only `manage_users` sees it.
+  const admin = navFor(me("admin", ["read_admin", "manage_users"]), TYPES);
+  const section = admin.find((s) => s.id === "admin");
+  expect(section?.label).toBe("Administration");
+  expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
+    ["users", "Users", "/users", "g u"],
+  ]);
+  expect(navItemAt(admin, "/users")?.id).toBe("users");
+  expect(navItemAt(admin, "/users/")?.id).toBe("users");
+  const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
+  expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
 });
 
 test("content_types_is_registered", () => {

@@ -22,6 +22,7 @@ import { Route as LoginTotpRouteImport } from './routes/login_.totp'
 import { Route as AppCommentsIndexRouteImport } from './routes/_app/comments.index'
 import { Route as AppMediaIndexRouteImport } from './routes/_app/media.index'
 import { Route as AppStructureRedirectsRouteImport } from './routes/_app/structure.redirects'
+import { Route as AppUsersIndexRouteImport } from './routes/_app/users.index'
 import { Route as AppContentTypeIndexRouteImport } from './routes/_app/content.$type.index'
 import { Route as AppContentTypeIdRouteImport } from './routes/_app/content.$type.$id'
 import { Route as AppContentTypeNewRouteImport } from './routes/_app/content.$type.new'
@@ -96,6 +97,11 @@ const AppStructureRedirectsRoute = AppStructureRedirectsRouteImport.update({
   path: '/structure/redirects',
   getParentRoute: () => AppRoute,
 } as any)
+const AppUsersIndexRoute = AppUsersIndexRouteImport.update({
+  id: '/users/',
+  path: '/users/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppContentTypeIndexRoute = AppContentTypeIndexRouteImport.update({
   id: '/content/$type/',
   path: '/content/$type/',
@@ -157,6 +163,7 @@ export interface FileRoutesByFullPath {
   '/structure/redirects': typeof AppStructureRedirectsRoute
   '/comments/': typeof AppCommentsIndexRoute
   '/media/': typeof AppMediaIndexRoute
+  '/users/': typeof AppUsersIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
   '/structure/menus/$name': typeof AppStructureMenusNameRoute
@@ -180,6 +187,7 @@ export interface FileRoutesByTo {
   '/structure/redirects': typeof AppStructureRedirectsRoute
   '/comments': typeof AppCommentsIndexRoute
   '/media': typeof AppMediaIndexRoute
+  '/users': typeof AppUsersIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
   '/structure/menus/$name': typeof AppStructureMenusNameRoute
@@ -205,6 +213,7 @@ export interface FileRoutesById {
   '/_app/structure/redirects': typeof AppStructureRedirectsRoute
   '/_app/comments/': typeof AppCommentsIndexRoute
   '/_app/media/': typeof AppMediaIndexRoute
+  '/_app/users/': typeof AppUsersIndexRoute
   '/_app/content/$type/$id': typeof AppContentTypeIdRoute
   '/_app/content/$type/new': typeof AppContentTypeNewRoute
   '/_app/structure/menus/$name': typeof AppStructureMenusNameRoute
@@ -230,6 +239,7 @@ export interface FileRouteTypes {
     | '/structure/redirects'
     | '/comments/'
     | '/media/'
+    | '/users/'
     | '/content/$type/$id'
     | '/content/$type/new'
     | '/structure/menus/$name'
@@ -253,6 +263,7 @@ export interface FileRouteTypes {
     | '/structure/redirects'
     | '/comments'
     | '/media'
+    | '/users'
     | '/content/$type/$id'
     | '/content/$type/new'
     | '/structure/menus/$name'
@@ -277,6 +288,7 @@ export interface FileRouteTypes {
     | '/_app/structure/redirects'
     | '/_app/comments/'
     | '/_app/media/'
+    | '/_app/users/'
     | '/_app/content/$type/$id'
     | '/_app/content/$type/new'
     | '/_app/structure/menus/$name'
@@ -390,6 +402,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppStructureRedirectsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/users/': {
+      id: '/_app/users/'
+      path: '/users'
+      fullPath: '/users/'
+      preLoaderRoute: typeof AppUsersIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/content/$type/': {
       id: '/_app/content/$type/'
       path: '/content/$type'
@@ -464,6 +483,7 @@ interface AppRouteChildren {
   AppStructureRedirectsRoute: typeof AppStructureRedirectsRoute
   AppCommentsIndexRoute: typeof AppCommentsIndexRoute
   AppMediaIndexRoute: typeof AppMediaIndexRoute
+  AppUsersIndexRoute: typeof AppUsersIndexRoute
   AppContentTypeIdRoute: typeof AppContentTypeIdRoute
   AppContentTypeNewRoute: typeof AppContentTypeNewRoute
   AppStructureMenusNameRoute: typeof AppStructureMenusNameRoute
@@ -483,6 +503,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppStructureRedirectsRoute: AppStructureRedirectsRoute,
   AppCommentsIndexRoute: AppCommentsIndexRoute,
   AppMediaIndexRoute: AppMediaIndexRoute,
+  AppUsersIndexRoute: AppUsersIndexRoute,
   AppContentTypeIdRoute: AppContentTypeIdRoute,
   AppContentTypeNewRoute: AppContentTypeNewRoute,
   AppStructureMenusNameRoute: AppStructureMenusNameRoute,

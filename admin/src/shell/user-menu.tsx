@@ -18,6 +18,7 @@ import { useTranslation } from "react-i18next";
 import type { MeDto } from "@/auth/session";
 import { KbdCombo } from "@/components/kit/kbd-combo";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { initials } from "@/lib/initials";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -46,14 +47,6 @@ const DENSITIES = [
 const ROLES = ["admin", "editor", "author", "contributor"] as const;
 type Role = (typeof ROLES)[number];
 const isRole = (r: string): r is Role => (ROLES as readonly string[]).includes(r);
-
-/** Up to two initials of the display name (the login when it has none). */
-function initials(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  const first = words[0]?.[0] ?? "";
-  const last = words.length > 1 ? (words[words.length - 1]?.[0] ?? "") : (words[0]?.[1] ?? "");
-  return `${first}${last}`.toUpperCase();
-}
 
 export interface UserMenuProps {
   me: MeDto;

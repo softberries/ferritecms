@@ -228,5 +228,144 @@
       "count_one": "{{count}} session signed in",
       "count_other": "{{count}} sessions signed in"
     }
+  },
+  "users": {
+    "title": "Users",
+    "description": "Everyone who can sign in to this admin: their roles, how they sign in, and their API tokens.",
+    "searchLabel": "users",
+    "filterRole": "Filter by role",
+    "filterStatus": "Filter by status",
+    "clearFilters": "Clear filters",
+    "noMatch": {
+      "title": "No users match",
+      "body": "No user has this role and status.",
+      "bodyQ": "No login, name or e-mail holds “{{q}}” with these filters."
+    },
+    "empty": {
+      "title": "No users yet",
+      "body": "Add someone with New user."
+    },
+    "open": "Open",
+    "openOn": "Open {{name}}",
+    "loadMore": "Load more",
+    "loadingMore": "Loading…",
+    "you": "You",
+    "never": "Never",
+    "twoFactorOn": "Two-factor authentication on",
+    "twoFactorShort": "2FA",
+    "twoFactorOff": "Off",
+    "cancel": "Cancel",
+    "status": {
+      "active": "Active",
+      "disabled": "Disabled",
+      "mustReset": "Must change password"
+    },
+    "columns": {
+      "user": "User",
+      "displayName": "Display name",
+      "email": "E-mail",
+      "role": "Role",
+      "status": "Status",
+      "twoFactor": "Two-factor",
+      "lastLogin": "Last sign-in"
+    },
+    "new": {
+      "action": "New user",
+      "title": "New user",
+      "description": "They sign in with the login or the e-mail address. The login cannot change later.",
+      "accessLegend": "How they get in",
+      "setPassword": "Set a password",
+      "sendReset": "Send a reset e-mail",
+      "password": "Password",
+      "passwordHint": "They must change it when they first sign in. Pass it on to them yourself; it is not shown again.",
+      "resetHint": "The account is made without a password, and a link to choose one is e-mailed to them. The link expires after a while; send a new one with Set password if it does.",
+      "create": "Create user",
+      "creating": "Creating…",
+      "created": "{{name}} was added",
+      "resetSent": "A reset link was sent to {{email}}",
+      "resetFailed": "The account was made, but the reset e-mail was not sent: {{detail}}"
+    },
+    "form": {
+      "login": "Login",
+      "loginHint": "Lower-case letters, digits, “.”, “_” and “-”; at most 60.",
+      "loginRequired": "Enter a login.",
+      "loginInvalid": "Use 1 to 60 of a–z, 0–9, “.”, “_” and “-”, starting with a letter or digit.",
+      "emailInvalid": "Enter an e-mail address like name@example.com.",
+      "nameRequired": "Enter a display name.",
+      "nameTooLong": "Use at most 100 characters.",
+      "passwordShort": "Use at least {{min}} characters.",
+      "passwordLong": "This password is too long."
+    },
+    "sheet": {
+      "loading": "Loading user…",
+      "description": "A user's profile, role, sign-in and API tokens.",
+      "reloaded": "Reloaded their account as it is now; your change was not saved.",
+      "profile": "Profile",
+      "profileSaved": "Profile saved",
+      "saveProfile": "Save profile",
+      "saving": "Saving…",
+      "ownBody": "This is you. Your role and status cannot be changed here, and your profile, password and two-factor settings are in your account.",
+      "manageAccount": "Manage your account",
+      "access": "Role and status",
+      "accessHint": "A change asks first: it signs them out everywhere.",
+      "signIn": "Sign-in",
+      "password": "Password",
+      "passwordBody": "Set a new one if they lost theirs.",
+      "passwordMustReset": "They must change their password at their next sign-in.",
+      "twoFactor": "Two-factor authentication",
+      "twoFactorOn": "On, with an authenticator app.",
+      "twoFactorOff": "Off. Only they can turn it on, in their account.",
+      "tokens": "API tokens",
+      "tokensHint": "Only they can make new tokens, in their account.",
+      "noTokens": "No API tokens.",
+      "tokenUsed": "Used",
+      "created": "Member since",
+      "danger": "Delete user",
+      "dangerBody": "Removes the account for good. Content they wrote is kept and moves to another user."
+    },
+    "access": {
+      "roleTitle": "Make {{name}} {{role}}?",
+      "roleBody": "Their sessions end on every node, so they sign in again. Their API tokens stay, and can do only what the new role allows.",
+      "roleConfirm": "Change role",
+      "roleChanged": "Role changed to {{role}}",
+      "disableTitle": "Disable {{name}}?",
+      "disableBody": "They can no longer sign in: their sessions end and their API tokens are revoked. Their content stays.",
+      "disableConfirm": "Disable account",
+      "disabled": "Account disabled",
+      "enableTitle": "Enable {{name}}?",
+      "enableBody": "They can sign in again. API tokens revoked when the account was disabled do not come back.",
+      "enableConfirm": "Enable account",
+      "enabled": "Account enabled"
+    },
+    "password": {
+      "action": "Set password",
+      "title": "Set a password for {{name}}",
+      "body": "They must change it when they next sign in, and their sessions end now. Their API tokens keep working.",
+      "label": "New password",
+      "done": "Password set for {{name}}"
+    },
+    "totp": {
+      "action": "Turn off two-factor",
+      "title": "Turn off two-factor authentication for {{name}}?",
+      "body": "For a lost authenticator. They then sign in with their password alone until they set it up again. Their sessions and tokens are kept.",
+      "confirm": "Turn off",
+      "done": "Two-factor authentication is off for {{name}}"
+    },
+    "delete": {
+      "action": "Delete user",
+      "title": "Delete {{name}}?",
+      "body": "The account is removed for good: their sessions end and their API tokens are revoked.",
+      "confirm": "Delete user",
+      "deleting": "Deleting…",
+      "reassign": "This user owns content. Reassign it to:",
+      "reassignHint": "Their posts, pages and revisions move to that user; nothing is deleted.",
+      "confirmReassign": "Reassign and delete",
+      "search": "Search users",
+      "searchPlaceholder": "Search by name, login or e-mail…",
+      "pickLabel": "Active users",
+      "noMatch": "No active user matches “{{q}}”.",
+      "nobody": "There is no other active user.",
+      "done": "{{name}} was deleted"
+    }
   }
 }
