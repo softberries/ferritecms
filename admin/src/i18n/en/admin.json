@@ -34,6 +34,7 @@
     "badColour": "Use a colour like #1a2b3c.",
     "badNumber": "Enter a number.",
     "pickColour": "Pick a colour",
-    "unsupported": "{{label}}: this admin cannot edit settings of the kind “{{kind}}”."
+    "unsupported": "{{label}}: this admin cannot edit settings of the kind “{{kind}}”.",
+    "fixFirst": "Some settings need fixing before they can be saved."
   }
 }

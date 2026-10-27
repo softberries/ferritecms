@@ -44,7 +44,7 @@ export function CodeInput({
     <span
       key={i}
       className={cn(
-        "flex h-12 w-11 items-center justify-center rounded-lg border bg-background font-mono text-xl font-medium text-foreground tabular-nums transition-colors duration-(--dur-instant) dark:bg-input/30",
+        "flex h-12 w-11 min-w-0 shrink items-center justify-center rounded-lg border bg-background font-mono text-xl font-medium text-foreground tabular-nums transition-colors duration-(--dur-instant) dark:bg-input/30",
         invalid ? "border-destructive" : "border-input",
         focused && i === active && !invalid && "border-primary ring-2 ring-primary/25",
       )}
@@ -58,10 +58,11 @@ export function CodeInput({
   );
   return (
     <div className="relative w-full rounded-xl has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-4 has-[input:focus-visible]:outline-ring">
-      <div aria-hidden="true" className="flex items-center justify-between">
-        <div className="flex gap-2">{[0, 1, 2].map(cell)}</div>
-        <span className="h-px w-3 bg-input" />
-        <div className="flex gap-2">{[3, 4, 5].map(cell)}</div>
+      {/* The cells shrink on narrow screens before the gaps do, so the dash stays clear. */}
+      <div aria-hidden="true" className="flex items-center justify-between gap-2 sm:gap-3">
+        <div className="flex min-w-0 gap-1.5 sm:gap-2">{[0, 1, 2].map(cell)}</div>
+        <span className="h-px w-3 shrink-0 bg-input" />
+        <div className="flex min-w-0 gap-1.5 sm:gap-2">{[3, 4, 5].map(cell)}</div>
       </div>
       <input
         ref={ref}

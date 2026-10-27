@@ -13,7 +13,7 @@
 // check and the write is accepted (P31).
 
 import { CircleAlertIcon, RotateCcwIcon, TriangleAlertIcon } from "lucide-react";
-import { type FormEvent, useEffect, useId, useState } from "react";
+import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { reportApiError } from "@/api/client";
@@ -31,9 +31,9 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { parseNumber } from "@/editor/fields/fields-model";
-import { MediaChoice } from "@/editor/fields/media-field";
 import { stableEqual, staleGuard } from "@/lib/stale-guard";
+import { parseNumber } from "@/lib/values";
+import { MediaChoice } from "./media-choice";
 import { SecretField } from "./secret-field";
 import { useStaleAsk } from "./use-stale-ask";
 
@@ -83,6 +83,48 @@ export interface SettingsFormProps {
   disabled?: boolean;
 }
 
+/**
+ * What a key reads as with nothing valid stored and no default: core's
+ * `empty_setting_value` (`ferrite-domain/src/setting.rs`): `""` for text, textarea and
+ * colour, `false`, `0`, the first option, `null` for media and secrets.
+ */
+function emptyValue(kind: SettingKind, options: readonly string[]): unknown {
+  switch (kind) {
+    case "text":
+    case "textarea":
+    case "color":
+      return "";
+    case "bool":
+      return false;
+    case "number":
+      return 0;
+    case "select":
+      return options[0] ?? null;
+    case "media":
+    case "secret":
+      return null;
+  }
+}
+
+/** The value a key reads as after a reset: its default, else its kind's empty value. */
+function readDefault(d: SettingDefDto): unknown {
+  return d.default ?? emptyValue(d.type as SettingKind, d.options);
+}
+
+/** `#rgb` expanded and lower-cased, so colours compare as the browser paints them. */
+function normalColour(v: unknown): unknown {
+  if (typeof v !== "string") return v;
+  const short = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(v);
+  return (
+    short ? `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}` : v
+  ).toLowerCase();
+}
+
+/** Equal as values of `kind` (colours case-insensitively, `#rgb` = `#rrggbb`). */
+function sameValue(kind: SettingKind, a: unknown, b: unknown): boolean {
+  return kind === "color" ? normalColour(a) === normalColour(b) : stableEqual(a, b);
+}
+
 function without<T>(record: Record<string, T>, key: string): Record<string, T> {
   return Object.fromEntries(Object.entries(record).filter(([k]) => k !== key));
 }
@@ -113,26 +155,29 @@ export function SettingsForm({
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const defs = schema.filter((d) => isKind(d.type));
   const kindOf = (d: SettingDefDto) => d.type as SettingKind;
   const effective = (d: SettingDefDto): unknown => {
     const draft = drafts[d.key];
     if (!draft) return base[d.key] ?? null;
-    return draft.reset ? (d.default ?? null) : draft.value;
+    return draft.reset ? readDefault(d) : draft.value;
   };
   const changed = (d: SettingDefDto): boolean => {
     const draft = drafts[d.key];
     if (!draft) return false;
-    return draft.reset || !stableEqual(draft.value, base[d.key] ?? null);
+    return draft.reset || !sameValue(kindOf(d), draft.value, base[d.key] ?? null);
   };
   const clientError = (d: SettingDefDto): string | null => {
-    if (!changed(d)) return null;
+    // A reset sends `null`: the server's default needs no check here.
+    if (!changed(d) || drafts[d.key]?.reset) return null;
     const v = effective(d);
     if (kindOf(d) === "color" && (typeof v !== "string" || !HEX.test(v))) {
       return t("settingsForm.badColour");
     }
-    if (kindOf(d) === "number" && typeof v === "string") return t("settingsForm.badNumber");
+    // A cleared number is not a reset (that is the button): it needs a number.
+    if (kindOf(d) === "number" && typeof v !== "number") return t("settingsForm.badNumber");
     return null;
   };
 
@@ -176,7 +221,13 @@ export function SettingsForm({
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (saving || disabled || !dirty || hasErrors) return;
+    if (saving || disabled || !dirty) return;
+    if (hasErrors) {
+      // Never silent: the first marked field takes the focus, its message beside it.
+      formRef.current?.querySelector<HTMLElement>("[aria-invalid=true]")?.focus();
+      toast.error(t("settingsForm.fixFirst"));
+      return;
+    }
     setSaving(true);
     setFailure(null);
     try {
@@ -220,6 +271,7 @@ export function SettingsForm({
 
   return (
     <form
+      ref={formRef}
       data-slot="settings-form"
       noValidate
       onSubmit={(e) => void submit(e)}
@@ -256,7 +308,7 @@ export function SettingsForm({
             error={serverErrors[d.key] ?? clientError(d)}
             canReset={
               !drafts[d.key]?.reset &&
-              (invalid.includes(d.key) || !stableEqual(effective(d), d.default ?? null))
+              (invalid.includes(d.key) || !sameValue(kindOf(d), effective(d), readDefault(d)))
             }
             disabled={off}
             onChange={(value) => {

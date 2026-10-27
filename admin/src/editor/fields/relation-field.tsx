@@ -28,7 +28,7 @@ import {
   useTypeLabel,
 } from "@/content/find-item";
 import type { ControlIds } from "./fields-context";
-import { uuidOf } from "./fields-model";
+import { uuidOf } from "@/lib/values";
 
 /** How long the search waits after the last keystroke. */
 const SEARCH_DEBOUNCE_MS = 150;

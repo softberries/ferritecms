@@ -88,7 +88,8 @@ export function AdministrationSection() {
     tagline: t("administration.form.taglineValue"),
     footer: "",
     show_author: true,
-    excerpt_words: 40,
+    // Listed in `invalid` below: the server reads it as the default.
+    excerpt_words: 55,
     layout: "grid",
     accent: EMBER,
     logo: null,

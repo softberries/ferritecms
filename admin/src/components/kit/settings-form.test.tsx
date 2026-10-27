@@ -220,3 +220,34 @@ test("server_field_errors_show_at_their_field", async () => {
   expect(await field("title").findByText("At most 1000 characters.")).toBeInTheDocument();
   expect(screen.getByLabelText("Title")).toHaveAttribute("aria-invalid", "true");
 });
+
+test("empty_values_and_short_colours_read_as_defaults", async () => {
+  const schema = [
+    // No default: the server reads it as its kind's empty value ("").
+    def("note", "text", "Note"),
+    def("tint", "color", "Tint", hex("abc")),
+    def("edge", "color", "Edge", hex("abc")),
+  ];
+  const values = { note: "", tint: hex("AABBCC"), edge: hex("112233") };
+  const { onSubmit } = await setup({ schema, values });
+  // At rest and equal to what a reset gives: no Reset.
+  expect(field("note").queryByRole("button", { name: "Reset to default" })).toBeNull();
+  expect(field("tint").queryByRole("button", { name: "Reset to default" })).toBeNull();
+  // A real difference: Reset, which sends `null` with no colour check on the short default.
+  await userEvent.click(field("edge").getByRole("button", { name: "Reset to default" }));
+  expect(field("edge").queryByText(/^Use a colour like #/)).toBeNull();
+  await save();
+  await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ edge: null }));
+});
+
+test("a_cleared_number_is_not_a_reset", async () => {
+  const { onSubmit } = await setup();
+  const columns = screen.getByLabelText("Columns");
+  await userEvent.clear(columns);
+  expect(field("columns").getByText("Enter a number.")).toBeInTheDocument();
+  // Save never returns silently: the field takes the focus and a toast says why.
+  await userEvent.click(screen.getByLabelText("Title"));
+  await save();
+  expect(onSubmit).not.toHaveBeenCalled();
+  expect(columns).toHaveFocus();
+});

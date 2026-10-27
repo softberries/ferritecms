@@ -119,6 +119,6 @@ export const qk = {
   plugins: ["plugins"] as const,
   pluginMetrics: (name: string) => ["plugins", name, "metrics"] as const,
   pluginSettings: (name: string) => ["plugins", name, "settings"] as const,
-  /** Deleted plugins whose data is kept (`retained` is a reserved plugin name). */
-  pluginsRetained: ["plugins", "retained"] as const,
+  /** Deleted plugins whose data is kept (its own root, apart from per-plugin keys). */
+  pluginsRetained: ["pluginsRetained"] as const,
 } as const;
