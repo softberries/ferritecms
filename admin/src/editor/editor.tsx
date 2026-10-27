@@ -110,6 +110,8 @@ export interface Reopen {
   kept?: Draft;
   /** A revision restore (or its Undo) remounted the screen: it says so, with Undo. */
   revision?: RevisionNotice;
+  /** The restored draft's Discard remounted the screen: it says so, with Undo (this draft). */
+  discarded?: Draft;
   /**
    * This browser's backup still on offer (it stays offered until restored or discarded);
    * absent: the screen's offer, if any, is carried over; `null`: none.
@@ -140,6 +142,8 @@ interface RestoreTarget {
 
 /** The kept Discard's toast (with Undo), dismissed when the screen goes. */
 const KEPT_TOAST = "editor-kept";
+/** The restored draft's Discard toast (with Undo), dismissed when the screen goes. */
+const DISCARD_TOAST = "editor-discarded";
 /** The revision restore's toast (with Undo), dismissed when the screen goes. */
 const REVISION_TOAST = "editor-revision";
 /**
@@ -173,6 +177,8 @@ export interface EditorScreenProps {
   onReopen?: (next: Reopen) => void;
   /** The screen was remounted by a revision restore (or its Undo). */
   revision?: RevisionNotice | null;
+  /** The screen was remounted by the restored draft's Discard: the draft its Undo puts back. */
+  discarded?: Draft | null;
   /**
    * The route's queue of images dropped on the body (`body-uploads.ts`): it outlives the
    * screen's remounts. Without it (tests) the screen keeps its own.
@@ -191,6 +197,7 @@ export function EditorScreen({
   onCreated,
   onReopen: reopenScreen,
   revision,
+  discarded,
   uploads,
 }: EditorScreenProps) {
   const { t } = useTranslation("editor");
@@ -518,6 +525,9 @@ export function EditorScreen({
     if (notice.kind === "undone") {
       toast.success(t("revisions.undone"), REVISION_UPDATE);
     } else {
+      // The restore landed: "Restoring…" goes now, not when the list below answers (its
+      // Undo is added then).
+      toast.success(t("revisions.restored"), { ...REVISION_UPDATE, duration: UNDO_TOAST_MS });
       void listRevisions(type, noticeItem, { limit: 2 })
         .then((list) => undoTarget(list.items, notice.rid))
         .catch(() => null)
@@ -583,6 +593,43 @@ export function EditorScreen({
     [],
   );
 
+  // After the restored draft's Discard: the toast, with Undo (it writes the draft back to
+  // the slot and reopens on it). The Undo belongs to this screen: it goes with it, and
+  // with the first edit here (it would replace that edit unseen).
+  const [discardedDraft] = useState(() => discarded ?? null);
+  const reopenRef = useRef(onReopen);
+  useEffect(() => {
+    reopenRef.current = onReopen;
+  });
+  const discardedItem = item?.id;
+  useEffect(() => {
+    if (!discardedDraft || !discardedItem) return;
+    const id = discardedItem;
+    toast.success(t("restore.discarded"), {
+      id: DISCARD_TOAST,
+      action: {
+        label: t("restore.undo"),
+        onClick: () => {
+          void putAutosave(type, id, autosaveInput(discardedDraft))
+            .then(() => getContent(type, id))
+            .then((now) =>
+              reopenRef.current?.({
+                item: now,
+                restore: { draft: discardedDraft, at: new Date().toISOString() },
+              }),
+            )
+            .catch(() => toast.error(t("restore.undoFailed"), { id: "editor-restore" }));
+        },
+      },
+    });
+    return () => {
+      toast.dismiss(DISCARD_TOAST);
+    };
+  }, [discardedDraft, discardedItem, type, t]);
+  useEffect(() => {
+    if (discardedDraft && doc.dirty) toast.dismiss(DISCARD_TOAST);
+  }, [discardedDraft, doc.dirty]);
+
   const failedDiscard = (e: unknown) => {
     if (isProblem(e, "unauthenticated")) reportApiError(e);
     else toast.error(t("restore.discardFailed"), { id: "editor-restore" });
@@ -604,23 +651,10 @@ export function EditorScreen({
     try {
       await doc.discard();
       // The slot is gone; a failed reload of the item still leaves this screen (on the
-      // copy it has), so no screen goes on without a working autosaver.
+      // copy it has), so no screen goes on without a working autosaver. The reopened
+      // screen says so, with Undo (which goes with it).
       const fresh = await getContent(type, id).catch(() => doc.item);
-      toast.success(t("restore.discarded"), {
-        id: "editor-restore",
-        action: {
-          label: t("restore.undo"),
-          onClick: () => {
-            void putAutosave(type, id, autosaveInput(draft))
-              .then(() => getContent(type, id))
-              .then((now) =>
-                onReopen?.({ item: now, restore: { draft, at: new Date().toISOString() } }),
-              )
-              .catch(() => toast.error(t("restore.undoFailed"), { id: "editor-restore" }));
-          },
-        },
-      });
-      onReopen?.({ item: fresh });
+      onReopen?.({ item: fresh, discarded: draft });
     } catch (e) {
       // Nothing changed: the restored draft is still the working draft and still guarded.
       setRestoredShown(true);
@@ -883,7 +917,7 @@ export function EditorScreen({
             // Opened from the phone's settings sheet (gone now): its button, else the body.
             const toggle = document.querySelector<HTMLElement>("[data-slot=panel-toggle]");
             if (toggle) toggle.focus();
-            else doc.editor.view.dom.focus();
+            else if (!doc.editor.isDestroyed) doc.editor.view.dom.focus();
           }}
         />
       ) : null}

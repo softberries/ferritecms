@@ -3,7 +3,7 @@
 // Undo goes away as soon as the item is saved again, and an Undo that still runs sends
 // the restore's own version as its `If-Match` (a later save answers 412).
 
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { Toaster, toast } from "sonner";
@@ -229,5 +229,96 @@ describe("revision restore", () => {
     expect(toastEl()).not.toHaveAttribute("data-removed", "true");
     expect(toastEl()).not.toHaveTextContent("is back");
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+  });
+
+  test("restored_replaces_the_progress_toast_at_once", async () => {
+    // M2b-1 follow-up: "Restoring…" stayed until the revisions list (for the Undo)
+    // answered. The restored screen says "Version restored" as it opens.
+    const success = vi.spyOn(toast, "success");
+    let answer: (r: Response) => void = () => undefined;
+    stubRoutes({
+      [`${BASE}/revisions`]: () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    });
+    await openScreen(itemWith({ version: 5 }), {
+      revision: { kind: "restored", rid: R0, at: "2026-10-01T09:00:00Z", version: 5 },
+      onReopen: vi.fn(),
+    });
+    await waitFor(() =>
+      expect(success).toHaveBeenCalledWith(
+        "Version restored",
+        expect.objectContaining({ id: "editor-revision", action: undefined }),
+      ),
+    );
+    answer(
+      json({
+        items: [
+          summary(R2, "2026-10-01T10:05:00Z", `restored from ${R0}`),
+          summary(R1, "2026-10-01T10:00:00Z"),
+        ],
+      }),
+    );
+    await screen.findByRole("button", { name: "Undo" });
+  });
+
+  test("undo_without_edit_rights_says_it_could_not_restore", async () => {
+    // M7: the account may no longer edit the item (a transition took the right away):
+    // the Undo sends nothing and says so in its toast.
+    const error = vi.spyOn(toast, "error");
+    const posts: string[] = [];
+    stubRoutes({
+      [`${BASE}/revisions`]: () =>
+        json({
+          items: [
+            summary(R2, "2026-10-01T10:05:00Z", `restored from ${R0}`),
+            summary(R1, "2026-10-01T10:00:00Z"),
+          ],
+        }),
+      [`${BASE}/revisions/${R1}/restore`]: () => {
+        posts.push("restore");
+        return json(itemWith({ version: 6 }));
+      },
+    });
+    const start = itemWith({ version: 5 });
+    await openScreen(
+      { ...start, allowed: { ...start.allowed, edit: false } },
+      {
+        revision: { kind: "restored", rid: R0, at: "2026-10-01T09:00:00Z", version: 5 },
+        onReopen: vi.fn(),
+      },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+    await waitFor(() =>
+      expect(error).toHaveBeenCalledWith(
+        "Could not restore this version.",
+        expect.objectContaining({ id: "editor-revision" }),
+      ),
+    );
+    expect(posts).toEqual([]);
+  });
+
+  test("closing_revisions_opened_from_the_phone_sheet_focuses_its_button", async () => {
+    // M6: on a phone the drawer opens from the settings sheet, which closes; on close the
+    // focus goes to the button that opens the sheet (jsdom has no matchMedia: phone).
+    stubRoutes({
+      [`${BASE}/revisions`]: () => json({ items: [summary(R1, "2026-10-01T10:00:00Z")] }),
+      [`${BASE}/revisions/${R1}`]: () => json(revision(R1, "The newer paragraph.")),
+      "/api/v1/taxonomies": () => json({ items: [] }),
+      "/api/v1/meta": () => json({ site_url: "http://localhost:8080" }),
+    });
+    await openScreen(itemWith(), { onReopen: vi.fn() });
+    const user = userEvent.setup();
+    const settings = document.querySelector<HTMLElement>("[data-slot=panel-toggle]");
+    if (!settings) throw new Error("no settings button");
+    await user.click(settings);
+    const sheet = await screen.findByRole("dialog");
+    await user.click(await within(sheet).findByRole("button", { name: /^Revisions/ }));
+    const drawer = await screen.findByRole("dialog", { name: /^Version history/ });
+    await waitFor(() => expect(drawer).toContainElement(document.activeElement as HTMLElement));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(settings));
   });
 });

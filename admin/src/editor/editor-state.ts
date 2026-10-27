@@ -679,7 +679,14 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   const [kept, setKeptState] = useState<Draft | null>(opts.kept ?? null);
   const keptRef = useRef(kept);
   // Whether the slot really holds the kept copy (a failed re-PUT leaves it in memory only).
-  const [keptStored, setKeptStored] = useState(true);
+  // Read through the ref: a caller holding an older render (the leave dialog's Save and
+  // leave, right after `save()`'s own re-PUT) must not write it a second time.
+  const [keptStored, setKeptStoredState] = useState(true);
+  const keptStoredRef = useRef(keptStored);
+  const setKeptStored = useCallback((stored: boolean) => {
+    keptStoredRef.current = stored;
+    setKeptStoredState(stored);
+  }, []);
   const setKept = useCallback((d: Draft | null) => {
     keptRef.current = d;
     setKeptState(d);
@@ -1142,7 +1149,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
       inflight.current = p;
       return p;
     },
-    [editor, type, adopt, fail, isDirtyNow, touch, queryClient, backupKey],
+    [editor, type, adopt, fail, isDirtyNow, touch, queryClient, backupKey, setKeptStored],
   );
 
   /** A save waits for a transition in flight, then saves what is still unsaved. */
@@ -1242,7 +1249,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
         release();
       }
     },
-    [itemId, type, setKept],
+    [itemId, type, setKept, setKeptStored],
   );
 
   const discard = useCallback(async (): Promise<void> => {
@@ -1273,7 +1280,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
 
   const storeKept = useCallback(async (): Promise<boolean> => {
     const copy = keptRef.current;
-    if (copy === null || keptStored || itemId === null) return true;
+    if (copy === null || keptStoredRef.current || itemId === null) return true;
     const a = autosaver.current;
     const release = (await a?.hold()) ?? (() => undefined);
     try {
@@ -1289,7 +1296,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     } finally {
       release();
     }
-  }, [keptStored, itemId, type]);
+  }, [itemId, type, setKeptStored]);
 
   const discardKept = useCallback(async (): Promise<void> => {
     if (itemId === null) return;
@@ -1389,7 +1396,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
         release();
       }
     },
-    [type, adopt, fail, lock, lockEditing, backupKey],
+    [type, adopt, fail, lock, lockEditing, backupKey, setKeptStored],
   );
 
   // The indicator: an explicit save in flight or failed comes first; then, with
