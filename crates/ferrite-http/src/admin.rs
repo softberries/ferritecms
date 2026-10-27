@@ -24,8 +24,17 @@
 //! `no-cache`. Each file has a **weak** ETag of the first 16 hex digits of its SHA-256
 //! (`W/"…"`, pre-flight F2: the compression layer may change the bytes per request, and
 //! a strong validator must differ per content-coding, RFC 9110 §8.8.1); `If-None-Match`
-//! uses the weak comparison and answers `304`; `Vary: Accept-Encoding` on both. Every
-//! admin response, errors and redirects included, carries the admin CSP
+//! uses the weak comparison and answers `304`; `Vary: Accept-Encoding` on both.
+//!
+//! `index.html` (the fallback and `/admin/index.html`) gets `class="dark"` or
+//! `class="light"` on `<html>` when the request's [`THEME_COOKIE`] is exactly `dark` or
+//! `light` (P57: the explicit theme paints before any JS; no inline script, so the CSP
+//! is unchanged). Any other value is ignored and the class is a fixed string, never the
+//! cookie's text. `index.html` always carries `Vary: Accept-Encoding, Cookie`, and a
+//! rewritten page the ETag of its own bytes, so a `304` never revalidates one theme's
+//! copy for the other.
+//!
+//! Every admin response, errors and redirects included, carries the admin CSP
 //! ([`admin_csp`]), `Referrer-Policy: no-referrer` (P24), `X-Frame-Options: DENY`,
 //! `Cross-Origin-Opener-Policy: same-origin`, `X-Content-Type-Options: nosniff`,
 //! `Permissions-Policy: camera=(), microphone=(), geolocation=()` and
@@ -56,6 +65,14 @@ const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 const NO_CACHE: &str = "no-cache";
 const INDEX: &str = "index.html";
 const ASSETS: &str = "assets/";
+const VARY_ENCODING: &str = "accept-encoding";
+/// `index.html` depends on the theme cookie too (P57), so no cache may hand one
+/// viewer's copy to another.
+const VARY_COOKIE: &str = "accept-encoding, cookie";
+
+/// The cookie the admin writes for an explicit theme choice (`dark` or `light`; P57,
+/// design 11 §4); `index.html` gets the matching class on `<html>`.
+pub const THEME_COOKIE: &str = "ferrite_admin_theme";
 
 /// The static page served for every page path when no admin build is embedded.
 const PLACEHOLDER: &str = include_str!("admin/placeholder.html");
@@ -198,22 +215,79 @@ fn respond(state: &AppState, method: &Method, uri: &Uri, headers: &HeaderMap) ->
     };
     if path.starts_with(ASSETS) {
         return match state.admin.get(&path) {
-            Some(file) => file_response(&file, extension(&path), IMMUTABLE, headers),
+            Some(file) => file_response(&file, extension(&path), IMMUTABLE, VARY_ENCODING, headers),
             None => not_found(),
         };
     }
     let ext = extension(&path);
-    if ext.is_some()
+    if path != INDEX
+        && ext.is_some()
         && let Some(file) = state.admin.get(&path)
     {
-        return file_response(&file, ext, NO_CACHE, headers);
+        return file_response(&file, ext, NO_CACHE, VARY_ENCODING, headers);
     }
-    if ext.is_some_and(|e| content_type(e).is_some()) {
+    if path != INDEX && ext.is_some_and(|e| content_type(e).is_some()) {
         return not_found();
     }
     match state.admin.get(INDEX) {
-        Some(file) => file_response(&file, Some("html"), NO_CACHE, headers),
-        None => file_response(&PLACEHOLDER_FILE, Some("html"), NO_CACHE, headers),
+        Some(file) => match theme_class(headers) {
+            Some(attr) => {
+                let themed = with_theme_class(&file, attr);
+                file_response(&themed, Some("html"), NO_CACHE, VARY_COOKIE, headers)
+            }
+            None => file_response(&file, Some("html"), NO_CACHE, VARY_COOKIE, headers),
+        },
+        None => file_response(
+            &PLACEHOLDER_FILE,
+            Some("html"),
+            NO_CACHE,
+            VARY_ENCODING,
+            headers,
+        ),
+    }
+}
+
+/// The `<html>` attribute for the viewer's explicit theme (P57): the cookie
+/// [`THEME_COOKIE`] (first occurrence) with exactly `dark` or `light`; any other value,
+/// or none, gives `None` (no class: `tokens.css` follows the system scheme). The
+/// attribute is a fixed string; the cookie value is never copied into the page.
+fn theme_class(headers: &HeaderMap) -> Option<&'static str> {
+    let value = headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .find_map(|pair| {
+            let (name, value) = pair.trim().split_once('=')?;
+            (name == THEME_COOKIE).then_some(value)
+        })?;
+    match value {
+        "dark" => Some(" class=\"dark\""),
+        "light" => Some(" class=\"light\""),
+        _ => None,
+    }
+}
+
+/// `file` with `attr` inserted into its `<html` start tag (unchanged when it has none),
+/// with the digest of the new bytes, so the ETag differs per theme.
+fn with_theme_class(file: &AdminFile, attr: &str) -> AdminFile {
+    let bytes = &file.bytes[..];
+    let at = bytes
+        .windows(6)
+        .position(|w| {
+            w[..5].eq_ignore_ascii_case(b"<html") && (w[5] == b'>' || w[5].is_ascii_whitespace())
+        })
+        .map(|i| i + 5);
+    let Some(at) = at else {
+        return file.clone();
+    };
+    let mut out = Vec::with_capacity(bytes.len() + attr.len());
+    out.extend_from_slice(&bytes[..at]);
+    out.extend_from_slice(attr.as_bytes());
+    out.extend_from_slice(&bytes[at..]);
+    AdminFile {
+        sha256: Sha256::digest(&out).into(),
+        bytes: Cow::Owned(out),
     }
 }
 
@@ -275,6 +349,7 @@ fn file_response(
     file: &AdminFile,
     ext: Option<&str>,
     cache_control: &str,
+    vary: &str,
     headers: &HeaderMap,
 ) -> Response<Body> {
     let etag = format!("W/\"{}\"", ferrite_domain::to_hex(&file.sha256[..8]));
@@ -296,7 +371,7 @@ fn file_response(
     };
     set(&mut res, header::ETAG, &etag);
     set(&mut res, header::CACHE_CONTROL, cache_control);
-    set(&mut res, header::VARY, "accept-encoding");
+    set(&mut res, header::VARY, vary);
     if !ext.is_some_and(compressible) {
         res.extensions_mut().insert(crate::app::NoCompress);
     }

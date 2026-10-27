@@ -111,7 +111,7 @@ async fn spa_fallback_serves_index(app: App) -> App {
             Some("text/html; charset=utf-8"),
             "{path}"
         );
-        assert_eq!(r.header("vary"), Some("accept-encoding"), "{path}");
+        assert_eq!(r.header("vary"), Some("accept-encoding, cookie"), "{path}");
         assert_eq!(
             r.header("etag"),
             Some(etag_of(INDEX.as_bytes()).as_str()),
@@ -144,6 +144,80 @@ async fn spa_fallback_serves_index(app: App) -> App {
     let r = app.get("/admin/index.html").await;
     assert_eq!(r.body, INDEX);
     assert_eq!(r.header("cache-control"), Some("no-cache"));
+    app
+}
+
+/// `GET /admin/…` with the theme cookie (P57).
+async fn get_with_theme(app: &App, path: &str, cookie: &str) -> Resp {
+    let mut req = request(Method::GET, path);
+    req.headers_mut()
+        .insert(header::COOKIE, cookie.parse().unwrap());
+    app.send(req).await
+}
+
+async fn index_html_gets_theme_class_from_cookie(app: App) -> App {
+    let app = with_build(app).await;
+    for (cookie, class) in [
+        ("ferrite_admin_theme=dark", "dark"),
+        ("ferrite_admin_theme=light", "light"),
+        ("a=1; ferrite_admin_theme=dark; b=2", "dark"),
+        ("ferrite_admin_theme=light;other=x", "light"),
+    ] {
+        let themed = INDEX.replacen("<html>", &format!("<html class=\"{class}\">"), 1);
+        for path in ["/admin/", "/admin/content/post", "/admin/index.html"] {
+            let r = get_with_theme(&app, path, cookie).await;
+            assert_eq!(r.status, StatusCode::OK, "{cookie} {path}");
+            assert_eq!(r.body, themed, "{cookie} {path}");
+            assert_eq!(r.header("cache-control"), Some("no-cache"), "{path}");
+            assert_eq!(r.header("vary"), Some("accept-encoding, cookie"), "{path}");
+            // Its own validator: the plain page's tag does not revalidate it.
+            let etag = etag_of(themed.as_bytes());
+            assert_eq!(r.header("etag"), Some(etag.as_str()), "{cookie} {path}");
+            assert_admin_headers(&r, CSP);
+            let mut req = request(Method::GET, path);
+            req.headers_mut()
+                .insert(header::COOKIE, cookie.parse().unwrap());
+            req.headers_mut().insert(
+                header::IF_NONE_MATCH,
+                etag_of(INDEX.as_bytes()).parse().unwrap(),
+            );
+            assert_eq!(
+                app.send(req).await.status,
+                StatusCode::OK,
+                "{cookie} {path}"
+            );
+        }
+    }
+    // Any other value, or a cookie of another name, is ignored: the page is unchanged.
+    for cookie in [
+        "ferrite_admin_theme=system",
+        "ferrite_admin_theme=Dark",
+        "ferrite_admin_theme=",
+        "ferrite_admin_theme=dark%22%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E",
+        "ferrite_admin_theme=\"dark\"",
+        "ferrite_admin_theme=dark\" onload=\"x",
+        "xferrite_admin_theme=dark",
+        "ferrite_admin_theme_x=dark",
+    ] {
+        let r = get_with_theme(&app, "/admin/", cookie).await;
+        assert_eq!(r.status, StatusCode::OK, "{cookie}");
+        assert_eq!(r.body, INDEX, "{cookie}");
+        assert_eq!(
+            r.header("etag"),
+            Some(etag_of(INDEX.as_bytes()).as_str()),
+            "{cookie}"
+        );
+        assert_admin_headers(&r, CSP);
+    }
+    // Assets are not rewritten and do not vary on the cookie.
+    let r = get_with_theme(
+        &app,
+        "/admin/assets/index-abc.js",
+        "ferrite_admin_theme=dark",
+    )
+    .await;
+    assert_eq!(r.body, JS);
+    assert_eq!(r.header("vary"), Some("accept-encoding"));
     app
 }
 
@@ -358,6 +432,7 @@ async fn admin_is_not_cached_or_redirected(app: App) -> App {
 app_tests!(
     admin_redirects_bare_path,
     spa_fallback_serves_index,
+    index_html_gets_theme_class_from_cookie,
     hashed_assets_are_immutable,
     missing_asset_is_404_not_index,
     admin_index_has_the_csp,

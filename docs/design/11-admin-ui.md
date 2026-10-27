@@ -245,12 +245,20 @@ contrast pair unchanged.
   an emulated dark scheme). Only these tokens are needed: before React mounts, `#root`
   is empty, so the canvas (`body` background) and `color-scheme` are all that paint.
   The `dark:` variant (`.dark *`) does not match in that frame, and nothing uses it yet.
-  - Flash-free: `system` on any OS (the default), and an explicit choice that matches
-    the OS.
-  - Still flashes one frame: an explicit choice against the OS (stored `dark` on a light
-    OS, or `light` on a dark one), because `localStorage` is unreadable without JS.
-    Fixing it needs a server hint (for example a cookie that `index.html` serving turns
-    into a class); deferred.
+  - Flash-free: `system` on any OS (the default), and an explicit choice whatever the
+    OS (P57). An explicit choice is also a cookie `ferrite_admin_theme=dark|light`
+    (`Path=/admin`, `SameSite=Lax`, one year, `Secure` on https, not `HttpOnly` since
+    JS writes it; removed for `system`, and refreshed from `localStorage` on every load).
+    Serving `index.html` (`crates/ferrite-http/src/admin.rs`) adds `class="dark"` or
+    `class="light"` to `<html>` when the cookie is exactly one of those values; any
+    other value is ignored, and the class is a fixed string, never the cookie's text.
+    No inline script is added, so the CSP is unchanged. `index.html` carries
+    `Vary: Accept-Encoding, Cookie` and a rewritten page the ETag of its own bytes, so
+    no cache hands one theme's copy to another viewer (Rust
+    `index_html_gets_theme_class_from_cookie`; E2E
+    `explicit_dark_against_light_os_has_no_light_frame`).
+  - Still one frame late: a choice whose cookie the browser does not send (cookies
+    blocked), which falls back to the class set by JS.
   - Density has no first-paint effect: nothing density-sized renders before React.
 
 ## 5. Motion

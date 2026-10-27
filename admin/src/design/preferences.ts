@@ -41,8 +41,28 @@ export function storedTheme(): ThemePreference {
   return THEMES.find((t) => t === v) ?? "system";
 }
 
+/**
+ * The cookie `index.html` serving turns into `class="dark"` / `class="light"` on <html>
+ * (P57), so an explicit choice paints before any JS. Written for `light` and `dark`,
+ * removed for `system`. Not `HttpOnly`: this code writes it.
+ */
+export const THEME_COOKIE = "ferrite_admin_theme";
+const THEME_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
+
+export function writeThemeCookie(theme: ThemePreference): void {
+  const secure = window.location.protocol === "https:" ? "; Secure" : "";
+  const value = theme === "system" ? "; Max-Age=0" : `; Max-Age=${THEME_COOKIE_MAX_AGE}`;
+  const set = theme === "system" ? "" : theme;
+  try {
+    document.cookie = `${THEME_COOKIE}=${set}; Path=/admin; SameSite=Lax${value}${secure}`;
+  } catch {
+    // Cookies blocked: the class then comes from JS, one frame later.
+  }
+}
+
 export function storeTheme(theme: ThemePreference): void {
   write(THEME_KEY, theme);
+  writeThemeCookie(theme);
 }
 
 export function storedDensity(): Density {
@@ -113,6 +133,10 @@ export function applyDensity(density: Density): void {
  * script: the CSP forbids one).
  */
 export function applyStoredPreferences(): void {
-  applyTheme(resolveTheme(storedTheme()));
+  const theme = storedTheme();
+  applyTheme(resolveTheme(theme));
+  // Keeps the server hint in step with storage (a choice made before P57, or a cookie
+  // that expired or was cleared on its own).
+  writeThemeCookie(theme);
   applyDensity(storedDensity());
 }
