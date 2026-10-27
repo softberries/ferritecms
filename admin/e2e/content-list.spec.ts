@@ -8,6 +8,7 @@
 import type { Locator, Page } from "@playwright/test";
 import { ContentApi, type Item } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
+import { SNAP_PROJECT } from "./support/projects";
 import { SCHEMES, VIEWPORTS, screenFile } from "./support/snap";
 import { uid } from "./support/uid";
 
@@ -52,9 +53,9 @@ async function rowAction(page: Page, label: string, title: string, action: strin
   await page.getByRole("menuitem", { name: action }).click();
 }
 
-test("tabs_counts_and_filtering", async ({ as, site, backend }) => {
-  const admin = await ContentApi.as(backend, site.url, "admin");
-  const editor = await ContentApi.as(backend, site.url, "editor");
+test("tabs_counts_and_filtering", async ({ as, site, siteKey }) => {
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
+  const editor = await ContentApi.as(siteKey, site.url, "editor");
   const type = typeName();
   const label = `Tabs ${type.slice(-6)}`;
   const unique = word();
@@ -139,10 +140,10 @@ test("tabs_counts_and_filtering", async ({ as, site, backend }) => {
   }
 });
 
-test("numeric_search_survives_a_reload", async ({ as, site, backend }) => {
+test("numeric_search_survives_a_reload", async ({ as, site, siteKey }) => {
   // The router keeps free text as typed (M2b-2 Task 14): `?q=2024` stays the text "2024",
   // not a number, through a reload and in the request.
-  const admin = await ContentApi.as(backend, site.url, "admin");
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
   const item = await admin.create("post", `Annual report 2024 ${uid()}`);
   const page = await as("admin");
   await openList(page, "post", "Posts", "?q=2024");
@@ -160,11 +161,11 @@ test("numeric_search_survives_a_reload", async ({ as, site, backend }) => {
   await admin.dispose();
 });
 
-test("author_counts_match_list", async ({ as, site, backend }) => {
+test("author_counts_match_list", async ({ as, site, siteKey }) => {
   // `author2` (F35): no other test writes as this account.
-  const admin = await ContentApi.as(backend, site.url, "admin");
-  const mine = await ContentApi.as(backend, site.url, "author2");
-  const other = await ContentApi.as(backend, site.url, "author");
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
+  const mine = await ContentApi.as(siteKey, site.url, "author2");
+  const other = await ContentApi.as(siteKey, site.url, "author");
   const type = typeName();
   const label = `Authors ${type.slice(-6)}`;
   try {
@@ -203,9 +204,9 @@ test("author_counts_match_list", async ({ as, site, backend }) => {
   }
 });
 
-test("trash_with_undo", async ({ as, site, backend }) => {
+test("trash_with_undo", async ({ as, site, siteKey }) => {
   // A published post: Undo must bring it back published, not as a draft (F36).
-  const editor = await ContentApi.as(backend, site.url, "editor");
+  const editor = await ContentApi.as(siteKey, site.url, "editor");
   const unique = word();
   const title = `Undo ${unique} published`;
   try {
@@ -238,9 +239,9 @@ test("trash_with_undo", async ({ as, site, backend }) => {
   }
 });
 
-test("undo_after_leaving_the_list", async ({ as, site, backend }) => {
+test("undo_after_leaving_the_list", async ({ as, site, siteKey }) => {
   // The toast outlives the route: Undo must act on the post's own type, not the open one.
-  const editor = await ContentApi.as(backend, site.url, "editor");
+  const editor = await ContentApi.as(siteKey, site.url, "editor");
   const unique = word();
   const title = `Leave ${unique} published`;
   try {
@@ -275,14 +276,14 @@ test("undo_after_leaving_the_list", async ({ as, site, backend }) => {
 test("contributor_trash_asks_first_and_offers_no_undo", async ({
   as,
   site,
-  backend,
+  siteKey,
   snap,
   expectAccessible,
 }) => {
   // A contributor may trash their own drafts but never restore them (07 §1), so there is
   // nothing to undo: the list asks first and the toast has no Undo.
-  const contributor = await ContentApi.as(backend, site.url, "contributor");
-  const editor = await ContentApi.as(backend, site.url, "editor");
+  const contributor = await ContentApi.as(siteKey, site.url, "contributor");
+  const editor = await ContentApi.as(siteKey, site.url, "editor");
   const unique = word();
   const title = `Contrib ${unique} draft`;
   try {
@@ -314,8 +315,8 @@ test("contributor_trash_asks_first_and_offers_no_undo", async ({
   }
 });
 
-test("phone_tabs_keep_the_current_tab_in_view", async ({ as, site, backend, snap }) => {
-  const admin = await ContentApi.as(backend, site.url, "admin");
+test("phone_tabs_keep_the_current_tab_in_view", async ({ as, site, siteKey, snap }) => {
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
   const type = typeName();
   const label = `Phone ${type.slice(-6)}`;
   try {
@@ -363,11 +364,11 @@ test("phone_tabs_keep_the_current_tab_in_view", async ({ as, site, backend, snap
   }
 });
 
-test("bulk_publish_partial_failure", async ({ as, site, backend, guard }) => {
+test("bulk_publish_partial_failure", async ({ as, site, siteKey, guard }) => {
   // The browser logs the stale item's 412 as a console error; it is the point here.
   guard.allow(/status of 412/);
-  const admin = await ContentApi.as(backend, site.url, "admin");
-  const editor = await ContentApi.as(backend, site.url, "editor");
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
+  const editor = await ContentApi.as(siteKey, site.url, "editor");
   const type = typeName();
   const label = `Bulk ${type.slice(-6)}`;
   try {
@@ -411,9 +412,9 @@ test("bulk_publish_partial_failure", async ({ as, site, backend, guard }) => {
   }
 });
 
-test("keyboard_list_navigation", async ({ as, site, backend }) => {
-  const admin = await ContentApi.as(backend, site.url, "admin");
-  const editor = await ContentApi.as(backend, site.url, "editor");
+test("keyboard_list_navigation", async ({ as, site, siteKey }) => {
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
+  const editor = await ContentApi.as(siteKey, site.url, "editor");
   const type = typeName();
   const label = `Keys ${type.slice(-6)}`;
   try {
@@ -472,9 +473,9 @@ test("keyboard_list_navigation", async ({ as, site, backend }) => {
   }
 });
 
-test("infinite_paging", async ({ as, site, backend }) => {
-  const admin = await ContentApi.as(backend, site.url, "admin");
-  const editor = await ContentApi.as(backend, site.url, "editor");
+test("infinite_paging", async ({ as, site, siteKey }) => {
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
+  const editor = await ContentApi.as(siteKey, site.url, "editor");
   const type = typeName();
   const label = `Paging ${type.slice(-6)}`;
   try {
@@ -533,8 +534,8 @@ async function insertedRowOpacity(page: Page, act: () => Promise<void>): Promise
   });
 }
 
-test("row_motion_respects_reduced_motion", async ({ as, site, backend }) => {
-  const admin = await ContentApi.as(backend, site.url, "admin");
+test("row_motion_respects_reduced_motion", async ({ as, site, siteKey }) => {
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
   const type = typeName();
   const label = `Motion ${type.slice(-6)}`;
   try {
@@ -577,10 +578,10 @@ test("dashboard_tiles_open_the_filtered_list", async ({ as, site }) => {
   }
 });
 
-test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
+test("screens", async ({ as, site, siteKey, snap, expectAccessible }) => {
   test.setTimeout(300_000);
-  const admin = await ContentApi.as(backend, site.url, "admin");
-  const editor = await ContentApi.as(backend, site.url, "editor");
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
+  const editor = await ContentApi.as(siteKey, site.url, "editor");
   const type = typeName();
   const label = "Field notes";
   const topics = `x${type.replace(/-/g, "").slice(-12)}`;
@@ -715,7 +716,7 @@ test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
     await page.goto(`/admin/content/${type}`);
     await expect(table(page, label)).toHaveAttribute("aria-busy", "true");
     // `snap` waits for the network to go idle, which a held request never does.
-    for (const scheme of SCHEMES) {
+    for (const scheme of siteKey === SNAP_PROJECT ? SCHEMES : []) {
       await page.emulateMedia({ colorScheme: scheme });
       for (const v of ["desktop", "mobile"] as const) {
         await page.setViewportSize(VIEWPORTS[v]);

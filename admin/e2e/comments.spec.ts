@@ -55,8 +55,8 @@ async function ownAddress(page: Page): Promise<void> {
   await page.context().setExtraHTTPHeaders({ "X-Forwarded-For": guestAddress() });
 }
 
-test("approve_from_queue_shows_on_site", async ({ as, site, backend, expectAccessible }) => {
-  const api = await ContentApi.as(backend, site.url, "editor");
+test("approve_from_queue_shows_on_site", async ({ as, site, siteKey, expectAccessible }) => {
+  const api = await ContentApi.as(siteKey, site.url, "editor");
   const post = await newPost(api, "Approve");
   const name = `Reader ${uid("r").slice(-6)}`;
   const body = `Lovely post ${uid("b")}`;
@@ -94,8 +94,8 @@ test("approve_from_queue_shows_on_site", async ({ as, site, backend, expectAcces
   await api.dispose();
 });
 
-test("spam_and_undo", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "editor");
+test("spam_and_undo", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "editor");
   const post = await newPost(api, "Spam");
   const name = `Seller ${uid("s").slice(-6)}`;
   const c = await guestComment(site.url, post.id, { name, body: "Cheap watches" });
@@ -125,8 +125,8 @@ test("spam_and_undo", async ({ as, site, backend }) => {
   await api.dispose();
 });
 
-test("bulk_trash_with_partial_failure", async ({ as, site, backend, guard, snap }) => {
-  const api = await ContentApi.as(backend, site.url, "editor");
+test("bulk_trash_with_partial_failure", async ({ as, site, siteKey, guard, snap }) => {
+  const api = await ContentApi.as(siteKey, site.url, "editor");
   const post = await newPost(api, "Bulk");
   const names = [1, 2, 3].map((n) => `Bulk ${n} ${uid("n").slice(-5)}`);
   const ids: string[] = [];
@@ -169,8 +169,8 @@ test("bulk_trash_with_partial_failure", async ({ as, site, backend, guard, snap 
   await api.dispose();
 });
 
-test("reply_as_moderator", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "editor");
+test("reply_as_moderator", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "editor");
   const post = await newPost(api, "Reply");
   const name = `Asker ${uid("a").slice(-6)}`;
   const c = await guestComment(site.url, post.id, { name, body: "Does this work offline?" });
@@ -216,8 +216,8 @@ test("reply_as_moderator", async ({ as, site, backend }) => {
   await api.dispose();
 });
 
-test("keyboard_moderation", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "editor");
+test("keyboard_moderation", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "editor");
   const post = await newPost(api, "Keys");
   // Newest first: C, B, A.
   const names = ["A", "B", "C"].map((n) => `Key ${n} ${uid("k").slice(-5)}`);
@@ -289,8 +289,8 @@ test("keyboard_moderation", async ({ as, site, backend }) => {
   await api.dispose();
 });
 
-test("hostile_comment_renders_as_text", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "editor");
+test("hostile_comment_renders_as_text", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "editor");
   const post = await newPost(api, "Hostile");
   const name = `<img src=x onerror=alert(1)> ${uid("h").slice(-5)}`;
   const body = `<img src=x onerror=alert(1)>\n<script>alert(2)</script>\n<b>not bold</b>`;
@@ -336,9 +336,9 @@ test("author_has_no_queue", async ({ as, snap, expectAccessible }) => {
   await expectAccessible(page);
 });
 
-test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
+test("screens", async ({ as, site, siteKey, snap, expectAccessible }) => {
   test.setTimeout(240_000);
-  const api = await ContentApi.as(backend, site.url, "editor");
+  const api = await ContentApi.as(siteKey, site.url, "editor");
   const post = await newPost(api, "Screens");
   const empty = await newPost(api, "Quiet");
   // An approved thread starter, a pending reply to it, a long pending comment, one with

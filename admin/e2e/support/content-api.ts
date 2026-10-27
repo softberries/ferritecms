@@ -7,7 +7,6 @@
 
 import { expect, request as apiRequest, type APIRequestContext } from "@playwright/test";
 import type { FixtureFile } from "./files";
-import type { Backend } from "./server";
 import { authFile } from "./server";
 import type { Role } from "./users";
 
@@ -106,11 +105,14 @@ export class ContentApi {
     private readonly csrf: string,
   ) {}
 
-  /** A context on `role`'s shared session (never logged out, F23), sending the `Origin`. */
-  static async as(backend: Backend, url: string, role: Role): Promise<ContentApi> {
+  /**
+   * A context on `role`'s shared session (never logged out, F23) on the site of the
+   * project `siteKey`, sending the `Origin`.
+   */
+  static async as(siteKey: string, url: string, role: Role): Promise<ContentApi> {
     const ctx = await apiRequest.newContext({
       baseURL: url,
-      storageState: authFile(backend, role),
+      storageState: authFile(siteKey, role),
       extraHTTPHeaders: { Origin: url },
     });
     const res = await ctx.get("/api/v1/auth/me");

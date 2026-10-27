@@ -25,14 +25,22 @@ and `/_preview` to the site and rewrites `Origin` so the server's CSRF check pas
 | `lint`      | ESLint, then `prettier --check`                                |
 | `format`    | `prettier --write`                                             |
 | `test`      | Vitest (`app` project in jsdom, `scripts` project in Node)     |
-| `e2e`       | Playwright against a real `ferrite serve` (below)              |
+| `e2e`       | Playwright against a real `ferrite serve`, Chromium (below)    |
+| `e2e:all`   | the same in all four projects (Chromium, Firefox, WebKit)      |
 
 E2E: `pnpm -C admin build && cargo build --release -p ferrite && pnpm -C admin e2e`
-(`FERRITE_BIN` overrides `../target/release/ferrite`; first time:
-`pnpm -C admin exec playwright install chromium`). Global setup starts a SQLite site with
-`seed demo`, the harness accounts of `e2e/support/users.ts` and an SMTP sink, and logs the
-accounts in once (`e2e/.auth/`). With `FERRITE_TEST_PG_URL` set, the `chromium-pg` project
-runs the `*.smoke.spec.ts` files against a Postgres site too. Specs import `test` from
+(`FERRITE_BIN` overrides `../target/release/ferrite`; the Plugins spec also needs
+`cargo build --manifest-path plugins/Cargo.toml --target wasm32-wasip2 --release -p admin-e2e`;
+first time: `pnpm -C admin exec playwright install chromium firefox webkit`). The projects
+(`e2e/support/projects.ts`, P55) are `chromium-sqlite`, `chromium-pg` (with
+`FERRITE_TEST_PG_URL`), `firefox-sqlite` and `webkit-sqlite`, every spec in each; `pnpm e2e`
+runs the Chromium ones, `pnpm e2e:all` all four, `pnpm e2e --project firefox-sqlite` one,
+and `pnpm e2e e2e/menus.spec.ts` only that file. Global setup starts a site per selected
+project with `seed demo`, the harness accounts of `e2e/support/users.ts` and an SMTP sink,
+and logs the accounts in once (`e2e/.auth/<project>/`). The specs that change site-wide
+state (`settings`, `themes`, `system`) run after the rest, one at a time (the project's
+`-site-wide` teardown); a filtered run (a file, `-g`) runs only what it names, without that
+ordering. Screenshots and the contact sheet come from `chromium-sqlite` only. Specs import `test` from
 `e2e/support/fixtures.ts`: `as(role)`, `freshSession`, `snap`, `expectAccessible`, and a
 guard that fails a test on a CSP violation, a page error or a `console.error`. Screens go to
 `test-results/screens/` with a contact sheet (`index.html`); server logs to

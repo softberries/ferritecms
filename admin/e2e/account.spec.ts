@@ -16,7 +16,7 @@ import {
 } from "@playwright/test";
 import { keptState } from "./support/app-state";
 import { expect, test, type Guard } from "./support/fixtures";
-import { authFile, type Backend, type SiteInfo } from "./support/server";
+import { authFile, type SiteInfo } from "./support/server";
 import { VIEWPORTS } from "./support/snap";
 import { nextFreshStep, stepAt, totpCode } from "./support/totp";
 import { uid } from "./support/uid";
@@ -40,10 +40,10 @@ test.afterEach(async () => {
 });
 
 /** A new author with a known password, made by the admin over the API. */
-async function newUser(site: SiteInfo, backend: Backend, name = "Account Test"): Promise<User> {
+async function newUser(site: SiteInfo, siteKey: string, name = "Account Test"): Promise<User> {
   const ctx = await apiRequest.newContext({
     baseURL: site.url,
-    storageState: authFile(backend, "admin"),
+    storageState: authFile(siteKey, "admin"),
     extraHTTPHeaders: { Origin: site.url },
   });
   try {
@@ -144,8 +144,8 @@ async function enrolOverApi(page: Page, csrf: string, user: User, site: SiteInfo
   return { secret: s.secret_base32, step };
 }
 
-test("password_change_keeps_the_session", async ({ browser, site, backend, guard }) => {
-  const user = await newUser(site, backend);
+test("password_change_keeps_the_session", async ({ browser, site, siteKey, guard }) => {
+  const user = await newUser(site, siteKey);
   const { page } = await signedIn(browser, site, guard, user, 1);
   const other = await signedIn(browser, site, guard, user, 2);
   await openAccount(page);
@@ -172,9 +172,9 @@ test("password_change_keeps_the_session", async ({ browser, site, backend, guard
   );
 });
 
-test("totp_enrol_and_sign_in_with_code", async ({ browser, site, backend, guard }) => {
+test("totp_enrol_and_sign_in_with_code", async ({ browser, site, siteKey, guard }) => {
   test.setTimeout(120_000);
-  const user = await newUser(site, backend);
+  const user = await newUser(site, siteKey);
   const { page } = await signedIn(browser, site, guard, user, 3);
   await openAccount(page);
   const card = section(page, "Two-factor authentication");
@@ -208,9 +208,9 @@ test("totp_enrol_and_sign_in_with_code", async ({ browser, site, backend, guard 
   await expect(login.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
 });
 
-test("totp_disable_needs_password", async ({ browser, site, backend, guard }) => {
+test("totp_disable_needs_password", async ({ browser, site, siteKey, guard }) => {
   guard.allow(EXPECTED_FAILURES);
-  const user = await newUser(site, backend);
+  const user = await newUser(site, siteKey);
   const { page, csrf } = await signedIn(browser, site, guard, user, 5);
   await enrolOverApi(page, csrf, user, site);
   await openAccount(page);
@@ -234,8 +234,8 @@ test("totp_disable_needs_password", async ({ browser, site, backend, guard }) =>
   await expect(card.getByText("Off", { exact: true })).toBeVisible();
 });
 
-test("token_value_is_shown_once", async ({ browser, site, backend, guard }) => {
-  const user = await newUser(site, backend);
+test("token_value_is_shown_once", async ({ browser, site, siteKey, guard }) => {
+  const user = await newUser(site, siteKey);
   const { page } = await signedIn(browser, site, guard, user, 6);
   await openAccount(page);
   const card = section(page, "API tokens");
@@ -303,8 +303,8 @@ test("token_value_is_shown_once", async ({ browser, site, backend, guard }) => {
   await gone.dispose();
 });
 
-test("totp_secret_not_kept", async ({ browser, site, backend, guard }) => {
-  const user = await newUser(site, backend);
+test("totp_secret_not_kept", async ({ browser, site, siteKey, guard }) => {
+  const user = await newUser(site, siteKey);
   const { page } = await signedIn(browser, site, guard, user, 7);
   await openAccount(page);
   const secret = await startTotp(page);
@@ -329,9 +329,9 @@ test("totp_secret_not_kept", async ({ browser, site, backend, guard }) => {
   expect(await page.content()).not.toContain(again);
 });
 
-test("sign_out_other_sessions", async ({ browser, site, backend, guard }) => {
+test("sign_out_other_sessions", async ({ browser, site, siteKey, guard }) => {
   guard.allow(EXPECTED_FAILURES);
-  const user = await newUser(site, backend);
+  const user = await newUser(site, siteKey);
   const { page } = await signedIn(browser, site, guard, user, 8);
   const b = await signedIn(browser, site, guard, user, 9);
   const c = await signedIn(browser, site, guard, user, 10);
@@ -369,9 +369,9 @@ test("sign_out_other_sessions", async ({ browser, site, backend, guard }) => {
   expect((await page.request.get("/api/v1/auth/me")).status()).toBe(200);
 });
 
-test("account_screens", async ({ browser, site, backend, guard, snap, expectAccessible }) => {
+test("account_screens", async ({ browser, site, siteKey, guard, snap, expectAccessible }) => {
   test.setTimeout(120_000);
-  const user = await newUser(site, backend, "Ada Lovelace");
+  const user = await newUser(site, siteKey, "Ada Lovelace");
   const { page, csrf } = await signedIn(browser, site, guard, user, 11);
   // A second session and two tokens, so the lists have rows.
   await signedIn(browser, site, guard, user, 12);
@@ -401,9 +401,9 @@ test("account_screens", async ({ browser, site, backend, guard, snap, expectAcce
   await expect(profile.getByLabel("Current password")).toBeVisible();
   await expectAccessible(page);
   await snap(page, "account-email-change");
-  await page.reload();
 
-  // TOTP set-up, both steps.
+  // TOTP set-up, both steps (`openAccount` loads the page again, dropping the edit; a
+  // `reload()` before it raced the `goto` in Firefox, NS_BINDING_ABORTED).
   await openAccount(page);
   await startTotp(page);
   const totp = page.getByRole("dialog", { name: "Set up two-factor authentication" });

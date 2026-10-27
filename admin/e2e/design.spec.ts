@@ -29,7 +29,8 @@ test("fonts_and_tokens_apply", async ({ as }) => {
   });
   expect(loaded.inter).toBe(true);
   expect(loaded.mono).toBe(true);
-  expect(loaded.family).toMatch(/^"Inter Variable"/);
+  // WebKit serialises the family name without quotes.
+  expect(loaded.family).toMatch(/^"?Inter Variable"?,/);
   // Hashed, same-origin files only (font-src 'self'; principle 1: no CDN).
   expect(fonts.length).toBeGreaterThan(0);
   for (const f of fonts) expect(f).toMatch(/^200 \/admin\/assets\/[\w-]+\.woff2$/);
@@ -63,9 +64,13 @@ test("theme_follows_the_system_unless_chosen", async ({ as }) => {
   expect(lightBg).not.toBe(darkBg);
 });
 
-test("dark_os_first_paint_is_dark_before_js", async ({ browser, site, guard }) => {
+test("dark_os_first_paint_is_dark_before_js", async ({ browser, browserName, site, guard }) => {
   // The frame before the module script runs: no JS at all, so <html> has no class and
   // only tokens.css decides (11 §4). No storage state needed: index.html is public.
+  // Playwright's Firefox loses a context's `colorScheme` when a response's
+  // `Cross-Origin-Opener-Policy` moves the page to another process (the admin sends
+  // `same-origin`), so there the scheme is emulated again on the loaded page (10 §3).
+  const firefox = browserName === "firefox";
   const background = async (colorScheme: "light" | "dark") => {
     const ctx = await browser.newContext({
       baseURL: site.url,
@@ -75,6 +80,7 @@ test("dark_os_first_paint_is_dark_before_js", async ({ browser, site, guard }) =
     try {
       const page = await ctx.newPage();
       await page.goto("/admin/");
+      if (firefox) await page.emulateMedia({ colorScheme });
       expect(await page.locator("html").getAttribute("class")).toBeNull();
       return await page.evaluate(() => {
         const s = getComputedStyle(document.body);
@@ -100,6 +106,7 @@ test("dark_os_first_paint_is_dark_before_js", async ({ browser, site, guard }) =
   try {
     const page = await ctx.newPage();
     await page.goto("/admin/login");
+    if (firefox) await page.emulateMedia({ colorScheme: "dark" });
     await expect(page.locator("html")).toHaveClass("dark");
     expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
       dark.bg,

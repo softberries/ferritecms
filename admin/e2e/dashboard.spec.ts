@@ -27,10 +27,10 @@ async function loaded(page: Page): Promise<void> {
 }
 
 /** A request context of `role`'s shared session, sending the site's `Origin`. */
-async function api(backend: "sqlite" | "pg", url: string, role: Role) {
+async function api(siteKey: string, url: string, role: Role) {
   const ctx = await apiRequest.newContext({
     baseURL: url,
-    storageState: authFile(backend, role),
+    storageState: authFile(siteKey, role),
     extraHTTPHeaders: { Origin: url },
   });
   const me = (await (await ctx.get("/api/v1/auth/me")).json()) as {
@@ -42,12 +42,12 @@ async function api(backend: "sqlite" | "pg", url: string, role: Role) {
 
 /** A post of `role`'s own, left as a draft or submitted for review. */
 async function createPost(
-  backend: "sqlite" | "pg",
+  siteKey: string,
   url: string,
   role: Role,
   status: "draft" | "pending",
 ): Promise<string> {
-  const { ctx, csrf } = await api(backend, url, role);
+  const { ctx, csrf } = await api(siteKey, url, role);
   try {
     const title = `${uid(status === "draft" ? "Draft" : "Review")} dashboard`;
     const res = await ctx.post("/api/v1/content/post", { headers: csrf, data: { title } });
@@ -78,12 +78,12 @@ function fail500(route: Route) {
   });
 }
 
-test("admin_sees_health_and_attention", async ({ as, site, backend }) => {
+test("admin_sees_health_and_attention", async ({ as, site, siteKey }) => {
   // Two anonymous reads of the home page: at least one cache lookup on the node.
   const anon = await apiRequest.newContext({ baseURL: site.url });
   for (let i = 0; i < 2; i++) expect((await anon.get("/")).status()).toBe(200);
   await anon.dispose();
-  await createPost(backend, site.url, "author2", "pending");
+  await createPost(siteKey, site.url, "author2", "pending");
 
   const page = await as("admin");
   await openDashboard(page);
@@ -112,21 +112,15 @@ test("admin_sees_health_and_attention", async ({ as, site, backend }) => {
   await expect(health.getByText("All nodes")).toBeVisible();
 
   const attention = page.getByRole("region", { name: "Needs attention" });
-  // `system.spec.ts` makes a dead job for a few seconds (retry_dead_job) and the specs run
-  // in parallel: the check has loaded, with no dead job or with a link to them.
-  await expect(attention.getByText(/^(No dead jobs|\d+ dead jobs?)$/)).toBeVisible();
-  if (await attention.getByText(/^\d+ dead jobs?$/).isVisible()) {
-    await expect(attention.getByRole("link", { name: "View dead jobs" })).toHaveAttribute(
-      "href",
-      "/admin/system/jobs?status=dead",
-    );
-  }
+  // `system.spec.ts` makes a dead job (retry_dead_job) only after this file has run
+  // (site-wide specs run last, `projects.ts`).
+  await expect(attention.getByText("No dead jobs")).toBeVisible();
   await expect(attention.getByText(/^\d+ items? wait/)).toBeVisible();
   await expect(attention.getByText("Up to date", { exact: false })).toBeVisible();
 });
 
-test("author_sees_no_admin_cards", async ({ as, site, backend }) => {
-  const title = await createPost(backend, site.url, "author", "draft");
+test("author_sees_no_admin_cards", async ({ as, site, siteKey }) => {
+  const title = await createPost(siteKey, site.url, "author", "draft");
   const page = await as("author");
   const requests: URL[] = [];
   page.on("request", (r) => requests.push(new URL(r.url())));
@@ -144,15 +138,15 @@ test("author_sees_no_admin_cards", async ({ as, site, backend }) => {
   expect(paths.filter((p) => p.startsWith("/api/v1/system"))).toEqual([]);
   expect(paths.filter((p) => p.startsWith("/api/v1/plugins"))).toEqual([]);
   // Recent drafts ask for the author's own id, never `me` (pre-flight F34).
-  const { ctx, me } = await api(backend, site.url, "author");
+  const { ctx, me } = await api(siteKey, site.url, "author");
   await ctx.dispose();
   const draftLists = requests.filter((u) => u.searchParams.get("status") === "draft");
   expect(draftLists.length).toBeGreaterThan(0);
   for (const u of draftLists) expect(u.searchParams.get("author")).toBe(me.id);
 });
 
-test("tiles_match_counts", async ({ as, site, backend }) => {
-  await createPost(backend, site.url, "admin", "draft");
+test("tiles_match_counts", async ({ as, site, siteKey }) => {
+  await createPost(siteKey, site.url, "admin", "draft");
   const page = await as("admin");
   await openDashboard(page);
   const tiles = page.getByRole("region", { name: "Posts at a glance" });

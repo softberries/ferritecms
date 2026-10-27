@@ -54,8 +54,8 @@ async function inspectInDialog(page: Page, manifest: string): Promise<void> {
   await expect(dialog(page).getByRole("group", { name: "What is being installed" })).toBeVisible();
 }
 
-test("install_inspect_approve_enable", async ({ as, site, backend, snap, expectAccessible }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("install_inspect_approve_enable", async ({ as, site, siteKey, snap, expectAccessible }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const plugin = name();
   try {
     const page = await as("admin");
@@ -113,8 +113,8 @@ test("install_inspect_approve_enable", async ({ as, site, backend, snap, expectA
   }
 });
 
-test("untouched_secret_is_kept", async ({ as, site, backend, snap, expectAccessible }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("untouched_secret_is_kept", async ({ as, site, siteKey, snap, expectAccessible }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const plugin = name();
   const secret = `e2e-secret-${uid("s")}`;
   try {
@@ -144,13 +144,16 @@ test("untouched_secret_is_kept", async ({ as, site, backend, snap, expectAccessi
 
     // Save another field: the secret is left out of the PATCH, and stays set.
     await form.getByLabel("Greeting", { exact: true }).fill("Welcome");
-    const second = page.waitForRequest(
+    // The response, not a toast: the first save's toast may still be showing.
+    const second = page.waitForResponse(
       (r) =>
-        r.method() === "PATCH" &&
+        r.request().method() === "PATCH" &&
         new URL(r.url()).pathname === `/api/v1/plugins/${plugin}/settings`,
     );
     await form.getByRole("button", { name: "Save changes" }).click();
-    expect((await second).postDataJSON()).toEqual({ greeting: "Welcome" });
+    const saved = await second;
+    expect(saved.ok()).toBe(true);
+    expect(saved.request().postDataJSON()).toEqual({ greeting: "Welcome" });
     await expect(toast(page, "Settings saved").last()).toBeVisible();
     const stored = await api.pluginSettings(plugin);
     expect(stored.secrets.api_key).toBe(true);
@@ -166,8 +169,8 @@ test("untouched_secret_is_kept", async ({ as, site, backend, snap, expectAccessi
   }
 });
 
-test("delete_keep_vs_erase", async ({ as, site, backend, snap, expectAccessible }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("delete_keep_vs_erase", async ({ as, site, siteKey, snap, expectAccessible }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const kept = name();
   const erased = name();
   try {
@@ -219,8 +222,8 @@ test("delete_keep_vs_erase", async ({ as, site, backend, snap, expectAccessible 
   }
 });
 
-test("hostile_manifest_renders_as_text", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("hostile_manifest_renders_as_text", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const plugin = name();
   const fields = {
     description: "<img src=x onerror=alert(1)>",
@@ -269,8 +272,8 @@ test("hostile_manifest_renders_as_text", async ({ as, site, backend }) => {
   }
 });
 
-test("metrics_table_shows_this_node", async ({ as, site, backend, snap, expectAccessible }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("metrics_table_shows_this_node", async ({ as, site, siteKey, snap, expectAccessible }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const plugin = name();
   try {
     await api.installPlugin(fixtureManifest(plugin), fixtureComponent());
@@ -316,8 +319,8 @@ test("metrics_table_shows_this_node", async ({ as, site, backend, snap, expectAc
   }
 });
 
-test("plugins_screens", async ({ as, site, backend, snap, expectAccessible }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("plugins_screens", async ({ as, site, siteKey, snap, expectAccessible }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const shown = name();
   const gone = name();
   try {

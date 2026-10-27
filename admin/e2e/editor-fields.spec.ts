@@ -90,8 +90,8 @@ async function save(page: Page): Promise<void> {
   await expect(indicator(page)).toHaveAttribute("data-state", "saved");
 }
 
-test("fill_every_field_kind_and_reload", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("fill_every_field_kind_and_reload", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const type = await bookType(api);
   const post = await api.create("post", `Related ${uid()}`);
   const fileName = `cover-${uid()}`;
@@ -177,8 +177,8 @@ test("fill_every_field_kind_and_reload", async ({ as, site, backend }) => {
   }
 });
 
-test("repeater_reorder_by_keyboard", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("repeater_reorder_by_keyboard", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const type = await bookType(api);
   const item = await api.create(type.name, `Book ${uid()}`, {
     fields: {
@@ -226,12 +226,12 @@ test("repeater_reorder_by_keyboard", async ({ as, site, backend }) => {
 test("relation_searches_its_types_and_picks_an_item", async ({
   as,
   site,
-  backend,
+  siteKey,
   expectAccessible,
 }) => {
   // Two types of the test's own, so the search spans several types (results grouped by
   // type) without asking any type another test may delete meanwhile.
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const s = short();
   const notes = { name: `rn${s}`, label: `Notes ${s}` };
   const clips = { name: `rc${s}`, label: `Clips ${s}` };
@@ -283,8 +283,8 @@ test("relation_searches_its_types_and_picks_an_item", async ({
   }
 });
 
-test("seo_fields_reach_the_head", async ({ as, site, backend, snap, expectAccessible }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("seo_fields_reach_the_head", async ({ as, site, siteKey, snap, expectAccessible }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const item = await api.createIn("post", `Seo ${uid()}`, "published");
   const page = await as("admin");
   try {
@@ -324,10 +324,10 @@ test("seo_fields_reach_the_head", async ({ as, site, backend, snap, expectAccess
   }
 });
 
-test("field_conflict_shows_in_412_dialog", async ({ as, site, backend, guard }) => {
+test("field_conflict_shows_in_412_dialog", async ({ as, site, siteKey, guard }) => {
   // The refused save is a 412 by design: the browser logs that failed load.
   guard.allowFailedResource(/\/api\/v1\/content\/[a-z0-9_-]+\/[0-9a-f-]+$/);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const type = await bookType(api);
   const item = await api.create(type.name, `Book ${uid()}`, {
     fields: { subtitle: "Shared", price: 1 },
@@ -359,9 +359,9 @@ test("field_conflict_shows_in_412_dialog", async ({ as, site, backend, guard }) 
   }
 });
 
-test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
+test("screens", async ({ as, site, siteKey, snap, expectAccessible }) => {
   test.setTimeout(240_000);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const type = await bookType(api);
   const post = await api.create("post", `Screens related ${uid()}`);
   const item = await api.create(type.name, `Book ${uid()}`, {

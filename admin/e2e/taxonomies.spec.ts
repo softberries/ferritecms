@@ -129,9 +129,9 @@ const byName = (terms: Term[], name: string) => {
   return term;
 };
 
-test("editor_builds_a_category_tree", async ({ as, site, backend }) => {
+test("editor_builds_a_category_tree", async ({ as, site, siteKey }) => {
   test.setTimeout(120_000);
-  const admin = await ContentApi.as(backend, site.url, "admin");
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
   const tax = await newTaxonomy(admin, true, "kd", "Kinds");
   const page = await as("editor");
   const list = tree(page, tax.label);
@@ -221,10 +221,10 @@ test("editor_builds_a_category_tree", async ({ as, site, backend }) => {
   }
 });
 
-test("cycle_is_refused_and_rolled_back", async ({ as, site, backend, guard }) => {
+test("cycle_is_refused_and_rolled_back", async ({ as, site, siteKey, guard }) => {
   // The refused move is a 422 by design: the browser logs that failed load.
   guard.allowFailedResource(/\/api\/v1\/terms\/[0-9a-f-]+$/);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const tax = await newTaxonomy(api, true, "cy", "Cycles");
   const alpha = await api.createTerm(tax.name, "Alpha");
   const beta = await api.createTerm(tax.name, "Beta");
@@ -267,8 +267,8 @@ test("cycle_is_refused_and_rolled_back", async ({ as, site, backend, guard }) =>
   }
 });
 
-test("flat_tags_table_filter", async ({ as, site, backend }) => {
-  const admin = await ContentApi.as(backend, site.url, "admin");
+test("flat_tags_table_filter", async ({ as, site, siteKey }) => {
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
   const tax = await newTaxonomy(admin, false, "lb", "Labels");
   await admin.createTerm(tax.name, "Sourdough");
   await admin.createTerm(tax.name, "Rye bread");
@@ -323,8 +323,8 @@ test("flat_tags_table_filter", async ({ as, site, backend }) => {
   }
 });
 
-test("term_stale_guard", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("term_stale_guard", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const tax = await newTaxonomy(api, false, "sg", "Stale");
   const term = await api.createTerm(tax.name, "Original");
   const page = await as("admin");
@@ -357,9 +357,9 @@ test("term_stale_guard", async ({ as, site, backend }) => {
   }
 });
 
-test("settings_saved_then_reopened_save_without_a_stale_prompt", async ({ as, site, backend }) => {
+test("settings_saved_then_reopened_save_without_a_stale_prompt", async ({ as, site, siteKey }) => {
   // The dialog's next opening starts from the saved taxonomy (final review B7).
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const tax = await newTaxonomy(api, false, "rs", "Resave");
   const page = await as("admin");
   const dialog = page.locator("[data-slot=taxonomy-settings-dialog]");
@@ -380,8 +380,8 @@ test("settings_saved_then_reopened_save_without_a_stale_prompt", async ({ as, si
   }
 });
 
-test("admin_creates_taxonomy_for_a_custom_type", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("admin_creates_taxonomy_for_a_custom_type", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const s = short();
   const type = { name: `bk${s}`, label: `Books ${s}` };
   await api.createType(type.name, type.label);
@@ -427,9 +427,9 @@ test("palette_opens_new_taxonomy", async ({ as }) => {
   await expect(page).toHaveURL(/\/admin\/structure\/taxonomies$/);
 });
 
-test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
+test("screens", async ({ as, site, siteKey, snap, expectAccessible }) => {
   test.setTimeout(240_000);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const cats = await newTaxonomy(api, true, "sc", "Topics");
   const tags = await newTaxonomy(api, false, "st", "Keywords");
   const travel = await api.createTerm(cats.name, "Travel");

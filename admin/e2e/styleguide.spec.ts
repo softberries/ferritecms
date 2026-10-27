@@ -68,7 +68,10 @@ test("styleguide_screens", async ({ as, snap, expectAccessible }) => {
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toBeHidden();
 
-  await page.getByRole("button", { name: "Schedule…" }).click();
+  // Opened from the keyboard: whether focus put back after a mouse-opened dialog shows a
+  // ring is up to the engine's `:focus-visible` heuristics (Firefox shows none).
+  await page.getByRole("button", { name: "Schedule…" }).focus();
+  await page.keyboard.press("Enter");
   const dialog = page.getByRole("dialog", { name: "Schedule post" });
   await expect(dialog).toBeVisible();
   await snap(page, "styleguide-overlays-dialog");
@@ -107,11 +110,11 @@ test("styleguide_compact_density", async ({ as }) => {
   expect(await button.evaluate((el) => el.getBoundingClientRect().height)).toBe(30);
 });
 
-test("styleguide_touch_targets", async ({ browser, backend, site, guard }) => {
+test("styleguide_touch_targets", async ({ browser, siteKey, site, guard }) => {
   // On a touch screen controls and rows stay at least 44 px whatever the density (11 §4).
   const ctx = await browser.newContext({
     baseURL: site.url,
-    storageState: authFile(backend, "admin"),
+    storageState: authFile(siteKey, "admin"),
     viewport: { width: 390, height: 844 },
     hasTouch: true,
     isMobile: true,

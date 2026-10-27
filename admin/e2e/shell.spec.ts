@@ -7,6 +7,7 @@ import type { Page, Route } from "@playwright/test";
 import { expect, test } from "./support/fixtures";
 import { mod } from "./support/keys";
 import { authFile } from "./support/server";
+import { SNAP_PROJECT } from "./support/projects";
 import { screenFile, settle, VIEWPORTS } from "./support/snap";
 
 // The browser logs every non-2xx fetch as a console error; the state tests expect some.
@@ -86,11 +87,11 @@ test("sidebar_collapses_and_persists", async ({ as, context }) => {
   await page.keyboard.press("Escape");
 });
 
-test("mobile_nav_sheet", async ({ browser, backend, site, guard }) => {
+test("mobile_nav_sheet", async ({ browser, siteKey, site, guard }) => {
   // A phone: touch targets stay at least 44 px (11 §8).
   const ctx = await browser.newContext({
     baseURL: site.url,
-    storageState: authFile(backend, "author"),
+    storageState: authFile(siteKey, "author"),
     viewport: VIEWPORTS.mobile,
     hasTouch: true,
     isMobile: true,
@@ -281,10 +282,16 @@ test("reduced_motion_disables_transforms", async ({ as }) => {
   expect(["", "none"]).toContain(still[0]);
 });
 
-/** Tabs until `target` has focus (at most `max` presses). */
+/**
+ * Tabs until `target` has focus (at most `max` presses). WebKit on macOS moves Tab
+ * through form controls only, as Safari does by default; Option+Tab reaches links too
+ * (10 §3).
+ */
 async function tabTo(page: Page, target: ReturnType<Page["locator"]>, max = 20): Promise<void> {
+  const webkitOnMac =
+    page.context().browser()?.browserType().name() === "webkit" && process.platform === "darwin";
   for (let i = 0; i < max; i++) {
-    await page.keyboard.press("Tab");
+    await page.keyboard.press(webkitOnMac ? "Alt+Tab" : "Tab");
     if (await target.evaluate((el) => el === document.activeElement)) return;
   }
   throw new Error("focus never reached the target");
@@ -295,7 +302,7 @@ const ring = (el: Element) => {
   return `${s.outlineStyle} ${s.outlineWidth}`;
 };
 
-test("keyboard_focus_rings_in_the_shell", async ({ as, snap }) => {
+test("keyboard_focus_rings_in_the_shell", async ({ as, siteKey, snap }) => {
   const page = await as("admin");
   await openDashboard(page);
   // A sidebar row (inset ring inside the sidebar) ...
@@ -313,7 +320,9 @@ test("keyboard_focus_rings_in_the_shell", async ({ as, snap }) => {
   await page.emulateMedia({ colorScheme: "dark" });
   await tabTo(page, posts);
   await settle(page);
-  await page.screenshot({ path: screenFile("shell-focus-nav-dark", "dark", "desktop") });
+  if (siteKey === SNAP_PROJECT) {
+    await page.screenshot({ path: screenFile("shell-focus-nav-dark", "dark", "desktop") });
+  }
   await page.emulateMedia({ colorScheme: "light" });
 
   // ... and a top-bar button.

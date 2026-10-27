@@ -1,8 +1,13 @@
 name: CI
 
 on:
+  # Work lands on `develop` and reaches `main` through one PR per batch; CI runs there
+  # (and on demand: `gh workflow run CI --ref <branch>`), not on every branch push.
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -53,25 +58,12 @@ jobs:
         env:
           FERRITE_TEST_PG_URL: postgres://ferrite@localhost:5432/ferrite_test
 
-  # The admin SPA (M2b-1): lint, types, unit tests, the API client drift check, the build,
-  # then Playwright against a release `ferrite serve` (SQLite, plus the Postgres smoke
-  # project; 10 §3). `check` stays without `admin/dist`, so it covers the placeholder.
+  # The admin SPA (M2b-1): lint, types, unit tests, the API client drift check and the
+  # build, then the release binary (embedding the fresh `admin/dist`) and the example
+  # plugin the Plugins spec installs, handed to `admin-e2e` as artifacts. `check` stays
+  # without `admin/dist`, so it covers the placeholder.
   admin:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_HOST_AUTH_METHOD: trust
-          POSTGRES_USER: ferrite
-          POSTGRES_DB: ferrite_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - name: Free disk space
         run: |
@@ -103,15 +95,103 @@ jobs:
       - run: cargo build --release --locked -p ferrite
       # The Plugins spec installs this example plugin (`admin/e2e/support/plugin-fixture.ts`).
       - run: cargo build --manifest-path plugins/Cargo.toml --target wasm32-wasip2 --release --locked -p admin-e2e
-      - run: pnpm -C admin exec playwright install --with-deps chromium
-      - run: pnpm -C admin e2e
-        env:
-          FERRITE_TEST_PG_URL: postgres://ferrite@localhost:5432/ferrite_test
       - uses: actions/upload-artifact@v4
-        if: always()
+        with:
+          name: admin-dist
+          path: admin/dist/
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ferrite-release
+          path: target/release/ferrite
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: admin-e2e-plugin
+          path: plugins/target/wasm32-wasip2/release/admin_e2e.wasm
+          if-no-files-found: error
+          retention-days: 3
+
+  # Every E2E spec in four parallel jobs (M2b P55; 10 §3): Chromium on SQLite and on
+  # Postgres, Firefox and WebKit on SQLite, against the binary and plugin `admin` built.
+  # Every job has the Postgres service; only `chromium-pg` gets FERRITE_TEST_PG_URL (its
+  # global setup fails without it). Design screenshots come from `chromium-sqlite` only.
+  admin-e2e:
+    needs: admin
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [chromium-sqlite, chromium-pg, firefox-sqlite, webkit-sqlite]
+        include:
+          - project: chromium-sqlite
+            engine: chromium
+          - project: chromium-pg
+            engine: chromium
+            pg_url: postgres://ferrite@localhost:5432/ferrite_test
+          - project: firefox-sqlite
+            engine: firefox
+          - project: webkit-sqlite
+            engine: webkit
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_USER: ferrite
+          POSTGRES_DB: ferrite_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: admin/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: admin/pnpm-lock.yaml
+      - run: pnpm -C admin install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: admin-dist
+          path: admin/dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: ferrite-release
+          path: target/release
+      - uses: actions/download-artifact@v4
+        with:
+          name: admin-e2e-plugin
+          path: plugins/target/wasm32-wasip2/release
+      # Artifacts do not keep the executable bit.
+      - run: chmod +x target/release/ferrite
+      - run: pnpm -C admin exec playwright install --with-deps ${{ matrix.engine }}
+      - run: pnpm -C admin e2e --project ${{ matrix.project }}
+        env:
+          FERRITE_TEST_PG_URL: ${{ matrix.pg_url }}
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: admin-e2e-${{ matrix.project }}
+          path: |
+            admin/test-results/report/
+            admin/test-results/artifacts/
+            admin/test-results/e2e-logs/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: always() && matrix.project == 'chromium-sqlite'
         with:
           name: admin-screens
-          path: admin/test-results/
+          path: admin/test-results/screens/
           if-no-files-found: ignore
 
   # The cluster example (P24): validated and built, not started (`docker compose up`

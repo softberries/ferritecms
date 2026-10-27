@@ -43,8 +43,8 @@ async function published(api: ContentApi, type: string, title: string): Promise<
   return api.transition(await api.create(type, title), "publish");
 }
 
-test("save_general_and_see_title_on_site", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("save_general_and_see_title_on_site", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const before = await api.getSettings();
   const page = await as("admin");
   const title = uid("Site");
@@ -77,8 +77,8 @@ test("save_general_and_see_title_on_site", async ({ as, site, backend }) => {
   }
 });
 
-test("front_page_choice_changes_home", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("front_page_choice_changes_home", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const before = await api.getSettings();
   const title = uid("Front");
   const home = await published(api, "page", title);
@@ -111,8 +111,8 @@ test("front_page_choice_changes_home", async ({ as, site, backend }) => {
   }
 });
 
-test("permalink_change_warns", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("permalink_change_warns", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const before = await api.getSettings();
   const post = await published(api, "post", uid("Moved"));
   const page = await as("admin");
@@ -165,8 +165,8 @@ test("permalink_change_warns", async ({ as, site, backend }) => {
   }
 });
 
-test("settings_stale_guard", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("settings_stale_guard", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const before = await api.getSettings();
   const a = await as("admin");
   const b = await as("admin");

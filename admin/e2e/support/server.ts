@@ -7,6 +7,7 @@ import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Backend } from "./projects";
 import { ACCOUNTS } from "./users";
 import { startSmtpSink } from "./smtp-sink";
 
@@ -190,8 +191,7 @@ async function stopChild(child: ChildProcess): Promise<void> {
   clearTimeout(timer);
 }
 
-/** An E2E site's backend; one Playwright project each (`playwright.config.ts`). */
-export type Backend = "sqlite" | "pg";
+export type { Backend };
 
 /** The `totp` account's enrollment: its secret and the step its confirm code used. */
 export interface TotpEnrollment {
@@ -201,6 +201,7 @@ export interface TotpEnrollment {
 
 /** What global setup tells the workers about a running site (`FERRITE_E2E_SITES`). */
 export interface SiteInfo {
+  backend: Backend;
   url: string;
   data: string;
   mailDir: string;
@@ -210,21 +211,22 @@ export interface SiteInfo {
 
 const SITES_ENV = "FERRITE_E2E_SITES";
 
-export function publishSites(sites: Partial<Record<Backend, SiteInfo>>): void {
+/** Publishes the running sites, by project name (`projects.ts`), to the workers. */
+export function publishSites(sites: Record<string, SiteInfo>): void {
   process.env[SITES_ENV] = JSON.stringify(sites);
 }
 
-/** The running site of `backend`, as global setup published it. */
-export function siteInfo(backend: Backend): SiteInfo {
+/** The running site of the project `siteKey`, as global setup published it. */
+export function siteInfo(siteKey: string): SiteInfo {
   const raw = process.env[SITES_ENV];
-  const site = raw ? (JSON.parse(raw) as Partial<Record<Backend, SiteInfo>>)[backend] : undefined;
-  if (!site) throw new Error(`no ${backend} E2E site; global setup did not start one`);
+  const site = raw ? (JSON.parse(raw) as Record<string, SiteInfo>)[siteKey] : undefined;
+  if (!site) throw new Error(`no E2E site for ${siteKey}; global setup did not start one`);
   return site;
 }
 
-/** The storage state of a harness account on `backend`'s site. */
-export function authFile(backend: Backend, login: string): string {
-  return join(adminDir, "e2e", ".auth", backend, `${login}.json`);
+/** The storage state of a harness account on the site of the project `siteKey`. */
+export function authFile(siteKey: string, login: string): string {
+  return join(adminDir, "e2e", ".auth", siteKey, `${login}.json`);
 }
 
 /** `admin/test-results`, Playwright's output folder. */

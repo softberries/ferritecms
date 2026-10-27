@@ -9,14 +9,15 @@
 // The tests of one file run one after the other.
 
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page, Request } from "@playwright/test";
 import { ContentApi } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
 import { uid } from "./support/uid";
+import { packTheme } from "../src/appearance/ustar";
 
 const FIXTURES = resolve(dirname(fileURLToPath(import.meta.url)), "../src/appearance/__fixtures__");
 const FOLDER = join(FIXTURES, "blog-min");
@@ -39,16 +40,31 @@ async function open(page: Page): Promise<void> {
 
 /**
  * Picks `folder` in the open upload dialog: the folder input on engines whose
- * Playwright supports directory upload (Chromium, Firefox); on WebKit the same theme's
- * `.tar` (only the blog-min fixture has one).
+ * Playwright supports directory upload (Chromium, Firefox); on WebKit, which has none
+ * (10 §3), the same theme as a `.tar` through the bundle input (blog-min's fixture, or
+ * the folder packed as the dialog packs it).
  */
 async function pickFolder(page: Page, browserName: string, folder: string): Promise<void> {
   if (browserName === "webkit") {
-    if (folder !== FOLDER) test.skip(true, "WebKit has no directory upload in Playwright");
-    await dialog(page).locator("[data-slot=theme-tar-input]").setInputFiles(TAR);
+    await dialog(page)
+      .locator("[data-slot=theme-tar-input]")
+      .setInputFiles(folder === FOLDER ? TAR : packed(folder));
     return;
   }
   await dialog(page).locator("[data-slot=theme-folder-input]").setInputFiles(folder);
+}
+
+/** `folder` packed into `<folder>.tar` beside it; its path. */
+function packed(folder: string): string {
+  const files = readdirSync(folder, { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile())
+    .map((e) => {
+      const path = join(e.parentPath, e.name);
+      return { path: relative(folder, path).split(sep).join("/"), bytes: readFileSync(path) };
+    });
+  const tar = `${folder}.tar`;
+  writeFileSync(tar, packTheme(files));
+  return tar;
 }
 
 /** A theme folder whose index template does not compile. */
@@ -64,8 +80,8 @@ function brokenTheme(name: string): string {
   return dir;
 }
 
-test("upload_folder_installs_and_activates", async ({ as, site, backend, browserName }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("upload_folder_installs_and_activates", async ({ as, site, siteKey, browserName }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const before = await api.activeTheme();
   const page = await as("admin");
   try {
@@ -116,12 +132,12 @@ test("upload_folder_installs_and_activates", async ({ as, site, backend, browser
 test("replacing_a_theme_warns", async ({
   as,
   site,
-  backend,
+  siteKey,
   browserName,
   snap,
   expectAccessible,
 }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   await api.installTheme(readFileSync(TAR));
   const page = await as("admin");
   try {
@@ -151,18 +167,17 @@ test("replacing_a_theme_warns", async ({
 test("upload_error_lists_template_problems", async ({
   as,
   site,
-  backend,
+  siteKey,
   browserName,
   guard,
   snap,
   expectAccessible,
 }) => {
-  test.skip(browserName === "webkit", "WebKit has no directory upload in Playwright");
   // The browser logs the refused upload's 422; the dialog shows it.
   guard.allowFailedResource(/\/api\/v1\/themes(\?|$)/);
   const name = uid("broken").toLowerCase();
   const folder = brokenTheme(name);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const page = await as("admin");
   try {
     await open(page);
@@ -183,8 +198,8 @@ test("upload_error_lists_template_problems", async ({
   }
 });
 
-test("theme_settings_save", async ({ as, site, backend, snap, expectAccessible }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("theme_settings_save", async ({ as, site, siteKey, snap, expectAccessible }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const page = await as("admin");
   try {
     await open(page);
@@ -212,8 +227,8 @@ test("theme_settings_save", async ({ as, site, backend, snap, expectAccessible }
   }
 });
 
-test("themes_screens", async ({ as, site, backend, snap, expectAccessible }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("themes_screens", async ({ as, site, siteKey, snap, expectAccessible }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   // A second theme, so the list has an inactive card to activate.
   await api.installTheme(readFileSync(TAR));
   const page = await as("admin");

@@ -104,11 +104,17 @@ test("search_finds_seeded_post", async ({ as, site }) => {
   for (const url of searches) {
     expect(new URL(url).searchParams.get("limit")).toBe("8");
   }
-  const lastRound = searches.filter((u) => new URL(u).searchParams.get("q") === "WebAssembly");
-  expect(lastRound.map((u) => new URL(u).pathname).sort()).toEqual([
-    "/api/v1/content/page",
-    "/api/v1/content/post",
-  ]);
+  // Custom types that tests beside this one create are searched too, and one deleted
+  // meanwhile (a 404) makes the palette read the types and search again: the built-in
+  // types are both searched, media never.
+  const lastRound = new Set(
+    searches
+      .filter((u) => new URL(u).searchParams.get("q") === "WebAssembly")
+      .map((u) => new URL(u).pathname),
+  );
+  expect(lastRound).toContain("/api/v1/content/page");
+  expect(lastRound).toContain("/api/v1/content/post");
+  expect(lastRound).not.toContain("/api/v1/content/media");
 
   await hit.click();
   await expect(page).toHaveURL(`${site.url}/admin/content/post/${id}`);
@@ -122,10 +128,10 @@ test("search_finds_seeded_post", async ({ as, site }) => {
   ).toContainText(SEEDED);
 });
 
-test("body_only_hit_shows_snippet", async ({ as, site, backend, snap, expectAccessible }) => {
+test("body_only_hit_shows_snippet", async ({ as, site, siteKey, snap, expectAccessible }) => {
   // A hit the server matched in its text, not its title, says so and shows the start of
   // its excerpt (plain text, at most 120 characters).
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const word = `zq${uid("")
     .replace(/[^a-z0-9]/g, "")
     .slice(-8)}`;
@@ -187,7 +193,8 @@ test("switch_theme_from_palette", async ({ as }) => {
   await expect(html).toHaveClass("light");
 
   await openPalette(page);
-  await page.keyboard.type("dark");
+  // The whole name: content that tests beside this one write could match "dark" alone.
+  await page.keyboard.type("dark theme");
   await expect(option(page, /Dark theme/)).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("Enter");
   await expect(palette(page)).toBeHidden();

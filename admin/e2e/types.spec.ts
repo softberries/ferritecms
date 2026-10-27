@@ -120,8 +120,8 @@ async function save(page: Page): Promise<void> {
   await expect(saveState(page)).toHaveAttribute("data-state", "saved");
 }
 
-test("create_type_with_fields_then_write_an_item", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("create_type_with_fields_then_write_an_item", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const page = await as("admin");
   const s = short();
   const label = `Recipes ${s}`;
@@ -214,8 +214,8 @@ test("create_type_with_fields_then_write_an_item", async ({ as, site, backend })
   }
 });
 
-test("reorder_fields_by_keyboard", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("reorder_fields_by_keyboard", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const type = await newType(api, [
     { name: "alpha", label: "Alpha", kind: "text" },
     { name: "beta", label: "Beta", kind: "number" },
@@ -258,11 +258,11 @@ test("reorder_fields_by_keyboard", async ({ as, site, backend }) => {
 test("removing_a_field_warns_and_items_still_save", async ({
   as,
   site,
-  backend,
+  siteKey,
   snap,
   expectAccessible,
 }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const type = await newType(api, [
     { name: "subtitle", label: "Subtitle", kind: "text", required: true },
     { name: "genre", label: "Genre", kind: "select", options: ["fiction", "essay"] },
@@ -335,10 +335,10 @@ test("removing_a_field_warns_and_items_still_save", async ({
   }
 });
 
-test("relation_limited_to_types", async ({ as, site, backend, snap, expectAccessible }) => {
+test("relation_limited_to_types", async ({ as, site, siteKey, snap, expectAccessible }) => {
   // P52: the builder sets a relation's target types (here: pages only), the change says
   // that stored values may now be refused, and the editor's picker searches only pages.
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const type = await newType(api, [{ name: "related", label: "Related", kind: "relation" }]);
   const token = uid("shelf");
   const post = await api.createIn("post", `Post ${token}`, "published");
@@ -404,8 +404,8 @@ test("relation_limited_to_types", async ({ as, site, backend, snap, expectAccess
   }
 });
 
-test("type_stale_guard", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("type_stale_guard", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const type = await newType(api, [{ name: "alpha", label: "Alpha", kind: "text" }]);
   const a = await as("admin");
   const b = await as("admin");
@@ -450,14 +450,14 @@ test("type_stale_guard", async ({ as, site, backend }) => {
 test("delete_type_with_content_is_refused_with_reason", async ({
   as,
   site,
-  backend,
+  siteKey,
   guard,
   snap,
   expectAccessible,
 }) => {
   // The refused deletes are 422s by design: the browser logs those failed loads.
   guard.allowFailedResource(/\/api\/v1\/types\/[a-z0-9_-]+$/);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const type = await newType(api, [{ name: "alpha", label: "Alpha", kind: "text" }]);
   const item = await api.create(type.name, `Kept ${uid()}`);
   const page = await as("admin");
@@ -534,9 +534,9 @@ test("palette_opens_new_type", async ({ as }) => {
   await expect(page).toHaveURL(/\/admin\/structure\/types$/);
 });
 
-test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
+test("screens", async ({ as, site, siteKey, snap, expectAccessible }) => {
   test.setTimeout(240_000);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const type = await newType(api, SCHEMA, "bk");
   const page = await as("admin");
   try {

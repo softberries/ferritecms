@@ -47,7 +47,7 @@ const brokenPng = (name: string) => ({
   ]),
 });
 
-test("status_shows_backends_and_schema", async ({ as, site, snap, expectAccessible }) => {
+test("status_shows_backends_and_schema", async ({ as, site, backend, snap, expectAccessible }) => {
   const page = await as("admin");
   // `/admin/system` opens Status.
   await page.goto("/admin/system");
@@ -56,7 +56,9 @@ test("status_shows_backends_and_schema", async ({ as, site, snap, expectAccessib
 
   const region = (name: string) => screen(page).getByRole("region", { name });
   const facts = region("Site");
-  await expect(facts.getByText("SQLite", { exact: true })).toBeVisible();
+  await expect(
+    facts.getByText(backend === "pg" ? "Postgres" : "SQLite", { exact: true }),
+  ).toBeVisible();
   await expect(facts.getByText("Local folder", { exact: true })).toBeVisible();
   await expect(facts.getByText("Solo", { exact: true })).toBeVisible();
   await expect(facts.getByText(site.url, { exact: true })).toBeVisible();
@@ -132,8 +134,8 @@ test("system_screens", async ({ as, snap, expectAccessible }) => {
   await expect(page.getByRole("heading", { name: /not found/i })).toBeVisible();
 });
 
-test("retry_dead_job", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("retry_dead_job", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   let mediaId: string | undefined;
   try {
     const before = new Set((await jobs(api, "kind=media.variants")).map((j) => j.id));
@@ -194,8 +196,8 @@ test("retry_dead_job", async ({ as, site, backend }) => {
   }
 });
 
-test("audit_filter_by_action_prefix", async ({ as, site, backend, snap, expectAccessible }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("audit_filter_by_action_prefix", async ({ as, site, siteKey, snap, expectAccessible }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   // A token named with markup: its audit row's details carry the name.
   const tokenName = `<img src=x onerror=alert(1)> ${uid("tok")}`;
   const created = await api.ctx.post(`/api/v1/users/${api.me.id}/tokens`, {

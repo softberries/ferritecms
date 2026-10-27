@@ -1,18 +1,19 @@
-// Starts the E2E sites once per run: SQLite always, Postgres when FERRITE_TEST_PG_URL is
-// set (schema `e2e_<random>`). Logs the harness accounts in over the API and saves their
-// storage states, publishes the sites to the workers through the environment, and
-// returns the teardown.
+// Starts the E2E sites once per run: one per selected project (`projects.ts`), each with
+// its own data folder (and, for `chromium-pg`, its own schema `e2e_<random>` in
+// FERRITE_TEST_PG_URL), so engines and backends never share state. Logs the harness
+// accounts in over the API and saves their storage states, publishes the sites to the
+// workers through the environment, and returns the teardown.
 
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
 import { request } from "@playwright/test";
 import { writeContactSheet } from "./contact-sheet";
+import { selectedProjects, SNAP_PROJECT, type SiteProject } from "./projects";
 import {
   authFile,
   publishSites,
   startSite,
-  type Backend,
   type Site,
   type SiteInfo,
   type TotpEnrollment,
@@ -22,34 +23,55 @@ import { stepAt, totpCode } from "./totp";
 import { ACCOUNTS, account, forwardedFor } from "./users";
 
 export default async function globalSetup(): Promise<() => Promise<void>> {
-  // The contact sheet shows this run's screens only.
-  rmSync(SCREENS_DIR, { recursive: true, force: true });
+  const projects = selectedProjects();
+  if (projects.length === 0) throw new Error("no E2E project selected");
   const pgUrl = process.env.FERRITE_TEST_PG_URL;
-  const schema = pgUrl ? `e2e_${randomBytes(6).toString("hex")}` : undefined;
-  const started = await Promise.allSettled([
-    startSite({ name: "sqlite" }),
-    ...(pgUrl && schema ? [startSite({ name: "pg", db: { url: pgUrl, schema } })] : []),
-  ]);
-  const sites: [Backend, Site][] = [];
+  if (projects.some((p) => p.backend === "pg") && !pgUrl) {
+    // CI defines `chromium-pg` without the URL so that a job missing it fails (10 §2).
+    throw new Error("chromium-pg is selected but FERRITE_TEST_PG_URL is missing");
+  }
+  // The contact sheet shows this run's screens only; only `chromium-sqlite` takes them.
+  const snaps = projects.some((p) => p.name === SNAP_PROJECT);
+  if (snaps) rmSync(SCREENS_DIR, { recursive: true, force: true });
+  else console.log(`E2E: no review screenshots or contact sheet outside ${SNAP_PROJECT}`);
+
+  const schemas: string[] = [];
+  const started = await Promise.allSettled(
+    projects.map((p) => {
+      if (p.backend === "sqlite") return startSite({ name: p.name });
+      const schema = `e2e_${randomBytes(6).toString("hex")}`;
+      schemas.push(schema);
+      return startSite({ name: p.name, db: { url: pgUrl ?? "", schema } });
+    }),
+  );
+  const sites: [SiteProject, Site][] = [];
   started.forEach((r, i) => {
-    if (r.status === "fulfilled") sites.push([i === 0 ? "sqlite" : "pg", r.value]);
+    const p = projects[i];
+    if (p && r.status === "fulfilled") sites.push([p, r.value]);
   });
 
   const teardown = async () => {
     await Promise.all(sites.map(([, s]) => s.stop()));
-    if (pgUrl && schema) dropSchema(pgUrl, schema);
-    writeContactSheet();
+    if (pgUrl) for (const schema of schemas) dropSchema(pgUrl, schema);
+    if (snaps) writeContactSheet();
   };
 
   try {
     const failed = started.find((r) => r.status === "rejected");
     if (failed) throw failed.reason;
-    const published: Partial<Record<Backend, SiteInfo>> = {};
-    for (const [backend, site] of sites) {
-      await saveStorageStates(backend, site);
-      const totp = await enrollTotp(backend, site);
+    const published: Record<string, SiteInfo> = {};
+    for (const [project, site] of sites) {
+      await saveStorageStates(project.name, site);
+      const totp = await enrollTotp(project.name, site);
       const { url, data, mailDir, resetmePassword } = site;
-      published[backend] = { url, data, mailDir, resetmePassword, totp };
+      published[project.name] = {
+        backend: project.backend,
+        url,
+        data,
+        mailDir,
+        resetmePassword,
+        totp,
+      };
     }
     publishSites(published);
   } catch (e) {
@@ -60,7 +82,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 }
 
 /** One API login per account, each from its own forwarded address (F24). */
-async function saveStorageStates(backend: Backend, site: Site): Promise<void> {
+async function saveStorageStates(siteKey: string, site: Site): Promise<void> {
   for (const [i, a] of ACCOUNTS.entries()) {
     if (!a.storageState) continue;
     const ctx = await request.newContext({
@@ -73,10 +95,10 @@ async function saveStorageStates(backend: Backend, site: Site): Promise<void> {
       const body = (await res.json().catch(() => null)) as { status?: string } | null;
       if (res.status() !== 200 || body?.status !== "session") {
         throw new Error(
-          `${backend}: login of ${a.login} answered ${res.status()} ${JSON.stringify(body)}`,
+          `${siteKey}: login of ${a.login} answered ${res.status()} ${JSON.stringify(body)}`,
         );
       }
-      await ctx.storageState({ path: authFile(backend, a.login) });
+      await ctx.storageState({ path: authFile(siteKey, a.login) });
     } finally {
       await ctx.dispose();
     }
@@ -87,7 +109,7 @@ async function saveStorageStates(backend: Backend, site: Site): Promise<void> {
  * Turns TOTP on for the `totp` account over the API (07 §2): log in, `POST
  * /auth/totp/setup`, then `confirm` with a code computed from the returned secret.
  */
-async function enrollTotp(backend: Backend, site: Site): Promise<TotpEnrollment> {
+async function enrollTotp(siteKey: string, site: Site): Promise<TotpEnrollment> {
   const a = account("totp");
   const ctx = await request.newContext({
     baseURL: site.url,
@@ -99,7 +121,7 @@ async function enrollTotp(backend: Backend, site: Site): Promise<TotpEnrollment>
     });
     const session = (await login.json().catch(() => null)) as { csrf_token?: string } | null;
     if (login.status() !== 200 || !session?.csrf_token) {
-      throw new Error(`${backend}: login of totp answered ${login.status()}`);
+      throw new Error(`${siteKey}: login of totp answered ${login.status()}`);
     }
     const headers = { "X-CSRF-Token": session.csrf_token };
     const setup = await ctx.post("/api/v1/auth/totp/setup", { headers });
@@ -108,7 +130,7 @@ async function enrollTotp(backend: Backend, site: Site): Promise<TotpEnrollment>
       secret_base32?: string;
     } | null;
     if (setup.status() !== 200 || !body?.enrollment || !body.secret_base32) {
-      throw new Error(`${backend}: totp setup answered ${setup.status()}`);
+      throw new Error(`${siteKey}: totp setup answered ${setup.status()}`);
     }
     const step = stepAt();
     const confirm = await ctx.post("/api/v1/auth/totp/confirm", {
@@ -121,7 +143,7 @@ async function enrollTotp(backend: Backend, site: Site): Promise<TotpEnrollment>
     });
     if (!confirm.ok()) {
       throw new Error(
-        `${backend}: totp confirm answered ${confirm.status()} ${await confirm.text()}`,
+        `${siteKey}: totp confirm answered ${confirm.status()} ${await confirm.text()}`,
       );
     }
     return { secret: body.secret_base32, step };

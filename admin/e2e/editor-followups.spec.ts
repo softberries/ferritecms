@@ -81,7 +81,7 @@ async function crashAfterTakeTheirs(a: Page, b: Page, editorApi: ContentApi) {
 test("kept_copy_edits_survive_a_crash", async ({
   as,
   site,
-  backend,
+  siteKey,
   guard,
   snap,
   expectAccessible,
@@ -89,7 +89,7 @@ test("kept_copy_edits_survive_a_crash", async ({
   test.setTimeout(120_000);
   // The refused save is a 412 by design: the browser logs that failed load.
   guard.allowFailedResource(/\/api\/v1\/content\/post\/[0-9a-f-]+$/);
-  const editorApi = await ContentApi.as(backend, site.url, "editor");
+  const editorApi = await ContentApi.as(siteKey, site.url, "editor");
   const { item, theirs, mine, newer, c } = await crashAfterTakeTheirs(
     await as("editor"),
     await as("admin"),
@@ -117,9 +117,9 @@ test("kept_copy_edits_survive_a_crash", async ({
   await editorApi.dispose();
 });
 
-test("restoring_the_backup_keeps_the_kept_copy", async ({ as, site, backend, guard }) => {
+test("restoring_the_backup_keeps_the_kept_copy", async ({ as, site, siteKey, guard }) => {
   guard.allowFailedResource(/\/api\/v1\/content\/post\/[0-9a-f-]+$/);
-  const editorApi = await ContentApi.as(backend, site.url, "editor");
+  const editorApi = await ContentApi.as(siteKey, site.url, "editor");
   const { item, theirs, mine, newer, c } = await crashAfterTakeTheirs(
     await as("editor"),
     await as("admin"),
@@ -142,10 +142,10 @@ test("restoring_the_backup_keeps_the_kept_copy", async ({ as, site, backend, gua
   await editorApi.dispose();
 });
 
-test("failed_backup_restore_says_so_and_keeps_the_backup", async ({ as, site, backend, guard }) => {
+test("failed_backup_restore_says_so_and_keeps_the_backup", async ({ as, site, siteKey, guard }) => {
   guard.allowFailedResource(/\/api\/v1\/content\/post\/[0-9a-f-]+$/);
   guard.allowFailedResource(/\/autosave$/);
-  const editorApi = await ContentApi.as(backend, site.url, "editor");
+  const editorApi = await ContentApi.as(siteKey, site.url, "editor");
   const { item, newer, c } = await crashAfterTakeTheirs(
     await as("editor"),
     await as("admin"),
