@@ -131,3 +131,64 @@ describe("restore_revision", () => {
     expect((doc as EditorDocument).restoring).toBe(false);
   });
 });
+
+describe("autosave_slot", () => {
+  const SLOT = `/api/v1/content/post/${ID}/autosave`;
+
+  function slotLog() {
+    const log: { method: string; title?: string }[] = [];
+    stubRoutes({
+      [SLOT]: async (_url, req) => {
+        if (req.method === "PUT") {
+          const body = (await req.json()) as { title: string };
+          log.push({ method: "PUT", title: body.title });
+          return json({ ...body, saved_at: "2026-10-01T10:06:00Z" });
+        }
+        log.push({ method: req.method });
+        return new Response(null, { status: 204 });
+      },
+    });
+    return log;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("a_draft_edited_back_to_the_item_clears_the_slot", async () => {
+    // CI run 40404431115: invalid values sat long enough to be autosaved, were typed back
+    // to what the item holds ("Saved"), and a reload within the next 10 s opened the old
+    // invalid draft from the slot as a restored draft. Back at the item, the slot goes.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const log = slotLog();
+    renderWithRouter(<Harness start={item(4, "Stored text")} />);
+    await waitFor(() => expect(doc).not.toBeNull());
+    act(() => doc?.setTitle("Half-way title"));
+    await act(() => vi.advanceTimersByTimeAsync(11_000));
+    await waitFor(() => expect(log).toEqual([{ method: "PUT", title: "Half-way title" }]));
+
+    act(() => doc?.setTitle("Restore me"));
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    await waitFor(() => expect(log.map((r) => r.method)).toEqual(["PUT", "DELETE"]));
+    expect(doc?.saveState).toBe("saved");
+    // Nothing is written after it: the item holds the draft.
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(log.map((r) => r.method)).toEqual(["PUT", "DELETE"]);
+
+    // Edited again: the slot follows as before.
+    act(() => doc?.setTitle("Second edit"));
+    await act(() => vi.advanceTimersByTimeAsync(11_000));
+    await waitFor(() => expect(log.at(-1)).toEqual({ method: "PUT", title: "Second edit" }));
+  });
+
+  test("an_edit_undone_before_the_slot_took_it_writes_nothing", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const log = slotLog();
+    renderWithRouter(<Harness start={item(4, "Stored text")} />);
+    await waitFor(() => expect(doc).not.toBeNull());
+    act(() => doc?.setTitle("Typo"));
+    act(() => doc?.setTitle("Restore me"));
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(log).toEqual([]);
+  });
+});

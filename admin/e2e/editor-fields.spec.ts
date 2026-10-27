@@ -6,7 +6,7 @@
 // longer has listed and dropped; and the review screens. Every type and item is created
 // by the test itself (E2E data hygiene) and removed at the end.
 
-import type { Page } from "@playwright/test";
+import type { Page, Response } from "@playwright/test";
 import { showSection } from "./support/editor-snap";
 import { ContentApi, type Item } from "./support/content-api";
 import { png } from "./support/files";
@@ -352,6 +352,9 @@ test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
 
     // Required and invalid: the save is refused here and the fields say why, also from
     // focus mode (which hides the card): it ends and the first field gets the cursor.
+    const slot = (method: string) => (r: Response) =>
+      r.request().method() === method && r.url().endsWith(`/${item.id}/autosave`);
+    const autosaved = page.waitForResponse(slot("PUT"), { timeout: 60_000 });
     await card(page)
       .getByRole("textbox", { name: /^Subtitle/ })
       .fill("");
@@ -374,11 +377,16 @@ test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
     );
     await snap(page, "editor-fields-invalid", showSection(page, "fields-card", true));
     await expectAccessible(page);
-    // Back as stored: nothing unsaved before the reload below.
+    // The slot has taken the invalid draft (every 10 s, as on a slow CI runner)...
+    await autosaved;
+    // ...and typed back as stored, it is deleted: nothing unsaved before the reload
+    // below, and no restored draft after it (CI run 40404431115).
+    const cleared = page.waitForResponse(slot("DELETE"));
     await card(page)
       .getByRole("textbox", { name: /^Subtitle/ })
       .fill("A subtitle that sets the scene");
     await card(page).getByRole("textbox", { name: "Price" }).fill("24.9");
+    expect((await cleared).status()).toBe(204);
     await expect(indicator(page)).toHaveAttribute("data-state", "saved");
 
     // A field removed from the type: listed, and dropped by the next save.

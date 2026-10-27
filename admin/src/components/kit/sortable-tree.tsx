@@ -19,7 +19,6 @@ import {
   useSensor,
   useSensors,
   type Announcements,
-  type DragMoveEvent,
   type DragOverEvent,
   type DragStartEvent,
   type UniqueIdentifier,
@@ -29,10 +28,11 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
+import { getEventCoordinates } from "@dnd-kit/utilities";
 import { cn } from "cn";
 import { ArrowDownIcon, ArrowUpIcon, IndentIcon, OutdentIcon } from "lucide-react";
 import { useReducedMotion } from "motion/react";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { SortableRow, type RowAction } from "./sortable-list";
 import { DRAG_DISTANCE_PX, useSettling } from "./sortable-shared";
@@ -106,8 +106,23 @@ export function SortableTree<T>({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [offsetX, setOffsetX] = useState(0);
-  // A keyboard drag only moves up and down: its x follows the rows' indents, not intent.
-  const keyboardDrag = useRef(false);
+  // The level follows the pointer's own horizontal travel since the drag began, not
+  // dnd-kit's `delta`: dnd-kit takes the dragged node's layout shift off its delta, and
+  // this tree shifts that very node (the guide sits at the projected level), so its
+  // delta undid each level change the next frame and the guide flickered between two
+  // levels (CI run 40404431115). A keyboard drag only moves up and down: no listener,
+  // its x stays 0.
+  const stopPointer = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopPointer.current?.(), []);
+  const followPointer = (activator: Event) => {
+    stopPointer.current?.();
+    stopPointer.current = null;
+    const start = getEventCoordinates(activator);
+    if (activator instanceof KeyboardEvent || start === null) return;
+    const onMove = (e: PointerEvent) => setOffsetX(e.clientX - start.x);
+    window.addEventListener("pointermove", onMove);
+    stopPointer.current = () => window.removeEventListener("pointermove", onMove);
+  };
   const [status, setStatus] = useState("");
   const list = useRef<HTMLUListElement>(null);
   const lastOver = useRef<UniqueIdentifier | null>(null);
@@ -169,6 +184,8 @@ export function SortableTree<T>({
   };
 
   const reset = () => {
+    stopPointer.current?.();
+    stopPointer.current = null;
     settle();
     setActiveId(null);
     setOverId(null);
@@ -235,11 +252,10 @@ export function SortableTree<T>({
         },
       }}
       onDragStart={({ active, activatorEvent }: DragStartEvent) => {
-        keyboardDrag.current = activatorEvent instanceof KeyboardEvent;
+        followPointer(activatorEvent);
         setActiveId(String(active.id));
         setOverId(String(active.id));
       }}
-      onDragMove={({ delta }: DragMoveEvent) => setOffsetX(keyboardDrag.current ? 0 : delta.x)}
       onDragOver={({ over }: DragOverEvent) => setOverId(over ? String(over.id) : null)}
       onDragEnd={() => {
         if (activeId !== null && projection) {

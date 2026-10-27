@@ -703,6 +703,10 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     else if (itemId !== null && autosaves) void deleteAutosave(type, itemId).catch(() => undefined);
   }, [restoreDone, itemId, autosaves, type]);
 
+  // Whether the slot may hold a draft other than the item: a restored one, or one the
+  // autosaver (or `keepInSlot`) wrote since. A save, a discard or a restore empties it.
+  const slotHolds = useRef(restored !== null);
+
   const fail = useCallback(
     (e: unknown, op: WriteOp, onError?: (e: unknown) => void, context: ConflictContext = {}) => {
       if (needsSignIn(e)) {
@@ -724,6 +728,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
       intervalMs: AUTOSAVE_INTERVAL_MS,
       save: async (d) => {
         await putAutosave(type, itemId, autosaveInput(d));
+        slotHolds.current = true;
       },
       onError: (e) => {
         if (!needsSignIn(e)) return;
@@ -812,18 +817,50 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   const backupNow = useCallback(() => backupRef.current, []);
 
   /**
+   * The draft is back at what the item holds: nothing is left to autosave, and a draft
+   * the slot took earlier goes, or a reload would open that older draft as a restored
+   * one under a "Saved" indicator (CI run 40404431115). A running write lands first and
+   * none starts while the `DELETE` runs; an edit meanwhile is written after it.
+   */
+  const clearing = useRef(false);
+  const clearSlot = useCallback(() => {
+    const a = autosaver.current;
+    if (!a) return;
+    a.markClean();
+    if (!slotHolds.current || clearing.current || itemId === null) return;
+    clearing.current = true;
+    void (async () => {
+      const release = await a.hold();
+      try {
+        if (slotHolds.current && !isDirtyNow()) {
+          await deleteAutosave(type, itemId);
+          slotHolds.current = false;
+        }
+      } catch {
+        // It stays: the next edit writes over it, the next save deletes it.
+      } finally {
+        clearing.current = false;
+        release();
+      }
+    })();
+  }, [itemId, type, isDirtyNow]);
+
+  /**
    * A change of the draft: the slot follows it (never on a read-only screen); while a
    * kept copy holds the slot, the local backup does (cleared when nothing is unsaved).
    */
   const touch = useCallback(() => {
     if (readOnlyRef.current !== null) return;
-    if (keptRef.current === null) autosaver.current?.markDirty(draftNow);
+    if (keptRef.current === null) {
+      if (isDirtyNow()) autosaver.current?.markDirty(draftNow);
+      else clearSlot();
+    }
     // A backup still on offer is not written over: the user has not chosen yet.
     else if (backupKey && backupRef.current === null) {
       if (isDirtyNow()) writeBackup(backupKey, draftNow());
       else clearBackup(backupKey);
     }
-  }, [draftNow, backupKey, isDirtyNow]);
+  }, [draftNow, backupKey, isDirtyNow, clearSlot]);
 
   const recompute = useCallback(() => {
     const isDirty = isDirtyNow();
@@ -1036,6 +1073,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
           // held, so nothing can come between). The working draft's local backup is
           // saved now too (one still on offer is another draft: it stays).
           autosaver.current?.markClean();
+          slotHolds.current = false;
           if (backupKey && backupRef.current === null) clearBackup(backupKey);
           const keptCopy = keptRef.current;
           if (keptCopy && current) {
@@ -1187,6 +1225,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
       const release = (await a?.hold()) ?? (() => undefined);
       try {
         await putAutosave(type, itemId, autosaveInput(d));
+        slotHolds.current = true;
         // The slot holds this draft: nothing left to write when the screen goes.
         a?.markClean();
         if (options.asKept) {
@@ -1224,6 +1263,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     const release = (await a?.hold()) ?? (() => undefined);
     try {
       await deleteAutosave(type, itemId);
+      slotHolds.current = false;
       a?.markClean();
       a?.dispose();
     } finally {
@@ -1257,6 +1297,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     const release = (await a?.hold()) ?? (() => undefined);
     try {
       await deleteAutosave(type, itemId);
+      slotHolds.current = false;
       setKept(null);
     } finally {
       release();
@@ -1321,6 +1362,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
         );
         // The server deleted this user's slot with the restore: the old working draft
         // must not go back there (not by the timer, not when the screen goes).
+        slotHolds.current = false;
         a?.markClean();
         a?.dispose();
         // The working draft (and so its local backup) is replaced by the revision.

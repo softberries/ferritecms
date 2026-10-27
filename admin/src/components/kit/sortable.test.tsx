@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PencilIcon } from "lucide-react";
@@ -201,6 +201,89 @@ describe("sortable", () => {
       "Home",
       "Blog",
     ]);
+  });
+
+  it("sortable_tree_pointer_indent_holds_while_the_pointer_rests", async () => {
+    // CI run 40404431115: the dragged row is drawn at its projected level by its own
+    // inline margin, which moves its rect; dnd-kit takes that layout shift off its drag
+    // delta, so the level fell back, the margin with it, and the next frame indented it
+    // again: the guide flickered every frame and the drop's level was the frame's. Here
+    // a row's rect follows its frame's margin, as in a browser.
+    vi.restoreAllMocks();
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: Element,
+    ) {
+      const row = this.closest("[data-sortable-row]");
+      if (!row?.parentElement) return new DOMRect(0, 0, 0, 0);
+      const rows = Array.from(row.parentElement.querySelectorAll(":scope > [data-sortable-row]"));
+      const frame = row.firstElementChild as HTMLElement | null;
+      const left = Number.parseFloat(frame?.style.marginInlineStart || "0");
+      return new DOMRect(left, rows.indexOf(row) * ROW_H, 320 - left, ROW_H);
+    });
+    // The browser reports the narrower row (dnd-kit then measures it again); here every
+    // observer hears after each render.
+    const observers = new Set<ResizeObserverCallback>();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private cb: ResizeObserverCallback) {}
+        observe() {
+          observers.add(this.cb);
+        }
+        unobserve() {}
+        disconnect() {
+          observers.delete(this.cb);
+        }
+      },
+    );
+    const settle = async () => {
+      await tick();
+      act(() => {
+        for (const cb of observers) cb([], {} as ResizeObserver);
+      });
+      await tick();
+    };
+    const nodes: TreeNode<string>[] = [
+      { id: "n1", parentId: null, data: "Alpha" },
+      { id: "n2", parentId: null, data: "Beta" },
+    ];
+    const onChange = vi.fn<(next: TreeNode<string>[], moved: { id: string }) => void>();
+    render(
+      <SortableTree
+        nodes={nodes}
+        label={(d) => d}
+        render={(n) => <span>{n.data}</span>}
+        onChange={onChange}
+        maxDepth={8}
+        unordered
+      />,
+    );
+    const handle = screen.getByRole("button", { name: "Reorder Beta" });
+    const at = (x: number) => ({ clientX: x, clientY: 60, isPrimary: true, button: 0 });
+    const guide = () =>
+      document.querySelector<HTMLElement>("[data-placeholder]")?.style.marginInlineStart;
+    const margins: (string | undefined)[] = [];
+    fireEvent.pointerDown(handle, at(10));
+    try {
+      for (const x of [16, 25, 40]) {
+        fireEvent.pointerMove(document, at(x));
+        await settle();
+      }
+      // Several renders with the pointer at rest: the guide stays one level in.
+      for (let i = 0; i < 4; i++) {
+        await settle();
+        margins.push(guide());
+      }
+    } finally {
+      fireEvent.pointerUp(document, at(40));
+      // dnd-kit stops clicks on the document for 50 ms after a pointer drag: wait it out,
+      // or it eats the next test's first clicks.
+      await act(() => new Promise((r) => setTimeout(r, 60)));
+      vi.unstubAllGlobals();
+    }
+    expect(margins).toEqual(["24px", "24px", "24px", "24px"]);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0]?.[1]).toMatchObject({ id: "n2", parentId: "n1" });
   });
 
   it("sortable_tree_unordered_moves_only_change_the_parent", async () => {

@@ -142,6 +142,17 @@ interface RestoreTarget {
 const KEPT_TOAST = "editor-kept";
 /** The revision restore's toast (with Undo), dismissed when the screen goes. */
 const REVISION_TOAST = "editor-revision";
+/**
+ * The options of a message that takes over the revision toast (progress, failure, Undo
+ * done): sonner merges an update into the toast with its id, so the restore's
+ * description, its Undo and its long duration are cleared, not carried over.
+ */
+const REVISION_UPDATE = {
+  id: REVISION_TOAST,
+  description: undefined,
+  action: undefined,
+  duration: undefined,
+} as const;
 
 export interface EditorScreenProps {
   type: string;
@@ -443,7 +454,7 @@ export function EditorScreen({
     setRestoring(target.rid);
     // The editor is locked meanwhile; the toast says what is happening (the drawer is
     // closed for an Undo).
-    toast.loading(t("revisions.restoring"), { id: REVISION_TOAST });
+    toast.loading(t("revisions.restoring"), REVISION_UPDATE);
     let failed = false;
     const next = await doc.restoreRevision(target.rid, {
       ...(target.version === undefined ? {} : { version: target.version }),
@@ -453,9 +464,10 @@ export function EditorScreen({
           e instanceof ApiError
             ? e.problem.errors?.[0]?.detail || e.problem.detail || e.problem.title
             : null;
-        toast.error(detail ? t("revisions.failedWith", { detail }) : t("revisions.failed"), {
-          id: REVISION_TOAST,
-        });
+        toast.error(
+          detail ? t("revisions.failedWith", { detail }) : t("revisions.failed"),
+          REVISION_UPDATE,
+        );
       },
     });
     if (!next || !onReopen) {
@@ -504,7 +516,7 @@ export function EditorScreen({
     if (!notice || !noticeItem) return;
     let live = true;
     if (notice.kind === "undone") {
-      toast.success(t("revisions.undone"), { id: REVISION_TOAST });
+      toast.success(t("revisions.undone"), REVISION_UPDATE);
     } else {
       void listRevisions(type, noticeItem, { limit: 2 })
         .then((list) => undoTarget(list.items, notice.rid))
@@ -521,13 +533,18 @@ export function EditorScreen({
               ? {
                   action: {
                     label: t("revisions.undo"),
-                    onClick: () =>
+                    onClick: (event) => {
+                      // Sonner removes a toast 200 ms after its action runs unless the
+                      // click's default is prevented; the Undo's progress and its result
+                      // reuse this toast (CI run 40404431115: they went with it).
+                      event.preventDefault();
                       requestRestoreRef.current({
                         rid: undo,
                         at: "",
                         undo: true,
                         version: notice.version,
-                      }),
+                      });
+                    },
                   },
                 }
               : {}),

@@ -3,10 +3,10 @@
 // Undo goes away as soon as the item is saved again, and an Undo that still runs sends
 // the restore's own version as its `If-Match` (a later save answers 412).
 
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
-import { toast } from "sonner";
+import { Toaster, toast } from "sonner";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { SchemaContentDto, SchemaRevisionDto } from "@/api/schema";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -78,6 +78,7 @@ function openScreen(item: SchemaContentDto, extra: Partial<EditorScreenProps> = 
       TooltipProvider,
       null,
       createElement(EditorScreen, { type: "post", typeLabel: "Posts", item, ...extra }),
+      createElement(Toaster),
     ),
   );
   return screen.findByRole("textbox", { name: "Body" });
@@ -118,7 +119,10 @@ describe("revision restore", () => {
 
     // In flight: the progress toast, and nothing can be typed or saved.
     await waitFor(() => expect(posts).toEqual(['"4"']));
-    expect(loading).toHaveBeenCalledWith("Restoring…", { id: "editor-revision" });
+    expect(loading).toHaveBeenCalledWith(
+      "Restoring…",
+      expect.objectContaining({ id: "editor-revision" }),
+    );
     expect(document.querySelector("[data-slot=editor-title]")).toHaveAttribute("readonly");
     expect(document.querySelector(".editor-body")).toHaveAttribute("contenteditable", "false");
 
@@ -186,7 +190,44 @@ describe("revision restore", () => {
 
     // An Undo that still ran (a click racing the save) goes with the restore's version:
     // the server refuses it, nothing saved since is reverted.
-    options.action.onClick({});
+    options.action.onClick({ preventDefault: () => undefined });
     await waitFor(() => expect(undoPosts).toEqual(['"5"']));
+  });
+
+  test("undo_keeps_its_toast_for_the_progress", async () => {
+    // CI run 40404431115: sonner removes a toast 200 ms after its action button is
+    // clicked unless the click's default is prevented. The Undo's progress ("Restoring…")
+    // and its result ("Restore undone", after the remount) reuse the toast's id, so they
+    // landed in the toast on its way out and went with it.
+    const undoPosts: (string | null)[] = [];
+    stubRoutes({
+      [`${BASE}/revisions`]: () =>
+        json({
+          items: [
+            summary(R2, "2026-10-01T10:05:00Z", `restored from ${R0}`),
+            summary(R1, "2026-10-01T10:00:00Z"),
+          ],
+        }),
+      [`${BASE}/revisions/${R1}/restore`]: (_url, req) => {
+        undoPosts.push(req.headers.get("If-Match"));
+        return new Promise<Response>(() => undefined);
+      },
+    });
+    await openScreen(itemWith({ version: 5 }), {
+      revision: { kind: "restored", rid: R0, at: "2026-10-01T09:00:00Z", version: 5 },
+      onReopen: vi.fn(),
+    });
+    const toastEl = () => document.querySelector("[data-sonner-toast]");
+    await waitFor(() => expect(toastEl()).toHaveTextContent("Version restored"));
+    // (A plain click: sonner's swipe handler wants pointer capture, which jsdom lacks.)
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(undoPosts).toEqual(['"5"']));
+    // Past sonner's 200 ms exit: the same toast now says what runs, without the old
+    // description or a second Undo.
+    await new Promise((r) => setTimeout(r, 300));
+    await waitFor(() => expect(toastEl()).toHaveTextContent("Restoring…"));
+    expect(toastEl()).not.toHaveAttribute("data-removed", "true");
+    expect(toastEl()).not.toHaveTextContent("is back");
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
   });
 });
