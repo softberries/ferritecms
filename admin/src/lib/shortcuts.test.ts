@@ -69,6 +69,20 @@ test("chords", () => {
   expect(dash).toHaveBeenCalledOnce();
 });
 
+test("chord_completes_with_a_binding_registered_between_steps", () => {
+  bind("g d");
+  const first = vi.fn();
+  const offFirst = registerShortcut({ id: "nav", keys: "g s", label: "S", group: "T", run: first });
+  press("g");
+  // Registered again (its label changed) before the second step.
+  offFirst();
+  const second = vi.fn();
+  cleanups.push(registerShortcut({ id: "nav", keys: "g s", label: "S2", group: "T", run: second }));
+  press("s");
+  expect(first).not.toHaveBeenCalled();
+  expect(second).toHaveBeenCalledOnce();
+});
+
 test("chord_timeout", () => {
   const dash = bind("g d");
   press("g");
