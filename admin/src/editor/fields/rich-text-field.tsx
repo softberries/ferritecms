@@ -4,7 +4,8 @@
 // value the schema cannot represent is shown as its text and kept as stored (Review Focus
 // 3 of M2b-1: never rewritten by opening it). The editor follows its value: one that
 // changes from outside (a row moved under it) replaces what it shows; its own edits,
-// coming back as the value, do not.
+// coming back as the value, do not, not even one that comes back after a newer edit
+// (typing faster than the form renders).
 
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import { useEffect, useRef, useState } from "react";
@@ -71,6 +72,9 @@ function RichEditor({
   const content = contentOf(value);
   // The value the editor shows: set by its own edits and by values from outside.
   const shown = useRef<unknown>(value);
+  // The documents this editor reported (each a new object), so a late echo of one is
+  // known as its own and not shown over a newer edit.
+  const emitted = useRef(new WeakSet<object>());
   const editor = useEditor({
     extensions,
     ...(content ? { content } : {}),
@@ -91,12 +95,14 @@ function RichEditor({
     },
     onUpdate: ({ editor: e }) => {
       const next = e.isEmpty ? null : e.getJSON();
+      if (next) emitted.current.add(next);
       shown.current = next;
       latest.current(next);
     },
   });
   useEffect(() => {
     if (editor.isDestroyed || value === shown.current) return;
+    if (isObject(value) && emitted.current.has(value)) return;
     shown.current = value;
     if (sameValue(value, editor.isEmpty ? null : editor.getJSON())) return;
     // A value this editor cannot represent is left alone (never rewritten by showing it).

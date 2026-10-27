@@ -58,4 +58,32 @@ describe("rich_text field", () => {
     await waitFor(() => expect(box()).toHaveTextContent("Start more"));
     expect(latest).toEqual(doc("Start more"));
   });
+
+  test("a_late_echo_of_its_own_edit_does_not_drop_a_newer_one", async () => {
+    // Typing faster than the form renders: the value of the first keystroke comes back
+    // after the second was made.
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <RichTextField ids={ids} value={doc("Start")} onChange={onChange} disabled={false} />,
+    );
+    await waitFor(() => expect(box()).toHaveTextContent("Start"));
+    const editor = (box() as unknown as { editor: Editor }).editor;
+    act(() => {
+      editor.commands.insertContentAt(editor.state.doc.content.size - 1, " a");
+    });
+    act(() => {
+      editor.commands.insertContentAt(editor.state.doc.content.size - 1, "b");
+    });
+    const [first] = onChange.mock.calls[0] as [unknown];
+    rerender(<RichTextField ids={ids} value={first} onChange={onChange} disabled={false} />);
+    // Another keystroke before the second value comes back.
+    act(() => {
+      editor.commands.insertContentAt(editor.state.doc.content.size - 1, "c");
+    });
+    for (const [value] of onChange.mock.calls.slice(1) as [unknown][]) {
+      rerender(<RichTextField ids={ids} value={value} onChange={onChange} disabled={false} />);
+    }
+    await waitFor(() => expect(box()).toHaveTextContent("Start abc"));
+    expect(onChange).toHaveBeenLastCalledWith(doc("Start abc"));
+  });
 });
