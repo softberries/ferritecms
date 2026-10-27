@@ -147,3 +147,77 @@ Plan: docs/superpowers/plans/2026-10-26-m2b2-media-and-content-modelling.md (15 
 - Ruling R34: a signed-in commenter whose role holds `moderate_comments` is exempt from the per-address comment rate limit (decided in core) — a moderator replying to a batch from the queue would hit `429` — cost: a compromised moderator session can post comments without that limit (moderators' comments are approved anyway).
 - Ruling R35: free-text search parameters (`q`) stay strings app-wide (a router-level codec), so a search for `2024` or `531038e6` survives a reload — TanStack Router JSON-decodes search values — cost: one shared codec to keep.
 - Ruling R36: `refs` is a reserved type and taxonomy name — the static `/content/refs` route would shadow a type's list — cost: a pre-existing type or taxonomy named `refs` has no migration path (follow-up).
+
+## M2b-3 plan rulings
+
+Plan: docs/superpowers/plans/2026-10-27-m2b3-administration-and-m2-exit.md (16 tasks).
+
+- **P41:** M2b-3 is 16 tasks.
+  - Four Rust API tasks come first, because the screens consume them.
+  - Two follow-up tasks, then the E2E matrix, the bundle budget and the exit.
+  - Cost if wrong: the screens wait for the API.
+- **P42: Theme upload.** The server keeps its canonical bundle format (no wider untrusted parser).
+  - The admin packs a picked or dropped folder into the canonical ustar in the browser. The packer is a TS port of `bundle::pack`, pinned byte for byte against a fixture the Rust packer wrote.
+  - A `.tar` file can also be sent as it is; the server's refusal is shown.
+  - `ferrite theme pack --dir DIR --out FILE` gives API users a valid file.
+  - Cost: two packers to keep equal (the fixture test pins them).
+- **P43: An admin can switch off another user's TOTP** (`POST /users/{id}/totp/disable`).
+  - Not for oneself (`/auth/totp/disable` with a password).
+  - The target's sessions are kept; audited.
+  - There are still no recovery codes.
+  - Cost: an admin account can remove a second factor without the owner (it can already set their password).
+- **P44: Changing one's own e-mail needs `current_password`**, because the e-mail is the reset channel.
+  - An admin changing someone else's e-mail does not need it.
+  - Cost: one more field in the account form.
+- **P45: Sessions:** `GET /auth/sessions`, `DELETE /auth/sessions/{id}`, `POST /auth/sessions/revoke-others`.
+  - A session is shown by an opaque id (not the cookie value or its stored hash), created and last-seen times, and `current`.
+  - No user agent is stored, so none is shown. No migration in M2b-3.
+  - Cost: sessions are told apart only by time.
+- **P46: User list filters** `q` (login, display name or e-mail substring), `role`, `status`.
+  - Delete asks for a reassignment only when the server's `422` says the user owns content (field `reassign`). There is no count endpoint.
+  - Cost: one refused request before the reassign picker shows.
+- **P47: Plugin data retention becomes visible.**
+  - `GET /plugins/retained` lists deleted plugins whose data is still kept, with the purge date.
+  - `POST /plugins/{name}/purge` erases it early. A `422` (field `name`) while a plugin of that name is installed.
+  - Cost: one store query on both backends.
+- **P48: Hook latency is shown as a p95 upper bound** from the existing six buckets ("p95 ≤ 25 ms"), labelled "This node, since <start>".
+  - No host change; cluster-wide series stay M4.
+  - Cost: a coarse number.
+- **P49: Mail stays config-only.**
+  - `GET /system/status` gains `mail: { configured, from }` (never the SMTP URL).
+  - `POST /system/mail/test` sends one mail to the caller's own address (`manage_system`; 3 per 10 minutes per user; audited `mail.test`; `422` when mail is not configured).
+  - Settings shows a read-only Mail panel with that test.
+  - Cost: no mail settings in the UI.
+- **P50: Media sizes are the active theme's `[images]`, shown read-only** in Settings from `ThemeDto.images`.
+  - No size setting; regenerating variants stays M4.
+  - Cost: changing sizes needs a theme change.
+- **P51: The TOTP issuer and the password-reset mail read the `site.title` option at use time**, falling back to `ferrite.toml`. This closes the split between Settings and the startup value.
+  - Cost: one option read per enrolment or mail.
+- **P52: Relation fields gain `types: string[]`** in `FieldDef` (empty = any type, the M2b-2 behaviour).
+  - Core refuses an item of another type on write (`422` at the field's path).
+  - The field builder and the picker use it.
+  - Cost: one item read per relation value on write (batched per save).
+- **P53: A trashed media item remembers its status** in `content_meta` `media.trashed_from`, written in the trash `Tx`.
+  - Restore re-applies it: `published` only if it was published, else `draft`.
+  - Items trashed before this change restore as published (R23 behaviour).
+  - Cost: one meta row per trashed media item.
+- **P54: R34 is closed by ruling.** Moderators keep no comment rate limit: they are trusted, audited accounts, and a compromised one is disabled.
+  - **R36 is closed by ruling.** No released site predates M2b-2, so no migration path for a `refs` type is built; the ROADMAP says so.
+  - Cost: none for existing sites.
+- **P55: E2E matrix.** CI runs every spec in four parallel jobs: `chromium-sqlite`, `chromium-pg`, `firefox-sqlite`, `webkit-sqlite`.
+  - Design snapshots (`snap()` and the contact sheet) run only in `chromium-sqlite`.
+  - A spec or step that cannot run in an engine is skipped with `test.skip(browserName === …, "<reason>")`, and every skip is listed in 10 §3.
+  - Linux WebKit is not Safari: a manual Safari pass stays in the exit.
+  - Cost: about four times the E2E CI minutes, in parallel wall-clock.
+- **P56: Bundle budget.** `admin/bundle-budget.json` holds gzip -9 limits per group (entry, entry plus modulepreloads, main CSS, editor chunk, chart chunk, largest other lazy chunk).
+  - Each limit is the M2b-3 size measured in Task 15, plus 10 %, rounded up to the next KiB.
+  - `pnpm -C admin bundle:check` fails CI over a limit. Raising a limit is a reviewed edit of that file.
+  - Cost: a deliberate step for growth.
+- **P57: The explicit-theme flash is fixed server-side.**
+  - The admin writes a cookie `ferrite_admin_theme=light|dark` (path `/admin/`, `SameSite=Lax`, one year; removed for `system`).
+  - Serving `index.html` adds `class="dark"` or `class="light"` to `<html>` from it.
+  - No inline script is added, so the CSP is unchanged.
+  - Cost: `index.html` is rewritten per request (it is `no-cache` anyway).
+- **P58: Settings screens are last-write-wins** (`staleGuard`, P31).
+  - A permalink change confirms first, saying every post or page URL moves and no redirects are created (M3).
+  - Cost: a dialog on a rare change.
