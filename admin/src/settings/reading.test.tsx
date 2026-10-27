@@ -56,3 +56,31 @@ test("per_page_limits_are_checked_before_the_save", async () => {
   expect(await screen.findByText("Pick a page.")).toBeInTheDocument();
   expect(seen).toEqual([]);
 });
+
+test("front_page_name_failure_offers_retry", async () => {
+  let calls = 0;
+  stubRoutes({
+    "/api/v1/content/refs": () => {
+      calls += 1;
+      return calls === 1
+        ? json({ title: "Server error", status: 500 }, 500)
+        : json({
+            items: [
+              {
+                id: PAGE_ID,
+                title: "Welcome home",
+                status: "published",
+                type: "page",
+                permalink: "/",
+              },
+            ],
+          });
+    },
+  });
+  renderWithRouter(<ReadingGroup settings={settings({ "reading.front_page": PAGE_ID })} />);
+  // A failed lookup is not a deleted page.
+  expect(await screen.findByText(/could not be loaded/i)).toBeInTheDocument();
+  expect(screen.queryByText(/no longer exists/i)).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByText("Welcome home")).toBeInTheDocument();
+});

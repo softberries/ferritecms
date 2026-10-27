@@ -407,7 +407,9 @@
         "uppercase": "“{{segment}}” has capital letters; addresses are lower case.",
         "badLiteral": "“{{segment}}” may use only a–z, 0–9, “-”, “.”, “_” and “~”.",
         "reserved": "“{{segment}}” is reserved and cannot start an address.",
-        "noParentPath": "Pages need %parent_path%, or sub-pages would share addresses."
+        "noParentPath": "Pages need %parent_path%, or sub-pages would share addresses.",
+        "routeWord": "“{{segment}}” starts author, page or search addresses and cannot start this one.",
+        "year": "“{{segment}}” looks like a year archive and cannot start an address."
       }
     },
     "groups": {
@@ -462,7 +464,10 @@
       "perPage": "Posts per page",
       "perPageHint": "1 to 100, for the home page and archives. Leave empty for the default, {{value}}.",
       "discourage": "Discourage search engines",
-      "discourageHint": "robots.txt then asks every crawler to stay away. Crawlers that ignore robots.txt may still index the site."
+      "discourageHint": "robots.txt then asks every crawler to stay away. Crawlers that ignore robots.txt may still index the site.",
+      "nameFailed": "The chosen page could not be loaded.",
+      "retry": "Retry",
+      "pageUnknown": "Page name not loaded"
     },
     "permalinks": {
       "post": "Post addresses",

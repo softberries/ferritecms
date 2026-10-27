@@ -1,9 +1,10 @@
 // Permalink structures as core reads them (`ferrite-core/src/permalink.rs`): the checks
-// `Structure::parse` and `PermalinkRules::from_options` make, and the path a structure
-// gives a sample item. Pure functions: the Permalinks settings preview them as the
-// structure is typed. Core also refuses a first literal segment that names a content
-// type, a taxonomy, a route word or a year; those need the registered names, so the
-// server's `422` says so at the field.
+// `Structure::parse`, `PermalinkRules::from_options` and the constant half of
+// `check_types` make (a first segment that is a route word or a year), and the path a
+// structure gives a sample item. Pure functions: the Permalinks settings preview them as
+// the structure is typed. Core also refuses a first segment that names a registered
+// content type or taxonomy; those names are not known here, so the server's `422` says
+// so at the field.
 
 /** The tokens core knows; a segment is one token or a literal. */
 export const PERMALINK_TOKENS = [
@@ -36,6 +37,9 @@ const RESERVED = [
   "metrics",
 ];
 
+/** `slug::ROUTE_WORDS`: author archives, pagination, search. */
+const ROUTE_WORDS = ["author", "page", "search"];
+
 /** `%category%` of an item without a category (core's `UNCATEGORIZED`). */
 const UNCATEGORIZED = "uncategorized";
 
@@ -50,6 +54,8 @@ export type StructureProblem =
   | { problem: "uppercase"; segment: string }
   | { problem: "badLiteral"; segment: string }
   | { problem: "reserved"; segment: string }
+  | { problem: "routeWord"; segment: string }
+  | { problem: "year"; segment: string }
   | { problem: "noParentPath" };
 
 const isToken = (s: string): s is PermalinkToken =>
@@ -57,8 +63,9 @@ const isToken = (s: string): s is PermalinkToken =>
 
 /** Why core would refuse `structure` for `kind`, or `null` when it takes it. */
 export function checkStructure(structure: string, kind: StructureKind): StructureProblem | null {
+  // `/` alone too: core strips both slashes from one character and finds none left.
   if (!structure.startsWith("/") || !structure.endsWith("/") || structure.length < 2) {
-    return structure === "/" ? { problem: "noSlug" } : { problem: "slashes" };
+    return { problem: "slashes" };
   }
   const inner = structure.slice(1, -1);
   if (inner === "") return { problem: "noSlug" };
@@ -73,7 +80,12 @@ export function checkStructure(structure: string, kind: StructureKind): Structur
   }
   if (!parts.includes("%slug%")) return { problem: "noSlug" };
   const first = parts[0] ?? "";
-  if (!isToken(first) && RESERVED.includes(first)) return { problem: "reserved", segment: first };
+  if (!isToken(first)) {
+    // Core compares these case-insensitively; literals are lower case by now.
+    if (RESERVED.includes(first)) return { problem: "reserved", segment: first };
+    if (ROUTE_WORDS.includes(first)) return { problem: "routeWord", segment: first };
+    if (/^[0-9]{4}$/.test(first)) return { problem: "year", segment: first };
+  }
   if (kind === "page" && !parts.includes("%parent_path%")) return { problem: "noParentPath" };
   return null;
 }

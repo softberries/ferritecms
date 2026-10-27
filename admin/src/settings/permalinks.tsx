@@ -92,8 +92,14 @@ export function PermalinksGroup({ settings }: { settings: SettingsDto }) {
   });
   const post = form.draft["permalink.post"];
   const page = form.draft["permalink.page"];
-  // "Custom" stays chosen while its structure happens to match a preset.
+  // "Custom" stays chosen while its structure happens to match a preset, until the form
+  // starts again from a stored copy (a reload or a save): then the structure decides.
   const [custom, setCustom] = useState(() => presetOf(post) === "custom");
+  const [startedAt, setStartedAt] = useState(form.generation);
+  if (startedAt !== form.generation) {
+    setStartedAt(form.generation);
+    setCustom(presetOf(post) === "custom");
+  }
   const preset: Preset = custom ? "custom" : presetOf(post);
   const sample = samples(t);
   const off = form.saving;

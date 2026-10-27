@@ -1,7 +1,9 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test } from "vitest";
-import type { SettingsDto } from "@/api/settings";
+import { QueryClient, useQuery } from "@tanstack/react-query";
+import { qk } from "@/api/keys";
+import { type SettingsDto, settingsQuery } from "@/api/settings";
 import { json, renderWithRouter, stubRoutes } from "@/test/render";
 import { invalid } from "@/users/fixtures";
 import { GeneralGroup } from "./general";
@@ -154,4 +156,56 @@ test("page_structure_without_parent_path_is_refused", async () => {
   await userEvent.click(screen.getAllByRole("button", { name: "Add %slug%" }).at(-1)!);
   expect(page).toHaveValue("/docs/%parent_path%/%slug%/");
   expect(screen.getByText(/example\.test\/docs\/about\/team\//)).toBeInTheDocument();
+});
+
+test("permalink_confirm_asks_before_saving_starts", async () => {
+  settingsApi(STORED);
+  renderWithRouter(<PermalinksGroup settings={STORED} />);
+  await userEvent.click(await screen.findByRole("radio", { name: /Month and name/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await screen.findByRole("alertdialog", { name: "Change the permalinks?" });
+  // Only asking: the form is not saving and its fields stay enabled behind the dialog.
+  expect(screen.queryByRole("button", { name: "Saving…", hidden: true })).toBeNull();
+  expect(screen.getByRole("textbox", { name: "Page structure", hidden: true })).toBeEnabled();
+});
+
+/** The group as the screen renders it: its settings from the query cache, seeded with `STORED`. */
+function renderLive(Group: typeof PermalinksGroup) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client.setQueryData(qk.settings, STORED);
+  function Live() {
+    const settings = useQuery(settingsQuery);
+    return settings.data ? <Group settings={settings.data} /> : null;
+  }
+  renderWithRouter(<Live />, client);
+}
+
+test("preset_follows_the_structure_after_reload", async () => {
+  // Someone else chose "Category and name" meanwhile.
+  settingsApi({ ...STORED, "permalink.post": "/%category%/%slug%/" });
+  renderLive(PermalinksGroup);
+  await userEvent.click(await screen.findByRole("radio", { name: /Custom/ }));
+  const custom = screen.getByRole("textbox", { name: "Custom structure" });
+  await userEvent.clear(custom);
+  await userEvent.type(custom, "/blog/%slug%/");
+  await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Change permalinks" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+  await waitFor(() =>
+    expect(screen.getByRole("radio", { name: /Category and name/ })).toBeChecked(),
+  );
+  expect(screen.queryByRole("textbox", { name: "Custom structure" })).toBeNull();
+});
+
+test("preset_follows_the_structure_after_save", async () => {
+  const { patches } = settingsApi(STORED);
+  renderLive(PermalinksGroup);
+  await userEvent.click(await screen.findByRole("radio", { name: /Custom/ }));
+  const custom = screen.getByRole("textbox", { name: "Custom structure" });
+  await userEvent.clear(custom);
+  await userEvent.type(custom, "/%year%/%month%/%slug%/");
+  await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Change permalinks" }));
+  await waitFor(() => expect(patches).toHaveLength(1));
+  await waitFor(() => expect(screen.getByRole("radio", { name: /Month and name/ })).toBeChecked());
 });

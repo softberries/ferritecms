@@ -4,9 +4,10 @@
 // the post listing at `/` until it is (core's `site.rs`).
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { ChevronsUpDownIcon, TriangleAlertIcon } from "lucide-react";
+import { ChevronsUpDownIcon, CircleAlertIcon, TriangleAlertIcon } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { INLINE_ERRORS } from "@/api/client";
 import { listContent } from "@/api/content";
 import { qk } from "@/api/keys";
 import type { SettingsDto } from "@/api/settings";
@@ -157,15 +158,22 @@ function PagePicker({
     placeholderData: keepPreviousData,
     staleTime: 30_000,
   });
-  const chosen = useQuery({ ...contentTargetQuery(value ?? ""), enabled: value !== null });
+  // Its own error below (not a toast); a failure is not a deleted page.
+  const chosen = useQuery({
+    ...contentTargetQuery(value ?? ""),
+    enabled: value !== null,
+    meta: INLINE_ERRORS,
+  });
   const name =
     value === null
       ? t("settings.reading.pickPage")
       : chosen.data
         ? chosen.data.title || t("settings.reading.untitled")
-        : chosen.isPending
-          ? t("settings.reading.loading")
-          : t("settings.reading.pageGone");
+        : chosen.isError
+          ? t("settings.reading.pageUnknown")
+          : chosen.isPending
+            ? t("settings.reading.loading")
+            : t("settings.reading.pageGone");
   const notice =
     value !== null && chosen.data === null
       ? t("settings.reading.pageGoneHint")
@@ -244,6 +252,25 @@ function PagePicker({
           </Command>
         </PopoverContent>
       </Popover>
+      {chosen.isError ? (
+        <p
+          role="alert"
+          data-slot="front-page-failed"
+          className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-destructive"
+        >
+          <CircleAlertIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          {t("settings.reading.nameFailed")}
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            className="h-auto p-0 pointer-coarse:h-11"
+            onClick={() => void chosen.refetch()}
+          >
+            {t("settings.reading.retry")}
+          </Button>
+        </p>
+      ) : null}
       {notice ? (
         <p
           data-slot="front-page-notice"

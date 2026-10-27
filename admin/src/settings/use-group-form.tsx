@@ -48,6 +48,8 @@ export interface FrameForm {
   dialogs: ReactNode;
   /** The `id` of the group's `<form>` (the first refused field takes the focus). */
   formId: string;
+  /** Changes whenever the form starts again from a stored copy. */
+  generation: number;
 }
 
 export interface GroupForm<S extends Specs> extends FrameForm {
@@ -95,6 +97,8 @@ export function useGroupForm<S extends Specs>(
   const [failure, setFailure] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [attempted, setAttempted] = useState(false);
+  // Bumped each time the form starts from a stored copy (a reload, a save, a refetch).
+  const [generation, setGeneration] = useState(0);
   const busy = useRef(false);
   const formId = useId();
 
@@ -112,6 +116,7 @@ export function useGroupForm<S extends Specs>(
       setServerErrors({});
       setFailure(null);
       setAttempted(false);
+      setGeneration((g) => g + 1);
     },
     [specs],
   );
@@ -178,10 +183,11 @@ export function useGroupForm<S extends Specs>(
     const patch: Record<string, unknown> = {};
     for (const key of changed) patch[key] = spec(key).write(draft[key]);
     busy.current = true;
-    setSaving(true);
-    setFailure(null);
     try {
+      // Asking is not saving: the form stays as it is while the question is open.
       if (options.confirm && !(await options.confirm(patch))) return;
+      setSaving(true);
+      setFailure(null);
       const guard = await staleGuard({
         reread: getSettings,
         base,
@@ -251,5 +257,5 @@ export function useGroupForm<S extends Specs>(
     </>
   );
 
-  return { draft, set, errors, changed, dirty, saving, failure, save, dialogs, formId };
+  return { draft, set, errors, changed, dirty, saving, failure, save, dialogs, formId, generation };
 }

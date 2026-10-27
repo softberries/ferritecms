@@ -123,9 +123,11 @@ test("permalink_change_warns", async ({ as, site, backend }) => {
     await expect(page.locator("[data-slot=permalink-post-preview]")).toContainText(
       new RegExp(`/${year}/\\d{2}/sample-post/$`),
     );
-    let sent = false;
+    // Every settings request from here: the stale re-read (`GET`) and the `PATCH` come
+    // only after the confirm.
+    const calls: string[] = [];
     page.on("request", (r) => {
-      if (isPatch(r)) sent = true;
+      if (new URL(r.url()).pathname === "/api/v1/settings") calls.push(r.method());
     });
     await saveButton(page).click();
     const confirm = page.getByRole("alertdialog", { name: "Change the permalinks?" });
@@ -133,15 +135,19 @@ test("permalink_change_warns", async ({ as, site, backend }) => {
       "Every post or page whose address follows the changed structure moves to a new URL. " +
         "No redirects are created from the old URLs, so links to them elsewhere stop working.",
     );
-    // Cancel sends nothing.
+    // Cancel sends nothing (checked again below, after a save that does send).
     await confirm.getByRole("button", { name: "Cancel" }).click();
-    expect(sent).toBe(false);
+    await expect(confirm).toBeHidden();
+    expect(calls).toEqual([]);
 
     await saveButton(page).click();
     const patch = page.waitForRequest(isPatch);
     await confirm.getByRole("button", { name: "Change permalinks" }).click();
     expect((await patch).postDataJSON()).toEqual({ "permalink.post": "/%year%/%month%/%slug%/" });
     await expect(toast(page, "Settings saved")).toBeVisible();
+    // One re-read and one write, both from the confirmed save: a late request from the
+    // cancelled one would show here.
+    expect(calls).toEqual(["GET", "PATCH"]);
 
     // The post's URL follows the new structure (UTC year and month of publication).
     const at = new Date(post.published_at ?? "");

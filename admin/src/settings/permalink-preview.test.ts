@@ -59,7 +59,6 @@ test("structure_checks_follow_core", () => {
   expect(checkStructure(DEFAULT_POST_STRUCTURE, "post")).toBeNull();
   expect(checkStructure("%slug%/", "post")).toEqual({ problem: "slashes" });
   expect(checkStructure("/%slug%", "post")).toEqual({ problem: "slashes" });
-  expect(checkStructure("/", "post")).toEqual({ problem: "noSlug" });
   expect(checkStructure("/%year%/%month%/", "post")).toEqual({ problem: "noSlug" });
   expect(checkStructure("/a//%slug%/", "post")).toEqual({ problem: "emptySegment" });
   expect(checkStructure("/%postname%/", "post")).toEqual({
@@ -80,6 +79,25 @@ test("structure_checks_follow_core", () => {
     problem: "reserved",
     segment: "admin",
   });
+  // Core's `check_types` constants: a route word or a year archive cannot start it.
+  expect(checkStructure("/page/%slug%/", "post")).toEqual({
+    problem: "routeWord",
+    segment: "page",
+  });
+  expect(checkStructure("/author/%slug%/", "post")).toEqual({
+    problem: "routeWord",
+    segment: "author",
+  });
+  expect(checkStructure("/search/%slug%/", "page")).toEqual({
+    problem: "routeWord",
+    segment: "search",
+  });
+  expect(checkStructure("/2024/%slug%/", "post")).toEqual({ problem: "year", segment: "2024" });
+  // Not four digits, or not first: fine.
+  expect(checkStructure("/202/%slug%/", "post")).toBeNull();
+  expect(checkStructure("/x/2024/page/%slug%/", "post")).toBeNull();
+  // `/` alone: core says it must start and end with `/`.
+  expect(checkStructure("/", "post")).toEqual({ problem: "slashes" });
   // Only the first segment is checked against the reserved words.
   expect(checkStructure("/x/admin/%slug%/", "post")).toBeNull();
 });
