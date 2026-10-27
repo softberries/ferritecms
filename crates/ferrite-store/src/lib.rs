@@ -38,8 +38,8 @@ pub use paging::{
     check_new_node, check_node_meta, check_prune_limit, check_rate_bucket, check_rate_window,
     comment_counts, comment_cursor, content_cursor, content_list_plan, content_sort_key,
     encode_audit_cursor, encode_comment_cursor, encode_content_cursor, encode_job_cursor,
-    encode_text_cursor, idempotency_status, job_backoff, job_cursor, like_contains, rate_hit,
-    sanitize_job_error, slug_has_prefix, slug_prefix_bounds, sort_claimed, text_cursor,
+    encode_text_cursor, idempotency_status, job_backoff, job_cursor, like_contains, media_kind_sql,
+    rate_hit, sanitize_job_error, slug_has_prefix, slug_prefix_bounds, sort_claimed, text_cursor,
 };
 pub use repos::{
     ApiTokenRepo, ApprovedTotals, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, CommentRepo,

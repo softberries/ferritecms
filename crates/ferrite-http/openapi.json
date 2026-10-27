@@ -5226,7 +5226,7 @@
           {
             "name": "q",
             "in": "query",
-            "description": "Only redirects whose source or target holds this text, ignoring case (`%` and\n`_` match only themselves). Trimmed; 1 to 200 characters (`422`, field `q`).",
+            "description": "Only redirects whose source or target holds this text, ignoring case (`%` and\n`_` match only themselves). Trimmed; blank is no search; at most 200 characters (`422`, field `q`).",
             "required": false,
             "schema": {
               "type": "string"
@@ -5295,7 +5295,7 @@
             }
           },
           "422": {
-            "description": "`validation`: `q` blank or longer than 200 characters (`errors[0].field` = `q`)",
+            "description": "`validation`: `q` longer than 200 characters (`errors[0].field` = `q`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -9411,7 +9411,7 @@
               "string",
               "null"
             ],
-            "description": "The public path, only while the item has a public page now (published, its\npublish time reached); `null` otherwise."
+            "description": "The public path, only while the item has a public page now (published, its\npublish time reached, and not a media item: media have no page); `null`\notherwise."
           },
           "status": {
             "type": "string",

@@ -14,6 +14,7 @@ use ferrite_core::{
     AuthService, CoreError, DepKeys, PermalinkRules, RedirectService, SiteReader,
     comments::CommentService, events::option_key,
 };
+use ferrite_domain::MEDIA_KIND;
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::PluginHost;
 use ferrite_store::{Store, StoreError};
@@ -25,8 +26,6 @@ use crate::admin::{AdminAssets, AdminHeaders, EmbeddedAdmin, InvalidAdminHeader}
 use crate::plugins::ServedBuffer;
 use crate::route::{RouteTable, TypeInfo};
 
-/// Content type that is never routed (media items are only shown inside other items).
-const MEDIA_KIND: &str = "media";
 /// Default TTL of pages marked volatile by plugins (05 §7a, `plugins.volatile_ttl`)
 /// and of search results (06 §6, `cache.search_ttl`).
 pub const SHORT_TTL: Duration = Duration::from_secs(60);

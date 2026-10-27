@@ -22,7 +22,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ContentId, ContentItem, ContentOrder, ContentQuery,
-    ContentStatus, Media, MediaKind, Page, ReadableBy, SearchQuery, Timestamp, UserId,
+    ContentStatus, MEDIA_KIND, Media, MediaKind, Page, ReadableBy, SearchQuery, Timestamp, UserId,
 };
 use ferrite_store::Store;
 use serde_json::Value;
@@ -33,7 +33,6 @@ use crate::{
     content::{AuthorRef, Edit, WALKED},
     events,
     jobs::{MEDIA_VARIANTS_VERSION, MediaVariants, media_variants_job},
-    site::MEDIA_KIND,
     tx::finish,
 };
 

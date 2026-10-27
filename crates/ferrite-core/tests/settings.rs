@@ -629,7 +629,16 @@ pub async fn redirect_update_moves_source(db: &TestDb) {
             .items
             .is_empty()
     );
-    // `q` is trimmed and must then be 1..=200 characters.
+    // `q` is trimmed and must then be at most 200 characters; blank is no search.
+    let all = svc.list(&reader, page(None)).await.unwrap().items.len();
+    assert_eq!(
+        svc.list(&reader, page(Some("   ")))
+            .await
+            .unwrap()
+            .items
+            .len(),
+        all
+    );
     assert_eq!(
         svc.list(&reader, page(Some("  LEGACY ")))
             .await
@@ -638,12 +647,12 @@ pub async fn redirect_update_moves_source(db: &TestDb) {
             .len(),
         1
     );
-    for bad in ["   ", &"a".repeat(201)] {
-        assert!(matches!(
-            svc.list(&reader, page(Some(bad))).await,
-            Err(CoreError::InvalidField { field: "q", .. })
-        ));
-    }
+    assert!(matches!(
+        svc.list(&reader, page(Some(&"a".repeat(201)))).await,
+        Err(CoreError::InvalidField { field: "q", .. })
+    ));
+    // The default query is a usable first page.
+    assert_eq!(RedirectQuery::default().limit, 20);
     assert!(matches!(
         svc.update(&reader, r.id, "/q", "/r", 301).await,
         Err(CoreError::Forbidden("redirects:write"))

@@ -1384,7 +1384,8 @@ export interface components {
             id: string;
             /**
              * @description The public path, only while the item has a public page now (published, its
-             *     publish time reached); `null` otherwise.
+             *     publish time reached, and not a media item: media have no page); `null`
+             *     otherwise.
              */
             permalink: string | null;
             /** @description `draft`, `pending`, `scheduled`, `published`, `private` or `trash`. */
@@ -7084,7 +7085,7 @@ export interface operations {
             query?: {
                 /**
                  * @description Only redirects whose source or target holds this text, ignoring case (`%` and
-                 *     `_` match only themselves). Trimmed; 1 to 200 characters (`422`, field `q`).
+                 *     `_` match only themselves). Trimmed; blank is no search; at most 200 characters (`422`, field `q`).
                  */
                 q?: string;
                 /** @description 1..=200; default 50. */
@@ -7134,7 +7135,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation`: `q` blank or longer than 200 characters (`errors[0].field` = `q`) */
+            /** @description `validation`: `q` longer than 200 characters (`errors[0].field` = `q`) */
             422: {
                 headers: {
                     [name: string]: unknown;

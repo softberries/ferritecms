@@ -28,8 +28,8 @@ pub use auth::{
 };
 pub use comment::{Comment, CommentQuery, CommentStatus};
 pub use content::{
-    Autosave, ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, MediaKind,
-    NewContent, ParentFilter, ReadableBy, Revision,
+    Autosave, ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, MEDIA_KIND,
+    MediaKind, NewContent, ParentFilter, ReadableBy, Revision,
 };
 pub use event::{Event, NewEvent};
 pub use hex::to_hex;

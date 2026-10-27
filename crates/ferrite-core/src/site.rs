@@ -57,8 +57,8 @@ use std::{
 
 use chrono::NaiveDate;
 use ferrite_domain::{
-    ArtifactHash, ContentId, ContentItem, ContentQuery, ContentStatus, MAX_PAGE, SearchQuery,
-    Taxonomy, TermId, Timestamp,
+    ArtifactHash, ContentId, ContentItem, ContentQuery, ContentStatus, MAX_PAGE, MEDIA_KIND,
+    SearchQuery, Taxonomy, TermId, Timestamp,
 };
 use ferrite_store::{
     MAX_CONTENT_KINDS, MAX_ID_FILTER, MAX_PAGE_ROWS, MAX_SEARCH_KINDS, Repos, Store,
@@ -83,8 +83,6 @@ pub type MediaUrlFn = Arc<dyn Fn(&ArtifactHash, &str) -> String + Send + Sync>;
 /// The current time; injected so tests control "now".
 pub type Clock = Arc<dyn Fn() -> Timestamp + Send + Sync>;
 
-/// Content type of media items.
-pub(crate) const MEDIA_KIND: &str = "media";
 /// Content type listed on the front page and in date and author archives.
 const POST_KIND: &str = "post";
 /// Option: items per listing page (integer, clamped to 1..=100; default 10).
@@ -910,6 +908,12 @@ impl SiteReader {
     /// two options, the totals, the page's rows, the permalink's terms and ancestors
     /// (only with more than one page), and for a reply whose ancestors are hidden at
     /// most `MAX_COMMENT_DEPTH` lookups (`can_reply`).
+    ///
+    /// The reads are autocommit reads, not one snapshot (a `Tx` would take SQLite's
+    /// single writer on a public read): a moderation or submit committed between the
+    /// totals and the page can make them disagree by that comment. Every such write
+    /// invalidates `post:<id>`, which this read records, so the page cache's staleness
+    /// guard does not store that render, and the next one reads both anew.
     pub async fn comments(
         &self,
         id: ContentId,

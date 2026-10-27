@@ -22,6 +22,8 @@ pub const MAX_SEARCH_CHARS: usize = 200;
 /// - `cpage`: the comment page of a single item (M2b-2 P34), a number in `2..=u32::MAX`
 ///   without a leading zero; anything else (`1`, `0`, `abc`) is page 1, the same page as
 ///   no parameter, so it is dropped. A page past the thread's last shows the last.
+///   The page handler drops it, cache key included, on routes that cannot show one
+///   item ([`Route::may_show_item`](super::Route::may_show_item)).
 ///
 /// The first occurrence of a parameter wins.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

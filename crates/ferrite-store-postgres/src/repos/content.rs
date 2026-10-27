@@ -5,14 +5,14 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ferrite_domain::{
-    ContentId, ContentItem, ContentQuery, ContentType, MediaKind, NewContent, Page, ParentFilter,
-    Revision, RevisionId, Timestamp, UserId,
+    ContentId, ContentItem, ContentQuery, ContentType, NewContent, Page, ParentFilter, Revision,
+    RevisionId, Timestamp, UserId,
 };
 use ferrite_store::{
     ContentRepo, ContentTypeRepo, ListPart, MAX_ID_FILTER, MAX_META_KEYS, MAX_SLUG_PREFIX_RESULTS,
     MetaRepo, RevisionRepo, StoreError, check_content_filters, check_id_list, check_len,
-    check_limit, content_cursor, content_list_plan, encode_content_cursor, slug_has_prefix,
-    slug_prefix_bounds, validate_json, validate_text,
+    check_limit, content_cursor, content_list_plan, encode_content_cursor, media_kind_sql,
+    slug_has_prefix, slug_prefix_bounds, validate_json, validate_text,
 };
 use serde_json::Value;
 use sqlx::{Postgres, QueryBuilder, types::Json};
@@ -450,17 +450,6 @@ fn push_filters(qb: &mut QueryBuilder<Postgres>, query: &ContentQuery) {
         qb.push(" AND id IN (SELECT item_id FROM media WHERE ")
             .push(media_kind_sql(kind))
             .push(")");
-    }
-}
-
-/// The `media` row predicate of a [`MediaKind`] (by the type's top-level part; the
-/// same text on both backends).
-fn media_kind_sql(kind: MediaKind) -> &'static str {
-    match kind {
-        MediaKind::Image => "substr(mime, 1, 6) = 'image/'",
-        MediaKind::Video => "substr(mime, 1, 6) = 'video/'",
-        MediaKind::Audio => "substr(mime, 1, 6) = 'audio/'",
-        MediaKind::Document => "substr(mime, 1, 6) NOT IN ('image/', 'video/', 'audio/')",
     }
 }
 

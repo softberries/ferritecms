@@ -237,6 +237,7 @@ backend_tests!(
     comment_counts_per_status_and_item,
     thread_pages_cover_every_comment,
     approved_page_keeps_every_root,
+    short_comment_page_under_tight_budget,
     root_position_of_reply_is_its_root,
     approved_totals_counts_all,
     has_approved_from_matches_exact_lowercase,

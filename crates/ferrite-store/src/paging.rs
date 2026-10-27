@@ -4,7 +4,8 @@ use std::{collections::BTreeMap, time::Duration};
 
 use ferrite_domain::{
     Autosave, Comment, CommentStatus, ContentId, ContentItem, ContentOrder, ContentQuery, Cursor,
-    IdempotencyKey, Job, MAX_PAGE, NewAudit, NewJob, NewNode, RateHit, TermId, Timestamp,
+    IdempotencyKey, Job, MAX_PAGE, MEDIA_KIND, MediaKind, NewAudit, NewJob, NewNode, RateHit,
+    TermId, Timestamp,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -62,8 +63,16 @@ pub fn check_id_list(what: &str, ids: &[ContentId]) -> Result<(), StoreError> {
     Ok(())
 }
 
-/// The content type of media items, the only one [`ContentQuery::media_kind`] applies to.
-const MEDIA_KIND: &str = "media";
+/// The `media` row predicate of a [`MediaKind`] (by the type's top-level part), the
+/// same SQL text on both backends.
+pub fn media_kind_sql(kind: MediaKind) -> &'static str {
+    match kind {
+        MediaKind::Image => "substr(mime, 1, 6) = 'image/'",
+        MediaKind::Video => "substr(mime, 1, 6) = 'video/'",
+        MediaKind::Audio => "substr(mime, 1, 6) = 'audio/'",
+        MediaKind::Document => "substr(mime, 1, 6) NOT IN ('image/', 'video/', 'audio/')",
+    }
+}
 
 /// Most kinds a content query's `kinds` filter accepts.
 pub const MAX_CONTENT_KINDS: usize = 20;

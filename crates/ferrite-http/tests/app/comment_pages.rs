@@ -16,6 +16,7 @@ app_tests!(
     count_is_the_real_total,
     form_redirect_lands_on_the_comments_page,
     cpage_is_part_of_the_cache_key,
+    cpage_keys_only_item_pages,
     cpage_past_the_end_shows_the_last_page,
 );
 
@@ -148,6 +149,21 @@ async fn cpage_is_part_of_the_cache_key(app: App) -> App {
         assert_eq!(app.get(same).await.body, one.body, "{same}");
     }
     assert_eq!(app.cached().await, 2);
+    app
+}
+
+/// `cpage` is not in the cache key of a page that cannot show one item's comments (a
+/// search, an archive): `?cpage=N` there is the same entry as without it.
+async fn cpage_keys_only_item_pages(app: App) -> App {
+    let app = blog(app).await;
+    app.post("Hello", "hello", &[]).await;
+    let search = app.get("/?s=hello").await;
+    assert_eq!(search.status, StatusCode::OK);
+    let archive = app.get("/post/").await;
+    let cached = app.cached().await;
+    assert_eq!(app.get("/?s=hello&cpage=2").await.body, search.body);
+    assert_eq!(app.get("/post/?cpage=3").await.body, archive.body);
+    assert_eq!(app.cached().await, cached, "no new cache entries");
     app
 }
 

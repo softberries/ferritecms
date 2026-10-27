@@ -69,7 +69,8 @@ pub struct CommentItemDto {
     /// (a token without `content:read`).
     pub title: String,
     /// The public path, only while the item has a public page now (published, its
-    /// publish time reached); `null` otherwise.
+    /// publish time reached, and not a media item: media have no page); `null`
+    /// otherwise.
     #[schema(required = true)]
     pub permalink: Option<String>,
     /// `draft`, `pending`, `scheduled`, `published`, `private` or `trash`.

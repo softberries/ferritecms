@@ -119,7 +119,12 @@ async fn page(
         };
         return (res, CacheOutcome::Bypass);
     }
-    let query = NormalQuery::parse(raw_query.as_deref());
+    let mut query = NormalQuery::parse(raw_query.as_deref());
+    // A comment page exists on single items only: elsewhere `?cpage=N` is ignored, so
+    // it adds no cache entries.
+    if !route.may_show_item() {
+        query.cpage = None;
+    }
     let user = session(state, headers).await.map(|who| who.user.id);
     let host = state.config.default_host.clone();
     // Per-user variants are keyed by the user id alone, which is safe only because
