@@ -64,7 +64,7 @@ Rules the tooling enforces:
 ## Bundle budget
 
 `pnpm -C admin build && pnpm -C admin bundle:check` gzips (level 9) the entry script, the
-entry with its modulepreloads, the main stylesheet, the editor (`editor-*.js`) and chart
+entry with its modulepreloads, every stylesheet (main and lazy, so the editor's too), the editor (`editor-*.js`) and chart
 (`chart-*.js`) chunks, and the largest other lazy chunk, and compares each with
 `bundle-budget.json` (P56). It prints size, limit and headroom per group and exits 1 naming
 any group over its limit. CI runs it after `build`.

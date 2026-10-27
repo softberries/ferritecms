@@ -1,5 +1,5 @@
 // Bundle-size budget (M2b-3 Task 15, P56). Reads `dist/index.html` for the entry
-// script, its modulepreloads and the main stylesheet, finds the editor (TipTap) and
+// script, its modulepreloads and every stylesheet (main and lazy, such as the editor's), finds the editor (TipTap) and
 // chart chunks by name prefix, gzips each at level 9 and compares the sizes with
 // `bundle-budget.json`. Exits 1 naming every group over its limit. Run after
 // `pnpm build`; to raise a limit, edit `bundle-budget.json` in a reviewed change.
@@ -32,15 +32,19 @@ const base = (href) => href.slice(href.lastIndexOf("/") + 1);
 export function checkBundle(dist, limits) {
   const html = readFileSync(join(dist, "index.html"), "utf8");
   const entry = html.match(/<script\b[^>]*\bsrc="([^"]+\.js)"/)?.[1];
-  const css = html.match(/<link\b[^>]*rel="stylesheet"[^>]*\bhref="([^"]+\.css)"/)?.[1];
   if (!entry) throw new Error("index.html: no entry script");
-  if (!css) throw new Error("index.html: no stylesheet");
+  if (!/<link\b[^>]*rel="stylesheet"/.test(html)) throw new Error("index.html: no stylesheet");
   const preloads = [...html.matchAll(/<link\b[^>]*rel="modulepreload"[^>]*\bhref="([^"]+)"/g)].map(
     (m) => base(m[1] ?? ""),
   );
   const entryFile = base(entry);
 
-  const assets = readdirSync(join(dist, "assets")).filter((f) => f.endsWith(".js"));
+  const all = readdirSync(join(dist, "assets"));
+  const assets = all.filter((f) => f.endsWith(".js"));
+  const cssFiles = all.filter((f) => f.endsWith(".css"));
+  for (const f of [entryFile, ...preloads]) {
+    if (!assets.includes(f)) throw new Error(`index.html names ${f}, which is not in assets/`);
+  }
   const editor = assets.filter((f) => EDITOR.test(f));
   const chart = assets.filter((f) => CHART.test(f));
   if (editor.length !== 1)
@@ -53,7 +57,7 @@ export function checkBundle(dist, limits) {
   const sizes = {
     entry: gz(dist, entryFile),
     entry_preloads: [entryFile, ...preloads].reduce((sum, f) => sum + gz(dist, f), 0),
-    css: gzipSync(readFileSync(join(dist, "assets", base(css))), { level: 9 }).length,
+    css: cssFiles.reduce((sum, f) => sum + gz(dist, f), 0),
     editor: gz(dist, editor[0] ?? ""),
     chart: gz(dist, chart[0] ?? ""),
     largest_lazy: Math.max(0, ...lazy),

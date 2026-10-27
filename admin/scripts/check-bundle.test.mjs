@@ -51,7 +51,7 @@ const ROOMY = {
 };
 
 test("check_bundle_flags_over_limit", () => {
-  const d = dist(FILES);
+  const d = dist({ ...FILES, "assets/editor-HHHHHHHH.css": noise(800) });
 
   const ok = checkBundle(d, ROOMY);
   expect(ok.failures).toEqual([]);
@@ -60,15 +60,32 @@ test("check_bundle_flags_over_limit", () => {
   expect(size.largest_lazy).toBeGreaterThan(2450);
   expect(size.largest_lazy).toBeLessThan(2600);
   expect(size.entry_preloads).toBeGreaterThan(size.entry ?? 0);
+  // css counts the lazy stylesheet too
+  expect(size.css).toBeGreaterThan(1750);
 
-  const over = checkBundle(d, { ...ROOMY, chart: 100, css: 100 });
-  expect(over.failures.map((f) => f.group)).toEqual(["css", "chart"]);
-  expect(over.rows.find((r) => r.group === "chart")?.headroom).toBeLessThan(0);
+  for (const group of Object.keys(ROOMY)) {
+    const over = checkBundle(d, { ...ROOMY, [group]: 100 });
+    expect(over.failures.map((f) => f.group)).toEqual([group]);
+    expect(over.rows.find((r) => r.group === group)?.headroom).toBeLessThan(0);
+  }
+  // the lazy stylesheet alone can push css over its limit
+  expect(
+    checkBundle(d, { ...ROOMY, css: (size.css ?? 0) - 1 }).failures.map((f) => f.group),
+  ).toEqual(["css"]);
 });
 
-test("missing_editor_chunk_is_a_problem", () => {
-  const rest = Object.fromEntries(
-    Object.entries(FILES).filter(([name]) => !name.includes("editor-")),
-  );
-  expect(() => checkBundle(dist(rest), ROOMY)).toThrow(/editor/);
+/** @param {string} name */
+const without = (name) =>
+  Object.fromEntries(Object.entries(FILES).filter(([n]) => !n.includes(name)));
+
+test("missing_chunks_and_files_are_named_errors", () => {
+  expect(() => checkBundle(dist(without("editor-")), ROOMY)).toThrow(/editor/);
+  expect(() => checkBundle(dist(without("chart-")), ROOMY)).toThrow(/chart/);
+  expect(() => checkBundle(dist(without("react-")), ROOMY)).toThrow(/react-BBBBBBBB\.js/);
+  expect(() => checkBundle(dist(without("index-AAAAAAAA")), ROOMY)).toThrow(/index-AAAAAAAA\.js/);
+  const noCss = {
+    ...FILES,
+    "index.html": FILES["index.html"].replace(/<link rel="stylesheet".*/, ""),
+  };
+  expect(() => checkBundle(dist(noCss), ROOMY)).toThrow(/stylesheet/);
 });
