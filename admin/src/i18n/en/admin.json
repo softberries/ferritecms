@@ -555,10 +555,6 @@
     "description": "How the public site looks. Upload a theme folder, switch the active theme and customize it.",
     "upload": "Upload theme",
     "list": "Installed themes",
-    "empty": {
-      "title": "No themes",
-      "body": "Upload a theme folder to get started."
-    },
     "badge": {
       "active": "Active",
       "builtIn": "Built in"

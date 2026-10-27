@@ -109,6 +109,15 @@ folder's own name); both packers are pinned byte for byte to
 `admin/src/appearance/__fixtures__/blog-min.tar`, the command's output for the
 `blog-min/` folder next to it (a nested asset, a path over 100 bytes that needs the ustar
 prefix field, a hidden file that is skipped; `crates/ferrite/tests/theme_pack.rs`).
+Given the same files, the two packers write the same bytes; the walks in front of them
+differ where a browser cannot see what `package::read_dir` sees. A dropped folder (the
+File and Directory Entries API) is counted as the CLI counts it, every listed entry
+(files, folders and hidden names) against the 2000 limit. An `<input webkitdirectory>`
+selection lists files only, so there only the files that are packed count, and a folder
+the CLI refuses as "more than 2000 files" can still pack in the browser. Symlinks: the
+CLI refuses them by name, but a page cannot tell a link from a file and both browser
+paths follow it, packing the target's bytes. Either way the server unpacks the upload
+with its own limits (`bundle::unpack`), which stay the authority.
 
 **Install and selection (as built, M1.5).** `ferrite::extensions::install_theme_dir` packs
 a folder, loads the bundle (a theme that does not compile is refused before anything is

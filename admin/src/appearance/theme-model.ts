@@ -26,3 +26,11 @@ export function safeHomepage(href: string | null | undefined): string | null {
     return null;
   }
 }
+
+/** Two letters that tell themes apart: the first letters of two words, else of the name. */
+export function monogram(name: string): string {
+  const words = name.split(/[-_]+/).filter(Boolean);
+  const letters =
+    words.length > 1 ? `${words[0]?.[0] ?? ""}${words[1]?.[0] ?? ""}` : name.slice(0, 2);
+  return letters.toUpperCase();
+}

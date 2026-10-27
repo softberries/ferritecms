@@ -2,15 +2,27 @@
 // over `GET/PATCH /themes/{name}/settings`. Only the changed keys are sent; a reset sends
 // `null`. Settings are last-write-wins, so the form asks before overwriting a change made
 // since it opened (P31). Settings belong to the theme name (H-T3): a replaced theme keeps
-// the values stored under its name.
+// the values stored under its name. Closing the sheet (Escape, the overlay, Close) or
+// leaving the screen with unsaved changes asks first, as the Settings screen does.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { INLINE_ERRORS } from "@/api/client";
 import { qk } from "@/api/keys";
 import { getThemeSettings, patchThemeSettings, themeSettingsQuery } from "@/api/themes";
 import { ErrorState } from "@/components/kit/error-state";
 import { SettingsForm } from "@/components/kit/settings-form";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
 import {
   Sheet,
   SheetContent,
@@ -19,6 +31,8 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useLeaveGuard } from "@/editor/leave-guard";
+import { DESTRUCTIVE } from "@/lib/destructive";
 
 export interface ThemeSettingsSheetProps {
   name: string;
@@ -30,8 +44,33 @@ export function ThemeSettingsSheet({ name, onClose }: ThemeSettingsSheetProps) {
   const queryClient = useQueryClient();
   // Its error shows in the sheet (no toast on top).
   const settings = useQuery({ ...themeSettingsQuery(name), meta: INLINE_ERRORS });
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // Closing the sheet with unsaved changes; route changes go through the leave guard.
+  const [closing, setClosing] = useState(false);
+  const leave = useLeaveGuard(dirty && !saving);
+  const asking = closing || leave.blocked;
+  const stay = () => {
+    setClosing(false);
+    if (leave.blocked) leave.stay();
+  };
+  const drop = () => {
+    if (leave.blocked) {
+      leave.leave();
+      return;
+    }
+    setClosing(false);
+    onClose();
+  };
   return (
-    <Sheet open onOpenChange={(open) => !open && onClose()}>
+    <Sheet
+      open
+      onOpenChange={(open) => {
+        if (open) return;
+        if (dirty) setClosing(true);
+        else onClose();
+      }}
+    >
       <SheetContent
         side="right"
         data-slot="theme-settings"
@@ -48,10 +87,16 @@ export function ThemeSettingsSheet({ name, onClose }: ThemeSettingsSheetProps) {
               values={settings.data.values}
               staleKey={t("themes.settings.staleKey", { name })}
               reload={async () => (await getThemeSettings(name)).values}
+              onDirtyChange={setDirty}
               onSubmit={async (patch) => {
-                const saved = await patchThemeSettings(name, patch);
-                queryClient.setQueryData(qk.themeSettings(name), saved);
-                return saved.values;
+                setSaving(true);
+                try {
+                  const saved = await patchThemeSettings(name, patch);
+                  queryClient.setQueryData(qk.themeSettings(name), saved);
+                  return saved.values;
+                } finally {
+                  setSaving(false);
+                }
               }}
             />
           ) : settings.isError ? (
@@ -69,6 +114,20 @@ export function ThemeSettingsSheet({ name, onClose }: ThemeSettingsSheetProps) {
           )}
         </div>
       </SheetContent>
+      <AlertDialog open={asking} onOpenChange={(open) => (open ? undefined : stay())}>
+        <AlertDialogContent data-slot="theme-settings-leave">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("settings.leave.title")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("settings.leave.body")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("settings.leave.stay")}</AlertDialogCancel>
+            <Button variant="destructive" className={DESTRUCTIVE} onClick={drop}>
+              {t("settings.leave.leave")}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Sheet>
   );
 }

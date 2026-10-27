@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, test } from "vitest";
 import type { ThemeDto } from "@/api/themes";
 import { json, renderWithRouter, stubRoutes } from "@/test/render";
-import { nodesSettled, safeHomepage } from "./theme-model";
+import { monogram, nodesSettled, safeHomepage } from "./theme-model";
 import { ThemesScreen } from "./themes-screen";
 
 const NODE = "11111111-1111-4111-8111-111111111111";
@@ -137,4 +137,12 @@ test("homepage_link_only_for_http", () => {
   expect(safeHomepage("data:text/html,x")).toBeNull();
   expect(safeHomepage("not a url")).toBeNull();
   expect(safeHomepage(null)).toBeNull();
+});
+
+test("monogram_tells_themes_apart", () => {
+  expect(monogram("blog")).toBe("BL");
+  expect(monogram("blog-min")).toBe("BM");
+  expect(monogram("my_theme")).toBe("MT");
+  expect(monogram("x")).toBe("X");
+  expect(monogram("a-b-c")).toBe("AB");
 });

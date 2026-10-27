@@ -110,3 +110,23 @@ test("dropped_folder_too_deep_stops", async () => {
   for (let i = 20; i >= 0; i--) deep = dirEntry(`d${i}`, [deep]);
   await expect(readDrop(drop([deep]))).rejects.toMatchObject({ problem: "too-deep" });
 });
+
+test("dropped_folder_counts_entries_like_the_cli", async () => {
+  // `package::read_dir` counts every listed entry (folders and hidden names too) against
+  // the 2000 limit: 1998 files + a folder + a hidden file + the folder's file = 2001.
+  const files = Array.from({ length: 1998 }, (_, i) => fileEntry(`f${i}.css`));
+  const tree = dirEntry("t", [
+    ...files,
+    dirEntry("sub", [fileEntry("x.css")]),
+    fileEntry(".hidden"),
+  ]);
+  await expect(readDrop(drop([tree]))).rejects.toMatchObject({ problem: "too-many-files" });
+  // One fewer listed entry packs.
+  const ok = dirEntry("t", [
+    ...files.slice(1),
+    dirEntry("sub", [fileEntry("x.css")]),
+    fileEntry(".hidden"),
+  ]);
+  const got = await readDrop(drop([ok]));
+  expect(got.kind).toBe("folder");
+});

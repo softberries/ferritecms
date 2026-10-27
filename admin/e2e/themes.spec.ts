@@ -204,6 +204,8 @@ test("theme_settings_save", async ({ as, site, backend, snap, expectAccessible }
     await sheet.getByRole("button", { name: "Save changes" }).click();
     expect((await patch).postDataJSON()).toEqual({ show_excerpts: !was });
     await expect(toast(page, "Settings saved")).toBeVisible();
+    // Stored: the server reads it back.
+    expect((await api.themeSettings("blog")).values.show_excerpts).toBe(!was);
   } finally {
     await api.patchThemeSettings("blog", { show_excerpts: null });
     await api.dispose();

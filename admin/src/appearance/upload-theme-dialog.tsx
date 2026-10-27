@@ -269,6 +269,7 @@ function UploadBody({
               ref={folderInput}
               data-slot="theme-folder-input"
               type="file"
+              multiple
               hidden
               tabIndex={-1}
               {...DIRECTORY}
@@ -355,7 +356,7 @@ function PickedSummary({
   return (
     <div
       data-slot="theme-picked"
-      className="flex flex-wrap items-center gap-3 rounded-xl border bg-muted/40 p-3"
+      className="flex items-center gap-3 rounded-xl border bg-muted/40 p-3"
     >
       <span className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-card text-muted-foreground">
         <Icon aria-hidden="true" className="size-5" />
@@ -363,18 +364,21 @@ function PickedSummary({
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <p
           data-slot="theme-picked-name"
+          title={picked.name ?? undefined}
           className={cn(
-            "font-medium break-words",
+            "truncate font-medium",
             picked.name ? "text-foreground" : "text-muted-foreground",
           )}
         >
           {picked.name ?? t("themes.uploadDialog.unknownName")}
         </p>
-        <p className="text-xs break-all text-muted-foreground tabular-nums">{summary}</p>
+        <p className="truncate text-xs text-muted-foreground tabular-nums" title={summary}>
+          {summary}
+        </p>
       </div>
       <Button
         variant="ghost"
-        className="pointer-coarse:min-h-11"
+        className="shrink-0 pointer-coarse:min-h-11"
         disabled={disabled}
         onClick={onAgain}
       >

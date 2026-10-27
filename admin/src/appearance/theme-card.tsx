@@ -16,7 +16,7 @@ import type { ThemeDto } from "@/api/themes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { safeHomepage } from "./theme-model";
+import { monogram, safeHomepage } from "./theme-model";
 
 /** What the screen knows about an activation it is following (polling node state). */
 export type NodeWatch = "checking" | "pending" | null;
@@ -46,9 +46,9 @@ export function ThemeCard({ theme, onActivate, onCustomize, watch }: ThemeCardPr
         <div className="flex items-start gap-3">
           <span
             aria-hidden="true"
-            className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-muted text-md font-medium text-muted-foreground uppercase"
+            className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-muted text-sm font-medium tracking-wide text-muted-foreground"
           >
-            {theme.name.slice(0, 1)}
+            {monogram(theme.name)}
           </span>
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <h3 className="text-md font-medium break-words text-foreground">{theme.name}</h3>

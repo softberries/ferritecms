@@ -508,6 +508,11 @@ export class ContentApi {
     );
   }
 
+  /** `GET /themes/{name}/settings`: the schema and every value as templates see it. */
+  async themeSettings(name: string): Promise<{ values: Record<string, unknown> }> {
+    return this.ok(await this.ctx.get(`/api/v1/themes/${name}/settings`), `${name} settings`);
+  }
+
   /** `PATCH /themes/{name}/settings` (`null` resets a key). */
   async patchThemeSettings(name: string, patch: Record<string, unknown>): Promise<void> {
     await this.ok(

@@ -4,6 +4,9 @@
 // `blog/theme.toml` becomes `theme.toml`. Hidden entries (any segment starting with `.`)
 // are skipped before anything is read, and the server's limits are checked from the file
 // sizes before the bytes are read, so a huge folder fails fast instead of filling memory.
+// A dropped folder is counted as `ferrite theme pack` counts it (every listed entry); an
+// `<input webkitdirectory>` selection lists files only, so there only the files that are
+// packed count (06 §1).
 
 import { PACK_LIMITS, PackError, isHidden, type PackFile } from "./ustar";
 
@@ -78,22 +81,30 @@ async function children(dir: DirectoryEntry): Promise<Entry[]> {
 }
 
 /**
- * The files under `dir` with paths relative to it, hidden entries not walked; stops at the
- * depth limit and at one file past the count limit (the count is checked again in `read`).
+ * The files under `dir` with paths relative to it, walked as `package::read_dir` walks a
+ * folder: every listed entry (files, folders and hidden names alike) counts against the
+ * 2000 limit, hidden entries are not walked or packed, and folders nest at most 16 deep.
  */
-async function walk(dir: DirectoryEntry, prefix: string, depth: number, out: Picked[]) {
+async function walk(
+  dir: DirectoryEntry,
+  prefix: string,
+  depth: number,
+  out: Picked[],
+  seen: { entries: number },
+) {
   for (const entry of await children(dir)) {
+    seen.entries += 1;
+    if (seen.entries > PACK_LIMITS.files) throw new PackError("too-many-files");
     if (entry.name.startsWith(".")) continue;
     const path = `${prefix}${entry.name}`;
     if (entry.isDirectory) {
       if (depth + 1 > PACK_LIMITS.depth) throw new PackError("too-deep", path);
-      await walk(entry as DirectoryEntry, `${path}/`, depth + 1, out);
+      await walk(entry as DirectoryEntry, `${path}/`, depth + 1, out, seen);
     } else if (entry.isFile) {
       const file = await new Promise<File>((ok, fail) => {
         (entry as FileEntry).file(ok, fail);
       });
       out.push({ path, file });
-      if (out.length > PACK_LIMITS.files) throw new PackError("too-many-files");
     }
   }
 }
@@ -106,7 +117,7 @@ export async function readDrop(dt: DataTransfer): Promise<Drop> {
   const entry = item?.webkitGetAsEntry() as Entry | null | undefined;
   if (entry?.isDirectory) {
     const picked: Picked[] = [];
-    await walk(entry as DirectoryEntry, "", 0, picked);
+    await walk(entry as DirectoryEntry, "", 0, picked, { entries: 0 });
     return { kind: "folder", folder: await read(entry.name, picked) };
   }
   const file = item?.getAsFile();
