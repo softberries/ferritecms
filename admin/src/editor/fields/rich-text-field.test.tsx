@@ -86,4 +86,26 @@ describe("rich_text field", () => {
     await waitFor(() => expect(box()).toHaveTextContent("Start abc"));
     expect(onChange).toHaveBeenLastCalledWith(doc("Start abc"));
   });
+
+  test("an_earlier_own_document_coming_back_after_an_outside_value_is_shown", async () => {
+    // Its own edit A, then a value from outside (B), then A again (a move back, a draft
+    // put back): A is shown, not ignored as an echo.
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <RichTextField ids={ids} value={doc("Start")} onChange={onChange} disabled={false} />,
+    );
+    await waitFor(() => expect(box()).toHaveTextContent("Start"));
+    const editor = (box() as unknown as { editor: Editor }).editor;
+    act(() => {
+      editor.commands.insertContentAt(editor.state.doc.content.size - 1, " mine");
+    });
+    const [own] = onChange.mock.calls[0] as [unknown];
+    rerender(<RichTextField ids={ids} value={own} onChange={onChange} disabled={false} />);
+    rerender(
+      <RichTextField ids={ids} value={doc("Outside")} onChange={onChange} disabled={false} />,
+    );
+    await waitFor(() => expect(box()).toHaveTextContent("Outside"));
+    rerender(<RichTextField ids={ids} value={own} onChange={onChange} disabled={false} />);
+    await waitFor(() => expect(box()).toHaveTextContent("Start mine"));
+  });
 });

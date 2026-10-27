@@ -103,6 +103,9 @@ function RichEditor({
   useEffect(() => {
     if (editor.isDestroyed || value === shown.current) return;
     if (isObject(value) && emitted.current.has(value)) return;
+    // A value from outside: what this editor reported before is no longer an echo (a
+    // later return to one of those documents is shown).
+    emitted.current = new WeakSet();
     shown.current = value;
     if (sameValue(value, editor.isEmpty ? null : editor.getJSON())) return;
     // A value this editor cannot represent is left alone (never rewritten by showing it).

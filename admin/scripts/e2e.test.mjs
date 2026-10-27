@@ -3,7 +3,9 @@ import { playwrightArgs } from "./e2e.mjs";
 
 const sqlite = { all: false, pg: false };
 
-test("default_runs_chromium_with_its_teardown", () => {
+// The site-wide teardown of each named project is not in the arguments: Playwright runs a
+// project's teardown by itself.
+test("default_names_the_chromium_projects", () => {
   expect(playwrightArgs([], sqlite)).toEqual(["test", "--project=chromium-sqlite"]);
   expect(playwrightArgs([], { all: false, pg: true })).toEqual([
     "test",

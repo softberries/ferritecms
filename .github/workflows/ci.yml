@@ -116,8 +116,9 @@ jobs:
 
   # Every E2E spec in four parallel jobs (M2b P55; 10 §3): Chromium on SQLite and on
   # Postgres, Firefox and WebKit on SQLite, against the binary and plugin `admin` built.
-  # Every job has the Postgres service; only `chromium-pg` gets FERRITE_TEST_PG_URL (its
-  # global setup fails without it). Design screenshots come from `chromium-sqlite` only.
+  # Only `chromium-pg` starts the Postgres service (an empty `image` starts none; GitHub's
+  # workflow syntax, `services.<id>.image`) and gets FERRITE_TEST_PG_URL (its global setup
+  # fails without it). Design screenshots come from `chromium-sqlite` only.
   admin-e2e:
     needs: admin
     runs-on: ubuntu-latest
@@ -137,7 +138,7 @@ jobs:
             engine: webkit
     services:
       postgres:
-        image: postgres:18
+        image: ${{ matrix.project == 'chromium-pg' && 'postgres:18' || '' }}
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_USER: ferrite

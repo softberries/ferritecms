@@ -26,7 +26,7 @@ and `/_preview` to the site and rewrites `Origin` so the server's CSRF check pas
 | `format`    | `prettier --write`                                             |
 | `test`      | Vitest (`app` project in jsdom, `scripts` project in Node)     |
 | `e2e`       | Playwright against a real `ferrite serve`, Chromium (below)    |
-| `e2e:all`   | the same in all four projects (Chromium, Firefox, WebKit)      |
+| `e2e:all`   | the same in every project (three, four with Postgres)          |
 
 E2E: `pnpm -C admin build && cargo build --release -p ferrite && pnpm -C admin e2e`
 (`FERRITE_BIN` overrides `../target/release/ferrite`; the Plugins spec also needs
@@ -34,7 +34,8 @@ E2E: `pnpm -C admin build && cargo build --release -p ferrite && pnpm -C admin e
 first time: `pnpm -C admin exec playwright install chromium firefox webkit`). The projects
 (`e2e/support/projects.ts`, P55) are `chromium-sqlite`, `chromium-pg` (with
 `FERRITE_TEST_PG_URL`), `firefox-sqlite` and `webkit-sqlite`, every spec in each; `pnpm e2e`
-runs the Chromium ones, `pnpm e2e:all` all four, `pnpm e2e --project firefox-sqlite` one,
+runs the Chromium ones, `pnpm e2e:all` all of them (three without `FERRITE_TEST_PG_URL`,
+four with it), `pnpm e2e --project firefox-sqlite` one,
 and `pnpm e2e e2e/menus.spec.ts` only that file. Global setup starts a site per selected
 project with `seed demo`, the harness accounts of `e2e/support/users.ts` and an SMTP sink,
 and logs the accounts in once (`e2e/.auth/<project>/`). The specs that change site-wide

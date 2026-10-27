@@ -55,13 +55,19 @@ export const TOAST_IN_TRANSITION =
  * metrics (the seeded site has no plugins). Tests run in parallel against one site, so an
  * open page can still list a type, taxonomy or plugin another test deleted: its fan-out
  * request (the palette, the menu editor, the dashboard) answers 404, which the page
- * handles (no results, the list read again) but the browser logs. Accepted in every test.
+ * handles (no results, the list read again) but the browser logs. Accepted in every test,
+ * except a plugin's metrics in `plugins.spec.ts`, whose tests read the metrics of their own
+ * plugins (`goneElsewhere`).
  */
 const GONE_ELSEWHERE = [
   /\/api\/v1\/content\/(?!(?:post|page|media|refs)(?:[/?]|$))[a-z][a-z0-9_-]*(?:\/counts)?(?:\?|$)/,
   /\/api\/v1\/taxonomies\/(?!(?:category|post_tag)\/)[a-z][a-z0-9_-]*\/terms(?:\?|$)/,
-  /\/api\/v1\/plugins\/[a-z0-9][a-z0-9_-]*\/metrics(?:\?|$)/,
 ];
+const PLUGIN_METRICS = /\/api\/v1\/plugins\/[a-z0-9][a-z0-9_-]*\/metrics(?:\?|$)/;
+
+/** The `GONE_ELSEWHERE` patterns for the spec file `file`. */
+const goneElsewhere = (file: string): RegExp[] =>
+  /(?:^|[/\\])plugins\.spec\.ts$/.test(file) ? GONE_ELSEWHERE : [...GONE_ELSEWHERE, PLUGIN_METRICS];
 
 /**
  * What an engine reports when a navigation cancels a load still in flight, which Chromium
@@ -69,21 +75,20 @@ const GONE_ELSEWHERE = [
  * - Firefox logs a console error for a web font whose download was aborted
  *   (`status=2152398850` is NS_BINDING_ABORTED);
  * - WebKit reports a same-origin `fetch` the navigation cancelled as "Fetch API cannot
- *   load <url> due to access control checks." (Playwright passes it on as a page error),
- *   and a lazy module whose request was cancelled as "TypeError: Importing a module
- *   script failed." (accepted only when that page saw a script request cancelled within
- *   `CANCEL_WINDOW_MS`, `IMPORT_CANCELLED`).
+ *   load <url> due to access control checks." (Playwright passes it on as a page error;
+ *   `FETCH_CANCELLED`), and a lazy module whose request was cancelled as "TypeError:
+ *   Importing a module script failed." (`IMPORT_CANCELLED`). Each is accepted only when
+ *   that page saw the request cancelled within `CANCEL_WINDOW_MS`: the fetch's own URL
+ *   (of this site), or for an import any script.
  */
-const CANCELLED_LOAD: Partial<Record<string, (text: string, origin: string) => boolean>> = {
+const CANCELLED_LOAD: Partial<Record<string, (text: string) => boolean>> = {
   firefox: (text) =>
     /^\[JavaScript Error: "downloadable font: download failed \(.*\): status=2152398850 /.test(
       text,
     ),
-  webkit: (text, origin) =>
-    text.startsWith(`Fetch API cannot load ${origin}/`) &&
-    text.split("\n")[0]?.endsWith(" due to access control checks.") === true,
 };
 
+const FETCH_CANCELLED = /^Fetch API cannot load (\S+) due to access control checks\.$/;
 const IMPORT_CANCELLED = "TypeError: Importing a module script failed.";
 const CANCEL_WINDOW_MS = 2_000;
 
@@ -143,30 +148,50 @@ export const test = base.extend<Fixtures & Options>({
   },
 
   guard: [
-    async ({ context, browserName, site }, use) => {
+    async ({ context, browserName, site }, use, testInfo) => {
       const cancelled = CANCELLED_LOAD[browserName];
-      const isCancelledLoad = (text: string) => cancelled?.(text, site.url) ?? false;
+      const isCancelledLoad = (text: string) => cancelled?.(text) ?? false;
+      const gone = goneElsewhere(testInfo.file);
       const problems: string[] = [];
-      // WebKit: failed module imports, and when each page saw a script request cancelled.
-      const imports: { page: Page; at: number }[] = [];
-      const scriptsCancelled = new Map<Page, number[]>();
+      // WebKit: errors that a cancelled request explains (`url` null: any script), and
+      // the requests each page saw cancelled.
+      const pending: { page: Page; url: string | null; at: number; report: string }[] = [];
+      const cancelledRequests = new Map<Page, { url: string; script: boolean; at: number }[]>();
+      /** WebKit's report of a cancelled load, kept until the end of the test; else false. */
+      const deferCancelled = (page: Page, text: string, report: string): boolean => {
+        if (browserName !== "webkit") return false;
+        if (text === IMPORT_CANCELLED) {
+          pending.push({ page, url: null, at: Date.now(), report });
+          return true;
+        }
+        const url = FETCH_CANCELLED.exec(text.split("\n")[0] ?? "")?.[1];
+        if (!url?.startsWith(`${site.url}/`)) return false;
+        pending.push({ page, url, at: Date.now(), report });
+        return true;
+      };
       const allowed: RegExp[] = [];
       const allowedResources: RegExp[] = [];
       const watched = new WeakSet<BrowserContext>();
       const watchPage = (page: Page) => {
         if (browserName === "webkit") retryInterruptedReload(page);
         page.on("pageerror", (e) => {
-          if (isCancelledLoad(e.stack ?? "")) return;
-          if (browserName === "webkit" && e.message === IMPORT_CANCELLED) {
-            imports.push({ page, at: Date.now() });
+          const report = `pageerror: ${e.message}`;
+          if (
+            deferCancelled(
+              page,
+              e.message === IMPORT_CANCELLED ? e.message : (e.stack ?? ""),
+              report,
+            )
+          ) {
             return;
           }
-          problems.push(`pageerror: ${e.message}`);
+          problems.push(report);
         });
         if (browserName === "webkit") {
           page.on("requestfailed", (r) => {
-            if (r.resourceType() !== "script" || r.failure()?.errorText !== "cancelled") return;
-            scriptsCancelled.set(page, [...(scriptsCancelled.get(page) ?? []), Date.now()]);
+            if (r.failure()?.errorText !== "cancelled") return;
+            const seen = { url: r.url(), script: r.resourceType() === "script", at: Date.now() };
+            cancelledRequests.set(page, [...(cancelledRequests.get(page) ?? []), seen]);
           });
         }
         page.on("console", (msg) => {
@@ -175,6 +200,7 @@ export const test = base.extend<Fixtures & Options>({
           if (allowed.some((re) => re.test(text))) return;
           if (isCancelledLoad(text)) return;
           const at = msg.location();
+          if (deferCancelled(page, text, `console.error: ${text}`)) return;
           if (
             text.startsWith("Failed to load resource") &&
             allowedResources.some((re) => re.test(at.url))
@@ -184,7 +210,7 @@ export const test = base.extend<Fixtures & Options>({
           if (
             text.startsWith("Failed to load resource") &&
             text.includes("status of 404") &&
-            GONE_ELSEWHERE.some((re) => re.test(at.url))
+            gone.some((re) => re.test(at.url))
           ) {
             return;
           }
@@ -223,11 +249,12 @@ export const test = base.extend<Fixtures & Options>({
       };
       await guard.watch(context);
       await use(guard);
-      for (const { page, at } of imports) {
-        const near = (scriptsCancelled.get(page) ?? []).some(
-          (t) => Math.abs(t - at) <= CANCEL_WINDOW_MS,
+      for (const { page, url, at, report } of pending) {
+        const explained = (cancelledRequests.get(page) ?? []).some(
+          (r) =>
+            Math.abs(r.at - at) <= CANCEL_WINDOW_MS && (url === null ? r.script : r.url === url),
         );
-        if (!near) problems.push(`pageerror: ${IMPORT_CANCELLED}`);
+        if (!explained) problems.push(report);
       }
       expect(problems, "CSP violations, page errors and console errors").toEqual([]);
     },
