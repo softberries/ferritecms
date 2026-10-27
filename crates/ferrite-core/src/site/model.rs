@@ -163,6 +163,46 @@ pub struct MediaPublic {
     pub variants: Vec<MediaVariant>,
 }
 
+impl MediaPublic {
+    /// The `srcset` candidates of the item: one `(width, url)` per known width,
+    /// ascending. Of several files with the same width (a `hero` crop and the `large`
+    /// resize can both be 1280 wide), the variant named `preferred` wins, then the
+    /// original, then the variant first by name. Variants without a width are left
+    /// out, and so is the original when its width is unknown. The theme's `image()`
+    /// helper and inline body images (06 §4) both use it.
+    pub fn srcset_candidates(&self, preferred: Option<&str>) -> Vec<(i32, &str)> {
+        // (width, rank, url): lower rank wins a width.
+        let mut candidates: Vec<(i32, u8, &str)> = self
+            .variants
+            .iter()
+            .filter_map(|v| {
+                let rank = if Some(v.name.as_str()) == preferred {
+                    0
+                } else {
+                    2
+                };
+                v.width.map(|w| (w, rank, v.url.as_str()))
+            })
+            .collect();
+        if let Some(w) = self.width {
+            candidates.push((w, 1, self.url.as_str()));
+        }
+        // Stable: equal (width, rank) keep the variants' name order.
+        candidates.sort_by_key(|&(w, rank, _)| (w, rank));
+        candidates.dedup_by_key(|c| c.0);
+        candidates.into_iter().map(|(w, _, url)| (w, url)).collect()
+    }
+}
+
+/// `srcset` text for `candidates`: `url 640w, url 1280w`.
+pub fn srcset(candidates: &[(i32, &str)]) -> String {
+    candidates
+        .iter()
+        .map(|(w, url)| format!("{url} {w}w"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// A stored file that `/_media/<hash>/<name>` may serve: the original or a variant of
 /// a public media item ([`SiteReader::media_file`](super::SiteReader::media_file)).
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -333,12 +333,34 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 | `related(post, n=3)` | public items of the same type sharing a term with `post`, newest first per term; `n` ≤ 10 | `archive:<kind>`, `post:<item>` |
 | `query(type=…, term="<tax>/<slug>", limit=10)` | public items, newest first; `limit` ≤ 50; with `term`, exactly up to `limit` items of `type` with the term in one query (`SiteReader::term_items`, any type the taxonomy applies to, not capped by `reading.per_page`); a type the taxonomy does not list gets none | `archive:<kind>`, `term:<id>` |
 | `asset(path)` | `/_theme/<theme hash>/<path>`, each segment percent-encoded | `theme` |
-| `image(media, size)` | the `size` variant of a public media item (the original for an unknown size) with `width`, `height` and a `srcset` of one candidate per width | `post:<media id>` |
+| `image(media, size)` | the `size` variant of a public media item (the original for an unknown size) with `width`, `height` and a `srcset` of one candidate per width (`MediaPublic::srcset_candidates`, shared with inline images below: of several files of one width the requested size wins, then the original) | `post:<media id>` |
 | `head()` | the pre-rendered `<head>` HTML (core SEO + `render.head` plugin filters, §5) | — |
 | `footer()` | the plugins' footer HTML (`render.footer`, §5; sanitised like `content.body`); `""` without footer plugins and on error pages. `blog` prints it just before `</body>` | — |
 | `comments(post)` | one page of the public thread of a **public post** (other kinds, drafts, unknown ids: `none`), through `SiteReader::comments` (M2b-2 P34): the page is the request's `?cpage=N` on a single item (a positive integer, anything else is 1; past the last page shows the last). A page holds `comments.per_page` top-level threads (default 50, 1..=100), oldest first, each with all its approved replies; a **root** is an approved comment whose parent is null or not approved (a reply under a spam or held comment starts its own thread). A page always shows every one of its top-level threads; its rows are capped at 2,000 (`MAX_PAGE_ROWS`), and past that only replies are cut: the roots first, then replies in thread order (depth first, oldest first) until the budget is used, so the latest replies of a page's later threads may not show (a shown reply's parent always shows). `open` (`comments.enabled`, default on; a closed thread still lists its comments, as WordPress does, and the theme hides the form), `count` = `total` (every approved comment of the post, not only this page's), `page`, `pages` (at least 1), `per_page`, `prev_url` / `next_url` (the post's permalink, `?cpage=N` past page 1; `none` at either end), `items` in thread order (each reply right after its parent, siblings oldest first), `action` (`/_comment`), `honeypot` (`website`). Each item: `id`, `parent_id`, `depth` (0 at the top level), `author_name` (plain text), `author_url` (`http(s)` only, else `none`), `html` (the plain-text body escaped by core into `<p>`/`<br>`, marked safe), `date` (RFC 3339), `can_reply` (a reply would be accepted: core's own depth rule over the stored chain, so it holds when a parent is hidden). Approved comments only; never an e-mail or address hash. One bridge call | `post:<id>`, `option:comments.enabled`, `option:comments.per_page`; with more than one page the permalink's term and ancestor keys |
 | `plugin_route(name, path)` | `/_p/<name><path>` (05 §4b), each path segment percent-encoded; `""` unless `name` is a plugin name (`[a-z0-9-]{2,48}`) and `path` starts with `/` and has no `.`/`..` segment | — |
 | filters | `date(fmt)` (chrono strftime, UTC), `excerpt(n=55)` (plain text), `slugify` (core's slug function), `json` (safe in `<script>` and in **single-quoted** attributes only), MiniJinja's `urlencode`; `t` (i18n) is not built | — |
+
+**Inline images (M2b-3 Task 4, the follow-up of M2b-2 R28).** A body `image` node whose
+`src` is `ferrite:media/<id>` of a public media item renders as `image()` does
+(`Hydrator::inline_image` in `ferrite-core`), when the item is a raster image (JPEG, PNG,
+GIF, WebP) whose dimensions the `media.variants` job has recorded:
+
+- `srcset` lists the original and every ready variant of the same shape, one per width
+  with `w` descriptors (`MediaPublic::srcset_candidates`). A variant cropped to another
+  aspect ratio (the core `thumbnail`, the `blog` theme's `card` and `hero`) is left out:
+  a browser picking it would show a different picture.
+- `src` is the widest of those no wider than the theme's largest size (the widest
+  `[images]` entry of the served theme, `SiteReader::set_image_width`, set by the node
+  whenever it starts serving a theme), else the original; without theme sizes the
+  original's width is the largest size.
+- `sizes="(max-width: <largest>px) 100vw, <largest>px"`, `width`/`height` from the media
+  item's dimensions, `loading="lazy"`, `decoding="async"`, after `alt` (and `title`).
+
+An SVG, any other type and an image not measured yet keep the plain `<img src alt>` of
+the original; a missing or non-public item drops the image, as before. The media item's
+`post:<id>` is already a dependency of the page, and `record_variants` invalidates it, so
+a page rendered before the variants were ready is refreshed when they are. A theme swap
+flushes the page cache, so pages follow the new theme's largest size.
 
 **The comment form (M2a-2b P12, P13).** Themes post a plain HTML form (no script) to
 `POST /_comment` (`crates/ferrite-http/src/app/comment_form.rs`), form-encoded, with the

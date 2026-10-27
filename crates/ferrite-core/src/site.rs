@@ -46,7 +46,14 @@
 mod hydrate;
 mod model;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    num::NonZeroU32,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
+};
 
 use chrono::NaiveDate;
 use ferrite_domain::{
@@ -68,6 +75,7 @@ use hydrate::{Hydrator, Nodes, chain, load_ancestors, unique};
 pub use model::{
     DepKeys, FeedSource, FrontPage, ItemLink, Listing, MediaFile, MediaPublic, MediaVariant,
     PageItem, Previewed, PublicItem, SiteRead, SitemapEntry, SitemapPage, TermPublic, UserPublic,
+    srcset,
 };
 
 /// Maps an artifact hash and a file name to a public URL (`MediaStore::public_url`).
@@ -167,6 +175,9 @@ pub struct SiteReader {
     sitemap_file_len: usize,
     media_url: MediaUrlFn,
     clock: Clock,
+    /// The served theme's widest image size in pixels, 0 for none
+    /// ([`set_image_width`](Self::set_image_width)).
+    image_width: AtomicU32,
 }
 
 impl SiteReader {
@@ -182,7 +193,17 @@ impl SiteReader {
             sitemap_file_len: SITEMAP_FILE_LEN,
             media_url,
             clock,
+            image_width: AtomicU32::new(0),
         }
+    }
+
+    /// Sets the served theme's widest `[images]` size (`None`: the theme has none):
+    /// inline `ferrite:media/<id>` images take it as their largest display size (06
+    /// §4). The node sets it whenever it starts serving a theme; the pages cached
+    /// before a theme swap are flushed with it.
+    pub fn set_image_width(&self, width: Option<u32>) {
+        self.image_width
+            .store(width.unwrap_or(0), Ordering::Relaxed);
     }
 
     /// Splits sitemaps every `len` URLs (at least 1) instead of [`SITEMAP_FILE_LEN`];
@@ -1089,6 +1110,7 @@ impl SiteReader {
             repos,
             permalinks: rules,
             media_url: &self.media_url,
+            image_width: NonZeroU32::new(self.image_width.load(Ordering::Relaxed)),
             now,
         }
     }

@@ -203,6 +203,16 @@ pub(crate) fn parse(src: &str) -> Result<ThemeManifest, Vec<String>> {
 }
 
 impl ThemeManifest {
+    /// The width of the widest `[images]` size, `None` when the theme declares none
+    /// (or only zero widths): the largest display size of inline body images (06 §4).
+    pub fn largest_image_width(&self) -> Option<u32> {
+        self.images
+            .values()
+            .map(|s| s.width)
+            .filter(|w| *w > 0)
+            .max()
+    }
+
     /// The value of every declared setting: the stored value when it is valid for the
     /// setting's type, else the default, else the type's empty value (`""`, `false`,
     /// `0`, the first option, `null` for media). Undeclared stored keys are dropped.
@@ -283,6 +293,7 @@ logo = { type = "media", label = "Logo" }
                 crop: true
             }
         );
+        assert_eq!(m.largest_image_width(), Some(640));
         assert_eq!(m.settings["show_author"].label, "show_author");
         assert_eq!(m.settings["accent_color"].kind, SettingKind::Color);
     }

@@ -46,7 +46,7 @@ pub const MAX_ORIGINAL_NAME: usize = 255;
 /// The only type whose bytes can carry the sanitiser's marker.
 const SVG_MIME: &str = "image/svg+xml";
 /// The types `process_image` reads (`ferrite_media::is_raster_image`).
-const RASTER_MIMES: [&str; 4] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+pub(crate) const RASTER_MIMES: [&str; 4] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
 /// A staged upload to record ([`MediaService::record_upload`]).
 #[derive(Debug, Clone, PartialEq)]

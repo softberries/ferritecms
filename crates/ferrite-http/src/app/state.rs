@@ -141,7 +141,8 @@ pub(crate) struct SiteTexts {
 /// The parts an [`AppState`] is built from.
 pub struct AppParts {
     pub store: Arc<dyn Store>,
-    /// Must use the same permalink rules as `routes`.
+    /// Must use the same permalink rules as `routes`. [`AppState::new`] sets its
+    /// inline image width from `theme`.
     pub reader: Arc<SiteReader>,
     pub plugins: Arc<PluginHost>,
     /// Where `/_media` reads files from.
@@ -210,6 +211,9 @@ impl AppState {
     /// never served without its CSP.
     pub fn new(parts: AppParts) -> Result<Self, InvalidAdminHeader> {
         let admin_headers = AdminHeaders::new(parts.config.media_origin.as_deref())?;
+        parts
+            .reader
+            .set_image_width(parts.theme.manifest().largest_image_width());
         Ok(Self {
             redirects: Arc::new(RedirectService::new(parts.store.clone())),
             auth: None,
@@ -280,8 +284,12 @@ impl AppState {
     }
 
     /// Makes `theme` the served theme; the replaced one becomes
-    /// [`previous_theme`](Self::previous_theme) (the one before it is dropped).
+    /// [`previous_theme`](Self::previous_theme) (the one before it is dropped). The
+    /// reader's inline image width follows it
+    /// ([`SiteReader::set_image_width`]); the caller flushes the page cache.
     pub fn swap_theme(&self, theme: Arc<Theme>) {
+        self.reader
+            .set_image_width(theme.manifest().largest_image_width());
         let old = self.theme.swap(theme);
         self.previous_theme.store(Some(old));
     }

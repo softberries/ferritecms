@@ -1713,7 +1713,202 @@ pub async fn term_items_respects_limit(db: &TestDb) {
     assert_eq!(max.value.len(), 35);
 }
 
+// ------------------------------------------------------------ inline images (R28)
+
+fn new_hash() -> ArtifactHash {
+    ArtifactHash::parse(&format!("{:0>64}", format!("{:x}", rand_u64()))).unwrap()
+}
+
+/// A published media item of `mime`, `name`, `size` and `variants` (name, w, h), with
+/// artifact rows for every file; returns its id and the URLs of the original and of
+/// each variant (in the order given).
+async fn media_with(
+    store: &dyn Store,
+    author: &User,
+    mime: &str,
+    name: &str,
+    size: Option<(i32, i32)>,
+    variants: &[(&str, i32, i32)],
+) -> (ContentId, String, Vec<String>) {
+    let id = insert(
+        store,
+        author,
+        item(
+            "media",
+            &format!("m-{}", rand_u64()),
+            ContentStatus::Published,
+            Some(-HOUR),
+        ),
+    )
+    .await;
+    let hash = new_hash();
+    let mut rows = serde_json::Map::new();
+    let mut urls = Vec::new();
+    let repos = store.read();
+    for h in std::iter::once(hash.clone()).chain(variants.iter().map(|_| new_hash())) {
+        repos
+            .artifacts()
+            .insert_if_absent(&Artifact {
+                hash: h.clone(),
+                kind: ArtifactKind::Media,
+                bytes: 10,
+                mime: mime.into(),
+                created_at: at(0),
+            })
+            .await
+            .unwrap();
+        if h != hash {
+            let (v, w, height) = variants[urls.len()];
+            rows.insert(
+                v.into(),
+                json!({"hash": h.as_str(), "w": w, "h": height, "mime": mime}),
+            );
+            urls.push(format!("/_media/{h}/{name}"));
+        }
+    }
+    repos
+        .media()
+        .insert(&Media {
+            item_id: id,
+            artifact_hash: hash.clone(),
+            mime: mime.into(),
+            bytes: 10,
+            width: size.map(|s| s.0),
+            height: size.map(|s| s.1),
+            alt: String::new(),
+            original_name: name.into(),
+            variants: Value::Object(rows),
+            sanitized: mime == "image/svg+xml",
+        })
+        .await
+        .unwrap();
+    (id, format!("/_media/{hash}/{name}"), urls)
+}
+
+/// A published post whose body is the given inline images (`ferrite:media/<id>`, alt).
+async fn post_with_images(
+    store: &dyn Store,
+    author: &User,
+    slug: &str,
+    images: &[(ContentId, &str)],
+) {
+    let mut it = item("post", slug, ContentStatus::Published, Some(-HOUR));
+    let nodes: Vec<Value> = images
+        .iter()
+        .map(|(id, alt)| json!({"type": "image", "attrs": {"src": format!("ferrite:media/{id}"), "alt": alt}}))
+        .collect();
+    it.body = json!({"type": "doc", "content": nodes});
+    insert(store, author, it).await;
+}
+
+/// R28 follow-up: an inline raster image renders as the `image()` helper does: `src`
+/// the widest file no wider than the theme's largest size, `srcset` every ready
+/// variant plus the original (a crop of another shape is left out), `sizes`, the
+/// media's dimensions, lazy loading. Its media item is a dependency of the page.
+pub async fn inline_image_has_srcset(db: &TestDb) {
+    let store = db.store();
+    let author = user(store, "writer", Role::Author).await;
+    let (photo, orig, v) = media_with(
+        store,
+        &author,
+        "image/jpeg",
+        "photo.jpg",
+        Some((2000, 1500)),
+        &[("large", 1600, 1200), ("medium", 768, 576)],
+    )
+    .await;
+    let (cropped, orig2, v2) = media_with(
+        store,
+        &author,
+        "image/png",
+        "wide.png",
+        Some((2000, 1500)),
+        &[("hero", 1280, 640), ("medium", 768, 576)],
+    )
+    .await;
+    post_with_images(store, &author, "pics", &[(photo, "a photo"), (cropped, "")]).await;
+
+    let r = reader(db.shared_store());
+    r.set_image_width(Some(1280));
+    let got = r.single("post", &parts(&["pics"])).await.unwrap();
+    let html = got.value.unwrap().html;
+    let (large, medium) = (&v[0], &v[1]);
+    assert!(
+        html.contains(&format!(
+            "<img src=\"{medium}\" alt=\"a photo\" srcset=\"{medium} 768w, {large} 1600w, {orig} 2000w\" \
+             sizes=\"(max-width: 1280px) 100vw, 1280px\" width=\"2000\" height=\"1500\" \
+             loading=\"lazy\" decoding=\"async\">"
+        )),
+        "{html}"
+    );
+    // The 2:1 `hero` crop of a 4:3 image is not a candidate.
+    let medium2 = &v2[1];
+    assert!(
+        html.contains(&format!(
+            "<img src=\"{medium2}\" alt=\"\" srcset=\"{medium2} 768w, {orig2} 2000w\""
+        )),
+        "{html}"
+    );
+    assert!(!html.contains(&v2[0]), "{html}");
+    assert!(got.deps.contains(&post_key(photo)));
+    assert!(got.deps.contains(&post_key(cropped)));
+
+    // Without theme sizes the original is `src` and the largest size.
+    r.set_image_width(None);
+    let html = r
+        .single("post", &parts(&["pics"]))
+        .await
+        .unwrap()
+        .value
+        .unwrap()
+        .html;
+    assert!(
+        html.contains(&format!(
+            "<img src=\"{orig}\" alt=\"a photo\" srcset=\"{medium} 768w, {large} 1600w, {orig} 2000w\" \
+             sizes=\"(max-width: 2000px) 100vw, 2000px\""
+        )),
+        "{html}"
+    );
+}
+
+/// R28 follow-up: an SVG, a non-image and an image whose variants are not ready keep
+/// the plain `<img src alt>`.
+pub async fn inline_svg_has_no_srcset(db: &TestDb) {
+    let store = db.store();
+    let author = user(store, "writer", Role::Author).await;
+    let (svg, svg_url, _) =
+        media_with(store, &author, "image/svg+xml", "logo.svg", None, &[]).await;
+    let (pdf, pdf_url, _) =
+        media_with(store, &author, "application/pdf", "doc.pdf", None, &[]).await;
+    let (fresh, fresh_url, _) = media_with(store, &author, "image/png", "new.png", None, &[]).await;
+    post_with_images(
+        store,
+        &author,
+        "plain",
+        &[(svg, "logo"), (pdf, "doc"), (fresh, "new")],
+    )
+    .await;
+    let r = reader(db.shared_store());
+    r.set_image_width(Some(1280));
+    let html = r
+        .single("post", &parts(&["plain"]))
+        .await
+        .unwrap()
+        .value
+        .unwrap()
+        .html;
+    assert_eq!(
+        html,
+        format!(
+            "<img src=\"{svg_url}\" alt=\"logo\"><img src=\"{pdf_url}\" alt=\"doc\">\
+             <img src=\"{fresh_url}\" alt=\"new\">"
+        )
+    );
+}
+
 backend_tests!(
+    inline_image_has_srcset,
+    inline_svg_has_no_srcset,
     media_is_published_only,
     sitemap_files_count_and_split,
     media_file_is_published_only,
