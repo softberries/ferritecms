@@ -155,6 +155,40 @@ describe("autosave", () => {
     a.dispose();
   });
 
+  test("a_network_failure_after_mark_clean_does_not_come_back", async () => {
+    // e1cd3a5 re-review: the draft went back to the item (`markClean`) while its PUT ran;
+    // that PUT then failed offline and re-queued the old draft, which was written later.
+    const running = deferred();
+    const save = vi.fn<(d: Draft) => Promise<void>>(() => running.promise);
+    const { a, states } = setup(save);
+    a.markDirty(draft("Half-way"));
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_INTERVAL_MS);
+    expect(save).toHaveBeenCalledOnce();
+    a.markClean();
+    running.reject(new NetworkError("offline"));
+    await settle();
+    expect(a.state.get()).toBe("saved");
+    expect(states).not.toContain("offline");
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_INTERVAL_MS * 3);
+    expect(save).toHaveBeenCalledOnce();
+  });
+
+  test("a_newer_draft_survives_a_network_failure_after_mark_clean", async () => {
+    // An edit after the `markClean` is still written once the connection is back.
+    const running = deferred();
+    const save = vi.fn<(d: Draft) => Promise<void>>(() => running.promise);
+    const { a } = setup(save);
+    a.markDirty(draft("Half-way"));
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_INTERVAL_MS);
+    a.markClean();
+    a.markDirty(draft("Newer"));
+    running.reject(new NetworkError("offline"));
+    await settle();
+    save.mockImplementation(() => Promise.resolve());
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_INTERVAL_MS);
+    expect(save.mock.calls.map(([d]) => d.title)).toEqual(["Half-way", "Newer"]);
+  });
+
   test("explicit_save_marks_clean_and_puts_nothing", async () => {
     const save = vi.fn(() => Promise.resolve());
     const { a } = setup(save);

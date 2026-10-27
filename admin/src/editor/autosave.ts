@@ -113,6 +113,8 @@ export function createAutosaver(opts: AutosaverOptions): Autosaver {
   let holds = 0;
   let disposed = false;
   let lastSaved: number | null = null;
+  // Bumped by `markClean`: a write that fails after it does not bring its draft back.
+  let cleaned = 0;
 
   const arm = () => {
     if (timer !== null || disposed || pending === null) return;
@@ -139,6 +141,7 @@ export function createAutosaver(opts: AutosaverOptions): Autosaver {
       return Promise.resolve();
     }
     state.set("saving");
+    const generation = cleaned;
     const run = (async () => {
       try {
         await opts.save(draft);
@@ -147,9 +150,10 @@ export function createAutosaver(opts: AutosaverOptions): Autosaver {
       } catch (e) {
         if (disposed) return;
         if (e instanceof NetworkError) {
-          // Not stored: it waits again (unless a newer draft replaced it meanwhile).
-          pending ??= source;
-          state.set("offline");
+          // Not stored: it waits again (unless a newer draft replaced it meanwhile, or the
+          // draft was marked clean since: then nothing of it is left to write).
+          if (generation === cleaned) pending ??= source;
+          state.set(pending === null ? "saved" : "offline");
         } else {
           // A lost session or a refusal is not retried by itself; a newer draft, or the
           // next edit, tries again. The editor still holds the draft either way.
@@ -188,6 +192,7 @@ export function createAutosaver(opts: AutosaverOptions): Autosaver {
       arm();
     },
     markClean() {
+      cleaned++;
       pending = null;
       if (timer !== null) clearTimeout(timer);
       timer = null;

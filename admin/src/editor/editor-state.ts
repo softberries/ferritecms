@@ -833,8 +833,11 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   const clearSlot = useCallback(() => {
     const a = autosaver.current;
     if (!a) return;
+    // A write running now may be about to put an older draft in the slot: it is waited
+    // for below, like one that already landed.
+    const writing = a.state.get() === "saving";
     a.markClean();
-    if (!slotHolds.current || clearing.current || itemId === null) return;
+    if ((!slotHolds.current && !writing) || clearing.current || itemId === null) return;
     clearing.current = true;
     void (async () => {
       const release = await a.hold();
@@ -843,36 +846,47 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
           await deleteAutosave(type, itemId);
           slotHolds.current = false;
         }
-      } catch {
-        // It stays: the next edit writes over it, the next save deletes it.
+      } catch (e) {
+        if (needsSignIn(e)) {
+          // The session ended: the draft is kept for after the sign-in (F37).
+          a.dispose();
+          latest.current.onUnauthenticated?.(e, draftNow());
+        }
+        // Otherwise it stays: the next edit writes over it, the next save deletes it.
       } finally {
         clearing.current = false;
         release();
       }
     })();
-  }, [itemId, type, isDirtyNow]);
+  }, [itemId, type, isDirtyNow, draftNow]);
 
   /**
    * A change of the draft: the slot follows it (never on a read-only screen); while a
    * kept copy holds the slot, the local backup does (cleared when nothing is unsaved).
+   * `known`: whether the draft differs from the item, when the caller has just checked.
    */
-  const touch = useCallback(() => {
-    if (readOnlyRef.current !== null) return;
-    if (keptRef.current === null) {
-      if (isDirtyNow()) autosaver.current?.markDirty(draftNow);
-      else clearSlot();
-    }
-    // A backup still on offer is not written over: the user has not chosen yet.
-    else if (backupKey && backupRef.current === null) {
-      if (isDirtyNow()) writeBackup(backupKey, draftNow());
-      else clearBackup(backupKey);
-    }
-  }, [draftNow, backupKey, isDirtyNow, clearSlot]);
+  const touch = useCallback(
+    (known?: boolean) => {
+      if (readOnlyRef.current !== null) return;
+      if (keptRef.current === null) {
+        if (known ?? isDirtyNow()) autosaver.current?.markDirty(draftNow);
+        else clearSlot();
+      }
+      // A backup still on offer is not written over: the user has not chosen yet.
+      else if (backupKey && backupRef.current === null) {
+        if (known ?? isDirtyNow()) writeBackup(backupKey, draftNow());
+        else clearBackup(backupKey);
+      }
+    },
+    [draftNow, backupKey, isDirtyNow, clearSlot],
+  );
 
-  const recompute = useCallback(() => {
+  /** Whether the draft differs from the item now, into `dirty` and the save state. */
+  const recompute = useCallback((): boolean => {
     const isDirty = isDirtyNow();
     setDirty(isDirty);
     setSaveState((s) => (s === "saving" ? s : isDirty ? "dirty" : "saved"));
+    return isDirty;
   }, [isDirtyNow]);
 
   // A transition can take the right to edit away (or the item into the trash).
@@ -883,16 +897,13 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   }, [editor, readOnly]);
 
   useEffect(() => {
-    const onUpdate = () => {
-      setDirty(true);
-      setSaveState((s) => (s === "saving" ? s : "dirty"));
-      touch();
-    };
+    // A body edit undone back to the item is "Saved" again (e1cd3a5 re-review).
+    const onUpdate = () => touch(recompute());
     editor.on("update", onUpdate);
     return () => {
       editor.off("update", onUpdate);
     };
-  }, [editor, touch]);
+  }, [editor, touch, recompute]);
 
   // A hand-over continues where the user was: same selection and focus.
   useEffect(() => {
@@ -933,8 +944,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     (patch: Partial<MetaDraft>) => {
       metaRef.current = { ...metaRef.current, ...patch };
       setMetaState(metaRef.current);
-      recompute();
-      touch();
+      touch(recompute());
     },
     [recompute, touch],
   );
@@ -1097,7 +1107,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
               }
             }
           }
-          if (!still) touch();
+          if (!still) touch(true);
           if (!current) {
             const { from, to } = editor.state.selection;
             const active = document.activeElement;
@@ -1311,7 +1321,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     }
     // The slot is free: the working draft goes there from now on (not to the backup).
     if (backupKey) clearBackup(backupKey);
-    if (isDirtyNow()) touch();
+    if (isDirtyNow()) touch(true);
   }, [itemId, type, setKept, isDirtyNow, touch, backupKey]);
 
   /** The editing lock of a restore: the body and title are read-only while it is on. */
