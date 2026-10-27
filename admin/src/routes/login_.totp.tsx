@@ -3,7 +3,7 @@
 // wrong or expired code with `401` (no `422`, F21), and after the challenge's 5 minutes
 // the screen goes back to login with a notice.
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Link,
   createFileRoute,
@@ -18,6 +18,7 @@ import { loginTotp } from "@/api/auth";
 import { isProblem } from "@/api/problem";
 import type { SchemaLoginResponse } from "@/api/schema";
 import { AuthLayout, FormAlert, SubmitButton } from "@/auth/auth-layout";
+import { useSecretCall } from "@/auth/use-secret-call";
 import { type FormFailure, genericFailure } from "@/auth/errors";
 import { nextSearch, routerHref, safeNext } from "@/auth/next";
 import { startSession } from "@/auth/session";
@@ -75,7 +76,7 @@ function TotpPage() {
     };
   }, [issuedAt]);
 
-  const verify = useMutation({
+  const verify = useSecretCall({
     mutationFn: loginTotp,
     onSuccess: async (r: SchemaLoginResponse) => {
       if (r.status !== "session") return;

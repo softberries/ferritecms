@@ -13,6 +13,7 @@ import {
   type Page,
   type Route,
 } from "@playwright/test";
+import { keptState } from "./support/app-state";
 import { ContentApi } from "./support/content-api";
 import { expect, test, type Guard } from "./support/fixtures";
 import { authFile, type SiteInfo } from "./support/server";
@@ -145,6 +146,10 @@ test("login_password_and_logout", async ({ browser, site, guard }) => {
 
   await signIn(page, a.login, a.password ?? "");
   await expectDashboard(page, site);
+  // The password went with the call: it is kept nowhere (no cached mutation holds it).
+  const kept = await keptState(page);
+  expect(kept).toContain(a.login);
+  expect(kept).not.toContain(a.password ?? "");
   // Sign out from the account menu, which names who is signed in.
   await page.getByRole("button", { name: "Account" }).click();
   await expect(page.getByRole("menu")).toContainText(a.email);
@@ -176,8 +181,11 @@ test("login_with_totp", async ({ browser, site, guard }, testInfo) => {
   const spent = testInfo.retry > 0 ? Math.max(site.totp.step, stepAt()) : site.totp.step;
   const step = await nextFreshStep(spent);
   // Six digits submit on their own.
-  await input.fill(totpCode(site.totp.secret, step));
+  const code = totpCode(site.totp.secret, step);
+  await input.fill(code);
   await expectDashboard(page, site);
+  expect(await keptState(page)).not.toContain(a.password ?? "");
+  expect(await keptState(page)).not.toContain(`"${code}"`);
   expect(stepAt()).toBeGreaterThanOrEqual(step);
 });
 

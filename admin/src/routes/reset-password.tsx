@@ -2,7 +2,7 @@
 // fragment and dropped it from the address bar before anything rendered; it lives only
 // in this route's loader data (memory) and in the confirm request's body (Review Focus 1).
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { CircleCheckIcon, LinkIcon } from "lucide-react";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -13,6 +13,7 @@ import { confirmReset } from "@/api/auth";
 import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import { AuthLayout, FormAlert, SubmitButton } from "@/auth/auth-layout";
+import { useSecretCall } from "@/auth/use-secret-call";
 import { type FormFailure, genericFailure } from "@/auth/errors";
 import { resetSchema } from "@/auth/schemas";
 import { FormPasswordField } from "@/auth/password-field";
@@ -65,7 +66,7 @@ function ResetForm({
   });
   const [failure, setFailure] = useState<FormFailure | null>(null);
 
-  const confirm = useMutation({
+  const confirm = useSecretCall({
     mutationFn: confirmReset,
     onSuccess: () => {
       // Every session of the account ended; a cached user here is stale.

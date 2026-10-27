@@ -1,7 +1,7 @@
 // Sign in: login (or e-mail) and password. A TOTP account continues at `/login/totp`
 // with the challenge in history state, never in the URL.
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Link,
   createFileRoute,
@@ -19,6 +19,7 @@ import { qk } from "@/api/keys";
 import { isProblem } from "@/api/problem";
 import type { SchemaLoginResponse } from "@/api/schema";
 import { AuthLayout, Field, FormAlert, Notice, SubmitButton } from "@/auth/auth-layout";
+import { useSecretCall } from "@/auth/use-secret-call";
 import { type FormFailure, genericFailure } from "@/auth/errors";
 import { fieldMessage, loginSchema } from "@/auth/schemas";
 import { nextSearch, routerHref, safeNext } from "@/auth/next";
@@ -53,7 +54,7 @@ function LoginPage() {
     setFailure(null);
   }, []);
 
-  const signIn = useMutation({
+  const signIn = useSecretCall({
     mutationFn: login,
     onSuccess: async (r: SchemaLoginResponse) => {
       if (r.status === "totp_required") {
