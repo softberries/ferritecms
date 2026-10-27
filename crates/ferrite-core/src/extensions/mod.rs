@@ -56,6 +56,10 @@ const OPTION_PAGE: u32 = 200;
 const PLUGIN_OPTION_PREFIX: &str = "plugin.";
 /// Last segment of the deletion marker option.
 const DELETED_AT: &str = "deleted_at";
+/// Last segment of the option a `purge=true` delete writes beside the deletion marker:
+/// the same deletion's time, once its data is erased (the marker stays for the delete's
+/// final sweep, F16), so the deletion is not listed as retained.
+const ERASED_AT: &str = "erased_at";
 
 /// A deleted plugin whose KV and settings are still kept
 /// ([`ExtensionService::retained_plugins`]).
@@ -391,15 +395,21 @@ impl ExtensionService {
     /// The deleted plugins whose KV and settings are still kept, by name, with the day
     /// the purge job erases them (M2b-3 P47).
     pub async fn retained_plugins(&self) -> Result<Vec<RetainedPluginData>, CoreError> {
-        let retained = self.store.read().plugins().retained().await?;
-        Ok(retained
-            .into_iter()
-            .map(|r| RetainedPluginData {
+        let repos = self.store.read();
+        let retained = repos.plugins().retained().await?;
+        let mut out = Vec::with_capacity(retained.len());
+        for r in retained {
+            // Deleted with `purge=true`: erased already, only the marker is left.
+            if erased_with(repos, &r.name, r.deleted_at.as_micros()).await? {
+                continue;
+            }
+            out.push(RetainedPluginData {
                 purge_after: crate::jobs::after(r.deleted_at, PLUGIN_DATA_RETENTION),
                 name: r.name,
                 deleted_at: r.deleted_at,
-            })
-            .collect())
+            });
+        }
+        Ok(out)
     }
 
     /// Erases the retained data of the deleted plugin `name` now, instead of at the end
@@ -436,7 +446,11 @@ impl ExtensionService {
             ));
         }
         let marker = repos.options().get(&deleted_marker(name)).await?;
-        if marker.and_then(|m| m.value.as_i64()).is_none() {
+        let Some(deleted_at) = marker.and_then(|m| m.value.as_i64()) else {
+            return Err(CoreError::NotFound);
+        };
+        // Deleted with `purge=true`: nothing retained (the delete's sweep removes the marker).
+        if erased_with(repos, name, deleted_at).await? {
             return Err(CoreError::NotFound);
         }
         let settings = stored_setting_keys(repos, name).await?;
@@ -556,9 +570,10 @@ async fn write_install_plugin(
         ..row.clone()
     };
     repos.plugins().upsert(&row).await?;
-    let marker = deleted_marker(&row.name);
-    if repos.options().get(&marker).await?.is_some() {
-        delete_option(repos, &marker).await?;
+    for marker in [deleted_marker(&row.name), erased_marker(&row.name)] {
+        if repos.options().get(&marker).await?.is_some() {
+            delete_option(repos, &marker).await?;
+        }
     }
     repos
         .events()
@@ -607,6 +622,20 @@ async fn write_delete_plugin(
         .events()
         .append(&events::options_changed(&marker))
         .await?;
+    let erased = erased_marker(name);
+    if purge_now {
+        repos
+            .options()
+            .set(&erased, &json!(deleted_at.as_micros()), false)
+            .await?;
+        repos
+            .events()
+            .append(&events::options_changed(&erased))
+            .await?;
+    } else if repos.options().get(&erased).await?.is_some() {
+        // An earlier `purge=true` deletion's, not this one's.
+        delete_option(repos, &erased).await?;
+    }
     let mut job = plugin_purge_job(&PluginPurge {
         v: PLUGIN_PURGE_VERSION,
         name: name.to_owned(),
@@ -641,7 +670,18 @@ async fn delete_options(
     if keep_marker {
         return Ok(());
     }
+    let erased = erased_marker(name);
+    if repos.options().get(&erased).await?.is_some() {
+        delete_option(repos, &erased).await?;
+    }
     delete_option(repos, &deleted_marker(name)).await
+}
+
+/// Whether plugin `name`'s deletion at `deleted_at` (unix micros) was a `purge=true`
+/// one, its data already erased.
+async fn erased_with(repos: &dyn Repos, name: &str, deleted_at: i64) -> Result<bool, CoreError> {
+    let erased = repos.options().get(&erased_marker(name)).await?;
+    Ok(erased.and_then(|o| o.value.as_i64()) == Some(deleted_at))
 }
 
 /// A plugin-owned option the sweep reads.
@@ -693,6 +733,12 @@ async fn stored_setting_keys(repos: &dyn Repos, name: &str) -> Result<Vec<String
 /// plugins by the `plugin.` rule of `options.get`.
 fn deleted_marker(name: &str) -> String {
     format!("{PLUGIN_OPTION_PREFIX}{name}.{DELETED_AT}")
+}
+
+/// The option recording that plugin `name`'s last deletion erased its data at once
+/// (`purge=true`; unix micros of that deletion). Hidden from plugins like the marker.
+fn erased_marker(name: &str) -> String {
+    format!("{PLUGIN_OPTION_PREFIX}{name}.{ERASED_AT}")
 }
 
 /// The keys of a row manifest's `[settings]` table (sorted).

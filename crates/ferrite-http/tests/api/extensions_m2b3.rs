@@ -18,6 +18,7 @@ api_tests!(
     theme_dto_has_manifest_facts,
     plugin_dto_has_manifest_facts,
     retained_list_and_purge,
+    purged_delete_is_not_retained,
     blog_min_fixture_installs,
 );
 
@@ -341,6 +342,57 @@ async fn retained_list_and_purge(api: Api) -> Api {
         kv.get("hello", "k2").await.unwrap().as_deref(),
         Some(&b"v"[..])
     );
+    api
+}
+
+/// A delete with `purge=true` erases the data at once, so nothing is listed as retained
+/// and there is nothing left to purge, although the deletion marker stays for the
+/// delete's final sweep (F16). A later delete without purge is listed again, and a
+/// reinstall leaves no marker of either kind.
+async fn purged_delete_is_not_retained(api: Api) -> Api {
+    let mut c = admin(&api).await;
+    let manifest = plugin_manifest("hello");
+    let options = api.store.read().options();
+    install_hello(&mut c, &api, &manifest).await;
+    let r = c
+        .send(
+            &api,
+            Method::DELETE,
+            &format!("{PLUGINS}/hello?purge=true"),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{r:?}");
+    assert!(
+        options
+            .get("plugin.hello.deleted_at")
+            .await
+            .unwrap()
+            .is_some(),
+        "the marker stays for the final sweep"
+    );
+    assert_eq!(c.get(&api, RETAINED).await.json(), json!({"items": []}));
+    c.post_empty(&api, &format!("{PLUGINS}/hello/purge"))
+        .await
+        .assert_problem(404, "not-found");
+
+    // Installed again and deleted keeping the data: listed.
+    install_hello(&mut c, &api, &manifest).await;
+    assert_eq!(options.get("plugin.hello.erased_at").await.unwrap(), None);
+    c.send(
+        &api,
+        Method::DELETE,
+        &format!("{PLUGINS}/hello"),
+        None,
+        None,
+    )
+    .await;
+    let list = c.get(&api, RETAINED).await.json();
+    assert_eq!(list["items"][0]["name"], "hello", "{list}");
+    let r = c.post_empty(&api, &format!("{PLUGINS}/hello/purge")).await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{r:?}");
+    assert_eq!(options.get("plugin.hello.erased_at").await.unwrap(), None);
     api
 }
 
