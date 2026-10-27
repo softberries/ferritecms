@@ -353,7 +353,8 @@ GIF, WebP) whose dimensions the `media.variants` job has recorded:
   `[images]` entry of the served theme, `SiteReader::set_image_width`, set by the node
   whenever it starts serving a theme), else the original; without theme sizes the
   original's width is the largest size.
-- `sizes="(max-width: <largest>px) 100vw, <largest>px"`, `width`/`height` from the media
+- `sizes="(max-width: <slot>px) 100vw, <slot>px"`, the slot being the largest size or
+  the original's width when that is smaller (an 800 px image never claims a 1280 px slot), `width`/`height` from the media
   item's dimensions, `loading="lazy"`, `decoding="async"`, after `alt` (and `title`).
 
 An SVG, any other type and an image not measured yet keep the plain `<img src alt>` of

@@ -212,8 +212,9 @@ impl ContentTypeService {
     /// Removes type `name` (needs `manage_settings`). Built-in types are
     /// `Invalid("built-in type")`, a type with items in any status (trash included)
     /// `Invalid("type has content")`, one another type's relation field lists in its
-    /// `types` `Invalid` naming that type, one a taxonomy is attached to `Invalid`
-    /// naming the taxonomy. Missing: `NotFound`.
+    /// `types` `Invalid` naming that type (as is any other type whose stored schema no
+    /// longer parses), one a taxonomy is attached to `Invalid` naming the taxonomy.
+    /// Missing: `NotFound`.
     pub async fn delete(&self, actor: &Actor, name: &str) -> Result<(), CoreError> {
         require(actor, Capability::ManageSettings)?;
         let (guard, tx) = begin_locked(self.store.as_ref()).await?;
@@ -233,17 +234,25 @@ impl ContentTypeService {
             if !items.items.is_empty() {
                 return Err(CoreError::Invalid("type has content".into()));
             }
-            if let Some(other) = tx.types().list().await?.into_iter().find(|t| {
-                t.name != ty.name
-                    && fields::schema_of(&t.fields)
-                        .ok()
-                        .flatten()
-                        .is_some_and(|defs| fields::names_type(&defs, &ty.name))
-            }) {
-                return Err(CoreError::Invalid(format!(
-                    "type is a relation target of type {:?}",
-                    other.name
-                )));
+            for other in tx.types().list().await? {
+                if other.name == ty.name {
+                    continue;
+                }
+                // A stored schema that no longer parses is not ignored: it might name this
+                // type. Not the request's fault, so plain `Invalid` naming the type (as a
+                // stored permalink option that no longer parses).
+                let defs = fields::schema_of(&other.fields).map_err(|e| {
+                    CoreError::Invalid(format!(
+                        "the stored field schema of type {:?} is unreadable: {e}",
+                        other.name
+                    ))
+                })?;
+                if defs.is_some_and(|defs| fields::names_type(&defs, &ty.name)) {
+                    return Err(CoreError::Invalid(format!(
+                        "type is a relation target of type {:?}",
+                        other.name
+                    )));
+                }
             }
             if let Some(tax) = tx
                 .taxonomies()

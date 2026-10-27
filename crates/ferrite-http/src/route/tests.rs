@@ -334,6 +334,7 @@ fn files_and_reserved_routes() {
             (&format!("/_media/{HASH}/photo.jpg"), media("photo.jpg")),
             (&format!("/_media/{HASH}/caf%C3%A9.jpg"), media("café.jpg")),
             (&format!("/_media/{HASH}/caf%c3%a9.jpg"), media("café.jpg")),
+            (&format!("/_media/{HASH}/a%2Cb%201.jpg"), media("a,b 1.jpg")),
             (&format!("/_media/{HASH}/Photo.JPG"), media("Photo.JPG")),
             (&format!("/_media/{HASH}/photo.jpg?x=1"), media("photo.jpg")),
             (&format!("/_media/{HASH}/photo.jpg/"), Route::NotFound),

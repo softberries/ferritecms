@@ -960,6 +960,16 @@ pub async fn relation_types_must_name_types(db: &TestDb) {
     let m = plain_invalid(svc.delete(&admin, "author_bio").await);
     assert!(m.contains("quote"), "{m}");
     svc.delete(&admin, "quote").await.unwrap();
+
+    // A stored schema that no longer parses (written past core) blocks the delete
+    // instead of being skipped: it might name the type.
+    let mut broken = svc.get(&admin, "book").await.unwrap();
+    broken.fields = json!({"fields": [{"name": "r", "kind": "colour"}]});
+    store.read().types().upsert(&broken).await.unwrap();
+    let m = plain_invalid(svc.delete(&admin, "author_bio").await);
+    assert!(m.contains("\"book\"") && m.contains("unreadable"), "{m}");
+    broken.fields = json!({});
+    store.read().types().upsert(&broken).await.unwrap();
     svc.delete(&admin, "author_bio").await.unwrap();
 }
 

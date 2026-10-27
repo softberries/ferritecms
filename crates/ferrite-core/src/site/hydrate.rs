@@ -223,9 +223,9 @@ impl Hydrator<'_> {
     /// `image()` helper renders one: for a raster image whose dimensions are recorded,
     /// `srcset` lists the original and every variant of the same shape (a crop to
     /// another aspect ratio would show a different picture; [`same_shape`]), `src` is
-    /// the widest of them no wider than the theme's largest size (the original's width
-    /// when the theme has no sizes; the original when none fits), and `sizes` says the
-    /// image is at most that wide. Anything else (SVG, other types, an image the
+    /// the widest of them no wider than the display slot (the theme's largest size, or
+    /// the original's width when that is smaller or the theme has no sizes; the original
+    /// when none fits), and `sizes` says the image is at most that wide. Anything else (SVG, other types, an image the
     /// `media.variants` job has not measured yet) is a plain `<img>` of the original.
     fn inline_image(&self, m: &Media) -> InlineImage {
         let public = self.media_public(m);
@@ -240,10 +240,11 @@ impl Hydrator<'_> {
             .variants
             .retain(|v| same_shape((width, height), v.width.zip(v.height)));
         let candidates = shaped.srcset_candidates(None);
+        // The display slot: the theme's largest size, but never wider than the image.
         let largest = self
             .image_width
             .and_then(|w| i32::try_from(w.get()).ok())
-            .unwrap_or(width);
+            .map_or(width, |l| l.min(width));
         let src = candidates
             .iter()
             .rev()

@@ -1906,8 +1906,43 @@ pub async fn inline_svg_has_no_srcset(db: &TestDb) {
     );
 }
 
+/// An original narrower than the theme's largest size claims only its own width in
+/// `sizes`, and is `src` itself.
+pub async fn inline_image_narrower_than_theme(db: &TestDb) {
+    let store = db.store();
+    let author = user(store, "writer", Role::Author).await;
+    let (small, orig, v) = media_with(
+        store,
+        &author,
+        "image/png",
+        "small.png",
+        Some((800, 600)),
+        &[("medium", 768, 576)],
+    )
+    .await;
+    post_with_images(store, &author, "small", &[(small, "s")]).await;
+    let r = reader(db.shared_store());
+    r.set_image_width(Some(1280));
+    let html = r
+        .single("post", &parts(&["small"]))
+        .await
+        .unwrap()
+        .value
+        .unwrap()
+        .html;
+    let medium = &v[0];
+    assert!(
+        html.contains(&format!(
+            "<img src=\"{orig}\" alt=\"s\" srcset=\"{medium} 768w, {orig} 800w\" \
+             sizes=\"(max-width: 800px) 100vw, 800px\" width=\"800\" height=\"600\""
+        )),
+        "{html}"
+    );
+}
+
 backend_tests!(
     inline_image_has_srcset,
+    inline_image_narrower_than_theme,
     inline_svg_has_no_srcset,
     media_is_published_only,
     sitemap_files_count_and_split,
