@@ -27,7 +27,9 @@ const SCHEMA = [
   { name: "release", label: "Release", kind: "date" },
   { name: "in_print", label: "In print", kind: "bool" },
   { name: "genre", label: "Genre", kind: "select", options: ["fiction", "essay"] },
-  { name: "related", label: "Related", kind: "relation" },
+  // Posts only: a search across every type would also ask the types other tests create
+  // and delete in parallel (a `404` race, m2b2-exit §2); `post` is never deleted.
+  { name: "related", label: "Related", kind: "relation", types: ["post"] },
   { name: "cover", label: "Cover file", kind: "media" },
   {
     name: "chapters",
@@ -109,7 +111,7 @@ test("fill_every_field_kind_and_reload", async ({ as, site, backend }) => {
     await c.getByRole("combobox", { name: "Genre" }).click();
     await page.getByRole("option", { name: "essay" }).click();
     await c.getByRole("button", { name: "Related" }).click();
-    await page.getByPlaceholder("Search posts, pages and more…").fill(post.title);
+    await page.getByPlaceholder("Search Posts…").fill(post.title);
     await page.getByRole("option", { name: new RegExp(post.title) }).click();
     // A `media` field takes any kind.
     await c.getByRole("button", { name: "Cover file" }).click();
@@ -220,7 +222,7 @@ test("relation_picks_a_post", async ({ as, site, backend, expectAccessible }) =>
     const trigger = card(page).getByRole("button", { name: "Related" });
     await expect(trigger).toContainText("Choose an item");
     await trigger.click();
-    await page.getByPlaceholder("Search posts, pages and more…").fill(post.title);
+    await page.getByPlaceholder("Search Posts…").fill(post.title);
     // Results by type, each with its status.
     const option = page.getByRole("option", { name: new RegExp(post.title) });
     await expect(option).toContainText("Published");

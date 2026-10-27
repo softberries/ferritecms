@@ -150,7 +150,7 @@ test("body_only_hit_shows_snippet", async ({ as, site, backend, snap, expectAcce
     const shown = (await snippet.textContent()) ?? "";
     expect(Array.from(shown.replace(/^Matches in text · /, "")).length).toBeLessThanOrEqual(121);
     await expectAccessible(page);
-    await snap(page, "palette-body-hit");
+    await snap(page, "palette-body-hit", { fullPage: false });
     // A title hit has no snippet.
     await input(page).fill(item.title);
     await expect(option(page, new RegExp(item.title))).toBeVisible();

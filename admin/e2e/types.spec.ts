@@ -286,22 +286,24 @@ test("removing_a_field_warns_and_items_still_save", async ({
     await expect(dialog).toContainText(
       "existing values stay stored until each item is saved, and are then removed",
     );
-    // The last chip is whole: its bottom lies inside the list's scrollable content (an
-    // overflowing list scrolls to it), so no edge is clipped (M2b-2 minor).
+    // The last chip is whole: with the list scrolled to its end, the chip lies inside the
+    // list's visible box (its client area), so no edge is clipped (M2b-2 minor).
     const clipped = await dialog
       .locator("code")
       .last()
       .evaluate((chip) => {
         const scroller = chip.closest("section")?.parentElement;
         if (!scroller) return null;
-        const bottom =
-          chip.getBoundingClientRect().bottom -
-          scroller.getBoundingClientRect().top +
-          scroller.scrollTop;
-        return bottom - scroller.scrollHeight;
+        scroller.scrollTop = scroller.scrollHeight;
+        const box = scroller.getBoundingClientRect();
+        const top = box.top + scroller.clientTop;
+        const bottom = top + scroller.clientHeight;
+        const r = chip.getBoundingClientRect();
+        return { above: top - r.top, below: r.bottom - bottom };
       });
     expect(clipped).not.toBeNull();
-    expect(clipped as number).toBeLessThanOrEqual(0);
+    expect(clipped?.above).toBeLessThanOrEqual(0);
+    expect(clipped?.below).toBeLessThanOrEqual(0);
     await snap(page, "types-schema-change-removed", { fullPage: false });
     await expectAccessible(page);
     await dialog.getByRole("button", { name: "Save changes" }).click();

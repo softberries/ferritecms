@@ -38,13 +38,14 @@ export const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]
 
 /**
  * The list or counts of a custom content type (`/api/v1/content/<type>` or
- * `/counts`, never `post` or `page`). Tests run in parallel against one site, so a type
- * another test deletes can still be in an open page's types: its fan-out request (the
- * palette, the relation field, the menu editor) answers 404, which the page handles
- * (no results, the types read again) but the browser logs. Accepted in every test.
+ * `/counts`; never a built-in type, `post`, `page` or `media`, nor the static
+ * `/content/refs`, whose 404s are real failures). Tests run in parallel against one
+ * site, so a type another test deletes can still be in an open page's types: its fan-out
+ * request (the palette, the menu editor) answers 404, which the page handles (no
+ * results, the types read again) but the browser logs. Accepted in every test.
  */
 const CUSTOM_TYPE_LIST =
-  /\/api\/v1\/content\/(?!(?:post|page)(?:[/?]|$))[a-z][a-z0-9_]*(?:\/counts)?(?:\?|$)/;
+  /\/api\/v1\/content\/(?!(?:post|page|media|refs)(?:[/?]|$))[a-z][a-z0-9_]*(?:\/counts)?(?:\?|$)/;
 
 export interface Guard {
   /** Console errors matching `re` do not fail the test. */

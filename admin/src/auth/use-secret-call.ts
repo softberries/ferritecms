@@ -2,8 +2,9 @@
 // rather than a TanStack mutation: the mutation cache keeps a mutation's `variables`
 // (the secret) for `gcTime` after it settles, and nothing here may outlive the form
 // (Review Focus 3). Same shape as the `useMutation` it replaces: `mutate`, `isPending`,
-// `onSuccess`, `onError`. A failure also goes to the app's handler (`reportApiError`:
-// a `401` still leads to sign in), as a mutation's did.
+// `onSuccess`, `onError`. A failure (of the call or of `onSuccess`) goes to `onError` and
+// to the app's handler (`reportApiError`: a `401` still leads to sign in), as a
+// mutation's did.
 
 import { useRef, useState } from "react";
 import { reportApiError } from "@/api/client";
@@ -33,15 +34,15 @@ export function useSecretCall<A, R>({
     setPending(true);
     void (async () => {
       try {
-        let result: R;
+        // A throw in `onSuccess` (a follow-up read that fails, say) is a failure of the
+        // call too: never an unhandled rejection.
         try {
-          result = await mutationFn(args);
+          const result = await mutationFn(args);
+          await onSuccess?.(result);
         } catch (error) {
           reportApiError(error);
           onError?.(error);
-          return;
         }
-        await onSuccess?.(result);
       } finally {
         running.current = false;
         setPending(false);
