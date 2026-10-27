@@ -549,5 +549,94 @@
       "sent": "Test e-mail queued for {{to}}",
       "notSent": "Test e-mail not sent"
     }
+  },
+  "themes": {
+    "title": "Themes",
+    "description": "How the public site looks. Upload a theme folder, switch the active theme and customize it.",
+    "upload": "Upload theme",
+    "list": "Installed themes",
+    "empty": {
+      "title": "No themes",
+      "body": "Upload a theme folder to get started."
+    },
+    "badge": {
+      "active": "Active",
+      "builtIn": "Built in"
+    },
+    "version": "Version {{version}}",
+    "by": "By {{author}}",
+    "license": "Licence {{license}}",
+    "hash": "Bundle {{hash}}",
+    "hashTitle": "SHA-256 of the installed bundle: {{hash}}",
+    "noDescription": "No description.",
+    "facts": {
+      "menus_one": "{{count}} menu location",
+      "menus_other": "{{count}} menu locations",
+      "images_one": "{{count}} image size",
+      "images_other": "{{count}} image sizes"
+    },
+    "activate": "Activate",
+    "activateOn": "Activate {{name}}",
+    "customize": "Customize",
+    "customizeOn": "Customize {{name}}",
+    "nodes": {
+      "title": "Served by",
+      "loaded": "Loaded",
+      "fallback": "Fallback",
+      "fallbackHint": "This node cannot load the theme and keeps serving its previous one.",
+      "none": "No node has reported yet.",
+      "checking": "Checking that every node loads {{name}}…",
+      "pending": "Some nodes have not loaded {{name}} yet. Their state shows here when they report it."
+    },
+    "confirm": {
+      "title": "Activate {{name}}?",
+      "body": "The public site switches to this theme on every node as soon as each one loads it. {{current}} stays installed and can be activated again.",
+      "bodyNoCurrent": "The public site switches to this theme on every node as soon as each one loads it.",
+      "confirm": "Activate",
+      "activating": "Activating…",
+      "cancel": "Cancel",
+      "doesNotLoad": "The theme does not load, so nothing changed:",
+      "done": "{{name}} is the active theme"
+    },
+    "uploadDialog": {
+      "title": "Upload a theme",
+      "description": "A theme folder holds theme.toml, templates/ and assets/. Folders are packed in your browser; hidden files are left out.",
+      "drop": "Drop a theme folder or a .tar bundle here",
+      "dropHint": "Up to 2000 files and 20 MiB.",
+      "overlay": "Drop to pick this theme",
+      "chooseFolder": "Choose folder",
+      "chooseTar": "Choose .tar file",
+      "chooseAgain": "Choose another",
+      "reading": "Reading the folder…",
+      "dropOther": "Drop one theme folder or one .tar file.",
+      "unknownName": "Theme name not found in theme.toml",
+      "folderSummary_one": "{{count}} file, {{size}}",
+      "folderSummary_other": "{{count}} files, {{size}}",
+      "tarSummary": "{{file}}, {{size}}",
+      "replace": "A theme named {{name}} is installed (version {{version}}). Uploading replaces it.",
+      "replaceActive": "A theme named {{name}} is installed (version {{version}}) and it is the active theme. Uploading replaces it, and the new files go live on the site at once.",
+      "uploading": "Uploading…",
+      "progress": "Upload progress",
+      "submit": "Upload",
+      "submitReplace": "Replace theme",
+      "cancel": "Cancel",
+      "doesNotLoad": "The theme does not load, so nothing was installed:",
+      "installed": "Theme {{name}} installed",
+      "pack": {
+        "too-many-files": "The folder has more than 2000 files.",
+        "too-large": "The folder's files add up to more than 20 MiB.",
+        "path-too-long": "{{path}}: the path is longer than 255 bytes.",
+        "bad-path": "{{path}}: the path has a backslash, a control character or an empty segment.",
+        "too-deep": "{{path}}: folders are nested deeper than 16 levels.",
+        "does-not-fit": "{{path}}: the path does not fit a tar header (the file name after the last folder must be at most 100 bytes).",
+        "duplicate": "{{path}}: the file appears twice."
+      }
+    },
+    "settings": {
+      "title": "Customize {{name}}",
+      "description": "Options the theme declares in theme.toml. They apply on every page the theme renders.",
+      "staleKey": "Theme {{name}}",
+      "loading": "Loading the theme's settings"
+    }
   }
 }

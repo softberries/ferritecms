@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { setCsrfToken } from "./csrf";
 import { ApiError } from "./problem";
-import { UploadNetworkError, uploadMedia } from "./upload";
+import { UploadNetworkError, uploadMedia, uploadTheme } from "./upload";
 
 class FakeXhr {
   static last: FakeXhr;
@@ -9,7 +9,7 @@ class FakeXhr {
   url = "";
   withCredentials = false;
   headers: Record<string, string> = {};
-  body: FormData | null = null;
+  body: FormData | Blob | null = null;
   status = 0;
   statusText = "";
   responseText = "";
@@ -32,7 +32,7 @@ class FakeXhr {
   getResponseHeader(k: string) {
     return this.responseHeaders[k] ?? this.responseHeaders[k.toLowerCase()] ?? null;
   }
-  send(body: FormData) {
+  send(body: FormData | Blob) {
     this.body = body;
   }
   abort() {
@@ -80,15 +80,16 @@ test("sends_headers_and_multipart_with_file_last", async () => {
   expect(xhr.headers["X-CSRF-Token"]).toBe("tok-9");
   expect(xhr.headers["Idempotency-Key"]).toBe("key-1");
   expect(xhr.headers.Accept).toBe("application/json");
-  expect([...(xhr.body?.keys() ?? [])]).toEqual(["title", "alt", "file"]);
-  expect(xhr.body?.get("title")).toBe("T");
+  const form = xhr.body as FormData;
+  expect([...form.keys()]).toEqual(["title", "alt", "file"]);
+  expect(form.get("title")).toBe("T");
   xhr.respond(201, { id: "m1" });
   await expect(promise).resolves.toEqual({ id: "m1" });
 });
 
 test("omits_blank_title_and_alt", async () => {
   const { promise, xhr } = start({ title: undefined, alt: undefined });
-  expect([...(xhr.body?.keys() ?? [])]).toEqual(["file"]);
+  expect([...(xhr.body as FormData).keys()]).toEqual(["file"]);
   xhr.respond(201, {});
   await promise;
 });
@@ -158,4 +159,43 @@ test("network_error_rejects_with_upload_network_error", async () => {
   const { promise, xhr } = start();
   xhr.onerror?.();
   await expect(promise).rejects.toBeInstanceOf(UploadNetworkError);
+});
+
+test("theme_upload_sends_the_raw_tar", async () => {
+  const onProgress = vi.fn();
+  const tar = new Uint8Array([1, 2, 3]);
+  const promise = uploadTheme(tar, { onProgress, signal: new AbortController().signal });
+  const xhr = FakeXhr.last;
+  expect(xhr.method).toBe("POST");
+  expect(xhr.url).toBe("/api/v1/themes?activate=false");
+  expect(xhr.headers["Content-Type"]).toBe("application/x-tar");
+  expect(xhr.headers["X-CSRF-Token"]).toBe("tok-9");
+  expect(xhr.headers["Idempotency-Key"]).toBeUndefined();
+  expect(xhr.body).toBeInstanceOf(Blob);
+  expect((xhr.body as Blob).size).toBe(3);
+  xhr.upload.onprogress?.({ lengthComputable: true, loaded: 3, total: 3 } as ProgressEvent);
+  expect(onProgress).toHaveBeenCalledWith(3, 3);
+  xhr.respond(201, { name: "t" });
+  await expect(promise).resolves.toEqual({ name: "t" });
+});
+
+test("theme_upload_422_lists_problems", async () => {
+  const promise = uploadTheme(new Blob(["x"]), {
+    onProgress: noop,
+    signal: new AbortController().signal,
+  });
+  FakeXhr.last.respond(
+    422,
+    {
+      type: "/api/v1/problems/validation",
+      title: "v",
+      status: 422,
+      detail: "the theme does not load",
+      errors: [{ detail: "templates/index.html:3: syntax error" }],
+    },
+    { "Content-Type": "application/problem+json" },
+  );
+  const e = (await promise.catch((x: unknown) => x)) as ApiError;
+  expect(e).toBeInstanceOf(ApiError);
+  expect(e.problem.errors?.[0]?.detail).toBe("templates/index.html:3: syntax error");
 });

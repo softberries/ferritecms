@@ -111,6 +111,19 @@ test("users_is_registered", () => {
   expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
 });
 
+test("appearance_is_registered", () => {
+  // M2b-3 Task 9 registers Appearance (the Themes screen) under Administration: only
+  // `manage_themes` sees it, with `g a`.
+  const admin = navFor(me("admin", ["read_admin", "manage_themes"]), TYPES);
+  const section = admin.find((s) => s.id === "admin");
+  expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
+    ["appearance", "Appearance", "/appearance/themes", "g a"],
+  ]);
+  expect(navItemAt(admin, "/appearance/themes")?.id).toBe("appearance");
+  const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
+  expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
+});
+
 test("settings_is_registered", () => {
   // M2b-3 Task 8 registers Settings under Administration: only `manage_settings` sees it,
   // and it is current on every group's page.

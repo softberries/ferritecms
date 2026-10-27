@@ -83,6 +83,15 @@ export interface QueuedComment {
   item: { id: string; type: string; title: string; permalink: string | null; status: string };
 }
 
+export interface ThemeInfo {
+  name: string;
+  version: string;
+  active: boolean;
+  /** SHA-256 of the installed bundle; `null` for a built-in theme without a row. */
+  hash: string | null;
+  nodes: { node_name: string; name: string; fallback: boolean }[];
+}
+
 export class ContentApi {
   private constructor(
     readonly ctx: APIRequestContext,
@@ -466,6 +475,48 @@ export class ContentApi {
         items: { id: string; title: string; status: string; permalink: string | null }[];
       }>(res, "refs")
     ).items;
+  }
+
+  /** `GET /themes`: name, version, active and node state of every theme. */
+  async listThemes(): Promise<ThemeInfo[]> {
+    return (await this.ok<{ items: ThemeInfo[] }>(await this.ctx.get("/api/v1/themes"), "themes"))
+      .items;
+  }
+
+  /** The active theme's name (the embedded `blog` on a fresh site). */
+  async activeTheme(): Promise<string> {
+    const active = (await this.listThemes()).find((t) => t.active);
+    return active?.name ?? "blog";
+  }
+
+  /** `POST /themes/{name}/activate` (a test puts back the theme it found in `finally`). */
+  async activateTheme(name: string): Promise<void> {
+    await this.ok(
+      await this.ctx.post(`/api/v1/themes/${name}/activate`, { headers: this.headers() }),
+      `activate ${name}`,
+    );
+  }
+
+  /** `POST /themes`: a bundle, installed without activating. */
+  async installTheme(tar: Buffer): Promise<ThemeInfo> {
+    return this.ok(
+      await this.ctx.post("/api/v1/themes", {
+        headers: { ...this.headers(), "Content-Type": "application/x-tar" },
+        data: tar,
+      }),
+      "install theme",
+    );
+  }
+
+  /** `PATCH /themes/{name}/settings` (`null` resets a key). */
+  async patchThemeSettings(name: string, patch: Record<string, unknown>): Promise<void> {
+    await this.ok(
+      await this.ctx.patch(`/api/v1/themes/${name}/settings`, {
+        headers: this.headers(),
+        data: patch,
+      }),
+      `patch ${name} settings`,
+    );
   }
 
   async dispose(): Promise<void> {

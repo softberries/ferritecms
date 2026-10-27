@@ -100,8 +100,12 @@ writes `ferrite_theme::pack` of a folder (hidden files, any path segment startin
 does not load is refused, exit 1, and nothing is written) and prints `packed <n> files,
 <bytes> bytes, sha256 <hex>`. It needs no data folder, config or database (09 §8), so an
 API user can produce the file `POST /themes` takes; a `tar cf` archive is refused (it has
-directory entries and pads to a 10 KiB record). The admin packs a dropped folder in the
-browser with a TypeScript port of `pack`; both packers are pinned byte for byte to
+directory entries and pads to a 10 KiB record). The admin packs a picked or dropped
+folder in the browser with a TypeScript port of `pack` (`admin/src/appearance/ustar.ts`:
+the same sort by UTF-8 bytes, header fields, prefix/name split at the longest parent that
+fits 155 bytes, hidden entries left out and limits, each refusal naming the file;
+`pick-folder.ts` reads `<input webkitdirectory>` or a dropped folder and strips the
+folder's own name); both packers are pinned byte for byte to
 `admin/src/appearance/__fixtures__/blog-min.tar`, the command's output for the
 `blog-min/` folder next to it (a nested asset, a path over 100 bytes that needs the ustar
 prefix field, a hidden file that is skipped; `crates/ferrite/tests/theme_pack.rs`).

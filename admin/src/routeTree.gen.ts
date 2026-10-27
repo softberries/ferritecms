@@ -19,6 +19,7 @@ import { Route as AppSplatRouteImport } from './routes/_app/$'
 import { Route as AppStyleguideRouteImport } from './routes/_app/[_]styleguide'
 import { Route as AppAccountRouteImport } from './routes/_app/account'
 import { Route as LoginTotpRouteImport } from './routes/login_.totp'
+import { Route as AppAppearanceThemesRouteImport } from './routes/_app/appearance.themes'
 import { Route as AppCommentsIndexRouteImport } from './routes/_app/comments.index'
 import { Route as AppMediaIndexRouteImport } from './routes/_app/media.index'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings.index'
@@ -83,6 +84,11 @@ const LoginTotpRoute = LoginTotpRouteImport.update({
   id: '/login_/totp',
   path: '/login/totp',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppAppearanceThemesRoute = AppAppearanceThemesRouteImport.update({
+  id: '/appearance/themes',
+  path: '/appearance/themes',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppCommentsIndexRoute = AppCommentsIndexRouteImport.update({
   id: '/comments/',
@@ -172,6 +178,7 @@ export interface FileRoutesByFullPath {
   '/_styleguide': typeof AppStyleguideRoute
   '/account': typeof AppAccountRoute
   '/login/totp': typeof LoginTotpRoute
+  '/appearance/themes': typeof AppAppearanceThemesRoute
   '/settings/$group': typeof AppSettingsGroupRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
   '/comments/': typeof AppCommentsIndexRoute
@@ -198,6 +205,7 @@ export interface FileRoutesByTo {
   '/account': typeof AppAccountRoute
   '/login/totp': typeof LoginTotpRoute
   '/': typeof AppIndexRoute
+  '/appearance/themes': typeof AppAppearanceThemesRoute
   '/settings/$group': typeof AppSettingsGroupRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
   '/comments': typeof AppCommentsIndexRoute
@@ -226,6 +234,7 @@ export interface FileRoutesById {
   '/_app/account': typeof AppAccountRoute
   '/login_/totp': typeof LoginTotpRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/appearance/themes': typeof AppAppearanceThemesRoute
   '/_app/settings/$group': typeof AppSettingsGroupRoute
   '/_app/structure/redirects': typeof AppStructureRedirectsRoute
   '/_app/comments/': typeof AppCommentsIndexRoute
@@ -254,6 +263,7 @@ export interface FileRouteTypes {
     | '/_styleguide'
     | '/account'
     | '/login/totp'
+    | '/appearance/themes'
     | '/settings/$group'
     | '/structure/redirects'
     | '/comments/'
@@ -280,6 +290,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/login/totp'
     | '/'
+    | '/appearance/themes'
     | '/settings/$group'
     | '/structure/redirects'
     | '/comments'
@@ -307,6 +318,7 @@ export interface FileRouteTypes {
     | '/_app/account'
     | '/login_/totp'
     | '/_app/'
+    | '/_app/appearance/themes'
     | '/_app/settings/$group'
     | '/_app/structure/redirects'
     | '/_app/comments/'
@@ -404,6 +416,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/login/totp'
       preLoaderRoute: typeof LoginTotpRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_app/appearance/themes': {
+      id: '/_app/appearance/themes'
+      path: '/appearance/themes'
+      fullPath: '/appearance/themes'
+      preLoaderRoute: typeof AppAppearanceThemesRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/comments/': {
       id: '/_app/comments/'
@@ -518,6 +537,7 @@ interface AppRouteChildren {
   AppStyleguideRoute: typeof AppStyleguideRoute
   AppAccountRoute: typeof AppAccountRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppAppearanceThemesRoute: typeof AppAppearanceThemesRoute
   AppSettingsGroupRoute: typeof AppSettingsGroupRoute
   AppStructureRedirectsRoute: typeof AppStructureRedirectsRoute
   AppCommentsIndexRoute: typeof AppCommentsIndexRoute
@@ -540,6 +560,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppStyleguideRoute: AppStyleguideRoute,
   AppAccountRoute: AppAccountRoute,
   AppIndexRoute: AppIndexRoute,
+  AppAppearanceThemesRoute: AppAppearanceThemesRoute,
   AppSettingsGroupRoute: AppSettingsGroupRoute,
   AppStructureRedirectsRoute: AppStructureRedirectsRoute,
   AppCommentsIndexRoute: AppCommentsIndexRoute,

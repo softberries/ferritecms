@@ -14,6 +14,7 @@ import {
   LayoutDashboardIcon,
   ListTreeIcon,
   MessageSquareIcon,
+  PaletteIcon,
   SettingsIcon,
   ShapesIcon,
   SignpostIcon,
@@ -110,6 +111,7 @@ export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
     icon: SignpostIcon,
   },
   { screen: "users", to: "/users", label: "nav.users", icon: UsersIcon },
+  { screen: "appearance", to: "/appearance/themes", label: "nav.appearance", icon: PaletteIcon },
   { screen: "settings", to: "/settings", label: "nav.settings", icon: SettingsIcon },
 ] as const;
 
