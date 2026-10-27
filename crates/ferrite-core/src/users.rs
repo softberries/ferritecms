@@ -396,11 +396,12 @@ impl UserService {
 
     /// Deletes a user (`manage_users`; not oneself). Authored content and revisions move
     /// to `reassign_to` (an existing active user) in the same `Tx`; a user with content
-    /// and no `reassign_to` is `Invalid("reassign the user's content first")`.
+    /// and no `reassign_to` is `InvalidField { field: "reassign" }` ("reassign the user's
+    /// content first"), as is a `reassign_to` that is the user, unknown or not active.
     ///
     /// The target and the heir are row-locked in ascending id order, so two concurrent
     /// deletes reassigning to each other serialize instead of deadlocking: the second
-    /// one then finds its target or its heir gone (`NotFound` / `Invalid`).
+    /// one then finds its target or its heir gone (`NotFound` / `InvalidField` `reassign`).
     pub async fn delete(
         &self,
         actor: &Actor,
@@ -414,8 +415,9 @@ impl UserService {
         let tx = self.store.begin().await?;
         let done = async {
             if reassign_to == Some(id) {
-                return Err(CoreError::Invalid(
-                    "cannot reassign content to the deleted user".into(),
+                return Err(CoreError::invalid_field(
+                    "reassign",
+                    "cannot reassign content to the deleted user",
                 ));
             }
             // Lock both rows in id order (R10) before any check.
@@ -438,11 +440,15 @@ impl UserService {
             if let Some(heir) = reassign_to {
                 match target {
                     None => {
-                        return Err(CoreError::Invalid("reassign target not found".into()));
+                        return Err(CoreError::invalid_field(
+                            "reassign",
+                            "reassign target not found",
+                        ));
                     }
                     Some(t) if t.status != UserStatus::Active => {
-                        return Err(CoreError::Invalid(
-                            "reassign target must be an active user".into(),
+                        return Err(CoreError::invalid_field(
+                            "reassign",
+                            "reassign target must be an active user",
                         ));
                     }
                     Some(_) => {}
@@ -453,7 +459,7 @@ impl UserService {
             }
             tx.users().delete(id).await.map_err(|e| match e {
                 StoreError::ForeignKey { .. } => {
-                    CoreError::Invalid("reassign the user's content first".into())
+                    CoreError::invalid_field("reassign", "reassign the user's content first")
                 }
                 other => other.into(),
             })?;

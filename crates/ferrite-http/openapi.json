@@ -8400,7 +8400,7 @@
             }
           },
           "422": {
-            "description": "`validation`: oneself, the last active admin, content without `reassign`, or `reassign` not an active user",
+            "description": "`validation`: oneself, the last active admin, or (field `reassign`) content without `reassign`, or `reassign` the user itself or not an active user",
             "content": {
               "application/problem+json": {
                 "schema": {

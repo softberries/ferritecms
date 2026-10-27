@@ -437,6 +437,19 @@ async fn delete_requires_reassign_and_moves_content(db: &TestDb) {
         invalid(users.delete(&admin, author.id, None).await),
         "reassign the user's content first"
     );
+    // Every reassign refusal names the field (the admin's delete dialog switches on it).
+    for reassign in [None, Some(UserId::new()), Some(author.id)] {
+        assert!(
+            matches!(
+                users.delete(&admin, author.id, reassign).await,
+                Err(CoreError::InvalidField {
+                    field: "reassign",
+                    ..
+                })
+            ),
+            "{reassign:?}"
+        );
+    }
     assert!(
         invalid(users.delete(&admin, author.id, Some(UserId::new())).await).contains("reassign")
     );
@@ -856,7 +869,15 @@ async fn mutual_reassign_deletes_serialize(db: Arc<TestDb>) {
         assert_eq!(ok, 1, "round {round}: {results:?}");
         for r in &results {
             assert!(
-                matches!(r, Ok(()) | Err(CoreError::NotFound | CoreError::Invalid(_))),
+                matches!(
+                    r,
+                    Ok(())
+                        | Err(CoreError::NotFound
+                            | CoreError::InvalidField {
+                                field: "reassign",
+                                ..
+                            })
+                ),
                 "round {round}: {r:?}"
             );
         }

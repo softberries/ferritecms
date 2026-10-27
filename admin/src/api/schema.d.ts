@@ -9479,7 +9479,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation`: oneself, the last active admin, content without `reassign`, or `reassign` not an active user */
+            /** @description `validation`: oneself, the last active admin, or (field `reassign`) content without `reassign`, or `reassign` the user itself or not an active user */
             422: {
                 headers: {
                     [name: string]: unknown;

@@ -217,7 +217,7 @@ pub async fn update_user(
         (status = 403, description = "`forbidden` (`manage_users`, `users:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 409, description = "`conflict`: content was added concurrently; retry", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 422, description = "`validation`: oneself, the last active admin, content without `reassign`, or `reassign` not an active user", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: oneself, the last active admin, or (field `reassign`) content without `reassign`, or `reassign` the user itself or not an active user", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn delete_user(
