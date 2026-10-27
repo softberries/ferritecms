@@ -21,6 +21,8 @@ import { Route as AppAccountRouteImport } from './routes/_app/account'
 import { Route as LoginTotpRouteImport } from './routes/login_.totp'
 import { Route as AppCommentsIndexRouteImport } from './routes/_app/comments.index'
 import { Route as AppMediaIndexRouteImport } from './routes/_app/media.index'
+import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings.index'
+import { Route as AppSettingsGroupRouteImport } from './routes/_app/settings.$group'
 import { Route as AppStructureRedirectsRouteImport } from './routes/_app/structure.redirects'
 import { Route as AppUsersIndexRouteImport } from './routes/_app/users.index'
 import { Route as AppContentTypeIndexRouteImport } from './routes/_app/content.$type.index'
@@ -92,6 +94,16 @@ const AppMediaIndexRoute = AppMediaIndexRouteImport.update({
   path: '/media/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppSettingsIndexRoute = AppSettingsIndexRouteImport.update({
+  id: '/settings/',
+  path: '/settings/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSettingsGroupRoute = AppSettingsGroupRouteImport.update({
+  id: '/settings/$group',
+  path: '/settings/$group',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppStructureRedirectsRoute = AppStructureRedirectsRouteImport.update({
   id: '/structure/redirects',
   path: '/structure/redirects',
@@ -160,9 +172,11 @@ export interface FileRoutesByFullPath {
   '/_styleguide': typeof AppStyleguideRoute
   '/account': typeof AppAccountRoute
   '/login/totp': typeof LoginTotpRoute
+  '/settings/$group': typeof AppSettingsGroupRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
   '/comments/': typeof AppCommentsIndexRoute
   '/media/': typeof AppMediaIndexRoute
+  '/settings/': typeof AppSettingsIndexRoute
   '/users/': typeof AppUsersIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
@@ -184,9 +198,11 @@ export interface FileRoutesByTo {
   '/account': typeof AppAccountRoute
   '/login/totp': typeof LoginTotpRoute
   '/': typeof AppIndexRoute
+  '/settings/$group': typeof AppSettingsGroupRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
   '/comments': typeof AppCommentsIndexRoute
   '/media': typeof AppMediaIndexRoute
+  '/settings': typeof AppSettingsIndexRoute
   '/users': typeof AppUsersIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
@@ -210,9 +226,11 @@ export interface FileRoutesById {
   '/_app/account': typeof AppAccountRoute
   '/login_/totp': typeof LoginTotpRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/settings/$group': typeof AppSettingsGroupRoute
   '/_app/structure/redirects': typeof AppStructureRedirectsRoute
   '/_app/comments/': typeof AppCommentsIndexRoute
   '/_app/media/': typeof AppMediaIndexRoute
+  '/_app/settings/': typeof AppSettingsIndexRoute
   '/_app/users/': typeof AppUsersIndexRoute
   '/_app/content/$type/$id': typeof AppContentTypeIdRoute
   '/_app/content/$type/new': typeof AppContentTypeNewRoute
@@ -236,9 +254,11 @@ export interface FileRouteTypes {
     | '/_styleguide'
     | '/account'
     | '/login/totp'
+    | '/settings/$group'
     | '/structure/redirects'
     | '/comments/'
     | '/media/'
+    | '/settings/'
     | '/users/'
     | '/content/$type/$id'
     | '/content/$type/new'
@@ -260,9 +280,11 @@ export interface FileRouteTypes {
     | '/account'
     | '/login/totp'
     | '/'
+    | '/settings/$group'
     | '/structure/redirects'
     | '/comments'
     | '/media'
+    | '/settings'
     | '/users'
     | '/content/$type/$id'
     | '/content/$type/new'
@@ -285,9 +307,11 @@ export interface FileRouteTypes {
     | '/_app/account'
     | '/login_/totp'
     | '/_app/'
+    | '/_app/settings/$group'
     | '/_app/structure/redirects'
     | '/_app/comments/'
     | '/_app/media/'
+    | '/_app/settings/'
     | '/_app/users/'
     | '/_app/content/$type/$id'
     | '/_app/content/$type/new'
@@ -395,6 +419,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppMediaIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/settings/': {
+      id: '/_app/settings/'
+      path: '/settings'
+      fullPath: '/settings/'
+      preLoaderRoute: typeof AppSettingsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings/$group': {
+      id: '/_app/settings/$group'
+      path: '/settings/$group'
+      fullPath: '/settings/$group'
+      preLoaderRoute: typeof AppSettingsGroupRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/structure/redirects': {
       id: '/_app/structure/redirects'
       path: '/structure/redirects'
@@ -480,9 +518,11 @@ interface AppRouteChildren {
   AppStyleguideRoute: typeof AppStyleguideRoute
   AppAccountRoute: typeof AppAccountRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppSettingsGroupRoute: typeof AppSettingsGroupRoute
   AppStructureRedirectsRoute: typeof AppStructureRedirectsRoute
   AppCommentsIndexRoute: typeof AppCommentsIndexRoute
   AppMediaIndexRoute: typeof AppMediaIndexRoute
+  AppSettingsIndexRoute: typeof AppSettingsIndexRoute
   AppUsersIndexRoute: typeof AppUsersIndexRoute
   AppContentTypeIdRoute: typeof AppContentTypeIdRoute
   AppContentTypeNewRoute: typeof AppContentTypeNewRoute
@@ -500,9 +540,11 @@ const AppRouteChildren: AppRouteChildren = {
   AppStyleguideRoute: AppStyleguideRoute,
   AppAccountRoute: AppAccountRoute,
   AppIndexRoute: AppIndexRoute,
+  AppSettingsGroupRoute: AppSettingsGroupRoute,
   AppStructureRedirectsRoute: AppStructureRedirectsRoute,
   AppCommentsIndexRoute: AppCommentsIndexRoute,
   AppMediaIndexRoute: AppMediaIndexRoute,
+  AppSettingsIndexRoute: AppSettingsIndexRoute,
   AppUsersIndexRoute: AppUsersIndexRoute,
   AppContentTypeIdRoute: AppContentTypeIdRoute,
   AppContentTypeNewRoute: AppContentTypeNewRoute,

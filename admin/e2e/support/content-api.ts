@@ -2,8 +2,8 @@
 // a request context on a harness account's shared session, plus helpers to create a
 // content type (admin only), taxonomies, terms and items in any status, and to remove a
 // type with everything in it afterwards, so the sidebar of later screenshots stays clean;
-// menus (read, replace, delete); comments (list per item, moderate, delete); and
-// redirects (create, import, search, delete).
+// menus (read, replace, delete); comments (list per item, moderate, delete);
+// redirects (create, import, search, delete); and the site settings (read, patch).
 
 import { expect, request as apiRequest, type APIRequestContext } from "@playwright/test";
 import type { FixtureFile } from "./files";
@@ -441,6 +441,31 @@ export class ContentApi {
     for (const r of await this.listRedirects(q)) {
       await this.ctx.delete(`/api/v1/redirects/${r.id}`, { headers: this.headers() });
     }
+  }
+
+  /** `GET /settings`: every site setting (`null`: the default). */
+  async getSettings(): Promise<Record<string, unknown>> {
+    return this.ok(await this.ctx.get("/api/v1/settings"), "get settings");
+  }
+
+  /** `PATCH /settings` (a test puts back what it changed in its `finally`). */
+  async patchSettings(patch: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.ok(
+      await this.ctx.patch("/api/v1/settings", { headers: this.headers(), data: patch }),
+      "patch settings",
+    );
+  }
+
+  /** `GET /content/refs`: the type, title, status and permalink of `ids`. */
+  async refs(
+    ids: string[],
+  ): Promise<{ id: string; title: string; status: string; permalink: string | null }[]> {
+    const res = await this.ctx.get(`/api/v1/content/refs?ids=${ids.join(",")}`);
+    return (
+      await this.ok<{
+        items: { id: string; title: string; status: string; permalink: string | null }[];
+      }>(res, "refs")
+    ).items;
   }
 
   async dispose(): Promise<void> {

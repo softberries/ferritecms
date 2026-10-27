@@ -14,6 +14,7 @@ import {
   LayoutDashboardIcon,
   ListTreeIcon,
   MessageSquareIcon,
+  SettingsIcon,
   ShapesIcon,
   SignpostIcon,
   TagsIcon,
@@ -109,6 +110,7 @@ export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
     icon: SignpostIcon,
   },
   { screen: "users", to: "/users", label: "nav.users", icon: UsersIcon },
+  { screen: "settings", to: "/settings", label: "nav.settings", icon: SettingsIcon },
 ] as const;
 
 /** Types the content screens list: everything but `media` (its own screen, M2b-2). */

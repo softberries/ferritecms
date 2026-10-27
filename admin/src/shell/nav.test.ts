@@ -111,6 +111,19 @@ test("users_is_registered", () => {
   expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
 });
 
+test("settings_is_registered", () => {
+  // M2b-3 Task 8 registers Settings under Administration: only `manage_settings` sees it,
+  // and it is current on every group's page.
+  const admin = navFor(me("admin", ["read_admin", "manage_settings"]), TYPES);
+  const section = admin.find((s) => s.id === "admin");
+  expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
+    ["settings", "Settings", "/settings", "g s"],
+  ]);
+  expect(navItemAt(admin, "/settings")?.id).toBe("settings");
+  const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
+  expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
+});
+
 test("content_types_is_registered", () => {
   // Task 9 registers Content types under Structure: only `manage_settings` sees it.
   const ADMIN_CAPS = me("admin", ["read_admin", "manage_settings"]);

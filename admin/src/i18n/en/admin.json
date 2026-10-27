@@ -368,5 +368,181 @@
       "nobody": "There is no other active user.",
       "done": "{{name}} was deleted"
     }
+  },
+  "settings": {
+    "title": "Settings",
+    "description": "How the site is named, what its home page shows, where its pages live and how comments are handled.",
+    "rail": "Settings groups",
+    "resource": "The {{group}} settings",
+    "save": "Save changes",
+    "saving": "Saving…",
+    "saved": "Settings saved",
+    "notSaved": "Settings not saved",
+    "reloaded": "Reloaded their version; your edits were dropped",
+    "fixFirst": "Some settings need fixing before they can be saved.",
+    "pending_one": "{{count}} unsaved change",
+    "pending_other": "{{count}} unsaved changes",
+    "shortcuts": {
+      "group": "Settings",
+      "save": "Save settings"
+    },
+    "leave": {
+      "title": "Leave without saving?",
+      "body": "Your changes to these settings are not saved yet. Leaving drops them.",
+      "stay": "Stay",
+      "leave": "Leave and drop changes"
+    },
+    "errors": {
+      "tooLong": "At most {{max}} characters.",
+      "control": "Remove the control characters (such as tabs).",
+      "locale": "Use 1 to 35 letters, digits, “-” or “_”, such as en or pt-BR.",
+      "integer": "Enter a whole number from {{min}} to {{max}}.",
+      "pickPage": "Pick a page.",
+      "permalink": {
+        "slashes": "Start and end the structure with “/”.",
+        "noSlug": "The structure needs %slug%.",
+        "emptySegment": "Remove the empty segment (“//”).",
+        "unknownToken": "“{{segment}}” is not a token: a segment is one token or plain text.",
+        "dotSegment": "“.” and “..” cannot be segments.",
+        "uppercase": "“{{segment}}” has capital letters; addresses are lower case.",
+        "badLiteral": "“{{segment}}” may use only a–z, 0–9, “-”, “.”, “_” and “~”.",
+        "reserved": "“{{segment}}” is reserved and cannot start an address.",
+        "noParentPath": "Pages need %parent_path%, or sub-pages would share addresses."
+      }
+    },
+    "groups": {
+      "general": {
+        "title": "General",
+        "description": "The site's name, tagline and language."
+      },
+      "reading": {
+        "title": "Reading",
+        "description": "What the home page shows, how many posts a listing holds, and search engines."
+      },
+      "permalinks": {
+        "title": "Permalinks",
+        "description": "The addresses of posts and pages."
+      },
+      "comments": {
+        "title": "Comments",
+        "description": "Whether posts take comments and which wait for moderation."
+      },
+      "mediaSizes": {
+        "title": "Media sizes",
+        "description": "The image sizes made for every uploaded image."
+      },
+      "mail": {
+        "title": "Mail",
+        "description": "Outgoing e-mail for password resets and plugin notices."
+      }
+    },
+    "general": {
+      "title": "Site title",
+      "titleHint": "Shown in the browser tab, feeds and e-mails. Leave empty to use the title in ferrite.toml.",
+      "tagline": "Tagline",
+      "taglineHint": "A short line about the site, used by themes and feeds. Leave empty to use the one in ferrite.toml.",
+      "locale": "Language",
+      "localeHint": "A language tag such as en or pt-BR, for the pages' lang attribute and the feed. Leave empty to use the one in ferrite.toml."
+    },
+    "reading": {
+      "frontPage": "Home page shows",
+      "latestPosts": "Latest posts",
+      "latestPostsHint": "The newest posts first, a page at a time.",
+      "aPage": "A page",
+      "aPageHint": "A page of your choice; the post listing then has no address of its own.",
+      "page": "Page",
+      "pickPage": "Choose a page…",
+      "searchPages": "Search published pages…",
+      "noPages": "No published pages found.",
+      "loading": "Loading…",
+      "untitled": "Untitled",
+      "pageGone": "Page not available",
+      "pageGoneHint": "The chosen page no longer exists or cannot be read; choose another.",
+      "notPublished": "This page is not published: the home page shows the latest posts until it is.",
+      "perPage": "Posts per page",
+      "perPageHint": "1 to 100, for the home page and archives. Leave empty for the default, {{value}}.",
+      "discourage": "Discourage search engines",
+      "discourageHint": "robots.txt then asks every crawler to stay away. Crawlers that ignore robots.txt may still index the site."
+    },
+    "permalinks": {
+      "post": "Post addresses",
+      "presets": {
+        "name": "Post name",
+        "month": "Month and name",
+        "category": "Category and name",
+        "custom": "Custom"
+      },
+      "customHint": "Build your own from the tokens below.",
+      "customStructure": "Custom structure",
+      "postPreview": "A post would be at",
+      "page": "Page structure",
+      "pageHint": "Must contain %parent_path%: a sub-page's address holds its parents'. The default is {{default}}.",
+      "pagePreview": "A sub-page would be at",
+      "tokens": "Tokens:",
+      "addToken": "Add {{token}}",
+      "tokenHints": {
+        "slug": "The item's slug (required)",
+        "year": "The publication year, four digits (UTC)",
+        "month": "The publication month, two digits (UTC)",
+        "category": "The first category's slug, or “uncategorized”",
+        "parent_path": "The parents' slugs, empty for a top-level item"
+      },
+      "noPreview": "Fix the structure to see a preview.",
+      "samplePost": "sample-post",
+      "sampleCategory": "news",
+      "otherTypes": "Items of custom content types stay at /t/<type>/<slug>/.",
+      "confirm": {
+        "title": "Change the permalinks?",
+        "body": "Every post or page whose address follows the changed structure moves to a new URL. No redirects are created from the old URLs, so links to them elsewhere stop working.",
+        "cancel": "Cancel",
+        "ok": "Change permalinks"
+      }
+    },
+    "comments": {
+      "enabled": "Allow comments",
+      "enabledHint": "Visitors can comment on posts.",
+      "moderation": "Comments from guests",
+      "known": "Known commenters post directly",
+      "knownHint": "A guest with an approved comment under the same name and e-mail posts without waiting. Anyone who knows those two can post as them.",
+      "all": "Hold every guest comment",
+      "allHint": "Each guest comment waits for a moderator.",
+      "perPage": "Comment threads per page",
+      "perPageHint": "1 to 100 top-level threads on each public page, with all their replies. Leave empty for the default, {{value}}."
+    },
+    "mediaSizes": {
+      "setBy": "Set by the theme {{theme}}",
+      "none": "The theme {{theme}} asks for no sizes of its own.",
+      "name": "Name",
+      "size": "Width × height",
+      "crop": "Fit",
+      "auto": "auto",
+      "cropped": "Cropped",
+      "scaled": "Scaled",
+      "notMade": "Not made",
+      "skipped": {
+        "noCrop": "A size with a height must be cropped.",
+        "zero": "A size cannot be 0 pixels.",
+        "taken": "FerriteCMS already makes a size of this name."
+      },
+      "noActive": "No active theme",
+      "noActiveBody": "The site serves the built-in theme until one is activated.",
+      "needsThemes": "Seeing the theme's sizes needs permission to manage themes.",
+      "changeNote": "Sizes are not a setting: to change them, change the theme (its theme.toml [images]). FerriteCMS also makes its own sizes: {{sizes}}."
+    },
+    "mail": {
+      "configured": "Mail is set up",
+      "configuredHint": "Password resets and plugin notices are sent by e-mail.",
+      "notConfigured": "Mail is not set up",
+      "notConfiguredHint": "Password resets by e-mail and plugin notices are off.",
+      "from": "From",
+      "setup": "Add a [mail] section to ferrite.toml:",
+      "setupRestart": "Then restart ferrite serve. The SMTP URL can also come from smtp_url_file or FERRITE_MAIL__SMTP_URL.",
+      "test": "Send test e-mail",
+      "sending": "Sending…",
+      "testHint": "Goes to your address, {{email}}.",
+      "testNeedsSystem": "Sending a test e-mail needs System access.",
+      "sent": "Test e-mail queued for {{to}}",
+      "notSent": "Test e-mail not sent"
+    }
   }
 }
