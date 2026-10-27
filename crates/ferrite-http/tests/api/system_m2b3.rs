@@ -1,7 +1,7 @@
 //! M2b-3 Task 3: audit filters, the mail facts and the test mail (P49), typed node
 //! `meta`, `me.mail_configured`, and the site title read at use time (P51).
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 use axum::http::{Method, StatusCode};
 use ferrite_domain::{NewAudit, NewNode, NodeId, Role};
@@ -29,6 +29,8 @@ const ME: &str = "/api/v1/auth/me";
 const SETTINGS: &str = "/api/v1/settings";
 const TOTP_SETUP: &str = "/api/v1/auth/totp/setup";
 const MAIL_WAIT: Duration = Duration::from_secs(5);
+/// The test-mail limit's window (3 per 10 minutes per user).
+const MAIL_TEST_WINDOW: Duration = Duration::from_secs(600);
 
 async fn admin(api: &Api, login: &str) -> Client {
     api.user(login, Role::Admin, false).await;
@@ -111,19 +113,6 @@ async fn me_reports_mail_configured_by_role(api: Api) -> Api {
     api
 }
 
-/// Waits until at least 30 s are left in the current 600 s window, so the four calls
-/// below share one window.
-async fn align_to_mail_window() {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let left = 600 - now % 600;
-    if left < 30 {
-        tokio::time::sleep(Duration::from_secs(left + 1)).await;
-    }
-}
-
 /// `202 {to}` to the actor's own address through the queue, audited; the fourth call in
 /// 10 minutes is `429`; editors and tokens without `system:write` are refused; a site
 /// without `[mail]` is `422` (field `mail`).
@@ -182,7 +171,6 @@ async fn mail_test_sends_to_self_and_is_limited(api: Api) -> Api {
             .is_empty()
     );
 
-    align_to_mail_window().await;
     let before = SystemTime::now();
     let r = c.post_empty(&api, MAIL_TEST).await;
     assert_eq!(r.status, StatusCode::ACCEPTED, "{r:?}");
@@ -226,22 +214,35 @@ async fn mail_test_sends_to_self_and_is_limited(api: Api) -> Api {
         row.details
     );
 
+    // The limit, independent of where the fixed 10-minute window is: two hits are
+    // already in `lim`'s bucket, so its next call is the third (202) and the one after
+    // the fourth (429).
+    let lim_user = api.user("lim", Role::Admin, false).await;
+    let mut lim = api.logged_in("lim").await;
     for _ in 0..2 {
-        let r = c.post_empty(&api, MAIL_TEST).await;
-        assert_eq!(r.status, StatusCode::ACCEPTED, "{r:?}");
+        api.store
+            .read()
+            .rate_limits()
+            .hit(&format!("mail-test:user:{}", lim_user.id), MAIL_TEST_WINDOW)
+            .await
+            .unwrap();
     }
-    let r = c.post_empty(&api, MAIL_TEST).await;
+    let r = lim.post_empty(&api, MAIL_TEST).await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{r:?}");
+    let r = lim.post_empty(&api, MAIL_TEST).await;
     r.assert_problem(429, "rate-limited");
     assert!(r.header("retry-after").is_some(), "{r:?}");
-    assert_eq!(api.mailer.wait_for(3, MAIL_WAIT).await.len(), 3);
+    let sent = api.mailer.wait_for(2, MAIL_WAIT).await;
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[1].to, ["lim@example.com"]);
     assert_eq!(
         api.mailer
-            .wait_for(4, Duration::from_millis(200))
+            .wait_for(3, Duration::from_millis(200))
             .await
             .len(),
-        3
+        2
     );
-    // Per user: another admin still has its three.
+    // Per user: another admin has its own budget.
     let mut other = admin(&api, "other").await;
     let r = other.post_empty(&api, MAIL_TEST).await;
     assert_eq!(r.status, StatusCode::ACCEPTED, "{r:?}");

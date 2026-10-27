@@ -18,8 +18,8 @@
 //! | `Changed(what)` | 409 | `conflict` (detail = what changed; retry) |
 //! | `Store(UniqueViolation)` | 409 | `conflict` (a known constraint adds an `errors` entry for its field, see [`UNIQUE_FIELDS`]; the constraint name is never sent) |
 //! | `Store(ForeignKey)` | 409 | `conflict` ("a related record changed; retry", F15) |
-//! | `Store(Busy)` | 503 | `busy` + `Retry-After: 5` |
-//! | `Random`, `Hashing`, any other `Store` | 500 | `internal` |
+//! | `Store(Busy)`, `Unavailable(what)` | 503 | `busy` + `Retry-After: 5` |
+//! | `Random`, `Hashing`, `Internal(what)`, any other `Store` | 500 | `internal` |
 //!
 //! Problems built by the API layer itself, not mapped from a core error:
 //!
@@ -402,7 +402,11 @@ impl From<CoreError> for Problem {
                 "Conflict",
                 format!("{what}; retry"),
             ),
-            CoreError::Random | CoreError::Hashing => {
+            CoreError::Unavailable(what) => {
+                tracing::warn!(what, "request failed: unavailable");
+                Self::busy()
+            }
+            CoreError::Random | CoreError::Hashing | CoreError::Internal(_) => {
                 tracing::error!(error = %e, "request failed");
                 Self::internal()
             }
@@ -629,6 +633,20 @@ mod tests {
                 "internal",
                 Some("internal error"),
                 None,
+            ),
+            (
+                CoreError::Internal("test mail refused"),
+                500,
+                "internal",
+                Some("internal error"),
+                None,
+            ),
+            (
+                CoreError::Unavailable("the mail queue is full or shutting down"),
+                503,
+                "busy",
+                Some("busy, retry"),
+                Some(BUSY_RETRY_AFTER),
             ),
             (
                 s(StoreError::UniqueViolation {

@@ -41,6 +41,14 @@ pub enum CoreError {
     /// message says what changed; retrying re-checks.
     #[error("changed concurrently: {0}")]
     Changed(&'static str),
+    /// A node-local resource is out of capacity or stopping (the mail queue full or
+    /// shutting down); retrying later may work. The text says which (`503 busy`).
+    #[error("unavailable: {0}")]
+    Unavailable(&'static str),
+    /// A value core built itself was refused by its own checks: a bug, not the caller's
+    /// input (`500`). The text says which.
+    #[error("internal error: {0}")]
+    Internal(&'static str),
     /// The operating system's random number generator failed (keys, nonces, tokens).
     #[error("system random number generator failed")]
     Random,

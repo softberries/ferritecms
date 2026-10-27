@@ -19,7 +19,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use ferrite_domain::{
     AuditEntry, AuditQuery, Job, JobId, JobQuery, JobStatus, NewAudit, Node, Page, Timestamp,
 };
-use ferrite_store::{MigrationStatus, Repos, Store, StoreError};
+use ferrite_store::{MigrationStatus, Repos, Store};
 use serde_json::{Value, json};
 
 use crate::{
@@ -124,8 +124,9 @@ impl SystemService {
     /// that address. Needs `manage_system` with `system:write`. In order: no `[mail]`
     /// (`queue` = `None`) is `invalid_field("mail", MAIL_NOT_CONFIGURED)`; then one hit on
     /// `mail-test:user:<id>`, 3 per 10 minutes (`RateLimited`); an account without a
-    /// usable address is `invalid_field("email")`; a queue that refuses (full, shutting
-    /// down) is `Store(Busy)` (`503`). Once queued it is audited `mail.test` (target the
+    /// usable address is `invalid_field("email")`; a mail failing its own checks is
+    /// `Internal` (`500`); a queue that refuses (full, shutting down) is `Unavailable`
+    /// (`503 busy`). Once queued it is audited `mail.test` (target the
     /// user, no address in `details`). The send itself runs in the background: an SMTP
     /// failure is logged by the queue, not returned.
     ///
@@ -164,9 +165,17 @@ impl SystemService {
         }
         let title = settings::site_title(store, configured_title).await?;
         let mail = test_mail(&user.email, &title, site_url, &user.login, Timestamp::now());
-        if let Err(e) = queue.send(mail).await {
-            tracing::warn!(user = %user.id, error = %e, "test mail not queued");
-            return Err(CoreError::Store(StoreError::Busy));
+        // Checked here so a refusal by the queue below can only mean it is full or
+        // stopping: a mail failing its own checks is a bug (the address and title were
+        // checked above), never worth a retry.
+        if let Err(e) = mail.check() {
+            tracing::error!(user = %user.id, error = %e, "test mail failed its checks");
+            return Err(CoreError::Internal("test mail refused by the mail checks"));
+        }
+        if queue.send(mail).await.is_err() {
+            return Err(CoreError::Unavailable(
+                "the mail queue is full or shutting down",
+            ));
         }
         store
             .read()

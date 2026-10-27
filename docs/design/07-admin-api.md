@@ -644,7 +644,8 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   "csrf_token" }`; `POST /auth/login/totp` finishes it. A code's step must be newer than
   `users.totp_last_step` (one conditional update), so a code cannot be replayed. The
   issuer is the site title at setup time (the `site.title` option, else `ferrite.toml`;
-  M2b-3 P51) without `:` (`FerriteCMS` when empty). There are no recovery codes: an admin turns another user's
+  a blank or whitespace-only option counts as unset; M2b-3 P51) without `:`
+  (`FerriteCMS` when empty). There are no recovery codes: an admin turns another user's
   TOTP off with `POST /users/{id}/totp/disable` (`manage_users` + `users:write`, never
   oneself, their sessions kept, audited `user.totp_disable`; M2b-3 P43), or an operator
   runs `ferrite user disable-totp --login <login>`.

@@ -413,7 +413,7 @@ also installs the `ring` rustls default crypto provider at start.
   mail, 01 §4; config-only, M2b-3 P49: `GET /system/status` shows `mail.configured` and
   `mail.from`, never the SMTP URL, and `POST /system/mail/test` sends one mail to the
   calling admin to check it; mails name the site by the `site.title` option, else the
-  configured title, read when each mail is made, P51),
+  configured title (a blank option counts as unset), read when each mail is made, P51),
   `cluster.mode`, `cluster.node_name`, `cluster.workers`, `cache.logged_in` (`bypass` or
   `per-user`, 06 §3), `auth.secret_key[_file]` (else `<data>/secret.key` in solo mode, created
   on first start if missing). Render concurrency (2 × available parallelism, 5 s wait,
