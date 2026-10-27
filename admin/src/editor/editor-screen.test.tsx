@@ -146,8 +146,8 @@ describe("editor screen", () => {
     stubRoutes(sideRoutes);
     const item = itemWith({ publish: false, schedule: false });
     await open({ item, handoff: handoffOf(item) });
-    // Let any effect run; nothing opens.
-    await new Promise((r) => setTimeout(r, 50));
+    // The dialog's open state is the screen's initial state (no effect, no request), so
+    // it would be there once the screen has rendered.
     expect(document.querySelector("[data-slot=publish-dialog]")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
   });

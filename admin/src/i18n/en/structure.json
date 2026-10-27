@@ -171,7 +171,8 @@
       "hasContent": "It still has items (in some status, the trash included). Delete them first.",
       "relationTarget": "A relation field of the type {{type}} points at it: remove it there first."
     },
-    "close": "Close"
+    "close": "Close",
+    "builtInTitle": "{{label}} cannot be deleted"
   },
   "shortcuts": {
     "group": "Content type",

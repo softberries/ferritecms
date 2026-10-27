@@ -337,4 +337,87 @@ describe("autosave_slot", () => {
       ]),
     );
   });
+
+  test("a_401_on_the_waited_put_ends_the_slot_work_once", async () => {
+    // Review minor: the draft went back to the item while a PUT ran; that PUT answered
+    // 401 (the autosaver stopped, the draft went to sign in). No DELETE follows it, and
+    // the sign-in is asked for once.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const methods: string[] = [];
+    let second: (r: Response) => void = () => undefined;
+    stubRoutes({
+      [SLOT]: async (_url, req) => {
+        methods.push(req.method);
+        if (req.method === "PUT" && methods.length === 1) {
+          return json({ ...((await req.json()) as object), saved_at: "2026-10-01T10:06:00Z" });
+        }
+        if (req.method === "PUT") return new Promise<Response>((r) => (second = r));
+        return new Response(null, { status: 204 });
+      },
+    });
+    const onUnauthenticated = vi.fn();
+    renderWithRouter(
+      <Harness start={item(4, "Stored text")} onUnauthenticated={onUnauthenticated} />,
+    );
+    await waitFor(() => expect(doc).not.toBeNull());
+    act(() => doc?.setTitle("First"));
+    await act(() => vi.advanceTimersByTimeAsync(11_000));
+    await waitFor(() => expect(methods).toEqual(["PUT"]));
+    act(() => doc?.setTitle("Second"));
+    await act(() => vi.advanceTimersByTimeAsync(11_000));
+    await waitFor(() => expect(methods).toEqual(["PUT", "PUT"]));
+    act(() => doc?.setTitle("Restore me"));
+    act(() =>
+      second(
+        new Response(
+          JSON.stringify({
+            type: "https://ferritecms.dev/problems/unauthenticated",
+            title: "Unauthenticated",
+            status: 401,
+            detail: "sign in again",
+          }),
+          { status: 401, headers: { "Content-Type": "application/problem+json" } },
+        ),
+      ),
+    );
+    await waitFor(() => expect(onUnauthenticated).toHaveBeenCalledOnce());
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(methods).toEqual(["PUT", "PUT"]);
+    expect(onUnauthenticated).toHaveBeenCalledOnce();
+  });
+
+  test("typing_while_the_slot_waits_on_a_running_put_keeps_the_edit", async () => {
+    // The draft went back to the item while a PUT ran (the slot waits for it), then the
+    // user typed again before it landed: no DELETE, and the new edit is written after.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const log: string[] = [];
+    let landPut: () => void = () => undefined;
+    stubRoutes({
+      [SLOT]: async (_url, req) => {
+        if (req.method !== "PUT") {
+          log.push(req.method);
+          return new Response(null, { status: 204 });
+        }
+        const body = (await req.json()) as { title: string };
+        log.push(`PUT ${body.title}`);
+        if (body.title === "Half-way") {
+          await new Promise<void>((r) => {
+            landPut = r;
+          });
+        }
+        return json({ ...body, saved_at: "2026-10-01T10:06:00Z" });
+      },
+    });
+    renderWithRouter(<Harness start={item(4, "Stored text")} />);
+    await waitFor(() => expect(doc).not.toBeNull());
+    act(() => doc?.setTitle("Half-way"));
+    await act(() => vi.advanceTimersByTimeAsync(11_000));
+    await waitFor(() => expect(log).toEqual(["PUT Half-way"]));
+    act(() => doc?.setTitle("Restore me"));
+    act(() => doc?.setTitle("Typed while waiting"));
+    act(() => landPut());
+    await act(() => vi.advanceTimersByTimeAsync(11_000));
+    await waitFor(() => expect(log).toEqual(["PUT Half-way", "PUT Typed while waiting"]));
+    expect(doc?.dirty).toBe(true);
+  });
 });

@@ -392,7 +392,8 @@ function TargetsEditor({
   const id = useId();
   const all = useQuery(typesQuery);
   const offered = useMemo(() => relationTargets(all.data ?? []), [all.data]);
-  const unknown = types.filter((name) => !offered.some((ty) => ty.name === name));
+  // Until the types are loaded nothing is known to be gone (no false alarm).
+  const unknown = all.data ? types.filter((name) => !offered.some((ty) => ty.name === name)) : [];
   const toggle = (name: string, on: boolean) =>
     onChange(on ? [...types.filter((v) => v !== name), name] : types.filter((v) => v !== name));
   const entries = [

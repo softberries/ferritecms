@@ -1,9 +1,10 @@
 // A `relation` field: a combobox searching `GET /content/{type}?q=` (one request per
 // type, the results grouped by type in the sidebar's order) across the content types the
-// field lists (`FieldDef.types`, P52), or every type the sidebar shows when it lists none,
-// each result with its type and status. The value is the item's UUID. The chosen item is named by id
-// (`GET /content/refs`, any type); one that is gone or unreadable shows
-// "Unknown item <short id>" and keeps the value until another is chosen or it is cleared.
+// field lists (`FieldDef.types`, P52; the search field names them), or every type the
+// sidebar shows when it lists none, each result with its type and status. The value is
+// the item's UUID. The chosen item is named by id (`GET /content/refs`, any type); one
+// that is gone or unreadable shows "Unknown item <short id>" and keeps the value until
+// another is chosen or it is cleared.
 
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronsUpDownIcon, LinkIcon } from "lucide-react";
@@ -30,6 +31,7 @@ import {
 } from "@/content/find-item";
 import type { ControlIds } from "./fields-context";
 import { searchTypes } from "./fields-model";
+import { uiLocale } from "@/lib/locale";
 import { uuidOf } from "@/lib/values";
 
 /** How long the search waits after the last keystroke. */
@@ -54,6 +56,8 @@ export function RelationField({
   const { t } = useTranslation("editor");
   const nav = useNavContentTypes();
   const types = useMemo(() => searchTypes(nav, targets), [nav, targets]);
+  // Limited to some types: the search field names them.
+  const limited = (targets?.length ?? 0) > 0 && types.length > 0;
   const typeLabel = useTypeLabel();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -138,7 +142,15 @@ export function RelationField({
             <CommandInput
               value={search}
               onValueChange={setSearch}
-              placeholder={t("fields.relationSearch")}
+              placeholder={
+                limited
+                  ? t("fields.relationSearchIn", {
+                      types: new Intl.ListFormat(uiLocale(), { type: "disjunction" }).format(
+                        types.map((ty) => ty.label),
+                      ),
+                    })
+                  : t("fields.relationSearch")
+              }
             />
             <CommandList>
               <CommandEmpty>

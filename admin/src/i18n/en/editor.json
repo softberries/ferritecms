@@ -520,7 +520,8 @@
     "staleAfter": ", removed when you save",
     "staleHint": "The value stays stored until this item is saved.",
     "blocked": "Not saved: check the highlighted fields.",
-    "rowLabelNamed": "{{label}}, row {{n}}: {{preview}}"
+    "rowLabelNamed": "{{label}}, row {{n}}: {{preview}}",
+    "relationSearchIn": "Search {{types}}…"
   },
   "featured": {
     "heading": "Featured image",

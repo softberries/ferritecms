@@ -286,14 +286,19 @@ test("removing_a_field_warns_and_items_still_save", async ({
     await expect(dialog).toContainText(
       "existing values stay stored until each item is saved, and are then removed",
     );
-    // The last chip is whole: the list's scroller does not clip its border (M2b-2 minor).
+    // The last chip is whole: its bottom lies inside the list's scrollable content (an
+    // overflowing list scrolls to it), so no edge is clipped (M2b-2 minor).
     const clipped = await dialog
       .locator("code")
       .last()
       .evaluate((chip) => {
         const scroller = chip.closest("section")?.parentElement;
         if (!scroller) return null;
-        return chip.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom;
+        const bottom =
+          chip.getBoundingClientRect().bottom -
+          scroller.getBoundingClientRect().top +
+          scroller.scrollTop;
+        return bottom - scroller.scrollHeight;
       });
     expect(clipped).not.toBeNull();
     expect(clipped as number).toBeLessThanOrEqual(0);
@@ -372,7 +377,8 @@ test("relation_limited_to_types", async ({ as, site, backend, snap, expectAccess
     const trigger = page.locator("[data-slot=relation-trigger]");
     await trigger.click();
     const answered = page.waitForResponse((r) => new URL(r.url()).searchParams.get("q") === token);
-    await page.getByPlaceholder("Search posts, pages and more…").fill(token);
+    // The search names the one type it covers.
+    await page.getByPlaceholder("Search Pages…").fill(token);
     await answered;
     const option = page.getByRole("option", { name: new RegExp(target.title) });
     await expect(option).toBeVisible();
@@ -471,8 +477,11 @@ test("delete_type_with_content_is_refused_with_reason", async ({
     // A built-in type: the confirm says it cannot be deleted and offers only Close.
     await openType(page, "post");
     await danger.getByRole("button", { name: "Delete type" }).click();
+    await expect(confirm).toContainText("Posts cannot be deleted");
     await expect(confirm).toContainText("Built-in types cannot be deleted.");
     await expect(confirm.getByRole("button", { name: "Delete type" })).toHaveCount(0);
+    await snap(page, "types-delete-built-in", { fullPage: false });
+    await expectAccessible(page);
     await confirm.getByRole("button", { name: "Close" }).click();
     await expect(confirm).toHaveCount(0);
     expect((await api.ctx.get("/api/v1/types/post")).status()).toBe(200);

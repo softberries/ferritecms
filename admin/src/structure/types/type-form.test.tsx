@@ -125,7 +125,7 @@ describe("type form", () => {
     await mount(dto);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Delete type" }));
-    const dialog = await screen.findByRole("alertdialog");
+    const dialog = await screen.findByRole("alertdialog", { name: "Posts cannot be deleted" });
     expect(dialog).toHaveTextContent("Built-in types cannot be deleted.");
     expect(dialog).not.toHaveTextContent("removed for good");
     expect(within(dialog).queryByRole("button", { name: "Delete type" })).toBeNull();
@@ -194,5 +194,20 @@ describe("type form", () => {
       expect(within(row("related")).getByText('type "page" is not a content type')).toBeVisible(),
     );
     expect(document.querySelector("[data-slot=save-failure]")).toBeNull();
+  });
+
+  test("stored_targets_are_not_flagged_before_the_types_load", async () => {
+    // Review minor: while the content types load, no stored target reads as gone.
+    const dto = typeOf("book", [def("related", "relation", { types: ["page"] })]);
+    stubRoutes({
+      "/api/v1/types": () => new Promise<Response>(() => undefined),
+      [`/api/v1/types/${dto.name}`]: () => json(dto),
+    });
+    await mount(dto);
+    const user = userEvent.setup();
+    await openRow(user, "related");
+    const targets = await within(row("related")).findByRole("group", { name: "Can point at" });
+    expect(targets).not.toHaveTextContent("not a content type");
+    expect(within(targets).queryAllByRole("checkbox")).toHaveLength(0);
   });
 });

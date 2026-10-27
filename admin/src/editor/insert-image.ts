@@ -2,9 +2,9 @@
 // the editor bar's button open the media picker (images only) and insert
 // `image { src: "ferrite:media/<id>", alt: <the item's alt text>, title: null }`, which
 // the site renders with a `srcset` of the original and its variants of the same shape
-// (06 §4; a plain original for SVG or an image not measured yet). Image files dropped on the body upload through a queue like the library's
-// (at most 3 at once, one `Idempotency-Key` per file) that lives with the route
-// (`body-uploads.ts`); each shows a placeholder where it was dropped, which follows the
+// (06 §4; a plain original for SVG or an image not measured yet). Image files dropped on
+// the body upload through a queue like the library's (at most 3 at once, one
+// `Idempotency-Key` per file) that lives with the route (`body-uploads.ts`); each shows a placeholder where it was dropped, which follows the
 // edits made meanwhile, and becomes the image when its upload is done, without moving
 // the caret or the focus. A screen that remounts while uploads run shows them again (at
 // the same place after a new item's first save, else at the end of the body). A failed

@@ -221,4 +221,39 @@ describe("fields_form_test", () => {
     await userEvent.setup().type(price, "4");
     expect(price).not.toHaveAttribute("aria-invalid");
   });
+
+  test("a_relation_of_the_wrong_type_is_shown_at_its_field", async () => {
+    // P52: core refuses a value whose item is of a type the field does not list, at the
+    // value's path (`invalid_key`); the relation's trigger says why.
+    const defs = [def("related", "relation", { types: ["page"] })];
+    const POST_ID = "0190f1c0-0000-7000-8000-0000000000dd";
+    const detail = 'fields.related: must be an item of type "page"';
+    const problem = {
+      type: "https://ferrite.dev/problems/validation",
+      title: "Validation failed",
+      status: 422,
+      detail,
+      errors: [{ field: "fields.related", detail }],
+    };
+    routes(
+      () =>
+        new Response(JSON.stringify(problem), {
+          status: 422,
+          headers: { "Content-Type": "application/problem+json" },
+        }),
+    );
+    renderWithRouter(<Harness start={item({ related: POST_ID })} defs={defs} />);
+    await waitFor(() => expect(doc).not.toBeNull());
+    act(() => d().setTitle("Edited"));
+    await act(async () => {
+      await d().save();
+    });
+    const trigger = await waitFor(() => {
+      const el = document.querySelector("[data-slot=relation-trigger]");
+      if (!el) throw new Error("no relation trigger");
+      return el;
+    });
+    await waitFor(() => expect(trigger).toHaveAttribute("aria-invalid", "true"));
+    expect(trigger).toHaveAccessibleDescription(/must be an item of type "page"/i);
+  });
 });

@@ -79,6 +79,8 @@ export interface Autosaver {
   hold(): Promise<() => void>;
   /** Stops for good: no timer, no listener, no further write. */
   dispose(): void;
+  /** Whether `dispose` ran (a lost session, the screen gone). */
+  disposed(): boolean;
   state: Observable<AutosaveState>;
   /** When the slot last took a draft (ms since the epoch), else `null`. */
   savedAt(): number | null;
@@ -218,6 +220,7 @@ export function createAutosaver(opts: AutosaverOptions): Autosaver {
       win?.removeEventListener("online", onOnline);
       doc?.removeEventListener("visibilitychange", onVisibility);
     },
+    disposed: () => disposed,
     state,
     savedAt: () => lastSaved,
   };

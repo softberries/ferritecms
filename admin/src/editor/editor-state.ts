@@ -832,7 +832,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   const clearing = useRef(false);
   const clearSlot = useCallback(() => {
     const a = autosaver.current;
-    if (!a) return;
+    if (!a || a.disposed()) return;
     // A write running now may be about to put an older draft in the slot: it is waited
     // for below, like one that already landed.
     const writing = a.state.get() === "saving";
@@ -842,7 +842,8 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     void (async () => {
       const release = await a.hold();
       try {
-        if (slotHolds.current && !isDirtyNow()) {
+        // Stopped meanwhile (the waited write met a lost session): no further request.
+        if (!a.disposed() && slotHolds.current && !isDirtyNow()) {
           await deleteAutosave(type, itemId);
           slotHolds.current = false;
         }

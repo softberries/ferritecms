@@ -439,7 +439,11 @@ export function TypeForm({ initial }: { initial: ContentTypeDto }) {
       <AlertDialog open={confirmDelete} onOpenChange={(o) => setConfirmDelete(o)}>
         <AlertDialogContent data-slot="delete-type-dialog">
           <AlertDialogHeader>
-            <AlertDialogTitle>{t("delete.confirmTitle", { label: base.label })}</AlertDialogTitle>
+            <AlertDialogTitle>
+              {base.built_in
+                ? t("delete.builtInTitle", { label: base.label })
+                : t("delete.confirmTitle", { label: base.label })}
+            </AlertDialogTitle>
             <AlertDialogDescription>
               {base.built_in ? t("delete.builtIn") : t("delete.confirmBody", { name: base.name })}
             </AlertDialogDescription>
