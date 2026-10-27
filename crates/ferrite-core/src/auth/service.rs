@@ -46,6 +46,7 @@ use crate::{
     actor::{Area, Capability, Scope, can, require, require_scope},
     normalize_email, normalize_login,
     tx::finish,
+    users::PasswordCheck,
 };
 
 /// The service's clock.
@@ -545,7 +546,8 @@ impl AuthService {
         self.issue_session(&user, ip, user_agent).await.map(Some)
     }
 
-    /// A request's [`UserService::update`]: when the actor changes their own e-mail to a
+    /// A request's [`UserService::update`], and the only way to change one's own e-mail
+    /// (the password-verifying path): when the actor changes their own e-mail to a
     /// different address with a `current_password`, the check first counts on the
     /// login's `login:user` bucket (5/min, shared with `POST /auth/password`; exceeded →
     /// `RateLimited`, R11, M2b-3 P44). Refusals that need no password check (no
@@ -573,7 +575,9 @@ impl AuthService {
                 self.password_attempt(&row.login).await?;
             }
         }
-        users.update(actor, id, patch).await
+        users
+            .update_as(actor, id, patch, PasswordCheck::Verify)
+            .await
     }
 
     // ---- Sessions (M2b-3 P45) --------------------------------------------------------
@@ -642,7 +646,8 @@ impl AuthService {
     }
 
     /// Ends every session of the actor except `current` (`users:write`) and returns how
-    /// many ended; audits `session.revoke` with `details.count`.
+    /// many ended; audits `session.revoke` with `details.count` when any did (none ended:
+    /// no audit row).
     pub async fn revoke_other_sessions(
         &self,
         actor: &Actor,
@@ -655,8 +660,10 @@ impl AuthService {
                 .sessions()
                 .delete_for_user(actor.user, Some(&current.id_hash))
                 .await?;
-            let details = json!({ "count": count });
-            user_audit(tx.as_ref(), actor, "session.revoke", actor.user, details).await?;
+            if count > 0 {
+                let details = json!({ "count": count });
+                user_audit(tx.as_ref(), actor, "session.revoke", actor.user, details).await?;
+            }
             Ok(count)
         }
         .await;

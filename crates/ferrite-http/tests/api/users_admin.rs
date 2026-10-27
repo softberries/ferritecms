@@ -190,6 +190,20 @@ async fn own_email_change_needs_password(api: Api) -> Api {
         .await
         .assert_problem(422, "validation");
     assert_eq!(p["errors"][0]["field"], "current_password");
+    // A change of case only is a change; a display name sent with it is not saved.
+    for body in [
+        json!({"email": "ANN@example.com"}),
+        json!({"email": "new@example.com", "display_name": "X"}),
+    ] {
+        let p = c
+            .send(&api, Method::PATCH, &me, Some(&body), None)
+            .await
+            .assert_problem(422, "validation");
+        assert_eq!(p["errors"][0]["field"], "current_password", "{body}");
+    }
+    let r = c.get(&api, &me).await.json();
+    assert_eq!(r["email"], "ann@example.com");
+    assert_eq!(r["display_name"], "ann");
     // The current e-mail and a display name need no password.
     let r = c
         .send(

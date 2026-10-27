@@ -84,6 +84,14 @@ pub struct UserPatch {
     pub current_password: Option<Secret>,
 }
 
+/// Whether [`UserService::update_as`] verifies the current password of an own e-mail
+/// change (only `AuthService::update_user`, behind the rate limit) or refuses it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PasswordCheck {
+    Refuse,
+    Verify,
+}
+
 /// Manages user accounts. Methods taking an [`Actor`] check capabilities and scopes;
 /// [`operator`](Self::operator) is the system path for the CLI.
 pub struct UserService {
@@ -140,18 +148,35 @@ impl UserService {
     /// self-patch carrying the current role or status ignores it (admin forms send whole
     /// objects), a different value is `Invalid`.
     ///
-    /// Changing one's **own** e-mail to a different address needs `current_password`
-    /// (M2b-3 P44): missing is `InvalidField` `current_password`, wrong is
-    /// `Forbidden("current password")`. The check runs before the `Tx` (argon2); inside
-    /// it a changed password hash is `Forbidden` and an e-mail that differs only now
-    /// still needs the password. A request goes through
-    /// [`AuthService::update_user`](crate::AuthService::update_user), which rate limits
-    /// the check first (R11).
+    /// Changing one's **own** e-mail to a different address needs the current password
+    /// (M2b-3 P44), which this method never checks: such a change is
+    /// `InvalidField` `current_password` here whatever `patch.current_password` holds.
+    /// Requests change their own e-mail through
+    /// [`AuthService::update_user`](crate::AuthService::update_user), the only caller
+    /// of the verifying path, which counts the check on the per-login rate limit first
+    /// (R11). So no caller outside core can run an unlimited password check.
     pub async fn update(
         &self,
         actor: &Actor,
         id: UserId,
         patch: UserPatch,
+    ) -> Result<User, CoreError> {
+        self.update_as(actor, id, patch, PasswordCheck::Refuse)
+            .await
+    }
+
+    /// [`update`](Self::update), with `check` deciding what an own e-mail change does.
+    /// [`PasswordCheck::Verify`] verifies `patch.current_password` (missing:
+    /// `InvalidField` `current_password`; wrong: `Forbidden("current password")`) before
+    /// the `Tx` (argon2); inside it a changed password hash is `Forbidden` and an e-mail
+    /// that differs only now still needs the password. Crate-private: only
+    /// `AuthService::update_user` passes `Verify`, after hitting the rate limit.
+    pub(crate) async fn update_as(
+        &self,
+        actor: &Actor,
+        id: UserId,
+        patch: UserPatch,
+        check: PasswordCheck,
     ) -> Result<User, CoreError> {
         let is_self = id == actor.user;
         if is_self {
@@ -178,6 +203,11 @@ impl UserService {
                     .ok_or(CoreError::NotFound)?;
                 if *email == row.email {
                     None
+                } else if check == PasswordCheck::Refuse {
+                    return Err(CoreError::invalid_field(
+                        "current_password",
+                        PASSWORD_NEEDED,
+                    ));
                 } else {
                     let current = patch.current_password.as_ref().ok_or_else(|| {
                         CoreError::invalid_field("current_password", PASSWORD_NEEDED)

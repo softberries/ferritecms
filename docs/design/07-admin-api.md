@@ -529,7 +529,7 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   column, no migration): it names a session to its owner without revealing the stored key
   or the cookie. No user agent or address is shown, so sessions are told apart by time.
   Both revocations are audited `session.revoke` (target the user; `details.session` = the
-  id, or `details.count`).
+  id, or `details.count`; a revoke-others that ended none writes no row).
 - **CSRF and origin** (P8): a cookie-authenticated request with a method other than GET or
   HEAD needs `X-CSRF-Token` = base64url(HMAC-SHA256(session `csrf_secret`,
   `"ferrite-csrf:v1:" + id_hash`)) and an `Origin` equal to the `site.url` origin (without

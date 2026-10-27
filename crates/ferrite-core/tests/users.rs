@@ -6,8 +6,11 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use ferrite_core::{
-    Actor, CoreError, NewAccount, UserPatch, UserService,
-    auth::password::{self, Verified},
+    Actor, AuthService, CoreError, NewAccount, UserPatch, UserService,
+    auth::{
+        SiteKey,
+        password::{self, Verified},
+    },
     events::user_key,
 };
 use ferrite_domain::{
@@ -37,6 +40,10 @@ fn page(limit: u32) -> UserQuery {
         limit,
         ..UserQuery::default()
     }
+}
+
+fn auth_service(db: &TestDb) -> AuthService {
+    AuthService::new(db.shared_store(), SiteKey::generate().unwrap())
 }
 
 fn service(db: &TestDb) -> UserService {
@@ -210,8 +217,10 @@ async fn login_and_email_validation(db: &TestDb) {
     b.password = Some(PASSWORD.into());
     let bob = users.create(&admin, b).await.unwrap();
     let bob_actor = Actor::new(bob.id, bob.role);
-    let r = users
-        .update(
+    let auth = auth_service(db);
+    let r = auth
+        .update_user(
+            &users,
             &bob_actor,
             bob.id,
             UserPatch {
@@ -222,8 +231,9 @@ async fn login_and_email_validation(db: &TestDb) {
         )
         .await;
     assert_eq!(invalid(r), "e-mail taken");
-    let bob = users
-        .update(
+    let bob = auth
+        .update_user(
+            &users,
             &bob_actor,
             bob.id,
             UserPatch {
@@ -924,6 +934,7 @@ async fn disable_totp_for_other_user(db: &TestDb) {
 async fn own_email_change_needs_password(db: &TestDb) {
     let store = db.store();
     let users = service(db);
+    let auth = auth_service(db);
     let (_, admin) = bootstrap_admin(&users, "root").await;
     let mut a = account("ann", Role::Author);
     a.password = Some(PASSWORD.into());
@@ -934,29 +945,48 @@ async fn own_email_change_needs_password(db: &TestDb) {
         current_password: pw.map(Secret::from),
         ..UserPatch::default()
     };
-
-    // Missing: 422 on `current_password`; wrong: Forbidden. Nothing changes.
-    match users
-        .update(&me, ann.id, email("new@example.com", None))
-        .await
-    {
+    let needs_password = |r: Result<User, CoreError>| match r {
         Err(CoreError::InvalidField {
             field: "current_password",
             ..
         }) => {}
         other => panic!("expected InvalidField current_password, got {other:?}"),
-    }
-    assert!(matches!(
-        users
-            .update(
-                &me,
-                ann.id,
-                email("new@example.com", Some("wrong password!"))
-            )
+    };
+
+    // Missing: 422 on `current_password`, also for a change of case only, and nothing
+    // else in the patch is saved; wrong: Forbidden.
+    needs_password(
+        auth.update_user(&users, &me, ann.id, email("new@example.com", None))
             .await,
+    );
+    needs_password(
+        auth.update_user(&users, &me, ann.id, email("ANN@example.com", None))
+            .await,
+    );
+    let mut with_name = email("new@example.com", None);
+    with_name.display_name = Some("X".into());
+    needs_password(auth.update_user(&users, &me, ann.id, with_name).await);
+    assert!(matches!(
+        auth.update_user(
+            &users,
+            &me,
+            ann.id,
+            email("new@example.com", Some("wrong password!"))
+        )
+        .await,
         Err(CoreError::Forbidden("current password"))
     ));
-    assert_eq!(stored(store, ann.id).await.email, "ann@example.com");
+    let row = stored(store, ann.id).await;
+    assert_eq!(row.email, "ann@example.com");
+    assert_eq!(row.display_name, "User ann");
+
+    // `UserService::update` never verifies a password (no rate limit there): an own
+    // e-mail change through it is refused even with the right one.
+    needs_password(
+        users
+            .update(&me, ann.id, email("new@example.com", Some(PASSWORD)))
+            .await,
+    );
 
     // The same e-mail (after trimming) changes nothing and needs no password; neither
     // does a display-name change.
@@ -978,8 +1008,13 @@ async fn own_email_change_needs_password(db: &TestDb) {
         .unwrap();
     assert_eq!(renamed.display_name, "Ann B");
 
-    let changed = users
-        .update(&me, ann.id, email("new@example.com", Some(PASSWORD)))
+    let changed = auth
+        .update_user(
+            &users,
+            &me,
+            ann.id,
+            email("new@example.com", Some(PASSWORD)),
+        )
         .await
         .unwrap();
     assert_eq!(changed.email, "new@example.com");

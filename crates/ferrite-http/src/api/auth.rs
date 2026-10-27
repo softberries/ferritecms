@@ -692,7 +692,7 @@ pub async fn revoke_session(
     operation_id = "revoke_other_sessions",
     security(("session" = [])),
     responses(
-        (status = 200, description = "Every other session of the user ended; this one is kept. Audited `session.revoke` with `details.count`", body = SessionsRevoked),
+        (status = 200, description = "Every other session of the user ended; this one is kept. Audited `session.revoke` with `details.count` (none ended: no audit row)", body = SessionsRevoked),
         (status = 400, description = "`bad-request`: the request used a bearer token", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),

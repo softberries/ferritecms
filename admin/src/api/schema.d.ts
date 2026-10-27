@@ -3413,7 +3413,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every other session of the user ended; this one is kept. Audited `session.revoke` with `details.count` */
+            /** @description Every other session of the user ended; this one is kept. Audited `session.revoke` with `details.count` (none ended: no audit row) */
             200: {
                 headers: {
                     [name: string]: unknown;

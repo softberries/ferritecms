@@ -122,7 +122,7 @@ async fn sessions_list_and_revoke(api: Api) -> Api {
     assert_eq!(r.json(), json!({"revoked": 0}));
     assert_eq!(bens.get(&api, ME).await.status, StatusCode::OK);
 
-    // Audited as `session.revoke`.
+    // Audited as `session.revoke`; the revoke-others that ended none wrote no row.
     let ada = api.user("ada", Role::Admin, false).await;
     let admin = api.bearer(&ada, &["*"]).await;
     let audit = admin.get(&api, "/api/v1/system/audit").await.json();
@@ -132,9 +132,10 @@ async fn sessions_list_and_revoke(api: Api) -> Api {
         .iter()
         .filter(|e| e["action"] == "session.revoke")
         .collect();
-    assert_eq!(rows.len(), 3, "{audit}");
+    assert_eq!(rows.len(), 2, "{audit}");
     assert!(rows.iter().all(|e| e["actor"]["login"] == "ann"));
     assert!(rows.iter().any(|e| e["details"] == json!({"count": 2})));
+    assert!(!rows.iter().any(|e| e["details"] == json!({"count": 0})));
     assert!(
         rows.iter()
             .any(|e| e["details"] == json!({"session": second_id}))

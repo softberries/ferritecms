@@ -449,7 +449,7 @@
         "operationId": "revoke_other_sessions",
         "responses": {
           "200": {
-            "description": "Every other session of the user ended; this one is kept. Audited `session.revoke` with `details.count`",
+            "description": "Every other session of the user ended; this one is kept. Audited `session.revoke` with `details.count` (none ended: no audit row)",
             "content": {
               "application/json": {
                 "schema": {
