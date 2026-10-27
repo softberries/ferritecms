@@ -31,7 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { FormField } from "@/structure/types/form-field";
+import { FormField } from "@/components/kit/form-field";
 import {
   EXPIRY_CHOICES,
   type Expiry,
@@ -55,15 +55,33 @@ export interface TokenDialogProps {
 }
 
 export function TokenDialog({ open, onOpenChange, userId, held, onCreated }: TokenDialogProps) {
+  // While the value is shown, Escape and a click outside do not close the dialog (it
+  // would be lost unread); Done and × do.
+  const [holding, setHolding] = useState(false);
+  const change = (next: boolean) => {
+    if (!next) setHolding(false);
+    onOpenChange(next);
+  };
+  const keep = (e: Event) => {
+    if (holding) e.preventDefault();
+  };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-slot="token-dialog" className="sm:max-w-xl">
+    <Dialog open={open} onOpenChange={change}>
+      <DialogContent
+        data-slot="token-dialog"
+        className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-xl"
+        onEscapeKeyDown={keep}
+        onInteractOutside={keep}
+      >
         {/* Mounted only while open: the created value goes with it. */}
         <TokenBody
           userId={userId}
           held={held}
-          onCreated={onCreated}
-          close={() => onOpenChange(false)}
+          onCreated={() => {
+            setHolding(true);
+            onCreated();
+          }}
+          close={() => change(false)}
         />
       </DialogContent>
     </Dialog>
@@ -90,6 +108,7 @@ function TokenBody({ userId, held, onCreated, close }: BodyProps) {
   const [pending, setPending] = useState(false);
   const [created, setCreated] = useState<CreatedTokenDto | null>(null);
   const nameInput = useRef<HTMLInputElement>(null);
+  const grid = useRef<HTMLDivElement>(null);
   const ids = useId();
   const scopesLabelId = `${ids}-scopes`;
   const scopesHintId = `${ids}-scopes-hint`;
@@ -119,7 +138,7 @@ function TokenBody({ userId, held, onCreated, close }: BodyProps) {
       return;
     }
     if (badScopes) {
-      document.querySelector<HTMLInputElement>(`[data-scope-grid="${ids}"] input`)?.focus();
+      grid.current?.querySelector("input")?.focus();
       return;
     }
     setFailure(null);
@@ -199,27 +218,45 @@ function TokenBody({ userId, held, onCreated, close }: BodyProps) {
           {serverError}
         </p>
       ) : null}
-      <FormField
-        label={t("account.tokenDialog.name")}
-        hint={t("account.tokenDialog.nameHint")}
-        error={nameError ?? undefined}
-      >
-        {(control) => (
-          <Input
-            {...control}
-            ref={nameInput}
-            value={name}
-            autoComplete="off"
-            maxLength={MAX_TOKEN_NAME + 20}
-            disabled={pending}
-            autoFocus
-            onChange={(e) => {
-              setName(e.currentTarget.value);
-              setNameError(null);
-            }}
-          />
-        )}
-      </FormField>
+      <div className="grid items-start gap-5 sm:grid-cols-[minmax(0,1fr)_12rem]">
+        <FormField
+          label={t("account.tokenDialog.name")}
+          hint={t("account.tokenDialog.nameHint")}
+          error={nameError ?? undefined}
+        >
+          {(control) => (
+            <Input
+              {...control}
+              ref={nameInput}
+              value={name}
+              autoComplete="off"
+              maxLength={MAX_TOKEN_NAME + 20}
+              disabled={pending}
+              autoFocus
+              onChange={(e) => {
+                setName(e.currentTarget.value);
+                setNameError(null);
+              }}
+            />
+          )}
+        </FormField>
+        <FormField label={t("account.tokenDialog.expires")}>
+          {(control) => (
+            <Select value={expiry} onValueChange={(v) => setExpiry(v as Expiry)} disabled={pending}>
+              <SelectTrigger {...control} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {EXPIRY_CHOICES.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {t(`account.tokenDialog.expiry.${c}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </FormField>
+      </div>
 
       <div className="flex min-w-0 flex-col gap-2">
         <div className="flex items-end justify-between gap-3">
@@ -244,9 +281,9 @@ function TokenBody({ userId, held, onCreated, close }: BodyProps) {
           role="group"
           aria-labelledby={scopesLabelId}
           aria-describedby={scopesError ? `${scopesHintId} ${scopesErrorId}` : scopesHintId}
-          data-scope-grid={ids}
+          ref={grid}
           className={cn(
-            "max-h-[min(22rem,40svh)] divide-y overflow-y-auto rounded-lg border",
+            "max-h-[40svh] divide-y overflow-y-auto rounded-lg border sm:max-h-[60svh]",
             scopesError && "border-destructive",
           )}
         >
@@ -271,23 +308,6 @@ function TokenBody({ userId, held, onCreated, close }: BodyProps) {
           </p>
         ) : null}
       </div>
-
-      <FormField label={t("account.tokenDialog.expires")} className="sm:max-w-56">
-        {(control) => (
-          <Select value={expiry} onValueChange={(v) => setExpiry(v as Expiry)} disabled={pending}>
-            <SelectTrigger {...control} className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {EXPIRY_CHOICES.map((c) => (
-                <SelectItem key={c} value={c}>
-                  {t(`account.tokenDialog.expiry.${c}`)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-      </FormField>
 
       <DialogFooter>
         <Button type="button" variant="outline" onClick={close}>

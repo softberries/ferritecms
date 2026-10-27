@@ -30,11 +30,12 @@ test("current_session_has_no_sign_out", async () => {
   const list = await screen.findByRole("list", { name: "Sessions" });
   const rows = within(list).getAllByRole("listitem");
   expect(rows).toHaveLength(3);
-  const current = rows.find((r) => r.textContent?.includes("This session"));
-  expect(current).toBeDefined();
-  expect(within(current as HTMLElement).queryByRole("button")).toBeNull();
+  // This session is pinned first, whatever the server's order, and has no Sign out.
+  const current = rows[0] as HTMLElement;
+  expect(current).toHaveTextContent("This session");
+  expect(within(current).queryByRole("button")).toBeNull();
 
-  await userEvent.click(within(rows[0] as HTMLElement).getByRole("button", { name: /Sign out/ }));
+  await userEvent.click(within(rows[1] as HTMLElement).getByRole("button", { name: /Sign out/ }));
   await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(2));
   await userEvent.click(screen.getByRole("button", { name: "Sign out all other sessions" }));
   await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(1));

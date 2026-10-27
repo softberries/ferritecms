@@ -275,6 +275,10 @@ test("token_value_is_shown_once", async ({ browser, site, backend, guard }) => {
 
   // Held only by the dialog: not in the address, history, storage or either cache.
   expect(await keptState(page)).not.toContain(value);
+  // Escape and a click outside do not lose it unread; Done closes.
+  await page.keyboard.press("Escape");
+  await page.mouse.click(5, 5);
+  await expect(created.getByLabel("Token")).toHaveValue(value);
   await created.getByRole("button", { name: "Done" }).click();
   await expect(created).toBeHidden();
   expect(await page.content()).not.toContain(value);
@@ -307,7 +311,8 @@ test("totp_secret_not_kept", async ({ browser, site, backend, guard }) => {
   const dialog = page.getByRole("dialog", { name: "Set up two-factor authentication" });
   // Shown in the dialog only: not in the address, history, storage or either cache.
   const kept = await keptState(page);
-  expect(kept).toContain('"queries"');
+  // The caches were read: they hold this user's own data.
+  expect(kept).toContain(user.login);
   expect(kept).not.toContain(secret);
   expect(kept).not.toContain("otpauth");
 

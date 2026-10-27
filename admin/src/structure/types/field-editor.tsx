@@ -31,7 +31,7 @@ import {
   validName,
 } from "./builder-model";
 import { FieldBuilder } from "./field-builder";
-import { FormField, SwitchRow } from "./form-field";
+import { FormField, SwitchRow } from "@/components/kit/form-field";
 import { KIND_ICONS } from "./kinds";
 
 export interface FieldEditorProps {

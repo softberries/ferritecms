@@ -47,7 +47,7 @@ import {
   toSchema,
 } from "./builder-model";
 import { FieldBuilder } from "./field-builder";
-import { FormField, SwitchRow } from "./form-field";
+import { FormField, SwitchRow } from "@/components/kit/form-field";
 import { type SchemaChange, describeChange, isEmptyChange } from "./schema-change";
 import { MAX_TYPE_LABEL, labelProblem } from "./type-rules";
 import { DESTRUCTIVE } from "@/lib/destructive";

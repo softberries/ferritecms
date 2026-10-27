@@ -18,7 +18,7 @@ import { RelativeTime } from "@/components/kit/relative-time";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { FormField } from "@/structure/types/form-field";
+import { FormField } from "@/components/kit/form-field";
 import { fieldErrorsOf, isWrongPassword, withoutKey, writeFailure } from "./account-model";
 
 /** Core's limit on a display name, in characters. */

@@ -476,8 +476,9 @@ function DisableBody({
         setError(t("account.wrongPassword"));
         input.current?.focus();
       } else if (err instanceof ApiError && err.status === 422) {
-        // Already off (another tab): show it as it is.
+        // Already off (another tab): say so and show it as it is.
         changed();
+        toast.info(t("account.totp.alreadyOff"));
         close();
       } else {
         setFailure(writeFailure(err));

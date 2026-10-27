@@ -53,7 +53,7 @@ import { useShortcut } from "@/lib/shortcuts";
 import { stableEqual, staleGuard } from "@/lib/stale-guard";
 import { problemText } from "../taxonomies/terms-model";
 import { DESTRUCTIVE } from "@/lib/destructive";
-import { FormField } from "../types/form-field";
+import { FormField } from "@/components/kit/form-field";
 import { AddItems } from "./add-items";
 import {
   MAX_MENU_ITEMS,

@@ -50,7 +50,7 @@ import {
 } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { staleGuard } from "@/lib/stale-guard";
-import { FormField } from "../types/form-field";
+import { FormField } from "@/components/kit/form-field";
 import { returnToRowMenu } from "./row-focus";
 import { childCount, parentChoices, problemText } from "./terms-model";
 import { DESTRUCTIVE } from "@/lib/destructive";

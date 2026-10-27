@@ -47,6 +47,8 @@ export function TokensCard({ me }: { me: MeDto }) {
   const [revoking, setRevoking] = useState<TokenDto | null>(null);
   const refresh = () => void queryClient.invalidateQueries({ queryKey: qk.tokens(me.id) });
   const tokens = list.data ?? [];
+  // At the server's limit New token is off (a `422` would refuse it anyway).
+  const full = tokens.length >= MAX_TOKENS;
 
   return (
     <Card className="gap-0 py-0">
@@ -54,10 +56,20 @@ export function TokensCard({ me }: { me: MeDto }) {
         <span className="text-sm text-muted-foreground tabular-nums">
           {list.data ? t("account.tokens.count", { count: tokens.length, max: MAX_TOKENS }) : " "}
         </span>
-        <Button variant="outline" onClick={() => setCreating(true)}>
+        <Button
+          variant="outline"
+          disabled={full}
+          aria-describedby={full ? "tokens-full" : undefined}
+          onClick={() => setCreating(true)}
+        >
           <PlusIcon data-icon="inline-start" />
           {t("account.tokens.new")}
         </Button>
+        {full ? (
+          <p id="tokens-full" className="w-full text-sm text-muted-foreground">
+            {t("account.tokens.full", { max: MAX_TOKENS })}
+          </p>
+        ) : null}
       </div>
       {list.isError && !list.data ? (
         <ErrorState error={list.error} retry={() => void list.refetch()} className="py-8" />
@@ -140,14 +152,18 @@ function TokenRow({ token, onRevoke }: { token: TokenDto; onRevoke: () => void }
           {/* Below `md` the scopes column is hidden: the chips go under the name. */}
           <ScopeChips scopes={token.scopes} className="md:hidden" />
           {/* Below `sm` the date columns are hidden too. */}
-          <span className="text-xs text-muted-foreground sm:hidden">
-            {token.last_used_at ? (
-              <RelativeTime at={token.last_used_at} />
-            ) : (
-              t("account.tokens.neverUsed")
-            )}
-            {" · "}
-            <Expiry token={token} labelled />
+          <span className="flex flex-wrap gap-x-1 text-xs text-muted-foreground sm:hidden">
+            <span className="whitespace-nowrap">
+              {token.last_used_at ? (
+                <RelativeTime at={token.last_used_at} />
+              ) : (
+                t("account.tokens.neverUsed")
+              )}
+            </span>
+            <span aria-hidden="true">·</span>
+            <span className="whitespace-nowrap">
+              <Expiry token={token} labelled />
+            </span>
           </span>
         </div>
       </TableCell>

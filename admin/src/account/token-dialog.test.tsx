@@ -73,6 +73,41 @@ test("token_scopes_offer_only_held_scopes", async () => {
   expect(seen).toHaveLength(1);
 });
 
+test("token_created_view_closes_only_by_done", async () => {
+  stubRoutes({
+    [`/api/v1/users/${ME.id}/tokens`]: () =>
+      json(
+        {
+          id: "22222222-2222-4222-8222-222222222222",
+          name: "x",
+          scopes: ["content:read"],
+          created_at: "2026-10-27T10:00:00Z",
+          token: "fer_only_once",
+        },
+        201,
+      ),
+  });
+  const onOpenChange = vi.fn();
+  renderWithRouter(
+    <TokenDialog
+      open
+      onOpenChange={onOpenChange}
+      userId={ME.id}
+      held={["content:read"]}
+      onCreated={() => {}}
+    />,
+  );
+  await userEvent.type(await screen.findByLabelText("Name"), "x");
+  await userEvent.click(screen.getByRole("radio", { name: "Read" }));
+  await userEvent.click(screen.getByRole("button", { name: "Create token" }));
+  expect(await screen.findByDisplayValue("fer_only_once")).toBeInTheDocument();
+  // Escape does not throw the value away unread.
+  await userEvent.keyboard("{Escape}");
+  expect(onOpenChange).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Done" }));
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+});
+
 test("token_expiry_is_rfc3339_utc", () => {
   const now = Date.UTC(2026, 9, 27, 10, 30, 15, 123);
   expect(expiresAt("never", now)).toBeNull();

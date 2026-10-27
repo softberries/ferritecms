@@ -25,7 +25,8 @@ export function SessionsCard() {
   const queryClient = useQueryClient();
   const list = useQuery(sessionsQuery);
   const [busy, setBusy] = useState<string | null>(null);
-  const sessions = list.data ?? [];
+  // This session first, then the others newest first (the server's order).
+  const sessions = [...(list.data ?? [])].sort((x, y) => Number(y.current) - Number(x.current));
   const others = sessions.filter((s) => !s.current).length;
   const refresh = () => queryClient.invalidateQueries({ queryKey: qk.sessions });
 
@@ -129,10 +130,12 @@ function SessionRow({
         <span className="flex items-center gap-2 text-sm font-medium text-foreground">
           {session.current ? t("account.sessions.current") : t("account.sessions.other")}
         </span>
-        <span className="text-xs text-muted-foreground">
-          <span title={signedIn}>{t("account.sessions.signedIn", { when: signedIn })}</span>
-          {" · "}
-          <span>
+        <span className="flex flex-wrap gap-x-1 text-xs text-muted-foreground">
+          <span title={signedIn} className="whitespace-nowrap">
+            {t("account.sessions.signedIn", { when: signedIn })}
+          </span>
+          <span aria-hidden="true">·</span>
+          <span className="whitespace-nowrap">
             {t("account.sessions.lastSeenPrefix")} <RelativeTime at={session.last_seen_at} />
           </span>
         </span>

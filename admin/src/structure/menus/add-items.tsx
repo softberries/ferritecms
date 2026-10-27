@@ -29,7 +29,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type ContentTarget, contentTargetQuery, useNavContentTypes } from "@/content/find-item";
 import { filterTerms, toTree } from "../taxonomies/terms-model";
-import { FormField } from "../types/form-field";
+import { FormField } from "@/components/kit/form-field";
 import {
   MAX_MENU_ITEMS,
   MAX_MENU_LABEL,

@@ -40,10 +40,8 @@
   "account": {
     "title": "Account",
     "description": "Your profile, how you sign in, API tokens and the sessions signed in as you.",
-    "loadFailed": "Your account could not be loaded.",
     "wrongPassword": "Wrong password.",
     "passwordRequired": "Enter your password.",
-    "notSaved": "Not saved",
     "sections": {
       "profile": {
         "title": "Profile",
@@ -134,7 +132,8 @@
       "disableBody": "Signing in will need only your password. Enter it to confirm.",
       "turningOff": "Turning off…",
       "disabled": "Two-factor authentication is off",
-      "method": "Authenticator app"
+      "method": "Authenticator app",
+      "alreadyOff": "Two-factor authentication was already off."
     },
     "tokens": {
       "count_one": "{{count}} of {{max}} tokens",
@@ -151,7 +150,6 @@
       "never": "Never",
       "neverUsed": "Never used",
       "expired": "Expired",
-      "createdAt": "Created {{when}}",
       "revoke": "Revoke",
       "revokeLabel": "Revoke {{name}}",
       "revokeTitle": "Revoke “{{name}}”?",
@@ -163,9 +161,9 @@
       "cancel": "Cancel",
       "emptyTitle": "No API tokens",
       "emptyBody": "Create one for a script or another program that works with this site.",
-      "loadFailed": "Your tokens could not be loaded.",
       "neverExpires": "Never expires",
-      "expiresPrefix": "Expires"
+      "expiresPrefix": "Expires",
+      "full": "You have {{max}} tokens, the most an account can hold. Revoke one to make a new one."
     },
     "tokenDialog": {
       "title": "New API token",
@@ -227,7 +225,6 @@
       "signedOutOthers_other": "Signed out {{count}} other sessions",
       "failed": "Not signed out",
       "onlyThis": "No other session is signed in as you.",
-      "loadFailed": "Your sessions could not be loaded.",
       "count_one": "{{count}} session signed in",
       "count_other": "{{count}} sessions signed in"
     }

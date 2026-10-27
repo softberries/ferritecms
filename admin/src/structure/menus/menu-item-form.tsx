@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { returnToRowMenu } from "../taxonomies/row-focus";
-import { FormField } from "../types/form-field";
+import { FormField } from "@/components/kit/form-field";
 import {
   MAX_MENU_LABEL,
   MAX_MENU_URL,
