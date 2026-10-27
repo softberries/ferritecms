@@ -642,8 +642,10 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   `enrollment` (valid 10 minutes, nothing stored); `POST /auth/totp/confirm` with the
   enrollment, a code and the current password stores the secret sealed under the site
   key and deletes the user's other sessions in the same `Tx` (R26; the confirming
-  session is kept, through a token every session ends, API tokens are kept); setup while
-  TOTP is on is `422` (disable first). A correct password for an account with TOTP
+  session is kept, through a token every session ends, API tokens are kept); a bad,
+  someone else's or expired enrollment is `422` with `errors[0].field` = `enrollment`, a
+  wrong or replayed code `422` with `field` = `code`, and TOTP already on at confirm a
+  `422` without a field; setup while TOTP is on is `422` (disable first). A correct password for an account with TOTP
   answers `{ "status": "totp_required", "challenge" }` (a sealed blob, valid 5 minutes,
   bound to the current password hash) instead of `{ "status": "session", "user",
   "csrf_token" }`; `POST /auth/login/totp` finishes it. A code's step must be newer than

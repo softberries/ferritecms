@@ -3778,7 +3778,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation`: bad or expired enrollment, wrong code */
+            /** @description `validation`: bad or expired enrollment (`errors[0].field` = `enrollment`), wrong or replayed code (`code`), TOTP already on (no field) */
             422: {
                 headers: {
                     [name: string]: unknown;

@@ -593,6 +593,17 @@ async fn totp_login_flow_over_http(api: Api) -> Api {
         )
         .await;
     r.assert_problem(422, "validation");
+    // Which part was wrong is a field: the code, or the enrollment (bad or expired).
+    assert_eq!(r.json()["errors"][0]["field"], "code", "{r:?}");
+    let r = c
+        .post(
+            &api,
+            "/api/v1/auth/totp/confirm",
+            json!({"enrollment": "v1.not-sealed", "code": "000000", "password": PASSWORD}),
+        )
+        .await;
+    r.assert_problem(422, "validation");
+    assert_eq!(r.json()["errors"][0]["field"], "enrollment", "{r:?}");
     // The right code without the password: a stolen session cannot enroll.
     let r = c
         .post(

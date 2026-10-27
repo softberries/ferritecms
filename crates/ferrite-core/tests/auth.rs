@@ -506,7 +506,7 @@ async fn totp_enroll_login_and_replay(db: &TestDb) {
     assert!(matches!(
         auth.totp_confirm(&actor, None, &setup.enrollment, &wrong, PASSWORD)
             .await,
-        Err(CoreError::Invalid(_))
+        Err(CoreError::InvalidField { field: "code", .. })
     ));
     let other = make_user(db, "oz", Role::Author).await;
     let code = totp.generate(clock.secs()).to_string();
@@ -519,7 +519,10 @@ async fn totp_enroll_login_and_replay(db: &TestDb) {
             PASSWORD
         )
         .await,
-        Err(CoreError::Invalid(_))
+        Err(CoreError::InvalidField {
+            field: "enrollment",
+            ..
+        })
     ));
     // The right code without the account's password does not enable it either.
     assert!(matches!(
@@ -719,7 +722,7 @@ async fn totp_attempts_are_rate_limited(db: &TestDb) {
             matches!(
                 auth.totp_confirm(&ann_actor, None, &setup.enrollment, &wrong, PASSWORD)
                     .await,
-                Err(CoreError::Invalid(_))
+                Err(CoreError::InvalidField { field: "code", .. })
             ),
             "attempt {}",
             i + 1

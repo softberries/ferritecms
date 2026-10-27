@@ -228,13 +228,19 @@ function SetupBody({ close, userId, login }: { close: () => void; userId: string
         setPasswordError(t("account.wrongPassword"));
         passwordInput.current?.focus();
       } else if (error instanceof ApiError && error.status === 422) {
-        // Core says which: the sealed enrolment ran out (10 minutes) or the code is wrong.
-        if (/enrollment/i.test(error.problem.detail ?? "")) {
+        // Core names the part: `enrollment` (bad or ran out after 10 minutes) or `code`
+        // (wrong or replayed); no field means TOTP is on already (another tab).
+        const fields = error.fieldErrors();
+        if (fields.enrollment !== undefined) {
           setExpired(true);
-        } else {
+        } else if (fields.code !== undefined) {
           setCodeError(t("account.totp.codeWrong"));
           setCode("");
           codeInput.current?.focus();
+        } else {
+          changed();
+          toast.info(t("account.totp.alreadyOn"));
+          close();
         }
       } else {
         setFailure(writeFailure(error));

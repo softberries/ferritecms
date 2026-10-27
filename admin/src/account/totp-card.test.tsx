@@ -20,13 +20,14 @@ const ME: MeDto = {
 
 const SECRETS = ["JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP", "KRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLU"];
 
-function problem(status: number, slug: string, detail = ""): Response {
+function problem(status: number, slug: string, detail = "", field?: string): Response {
   return new Response(
     JSON.stringify({
       type: `https://ferritecms.dev/problems/${slug}`,
       title: slug,
       status,
       detail,
+      ...(field ? { errors: [{ field, detail }] } : {}),
     }),
     { status, headers: { "Content-Type": "application/problem+json" } },
   );
@@ -81,7 +82,7 @@ test("totp_dialog_drops_secret_on_close", async () => {
 });
 
 test("totp_confirm_errors_show_inline", async () => {
-  let answer: () => Response = () => problem(422, "validation", "wrong code");
+  let answer: () => Response = () => problem(422, "validation", "wrong code", "code");
   const bodies: unknown[] = [];
   stubRoutes({
     "/api/v1/auth/totp/setup": () =>
@@ -110,4 +111,15 @@ test("totp_confirm_errors_show_inline", async () => {
   await userEvent.type(screen.getByLabelText("Six-digit code"), "654321");
   await userEvent.click(screen.getByRole("button", { name: "Turn on" }));
   expect(await screen.findByText("Wrong password.")).toBeInTheDocument();
+
+  // An enrollment past its 10 minutes (field `enrollment`): Start again, a new set-up.
+  answer = () => problem(422, "validation", "enrollment expired", "enrollment");
+  await userEvent.click(screen.getByRole("button", { name: "Turn on" }));
+  expect(await screen.findByText(/This set-up has expired/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Start again" })).toBeInTheDocument();
+
+  // No field: TOTP is on already (another tab); the dialog closes.
+  answer = () => problem(422, "validation", "disable TOTP first");
+  await userEvent.click(screen.getByRole("button", { name: "Turn on" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });

@@ -572,7 +572,7 @@ pub async fn totp_setup(
         (status = 204, description = "TOTP is on"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (wrong current password), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 422, description = "`validation`: bad or expired enrollment, wrong code", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: bad or expired enrollment (`errors[0].field` = `enrollment`), wrong or replayed code (`code`), TOTP already on (no field)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 429, description = "`rate-limited` (see `Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]

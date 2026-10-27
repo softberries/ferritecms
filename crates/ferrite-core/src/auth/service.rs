@@ -895,13 +895,14 @@ impl AuthService {
     /// password: the secret is stored sealed under `totp-secret:<user id>`, the code's
     /// step is recorded (it cannot log in again) and `totp.enable` is audited.
     ///
-    /// * A bad or expired enrollment, or someone else's, is `Invalid` (no slot used).
+    /// * A bad or expired enrollment, or someone else's, is `InvalidField("enrollment")`
+    ///   (no slot used).
     /// * The password re-check counts on the login's `login:user` bucket (5/min, as
     ///   R11), so a stolen session cannot enroll an attacker's authenticator without
     ///   the password; wrong → `Forbidden("current password")`.
     /// * Then each checked code counts on `totp:user:<id>` (5/min, shared with
-    ///   `login_totp`); a wrong code is `Invalid`. Either limit exceeded →
-    ///   `RateLimited`.
+    ///   `login_totp`); a wrong or replayed code is `InvalidField("code")`. Either limit
+    ///   exceeded → `RateLimited`.
     /// * On success the user's other sessions are deleted in the same `Tx` (R26): a user
     ///   who enrolls because a session may be stolen ends it. `keep_session` is the
     ///   `id_hash` of the caller's session (`None` through an API token: every session
@@ -915,7 +916,7 @@ impl AuthService {
         password: &str,
     ) -> Result<(), CoreError> {
         require_scope(actor, Some(Scope::write(Area::Users)))?;
-        let invalid = || CoreError::Invalid("enrollment is not valid".into());
+        let invalid = || CoreError::invalid_field("enrollment", "enrollment is not valid");
         let enrollment: Enrollment = self
             .open_json(ENROLL_PURPOSE, enrollment)
             .ok_or_else(invalid)?;
@@ -924,7 +925,7 @@ impl AuthService {
         }
         let now = self.now();
         if now.as_micros() >= enrollment.exp {
-            return Err(CoreError::Invalid("enrollment expired".into()));
+            return Err(CoreError::invalid_field("enrollment", "enrollment expired"));
         }
         let secret = URL_SAFE_NO_PAD
             .decode(&enrollment.secret)
@@ -949,7 +950,7 @@ impl AuthService {
         .await?;
         // The issuer only shapes the `otpauth://` URL, not the codes.
         let otp = totp::build(&secret, totp::DEFAULT_ISSUER, &user.login)?;
-        let wrong = || CoreError::Invalid("wrong code".into());
+        let wrong = || CoreError::invalid_field("code", "wrong code");
         let step = totp::check(&otp, code, now).ok_or_else(wrong)?;
         let sealed = Secret::new(seal(&self.key, &secret_purpose(user.id), &secret)?);
         let tx = self.store.begin().await?;

@@ -616,7 +616,7 @@
             }
           },
           "422": {
-            "description": "`validation`: bad or expired enrollment, wrong code",
+            "description": "`validation`: bad or expired enrollment (`errors[0].field` = `enrollment`), wrong or replayed code (`code`), TOTP already on (no field)",
             "content": {
               "application/problem+json": {
                 "schema": {
