@@ -28,7 +28,7 @@ use ferrite_http::extensions::{Inspected, Installer, MAX_PLUGIN_BYTES};
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::{HostConfig, PermissionItem, PermissionReport, Risk};
 use ferrite_store::Store;
-use ferrite_theme::Theme;
+use ferrite_theme::{Theme, ThemeSource};
 
 use crate::{
     binary_version,
@@ -36,7 +36,7 @@ use crate::{
     load_config,
     open::{OpenMode, open_store, startup_check},
     serve::host_config,
-    site::open_media,
+    site::{open_media, sha256_hex},
 };
 
 /// The component's file extension.
@@ -72,6 +72,18 @@ pub enum ThemeCommand {
     },
     /// List themes: `<name>  <version>  <installed|embedded>  [active]`.
     List(DataArg),
+    /// Pack a theme folder into the bundle `POST /api/v1/themes` takes (needs no data
+    /// folder): the canonical ustar, hidden files left out. A theme that does not load is
+    /// refused and nothing is written. Prints
+    /// `packed <n> files, <bytes> bytes, sha256 <hex>`.
+    Pack {
+        /// The theme folder (holds `theme.toml` and `templates/`).
+        #[arg(long)]
+        dir: PathBuf,
+        /// The bundle file to write (replaced if it exists).
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -158,7 +170,25 @@ pub async fn run_theme(cmd: ThemeCommand) -> anyhow::Result<()> {
         ThemeCommand::List(data) => {
             with_site(&data.data, async |site| list_themes(&site).await).await
         }
+        ThemeCommand::Pack { dir, out } => pack_theme(&dir, &out),
     }
+}
+
+/// `ferrite theme pack`: no config, database or media store.
+fn pack_theme(dir: &Path, out: &Path) -> anyhow::Result<()> {
+    let (bundle, files) = ferrite_theme::pack_counted(&ThemeSource::Dir(dir.to_path_buf()))
+        .with_context(|| format!("cannot pack {}", dir.display()))?;
+    let bundle = Bytes::from(bundle);
+    // What an upload does with it: unpacked and every template compiled.
+    Theme::load(&ThemeSource::Bundle(bundle.clone()))
+        .with_context(|| format!("{} does not load as a theme", dir.display()))?;
+    std::fs::write(out, &bundle).with_context(|| format!("cannot write {}", out.display()))?;
+    println!(
+        "packed {files} files, {} bytes, sha256 {}",
+        bundle.len(),
+        sha256_hex(&bundle)
+    );
+    Ok(())
 }
 
 pub async fn run_plugin(cmd: PluginCommand) -> anyhow::Result<()> {

@@ -4524,6 +4524,54 @@
         ]
       }
     },
+    "/api/v1/plugins/retained": {
+      "get": {
+        "tags": [
+          "plugins"
+        ],
+        "operationId": "list_retained_plugins",
+        "responses": {
+          "200": {
+            "description": "Every deleted plugin whose KV and settings are still kept (deleted without `purge`, not installed again), by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetainedPluginList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/plugins/{name}": {
       "get": {
         "tags": [
@@ -4890,6 +4938,88 @@
           },
           "404": {
             "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/plugins/{name}/purge": {
+      "post": {
+        "tags": [
+          "plugins"
+        ],
+        "operationId": "purge_plugin",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "A deleted plugin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The deleted plugin's KV and settings are erased now (audited `plugin.purge`); a later install of that name starts empty"
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no data of that name is retained",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: a plugin of that name is installed (`errors[0].field` = `name`); delete it with `purge=true` instead",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`busy`: another extension change holds the lock (`Retry-After`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -11107,6 +11237,34 @@
               "update"
             ],
             "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The manifest's `plugin.description` (text)."
+              },
+              "homepage": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The manifest's `plugin.homepage` (text; link it only if it is `http:`/`https:`)."
+              },
+              "license": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The manifest's `plugin.license` (text)."
+              },
+              "publisher": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The manifest's `plugin.publisher` (text, unverified)."
+              },
               "update": {
                 "type": "boolean",
                 "description": "Whether a plugin of this name is installed: `added` is then against its grant."
@@ -11128,6 +11286,13 @@
           "nodes"
         ],
         "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stored manifest's `plugin.description` (text)."
+          },
           "disabled_reason": {
             "type": [
               "string",
@@ -11138,9 +11303,23 @@
           "enabled": {
             "type": "boolean"
           },
+          "homepage": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stored manifest's `plugin.homepage` (text; link it only if it is\n`http:`/`https:`)."
+          },
           "installed_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "license": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stored manifest's `plugin.license` (text)."
           },
           "name": {
             "type": "string"
@@ -11151,6 +11330,13 @@
               "$ref": "#/components/schemas/PluginNodeState"
             },
             "description": "What each live node (heartbeat within 30 s) reports about it, by node; a node\nthat has not loaded the plugin yet is not listed."
+          },
+          "publisher": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stored manifest's `plugin.publisher` (text, unverified)."
           },
           "report": {
             "oneOf": [
@@ -11524,6 +11710,44 @@
           },
           "target": {
             "type": "string"
+          }
+        }
+      },
+      "RetainedPluginDto": {
+        "type": "object",
+        "description": "A deleted plugin whose KV and settings are still kept (M2b-3 P47).",
+        "required": [
+          "name",
+          "deleted_at",
+          "purge_after"
+        ],
+        "properties": {
+          "deleted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "purge_after": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the data is erased unless the plugin is installed again first: 30 days\nafter `deleted_at` (`POST /plugins/{name}/purge` erases it earlier)."
+          }
+        }
+      },
+      "RetainedPluginList": {
+        "type": "object",
+        "description": "`GET /plugins/retained`: every deleted plugin whose data is kept, by name.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetainedPluginDto"
+            }
           }
         }
       },
@@ -12196,10 +12420,13 @@
       },
       "ThemeDto": {
         "type": "object",
-        "description": "A theme: installed (a row) or embedded (no row).",
+        "description": "A theme: installed (a row) or embedded (no row). The manifest facts (`author`,\n`license`, `homepage`, `description`, `menus`, `images`, `has_settings`) are the\nrow's stored manifest, or the embedded theme's `theme.toml`; each is text the theme\nauthor wrote (render it as text).",
         "required": [
           "name",
           "version",
+          "has_settings",
+          "menus",
+          "images",
           "origin",
           "active",
           "nodes"
@@ -12209,11 +12436,42 @@
             "type": "boolean",
             "description": "The theme nodes should serve: the active row, or with no row active the embedded\ndefault (`blog`) while it has no row. With no row active and an inactive `blog`\nrow (uploaded without `activate`), no entry is active: nodes then serve the\nembedded `blog` files, which no entry describes; activating a theme ends that."
           },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "description": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "has_settings": {
+            "type": "boolean",
+            "description": "Whether `theme.toml` declares settings (`GET /themes/{name}/settings` has a form)."
+          },
+          "hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The row's artifact (SHA-256 of the bundle, 64 lowercase hex); `null` for an\nembedded theme without a row."
+          },
+          "homepage": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An `http://` or `https://` URL (`theme.toml` refuses anything else)."
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThemeImageDto"
+            },
+            "description": "The image variant sizes, by name."
           },
           "installed_at": {
             "type": [
@@ -12222,6 +12480,19 @@
             ],
             "format": "date-time",
             "description": "When the row was written; `null` for an embedded theme without a row."
+          },
+          "license": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "menus": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThemeMenuDto"
+            },
+            "description": "The menu locations, by name."
           },
           "name": {
             "type": "string"
@@ -12238,6 +12509,40 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "ThemeImageDto": {
+        "type": "object",
+        "description": "An image variant size a theme wants (its `[images]` table, 03 §4).",
+        "required": [
+          "name",
+          "width",
+          "crop"
+        ],
+        "properties": {
+          "crop": {
+            "type": "boolean",
+            "description": "Whether the variant is cropped to `width` x `height`."
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "In pixels; `null`: scaled to `width` keeping the aspect ratio, or with `crop` a\n`width` square.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "The size's name (`[a-z0-9_-]`), the key of its `[images]` entry."
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32",
+            "description": "In pixels.",
+            "minimum": 0
           }
         }
       },
@@ -12260,6 +12565,23 @@
               "null"
             ],
             "description": "Always `null`: one page holds every theme."
+          }
+        }
+      },
+      "ThemeMenuDto": {
+        "type": "object",
+        "description": "A menu location a theme declares (its `[menus]` table).",
+        "required": [
+          "name",
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "The location, and the name of the menu the theme shows there."
           }
         }
       },

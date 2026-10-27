@@ -260,6 +260,7 @@ ferrite user disable-totp --data DIR --login L                                  
 ferrite theme install  --data DIR --dir PATH [--activate]                        # M2a-2a
 ferrite theme activate --data DIR NAME                                           # M2a-2a
 ferrite theme list     --data DIR                                                # M2a-2a
+ferrite theme pack     --dir PATH --out FILE                                     # M2b-3 (no data folder)
 ferrite plugin check   --data DIR --dir PATH                                     # M2a-2a
 ferrite plugin install --data DIR --dir PATH [--enable] [--yes]                  # M2a-2a
 ferrite plugin list|enable|disable|remove --data DIR [NAME] [--purge]            # M2a-2a
@@ -444,6 +445,7 @@ operator path for extensions, over `ExtensionService` and the install pipeline, 
 login, no capability checks and no audit rows. Like `ferrite user`, every subcommand loads
 the config, opens the database and media and runs the migration check; with SQLite it takes
 the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the message.
+`theme pack` is the exception: it reads only the folder and writes only `--out`.
 
 - `theme install --dir PATH [--activate]`: packs the folder into a bundle; a theme that
   does not compile is refused before anything is stored. `theme activate NAME` loads the
@@ -451,6 +453,10 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
   active theme unchanged, as the API does; an embedded theme without a row is installed from
   the embedded files. `theme list` prints `<name>  <version>  <installed|embedded>` plus
   `  active` for the active one (the embedded `blog` when no row is active).
+- `theme pack --dir PATH --out FILE` (M2b-3 P42): writes the canonical bundle of the
+  folder (hidden files left out; 06 §1) after loading it as an upload would (a theme that
+  does not load exits 1 and writes nothing), and prints `packed <n> files, <bytes> bytes,
+  sha256 <hex>`. The file is what `POST /api/v1/themes` takes.
 - `plugin check --dir PATH`: `PATH` holds `ferrite-plugin.toml` and exactly one `*.wasm`.
   Loads both on a scratch host, prints the permission report and stores nothing; exit 1 when
   the manifest or component is refused. `plugin install --dir PATH [--enable] [--yes]` prints

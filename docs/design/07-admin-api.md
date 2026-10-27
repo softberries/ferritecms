@@ -141,8 +141,8 @@ importer. The admin SPA that uses them is M2b.
 | Settings | `GET/PATCH /settings` (the allowlist `ferrite_core::settings::SETTINGS`) | M2a-1 | reads `settings:read`; writes `manage_settings` + `settings:write` |
 | Media | `POST /media` (multipart, streaming, `Idempotency-Key`), `GET /media?q&kind&author&trash&limit&cursor`, `GET/PATCH/DELETE /media/{id}` (`PATCH` title and alt with `If-Match`; `DELETE` trashes, `?force=true` deletes a trashed item), `POST /media/{id}/restore` (`If-Match`; from trash to published); see **Media** below | M2a-2b (built); `q`, `kind`, `trash`, restore M2b-2 (P33) | upload `upload_media` + `media:write`; reads `media:read` and `can_read` per item; edit, trash, restore and delete the content role rules with `media:write` in place of `content:write` (restore also `publish_own`/`publish_others`) |
 | Comments | `GET /comments?status&item&limit&cursor`, `GET /comments/counts?item` → `{pending, approved, spam, trash}` (every status, zero-filled), `PATCH /comments/{id}` (`{ status }`), `DELETE /comments/{id}` (spam or trash only), public `POST /content/{type}/{id}/comments` (rate-limited, honeypot; see **Comments** below). Listed and moderated comments carry `item: {id, type, title, permalink, status}` (`permalink` a path while the item has a public page now, else `null`; `title` is `""` for an item without a public page when the caller may not read content, e.g. a `comments:read` token without `content:read`; M2b-2 Task 3) | M2a-2b (built); `item`, `counts` M2b-2 | moderation `moderate_comments` + `comments:read`/`comments:write`; the submit: none, or a token with `comments:write` |
-| Themes | `GET /themes`, `POST /themes` (raw ustar bundle, `?activate=true`), `POST /themes/{name}/activate`, `GET/PATCH /themes/{name}/settings` (no delete, M2a-2 P30) | M2a-2a | reads `manage_themes` + `extensions:read` (`require_reader`); writes `manage_themes` + `extensions:write` |
-| Plugins | `GET /plugins`, `GET /plugins/{name}`, `POST /plugins/inspect` (multipart upload → permission report, nothing installed), `POST /plugins` (install with `approve` = the report's fingerprint), `POST /plugins/{name}/enable`, `POST /plugins/{name}/disable`, `DELETE /plugins/{name}` (`?purge=true`), `GET/PATCH /plugins/{name}/settings` | M2a-2a | reads `manage_plugins` + `extensions:read` (`require_reader`, so editors see no plugin list); writes `manage_plugins` + `extensions:write` |
+| Themes | `GET /themes`, `POST /themes` (raw ustar bundle, `?activate=true`), `POST /themes/{name}/activate`, `GET/PATCH /themes/{name}/settings` (no delete, M2a-2 P30); manifest facts in `ThemeDto` (M2b-3) | M2a-2a, M2b-3 | reads `manage_themes` + `extensions:read` (`require_reader`); writes `manage_themes` + `extensions:write` |
+| Plugins | `GET /plugins`, `GET /plugins/{name}`, `POST /plugins/inspect` (multipart upload → permission report, nothing installed), `POST /plugins` (install with `approve` = the report's fingerprint), `POST /plugins/{name}/enable`, `POST /plugins/{name}/disable`, `DELETE /plugins/{name}` (`?purge=true`), `GET/PATCH /plugins/{name}/settings`; `GET /plugins/retained`, `POST /plugins/{name}/purge` (M2b-3 P47) | M2a-2a, M2b-3 | reads `manage_plugins` + `extensions:read` (`require_reader`, so editors see no plugin list); writes `manage_plugins` + `extensions:write` |
 | Plugin metrics | `GET /plugins/{name}/metrics` (24 h of failures per hook and hour, every node's; the answering node's per-hook call stats; 05 §8) | M2a-2b (built) | `manage_plugins` + `extensions:read` |
 | System | `GET /system/status` (versions, mode, backends, schema, the active theme and the nodes serving a fallback, job counts, node counts), `GET /system/nodes`, `GET /system/audit?limit&cursor`, `GET /system/jobs?status&kind&limit&cursor`, `POST /system/jobs/{id}/retry`, `GET /system/metrics/summary` (see **System** below) | M2a-2b (built) | `manage_system` (admins) + `system:read`; retry `system:write` |
 | Import | `POST /import/wordpress` (upload WXR + optional uploads zip → job), `GET /import/{job}` | M3 | — |
@@ -312,7 +312,7 @@ an upload's body is read, so the OpenAPI sweep's unauthenticated and CSRF cases 
 the upload routes too; the node's one `Installer` checks and compiles uploads (two
 compiles and four uploads at once per node; a fifth upload is `503 busy` with
 `Retry-After`). Every write takes the `extensions` lock (30 s, then `503 busy`) and
-appends an audit row (`plugin.install|enable|disable|delete|settings`,
+appends an audit row (`plugin.install|enable|disable|delete|purge|settings`,
 `theme.install|activate|settings`; never setting values). No `If-Match` (P11).
 
 - **Plugin uploads** are `multipart/form-data` with the parts `manifest` (UTF-8 TOML,
@@ -324,18 +324,34 @@ appends an audit row (`plugin.install|enable|disable|delete|settings`,
   manifest that is not UTF-8: `manifest`), a refused component `422` with `field =
   component` (a host fault while compiling it, an engine or host-configuration error,
   is `500 internal`); a limit above its ceiling is refused at inspection. `POST /plugins/inspect` answers
-  `{ plugin, version, artifact, items[], added[], limits[], fingerprint, update }` (05 §2;
+  `{ plugin, version, artifact, items[], added[], limits[], fingerprint, update,
+  description, publisher, license, homepage }` (05 §2; the last four from the upload's
+  `[plugin]` table, `null` when unset;
   `limits` lists only the limits the manifest requests); `POST /plugins` with an `approve` that is not that upload's
   fingerprint is `422 validation`, `errors[0].field = "approve"`, with the upload's
   `report` in the problem, and changes nothing (R1). Install answers `201` with `Location`
   (an update too); a new plugin is installed disabled, a replaced one keeps its state.
 - **`PluginDto`**: `name`, `version`, `enabled`, `disabled_reason`, `installed_at`,
-  `updated_at`, `report` (the row's report against its own grant, so `added` is empty for
+  `updated_at`, `description`, `publisher`, `license`, `homepage` (from the stored
+  manifest's `[plugin]` table, `null` when unset; author text: shown as text, a homepage
+  linked only when `http:`/`https:`, the publisher unverified; M2b-3), `report` (the row's report against its own grant, so `added` is empty for
   a row installed with approval; `null` if the stored manifest or grant no longer parses)
   and `nodes` (each node with a heartbeat in the last 30 s: `node`, `name`, `version`,
   `status` = `loaded|failed|disabled`, `error`: the node's diagnostic, scrubbed of paths,
   endpoints, addresses and credentials and cut to 1 KiB (see **System** below); admins
   only).
+- **Retained plugin data (M2b-3 P47)**: a delete without `purge` keeps the plugin's KV and
+  settings for 30 days behind the option `plugin.<name>.deleted_at` (05 §2).
+  `GET /plugins/retained` (`manage_plugins` + `extensions:read`) answers `{ items: [{ name,
+  deleted_at, purge_after }] }`, one per such marker whose plugin is not installed again,
+  by name (`PluginRepo::retained`; `purge_after` = `deleted_at` + 30 days, when the
+  delete's purge job erases the data). `POST /plugins/{name}/purge` (`extensions:write`)
+  erases it now under the `extensions` lock: the KV, every stored
+  `plugin.<name>.settings.*` option (with `options.changed`) and the marker, audited
+  `plugin.purge {name}`; `204`. A plugin of that name installed is `422 validation`,
+  `errors[0].field = "name"` (delete it with `purge=true`); no marker is `404`. A delete
+  with `purge=true` keeps its marker until its final sweep (`PLUGIN_PURGE_GRACE`, 2
+  minutes), so it is listed for those minutes. `retained` is a reserved plugin name (R9).
 - **Theme uploads** are the raw deterministic ustar bundle (`Content-Type:
   application/x-tar`, else `415`; at most `ferrite_theme::MAX_BUNDLE_BYTES`, else `413`),
   unpacked in memory and compiled before anything is stored; a theme that does not load is
@@ -348,7 +364,13 @@ appends an audit row (`plugin.install|enable|disable|delete|settings`,
   row, else the embedded `blog`) carries `nodes`: per live node `node`, `node_name`,
   `node_version`, the served `name` and `hash`, `origin`, `error` and `fallback` (`true`
   when the node does not serve the active row's artifact: a startup fallback or a failed
-  hot swap; 06 §1); `error` is scrubbed like a plugin's.
+  hot swap; 06 §1); `error` is scrubbed like a plugin's. Every entry also carries the
+  manifest facts (M2b-3), from the row's stored manifest or the embedded `theme.toml`:
+  `author`, `license`, `homepage` (`http(s)://` only, 06 §1), `has_settings` (a non-empty
+  `[settings]`), `menus` (`{ name, label }`, by name), `images` (`{ name, width, height,
+  crop }`, the `[images]` table by name; `height` `null` when unset) and `hash` (the row's
+  artifact, `null` for an embedded theme without a row). A row stored before a key
+  existed reads as without it.
 - **Settings**: `GET/PATCH /themes/{name}/settings` and `/plugins/{name}/settings` answer
   `{ schema, values }` (plugins also `secrets` and `invalid`, 05 §4c); `PATCH` takes an
   object of keys (`null` resets or deletes one), checks every entry first (an undeclared

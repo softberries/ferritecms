@@ -17,6 +17,9 @@
 //!   replaced one keeps its enabled state and gets the new grant.
 //! * `DELETE /plugins/{name}` keeps the plugin's KV and settings for 30 days (a
 //!   reinstall in that time finds them); `?purge=true` deletes them at once (P9, R2).
+//! * `GET /plugins/retained` lists the deleted plugins whose data is still kept, with
+//!   the day it goes; `POST /plugins/{name}/purge` erases it now (M2b-3 P47; `422`
+//!   while a plugin of that name is installed, `404` when nothing is retained).
 //!
 //! * `GET /plugins/{name}/settings` answers the schema of the manifest's `[settings]`,
 //!   the non-secret values as the plugin reads them, and for each `secret` only whether
@@ -53,8 +56,8 @@ use super::{
     ApiState, Authed, BASE,
     dto::extensions::{
         FailureBucketDto, GrantReportDto, HookStatsDto, NodeHookStatsDto, PermissionReportDto,
-        PluginDto, PluginInspectUpload, PluginList, PluginMetricsDto, PluginNodeState,
-        PluginSettingsDto, PluginUpload, SettingsPatch,
+        PluginDto, PluginFacts, PluginInspectUpload, PluginList, PluginMetricsDto, PluginNodeState,
+        PluginSettingsDto, PluginUpload, RetainedPluginDto, RetainedPluginList, SettingsPatch,
     },
     extract::{ApiJson, ApiPath, created_at, parse_query},
     multipart::{open, read_parts},
@@ -162,6 +165,7 @@ pub async fn inspect_plugin(
     Ok(Json(PermissionReportDto::new(
         inspected.report(),
         inspected.is_update(),
+        PluginFacts::of(&inspected.manifest().plugin),
     )))
 }
 
@@ -206,7 +210,11 @@ pub async fn install_plugin(
         String::from_utf8(parts.remove("approve").unwrap_or_default().to_vec()).unwrap_or_default();
     let component = parts.remove("component").unwrap_or_default();
     let inspected = api.installer.inspect_plugin(&manifest, component).await?;
-    let report = PermissionReportDto::new(inspected.report(), inspected.is_update());
+    let report = PermissionReportDto::new(
+        inspected.report(),
+        inspected.is_update(),
+        PluginFacts::of(&inspected.manifest().plugin),
+    );
     let (artifact, row) = match api.installer.stage_plugin(inspected, &approve).await {
         Ok(staged) => staged,
         Err(e @ ExtensionError::Approval(_)) => {
@@ -315,6 +323,53 @@ pub async fn delete_plugin(
     api.extensions
         .delete_plugin(&who.actor, &name, params.purge.unwrap_or(false))
         .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/plugins/retained",
+    tag = "plugins",
+    operation_id = "list_retained_plugins",
+    security(("session" = []), ("bearer" = [])),
+    responses(
+        (status = 200, description = "Every deleted plugin whose KV and settings are still kept (deleted without `purge`, not installed again), by name", body = RetainedPluginList),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn list_retained_plugins(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+) -> Result<Json<RetainedPluginList>, Problem> {
+    let retained = api.extensions.retained_plugins(&who.actor).await?;
+    Ok(Json(RetainedPluginList {
+        items: retained.into_iter().map(RetainedPluginDto::from).collect(),
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/plugins/{name}/purge",
+    tag = "plugins",
+    operation_id = "purge_plugin",
+    security(("session" = []), ("bearer" = [])),
+    params(("name" = String, Path, description = "A deleted plugin")),
+    responses(
+        (status = 204, description = "The deleted plugin's KV and settings are erased now (audited `plugin.purge`); a later install of that name starts empty"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`: no data of that name is retained", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: a plugin of that name is installed (`errors[0].field` = `name`); delete it with `purge=true` instead", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 503, description = "`busy`: another extension change holds the lock (`Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn purge_plugin(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(name): ApiPath<String>,
+) -> Result<StatusCode, Problem> {
+    api.extensions.purge_plugin(&who.actor, &name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

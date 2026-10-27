@@ -146,6 +146,7 @@ backend_tests!(
     media_sanitized_roundtrip,
     plugins_upsert_list_enable,
     plugins_action_subscribers,
+    retained_plugin_markers,
     plugin_kv_crud_and_usage,
     plugin_kv_delete_all_in_batches,
     themes_single_active,

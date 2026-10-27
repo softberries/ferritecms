@@ -13,7 +13,7 @@ pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 /// Plugin names that are refused because a static admin API path takes them
 /// (`/api/v1/plugins/<name>` would hit that route instead; ruling R9). A new static
 /// segment under `/plugins/` goes here.
-pub const RESERVED_PLUGIN_NAMES: &[&str] = &["inspect"];
+pub const RESERVED_PLUGIN_NAMES: &[&str] = &["inspect", "retained"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Manifest {

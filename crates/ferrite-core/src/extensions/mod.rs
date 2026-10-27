@@ -57,6 +57,17 @@ const PLUGIN_OPTION_PREFIX: &str = "plugin.";
 /// Last segment of the deletion marker option.
 const DELETED_AT: &str = "deleted_at";
 
+/// A deleted plugin whose KV and settings are still kept
+/// ([`ExtensionService::retained_plugins`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetainedPluginData {
+    pub name: String,
+    pub deleted_at: Timestamp,
+    /// When the delete's purge job erases the data:
+    /// [`PLUGIN_DATA_RETENTION`](crate::jobs::PLUGIN_DATA_RETENTION) after `deleted_at`.
+    pub purge_after: Timestamp,
+}
+
 /// How long a write waits for the `extensions` lock by default.
 pub const EXTENSIONS_LOCK_WAIT: Duration = Duration::from_secs(30);
 
@@ -373,6 +384,76 @@ impl ExtensionService {
         if marker.and_then(|m| m.value.as_i64()) != Some(deleted_at.as_micros()) {
             return Ok(false);
         }
+        self.erase_locked(name, settings, keep_marker, None).await?;
+        Ok(true)
+    }
+
+    /// The deleted plugins whose KV and settings are still kept, by name, with the day
+    /// the purge job erases them (M2b-3 P47).
+    pub async fn retained_plugins(&self) -> Result<Vec<RetainedPluginData>, CoreError> {
+        let retained = self.store.read().plugins().retained().await?;
+        Ok(retained
+            .into_iter()
+            .map(|r| RetainedPluginData {
+                purge_after: crate::jobs::after(r.deleted_at, PLUGIN_DATA_RETENTION),
+                name: r.name,
+                deleted_at: r.deleted_at,
+            })
+            .collect())
+    }
+
+    /// Erases the retained data of the deleted plugin `name` now, instead of at the end
+    /// of the retention (M2b-3 P47): its KV, every stored `plugin.<name>.settings.*`
+    /// option and its deletion marker, under the `extensions` lock, with `audit` in the
+    /// options' transaction. A plugin `name` installed is `InvalidField { field: "name"
+    /// }`; no deletion marker (nothing retained, or already purged) is `NotFound`. The
+    /// delete's purge job later finds no marker and does nothing.
+    pub(crate) async fn purge_retained_with(
+        &self,
+        name: &str,
+        audit: Option<NewAudit>,
+    ) -> Result<(), CoreError> {
+        // Plugin names have no `.`: such a name would address another plugin's options.
+        if name.is_empty() || name.contains('.') {
+            return Err(CoreError::NotFound);
+        }
+        let guard = lock(self.store.as_ref(), LOCK_EXTENSIONS, self.lock_wait).await?;
+        let done = self.purge_retained_locked(name, audit).await;
+        release(guard).await;
+        done
+    }
+
+    async fn purge_retained_locked(
+        &self,
+        name: &str,
+        audit: Option<NewAudit>,
+    ) -> Result<(), CoreError> {
+        let repos = self.store.read();
+        if repos.plugins().get(name).await?.is_some() {
+            return Err(CoreError::invalid_field(
+                "name",
+                "a plugin of this name is installed; delete it to erase its data",
+            ));
+        }
+        let marker = repos.options().get(&deleted_marker(name)).await?;
+        if marker.and_then(|m| m.value.as_i64()).is_none() {
+            return Err(CoreError::NotFound);
+        }
+        let settings = stored_setting_keys(repos, name).await?;
+        self.erase_locked(name, &settings, false, audit).await
+    }
+
+    /// Deletes `name`'s KV, its `settings` options and (unless `keep_marker`) its
+    /// deletion marker, appending `audit` with the options. The caller holds the
+    /// `extensions` lock and has checked that no plugin `name` is installed.
+    async fn erase_locked(
+        &self,
+        name: &str,
+        settings: &[String],
+        keep_marker: bool,
+        audit: Option<NewAudit>,
+    ) -> Result<(), CoreError> {
+        let repos = self.store.read();
         // Batches outside any `Tx`, so no transaction holds the writer for long.
         loop {
             let deleted = repos.plugin_kv().delete_all(name, KV_PURGE_BATCH).await?;
@@ -381,9 +462,11 @@ impl ExtensionService {
             }
         }
         let tx = self.store.begin().await?;
-        let done = delete_options(tx.as_ref(), name, settings, keep_marker).await;
-        finish(tx, done).await?;
-        Ok(true)
+        let done = match delete_options(tx.as_ref(), name, settings, keep_marker).await {
+            Ok(()) => append_audit(tx.as_ref(), audit).await,
+            Err(e) => Err(e),
+        };
+        finish(tx, done).await
     }
 
     /// Takes the `extensions` lock, then opens the write transaction. The lock is
@@ -581,6 +664,29 @@ async fn delete_option(repos: &dyn Repos, key: &str) -> Result<(), CoreError> {
     repos.options().delete(key).await?;
     repos.events().append(&events::options_changed(key)).await?;
     Ok(())
+}
+
+/// The keys of plugin `name`'s stored settings options (`plugin.<name>.settings.<key>`),
+/// whatever its last manifest declared.
+async fn stored_setting_keys(repos: &dyn Repos, name: &str) -> Result<Vec<String>, CoreError> {
+    let prefix = crate::ext_settings::plugin_option(name, "");
+    let mut keys = Vec::new();
+    let mut after = String::new();
+    loop {
+        let page = repos
+            .options()
+            .list_prefix(&prefix, &after, OPTION_PAGE)
+            .await?;
+        keys.extend(
+            page.iter()
+                .filter_map(|e| e.key.strip_prefix(&prefix).map(str::to_owned)),
+        );
+        match page.last() {
+            Some(last) if page.len() >= OPTION_PAGE as usize => after = last.key.clone(),
+            _ => break,
+        }
+    }
+    Ok(keys)
 }
 
 /// The option recording when plugin `name` was last deleted (unix micros). Hidden from

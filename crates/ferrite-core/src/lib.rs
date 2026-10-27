@@ -41,7 +41,9 @@ pub use auth::{
 };
 pub use content::{AdminQuery, AutosaveDraft, ContentDraft, ContentService, MAX_REVISIONS_LISTED};
 pub use error::{CoreError, RowError};
-pub use extensions::{EXTENSIONS_LOCK_WAIT, ExtensionAdmin, ExtensionService, MAX_FAILURE_BUCKETS};
+pub use extensions::{
+    EXTENSIONS_LOCK_WAIT, ExtensionAdmin, ExtensionService, MAX_FAILURE_BUCKETS, RetainedPluginData,
+};
 pub use media::{
     MAX_MEDIA_ALT, MAX_MEDIA_TITLE, MAX_ORIGINAL_NAME, MediaItem, MediaPatch, MediaQuery,
     MediaService, NewUpload, check_file_name,

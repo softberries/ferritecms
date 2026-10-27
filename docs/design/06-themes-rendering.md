@@ -32,6 +32,7 @@ name        = "blog"
 version     = "0.1.0"          # semver
 author      = "FerriteCMS"     # optional
 license     = "MIT"            # optional
+homepage    = "https://github.com/softberries/ferritecms"  # optional; http:// or https:// only
 description = "…"              # optional
 
 [menus]                                   # menu locations: name = label
@@ -45,6 +46,11 @@ card = { width = 640, height = 360, crop = true }
 accent_color = { type = "color", default = "#c2410c", label = "Accent colour" }
 show_author  = { type = "bool", default = true }
 ```
+
+`author`, `license`, `homepage` and `description` are free text shown by the admin
+(`GET /themes`, 07 §1) as text; `homepage` must be an `http://` or `https://` URL with a
+host part, no whitespace and at most 2048 bytes, else `theme.toml` is refused (M2b-3), so
+the admin can link it.
 
 Setting kinds are the plugin manifest's minus `secret` (`text`, `textarea`, `bool`, `number`,
 `select`, `color`, `media`), because every setting value is visible to templates
@@ -86,6 +92,18 @@ is read, and a bundle larger than the limits allow (`MAX_BUNDLE_BYTES`, 20 MiB +
 entry) is refused unparsed. Hidden files are skipped as in a folder; the theme hash is
 computed over the files exactly as for a folder, so the same files give the same
 `Theme::hash()` from any source (`crates/ferrite-theme/src/bundle.rs`).
+
+**Packing a folder (as built, M2b-3 P42).** `ferrite theme pack --dir DIR --out FILE`
+writes `ferrite_theme::pack` of a folder (hidden files, any path segment starting with
+`.`, left out), loads the result as an upload would (unpacked and compiled; a theme that
+does not load is refused, exit 1, and nothing is written) and prints `packed <n> files,
+<bytes> bytes, sha256 <hex>`. It needs no data folder, config or database (09 §8), so an
+API user can produce the file `POST /themes` takes; a `tar cf` archive is refused (it has
+directory entries and pads to a 10 KiB record). The admin packs a dropped folder in the
+browser with a TypeScript port of `pack`; both packers are pinned byte for byte to
+`admin/src/appearance/__fixtures__/blog-min.tar`, the command's output for the
+`blog-min/` folder next to it (a nested asset, a path over 100 bytes that needs the ustar
+prefix field, a hidden file that is skipped; `crates/ferrite/tests/theme_pack.rs`).
 
 **Install and selection (as built, M1.5).** `ferrite::extensions::install_theme_dir` packs
 a folder, loads the bundle (a theme that does not compile is refused before anything is

@@ -16,6 +16,8 @@ pub struct ThemeManifest {
     pub version: semver::Version,
     pub author: Option<String>,
     pub license: Option<String>,
+    /// An `http://` or `https://` URL (checked by the parser).
+    pub homepage: Option<String>,
     pub description: Option<String>,
     /// Menu locations: name -> label.
     pub menus: BTreeMap<String, String>,
@@ -94,6 +96,7 @@ struct RawMeta {
     version: semver::Version,
     author: Option<String>,
     license: Option<String>,
+    homepage: Option<String>,
     description: Option<String>,
 }
 
@@ -109,6 +112,8 @@ struct RawSetting {
 }
 
 const MAX_NAME: usize = 64;
+/// Longest `homepage`.
+const MAX_HOMEPAGE: usize = 2048;
 
 /// Parses `theme.toml`; every problem found is returned.
 pub(crate) fn parse(src: &str) -> Result<ThemeManifest, Vec<String>> {
@@ -118,6 +123,14 @@ pub(crate) fn parse(src: &str) -> Result<ThemeManifest, Vec<String>> {
         problems.push(format!(
             "theme.toml: theme.name {:?} must be 1-{MAX_NAME} chars of [a-z0-9-]",
             raw.theme.name
+        ));
+    }
+    if let Some(url) = &raw.theme.homepage
+        && !is_web_url(url)
+    {
+        problems.push(format!(
+            "theme.toml: theme.homepage {url:?} must be an http:// or https:// URL \
+             (at most {MAX_HOMEPAGE} bytes, no spaces)"
         ));
     }
     for name in raw.menus.keys() {
@@ -182,6 +195,7 @@ pub(crate) fn parse(src: &str) -> Result<ThemeManifest, Vec<String>> {
         version: raw.theme.version,
         author: raw.theme.author,
         license: raw.theme.license,
+        homepage: raw.theme.homepage,
         description: raw.theme.description,
         menus: raw.menus,
         images: raw.images,
@@ -222,6 +236,21 @@ fn valid_value(kind: SettingKind, options: &[String], v: &serde_json::Value) -> 
     ferrite_domain::check_setting_value(kind.setting_type(), options, v).is_ok()
 }
 
+/// An `http://` or `https://` URL with something after the scheme, no whitespace or
+/// control characters, at most [`MAX_HOMEPAGE`] bytes: what the admin may render as a
+/// link.
+fn is_web_url(url: &str) -> bool {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"));
+    url.len() <= MAX_HOMEPAGE
+        && rest.is_some_and(|r| {
+            !r.is_empty()
+                && !r.starts_with('/')
+                && !r.chars().any(|c| c.is_whitespace() || c.is_control())
+        })
+}
+
 fn is_name(s: &str, underscore: bool) -> bool {
     !s.is_empty()
         && s.len() <= MAX_NAME
@@ -240,6 +269,7 @@ name = "blog"
 version = "0.1.0"
 author = "FerriteCMS"
 license = "MIT"
+homepage = "https://example.com/blog"
 
 [menus]
 primary = "Primary navigation"
@@ -259,6 +289,7 @@ logo = { type = "media", label = "Logo" }
         let m = parse(OK).unwrap();
         assert_eq!(m.name, "blog");
         assert_eq!(m.version, semver::Version::new(0, 1, 0));
+        assert_eq!(m.homepage.as_deref(), Some("https://example.com/blog"));
         assert_eq!(m.menus["primary"], "Primary navigation");
         assert_eq!(
             m.images["card"],
@@ -331,6 +362,22 @@ logo = { type = "media", label = "Logo" }
             (
                 "[theme]\nname = \"x\"\nversion = \"0.1.0\"\n[other]\n",
                 "unknown field",
+            ),
+            (
+                "[theme]\nname = \"x\"\nversion = \"0.1.0\"\nhomepage = \"javascript:alert(1)\"\n",
+                "theme.homepage",
+            ),
+            (
+                "[theme]\nname = \"x\"\nversion = \"0.1.0\"\nhomepage = \"ftp://example.com\"\n",
+                "theme.homepage",
+            ),
+            (
+                "[theme]\nname = \"x\"\nversion = \"0.1.0\"\nhomepage = \"https://\"\n",
+                "theme.homepage",
+            ),
+            (
+                "[theme]\nname = \"x\"\nversion = \"0.1.0\"\nhomepage = \"https://a b\"\n",
+                "theme.homepage",
             ),
             (
                 "[theme]\nname = \"x\"\nversion = \"0.1.0\"\n[settings]\na = { type = \"secret\" }\n",

@@ -192,6 +192,8 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
             routes!(plugins::inspect_plugin),
             plugins::MAX_UPLOAD_BODY,
         ))
+        .routes(routes!(plugins::list_retained_plugins))
+        .routes(routes!(plugins::purge_plugin))
         .routes(routes!(plugins::get_plugin, plugins::delete_plugin))
         .routes(routes!(plugins::enable_plugin))
         .routes(routes!(plugins::disable_plugin))

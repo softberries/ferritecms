@@ -628,6 +628,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/plugins/retained": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_retained_plugins"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/plugins/{name}": {
         parameters: {
             query?: never;
@@ -686,6 +702,22 @@ export interface paths {
         get: operations["get_plugin_metrics"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plugins/{name}/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["purge_plugin"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2170,22 +2202,41 @@ export interface components {
          *     and the `report` of an approval refusal).
          */
         PermissionReportDto: components["schemas"]["GrantReportDto"] & {
+            /** @description The manifest's `plugin.description` (text). */
+            description?: string | null;
+            /** @description The manifest's `plugin.homepage` (text; link it only if it is `http:`/`https:`). */
+            homepage?: string | null;
+            /** @description The manifest's `plugin.license` (text). */
+            license?: string | null;
+            /** @description The manifest's `plugin.publisher` (text, unverified). */
+            publisher?: string | null;
             /** @description Whether a plugin of this name is installed: `added` is then against its grant. */
             update: boolean;
         };
         /** @description An installed plugin. */
         PluginDto: {
+            /** @description The stored manifest's `plugin.description` (text). */
+            description?: string | null;
             /** @description Why it was disabled automatically (failures), if it was. */
             disabled_reason?: string | null;
             enabled: boolean;
+            /**
+             * @description The stored manifest's `plugin.homepage` (text; link it only if it is
+             *     `http:`/`https:`).
+             */
+            homepage?: string | null;
             /** Format: date-time */
             installed_at: string;
+            /** @description The stored manifest's `plugin.license` (text). */
+            license?: string | null;
             name: string;
             /**
              * @description What each live node (heartbeat within 30 s) reports about it, by node; a node
              *     that has not loaded the plugin yet is not listed.
              */
             nodes: components["schemas"]["PluginNodeState"][];
+            /** @description The stored manifest's `plugin.publisher` (text, unverified). */
+            publisher?: string | null;
             report?: components["schemas"]["GrantReportDto"] | null;
             /** Format: date-time */
             updated_at: string;
@@ -2359,6 +2410,22 @@ export interface components {
             code?: number;
             source?: string;
             target?: string;
+        };
+        /** @description A deleted plugin whose KV and settings are still kept (M2b-3 P47). */
+        RetainedPluginDto: {
+            /** Format: date-time */
+            deleted_at: string;
+            name: string;
+            /**
+             * Format: date-time
+             * @description When the data is erased unless the plugin is installed again first: 30 days
+             *     after `deleted_at` (`POST /plugins/{name}/purge` erases it earlier).
+             */
+            purge_after: string;
+        };
+        /** @description `GET /plugins/retained`: every deleted plugin whose data is kept, by name. */
+        RetainedPluginList: {
+            items: components["schemas"]["RetainedPluginDto"][];
         };
         /** @description One revision: the saved title, excerpt, body and fields. */
         RevisionDto: {
@@ -2650,7 +2717,12 @@ export interface components {
          *     itself): a ustar archive of `theme.toml`, `templates/` and `assets/`.
          */
         ThemeBundle: string;
-        /** @description A theme: installed (a row) or embedded (no row). */
+        /**
+         * @description A theme: installed (a row) or embedded (no row). The manifest facts (`author`,
+         *     `license`, `homepage`, `description`, `menus`, `images`, `has_settings`) are the
+         *     row's stored manifest, or the embedded theme's `theme.toml`; each is text the theme
+         *     author wrote (render it as text).
+         */
         ThemeDto: {
             /**
              * @description The theme nodes should serve: the active row, or with no row active the embedded
@@ -2659,12 +2731,27 @@ export interface components {
              *     embedded `blog` files, which no entry describes; activating a theme ends that.
              */
             active: boolean;
+            author?: string | null;
             description?: string | null;
+            /** @description Whether `theme.toml` declares settings (`GET /themes/{name}/settings` has a form). */
+            has_settings: boolean;
+            /**
+             * @description The row's artifact (SHA-256 of the bundle, 64 lowercase hex); `null` for an
+             *     embedded theme without a row.
+             */
+            hash?: string | null;
+            /** @description An `http://` or `https://` URL (`theme.toml` refuses anything else). */
+            homepage?: string | null;
+            /** @description The image variant sizes, by name. */
+            images: components["schemas"]["ThemeImageDto"][];
             /**
              * Format: date-time
              * @description When the row was written; `null` for an embedded theme without a row.
              */
             installed_at?: string | null;
+            license?: string | null;
+            /** @description The menu locations, by name. */
+            menus: components["schemas"]["ThemeMenuDto"][];
             name: string;
             /**
              * @description What each live node (heartbeat within 30 s) serves, by node; only on the active
@@ -2674,6 +2761,24 @@ export interface components {
             origin: components["schemas"]["ThemeOrigin"];
             version: string;
         };
+        /** @description An image variant size a theme wants (its `[images]` table, 03 §4). */
+        ThemeImageDto: {
+            /** @description Whether the variant is cropped to `width` x `height`. */
+            crop: boolean;
+            /**
+             * Format: int32
+             * @description In pixels; `null`: scaled to `width` keeping the aspect ratio, or with `crop` a
+             *     `width` square.
+             */
+            height?: number | null;
+            /** @description The size's name (`[a-z0-9_-]`), the key of its `[images]` entry. */
+            name: string;
+            /**
+             * Format: int32
+             * @description In pixels.
+             */
+            width: number;
+        };
         /**
          * @description `GET /themes`: every installed theme and every embedded theme without a row, by
          *     name.
@@ -2682,6 +2787,12 @@ export interface components {
             items: components["schemas"]["ThemeDto"][];
             /** @description Always `null`: one page holds every theme. */
             next_cursor?: string | null;
+        };
+        /** @description A menu location a theme declares (its `[menus]` table). */
+        ThemeMenuDto: {
+            label: string;
+            /** @description The location, and the name of the menu the theme shows there. */
+            name: string;
         };
         /** @description What one live node serves (`nodes.meta.theme`). */
         ThemeNodeState: {
@@ -2986,6 +3097,8 @@ export type SchemaRedirectInput = components['schemas']['RedirectInput'];
 export type SchemaRedirectList = components['schemas']['RedirectList'];
 export type SchemaRedirectOriginDto = components['schemas']['RedirectOriginDto'];
 export type SchemaRedirectPatch = components['schemas']['RedirectPatch'];
+export type SchemaRetainedPluginDto = components['schemas']['RetainedPluginDto'];
+export type SchemaRetainedPluginList = components['schemas']['RetainedPluginList'];
 export type SchemaRevisionDto = components['schemas']['RevisionDto'];
 export type SchemaRevisionList = components['schemas']['RevisionList'];
 export type SchemaRevisionSummaryDto = components['schemas']['RevisionSummaryDto'];
@@ -3012,7 +3125,9 @@ export type SchemaTermList = components['schemas']['TermList'];
 export type SchemaTermPatch = components['schemas']['TermPatch'];
 export type SchemaThemeBundle = components['schemas']['ThemeBundle'];
 export type SchemaThemeDto = components['schemas']['ThemeDto'];
+export type SchemaThemeImageDto = components['schemas']['ThemeImageDto'];
 export type SchemaThemeList = components['schemas']['ThemeList'];
+export type SchemaThemeMenuDto = components['schemas']['ThemeMenuDto'];
 export type SchemaThemeNodeState = components['schemas']['ThemeNodeState'];
 export type SchemaThemeOrigin = components['schemas']['ThemeOrigin'];
 export type SchemaThemeSettingsDto = components['schemas']['ThemeSettingsDto'];
@@ -6338,6 +6453,44 @@ export interface operations {
             };
         };
     };
+    list_retained_plugins: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every deleted plugin whose KV and settings are still kept (deleted without `purge`, not installed again), by name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetainedPluginList"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
     get_plugin: {
         parameters: {
             query?: never;
@@ -6619,6 +6772,72 @@ export interface operations {
             };
             /** @description `not-found` */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    purge_plugin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A deleted plugin */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The deleted plugin's KV and settings are erased now (audited `plugin.purge`); a later install of that name starts empty */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no data of that name is retained */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: a plugin of that name is installed (`errors[0].field` = `name`); delete it with `purge=true` instead */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `busy`: another extension change holds the lock (`Retry-After`) */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

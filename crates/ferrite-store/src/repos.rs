@@ -496,6 +496,12 @@ pub trait PluginRepo: Send + Sync {
     ) -> Result<(), StoreError>;
     /// Removes an installed plugin (missing: no-op).
     async fn delete(&self, id: &str) -> Result<(), StoreError>;
+    /// The deleted plugins whose data is still kept (M2b-3 P47): every option
+    /// `plugin.<name>.deleted_at` (the deletion marker a delete writes) whose value is
+    /// an integer (unix micros) and whose `<name>` has no `.` and no installed row, by
+    /// name in binary order. Other values are skipped. Unbounded: one row per deleted
+    /// plugin not yet purged.
+    async fn retained(&self) -> Result<Vec<RetainedPlugin>, StoreError>;
     /// Disables the plugin with `reason` in one conditional statement (P20, R12), only
     /// while it is enabled **and** its `updated_at` is still `observed_updated_at` (the
     /// value the caller read before summing its failures): `true` only for the
@@ -509,6 +515,29 @@ pub trait PluginRepo: Send + Sync {
         reason: &str,
         observed_updated_at: Timestamp,
     ) -> Result<bool, StoreError>;
+}
+
+/// A deleted plugin whose KV and settings are still kept ([`PluginRepo::retained`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetainedPlugin {
+    pub name: String,
+    /// When it was deleted (the marker's value).
+    pub deleted_at: Timestamp,
+}
+
+/// The marker `key`'s plugin name and its value as a [`RetainedPlugin`], if `key` is a
+/// marker of a dot-free name and `value` integer micros: what both backends'
+/// [`PluginRepo::retained`] keep of the rows their query selects.
+pub fn retained_marker(key: &str, value: &serde_json::Value) -> Option<RetainedPlugin> {
+    let name = key.strip_prefix("plugin.")?.strip_suffix(".deleted_at")?;
+    if name.is_empty() || name.contains('.') {
+        return None;
+    }
+    let deleted_at = Timestamp::from_micros(value.as_i64()?).ok()?;
+    Some(RetainedPlugin {
+        name: name.to_owned(),
+        deleted_at,
+    })
 }
 
 /// Shared per-minute plugin failure counters (P20): each node adds its buffered counts,
