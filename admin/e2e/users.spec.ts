@@ -327,6 +327,23 @@ test("users_screens", async ({ as, site, playwright, guard, snap, expectAccessib
   await expect(sheet(page).getByText("Newsletter export")).toBeVisible();
   await expectAccessible(page);
   await snap(page, "users-sheet", { fullPage: false });
+  // The sheet scrolls on its own: the end of it (facts, tokens, Delete) is a second snap.
+  const danger = sheet(page).getByRole("region", { name: "Delete user" });
+  await danger.scrollIntoViewIfNeeded();
+  await expectAccessible(page);
+  await snap(page, "users-sheet-end", {
+    fullPage: false,
+    prepare: async () => {
+      await danger.scrollIntoViewIfNeeded();
+    },
+  });
+
+  // One's own row (H-A1): no role, status, password, two-factor or delete.
+  const me = (await (await page.request.get("/api/v1/auth/me")).json()) as { id: string };
+  await open(page, `?id=${me.id}`);
+  await expect(sheet(page).getByRole("link", { name: "Manage your account" })).toBeVisible();
+  await expectAccessible(page);
+  await snap(page, "users-sheet-own", { fullPage: false });
 
   await open(page, "?new=true");
   const dialog = page.getByRole("dialog", { name: "New user" });
@@ -335,6 +352,11 @@ test("users_screens", async ({ as, site, playwright, guard, snap, expectAccessib
   await dialog.getByLabel("Display name").fill("Hedy Lamarr");
   await expectAccessible(page);
   await snap(page, "users-new", { fullPage: false });
+  // On a phone the fields scroll and Cancel and Create user stay in view.
+  await page.setViewportSize(VIEWPORTS.mobile);
+  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeInViewport();
+  await expect(dialog.getByRole("button", { name: "Create user" })).toBeInViewport();
+  await page.setViewportSize(VIEWPORTS.desktop);
   await dialog.getByRole("button", { name: "Cancel" }).click();
 
   await open(page, `?q=${tag}&id=${ada.id}`);

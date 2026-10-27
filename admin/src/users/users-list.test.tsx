@@ -63,3 +63,23 @@ test("search_waits_250ms", async () => {
   expect(setSearch).not.toHaveBeenCalled();
   await waitFor(() => expect(setSearch).toHaveBeenCalledWith({ q: "gr" }), { timeout: 1000 });
 });
+
+test("status_and_two_factor_show_in_the_name_cell_below_lg", async () => {
+  // Below `lg` the Status and Two-factor columns are hidden: their badges go under the
+  // name (role only below `sm`, where its column hides).
+  const pending = user({ must_reset: true, totp_enabled: true });
+  const plain = user({ id: "33333333-3333-4333-8333-333333333333", login: "linus" });
+  stubRoutes({ "/api/v1/users": () => json({ items: [pending, plain], next_cursor: null }) });
+  renderWithRouter(<UsersScreen search={{}} setSearch={vi.fn()} me={ME} />);
+  await screen.findAllByText("Grace Hopper");
+  const [extra, onlyRole] = document.querySelectorAll("[data-slot=name-extra]");
+  // With nothing but the role to add, the row goes with the role column.
+  expect(onlyRole).toHaveClass("sm:hidden");
+  expect(onlyRole).not.toHaveClass("lg:hidden");
+  expect(extra).not.toBeNull();
+  expect(extra).toHaveClass("lg:hidden");
+  expect(extra).toHaveTextContent("Must change password");
+  expect(extra).toHaveTextContent("Two-factor authentication on");
+  const role = extra?.querySelector("[data-slot=role-badge]");
+  expect(role?.parentElement).toHaveClass("sm:hidden");
+});

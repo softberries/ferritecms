@@ -40,8 +40,9 @@ test("own_row_hides_controls", async () => {
   expect(await within(sheet).findByRole("heading", { name: "Ada Lovelace" })).toBeInTheDocument();
   const link = within(sheet).getByRole("link", { name: "Manage your account" });
   expect(link).toHaveAttribute("href", "/admin/account");
-  // Their tokens are still listed.
+  // Their tokens are still listed; new ones are made in the account.
   expect(await within(sheet).findByText("Deploy script")).toBeInTheDocument();
+  expect(within(sheet).getByText("Make new tokens in your account.")).toBeInTheDocument();
   for (const name of ["Role", "Status"]) {
     expect(within(sheet).queryByRole("combobox", { name })).toBeNull();
   }
@@ -93,8 +94,11 @@ test("last_admin_refusal_is_shown", async () => {
     "the site needs at least one active admin",
   );
   expect(patches).toEqual([{ role: "editor" }]);
-  // Still open, and the role shown is unchanged.
+  // Still open; once closed, the role shown is unchanged.
   expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+  await userEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(within(sheet).getByRole("combobox", { name: "Role" })).toHaveTextContent("Administrator");
 });
 
 test("disable_confirm_says_tokens_are_revoked", async () => {

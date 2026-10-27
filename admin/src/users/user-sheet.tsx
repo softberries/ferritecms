@@ -11,53 +11,23 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { format } from "date-fns";
-import { KeyRoundIcon, Trash2Icon, UserRoundCogIcon } from "lucide-react";
+import { Trash2Icon, UserRoundCogIcon } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { INLINE_ERRORS, reportApiError } from "@/api/client";
 import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
-import { type TokenDto, tokensQuery } from "@/api/tokens";
-import {
-  type RoleDto,
-  type UserDto,
-  type UserStatus,
-  disableUserTotp,
-  getUser,
-  patchUser,
-  setUserPassword,
-  userQuery,
-} from "@/api/users";
+import { type UserDto, getUser, patchUser, userQuery } from "@/api/users";
 import { withoutKey } from "@/account/account-model";
-import { Expiry, RevokeDialog } from "@/account/tokens-card";
-import { ScopeChips } from "@/account/token-dialog";
 import { Alert } from "@/auth/auth-layout";
-import { MAX_PASSWORD_BYTES, MIN_PASSWORD_CHARS, byteLength, charCount } from "@/auth/errors";
-import { PasswordField } from "@/auth/password-field";
 import type { MeDto } from "@/auth/session";
 import { ErrorState } from "@/components/kit/error-state";
 import { FormField } from "@/components/kit/form-field";
 import { RelativeTime } from "@/components/kit/relative-time";
 import { useStaleAsk } from "@/components/kit/use-stale-ask";
-import {
-  AlertDialog,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -74,16 +44,17 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DESTRUCTIVE } from "@/lib/destructive";
+import { displayNameProblem, isEmailShape } from "@/lib/account-rules";
 import { staleGuard } from "@/lib/stale-guard";
 import { problemText } from "@/structure/taxonomies/terms-model";
+import { type AccessChange, AccessDialog } from "./access-dialog";
 import { DeleteUserDialog } from "./delete-user-dialog";
 import { useRoleLabel } from "./role-label";
+import { SetPasswordDialog } from "./set-password-dialog";
+import { TotpOffDialog } from "./totp-off-dialog";
 import { RoleBadge, TwoFactorBadge, UserAvatar, UserStatusBadge } from "./user-parts";
+import { UserTokens } from "./user-tokens";
 import { ROLES, STATUSES } from "./users-search";
-
-/** Core's limit on a display name, in characters. */
-const MAX_DISPLAY_NAME = 100;
 
 export interface UserSheetProps {
   id: string;
@@ -137,8 +108,6 @@ const sameAccount = (a: UserDto, b: UserDto) =>
   a.email === b.email &&
   a.role === b.role &&
   a.status === b.status;
-
-type AccessChange = { kind: "role"; value: RoleDto } | { kind: "status"; value: UserStatus };
 
 function SheetBody({
   user,
@@ -325,7 +294,7 @@ function SheetBody({
         )}
 
         <Section title={t("users.sheet.tokens")}>
-          <UserTokens userId={base.id} />
+          <UserTokens userId={base.id} own={own} />
         </Section>
 
         <dl className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-lg bg-muted/60 px-4 py-3">
@@ -475,11 +444,10 @@ function ProfileForm({
     e.preventDefault();
     if (pending || !dirty) return;
     const found: Partial<Record<ProfileField, string>> = {};
-    if (nextName === "") found.display_name = t("users.form.nameRequired");
-    else if (Array.from(nextName).length > MAX_DISPLAY_NAME) {
-      found.display_name = t("users.form.nameTooLong");
-    }
-    if (!/^[^\s@]+@[^\s@]+$/.test(nextEmail)) found.email = t("users.form.emailInvalid");
+    const nameProblem = displayNameProblem(nextName);
+    if (nameProblem === "required") found.display_name = t("users.form.nameRequired");
+    else if (nameProblem === "long") found.display_name = t("users.form.nameTooLong");
+    if (!isEmailShape(nextEmail)) found.email = t("users.form.emailInvalid");
     setErrors(found);
     setFailure(null);
     if (Object.keys(found).length > 0) return;
@@ -548,348 +516,5 @@ function ProfileForm({
         {pending ? t("users.sheet.saving") : t("users.sheet.saveProfile")}
       </Button>
     </form>
-  );
-}
-
-/** The confirm of a role or status change; says what it ends (H-A4). */
-function AccessDialog({
-  user,
-  change,
-  onClose,
-  apply,
-}: {
-  user: UserDto;
-  change: AccessChange | null;
-  onClose: () => void;
-  apply: (change: AccessChange) => Promise<void>;
-}) {
-  const { t } = useTranslation("admin");
-  const roleLabel = useRoleLabel();
-  const [shown, setShown] = useState(change);
-  if (change && change !== shown) setShown(change);
-  const [pending, setPending] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
-  const [opened, setOpened] = useState(change);
-  if (change !== opened) {
-    setOpened(change);
-    setFailure(null);
-  }
-  const name = user.display_name;
-  let title = "";
-  let body = "";
-  let confirm = "";
-  let destructive = false;
-  if (shown?.kind === "role") {
-    title = t("users.access.roleTitle", { name, role: roleLabel(shown.value) });
-    body = t("users.access.roleBody");
-    confirm = t("users.access.roleConfirm");
-  } else if (shown?.value === "disabled") {
-    title = t("users.access.disableTitle", { name });
-    body = t("users.access.disableBody");
-    confirm = t("users.access.disableConfirm");
-    destructive = true;
-  } else if (shown) {
-    title = t("users.access.enableTitle", { name });
-    body = t("users.access.enableBody");
-    confirm = t("users.access.enableConfirm");
-  }
-
-  const run = async () => {
-    if (!change || pending) return;
-    setPending(true);
-    setFailure(null);
-    try {
-      await apply(change);
-    } catch (error) {
-      reportApiError(error);
-      setFailure(problemText(error));
-    } finally {
-      setPending(false);
-    }
-  };
-
-  return (
-    <AlertDialog open={change !== null} onOpenChange={(open) => !open && !pending && onClose()}>
-      <AlertDialogContent data-slot="access-change">
-        <AlertDialogHeader>
-          <AlertDialogTitle className="break-words">{title}</AlertDialogTitle>
-          <AlertDialogDescription>{body}</AlertDialogDescription>
-        </AlertDialogHeader>
-        {failure ? <Alert tone="error">{failure}</Alert> : null}
-        <AlertDialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={pending}>
-            {t("users.cancel")}
-          </Button>
-          <Button
-            className={destructive ? DESTRUCTIVE : undefined}
-            onClick={() => void run()}
-            disabled={pending}
-            aria-busy={pending || undefined}
-          >
-            {confirm}
-          </Button>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-}
-
-/**
- * `POST /users/{id}/password`: the typed password lives in this dialog's state only and
- * is sent with a plain call (never a mutation cache); it is not shown back.
- */
-function SetPasswordDialog({
-  user,
-  onClose,
-  onDone,
-}: {
-  user: UserDto | null;
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const { t } = useTranslation("admin");
-  const [shown, setShown] = useState(user);
-  if (user && user !== shown) setShown(user);
-  return (
-    <Dialog open={user !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent data-slot="set-password" className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="break-words">
-            {t("users.password.title", { name: shown?.display_name ?? "" })}
-          </DialogTitle>
-          <DialogDescription>{t("users.password.body")}</DialogDescription>
-        </DialogHeader>
-        {user ? <SetPasswordForm user={user} onClose={onClose} onDone={onDone} /> : null}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function SetPasswordForm({
-  user,
-  onClose,
-  onDone,
-}: {
-  user: UserDto;
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const { t } = useTranslation("admin");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (pending) return;
-    if (charCount(password) < MIN_PASSWORD_CHARS) {
-      setError(t("users.form.passwordShort", { min: MIN_PASSWORD_CHARS }));
-      return;
-    }
-    if (byteLength(password) > MAX_PASSWORD_BYTES) {
-      setError(t("users.form.passwordLong"));
-      return;
-    }
-    setPending(true);
-    setFailure(null);
-    try {
-      await setUserPassword(user.id, password);
-      toast.success(t("users.password.done", { name: user.display_name }));
-      onDone();
-    } catch (err) {
-      reportApiError(err);
-      const fields = err instanceof ApiError && err.status === 422 ? err.fieldErrors() : {};
-      if (fields.password) setError(fields.password);
-      else setFailure(problemText(err));
-    } finally {
-      setPending(false);
-    }
-  };
-
-  return (
-    <form noValidate onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
-      <PasswordField
-        id="user-new-password"
-        label={t("users.password.label")}
-        value={password}
-        onValueChange={(v) => {
-          setPassword(v);
-          setError(null);
-        }}
-        autoComplete="new-password"
-        policy
-        error={error}
-        disabled={pending}
-        autoFocus
-      />
-      {failure ? <Alert tone="error">{failure}</Alert> : null}
-      <DialogFooter>
-        <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
-          {t("users.cancel")}
-        </Button>
-        <Button type="submit" disabled={pending} aria-busy={pending || undefined}>
-          {t("users.password.action")}
-        </Button>
-      </DialogFooter>
-    </form>
-  );
-}
-
-/** `POST /users/{id}/totp/disable` (P43), after a confirm. */
-function TotpOffDialog({
-  user,
-  onClose,
-  onDone,
-}: {
-  user: UserDto | null;
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const { t } = useTranslation("admin");
-  const [shown, setShown] = useState(user);
-  if (user && user !== shown) setShown(user);
-  const [pending, setPending] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
-
-  const run = async () => {
-    if (!user || pending) return;
-    setPending(true);
-    setFailure(null);
-    try {
-      await disableUserTotp(user.id);
-      toast.success(t("users.totp.done", { name: user.display_name }));
-      onDone();
-    } catch (error) {
-      reportApiError(error);
-      setFailure(problemText(error));
-    } finally {
-      setPending(false);
-    }
-  };
-
-  return (
-    <AlertDialog
-      open={user !== null}
-      onOpenChange={(open) => {
-        if (!open && !pending) {
-          setFailure(null);
-          onClose();
-        }
-      }}
-    >
-      <AlertDialogContent data-slot="totp-off">
-        <AlertDialogHeader>
-          <AlertDialogTitle className="break-words">
-            {t("users.totp.title", { name: shown?.display_name ?? "" })}
-          </AlertDialogTitle>
-          <AlertDialogDescription>{t("users.totp.body")}</AlertDialogDescription>
-        </AlertDialogHeader>
-        {failure ? <Alert tone="error">{failure}</Alert> : null}
-        <AlertDialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={pending}>
-            {t("users.cancel")}
-          </Button>
-          <Button
-            className={DESTRUCTIVE}
-            onClick={() => void run()}
-            disabled={pending}
-            aria-busy={pending || undefined}
-          >
-            {t("users.totp.confirm")}
-          </Button>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-}
-
-function isExpired(token: TokenDto): boolean {
-  return token.expires_at != null && new Date(token.expires_at).getTime() <= Date.now();
-}
-
-/** The user's API tokens, read-only but for Revoke (new ones are made in Account). */
-function UserTokens({ userId }: { userId: string }) {
-  const { t } = useTranslation("admin");
-  const queryClient = useQueryClient();
-  const list = useQuery(tokensQuery(userId));
-  const [revoking, setRevoking] = useState<TokenDto | null>(null);
-  const tokens = list.data ?? [];
-
-  let content: ReactNode;
-  if (list.isError && !list.data) {
-    content = <ErrorState error={list.error} retry={() => void list.refetch()} />;
-  } else if (list.isPending) {
-    content = (
-      <div aria-busy="true" className="flex flex-col gap-2">
-        <Skeleton className="h-12 w-full" />
-      </div>
-    );
-  } else if (tokens.length === 0) {
-    content = (
-      <p className="flex items-center gap-2 rounded-lg border border-dashed px-4 py-3 text-sm text-muted-foreground">
-        <KeyRoundIcon aria-hidden="true" className="size-4 shrink-0" />
-        {t("users.sheet.noTokens")}
-      </p>
-    );
-  } else {
-    content = (
-      <ul aria-label={t("users.sheet.tokens")} className="flex flex-col divide-y rounded-lg border">
-        {tokens.map((token) => {
-          const gone = isExpired(token);
-          return (
-            <li key={token.id} data-slot="user-token" className="flex items-start gap-3 px-4 py-3">
-              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                <span className="flex min-w-0 items-center gap-2">
-                  <span className="truncate text-sm font-medium text-foreground" title={token.name}>
-                    {token.name}
-                  </span>
-                  {gone ? <Badge variant="destructive">{t("account.tokens.expired")}</Badge> : null}
-                </span>
-                <ScopeChips scopes={token.scopes} />
-                <span className="flex flex-wrap gap-x-1 text-xs text-muted-foreground">
-                  <span className="whitespace-nowrap">
-                    {token.last_used_at ? (
-                      <>
-                        {t("users.sheet.tokenUsed")} <RelativeTime at={token.last_used_at} />
-                      </>
-                    ) : (
-                      t("account.tokens.neverUsed")
-                    )}
-                  </span>
-                  <span aria-hidden="true">·</span>
-                  <span className="whitespace-nowrap">
-                    <Expiry token={token} labelled />
-                  </span>
-                </span>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={t("account.tokens.revokeLabel", { name: token.name })}
-                title={t("account.tokens.revoke")}
-                onClick={() => setRevoking(token)}
-                className="shrink-0 text-muted-foreground hover:text-destructive"
-              >
-                <Trash2Icon />
-              </Button>
-            </li>
-          );
-        })}
-      </ul>
-    );
-  }
-
-  return (
-    <>
-      {content}
-      <p className="text-xs text-muted-foreground">{t("users.sheet.tokensHint")}</p>
-      <RevokeDialog
-        token={revoking}
-        userId={userId}
-        onClose={() => setRevoking(null)}
-        onRevoked={() => void queryClient.invalidateQueries({ queryKey: qk.tokens(userId) })}
-      />
-    </>
   );
 }

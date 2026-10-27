@@ -5,6 +5,7 @@
 // (`?id=`). Display names, logins and e-mails are the users' own text and render as text.
 
 import { keepPreviousData, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import { cn } from "cn";
 import { ChevronRightIcon, PlusIcon, SearchXIcon, UsersIcon } from "lucide-react";
 import { type ReactNode, useMemo } from "react";
 import { useTranslation } from "react-i18next";
@@ -268,10 +269,22 @@ function useColumns(me: MeDto): DataTableColumn<UserDto>[] {
                 <span className="truncate font-mono text-xs text-muted-foreground" title={u.login}>
                   {u.login}
                 </span>
-                {/* Below `sm` the role column is hidden: role and status go here. */}
-                <span className="mt-1 flex flex-wrap items-center gap-2 sm:hidden">
-                  <RoleBadge role={u.role} />
-                  {u.status === "disabled" ? <UserStatusBadge user={u} /> : null}
+                {/* Below `lg` the Status and Two-factor columns are hidden, below `sm` the
+                    Role column too: their badges go here, each up to where its column shows. */}
+                <span
+                  data-slot="name-extra"
+                  className={cn(
+                    "mt-1 flex flex-wrap items-center gap-2",
+                    // With only the role to show, the row goes with the role column.
+                    u.status === "disabled" || u.must_reset || u.totp_enabled
+                      ? "lg:hidden"
+                      : "sm:hidden",
+                  )}
+                >
+                  <span className="contents sm:hidden">
+                    <RoleBadge role={u.role} />
+                  </span>
+                  {u.status === "disabled" || u.must_reset ? <UserStatusBadge user={u} /> : null}
                   <TwoFactorBadge on={u.totp_enabled} />
                 </span>
               </div>

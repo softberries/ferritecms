@@ -19,10 +19,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/kit/form-field";
+import { MAX_DISPLAY_NAME, displayNameProblem, isEmailShape } from "@/lib/account-rules";
 import { fieldErrorsOf, isWrongPassword, withoutKey, writeFailure } from "./account-model";
 
-/** Core's limit on a display name, in characters. */
-const MAX_DISPLAY_NAME = 100;
 const ROLES = ["admin", "editor", "author", "contributor"] as const;
 
 const FIELDS = ["display_name", "email", "current_password"] as const;
@@ -53,12 +52,11 @@ export function ProfileCard({ user }: { user: UserDto }) {
 
   const check = (): Partial<Record<Field, string>> => {
     const out: Partial<Record<Field, string>> = {};
-    if (nextName === "") out.display_name = t("account.profile.nameRequired");
-    else if (Array.from(nextName).length > MAX_DISPLAY_NAME) {
-      out.display_name = t("account.profile.nameTooLong");
-    }
+    const nameProblem = displayNameProblem(nextName);
+    if (nameProblem === "required") out.display_name = t("account.profile.nameRequired");
+    else if (nameProblem === "long") out.display_name = t("account.profile.nameTooLong");
     if (nextEmail === "") out.email = t("account.profile.emailRequired");
-    else if (!/^[^\s@]+@[^\s@]+$/.test(nextEmail)) out.email = t("account.profile.emailInvalid");
+    else if (!isEmailShape(nextEmail)) out.email = t("account.profile.emailInvalid");
     if (emailChanged && password === "") {
       out.current_password = t("account.profile.passwordForEmail");
     }

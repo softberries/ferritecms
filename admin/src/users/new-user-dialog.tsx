@@ -13,7 +13,7 @@ import { requestReset } from "@/api/auth";
 import { ApiError } from "@/api/problem";
 import { type RoleDto, type UserDto, createUser } from "@/api/users";
 import { Alert } from "@/auth/auth-layout";
-import { MAX_PASSWORD_BYTES, MIN_PASSWORD_CHARS, byteLength, charCount } from "@/auth/errors";
+import { MIN_PASSWORD_CHARS } from "@/auth/errors";
 import { PasswordField } from "@/auth/password-field";
 import type { MeDto } from "@/auth/session";
 import { FormField } from "@/components/kit/form-field";
@@ -34,13 +34,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { displayNameProblem, isEmailShape, passwordProblem } from "@/lib/account-rules";
 import { problemText } from "@/structure/taxonomies/terms-model";
 import { useRoleLabel } from "./role-label";
 import { ROLES } from "./users-search";
 
 /** Core's `normalize_login` (after trimming and lower-casing). */
 const LOGIN = /^[a-z0-9][a-z0-9._-]{0,59}$/;
-const MAX_DISPLAY_NAME = 100;
 const FIELDS = ["login", "email", "display_name", "role", "password"] as const;
 type Field = (typeof FIELDS)[number];
 type Access = "password" | "reset";
@@ -59,7 +59,7 @@ export function NewUserDialog({ open, onOpenChange, me, onCreated }: NewUserDial
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         data-slot="new-user"
-        className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-lg"
+        className="flex max-h-[calc(100svh-2rem)] flex-col sm:max-w-lg"
       >
         <DialogHeader>
           <DialogTitle>{t("users.new.title")}</DialogTitle>
@@ -111,18 +111,15 @@ function NewUserForm({
     const l = login.trim().toLowerCase();
     if (l === "") out.login = t("users.form.loginRequired");
     else if (!LOGIN.test(l)) out.login = t("users.form.loginInvalid");
-    if (!/^[^\s@]+@[^\s@]+$/.test(email.trim())) out.email = t("users.form.emailInvalid");
-    const n = name.trim();
-    if (n === "") out.display_name = t("users.form.nameRequired");
-    else if (Array.from(n).length > MAX_DISPLAY_NAME) {
-      out.display_name = t("users.form.nameTooLong");
-    }
-    if (access === "password") {
-      if (charCount(password) < MIN_PASSWORD_CHARS) {
-        out.password = t("users.form.passwordShort", { min: MIN_PASSWORD_CHARS });
-      } else if (byteLength(password) > MAX_PASSWORD_BYTES) {
-        out.password = t("users.form.passwordLong");
-      }
+    if (!isEmailShape(email.trim())) out.email = t("users.form.emailInvalid");
+    const nameProblem = displayNameProblem(name.trim());
+    if (nameProblem === "required") out.display_name = t("users.form.nameRequired");
+    else if (nameProblem === "long") out.display_name = t("users.form.nameTooLong");
+    const problem = access === "password" ? passwordProblem(password) : null;
+    if (problem === "short") {
+      out.password = t("users.form.passwordShort", { min: MIN_PASSWORD_CHARS });
+    } else if (problem === "long") {
+      out.password = t("users.form.passwordLong");
     }
     return out;
   };
@@ -173,127 +170,138 @@ function NewUserForm({
   };
 
   return (
-    <form noValidate onSubmit={(e) => void submit(e)} className="flex flex-col gap-5">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <FormField
-          label={t("users.form.login")}
-          hint={t("users.form.loginHint")}
-          error={errors.login}
-        >
+    <form
+      noValidate
+      onSubmit={(e) => void submit(e)}
+      className="flex min-h-0 flex-1 flex-col gap-4"
+    >
+      {/* The fields scroll on a short screen; the footer (Cancel, Create) stays in view.
+          The padding keeps focus rings inside the scroll container's clip. */}
+      <div
+        data-slot="new-user-fields"
+        className="-mx-4 flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-4 py-1"
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FormField
+            label={t("users.form.login")}
+            hint={t("users.form.loginHint")}
+            error={errors.login}
+          >
+            {(control) => (
+              <Input
+                {...control}
+                value={login}
+                autoFocus
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                className="font-mono"
+                disabled={pending}
+                onChange={(e) => {
+                  setLogin(e.currentTarget.value);
+                  clear("login");
+                }}
+              />
+            )}
+          </FormField>
+          <FormField label={t("users.columns.role")} error={errors.role}>
+            {(control) => (
+              <Select
+                value={role}
+                disabled={pending}
+                onValueChange={(v) => {
+                  const r = ROLES.find((x) => x === v);
+                  if (r) setRole(r);
+                }}
+              >
+                <SelectTrigger {...control} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper">
+                  {ROLES.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {roleLabel(r)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </FormField>
+        </div>
+        <FormField label={t("users.columns.email")} error={errors.email}>
           {(control) => (
             <Input
               {...control}
-              value={login}
-              autoFocus
+              type="email"
+              value={email}
               autoComplete="off"
-              autoCapitalize="none"
-              autoCorrect="off"
               spellCheck={false}
-              className="font-mono"
               disabled={pending}
               onChange={(e) => {
-                setLogin(e.currentTarget.value);
-                clear("login");
+                setEmail(e.currentTarget.value);
+                clear("email");
               }}
             />
           )}
         </FormField>
-        <FormField label={t("users.columns.role")} error={errors.role}>
+        <FormField label={t("users.columns.displayName")} error={errors.display_name}>
           {(control) => (
-            <Select
-              value={role}
+            <Input
+              {...control}
+              value={name}
+              autoComplete="off"
               disabled={pending}
-              onValueChange={(v) => {
-                const r = ROLES.find((x) => x === v);
-                if (r) setRole(r);
+              onChange={(e) => {
+                setName(e.currentTarget.value);
+                clear("display_name");
               }}
-            >
-              <SelectTrigger {...control} className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent position="popper">
-                {ROLES.map((r) => (
-                  <SelectItem key={r} value={r}>
-                    {roleLabel(r)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            />
           )}
         </FormField>
+        <fieldset className="flex flex-col gap-3">
+          <legend className="mb-2 text-sm font-medium text-foreground">
+            {t("users.new.accessLegend")}
+          </legend>
+          {mail ? (
+            <div className="grid gap-2 sm:grid-cols-2">
+              <AccessChoice
+                value="password"
+                checked={access === "password"}
+                onChange={setAccess}
+                label={t("users.new.setPassword")}
+                disabled={pending}
+              />
+              <AccessChoice
+                value="reset"
+                checked={access === "reset"}
+                onChange={setAccess}
+                label={t("users.new.sendReset")}
+                disabled={pending}
+              />
+            </div>
+          ) : null}
+          {access === "password" ? (
+            <PasswordField
+              id="new-user-password"
+              label={t("users.new.password")}
+              value={password}
+              onValueChange={(v) => {
+                setPassword(v);
+                clear("password");
+              }}
+              autoComplete="new-password"
+              policy
+              error={errors.password ?? null}
+              disabled={pending}
+            />
+          ) : null}
+          <p className="text-xs text-muted-foreground">
+            {access === "password" ? t("users.new.passwordHint") : t("users.new.resetHint")}
+          </p>
+        </fieldset>
+        {failure ? <Alert tone="error">{failure}</Alert> : null}
       </div>
-      <FormField label={t("users.columns.email")} error={errors.email}>
-        {(control) => (
-          <Input
-            {...control}
-            type="email"
-            value={email}
-            autoComplete="off"
-            spellCheck={false}
-            disabled={pending}
-            onChange={(e) => {
-              setEmail(e.currentTarget.value);
-              clear("email");
-            }}
-          />
-        )}
-      </FormField>
-      <FormField label={t("users.columns.displayName")} error={errors.display_name}>
-        {(control) => (
-          <Input
-            {...control}
-            value={name}
-            autoComplete="off"
-            disabled={pending}
-            onChange={(e) => {
-              setName(e.currentTarget.value);
-              clear("display_name");
-            }}
-          />
-        )}
-      </FormField>
-      <fieldset className="flex flex-col gap-3">
-        <legend className="mb-2 text-sm font-medium text-foreground">
-          {t("users.new.accessLegend")}
-        </legend>
-        {mail ? (
-          <div className="grid gap-2 sm:grid-cols-2">
-            <AccessChoice
-              value="password"
-              checked={access === "password"}
-              onChange={setAccess}
-              label={t("users.new.setPassword")}
-              disabled={pending}
-            />
-            <AccessChoice
-              value="reset"
-              checked={access === "reset"}
-              onChange={setAccess}
-              label={t("users.new.sendReset")}
-              disabled={pending}
-            />
-          </div>
-        ) : null}
-        {access === "password" ? (
-          <PasswordField
-            id="new-user-password"
-            label={t("users.new.password")}
-            value={password}
-            onValueChange={(v) => {
-              setPassword(v);
-              clear("password");
-            }}
-            autoComplete="new-password"
-            policy
-            error={errors.password ?? null}
-            disabled={pending}
-          />
-        ) : null}
-        <p className="text-xs text-muted-foreground">
-          {access === "password" ? t("users.new.passwordHint") : t("users.new.resetHint")}
-        </p>
-      </fieldset>
-      {failure ? <Alert tone="error">{failure}</Alert> : null}
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onCancel} disabled={pending}>
           {t("users.cancel")}
