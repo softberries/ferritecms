@@ -26,7 +26,7 @@
 
 use std::sync::Arc;
 
-use ferrite_domain::{NewAudit, NewUser, Page, Role, Secret, User, UserId, UserStatus};
+use ferrite_domain::{NewAudit, NewUser, Page, Role, Secret, User, UserId, UserQuery, UserStatus};
 use ferrite_store::{Repos, Store, StoreError};
 use serde_json::{Value, json};
 
@@ -44,12 +44,16 @@ pub const MAX_LOGIN: usize = 60;
 pub const MAX_EMAIL: usize = 254;
 /// Longest display name, in characters.
 pub const MAX_DISPLAY_NAME: usize = 100;
+/// Longest user search (`UserQuery::q`, after trimming), in characters.
+pub const MAX_USER_QUERY: usize = 100;
 
 const LAST_ADMIN: &str = "the site needs at least one active admin";
 const OWN_ROLE: &str = "cannot change your own role or status";
 const LOGIN_FIXED: &str = "a login cannot be changed";
 const LOGIN_TAKEN: &str = "login taken";
 const EMAIL_TAKEN: &str = "e-mail taken";
+const OWN_TOTP: &str = "use your own account's TOTP settings";
+const PASSWORD_NEEDED: &str = "enter your current password to change your e-mail";
 
 /// Input for a new account.
 #[derive(Debug, Clone)]
@@ -75,6 +79,9 @@ pub struct UserPatch {
     pub display_name: Option<String>,
     pub role: Option<Role>,
     pub status: Option<UserStatus>,
+    /// The actor's current password: needed when they change their **own** e-mail (the
+    /// password-reset channel, M2b-3 P44), ignored otherwise.
+    pub current_password: Option<Secret>,
 }
 
 /// Manages user accounts. Methods taking an [`Actor`] check capabilities and scopes;
@@ -88,15 +95,23 @@ impl UserService {
         Self { store }
     }
 
-    /// Lists users by login (`manage_users` role, `users:read` scope).
-    pub async fn list(
-        &self,
-        actor: &Actor,
-        limit: u32,
-        cursor: Option<&str>,
-    ) -> Result<Page<User>, CoreError> {
+    /// Lists users by login (`manage_users` role, `users:read` scope). `query.q` is
+    /// trimmed and must then be 1..=[`MAX_USER_QUERY`] characters (`InvalidField` `q`);
+    /// it matches the login, display name or e-mail as a case-insensitive substring,
+    /// wildcards literal ([`UserRepo::list`](ferrite_store::UserRepo::list)).
+    pub async fn list(&self, actor: &Actor, mut query: UserQuery) -> Result<Page<User>, CoreError> {
         require_manage_read(actor)?;
-        Ok(self.store.read().users().list(limit, cursor).await?)
+        if let Some(q) = query.q.take() {
+            let q = q.trim();
+            if q.is_empty() || q.chars().count() > MAX_USER_QUERY {
+                return Err(CoreError::invalid_field(
+                    "q",
+                    format!("q must be 1 to {MAX_USER_QUERY} characters"),
+                ));
+            }
+            query.q = Some(q.to_owned());
+        }
+        Ok(self.store.read().users().list(&query).await?)
     }
 
     /// One user: anyone may read themselves; others need `manage_users` (and
@@ -124,6 +139,14 @@ impl UserService {
     /// to another user, needs `manage_users`. Role and status never change on oneself: a
     /// self-patch carrying the current role or status ignores it (admin forms send whole
     /// objects), a different value is `Invalid`.
+    ///
+    /// Changing one's **own** e-mail to a different address needs `current_password`
+    /// (M2b-3 P44): missing is `InvalidField` `current_password`, wrong is
+    /// `Forbidden("current password")`. The check runs before the `Tx` (argon2); inside
+    /// it a changed password hash is `Forbidden` and an e-mail that differs only now
+    /// still needs the password. A request goes through
+    /// [`AuthService::update_user`](crate::AuthService::update_user), which rate limits
+    /// the check first (R11).
     pub async fn update(
         &self,
         actor: &Actor,
@@ -143,11 +166,49 @@ impl UserService {
             .as_deref()
             .map(normalize_display_name)
             .transpose()?;
+        // The password hash the current password was checked against (own e-mail change).
+        let checked = match (&email, is_self) {
+            (Some(email), true) => {
+                let row = self
+                    .store
+                    .read()
+                    .users()
+                    .get(id)
+                    .await?
+                    .ok_or(CoreError::NotFound)?;
+                if *email == row.email {
+                    None
+                } else {
+                    let current = patch.current_password.as_ref().ok_or_else(|| {
+                        CoreError::invalid_field("current_password", PASSWORD_NEEDED)
+                    })?;
+                    match password::verify(current.expose(), row.password_hash.as_ref()).await {
+                        Verified::Match { .. } => Some(row.password_hash),
+                        Verified::Mismatch => return Err(CoreError::Forbidden("current password")),
+                    }
+                }
+            }
+            _ => None,
+        };
         let tx = self.store.begin().await?;
         let done = async {
             let old = locked(tx.as_ref(), id).await?;
             if login.as_ref().is_some_and(|l| *l != old.login) {
                 return Err(CoreError::invalid_field("login", LOGIN_FIXED));
+            }
+            if is_self && email.as_ref().is_some_and(|e| *e != old.email) {
+                match &checked {
+                    None => {
+                        return Err(CoreError::invalid_field(
+                            "current_password",
+                            PASSWORD_NEEDED,
+                        ));
+                    }
+                    Some(hash) if *hash != old.password_hash => {
+                        return Err(CoreError::Forbidden("current password"));
+                    }
+                    Some(_) => {}
+                }
             }
             if is_self
                 && (patch.role.is_some_and(|r| r != old.role)
@@ -267,6 +328,37 @@ impl UserService {
             tx.sessions().delete_for_user(id, keep_session).await?;
             let details = json!({ "must_reset": user.must_reset, "self": is_self });
             audit(tx.as_ref(), Some(actor.user), "user.password", id, details).await
+        }
+        .await;
+        finish(tx, done).await
+    }
+
+    /// Turns TOTP off for another user (`manage_users`, `users:write`; M2b-3 P43), the
+    /// recovery path for a lost authenticator: clears the secret and the replay step and
+    /// audits `user.totp_disable` with the actor. The user's sessions and tokens are
+    /// kept. Oneself is `InvalidField` `id` (the own account's TOTP settings need the
+    /// password); TOTP not on is `Invalid`; a missing user `NotFound`.
+    pub async fn disable_totp_for(&self, actor: &Actor, id: UserId) -> Result<(), CoreError> {
+        require(actor, Capability::ManageUsers)?;
+        if id == actor.user {
+            return Err(CoreError::invalid_field("id", OWN_TOTP));
+        }
+        let tx = self.store.begin().await?;
+        let done = async {
+            let user = locked(tx.as_ref(), id).await?;
+            if user.totp_secret.is_none() {
+                return Err(CoreError::Invalid("TOTP is not enabled".into()));
+            }
+            tx.users().set_totp(id, None).await?;
+            let details = json!({ "had_totp": true });
+            audit(
+                tx.as_ref(),
+                Some(actor.user),
+                "user.totp_disable",
+                id,
+                details,
+            )
+            .await
         }
         .await;
         finish(tx, done).await
@@ -497,7 +589,12 @@ impl OperatorUsers<'_> {
 
     /// Lists users by login.
     pub async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<User>, CoreError> {
-        Ok(self.users.store.read().users().list(limit, cursor).await?)
+        let query = UserQuery {
+            limit,
+            cursor: cursor.map(str::to_owned),
+            ..UserQuery::default()
+        };
+        Ok(self.users.store.read().users().list(&query).await?)
     }
 
     async fn id_of(&self, login: &str) -> Result<UserId, CoreError> {

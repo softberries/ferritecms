@@ -9,6 +9,7 @@ mod notify;
 mod paging;
 mod repos;
 mod search;
+mod session;
 mod text;
 
 pub use error::StoreError;
@@ -51,6 +52,7 @@ pub use search::{
     IndexTerms, IndexedTerm, MAX_INDEX_TERMS, MAX_QUERY_TERMS, MAX_SEARCH_KINDS, MAX_TERM_CHARS,
     SearchPlan, encode_rank_cursor, index_terms, plan_search, rank_cursor, search_terms,
 };
+pub use session::session_public_id;
 pub use text::{email_key, validate_text};
 
 /// Attempts a job gets by default.

@@ -116,6 +116,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_sessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/sessions/revoke-others": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["revoke_other_sessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/sessions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["revoke_session"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/totp/confirm": {
         parameters: {
             query?: never;
@@ -1055,6 +1103,22 @@ export interface paths {
         put?: never;
         post?: never;
         delete: operations["revoke_token"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/totp/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["disable_user_totp"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2386,6 +2450,38 @@ export interface components {
             description?: string | null;
             title?: string | null;
         };
+        /**
+         * @description One of the user's sessions (`GET /auth/sessions`). No user agent or address is
+         *     shown: sessions are told apart by time.
+         */
+        SessionDto: {
+            /** Format: date-time */
+            created_at: string;
+            /** @description The session this request came with (end it with `POST /auth/logout`). */
+            current: boolean;
+            /**
+             * @description An opaque id (16 hex characters) for `DELETE /auth/sessions/{id}`; never the
+             *     cookie value.
+             */
+            id: string;
+            /**
+             * Format: date-time
+             * @description Updated at most every 5 minutes.
+             */
+            last_seen_at: string;
+        };
+        /** @description `GET /auth/sessions`: the user's live sessions, newest first. */
+        SessionList: {
+            items: components["schemas"]["SessionDto"][];
+        };
+        /** @description The result of `POST /auth/sessions/revoke-others`. */
+        SessionsRevoked: {
+            /**
+             * Format: int64
+             * @description How many sessions ended.
+             */
+            revoked: number;
+        };
         /** @description One declared setting: what the admin renders a form field from (05 §4c, 06 §1). */
         SettingDefDto: {
             /** @description The declared default; `null` for none (always for `media` and `secret`). */
@@ -2778,6 +2874,15 @@ export interface components {
          *     on oneself; the last active admin cannot be demoted or disabled.
          */
         UserPatchInput: {
+            /**
+             * Format: password
+             * @description The request's own current password. Required when a user changes their **own**
+             *     `email` to a different address (missing: `422`, `errors[0].field` =
+             *     `current_password`; wrong: `403 forbidden`; checked on the same per-login rate
+             *     limit as `POST /auth/password`); ignored otherwise, so an admin changing another
+             *     user's e-mail sends none.
+             */
+            current_password?: string | null;
             display_name?: string;
             email?: string;
             /**
@@ -2890,6 +2995,9 @@ export type SchemaSchemaStatusDto = components['schemas']['SchemaStatusDto'];
 export type SchemaSchemaVerdict = components['schemas']['SchemaVerdict'];
 export type SchemaSeoDto = components['schemas']['SeoDto'];
 export type SchemaSeoPatchDto = components['schemas']['SeoPatchDto'];
+export type SchemaSessionDto = components['schemas']['SessionDto'];
+export type SchemaSessionList = components['schemas']['SessionList'];
+export type SchemaSessionsRevoked = components['schemas']['SessionsRevoked'];
 export type SchemaSettingDefDto = components['schemas']['SettingDefDto'];
 export type SchemaSettingsDto = components['schemas']['SettingsDto'];
 export type SchemaSettingsPatch = components['schemas']['SettingsPatch'];
@@ -3239,6 +3347,166 @@ export interface operations {
                 };
             };
             /** @description `validation`: `errors[0].field` is `password` (breaks the policy) or `token` (invalid, expired or used link) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_sessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's live sessions, newest first; `current` is this one */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionList"];
+                };
+            };
+            /** @description `bad-request`: the request used a bearer token */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    revoke_other_sessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every other session of the user ended; this one is kept. Audited `session.revoke` with `details.count` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionsRevoked"];
+                };
+            };
+            /** @description `bad-request`: the request used a bearer token */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    revoke_session: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A session's `id` from `GET /auth/sessions` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session ended (on every node at its next request); audited `session.revoke` */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `bad-request`: the request used a bearer token */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no session of the user has this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: the current session (use `POST /auth/logout`) */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -8549,9 +8817,19 @@ export interface operations {
     list_users: {
         parameters: {
             query?: {
+                /**
+                 * @description Only users whose login, display name or e-mail holds this text, ignoring case
+                 *     (`%` and `_` match only themselves). Trimmed; 1 to 100 characters (`422`, field
+                 *     `q`).
+                 */
+                q?: string;
+                /** @description Only users with this role. */
+                role?: components["schemas"]["RoleDto"];
+                /** @description Only users with this status. */
+                status?: components["schemas"]["UserStatusDto"];
                 /** @description 1..=200; default 50. */
                 limit?: number;
-                /** @description `next_cursor` of the previous page. */
+                /** @description `next_cursor` of the previous page of the same query. */
                 cursor?: string;
             };
             header?: never;
@@ -8569,7 +8847,7 @@ export interface operations {
                     "application/json": components["schemas"]["UserList"];
                 };
             };
-            /** @description `validation` (`limit`, `cursor`) or `malformed-query` */
+            /** @description `validation` (`limit`, `cursor`) or `malformed-query` (also an unknown `role` or `status`) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -8589,6 +8867,15 @@ export interface operations {
             };
             /** @description `forbidden` (`manage_users`, `users:read`) or `password-reset-required` */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: `q` blank or longer than 100 characters (`errors[0].field` = `q`) */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8829,7 +9116,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `forbidden` (another user, role or status: `manage_users`; `users:write`), `csrf` or `password-reset-required` */
+            /** @description `forbidden` (another user, role or status: `manage_users`; `users:write`; a wrong `current_password`), `csrf` or `password-reset-required` */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8847,8 +9134,17 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation`: `errors[0].field` `login` (cannot change), `email` (also taken) or `display_name`; one's own role or status; the last active admin */
+            /** @description `validation`: `errors[0].field` `login` (cannot change), `email` (also taken), `display_name` or `current_password` (missing for an own e-mail change); one's own role or status; the last active admin */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `rate-limited`: the own-e-mail password check (see `Retry-After`) */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9087,6 +9383,62 @@ export interface operations {
             };
             /** @description `not-found`: the user holds no such token */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    disable_user_totp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description TOTP is off for the user (a lost authenticator); their sessions and tokens are kept */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_users`, `users:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: the request's own account (`errors[0].field` = `id`; use `POST /auth/totp/disable` with the password), or TOTP is not on */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

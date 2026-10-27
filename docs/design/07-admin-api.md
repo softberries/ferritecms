@@ -129,14 +129,14 @@ importer. The admin SPA that uses them is M2b.
 | Resource | Endpoints | Status | Core check (role capability, then token scope) |
 |---|---|---|---|
 | Meta | `GET /meta`, `GET /openapi.json` (no auth) | M2a-1 | none |
-| Auth | `POST /auth/login`, `POST /auth/login/totp`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/password`, `POST /auth/totp/setup`, `POST /auth/totp/confirm`, `POST /auth/totp/disable` | M2a-1 | own account |
+| Auth | `POST /auth/login`, `POST /auth/login/totp`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/password`, `POST /auth/totp/setup`, `POST /auth/totp/confirm`, `POST /auth/totp/disable`; `GET /auth/sessions`, `DELETE /auth/sessions/{id}`, `POST /auth/sessions/revoke-others` (see **Sessions** in §2) | M2a-1; sessions M2b-3 | own account |
 | Auth: password reset by e-mail | `POST /auth/password-reset`, `POST /auth/password-reset/confirm` (no credentials; origin-checked like login) | M2a-2a (needs `[mail]`) | none (the sealed token is the credential) |
 | Content | `GET/POST /content/{type}`, `GET/PATCH/DELETE /content/{type}/{id}` (`DELETE` trashes; `?force=true` deletes a trashed item), `POST /content/{type}/{id}/publish`, `…/unpublish`, `…/submit`, `…/schedule`, `…/restore` (from trash); type `media` is 404 here (uploads are `/media`). Items and list entries carry `author` (`{id, login, display_name}`) and `allowed` (`{edit, publish, unpublish, schedule, submit, trash, restore, delete, trash_undoable}`, from core's `allowed_actions`; `trash_undoable`: trash is allowed and restore would be once trashed, the admin's Undo, M2b-1 Task 13 fix round 1); `GET /content/{type}/counts` → `{draft, pending, scheduled, published, private, trash}` (M2b P13, P14); `GET /content/refs?ids=<uuid>,…` names items by id across types (relation fields, menu targets, the comments queue's item filter): `{items: [{id, type, title, status, permalink}]}` for the ids the caller may read (the lists' rule, any status; media items only with `media:read`; `permalink` a path while the item has a public page now, else `null`), in no particular order; unknown and unreadable ids are absent, never an error; 1..=200 ids (`422`, `errors[0].field` `ids`), a malformed id `400` (`ids`); one store query plus the permalink reads; the static `refs` segment wins over `{type}` and core reserves `refs` as a type (and taxonomy) name (M2b-2 Task 14); `GET/PUT/DELETE /content/{type}/{id}/autosave`, the caller's own working copy (see **Autosave** below, P15). Items (not list entries) carry `seo: {title, description}` (each a string or `null`; `content_meta` `seo.title`/`seo.description`, M2b P28); create and `PATCH` take `seo?: {title?, description?}`: absent keeps a member, `null` or a string blank after trimming deletes it, a string sets it trimmed (no NUL, and no control characters once trimmed, so an edge newline is trimmed and an inner one refused; title at most 200 and description at most 500 characters, else `422` with `errors[0].field` `seo.title`/`seo.description`), in the item's transaction; a `PATCH` of `seo` alone is a full save (`If-Match`, a new version and revision); revisions do not restore SEO (P13). A `body` that is sent (create, a `PATCH` that includes `body`, autosave `PUT`) or restored (revision restore) must be an object with `"type": "doc"` (`422`, `errors[0].field` `body`); a `PATCH` without `body` keeps the stored body as it is, even one that predates the check, and stored bodies are never rewritten (M2b-2 Task 1) | M2a-1; `author`, `allowed`, `counts`, `autosave` M2b-1; `seo`, body root check, `refs` M2b-2 | `read_admin` + `content:read` and `can_read`; writes `edit_own`/`edit_others`/`publish_*` + `content:write` |
 | Revisions | `GET /content/{type}/{id}/revisions`, `GET …/revisions/{rid}`, `POST …/revisions/{rid}/restore` | M2a-1 | reads as content plus a role that may edit the item (R26, §1 "Reading revisions"); restore as a content update |
 | Content types | `GET/POST /types`, `GET/PATCH/DELETE /types/{name}` | M2a-1 | reads `content:read`; writes `manage_settings` + `settings:write` |
 | Taxonomies & terms | `GET/POST /taxonomies`, `GET/PATCH/DELETE /taxonomies/{name}`, `GET/POST /taxonomies/{taxonomy}/terms`, `GET/PATCH/DELETE /terms/{id}` | M2a-1 | taxonomy reads `content:read`, writes `manage_settings` + `settings:write`; term reads `terms:read`, writes `manage_terms` + `terms:write` |
 | Menus | `GET /menus`, `GET/PUT/DELETE /menus/{name}` (`PUT` replaces the whole tree); the list also carries `locations: [{name, label, menu}]`, the `[menus]` table of the theme the answering node serves now (after any hot swap; by name, empty when it declares none), `menu` = a menu with that name exists (M2b-2 Task 3) | M2a-1; `locations` M2b-2 | reads `menus:read`; writes `manage_menus` + `menus:write` |
-| Users & tokens | `GET/POST /users`, `GET/PATCH/DELETE /users/{id}` (`DELETE ?reassign=<id>` moves the user's content), `POST /users/{id}/password`, `GET/POST /users/{id}/tokens`, `DELETE /users/{id}/tokens/{tid}` | M2a-1 | others: `manage_users` + `users:read`/`users:write`; oneself: own e-mail, display name and tokens (`users:read` to list tokens, `users:write` to change); own password via `POST /auth/password` |
+| Users & tokens | `GET/POST /users` (`GET ?q&role&status&limit&cursor`: `q` is trimmed, 1 to 100 characters, else `422` with `errors[0].field` `q`, and matches the login, display name or e-mail as a case-insensitive substring with `%`, `_` and `\` literal (`LIKE`/`ILIKE … ESCAPE '\'`; SQLite folds ASCII case only); `role` and `status` match exactly, an unknown value is `400 malformed-query`; order (login) and cursor as without them, M2b-3 P46), `GET/PATCH/DELETE /users/{id}` (`DELETE ?reassign=<id>` moves the user's content; a `PATCH` changing one's **own** `email` to a different address needs `current_password`: missing `422` with `errors[0].field` `current_password`, wrong `403 forbidden`, counted on the per-login bucket of `POST /auth/password` (5/min, `429`); the same address needs none; an admin changing another user's e-mail needs none, M2b-3 P44), `POST /users/{id}/password`, `POST /users/{id}/totp/disable` (`204`; turns off another user's TOTP, the lost-authenticator path: their sessions and tokens are kept, audited `user.totp_disable` with the actor; oneself `422` with `errors[0].field` `id`, TOTP not on `422`; M2b-3 P43), `GET/POST /users/{id}/tokens`, `DELETE /users/{id}/tokens/{tid}` | M2a-1; filters, `current_password`, `totp/disable` M2b-3 | others: `manage_users` + `users:read`/`users:write`; oneself: own e-mail (with the password), display name and tokens (`users:read` to list tokens, `users:write` to change); own password via `POST /auth/password`, own TOTP via `/auth/totp/*` |
 | Redirects | `GET/POST /redirects` (`GET ?q&limit&cursor`: `q` is trimmed, 1 to 200 characters, else `422` with `errors[0].field` `q`, and matches `source` or `target` as a case-insensitive substring with `%`, `_` and `\` literal (`LIKE`/`ILIKE … ESCAPE '\'`; SQLite folds ASCII case only); order and cursor as without it), `GET/PATCH/DELETE /redirects/{id}`, `POST /redirects/import` (CSV), `GET /redirects/export` (CSV) | M2a-1; `q` M2b-2 | `manage_redirects` (admins) + `redirects:read`/`redirects:write` |
 | Settings | `GET/PATCH /settings` (the allowlist `ferrite_core::settings::SETTINGS`) | M2a-1 | reads `settings:read`; writes `manage_settings` + `settings:write` |
 | Media | `POST /media` (multipart, streaming, `Idempotency-Key`), `GET /media?q&kind&author&trash&limit&cursor`, `GET/PATCH/DELETE /media/{id}` (`PATCH` title and alt with `If-Match`; `DELETE` trashes, `?force=true` deletes a trashed item), `POST /media/{id}/restore` (`If-Match`; from trash to published); see **Media** below | M2a-2b (built); `q`, `kind`, `trash`, restore M2b-2 (P33) | upload `upload_media` + `media:write`; reads `media:read` and `can_read` per item; edit, trash, restore and delete the content role rules with `media:write` in place of `content:write` (restore also `publish_own`/`publish_others`) |
@@ -518,6 +518,18 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   new cookie for the caller), on a role change, disable and delete, by `ferrite user
   reset-password`, and when TOTP is enabled (all but the confirming session, R26). A
   cookie sent with a successful login is deleted server-side (no session fixation).
+  A user manages their own sessions (M2b-3 P45; cookie sessions only: a bearer request is
+  `400 bad-request`, as for logout; `users:write`, which a session always holds):
+  `GET /auth/sessions` → `{ items: [{ id, created_at, last_seen_at, current }] }`, newest
+  first, the newest 100 read and those past their end or idle limit left out;
+  `DELETE /auth/sessions/{id}` → `204` (the current session `422`, sign out instead; an id
+  that is none of the user's sessions `404`); `POST /auth/sessions/revoke-others` →
+  `{ revoked: n }`, keeping the current one. The `id` is the first 16 hex characters of
+  SHA-256 over the stored key (itself the SHA-256 of the cookie), computed on read (no
+  column, no migration): it names a session to its owner without revealing the stored key
+  or the cookie. No user agent or address is shown, so sessions are told apart by time.
+  Both revocations are audited `session.revoke` (target the user; `details.session` = the
+  id, or `details.count`).
 - **CSRF and origin** (P8): a cookie-authenticated request with a method other than GET or
   HEAD needs `X-CSRF-Token` = base64url(HMAC-SHA256(session `csrf_secret`,
   `"ferrite-csrf:v1:" + id_hash`)) and an `Origin` equal to the `site.url` origin (without
@@ -573,8 +585,10 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   "csrf_token" }`; `POST /auth/login/totp` finishes it. A code's step must be newer than
   `users.totp_last_step` (one conditional update), so a code cannot be replayed. The
   issuer is the configured `site.title` (`ferrite.toml`, read at startup) without `:`
-  (`FerriteCMS` when empty). There are no recovery codes: an operator runs `ferrite user
-  disable-totp --login <login>`.
+  (`FerriteCMS` when empty). There are no recovery codes: an admin turns another user's
+  TOTP off with `POST /users/{id}/totp/disable` (`manage_users` + `users:write`, never
+  oneself, their sessions kept, audited `user.totp_disable`; M2b-3 P43), or an operator
+  runs `ferrite user disable-totp --login <login>`.
 - **Site key** (P4, R1; [01 §4](01-architecture.md#4-configuration), §8):
   `auth.secret_key[_file]`, or in solo mode `<data>/secret.key`; cluster mode refuses to
   start without a configured key. It seals TOTP secrets, login/enrollment challenges and
@@ -597,7 +611,8 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   made when a `String` grew.
 - **Passkeys** (`webauthn-rs`): deferred past M2 (P3; the newest `webauthn-rs` is a
   pre-release, and the ceremony needs the SPA). There is no `passkeys` table.
-- **Audit log** (P22): user, token, TOTP, type/taxonomy and settings writes, extension
+- **Audit log** (P22): user, token, TOTP, session revocation (`session.revoke`, M2b-3),
+  type/taxonomy and settings writes, extension
   writes through the API (plugin install/enable/disable/delete/settings, theme
   install/activate/settings; M2a-2a) and a completed password reset
   (`user.password_reset`, no actor) append a row to `audit_log` in the same `Tx` (no
@@ -635,7 +650,8 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
     cannot be guessed, a bad, expired or used token is refused before any password work,
     and argon2 runs only for a token that is valid for the current password hash.
   - API tokens are kept (R22) and **TOTP is kept**: a reset never bypasses or disables the
-    second factor; a lost authenticator still needs `ferrite user disable-totp`.
+    second factor; a lost authenticator still needs an admin (`POST
+    /users/{id}/totp/disable`) or `ferrite user disable-totp`.
 
   An operator can also reset a password with the CLI: `ferrite user reset-password --data
   DIR --login <login> [--password-stdin]` ([09 §8](09-operations.md#8-cli-summary)); it

@@ -386,6 +386,195 @@
         }
       }
     },
+    "/api/v1/auth/sessions": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "list_sessions",
+        "responses": {
+          "200": {
+            "description": "The user's live sessions, newest first; `current` is this one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`bad-request`: the request used a bearer token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/sessions/revoke-others": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "revoke_other_sessions",
+        "responses": {
+          "200": {
+            "description": "Every other session of the user ended; this one is kept. Audited `session.revoke` with `details.count`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionsRevoked"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`bad-request`: the request used a bearer token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/sessions/{id}": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "revoke_session",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "A session's `id` from `GET /auth/sessions`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The session ended (on every node at its next request); audited `session.revoke`"
+          },
+          "400": {
+            "description": "`bad-request`: the request used a bearer token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no session of the user has this id",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: the current session (use `POST /auth/logout`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/v1/auth/totp/confirm": {
       "post": {
         "tags": [
@@ -7623,6 +7812,33 @@
         "operationId": "list_users",
         "parameters": [
           {
+            "name": "q",
+            "in": "query",
+            "description": "Only users whose login, display name or e-mail holds this text, ignoring case\n(`%` and `_` match only themselves). Trimmed; 1 to 100 characters (`422`, field\n`q`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "description": "Only users with this role.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/RoleDto"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only users with this status.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/UserStatusDto"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "description": "1..=200; default 50.",
@@ -7636,7 +7852,7 @@
           {
             "name": "cursor",
             "in": "query",
-            "description": "`next_cursor` of the previous page.",
+            "description": "`next_cursor` of the previous page of the same query.",
             "required": false,
             "schema": {
               "type": "string"
@@ -7655,7 +7871,7 @@
             }
           },
           "400": {
-            "description": "`validation` (`limit`, `cursor`) or `malformed-query`",
+            "description": "`validation` (`limit`, `cursor`) or `malformed-query` (also an unknown `role` or `status`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7676,6 +7892,16 @@
           },
           "403": {
             "description": "`forbidden` (`manage_users`, `users:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: `q` blank or longer than 100 characters (`errors[0].field` = `q`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7997,7 +8223,7 @@
             }
           },
           "403": {
-            "description": "`forbidden` (another user, role or status: `manage_users`; `users:write`), `csrf` or `password-reset-required`",
+            "description": "`forbidden` (another user, role or status: `manage_users`; `users:write`; a wrong `current_password`), `csrf` or `password-reset-required`",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -8017,7 +8243,17 @@
             }
           },
           "422": {
-            "description": "`validation`: `errors[0].field` `login` (cannot change), `email` (also taken) or `display_name`; one's own role or status; the last active admin",
+            "description": "`validation`: `errors[0].field` `login` (cannot change), `email` (also taken), `display_name` or `current_password` (missing for an own e-mail change); one's own role or status; the last active admin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate-limited`: the own-e-mail password check (see `Retry-After`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -8348,6 +8584,78 @@
           },
           "404": {
             "description": "`not-found`: the user holds no such token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/{id}/totp/disable": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "operationId": "disable_user_totp",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "TOTP is off for the user (a lost authenticator); their sessions and tokens are kept"
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_users`, `users:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: the request's own account (`errors[0].field` = `id`; use `POST /auth/totp/disable` with the password), or TOTP is not on",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -11433,6 +11741,65 @@
           }
         }
       },
+      "SessionDto": {
+        "type": "object",
+        "description": "One of the user's sessions (`GET /auth/sessions`). No user agent or address is\nshown: sessions are told apart by time.",
+        "required": [
+          "id",
+          "created_at",
+          "last_seen_at",
+          "current"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "current": {
+            "type": "boolean",
+            "description": "The session this request came with (end it with `POST /auth/logout`)."
+          },
+          "id": {
+            "type": "string",
+            "description": "An opaque id (16 hex characters) for `DELETE /auth/sessions/{id}`; never the\ncookie value."
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Updated at most every 5 minutes."
+          }
+        }
+      },
+      "SessionList": {
+        "type": "object",
+        "description": "`GET /auth/sessions`: the user's live sessions, newest first.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionDto"
+            }
+          }
+        }
+      },
+      "SessionsRevoked": {
+        "type": "object",
+        "description": "The result of `POST /auth/sessions/revoke-others`.",
+        "required": [
+          "revoked"
+        ],
+        "properties": {
+          "revoked": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many sessions ended.",
+            "minimum": 0
+          }
+        }
+      },
       "SettingDefDto": {
         "type": "object",
         "description": "One declared setting: what the admin renders a form field from (05 §4c, 06 §1).",
@@ -12310,6 +12677,14 @@
         "type": "object",
         "description": "`PATCH /users/{id}`: merged into the stored account. Role and status cannot change\non oneself; the last active admin cannot be demoted or disabled.",
         "properties": {
+          "current_password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "password",
+            "description": "The request's own current password. Required when a user changes their **own**\n`email` to a different address (missing: `422`, `errors[0].field` =\n`current_password`; wrong: `403 forbidden`; checked on the same per-login rate\nlimit as `POST /auth/password`); ignored otherwise, so an admin changing another\nuser's e-mail sends none."
+          },
           "display_name": {
             "type": "string"
           },

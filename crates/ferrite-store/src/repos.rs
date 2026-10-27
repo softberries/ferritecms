@@ -11,7 +11,7 @@ use ferrite_domain::{
     JobLease, JobQuery, JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob, NewNode,
     NewUser, Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId, RedirectQuery,
     Revision, RevisionId, SearchQuery, Secret, Session, Taxonomy, Term, TermId, Timestamp, User,
-    UserId,
+    UserId, UserQuery,
 };
 
 use crate::{Channel, LockGuard, StoreError, Subscription, migrate::MigrationStatus};
@@ -406,8 +406,12 @@ pub trait UserRepo: Send + Sync {
     /// (then id); `limit` outside 1..=[`MAX_AUTH_LIST`](crate::MAX_AUTH_LIST) is
     /// `Invalid`.
     async fn list_active_admins(&self, limit: u32) -> Result<Vec<User>, StoreError>;
-    /// Lists users with cursor pagination.
-    async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<User>, StoreError>;
+    /// Lists users by login (binary order, then id) with cursor pagination, filtered by
+    /// `query`: `q` is a case-insensitive substring of the login, display name or e-mail
+    /// (`LIKE … ESCAPE '\'`, Postgres `ILIKE`; SQLite folds ASCII case only), with `%`,
+    /// `_` and `\` matching only themselves; `role` and `status` match exactly. A NUL in
+    /// `q`, a bad `limit` or a bad cursor is `Invalid`.
+    async fn list(&self, query: &UserQuery) -> Result<Page<User>, StoreError>;
     /// Fetches up to [`MAX_ID_FILTER`](crate::MAX_ID_FILTER) users in one query, returned
     /// in the order of `ids`; missing ids are skipped and a repeated id yields its user
     /// once (at its first position). More ids is `Invalid`.
@@ -799,6 +803,33 @@ pub trait SessionRepo: Send + Sync {
     /// Up to [`MAX_AUTH_LIST`](crate::MAX_AUTH_LIST) sessions of `user`, newest first
     /// (`created_at DESC, id_hash DESC`).
     async fn list_for_user(&self, user: UserId) -> Result<Vec<Session>, StoreError>;
+    /// The session of `user` whose [public id](crate::session_public_id) is `public_id`,
+    /// among those [`list_for_user`](Self::list_for_user) returns (the newest
+    /// [`MAX_AUTH_LIST`](crate::MAX_AUTH_LIST)); expired or not. Another user's session
+    /// is `None`. The public id is not stored (no migration, M2b-3 P45), so this hashes
+    /// each listed key.
+    async fn get_by_public_id(
+        &self,
+        user: UserId,
+        public_id: &str,
+    ) -> Result<Option<Session>, StoreError> {
+        Ok(self
+            .list_for_user(user)
+            .await?
+            .into_iter()
+            .find(|s| crate::session_public_id(&s.id_hash) == public_id))
+    }
+    /// Deletes the session [`get_by_public_id`](Self::get_by_public_id) finds; `false`
+    /// when there is none.
+    async fn delete_by_public_id(&self, user: UserId, public_id: &str) -> Result<bool, StoreError> {
+        match self.get_by_public_id(user, public_id).await? {
+            Some(session) => {
+                self.delete(&session.id_hash).await?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
     /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) sessions with
     /// `expires_at < now` or `last_seen_at < idle_before`; returns the count. Callers loop
     /// until a batch comes back short (R5).

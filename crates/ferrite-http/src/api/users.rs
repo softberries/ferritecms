@@ -8,7 +8,13 @@
 //!
 //! * A user can read and edit their own account (`email`, `display_name`); everything
 //!   else, and any other account, needs `manage_users`. So only the user themselves and
-//!   managers ever see an e-mail address.
+//!   managers ever see an e-mail address. Changing one's own e-mail to a different
+//!   address needs `current_password` (the reset channel, M2b-3 P44), rate limited like
+//!   `POST /auth/password` (`AuthService::update_user`).
+//! * `GET /users?q&role&status` filters the list (M2b-3 P46).
+//! * `POST /users/{id}/totp/disable` turns off another user's TOTP (a lost
+//!   authenticator, M2b-3 P43); their sessions are kept. One's own TOTP goes through
+//!   `/auth/totp/disable` with the password.
 //! * Logins never change (R3); role and status never change on oneself; the last active
 //!   admin cannot be demoted, disabled or deleted (`422`). A role change, disable or
 //!   delete ends the user's sessions on every node at once; disable and delete also
@@ -34,7 +40,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use ferrite_core::{NewAccount, Scopes, UserPatch};
-use ferrite_domain::{ApiTokenId, Timestamp, UserId};
+use ferrite_domain::{ApiTokenId, MAX_PAGE, Timestamp, UserId, UserQuery};
 use ferrite_store::USER_CURSOR_TAG;
 use uuid::Uuid;
 
@@ -43,9 +49,9 @@ use super::{
     dto::Password,
     dto::users::{
         CreatedTokenDto, DeleteUserParams, PasswordSet, TokenDto, TokenInput, TokenList, UserDto,
-        UserInput, UserList, UserPatchInput,
+        UserInput, UserList, UserListParams, UserPatchInput,
     },
-    extract::{ApiJson, ApiPath, ApiQuery, PageParams, created_at, invalid_cursor},
+    extract::{ApiJson, ApiPath, ApiQuery, DEFAULT_LIMIT, check_limit, created_at, invalid_cursor},
     list,
     problem::{Problem, ProblemDocument},
 };
@@ -56,28 +62,38 @@ use super::{
     tag = "users",
     operation_id = "list_users",
     security(("session" = []), ("bearer" = [])),
-    params(PageParams),
+    params(UserListParams),
     responses(
         (status = 200, description = "One page of users, by login", body = UserList),
-        (status = 400, description = "`validation` (`limit`, `cursor`) or `malformed-query`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 400, description = "`validation` (`limit`, `cursor`) or `malformed-query` (also an unknown `role` or `status`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (`manage_users`, `users:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: `q` blank or longer than 100 characters (`errors[0].field` = `q`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn list_users(
     State(api): State<Arc<ApiState>>,
     Authed(who): Authed,
-    ApiQuery(page): ApiQuery<PageParams>,
+    ApiQuery(params): ApiQuery<UserListParams>,
 ) -> Result<Json<UserList>, Problem> {
-    let limit = page.limit()?;
-    if let Some(c) = &page.cursor
+    let limit = check_limit(params.limit, DEFAULT_LIMIT, MAX_PAGE)?;
+    if let Some(c) = &params.cursor
         && ferrite_store::text_cursor(USER_CURSOR_TAG, c).is_err()
     {
         return Err(invalid_cursor());
     }
     let found = api
         .users
-        .list(&who.actor, limit, page.cursor.as_deref())
+        .list(
+            &who.actor,
+            UserQuery {
+                q: params.q,
+                role: params.role.map(Into::into),
+                status: params.status.map(Into::into),
+                limit,
+                cursor: params.cursor,
+            },
+        )
         .await?;
     let (items, next_cursor) = list::items(found, UserDto::from);
     Ok(Json(UserList { items, next_cursor }))
@@ -156,9 +172,10 @@ pub async fn get_user(
         (status = 200, description = "Saved (a role change or disable also ended the user's sessions; a disable revoked their tokens)", body = UserDto),
         (status = 400, description = "`malformed-json` (also `null` members)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 403, description = "`forbidden` (another user, role or status: `manage_users`; `users:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (another user, role or status: `manage_users`; `users:write`; a wrong `current_password`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 422, description = "`validation`: `errors[0].field` `login` (cannot change), `email` (also taken) or `display_name`; one's own role or status; the last active admin", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: `errors[0].field` `login` (cannot change), `email` (also taken), `display_name` or `current_password` (missing for an own e-mail change); one's own role or status; the last active admin", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 429, description = "`rate-limited`: the own-e-mail password check (see `Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn update_user(
@@ -168,8 +185,9 @@ pub async fn update_user(
     ApiJson(patch): ApiJson<UserPatchInput>,
 ) -> Result<Json<UserDto>, Problem> {
     let user = api
-        .users
-        .update(
+        .auth
+        .update_user(
+            &api.users,
             &who.actor,
             UserId::from_uuid(id),
             UserPatch {
@@ -178,6 +196,7 @@ pub async fn update_user(
                 display_name: patch.display_name,
                 role: patch.role.map(Into::into),
                 status: patch.status.map(Into::into),
+                current_password: patch.current_password.map(Password::into_secret),
             },
         )
         .await?;
@@ -249,6 +268,32 @@ pub async fn set_user_password(
     }
     api.users
         .set_password(&who.actor, id, None, req.password.expose(), None)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    post,
+    path = "/users/{id}/totp/disable",
+    tag = "users",
+    operation_id = "disable_user_totp",
+    security(("session" = []), ("bearer" = [])),
+    params(("id" = Uuid, Path)),
+    responses(
+        (status = 204, description = "TOTP is off for the user (a lost authenticator); their sessions and tokens are kept"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_users`, `users:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: the request's own account (`errors[0].field` = `id`; use `POST /auth/totp/disable` with the password), or TOTP is not on", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn disable_user_totp(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(id): ApiPath<Uuid>,
+) -> Result<StatusCode, Problem> {
+    api.users
+        .disable_totp_for(&who.actor, UserId::from_uuid(id))
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }

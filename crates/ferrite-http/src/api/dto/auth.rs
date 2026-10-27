@@ -1,6 +1,9 @@
 //! Bodies of the `/auth` endpoints.
 
-use ferrite_core::{AuthService, Authenticated, Capability, Via, auth::TotpSetup, require};
+use chrono::{DateTime, Utc};
+use ferrite_core::{
+    AuthService, Authenticated, Capability, SessionInfo, Via, auth::TotpSetup, require,
+};
 use serde::{Deserialize, Serialize};
 
 use super::Password;
@@ -78,6 +81,44 @@ pub struct TotpDisable {
     /// The account's current password.
     #[schema(value_type = String, format = Password)]
     pub password: Password,
+}
+
+/// One of the user's sessions (`GET /auth/sessions`). No user agent or address is
+/// shown: sessions are told apart by time.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SessionDto {
+    /// An opaque id (16 hex characters) for `DELETE /auth/sessions/{id}`; never the
+    /// cookie value.
+    pub id: String,
+    pub created_at: DateTime<Utc>,
+    /// Updated at most every 5 minutes.
+    pub last_seen_at: DateTime<Utc>,
+    /// The session this request came with (end it with `POST /auth/logout`).
+    pub current: bool,
+}
+
+impl From<SessionInfo> for SessionDto {
+    fn from(s: SessionInfo) -> Self {
+        Self {
+            id: s.id,
+            created_at: s.created_at.as_datetime(),
+            last_seen_at: s.last_seen_at.as_datetime(),
+            current: s.current,
+        }
+    }
+}
+
+/// `GET /auth/sessions`: the user's live sessions, newest first.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SessionList {
+    pub items: Vec<SessionDto>,
+}
+
+/// The result of `POST /auth/sessions/revoke-others`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SessionsRevoked {
+    /// How many sessions ended.
+    pub revoked: u64,
 }
 
 /// The authenticated user and what the request's credential allows.

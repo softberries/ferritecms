@@ -12,7 +12,7 @@ use ferrite_core::{
 };
 use ferrite_domain::{
     ApiToken, ApiTokenId, Revision, RevisionId, Role, Secret, Session, Timestamp, User, UserId,
-    UserStatus,
+    UserQuery, UserStatus,
 };
 use ferrite_store::Store;
 use ferrite_store_tests::{TestDb, backend_tests, backend_tests_spawning, fixtures::new_post};
@@ -29,6 +29,13 @@ fn account(login: &str, role: Role) -> NewAccount {
         role,
         password: None,
         must_reset: false,
+    }
+}
+
+fn page(limit: u32) -> UserQuery {
+    UserQuery {
+        limit,
+        ..UserQuery::default()
     }
 }
 
@@ -197,11 +204,11 @@ async fn login_and_email_validation(db: &TestDb) {
     dup.email = "alice@EXAMPLE.com".into();
     assert_eq!(invalid(users.create(&admin, dup).await), "e-mail taken");
 
-    // Updating to a taken e-mail; self may change own e-mail and display name.
-    let bob = users
-        .create(&admin, account("bob", Role::Author))
-        .await
-        .unwrap();
+    // Updating to a taken e-mail; self may change own e-mail (with the password, P44)
+    // and display name.
+    let mut b = account("bob", Role::Author);
+    b.password = Some(PASSWORD.into());
+    let bob = users.create(&admin, b).await.unwrap();
     let bob_actor = Actor::new(bob.id, bob.role);
     let r = users
         .update(
@@ -209,6 +216,7 @@ async fn login_and_email_validation(db: &TestDb) {
             bob.id,
             UserPatch {
                 email: Some("ALICE@example.com".into()),
+                current_password: Some(PASSWORD.into()),
                 ..UserPatch::default()
             },
         )
@@ -221,6 +229,7 @@ async fn login_and_email_validation(db: &TestDb) {
             UserPatch {
                 email: Some("bob@new.example".into()),
                 display_name: Some(" Bobby ".into()),
+                current_password: Some(PASSWORD.into()),
                 ..UserPatch::default()
             },
         )
@@ -304,10 +313,10 @@ async fn login_and_email_validation(db: &TestDb) {
     ));
     assert_eq!(users.get(&bob_actor, bob.id).await.unwrap().id, bob.id);
     assert!(matches!(
-        users.list(&bob_actor, 50, None).await,
+        users.list(&bob_actor, page(50)).await,
         Err(CoreError::Forbidden("manage_users"))
     ));
-    assert!(users.list(&admin, 50, None).await.unwrap().items.len() >= 4);
+    assert!(users.list(&admin, page(50)).await.unwrap().items.len() >= 4);
 
     let actions = audit_actions(db.store()).await;
     assert!(actions.iter().any(|a| a == "user.create"), "{actions:?}");
@@ -687,7 +696,7 @@ async fn role_change_and_disable_revoke_sessions_and_tokens(db: &TestDb) {
         Err(CoreError::Forbidden("users:write"))
     ));
     assert!(matches!(
-        users.list(&narrow, 10, None).await,
+        users.list(&narrow, page(10)).await,
         Err(CoreError::Forbidden("users:read"))
     ));
 }
@@ -835,6 +844,154 @@ async fn mutual_reassign_deletes_serialize(db: Arc<TestDb>) {
     }
 }
 
+/// M2b-3 P43: an admin turns off another user's TOTP; not their own, not as an editor.
+async fn disable_totp_for_other_user(db: &TestDb) {
+    let store = db.store();
+    let users = service(db);
+    let (_, admin) = bootstrap_admin(&users, "root").await;
+    let ed = users
+        .create(&admin, account("ed", Role::Editor))
+        .await
+        .unwrap();
+    let editor = Actor::new(ed.id, ed.role);
+    let target = users
+        .create(&admin, account("tess", Role::Author))
+        .await
+        .unwrap();
+    let repo = store.read().users();
+    repo.set_totp(target.id, Some(&Secret::new("sealed")))
+        .await
+        .unwrap();
+    repo.set_totp(admin.user, Some(&Secret::new("sealed")))
+        .await
+        .unwrap();
+    add_session(store, target.id, "tess-1").await;
+
+    // An editor lacks `manage_users`; a token without `users:write` lacks the scope.
+    assert!(matches!(
+        users.disable_totp_for(&editor, target.id).await,
+        Err(CoreError::Forbidden("manage_users"))
+    ));
+    let read_only = Actor::new(admin.user, Role::Admin)
+        .with_scopes(ferrite_core::Scopes::from_strs(&["users:read".to_owned()]).unwrap());
+    assert!(matches!(
+        users.disable_totp_for(&read_only, target.id).await,
+        Err(CoreError::Forbidden(_))
+    ));
+    // Oneself: the account's own TOTP settings (with the password).
+    match users.disable_totp_for(&admin, admin.user).await {
+        Err(CoreError::InvalidField {
+            field: "id",
+            message,
+        }) => {
+            assert_eq!(message, "use your own account's TOTP settings");
+        }
+        other => panic!("expected InvalidField id, got {other:?}"),
+    }
+    assert!(stored(store, admin.user).await.totp_secret.is_some());
+    assert!(matches!(
+        users.disable_totp_for(&admin, UserId::new()).await,
+        Err(CoreError::NotFound)
+    ));
+
+    users.disable_totp_for(&admin, target.id).await.unwrap();
+    let row = stored(store, target.id).await;
+    assert!(row.totp_secret.is_none());
+    assert_eq!(row.totp_last_step, None);
+    // The target's sessions are kept (P43).
+    assert_eq!(
+        session_ids(store, target.id).await,
+        BTreeSet::from(["tess-1".to_owned()])
+    );
+    // Not enabled (any more).
+    assert!(matches!(
+        users.disable_totp_for(&admin, target.id).await,
+        Err(CoreError::Invalid(_))
+    ));
+    let entries = store.read().audit().list(200, None).await.unwrap().items;
+    let rows: Vec<_> = entries
+        .iter()
+        .filter(|e| e.action == "user.totp_disable")
+        .collect();
+    assert_eq!(rows.len(), 1, "{entries:?}");
+    assert_eq!(rows[0].actor_id, Some(admin.user));
+    assert_eq!(rows[0].target_kind, "user");
+    assert_eq!(rows[0].target_id, Some(target.id.to_string()));
+}
+
+/// M2b-3 P44: changing one's own e-mail needs the current password; an admin changing
+/// another user's e-mail does not.
+async fn own_email_change_needs_password(db: &TestDb) {
+    let store = db.store();
+    let users = service(db);
+    let (_, admin) = bootstrap_admin(&users, "root").await;
+    let mut a = account("ann", Role::Author);
+    a.password = Some(PASSWORD.into());
+    let ann = users.create(&admin, a).await.unwrap();
+    let me = Actor::new(ann.id, ann.role);
+    let email = |e: &str, pw: Option<&str>| UserPatch {
+        email: Some(e.into()),
+        current_password: pw.map(Secret::from),
+        ..UserPatch::default()
+    };
+
+    // Missing: 422 on `current_password`; wrong: Forbidden. Nothing changes.
+    match users
+        .update(&me, ann.id, email("new@example.com", None))
+        .await
+    {
+        Err(CoreError::InvalidField {
+            field: "current_password",
+            ..
+        }) => {}
+        other => panic!("expected InvalidField current_password, got {other:?}"),
+    }
+    assert!(matches!(
+        users
+            .update(
+                &me,
+                ann.id,
+                email("new@example.com", Some("wrong password!"))
+            )
+            .await,
+        Err(CoreError::Forbidden("current password"))
+    ));
+    assert_eq!(stored(store, ann.id).await.email, "ann@example.com");
+
+    // The same e-mail (after trimming) changes nothing and needs no password; neither
+    // does a display-name change.
+    let same = users
+        .update(&me, ann.id, email(" ann@example.com ", None))
+        .await
+        .unwrap();
+    assert_eq!(same.email, "ann@example.com");
+    let renamed = users
+        .update(
+            &me,
+            ann.id,
+            UserPatch {
+                display_name: Some("Ann B".into()),
+                ..UserPatch::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(renamed.display_name, "Ann B");
+
+    let changed = users
+        .update(&me, ann.id, email("new@example.com", Some(PASSWORD)))
+        .await
+        .unwrap();
+    assert_eq!(changed.email, "new@example.com");
+
+    // An admin changing someone else's e-mail needs none.
+    let by_admin = users
+        .update(&admin, ann.id, email("third@example.com", None))
+        .await
+        .unwrap();
+    assert_eq!(by_admin.email, "third@example.com");
+}
+
 backend_tests_spawning!(mutual_reassign_deletes_serialize);
 
 backend_tests!(
@@ -844,4 +1001,6 @@ backend_tests!(
     password_change_revokes_other_sessions,
     role_change_and_disable_revoke_sessions_and_tokens,
     operator_path_bypasses_actor,
+    disable_totp_for_other_user,
+    own_email_change_needs_password,
 );

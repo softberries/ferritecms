@@ -46,3 +46,16 @@ pub struct NewUser {
     pub status: UserStatus,
     pub must_reset: bool,
 }
+
+/// A user listing (P46): by login (binary order), optionally searched and filtered.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UserQuery {
+    /// A case-insensitive substring of the login, display name or e-mail; `%`, `_` and
+    /// `\` match only themselves. Core trims it and allows 1..=100 characters.
+    pub q: Option<String>,
+    pub role: Option<Role>,
+    pub status: Option<UserStatus>,
+    /// 1..=[`MAX_PAGE`](crate::MAX_PAGE).
+    pub limit: u32,
+    pub cursor: Option<String>,
+}

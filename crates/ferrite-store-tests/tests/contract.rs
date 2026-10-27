@@ -4,7 +4,7 @@ use ferrite_store_tests::{
     comment_counts::*, comment_threads::*, constraints::*, content::*, event::*, idempotency::*,
     job::*, job_list::*, lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*,
     notify::*, plugin::*, plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*,
-    user::*,
+    user::*, user_filters::*,
 };
 
 backend_tests!(
@@ -127,6 +127,8 @@ backend_tests!(
     email_case_insensitive_unique,
     unicode_login_and_slug_exact,
     users_update_and_list,
+    user_list_filters,
+    session_public_id_roundtrip,
     email_folding_is_ascii_only,
     set_totp_sets_secret_and_resets_step,
     update_keeps_totp_last_step,

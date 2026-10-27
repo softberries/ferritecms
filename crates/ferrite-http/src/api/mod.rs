@@ -91,6 +91,9 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(auth::totp_setup))
         .routes(routes!(auth::totp_confirm))
         .routes(routes!(auth::totp_disable))
+        .routes(routes!(auth::list_sessions))
+        .routes(routes!(auth::revoke_session))
+        .routes(routes!(auth::revoke_other_sessions))
         .routes(routes!(content::list_content, content::create_content))
         .routes(routes!(content::count_content))
         .routes(routes!(content::content_refs))
@@ -168,6 +171,7 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
             users::delete_user
         ))
         .routes(routes!(users::set_user_password))
+        .routes(routes!(users::disable_user_totp))
         .routes(routes!(users::list_tokens, users::create_token))
         .routes(routes!(users::revoke_token))
         .merge(uploads(

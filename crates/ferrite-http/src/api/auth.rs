@@ -58,15 +58,17 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use ferrite_core::{Authenticated, CoreError, IssuedSession, LoginAttempt, LoginOutcome, Via};
+use ferrite_domain::Session;
 
 use super::{
     ApiState,
     cookie::{clear_cookie, read_session_cookie, session_cookie},
     dto::auth::{
         LoginRequest, LoginResponse, MeDto, PasswordChange, PasswordChanged, PasswordResetConfirm,
-        PasswordResetRequest, TotpConfirm, TotpDisable, TotpLoginRequest, TotpSetupDto,
+        PasswordResetRequest, SessionDto, SessionList, SessionsRevoked, TotpConfirm, TotpDisable,
+        TotpLoginRequest, TotpSetupDto,
     },
-    extract::ApiJson,
+    extract::{ApiJson, ApiPath},
     problem::{Challenge, Problem, ProblemDocument},
     state::origin_of,
 };
@@ -620,6 +622,89 @@ pub async fn totp_disable(
         .totp_disable(&who.actor, req.password.expose())
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The cookie session of a session-only route (`/auth/sessions`); a bearer request is
+/// `400 bad-request`, as for `POST /auth/logout`.
+fn session_of(who: &Authenticated) -> Result<&Session, Problem> {
+    match &who.via {
+        Via::Session(session) => Ok(session),
+        Via::Token(_) => Err(Problem::bad_request(
+            "sessions are managed with a cookie session; revoke an API token instead",
+        )),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/auth/sessions",
+    tag = "auth",
+    operation_id = "list_sessions",
+    security(("session" = [])),
+    responses(
+        (status = 200, description = "The user's live sessions, newest first; `current` is this one", body = SessionList),
+        (status = 400, description = "`bad-request`: the request used a bearer token", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn list_sessions(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+) -> Result<Json<SessionList>, Problem> {
+    let current = session_of(&who)?;
+    let items = api.auth.list_sessions(&who.actor, current).await?;
+    Ok(Json(SessionList {
+        items: items.into_iter().map(SessionDto::from).collect(),
+    }))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/auth/sessions/{id}",
+    tag = "auth",
+    operation_id = "revoke_session",
+    security(("session" = [])),
+    params(("id" = String, Path, description = "A session's `id` from `GET /auth/sessions`")),
+    responses(
+        (status = 204, description = "The session ended (on every node at its next request); audited `session.revoke`"),
+        (status = 400, description = "`bad-request`: the request used a bearer token", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`: no session of the user has this id", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: the current session (use `POST /auth/logout`)", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn revoke_session(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(id): ApiPath<String>,
+) -> Result<StatusCode, Problem> {
+    let current = session_of(&who)?;
+    api.auth.revoke_session(&who.actor, current, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    post,
+    path = "/auth/sessions/revoke-others",
+    tag = "auth",
+    operation_id = "revoke_other_sessions",
+    security(("session" = [])),
+    responses(
+        (status = 200, description = "Every other session of the user ended; this one is kept. Audited `session.revoke` with `details.count`", body = SessionsRevoked),
+        (status = 400, description = "`bad-request`: the request used a bearer token", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn revoke_other_sessions(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+) -> Result<Json<SessionsRevoked>, Problem> {
+    let current = session_of(&who)?;
+    let revoked = api.auth.revoke_other_sessions(&who.actor, current).await?;
+    Ok(Json(SessionsRevoked { revoked }))
 }
 
 #[cfg(test)]

@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ferrite_domain::Timestamp;
-use ferrite_domain::{NewUser, Page, Secret, User, UserId};
+use ferrite_domain::{NewUser, Page, Secret, User, UserId, UserQuery};
 use ferrite_store::{
     MAX_ID_FILTER, StoreError, USER_CURSOR_TAG, UserRepo, check_admin_limit, check_len,
-    check_limit, email_key, encode_text_cursor, text_cursor, validate_text,
+    check_limit, email_key, encode_text_cursor, like_contains, text_cursor, validate_text,
 };
 
 use sqlx::{Postgres, QueryBuilder};
@@ -196,19 +196,32 @@ impl UserRepo for PgRepos {
         rows.iter().map(codec::user).collect()
     }
 
-    async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<User>, StoreError> {
-        let limit = check_limit(limit)?;
-        let after = cursor
+    async fn list(&self, query: &UserQuery) -> Result<Page<User>, StoreError> {
+        let limit = check_limit(query.limit)?;
+        let after = query
+            .cursor
+            .as_deref()
             .map(|c| text_cursor(USER_CURSOR_TAG, c))
             .transpose()?;
+        if let Some(q) = &query.q {
+            validate_text("user query", q)?;
+        }
+        let pattern = query.q.as_deref().map(like_contains);
         let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {USER_COLUMNS} FROM users \
-             WHERE $1::text IS NULL OR (login COLLATE \"C\", id) > ($1::text, $2::uuid) \
+             WHERE ($1::text IS NULL OR (login COLLATE \"C\", id) > ($1::text, $2::uuid)) \
+             AND ($4::text IS NULL OR login ILIKE $4 ESCAPE '\\' \
+                  OR display_name ILIKE $4 ESCAPE '\\' OR email ILIKE $4 ESCAPE '\\') \
+             AND ($5::text IS NULL OR role = $5::text) \
+             AND ($6::text IS NULL OR status = $6::text) \
              ORDER BY login COLLATE \"C\", id LIMIT $3"
         )))
         .bind(after.as_ref().map(|(k, _)| k.as_str()))
         .bind(after.as_ref().map(|(_, id)| *id))
         .bind(i64::from(limit) + 1)
+        .bind(pattern.as_deref())
+        .bind(query.role.map(|r| r.as_str()))
+        .bind(query.status.map(|s| s.as_str()))
         .fetch_all(e))?;
         let mut items = rows
             .iter()

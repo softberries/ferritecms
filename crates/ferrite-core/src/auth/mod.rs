@@ -15,5 +15,6 @@ pub use key::{
 };
 pub use seal::{open, seal};
 pub use service::{
-    AuthService, Authenticated, Clock, IssuedSession, LoginAttempt, LoginOutcome, TotpSetup, Via,
+    AuthService, Authenticated, Clock, IssuedSession, LoginAttempt, LoginOutcome, SessionInfo,
+    TotpSetup, Via,
 };
