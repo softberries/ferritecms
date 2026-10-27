@@ -1,6 +1,7 @@
 // Bundle-size budget (M2b-3 Task 15, P56). Reads `dist/index.html` for the entry
-// script, its modulepreloads and every stylesheet (main and lazy, such as the editor's), finds the editor (TipTap) and
-// chart chunks by name prefix, gzips each at level 9 and compares the sizes with
+// script and its modulepreloads, takes every stylesheet in `dist/assets` (the main one
+// and lazy ones such as the editor's), finds the editor (TipTap) and chart chunks by
+// name prefix, gzips each at level 9 and compares the sizes with
 // `bundle-budget.json`. Exits 1 naming every group over its limit. Run after
 // `pnpm build`; to raise a limit, edit `bundle-budget.json` in a reviewed change.
 
