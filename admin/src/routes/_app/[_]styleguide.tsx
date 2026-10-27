@@ -30,6 +30,7 @@ import {
   OrderingSection,
   PatternsSection,
 } from "./-styleguide/patterns";
+import { AdministrationSection } from "./-styleguide/administration";
 import { SECTIONS, isSection, type SectionId } from "./-styleguide/sections";
 
 interface StyleguideSearch {
@@ -57,6 +58,7 @@ const RENDER: Record<SectionId, () => React.JSX.Element> = {
   ordering: OrderingSection,
   data: DataSection,
   charts: ChartsSection,
+  administration: AdministrationSection,
 };
 
 function StyleguidePage() {

@@ -15,6 +15,12 @@
     "taxonomies": "Taxonomies",
     "menus": "Menus",
     "redirects": "Redirects",
+    "administration": "Administration",
+    "users": "Users",
+    "appearance": "Appearance",
+    "plugins": "Plugins",
+    "settings": "Settings",
+    "system": "System",
     "viewSite": "View site",
     "badge_one": "({{count}} waiting)",
     "badge_other": "({{count}} waiting)"

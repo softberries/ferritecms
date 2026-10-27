@@ -1,7 +1,13 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api, unwrap } from "./client";
 import { type JobFilters, qk } from "./keys";
-import type { SchemaJobList, SchemaMetricsSummaryDto, SchemaSystemStatusDto } from "./schema";
+import type {
+  SchemaJobDto,
+  SchemaJobList,
+  SchemaMailTestDto,
+  SchemaMetricsSummaryDto,
+  SchemaSystemStatusDto,
+} from "./schema";
 
 export type SystemStatusDto = SchemaSystemStatusDto;
 export type MetricsSummaryDto = SchemaMetricsSummaryDto;
@@ -19,6 +25,19 @@ export function getMetricsSummary(): Promise<MetricsSummaryDto> {
 /** `GET /system/jobs` (`manage_system`): one page, newest first. */
 export function listJobs(query: JobFilters = {}): Promise<SchemaJobList> {
   return unwrap(api.GET("/api/v1/system/jobs", { params: { query } }));
+}
+
+/**
+ * `POST /system/jobs/{id}/retry` (`manage_system`): a dead job back to the queue
+ * (`handled: false` when no live node runs its kind).
+ */
+export function retryJob(id: string): Promise<SchemaJobDto> {
+  return unwrap(api.POST("/api/v1/system/jobs/{id}/retry", { params: { path: { id } } }));
+}
+
+/** `POST /system/mail/test` (`manage_system`): queues a test mail to the caller. */
+export function sendTestMail(): Promise<SchemaMailTestDto> {
+  return unwrap(api.POST("/api/v1/system/mail/test"));
 }
 
 export const systemStatusQuery = queryOptions({

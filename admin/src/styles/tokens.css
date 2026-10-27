@@ -71,6 +71,11 @@
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
 
+  /* QR codes: black on white in both modes (scanners expect dark modules on a light
+     ground), so `.dark` does not redefine them. */
+  --qr-fg: oklch(0 0 0);
+  --qr-bg: oklch(1 0 0);
+
   /* Radius (sm 0.3, md 0.4, lg 0.5, xl 0.7 rem; mapped in globals.css). */
   --radius: 0.5rem;
 

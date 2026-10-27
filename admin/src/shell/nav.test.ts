@@ -310,3 +310,65 @@ test("screen_entries_need_no_content_types", () => {
     ["content", [["Media", "/media"]]],
   ]);
 });
+
+// M2b-3: the Administration section, after Structure. Each screen task registers its own
+// entry; every one is registered here, in an order unlike the sidebar's.
+const ADMIN_ENTRIES: ScreenEntry[] = [
+  ...ENTRIES,
+  { screen: "system", to: "/system", label: "nav.system", icon: ShapesIcon },
+  { screen: "settings", to: "/settings", label: "nav.settings", icon: ShapesIcon },
+  { screen: "plugins", to: "/plugins", label: "nav.plugins", icon: ShapesIcon },
+  { screen: "appearance", to: "/appearance/themes", label: "nav.appearance", icon: ShapesIcon },
+  { screen: "users", to: "/users", label: "nav.users", icon: ShapesIcon },
+];
+
+test("admin_section_by_role", () => {
+  const admin = (who: MeDto) => {
+    const sections = navFor(who, TWO_TYPES, undefined, ADMIN_ENTRIES);
+    const section = sections.find((s) => s.id === "admin");
+    return section
+      ? { label: section.label, items: section.items.map((i) => [i.label, i.to, i.shortcut]) }
+      : null;
+  };
+  // Admins: every item, in the fixed order, after Structure, with their chords.
+  expect(admin(ADMIN)).toEqual({
+    label: "Administration",
+    items: [
+      ["Users", "/users", "g u"],
+      ["Appearance", "/appearance/themes", "g a"],
+      ["Plugins", "/plugins", "g l"],
+      ["Settings", "/settings", "g s"],
+      ["System", "/system", "g y"],
+    ],
+  });
+  expect(navFor(ADMIN, TWO_TYPES, undefined, ADMIN_ENTRIES).map((s) => s.id)).toEqual([
+    "overview",
+    "content",
+    "structure",
+    "admin",
+  ]);
+  // Editors, authors and contributors hold none of the capabilities: no section.
+  for (const who of [EDITOR, AUTHOR, CONTRIBUTOR]) expect(admin(who)).toBeNull();
+  // Each item by its own capability.
+  const ids = (caps: string[]) =>
+    navFor(me("odd", ["read_admin", ...caps]), [], undefined, ADMIN_ENTRIES)
+      .find((s) => s.id === "admin")
+      ?.items.map((i) => i.id) ?? [];
+  expect(ids(["manage_users"])).toEqual(["users"]);
+  expect(ids(["manage_themes"])).toEqual(["appearance"]);
+  expect(ids(["manage_plugins"])).toEqual(["plugins"]);
+  expect(ids(["manage_settings"])).toEqual(["settings"]);
+  expect(ids(["manage_system"])).toEqual(["system"]);
+  // Not without `read_admin`, whatever else the role holds.
+  expect(
+    navFor(me("odd", ["manage_users", "manage_system"]), [], undefined, ADMIN_ENTRIES).map(
+      (s) => s.id,
+    ),
+  ).toEqual(["overview"]);
+  // `g p` stays Posts.
+  const chords = navFor(ADMIN, TWO_TYPES, undefined, ADMIN_ENTRIES)
+    .flatMap((s) => s.items)
+    .map((i) => i.shortcut)
+    .filter((k) => k !== undefined);
+  expect(new Set(chords).size).toBe(chords.length);
+});

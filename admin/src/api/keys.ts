@@ -24,6 +24,18 @@ export type JobFilters = Omit<
   "cursor"
 >;
 
+/** The filters of the users list (every query member but the page cursor and size). */
+export type UserFilters = Omit<
+  NonNullable<operations["list_users"]["parameters"]["query"]>,
+  "cursor" | "limit"
+>;
+
+/** The filters of the audit log (every query member but the page cursor and size). */
+export type AuditFilters = Omit<
+  NonNullable<operations["list_audit"]["parameters"]["query"]>,
+  "cursor" | "limit"
+>;
+
 /**
  * TanStack Query keys. Keys nest, so invalidating a prefix covers what is under it:
  * `["content", type]` covers that type's lists, counts and items, and an item's key
@@ -91,7 +103,22 @@ export const qk = {
     status: ["system", "status"] as const,
     metrics: ["system", "metrics"] as const,
     jobs: (filters: JobFilters) => ["system", "jobs", filters] as const,
+    nodes: ["system", "nodes"] as const,
+    audit: (filters: AuditFilters) => ["system", "audit", filters] as const,
   },
+  /** Every users list and user (`["users"]` covers them all). */
+  usersAll: ["users"] as const,
+  users: (filters: UserFilters) => ["users", "list", filters] as const,
+  user: (id: string) => ["users", "item", id] as const,
+  /** Under the user, so invalidating `user(id)` refetches the tokens too. */
+  tokens: (userId: string) => ["users", "item", userId, "tokens"] as const,
+  /** The signed-in user's sessions. */
+  sessions: ["sessions"] as const,
+  themes: ["themes"] as const,
+  themeSettings: (name: string) => ["themes", name, "settings"] as const,
   plugins: ["plugins"] as const,
   pluginMetrics: (name: string) => ["plugins", name, "metrics"] as const,
+  pluginSettings: (name: string) => ["plugins", name, "settings"] as const,
+  /** Deleted plugins whose data is kept (`retained` is a reserved plugin name). */
+  pluginsRetained: ["plugins", "retained"] as const,
 } as const;

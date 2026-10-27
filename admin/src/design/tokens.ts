@@ -34,6 +34,8 @@ export const TOKENS = {
     "status-trash",
   ],
   chart: ["chart-1", "chart-2", "chart-3", "chart-4", "chart-5"],
+  /** Fixed black on white in both modes (QR codes). */
+  fixed: ["qr-fg", "qr-bg"],
   sidebar: [
     "sidebar",
     "sidebar-foreground",
@@ -59,6 +61,7 @@ export const COLOUR_TOKENS: readonly string[] = [
   ...TOKENS.status,
   ...TOKENS.chart,
   ...TOKENS.sidebar,
+  ...TOKENS.fixed,
 ];
 
 export interface ContrastPair {
@@ -83,6 +86,8 @@ export const CONTRAST_PAIRS: ContrastPair[] = [
   ...on(["sidebar-foreground"], ["sidebar", "sidebar-accent"], 4.5),
   ...on(["input", "ring"], ["background"], 3),
   ...on(TOKENS.chart, ["background", "card"], 3),
+  // A QR code's modules on its own ground (the quiet zone), the same in both modes.
+  ...on(["qr-fg"], ["qr-bg"], 4.5),
 ];
 
 /**

@@ -1,0 +1,39 @@
+{
+  "secret": {
+    "set": "Set",
+    "notSet": "Not set",
+    "removing": "Removed when you save",
+    "replace": "Replace",
+    "add": "Set a value",
+    "remove": "Remove",
+    "undo": "Undo",
+    "cancel": "Cancel",
+    "replaceHint": "The stored value is never shown. What you type here replaces it when you save.",
+    "setHint": "Stored sealed when you save; it is never shown again."
+  },
+  "copyOnce": {
+    "copy": "Copy",
+    "copiedShort": "Copied",
+    "copied": "Copied to the clipboard",
+    "copyFailed": "Could not copy. Select the text and copy it yourself.",
+    "hint": "Shown only now. Store it somewhere safe."
+  },
+  "settingsForm": {
+    "save": "Save changes",
+    "saving": "Saving…",
+    "saved": "Settings saved",
+    "notSaved": "Settings not saved",
+    "reloaded": "Reloaded their version; your edits were dropped",
+    "pending_one": "{{count}} unsaved change",
+    "pending_other": "{{count}} unsaved changes",
+    "reset": "Reset to default",
+    "default": "Default: {{value}}",
+    "on": "on",
+    "off": "off",
+    "invalid": "Stored value is not valid; the default is used",
+    "badColour": "Use a colour like #1a2b3c.",
+    "badNumber": "Enter a number.",
+    "pickColour": "Pick a colour",
+    "unsupported": "{{label}}: this admin cannot edit settings of the kind “{{kind}}”."
+  }
+}

@@ -1,5 +1,6 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
+import admin from "./en/admin.json";
 import auth from "./en/auth.json";
 import comments from "./en/comments.json";
 import common from "./en/common.json";
@@ -28,6 +29,7 @@ export const resources = {
     media,
     structure,
     comments,
+    admin,
   },
 } as const;
 
