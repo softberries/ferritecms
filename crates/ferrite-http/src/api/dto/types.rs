@@ -30,7 +30,7 @@ pub enum FieldKindDto {
     Bool,
     /// One of `options`.
     Select,
-    /// The id of a content item.
+    /// The id of a content item (of one of `types`, when set).
     Relation,
     /// The id of a media item.
     Media,
@@ -89,6 +89,12 @@ pub struct FieldDefDto {
     #[serde(default)]
     #[schema(no_recursion)]
     pub fields: Vec<FieldDefDto>,
+    /// The content types a `relation` may point at: distinct registered type names,
+    /// never `media`; empty means any type. Empty for every other kind. A relation
+    /// value whose item has another type is refused (`422`, `errors[0].field` at the
+    /// value's path, such as `fields.chapters[1].related`); a missing item is accepted.
+    #[serde(default)]
+    pub types: Vec<String>,
 }
 
 impl From<FieldDef> for FieldDefDto {
@@ -100,6 +106,7 @@ impl From<FieldDef> for FieldDefDto {
             required: d.required,
             options: d.options,
             fields: d.fields.into_iter().map(Self::from).collect(),
+            types: d.types,
         }
     }
 }
@@ -113,6 +120,7 @@ impl From<FieldDefDto> for FieldDef {
             required: d.required,
             options: d.options,
             fields: d.fields.into_iter().map(Self::from).collect(),
+            types: d.types,
         }
     }
 }

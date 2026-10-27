@@ -25,7 +25,8 @@ pub enum CoreError {
         message: String,
     },
     /// Invalid input attributable to one member whose name is data, not a fixed field: a
-    /// theme or plugin setting key (M2a-2 P13). Mapped like
+    /// theme or plugin setting key (M2a-2 P13), or the path of a field value such as
+    /// `fields.chapters[1].related` (a relation's target type, M2b-3 P52). Mapped like
     /// [`InvalidField`](Self::InvalidField), with `key` as the field. The message never
     /// holds the value (it may be a secret).
     #[error("invalid {key}: {message}")]

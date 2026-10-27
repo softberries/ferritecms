@@ -3860,7 +3860,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Restored from trash as published, its `published_at` kept, so its files are served again (`ETag`)",
+            "description": "Restored from trash (`ETag`): published again, its `published_at` kept and its files served, unless it was a draft when it was trashed or the caller may not publish it; then it is a draft (`status` says which)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10219,6 +10219,13 @@
           },
           "required": {
             "type": "boolean"
+          },
+          "types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The content types a `relation` may point at: distinct registered type names,\nnever `media`; empty means any type. Empty for every other kind. A relation\nvalue whose item has another type is refused (`422`, `errors[0].field` at the\nvalue's path, such as `fields.chapters[1].related`); a missing item is accepted."
           }
         }
       },

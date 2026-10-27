@@ -46,7 +46,7 @@ pub use extensions::{
 };
 pub use media::{
     MAX_MEDIA_ALT, MAX_MEDIA_TITLE, MAX_ORIGINAL_NAME, MediaItem, MediaPatch, MediaQuery,
-    MediaService, NewUpload, check_file_name,
+    MediaService, NewUpload, TRASHED_FROM_META, check_file_name,
 };
 pub use menu::{MAX_MENU_ITEMS, MenuLocation, MenuService, menu_locations};
 pub use options::OptionService;

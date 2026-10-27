@@ -52,7 +52,14 @@ fn field(name: &str, kind: FieldKind) -> FieldDef {
         required: false,
         options: Vec::new(),
         fields: Vec::new(),
+        types: Vec::new(),
     }
+}
+
+fn relation(name: &str, targets: &[&str]) -> FieldDef {
+    let mut f = field(name, FieldKind::Relation);
+    f.types = targets.iter().map(|t| (*t).to_owned()).collect();
+    f
 }
 
 fn new_type(name: &str, fields: Vec<FieldDef>) -> NewType {
@@ -864,7 +871,187 @@ pub async fn taxonomy_content_types_capped(db: &TestDb) {
     );
 }
 
+/// The `key` of an `InvalidKey` (a field error at a data path) and its message.
+fn invalid_at<T: std::fmt::Debug>(r: Result<T, CoreError>) -> (String, String) {
+    match r {
+        Err(CoreError::InvalidKey { key, message }) => (key, message),
+        other => panic!("expected InvalidKey, got {other:?}"),
+    }
+}
+
+/// P52: `types` belongs to relation fields only (sub-fields of a repeater too) and
+/// names registered types other than `media`; a type named there cannot be deleted.
+pub async fn relation_types_must_name_types(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let svc = types(db);
+    let refused = |r: Result<ferrite_domain::ContentType, CoreError>| invalid(r, "fields");
+
+    let mut text = field("t", FieldKind::Text);
+    text.types = vec!["page".into()];
+    let m = refused(svc.create(&admin, new_type("book", vec![text])).await);
+    assert!(m.contains("fields.t") && m.contains("only relation"), "{m}");
+    let m = refused(
+        svc.create(&admin, new_type("book", vec![relation("r", &["nope"])]))
+            .await,
+    );
+    assert!(m.contains("fields.r") && m.contains("\"nope\""), "{m}");
+    let m = refused(
+        svc.create(&admin, new_type("book", vec![relation("r", &["media"])]))
+            .await,
+    );
+    assert!(m.contains("media"), "{m}");
+    refused(
+        svc.create(
+            &admin,
+            new_type("book", vec![relation("r", &["page", "page"])]),
+        )
+        .await,
+    );
+    let mut chapters = field("chapters", FieldKind::Repeater);
+    chapters.fields = vec![relation("related", &["nope"])];
+    let m = refused(svc.create(&admin, new_type("book", vec![chapters])).await);
+    assert!(m.starts_with("fields.chapters.related:"), "{m}");
+    assert!(
+        svc.list(&admin)
+            .await
+            .unwrap()
+            .iter()
+            .all(|t| t.name != "book")
+    );
+
+    // Registered names, the new type's own name included, are fine.
+    let mut chapters = field("chapters", FieldKind::Repeater);
+    chapters.fields = vec![relation("related", &["book", "post"])];
+    let book = svc
+        .create(
+            &admin,
+            new_type("book", vec![relation("r", &["page"]), chapters]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(book.fields["fields"][0]["types"], json!(["page"]));
+    assert_eq!(
+        book.fields["fields"][1]["fields"][0]["types"],
+        json!(["book", "post"])
+    );
+    // An update is checked the same way.
+    refused(
+        svc.update(
+            &admin,
+            "book",
+            TypePatch {
+                fields: Some(Some(vec![relation("r", &["gone"])])),
+                ..TypePatch::default()
+            },
+        )
+        .await,
+    );
+    // A type another type's relation names cannot be deleted.
+    svc.create(&admin, new_type("author_bio", vec![]))
+        .await
+        .unwrap();
+    svc.create(
+        &admin,
+        new_type("quote", vec![relation("by", &["author_bio"])]),
+    )
+    .await
+    .unwrap();
+    let m = plain_invalid(svc.delete(&admin, "author_bio").await);
+    assert!(m.contains("quote"), "{m}");
+    svc.delete(&admin, "quote").await.unwrap();
+    svc.delete(&admin, "author_bio").await.unwrap();
+}
+
+/// P52: a relation value whose item is of a type the field does not list is refused at
+/// its path (repeater rows included), on create and update; a missing item is accepted
+/// (as before: it may be deleted later anyway), and a relation without `types` takes
+/// any item.
+pub async fn relation_types_refuse_other_type(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let svc = content(db);
+    let mut chapters = field("chapters", FieldKind::Repeater);
+    chapters.fields = vec![
+        field("title", FieldKind::Text),
+        relation("related", &["post"]),
+    ];
+    types(db)
+        .create(
+            &admin,
+            new_type(
+                "book",
+                vec![
+                    relation("related", &["page"]),
+                    relation("any", &[]),
+                    chapters,
+                ],
+            ),
+        )
+        .await
+        .unwrap();
+    let page = svc
+        .create(&admin, draft("page", "A page", json!({})))
+        .await
+        .unwrap()
+        .id
+        .to_string();
+    let post = svc
+        .create(&admin, draft("post", "A post", json!({})))
+        .await
+        .unwrap()
+        .id
+        .to_string();
+    let missing = uuid::Uuid::now_v7().to_string();
+
+    let ok = json!({
+        "related": page,
+        "any": post,
+        "chapters": [{"related": post}, {"title": "t", "related": missing}],
+    });
+    let item = svc
+        .create(&admin, draft("book", "B", ok.clone()))
+        .await
+        .unwrap();
+    assert_eq!(item.fields, ok);
+
+    let (key, message) = invalid_at(
+        svc.create(&admin, draft("book", "B", json!({"related": post})))
+            .await,
+    );
+    assert_eq!(key, "fields.related");
+    assert!(
+        message.starts_with("fields.related:") && message.contains("page"),
+        "{message}"
+    );
+    let (key, _) = invalid_at(
+        svc.create(
+            &admin,
+            draft(
+                "book",
+                "B",
+                json!({"chapters": [{"related": post}, {"related": page}]}),
+            ),
+        )
+        .await,
+    );
+    assert_eq!(key, "fields.chapters[1].related");
+    let (key, _) = invalid_at(
+        svc.update(
+            &admin,
+            item.id,
+            item.version,
+            draft("book", "B", json!({"related": item.id.to_string()})),
+        )
+        .await,
+    );
+    assert_eq!(key, "fields.related");
+    assert_eq!(svc.get(item.id).await.unwrap(), item);
+}
+
 backend_tests!(
+    relation_types_must_name_types,
+    relation_types_refuse_other_type,
     stored_permalink_errors_are_not_field_errors,
     field_values_validated_on_write,
     type_names_and_permalink_conflicts,

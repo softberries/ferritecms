@@ -254,6 +254,32 @@ impl ContentService {
         transition_item(repos, rules, actor, item, version, Action::Publish).await
     }
 
+    /// [`trash`](Self::trash) of item `id` inside the caller's `repos` with the caller's
+    /// pinned `rules`: the same checks, search removal and `invalidate` event.
+    pub(crate) async fn trash_in(
+        repos: &dyn Repos,
+        rules: &dyn Permalinks,
+        actor: &Actor,
+        current: ContentItem,
+        expected_version: i64,
+    ) -> Result<ContentItem, CoreError> {
+        transition_item(
+            repos,
+            rules,
+            actor,
+            current,
+            expected_version,
+            Action::Trash,
+        )
+        .await
+    }
+
+    /// Whether `actor` may publish `item` ([`publish`](Self::publish)'s rights check
+    /// alone: `publish_own` for the author, `publish_others` otherwise).
+    pub(crate) fn may_publish(actor: &Actor, item: &ContentItem) -> bool {
+        authorize(actor, item, Action::Publish).is_ok()
+    }
+
     /// [`restore`](Self::restore) of item `id` inside the caller's `repos` with the
     /// caller's pinned `rules`: the same checks (R8), search entry and `invalidate` event.
     pub(crate) async fn restore_in(

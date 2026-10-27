@@ -1710,6 +1710,13 @@ export interface components {
             /** @description The choices of a `select` (1 to 100); empty for every other kind. */
             options?: string[];
             required?: boolean;
+            /**
+             * @description The content types a `relation` may point at: distinct registered type names,
+             *     never `media`; empty means any type. Empty for every other kind. A relation
+             *     value whose item has another type is refused (`422`, `errors[0].field` at the
+             *     value's path, such as `fields.chapters[1].related`); a missing item is accepted.
+             */
+            types?: string[];
         };
         /**
          * @description One entry of `errors`: what is wrong with one input (`field` = the JSON path or
@@ -6018,7 +6025,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Restored from trash as published, its `published_at` kept, so its files are served again (`ETag`) */
+            /** @description Restored from trash (`ETag`): published again, its `published_at` kept and its files served, unless it was a draft when it was trashed or the caller may not publish it; then it is a draft (`status` says which) */
             200: {
                 headers: {
                     [name: string]: unknown;
