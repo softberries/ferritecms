@@ -30,6 +30,7 @@ import {
   SunIcon,
   TagsIcon,
   UploadIcon,
+  UserRoundIcon,
   XIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -293,6 +294,13 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
                 onSelect={() => go(item.to)}
               />
             ))}
+            <Row
+              value={t("goTo.account")}
+              keywords={[t("goTo.accountKeywords")]}
+              icon={UserRoundIcon}
+              label={t("goTo.account")}
+              onSelect={() => go("/account")}
+            />
             <Row
               value={t("goTo.shortcuts")}
               keywords={["help", "keys", "?"]}

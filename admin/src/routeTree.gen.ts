@@ -17,6 +17,7 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppSplatRouteImport } from './routes/_app/$'
 import { Route as AppStyleguideRouteImport } from './routes/_app/[_]styleguide'
+import { Route as AppAccountRouteImport } from './routes/_app/account'
 import { Route as LoginTotpRouteImport } from './routes/login_.totp'
 import { Route as AppCommentsIndexRouteImport } from './routes/_app/comments.index'
 import { Route as AppMediaIndexRouteImport } from './routes/_app/media.index'
@@ -68,6 +69,11 @@ const AppSplatRoute = AppSplatRouteImport.update({
 const AppStyleguideRoute = AppStyleguideRouteImport.update({
   id: '/_styleguide',
   path: '/_styleguide',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAccountRoute = AppAccountRouteImport.update({
+  id: '/account',
+  path: '/account',
   getParentRoute: () => AppRoute,
 } as any)
 const LoginTotpRoute = LoginTotpRouteImport.update({
@@ -146,6 +152,7 @@ export interface FileRoutesByFullPath {
   '/reset-password': typeof ResetPasswordRoute
   '/$': typeof AppSplatRoute
   '/_styleguide': typeof AppStyleguideRoute
+  '/account': typeof AppAccountRoute
   '/login/totp': typeof LoginTotpRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
   '/comments/': typeof AppCommentsIndexRoute
@@ -167,6 +174,7 @@ export interface FileRoutesByTo {
   '/reset-password': typeof ResetPasswordRoute
   '/$': typeof AppSplatRoute
   '/_styleguide': typeof AppStyleguideRoute
+  '/account': typeof AppAccountRoute
   '/login/totp': typeof LoginTotpRoute
   '/': typeof AppIndexRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
@@ -191,6 +199,7 @@ export interface FileRoutesById {
   '/reset-password': typeof ResetPasswordRoute
   '/_app/$': typeof AppSplatRoute
   '/_app/_styleguide': typeof AppStyleguideRoute
+  '/_app/account': typeof AppAccountRoute
   '/login_/totp': typeof LoginTotpRoute
   '/_app/': typeof AppIndexRoute
   '/_app/structure/redirects': typeof AppStructureRedirectsRoute
@@ -216,6 +225,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/$'
     | '/_styleguide'
+    | '/account'
     | '/login/totp'
     | '/structure/redirects'
     | '/comments/'
@@ -237,6 +247,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/$'
     | '/_styleguide'
+    | '/account'
     | '/login/totp'
     | '/'
     | '/structure/redirects'
@@ -260,6 +271,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/_app/$'
     | '/_app/_styleguide'
+    | '/_app/account'
     | '/login_/totp'
     | '/_app/'
     | '/_app/structure/redirects'
@@ -341,6 +353,13 @@ declare module '@tanstack/react-router' {
       path: '/_styleguide'
       fullPath: '/_styleguide'
       preLoaderRoute: typeof AppStyleguideRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/account': {
+      id: '/_app/account'
+      path: '/account'
+      fullPath: '/account'
+      preLoaderRoute: typeof AppAccountRouteImport
       parentRoute: typeof AppRoute
     }
     '/login_/totp': {
@@ -440,6 +459,7 @@ declare module '@tanstack/react-router' {
 interface AppRouteChildren {
   AppSplatRoute: typeof AppSplatRoute
   AppStyleguideRoute: typeof AppStyleguideRoute
+  AppAccountRoute: typeof AppAccountRoute
   AppIndexRoute: typeof AppIndexRoute
   AppStructureRedirectsRoute: typeof AppStructureRedirectsRoute
   AppCommentsIndexRoute: typeof AppCommentsIndexRoute
@@ -458,6 +478,7 @@ interface AppRouteChildren {
 const AppRouteChildren: AppRouteChildren = {
   AppSplatRoute: AppSplatRoute,
   AppStyleguideRoute: AppStyleguideRoute,
+  AppAccountRoute: AppAccountRoute,
   AppIndexRoute: AppIndexRoute,
   AppStructureRedirectsRoute: AppStructureRedirectsRoute,
   AppCommentsIndexRoute: AppCommentsIndexRoute,

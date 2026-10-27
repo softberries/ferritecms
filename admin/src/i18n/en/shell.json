@@ -23,7 +23,8 @@
     "system": "System",
     "viewSite": "View site",
     "badge_one": "({{count}} waiting)",
-    "badge_other": "({{count}} waiting)"
+    "badge_other": "({{count}} waiting)",
+    "account": "Account"
   },
   "crumbs": {
     "dashboard": "Dashboard",
@@ -53,7 +54,8 @@
     "theme": "Theme",
     "density": "Density",
     "shortcuts": "Keyboard shortcuts",
-    "signOut": "Sign out"
+    "signOut": "Sign out",
+    "account": "Account"
   },
   "theme": {
     "light": "Light",

@@ -1,7 +1,9 @@
 // The account menu at the right of the top bar: who is signed in (display name, role),
-// the theme (light / dark / system) and density, the shortcut sheet, and sign out.
+// a link to the Account screen, the theme (light / dark / system) and density, the
+// shortcut sheet, and sign out.
 // Non-modal (11 §7: a modal menu fails axe `aria-hidden-focus`).
 
+import { Link } from "@tanstack/react-router";
 import {
   KeyboardIcon,
   LogOutIcon,
@@ -10,6 +12,7 @@ import {
   Rows3Icon,
   Rows4Icon,
   SunIcon,
+  UserRoundIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { MeDto } from "@/auth/session";
@@ -91,6 +94,12 @@ export function UserMenu({ me, onShortcuts, onSignOut }: UserMenuProps) {
             {role} · {me.email}
           </span>
         </DropdownMenuLabel>
+        <DropdownMenuItem asChild>
+          <Link to="/account">
+            <UserRoundIcon />
+            {t("user.account")}
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
           <DropdownMenuLabel className="text-xs text-muted-foreground">
