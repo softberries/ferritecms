@@ -326,6 +326,7 @@ A last task writes the docs, the M2b-3 exit and the M2 exit.
   - An `action` ending in `.` is a prefix match; otherwise it is exact.
   - `GET /system/audit?actor&action&target_kind&target_id&limit&cursor`. `target_id` without `target_kind` → `422`.
 - `SystemStatusDto.mail: { configured: boolean, from: string | null }` (P49).
+- `MeDto.mail_configured: boolean | null`: a boolean for actors holding `manage_users` or `manage_system`, otherwise `null` (ledger Ruling A; Task 7 uses it).
 - `POST /system/mail/test` → `202 { to }`:
   - sends to the actor's own e-mail through `MailQueue`;
   - `manage_system` + `system:write`;
@@ -542,7 +543,7 @@ A last task writes the docs, the M2b-3 exit and the M2 exit.
   - 50 a page with Load more.
 - **New user** dialog:
   - login, e-mail, display name, role;
-  - password: "Set a password" (the user must change it at first login), or "Send a reset e-mail" (only when `status.mail.configured`; it calls `POST /auth/password-reset` after creation).
+  - password: "Set a password" (the user must change it at first login), or "Send a reset e-mail" (only when `me.mail_configured`; it calls `POST /auth/password-reset` after creation).
   - Created with `must_reset`.
 - **The user sheet** (`?id=`):
   - profile fields, role and status (through `staleGuard`);
@@ -777,6 +778,10 @@ Each group:
   - a `NetworkError` on an in-flight autosave `PUT` must not re-set `pending` after `markClean`;
   - the slot `DELETE` routes a `401` to `onUnauthenticated`;
   - tests for edits during an in-flight `PUT` or `DELETE`.
+- **Type builder minors from `m2b2-exit.md`** (moved here from Task 13, ledger Ruling B):
+  - the schema-change confirm warns about removed select options and is worded per change kind;
+  - the built-in type delete wording;
+  - the schema-change dialog's last chip clips.
 - **Relation target types (P52, from Task 4):**
   - the field builder edits a relation's types (a multi-select of types, empty = any);
   - the relation picker searches only those types.
@@ -820,9 +825,6 @@ Each group:
   - Undo forcing `restore: true` gets its comment;
   - the invisible tile check is clickable on fine pointers;
   - the search preview's `break-all`;
-  - the schema-change confirm: removed select options, and wording per change kind;
-  - the built-in type delete wording;
-  - the schema-change dialog's last chip clips;
   - term dialogs morph while closing;
   - the parent combobox filter matches UUIDs;
   - focus after a term delete;
