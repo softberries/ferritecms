@@ -68,7 +68,7 @@ pub use extract::{
 };
 pub use problem::{FieldError, Problem};
 pub(crate) use state::origin_of;
-pub use state::{ApiParts, ApiState, InvalidSiteUrl};
+pub use state::{ApiMail, ApiParts, ApiState, InvalidSiteUrl};
 pub use system::NodeInfo;
 
 use self::{meta::SpecJson, openapi::ApiDoc};
@@ -216,6 +216,7 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(system::list_audit))
         .routes(routes!(system::list_jobs))
         .routes(routes!(system::retry_job))
+        .routes(routes!(system::send_test_mail))
         .routes(routes!(system::metrics_summary))
 }
 

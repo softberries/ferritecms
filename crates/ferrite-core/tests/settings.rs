@@ -229,7 +229,12 @@ pub async fn settings_allowlist_and_validation(db: &TestDb) {
         assert!(e.autoload, "{key}");
     }
     // An audit row for the batch.
-    let audit = store.read().audit().list(10, None).await.unwrap();
+    let audit = store
+        .read()
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(10))
+        .await
+        .unwrap();
     let row = audit
         .items
         .iter()

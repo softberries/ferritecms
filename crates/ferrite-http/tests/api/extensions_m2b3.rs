@@ -301,7 +301,14 @@ async fn retained_list_and_purge(api: Api) -> Api {
         "the marker goes too"
     );
     assert_eq!(c.get(&api, RETAINED).await.json(), json!({"items": []}));
-    let audit = api.store.read().audit().list(10, None).await.unwrap().items;
+    let audit = api
+        .store
+        .read()
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(10))
+        .await
+        .unwrap()
+        .items;
     let entry = audit
         .iter()
         .find(|a| a.action == "plugin.purge")

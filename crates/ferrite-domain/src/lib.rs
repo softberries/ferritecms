@@ -22,8 +22,9 @@ mod url;
 mod user;
 
 pub use auth::{
-    ApiToken, AuditEntry, IDEMPOTENCY_RETENTION, IDEMPOTENCY_STALE, IdemBegin, IdempotencyKey,
-    NewAudit, RateHit, SESSION_ABSOLUTE, SESSION_IDLE, SESSION_TOUCH_EVERY, Session,
+    ApiToken, AuditEntry, AuditQuery, IDEMPOTENCY_RETENTION, IDEMPOTENCY_STALE, IdemBegin,
+    IdempotencyKey, NewAudit, RateHit, SESSION_ABSOLUTE, SESSION_IDLE, SESSION_TOUCH_EVERY,
+    Session,
 };
 pub use comment::{Comment, CommentQuery, CommentStatus};
 pub use content::{

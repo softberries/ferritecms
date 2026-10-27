@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use ferrite_core::{
-    AuthService, Authenticated, Capability, SessionInfo, Via, auth::TotpSetup, require,
+    AuthService, Authenticated, Capability, SessionInfo, Via, auth::TotpSetup, can, require,
 };
 use serde::{Deserialize, Serialize};
 
@@ -141,10 +141,18 @@ pub struct MeDto {
     pub scopes: Vec<String>,
     /// The `X-CSRF-Token` for this session's unsafe requests; `null` for a bearer token.
     pub csrf_token: Option<String>,
+    /// Whether the site can send mail (`[mail]` has `smtp_url` and `from`), for roles
+    /// holding `manage_users` or `manage_system` (whatever the credential's scopes);
+    /// `null` for everyone else.
+    pub mail_configured: Option<bool>,
 }
 
 impl MeDto {
-    pub fn of(auth: &AuthService, who: &Authenticated) -> Self {
+    /// `mail_configured`: whether this node has `[mail]`.
+    pub fn of(auth: &AuthService, who: &Authenticated, mail_configured: bool) -> Self {
+        let mail_visible = [Capability::ManageUsers, Capability::ManageSystem]
+            .into_iter()
+            .any(|cap| can(who.user.role, cap));
         let user = &who.user;
         let csrf_token = match &who.via {
             Via::Session(session) => Some(auth.csrf_token(session)),
@@ -165,6 +173,7 @@ impl MeDto {
                 .collect(),
             scopes: who.actor.scopes.to_strings(),
             csrf_token,
+            mail_configured: mail_visible.then_some(mail_configured),
         }
     }
 }

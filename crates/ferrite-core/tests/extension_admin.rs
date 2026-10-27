@@ -99,7 +99,7 @@ async fn audit_actions(store: &dyn Store) -> Vec<String> {
     let mut rows: Vec<String> = store
         .read()
         .audit()
-        .list(200, None)
+        .list(&ferrite_domain::AuditQuery::first(200))
         .await
         .unwrap()
         .items
@@ -325,7 +325,13 @@ pub async fn writes_are_audited(db: &TestDb) {
             "plugin.delete",
         ]
     );
-    let rows = store.read().audit().list(200, None).await.unwrap().items;
+    let rows = store
+        .read()
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(200))
+        .await
+        .unwrap()
+        .items;
     for row in &rows {
         assert_eq!(row.actor_id, Some(admin.user), "{row:?}");
         assert!(row.details.is_object(), "{row:?}");

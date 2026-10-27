@@ -311,7 +311,7 @@ async fn logged_in(api: &ApiState, headers: &HeaderMap, issued: IssuedSession) -
         user: issued.user,
         via: Via::Session(issued.session),
     };
-    let user = MeDto::of(&api.auth, &who);
+    let user = MeDto::of(&api.auth, &who, api.mail.is_some());
     let csrf_token = user.csrf_token.clone().unwrap_or_default();
     (
         [(header::SET_COOKIE, cookie)],
@@ -440,7 +440,7 @@ pub async fn me(
     State(api): State<Arc<ApiState>>,
     AuthedAllowReset(who): AuthedAllowReset,
 ) -> Json<MeDto> {
-    Json(MeDto::of(&api.auth, &who))
+    Json(MeDto::of(&api.auth, &who, api.mail.is_some()))
 }
 
 #[utoipa::path(
@@ -510,10 +510,10 @@ pub async fn request_password_reset(
     client: ClientInfo,
     ApiJson(req): ApiJson<PasswordResetRequest>,
 ) -> Result<StatusCode, Problem> {
-    let mailer = api.mailer.as_ref().ok_or_else(Problem::mail_unavailable)?;
+    let mail = api.mail.as_ref().ok_or_else(Problem::mail_unavailable)?;
     let reset_base = format!("{}{RESET_PAGE}", api.site_url);
     api.auth
-        .request_password_reset(mailer, &req.login, client.ip, &reset_base, &api.site_title)
+        .request_password_reset(&mail.queue, &req.login, client.ip, &reset_base)
         .await?;
     Ok(StatusCode::ACCEPTED)
 }

@@ -3,7 +3,7 @@
 //! tokens, password reset by e-mail and the DB-backed rate limits).
 
 mod key;
-mod limits;
+pub(crate) mod limits;
 pub mod password;
 mod reset;
 mod seal;

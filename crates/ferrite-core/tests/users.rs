@@ -124,7 +124,12 @@ async fn token_count(store: &dyn Store, user: UserId) -> u64 {
 }
 
 async fn audit_actions(store: &dyn Store) -> Vec<String> {
-    let page = store.read().audit().list(200, None).await.unwrap();
+    let page = store
+        .read()
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(200))
+        .await
+        .unwrap();
     page.items.into_iter().map(|a| a.action).collect()
 }
 
@@ -490,7 +495,13 @@ async fn delete_requires_reassign_and_moves_content(db: &TestDb) {
     let revisions = store.read().revisions().list(post.id, 10).await.unwrap();
     assert!(!revisions.is_empty());
     assert!(revisions.iter().all(|r| r.author_id == heir.id));
-    let entries = store.read().audit().list(200, None).await.unwrap().items;
+    let entries = store
+        .read()
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(200))
+        .await
+        .unwrap()
+        .items;
     let entry = entries
         .iter()
         .find(|a| a.action == "user.delete")
@@ -778,7 +789,13 @@ async fn operator_path_bypasses_actor(db: &TestDb) {
     let page = users.operator().list(50, None).await.unwrap();
     assert_eq!(page.items.len(), 1);
 
-    let entries = store.read().audit().list(200, None).await.unwrap().items;
+    let entries = store
+        .read()
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(200))
+        .await
+        .unwrap()
+        .items;
     assert!(entries.iter().all(|e| e.actor_id.is_none()), "{entries:?}");
     let actions: Vec<&str> = entries.iter().map(|e| e.action.as_str()).collect();
     assert!(actions.contains(&"user.create"));
@@ -918,7 +935,13 @@ async fn disable_totp_for_other_user(db: &TestDb) {
         users.disable_totp_for(&admin, target.id).await,
         Err(CoreError::Invalid(_))
     ));
-    let entries = store.read().audit().list(200, None).await.unwrap().items;
+    let entries = store
+        .read()
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(200))
+        .await
+        .unwrap()
+        .items;
     let rows: Vec<_> = entries
         .iter()
         .filter(|e| e.action == "user.totp_disable")

@@ -119,6 +119,8 @@ async fn login_sets_cookie_and_me_works(api: Api) -> Api {
             ],
             "scopes": all_scopes,
             "csrf_token": csrf,
+            // An editor holds neither `manage_users` nor `manage_system`.
+            "mail_configured": null,
         })
     );
 

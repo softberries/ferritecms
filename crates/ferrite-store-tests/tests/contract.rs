@@ -1,6 +1,6 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
-    auth::*, autosave::*, backend_tests, backend_tests_spawning, batch::*, comment::*,
+    audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning, batch::*, comment::*,
     comment_counts::*, comment_threads::*, constraints::*, content::*, event::*, idempotency::*,
     job::*, job_list::*, lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*,
     notify::*, plugin::*, plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*,
@@ -227,6 +227,7 @@ backend_tests!(
     rate_limit_counts_within_window_and_resets,
     rate_limit_window_never_moves_back,
     audit_append_and_list_newest_first,
+    audit_filters,
     auth_text_binds_reject_nul,
 );
 

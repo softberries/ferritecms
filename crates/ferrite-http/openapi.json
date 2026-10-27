@@ -5897,6 +5897,42 @@
         "operationId": "list_audit",
         "parameters": [
           {
+            "name": "actor",
+            "in": "query",
+            "description": "Rows written by this user (UUID).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "description": "An exact action (`user.update`), or a prefix ending in `.` (`user.`); 1..=100\ncharacters, case-sensitive.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "target_kind",
+            "in": "query",
+            "description": "Rows about this kind of target (`user`, `settings`, `plugin`, ...); 1..=100\ncharacters.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "target_id",
+            "in": "query",
+            "description": "Rows about this target (needs `target_kind`); 1..=255 characters.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "description": "1..=200; default 50.",
@@ -5910,7 +5946,7 @@
           {
             "name": "cursor",
             "in": "query",
-            "description": "`next_cursor` of the previous page.",
+            "description": "`next_cursor` of the previous page (of the same filters).",
             "required": false,
             "schema": {
               "type": "string"
@@ -5919,7 +5955,7 @@
         ],
         "responses": {
           "200": {
-            "description": "One page of the audit log, newest first",
+            "description": "One page of the audit log, newest first, filtered",
             "content": {
               "application/json": {
                 "schema": {
@@ -5929,7 +5965,7 @@
             }
           },
           "400": {
-            "description": "`validation`: `limit` or `cursor`",
+            "description": "`validation` (`actor`, `action`, `target_kind`, `target_id`, `limit`, `cursor`) or `malformed-query`",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -5950,6 +5986,16 @@
           },
           "403": {
             "description": "`forbidden` (`manage_system`, `system:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: `target_id` without `target_kind` (`errors[0].field` = `target_id`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -6127,6 +6173,84 @@
           },
           "422": {
             "description": "`validation`: the job is not `dead` (`errors[0].field` = `status`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/system/mail/test": {
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "operationId": "send_test_mail",
+        "responses": {
+          "202": {
+            "description": "A test mail to the caller's own address is queued (subject `Test e-mail from <site title>`); audited `mail.test`. Sending runs in the background: an SMTP failure is in the node's log, not here",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailTestDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_system`, `system:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: mail is not configured (`errors[0].field` = `mail`) or the account has no usable address (`email`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate-limited`: 3 test mails per 10 minutes per user (see `Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`busy`: the node's mail queue is full or shutting down",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -10501,6 +10625,39 @@
         ],
         "description": "The result of a correct password (`status` tells which)."
       },
+      "MailStatusDto": {
+        "type": "object",
+        "description": "Outgoing mail (P49): `[mail]` in `ferrite.toml` is the only place to set it; the SMTP\nURL (it can hold credentials) is never shown.",
+        "required": [
+          "configured"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "description": "`[mail]` has `smtp_url` and `from`: password resets, plugin `notify-admins` and\nthe test mail can send."
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`mail.from`; `null` when not configured."
+          }
+        }
+      },
+      "MailTestDto": {
+        "type": "object",
+        "description": "`POST /system/mail/test`: the mail is queued.",
+        "required": [
+          "to"
+        ],
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "The actor's own address, where the mail goes."
+          }
+        }
+      },
       "MeDto": {
         "type": "object",
         "description": "The authenticated user and what the request's credential allows.",
@@ -10542,6 +10699,13 @@
           },
           "login": {
             "type": "string"
+          },
+          "mail_configured": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the site can send mail (`[mail]` has `smtp_url` and `from`), for roles\nholding `manage_users` or `manage_system` (whatever the credential's scopes);\n`null` for everyone else."
           },
           "must_reset": {
             "type": "boolean",
@@ -11041,8 +11205,8 @@
             "description": "The heartbeat is within 30 s of the database clock."
           },
           "meta": {
-            "type": "object",
-            "description": "What the node reports (04 §8: `theme`, `plugins`, `plugins_error`,\n`permalinks_error`, `site_id`, `site_url`, `mode`, `clock_skew_ms`); error texts\nscrubbed of URLs, paths, addresses and credentials, at most 1 KiB each."
+            "$ref": "#/components/schemas/NodeMetaDto",
+            "description": "What the node reports (04 §8); error texts scrubbed of URLs, paths, addresses and\ncredentials, at most 1 KiB each."
           },
           "name": {
             "type": "string",
@@ -11111,6 +11275,186 @@
             "description": "Always `null`: one page holds every node."
           }
         }
+      },
+      "NodeMetaDto": {
+        "type": "object",
+        "description": "A node's `meta`, read leniently: every member is optional (a node of another version\nin a rolling deploy may lack or add members), unknown members are dropped, and a\nmember of the wrong type is `null` rather than failing the list.",
+        "properties": {
+          "clock_skew_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The node clock minus the database clock at its last heartbeat, in milliseconds."
+          },
+          "job_kinds": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The job kinds this node's runner handles."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`solo` or `cluster`."
+          },
+          "permalinks_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the current permalink options are not in effect."
+          },
+          "plugins": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The node's plugins by name, from its last reload.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/NodePluginDto"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "plugins_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the plugin rows could not be read at the last reload."
+          },
+          "site_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The site the node joined (cluster registry)."
+          },
+          "site_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The node's `site.url`."
+          },
+          "theme": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NodeThemeDto",
+                "description": "The theme this node serves."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "NodePluginDto": {
+        "type": "object",
+        "description": "`meta.plugins.<name>` of a node.",
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it is not loaded (scrubbed)."
+          },
+          "hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The component's content hash."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`loaded`, `failed` or `disabled`."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "NodeThemeDto": {
+        "type": "object",
+        "description": "`meta.theme` of a node.",
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the active theme is not served (scrubbed)."
+          },
+          "fallback": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "There is an active row and this node does not serve its artifact."
+          },
+          "hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The theme's content hash."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NodeThemeOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "NodeThemeOrigin": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "`embedded` or `folder`."
+          },
+          {
+            "type": "object",
+            "description": "An installed theme's artifact.",
+            "required": [
+              "artifact"
+            ],
+            "properties": {
+              "artifact": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Where a node's theme came from: `\"embedded\"`, `\"folder\"` or `{\"artifact\": <hash>}`."
       },
       "PasswordChange": {
         "type": "object",
@@ -12160,7 +12504,8 @@
           "theme",
           "jobs",
           "nodes",
-          "node"
+          "node",
+          "mail"
         ],
         "properties": {
           "database": {
@@ -12169,6 +12514,9 @@
           },
           "jobs": {
             "$ref": "#/components/schemas/JobCountsDto"
+          },
+          "mail": {
+            "$ref": "#/components/schemas/MailStatusDto"
           },
           "media": {
             "type": "string",

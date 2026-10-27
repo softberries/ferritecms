@@ -196,7 +196,9 @@ pub struct AuthService {
     pub(super) store: Arc<dyn Store>,
     pub(super) key: SiteKey,
     clock: Clock,
-    issuer: String,
+    /// `ferrite.toml` `site.title`: the fallback when the `site.title` option is unset
+    /// (P51).
+    site_title: String,
 }
 
 impl AuthService {
@@ -205,7 +207,7 @@ impl AuthService {
             store,
             key,
             clock: Arc::new(Timestamp::now),
-            issuer: totp::DEFAULT_ISSUER.to_owned(),
+            site_title: String::new(),
         }
     }
 
@@ -215,14 +217,19 @@ impl AuthService {
         Self { clock, ..self }
     }
 
-    /// The issuer shown in authenticator apps, normally the site title: `:` is removed
-    /// and an empty result falls back to `FerriteCMS` (F11). Fixed for the service's
-    /// lifetime.
-    pub fn with_issuer_name(self, name: String) -> Self {
+    /// The configured site title (`ferrite.toml`), used when the `site.title` option is
+    /// unset. The TOTP issuer and the reset mail read the option at use time (P51), so a
+    /// title changed in Settings names the site there at once.
+    pub fn with_site_title(self, title: String) -> Self {
         Self {
-            issuer: totp::issuer_name(&name),
+            site_title: title,
             ..self
         }
+    }
+
+    /// The site title now: the `site.title` option, else the configured one.
+    pub(super) async fn site_title(&self) -> Result<String, CoreError> {
+        crate::settings::site_title(self.store.as_ref(), &self.site_title).await
     }
 
     /// The keyed hash of a full client address, as stored on sessions.
@@ -401,7 +408,8 @@ impl AuthService {
             return Err(CoreError::Unauthenticated);
         }
         let secret = self.totp_secret_of(&user)?;
-        let totp = totp::build(&secret, &self.issuer, &user.login)?;
+        // The issuer only shapes the `otpauth://` URL, not the codes.
+        let totp = totp::build(&secret, totp::DEFAULT_ISSUER, &user.login)?;
         let step = totp::check(&totp, code, now).ok_or(CoreError::Unauthenticated)?;
         if !self
             .store
@@ -858,8 +866,11 @@ impl AuthService {
         if user.totp_secret.is_some() {
             return Err(CoreError::Invalid("disable TOTP first".into()));
         }
+        // The issuer is the site title now (P51): `:` removed, `FerriteCMS` when empty
+        // (F11).
+        let issuer = totp::issuer_name(&self.site_title().await?);
         let secret = Zeroizing::new(random_bytes::<{ totp::SECRET_LEN }>()?);
-        let otp = totp::build(secret.as_slice(), &self.issuer, &user.login)?;
+        let otp = totp::build(secret.as_slice(), &issuer, &user.login)?;
         let otpauth_url = otp.to_url().map_err(|e| {
             tracing::error!(error = %e, "otpauth URL refused");
             CoreError::Invalid("TOTP parameters refused".into())
@@ -936,7 +947,8 @@ impl AuthService {
             limits::WINDOW,
         )
         .await?;
-        let otp = totp::build(&secret, &self.issuer, &user.login)?;
+        // The issuer only shapes the `otpauth://` URL, not the codes.
+        let otp = totp::build(&secret, totp::DEFAULT_ISSUER, &user.login)?;
         let wrong = || CoreError::Invalid("wrong code".into());
         let step = totp::check(&otp, code, now).ok_or_else(wrong)?;
         let sealed = Secret::new(seal(&self.key, &secret_purpose(user.id), &secret)?);

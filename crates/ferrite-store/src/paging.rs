@@ -339,6 +339,43 @@ pub fn audit_cursor(cursor: &str) -> Result<(i64, Uuid), StoreError> {
     micros_cursor(AUDIT_CURSOR_TAG, cursor)
 }
 
+/// An [`AuditQuery`](ferrite_domain::AuditQuery) checked by [`check_audit_query`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuditPlan<'a> {
+    pub limit: u32,
+    /// The decoded cursor (`at` micros, `id`).
+    pub after: Option<(i64, Uuid)>,
+    /// The `action` filter: the text and whether it is a prefix (it ends in `.`).
+    pub action: Option<(&'a str, bool)>,
+}
+
+/// Validates an [`AuditQuery`](ferrite_domain::AuditQuery): `limit` 1..=200, a cursor
+/// of the audit listing, no NUL in any filter, and `target_id` only with
+/// `target_kind`.
+pub fn check_audit_query(q: &ferrite_domain::AuditQuery) -> Result<AuditPlan<'_>, StoreError> {
+    let limit = check_limit(q.limit)?;
+    let after = q.cursor.as_deref().map(audit_cursor).transpose()?;
+    for (field, value) in [
+        ("audit action filter", &q.action),
+        ("audit target_kind filter", &q.target_kind),
+        ("audit target_id filter", &q.target_id),
+    ] {
+        if let Some(v) = value {
+            validate_text(field, v)?;
+        }
+    }
+    if q.target_id.is_some() && q.target_kind.is_none() {
+        return Err(StoreError::Invalid(
+            "an audit target_id filter needs target_kind".into(),
+        ));
+    }
+    Ok(AuditPlan {
+        limit,
+        after,
+        action: q.action.as_deref().map(|a| (a, a.ends_with('.'))),
+    })
+}
+
 /// Cursor tag of the comment listing (see [`encode_comment_cursor`]; `c:` belongs to
 /// content cursors, F4).
 pub const COMMENT_CURSOR_TAG: &str = "cm:created";

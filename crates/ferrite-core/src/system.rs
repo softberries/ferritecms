@@ -1,7 +1,8 @@
-//! The system API (M2a-2b P15, P18, P19; 07 §1): the node registry, the audit log, the
-//! migration state, job counts, the job list and the dead-job retry. Every read needs
-//! `manage_system` (admins) and the `system:read` scope ([`require_reader`]); the retry
-//! needs `system:write` ([`require`]) and is audited (`job.retry`, P14).
+//! The system API (M2a-2b P15, P18, P19; 07 §1): the node registry, the audit log
+//! (with filters, M2b-3), the migration state, job counts, the job list, the dead-job
+//! retry and the test mail (P49). Every read needs `manage_system` (admins) and the
+//! `system:read` scope ([`require_reader`]); the retry and the test mail need
+//! `system:write` ([`require`]) and are audited (`job.retry`, `mail.test`).
 //!
 //! Job `last_error` texts are scrubbed here ([`diagnostics::scrub`], F16): the store
 //! only strips NUL and cuts them to 1 KiB, so a handler's error could carry a storage
@@ -15,14 +16,27 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use ferrite_domain::{AuditEntry, Job, JobId, JobQuery, JobStatus, NewAudit, Node, Page};
-use ferrite_store::{MigrationStatus, Repos, Store};
+use ferrite_domain::{
+    AuditEntry, AuditQuery, Job, JobId, JobQuery, JobStatus, NewAudit, Node, Page, Timestamp,
+};
+use ferrite_store::{MigrationStatus, Repos, Store, StoreError};
 use serde_json::{Value, json};
 
-use crate::{Actor, Capability, CoreError, diagnostics, require, require_reader, tx::finish};
+use crate::{
+    Actor, Capability, CoreError,
+    auth::limits,
+    diagnostics,
+    mail::{MailQueue, Mailer, check_address, test_mail},
+    require, require_reader, settings,
+    tx::finish,
+};
 
 /// Why a retry of a job that is not `dead` is refused (`422`, field `status`).
 pub const RETRY_NOT_DEAD: &str = "only dead jobs can be retried";
+
+/// Why a test mail cannot be sent without `[mail]` (`422`, field `mail`).
+pub const MAIL_NOT_CONFIGURED: &str =
+    "mail is not configured: set [mail] smtp_url and from in ferrite.toml";
 
 /// Reads behind `GET /system/*`.
 pub struct SystemService {
@@ -45,16 +59,22 @@ impl SystemService {
         Ok(nodes)
     }
 
-    /// One page of the audit log, newest first (`limit` 1..=200; a bad cursor is
-    /// `Invalid`).
+    /// One page of the audit log, newest first, filtered by `query` (see
+    /// [`AuditQuery`]). `target_id` without `target_kind` is
+    /// `invalid_field("target_id")`; a bad limit or cursor is `Invalid`.
     pub async fn audit(
         &self,
         actor: &Actor,
-        limit: u32,
-        cursor: Option<&str>,
+        query: &AuditQuery,
     ) -> Result<Page<AuditEntry>, CoreError> {
         require_reader(actor, Capability::ManageSystem)?;
-        Ok(self.store.read().audit().list(limit, cursor).await?)
+        if query.target_id.is_some() && query.target_kind.is_none() {
+            return Err(CoreError::invalid_field(
+                "target_id",
+                "target_id needs target_kind",
+            ));
+        }
+        Ok(self.store.read().audit().list(query).await?)
     }
 
     /// The database's migration state relative to `binary`.
@@ -98,6 +118,68 @@ impl SystemService {
         let mut job = finish(tx, done).await?;
         scrub_job(&mut job);
         Ok(job)
+    }
+
+    /// Sends one test mail to the actor's own address through `queue` (P49) and returns
+    /// that address. Needs `manage_system` with `system:write`. In order: no `[mail]`
+    /// (`queue` = `None`) is `invalid_field("mail", MAIL_NOT_CONFIGURED)`; then one hit on
+    /// `mail-test:user:<id>`, 3 per 10 minutes (`RateLimited`); an account without a
+    /// usable address is `invalid_field("email")`; a queue that refuses (full, shutting
+    /// down) is `Store(Busy)` (`503`). Once queued it is audited `mail.test` (target the
+    /// user, no address in `details`). The send itself runs in the background: an SMTP
+    /// failure is logged by the queue, not returned.
+    ///
+    /// The mail names the site by its title at use time (the `site.title` option, else
+    /// `configured_title`, P51), `site_url`, the actor's login and the UTC time.
+    pub async fn send_test_mail(
+        &self,
+        actor: &Actor,
+        queue: Option<&MailQueue>,
+        site_url: &str,
+        configured_title: &str,
+    ) -> Result<String, CoreError> {
+        require(actor, Capability::ManageSystem)?;
+        let Some(queue) = queue else {
+            return Err(CoreError::invalid_field("mail", MAIL_NOT_CONFIGURED));
+        };
+        let store = self.store.as_ref();
+        limits::hit(
+            store,
+            &limits::mail_test_user(actor.user),
+            limits::MAIL_TEST_PER_USER,
+            limits::MAIL_TEST_WINDOW,
+        )
+        .await?;
+        let user = store
+            .read()
+            .users()
+            .get(actor.user)
+            .await?
+            .ok_or(CoreError::NotFound)?;
+        if check_address(&user.email).is_err() {
+            return Err(CoreError::invalid_field(
+                "email",
+                "your account has no usable e-mail address",
+            ));
+        }
+        let title = settings::site_title(store, configured_title).await?;
+        let mail = test_mail(&user.email, &title, site_url, &user.login, Timestamp::now());
+        if let Err(e) = queue.send(mail).await {
+            tracing::warn!(user = %user.id, error = %e, "test mail not queued");
+            return Err(CoreError::Store(StoreError::Busy));
+        }
+        store
+            .read()
+            .audit()
+            .append(&NewAudit {
+                actor_id: Some(actor.user),
+                action: "mail.test".to_owned(),
+                target_kind: "user".to_owned(),
+                target_id: Some(user.id.to_string()),
+                details: json!({}),
+            })
+            .await?;
+        Ok(user.email)
     }
 
     /// The name of the active theme row, if one is active (none: nodes serve the

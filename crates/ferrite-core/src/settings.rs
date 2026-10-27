@@ -244,6 +244,23 @@ pub async fn read_all(store: &dyn Store, actor: &Actor) -> Result<Map<String, Va
     Ok(out)
 }
 
+/// The option holding the site title.
+pub const SITE_TITLE: &str = "site.title";
+
+/// The site title at use time (P51): the `site.title` option when it holds a string,
+/// else `configured` (`ferrite.toml` `site.title`). What names the site outside a page
+/// (the TOTP issuer, mail subjects and bodies) reads it here, so a title changed in
+/// Settings applies at once on every node.
+pub async fn site_title(store: &dyn Store, configured: &str) -> Result<String, CoreError> {
+    Ok(store
+        .read()
+        .options()
+        .get(SITE_TITLE)
+        .await?
+        .and_then(|e| e.value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| configured.to_owned()))
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

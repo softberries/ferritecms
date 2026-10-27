@@ -26,6 +26,7 @@ mod settings_ext;
 mod site;
 mod sweep;
 mod system;
+mod system_m2b3;
 mod themes;
 mod types;
 mod users;

@@ -9,6 +9,7 @@ use ferrite_core::{
     events::{invalidate, option_key, post_key},
     ext_settings::{SettingDef, open_secret, plugin_option, resolve_plugin_value},
     mail::{MailQueue, Mailer, OutgoingMail, check_address, header_safe},
+    settings,
 };
 use ferrite_domain::{ContentId, ContentStatus};
 use ferrite_plugin_host::{
@@ -73,7 +74,8 @@ pub const MAIL_TITLE_PREFIX_CHARS: usize = 100;
 ///   the fixed-hour bucket `mail:plugin:<name>` (over [`MAIL_PER_PLUGIN_HOUR`]:
 ///   refused), then up to [`MAIL_MAX_ADMINS`] active admins by login (an address that
 ///   fails `check_address` is skipped and logged), then one mail with every admin in
-///   Bcc, subject `[<site title>] <subject>` (the prefix as fixed by
+///   Bcc, subject `[<site title>] <subject>` (the site title read at send time, P51:
+///   the `site.title` option, else the configured one given to
 ///   [`with_mailer`](Self::with_mailer)) and body + `"\n\n-- \nSent by plugin <name>"`,
 ///   handed to the node's [`MailQueue`], which sends in the background (F28): the
 ///   guest learns about refusals, not about SMTP failures. Refusals that come after the
@@ -99,8 +101,8 @@ pub struct StoreHostServices {
     site_url: String,
     /// Opens sealed plugin secrets; `None`: secrets read as unset.
     site_key: Option<SiteKey>,
-    /// The node's mail queue and the subject prefix (`"[<site title>] "` or empty);
-    /// `None`: no `[mail]`.
+    /// The node's mail queue and the configured site title (`ferrite.toml`, the
+    /// fallback when the `site.title` option is unset); `None`: no `[mail]`.
     mail: Option<(Arc<MailQueue>, String)>,
     /// The node's outbound HTTPS client; `None`: `http.fetch` is not configured.
     egress: Option<Arc<Egress>>,
@@ -119,15 +121,16 @@ impl StoreHostServices {
     }
 
     /// Mail for `mail.notify-admins` through the node's queue (never a transport
-    /// directly: SMTP must not run inside a plugin call, F28), with `site_title` (the
-    /// configured one, fixed at boot) as the subject prefix.
+    /// directly: SMTP must not run inside a plugin call, F28). The subject prefix is the
+    /// site title at send time (P51): the `site.title` option, else `site_title` (the
+    /// configured one).
     ///
-    /// The title is checked here, once, so it cannot break every plugin mail (review
-    /// M3): one that is not header-safe (control characters, line separators) is not
-    /// used (no prefix, logged), and a longer one is cut to
-    /// [`MAIL_TITLE_PREFIX_CHARS`]. An empty title gives no prefix.
+    /// The title is checked at each send, so it cannot break a plugin mail (review M3):
+    /// one that is not header-safe (control characters, line separators) is not used
+    /// (no prefix, logged), and a longer one is cut to [`MAIL_TITLE_PREFIX_CHARS`]. An
+    /// empty title gives no prefix.
     pub fn with_mailer(mut self, queue: Arc<MailQueue>, site_title: String) -> Self {
-        self.mail = Some((queue, mail_prefix(&site_title)));
+        self.mail = Some((queue, site_title));
         self
     }
 
@@ -405,7 +408,7 @@ impl HostServices for StoreHostServices {
     }
 
     async fn notify_admins(&self, plugin: &str, subject: &str, text: &str) -> Result<(), String> {
-        let Some((queue, prefix)) = &self.mail else {
+        let Some((queue, configured_title)) = &self.mail else {
             return Err(ferrite_plugin_host::MAIL_NOT_CONFIGURED.to_owned());
         };
         let bucket = format!("mail:plugin:{plugin}");
@@ -449,7 +452,14 @@ impl HostServices for StoreHostServices {
         if bcc.is_empty() {
             return Err("no active admin has a usable e-mail address".to_owned());
         }
-        let subject = format!("{prefix}{subject}");
+        // The option read failing costs the prefix, not the mail.
+        let title = settings::site_title(self.store.as_ref(), configured_title)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(plugin, error = %e, "site title unreadable; using the configured one");
+                configured_title.clone()
+            });
+        let subject = format!("{}{subject}", mail_prefix(&title));
         let mail = OutgoingMail {
             to: Vec::new(),
             bcc,

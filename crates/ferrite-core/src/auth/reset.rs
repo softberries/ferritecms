@@ -33,15 +33,13 @@ use super::service::{AuthService, MAX_LOGIN_INPUT, ct_eq, plus};
 use super::{limits, password};
 use crate::{
     CoreError, UserService,
-    mail::{MailQueue, Mailer, OutgoingMail, header_safe},
+    mail::{MailQueue, Mailer, OutgoingMail, subject_title},
 };
 
 /// How long a reset link works.
 const RESET_TTL: Duration = Duration::from_secs(3600);
 /// Longest token looked at; ours are under 200 characters.
 const MAX_TOKEN_INPUT: usize = 512;
-/// Longest site title in the subject, in characters.
-const MAX_TITLE_CHARS: usize = 100;
 const RESET_PURPOSE: &str = "password-reset";
 /// Subkey label for the password-hash fingerprint in reset tokens.
 const RESET_PW_LABEL: &str = "ferrite:reset-pw:v1";
@@ -66,15 +64,14 @@ impl AuthService {
     /// nothing visible (a refusal is logged). Always `Ok(())` unless limited or the
     /// store fails.
     ///
-    /// `reset_base` is `<site.url>/admin/reset-password`; `site_title` names the site in
-    /// the mail.
+    /// `reset_base` is `<site.url>/admin/reset-password`; the site title at use time
+    /// (the `site.title` option, else `ferrite.toml`, P51) names the site in the mail.
     pub async fn request_password_reset(
         &self,
         queue: &MailQueue,
         input: &str,
         ip: Option<IpAddr>,
         reset_base: &str,
-        site_title: &str,
     ) -> Result<(), CoreError> {
         let store = self.store.as_ref();
         if let Some(ip) = ip {
@@ -103,7 +100,8 @@ impl AuthService {
         else {
             return Ok(());
         };
-        let mail = match self.reset_mail(&user, reset_base, site_title) {
+        let site_title = self.site_title().await?;
+        let mail = match self.reset_mail(&user, reset_base, &site_title) {
             Ok(mail) => mail,
             Err(e) => {
                 tracing::error!(user = %user.id, error = %e, "password reset token not made");
@@ -195,7 +193,7 @@ impl AuthService {
                 fp: self.reset_fingerprint(user),
             },
         )?;
-        let title = mail_title(site_title);
+        let title = subject_title(site_title);
         let subject = match &title {
             Some(t) => format!("[{t}] Password reset"),
             None => "Password reset".to_owned(),
@@ -224,30 +222,5 @@ impl AuthService {
     fn reset_fingerprint(&self, user: &User) -> String {
         let hash = user.password_hash.as_ref().map_or("", |h| h.expose());
         keyed_id(&self.key, RESET_PW_LABEL, hash.as_bytes())
-    }
-}
-
-/// The site title for the mail: trimmed, at most [`MAX_TITLE_CHARS`] characters; `None`
-/// when empty or not header-safe.
-fn mail_title(site_title: &str) -> Option<String> {
-    let title = site_title.trim();
-    if title.is_empty() || !header_safe(title) {
-        return None;
-    }
-    let cut: String = title.chars().take(MAX_TITLE_CHARS).collect();
-    Some(cut.trim_end().to_owned())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mail_title_rules() {
-        assert_eq!(mail_title(" My Blog ").as_deref(), Some("My Blog"));
-        assert_eq!(mail_title("   "), None);
-        assert_eq!(mail_title("Evil\r\nBcc: x@evil.test"), None);
-        let long = "é".repeat(150);
-        assert_eq!(mail_title(&long).unwrap().chars().count(), MAX_TITLE_CHARS);
     }
 }

@@ -34,7 +34,7 @@ use ferrite_core::{
 use ferrite_domain::{ArtifactHash, InstalledTheme, NodeId, Role, Secret, Timestamp, User};
 use ferrite_http::{
     AppParts, AppState, HttpConfig, PluginReloader, StoreHostServices,
-    api::{ApiParts, ApiState, NodeInfo},
+    api::{ApiMail, ApiParts, ApiState, NodeInfo},
     build_site,
     extensions::Installer,
     load_route_table,
@@ -62,6 +62,8 @@ pub use test_support::plugin_wasm;
 
 pub const SITE_URL: &str = "https://example.com";
 pub const SITE_TITLE: &str = "Test Site";
+/// `mail.from` of the harness API.
+pub const MAIL_FROM: &str = "Test Site <noreply@example.com>";
 /// `media.max_upload` of the harness API (1 MiB, so limit tests stay small).
 pub const MAX_UPLOAD: u64 = 1 << 20;
 
@@ -290,7 +292,7 @@ impl Api {
             Arc::new(PermalinkRules::default()),
         ));
         let auth = Arc::new(
-            AuthService::new(store.clone(), key.clone()).with_issuer_name(SITE_TITLE.into()),
+            AuthService::new(store.clone(), key.clone()).with_site_title(SITE_TITLE.into()),
         );
         let api = Arc::new(
             ApiState::new(ApiParts {
@@ -325,7 +327,10 @@ impl Api {
                 ),
                 installer,
                 media: media_store,
-                mailer: Some(Arc::new(MailQueue::new(mailer.clone()))),
+                mail: Some(ApiMail {
+                    queue: Arc::new(MailQueue::new(mailer.clone())),
+                    from: MAIL_FROM.into(),
+                }),
                 site_url: SITE_URL.into(),
                 site_title: SITE_TITLE.into(),
             })
@@ -394,7 +399,7 @@ impl Api {
     /// The whole site again, with the same store and services but no `[mail]`.
     pub fn router_without_mail(&self) -> Router {
         self.router_with(ApiParts {
-            mailer: None,
+            mail: None,
             ..self.same_parts()
         })
     }
@@ -466,7 +471,7 @@ impl Api {
             system: a.system.clone(),
             site: a.site.clone(),
             node: a.node,
-            mailer: a.mailer.clone(),
+            mail: a.mail.clone(),
             site_url: a.site_url.clone(),
             site_title: a.site_title.clone(),
         }
@@ -482,7 +487,7 @@ impl Api {
             Arc::new(PermalinkRules::default()),
         ));
         let auth = Arc::new(
-            AuthService::new(store.clone(), key.clone()).with_issuer_name(SITE_TITLE.into()),
+            AuthService::new(store.clone(), key.clone()).with_site_title(SITE_TITLE.into()),
         );
         let api = Arc::new(
             ApiState::new(ApiParts {
@@ -519,7 +524,7 @@ impl Api {
                         .expect("installer"),
                 ),
                 media: self.api.media.clone(),
-                mailer: self.api.mailer.clone(),
+                mail: self.api.mail.clone(),
                 site_url: SITE_URL.into(),
                 site_title: SITE_TITLE.into(),
             })

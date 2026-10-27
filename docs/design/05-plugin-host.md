@@ -797,7 +797,7 @@ of at most 64 KiB (`MAX_MAIL_BODY_BYTES`). Then `StoreHostServices::notify_admin
 node; a refused second mail in one call uses no hourly slot); the recipients are the
 active admins (at most 50, `MAIL_MAX_ADMINS`; unusable addresses skipped, none left is an
 error), all in `Bcc`, so admins do not see each other's addresses and the plugin never
-learns them. The subject gets the site-title prefix `[<site.title>] ` (01 §4) and the body
+learns them. The subject gets the site-title prefix `[<site title>] ` (the `site.title` option at send time, else `ferrite.toml`, M2b-3 P51; 01 §4) and the body
 the footer `Sent by plugin <name>`. The mail is handed to the node's mail queue and the
 call returns: SMTP never runs inside the plugin call (F28); a full queue (16 in flight) is
 an error to the guest, an SMTP failure is only logged. Example: `plugins/examples/notifier`

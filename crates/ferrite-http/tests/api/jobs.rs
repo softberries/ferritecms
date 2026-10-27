@@ -141,7 +141,13 @@ async fn dead_job_is_listed_and_retried(api: Api) -> Api {
         Some(LEAKY),
         "the store keeps the full text"
     );
-    let audit = api.store.read().audit().list(10, None).await.unwrap();
+    let audit = api
+        .store
+        .read()
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(10))
+        .await
+        .unwrap();
     let entry = &audit.items[0];
     assert_eq!(entry.action, "job.retry");
     assert_eq!(entry.target_kind, "job");
@@ -158,7 +164,13 @@ async fn dead_job_is_listed_and_retried(api: Api) -> Api {
         .await
         .assert_problem(422, "validation");
     assert_eq!(p["errors"][0]["field"], "status", "{p}");
-    let after = api.store.read().audit().list(10, None).await.unwrap();
+    let after = api
+        .store
+        .read()
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(10))
+        .await
+        .unwrap();
     assert_eq!(after.items.len(), audit.items.len(), "refusal not audited");
     c.post_empty(&api, &format!("{JOBS}/{}/retry", JobId::new()))
         .await

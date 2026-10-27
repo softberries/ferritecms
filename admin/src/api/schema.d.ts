@@ -868,6 +868,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/mail/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["send_test_mail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system/metrics/summary": {
         parameters: {
             query?: never;
@@ -1880,6 +1896,24 @@ export interface components {
             /** @enum {string} */
             status: "totp_required";
         };
+        /**
+         * @description Outgoing mail (P49): `[mail]` in `ferrite.toml` is the only place to set it; the SMTP
+         *     URL (it can hold credentials) is never shown.
+         */
+        MailStatusDto: {
+            /**
+             * @description `[mail]` has `smtp_url` and `from`: password resets, plugin `notify-admins` and
+             *     the test mail can send.
+             */
+            configured: boolean;
+            /** @description `mail.from`; `null` when not configured. */
+            from?: string | null;
+        };
+        /** @description `POST /system/mail/test`: the mail is queued. */
+        MailTestDto: {
+            /** @description The actor's own address, where the mail goes. */
+            to: string;
+        };
         /** @description The authenticated user and what the request's credential allows. */
         MeDto: {
             /** @description Capabilities granted by the role and the credential's scopes (07 §1 names). */
@@ -1891,6 +1925,12 @@ export interface components {
             /** Format: uuid */
             id: string;
             login: string;
+            /**
+             * @description Whether the site can send mail (`[mail]` has `smtp_url` and `from`), for roles
+             *     holding `manage_users` or `manage_system` (whatever the credential's scopes);
+             *     `null` for everyone else.
+             */
+            mail_configured?: boolean | null;
             /**
              * @description Only `GET /auth/me`, `POST /auth/logout` and `POST /auth/password` are open until
              *     the password is changed.
@@ -2100,11 +2140,10 @@ export interface components {
             /** @description The heartbeat is within 30 s of the database clock. */
             live: boolean;
             /**
-             * @description What the node reports (04 §8: `theme`, `plugins`, `plugins_error`,
-             *     `permalinks_error`, `site_id`, `site_url`, `mode`, `clock_skew_ms`); error texts
-             *     scrubbed of URLs, paths, addresses and credentials, at most 1 KiB each.
+             * @description What the node reports (04 §8); error texts scrubbed of URLs, paths, addresses and
+             *     credentials, at most 1 KiB each.
              */
-            meta: Record<string, never>;
+            meta: components["schemas"]["NodeMetaDto"];
             /** @description `cluster.node_name` or the host name. */
             name: string;
             /**
@@ -2134,6 +2173,60 @@ export interface components {
             items: components["schemas"]["NodeDto"][];
             /** @description Always `null`: one page holds every node. */
             next_cursor?: string | null;
+        };
+        /**
+         * @description A node's `meta`, read leniently: every member is optional (a node of another version
+         *     in a rolling deploy may lack or add members), unknown members are dropped, and a
+         *     member of the wrong type is `null` rather than failing the list.
+         */
+        NodeMetaDto: {
+            /**
+             * Format: int64
+             * @description The node clock minus the database clock at its last heartbeat, in milliseconds.
+             */
+            clock_skew_ms?: number | null;
+            /** @description The job kinds this node's runner handles. */
+            job_kinds?: string[] | null;
+            /** @description `solo` or `cluster`. */
+            mode?: string | null;
+            /** @description Why the current permalink options are not in effect. */
+            permalinks_error?: string | null;
+            /** @description The node's plugins by name, from its last reload. */
+            plugins?: {
+                [key: string]: components["schemas"]["NodePluginDto"];
+            } | null;
+            /** @description Why the plugin rows could not be read at the last reload. */
+            plugins_error?: string | null;
+            /** @description The site the node joined (cluster registry). */
+            site_id?: string | null;
+            /** @description The node's `site.url`. */
+            site_url?: string | null;
+            theme?: components["schemas"]["NodeThemeDto"] | null;
+        };
+        /** @description `meta.plugins.<name>` of a node. */
+        NodePluginDto: {
+            /** @description Why it is not loaded (scrubbed). */
+            error?: string | null;
+            /** @description The component's content hash. */
+            hash?: string | null;
+            /** @description `loaded`, `failed` or `disabled`. */
+            status?: string | null;
+            version?: string | null;
+        };
+        /** @description `meta.theme` of a node. */
+        NodeThemeDto: {
+            /** @description Why the active theme is not served (scrubbed). */
+            error?: string | null;
+            /** @description There is an active row and this node does not serve its artifact. */
+            fallback?: boolean | null;
+            /** @description The theme's content hash. */
+            hash?: string | null;
+            name?: string | null;
+            origin?: components["schemas"]["NodeThemeOrigin"] | null;
+        };
+        /** @description Where a node's theme came from: `"embedded"`, `"folder"` or `{"artifact": <hash>}`. */
+        NodeThemeOrigin: string | {
+            artifact: string;
         };
         /** @description `POST /auth/password`. */
         PasswordChange: {
@@ -2623,6 +2716,7 @@ export interface components {
             /** @description `sqlite` or `postgres`. */
             database: string;
             jobs: components["schemas"]["JobCountsDto"];
+            mail: components["schemas"]["MailStatusDto"];
             /** @description `local` or `s3`. */
             media: string;
             /** @description `solo` or `cluster`. */
@@ -3057,6 +3151,8 @@ export type SchemaJobList = components['schemas']['JobList'];
 export type SchemaLimitItemDto = components['schemas']['LimitItemDto'];
 export type SchemaLoginRequest = components['schemas']['LoginRequest'];
 export type SchemaLoginResponse = components['schemas']['LoginResponse'];
+export type SchemaMailStatusDto = components['schemas']['MailStatusDto'];
+export type SchemaMailTestDto = components['schemas']['MailTestDto'];
 export type SchemaMeDto = components['schemas']['MeDto'];
 export type SchemaMediaDto = components['schemas']['MediaDto'];
 export type SchemaMediaList = components['schemas']['MediaList'];
@@ -3076,6 +3172,10 @@ export type SchemaNodeCountsDto = components['schemas']['NodeCountsDto'];
 export type SchemaNodeDto = components['schemas']['NodeDto'];
 export type SchemaNodeHookStatsDto = components['schemas']['NodeHookStatsDto'];
 export type SchemaNodeList = components['schemas']['NodeList'];
+export type SchemaNodeMetaDto = components['schemas']['NodeMetaDto'];
+export type SchemaNodePluginDto = components['schemas']['NodePluginDto'];
+export type SchemaNodeThemeDto = components['schemas']['NodeThemeDto'];
+export type SchemaNodeThemeOrigin = components['schemas']['NodeThemeOrigin'];
 export type SchemaPasswordChange = components['schemas']['PasswordChange'];
 export type SchemaPasswordChanged = components['schemas']['PasswordChanged'];
 export type SchemaPasswordResetConfirm = components['schemas']['PasswordResetConfirm'];
@@ -7491,9 +7591,23 @@ export interface operations {
     list_audit: {
         parameters: {
             query?: {
+                /** @description Rows written by this user (UUID). */
+                actor?: string;
+                /**
+                 * @description An exact action (`user.update`), or a prefix ending in `.` (`user.`); 1..=100
+                 *     characters, case-sensitive.
+                 */
+                action?: string;
+                /**
+                 * @description Rows about this kind of target (`user`, `settings`, `plugin`, ...); 1..=100
+                 *     characters.
+                 */
+                target_kind?: string;
+                /** @description Rows about this target (needs `target_kind`); 1..=255 characters. */
+                target_id?: string;
                 /** @description 1..=200; default 50. */
                 limit?: number;
-                /** @description `next_cursor` of the previous page. */
+                /** @description `next_cursor` of the previous page (of the same filters). */
                 cursor?: string;
             };
             header?: never;
@@ -7502,7 +7616,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One page of the audit log, newest first */
+            /** @description One page of the audit log, newest first, filtered */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7511,7 +7625,7 @@ export interface operations {
                     "application/json": components["schemas"]["AuditList"];
                 };
             };
-            /** @description `validation`: `limit` or `cursor` */
+            /** @description `validation` (`actor`, `action`, `target_kind`, `target_id`, `limit`, `cursor`) or `malformed-query` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -7531,6 +7645,15 @@ export interface operations {
             };
             /** @description `forbidden` (`manage_system`, `system:read`) or `password-reset-required` */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: `target_id` without `target_kind` (`errors[0].field` = `target_id`) */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7645,6 +7768,71 @@ export interface operations {
             };
             /** @description `validation`: the job is not `dead` (`errors[0].field` = `status`) */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    send_test_mail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A test mail to the caller's own address is queued (subject `Test e-mail from <site title>`); audited `mail.test`. Sending runs in the background: an SMTP failure is in the node's log, not here */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailTestDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_system`, `system:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: mail is not configured (`errors[0].field` = `mail`) or the account has no usable address (`email`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `rate-limited`: 3 test mails per 10 minutes per user (see `Retry-After`) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `busy`: the node's mail queue is full or shutting down */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

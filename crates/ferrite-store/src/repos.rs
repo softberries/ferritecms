@@ -5,13 +5,13 @@ use std::{
 
 use async_trait::async_trait;
 use ferrite_domain::{
-    ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, Autosave, Comment,
-    CommentId, CommentQuery, CommentStatus, ContentId, ContentItem, ContentQuery, ContentType,
-    Event, FailureBucket, IdemBegin, IdempotencyKey, InstalledPlugin, InstalledTheme, Job, JobId,
-    JobLease, JobQuery, JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob, NewNode,
-    NewUser, Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId, RedirectQuery,
-    Revision, RevisionId, SearchQuery, Secret, Session, Taxonomy, Term, TermId, Timestamp, User,
-    UserId, UserQuery,
+    ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, AuditQuery, Autosave,
+    Comment, CommentId, CommentQuery, CommentStatus, ContentId, ContentItem, ContentQuery,
+    ContentType, Event, FailureBucket, IdemBegin, IdempotencyKey, InstalledPlugin, InstalledTheme,
+    Job, JobId, JobLease, JobQuery, JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob,
+    NewNode, NewUser, Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId,
+    RedirectQuery, Revision, RevisionId, SearchQuery, Secret, Session, Taxonomy, Term, TermId,
+    Timestamp, User, UserId, UserQuery,
 };
 
 use crate::{Channel, LockGuard, StoreError, Subscription, migrate::MigrationStatus};
@@ -929,8 +929,11 @@ pub trait AuditRepo: Send + Sync {
     /// NUL in `details` or in any text.
     async fn append(&self, entry: &NewAudit) -> Result<AuditId, StoreError>;
     /// Lists rows newest first (`at DESC, id DESC`) with cursor pagination (tag
-    /// [`AUDIT_CURSOR_TAG`](crate::AUDIT_CURSOR_TAG)); `limit` 1..=200.
-    async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<AuditEntry>, StoreError>;
+    /// [`AUDIT_CURSOR_TAG`](crate::AUDIT_CURSOR_TAG)), filtered by `query`
+    /// ([`check_audit_query`](crate::check_audit_query): `limit` 1..=200, `target_id`
+    /// only with `target_kind`, no NUL; else `Invalid`). An `action` ending in `.` is a
+    /// literal, case-sensitive prefix (no LIKE wildcards); otherwise it is exact.
+    async fn list(&self, query: &AuditQuery) -> Result<Page<AuditEntry>, StoreError>;
 }
 
 /// An item's approved comments ([`CommentRepo::approved_totals`]).

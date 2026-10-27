@@ -80,6 +80,33 @@ pub struct AuditEntry {
     pub node: Option<NodeId>,
 }
 
+/// An audit-log listing (`GET /system/audit`): newest first (`at DESC, id DESC`), every
+/// filter optional and combined with AND.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuditQuery {
+    /// Rows written by this user.
+    pub actor: Option<UserId>,
+    /// An exact action (`user.update`), or a prefix when it ends in `.` (`user.` matches
+    /// `user.create` but not `users.purge`); compared byte for byte, case-sensitive.
+    pub action: Option<String>,
+    pub target_kind: Option<String>,
+    /// Only together with `target_kind`.
+    pub target_id: Option<String>,
+    /// 1..=[`MAX_PAGE`](crate::MAX_PAGE).
+    pub limit: u32,
+    pub cursor: Option<String>,
+}
+
+impl AuditQuery {
+    /// The newest `limit` rows, unfiltered.
+    pub fn first(limit: u32) -> Self {
+        Self {
+            limit,
+            ..Self::default()
+        }
+    }
+}
+
 /// Idempotency rows are kept this long after the request started (M2a-2b P10, F7); the
 /// `sessions.prune` job deletes older ones.
 pub const IDEMPOTENCY_RETENTION: Duration = Duration::from_secs(24 * 3600);

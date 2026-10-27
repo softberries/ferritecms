@@ -144,7 +144,7 @@ importer. The admin SPA that uses them is M2b.
 | Themes | `GET /themes`, `POST /themes` (raw ustar bundle, `?activate=true`), `POST /themes/{name}/activate`, `GET/PATCH /themes/{name}/settings` (no delete, M2a-2 P30); manifest facts in `ThemeDto` (M2b-3) | M2a-2a, M2b-3 | reads `manage_themes` + `extensions:read` (`require_reader`); writes `manage_themes` + `extensions:write` |
 | Plugins | `GET /plugins`, `GET /plugins/{name}`, `POST /plugins/inspect` (multipart upload → permission report, nothing installed), `POST /plugins` (install with `approve` = the report's fingerprint), `POST /plugins/{name}/enable`, `POST /plugins/{name}/disable`, `DELETE /plugins/{name}` (`?purge=true`), `GET/PATCH /plugins/{name}/settings`; `GET /plugins/retained`, `POST /plugins/{name}/purge` (M2b-3 P47) | M2a-2a, M2b-3 | reads `manage_plugins` + `extensions:read` (`require_reader`, so editors see no plugin list); writes `manage_plugins` + `extensions:write` |
 | Plugin metrics | `GET /plugins/{name}/metrics` (24 h of failures per hook and hour, every node's; the answering node's per-hook call stats; 05 §8) | M2a-2b (built) | `manage_plugins` + `extensions:read` |
-| System | `GET /system/status` (versions, mode, backends, schema, the active theme and the nodes serving a fallback, job counts, node counts), `GET /system/nodes`, `GET /system/audit?limit&cursor`, `GET /system/jobs?status&kind&limit&cursor`, `POST /system/jobs/{id}/retry`, `GET /system/metrics/summary` (see **System** below) | M2a-2b (built) | `manage_system` (admins) + `system:read`; retry `system:write` |
+| System | `GET /system/status` (versions, mode, backends, schema, the active theme and the nodes serving a fallback, job counts, node counts), `GET /system/nodes`, `GET /system/audit?actor&action&target_kind&target_id&limit&cursor`, `GET /system/jobs?status&kind&limit&cursor`, `POST /system/jobs/{id}/retry`, `GET /system/metrics/summary`, `POST /system/mail/test` (see **System** below) | M2a-2b (built); audit filters, `mail`, typed node `meta` and the test mail M2b-3 | `manage_system` (admins) + `system:read`; retry and test mail `system:write` |
 | Import | `POST /import/wordpress` (upload WXR + optional uploads zip → job), `GET /import/{job}` | M3 | — |
 
 **Versions and `If-Match` (P11).** Only content has a `version`: `PATCH`, `DELETE`, the
@@ -398,15 +398,31 @@ the version, the mode or the migration state); the unauthenticated liveness prob
   `up_to_date|needs_up|newer_schema_ok|incompatible`, 02 §8), `theme` (`active`: the active
   row's name or `null`; `fallback_nodes`: names of live nodes with
   `nodes.meta.theme.fallback`), `jobs` (counts per status), `nodes` (`live`, `stale`: by
-  heartbeat within 30 s of the database clock) and `node` (`id`, `started_at` of the node
-  that answered).
+  heartbeat within 30 s of the database clock), `node` (`id`, `started_at` of the node
+  that answered) and `mail` (`configured`: `[mail]` has `smtp_url` and `from`; `from`:
+  `mail.from` or `null`; the SMTP URL is never shown, M2b-3 P49).
 - `GET /system/nodes` lists every registered node, live and stale (`live` flag), by id,
-  with its `meta`; unpaged (`next_cursor` always `null`, at most 1 000 rows).
-- `GET /system/audit` lists audit rows newest first with cursor paging (`limit` 1..=200,
-  default 50; a cursor of another list is `400`), each with `actor` = `{ id, login }`
-  (`null` for the operator path, unauthenticated flows and deleted users). `details` never
-  hold secrets or setting values (P22: setting writes list keys only; plugin installs list
-  the grant, never settings).
+  with its `meta`; unpaged (`next_cursor` always `null`, at most 1 000 rows). `meta` is
+  typed (`NodeMetaDto`, M2b-3): `theme` (`name`, `hash`, `origin` = `"embedded"`,
+  `"folder"` or `{ "artifact": <hash> }`, `error`, `fallback`), `plugins` (by name:
+  `version`, `hash`, `status`, `error`), `plugins_error`, `permalinks_error`, `job_kinds`,
+  `site_id`, `site_url`, `mode`, `clock_skew_ms`. Every member is optional and read
+  leniently, for rolling deploys: unknown members are dropped and a member of the wrong
+  type is `null` (a plugin entry that is not an object is left out) instead of failing
+  the list.
+- `GET /system/audit?actor&action&target_kind&target_id&limit&cursor` lists audit rows
+  newest first with cursor paging (`limit` 1..=200, default 50; a cursor of another list
+  is `400`), each with `actor` = `{ id, login }` (`null` for the operator path,
+  unauthenticated flows and deleted users). Filters (M2b-3), combined with AND: `actor` (a
+  user id), `action` (exact, or a prefix when it ends in `.`, so `user.` matches
+  `user.create` but not `users.purge`; compared literally and case-sensitively, by
+  `substr`/`length` on SQLite and `starts_with` on Postgres, no new index),
+  `target_kind`, and `target_id` (only with `target_kind`, else `422` with
+  `errors[0].field = "target_id"`). A malformed `actor`, or an empty or over-long
+  `action`/`target_kind` (1..=100 characters) or `target_id` (1..=255), or one with
+  control characters, is `400` naming the field. The cursor of a filtered page continues
+  the same filters. `details` never hold secrets or setting values (P22: setting writes
+  list keys only; plugin installs list the grant, never settings).
 - `GET /system/jobs?status&kind&limit&cursor` lists jobs newest first (`limit` 1..=200,
   default 50; an unknown `status`, a malformed `kind` or a cursor of another list is
   `400`) **without payloads** (P19), `last_error` scrubbed like node diagnostics (F16),
@@ -418,6 +434,15 @@ the version, the mode or the migration state); the unauthenticated liveness prob
 - `GET /system/metrics/summary`: the answering node's `renders`, `page_cache` (`entries`,
   `bytes`, `hits`, `misses`), `plugins` (`calls`, `failures`) since it started, and the
   site's `jobs` per status (P20; 09 §6).
+- `POST /system/mail/test` (`manage_system` + `system:write`; M2b-3 P49) queues one mail to
+  the caller's own address and answers `202 { "to" }`. Without `[mail]` it is `422`
+  (`errors[0].field = "mail"`); an account without a usable address `422` (`email`); 3
+  per 10 minutes per user (bucket `mail-test:user:<id>`, `429` with `Retry-After`); a full
+  or stopping mail queue `503 busy`. Subject `Test e-mail from <site title>`; the
+  plain-text body names the site URL, the caller's login and the UTC time and says it was
+  sent from the admin to check the mail settings. Audited `mail.test` (target the user,
+  empty `details`). The send runs in the background: an SMTP failure is in the node's
+  log, not in the answer.
 - **Node diagnostics are scrubbed** (`ferrite_core::diagnostics::scrub`): every error text a
   node puts in `nodes.meta` (`theme.error`, `plugins.<name>.error`, `plugins_error`,
   `permalinks_error`) is scrubbed where it is written (`NodeStatus`) and again where it is
@@ -525,7 +550,9 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   verifying WP hashes (`legacy_hash`) is **later**, only if a direct WP-database user
   import is added. An account with `must_reset` gets a session that may only call `GET
   /auth/me`, `POST /auth/logout` and `POST /auth/password` (else `403
-  password-reset-required`). Its API tokens are not restricted (R26): they are
+  password-reset-required`). `GET /auth/me` (and the login answer's `user`) carries
+  `mail_configured` (M2b-3): whether `[mail]` is set, for roles holding `manage_users` or
+  `manage_system` whatever the credential's scopes, `null` for other roles. Its API tokens are not restricted (R26): they are
   independent credentials that a reset keeps (R22), so a bot account keeps working
   after an admin resets its password.
 - **Logins** (P14, R3): `^[a-z0-9][a-z0-9._-]{0,59}$` after trimming and ASCII
@@ -616,8 +643,8 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
   bound to the current password hash) instead of `{ "status": "session", "user",
   "csrf_token" }`; `POST /auth/login/totp` finishes it. A code's step must be newer than
   `users.totp_last_step` (one conditional update), so a code cannot be replayed. The
-  issuer is the configured `site.title` (`ferrite.toml`, read at startup) without `:`
-  (`FerriteCMS` when empty). There are no recovery codes: an admin turns another user's
+  issuer is the site title at setup time (the `site.title` option, else `ferrite.toml`;
+  M2b-3 P51) without `:` (`FerriteCMS` when empty). There are no recovery codes: an admin turns another user's
   TOTP off with `POST /users/{id}/totp/disable` (`manage_users` + `users:write`, never
   oneself, their sessions kept, audited `user.totp_disable`; M2b-3 P43), or an operator
   runs `ferrite user disable-totp --login <login>`.
@@ -658,6 +685,8 @@ rulings P7–P9, P14–P17 in [`m2a.md`](../superpowers/rulings/m2a.md)).
     account gets a mail, to its own address, queued on the node's mail queue (16 sends
     in flight, 10 s each), so the response never waits for SMTP; a queue or SMTP failure
     is logged, never returned. Requests are not audited.
+  - The mail names the site by its title at request time (the `site.title` option, else
+    `ferrite.toml`; M2b-3 P51): subject `[<title>] Password reset`.
   - The mail links to `<site.url>/admin/reset-password#token=<token>`: the token is in the
     **fragment**, which browsers send to no server and leave out of `Referer`. That page
     is the admin SPA's (M2b); until then the link is a `404` and the token is posted to

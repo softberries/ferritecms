@@ -409,7 +409,11 @@ also installs the `ring` rustls default crypto provider at start.
   `plugins.action_deadline_ms`, `plugins.default_memory`, `plugins.default_fuel`,
   `plugins.disable_after_failures`, `plugins.failure_window` (counted cluster-wide, P20),
   `plugins.max_concurrent_calls` and `plugins.render_budget_ms` (M2a-2a P22, 05 §6),
-  `[mail]` (`smtp_url[_file]`, `from`; password reset and plugin mail, 01 §4),
+  `[mail]` (`smtp_url[_file]`, `from`; password reset, plugin mail and the admin's test
+  mail, 01 §4; config-only, M2b-3 P49: `GET /system/status` shows `mail.configured` and
+  `mail.from`, never the SMTP URL, and `POST /system/mail/test` sends one mail to the
+  calling admin to check it; mails name the site by the `site.title` option, else the
+  configured title, read when each mail is made, P51),
   `cluster.mode`, `cluster.node_name`, `cluster.workers`, `cache.logged_in` (`bypass` or
   `per-user`, 06 §3), `auth.secret_key[_file]` (else `<data>/secret.key` in solo mode, created
   on first start if missing). Render concurrency (2 × available parallelism, 5 s wait,

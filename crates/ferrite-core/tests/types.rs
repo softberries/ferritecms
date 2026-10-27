@@ -751,7 +751,12 @@ pub async fn types_changed_emitted_with_all(db: &TestDb) {
             ],
             "{action}"
         );
-        let audit = store.read().audit().list(1, None).await.unwrap();
+        let audit = store
+            .read()
+            .audit()
+            .list(&ferrite_domain::AuditQuery::first(1))
+            .await
+            .unwrap();
         let row = &audit.items[0];
         assert_eq!(row.action, *action);
         assert_eq!(row.actor_id, Some(admin.user));

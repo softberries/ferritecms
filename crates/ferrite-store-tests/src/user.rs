@@ -553,7 +553,12 @@ pub async fn user_delete_restricted_by_content_then_ok_after_reassign(db: &TestD
         assert_eq!(listed.len(), 2);
         assert!(listed.iter().all(|rev| rev.author_id == heir.id));
     }
-    let audit = r.audit().list(10, None).await.unwrap().items;
+    let audit = r
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(10))
+        .await
+        .unwrap()
+        .items;
     assert_eq!(audit.len(), 1);
     assert_eq!(audit[0].actor_id, None);
 
