@@ -103,8 +103,14 @@ export const qk = {
     status: ["system", "status"] as const,
     metrics: ["system", "metrics"] as const,
     jobs: (filters: JobFilters) => ["system", "jobs", filters] as const,
+    /** Every job list (the dashboard's and the Jobs tab's); refetch after a retry. */
+    jobLists: ["system", "jobs"] as const,
+    /** The Jobs tab's pages (`useInfiniteQuery` over `next_cursor`); under `jobLists`. */
+    jobsInfinite: (filters: JobFilters) => ["system", "jobs", "infinite", filters] as const,
     nodes: ["system", "nodes"] as const,
     audit: (filters: AuditFilters) => ["system", "audit", filters] as const,
+    /** The Audit tab's pages (`useInfiniteQuery` over `next_cursor`). */
+    auditInfinite: (filters: AuditFilters) => ["system", "audit", "infinite", filters] as const,
   },
   /** Every users list and user (`["users"]` covers them all). */
   usersAll: ["users"] as const,

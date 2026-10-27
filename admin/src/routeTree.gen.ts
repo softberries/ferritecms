@@ -27,6 +27,8 @@ import { Route as AppPluginsNameRouteImport } from './routes/_app/plugins.$name'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings.index'
 import { Route as AppSettingsGroupRouteImport } from './routes/_app/settings.$group'
 import { Route as AppStructureRedirectsRouteImport } from './routes/_app/structure.redirects'
+import { Route as AppSystemIndexRouteImport } from './routes/_app/system.index'
+import { Route as AppSystemTabRouteImport } from './routes/_app/system.$tab'
 import { Route as AppUsersIndexRouteImport } from './routes/_app/users.index'
 import { Route as AppContentTypeIndexRouteImport } from './routes/_app/content.$type.index'
 import { Route as AppContentTypeIdRouteImport } from './routes/_app/content.$type.$id'
@@ -127,6 +129,16 @@ const AppStructureRedirectsRoute = AppStructureRedirectsRouteImport.update({
   path: '/structure/redirects',
   getParentRoute: () => AppRoute,
 } as any)
+const AppSystemIndexRoute = AppSystemIndexRouteImport.update({
+  id: '/system/',
+  path: '/system/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSystemTabRoute = AppSystemTabRouteImport.update({
+  id: '/system/$tab',
+  path: '/system/$tab',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppUsersIndexRoute = AppUsersIndexRouteImport.update({
   id: '/users/',
   path: '/users/',
@@ -194,10 +206,12 @@ export interface FileRoutesByFullPath {
   '/plugins/$name': typeof AppPluginsNameRoute
   '/settings/$group': typeof AppSettingsGroupRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
+  '/system/$tab': typeof AppSystemTabRoute
   '/comments/': typeof AppCommentsIndexRoute
   '/media/': typeof AppMediaIndexRoute
   '/plugins/': typeof AppPluginsIndexRoute
   '/settings/': typeof AppSettingsIndexRoute
+  '/system/': typeof AppSystemIndexRoute
   '/users/': typeof AppUsersIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
@@ -223,10 +237,12 @@ export interface FileRoutesByTo {
   '/plugins/$name': typeof AppPluginsNameRoute
   '/settings/$group': typeof AppSettingsGroupRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
+  '/system/$tab': typeof AppSystemTabRoute
   '/comments': typeof AppCommentsIndexRoute
   '/media': typeof AppMediaIndexRoute
   '/plugins': typeof AppPluginsIndexRoute
   '/settings': typeof AppSettingsIndexRoute
+  '/system': typeof AppSystemIndexRoute
   '/users': typeof AppUsersIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
@@ -254,10 +270,12 @@ export interface FileRoutesById {
   '/_app/plugins/$name': typeof AppPluginsNameRoute
   '/_app/settings/$group': typeof AppSettingsGroupRoute
   '/_app/structure/redirects': typeof AppStructureRedirectsRoute
+  '/_app/system/$tab': typeof AppSystemTabRoute
   '/_app/comments/': typeof AppCommentsIndexRoute
   '/_app/media/': typeof AppMediaIndexRoute
   '/_app/plugins/': typeof AppPluginsIndexRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
+  '/_app/system/': typeof AppSystemIndexRoute
   '/_app/users/': typeof AppUsersIndexRoute
   '/_app/content/$type/$id': typeof AppContentTypeIdRoute
   '/_app/content/$type/new': typeof AppContentTypeNewRoute
@@ -285,10 +303,12 @@ export interface FileRouteTypes {
     | '/plugins/$name'
     | '/settings/$group'
     | '/structure/redirects'
+    | '/system/$tab'
     | '/comments/'
     | '/media/'
     | '/plugins/'
     | '/settings/'
+    | '/system/'
     | '/users/'
     | '/content/$type/$id'
     | '/content/$type/new'
@@ -314,10 +334,12 @@ export interface FileRouteTypes {
     | '/plugins/$name'
     | '/settings/$group'
     | '/structure/redirects'
+    | '/system/$tab'
     | '/comments'
     | '/media'
     | '/plugins'
     | '/settings'
+    | '/system'
     | '/users'
     | '/content/$type/$id'
     | '/content/$type/new'
@@ -344,10 +366,12 @@ export interface FileRouteTypes {
     | '/_app/plugins/$name'
     | '/_app/settings/$group'
     | '/_app/structure/redirects'
+    | '/_app/system/$tab'
     | '/_app/comments/'
     | '/_app/media/'
     | '/_app/plugins/'
     | '/_app/settings/'
+    | '/_app/system/'
     | '/_app/users/'
     | '/_app/content/$type/$id'
     | '/_app/content/$type/new'
@@ -497,6 +521,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppStructureRedirectsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/system/': {
+      id: '/_app/system/'
+      path: '/system'
+      fullPath: '/system/'
+      preLoaderRoute: typeof AppSystemIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/system/$tab': {
+      id: '/_app/system/$tab'
+      path: '/system/$tab'
+      fullPath: '/system/$tab'
+      preLoaderRoute: typeof AppSystemTabRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/users/': {
       id: '/_app/users/'
       path: '/users'
@@ -579,10 +617,12 @@ interface AppRouteChildren {
   AppPluginsNameRoute: typeof AppPluginsNameRoute
   AppSettingsGroupRoute: typeof AppSettingsGroupRoute
   AppStructureRedirectsRoute: typeof AppStructureRedirectsRoute
+  AppSystemTabRoute: typeof AppSystemTabRoute
   AppCommentsIndexRoute: typeof AppCommentsIndexRoute
   AppMediaIndexRoute: typeof AppMediaIndexRoute
   AppPluginsIndexRoute: typeof AppPluginsIndexRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
+  AppSystemIndexRoute: typeof AppSystemIndexRoute
   AppUsersIndexRoute: typeof AppUsersIndexRoute
   AppContentTypeIdRoute: typeof AppContentTypeIdRoute
   AppContentTypeNewRoute: typeof AppContentTypeNewRoute
@@ -604,10 +644,12 @@ const AppRouteChildren: AppRouteChildren = {
   AppPluginsNameRoute: AppPluginsNameRoute,
   AppSettingsGroupRoute: AppSettingsGroupRoute,
   AppStructureRedirectsRoute: AppStructureRedirectsRoute,
+  AppSystemTabRoute: AppSystemTabRoute,
   AppCommentsIndexRoute: AppCommentsIndexRoute,
   AppMediaIndexRoute: AppMediaIndexRoute,
   AppPluginsIndexRoute: AppPluginsIndexRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
+  AppSystemIndexRoute: AppSystemIndexRoute,
   AppUsersIndexRoute: AppUsersIndexRoute,
   AppContentTypeIdRoute: AppContentTypeIdRoute,
   AppContentTypeNewRoute: AppContentTypeNewRoute,

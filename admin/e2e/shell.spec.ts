@@ -173,6 +173,7 @@ test("shortcut_sheet_lists_bindings", async ({ as, snap, expectAccessible }) => 
     "Go to Appearance",
     "Go to Plugins",
     "Go to Settings",
+    "Go to System",
   ]);
   await expect(sheet.getByRole("heading", { name: "General" })).toBeVisible();
   await expect(sheet.getByRole("heading", { name: "Go to" })).toBeVisible();

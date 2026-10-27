@@ -23,8 +23,16 @@ export function getMetricsSummary(): Promise<MetricsSummaryDto> {
 }
 
 /** `GET /system/jobs` (`manage_system`): one page, newest first. */
-export function listJobs(query: JobFilters = {}): Promise<SchemaJobList> {
-  return unwrap(api.GET("/api/v1/system/jobs", { params: { query } }));
+export function listJobs(
+  query: JobFilters = {},
+  options: { signal?: AbortSignal } = {},
+): Promise<SchemaJobList> {
+  return unwrap(
+    api.GET("/api/v1/system/jobs", {
+      params: { query },
+      ...(options.signal ? { signal: options.signal } : {}),
+    }),
+  );
 }
 
 /**

@@ -137,6 +137,19 @@ test("plugins_is_registered", () => {
   expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
 });
 
+test("system_is_registered", () => {
+  // M2b-3 Task 11 registers System under Administration: only `manage_system` sees it,
+  // with `g y`.
+  const admin = navFor(me("admin", ["read_admin", "manage_system"]), TYPES);
+  const section = admin.find((s) => s.id === "admin");
+  expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
+    ["system", "System", "/system", "g y"],
+  ]);
+  expect(navItemAt(admin, "/system")?.id).toBe("system");
+  const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
+  expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
+});
+
 test("settings_is_registered", () => {
   // M2b-3 Task 8 registers Settings under Administration: only `manage_settings` sees it,
   // and it is current on every group's page.

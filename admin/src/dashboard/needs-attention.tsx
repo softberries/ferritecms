@@ -3,8 +3,8 @@
 // queue); for `manage_system` dead jobs, the schema verdict and theme
 // fallback nodes (`GET /system/status`); for `manage_plugins` plugins disabled by
 // failures. A check the actor may not see is not requested at all, and each check
-// loads and fails on its own. System entries are plain text until M2b-3 adds their
-// detail screens.
+// loads and fails on its own. The system checks link to the System screen's tabs (dead
+// jobs to Jobs filtered by `status=dead`, the schema to Status, fallback nodes to Nodes).
 
 import { type UseQueryResult, useQueries, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -168,6 +168,18 @@ export function NeedsAttention({
                   })
                 : t("attention.jobs.none")
             }
+            action={
+              jobs.data && jobs.data.items.length > 0 ? (
+                <Link
+                  to="/system/$tab"
+                  params={{ tab: "jobs" }}
+                  search={{ status: "dead" }}
+                  className="text-sm font-medium text-primary hover:underline"
+                >
+                  {t("attention.jobs.all")}
+                </Link>
+              ) : null
+            }
           >
             {jobs.data?.items.map((job) => (
               <li
@@ -252,6 +264,17 @@ export function NeedsAttention({
                     })
                   : ""
               }
+              action={
+                verdict !== undefined && verdict !== "up_to_date" ? (
+                  <Link
+                    to="/system/$tab"
+                    params={{ tab: "status" }}
+                    className="text-sm font-medium text-primary hover:underline"
+                  >
+                    {t("attention.schema.all")}
+                  </Link>
+                ) : null
+              }
             />
             <Check
               label={t("attention.theme.label")}
@@ -264,6 +287,17 @@ export function NeedsAttention({
                       formatted: new Intl.NumberFormat(uiLocale()).format(fallback.length),
                     })
                   : t("attention.theme.none")
+              }
+              action={
+                fallback && fallback.length > 0 ? (
+                  <Link
+                    to="/system/$tab"
+                    params={{ tab: "nodes" }}
+                    className="text-sm font-medium text-primary hover:underline"
+                  >
+                    {t("attention.theme.all")}
+                  </Link>
+                ) : null
               }
             >
               {fallback?.map((node) => (

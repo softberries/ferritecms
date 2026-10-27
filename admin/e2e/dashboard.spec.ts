@@ -112,7 +112,15 @@ test("admin_sees_health_and_attention", async ({ as, site, backend }) => {
   await expect(health.getByText("All nodes")).toBeVisible();
 
   const attention = page.getByRole("region", { name: "Needs attention" });
-  await expect(attention.getByText("No dead jobs")).toBeVisible();
+  // `system.spec.ts` makes a dead job for a few seconds (retry_dead_job) and the specs run
+  // in parallel: the check has loaded, with no dead job or with a link to them.
+  await expect(attention.getByText(/^(No dead jobs|\d+ dead jobs?)$/)).toBeVisible();
+  if (await attention.getByText(/^\d+ dead jobs?$/).isVisible()) {
+    await expect(attention.getByRole("link", { name: "View dead jobs" })).toHaveAttribute(
+      "href",
+      "/admin/system/jobs?status=dead",
+    );
+  }
   await expect(attention.getByText(/^\d+ items? wait/)).toBeVisible();
   await expect(attention.getByText("Up to date", { exact: false })).toBeVisible();
 });
@@ -321,6 +329,19 @@ test("screens", async ({ as, guard, snap, expectAccessible }) => {
   await loaded(page);
   await expect(page.getByTestId("failures-chart").locator(".recharts-bar")).toHaveCount(2);
   await expect(page.getByText("1 dead job")).toBeVisible();
+  // Each system check links to its System tab.
+  await expect(page.getByRole("link", { name: "View dead jobs" })).toHaveAttribute(
+    "href",
+    "/admin/system/jobs?status=dead",
+  );
+  await expect(page.getByRole("link", { name: "View status" })).toHaveAttribute(
+    "href",
+    "/admin/system/status",
+  );
+  await expect(page.getByRole("link", { name: "View nodes" })).toHaveAttribute(
+    "href",
+    "/admin/system/nodes",
+  );
   await snap(page, "dashboard-attention");
   await expectAccessible(page);
   await page.unrouteAll();

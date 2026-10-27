@@ -197,10 +197,10 @@
       },
       "expires": "Expires",
       "expiry": {
-        "never": "Never",
         "30": "In 30 days",
         "90": "In 90 days",
-        "365": "In 365 days"
+        "365": "In 365 days",
+        "never": "Never"
       },
       "create": "Create token",
       "creating": "Creating…",
@@ -812,6 +812,338 @@
       "erased": "The data of {{name}} was erased",
       "erasedOn": "Erased after {{date}}",
       "alreadyErased": "The data of {{name}} was already erased"
+    }
+  },
+  "system": {
+    "title": "System",
+    "description": "Versions, nodes, background jobs and the audit log.",
+    "tabs": {
+      "label": "System",
+      "status": "Status",
+      "nodes": "Nodes",
+      "jobs": "Jobs",
+      "audit": "Audit log",
+      "deadCount": "Dead jobs"
+    },
+    "schema": {
+      "upToDate": {
+        "title": "Up to date",
+        "body": "The database is at version {{db}}, the version this binary expects."
+      },
+      "needsUp": {
+        "title_one": "{{count}} migration to apply",
+        "title_other": "{{count}} migrations to apply",
+        "body_one": "The database is at version {{db}} and this binary expects {{binary}}. Apply it with ferrite migrate up.",
+        "body_other": "The database is at version {{db}} and this binary expects {{binary}}. Apply them with ferrite migrate up."
+      },
+      "newer": {
+        "title": "Newer database, still compatible",
+        "body": "A newer FerriteCMS moved the database to version {{db}}; this binary knows up to {{binary}} and can still run on it. Upgrade this binary when you can."
+      },
+      "incompatible": {
+        "title": "Incompatible",
+        "body": "The database is at version {{db}}, which this binary (version {{binary}}) cannot run on. Upgrade this binary."
+      },
+      "unknown": "The database is at version {{db}}; this binary knows up to {{binary}}."
+    },
+    "status": {
+      "site": {
+        "title": "Site",
+        "version": "Version",
+        "mode": "Mode",
+        "database": "Database",
+        "media": "Media storage",
+        "siteUrl": "Site address",
+        "answeredBy": "Answered by this node, up since {{time}}"
+      },
+      "modes": {
+        "solo": "Solo",
+        "cluster": "Cluster"
+      },
+      "databases": {
+        "sqlite": "SQLite",
+        "postgres": "Postgres"
+      },
+      "medias": {
+        "local": "Local folder",
+        "s3": "S3-compatible storage"
+      },
+      "schema": {
+        "title": "Database schema",
+        "database": "Database",
+        "binary": "This binary",
+        "pending": "Waiting to apply"
+      },
+      "mail": {
+        "title": "Mail",
+        "configured": "Mail is set up",
+        "notConfigured": "Mail is not set up",
+        "from": "From",
+        "configuredHint": "Password resets and plugin notices are sent by e-mail.",
+        "notConfiguredHint": "Password resets by e-mail and plugin notices are off. Mail is set up in ferrite.toml.",
+        "settings": "Mail settings"
+      },
+      "theme": {
+        "title": "Theme",
+        "active": "Active theme",
+        "none": "The built-in default",
+        "allServe": "Every live node serves it.",
+        "fallback_one": "{{count}} node serves the fallback theme:",
+        "fallback_other": "{{count}} nodes serve the fallback theme:",
+        "nodes": "See the nodes"
+      },
+      "jobs": {
+        "title": "Background jobs",
+        "hint": "Every node's jobs, by status."
+      },
+      "nodes": {
+        "title": "Nodes",
+        "live": "Live",
+        "stale": "Stale",
+        "hint": "A node is live while its last heartbeat is under 30 s old."
+      }
+    },
+    "nodes": {
+      "empty": {
+        "title": "No nodes",
+        "body": "No node has registered yet."
+      },
+      "live": "Live",
+      "stale": "Stale",
+      "thisNode": "This node",
+      "version": "Version",
+      "schema": "Schema",
+      "started": "Started",
+      "heartbeat": "Last heartbeat",
+      "mode": "Mode",
+      "skew": {
+        "ahead": "Clock {{seconds}} s ahead of the database",
+        "behind": "Clock {{seconds}} s behind the database"
+      },
+      "theme": {
+        "title": "Theme",
+        "fallback": "Fallback",
+        "serving": "Serving",
+        "hash": "Hash",
+        "origin": "Origin"
+      },
+      "origin": {
+        "embedded": "Built in",
+        "folder": "Folder",
+        "artifact": "Installed bundle"
+      },
+      "plugins": {
+        "title": "Plugins",
+        "none": "No plugins loaded",
+        "error": "The plugins could not be read"
+      },
+      "pluginStatus": {
+        "loaded": "Loaded",
+        "failed": "Failed",
+        "disabled": "Disabled"
+      },
+      "permalinks": "Permalinks",
+      "jobKinds": "Job kinds",
+      "noJobKinds": "Runs no jobs",
+      "notReported": "Not reported"
+    },
+    "jobs": {
+      "filterStatus": "Status",
+      "status": {
+        "queued": "Queued",
+        "running": "Running",
+        "done": "Done",
+        "dead": "Dead"
+      },
+      "kind": {
+        "label": "Kind",
+        "chosen": "Kind: {{kind}}. Change kind",
+        "search": "Find a kind",
+        "none": "No kinds known",
+        "clear": "Clear the kind"
+      },
+      "clearFilters": "Clear filters",
+      "columns": {
+        "job": "Job",
+        "status": "Status",
+        "attempts": "Attempts",
+        "runAt": "Run at",
+        "finished": "Finished",
+        "lockedBy": "Locked by"
+      },
+      "attempts": "{{attempts}} / {{max}}",
+      "attemptsLabel": "Attempts {{attempts}} of {{max}}",
+      "unhandled": "No node handles this kind yet",
+      "retry": {
+        "action": "Retry",
+        "on": "Retry {{kind}}",
+        "queued": "Queued again",
+        "queuedUnhandled": "Queued again. No node handles this kind yet",
+        "unhandledHint": "It waits until a node that runs {{kind}} jobs joins.",
+        "failed": "Not retried"
+      },
+      "error": {
+        "more": "Show the whole error",
+        "less": "Show less"
+      },
+      "empty": {
+        "title": "No jobs yet",
+        "body": "Background work such as scheduled publishing, image sizes and plugin actions shows here.",
+        "queued": "No queued jobs",
+        "running": "No running jobs",
+        "done": "No done jobs",
+        "dead": "No dead jobs",
+        "statusBody": "Nothing with this status right now."
+      },
+      "noMatch": {
+        "title": "No jobs match",
+        "body": "Try another status or kind."
+      },
+      "loadMore": "Load more",
+      "loadingMore": "Loading…",
+      "none": "—"
+    },
+    "audit": {
+      "table": "Audit log",
+      "columns": {
+        "time": "Time",
+        "actor": "Actor",
+        "action": "Action",
+        "target": "Target",
+        "details": "Details"
+      },
+      "system": "System",
+      "systemHint": "Not done through a signed-in account: the command line or an e-mailed link.",
+      "details": "Details",
+      "actor": {
+        "label": "Actor",
+        "chosen": "Actor: {{name}}. Change actor",
+        "search": "Find a user",
+        "none": "No users match",
+        "loading": "Loading…",
+        "clear": "Clear the actor"
+      },
+      "action": {
+        "label": "Action",
+        "chosen": "Action: {{action}}. Change action",
+        "prefix": "starts with {{prefix}}",
+        "search": "Find an action",
+        "startsWith": "Starts with {{prefix}}",
+        "any": "Any {{area}} action",
+        "clear": "Clear the action",
+        "hint": "Type a prefix ending in a dot, like user.",
+        "known": "Known actions"
+      },
+      "target": {
+        "label": "Target",
+        "chosen": "Target: {{target}}. Change target",
+        "kind": "Kind",
+        "id": "ID",
+        "idHint": "Optional: one item of that kind.",
+        "apply": "Apply",
+        "clear": "Clear the target",
+        "pick": "Choose a kind"
+      },
+      "clearFilters": "Clear filters",
+      "empty": {
+        "title": "Nothing logged yet",
+        "body": "Changes to users, settings, themes, plugins and jobs are logged here."
+      },
+      "noMatch": {
+        "title": "No entries match",
+        "body": "Try other filters."
+      },
+      "loadMore": "Load more",
+      "loadingMore": "Loading…",
+      "actions": {
+        "user": {
+          "create": "Created a user",
+          "update": "Updated a user",
+          "delete": "Deleted a user",
+          "password": "Set a user's password",
+          "password_reset": "Reset a password by e-mail",
+          "totp_disable": "Turned off a user's two-factor sign-in"
+        },
+        "session": {
+          "revoke": "Signed out a session"
+        },
+        "token": {
+          "create": "Created an API token",
+          "revoke": "Revoked an API token"
+        },
+        "totp": {
+          "enable": "Turned on two-factor sign-in",
+          "disable": "Turned off two-factor sign-in"
+        },
+        "settings": {
+          "update": "Changed site settings"
+        },
+        "mail": {
+          "test": "Sent a test e-mail"
+        },
+        "job": {
+          "retry": "Retried a job"
+        },
+        "plugin": {
+          "install": "Installed a plugin",
+          "enable": "Enabled a plugin",
+          "disable": "Disabled a plugin",
+          "delete": "Deleted a plugin",
+          "purge": "Erased a plugin's data",
+          "settings": "Changed plugin settings"
+        },
+        "theme": {
+          "install": "Installed a theme",
+          "activate": "Activated a theme",
+          "settings": "Changed theme settings"
+        },
+        "type": {
+          "create": "Created a content type",
+          "update": "Changed a content type",
+          "delete": "Deleted a content type"
+        },
+        "taxonomy": {
+          "create": "Created a taxonomy",
+          "update": "Changed a taxonomy",
+          "delete": "Deleted a taxonomy"
+        }
+      },
+      "areas": {
+        "user": "user",
+        "session": "session",
+        "token": "API token",
+        "totp": "two-factor",
+        "settings": "settings",
+        "mail": "mail",
+        "job": "job",
+        "plugin": "plugin",
+        "theme": "theme",
+        "type": "content type",
+        "taxonomy": "taxonomy"
+      },
+      "areaTitles": {
+        "user": "Users",
+        "session": "Sessions",
+        "token": "API tokens",
+        "totp": "Two-factor",
+        "settings": "Settings",
+        "mail": "Mail",
+        "job": "Jobs",
+        "plugin": "Plugins",
+        "theme": "Themes",
+        "type": "Content types",
+        "taxonomy": "Taxonomies"
+      },
+      "targets": {
+        "user": "User",
+        "api_token": "API token",
+        "settings": "Settings",
+        "job": "Job",
+        "plugin": "Plugin",
+        "theme": "Theme",
+        "type": "Content type",
+        "taxonomy": "Taxonomy"
+      }
     }
   }
 }

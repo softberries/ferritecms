@@ -75,7 +75,8 @@
       "some_other": "{{count}} dead jobs",
       "none": "No dead jobs",
       "attempts_one": "{{attempts}} of {{max}} attempt",
-      "attempts_other": "{{attempts}} of {{max}} attempts"
+      "attempts_other": "{{attempts}} of {{max}} attempts",
+      "all": "View dead jobs"
     },
     "plugins": {
       "label": "Plugins",
@@ -89,13 +90,15 @@
       "needs_up_one": "{{count}} migration pending (database {{db}}, binary {{binary}})",
       "needs_up_other": "{{count}} migrations pending (database {{db}}, binary {{binary}})",
       "newer_schema_ok": "The database (version {{db}}) is newer than this binary ({{binary}}) but compatible",
-      "incompatible": "The database (version {{db}}) is incompatible with this binary ({{binary}})"
+      "incompatible": "The database (version {{db}}) is incompatible with this binary ({{binary}})",
+      "all": "View status"
     },
     "theme": {
       "label": "Theme",
       "some_one": "{{formatted}} node serves the fallback theme",
       "some_other": "{{formatted}} nodes serve the fallback theme",
-      "none": "Every node serves the active theme"
+      "none": "Every node serves the active theme",
+      "all": "View nodes"
     }
   },
   "health": {
