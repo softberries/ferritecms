@@ -197,10 +197,10 @@
       },
       "expires": "Expires",
       "expiry": {
+        "never": "Never",
         "30": "In 30 days",
         "90": "In 90 days",
-        "365": "In 365 days",
-        "never": "Never"
+        "365": "In 365 days"
       },
       "create": "Create token",
       "creating": "Creating…",
@@ -853,8 +853,7 @@
         "mode": "Mode",
         "database": "Database",
         "media": "Media storage",
-        "siteUrl": "Site address",
-        "answeredBy": "Answered by this node, up since {{time}}"
+        "siteUrl": "Site address"
       },
       "modes": {
         "solo": "Solo",
@@ -880,8 +879,7 @@
         "notConfigured": "Mail is not set up",
         "from": "From",
         "configuredHint": "Password resets and plugin notices are sent by e-mail.",
-        "notConfiguredHint": "Password resets by e-mail and plugin notices are off. Mail is set up in ferrite.toml.",
-        "settings": "Mail settings"
+        "notConfiguredHint": "Password resets by e-mail and plugin notices are off. Mail is set up in ferrite.toml."
       },
       "theme": {
         "title": "Theme",
@@ -900,7 +898,7 @@
         "title": "Nodes",
         "live": "Live",
         "stale": "Stale",
-        "hint": "A node is live while its last heartbeat is under 30 s old."
+        "hint": "A node is live while its last heartbeat is at most 30 s old."
       }
     },
     "nodes": {
@@ -915,7 +913,6 @@
       "schema": "Schema",
       "started": "Started",
       "heartbeat": "Last heartbeat",
-      "mode": "Mode",
       "skew": {
         "ahead": "Clock {{seconds}} s ahead of the database",
         "behind": "Clock {{seconds}} s behind the database"
@@ -923,9 +920,7 @@
       "theme": {
         "title": "Theme",
         "fallback": "Fallback",
-        "serving": "Serving",
-        "hash": "Hash",
-        "origin": "Origin"
+        "hash": "Hash"
       },
       "origin": {
         "embedded": "Built in",
@@ -1001,7 +996,12 @@
       },
       "loadMore": "Load more",
       "loadingMore": "Loading…",
-      "none": "—"
+      "none": "—",
+      "summary": {
+        "finished": "Finished",
+        "runAt": "Run",
+        "lockedBy": "On"
+      }
     },
     "audit": {
       "table": "Audit log",
@@ -1009,8 +1009,7 @@
         "time": "Time",
         "actor": "Actor",
         "action": "Action",
-        "target": "Target",
-        "details": "Details"
+        "target": "Target"
       },
       "system": "System",
       "systemHint": "Not done through a signed-in account: the command line or an e-mailed link.",
@@ -1026,13 +1025,12 @@
       "action": {
         "label": "Action",
         "chosen": "Action: {{action}}. Change action",
-        "prefix": "starts with {{prefix}}",
+        "prefix": "starts with “{{prefix}}”",
         "search": "Find an action",
         "startsWith": "Starts with {{prefix}}",
         "any": "Any {{area}} action",
         "clear": "Clear the action",
-        "hint": "Type a prefix ending in a dot, like user.",
-        "known": "Known actions"
+        "hint": "Type a prefix ending in a dot, like user."
       },
       "target": {
         "label": "Target",

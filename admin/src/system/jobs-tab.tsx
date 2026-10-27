@@ -83,12 +83,6 @@ export function JobsTab({ search, setSearch }: TabProps) {
     () => new Map((nodes.data ?? []).map((n) => [n.id, n.name])),
     [nodes.data],
   );
-  const kinds = useMemo(() => {
-    const all = new Set<string>();
-    for (const n of nodes.data ?? []) for (const k of n.meta?.job_kinds ?? []) all.add(k);
-    if (search.kind) all.add(search.kind);
-    return [...all].sort();
-  }, [nodes.data, search.kind]);
   const jobs = useMemo(() => {
     const seen = new Map<string, JobDto>();
     for (const page of list.data?.pages ?? []) {
@@ -96,6 +90,15 @@ export function JobsTab({ search, setSearch }: TabProps) {
     }
     return [...seen.values()];
   }, [list.data]);
+  // The kinds the nodes run, the kinds of the loaded rows (a dead job of a kind no node
+  // runs any more, H-Y1) and the one in the URL.
+  const kinds = useMemo(() => {
+    const all = new Set<string>();
+    for (const n of nodes.data ?? []) for (const k of n.meta.job_kinds ?? []) all.add(k);
+    for (const j of jobs) all.add(j.kind);
+    if (search.kind) all.add(search.kind);
+    return [...all].sort();
+  }, [nodes.data, jobs, search.kind]);
   const [retrying, setRetrying] = useState<ReadonlySet<string>>(new Set());
 
   const retry = async (job: JobDto) => {
@@ -293,11 +296,11 @@ export function JobStatusBadge({ status }: { status: string }) {
   );
 }
 
-function Attempts({ job }: { job: JobDto }) {
+function Attempts({ job, className }: { job: JobDto; className?: string }) {
   const { t } = useTranslation("admin");
   return (
     <span
-      className="text-sm text-muted-foreground tabular-nums"
+      className={cn("text-sm text-muted-foreground tabular-nums", className)}
       title={t("system.jobs.attemptsLabel", { attempts: job.attempts, max: job.max_attempts })}
     >
       {t("system.jobs.attempts", { attempts: job.attempts, max: job.max_attempts })}
@@ -326,14 +329,35 @@ function useColumns(nodeNames: ReadonlyMap<string, string>): DataTableColumn<Job
                   {t("system.jobs.unhandled")}
                 </span>
               ) : null}
-              {/* Below `md` the status and attempts columns are hidden: here. */}
-              <span className="flex flex-wrap items-center gap-2 md:hidden">
-                <span className="sm:hidden">
+              {/* Below 1280 px some columns are hidden: each piece shows here until
+                  its own column appears. */}
+              <span
+                data-slot="job-summary"
+                className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs whitespace-normal text-muted-foreground xl:hidden"
+              >
+                <span data-piece="status" className="sm:hidden">
                   <JobStatusBadge status={j.status} />
                 </span>
-                <Attempts job={j} />
+                <span data-piece="attempts" className="md:hidden">
+                  <Attempts job={j} className="text-xs" />
+                </span>
                 {j.finished_at ? (
-                  <RelativeTime at={j.finished_at} className="text-xs text-muted-foreground" />
+                  <span data-piece="finished" className="lg:hidden">
+                    {t("system.jobs.summary.finished")} <RelativeTime at={j.finished_at} />
+                  </span>
+                ) : null}
+                <span data-piece="run_at" className="xl:hidden">
+                  {t("system.jobs.summary.runAt")} <RelativeTime at={j.run_at} />
+                </span>
+                {j.locked_by ? (
+                  <span
+                    data-piece="locked_by"
+                    className="min-w-0 wrap-anywhere xl:hidden"
+                    title={j.locked_by}
+                  >
+                    {t("system.jobs.summary.lockedBy")}{" "}
+                    <span className="font-mono">{nodeNames.get(j.locked_by) ?? j.locked_by}</span>
+                  </span>
                 ) : null}
               </span>
               {j.last_error ? <ExpandableText text={j.last_error} /> : null}

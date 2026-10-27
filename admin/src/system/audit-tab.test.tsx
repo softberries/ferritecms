@@ -54,7 +54,7 @@ test("audit_rows_are_readable_text", async () => {
         next_cursor: null,
       }),
   });
-  renderWithRouter(<AuditTab search={{}} setSearch={() => {}} />);
+  renderWithRouter(<AuditTab search={{}} setSearch={() => {}} canSearchUsers />);
   expect(await screen.findByText("Created an API token")).toBeVisible();
   const first = document.querySelector<HTMLElement>('tr[data-row-id="a1"]');
   if (!first) throw new Error("no row");
@@ -83,6 +83,7 @@ test("filters_reach_the_request_and_the_url", async () => {
     <AuditTab
       search={{ actor: ADMIN_ID, action: "user.", target_kind: "user" }}
       setSearch={setSearch}
+      canSearchUsers
     />,
   );
   expect(await screen.findByText("No entries match")).toBeVisible();
@@ -92,16 +93,14 @@ test("filters_reach_the_request_and_the_url", async () => {
   expect(request?.searchParams.get("target_kind")).toBe("user");
   expect(request?.searchParams.get("limit")).toBe("50");
   // The chips say what narrows the list.
+  expect(await screen.findByRole("button", { name: "Actor: admin. Change actor" })).toBeVisible();
   expect(
-    await screen.findByRole("button", { name: "Actor: Ada Admin. Change actor" }),
-  ).toBeVisible();
-  expect(
-    screen.getByRole("button", { name: "Action: starts with user.. Change action" }),
+    screen.getByRole("button", { name: "Action: starts with “user.”. Change action" }),
   ).toBeVisible();
 
   // "Starts with": a typed prefix ending in a dot.
   await userEvent.click(
-    screen.getByRole("button", { name: "Action: starts with user.. Change action" }),
+    screen.getByRole("button", { name: "Action: starts with “user.”. Change action" }),
   );
   const box = await screen.findByRole("combobox", { name: "Find an action" });
   await userEvent.type(box, "token.");
@@ -110,7 +109,7 @@ test("filters_reach_the_request_and_the_url", async () => {
 
   // An exact action from the list.
   await userEvent.click(
-    screen.getByRole("button", { name: "Action: starts with user.. Change action" }),
+    screen.getByRole("button", { name: "Action: starts with “user.”. Change action" }),
   );
   await userEvent.click(await screen.findByRole("option", { name: /^Revoked an API token/ }));
   expect(setSearch).toHaveBeenLastCalledWith({ action: "token.revoke" });
@@ -131,7 +130,7 @@ test("actor_picker_searches_users", async () => {
     "/api/v1/system/audit": () => json({ items: [audit()], next_cursor: null }),
     "/api/v1/users": () => json(USERS),
   });
-  renderWithRouter(<AuditTab search={{}} setSearch={setSearch} />);
+  renderWithRouter(<AuditTab search={{}} setSearch={setSearch} canSearchUsers />);
   await screen.findByText("Changed site settings");
   await userEvent.click(screen.getByRole("button", { name: "Actor" }));
   const box = await screen.findByRole("combobox", { name: "Find a user" });
@@ -143,4 +142,43 @@ test("actor_picker_searches_users", async () => {
   );
   await userEvent.click(await screen.findByRole("option", { name: /Ada Admin/ }));
   expect(setSearch).toHaveBeenLastCalledWith({ actor: ADMIN_ID });
+});
+
+test("without_manage_users_the_actors_come_from_the_rows", async () => {
+  const setSearch = vi.fn();
+  const other = "0190a1b2-c3d4-7e5f-8a9b-0000000000a2";
+  const seen = stubRoutes({
+    "/api/v1/system/audit": () =>
+      json({
+        items: [
+          audit({ id: "r1" }),
+          audit({ id: "r2", actor: { id: other, login: "editor" } }),
+          audit({ id: "r3" }),
+          audit({ id: "r4", actor: null }),
+        ],
+        next_cursor: null,
+      }),
+  });
+  renderWithRouter(<AuditTab search={{}} setSearch={setSearch} canSearchUsers={false} />);
+  await screen.findAllByText("Changed site settings");
+  await userEvent.click(screen.getByRole("button", { name: "Actor" }));
+  const options = (await screen.findAllByRole("option")).map((o) => o.textContent);
+  expect(options).toEqual(["admin", "editor"]);
+  expect(seen.some((u) => u.pathname.startsWith("/api/v1/users"))).toBe(false);
+  await userEvent.click(screen.getByRole("option", { name: "editor" }));
+  expect(setSearch).toHaveBeenLastCalledWith({ actor: other });
+});
+
+test("phone_summary_has_no_dangling_separator", async () => {
+  stubRoutes({
+    "/api/v1/system/audit": () => json({ items: [audit({ id: "r1" })], next_cursor: null }),
+  });
+  renderWithRouter(<AuditTab search={{}} setSearch={() => {}} canSearchUsers={false} />);
+  await screen.findByText("Changed site settings");
+  const line = document.querySelector<HTMLElement>("[data-slot=audit-summary]");
+  if (!line) throw new Error("no summary");
+  // A separator only ever sits between two pieces: never last in the line.
+  expect(line.lastElementChild?.getAttribute("aria-hidden")).not.toBe("true");
+  const phoneOnly = line.querySelector<HTMLElement>(".md\\:hidden");
+  expect(phoneOnly?.lastElementChild?.getAttribute("aria-hidden")).not.toBe("true");
 });

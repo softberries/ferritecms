@@ -95,10 +95,6 @@ export function auditAreaOf(action: string): AuditArea | null {
   return action.includes(".") && isOneOf(AUDIT_AREAS, area) ? area : null;
 }
 
-export function auditAreaText(t: TFunction<"admin">, area: AuditArea): string {
-  return t(`system.audit.areas.${area}`);
-}
-
 /** A known area's actions, in list order. */
 export function actionsOf(area: AuditArea): AuditAction[] {
   return AUDIT_ACTIONS.filter((a) => a.startsWith(`${area}.`));

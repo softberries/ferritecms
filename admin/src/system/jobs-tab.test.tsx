@@ -94,7 +94,7 @@ test("job_rows_show_text_and_unhandled_kinds", async () => {
   expect(within(rowOf(queued.id)).queryByRole("button", { name: /^Retry/ })).toBeNull();
   // Locked by: the node's name.
   const run = rowOf(running.id);
-  expect(within(run).getByText("node-a")).toBeVisible();
+  expect(within(run).getAllByText("node-a").length).toBeGreaterThan(0);
   // The error is text, never markup, and a long one expands.
   expect(document.querySelector("img")).toBeNull();
   const error = within(run).getByText(long);
@@ -125,4 +125,54 @@ test("status_chips_and_empty_state", async () => {
   expect(setSearch).toHaveBeenLastCalledWith({ status: "queued" });
   await userEvent.click(within(group).getByRole("button", { name: "Dead" }));
   expect(setSearch).toHaveBeenLastCalledWith({ status: undefined });
+});
+
+test("summary_line_covers_every_hidden_column", async () => {
+  // Below 1280 px some columns are hidden: the line under the kind shows each piece
+  // until its own column appears.
+  const running = job({
+    status: "running",
+    locked_by: NODE_A,
+    finished_at: "2026-10-27T08:00:02Z",
+  });
+  stubRoutes({
+    "/api/v1/system/jobs": () => json({ items: [running], next_cursor: null }),
+    "/api/v1/system/nodes": () => json({ items: [node()] }),
+  });
+  renderWithRouter(<JobsTab search={{}} setSearch={() => {}} />);
+  await screen.findByText("media.variants");
+  const summary = rowOf(running.id).querySelector<HTMLElement>("[data-slot=job-summary]");
+  if (!summary) throw new Error("no summary line");
+  expect(summary).toHaveClass("xl:hidden");
+  const piece = (name: string) => {
+    const el = summary.querySelector<HTMLElement>(`[data-piece=${name}]`);
+    if (!el) throw new Error(`no ${name} in the summary`);
+    return el;
+  };
+  expect(piece("status")).toHaveClass("sm:hidden");
+  expect(piece("attempts")).toHaveClass("md:hidden");
+  expect(piece("finished")).toHaveClass("lg:hidden");
+  expect(piece("run_at")).toHaveClass("xl:hidden");
+  expect(piece("locked_by")).toHaveClass("xl:hidden");
+  expect(piece("locked_by")).toHaveTextContent("node-a");
+  expect(piece("run_at")).toHaveTextContent(/^Run /);
+});
+
+test("kind_picker_offers_kinds_of_loaded_rows", async () => {
+  if (!("scrollIntoView" in Element.prototype)) {
+    Object.defineProperty(Element.prototype, "scrollIntoView", { value: () => {} });
+  }
+  const orphan = job({ kind: "gone.kind", handled: false });
+  stubRoutes({
+    "/api/v1/system/jobs": () => json({ items: [orphan], next_cursor: null }),
+    // A node with malformed meta: no crash, its bad parts dropped.
+    "/api/v1/system/nodes": () =>
+      json({ items: [node({ meta: { job_kinds: "media.variants" } as never })] }),
+  });
+  const setSearch = vi.fn();
+  renderWithRouter(<JobsTab search={{ kind: "url.kind" }} setSearch={setSearch} />);
+  await screen.findAllByText("gone.kind");
+  await userEvent.click(screen.getByRole("button", { name: "Kind: url.kind. Change kind" }));
+  const options = (await screen.findAllByRole("option")).map((o) => o.textContent);
+  expect(options).toEqual(["gone.kind", "url.kind"]);
 });

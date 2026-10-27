@@ -160,7 +160,7 @@ function NodeCard({ node, self }: { node: NodeDto; self: boolean }) {
         )}
       </section>
 
-      {meta.plugins !== undefined || meta.plugins_error ? (
+      {meta.plugins != null || meta.plugins_error ? (
         <section aria-label={t("system.nodes.plugins.title")} className="flex flex-col gap-2">
           <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
             {t("system.nodes.plugins.title")}

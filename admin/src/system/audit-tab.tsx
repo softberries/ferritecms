@@ -58,7 +58,13 @@ import type { TabProps } from "./jobs-tab";
 const PICKER_DEBOUNCE_MS = 250;
 const PICKER_LIMIT = 20;
 
-export function AuditTab({ search, setSearch }: TabProps) {
+export interface AuditTabProps extends TabProps {
+  /** `manage_users`: the actor picker searches every user (`GET /users`); without it,
+   * it offers the actors of the loaded rows. */
+  canSearchUsers: boolean;
+}
+
+export function AuditTab({ search, setSearch, canSearchUsers }: AuditTabProps) {
   const { t } = useTranslation("admin");
   const filters = useMemo(
     () => ({
@@ -87,6 +93,14 @@ export function AuditTab({ search, setSearch }: TabProps) {
     }
     return [...seen.values()];
   }, [list.data]);
+  // The distinct actors of the loaded rows, by login.
+  const rowActors = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const r of rows) if (r.actor && !seen.has(r.actor.id)) seen.set(r.actor.id, r.actor.login);
+    return [...seen]
+      .map(([id, login]) => ({ id, login }))
+      .sort((a, b) => a.login.localeCompare(b.login));
+  }, [rows]);
   const columns = useColumns();
   const filtered = Object.keys(filters).length > 0;
   const clear = () =>
@@ -128,7 +142,12 @@ export function AuditTab({ search, setSearch }: TabProps) {
       <div role="search" className="min-w-0">
         <ScrollFade className="-m-1 min-w-0 p-1 lg:overflow-visible">
           <div className="flex w-max items-center gap-2 lg:w-auto lg:flex-wrap">
-            <ActorPicker actor={search.actor} onSelect={(actor) => setSearch({ actor })} />
+            <ActorPicker
+              actor={search.actor}
+              rowActors={rowActors}
+              canSearchUsers={canSearchUsers}
+              onSelect={(actor) => setSearch({ actor })}
+            />
             <ActionPicker action={search.action} onSelect={(action) => setSearch({ action })} />
             <TargetPicker
               kind={search.target_kind}
@@ -274,12 +293,14 @@ function useColumns(): DataTableColumn<AuditDto>[] {
               </span>
               {/* Below `md` the time and actor columns are hidden, below `lg` the target:
                   here. */}
-              <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground lg:hidden">
-                <span className="contents md:hidden">
+              <span
+                data-slot="audit-summary"
+                className="flex min-w-0 flex-col gap-0.5 text-xs whitespace-normal text-muted-foreground lg:hidden"
+              >
+                <span className="flex flex-wrap items-center gap-x-2 md:hidden">
                   <RelativeTime at={r.at} />
                   <span aria-hidden="true">·</span>
                   <ActorText entry={r} />
-                  <span aria-hidden="true">·</span>
                 </span>
                 <span className="min-w-0 wrap-anywhere">
                   {targetKindText(t, r.target_kind)}
@@ -364,11 +385,20 @@ function FilterChip({
   );
 }
 
+interface Actor {
+  id: string;
+  login: string;
+}
+
 function ActorPicker({
   actor,
+  rowActors,
+  canSearchUsers,
   onSelect,
 }: {
   actor: string | undefined;
+  rowActors: Actor[];
+  canSearchUsers: boolean;
   onSelect: (actor: string | undefined) => void;
 }) {
   const { t } = useTranslation("admin");
@@ -383,78 +413,107 @@ function ActorPicker({
     queryKey: ["users", "list", "audit-picker", q],
     queryFn: ({ signal }) => listUsers({ limit: PICKER_LIMIT, ...(q ? { q } : {}) }, { signal }),
     placeholderData: keepPreviousData,
-    enabled: open,
+    enabled: open && canSearchUsers,
     meta: INLINE_ERRORS,
   });
-  // The chosen actor's name (the URL holds only the id).
+  // The chosen actor's login (the URL holds only the id): from the rows, else the user.
+  const fromRows = rowActors.find((a) => a.id === actor)?.login;
   const chosen = useQuery({
     ...userQuery(actor ?? ""),
-    enabled: actor !== undefined,
+    enabled: actor !== undefined && fromRows === undefined && canSearchUsers,
     meta: INLINE_ERRORS,
   });
-  const name = actor ? (chosen.data?.display_name ?? actor.slice(0, 8)) : undefined;
+  const name = actor ? (fromRows ?? chosen.data?.login ?? actor.slice(0, 8)) : undefined;
+  const pick = (id: string) => {
+    onSelect(id === actor ? undefined : id);
+    setOpen(false);
+  };
 
   return (
     <FilterChip
       label={t("system.audit.actor.label")}
-      value={name}
+      value={name === undefined ? undefined : <span className="font-mono">{name}</span>}
       chosenLabel={t("system.audit.actor.chosen", { name: name ?? "" })}
       clearLabel={t("system.audit.actor.clear")}
       onClear={() => onSelect(undefined)}
       open={open}
       onOpenChange={setOpen}
     >
-      <Command
-        label={t("system.audit.actor.search")}
-        shouldFilter={false}
-        loop
-        className="**:data-[slot=input-group]:outline-none!"
-      >
-        <CommandInput
-          value={text}
-          onValueChange={setText}
-          placeholder={t("system.audit.actor.search")}
-        />
-        <CommandList>
-          {users.isPending ? (
-            <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-              {t("system.audit.actor.loading")}
-            </p>
-          ) : users.isError ? (
-            <p role="alert" className="px-3 py-6 text-center text-sm text-destructive">
-              {problemText(users.error)}
-            </p>
-          ) : users.data.items.length === 0 ? (
-            <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-              {t("system.audit.actor.none")}
-            </p>
-          ) : (
+      {canSearchUsers ? (
+        <Command
+          label={t("system.audit.actor.search")}
+          shouldFilter={false}
+          loop
+          className="**:data-[slot=input-group]:outline-none!"
+        >
+          <CommandInput
+            value={text}
+            onValueChange={setText}
+            placeholder={t("system.audit.actor.search")}
+          />
+          <CommandList>
+            {users.isPending ? (
+              <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+                {t("system.audit.actor.loading")}
+              </p>
+            ) : users.isError ? (
+              <p role="alert" className="px-3 py-6 text-center text-sm text-destructive">
+                {problemText(users.error)}
+              </p>
+            ) : users.data.items.length === 0 ? (
+              <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+                {t("system.audit.actor.none")}
+              </p>
+            ) : (
+              <CommandGroup>
+                {users.data.items.map((u) => (
+                  <CommandItem
+                    key={u.id}
+                    value={u.id}
+                    data-checked={u.id === actor}
+                    onSelect={() => pick(u.id)}
+                  >
+                    <UserAvatar user={u} />
+                    <span className="flex min-w-0 flex-col">
+                      <span className="truncate" title={u.display_name}>
+                        {u.display_name}
+                      </span>
+                      <span className="truncate font-mono text-xs text-muted-foreground">
+                        {u.login}
+                      </span>
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+          </CommandList>
+        </Command>
+      ) : (
+        <Command
+          label={t("system.audit.actor.search")}
+          loop
+          className="**:data-[slot=input-group]:outline-none!"
+        >
+          <CommandInput placeholder={t("system.audit.actor.search")} />
+          <CommandList>
+            <CommandEmpty>{t("system.audit.actor.none")}</CommandEmpty>
             <CommandGroup>
-              {users.data.items.map((u) => (
+              {rowActors.map((a) => (
                 <CommandItem
-                  key={u.id}
-                  value={u.id}
-                  data-checked={u.id === actor}
-                  onSelect={() => {
-                    onSelect(u.id === actor ? undefined : u.id);
-                    setOpen(false);
-                  }}
+                  key={a.id}
+                  value={a.login}
+                  data-checked={a.id === actor}
+                  onSelect={() => pick(a.id)}
                 >
-                  <UserAvatar user={u} />
-                  <span className="flex min-w-0 flex-col">
-                    <span className="truncate" title={u.display_name}>
-                      {u.display_name}
-                    </span>
-                    <span className="truncate font-mono text-xs text-muted-foreground">
-                      {u.login}
-                    </span>
+                  <span className="truncate font-mono" title={a.login}>
+                    {a.login}
                   </span>
                 </CommandItem>
               ))}
             </CommandGroup>
-          )}
-        </CommandList>
-      </Command>
+          </CommandList>
+        </Command>
+      )}
     </FilterChip>
   );
 }

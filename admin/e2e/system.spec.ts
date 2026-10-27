@@ -236,7 +236,7 @@ test("audit_filter_by_action_prefix", async ({ as, site, backend, snap, expectAc
     // The filter is in the URL: a reload keeps it.
     await page.reload();
     await expect(
-      screen(page).getByRole("button", { name: "Action: starts with token.. Change action" }),
+      screen(page).getByRole("button", { name: "Action: starts with “token.”. Change action" }),
     ).toBeVisible();
     await snap(page, "system-audit-filtered");
     await expectAccessible(page);

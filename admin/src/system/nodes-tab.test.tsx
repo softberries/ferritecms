@@ -84,3 +84,38 @@ test("node_cards_render_what_meta_holds", async () => {
   expect(within(b).getByText("0.0.9")).toBeVisible();
   expect(within(b).getByText("Not reported")).toBeVisible();
 });
+
+test("malformed_meta_is_dropped_not_thrown", async () => {
+  stubRoutes({
+    "/api/v1/system/status": () => json(status()),
+    "/api/v1/system/nodes": () =>
+      json({
+        items: [
+          node({
+            name: "odd",
+            meta: {
+              plugins: { nil: null, word: "loaded", ok: { status: "loaded", version: 3 } },
+              job_kinds: "media.variants",
+              theme: "blog",
+              clock_skew_ms: "9000",
+              plugins_error: { not: "text" },
+            } as never,
+          }),
+          node({ id: NODE_B, name: "null-plugins", meta: { plugins: null } }),
+        ],
+      }),
+  });
+  renderWithRouter(<NodesTab />);
+  const odd = await screen.findByText("odd");
+  const c = card("odd");
+  expect(odd).toBeVisible();
+  // Only the well-formed plugin entry; its non-text version dropped.
+  const plugins = within(c).getByRole("list", { name: "Plugins" });
+  expect(within(plugins).getAllByRole("listitem")).toHaveLength(1);
+  expect(within(plugins).getByText("ok")).toBeVisible();
+  expect(within(c).queryByText(/Clock/)).toBeNull();
+  expect(within(c).queryByRole("list", { name: "Job kinds" })).toBeNull();
+  expect(within(c).getByText("Not reported")).toBeVisible();
+  // `plugins: null` is not reported, not "No plugins loaded".
+  expect(within(card("null-plugins")).queryByText("No plugins loaded")).toBeNull();
+});

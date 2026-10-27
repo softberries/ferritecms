@@ -41,6 +41,7 @@ function SystemRoute() {
     <SystemScreen
       tab={tab}
       search={search}
+      canSearchUsers={me.capabilities.includes("manage_users")}
       setSearch={(patch) => {
         void navigate({
           to: "/system/$tab",

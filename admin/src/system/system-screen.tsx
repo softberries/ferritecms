@@ -26,9 +26,11 @@ export interface SystemScreenProps {
   tab: SystemTab;
   search: SystemSearch;
   setSearch: (patch: SystemSearchPatch) => void;
+  /** `manage_users`: the audit actor picker searches every user. */
+  canSearchUsers: boolean;
 }
 
-export function SystemScreen({ tab, search, setSearch }: SystemScreenProps) {
+export function SystemScreen({ tab, search, setSearch, canSearchUsers }: SystemScreenProps) {
   const { t } = useTranslation("admin");
   return (
     <div data-slot="system-screen" className="mx-auto flex w-full max-w-6xl flex-col gap-5">
@@ -41,7 +43,9 @@ export function SystemScreen({ tab, search, setSearch }: SystemScreenProps) {
         {tab === "status" ? <StatusTab /> : null}
         {tab === "nodes" ? <NodesTab /> : null}
         {tab === "jobs" ? <JobsTab search={search} setSearch={setSearch} /> : null}
-        {tab === "audit" ? <AuditTab search={search} setSearch={setSearch} /> : null}
+        {tab === "audit" ? (
+          <AuditTab search={search} setSearch={setSearch} canSearchUsers={canSearchUsers} />
+        ) : null}
       </section>
     </div>
   );

@@ -274,7 +274,7 @@ function MailPanel({ s }: { s: SystemStatusDto }) {
 function StatusSkeleton() {
   return (
     <div aria-busy="true" className="grid grid-cols-[minmax(0,1fr)] gap-4 md:grid-cols-2">
-      {Array.from({ length: 4 }, (_, i) => (
+      {Array.from({ length: 6 }, (_, i) => (
         <div key={i} className="flex flex-col gap-4 rounded-xl border bg-card p-5">
           <Skeleton className="h-5 w-32" />
           <ListSkeleton rows={3} />
