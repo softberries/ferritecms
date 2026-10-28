@@ -34,9 +34,11 @@ pub enum Matched {
 }
 
 /// The account an import user maps to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserOutcome {
     pub id: UserId,
+    /// The account's login as stored (a new one's may differ from the WP login).
+    pub login: String,
     pub how: Matched,
 }
 
@@ -60,6 +62,7 @@ impl ImportBatch<'_> {
         let outcome = if let Some(found) = found {
             UserOutcome {
                 id: found.id,
+                login: found.login,
                 how: Matched::Email,
             }
         } else if let Some(found) = match &login {
@@ -68,6 +71,7 @@ impl ImportBatch<'_> {
         } {
             UserOutcome {
                 id: found.id,
+                login: found.login,
                 how: Matched::Login,
             }
         } else {
@@ -96,6 +100,7 @@ impl ImportBatch<'_> {
             self.items += 1;
             UserOutcome {
                 id: user.id,
+                login: user.login,
                 how: Matched::Created,
             }
         };

@@ -27,6 +27,17 @@ const RESERVED_META_PREFIXES: [&str; 2] = ["seo.", "import."];
 const NEEDS_SCHEMA_BATCH: &str =
     "content types, taxonomies and permalink options need a schema batch";
 
+/// What [`ImportBatch::content_type`] did with a type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeWritten {
+    /// The type did not exist: registered.
+    Created,
+    /// The type existed with a schema and gained fields it lacked.
+    Updated,
+    /// The type existed and was left as it is.
+    Unchanged,
+}
+
 /// What the import map holds for a source row whose target still exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mapped {
@@ -54,12 +65,7 @@ pub struct ImportBatch<'a> {
     pub(super) rules: Arc<dyn Permalinks>,
     /// The `permalink.*` rows written, last value per key.
     permalinks: Vec<(String, Option<Value>)>,
-    /// The `types` lock of a schema batch. In a mutex only so the batch is `Sync`: the
-    /// futures of its `&self` methods are then `Send`, as a driver on a multi-threaded
-    /// runtime needs; it is taken once, when the batch ends.
-    types_lock: std::sync::Mutex<Option<Box<dyn LockGuard>>>,
-    /// Whether this is a schema batch (it holds the `types` lock).
-    schema: bool,
+    types_lock: Option<Box<dyn LockGuard>>,
 }
 
 impl<'a> ImportBatch<'a> {
@@ -90,8 +96,7 @@ impl<'a> ImportBatch<'a> {
             items: 0,
             rules,
             permalinks: Vec::new(),
-            types_lock: std::sync::Mutex::new(types_lock),
-            schema,
+            types_lock,
         };
         match fenced {
             Ok(true) => Ok(batch),
@@ -181,7 +186,7 @@ impl<'a> ImportBatch<'a> {
     /// type with a schema gains the fields of `t` it lacks (by name, appended in `t`'s
     /// order); one without a schema accepts any fields already and is left alone, as is
     /// everything else about an existing type. Needs a schema batch (else `Internal`).
-    pub async fn content_type(&mut self, t: NewType) -> Result<(), CoreError> {
+    pub async fn content_type(&mut self, t: NewType) -> Result<TypeWritten, CoreError> {
         self.require_schema()?;
         let repos = self.tx.as_ref();
         let actor = self.handle.actor.user;
@@ -189,11 +194,11 @@ impl<'a> ImportBatch<'a> {
             let ty = check_new_type(&t)?;
             create_in(repos, actor, &ty, t.fields.as_deref()).await?;
             self.schema_changed();
-            return Ok(());
+            return Ok(TypeWritten::Created);
         };
         let (Some(mut defs), Some(wanted)) = (fields::schema_of(&existing.fields)?, t.fields)
         else {
-            return Ok(());
+            return Ok(TypeWritten::Unchanged);
         };
         let before = defs.len();
         for def in wanted {
@@ -202,7 +207,7 @@ impl<'a> ImportBatch<'a> {
             }
         }
         if defs.len() == before {
-            return Ok(());
+            return Ok(TypeWritten::Unchanged);
         }
         fields::check_schema(&defs)?;
         let patch = TypePatch {
@@ -211,7 +216,7 @@ impl<'a> ImportBatch<'a> {
         };
         update_in(repos, actor, &existing.name, None, &patch).await?;
         self.schema_changed();
-        Ok(())
+        Ok(TypeWritten::Updated)
     }
 
     /// Sets one meta value of `item` and adds the item's key to the batch's event.
@@ -278,7 +283,7 @@ impl<'a> ImportBatch<'a> {
     pub async fn rollback(self) -> Result<(), CoreError> {
         let Self { tx, types_lock, .. } = self;
         let rolled = tx.rollback().await.map_err(CoreError::from);
-        release(take_lock(types_lock)).await;
+        release(types_lock).await;
         rolled
     }
 
@@ -286,7 +291,7 @@ impl<'a> ImportBatch<'a> {
     async fn end(self, result: Result<(), CoreError>) -> Result<(), CoreError> {
         let Self { tx, types_lock, .. } = self;
         let done = crate::tx::finish(tx, result).await;
-        release(take_lock(types_lock)).await;
+        release(types_lock).await;
         done
     }
 
@@ -299,7 +304,7 @@ impl<'a> ImportBatch<'a> {
     }
 
     fn require_schema(&self) -> Result<(), CoreError> {
-        if !self.schema {
+        if self.types_lock.is_none() {
             return Err(CoreError::Internal(NEEDS_SCHEMA_BATCH));
         }
         Ok(())
@@ -310,12 +315,6 @@ impl<'a> ImportBatch<'a> {
         self.items += 1;
         self.keys.insert(events::ALL_KEY.to_owned());
     }
-}
-
-/// The guard out of a batch's lock slot (a poisoned mutex still holds it).
-fn take_lock(slot: std::sync::Mutex<Option<Box<dyn LockGuard>>>) -> Option<Box<dyn LockGuard>> {
-    slot.into_inner()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Whether the target of a map row of `kind` still exists.

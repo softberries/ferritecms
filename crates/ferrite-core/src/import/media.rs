@@ -1,7 +1,9 @@
 //! Imported attachments (P13): a published `media` item with the dates and author of
 //! the WP attachment, recorded like an upload.
 
-use ferrite_domain::{ContentId, ContentStatus, ImportMapKind, MEDIA_KIND, Timestamp, UserId};
+use ferrite_domain::{
+    ContentId, ContentStatus, ImportMapKind, MEDIA_KIND, Media, Timestamp, UserId,
+};
 use serde_json::json;
 
 use super::{ContentOutcome, ImportBatch, ImportContent, Written};
@@ -27,6 +29,12 @@ pub struct ImportMedia {
 }
 
 impl ImportBatch<'_> {
+    /// The `media` row of item `id` (its artifact, type and file name), as this batch
+    /// sees it: what a re-run needs about an unchanged attachment without its file.
+    pub async fn media_row(&self, id: ContentId) -> Result<Option<Media>, CoreError> {
+        Ok(self.tx.media().get(id).await?)
+    }
+
     /// Writes one imported attachment as a **published** `media` item (P4, P13):
     ///
     /// - the upload is checked first as `record_upload` checks it (`InvalidField`
