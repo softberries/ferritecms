@@ -113,8 +113,6 @@ pub async fn run(cmd: ImportCommand) -> anyhow::Result<ExitCode> {
         };
         // Built from the default: test builds have seam fields besides these.
         let mut opts = ImportOptions::default();
-        opts.uploads.clone_from(&args.uploads);
-        opts.fetch_media = args.fetch_media;
         opts.dry_run = args.dry_run;
         opts.keep_permalinks = !args.no_keep_permalinks;
         opts.site_options = !args.no_site_options;

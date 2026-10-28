@@ -34,10 +34,13 @@ use crate::wxr;
 const IR_FILE: &str = "ir.sqlite";
 /// The IR `meta` key holding the hex SHA-256 of the WXR file.
 const DIGEST_KEY: &str = "wxr_sha256";
+/// The `DIGEST_KEY` of a finished run's work file: no later run resumes it.
+const FINISHED: &str = "finished";
 /// The step that fills the IR.
 const PARSE: &str = "parse";
-/// Records in flight between the parser thread and the IR writer.
-const PARSE_QUEUE: usize = 256;
+/// Records in flight between the parser thread and the IR writer. An item may hold
+/// up to 64 MiB of text, so the queue is short: memory stays near a few items.
+const PARSE_QUEUE: usize = 8;
 /// How often the parse proves the run is alive (runs go stale after 120 s, P5).
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(30);
 
@@ -104,10 +107,6 @@ impl MediaSource for DirSource {
 /// How to import.
 #[derive(Debug, Clone)]
 pub struct ImportOptions {
-    /// A local copy of `wp-content/uploads`.
-    pub uploads: Option<PathBuf>,
-    /// Download attachments missing from `uploads` from the old site.
-    pub fetch_media: bool,
     /// Run everything, then roll every batch back.
     pub dry_run: bool,
     /// Adopt the WP permalink structure (P17).
@@ -143,8 +142,6 @@ pub const DEFAULT_MAX_UPLOAD: u64 = 256 << 20;
 impl Default for ImportOptions {
     fn default() -> Self {
         Self {
-            uploads: None,
-            fetch_media: false,
             dry_run: false,
             keep_permalinks: true,
             site_options: true,
@@ -402,12 +399,19 @@ async fn drive(
     digest: &str,
     dir: &Path,
 ) -> Result<Report, ImportError> {
-    let mut ir = prepare_ir(&ctx.work_dir, dir, digest).await?;
+    let mut ir = prepare_ir(&ctx.work_dir, dir, digest, opts.dry_run).await?;
     let mut done = steps(ctx, opts, handle, wxr, &mut ir).await;
     if let Ok(report) = &mut done
         && let Err(e) = crate::report::finish(report, &ir).await
     {
         done = Err(e);
+    }
+    // A finished run's work file is never resumed, even if deleting its folder fails:
+    // it no longer names the file it holds.
+    if done.is_ok()
+        && let Err(e) = ir.set_meta(DIGEST_KEY, FINISHED).await
+    {
+        tracing::warn!(error = %e, "marking the import's work file finished failed");
     }
     ir.close().await;
     done
@@ -611,13 +615,27 @@ fn normalise_source(base_blog_url: &str) -> Result<String, ImportError> {
 
 /// The IR for `dir`: the folder of an unfinished run of the same file (`digest`) with a
 /// finished parse, moved to `dir`, or a new file. Folders of the same file whose parse
-/// did not finish are deleted; other folders are left alone.
-async fn prepare_ir(work_dir: &Path, dir: &Path, digest: &str) -> Result<Ir, ImportError> {
+/// did not finish are deleted; other folders are left alone. A dry run always gets a new
+/// file and touches no other folder.
+async fn prepare_ir(
+    work_dir: &Path,
+    dir: &Path,
+    digest: &str,
+    dry_run: bool,
+) -> Result<Ir, ImportError> {
     let file_err = |path: &Path| {
         let path = path.to_owned();
         move |source| ImportError::File { path, source }
     };
-    if let Some(found) = find_ir(work_dir, digest).await? {
+    // A dry run neither takes nor clears another run's work file: a failed real run's
+    // fix-up queue must survive it. (A real run may still take a failed dry run's file:
+    // it holds the parse and no finished pass.)
+    let found = if dry_run {
+        None
+    } else {
+        find_ir(work_dir, digest).await?
+    };
+    if let Some(found) = found {
         tokio::fs::rename(&found, dir)
             .await
             .map_err(file_err(&found))?;
@@ -771,6 +789,10 @@ mod tests {
         assert_eq!(find_ir(work.path(), "aaa").await.unwrap(), None);
         assert!(!partial.exists());
         assert!(other.exists());
+        // B6: a finished run's file (its folder left behind) is never resumed.
+        let finished = make("finished", FINISHED, true).await;
+        assert_eq!(find_ir(work.path(), "aaa").await.unwrap(), None);
+        assert!(finished.exists());
         let parsed = make("parsed", "aaa", true).await;
         assert_eq!(find_ir(work.path(), "aaa").await.unwrap(), Some(parsed));
         assert_eq!(

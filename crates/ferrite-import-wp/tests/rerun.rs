@@ -705,6 +705,36 @@ pub async fn links_keep_their_query(db: &TestDb) {
     assert!(links.contains(&"/about/?utm=x#top".to_owned()), "{links:?}");
 }
 
+/// C1: a dry run between a failed real run and the next real run must not take the
+/// failed run's work file (and its fix-up queue) away: the next real run still fixes
+/// the forward link.
+pub async fn dry_run_keeps_a_failed_runs_work_file(db: &TestDb) {
+    let site = site(db).await;
+    let wxr = corpus("site-a.xml");
+    let opts = ImportOptions {
+        step_hook: Some(StepHook::new(|step| {
+            if step == "pass4" {
+                return Err(ImportError::Stopped);
+            }
+            Ok(())
+        })),
+        ..ImportOptions::default()
+    };
+    let err = run(site.ctx.clone(), &wxr, opts).await.unwrap_err();
+    assert!(matches!(err, ImportError::Stopped), "{err:?}");
+    let dry = ImportOptions {
+        dry_run: true,
+        ..ImportOptions::default()
+    };
+    import(&site, &wxr, dry).await;
+    import(&site, &wxr, ImportOptions::default()).await;
+    let post = by_title(db.store(), "Every core block").await;
+    let mut links = Vec::new();
+    hrefs(&post.body, &mut links);
+    assert!(links.contains(&"/about/".to_owned()), "{links:?}");
+    assert!(links.contains(&"/about/team/".to_owned()), "{links:?}");
+}
+
 backend_tests!(
     rerun_site_a_is_unchanged,
     rerun_keeps_a_local_edit,
@@ -720,4 +750,5 @@ backend_tests!(
     long_menu_name_beside_a_site_menu,
     csv_redirects_are_kept,
     links_keep_their_query,
+    dry_run_keeps_a_failed_runs_work_file,
 );
