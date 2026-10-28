@@ -283,13 +283,15 @@ test("reduced_motion_disables_transforms", async ({ as }) => {
 });
 
 /**
- * Tabs until `target` has focus (at most `max` presses). WebKit on macOS moves Tab
- * through form controls only, as Safari does by default; Option+Tab reaches links too
- * (10 §3).
+ * Tabs until `target` has focus, at most once per focusable element on the page (the
+ * sidebar grows with the custom types other tests create, so a fixed count is not
+ * enough). WebKit on macOS moves Tab through form controls only, as Safari does by
+ * default; Option+Tab reaches links too (10 §3).
  */
-async function tabTo(page: Page, target: ReturnType<Page["locator"]>, max = 20): Promise<void> {
+async function tabTo(page: Page, target: ReturnType<Page["locator"]>): Promise<void> {
   const webkitOnMac =
     page.context().browser()?.browserType().name() === "webkit" && process.platform === "darwin";
+  const max = await page.locator("a[href], button, input, select, textarea, [tabindex]").count();
   for (let i = 0; i < max; i++) {
     await page.keyboard.press(webkitOnMac ? "Alt+Tab" : "Tab");
     if (await target.evaluate((el) => el === document.activeElement)) return;
