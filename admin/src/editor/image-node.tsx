@@ -5,7 +5,9 @@
 // state with the stored `src`, so nothing is silently lost. Images are inserted from the
 // media picker (`insert-image.ts`, M2b-2). On an editable screen a small "Alt text" button
 // on the image opens a popover that edits `alt`; empty is allowed and marks the image
-// decorative, which the button then says.
+// decorative, which the button then says. An optional plain-text `caption` (M3 P11; the
+// site renders it as a `<figcaption>`) is edited in a field under the image; an empty
+// field removes the attribute, so an image without a caption stores none.
 
 import { Image, type ImageOptions } from "@tiptap/extension-image";
 import { NodeViewWrapper, ReactNodeViewRenderer, type ReactNodeViewProps } from "@tiptap/react";
@@ -14,6 +16,7 @@ import { cn } from "cn";
 import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
@@ -70,12 +73,13 @@ function useImageUrl(src: unknown, resolve: (id: string) => Promise<string | nul
 function ImageView({ node, selected, extension, editor, updateAttributes }: ReactNodeViewProps) {
   const { t } = useTranslation("editor");
   const options = extension.options as MediaImageOptions;
-  const attrs = node.attrs as { src?: unknown; alt?: unknown; title?: unknown };
+  const attrs = node.attrs as { src?: unknown; alt?: unknown; title?: unknown; caption?: unknown };
   const shown = useImageUrl(attrs.src, options.resolveMedia);
   const [failed, setFailed] = useState<string | null>(null);
   const alt = typeof attrs.alt === "string" ? attrs.alt : "";
   const src = typeof attrs.src === "string" ? attrs.src : "";
   const title = typeof attrs.title === "string" ? attrs.title : undefined;
+  const caption = typeof attrs.caption === "string" ? attrs.caption : "";
   const broken = shown.state === "broken" || (shown.state === "ready" && failed === shown.url);
 
   return (
@@ -112,6 +116,21 @@ function ImageView({ node, selected, extension, editor, updateAttributes }: Reac
       )}
       {editor.isEditable ? (
         <AltEditor alt={alt} onChange={(next) => updateAttributes({ alt: next })} />
+      ) : null}
+      {editor.isEditable ? (
+        <figcaption className="editor-image-caption" contentEditable={false}>
+          <Input
+            value={caption}
+            aria-label={t("image.caption")}
+            placeholder={t("image.captionPlaceholder")}
+            maxLength={1000}
+            // Empty: no attribute at all (`undefined` falls back to the absent default).
+            onChange={(e) => updateAttributes({ caption: e.target.value || undefined })}
+            className="h-8 border-transparent bg-transparent px-1 text-center text-sm text-muted-foreground shadow-none hover:border-input dark:bg-transparent"
+          />
+        </figcaption>
+      ) : caption.trim() ? (
+        <figcaption className="editor-image-caption">{caption}</figcaption>
       ) : null}
     </NodeViewWrapper>
   );
@@ -212,6 +231,20 @@ export const MediaImage = Image.extend<MediaImageOptions>({
     return {
       ...(this.parent?.() as ImageOptions),
       resolveMedia: () => Promise.resolve(null),
+    };
+  },
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      // No default: an image stored without a caption keeps none in `getJSON()` (F32).
+      caption: {
+        default: undefined,
+        parseHTML: (el: HTMLElement) => el.getAttribute("data-caption"),
+        renderHTML: (attrs: { caption?: unknown }) =>
+          typeof attrs.caption === "string" && attrs.caption !== ""
+            ? { "data-caption": attrs.caption }
+            : {},
+      },
     };
   },
   addNodeView() {

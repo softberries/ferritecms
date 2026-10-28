@@ -445,7 +445,13 @@ empty footer (no plugin calls).
 Block rendering: blocks are JSON (`[{type:"paragraph", content:[…]}, …]`) using the
 TipTap/ProseMirror JSON document model ([07](07-admin-api.md#editor)). The Rust renderer in
 `ferrite-core` (`blocks`) maps node types to HTML with escaping; raw `html` blocks are
-sanitised with `ammonia`.
+sanitised with `ammonia`. M3 (P11) adds an `embed` node (`provider` `youtube` or `vimeo`,
+`url`), rendered as a privacy-mode player `<iframe>` (`youtube-nocookie.com`,
+`player.vimeo.com`) built from the video id alone (`blocks::embed_id`; a URL it does not
+recognise renders as a paragraph with a link), and an optional plain-text `caption` on
+`image` (`<figure>…<figcaption>`; without one the output is a bare `<img>` as before).
+`blocks::is_editor_safe` is the twin of the admin editor's node and mark lists; both are
+pinned to `crates/ferrite-core/tests/fixtures/editor-schema.json`.
 
 **Previews.** `/_preview/<id>` (§3) renders `SiteReader::preview(actor, id)` with the
 preview request scope for plugins (05 §7a) and `request.preview = true`. Preview responses

@@ -9,11 +9,94 @@ mod url;
 
 pub use render::render_html;
 pub use text::{excerpt, extract_text};
+pub use url::embed_id;
+
+use serde_json::Value;
 
 /// Whether `body` is a block tree's root: an object with `"type": "doc"`. Content
 /// writes refuse any other body (M2b-2 Task 1); the functions here still cope with one.
-pub fn is_document(body: &serde_json::Value) -> bool {
-    body.get("type").and_then(serde_json::Value::as_str) == Some("doc")
+pub fn is_document(body: &Value) -> bool {
+    body.get("type").and_then(Value::as_str) == Some("doc")
+}
+
+/// The node types the admin's editor can hold (`admin/src/editor/schema.ts`
+/// `SUPPORTED_NODES`; both pinned to `tests/fixtures/editor-schema.json`).
+const EDITOR_NODES: &[&str] = &[
+    "doc",
+    "paragraph",
+    "heading",
+    "bulletList",
+    "orderedList",
+    "listItem",
+    "blockquote",
+    "codeBlock",
+    "horizontalRule",
+    "hardBreak",
+    "image",
+    "embed",
+    "table",
+    "tableRow",
+    "tableHeader",
+    "tableCell",
+    "html",
+    "text",
+];
+
+/// The marks the admin's editor can hold (`SUPPORTED_MARKS`).
+const EDITOR_MARKS: &[&str] = &["bold", "italic", "strike", "code", "link"];
+
+/// Body heading levels (`HEADING_LEVELS`); level 1 is the title (m2b P18).
+const EDITOR_HEADING_LEVELS: std::ops::RangeInclusive<u64> = 2..=6;
+
+/// Whether the admin's editor opens `doc` editable: the Rust twin of its `validateBody`
+/// (`admin/src/editor/schema.ts`). The root is a `doc`, every node type and mark is on
+/// the editor's lists, every heading has a level of 2–6, and `content` and `marks` are
+/// lists. Unlike `validateBody`, which treats a missing body (`null`, `{}`) as empty,
+/// anything but a `doc` root is refused. The importer emits only bodies that pass.
+/// Iterative: any depth.
+pub fn is_editor_safe(doc: &Value) -> bool {
+    if !is_document(doc) {
+        return false;
+    }
+    let mut stack = vec![doc];
+    while let Some(v) = stack.pop() {
+        let Some(node) = v.as_object() else {
+            return false;
+        };
+        let ty = node.get("type").and_then(Value::as_str).unwrap_or("");
+        if !EDITOR_NODES.contains(&ty) {
+            return false;
+        }
+        if ty == "heading"
+            && !node
+                .get("attrs")
+                .and_then(|a| a.get("level"))
+                .and_then(Value::as_u64)
+                .is_some_and(|l| EDITOR_HEADING_LEVELS.contains(&l))
+        {
+            return false;
+        }
+        if let Some(marks) = node.get("marks") {
+            let Some(marks) = marks.as_array() else {
+                return false;
+            };
+            let known = |m: &Value| {
+                m.get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|t| EDITOR_MARKS.contains(&t))
+            };
+            if !marks.iter().all(known) {
+                return false;
+            }
+        }
+        if let Some(content) = node.get("content") {
+            let Some(content) = content.as_array() else {
+                return false;
+            };
+            stack.extend(content);
+        }
+    }
+    true
 }
 
 /// Nodes nested deeper than this render their text content only.
@@ -76,5 +159,151 @@ mod tests {
         ] {
             assert!(!super::is_document(&body), "{body}");
         }
+    }
+
+    /// The admin's schema lists (`admin/src/editor/schema.ts`), which its own test pins
+    /// to the same file, so the two cannot drift.
+    fn admin_schema() -> serde_json::Value {
+        serde_json::from_str(include_str!("../../tests/fixtures/editor-schema.json")).unwrap()
+    }
+
+    fn strings(v: &serde_json::Value) -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn editor_lists_match_the_admin() {
+        let schema = admin_schema();
+        let sorted = |mut v: Vec<String>| {
+            v.sort();
+            v
+        };
+        let ours = |l: &[&str]| sorted(l.iter().map(|s| (*s).to_owned()).collect());
+        assert_eq!(ours(super::EDITOR_NODES), sorted(strings(&schema["nodes"])));
+        assert_eq!(ours(super::EDITOR_MARKS), sorted(strings(&schema["marks"])));
+        let levels: Vec<u64> = schema["heading_levels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l.as_u64().unwrap())
+            .collect();
+        assert_eq!(super::EDITOR_HEADING_LEVELS.collect::<Vec<_>>(), levels);
+        // Every provider the admin offers is one `embed_id` knows.
+        let cases = schema["embed_cases"].as_array().unwrap();
+        for provider in strings(&schema["embed_providers"]) {
+            assert!(
+                cases.iter().any(|c| c["provider"] == provider.as_str()
+                    && super::embed_id(&provider, c["url"].as_str().unwrap()).is_some()),
+                "{provider}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_admin_node_and_mark_is_editor_safe() {
+        let schema = admin_schema();
+        for ty in strings(&schema["nodes"]) {
+            let node = match ty.as_str() {
+                "doc" => continue,
+                "heading" => json!({"type": "heading", "attrs": {"level": 2}}),
+                _ => json!({"type": ty}),
+            };
+            let d = json!({"type": "doc", "content": [node]});
+            assert!(super::is_editor_safe(&d), "{ty}");
+        }
+        for mark in strings(&schema["marks"]) {
+            let d = json!({"type": "doc", "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "x", "marks": [{"type": mark}]}]}]});
+            assert!(super::is_editor_safe(&d), "{mark}");
+        }
+        for level in 2..=6 {
+            let d =
+                json!({"type": "doc", "content": [{"type": "heading", "attrs": {"level": level}}]});
+            assert!(super::is_editor_safe(&d), "h{level}");
+        }
+        // The admin's own every-node fixture (its round-trip test) passes too.
+        let every: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../admin/src/editor/fixtures/every-node.json"
+        ))
+        .unwrap();
+        assert!(super::is_editor_safe(&every));
+        assert!(super::is_editor_safe(&json!({"type": "doc"})));
+        assert!(super::is_editor_safe(
+            &json!({"type": "doc", "content": []})
+        ));
+    }
+
+    #[test]
+    fn editor_unsafe_bodies() {
+        let doc = |content: serde_json::Value| json!({"type": "doc", "content": content});
+        let p = |marks: serde_json::Value| {
+            doc(
+                json!([{"type": "paragraph", "content": [{"type": "text", "text": "x", "marks": marks}]}]),
+            )
+        };
+        for (why, body) in [
+            (
+                "h1",
+                doc(json!([{"type": "heading", "attrs": {"level": 1}}])),
+            ),
+            (
+                "h7",
+                doc(json!([{"type": "heading", "attrs": {"level": 7}}])),
+            ),
+            (
+                "level as text",
+                doc(json!([{"type": "heading", "attrs": {"level": "2"}}])),
+            ),
+            ("no level", doc(json!([{"type": "heading"}]))),
+            (
+                "unknown node",
+                doc(json!([{"type": "callout", "content": []}])),
+            ),
+            (
+                "nested unknown",
+                doc(json!([{"type": "blockquote", "content": [{"type": "columns"}]}])),
+            ),
+            ("no type", doc(json!([{"content": []}]))),
+            ("not a node", doc(json!([5]))),
+            ("list as node", doc(json!([[]]))),
+            ("content not a list", doc(json!("x"))),
+            ("underline", p(json!([{"type": "underline"}]))),
+            ("mark without type", p(json!([{}]))),
+            ("marks not a list", p(json!({"type": "bold"}))),
+            ("paragraph root", json!({"type": "paragraph"})),
+            ("null root", json!(null)),
+            ("list root", json!([{"type": "doc"}])),
+        ] {
+            assert!(!super::is_editor_safe(&body), "{why}: {body}");
+        }
+    }
+
+    #[test]
+    fn is_editor_safe_copes_with_deep_nesting() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                // Built by hand: `json!` serializes an embedded `Value` recursively.
+                let wrap = |ty: &str, child: serde_json::Value| {
+                    let mut m = serde_json::Map::new();
+                    m.insert("type".into(), ty.into());
+                    m.insert("content".into(), serde_json::Value::Array(vec![child]));
+                    serde_json::Value::Object(m)
+                };
+                let mut v = json!({"type": "text", "text": "x"});
+                for _ in 0..50_000 {
+                    v = wrap("blockquote", v);
+                }
+                let d = wrap("doc", v);
+                assert!(super::is_editor_safe(&d));
+                std::mem::forget(d); // Value's Drop recurses
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

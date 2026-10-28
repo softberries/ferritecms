@@ -1,5 +1,5 @@
 use super::text::collect_text;
-use super::url::{ImageSrc, image_src, safe_href};
+use super::url::{ImageSrc, embed_id, image_src, safe_href};
 use super::{InlineImage, MAX_DEPTH, RenderCtx};
 use ferrite_domain::html::{CITE_TAGS, SAFE_URL_SCHEMES, relative_url_allowed};
 use html_escape::{encode_double_quoted_attribute, encode_text};
@@ -101,6 +101,7 @@ fn render_object(
         "horizontalRule" => out.push_str("<hr>"),
         "hardBreak" => out.push_str("<br>"),
         "image" => render_image(map, ctx, out),
+        "embed" => render_embed(map, out),
         "table" => wrap("table", "", map, depth, ctx, out),
         "tableRow" => wrap("tr", "", map, depth, ctx, out),
         "tableHeader" => wrap("th", &span_attrs(map), map, depth, ctx, out),
@@ -180,6 +181,13 @@ fn render_image(map: &Map<String, Value>, ctx: &RenderCtx, out: &mut String) {
             None => return,
         },
     };
+    // A caption makes the image a figure (P11); without one the output is unchanged.
+    let caption = attr_str(map, "caption")
+        .map(str::trim)
+        .filter(|c| !c.is_empty());
+    if caption.is_some() {
+        out.push_str("<figure>");
+    }
     out.push_str(&format!(
         "<img src=\"{}\" alt=\"{}\"",
         encode_double_quoted_attribute(&image.src),
@@ -201,6 +209,43 @@ fn render_image(map: &Map<String, Value>, ctx: &RenderCtx, out: &mut String) {
         ));
     }
     out.push('>');
+    if let Some(c) = caption {
+        out.push_str(&format!(
+            "<figcaption>{}</figcaption></figure>",
+            encode_text(c)
+        ));
+    }
+}
+
+/// An `embed` node (P11): a privacy-mode player `<iframe>` built from the video id
+/// alone, so nothing of the stored URL reaches the attribute. A URL the provider does not
+/// recognise is a paragraph with a link to it (when it is a safe href), else nothing.
+fn render_embed(map: &Map<String, Value>, out: &mut String) {
+    let Some(url) = attr_str(map, "url") else {
+        return;
+    };
+    let provider = attr_str(map, "provider").unwrap_or("");
+    let player = embed_id(provider, url).and_then(|id| match provider {
+        "youtube" => Some((
+            format!("https://www.youtube-nocookie.com/embed/{id}"),
+            "YouTube",
+        )),
+        "vimeo" => Some((format!("https://player.vimeo.com/video/{id}"), "Vimeo")),
+        _ => None,
+    });
+    if let Some((src, label)) = player {
+        out.push_str(&format!(
+            "<figure class=\"embed embed-{provider}\"><iframe src=\"{src}\" title=\"{label} video\" \
+             loading=\"lazy\" allowfullscreen referrerpolicy=\"strict-origin-when-cross-origin\" \
+             sandbox=\"allow-scripts allow-same-origin allow-presentation allow-popups\"></iframe></figure>"
+        ));
+    } else if let Some(href) = safe_href(url) {
+        out.push_str(&format!(
+            "<p><a href=\"{}\">{}</a></p>",
+            encode_double_quoted_attribute(&href),
+            encode_text(&href)
+        ));
+    }
 }
 
 fn render_text(map: &Map<String, Value>, out: &mut String) {
@@ -536,6 +581,133 @@ mod tests {
              sizes=\"(max-width: 1280px) 100vw, 1280px\" width=\"1280\" height=\"720\" \
              loading=\"lazy\" decoding=\"async\">"
         );
+    }
+
+    #[test]
+    fn captioned_images_are_figures() {
+        let img = |attrs: Value| r(doc(vec![json!({"type":"image","attrs":attrs})]));
+        assert_eq!(
+            img(json!({"src":"/i.png","alt":"a","caption":"A <b>lake</b> & \"sky\""})),
+            "<figure><img src=\"/i.png\" alt=\"a\"><figcaption>A &lt;b&gt;lake&lt;/b&gt; &amp; \"sky\"</figcaption></figure>"
+        );
+        // Surrounding white space goes; an empty, blank or non-text caption is no caption.
+        assert_eq!(
+            img(json!({"src":"/i.png","caption":"  Lake  "})),
+            "<figure><img src=\"/i.png\" alt=\"\"><figcaption>Lake</figcaption></figure>"
+        );
+        for none in [json!(""), json!("  "), json!(null), json!(5), json!(["x"])] {
+            assert_eq!(
+                img(json!({"src":"/i.png","caption":none})),
+                "<img src=\"/i.png\" alt=\"\">"
+            );
+        }
+        // A dropped image drops its caption too.
+        assert_eq!(img(json!({"src":"javascript:x","caption":"c"})), "");
+        // A media image keeps its responsive attributes inside the figure.
+        let responsive = |_: &str| {
+            Some(InlineImage {
+                src: "/m/a.jpg".into(),
+                responsive: Some(Responsive {
+                    srcset: "/m/a.jpg 640w".into(),
+                    sizes: "(max-width: 640px) 100vw, 640px".into(),
+                    width: 640,
+                    height: 480,
+                }),
+            })
+        };
+        let d = doc(vec![
+            json!({"type":"image","attrs":{"src":format!("ferrite:media/{ID}"),"alt":"a","caption":"c"}}),
+        ]);
+        assert_eq!(
+            render_html(&d, &RenderCtx { media: &responsive }),
+            "<figure><img src=\"/m/a.jpg\" alt=\"a\" srcset=\"/m/a.jpg 640w\" \
+             sizes=\"(max-width: 640px) 100vw, 640px\" width=\"640\" height=\"480\" \
+             loading=\"lazy\" decoding=\"async\"><figcaption>c</figcaption></figure>"
+        );
+        let none = |_: &str| None;
+        assert_eq!(render_html(&d, &RenderCtx { media: &none }), "");
+    }
+
+    const IFRAME: &str = "loading=\"lazy\" allowfullscreen \
+        referrerpolicy=\"strict-origin-when-cross-origin\" \
+        sandbox=\"allow-scripts allow-same-origin allow-presentation allow-popups\"></iframe></figure>";
+
+    fn embed(provider: Value, url: Value) -> String {
+        r(doc(vec![
+            json!({"type":"embed","attrs":{"provider":provider,"url":url}}),
+        ]))
+    }
+
+    #[test]
+    fn youtube_embeds() {
+        for url in [
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtu.be/dQw4w9WgXcQ",
+            "https://www.youtube.com/embed/dQw4w9WgXcQ",
+            "https://www.youtube.com/shorts/dQw4w9WgXcQ",
+        ] {
+            assert_eq!(
+                embed(json!("youtube"), json!(url)),
+                format!(
+                    "<figure class=\"embed embed-youtube\"><iframe \
+                     src=\"https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ\" \
+                     title=\"YouTube video\" {IFRAME}"
+                ),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn vimeo_embeds() {
+        for url in [
+            "https://vimeo.com/76979871",
+            "https://player.vimeo.com/video/76979871",
+        ] {
+            assert_eq!(
+                embed(json!("vimeo"), json!(url)),
+                format!(
+                    "<figure class=\"embed embed-vimeo\"><iframe \
+                     src=\"https://player.vimeo.com/video/76979871\" title=\"Vimeo video\" {IFRAME}"
+                ),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn unparseable_embeds_become_links() {
+        // A URL the provider does not recognise (or an unknown provider) is a link.
+        assert_eq!(
+            embed(
+                json!("youtube"),
+                json!("https://www.youtube.com/channel/UC1?a=1&b=<2>")
+            ),
+            "<p><a href=\"https://www.youtube.com/channel/UC1?a=1&amp;b=&lt;2&gt;\">\
+             https://www.youtube.com/channel/UC1?a=1&amp;b=&lt;2&gt;</a></p>"
+        );
+        assert_eq!(
+            embed(json!("twitter"), json!("https://twitter.com/x/status/1")),
+            "<p><a href=\"https://twitter.com/x/status/1\">https://twitter.com/x/status/1</a></p>"
+        );
+        assert_eq!(
+            embed(json!(null), json!("https://youtu.be/dQw4w9WgXcQ")),
+            "<p><a href=\"https://youtu.be/dQw4w9WgXcQ\">https://youtu.be/dQw4w9WgXcQ</a></p>"
+        );
+        // A URL a link may not carry renders nothing at all.
+        for bad in [
+            json!("javascript:alert(1)"),
+            json!("javascript:alert(1)//youtu.be/dQw4w9WgXcQ"),
+            json!("data:text/html,x"),
+            json!("//youtu.be/dQw4w9WgXcQ"),
+            json!(""),
+            json!(null),
+            json!(5),
+        ] {
+            assert_eq!(embed(json!("youtube"), bad.clone()), "", "{bad}");
+        }
+        assert_eq!(r(doc(vec![json!({"type":"embed"})])), "");
+        assert_eq!(r(doc(vec![json!({"type":"embed","attrs":"x"})])), "");
     }
 
     #[test]

@@ -111,6 +111,11 @@
       "hint": "From the media library",
       "keywords": "picture photo media img upload"
     },
+    "embed": {
+      "label": "Embed",
+      "hint": "A YouTube or Vimeo video",
+      "keywords": "video youtube vimeo player"
+    },
     "divider": {
       "label": "Divider",
       "hint": "A horizontal rule",
@@ -137,7 +142,9 @@
     "decorative": "Decorative",
     "altEdit": "Edit the alt text",
     "altMissing": "No alt text",
-    "uploadForbidden": "You are not allowed to upload files."
+    "uploadForbidden": "You are not allowed to upload files.",
+    "caption": "Caption",
+    "captionPlaceholder": "Add a caption"
   },
   "html": {
     "label": "HTML",
@@ -542,5 +549,18 @@
     "previewNoUrl": "The address is known after the first save",
     "previewNoDescription": "No description: search engines pick text from the page.",
     "siteFallback": "Your site"
+  },
+  "embed": {
+    "youtube": "YouTube video",
+    "vimeo": "Vimeo video",
+    "link": "Video link",
+    "change": "Change URL",
+    "urlLabel": "Video URL",
+    "hint": "A YouTube or Vimeo link; the site shows the player.",
+    "invalid": "Use a YouTube or Vimeo video link.",
+    "apply": "Embed",
+    "cancel": "Cancel",
+    "empty": "No video URL yet",
+    "shownAsLink": "The site shows this URL as a link."
   }
 }
