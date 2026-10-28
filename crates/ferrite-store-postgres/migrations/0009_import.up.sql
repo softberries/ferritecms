@@ -32,7 +32,7 @@ CREATE INDEX import_runs_started_by_idx ON import_runs (started_by);
 CREATE TABLE import_map (
     source      text COLLATE "C" NOT NULL,
     kind        text COLLATE "C" NOT NULL CONSTRAINT import_map_kind_check
-                CHECK (kind IN ('user', 'term', 'media', 'content', 'comment', 'menu', 'option')),
+                CHECK (kind IN ('user', 'term', 'media', 'content', 'comment', 'menu', 'option', 'redirect')),
     wp_id       bigint NOT NULL,
     ferrite_id  uuid NOT NULL,
     hash        text COLLATE "C" NOT NULL,

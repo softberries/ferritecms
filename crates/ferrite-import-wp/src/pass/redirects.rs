@@ -13,8 +13,11 @@
 //! are, so a non-ASCII path compares (and fires) as the router sees it. Links with a
 //! query (`?p=`, `?attachment_id=`, …) have no path to redirect from, and the site root
 //! `/` is never a source (it would take over the home page): refused and noted. A row
-//! whose old path equals the new one is not made. A redirect edited (or made) here is
-//! kept. Refusals are noted in input order; none fails the run.
+//! whose old path equals the new one is not made. The import overwrites only a stored
+//! redirect it wrote itself and nobody changed since (its import-map row, kind
+//! `redirect`, keeps the source and target it wrote); any other stored row (made or
+//! edited here, or from the admin's CSV import) is kept and noted. Refusals are noted
+//! in input order; none fails the run.
 
 use std::collections::HashMap;
 
@@ -22,6 +25,9 @@ use ferrite_core::import::{ImportBatch, RedirectOutcome};
 use ferrite_core::permalink::{encode_segment, term_path};
 use ferrite_domain::{ImportMapKind, TermId};
 use futures::TryStreamExt;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use super::content::Links;
 use super::types::type_name;
@@ -114,7 +120,7 @@ pub(crate) async fn import(
             .collect();
         let mut batch = session.batch().await?;
         let written = write(&mut batch, &writes).await;
-        let out = session.finish_batch(batch, written).await?;
+        let (out, theirs) = session.finish_batch(batch, written).await?;
         let counts = report.counts_of(KIND);
         counts.created += u64::from(out.created);
         counts.updated += u64::from(out.updated);
@@ -123,6 +129,7 @@ pub(crate) async fn import(
         // ours are in place.
         let mut refused = out.refused.into_iter().peekable();
         let mut kept = out.kept.into_iter().peekable();
+        let mut theirs = theirs.into_iter().peekable();
         for row in chunk {
             match row {
                 Row::Refused(source, why) => {
@@ -130,14 +137,16 @@ pub(crate) async fn import(
                     report.note(format!("redirect from {source} not made: {why}"));
                 }
                 Row::Write(source, _) => {
-                    if let Some((_, why)) = refused.next_if(|(s, _)| s == source) {
-                        report.counts_of(KIND).skipped += 1;
-                        report.note(format!("redirect from {source} not made: {why}"));
-                    } else if kept.next_if(|s| s == source).is_some() {
+                    if theirs.next_if(|s| s == source).is_some()
+                        || kept.next_if(|s| s == source).is_some()
+                    {
                         report.counts_of(KIND).kept += 1;
                         report.note(format!(
-                            "redirect from {source} was edited here (or made here); kept"
+                            "redirect from {source} was edited here (or is not the import's); kept"
                         ));
+                    } else if let Some((_, why)) = refused.next_if(|(s, _)| s == source) {
+                        report.counts_of(KIND).skipped += 1;
+                        report.note(format!("redirect from {source} not made: {why}"));
                     }
                 }
             }
@@ -207,11 +216,69 @@ async fn imported_slugs(
     Ok(out)
 }
 
+/// What the import map keeps about a redirect the import wrote (JSON in the row's
+/// `hash`).
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
+struct Written {
+    source: String,
+    target: String,
+}
+
+/// The map id of a redirect source: the first 8 bytes of its SHA-256 (the row's state
+/// names the source, so a collision reads as "not the import's", never as a match).
+fn map_id(source: &str) -> i64 {
+    let digest = Sha256::digest(source.as_bytes());
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&digest[..8]);
+    i64::from_be_bytes(bytes)
+}
+
+/// Writes the rows whose source has no stored redirect, or one the import wrote and
+/// nobody changed since (its map row names that source and the stored target); the
+/// sources of the others (an admin's, a CSV import's, an edited one) come back, kept.
+/// Every row written or found unchanged is recorded in the import map.
 async fn write(
     b: &mut ImportBatch<'_>,
     rows: &[(String, String, u16)],
-) -> Result<RedirectOutcome, ImportError> {
-    Ok(b.redirects(rows).await?)
+) -> Result<(RedirectOutcome, Vec<String>), ImportError> {
+    let mut mine = Vec::with_capacity(rows.len());
+    let mut theirs = Vec::new();
+    for row in rows {
+        let Some(stored) = b.get_redirect(&row.0).await? else {
+            mine.push(row.clone());
+            continue;
+        };
+        let last = b
+            .lookup(ImportMapKind::Redirect, map_id(&row.0))
+            .await?
+            .and_then(|m| serde_json::from_str::<Written>(&m.hash).ok());
+        let ours = last.is_some_and(|w| w.source == row.0 && w.target == stored.target);
+        if ours {
+            mine.push(row.clone());
+        } else {
+            theirs.push(row.0.clone());
+        }
+    }
+    let out = b.redirects(&mine).await?;
+    for (source, target, _) in &mine {
+        let skipped = out.refused.iter().any(|(s, _)| s == source) || out.kept.contains(source);
+        if skipped {
+            continue;
+        }
+        let state = serde_json::to_string(&Written {
+            source: source.clone(),
+            target: target.clone(),
+        })?;
+        b.remember(
+            ImportMapKind::Redirect,
+            map_id(source),
+            Uuid::nil(),
+            &state,
+            0,
+        )
+        .await?;
+    }
+    Ok((out, theirs))
 }
 
 #[cfg(test)]

@@ -574,6 +574,123 @@ pub async fn resume_after_failure_in_pass4(db: &TestDb) {
     resume_at(db, 43, "pass4").await;
 }
 
+/// A nav menu with a long slug beside a site menu of the same name gets a free name
+/// within the slug limit (cut before the suffix), and the run does not fail.
+pub async fn long_menu_name_beside_a_site_menu(db: &TestDb) {
+    let site = site(db).await;
+    let store = db.store();
+    let long = "m".repeat(199);
+    let mut xml = std::fs::read_to_string(corpus("site-a.xml")).unwrap();
+    xml = xml
+        .replace(
+            "<wp:term_slug>main</wp:term_slug>",
+            &format!("<wp:term_slug>{long}</wp:term_slug>"),
+        )
+        .replace("nicename=\"main\"", &format!("nicename=\"{long}\""));
+    let wxr = site.work.path().join("long.xml");
+    std::fs::write(&wxr, xml).unwrap();
+    MenuService::new(db.shared_store())
+        .put(
+            &site.ctx.actor,
+            &Menu {
+                name: long.clone(),
+                label: "Native".into(),
+                items: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let report = import(&site, &wxr, ImportOptions::default()).await;
+    let free = format!("{}-wp", "m".repeat(197));
+    assert!(noted(&report, &free), "{:?}", report.notes);
+    let imported = store.read().menus().get(&free).await.unwrap().unwrap();
+    assert_eq!(imported.items.len(), 5);
+}
+
+/// A redirect the admin imported from CSV on a source the WordPress import also makes
+/// is kept, whether it was there before the first import or replaced the import's row.
+pub async fn csv_redirects_are_kept(db: &TestDb) {
+    let site = site(db).await;
+    let store = db.store();
+    let redirects = RedirectService::new(db.shared_store());
+    let row = |source: &str, target: &str| (source.to_owned(), target.to_owned(), 301u16);
+    redirects
+        .import(
+            &site.ctx.actor,
+            &[row("/books/the-first-book/", "/csv-book/")],
+        )
+        .await
+        .unwrap();
+    let report = import(&site, &corpus("site-a.xml"), ImportOptions::default()).await;
+    let target = |source: &'static str| async move {
+        store
+            .read()
+            .redirects()
+            .get_by_source(source)
+            .await
+            .unwrap()
+            .map(|r| r.target)
+    };
+    assert_eq!(
+        target("/books/the-first-book/").await.as_deref(),
+        Some("/csv-book/")
+    );
+    assert!(
+        noted(&report, "redirect from /books/the-first-book/"),
+        "{:?}",
+        report.notes
+    );
+    // A CSV row replacing one the WordPress import made is kept on a re-run too.
+    redirects
+        .import(
+            &site.ctx.actor,
+            &[row("/books/the-second-book/", "/csv-second/")],
+        )
+        .await
+        .unwrap();
+    let report = import(&site, &corpus("site-a.xml"), ImportOptions::default()).await;
+    assert_eq!(
+        target("/books/the-second-book/").await.as_deref(),
+        Some("/csv-second/")
+    );
+    assert_eq!(report.counts["redirects"].kept, 2, "{:?}", report.counts);
+}
+
+/// Every link `href` in a block tree.
+fn hrefs(node: &Value, out: &mut Vec<String>) {
+    if let Some(marks) = node.get("marks").and_then(Value::as_array) {
+        for m in marks {
+            if let Some(h) = m.pointer("/attrs/href").and_then(Value::as_str) {
+                out.push(h.to_owned());
+            }
+        }
+    }
+    if let Some(children) = node.get("content").and_then(Value::as_array) {
+        for c in children {
+            hrefs(c, out);
+        }
+    }
+}
+
+/// A link to an old item with a query and a fragment resolves by its path and keeps
+/// both.
+pub async fn links_keep_their_query(db: &TestDb) {
+    let site = site(db).await;
+    let wxr = edited(
+        &site,
+        "query.xml",
+        &[(
+            "href=\"http://localhost:8099/about/\"",
+            "href=\"http://localhost:8099/about/?utm=x#top\"",
+        )],
+    );
+    import(&site, &wxr, ImportOptions::default()).await;
+    let post = by_title(db.store(), "Every core block").await;
+    let mut links = Vec::new();
+    hrefs(&post.body, &mut links);
+    assert!(links.contains(&"/about/?utm=x#top".to_owned()), "{links:?}");
+}
+
 backend_tests!(
     rerun_site_a_is_unchanged,
     rerun_keeps_a_local_edit,
@@ -586,4 +703,7 @@ backend_tests!(
     resume_after_failure_in_pass1,
     resume_after_failure_in_pass3,
     resume_after_failure_in_pass4,
+    long_menu_name_beside_a_site_menu,
+    csv_redirects_are_kept,
+    links_keep_their_query,
 );

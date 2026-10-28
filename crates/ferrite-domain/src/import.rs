@@ -28,6 +28,7 @@ string_enum!(
         Comment => "comment",
         Menu => "menu",
         Option => "option",
+        Redirect => "redirect",
     }
 );
 

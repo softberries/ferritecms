@@ -3,8 +3,8 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use ferrite_domain::{
-    CommentId, ContentId, ContentItem, ImportMapKind, ImportMapRow, Menu, Taxonomy, Term, TermId,
-    Timestamp, UserId,
+    CommentId, ContentId, ContentItem, ImportMapKind, ImportMapRow, Menu, Redirect, Taxonomy, Term,
+    TermId, Timestamp, UserId,
 };
 use ferrite_store::{LockGuard, Repos, Store, Tx};
 use serde_json::Value;
@@ -165,6 +165,11 @@ impl<'a> ImportBatch<'a> {
     /// wrote it).
     pub async fn get_option(&self, key: &str) -> Result<Option<Value>, CoreError> {
         Ok(self.tx.options().get(key).await?.map(|o| o.value))
+    }
+
+    /// The stored redirect of `source` (to tell one the import did not write).
+    pub async fn get_redirect(&self, source: &str) -> Result<Option<Redirect>, CoreError> {
+        Ok(self.tx.redirects().get_by_source(source).await?)
     }
 
     /// Records (or replaces) the map row of (`kind`, `wp_id`) for this run's source.
@@ -361,7 +366,7 @@ async fn target_exists(
             .get(CommentId::from_uuid(id))
             .await?
             .is_some(),
-        ImportMapKind::Menu | ImportMapKind::Option => true,
+        ImportMapKind::Menu | ImportMapKind::Option | ImportMapKind::Redirect => true,
     })
 }
 

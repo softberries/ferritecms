@@ -255,19 +255,37 @@ async fn write(
     Ok(())
 }
 
-/// `name`, or `<name>-wp`, `<name>-wp-2`, … when the site has a menu of that name.
+/// `name`, or `<name>-wp`, `<name>-wp-2`, … when the site has a menu of that name; each
+/// candidate cut before its suffix to fit core's slug limit and checked with its rule.
+/// `None` when no valid name is free.
 async fn free_name(b: &mut ImportBatch<'_>, name: &str) -> Result<Option<String>, ImportError> {
     for n in 0..NAME_ATTEMPTS {
-        let candidate = match n {
-            0 => name.to_owned(),
-            1 => format!("{name}-wp"),
-            n => format!("{name}-wp-{n}"),
+        let Some(candidate) = candidate(name, n) else {
+            continue;
         };
         if b.get_menu(&candidate).await?.is_none() {
             return Ok(Some(candidate));
         }
     }
     Ok(None)
+}
+
+/// The `n`th name to try for menu `name` (see [`free_name`]), if it is a valid one: the
+/// name itself, then the name cut to make room for the suffix.
+fn candidate(name: &str, n: usize) -> Option<String> {
+    let suffix = match n {
+        0 => String::new(),
+        1 => "-wp".to_owned(),
+        n => format!("-wp-{n}"),
+    };
+    let candidate = if suffix.is_empty() {
+        name.to_owned()
+    } else {
+        let keep = slug::MAX_LEN.saturating_sub(suffix.chars().count());
+        let head: String = name.chars().take(keep).collect();
+        format!("{}{suffix}", head.trim_end_matches('-'))
+    };
+    (slug::validate(&candidate).ok().as_deref() == Some(candidate.as_str())).then_some(candidate)
 }
 
 /// The menu `name` from the WXR entries. Entries left out are noted, except on a dry
@@ -449,4 +467,22 @@ async fn entry(
         label: label(&text),
         ..entry
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn candidates_fit_the_slug_limit() {
+        assert_eq!(candidate("main", 0).as_deref(), Some("main"));
+        assert_eq!(candidate("main", 1).as_deref(), Some("main-wp"));
+        assert_eq!(candidate("main", 3).as_deref(), Some("main-wp-3"));
+        let long = "m".repeat(199);
+        assert_eq!(candidate(&long, 0).as_deref(), Some(long.as_str()));
+        let free = candidate(&long, 1).unwrap();
+        assert_eq!(free, format!("{}-wp", "m".repeat(197)));
+        assert_eq!(candidate(&long, 12).unwrap().chars().count(), slug::MAX_LEN);
+        assert_eq!(candidate(&"m".repeat(201), 0), None);
+    }
 }

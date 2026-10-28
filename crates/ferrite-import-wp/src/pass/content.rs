@@ -134,12 +134,7 @@ impl Links {
         if url.query().is_some() {
             return None;
         }
-        let path = percent_decode(url.path());
-        Some(if path.ends_with('/') {
-            path
-        } else {
-            format!("{path}/")
-        })
+        Some(path_of(&url))
     }
 
     /// `link` as an absolute URL when it is on the old site (or relative to it).
@@ -154,15 +149,25 @@ impl Links {
         (matches!(url.scheme(), "http" | "https") && self.hosts.contains(&host)).then_some(url)
     }
 
-    /// The WP item an old link names: `?p=N` / `?page_id=N`, else its `<link>` path.
-    fn target(&self, href: &str) -> Option<i64> {
+    /// The WP item an old link names, and what of the link to keep after the item's new
+    /// path: `?p=N` / `?page_id=N` name it by id (only the fragment is kept), any other
+    /// link by its path, the query and fragment set aside and kept (`/hello/?utm=x#top`).
+    fn target(&self, href: &str) -> Option<(i64, String)> {
         let url = self.on_site(href)?;
         let by_query = url
             .query_pairs()
             .find(|(k, _)| k == "p" || k == "page_id")
             .and_then(|(_, v)| v.parse::<i64>().ok());
-        let wp_id = by_query.or_else(|| self.by_path.get(&self.old_path(href)?).copied())?;
-        self.items.contains_key(&wp_id).then_some(wp_id)
+        let fragment = url.fragment().map(|f| format!("#{f}")).unwrap_or_default();
+        let (wp_id, rest) = match by_query {
+            Some(id) => (id, fragment),
+            None => {
+                let id = *self.by_path.get(&path_of(&url))?;
+                let query = url.query().map(|q| format!("?{q}")).unwrap_or_default();
+                (id, format!("{query}{fragment}"))
+            }
+        };
+        self.items.contains_key(&wp_id).then_some((wp_id, rest))
     }
 
     /// A URL as it should read on the new site: an old item's link becomes its new path,
@@ -172,8 +177,10 @@ impl Links {
         if let Some(m) = self.media.resolve(url) {
             return m.url.clone();
         }
-        if let Some((_, path)) = self.target(url).and_then(|wp| self.written.get(&wp)) {
-            return path.clone();
+        if let Some((wp_id, rest)) = self.target(url)
+            && let Some((_, path)) = self.written.get(&wp_id)
+        {
+            return format!("{path}{rest}");
         }
         match self.on_site(url) {
             Some(u) => {
@@ -195,6 +202,16 @@ impl Links {
     /// The WP post type and status of export item `wp_id`.
     pub(crate) fn item(&self, wp_id: i64) -> Option<&(String, String)> {
         self.items.get(&wp_id)
+    }
+}
+
+/// The decoded path of `url`, with a trailing `/` (how old item paths are keyed).
+fn path_of(url: &url::Url) -> String {
+    let path = percent_decode(url.path());
+    if path.ends_with('/') {
+        path
+    } else {
+        format!("{path}/")
     }
 }
 
@@ -270,14 +287,11 @@ impl Rewrite for Resolver<'_> {
         if let Some(m) = self.links.media.resolve(href) {
             return m.url.clone();
         }
-        let Some(wp_id) = self.links.target(href) else {
+        let Some((wp_id, rest)) = self.links.target(href) else {
             return href.to_owned();
         };
         match self.links.written.get(&wp_id) {
-            Some((_, path)) => match href.split_once('#') {
-                Some((_, fragment)) => format!("{path}#{fragment}"),
-                None => path.clone(),
-            },
+            Some((_, path)) => format!("{path}{rest}"),
             None => {
                 self.pending.set(true);
                 href.to_owned()

@@ -414,13 +414,12 @@ pub async fn import_map_upsert_and_list(db: &TestDb) {
             .unwrap()
             .is_empty()
     );
-    // Every kind is accepted, `option` (site options the import wrote) included.
-    let option = map_row(a, ImportMapKind::Option, 3);
-    imports.map_put(&option).await.unwrap();
-    assert_eq!(
-        imports.map_get(a, ImportMapKind::Option, 3).await.unwrap(),
-        Some(option)
-    );
+    // Every kind is accepted, `option` and `redirect` (what the import wrote) included.
+    for kind in [ImportMapKind::Option, ImportMapKind::Redirect] {
+        let row = map_row(a, kind, 3);
+        imports.map_put(&row).await.unwrap();
+        assert_eq!(imports.map_get(a, kind, 3).await.unwrap(), Some(row));
+    }
 
     let bad = ImportMapRow {
         hash: "x\0".into(),

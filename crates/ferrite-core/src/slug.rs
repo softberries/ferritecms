@@ -3,7 +3,8 @@
 use crate::CoreError;
 use std::collections::HashSet;
 
-const MAX_LEN: usize = 200;
+/// Longest slug, in characters.
+pub const MAX_LEN: usize = 200;
 
 /// Slugs a top-level item may not take: they would shadow core routes and files.
 pub const RESERVED: &[&str] = &[
