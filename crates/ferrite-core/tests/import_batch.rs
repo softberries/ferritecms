@@ -224,8 +224,8 @@ pub async fn batch_emits_one_event(db: &TestDb) {
     );
 }
 
-/// P9: e-mail first (case-insensitively), then login; otherwise a new author with no
-/// password who must reset it. A WP login core refuses is slugified with `-N`.
+/// P9: the mapped account first, then e-mail (case-insensitively), then login;
+/// otherwise a new author with no password who must reset it. A WP login core refuses is slugified with `-N`.
 pub async fn user_matching_order(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
@@ -299,6 +299,21 @@ pub async fn user_matching_order(db: &TestDb) {
     let jd = repos.users().get(slugged).await.unwrap().unwrap();
     assert_eq!(jd.login, "john-doe-2");
     assert_eq!(jd.display_name, "john-doe-2");
+
+    // A mapped author is found through the map first, whatever its e-mail is now
+    // (C3: no `-3` account for a slugified login whose e-mail changed).
+    let mut batch = run.batch(&svc).await.unwrap();
+    let out = batch
+        .user(ImportUser {
+            wp_id: 4,
+            login: "John Doe".into(),
+            email: "changed@e.test".into(),
+            display_name: String::new(),
+        })
+        .await
+        .unwrap();
+    assert_eq!((out.id, out.how), (slugged, Matched::Mapped));
+    batch.commit().await.unwrap();
 }
 
 /// P8: a new term keeps its WP slug and parent; a WP term whose slug an existing site

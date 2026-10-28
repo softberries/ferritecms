@@ -57,7 +57,7 @@ fn record(
     let counts = report.counts_of("users");
     match user.how {
         Matched::Created => counts.created += 1,
-        Matched::Email | Matched::Login => counts.unchanged += 1,
+        Matched::Mapped | Matched::Email | Matched::Login => counts.unchanged += 1,
     }
     if placeholder {
         report.note(format!(
@@ -80,7 +80,7 @@ fn record(
             "author {:?} was matched to the account with the same login, not by e-mail",
             author.login
         )),
-        Matched::Email => {}
+        Matched::Mapped | Matched::Email => {}
     }
 }
 

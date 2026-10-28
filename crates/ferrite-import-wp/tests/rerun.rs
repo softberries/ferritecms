@@ -780,6 +780,48 @@ pub async fn rerun_with_uploads_rewrites_media(db: &TestDb) {
     );
 }
 
+/// C3: an author whose login core refuses (so its account login is a slug) and whose
+/// account e-mail was changed here is found through the import map on a re-run: no
+/// `-2` account.
+pub async fn rerun_finds_mapped_users(db: &TestDb) {
+    let site = site(db).await;
+    let wxr = site.work.path().join("author.xml");
+    std::fs::write(
+        &wxr,
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:wp="http://wordpress.org/export/1.2/">
+<channel><title>Authors</title><link>http://authors.test</link><description></description>
+<wp:wxr_version>1.2</wp:wxr_version><wp:base_site_url>http://authors.test</wp:base_site_url><wp:base_blog_url>http://authors.test</wp:base_blog_url>
+<wp:author><wp:author_id>2</wp:author_id><wp:author_login>Ann Smith</wp:author_login><wp:author_email></wp:author_email><wp:author_display_name><![CDATA[Ann]]></wp:author_display_name></wp:author>
+</channel></rss>
+"#,
+    )
+    .unwrap();
+    import(&site, &wxr, ImportOptions::default()).await;
+    let store = db.store();
+    let mut ann = store
+        .read()
+        .users()
+        .get_by_login("ann-smith")
+        .await
+        .unwrap()
+        .unwrap();
+    ann.email = "ann@real.example".into();
+    store.read().users().update(&ann).await.unwrap();
+
+    let again = import(&site, &wxr, ImportOptions::default()).await;
+    assert_eq!(again.counts["users"].created, 0, "{:?}", again.counts);
+    assert!(
+        store
+            .read()
+            .users()
+            .get_by_login("ann-smith-2")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
 backend_tests!(
     rerun_site_a_is_unchanged,
     rerun_keeps_a_local_edit,
@@ -797,4 +839,5 @@ backend_tests!(
     links_keep_their_query,
     dry_run_keeps_a_failed_runs_work_file,
     rerun_with_uploads_rewrites_media,
+    rerun_finds_mapped_users,
 );
