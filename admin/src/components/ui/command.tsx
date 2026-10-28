@@ -15,9 +15,56 @@ import {
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group";
 import { SearchIcon, CheckIcon } from "lucide-react";
 
-function Command({ className, ...props }: React.ComponentProps<typeof CommandPrimitive>) {
+/**
+ * Keeps the input's and the list's `aria-activedescendant` on the option cmdk marks
+ * selected. cmdk 1.1.1 reads that option's id once, when the selected value changes, and
+ * can read it before the DOM is updated; options remounted with the same values (a list
+ * rebuilt by a refetch) then leave it naming an element that is gone.
+ */
+function syncActiveDescendant(root: HTMLElement): void {
+  const id = root.querySelector('[cmdk-item][aria-selected="true"]')?.id || null;
+  for (const el of root.querySelectorAll("[cmdk-input], [cmdk-list]")) {
+    if (id === null) {
+      if (el.hasAttribute("aria-activedescendant")) el.removeAttribute("aria-activedescendant");
+    } else if (el.getAttribute("aria-activedescendant") !== id) {
+      el.setAttribute("aria-activedescendant", id);
+    }
+  }
+}
+
+function useActiveDescendantSync(): React.RefCallback<HTMLDivElement> {
+  return React.useCallback((root: HTMLDivElement | null) => {
+    if (!root) return;
+    syncActiveDescendant(root);
+    const observer = new MutationObserver(() => syncActiveDescendant(root));
+    observer.observe(root, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["aria-selected", "aria-activedescendant"],
+    });
+    return () => observer.disconnect();
+  }, []);
+}
+
+function Command({ className, ref, ...props }: React.ComponentProps<typeof CommandPrimitive>) {
+  const sync = useActiveDescendantSync();
+  const refs = React.useCallback(
+    (node: HTMLDivElement | null) => {
+      const cleanup = sync(node);
+      if (typeof ref === "function") ref(node);
+      else if (ref) ref.current = node;
+      return () => {
+        if (typeof cleanup === "function") cleanup();
+        if (typeof ref === "function") ref(null);
+        else if (ref) ref.current = null;
+      };
+    },
+    [sync, ref],
+  );
   return (
     <CommandPrimitive
+      ref={refs}
       data-slot="command"
       className={cn(
         "flex size-full flex-col overflow-hidden rounded-xl! bg-popover p-1 text-popover-foreground",
