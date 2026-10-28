@@ -774,6 +774,14 @@ pub async fn redirects_partial_refusal_reports_and_writes_rest(db: &TestDb) {
     })
     .await;
     assert_eq!((out.created, out.updated, out.refused.len()), (1, 1, 0));
+    // The same rows again: nothing written.
+    let out = in_batch(db, &admin, async |b| {
+        b.redirects(&[row("/old-a/", "/newer-a/"), row("/old-d/", "/z/")])
+            .await
+            .unwrap()
+    })
+    .await;
+    assert_eq!((out.created, out.updated, out.unchanged), (0, 0, 2));
     let out = in_batch(db, &admin, async |b| {
         b.redirects(&[row("/newer-a/", "/old-a/")]).await.unwrap()
     })
