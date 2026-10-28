@@ -32,6 +32,46 @@ pub trait Rewrite {
     fn href(&self, href: &str) -> String;
 }
 
+/// A memoised forward search for one needle. While the positions asked for do not move
+/// back past a match, every byte is searched at most once, so a scanner that asks again
+/// from each candidate stays linear on input with no match left.
+pub(crate) struct NextMatch<'a> {
+    hay: &'a str,
+    needle: &'a str,
+    /// The last search: where it started and what it found.
+    last: Option<(usize, Option<usize>)>,
+}
+
+impl<'a> NextMatch<'a> {
+    pub(crate) fn new(hay: &'a str, needle: &'a str) -> Self {
+        Self {
+            hay,
+            needle,
+            last: None,
+        }
+    }
+
+    /// The first match at or after `from`.
+    pub(crate) fn find(&mut self, from: usize) -> Option<usize> {
+        if let Some((searched, found)) = self.last
+            && searched <= from
+        {
+            match found {
+                None => return None,
+                Some(c) if c >= from => return Some(c),
+                Some(_) => {}
+            }
+        }
+        let found = self
+            .hay
+            .get(from..)
+            .and_then(|h| h.find(self.needle))
+            .map(|r| from + r);
+        self.last = Some((from, found));
+        found
+    }
+}
+
 /// At most this many example item ids are kept per note.
 pub const MAX_EXAMPLES: usize = 5;
 
@@ -60,7 +100,8 @@ pub struct Notes {
     /// The WP id of the item being converted; recorded as an example with every count.
     pub item: Option<i64>,
     /// Formatting dropped with the text kept: `underline`, `sup`, `sub`, `highlight`, `font`,
-    /// `style`, `link` (unsafe, or around an image), `code` (combined with other marks).
+    /// `alignment`, `style` (other inline CSS), `link` (unsafe, or around an image), `code`
+    /// (combined with other marks).
     pub dropped_marks: BTreeMap<String, Tally>,
     pub h1_demoted: Tally,
     /// Elements the block tree has no place for, by tag name.

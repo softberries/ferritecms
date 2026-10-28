@@ -6,6 +6,8 @@
 
 use serde_json::{Map, Value};
 
+use super::NextMatch;
+
 /// One parsed block.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
@@ -83,15 +85,15 @@ impl Delimiter<'_> {
 
 struct Scanner<'a> {
     src: &'a str,
-    /// The last `-->` search: from where, and what it found.
-    close_cache: Option<(usize, Option<usize>)>,
+    /// `-->` searches, memoised so a run of `<!--` without any `-->` stays linear.
+    close: NextMatch<'a>,
 }
 
 impl<'a> Scanner<'a> {
     fn new(src: &'a str) -> Self {
         Self {
             src,
-            close_cache: None,
+            close: NextMatch::new(src, "-->"),
         }
     }
 
@@ -106,23 +108,6 @@ impl<'a> Scanner<'a> {
             at = start + 4;
         }
         None
-    }
-
-    /// The first `-->` at or after `from`. Searches are memoised, so a run of `<!--` without
-    /// any `-->` stays linear.
-    fn find_close(&mut self, from: usize) -> Option<usize> {
-        if let Some((searched_from, found)) = self.close_cache
-            && searched_from <= from
-        {
-            match found {
-                None => return None,
-                Some(c) if c >= from => return Some(c),
-                Some(_) => {}
-            }
-        }
-        let found = self.src[from..].find("-->").map(|r| from + r);
-        self.close_cache = Some((from, found));
-        found
     }
 
     /// The WP tokenizer at one `<!--`:
@@ -156,7 +141,7 @@ impl<'a> Scanner<'a> {
         if b.get(i) == Some(&b'{') {
             // The attrs end at the `}` before the first `-->`; WP's own serialiser escapes
             // `--` inside attrs, so a literal `-->` never sits inside the JSON.
-            let close = self.find_close(i)?;
+            let close = self.close.find(i)?;
             let mut j = close;
             if b.get(j - 1) == Some(&b'/') {
                 j -= 1;
@@ -253,6 +238,8 @@ impl Parser<'_> {
                 self.skipped.pop();
                 self.push_text(raw);
             } else if let Some(at) = self.stack.iter().rposition(|b| b.name == name) {
+                // Openers kept as text past the cap were all inside the blocks closed here.
+                self.skipped.clear();
                 while self.stack.len() > at {
                     self.close_top();
                 }
@@ -610,6 +597,20 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].attrs["a"], json!({"b": "}"}));
         assert_eq!(blocks[0].attrs["c"], json!("-->"));
+    }
+
+    #[test]
+    fn closing_an_outer_block_past_the_cap_ends_the_text_mode() {
+        let src = format!(
+            "{}<!-- wp:quote -->q{}<!-- wp:paragraph --><p>after</p><!-- /wp:paragraph -->",
+            "<!-- wp:group -->".repeat(MAX_DEPTH),
+            "<!-- /wp:group -->".repeat(MAX_DEPTH)
+        );
+        let blocks = parse(&src);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].name, "core/group");
+        assert_eq!(blocks[1].name, "core/paragraph");
+        assert_eq!(blocks[1].inner_html, [html("<p>after</p>")]);
     }
 
     #[test]

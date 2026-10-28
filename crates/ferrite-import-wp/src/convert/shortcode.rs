@@ -4,6 +4,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use super::NextMatch;
+
 /// A run of text, or one shortcode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Piece {
@@ -25,7 +27,8 @@ pub fn scan(text: &str) -> Vec<Piece> {
     let mut out = Vec::new();
     let mut s = Scanner {
         src: text,
-        closers: HashMap::new(),
+        closers: closer_positions(text),
+        bracket: NextMatch::new(text, "]"),
     };
     let mut pos = 0;
     let mut from = 0;
@@ -58,29 +61,43 @@ fn push_text(out: &mut Vec<Piece>, t: &str) {
     }
 }
 
+fn is_name_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_' || c == b'-'
+}
+
+/// Where each `[/name]` starts, by name, in order: one pass, so any number of distinct
+/// unclosed openers stays linear.
+fn closer_positions(text: &str) -> HashMap<&str, Vec<usize>> {
+    let b = text.as_bytes();
+    let mut map: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut from = 0;
+    while let Some(rel) = text[from..].find("[/") {
+        let at = from + rel;
+        let name_start = at + 2;
+        let mut i = name_start;
+        while b.get(i).copied().is_some_and(is_name_byte) {
+            i += 1;
+        }
+        if i > name_start && b.get(i) == Some(&b']') {
+            map.entry(&text[name_start..i]).or_default().push(at);
+        }
+        from = name_start;
+    }
+    map
+}
+
 struct Scanner<'a> {
     src: &'a str,
-    /// Per closer `[/name]`: where the last search started and what it found, so a run of
-    /// unclosed openers stays linear.
-    closers: HashMap<String, (usize, Option<usize>)>,
+    closers: HashMap<&'a str, Vec<usize>>,
+    /// `]` searches, memoised so a run of `[name` without any `]` stays linear.
+    bracket: NextMatch<'a>,
 }
 
 impl Scanner<'_> {
     /// The first `[/name]` at or after `from`.
-    fn find_closer(&mut self, name: &str, from: usize) -> Option<usize> {
-        if let Some(&(searched, found)) = self.closers.get(name)
-            && searched <= from
-        {
-            match found {
-                None => return None,
-                Some(c) if c >= from => return Some(c),
-                Some(_) => {}
-            }
-        }
-        let closer = format!("[/{name}]");
-        let found = self.src[from..].find(&closer).map(|r| from + r);
-        self.closers.insert(name.to_owned(), (from, found));
-        found
+    fn find_closer(&self, name: &str, from: usize) -> Option<usize> {
+        let at = self.closers.get(name)?;
+        at.get(at.partition_point(|&p| p < from)).copied()
     }
 
     /// WP's shortcode regex at the `[` at `at`: the piece (text for an escaped one) and the
@@ -98,24 +115,17 @@ impl Scanner<'_> {
             return None;
         }
         let mut i = name_start + 1;
-        while b
-            .get(i)
-            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'-')
-        {
+        while b.get(i).copied().is_some_and(is_name_byte) {
             i += 1;
         }
         let name = &src[name_start..i];
-        // Attributes: anything but `]`, and `/` only when not followed by `]`.
+        // Attributes: anything up to the first `]`; a `/` right before it closes the tag.
         let attrs_start = i;
-        let (attrs_end, self_closing) = loop {
-            match b.get(i)? {
-                b']' => break (i, false),
-                b'/' if b.get(i + 1) == Some(&b']') => break (i, true),
-                _ => i += 1,
-            }
-        };
+        let bracket = self.bracket.find(attrs_start)?;
+        let self_closing = bracket > attrs_start && b[bracket - 1] == b'/';
+        let attrs_end = if self_closing { bracket - 1 } else { bracket };
         let attrs = parse_attrs(&src[attrs_start..attrs_end]);
-        let mut end = attrs_end + if self_closing { 2 } else { 1 };
+        let mut end = bracket + 1;
         let mut inner = None;
         if !self_closing && let Some(c) = self.find_closer(name, end) {
             inner = Some(src[end..c].to_owned());
@@ -139,8 +149,14 @@ impl Scanner<'_> {
     }
 }
 
+/// PCRE's `\s` without the `u` flag (WP's attribute regex has none).
+fn is_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r')
+}
+
 /// `shortcode_parse_atts`: `k="v"`, `k='v'`, `k=v`, `"v"`, `'v'` and bare `v`, each followed
-/// by whitespace or the end. Keys are lower-cased; positional values are numbered.
+/// by whitespace or the end. Keys are lower-cased; positional values are numbered. Values
+/// go through `stripcslashes`, and one with a `<` that no `>` closes becomes empty.
 fn parse_attrs(raw: &str) -> BTreeMap<String, String> {
     let text: String = raw
         .chars()
@@ -156,17 +172,18 @@ fn parse_attrs(raw: &str) -> BTreeMap<String, String> {
     let mut positional = 0;
     let mut rest = text.as_str();
     loop {
-        rest = rest.trim_start();
+        rest = rest.trim_start_matches(is_space);
         if rest.is_empty() {
             break;
         }
         let (key, value, after) = attr(rest);
+        let value = value_of(value);
         match key {
             Some(k) => {
-                attrs.insert(k.to_ascii_lowercase(), value.to_owned());
+                attrs.insert(k.to_ascii_lowercase(), value);
             }
             None => {
-                attrs.insert(positional.to_string(), value.to_owned());
+                attrs.insert(positional.to_string(), value);
                 positional += 1;
             }
         }
@@ -175,20 +192,94 @@ fn parse_attrs(raw: &str) -> BTreeMap<String, String> {
     attrs
 }
 
-/// One attribute at the start of `s` (no leading whitespace): `(key, value, rest)`.
+/// A raw value after `stripcslashes`, emptied when it holds an unclosed `<` (WP's
+/// `/^[^<]*+(?:<[^>]*+>[^<]*+)*+$/` check).
+fn value_of(raw: &str) -> String {
+    let v = stripcslashes(raw);
+    let mut rest = v.as_str();
+    while let Some(lt) = rest.find('<') {
+        match rest[lt..].find('>') {
+            Some(gt) => rest = &rest[lt + gt + 1..],
+            None => return String::new(),
+        }
+    }
+    v
+}
+
+/// PHP's `stripcslashes`: C escapes (`\n`, `\t`, `\r`, `\a`, `\v`, `\b`, `\f`, `\xHH`, octal
+/// `\OOO`) become their bytes, any other `\c` becomes `c`; a final `\` stays. Bytes that are
+/// not UTF-8 become U+FFFD.
+fn stripcslashes(s: &str) -> String {
+    if !s.contains('\\') {
+        return s.to_owned();
+    }
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'\\' || i + 1 == b.len() {
+            out.push(b[i]);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let c = b[i];
+        i += 1;
+        out.push(match c {
+            b'n' => b'\n',
+            b't' => b'\t',
+            b'r' => b'\r',
+            b'a' => 0x07,
+            b'v' => 0x0b,
+            b'b' => 0x08,
+            b'f' => 0x0c,
+            b'x' if b.get(i).is_some_and(u8::is_ascii_hexdigit) => {
+                let mut v = 0u8;
+                for _ in 0..2 {
+                    match b.get(i).and_then(|d| (*d as char).to_digit(16)) {
+                        Some(d) => {
+                            v = v.wrapping_mul(16).wrapping_add(d as u8);
+                            i += 1;
+                        }
+                        None => break,
+                    }
+                }
+                v
+            }
+            b'0'..=b'7' => {
+                let mut v = c - b'0';
+                for _ in 0..2 {
+                    match b.get(i) {
+                        Some(d @ b'0'..=b'7') => {
+                            v = v.wrapping_mul(8).wrapping_add(d - b'0');
+                            i += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                v
+            }
+            other => other,
+        });
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// One attribute at the start of `s` (no leading whitespace): `(key, value, rest)`. Keys
+/// are `[\w-]+` with PCRE's ASCII `\w`.
 fn attr(s: &str) -> (Option<&str>, &str, &str) {
     let key_len = s
-        .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-'))
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
         .unwrap_or(s.len());
     if key_len > 0 {
-        let after_key = s[key_len..].trim_start();
+        let after_key = s[key_len..].trim_start_matches(is_space);
         if let Some(v) = after_key.strip_prefix('=') {
-            let v = v.trim_start();
+            let v = v.trim_start_matches(is_space);
             if let Some((value, rest)) = quoted(v) {
                 return (Some(&s[..key_len]), value, rest);
             }
             let end = v
-                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+                .find(|c: char| is_space(c) || c == '"' || c == '\'')
                 .unwrap_or(v.len());
             if end > 0 {
                 return (Some(&s[..key_len]), &v[..end], &v[end..]);
@@ -198,7 +289,7 @@ fn attr(s: &str) -> (Option<&str>, &str, &str) {
     if let Some((value, rest)) = quoted(s) {
         return (None, value, rest);
     }
-    let end = s.find(char::is_whitespace).unwrap_or(s.len());
+    let end = s.find(is_space).unwrap_or(s.len());
     (None, &s[..end], &s[end..])
 }
 
@@ -207,7 +298,7 @@ fn quoted(s: &str) -> Option<(&str, &str)> {
     let q = s.chars().next().filter(|c| matches!(c, '"' | '\''))?;
     let close = s[1..].find(q)? + 1;
     let rest = &s[close + 1..];
-    (rest.is_empty() || rest.starts_with(char::is_whitespace)).then(|| (&s[1..close], rest))
+    (rest.is_empty() || rest.starts_with(is_space)).then(|| (&s[1..close], rest))
 }
 
 #[cfg(test)]
@@ -343,5 +434,47 @@ mod tests {
     fn many_unclosed_openers_stay_linear() {
         let src = "[x]".repeat(20_000);
         assert_eq!(scan(&src).len(), 20_000);
+    }
+
+    #[test]
+    fn attribute_keys_are_ascii_word_characters() {
+        assert_eq!(
+            scan("[x k\u{e9}y=\"v\" ok=1]"),
+            [code("x", &[("0", "k\u{e9}y=\"v\""), ("ok", "1")], None)]
+        );
+    }
+
+    #[test]
+    fn attribute_values_are_stripcslashed() {
+        assert_eq!(
+            scan(r#"[x a="tab\there" b="\x41\101\q\x" c=end\]"#),
+            [code(
+                "x",
+                &[("a", "tab\there"), ("b", "AAqx"), ("c", "end\\")],
+                None
+            )]
+        );
+    }
+
+    #[test]
+    fn values_with_an_unclosed_lt_are_emptied() {
+        assert_eq!(
+            scan("[x a=\"<b>ok</b>\" b=\"<script\" c=\"1 < 2\" d=\"a<b>c\"]"),
+            [code(
+                "x",
+                &[("a", "<b>ok</b>"), ("b", ""), ("c", ""), ("d", "a<b>c")],
+                None
+            )]
+        );
+    }
+
+    #[test]
+    fn unclosed_openers_stay_linear() {
+        let start = std::time::Instant::now();
+        let src = "[x".repeat(200_000);
+        assert_eq!(scan(&src), [text(&src)]);
+        let distinct: String = (0..200_000).map(|i| format!("[a{i}]")).collect();
+        assert_eq!(scan(&distinct).len(), 200_000);
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
     }
 }

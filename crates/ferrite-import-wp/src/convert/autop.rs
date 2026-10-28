@@ -1,5 +1,7 @@
 //! A port of WordPress's `wpautop`: paragraphs and line breaks for classic-editor bodies.
 
+use super::NextMatch;
+
 /// WP's `$allblocks`: tags that start and end a paragraph.
 const BLOCKS: &[&str] = &[
     "table",
@@ -72,14 +74,42 @@ pub fn wpautop(text: &str) -> String {
         out.push_str(&paragraph(&chunk));
         out.push('\n');
     }
-    for (i, pre) in pres.iter().enumerate() {
-        out = out.replacen(&pre_placeholder(i), pre, 1);
-    }
-    out
+    restore_pre(&out, &pres)
 }
 
+const PRE_MARK: &str = "<pre wp-pre-tag-";
+
 fn pre_placeholder(i: usize) -> String {
-    format!("<pre wp-pre-tag-{i}></pre>")
+    format!("{PRE_MARK}{i}></pre>")
+}
+
+/// Puts each `<pre>` back in one pass. Every placeholder in `text` is ours: the text outside
+/// the set-aside `<pre>`s holds no `</pre>`, and a literal placeholder in the input was a
+/// `<pre>` itself, so a restored `<pre>` is never searched again.
+fn restore_pre(text: &str, pres: &[String]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find(PRE_MARK) {
+        let after = &rest[i + PRE_MARK.len()..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        let pre = after[..digits]
+            .parse::<usize>()
+            .ok()
+            .and_then(|n| pres.get(n));
+        match (pre, after[digits..].strip_prefix("></pre>")) {
+            (Some(pre), Some(tail)) => {
+                out.push_str(&rest[..i]);
+                out.push_str(pre);
+                rest = tail;
+            }
+            _ => {
+                out.push_str(&rest[..i + PRE_MARK.len()]);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Replaces each `<pre…>…</pre>` with a placeholder (itself a block tag), as WP does.
@@ -127,35 +157,36 @@ fn is_block(name: &str) -> bool {
 }
 
 /// Splits `text` into text runs and tags (`<x …>`, `</x>`, `<!-- … -->`); newlines inside a
-/// tag become spaces.
+/// tag become spaces. A `<` that opens no tag stays text.
 fn tokens(text: &str) -> Vec<(bool, String)> {
+    let mut gt = NextMatch::new(text, ">");
+    let mut comment_end = NextMatch::new(text, "-->");
     let mut out = Vec::new();
-    let mut rest = text;
-    while !rest.is_empty() {
-        let Some(lt) = rest.find('<') else {
-            out.push((false, rest.to_owned()));
-            break;
-        };
-        let after = &rest[lt + 1..];
-        let is_tag = after.starts_with(|c: char| c.is_ascii_alphabetic() || c == '/' || c == '!');
-        let end = if !is_tag {
-            None
-        } else if after.starts_with("!--") {
-            rest[lt..].find("-->").map(|e| lt + e + 3)
+    let mut pos = 0;
+    let mut from = 0;
+    while let Some(rel) = text[from..].find('<') {
+        let lt = from + rel;
+        let after = &text[lt + 1..];
+        let end = if after.starts_with("!--") {
+            comment_end.find(lt + 2).map(|e| e + 3)
+        } else if after.starts_with(|c: char| c.is_ascii_alphabetic() || c == '/' || c == '!') {
+            gt.find(lt + 1).map(|e| e + 1)
         } else {
-            rest[lt..].find('>').map(|e| lt + e + 1)
+            None
         };
         let Some(end) = end else {
-            // `<` that opens no tag: text up to and including it.
-            out.push((false, rest[..=lt].to_owned()));
-            rest = &rest[lt + 1..];
+            from = lt + 1;
             continue;
         };
-        if lt > 0 {
-            out.push((false, rest[..lt].to_owned()));
+        if lt > pos {
+            out.push((false, text[pos..lt].to_owned()));
         }
-        out.push((true, rest[lt..end].replace('\n', " ")));
-        rest = &rest[end..];
+        out.push((true, text[lt..end].replace('\n', " ")));
+        pos = end;
+        from = end;
+    }
+    if pos < text.len() {
+        out.push((false, text[pos..].to_owned()));
     }
     out
 }
@@ -438,5 +469,35 @@ mod tests {
             wpautop("a < b\n\n<!-- more -->"),
             "<p>a < b</p>\n<p><!-- more --></p>\n"
         );
+    }
+
+    #[test]
+    fn a_literal_placeholder_does_not_swap_pre_content() {
+        assert_eq!(
+            wpautop("<pre>a <pre wp-pre-tag-1></pre>\n\nx\n\n<pre>b</pre>"),
+            "<pre>a <pre wp-pre-tag-1></pre>\n<p>x</p>\n<pre>b</pre>\n"
+        );
+    }
+
+    fn assert_fast(input: &str) {
+        let start = std::time::Instant::now();
+        let out = wpautop(input);
+        assert!(!out.is_empty());
+        let took = start.elapsed();
+        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+    }
+
+    #[test]
+    fn unterminated_tags_and_comments_stay_linear() {
+        assert_fast(&"<a".repeat(200_000));
+        assert_fast(&"<!--".repeat(200_000));
+    }
+
+    #[test]
+    fn many_pre_blocks_stay_linear() {
+        let input = "<pre></pre>".repeat(200_000);
+        let start = std::time::Instant::now();
+        assert_eq!(wpautop(&input).matches("<pre></pre>").count(), 200_000);
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
     }
 }

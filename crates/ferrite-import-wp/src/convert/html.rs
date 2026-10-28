@@ -267,9 +267,7 @@ impl Conv<'_> {
             self.text(flow, &visible_text(e), style);
             return;
         }
-        if e.attr("style").is_some_and(|s| !s.trim().is_empty()) {
-            self.notes.dropped_mark("style");
-        }
+        self.presentation(e, name);
         let mut inner = style.clone();
         match name {
             "p" => {
@@ -378,6 +376,34 @@ impl Conv<'_> {
                 self.notes.unsupported_tag(name);
                 self.children(e, flow, style, depth);
             }
+        }
+    }
+
+    /// Counts the presentation `e` loses (P11): `alignment` for `<center>`, an `align`
+    /// attribute, WP's `align*` and `has-text-align-*` classes and `text-align` in `style`;
+    /// `style` for any other inline CSS.
+    fn presentation(&mut self, e: ElementRef<'_>, name: &str) {
+        let mut aligned = name == "center" || e.attr("align").is_some_and(|a| !a.trim().is_empty());
+        if let Some(class) = e.attr("class") {
+            aligned |= class.split_ascii_whitespace().any(|c| {
+                matches!(c, "aligncenter" | "alignleft" | "alignright" | "alignnone")
+                    || c.starts_with("has-text-align-")
+            });
+        }
+        let mut other_css = false;
+        for decl in e.attr("style").unwrap_or("").split(';') {
+            let prop = decl.split(':').next().unwrap_or("").trim();
+            if prop.eq_ignore_ascii_case("text-align") {
+                aligned = true;
+            } else if !prop.is_empty() {
+                other_css = true;
+            }
+        }
+        if aligned {
+            self.notes.dropped_mark("alignment");
+        }
+        if other_css {
+            self.notes.dropped_mark("style");
         }
     }
 
@@ -611,19 +637,31 @@ fn list_item(mut content: Vec<Node>) -> Node {
     Node::ListItem(content)
 }
 
-/// The text of `e` outside dropped elements (iterative, so any depth).
+/// The text of `e` outside dropped elements: one pre-order walk that skips dropped
+/// subtrees (iterative, so any depth).
 fn visible_text(e: ElementRef<'_>) -> String {
     let mut out = String::new();
-    for d in e.descendants() {
-        let Dom::Text(t) = d.value() else {
-            continue;
+    let mut next = e.first_child();
+    while let Some(n) = next {
+        let descend = match n.value() {
+            Dom::Text(t) => {
+                out.push_str(&t.text);
+                false
+            }
+            Dom::Element(el) => !DROPPED.contains(&el.name()),
+            _ => false,
         };
-        let hidden = d
-            .ancestors()
-            .take_while(|a| a.id() != e.id())
-            .any(|a| matches!(a.value(), Dom::Element(el) if DROPPED.contains(&el.name())));
-        if !hidden {
-            out.push_str(&t.text);
+        next = if descend { n.first_child() } else { None };
+        let mut cur = n;
+        while next.is_none() {
+            if let Some(sibling) = cur.next_sibling() {
+                next = Some(sibling);
+            } else {
+                match cur.parent() {
+                    Some(p) if p.id() != e.id() => cur = p,
+                    _ => break,
+                }
+            }
         }
     }
     out
@@ -1151,7 +1189,8 @@ mod tests {
         assert_eq!(notes.h1_demoted.count, 1);
         assert_eq!(notes.missing_media.count, 1);
         assert_eq!(count(&notes.dropped_marks, "sup"), 1);
-        assert_eq!(count(&notes.dropped_marks, "style"), 2);
+        assert_eq!(count(&notes.dropped_marks, "style"), 1);
+        assert_eq!(count(&notes.dropped_marks, "alignment"), 1);
         for (_, body) in &bodies {
             let (nodes, _) = conv(&wpautop(body));
             assert!(ferrite_core::blocks::is_editor_safe(&to_json(&nodes)));
@@ -1181,5 +1220,55 @@ mod tests {
             })
             .unwrap();
         }
+    }
+
+    #[test]
+    fn alignment_is_counted_and_content_kept() {
+        let (nodes, notes) = conv(
+            "<center>c</center><p align=\"right\">r</p>\
+             <img class=\"aligncenter size-full\" src=\"/a.png\" alt=\"\">\
+             <figure class=\"wp-block-image alignleft\"><img src=\"/b.png\" alt=\"\"></figure>\
+             <p class=\"has-text-align-center\">t</p>\
+             <p style=\"text-align:center; color: red\">s</p><p class=\"other\">plain</p>",
+        );
+        assert_eq!(
+            nodes,
+            [
+                p(vec![t("c")]),
+                p(vec![t("r")]),
+                img("/a.png", Some("")),
+                img("/b.png", Some("")),
+                p(vec![t("t")]),
+                p(vec![t("s")]),
+                p(vec![t("plain")]),
+            ]
+        );
+        assert_eq!(count(&notes.dropped_marks, "alignment"), 6);
+        assert_eq!(count(&notes.dropped_marks, "style"), 1);
+    }
+
+    #[test]
+    fn visible_text_skips_dropped_elements_past_the_depth_cap() {
+        let html = format!(
+            "{}a<script>evil()</script><b>b</b>{}",
+            "<div>".repeat(100),
+            "</div>".repeat(100)
+        );
+        let (nodes, _) = conv(&html);
+        assert_eq!(nodes, [p(vec![t("ab")])]);
+    }
+
+    #[test]
+    fn wide_deep_text_stays_linear() {
+        let html = format!(
+            "{}{}{}",
+            "<div>".repeat(5_000),
+            "<b>x</b>".repeat(100_000),
+            "</div>".repeat(5_000)
+        );
+        let start = std::time::Instant::now();
+        let (nodes, _) = conv(&html);
+        assert_eq!(nodes.len(), 1);
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
     }
 }
