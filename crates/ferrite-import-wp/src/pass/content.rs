@@ -266,9 +266,9 @@ pub(crate) struct Converted {
     pub pending: bool,
 }
 
-/// Converts `item`'s body and builds its fields: the featured image, and for a custom
-/// type with ACF groups the mapped values.
-pub(crate) fn convert(item: &Item, links: &Links, acf: &AcfModel) -> Converted {
+/// Converts `item`'s body and builds its fields: the featured image, and the mapped
+/// ACF values of its type (`acf`, empty for a type without ACF fields).
+pub(crate) fn convert(item: &Item, links: &Links, acf: &TypeAcf<'_>) -> Converted {
     let rw = Resolver::new(links);
     let mut notes = Notes {
         item: Some(item.wp_id),
@@ -282,16 +282,14 @@ pub(crate) fn convert(item: &Item, links: &Links, acf: &AcfModel) -> Converted {
     {
         fields.insert(FEATURED_IMAGE.to_owned(), json!(id.to_string()));
     }
-    if is_custom_with_acf(&item.post_type, acf) {
-        for (field, def) in type_fields(&item.post_type, acf).mapped {
-            let mut values = Values {
-                item,
-                rw: &rw,
-                notes: &mut notes,
-            };
-            if let Some(v) = values.value(field, &def, &field.name) {
-                fields.insert(def.name.clone(), v);
-            }
+    for (field, def) in &acf.mapped {
+        let mut values = Values {
+            item,
+            rw: &rw,
+            notes: &mut notes,
+        };
+        if let Some(v) = values.value(field, def, &field.name) {
+            fields.insert(def.name.clone(), v);
         }
     }
     let pending = rw.pending();
@@ -303,26 +301,41 @@ pub(crate) fn convert(item: &Item, links: &Links, acf: &AcfModel) -> Converted {
     }
 }
 
-/// Whether `post_type` is a custom type whose fields come from ACF (P16; on `post` and
-/// `page` ACF values stay as meta).
-fn is_custom_with_acf(post_type: &str, acf: &AcfModel) -> bool {
-    !matches!(post_type, "post" | "page") && acf.has_groups_for(post_type)
+/// A post type's mapped ACF fields and the meta keys their values consume (each field's
+/// name and, for a repeater, its row keys `<name>_<n>_…`), worked out once per type.
+/// Empty for `post` and `page`, whose ACF values stay as meta (P16), and for types
+/// without ACF groups.
+pub(crate) struct TypeAcf<'a> {
+    mapped: Vec<(&'a AcfField, FieldDef)>,
+    names: HashSet<String>,
+    prefixes: Vec<String>,
 }
 
-/// The meta keys the ACF values of a custom type consume: each mapped field's name and,
-/// for a repeater, its row keys (`<name>_<n>_…`).
-fn acf_keys(post_type: &str, acf: &AcfModel) -> (HashSet<String>, Vec<String>) {
-    let mut names = HashSet::new();
-    let mut prefixes = Vec::new();
-    if is_custom_with_acf(post_type, acf) {
-        for (field, _) in type_fields(post_type, acf).mapped {
-            names.insert(field.name.clone());
-            if field.kind == "repeater" {
-                prefixes.push(format!("{}_", field.name));
-            }
+impl<'a> TypeAcf<'a> {
+    pub(crate) fn of(post_type: &str, acf: &'a AcfModel) -> Self {
+        let custom = !matches!(post_type, "post" | "page") && acf.has_groups_for(post_type);
+        let mapped = if custom {
+            type_fields(post_type, acf).mapped
+        } else {
+            Vec::new()
+        };
+        let names = mapped.iter().map(|(f, _)| f.name.clone()).collect();
+        let prefixes = mapped
+            .iter()
+            .filter(|(f, _)| f.kind == "repeater")
+            .map(|(f, _)| format!("{}_", f.name))
+            .collect();
+        Self {
+            mapped,
+            names,
+            prefixes,
         }
     }
-    (names, prefixes)
+
+    /// Whether meta `key` holds one of these fields' values.
+    fn consumes(&self, key: &str) -> bool {
+        self.names.contains(key) || self.prefixes.iter().any(|p| key.starts_with(p.as_str()))
+    }
 }
 
 /// Maps ACF values (P16).
@@ -436,7 +449,6 @@ fn status(wp: &str) -> Result<ContentStatus, String> {
 /// What pass 3 reads beside the items.
 struct Context<'a> {
     links: Links,
-    acf: AcfModel,
     channel: Channel,
     /// Author login → WP author id.
     authors: HashMap<String, i64>,
@@ -444,8 +456,8 @@ struct Context<'a> {
     terms: HashMap<(String, String), i64>,
     /// Post types with an item that has a parent (their types are hierarchical).
     hierarchical: HashSet<String>,
-    /// On a dry run, pass 1's types and taxonomies, re-registered in every batch (pass
-    /// 1's batches were rolled back).
+    /// On a dry run (and only then), pass 1's types and taxonomies, re-registered in
+    /// every batch (pass 1's batches were rolled back).
     schema: Option<Schema>,
     admin: UserId,
     session: &'a Session<'a>,
@@ -473,22 +485,25 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
     let ir = session.ir();
     let channel = ir.channel().await?;
     let order = order(ir).await?;
-    let schema = if session.opts().dry_run {
+    let acf = field_defs(ir).await?;
+    let dry_run = session.opts().dry_run;
+    let schema = if dry_run {
         let census = Census::scan(ir).await?;
         let wp_terms = ir.terms().await?;
-        Some(plan(
-            &census,
-            &field_defs(ir).await?,
-            &wp_terms,
-            &mut Report::default(),
-        ))
+        Some(plan(&census, &acf, &wp_terms, &mut Report::default()))
     } else {
         None
     };
+    if dry_run {
+        report.note(
+            "dry run: every batch was rolled back, so later batches did not see the users, \
+             terms, media and parents of earlier ones; items fall back to the importing \
+             admin and lose those terms, images and parents in this report only",
+        );
+    }
     let mut cx = Context {
         schema,
         links: Links::load(session, &channel).await?,
-        acf: field_defs(ir).await?,
         authors: ir
             .authors()
             .await?
@@ -514,11 +529,12 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
         let Some(kind) = type_name(post_type) else {
             continue;
         };
-        if is_acf_on_built_in(post_type, &cx.acf) {
+        if is_acf_on_built_in(post_type, &acf) {
             report.note(format!(
                 "ACF values of {post_type} items stay as wp.<name> meta (no fields on built-in types)"
             ));
         }
+        let type_acf = TypeAcf::of(post_type, &acf);
         for chunk in parent_first(nodes).chunks(session.batch_items()) {
             let mut items = Vec::with_capacity(chunk.len());
             for wp_id in chunk {
@@ -526,7 +542,7 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
                     items.push(item);
                 }
             }
-            write_chunk(&mut cx, &kind, items, report).await?;
+            write_chunk(&mut cx, &kind, &type_acf, items, report).await?;
         }
     }
     Ok(())
@@ -541,6 +557,7 @@ fn is_acf_on_built_in(post_type: &str, acf: &AcfModel) -> bool {
 async fn write_chunk(
     cx: &mut Context<'_>,
     kind: &str,
+    acf: &TypeAcf<'_>,
     items: Vec<Item>,
     report: &mut Report,
 ) -> Result<(), ImportError> {
@@ -551,14 +568,30 @@ async fn write_chunk(
     };
     let written = match &cx.schema {
         Some(schema) => match ensure(&mut batch, schema, None).await {
-            Ok(()) => write_items(&mut batch, cx, kind, items, report).await,
+            Ok(()) => write_items(&mut batch, cx, kind, acf, items, report).await,
             Err(e) => Err(e),
         },
-        None => write_items(&mut batch, cx, kind, items, report).await,
+        None => write_items(&mut batch, cx, kind, acf, items, report).await,
+    };
+    // The fix-up queue is written before the batch commits: once it is committed, a
+    // resumed run sees these items unchanged and would never queue them. A batch that
+    // then rolls back leaves extra entries, which the fix-up skips or finds nothing to do
+    // for. A dry run writes none (its rows are rolled back).
+    let written = match written {
+        Ok(done) if !session.opts().dry_run => {
+            let queue: Vec<i64> = done
+                .iter()
+                .filter(|d| {
+                    d.pending && matches!(d.outcome.result, Written::Created | Written::Updated)
+                })
+                .map(|d| d.wp_id)
+                .collect();
+            session.ir().add_fixups(&queue).await.map(|()| done)
+        }
+        other => other,
     };
     let done = session.finish_batch(batch, written).await?;
     let mut rows = Vec::new();
-    let mut fixups = Vec::new();
     for d in done {
         let counts = report.counts_of(&d.kind);
         match d.outcome.result {
@@ -585,20 +618,16 @@ async fn write_chunk(
                 d.wp_id
             ));
         }
-        let fresh = matches!(d.outcome.result, Written::Created | Written::Updated);
-        if d.pending && fresh {
-            fixups.push(d.wp_id);
-        }
         if let Some(path) = d.path {
             let id = d.outcome.id.as_uuid();
             cx.links.written.insert(d.wp_id, (id, path.clone()));
             rows.push((d.wp_id, id, path));
         }
     }
-    // A dry run's rows were rolled back: nothing for the fix-up or a later run.
+    // A dry run's rows were rolled back: nothing for a later run. A crash before this
+    // loses nothing: a resumed run records the paths of unchanged items again.
     if !session.opts().dry_run {
         session.ir().put_content_paths(&rows).await?;
-        session.ir().add_fixups(&fixups).await?;
     }
     Ok(())
 }
@@ -608,12 +637,13 @@ async fn write_items(
     b: &mut ImportBatch<'_>,
     cx: &Context<'_>,
     kind: &str,
+    acf: &TypeAcf<'_>,
     items: Vec<Item>,
     report: &mut Report,
 ) -> Result<Vec<Done>, ImportError> {
     let mut out = Vec::with_capacity(items.len());
     for item in items {
-        let Some(prepared) = prepare(b, cx, kind, &item, report).await? else {
+        let Some(prepared) = prepare(b, cx, kind, acf, &item, report).await? else {
             continue;
         };
         report.conversion.merge(&prepared.notes);
@@ -637,6 +667,7 @@ async fn prepare(
     b: &mut ImportBatch<'_>,
     cx: &Context<'_>,
     kind: &str,
+    acf: &TypeAcf<'_>,
     item: &Item,
     report: &mut Report,
 ) -> Result<Option<Prepared>, ImportError> {
@@ -658,16 +689,14 @@ async fn prepare(
     };
     let parent = parent(b, cx, item, &mut lines).await?;
     let terms = terms(b, cx, item, &mut lines).await?;
-    let converted = convert(item, &cx.links, &cx.acf);
+    let converted = convert(item, &cx.links, acf);
     let (seo, seo_notes) = crate::seo::map(item, &cx.channel);
     lines.extend(seo_notes);
-    let (acf_names, acf_prefixes) = acf_keys(&item.post_type, &cx.acf);
     let consumed = |k: &str| {
         k == THUMBNAIL
             || PRIMARY_CATEGORY.contains(&k)
             || crate::seo::SEO_KEYS.contains(&k)
-            || acf_names.contains(k)
-            || acf_prefixes.iter().any(|p| k.starts_with(p.as_str()))
+            || acf.consumes(k)
     };
     let mut wp_meta = crate::meta::wp_meta(item, consumed);
     if item.is_sticky {
@@ -692,7 +721,7 @@ async fn prepare(
         status,
         published_at,
         created_at,
-        updated_at: wp_time(&item.modified_gmt, "").unwrap_or(created_at),
+        updated_at: wp_time(&item.modified_gmt, &item.modified_local).unwrap_or(created_at),
         excerpt: (!excerpt.is_empty()).then(|| excerpt.replace('\0', "")),
         body: converted.body,
         fields: converted.fields,
@@ -732,7 +761,8 @@ async fn parent(
     } else {
         None
     };
-    if found.is_none() {
+    // On a dry run the parent's row was rolled back with its batch (noted once).
+    if found.is_none() && cx.schema.is_none() {
         lines.push(format!(
             "item {}: its parent {} was not imported; imported without a parent",
             item.wp_id, item.parent_wp_id

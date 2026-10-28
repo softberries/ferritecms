@@ -72,10 +72,14 @@ pub struct Unmapped {
 impl AcfModel {
     /// The value-holding fields shown on `post_type`, group by group (layout fields such
     /// as tabs are left out).
-    pub fn fields_for<'a>(&'a self, post_type: &'a str) -> impl Iterator<Item = &'a AcfField> {
+    pub fn fields_for<'a>(
+        &'a self,
+        post_type: &str,
+    ) -> impl Iterator<Item = &'a AcfField> + use<'a> {
+        let post_type = post_type.to_owned();
         self.groups
             .iter()
-            .filter(move |g| g.post_types.iter().any(|t| t == post_type))
+            .filter(move |g| g.post_types.contains(&post_type))
             .flat_map(|g| &g.fields)
             .filter(|f| !is_layout(&f.kind))
     }

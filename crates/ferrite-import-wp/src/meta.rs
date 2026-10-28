@@ -1,12 +1,14 @@
 //! WordPress post meta → `wp.<key>` item meta.
 //!
 //! Every key the import does not read itself (SEO, ACF values, the featured image) is kept
-//! as `wp.<key>` with its value as a JSON string (a key WordPress repeats keeps every value,
-//! as a JSON array of strings), except WordPress's bookkeeping, which is dropped:
+//! as `wp.<key>`. Its value is a JSON string, or a JSON array of strings when WordPress
+//! repeated the key (every value is kept), except WordPress's bookkeeping, which is dropped:
 //! `_edit_lock`, `_edit_last`, `_pingme`, `_encloseme`, `_wp_old_slug`, `_wp_old_date`,
 //! `_wp_trash_meta_*`, `_wp_desired_post_slug`, `_oembed_*`, `_menu_item_*` and ACF's
 //! `_<name>` reference keys (whose value is a field key, `field_…`). `_wp_page_template` is
 //! kept as `wp.page_template`.
+
+use std::collections::HashMap;
 
 use serde_json::Value;
 
@@ -40,6 +42,7 @@ pub fn is_dropped(key: &str, value: &str) -> bool {
 /// the import into a field of its own), in first-seen order.
 pub fn wp_meta(item: &Item, consumed: impl Fn(&str) -> bool) -> Vec<(String, Value)> {
     let mut out: Vec<(String, Value)> = Vec::new();
+    let mut seen: HashMap<String, usize> = HashMap::new();
     for (key, value) in &item.meta {
         if key.is_empty() || is_dropped(key, value) || consumed(key) {
             continue;
@@ -50,10 +53,15 @@ pub fn wp_meta(item: &Item, consumed: impl Fn(&str) -> bool) -> Vec<(String, Val
             format!("{PREFIX}{key}")
         };
         let text = Value::String(value.replace('\0', ""));
-        match out.iter_mut().find(|(k, _)| *k == name) {
-            Some((_, Value::Array(values))) => values.push(text),
-            Some((_, first)) => *first = Value::Array(vec![first.take(), text]),
-            None => out.push((name, text)),
+        match seen.get(&name) {
+            Some(&i) => match &mut out[i].1 {
+                Value::Array(values) => values.push(text),
+                first => *first = Value::Array(vec![first.take(), text]),
+            },
+            None => {
+                seen.insert(name.clone(), out.len());
+                out.push((name, text));
+            }
         }
     }
     out

@@ -194,7 +194,7 @@ pub(crate) struct TypeFields<'a> {
     pub repeated: Vec<(&'a AcfField, String)>,
 }
 
-pub(crate) fn type_fields<'a>(post_type: &'a str, acf: &'a AcfModel) -> TypeFields<'a> {
+pub(crate) fn type_fields<'a>(post_type: &str, acf: &'a AcfModel) -> TypeFields<'a> {
     let mut out = TypeFields {
         mapped: Vec::new(),
         unmapped: Vec::new(),

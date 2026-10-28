@@ -116,10 +116,19 @@ pub fn map(item: &Item, channel: &Channel) -> (Option<SeoPatch>, Vec<String>) {
     (any.then_some(patch), notes)
 }
 
-/// The robots directives of Yoast's flags or Rank Math's list, sorted and deduplicated.
+/// The robots directives, sorted and deduplicated: Yoast's flags when the item has any
+/// Yoast robots meta (as for the title and description, Yoast wins), else Rank Math's
+/// list.
 fn robots(item: &Item) -> BTreeSet<Robots> {
     let mut out = BTreeSet::new();
     let yoast = |k: &str| meta(item, k).map(str::trim);
+    let has_yoast = [
+        "_yoast_wpseo_meta-robots-noindex",
+        "_yoast_wpseo_meta-robots-nofollow",
+        "_yoast_wpseo_meta-robots-adv",
+    ]
+    .iter()
+    .any(|k| yoast(k).is_some_and(|v| !v.is_empty()));
     if yoast("_yoast_wpseo_meta-robots-noindex") == Some("1") {
         out.insert(Robots::NoIndex);
     }
@@ -128,6 +137,9 @@ fn robots(item: &Item) -> BTreeSet<Robots> {
     }
     if let Some(adv) = yoast("_yoast_wpseo_meta-robots-adv") {
         out.extend(adv.split(',').filter_map(directive));
+    }
+    if has_yoast {
+        return out;
     }
     if let Some(list) = meta(item, "rank_math_robots").and_then(|v| unserialize(v).ok()) {
         out.extend(
@@ -279,6 +291,18 @@ mod tests {
         assert_eq!(patch.robots, Some(Some(vec![Robots::NoIndex])));
         assert_eq!(patch.canonical, None);
         assert!(notes.iter().any(|n| n.contains("canonical")), "{notes:?}");
+    }
+
+    #[test]
+    fn yoast_robots_win_over_rank_math() {
+        let (patch, _) = map(
+            &item(&[
+                ("_yoast_wpseo_meta-robots-nofollow", "1"),
+                ("rank_math_robots", r#"a:1:{i:0;s:7:"noindex";}"#),
+            ]),
+            &channel(),
+        );
+        assert_eq!(patch.unwrap().robots, Some(Some(vec![Robots::NoFollow])));
     }
 
     #[test]

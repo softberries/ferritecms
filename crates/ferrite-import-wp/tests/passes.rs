@@ -11,7 +11,9 @@ use async_trait::async_trait;
 use ferrite_core::content::{Robots, Seo};
 use ferrite_core::fields::{FieldDef, FieldKind, schema_of};
 use ferrite_core::jobs::PUBLISH_SCHEDULED_KIND;
-use ferrite_core::{Actor, PermalinkRules, SwappablePermalinks, import::ImportService};
+use ferrite_core::{
+    Actor, ContentDraft, ContentService, PermalinkRules, SwappablePermalinks, import::ImportService,
+};
 use ferrite_domain::{
     ContentId, ContentItem, ContentQuery, ContentStatus, JobQuery, MEDIA_KIND, NewUser, Role,
     Taxonomy, Term, TermId, Timestamp, UserId, UserStatus,
@@ -886,6 +888,201 @@ pub async fn pass3_site_b(db: &TestDb) {
     assert_eq!(meta_of(store, harbour.id, "wp.rank_math_title").await, None);
 }
 
+/// The run's IR file (one run folder under the work dir).
+fn ir_file(site: &Site) -> PathBuf {
+    let mut dirs = std::fs::read_dir(&site.ctx.work_dir).unwrap();
+    let dir = dirs.next().unwrap().unwrap().path();
+    assert!(dirs.next().is_none(), "one run folder");
+    dir.join("ir.sqlite")
+}
+
+/// The WP ids in IR table `table` (`content_paths` or `fixups`).
+async fn ir_ids(file: &Path, table: &str) -> Vec<i64> {
+    let pool =
+        sqlx::SqlitePool::connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(file))
+            .await
+            .unwrap();
+    let sql = match table {
+        "content_paths" => "SELECT wp_id FROM content_paths ORDER BY wp_id",
+        "fixups" => "SELECT wp_id FROM fixups ORDER BY wp_id",
+        other => panic!("not an IR id table: {other}"),
+    };
+    let ids = sqlx::query_scalar(sql).fetch_all(&pool).await.unwrap();
+    pool.close().await;
+    ids
+}
+
+/// Runs `f` to completion from a sync step hook (multi-threaded runtime only).
+fn block_on<T>(f: impl std::future::Future<Output = T>) -> T {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
+}
+
+/// A run that stops right after the batch with "Every core block" committed (its links
+/// name pages written later) still has the item in the fix-up queue, and the resumed
+/// run fixes its links.
+pub async fn pass3_fixup_queue_survives_a_crash(db: &TestDb) {
+    let site = site(db, site_a_uploads()).await;
+    let store = db.store();
+    // One item per batch: 4 users, 9 term batches, 4 × 2 media batches, 4 attachment
+    // lookups, "Hello world!" (26), then "Every core block" (27).
+    let opts = ImportOptions {
+        batch_items: Some(1),
+        fail_after_batches: Some(27),
+        ..ImportOptions::default()
+    };
+    let err = run(site.ctx.clone(), &corpus("site-a.xml"), opts)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ImportError::Stopped), "{err:?}");
+    let post = by_title(store, "post", "Every core block").await;
+    let mut links = Vec::new();
+    hrefs(&post.body, &mut links);
+    assert!(
+        links.contains(&"http://localhost:8099/about/".to_owned()),
+        "not fixed yet: {links:?}"
+    );
+    assert_eq!(ir_ids(&ir_file(&site), "fixups").await, [7]);
+
+    run_all(&site, &corpus("site-a.xml")).await;
+    let post = by_title(store, "post", "Every core block").await;
+    let mut links = Vec::new();
+    hrefs(&post.body, &mut links);
+    assert!(links.contains(&"/about/".to_owned()), "{links:?}");
+    assert!(links.contains(&"/about/team/".to_owned()), "{links:?}");
+}
+
+/// A dry run through pass 3 and the fix-up writes no content, no jobs and nothing to
+/// the IR's path and fix-up tables (seen at the fix-up's start, before the folder goes).
+pub async fn pass3_dry_run_writes_nothing(db: Arc<TestDb>) {
+    let site = site(&db, site_a_uploads()).await;
+    let store = db.store();
+    let seen = Arc::new(std::sync::Mutex::new(None));
+    let hook = {
+        let seen = seen.clone();
+        let work = site.ctx.work_dir.clone();
+        StepHook::new(move |step| {
+            if step == "fixup" {
+                let dir = std::fs::read_dir(&work).unwrap().next().unwrap().unwrap();
+                let file = dir.path().join("ir.sqlite");
+                let rows = block_on(async {
+                    (
+                        ir_ids(&file, "content_paths").await,
+                        ir_ids(&file, "fixups").await,
+                    )
+                });
+                *seen.lock().unwrap() = Some(rows);
+            }
+            Ok(())
+        })
+    };
+    let opts = ImportOptions {
+        dry_run: true,
+        step_hook: Some(hook),
+        ..ImportOptions::default()
+    };
+    let report = run(site.ctx.clone(), &corpus("site-a.xml"), opts)
+        .await
+        .unwrap();
+    assert_eq!(counts(&report, "post").created, 8, "counted as if written");
+    assert!(report.notes.iter().any(|n| n.starts_with("dry run:")));
+    assert!(
+        !report
+            .notes
+            .iter()
+            .any(|n| n.contains("was not imported; imported without"))
+    );
+    assert_eq!(
+        *seen.lock().unwrap(),
+        Some((Vec::new(), Vec::new())),
+        "no paths and no fix-ups in the IR"
+    );
+    let rows = store
+        .read()
+        .content()
+        .count(&ContentQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+    let jobs = store
+        .read()
+        .jobs()
+        .list(&JobQuery {
+            status: None,
+            kind: None,
+            limit: 10,
+            cursor: None,
+        })
+        .await
+        .unwrap()
+        .items;
+    assert!(jobs.is_empty(), "{jobs:?}");
+}
+
+/// An item edited here between pass 3 and the fix-up is kept as edited, with a note.
+pub async fn fixup_keeps_an_item_edited_meanwhile(db: Arc<TestDb>) {
+    let site = site(&db, site_a_uploads()).await;
+    let store = db.shared_store();
+    let hook = {
+        let store = store.clone();
+        let actor = site.ctx.actor;
+        let permalinks = site.ctx.permalinks.clone();
+        StepHook::new(move |step| {
+            if step == "fixup" {
+                block_on(async {
+                    let post = by_title(store.as_ref(), "post", "Every core block").await;
+                    ContentService::new(store.clone(), permalinks.clone())
+                        .update(
+                            &actor,
+                            post.id,
+                            post.version,
+                            ContentDraft {
+                                kind: "post".into(),
+                                title: "Edited here".into(),
+                                slug: None,
+                                parent_id: None,
+                                excerpt: None,
+                                body: post.body.clone(),
+                                fields: post.fields.clone(),
+                                menu_order: 0,
+                                terms: Vec::new(),
+                                seo: None,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                });
+            }
+            Ok(())
+        })
+    };
+    let opts = ImportOptions {
+        step_hook: Some(hook),
+        ..ImportOptions::default()
+    };
+    let report = run(site.ctx.clone(), &corpus("site-a.xml"), opts)
+        .await
+        .unwrap();
+    let fixups = counts(&report, "fixups");
+    assert_eq!(fixups.kept, 1, "{fixups:?}");
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n == "item 7 was edited here before its links were fixed; kept as edited"),
+        "{:?}",
+        report.notes
+    );
+    let post = by_title(db.store(), "post", "Edited here").await;
+    let mut links = Vec::new();
+    hrefs(&post.body, &mut links);
+    assert!(
+        links.contains(&"http://localhost:8099/about/".to_owned()),
+        "{links:?}"
+    );
+    // The book's relation was still fixed.
+    assert!(fixups.updated >= 1, "{fixups:?}");
+}
+
 backend_tests!(
     pass1_site_a,
     pass1_edge_cases,
@@ -895,4 +1092,10 @@ backend_tests!(
     pass2_missing_file_is_reported,
     pass3_site_a,
     pass3_site_b,
+    pass3_fixup_queue_survives_a_crash,
+);
+
+ferrite_store_tests::backend_tests_spawning!(
+    pass3_dry_run_writes_nothing,
+    fixup_keeps_an_item_edited_meanwhile,
 );
