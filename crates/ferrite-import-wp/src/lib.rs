@@ -4,6 +4,7 @@
 //! [`php::unserialize`] reads the PHP-serialised values WordPress stores in meta;
 //! [`ir::Ir`] keeps a parsed file for the passes, and [`run::run`] drives an import.
 
+pub mod convert;
 pub mod error;
 pub mod ir;
 pub mod model;
