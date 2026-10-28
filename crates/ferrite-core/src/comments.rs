@@ -6,7 +6,7 @@
 //! output (paragraphs and line breaks, no links). Limits: body 1..=[`MAX_COMMENT_BODY`]
 //! characters (`\r\n` and `\r` become `\n`; no control characters but `\n` and `\t`),
 //! name 1..=[`MAX_COMMENT_NAME`] characters without control or bidi characters
-//! ([`is_bidi_control`](crate::is_bidi_control), R13), e-mail at most [`MAX_COMMENT_EMAIL`] bytes
+//! ([`is_bidi_control`], R13), e-mail at most [`MAX_COMMENT_EMAIL`] bytes
 //! (required for guests), URL empty or at most [`MAX_COMMENT_URL`] characters of
 //! `http`/`https` with a host and no user info. Only `post` items take comments, while
 //! publicly visible and while `comments.enabled` holds (else `NotFound`, as for an
