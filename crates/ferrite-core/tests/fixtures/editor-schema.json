@@ -22,6 +22,11 @@
   "marks": ["bold", "italic", "strike", "code", "link"],
   "heading_levels": [2, 3, 4, 5, 6],
   "embed_providers": ["youtube", "vimeo"],
+  "embed_canonical": [
+    { "provider": "youtube", "id": "dQw4w9WgXcQ", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ" },
+    { "provider": "youtube", "id": "a_b-C1d2E3f", "url": "https://www.youtube.com/watch?v=a_b-C1d2E3f" },
+    { "provider": "vimeo", "id": "76979871", "url": "https://vimeo.com/76979871" }
+  ],
   "embed_cases": [
     { "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "provider": "youtube", "id": "dQw4w9WgXcQ" },
     { "url": "https://youtube.com/watch?feature=share&v=dQw4w9WgXcQ&t=42", "provider": "youtube", "id": "dQw4w9WgXcQ" },

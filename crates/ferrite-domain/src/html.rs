@@ -28,9 +28,60 @@ pub fn relative_url_allowed(url: &str) -> bool {
         && !url.chars().any(|c| c == '\\' || c.is_control())
 }
 
+/// The YouTube player URL prefix of a content `embed` node's `<iframe>` (M3 P11); the
+/// 11-character video id follows.
+pub const YOUTUBE_PLAYER: &str = "https://www.youtube-nocookie.com/embed/";
+/// The Vimeo player URL prefix of an `embed` node's `<iframe>`; the numeric id follows.
+pub const VIMEO_PLAYER: &str = "https://player.vimeo.com/video/";
+/// The `sandbox` of an `embed` node's `<iframe>`.
+pub const EMBED_SANDBOX: &str = "allow-scripts allow-same-origin allow-presentation allow-popups";
+/// The `referrerpolicy` of an `embed` node's `<iframe>`.
+pub const EMBED_REFERRER_POLICY: &str = "strict-origin-when-cross-origin";
+/// The `class` of the `<figure>` around an `embed` node's `<iframe>`, per provider.
+pub const EMBED_FIGURE_CLASSES: [&str; 2] = ["embed embed-youtube", "embed embed-vimeo"];
+
+/// Whether `src` is exactly a player URL that core's renderer emits for an `embed`
+/// node: [`YOUTUBE_PLAYER`] and an 11-character `[A-Za-z0-9_-]` id, or [`VIMEO_PLAYER`]
+/// and 1–20 digits, with nothing after the id.
+pub fn embed_player_src_allowed(src: &str) -> bool {
+    if let Some(id) = src.strip_prefix(YOUTUBE_PLAYER) {
+        return id.len() == 11
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'));
+    }
+    src.strip_prefix(VIMEO_PLAYER)
+        .is_some_and(|id| (1..=20).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embed_player_srcs() {
+        for ok in [
+            "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+            "https://www.youtube-nocookie.com/embed/a_b-C1d2E3f",
+            "https://player.vimeo.com/video/76979871",
+        ] {
+            assert!(embed_player_src_allowed(ok), "{ok}");
+        }
+        for bad in [
+            "https://www.youtube-nocookie.com/embed/dQw4w9WgXc",
+            "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1",
+            "https://www.youtube-nocookie.com/embed/dQw4w9WgXc/",
+            "https://www.youtube.com/embed/dQw4w9WgXcQ",
+            "http://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+            "https://player.vimeo.com/video/",
+            "https://player.vimeo.com/video/1x",
+            "https://player.vimeo.com/video/1?h=a",
+            "https://evil.example/",
+            "",
+        ] {
+            assert!(!embed_player_src_allowed(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn relative_urls() {

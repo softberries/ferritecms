@@ -49,7 +49,10 @@ export function parseEmbed(raw: string): { provider: EmbedProvider; id: string }
   return null;
 }
 
-/** The URL an `embed` node stores for a video: its provider's plain watch page. */
+/**
+ * The URL an `embed` node stores for a video: its provider's plain watch page (the core's
+ * `blocks::canonical_embed_url`; both pinned to the shared fixture's `embed_canonical`).
+ */
 export function canonicalEmbedUrl(provider: EmbedProvider, id: string): string {
   return provider === "youtube"
     ? `https://www.youtube.com/watch?v=${id}`

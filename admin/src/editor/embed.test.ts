@@ -5,7 +5,13 @@
 // on the site.
 
 import { describe, expect, test } from "vitest";
-import { EMBED_PROVIDERS, canonicalEmbedUrl, embedFromUrl, parseEmbed } from "./embed";
+import {
+  EMBED_PROVIDERS,
+  canonicalEmbedUrl,
+  embedFromUrl,
+  parseEmbed,
+  type EmbedProvider,
+} from "./embed";
 import { HEADING_LEVELS, SUPPORTED_MARKS, SUPPORTED_NODES } from "./schema";
 
 interface NodeFs {
@@ -22,6 +28,7 @@ interface SharedSchema {
   heading_levels: number[];
   embed_providers: string[];
   embed_cases: { url: string; provider: string | null; id: string | null }[];
+  embed_canonical: { provider: string; id: string; url: string }[];
 }
 
 // Relative to the admin folder, where Vitest runs.
@@ -44,6 +51,17 @@ describe("shared editor schema", () => {
     for (const c of shared.embed_cases) {
       const want = c.provider && c.id ? { provider: c.provider, id: c.id } : null;
       expect(parseEmbed(c.url), c.url).toEqual(want);
+    }
+  });
+});
+
+describe("canonical urls", () => {
+  test("canonical_urls_equal_the_rust_cases", () => {
+    expect(shared.embed_canonical.length).toBeGreaterThan(0);
+    for (const c of shared.embed_canonical) {
+      expect(EMBED_PROVIDERS as readonly string[]).toContain(c.provider);
+      expect(canonicalEmbedUrl(c.provider as EmbedProvider, c.id), c.url).toBe(c.url);
+      expect(parseEmbed(c.url)).toEqual({ provider: c.provider, id: c.id });
     }
   });
 });

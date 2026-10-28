@@ -9,7 +9,7 @@ mod url;
 
 pub use render::render_html;
 pub use text::{excerpt, extract_text};
-pub use url::embed_id;
+pub use url::{canonical_embed_url, embed_id};
 
 use serde_json::Value;
 
@@ -48,12 +48,15 @@ const EDITOR_MARKS: &[&str] = &["bold", "italic", "strike", "code", "link"];
 /// Body heading levels (`HEADING_LEVELS`); level 1 is the title (m2b P18).
 const EDITOR_HEADING_LEVELS: std::ops::RangeInclusive<u64> = 2..=6;
 
-/// Whether the admin's editor opens `doc` editable: the Rust twin of its `validateBody`
-/// (`admin/src/editor/schema.ts`). The root is a `doc`, every node type and mark is on
-/// the editor's lists, every heading has a level of 2–6, and `content` and `marks` are
-/// lists. Unlike `validateBody`, which treats a missing body (`null`, `{}`) as empty,
-/// anything but a `doc` root is refused. The importer emits only bodies that pass.
-/// Iterative: any depth.
+/// Whether `doc` passes the admin editor's allowlist check: the Rust twin of its
+/// `validateBody` (`admin/src/editor/schema.ts`). It checks that the root is a `doc`,
+/// that every node type and mark is on the editor's lists, that every heading has a level
+/// of 2–6, and that `content` and `marks` are lists. It does **not** check the
+/// ProseMirror content model (which node may contain which, e.g. a `listItem` straight in
+/// the `doc`), nor attribute values beyond the heading level: a body that passes can
+/// still fail TipTap's content check, which opens it read-only. Unlike `validateBody`,
+/// which treats a missing body (`null`, `{}`) as empty, anything but a `doc` root is
+/// refused. The importer emits only bodies that pass. Iterative: any depth.
 pub fn is_editor_safe(doc: &Value) -> bool {
     if !is_document(doc) {
         return false;

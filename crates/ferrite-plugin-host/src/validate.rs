@@ -6,7 +6,10 @@
 
 use std::sync::LazyLock;
 
-use ferrite_domain::html::{CITE_TAGS, SAFE_URL_SCHEMES, relative_url_allowed};
+use ferrite_domain::html::{
+    CITE_TAGS, EMBED_FIGURE_CLASSES, EMBED_REFERRER_POLICY, EMBED_SANDBOX, SAFE_URL_SCHEMES,
+    embed_player_src_allowed, relative_url_allowed,
+};
 
 use crate::capability::FilterType;
 use crate::manifest::HtmlMode;
@@ -25,9 +28,14 @@ pub const MAX_ROUTE_HEADER_BYTES: usize = 4 * 1024;
 /// [`ferrite_domain::html`]): absolute URLs only `http`, `https` or `mailto`; relative
 /// ones without `//`, a backslash, a control character or a leading space; no `cite`
 /// (on [`CITE_TAGS`], which ammonia does not check as a URL);
-/// `rel="noopener noreferrer"` on every link, plus two additions: `a[target]`, and
-/// `code[class]` restricted to `language-*` classes, so core's code-block classes
-/// survive a sanitising plugin.
+/// `rel="noopener noreferrer"` on every link, plus additions so core's own markup
+/// survives a sanitising plugin: `a[target]`; `code[class]` restricted to `language-*`
+/// classes (code blocks); and core's `embed` markup (M3 P11): `figure[class]` only as
+/// one of [`EMBED_FIGURE_CLASSES`], and an `<iframe>` only with a player `src`
+/// ([`embed_player_src_allowed`]), core's exact `sandbox` and `referrerpolicy`, and
+/// otherwise just `title`, `loading="lazy"` and `allowfullscreen`. An attribute with
+/// another value is dropped, and an iframe left without its `src`, `sandbox` or
+/// `referrerpolicy` is removed with its content ([`drop_unsafe_iframes`], after ammonia).
 ///
 /// **Chaining.** Each non-raw plugin's whole output is sanitised after it runs, and that
 /// output includes whatever it was given. So markup a `raw` plugin added earlier in the
@@ -40,17 +48,105 @@ static SANITIZER: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
         .link_rel(Some("noopener noreferrer"))
         .add_tag_attributes("a", ["target"])
         .add_tag_attributes("code", ["class"])
+        .add_tag_attributes("figure", ["class"])
+        .add_tags(["iframe"])
+        .add_tag_attributes("iframe", IFRAME_ATTRIBUTES)
         .attribute_filter(|element, attribute, value| {
-            if element == "code" && attribute == "class" {
-                return language_classes(value);
-            }
-            Some(value.into())
+            let keep = match (element, attribute) {
+                ("code", "class") => return language_classes(value),
+                ("figure", "class") => EMBED_FIGURE_CLASSES.contains(&value),
+                ("iframe", "src") => embed_player_src_allowed(value),
+                ("iframe", "sandbox") => value == EMBED_SANDBOX,
+                ("iframe", "referrerpolicy") => value == EMBED_REFERRER_POLICY,
+                ("iframe", "loading") => value == "lazy",
+                ("iframe", "allowfullscreen") => return Some("".into()),
+                _ => true,
+            };
+            keep.then(|| value.into())
         });
     for tag in CITE_TAGS {
         b.rm_tag_attributes(tag, ["cite"]);
     }
     b
 });
+
+/// The attributes an `<iframe>` may keep: those of core's `embed` markup.
+const IFRAME_ATTRIBUTES: [&str; 6] = [
+    "src",
+    "title",
+    "loading",
+    "allowfullscreen",
+    "referrerpolicy",
+    "sandbox",
+];
+
+/// The attributes without which a sanitised `<iframe>` is removed: the attribute filter
+/// has dropped any with a value other than core's.
+const IFRAME_REQUIRED: [&str; 3] = [" src=\"", " sandbox=\"", " referrerpolicy=\""];
+
+/// Removes from ammonia's output every `<iframe>` (and its fallback content) whose
+/// `src`, `sandbox` or `referrerpolicy` the attribute filter dropped.
+///
+/// This reads ammonia's serialisation, not arbitrary HTML: comments are gone, text and
+/// attribute values have `<` and `>` escaped, attribute values are always double-quoted
+/// with `"` escaped (quotes are still tracked, in case a serialiser stops escaping), and an
+/// iframe's content is raw text that ends at the first `</iframe>` (the parser ended it
+/// there). So a raw `<` outside a quoted value starts a tag.
+fn drop_unsafe_iframes(html: String) -> String {
+    if !html.contains("<iframe") {
+        return html;
+    }
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html.as_str();
+    while let Some(lt) = rest.find('<') {
+        out.push_str(&rest[..lt]);
+        rest = &rest[lt..];
+        // The tag runs to the first `>` outside a quoted attribute value.
+        let mut quoted = false;
+        let end = rest
+            .char_indices()
+            .find(|&(_, c)| {
+                if c == '"' {
+                    quoted = !quoted;
+                }
+                c == '>' && !quoted
+            })
+            .map_or(rest.len(), |(i, _)| i + 1);
+        let tag = &rest[..end];
+        let is_iframe = tag
+            .strip_prefix("<iframe")
+            .is_some_and(|t| t.starts_with([' ', '>']));
+        if !is_iframe {
+            out.push_str(tag);
+            rest = &rest[end..];
+            continue;
+        }
+        let close = rest[end..]
+            .find("</iframe>")
+            .map_or(rest.len(), |i| end + i + "</iframe>".len());
+        if IFRAME_REQUIRED.iter().all(|a| has_attribute(tag, a)) {
+            out.push_str(&rest[..close]);
+        }
+        rest = &rest[close..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Whether a serialised start tag has the attribute whose ` name="` is `needle`, outside
+/// any quoted value.
+fn has_attribute(tag: &str, needle: &str) -> bool {
+    let mut quoted = false;
+    for (i, c) in tag.char_indices() {
+        if !quoted && tag[i..].starts_with(needle) {
+            return true;
+        }
+        if c == '"' {
+            quoted = !quoted;
+        }
+    }
+    false
+}
 
 /// A relative URL as the shared policy allows it, else `None` (the attribute is dropped).
 fn keep_relative(url: &str) -> Option<std::borrow::Cow<'_, str>> {
@@ -156,7 +252,7 @@ pub(crate) fn validate_output(
     check_size(input, &output)?;
     match output {
         FilterValue::Html(s) if html != HtmlMode::Raw => {
-            let clean = FilterValue::Html(SANITIZER.clean(&s).to_string());
+            let clean = FilterValue::Html(drop_unsafe_iframes(SANITIZER.clean(&s).to_string()));
             check_size(input, &clean)?;
             Ok(clean)
         }
@@ -450,6 +546,142 @@ mod tests {
                     .into()
             ))
         );
+    }
+
+    /// Exactly what core's renderer emits for an `embed` node (`blocks/render.rs`).
+    const CORE_YOUTUBE: &str = "<figure class=\"embed embed-youtube\"><iframe \
+        src=\"https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ\" title=\"YouTube video\" \
+        loading=\"lazy\" allowfullscreen referrerpolicy=\"strict-origin-when-cross-origin\" \
+        sandbox=\"allow-scripts allow-same-origin allow-presentation allow-popups\"></iframe></figure>";
+
+    fn clean(s: &str) -> String {
+        match sanitized(s) {
+            Ok(FilterValue::Html(h)) => h,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// M3 P11: core's embed markup survives a sanitising plugin; the serialiser writes the
+    /// boolean `allowfullscreen` as `allowfullscreen=""`, which means the same.
+    #[test]
+    fn core_embeds_survive() {
+        let normal = CORE_YOUTUBE.replace("allowfullscreen ", "allowfullscreen=\"\" ");
+        assert_eq!(clean(CORE_YOUTUBE), normal);
+        assert_eq!(clean(&normal), normal);
+        let vimeo = CORE_YOUTUBE
+            .replace("embed-youtube", "embed-vimeo")
+            .replace(
+                "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+                "https://player.vimeo.com/video/76979871",
+            )
+            .replace("YouTube video", "Vimeo video");
+        assert_eq!(
+            clean(&vimeo),
+            vimeo.replace("allowfullscreen ", "allowfullscreen=\"\" ")
+        );
+        // A caption next to an image.
+        let fig = "<figure><img src=\"/i.png\" alt=\"a\"><figcaption>c</figcaption></figure>";
+        assert_eq!(clean(fig), fig);
+    }
+
+    #[test]
+    fn other_iframes_are_removed() {
+        let yt = "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ";
+        let sandbox = "allow-scripts allow-same-origin allow-presentation allow-popups";
+        let policy = "strict-origin-when-cross-origin";
+        let frame = |src: &str, sandbox: &str, policy: &str, extra: &str| {
+            format!(
+                "<iframe src=\"{src}\" referrerpolicy=\"{policy}\" sandbox=\"{sandbox}\"{extra}>x</iframe>i"
+            )
+        };
+        for (why, html) in [
+            (
+                "other src",
+                frame("https://evil.example/", sandbox, policy, ""),
+            ),
+            (
+                "youtube.com src",
+                frame(
+                    "https://www.youtube.com/embed/dQw4w9WgXcQ",
+                    sandbox,
+                    policy,
+                    "",
+                ),
+            ),
+            (
+                "player with a query",
+                frame(&format!("{yt}?autoplay=1"), sandbox, policy, ""),
+            ),
+            (
+                "javascript src",
+                frame("javascript:alert(1)", sandbox, policy, ""),
+            ),
+            (
+                "other sandbox",
+                frame(
+                    yt,
+                    "allow-scripts allow-same-origin allow-top-navigation",
+                    policy,
+                    "",
+                ),
+            ),
+            (
+                "no sandbox",
+                format!("<iframe src=\"{yt}\" referrerpolicy=\"{policy}\">x</iframe>i"),
+            ),
+            ("other policy", frame(yt, sandbox, "unsafe-url", "")),
+            (
+                "no src",
+                "<iframe srcdoc=\"<script>alert(1)</script>\" sandbox=\"allow-scripts\"></iframe>i"
+                    .to_owned(),
+            ),
+            (
+                "svg iframe",
+                format!(
+                    "<svg><iframe src=\"{yt}\" referrerpolicy=\"{policy}\" sandbox=\"{sandbox}\"></iframe></svg>i"
+                ),
+            ),
+        ] {
+            assert_eq!(clean(&html), "i", "{why}: {html}");
+        }
+        // Extra attributes go; the frame itself is core's and stays.
+        let out = clean(&frame(
+            yt,
+            sandbox,
+            policy,
+            " srcdoc=\"<script>x</script>\" onload=\"x()\" allow=\"camera\" style=\"x\" loading=\"eager\" name=\"n\"",
+        ));
+        assert_eq!(
+            out,
+            format!(
+                "<iframe src=\"{yt}\" referrerpolicy=\"{policy}\" sandbox=\"{sandbox}\">x</iframe>i"
+            )
+        );
+        // Text that looks like a frame inside an attribute or text is not a frame.
+        assert_eq!(
+            clean("<p title=\"<iframe src=x>\">&lt;iframe&gt;</p>"),
+            "<p title=\"&lt;iframe src=x&gt;\">&lt;iframe&gt;</p>"
+        );
+    }
+
+    #[test]
+    fn figure_classes_are_core_s_only() {
+        assert_eq!(
+            clean("<figure class=\"embed embed-vimeo\">v</figure>"),
+            "<figure class=\"embed embed-vimeo\">v</figure>"
+        );
+        for bad in [
+            "embed",
+            "embed embed-youtube x",
+            "evil",
+            "embed  embed-youtube",
+        ] {
+            assert_eq!(
+                clean(&format!("<figure class=\"{bad}\">v</figure>")),
+                "<figure>v</figure>",
+                "{bad}"
+            );
+        }
     }
 
     #[test]

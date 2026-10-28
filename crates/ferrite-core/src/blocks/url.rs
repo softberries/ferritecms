@@ -121,6 +121,18 @@ pub fn embed_id(provider: &str, raw: &str) -> Option<String> {
     }
 }
 
+/// The URL an `embed` node stores for video `id` of `provider`: its plain watch page,
+/// `https://www.youtube.com/watch?v=ID` or `https://vimeo.com/ID` (the admin's
+/// `canonicalEmbedUrl`; both pinned to `tests/fixtures/editor-schema.json`). `None` for
+/// any other provider. `id` is used as given: pass one [`embed_id`] returned.
+pub fn canonical_embed_url(provider: &str, id: &str) -> Option<String> {
+    match provider {
+        "youtube" => Some(format!("https://www.youtube.com/watch?v={id}")),
+        "vimeo" => Some(format!("https://vimeo.com/{id}")),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +217,24 @@ mod tests {
             None
         );
         assert_eq!(embed_id("YouTube", "https://youtu.be/dQw4w9WgXcQ"), None);
+    }
+
+    #[test]
+    fn canonical_urls_match_the_shared_cases() {
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/editor-schema.json")).unwrap();
+        let cases = schema["embed_canonical"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let (provider, id, url) = (
+                case["provider"].as_str().unwrap(),
+                case["id"].as_str().unwrap(),
+                case["url"].as_str().unwrap(),
+            );
+            assert_eq!(canonical_embed_url(provider, id).as_deref(), Some(url));
+            // It parses back to the same video.
+            assert_eq!(embed_id(provider, url).as_deref(), Some(id));
+        }
+        assert_eq!(canonical_embed_url("dailymotion", "x"), None);
     }
 }

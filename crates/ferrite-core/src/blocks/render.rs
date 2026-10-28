@@ -1,7 +1,10 @@
 use super::text::collect_text;
 use super::url::{ImageSrc, embed_id, image_src, safe_href};
 use super::{InlineImage, MAX_DEPTH, RenderCtx};
-use ferrite_domain::html::{CITE_TAGS, SAFE_URL_SCHEMES, relative_url_allowed};
+use ferrite_domain::html::{
+    CITE_TAGS, EMBED_REFERRER_POLICY, EMBED_SANDBOX, SAFE_URL_SCHEMES, VIMEO_PLAYER,
+    YOUTUBE_PLAYER, relative_url_allowed,
+};
 use html_escape::{encode_double_quoted_attribute, encode_text};
 use serde_json::{Map, Value};
 use std::borrow::Cow;
@@ -226,18 +229,16 @@ fn render_embed(map: &Map<String, Value>, out: &mut String) {
     };
     let provider = attr_str(map, "provider").unwrap_or("");
     let player = embed_id(provider, url).and_then(|id| match provider {
-        "youtube" => Some((
-            format!("https://www.youtube-nocookie.com/embed/{id}"),
-            "YouTube",
-        )),
-        "vimeo" => Some((format!("https://player.vimeo.com/video/{id}"), "Vimeo")),
+        "youtube" => Some((format!("{YOUTUBE_PLAYER}{id}"), "YouTube")),
+        "vimeo" => Some((format!("{VIMEO_PLAYER}{id}"), "Vimeo")),
         _ => None,
     });
+    // `ferrite-plugin-host`'s sanitiser keeps exactly this markup (same constants).
     if let Some((src, label)) = player {
         out.push_str(&format!(
             "<figure class=\"embed embed-{provider}\"><iframe src=\"{src}\" title=\"{label} video\" \
-             loading=\"lazy\" allowfullscreen referrerpolicy=\"strict-origin-when-cross-origin\" \
-             sandbox=\"allow-scripts allow-same-origin allow-presentation allow-popups\"></iframe></figure>"
+             loading=\"lazy\" allowfullscreen referrerpolicy=\"{EMBED_REFERRER_POLICY}\" \
+             sandbox=\"{EMBED_SANDBOX}\"></iframe></figure>"
         ));
     } else if let Some(href) = safe_href(url) {
         out.push_str(&format!(
