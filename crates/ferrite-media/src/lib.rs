@@ -3,6 +3,7 @@
 mod config;
 mod error;
 mod image;
+pub mod ingest;
 mod keys;
 mod name;
 mod sniff;
