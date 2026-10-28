@@ -7,6 +7,7 @@ import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { childEnv } from "./child-env";
 import type { Backend } from "./projects";
 import { ACCOUNTS } from "./users";
 import { startSmtpSink } from "./smtp-sink";
@@ -88,8 +89,7 @@ export async function startSite(opts: {
     }
 
     child = spawn(FERRITE_BIN, ["serve", "--data", data], {
-      env: {
-        ...process.env,
+      env: childEnv(process.env, {
         FERRITE_LOG: process.env.FERRITE_LOG ?? "info",
         NO_COLOR: "1",
         FERRITE_SERVER__LISTEN: `127.0.0.1:${port}`,
@@ -97,7 +97,7 @@ export async function startSite(opts: {
         FERRITE_SERVER__TRUSTED_PROXIES: '["127.0.0.1/32"]',
         FERRITE_MAIL__SMTP_URL: `smtp://127.0.0.1:${sink.port}`,
         FERRITE_MAIL__FROM: "FerriteCMS <admin@example.test>",
-      },
+      }),
       stdio: ["ignore", "pipe", "pipe"],
     });
     await listening(child, log);
@@ -127,7 +127,7 @@ function run(args: string[], stdin?: string): Promise<string> {
     const p = execFile(
       FERRITE_BIN,
       args,
-      { env: { ...process.env, FERRITE_LOG: "warn" }, maxBuffer: 16 << 20 },
+      { env: childEnv(process.env, { FERRITE_LOG: "warn" }), maxBuffer: 16 << 20 },
       (err, stdout, stderr) => {
         if (err) {
           reject(
