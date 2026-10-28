@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 use ferrite_core::NewType;
 use ferrite_core::fields::FieldDef;
-use ferrite_core::import::ImportBatch;
+use ferrite_core::import::{ImportBatch, TypeWritten};
 use ferrite_core::slug;
 use ferrite_domain::Taxonomy;
 
@@ -224,14 +224,13 @@ pub(crate) async fn ensure(
     mut report: Option<&mut Report>,
 ) -> Result<(), ImportError> {
     for ty in &schema.types {
-        let before = b.len();
-        b.content_type(ty.clone()).await?;
+        let written = b.content_type(ty.clone()).await?;
         if let Some(report) = report.as_deref_mut() {
             let counts = report.counts_of("types");
-            if b.len() > before {
-                counts.created += 1;
-            } else {
-                counts.unchanged += 1;
+            match written {
+                TypeWritten::Created => counts.created += 1,
+                TypeWritten::Updated => counts.updated += 1,
+                TypeWritten::Unchanged => counts.unchanged += 1,
             }
         }
     }

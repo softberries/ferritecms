@@ -9,7 +9,8 @@ use crate::model::Author;
 use crate::run::{MustReset, Report, Session};
 
 /// The domain of the e-mail an author with an invalid one gets (RFC 2606: never
-/// delivered).
+/// delivered). The local part is `wp<author id>.<login>`: unique per WP author, so two
+/// authors whose logins normalise alike are not matched to one account by e-mail.
 const PLACEHOLDER_DOMAIN: &str = "users.invalid";
 
 /// Imports every author, `batch_items` per batch.
@@ -66,7 +67,7 @@ fn record(
     }
     match user.how {
         Matched::Created => report.users_must_reset.push(MustReset {
-            login: account_login(author),
+            login: user.login,
             email,
             how: if placeholder {
                 "created with a placeholder e-mail"
@@ -83,20 +84,17 @@ fn record(
     }
 }
 
-/// The author's e-mail when core accepts it, else `<login>@users.invalid`; and whether
-/// it is that placeholder.
+/// The author's e-mail when core accepts it, else `wp<id>.<login>@users.invalid`; and
+/// whether it is that placeholder.
 fn email_for(author: &Author) -> (String, bool) {
     if normalize_email(&author.email).is_ok() {
         return (author.email.trim().to_owned(), false);
     }
-    (
-        format!("{}@{PLACEHOLDER_DOMAIN}", account_login(author)),
-        true,
-    )
+    let local = format!("wp{}.{}", author.wp_id, account_login(author));
+    (format!("{local}@{PLACEHOLDER_DOMAIN}"), true)
 }
 
-/// The login a new account gets: the WP login when core accepts it, else its slug (core
-/// appends `-N` when that is taken).
+/// The WP login as core takes it: normalised when it accepts it, else its slug.
 fn account_login(author: &Author) -> String {
     normalize_login(&author.login).unwrap_or_else(|_| slug::slugify(&author.login))
 }
@@ -122,11 +120,11 @@ mod tests {
         );
         assert_eq!(
             email_for(&author("Erin", "nope")),
-            ("erin@users.invalid".into(), true)
+            ("wp7.erin@users.invalid".into(), true)
         );
         assert_eq!(
             email_for(&author("Ann Smith", "")),
-            ("ann-smith@users.invalid".into(), true)
+            ("wp7.ann-smith@users.invalid".into(), true)
         );
     }
 }

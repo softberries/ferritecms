@@ -301,6 +301,11 @@ impl<'a> Session<'a> {
         self.ir
     }
 
+    /// The run's work folder (`<work_dir>/<run-id>`), deleted when the run ends `done`.
+    pub fn run_dir(&self) -> PathBuf {
+        self.ctx.work_dir.join(self.handle.run.id.to_string())
+    }
+
     /// The most items a batch should hold.
     pub fn batch_items(&self) -> usize {
         #[cfg(feature = "test-seams")]

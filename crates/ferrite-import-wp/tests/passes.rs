@@ -32,7 +32,7 @@ fn corpus(name: &str) -> PathBuf {
 }
 
 struct Site {
-    _media_dir: tempfile::TempDir,
+    media_dir: tempfile::TempDir,
     work: tempfile::TempDir,
     ctx: ImportContext,
 }
@@ -82,7 +82,7 @@ async fn site(db: &TestDb, media: Arc<dyn MediaSource>) -> Site {
         site_url: "http://localhost:8080".into(),
     };
     Site {
-        _media_dir: media_dir,
+        media_dir,
         work,
         ctx,
     }
@@ -291,6 +291,7 @@ const EDGE_WXR: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <wp:base_site_url>http://edge.test</wp:base_site_url>
 <wp:base_blog_url>http://edge.test</wp:base_blog_url>
 <wp:author><wp:author_id>1</wp:author_id><wp:author_login>broken</wp:author_login><wp:author_email>not-an-email</wp:author_email><wp:author_display_name><![CDATA[Broken Mail]]></wp:author_display_name></wp:author>
+<wp:author><wp:author_id>3</wp:author_id><wp:author_login>ann-smith</wp:author_login><wp:author_email></wp:author_email><wp:author_display_name><![CDATA[Ann S.]]></wp:author_display_name></wp:author>
 <wp:author><wp:author_id>2</wp:author_id><wp:author_login>Ann Smith</wp:author_login><wp:author_email></wp:author_email><wp:author_display_name><![CDATA[Ann]]></wp:author_display_name></wp:author>
 <wp:category><wp:term_id>1</wp:term_id><wp:category_nicename>%d0%b0%d0%b1</wp:category_nicename><wp:category_parent/><wp:cat_name><![CDATA[Аб]]></wp:cat_name></wp:category>
 <wp:category><wp:term_id>2</wp:term_id><wp:category_nicename>kept</wp:category_nicename><wp:category_parent>%d0%b0%d0%b1</wp:category_parent><wp:cat_name><![CDATA[Kept from WP]]></wp:cat_name></wp:category>
@@ -301,7 +302,7 @@ const EDGE_WXR: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 </rss>
 "#;
 
-/// Authors with a bad e-mail get a placeholder; percent-encoded slugs are decoded; a
+/// Authors with a bad e-mail get a placeholder unique per author; percent-encoded slugs are decoded; a
 /// site term with the same slug is reused with its own parent; a cycle or a missing
 /// parent drops the parent and is reported.
 pub async fn pass1_edge_cases(db: &TestDb) {
@@ -324,37 +325,38 @@ pub async fn pass1_edge_cases(db: &TestDb) {
     std::fs::write(&wxr, EDGE_WXR).unwrap();
     let report = run_until(&site, &wxr, "pass1").await;
 
-    let broken = store
-        .read()
-        .users()
-        .get_by_login("broken")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(broken.email, "broken@users.invalid");
-    let ann = store
-        .read()
-        .users()
-        .get_by_login("ann-smith")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(ann.email, "ann-smith@users.invalid");
+    let user = async |login: &str| {
+        store
+            .read()
+            .users()
+            .get_by_login(login)
+            .await
+            .unwrap()
+            .unwrap_or_else(|| panic!("no user {login}"))
+    };
+    assert_eq!(user("broken").await.email, "wp1.broken@users.invalid");
+    // Two WP authors whose logins normalise alike and who have no e-mail stay two
+    // accounts: the placeholder carries the WP author id.
+    let first = user("ann-smith").await;
+    let second = user("ann-smith-2").await;
+    assert_ne!(first.id, second.id);
+    assert_eq!(first.email, "wp3.ann-smith@users.invalid");
+    assert_eq!(second.email, "wp2.ann-smith@users.invalid");
+    assert_eq!(counts(&report, "users").created, 3);
     let mut reset = report.users_must_reset.clone();
     reset.sort_by(|a, b| a.login.cmp(&b.login));
+    let placeholder = |login: &str, email: &str| MustReset {
+        login: login.into(),
+        email: email.into(),
+        how: "created with a placeholder e-mail".into(),
+    };
+    // The logins core stored, `-2` included.
     assert_eq!(
         reset,
         [
-            MustReset {
-                login: "ann-smith".into(),
-                email: "ann-smith@users.invalid".into(),
-                how: "created with a placeholder e-mail".into(),
-            },
-            MustReset {
-                login: "broken".into(),
-                email: "broken@users.invalid".into(),
-                how: "created with a placeholder e-mail".into(),
-            },
+            placeholder("ann-smith", "wp3.ann-smith@users.invalid"),
+            placeholder("ann-smith-2", "wp2.ann-smith@users.invalid"),
+            placeholder("broken", "wp1.broken@users.invalid"),
         ]
     );
 
@@ -381,7 +383,7 @@ pub async fn pass1_edge_cases(db: &TestDb) {
 /// Site A, pass 2: four media items with their titles and alt texts, a URL index that
 /// knows every size of each, and the files missing from the uploads folder reported.
 pub async fn pass2_site_a(db: &TestDb) {
-    let site = site(db, site_a_uploads()).await;
+    let mut site = site(db, site_a_uploads()).await;
     let store = db.store();
     let report = run_until(&site, &corpus("site-a.xml"), "pass2").await;
     assert_eq!(
@@ -392,6 +394,7 @@ pub async fn pass2_site_a(db: &TestDb) {
         }
     );
     assert!(report.missing_media.is_empty());
+    assert_eq!(files_under(&site.media_dir.path().join("media")), 4);
     let page = store
         .read()
         .content()
@@ -430,7 +433,9 @@ pub async fn pass2_site_a(db: &TestDb) {
         Some(true)
     );
 
-    // Again: every attachment is unchanged.
+    // Again, with no files at all: every attachment is unchanged and no file is read
+    // (a read would find nothing and report it missing).
+    site.ctx.media_source = Arc::new(NoFiles);
     let again = run_until(&site, &corpus("site-a.xml"), "pass2").await;
     assert_eq!(
         counts(&again, "media"),
@@ -504,6 +509,16 @@ pub async fn pass2_media_index_is_kept_in_the_ir(db: &TestDb) {
         None
     );
     assert_eq!(index.len(), 6 + 4 + 4 + 3);
+}
+
+/// A source without any file.
+struct NoFiles;
+
+#[async_trait]
+impl MediaSource for NoFiles {
+    async fn open(&self, _: &str, _: &str, _: u64) -> Result<Option<ByteStream>, ImportError> {
+        Ok(None)
+    }
 }
 
 /// A source that misses one file.
@@ -587,6 +602,23 @@ pub async fn pass1_and_pass2_dry_run(db: &TestDb) {
         .unwrap()
         .map(|t| t.id);
     assert_eq!(none, None);
+    // The files were staged into a throwaway store, not the site's.
+    assert_eq!(files_under(&site.media_dir.path().join("media")), 0);
+    assert!(
+        std::fs::read_dir(&site.ctx.work_dir).map_or(true, |mut d| d.next().is_none()),
+        "the run folder is gone"
+    );
+}
+
+/// Regular files under `dir` (0 when it does not exist).
+fn files_under(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .map(|e| e.unwrap().path())
+        .map(|p| if p.is_dir() { files_under(&p) } else { 1 })
+        .sum()
 }
 
 backend_tests!(
