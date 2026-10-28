@@ -87,7 +87,7 @@ pub struct HttpConfig {
     pub render_wait: Duration,
     /// Time all plugin filters of one page may take together, counted from when its
     /// render slot is taken (P22, `plugins.render_budget_ms`); past it the remaining
-    /// plugins are skipped and the page is volatile. Default [`RENDER_BUDGET`].
+    /// plugins are skipped and the page is volatile. Default `RENDER_BUDGET`.
     pub render_budget: Duration,
     /// Peers whose `X-Forwarded-For` is honoured for the logged client address
     /// (`server.trusted_proxies`; see [`client`](super::client)). Default: none.

@@ -531,12 +531,54 @@ fn with_fallback(
     }
 }
 
-/// One client: the checked resolver, no redirects, no proxy, no `Referer`, the 5 s
-/// bounds and `roots`.
+/// One plugin client: the checked resolver, no redirects, no proxy, no `Referer`,
+/// `https` only, the 5 s bounds and `roots`.
 fn client(
     lookup: Lookup,
     allow_ip: fn(IpAddr) -> bool,
     roots: Roots,
+) -> Result<reqwest::Client, String> {
+    build(lookup, allow_ip, roots, true, TIMEOUT)
+}
+
+/// The longest fetch of one WordPress attachment (`media_client`).
+pub const MEDIA_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The client the WordPress import fetches attachments with
+/// ([`HttpSource`](crate::import_fetch::HttpSource)): the plugin client's checked
+/// resolver (`allow_ip` on every resolved address), no redirects, no proxy, no
+/// `Referer`, the platform roots with the `webpki-roots` fallback, but `http` allowed
+/// (WordPress sites still serve uploads over it) and [`MEDIA_TIMEOUT`] per file.
+pub(crate) fn media_client(allow_ip: fn(IpAddr) -> bool) -> Result<reqwest::Client, String> {
+    with_fallback(
+        || {
+            build(
+                Lookup::System,
+                allow_ip,
+                Roots::Platform,
+                false,
+                MEDIA_TIMEOUT,
+            )
+        },
+        || {
+            build(
+                Lookup::System,
+                allow_ip,
+                Roots::WebPki(Vec::new()),
+                false,
+                MEDIA_TIMEOUT,
+            )
+        },
+    )
+}
+
+/// A client with the checked resolver, no redirects, no proxy and no `Referer`.
+fn build(
+    lookup: Lookup,
+    allow_ip: fn(IpAddr) -> bool,
+    roots: Roots,
+    https_only: bool,
+    timeout: Duration,
 ) -> Result<reqwest::Client, String> {
     let builder = reqwest::Client::builder()
         .dns_resolver(CheckedResolver {
@@ -545,11 +587,11 @@ fn client(
             slots: Arc::new(Semaphore::new(LOOKUP_SLOTS)),
         })
         .redirect(redirect::Policy::none())
-        .https_only(true)
+        .https_only(https_only)
         .no_proxy()
         .referer(false)
         .connect_timeout(TIMEOUT)
-        .timeout(TIMEOUT);
+        .timeout(timeout);
     let builder = match roots {
         Roots::Platform => builder,
         #[cfg(feature = "test-seams")]
@@ -558,7 +600,7 @@ fn client(
     };
     builder
         .build()
-        .map_err(|e| format!("cannot build the plugin http client: {e}"))
+        .map_err(|e| format!("cannot build the outbound http client: {e}"))
 }
 
 /// A rustls config trusting `webpki-roots`, with the provider reqwest would pick (the
