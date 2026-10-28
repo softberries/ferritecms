@@ -54,7 +54,12 @@ pub struct ImportBatch<'a> {
     pub(super) rules: Arc<dyn Permalinks>,
     /// The `permalink.*` rows written, last value per key.
     permalinks: Vec<(String, Option<Value>)>,
-    types_lock: Option<Box<dyn LockGuard>>,
+    /// The `types` lock of a schema batch. In a mutex only so the batch is `Sync`: the
+    /// futures of its `&self` methods are then `Send`, as a driver on a multi-threaded
+    /// runtime needs; it is taken once, when the batch ends.
+    types_lock: std::sync::Mutex<Option<Box<dyn LockGuard>>>,
+    /// Whether this is a schema batch (it holds the `types` lock).
+    schema: bool,
 }
 
 impl<'a> ImportBatch<'a> {
@@ -85,7 +90,8 @@ impl<'a> ImportBatch<'a> {
             items: 0,
             rules,
             permalinks: Vec::new(),
-            types_lock,
+            types_lock: std::sync::Mutex::new(types_lock),
+            schema,
         };
         match fenced {
             Ok(true) => Ok(batch),
@@ -272,7 +278,7 @@ impl<'a> ImportBatch<'a> {
     pub async fn rollback(self) -> Result<(), CoreError> {
         let Self { tx, types_lock, .. } = self;
         let rolled = tx.rollback().await.map_err(CoreError::from);
-        release(types_lock).await;
+        release(take_lock(types_lock)).await;
         rolled
     }
 
@@ -280,7 +286,7 @@ impl<'a> ImportBatch<'a> {
     async fn end(self, result: Result<(), CoreError>) -> Result<(), CoreError> {
         let Self { tx, types_lock, .. } = self;
         let done = crate::tx::finish(tx, result).await;
-        release(types_lock).await;
+        release(take_lock(types_lock)).await;
         done
     }
 
@@ -293,7 +299,7 @@ impl<'a> ImportBatch<'a> {
     }
 
     fn require_schema(&self) -> Result<(), CoreError> {
-        if self.types_lock.is_none() {
+        if !self.schema {
             return Err(CoreError::Internal(NEEDS_SCHEMA_BATCH));
         }
         Ok(())
@@ -304,6 +310,12 @@ impl<'a> ImportBatch<'a> {
         self.items += 1;
         self.keys.insert(events::ALL_KEY.to_owned());
     }
+}
+
+/// The guard out of a batch's lock slot (a poisoned mutex still holds it).
+fn take_lock(slot: std::sync::Mutex<Option<Box<dyn LockGuard>>>) -> Option<Box<dyn LockGuard>> {
+    slot.into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Whether the target of a map row of `kind` still exists.
