@@ -10,14 +10,15 @@
 //! locations are not in WXR, so none are assigned.
 //!
 //! Re-runs follow P4. The map row (kind `menu`, the term's WP id) keeps, as JSON in its
-//! `hash`, the hash of the menu's WXR records, a digest of the menu as written and the
-//! name it was written under:
+//! `hash`, a digest of the menu as written (its entries resolved to items, terms and
+//! URLs) and the name it was written under:
 //! - not mapped: written; when the site already has a menu of that name (one of its
 //!   own), the import's goes under `<name>-wp` (or `-wp-2`, …), noted;
 //! - mapped, but no menu of that name any more (deleted here): written again;
 //! - mapped, and the stored menu differs from what the import wrote (edited here): kept,
 //!   noted;
-//! - mapped with the same WXR hash: unchanged; else rewritten.
+//! - mapped, and the menu built now has the same digest: unchanged; else rewritten (also
+//!   when only its targets resolve differently, e.g. an item imported only now).
 
 use std::collections::HashMap;
 
@@ -45,18 +46,9 @@ const KIND: &str = "menus";
 /// Names tried for an imported menu beside a site menu of the same name.
 const NAME_ATTEMPTS: usize = 100;
 
-/// One menu's WXR records, which its source hash covers.
-#[derive(Serialize)]
-struct Source<'a> {
-    term: &'a Term,
-    items: &'a [Item],
-}
-
 /// What the import map keeps about a menu it wrote (JSON in the row's `hash`).
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct State {
-    /// The hash of the WXR records.
-    source: String,
     /// The digest of the menu as written ([`digest`]).
     written: String,
     /// The name it was written under.
@@ -72,12 +64,11 @@ struct Lookups<'a> {
     dry_run: bool,
 }
 
-/// One menu to write: its term, name, entries (in `menu_order`) and records' hash.
+/// One menu to write: its term, name and entries (in `menu_order`).
 struct MenuIn<'a> {
     term: &'a Term,
     name: &'a str,
     items: &'a [Item],
-    source: &'a str,
 }
 
 /// Imports every menu.
@@ -113,15 +104,10 @@ pub(crate) async fn import(
         let name = percent_decode(&term.slug);
         let mut menu_items = entries.remove(&name).unwrap_or_default();
         menu_items.sort_by_key(|i| i.menu_order);
-        let source = hash(&Source {
-            term,
-            items: &menu_items,
-        })?;
         let menu = MenuIn {
             term,
             name: &name,
             items: &menu_items,
-            source: &source,
         };
         let mut batch = session.batch().await?;
         let mut part = Report::default();
@@ -180,12 +166,7 @@ async fn write(
     menu: &MenuIn<'_>,
     report: &mut Report,
 ) -> Result<(), ImportError> {
-    let MenuIn {
-        term,
-        name,
-        items,
-        source,
-    } = *menu;
+    let MenuIn { term, name, items } = *menu;
     if slug::validate(name).ok().as_deref() != Some(name) {
         report.counts_of(KIND).skipped += 1;
         report.note(format!(
@@ -208,10 +189,6 @@ async fn write(
                 ));
                 return Ok(());
             }
-            Some(_) if state.source == source => {
-                report.counts_of(KIND).unchanged += 1;
-                return Ok(());
-            }
             Some(_) => (state.name.clone(), false),
         },
         None => match free_name(b, name).await? {
@@ -232,9 +209,12 @@ async fn write(
     };
     let out = build(b, cx, &target, term, items, report).await?;
     let written = digest(&out)?;
+    if !created && state.as_ref().is_some_and(|s| s.written == written) {
+        report.counts_of(KIND).unchanged += 1;
+        return Ok(());
+    }
     b.menu(&out).await?;
     let state = State {
-        source: source.to_owned(),
         written,
         name: target,
     };

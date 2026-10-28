@@ -735,6 +735,51 @@ pub async fn dry_run_keeps_a_failed_runs_work_file(db: &TestDb) {
     assert!(links.contains(&"/about/team/".to_owned()), "{links:?}");
 }
 
+/// C2: a first run without the uploads leaves bodies and featured images on the old
+/// URLs; a re-run of the same file with the uploads points them at the new media.
+pub async fn rerun_with_uploads_rewrites_media(db: &TestDb) {
+    let mut site = site(db).await;
+    let wxr = corpus("site-a.xml");
+    let real = site.ctx.media_source.clone();
+    site.ctx.media_source = Arc::new(DirSource::new(site.work.path().join("no-uploads")));
+    import(&site, &wxr, ImportOptions::default()).await;
+    let post = by_title(db.store(), "Every core block").await;
+    assert!(
+        post.fields.get("featured_image").is_none(),
+        "{:?}",
+        post.fields
+    );
+    assert!(!post.body.to_string().contains("ferrite:media/"));
+
+    site.ctx.media_source = real;
+    let again = import(&site, &wxr, ImportOptions::default()).await;
+    assert_eq!(again.counts["media"].created, 4, "{:?}", again.counts);
+    let post = by_title(db.store(), "Every core block").await;
+    let hero = db
+        .store()
+        .read()
+        .content()
+        .list(&ContentQuery {
+            kind: Some("media".into()),
+            limit: 10,
+            ..ContentQuery::default()
+        })
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|i| i.title == "Hero")
+        .unwrap();
+    assert_eq!(post.fields["featured_image"], json!(hero.id.to_string()));
+    assert!(
+        post.body
+            .to_string()
+            .contains(&format!("ferrite:media/{}", hero.id)),
+        "{}",
+        post.body
+    );
+}
+
 backend_tests!(
     rerun_site_a_is_unchanged,
     rerun_keeps_a_local_edit,
@@ -751,4 +796,5 @@ backend_tests!(
     csv_redirects_are_kept,
     links_keep_their_query,
     dry_run_keeps_a_failed_runs_work_file,
+    rerun_with_uploads_rewrites_media,
 );
