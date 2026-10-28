@@ -224,6 +224,8 @@ pub struct Report {
     pub users_must_reset: Vec<MustReset>,
     /// Everything else worth a line: renames, dropped parents, refused files, …
     pub notes: Vec<String>,
+    /// The post permalink structure inferred from the old site and set (P17).
+    pub permalink_structure: Option<String>,
     /// What the body conversion lost, over every item (Task 16 serialises it).
     #[serde(skip)]
     pub conversion: crate::convert::Notes,
@@ -512,7 +514,7 @@ async fn steps(
         end_step(opts, ir, "pass3").await?;
     }
     if begin_step(opts, ir, "pass4").await? {
-        pass4(&session, &mut report).await?;
+        crate::pass::pass4(&session, &mut report).await?;
         end_step(opts, ir, "pass4").await?;
     }
     if begin_step(opts, ir, "fixup").await? {
@@ -554,11 +556,6 @@ async fn end_step(opts: &ImportOptions, ir: &Ir, name: &str) -> Result<(), Impor
     if !opts.dry_run {
         ir.mark_pass(name).await?;
     }
-    Ok(())
-}
-
-/// Pass 4: comments, menus, redirects, options (Task 15).
-async fn pass4(_session: &Session<'_>, _report: &mut Report) -> Result<(), ImportError> {
     Ok(())
 }
 

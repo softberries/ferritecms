@@ -7,10 +7,14 @@
 //! ([`types::type_name`], [`acf::field_defs`](crate::acf::field_defs)), so a resumed run
 //! that skips a finished pass loses nothing.
 
+mod comments;
 pub(crate) mod content;
 pub(crate) mod fixup;
 mod media;
+mod menus;
+mod options;
 mod people;
+mod redirects;
 mod terms;
 pub mod types;
 
@@ -33,6 +37,16 @@ pub(crate) async fn pass1(session: &Session<'_>, report: &mut Report) -> Result<
     let wp_terms = session.ir().terms().await?;
     let schema = types::plan(&census, &acf, &wp_terms, report);
     terms::import(session, &schema, wp_terms, report).await
+}
+
+/// Pass 4: comments, menus, redirects and site options.
+pub(crate) async fn pass4(session: &Session<'_>, report: &mut Report) -> Result<(), ImportError> {
+    comments::import(session, report).await?;
+    let channel = session.ir().channel().await?;
+    let links = content::Links::load(session, &channel).await?;
+    menus::import(session, &links, report).await?;
+    redirects::import(session, &links, report).await?;
+    options::import(session, report).await
 }
 
 /// Pass 2: attachments.

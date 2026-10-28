@@ -12,6 +12,7 @@ pub mod ir;
 pub mod meta;
 pub mod model;
 pub mod pass;
+pub mod permalinks;
 pub mod php;
 pub mod run;
 pub mod seo;

@@ -12,8 +12,10 @@ use crate::{
     tx::finish,
 };
 
-const MAX_URL_LEN: usize = 2048;
-const MAX_LABEL_LEN: usize = 200;
+/// Longest menu item URL, in characters.
+pub const MAX_MENU_URL: usize = 2048;
+/// Longest menu or menu item label, in characters.
+pub const MAX_MENU_LABEL: usize = 200;
 /// Most items one menu holds (each is checked inside the write's transaction).
 pub const MAX_MENU_ITEMS: usize = 500;
 
@@ -149,12 +151,12 @@ pub(crate) async fn put_in(repos: &dyn Repos, menu: &Menu) -> Result<(), CoreErr
     Ok(())
 }
 
-/// `InvalidField { field, .. }` when `label` is longer than [`MAX_LABEL_LEN`].
+/// `InvalidField { field, .. }` when `label` is longer than [`MAX_MENU_LABEL`].
 fn check_label(label: &str, field: &'static str, what: &str) -> Result<(), CoreError> {
-    if label.chars().count() > MAX_LABEL_LEN {
+    if label.chars().count() > MAX_MENU_LABEL {
         return Err(CoreError::invalid_field(
             field,
-            format!("{what} longer than {MAX_LABEL_LEN} characters"),
+            format!("{what} longer than {MAX_MENU_LABEL} characters"),
         ));
     }
     Ok(())
@@ -173,12 +175,12 @@ async fn check_item(repos: &dyn Repos, item: &MenuItem) -> Result<(), CoreError>
                 .url
                 .as_deref()
                 .ok_or_else(|| CoreError::Invalid("url menu item needs a url".into()))?;
-            if url.chars().count() > MAX_URL_LEN {
+            if url.chars().count() > MAX_MENU_URL {
                 return Err(CoreError::Invalid(format!(
-                    "menu url longer than {MAX_URL_LEN} characters"
+                    "menu url longer than {MAX_MENU_URL} characters"
                 )));
             }
-            if !is_allowed_url(url) {
+            if !is_allowed_menu_url(url) {
                 return Err(CoreError::Invalid(format!(
                     "menu url must be http(s) or a local path: {url:?}"
                 )));
@@ -217,7 +219,7 @@ async fn check_item(repos: &dyn Repos, item: &MenuItem) -> Result<(), CoreError>
 
 /// `http://`/`https://` (any case) or an absolute local path; no control characters,
 /// whitespace or backslashes.
-fn is_allowed_url(url: &str) -> bool {
+pub fn is_allowed_menu_url(url: &str) -> bool {
     if url.chars().any(|c| c.is_control() || c.is_whitespace()) || url.contains('\\') {
         return false;
     }
@@ -233,7 +235,7 @@ fn is_allowed_url(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{MenuLocation, is_allowed_url, menu_locations};
+    use super::{MenuLocation, is_allowed_menu_url, menu_locations};
 
     #[test]
     fn locations_mark_existing_menus() {
@@ -260,7 +262,7 @@ mod tests {
     #[test]
     fn url_rules() {
         for ok in ["https://a.b/c", "HTTP://a.b", "/x", "/"] {
-            assert!(is_allowed_url(ok), "{ok}");
+            assert!(is_allowed_menu_url(ok), "{ok}");
         }
         for bad in [
             "",
@@ -273,7 +275,7 @@ mod tests {
             "/\\evil",
             "mailto:a@b.c",
         ] {
-            assert!(!is_allowed_url(bad), "{bad}");
+            assert!(!is_allowed_menu_url(bad), "{bad}");
         }
     }
 }

@@ -774,6 +774,14 @@ pub async fn redirects_partial_refusal_reports_and_writes_rest(db: &TestDb) {
     })
     .await;
     assert_eq!((out.created, out.updated, out.refused.len()), (1, 1, 0));
+    // The same rows again: nothing written.
+    let out = in_batch(db, &admin, async |b| {
+        b.redirects(&[row("/old-a/", "/newer-a/"), row("/old-d/", "/z/")])
+            .await
+            .unwrap()
+    })
+    .await;
+    assert_eq!((out.created, out.updated, out.unchanged), (0, 0, 2));
     let out = in_batch(db, &admin, async |b| {
         b.redirects(&[row("/newer-a/", "/old-a/")]).await.unwrap()
     })
@@ -781,6 +789,32 @@ pub async fn redirects_partial_refusal_reports_and_writes_rest(db: &TestDb) {
     assert_eq!((out.created, out.updated), (0, 0));
     assert_eq!(out.refused.len(), 1);
     assert_eq!(out.refused[0].0, "/newer-a/");
+    // A redirect edited here (origin `manual`) is kept, not overwritten.
+    let row_a = store
+        .read()
+        .redirects()
+        .get_by_source("/old-a/")
+        .await
+        .unwrap()
+        .unwrap();
+    ferrite_core::RedirectService::new(db.shared_store())
+        .update(&admin, row_a.id, "/old-a/", "/mine/", 301)
+        .await
+        .unwrap();
+    let out = in_batch(db, &admin, async |b| {
+        b.redirects(&[row("/old-a/", "/newer-a/")]).await.unwrap()
+    })
+    .await;
+    assert_eq!((out.created, out.updated, out.unchanged), (0, 0, 0));
+    assert_eq!(out.kept, ["/old-a/"]);
+    let kept = store
+        .read()
+        .redirects()
+        .get_by_source("/old-a/")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(kept.target, "/mine/");
 }
 
 pub async fn redirects_refused_come_in_input_order(db: &TestDb) {

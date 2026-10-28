@@ -23,6 +23,7 @@ use futures::TryStreamExt;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+use super::options::Applied;
 use super::types::{Schema, ensure, plan, taxonomy_name, type_fields, type_name};
 use super::{Census, meta, record_hash, wp_time};
 use crate::ImportError;
@@ -59,7 +60,7 @@ pub(crate) struct Links {
     items: HashMap<i64, (String, String)>,
     /// Items written so far: WP id → (new id, path).
     pub(crate) written: HashMap<i64, (Uuid, String)>,
-    media: MediaIndex,
+    pub(crate) media: MediaIndex,
     /// Imported attachments: WP id → media id.
     attachments: HashMap<i64, Uuid>,
 }
@@ -125,23 +126,19 @@ impl Links {
         Ok(links)
     }
 
-    /// The path of an old URL on the old site, with a trailing `/`; `None` for another
-    /// host or a URL that names an item by query (`?p=`, `?page_id=`).
-    fn old_path(&self, link: &str) -> Option<String> {
+    /// The path of an old URL on the old site, decoded, with a trailing `/`; `None` for
+    /// another host or a URL with a query (`?p=`, `?page_id=`, `?attachment_id=`,
+    /// `?<type>=<slug>`: none of them is the path `/`).
+    pub(crate) fn old_path(&self, link: &str) -> Option<String> {
         let url = self.on_site(link)?;
-        if url.query_pairs().any(|(k, _)| k == "p" || k == "page_id") {
+        if url.query().is_some() {
             return None;
         }
-        let path = percent_decode(url.path());
-        Some(if path.ends_with('/') {
-            path
-        } else {
-            format!("{path}/")
-        })
+        Some(path_of(&url))
     }
 
     /// `link` as an absolute URL when it is on the old site (or relative to it).
-    fn on_site(&self, link: &str) -> Option<url::Url> {
+    pub(crate) fn on_site(&self, link: &str) -> Option<url::Url> {
         let link = link.trim();
         let url = match url::Url::parse(link) {
             Ok(u) => u,
@@ -152,20 +149,69 @@ impl Links {
         (matches!(url.scheme(), "http" | "https") && self.hosts.contains(&host)).then_some(url)
     }
 
-    /// The WP item an old link names: `?p=N` / `?page_id=N`, else its `<link>` path.
-    fn target(&self, href: &str) -> Option<i64> {
+    /// The WP item an old link names, and what of the link to keep after the item's new
+    /// path: `?p=N` / `?page_id=N` name it by id (only the fragment is kept), any other
+    /// link by its path, the query and fragment set aside and kept (`/hello/?utm=x#top`).
+    fn target(&self, href: &str) -> Option<(i64, String)> {
         let url = self.on_site(href)?;
         let by_query = url
             .query_pairs()
             .find(|(k, _)| k == "p" || k == "page_id")
             .and_then(|(_, v)| v.parse::<i64>().ok());
-        let wp_id = by_query.or_else(|| self.by_path.get(&self.old_path(href)?).copied())?;
-        self.items.contains_key(&wp_id).then_some(wp_id)
+        let fragment = url.fragment().map(|f| format!("#{f}")).unwrap_or_default();
+        let (wp_id, rest) = match by_query {
+            Some(id) => (id, fragment),
+            None => {
+                let id = *self.by_path.get(&path_of(&url))?;
+                let query = url.query().map(|q| format!("?{q}")).unwrap_or_default();
+                (id, format!("{query}{fragment}"))
+            }
+        };
+        self.items.contains_key(&wp_id).then_some((wp_id, rest))
+    }
+
+    /// A URL as it should read on the new site: an old item's link becomes its new path,
+    /// an upload its media URL, another URL on the old site its path (with query and
+    /// fragment); anything else is kept.
+    pub(crate) fn local_url(&self, url: &str) -> String {
+        if let Some(m) = self.media.resolve(url) {
+            return m.url.clone();
+        }
+        if let Some((wp_id, rest)) = self.target(url)
+            && let Some((_, path)) = self.written.get(&wp_id)
+        {
+            return format!("{path}{rest}");
+        }
+        match self.on_site(url) {
+            Some(u) => {
+                let mut local = u.path().to_owned();
+                if let Some(q) = u.query() {
+                    local.push('?');
+                    local.push_str(q);
+                }
+                if let Some(f) = u.fragment() {
+                    local.push('#');
+                    local.push_str(f);
+                }
+                local
+            }
+            None => url.trim().to_owned(),
+        }
     }
 
     /// The WP post type and status of export item `wp_id`.
-    fn item(&self, wp_id: i64) -> Option<&(String, String)> {
+    pub(crate) fn item(&self, wp_id: i64) -> Option<&(String, String)> {
         self.items.get(&wp_id)
+    }
+}
+
+/// The decoded path of `url`, with a trailing `/` (how old item paths are keyed).
+fn path_of(url: &url::Url) -> String {
+    let path = percent_decode(url.path());
+    if path.ends_with('/') {
+        path
+    } else {
+        format!("{path}/")
     }
 }
 
@@ -241,14 +287,11 @@ impl Rewrite for Resolver<'_> {
         if let Some(m) = self.links.media.resolve(href) {
             return m.url.clone();
         }
-        let Some(wp_id) = self.links.target(href) else {
+        let Some((wp_id, rest)) = self.links.target(href) else {
             return href.to_owned();
         };
         match self.links.written.get(&wp_id) {
-            Some((_, path)) => match href.split_once('#') {
-                Some((_, fragment)) => format!("{path}#{fragment}"),
-                None => path.clone(),
-            },
+            Some((_, path)) => format!("{path}{rest}"),
             None => {
                 self.pending.set(true);
                 href.to_owned()
@@ -485,6 +528,9 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
     let ir = session.ir();
     let channel = ir.channel().await?;
     let order = order(ir).await?;
+    if session.opts().keep_permalinks {
+        set_permalinks(session, report).await?;
+    }
     let acf = field_defs(ir).await?;
     let dry_run = session.opts().dry_run;
     let schema = if dry_run {
@@ -498,7 +544,9 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
         report.note(
             "dry run: every batch was rolled back, so later batches did not see the users, \
              terms, media and parents of earlier ones; items fall back to the importing \
-             admin and lose those terms, images and parents in this report only",
+             admin and lose those terms, images and parents in this report only; pass 4's \
+             counts for comments, menus and redirects are not meaningful either (they \
+             need the rolled-back items)",
         );
     }
     let mut cx = Context {
@@ -544,6 +592,68 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
             }
             write_chunk(&mut cx, &kind, &type_acf, items, report).await?;
         }
+    }
+    Ok(())
+}
+
+/// Infers the old site's post structure (P17) and, when there is one, sets
+/// `permalink.post` in a schema batch before any item is written, under the P4 rule of
+/// [`super::options::apply`] (the first import keeps a site's own structure). Ending
+/// that batch swaps the run's rules, so every path pass 3 and the fix-up compute follows
+/// it.
+async fn set_permalinks(session: &Session<'_>, report: &mut Report) -> Result<(), ImportError> {
+    let ir = session.ir();
+    let categories: HashMap<i64, String> = ir
+        .terms()
+        .await?
+        .into_iter()
+        .filter(|t| t.taxonomy == "category")
+        .map(|t| (t.wp_id, t.slug))
+        .collect();
+    let slug_of = |wp: i64| categories.get(&wp).cloned();
+    let mut posts: Vec<(Item, Option<String>)> = Vec::new();
+    let mut items = ir.items(&["post"]);
+    while let Some(item) = items.try_next().await? {
+        if item.status != "publish" {
+            continue;
+        }
+        let primary = PRIMARY_CATEGORY
+            .iter()
+            .find_map(|k| meta(&item, k))
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .and_then(slug_of)
+            .or_else(|| {
+                item.terms
+                    .iter()
+                    .find(|t| t.taxonomy == "category")
+                    .map(|t| t.slug.clone())
+            });
+        posts.push((item, primary));
+    }
+    drop(items);
+    let refs: Vec<(&Item, Option<&str>)> = posts.iter().map(|(i, c)| (i, c.as_deref())).collect();
+    let Some(structure) = crate::permalinks::infer(&refs) else {
+        report.note("the old post permalink structure could not be inferred; the site's is kept");
+        return Ok(());
+    };
+    let mut batch = session.schema_batch().await?;
+    let mut part = Report::default();
+    let written = super::options::apply(
+        &mut batch,
+        ferrite_core::permalink::POST_OPTION,
+        &json!(structure),
+        &mut part,
+    )
+    .await;
+    let applied = session.finish_batch(batch, written).await?;
+    super::options::merge(report, part);
+    if matches!(applied, Applied::Created | Applied::Updated) {
+        report.note(format!(
+            "post permalinks set to {structure} as on the old site"
+        ));
+    }
+    if applied != Applied::Kept {
+        report.permalink_structure = Some(structure);
     }
     Ok(())
 }
@@ -707,8 +817,7 @@ async fn prepare(
         _ => item.post_name.clone(),
     };
     let slug = percent_decode(slug.trim());
-    let published_at = wp_time(&item.date_gmt, &item.date_local);
-    let created_at = published_at.unwrap_or_else(Timestamp::now);
+    let (published_at, created_at, updated_at) = dates(item);
     let excerpt = item.excerpt.trim();
     let content = ImportContent {
         wp_id: item.wp_id,
@@ -721,7 +830,7 @@ async fn prepare(
         status,
         published_at,
         created_at,
-        updated_at: wp_time(&item.modified_gmt, &item.modified_local).unwrap_or(created_at),
+        updated_at,
         excerpt: (!excerpt.is_empty()).then(|| excerpt.replace('\0', "")),
         body: converted.body,
         fields: converted.fields,
@@ -736,6 +845,16 @@ async fn prepare(
         lines,
         pending: converted.pending,
     }))
+}
+
+/// `published_at`, `created_at` and `updated_at` of an item (P7): the GMT dates, or the
+/// local ones read as UTC when a GMT date is zero; `created_at` falls back to now and
+/// `updated_at` to `created_at`.
+fn dates(item: &Item) -> (Option<Timestamp>, Timestamp, Timestamp) {
+    let published_at = wp_time(&item.date_gmt, &item.date_local);
+    let created_at = published_at.unwrap_or_else(Timestamp::now);
+    let updated_at = wp_time(&item.modified_gmt, &item.modified_local).unwrap_or(created_at);
+    (published_at, created_at, updated_at)
 }
 
 /// The item's parent when its type is hierarchical and the parent, of the same type and
@@ -866,6 +985,35 @@ mod tests {
             [1, 2, 3, 4, 5]
         );
         assert_eq!(parent_first(&[(1, 2), (2, 1)]), [2, 1]);
+    }
+
+    /// "A draft" of site A has zero GMT dates: its dates are its local ones, as UTC.
+    #[test]
+    fn zero_gmt_dates_read_the_local_ones() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus/site-a.xml");
+        let bytes = std::fs::read(path).unwrap_or_default();
+        let mut draft = None;
+        crate::wxr::parse(&bytes[..], |r| {
+            if let crate::model::Record::Item(i) = r
+                && i.wp_id == 11
+            {
+                draft = Some(*i);
+            }
+            Ok(())
+        })
+        .unwrap_or_default();
+        let Some(mut draft) = draft else {
+            panic!("no item 11 in site A");
+        };
+        assert!(draft.modified_gmt.starts_with("0000-00-00"));
+        let at = |s: &str| serde_json::from_value::<Timestamp>(json!(s)).ok();
+        let (published, created, updated) = dates(&draft);
+        assert_eq!(published, at("2026-10-28T10:49:55Z"));
+        assert_eq!(Some(created), at("2026-10-28T10:49:55Z"));
+        assert_eq!(Some(updated), at("2026-10-28T10:49:55Z"));
+        // The modified date is the local one, not the creation date.
+        draft.modified_local = "2026-11-01 08:00:00".into();
+        assert_eq!(Some(dates(&draft).2), at("2026-11-01T08:00:00Z"));
     }
 
     #[test]

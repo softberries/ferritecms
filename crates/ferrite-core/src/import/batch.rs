@@ -3,7 +3,8 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use ferrite_domain::{
-    CommentId, ContentId, ImportMapKind, ImportMapRow, Taxonomy, TermId, Timestamp, UserId,
+    CommentId, ContentId, ContentItem, ImportMapKind, ImportMapRow, Menu, Redirect, Taxonomy, Term,
+    TermId, Timestamp, UserId,
 };
 use ferrite_store::{LockGuard, Repos, Store, Tx};
 use serde_json::Value;
@@ -141,6 +142,34 @@ impl<'a> ImportBatch<'a> {
             hash: row.hash,
             version: row.version,
         }))
+    }
+
+    /// Item `id` as this batch sees it (any status), for checks before a write that
+    /// would refuse it (a menu entry's target must not be trashed).
+    pub async fn get_item(&self, id: ContentId) -> Result<Option<ContentItem>, CoreError> {
+        Ok(self.tx.content().get(id).await?)
+    }
+
+    /// Term `id` as this batch sees it (the slug it was imported under).
+    pub async fn get_term(&self, id: TermId) -> Result<Option<Term>, CoreError> {
+        Ok(self.tx.terms().get(id).await?)
+    }
+
+    /// Menu `name` as this batch sees it (to tell a menu edited or deleted here, or one
+    /// the site already had).
+    pub async fn get_menu(&self, name: &str) -> Result<Option<Menu>, CoreError> {
+        Ok(self.tx.menus().get(name).await?)
+    }
+
+    /// The stored value of option `key` (to tell an option changed here since the import
+    /// wrote it).
+    pub async fn get_option(&self, key: &str) -> Result<Option<Value>, CoreError> {
+        Ok(self.tx.options().get(key).await?.map(|o| o.value))
+    }
+
+    /// The stored redirect of `source` (to tell one the import did not write).
+    pub async fn get_redirect(&self, source: &str) -> Result<Option<Redirect>, CoreError> {
+        Ok(self.tx.redirects().get_by_source(source).await?)
     }
 
     /// Records (or replaces) the map row of (`kind`, `wp_id`) for this run's source.
@@ -337,7 +366,7 @@ async fn target_exists(
             .get(CommentId::from_uuid(id))
             .await?
             .is_some(),
-        ImportMapKind::Menu => true,
+        ImportMapKind::Menu | ImportMapKind::Option | ImportMapKind::Redirect => true,
     })
 }
 
