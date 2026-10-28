@@ -3,7 +3,8 @@
 //! The comment HTML becomes plain text ([`plain_text`]). Status: `1` → approved, `0` →
 //! pending, `spam` → spam, `trash` → trash (WordPress does not export spam, R4, but the
 //! mapping stands). Pingbacks and trackbacks are skipped and counted. Threading is kept;
-//! a parent that was skipped makes the child top-level. A comment whose WP `user_id` is a
+//! a parent that was skipped, or one on another item, makes the child top-level (the
+//! latter noted). A comment whose WP `user_id` is a
 //! mapped account gets that user (and so `by_account`). Comments of items that were not
 //! imported are skipped.
 
@@ -116,11 +117,14 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
     let mut by_id: std::collections::HashMap<i64, Pending> =
         all.into_iter().map(|p| (p.comment.wp_id, p)).collect();
     let ordered: Vec<Pending> = order.iter().filter_map(|id| by_id.remove(id)).collect();
+    // The WP item of each comment, to tell a parent on another item.
+    let items_of: std::collections::HashMap<i64, i64> =
+        ordered.iter().map(|p| (p.comment.wp_id, p.item)).collect();
     let mut pings = 0u64;
     for chunk in ordered.chunks(session.batch_items()) {
         let mut batch = session.batch().await?;
         let mut part = Report::default();
-        let written = write(&mut batch, chunk, &mut part, &mut pings).await;
+        let written = write(&mut batch, chunk, &items_of, &mut part, &mut pings).await;
         session.finish_batch(batch, written).await?;
         let counts = report.counts_of(KIND);
         let c = part.counts_of(KIND);
@@ -138,6 +142,7 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
 async fn write(
     b: &mut ImportBatch<'_>,
     chunk: &[Pending],
+    items_of: &std::collections::HashMap<i64, i64>,
     report: &mut Report,
     pings: &mut u64,
 ) -> Result<(), ImportError> {
@@ -166,6 +171,13 @@ async fn write(
         }
         let parent = match c.parent_wp_id {
             0 => None,
+            wp if items_of.get(&wp).is_some_and(|item| *item != p.item) => {
+                report.note(format!(
+                    "comment {}: its parent {wp} is on another item; made top-level",
+                    c.wp_id
+                ));
+                None
+            }
             wp => b
                 .lookup(ImportMapKind::Comment, wp)
                 .await?

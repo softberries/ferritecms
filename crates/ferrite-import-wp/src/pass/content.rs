@@ -23,6 +23,7 @@ use futures::TryStreamExt;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+use super::options::Applied;
 use super::types::{Schema, ensure, plan, taxonomy_name, type_fields, type_name};
 use super::{Census, meta, record_hash, wp_time};
 use crate::ImportError;
@@ -125,11 +126,12 @@ impl Links {
         Ok(links)
     }
 
-    /// The path of an old URL on the old site, with a trailing `/`; `None` for another
-    /// host or a URL that names an item by query (`?p=`, `?page_id=`).
+    /// The path of an old URL on the old site, decoded, with a trailing `/`; `None` for
+    /// another host or a URL with a query (`?p=`, `?page_id=`, `?attachment_id=`,
+    /// `?<type>=<slug>`: none of them is the path `/`).
     pub(crate) fn old_path(&self, link: &str) -> Option<String> {
         let url = self.on_site(link)?;
-        if url.query_pairs().any(|(k, _)| k == "p" || k == "page_id") {
+        if url.query().is_some() {
             return None;
         }
         let path = percent_decode(url.path());
@@ -528,7 +530,9 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
         report.note(
             "dry run: every batch was rolled back, so later batches did not see the users, \
              terms, media and parents of earlier ones; items fall back to the importing \
-             admin and lose those terms, images and parents in this report only",
+             admin and lose those terms, images and parents in this report only; pass 4's \
+             counts for comments, menus and redirects are not meaningful either (they \
+             need the rolled-back items)",
         );
     }
     let mut cx = Context {
@@ -579,17 +583,20 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
 }
 
 /// Infers the old site's post structure (P17) and, when there is one, sets
-/// `permalink.post` in a schema batch before any item is written: ending that batch
-/// swaps the run's rules, so every path pass 3 and the fix-up compute follows it.
+/// `permalink.post` in a schema batch before any item is written, under the P4 rule of
+/// [`super::options::apply`] (the first import keeps a site's own structure). Ending
+/// that batch swaps the run's rules, so every path pass 3 and the fix-up compute follows
+/// it.
 async fn set_permalinks(session: &Session<'_>, report: &mut Report) -> Result<(), ImportError> {
     let ir = session.ir();
-    let terms = ir.terms().await?;
-    let slug_of = |wp: i64| {
-        terms
-            .iter()
-            .find(|t| t.wp_id == wp && t.taxonomy == "category")
-            .map(|t| t.slug.clone())
-    };
+    let categories: HashMap<i64, String> = ir
+        .terms()
+        .await?
+        .into_iter()
+        .filter(|t| t.taxonomy == "category")
+        .map(|t| (t.wp_id, t.slug))
+        .collect();
+    let slug_of = |wp: i64| categories.get(&wp).cloned();
     let mut posts: Vec<(Item, Option<String>)> = Vec::new();
     let mut items = ir.items(&["post"]);
     while let Some(item) = items.try_next().await? {
@@ -616,20 +623,25 @@ async fn set_permalinks(session: &Session<'_>, report: &mut Report) -> Result<()
         return Ok(());
     };
     let mut batch = session.schema_batch().await?;
-    let written = write_structure(&mut batch, &structure).await;
-    session.finish_batch(batch, written).await?;
-    report.note(format!(
-        "post permalinks set to {structure} as on the old site"
-    ));
-    report.permalink_structure = Some(structure);
-    Ok(())
-}
-
-async fn write_structure(b: &mut ImportBatch<'_>, structure: &str) -> Result<(), ImportError> {
-    Ok(
-        b.options(&[("permalink.post".to_owned(), Some(json!(structure)))])
-            .await?,
+    let mut part = Report::default();
+    let written = super::options::apply(
+        &mut batch,
+        ferrite_core::permalink::POST_OPTION,
+        &json!(structure),
+        &mut part,
     )
+    .await;
+    let applied = session.finish_batch(batch, written).await?;
+    super::options::merge(report, part);
+    if matches!(applied, Applied::Created | Applied::Updated) {
+        report.note(format!(
+            "post permalinks set to {structure} as on the old site"
+        ));
+    }
+    if applied != Applied::Kept {
+        report.permalink_structure = Some(structure);
+    }
+    Ok(())
 }
 
 fn is_acf_on_built_in(post_type: &str, acf: &AcfModel) -> bool {

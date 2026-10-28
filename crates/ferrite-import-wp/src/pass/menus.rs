@@ -4,21 +4,30 @@
 //! `menu_order`, nested by `_menu_item_menu_item_parent`. Kinds: `custom` → a URL (an old
 //! site URL becomes the new path), `post_type` → the item, `taxonomy` → the term; an empty
 //! title takes the target's. Core's menu items have no link target, so `_blank` is
-//! dropped and counted. An entry whose target was not imported (or is trashed), or whose
-//! URL core would refuse, is left out and noted; its children move up to its parent.
-//! Theme locations are not in WXR, so none are assigned.
+//! dropped and counted. A data problem never fails the run: an entry whose target was
+//! not imported or is trashed here, or whose URL core would refuse, is left out and noted
+//! (its children move up to its parent), and labels are cut to core's limit. Theme
+//! locations are not in WXR, so none are assigned.
 //!
-//! A menu is written whole. Its import-map row (kind `menu`, the term's WP id) keeps a
-//! hash of its WXR records: the same hash on a re-run leaves the menu as it is.
+//! Re-runs follow P4. The map row (kind `menu`, the term's WP id) keeps, as JSON in its
+//! `hash`, the hash of the menu's WXR records, a digest of the menu as written and the
+//! name it was written under:
+//! - not mapped: written; when the site already has a menu of that name (one of its
+//!   own), the import's goes under `<name>-wp` (or `-wp-2`, …), noted;
+//! - mapped, but no menu of that name any more (deleted here): written again;
+//! - mapped, and the stored menu differs from what the import wrote (edited here): kept,
+//!   noted;
+//! - mapped with the same WXR hash: unchanged; else rewritten.
 
 use std::collections::HashMap;
 
-use ferrite_core::MAX_MENU_ITEMS;
 use ferrite_core::import::ImportBatch;
-use ferrite_core::slug;
-use ferrite_domain::{ImportMapKind, Menu, MenuItem, MenuItemId, MenuItemKind};
+use ferrite_core::{MAX_MENU_ITEMS, MAX_MENU_LABEL, MAX_MENU_URL, is_allowed_menu_url, slug};
+use ferrite_domain::{
+    ContentId, ContentStatus, ImportMapKind, Menu, MenuItem, MenuItemId, MenuItemKind,
+};
 use futures::TryStreamExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -33,16 +42,42 @@ use crate::urls::percent_decode;
 
 /// The report kind of menus.
 const KIND: &str = "menus";
-/// Core's longest menu and item label (`menu::MAX_LABEL_LEN`).
-const MAX_LABEL: usize = 200;
-/// Core's longest menu URL (`menu::MAX_URL_LEN`).
-const MAX_URL: usize = 2048;
+/// Names tried for an imported menu beside a site menu of the same name.
+const NAME_ATTEMPTS: usize = 100;
 
-/// One menu's WXR records, which its hash covers.
+/// One menu's WXR records, which its source hash covers.
 #[derive(Serialize)]
 struct Source<'a> {
     term: &'a Term,
     items: &'a [Item],
+}
+
+/// What the import map keeps about a menu it wrote (JSON in the row's `hash`).
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct State {
+    /// The hash of the WXR records.
+    source: String,
+    /// The digest of the menu as written ([`digest`]).
+    written: String,
+    /// The name it was written under.
+    name: String,
+}
+
+/// What every menu entry reads.
+struct Lookups<'a> {
+    ir: &'a Ir,
+    links: &'a Links,
+    /// The export's terms by WP id.
+    terms: HashMap<i64, &'a Term>,
+    dry_run: bool,
+}
+
+/// One menu to write: its term, name, entries (in `menu_order`) and records' hash.
+struct MenuIn<'a> {
+    term: &'a Term,
+    name: &'a str,
+    items: &'a [Item],
+    source: &'a str,
 }
 
 /// Imports every menu.
@@ -52,12 +87,8 @@ pub(crate) async fn import(
     report: &mut Report,
 ) -> Result<(), ImportError> {
     let ir = session.ir();
-    let menus: Vec<Term> = ir
-        .terms()
-        .await?
-        .into_iter()
-        .filter(|t| t.taxonomy == "nav_menu")
-        .collect();
+    let terms = ir.terms().await?;
+    let menus: Vec<&Term> = terms.iter().filter(|t| t.taxonomy == "nav_menu").collect();
     if menus.is_empty() {
         return Ok(());
     }
@@ -72,11 +103,17 @@ pub(crate) async fn import(
         }
     }
     drop(items);
-    for term in &menus {
+    let lookups = Lookups {
+        ir,
+        links,
+        terms: terms.iter().map(|t| (t.wp_id, t)).collect(),
+        dry_run: session.opts().dry_run,
+    };
+    for term in menus {
         let name = percent_decode(&term.slug);
         let mut menu_items = entries.remove(&name).unwrap_or_default();
         menu_items.sort_by_key(|i| i.menu_order);
-        let hash = hash(&Source {
+        let source = hash(&Source {
             term,
             items: &menu_items,
         })?;
@@ -84,44 +121,62 @@ pub(crate) async fn import(
             term,
             name: &name,
             items: &menu_items,
-            hash: &hash,
+            source: &source,
         };
         let mut batch = session.batch().await?;
         let mut part = Report::default();
-        let written = write(&mut batch, ir, links, &menu, &mut part).await;
+        let written = write(&mut batch, &lookups, &menu, &mut part).await;
         session.finish_batch(batch, written).await?;
         let (counts, c) = (report.counts_of(KIND), part.counts_of(KIND));
         counts.created += c.created;
         counts.updated += c.updated;
         counts.unchanged += c.unchanged;
+        counts.kept += c.kept;
         counts.skipped += c.skipped;
         report.notes.extend(part.notes);
     }
     Ok(())
 }
 
-/// The SHA-256 (hex) of a menu's records.
-fn hash(source: &Source<'_>) -> Result<String, ImportError> {
-    let json = serde_json::to_vec(source)?;
+/// The SHA-256 (hex) of `value` as JSON.
+fn hash(value: &impl Serialize) -> Result<String, ImportError> {
+    let json = serde_json::to_vec(value)?;
     Ok(Sha256::digest(&json)
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect())
 }
 
-/// One menu to write: its term, name, entries (in `menu_order`) and records' hash.
-struct MenuIn<'a> {
-    term: &'a Term,
-    name: &'a str,
-    items: &'a [Item],
-    hash: &'a str,
+/// A menu's content without its entry ids: its label, and per entry the label, kind,
+/// target, URL, parent (as an index) and position.
+fn digest(menu: &Menu) -> Result<String, ImportError> {
+    let index: HashMap<MenuItemId, usize> = menu
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| (item.id, i))
+        .collect();
+    let entries: Vec<_> = menu
+        .items
+        .iter()
+        .map(|i| {
+            (
+                &i.label,
+                i.kind.as_str(),
+                i.target_id,
+                &i.url,
+                i.parent_id.and_then(|p| index.get(&p).copied()),
+                i.position,
+            )
+        })
+        .collect();
+    hash(&(&menu.label, entries))
 }
 
-/// Writes one menu (unless its hash is the mapped one).
+/// Writes one menu as the module docs say.
 async fn write(
     b: &mut ImportBatch<'_>,
-    ir: &Ir,
-    links: &Links,
+    cx: &Lookups<'_>,
     menu: &MenuIn<'_>,
     report: &mut Report,
 ) -> Result<(), ImportError> {
@@ -129,7 +184,7 @@ async fn write(
         term,
         name,
         items,
-        hash,
+        source,
     } = *menu;
     if slug::validate(name).ok().as_deref() != Some(name) {
         report.counts_of(KIND).skipped += 1;
@@ -138,18 +193,100 @@ async fn write(
         ));
         return Ok(());
     }
-    let mapped = b.lookup(ImportMapKind::Menu, term.wp_id).await?;
-    if mapped.as_ref().is_some_and(|m| m.hash == hash) {
-        report.counts_of(KIND).unchanged += 1;
-        return Ok(());
+    let state = match b.lookup(ImportMapKind::Menu, term.wp_id).await? {
+        Some(m) => serde_json::from_str::<State>(&m.hash).ok(),
+        None => None,
+    };
+    let (target, created) = match &state {
+        Some(state) => match b.get_menu(&state.name).await? {
+            None => (state.name.clone(), true),
+            Some(stored) if digest(&stored)? != state.written => {
+                report.counts_of(KIND).kept += 1;
+                report.note(format!(
+                    "menu {:?} was edited here since the last import; kept",
+                    state.name
+                ));
+                return Ok(());
+            }
+            Some(_) if state.source == source => {
+                report.counts_of(KIND).unchanged += 1;
+                return Ok(());
+            }
+            Some(_) => (state.name.clone(), false),
+        },
+        None => match free_name(b, name).await? {
+            Some(free) => {
+                if free != name {
+                    report.note(format!(
+                        "the site already has a menu {name:?}; the imported one is {free:?}"
+                    ));
+                }
+                (free, true)
+            }
+            None => {
+                report.counts_of(KIND).skipped += 1;
+                report.note(format!("menu {name:?} skipped: no free name for it"));
+                return Ok(());
+            }
+        },
+    };
+    let out = build(b, cx, &target, term, items, report).await?;
+    let written = digest(&out)?;
+    b.menu(&out).await?;
+    let state = State {
+        source: source.to_owned(),
+        written,
+        name: target,
+    };
+    b.remember(
+        ImportMapKind::Menu,
+        term.wp_id,
+        Uuid::nil(),
+        &serde_json::to_string(&state)?,
+        0,
+    )
+    .await?;
+    let counts = report.counts_of(KIND);
+    if created {
+        counts.created += 1;
+    } else {
+        counts.updated += 1;
     }
-    // Parents before children; a dropped entry's children move up to its parent.
+    Ok(())
+}
+
+/// `name`, or `<name>-wp`, `<name>-wp-2`, … when the site has a menu of that name.
+async fn free_name(b: &mut ImportBatch<'_>, name: &str) -> Result<Option<String>, ImportError> {
+    for n in 0..NAME_ATTEMPTS {
+        let candidate = match n {
+            0 => name.to_owned(),
+            1 => format!("{name}-wp"),
+            n => format!("{name}-wp-{n}"),
+        };
+        if b.get_menu(&candidate).await?.is_none() {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
+}
+
+/// The menu `name` from the WXR entries. Entries left out are noted, except on a dry
+/// run, where the rows of earlier batches are gone (the dry-run note says so).
+async fn build(
+    b: &mut ImportBatch<'_>,
+    cx: &Lookups<'_>,
+    name: &str,
+    term: &Term,
+    items: &[Item],
+    report: &mut Report,
+) -> Result<Menu, ImportError> {
     let nodes: Vec<(i64, i64)> = items.iter().map(|i| (i.wp_id, parent_of(i))).collect();
     let by_wp: HashMap<i64, &Item> = items.iter().map(|i| (i.wp_id, i)).collect();
     let mut kept: HashMap<i64, Option<MenuItemId>> = HashMap::new();
     let mut out: Vec<MenuItem> = Vec::new();
     let mut positions: HashMap<Option<MenuItemId>, i32> = HashMap::new();
     let mut blank = 0u64;
+    let mut notes = Vec::new();
     for wp_id in parent_first(&nodes) {
         let item = by_wp[&wp_id];
         let mut parent_wp = parent_of(item);
@@ -163,17 +300,17 @@ async fn write(
         if meta(item, "_menu_item_target") == Some("_blank") {
             blank += 1;
         }
-        let entry = match entry(b, ir, links, item).await? {
+        let entry = match entry(b, cx, item).await? {
             Ok(entry) if out.len() < MAX_MENU_ITEMS => entry,
             Ok(_) => {
-                report.note(format!(
+                notes.push(format!(
                     "menu {name:?}: more than {MAX_MENU_ITEMS} entries; entry {wp_id} left out"
                 ));
                 kept.insert(wp_id, None);
                 continue;
             }
             Err(why) => {
-                report.note(format!("menu {name:?}: entry {wp_id} left out: {why}"));
+                notes.push(format!("menu {name:?}: entry {wp_id} left out: {why}"));
                 kept.insert(wp_id, None);
                 continue;
             }
@@ -190,26 +327,27 @@ async fn write(
         kept.insert(wp_id, Some(id));
     }
     if blank > 0 {
-        report.note(format!(
+        notes.push(format!(
             "menu {name:?}: {blank} entries opened in a new tab; menu items have no target here"
         ));
     }
-    let label: String = term.name.trim().chars().take(MAX_LABEL).collect();
-    b.menu(&Menu {
+    if !cx.dry_run {
+        report.notes.extend(notes);
+    }
+    Ok(Menu {
         name: name.to_owned(),
-        label,
+        label: label(&term.name),
         items: out,
     })
-    .await?;
-    b.remember(ImportMapKind::Menu, term.wp_id, Uuid::nil(), hash, 0)
-        .await?;
-    let counts = report.counts_of(KIND);
-    if mapped.is_some() {
-        counts.updated += 1;
-    } else {
-        counts.created += 1;
-    }
-    Ok(())
+}
+
+/// A label as core takes it: no control characters, at most [`MAX_MENU_LABEL`].
+fn label(text: &str) -> String {
+    text.trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_MENU_LABEL)
+        .collect()
 }
 
 /// The WP id of an entry's parent entry (0 for none).
@@ -222,8 +360,7 @@ fn parent_of(item: &Item) -> i64 {
 /// One entry without its id, parent and position; `Err` with why it is left out.
 async fn entry(
     b: &mut ImportBatch<'_>,
-    ir: &Ir,
-    links: &Links,
+    cx: &Lookups<'_>,
     item: &Item,
 ) -> Result<Result<MenuItem, String>, ImportError> {
     let kind = meta(item, "_menu_item_type").unwrap_or_default();
@@ -231,7 +368,7 @@ async fn entry(
     let object_id: i64 = meta(item, "_menu_item_object_id")
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(0);
-    let mut label = item.title.trim().to_owned();
+    let mut text = item.title.trim().to_owned();
     let base = MenuItem {
         id: MenuItemId::new(),
         parent_id: None,
@@ -243,8 +380,10 @@ async fn entry(
     };
     let entry = match kind {
         "custom" => {
-            let url = links.local_url(meta(item, "_menu_item_url").unwrap_or_default());
-            if !allowed_url(&url) {
+            let url = cx
+                .links
+                .local_url(meta(item, "_menu_item_url").unwrap_or_default());
+            if !is_allowed_menu_url(&url) || url.chars().count() > MAX_MENU_URL {
                 return Ok(Err(format!(
                     "its URL {url:?} is not http(s) or a local path"
                 )));
@@ -255,18 +394,21 @@ async fn entry(
             }
         }
         "post_type" => {
-            let trashed = links
-                .item(object_id)
-                .is_none_or(|(_, status)| status == "trash");
-            let target = match trashed {
-                true => None,
-                false => b.lookup(ImportMapKind::Content, object_id).await?,
-            };
-            let Some(target) = target else {
+            let Some(target) = b.lookup(ImportMapKind::Content, object_id).await? else {
                 return Ok(Err(format!("its {object} {object_id} was not imported")));
             };
-            if label.is_empty() {
-                label = ir
+            let usable = b
+                .get_item(ContentId::from_uuid(target.id))
+                .await?
+                .is_some_and(|i| i.status != ContentStatus::Trash);
+            if !usable {
+                return Ok(Err(format!(
+                    "its {object} {object_id} is in the trash here"
+                )));
+            }
+            if text.is_empty() {
+                text = cx
+                    .ir
                     .item(object_id)
                     .await?
                     .map(|i| i.title)
@@ -284,13 +426,11 @@ async fn entry(
                     "its {object} term {object_id} was not imported"
                 )));
             };
-            if label.is_empty() {
-                label = ir
-                    .terms()
-                    .await?
-                    .into_iter()
-                    .find(|t| t.wp_id == object_id)
-                    .map(|t| t.name)
+            if text.is_empty() {
+                text = cx
+                    .terms
+                    .get(&object_id)
+                    .map(|t| t.name.clone())
                     .unwrap_or_default();
             }
             MenuItem {
@@ -306,47 +446,7 @@ async fn entry(
         }
     };
     Ok(Ok(MenuItem {
-        label: label
-            .chars()
-            .filter(|c| !c.is_control())
-            .take(MAX_LABEL)
-            .collect(),
+        label: label(&text),
         ..entry
     }))
-}
-
-/// Core's rule for a menu URL: `http(s)://…` or an absolute local path, no whitespace,
-/// control characters or backslashes, at most 2 048 characters.
-fn allowed_url(url: &str) -> bool {
-    if url.chars().count() > MAX_URL
-        || url.chars().any(|c| c.is_control() || c.is_whitespace())
-        || url.contains('\\')
-    {
-        return false;
-    }
-    let lower = url.to_ascii_lowercase();
-    let scheme = |p: &str| lower.strip_prefix(p).is_some_and(|rest| !rest.is_empty());
-    scheme("http://") || scheme("https://") || (url.starts_with('/') && !url.starts_with("//"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn menu_urls_follow_core_rules() {
-        for ok in ["/", "/about/", "https://example.org/x", "HTTP://a"] {
-            assert!(allowed_url(ok), "{ok}");
-        }
-        for bad in [
-            "mailto:a@b.test",
-            "#top",
-            "//cdn.test/x",
-            "http://",
-            "/a b",
-            "javascript:x",
-        ] {
-            assert!(!allowed_url(bad), "{bad}");
-        }
-    }
 }
