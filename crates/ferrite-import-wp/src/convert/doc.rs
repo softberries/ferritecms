@@ -80,6 +80,84 @@ pub fn to_json(nodes: &[Node]) -> Value {
     json!({"type": "doc", "content": content})
 }
 
+/// The deepest node [`cap_depth`] leaves nesting: a stored body must load back through
+/// serde_json, which refuses JSON nested past 128 levels (each node is two: its object
+/// and its `content`).
+pub const MAX_DEPTH: usize = 48;
+
+/// Flattens what nests past [`MAX_DEPTH`]: a blockquote, list item or table cell at that
+/// depth keeps its text (with its marks, blocks separated by hard breaks) in one
+/// paragraph instead of its blocks. Images, embeds and HTML below it are dropped.
+/// Returns how many nodes were flattened.
+pub fn cap_depth(nodes: &mut [Node]) -> usize {
+    let mut flattened = 0;
+    cap(nodes, 1, &mut flattened);
+    flattened
+}
+
+fn cap(nodes: &mut [Node], depth: usize, flattened: &mut usize) {
+    for n in nodes {
+        let (content, holds_blocks) = match n {
+            Node::Blockquote(c)
+            | Node::ListItem(c)
+            | Node::TableHeader { content: c, .. }
+            | Node::TableCell { content: c, .. } => (c, true),
+            Node::BulletList(c)
+            | Node::OrderedList { content: c, .. }
+            | Node::Table(c)
+            | Node::TableRow(c) => (c, false),
+            _ => continue,
+        };
+        let nests = content
+            .iter()
+            .any(|c| !matches!(c, Node::Paragraph(_) | Node::Heading { .. }));
+        if holds_blocks && depth >= MAX_DEPTH && nests {
+            let mut inline = Vec::new();
+            flatten(content, &mut inline);
+            *content = vec![Node::Paragraph(inline)];
+            *flattened += 1;
+        } else {
+            cap(content, depth + 1, flattened);
+        }
+    }
+}
+
+/// The text of `nodes` as inline nodes, a hard break between blocks.
+fn flatten(nodes: &[Node], out: &mut Vec<Node>) {
+    for n in nodes {
+        match n {
+            Node::Text { .. } | Node::HardBreak => out.push(n.clone()),
+            Node::CodeBlock { text, .. } => {
+                block_break(out);
+                out.push(Node::Text {
+                    text: text.clone(),
+                    marks: Vec::new(),
+                });
+            }
+            Node::Paragraph(c)
+            | Node::Heading { content: c, .. }
+            | Node::BulletList(c)
+            | Node::OrderedList { content: c, .. }
+            | Node::ListItem(c)
+            | Node::Blockquote(c)
+            | Node::Table(c)
+            | Node::TableRow(c)
+            | Node::TableHeader { content: c, .. }
+            | Node::TableCell { content: c, .. } => {
+                block_break(out);
+                flatten(c, out);
+            }
+            Node::HorizontalRule | Node::Image { .. } | Node::Html(_) | Node::Embed { .. } => {}
+        }
+    }
+}
+
+fn block_break(out: &mut Vec<Node>) {
+    if out.last().is_some_and(|n| *n != Node::HardBreak) {
+        out.push(Node::HardBreak);
+    }
+}
+
 fn list(nodes: &[Node]) -> Vec<Value> {
     nodes.iter().filter_map(node).collect()
 }

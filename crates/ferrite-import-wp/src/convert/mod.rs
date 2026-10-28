@@ -20,6 +20,16 @@ pub mod html;
 pub mod shortcode;
 pub mod shortcodes;
 
+/// A byte of a shortcode or block name: ASCII alphanumeric, `_` or `-`.
+pub(crate) fn is_name_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-')
+}
+
+/// PCRE's `\s` without the `u` flag (WordPress's regexes here have none).
+pub(crate) fn is_pcre_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r')
+}
+
 /// Where an image `src` points after the import (P14).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImageRef {
