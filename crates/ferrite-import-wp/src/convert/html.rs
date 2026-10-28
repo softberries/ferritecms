@@ -9,7 +9,7 @@
 use ferrite_core::blocks::{canonical_embed_url, embed_id, safe_href};
 use scraper::{ElementRef, Html, Node as Dom};
 
-use super::depth::{MAX_PARSE_DEPTH, nesting_depth};
+use super::depth::too_deep;
 use super::doc::{Mark, Node};
 use super::{ImageRef, Notes, Rewrite};
 
@@ -73,10 +73,11 @@ pub(crate) fn plain_paragraphs(html: &str) -> Vec<Node> {
         .collect()
 }
 
-/// `html` parsed as a `<body>` fragment, or `None` (counted as `too_deep`) when its tags
-/// nest past [`MAX_PARSE_DEPTH`]. Every parse of imported markup goes through here.
+/// `html` parsed as a `<body>` fragment, or `None` (counted as `too_deep`) when the tree
+/// builder would take quadratic time on it (`depth::too_deep`). Every parse of imported
+/// markup goes through here.
 pub(crate) fn parse_guarded(html: &str, notes: &mut Notes) -> Option<Html> {
-    if nesting_depth(html) > MAX_PARSE_DEPTH {
+    if too_deep(html) {
         notes.too_deep();
         return None;
     }
@@ -87,8 +88,8 @@ pub(crate) fn parse_guarded(html: &str, notes: &mut Notes) -> Option<Html> {
 ///
 /// Links and image sources go through `rw`; links that are not safe hrefs keep their text
 /// only. h1 becomes h2. Formatting the tree has no mark for keeps its text and is counted
-/// in `notes`, and so are dropped elements. NUL is stripped before parsing. Markup nested
-/// past [`MAX_PARSE_DEPTH`] is not parsed: its source becomes text paragraphs.
+/// in `notes`, and so are dropped elements. NUL is stripped before parsing. Markup too
+/// costly to parse (see [`parse_guarded`]) becomes text paragraphs of its source.
 pub fn convert(html: &str, rw: &dyn Rewrite, notes: &mut Notes) -> Vec<Node> {
     let html = html.replace('\0', "");
     let Some(doc) = parse_guarded(&html, notes) else {
@@ -1324,5 +1325,27 @@ mod tests {
         let (nodes, notes) = conv(&html);
         assert_eq!(nodes, [p(vec![t("x")])]);
         assert_eq!(notes.too_deep.count, 0);
+    }
+
+    /// `<object>` in a table leaves a formatting marker behind that every later `</b>` scans:
+    /// quadratic with a shallow tree.
+    #[test]
+    fn orphaned_formatting_markers_trip_the_guard() {
+        for unit in [
+            "<table><object></table>",
+            "<table><applet></table>",
+            "<table><marquee></table>",
+        ] {
+            let html = format!("{}{}", unit.repeat(40_000), "<b></b>".repeat(40_000));
+            let start = std::time::Instant::now();
+            let mut notes = Notes::default();
+            assert!(parse_guarded(&html, &mut notes).is_none(), "{unit}");
+            assert_eq!(notes.too_deep.count, 1);
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(1),
+                "{unit}: {:?}",
+                start.elapsed()
+            );
+        }
     }
 }

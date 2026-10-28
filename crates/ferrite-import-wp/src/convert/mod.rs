@@ -138,7 +138,8 @@ pub struct Notes {
     pub unknown_blocks: BTreeMap<String, Tally>,
     /// Block comments whose attributes were not a JSON object (read as none).
     pub bad_block_attrs: Tally,
-    /// Markup nested too deep to parse safely, kept as text (past 512 levels).
+    /// Markup too costly to parse safely (nested past 512 levels, or more than 1 024
+    /// `object`/`applet`/`marquee` elements), kept as text.
     pub too_deep: Tally,
     /// Page breaks (`<!--nextpage-->`, the nextpage block) dropped: the pages are joined.
     pub page_breaks: Tally,

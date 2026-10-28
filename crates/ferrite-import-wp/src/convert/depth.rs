@@ -1,10 +1,13 @@
-//! How deep html5ever's tree builder nests a fragment, measured with the tree builder itself.
+//! Whether html5ever's tree builder would take quadratic time on a fragment, measured with
+//! the tree builder itself.
 //!
-//! Tree building is quadratic in the nesting depth, and imported markup is untrusted, so
-//! markup nested past [`MAX_PARSE_DEPTH`] is not parsed for real. The measuring parse runs
-//! html5ever with a [`TreeSink`] that keeps only parent links, and feeds the input in chunks:
-//! once the depth passes the limit it stops, so a body that trips the guard costs a bounded
-//! amount of work.
+//! Imported markup is untrusted. Tree building is quadratic in the nesting depth, and in the
+//! number of formatting markers that `<object>`, `<applet>` and `<marquee>` leave behind
+//! (foster-parented out of a table, they are closed without clearing their marker, and every
+//! later formatting end tag scans past it). Markup past [`MAX_PARSE_DEPTH`] or
+//! [`MAX_MARKER_ELEMENTS`] is not parsed for real. The measuring parse runs html5ever with a
+//! [`TreeSink`] that keeps only parent links, and feeds the input in chunks: once a limit is
+//! passed it stops, so a body that trips the guard costs a bounded amount of work.
 
 use std::borrow::Cow;
 use std::cell::{Cell, Ref, RefCell};
@@ -18,6 +21,35 @@ use html5ever::{Attribute, QualName, local_name, ns};
 /// Markup whose elements nest deeper than this is not parsed.
 pub const MAX_PARSE_DEPTH: usize = 512;
 
+/// Markup with more marker-pushing elements than this is not parsed. `td`, `th`, `caption`
+/// and `template` push markers too, but their markers are cleared when they close (measured:
+/// linear), and real tables have thousands of cells; they are not counted.
+pub const MAX_MARKER_ELEMENTS: usize = 1024;
+
+/// Elements that push a marker onto the list of active formatting elements and can leave it
+/// there.
+const MARKER_ELEMENTS: &[&str] = &["object", "applet", "marquee"];
+
+/// Whether `html` is too costly to parse: nested past [`MAX_PARSE_DEPTH`], or holding more
+/// than [`MAX_MARKER_ELEMENTS`] marker-pushing elements.
+pub(crate) fn too_deep(html: &str) -> bool {
+    let m = measure(html);
+    m.depth > MAX_PARSE_DEPTH || m.markers > MAX_MARKER_ELEMENTS
+}
+
+/// What the measuring parse saw, up to where it stopped.
+#[derive(Debug, Default, Clone, Copy)]
+struct Measure {
+    depth: usize,
+    markers: usize,
+}
+
+impl Measure {
+    fn past_limits(&self) -> bool {
+        self.depth > MAX_PARSE_DEPTH || self.markers > MAX_MARKER_ELEMENTS
+    }
+}
+
 /// How much input is fed between two depth checks.
 const CHUNK: usize = 4096;
 
@@ -25,12 +57,12 @@ const CHUNK: usize = 4096;
 const CAP: usize = MAX_PARSE_DEPTH + 1;
 
 /// The depth of the deepest node the tree builder creates for `html` (parsed as a `<body>`
-/// fragment, as `scraper::Html::parse_fragment` parses it), or a value past
-/// [`MAX_PARSE_DEPTH`] as soon as it gets there. An over-estimate where nodes are moved.
-pub(crate) fn nesting_depth(html: &str) -> usize {
-    let max = Rc::new(Cell::new(0));
+/// fragment, as `scraper::Html::parse_fragment` parses it; an over-estimate where nodes are
+/// moved) and its marker-pushing elements, counted until either passes its limit.
+fn measure(html: &str) -> Measure {
+    let seen = Rc::new(Cell::new(Measure::default()));
     let mut parser = parse_fragment(
-        DepthSink::new(Rc::clone(&max)),
+        DepthSink::new(Rc::clone(&seen)),
         ParseOpts::default(),
         QualName::new(None, ns!(html), local_name!("body")),
         Vec::new(),
@@ -44,13 +76,13 @@ pub(crate) fn nesting_depth(html: &str) -> usize {
         }
         let (chunk, tail) = rest.split_at(at);
         parser.process(StrTendril::from_slice(chunk));
-        if max.get() > MAX_PARSE_DEPTH {
-            return max.get();
+        if seen.get().past_limits() {
+            return seen.get();
         }
         rest = tail;
     }
     parser.finish();
-    max.get()
+    seen.get()
 }
 
 struct Node {
@@ -67,14 +99,14 @@ struct Node {
 /// document is 0. Text is not kept (it adds nothing below an element).
 struct DepthSink {
     nodes: RefCell<Vec<Node>>,
-    max: Rc<Cell<usize>>,
+    seen: Rc<Cell<Measure>>,
 }
 
 impl DepthSink {
-    fn new(max: Rc<Cell<usize>>) -> Self {
+    fn new(seen: Rc<Cell<Measure>>) -> Self {
         let sink = Self {
             nodes: RefCell::new(Vec::new()),
-            max,
+            seen,
         };
         sink.node(QualName::new(None, ns!(), local_name!("")));
         sink
@@ -108,7 +140,9 @@ impl DepthSink {
             at = p;
         }
         let below = nodes[child].height + 1;
-        self.max.set(self.max.get().max(depth + below));
+        let mut seen = self.seen.get();
+        seen.depth = seen.depth.max(depth + below);
+        self.seen.set(seen);
         let mut h = below;
         let mut at = Some(parent);
         let mut steps = 0;
@@ -146,6 +180,11 @@ impl TreeSink for DepthSink {
     }
 
     fn create_element(&self, name: QualName, _: Vec<Attribute>, flags: ElementFlags) -> usize {
+        if name.ns == ns!(html) && MARKER_ELEMENTS.contains(&&*name.local) {
+            let mut seen = self.seen.get();
+            seen.markers += 1;
+            self.seen.set(seen);
+        }
         let element = self.node(name);
         if flags.template {
             let contents = self.node(QualName::new(None, ns!(), local_name!("")));
@@ -225,28 +264,29 @@ mod tests {
 
     use super::*;
 
+    fn depth(html: &str) -> usize {
+        measure(html).depth
+    }
+
     #[test]
     fn measures_the_built_tree() {
-        assert_eq!(nesting_depth(""), 1);
+        assert_eq!(depth(""), 1);
         // html > div > div; text adds nothing.
-        assert_eq!(nesting_depth("<div><div></div><b>x</b></div>"), 3);
-        assert_eq!(nesting_depth(&"<p>x".repeat(10_000)), 2);
-        assert_eq!(nesting_depth(&"<li>x".repeat(10_000)), 2);
-        assert_eq!(
-            nesting_depth(&format!("<svg>{}</svg>", "<path/>".repeat(1_000))),
-            3
-        );
+        assert_eq!(depth("<div><div></div><b>x</b></div>"), 3);
+        assert_eq!(depth(&"<p>x".repeat(10_000)), 2);
+        assert_eq!(depth(&"<li>x".repeat(10_000)), 2);
+        assert_eq!(depth(&format!("<svg>{}</svg>", "<path/>".repeat(1_000))), 3);
         // The adoption agency moves the `<p>` (and what follows) out of `<b>`: counted where
         // it ends up.
-        assert!(nesting_depth("<b><p>x</b>y</p>") <= 4);
+        assert!(depth("<b><p>x</b>y</p>") <= 4);
     }
 
     #[test]
     fn deep_but_legal_markup_is_under_the_limit() {
         let html = format!("{}x{}", "<div>".repeat(500), "</div>".repeat(500));
-        assert!(nesting_depth(&html) <= MAX_PARSE_DEPTH);
+        assert!(depth(&html) <= MAX_PARSE_DEPTH);
         for run in ["<p>a", "<li>b", "<dt>c<dd>d", "<option>e", "<tr><td>f"] {
-            let depth = nesting_depth(&run.repeat(10_000));
+            let depth = depth(&run.repeat(10_000));
             assert!(depth <= 8, "{run}: {depth}");
         }
     }
@@ -258,12 +298,25 @@ mod tests {
     fn a_deep_body_costs_well_under_a_second() {
         let html = format!("{}x{}", "<div>".repeat(40_000), "</div>".repeat(40_000));
         let start = Instant::now();
-        assert!(nesting_depth(&html) > MAX_PARSE_DEPTH);
+        assert!(depth(&html) > MAX_PARSE_DEPTH);
         assert!(
             start.elapsed() < Duration::from_millis(500),
             "{:?}",
             start.elapsed()
         );
+    }
+
+    #[test]
+    fn marker_elements_are_counted_and_cells_are_not() {
+        let m = measure(&"<object></object><applet></applet><marquee></marquee>".repeat(400));
+        assert!(m.markers > MAX_MARKER_ELEMENTS);
+        assert!(too_deep(&"<marquee>x</marquee>".repeat(1_100)));
+        let table = format!(
+            "<table>{}</table><template></template>",
+            "<tr><th>h<td>c<td><table><caption>x</caption></table>".repeat(2_000)
+        );
+        assert_eq!(measure(&table).markers, 0);
+        assert!(!too_deep(&table));
     }
 
     #[test]
@@ -285,6 +338,7 @@ mod tests {
             ("div end past object", "<div><object></div>".repeat(n)),
             ("formatting end past div", "<b><div></b>".repeat(n)),
             ("li then dd", "<li><dd>".repeat(n)),
+            ("self-closing outside foreign content", "<div/>".repeat(n)),
             (
                 "svg breakout, then self-closing",
                 format!("<svg><div>{}", "<div/>".repeat(n)),
@@ -309,7 +363,7 @@ mod tests {
         ];
         for (what, html) in cases {
             let start = Instant::now();
-            let depth = nesting_depth(&html);
+            let depth = depth(&html);
             let took = start.elapsed();
             assert!(depth > MAX_PARSE_DEPTH, "{what}: {depth}");
             assert!(took < Duration::from_secs(1), "{what}: {took:?}");
