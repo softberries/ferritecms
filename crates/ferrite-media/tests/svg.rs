@@ -110,6 +110,59 @@ fn has_external_reference(out: &str) -> bool {
     }
 }
 
+/// True when `javascript:` appears where a renderer could act on it: in an attribute value or in
+/// a `<style>` element. Text content (a `<title>`, a `<text>`) is inert and may contain it.
+fn has_javascript_url(out: &str) -> bool {
+    let mut reader = Reader::from_str(out);
+    let mut in_style = 0usize;
+    loop {
+        match reader.read_event() {
+            Ok(event @ (Event::Start(_) | Event::Empty(_))) => {
+                let (Event::Start(e) | Event::Empty(e)) = &event else {
+                    unreachable!()
+                };
+                if matches!(event, Event::Start(_))
+                    && e.local_name().as_ref().eq_ignore_ascii_case(b"style")
+                {
+                    in_style += 1;
+                }
+                for attr in e.attributes() {
+                    let attr = attr.expect("well-formed attribute");
+                    let value = attr
+                        .normalized_value(XmlVersion::Implicit1_0)
+                        .expect("escaped value")
+                        .to_lowercase();
+                    let squashed: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+                    if squashed.contains("javascript:") {
+                        return true;
+                    }
+                }
+            }
+            Ok(Event::End(e)) if e.local_name().as_ref().eq_ignore_ascii_case(b"style") => {
+                in_style = in_style.saturating_sub(1);
+            }
+            Ok(Event::Text(t)) if in_style > 0 => {
+                if String::from_utf8_lossy(&t)
+                    .to_lowercase()
+                    .contains("javascript:")
+                {
+                    return true;
+                }
+            }
+            Ok(Event::CData(t)) if in_style > 0 => {
+                if String::from_utf8_lossy(&t)
+                    .to_lowercase()
+                    .contains("javascript:")
+                {
+                    return true;
+                }
+            }
+            Ok(Event::Eof) | Err(_) => return false,
+            Ok(_) => {}
+        }
+    }
+}
+
 const FORBIDDEN: &[&str] = &[
     "script",
     "foreignobject",
@@ -682,8 +735,15 @@ fn payload_corpus_never_yields_active_content() {
     ];
     let mut corpus: Vec<Vec<u8>> = payloads.iter().map(|p| p.as_bytes().to_vec()).collect();
     let dir = format!("{}/tests/svg", env!("CARGO_MANIFEST_DIR"));
-    for entry in std::fs::read_dir(&dir).expect("fixture dir") {
-        corpus.push(std::fs::read(entry.expect("entry").path()).expect("fixture"));
+    // Sorted: `read_dir` order differs between file systems, and the mutations below pair
+    // each seed with the next values of one generator.
+    let mut paths: Vec<_> = std::fs::read_dir(&dir)
+        .expect("fixture dir")
+        .map(|entry| entry.expect("entry").path())
+        .collect();
+    paths.sort();
+    for path in paths {
+        corpus.push(std::fs::read(path).expect("fixture"));
     }
 
     // Deterministic mutations: truncations, byte flips and splices of markup fragments.
@@ -737,13 +797,11 @@ fn payload_corpus_never_yields_active_content() {
         accepted += 1;
         let out = String::from_utf8(out).expect("output is UTF-8");
         let lower = out.to_ascii_lowercase();
-        for bad in [
-            "<script",
-            "javascript:",
-            "<!entity",
-            "<!doctype",
-            "<foreignobject",
-        ] {
+        assert!(
+            !has_javascript_url(&out),
+            "javascript: URL in output: {out}"
+        );
+        for bad in ["<script", "<!entity", "<!doctype", "<foreignobject"] {
             assert!(!lower.contains(bad), "{bad:?} in output: {out}");
         }
         assert!(
