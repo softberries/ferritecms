@@ -318,6 +318,17 @@ fn truncated_file_errors() {
 }
 
 #[test]
+fn nesting_is_capped_at_256() {
+    let nest = |n: usize| wxr_doc(&format!("{}{}", "<x>".repeat(n), "</x>".repeat(n)));
+    // rss and channel are two levels already.
+    assert!(read_all(nest(254).as_bytes()).is_ok());
+    match read_all(nest(255).as_bytes()) {
+        Err(ImportError::Xml { msg, .. }) => assert!(msg.contains("256"), "{msg}"),
+        other => panic!("expected Xml, got {other:?}"),
+    }
+}
+
+#[test]
 fn item_without_post_id_is_missing() {
     let doc = wxr_doc("<item><title>a</title><wp:post_type>post</wp:post_type></item>");
     assert!(matches!(

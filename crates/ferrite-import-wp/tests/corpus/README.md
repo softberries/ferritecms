@@ -5,7 +5,7 @@ scratch WordPress 7.1.3. All content (posts, users, comments, images) is synthet
 
 | File | What it is |
 |---|---|
-| `site-a.xml` | WXR export of site A: Gutenberg blocks, Yoast SEO 27.x, ACF 6.8.10 (free), the custom type `book` with the taxonomy `genre`, menus, comments and every post status. 35 items, 4 authors. |
+| `site-a.xml` | WXR export of site A: Gutenberg blocks, Yoast SEO (installed 2026-10-28, requires WordPress ≥ 7.0), ACF 6.8.10 (free), the custom type `book` with the taxonomy `genre`, menus, comments and every post status. 35 items, 4 authors. |
 | `site-b.xml` | WXR export of site B: classic editor HTML, shortcodes, Rank Math 1.0.280. 7 items. |
 | `site-a-uploads/`, `site-b-uploads/` | The `wp-content/uploads` folders of both sites (flat-colour PNG and JPEG files, their generated sizes, one PDF). |
 | `site-a.php`, `site-b.php` | The builder scripts that created the content. |

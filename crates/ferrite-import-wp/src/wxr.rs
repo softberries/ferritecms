@@ -1,15 +1,19 @@
 //! The streaming WXR reader.
 //!
 //! One pass over the file with `quick_xml::Reader`; records go to the sink as soon as they
-//! close, so memory is bounded by the largest single item. Elements are matched by their
-//! qualified names (`wp:`, `content:`, `excerpt:`, `dc:`), the prefixes every WXR version
-//! uses.
+//! close, so memory is bounded by the largest single item.
+//!
+//! Elements are matched by their literal qualified names (`wp:`, `content:`, `excerpt:`,
+//! `dc:`), the prefixes every WordPress export writes; namespace URIs are not resolved.
+//! WordPress writes the channel in a fixed order (header fields, authors, terms, items), and
+//! `<channel>` fields that come after the first author, term or item are ignored.
 //!
 //! Safety (ruling P22): a DOCTYPE is refused, so no entity is ever declared, let alone
-//! expanded; only the five predefined entities and character references are resolved. A
-//! single text node over 64 MiB is refused, and so is invalid UTF-8, with its byte offset.
+//! expanded; only the five predefined entities and character references are resolved. One
+//! node (text, CDATA, tag, comment or PI) over 64 MiB is refused before it is buffered, and
+//! so are elements nested deeper than 256 and invalid UTF-8, with its byte offset.
 
-use std::io::BufRead;
+use std::io::{self, BufRead, Read};
 
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
@@ -20,6 +24,12 @@ use crate::model::{Author, Channel, Comment, Item, ItemTerm, Record, Term};
 
 /// The largest text node read, in bytes.
 const MAX_TEXT: usize = 64 * 1024 * 1024;
+
+/// Bytes one event may read beyond the text cap: the markup around a text node at the cap.
+const EVENT_SLACK: usize = 64 * 1024;
+
+/// The deepest element nesting read.
+const MAX_DEPTH: usize = 256;
 
 /// What [`parse`] read.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -32,6 +42,9 @@ pub struct ParseStats {
 
 /// Reads a WXR file and hands every record to `sink`, in file order, the [`Channel`] first.
 /// An error from `sink` stops the parse and is returned as is.
+///
+/// The per-node cap is checked at each refill of `r`, so a `BufReader` overshoots it by at
+/// most one buffer; an in-memory slice is a single refill and is copied before the check.
 pub fn parse<R: BufRead>(
     r: R,
     sink: impl FnMut(Record) -> Result<(), ImportError>,
@@ -44,7 +57,12 @@ fn parse_with_limit<R: BufRead>(
     sink: impl FnMut(Record) -> Result<(), ImportError>,
     max_text: usize,
 ) -> Result<ParseStats, ImportError> {
-    let mut reader = Reader::from_reader(r);
+    let mut reader = Reader::from_reader(Capped {
+        inner: r,
+        used: 0,
+        limit: max_text.saturating_add(EVENT_SLACK),
+        exceeded: false,
+    });
     let config = reader.config_mut();
     config.trim_text(false);
     config.check_end_names = true;
@@ -69,12 +87,25 @@ fn parse_with_limit<R: BufRead>(
     let mut buf = Vec::new();
     loop {
         p.offset = reader.buffer_position();
-        let event = reader
-            .read_event_into(&mut buf)
-            .map_err(|e| ImportError::Xml {
-                offset: reader.error_position(),
-                msg: e.to_string(),
-            })?;
+        reader.get_mut().used = 0;
+        let event = match reader.read_event_into(&mut buf) {
+            Ok(event) => event,
+            Err(_) if reader.get_ref().exceeded => {
+                return Err(ImportError::TooLarge { offset: p.offset });
+            }
+            Err(quick_xml::Error::Io(e)) => {
+                return Err(ImportError::Io {
+                    offset: reader.buffer_position(),
+                    msg: e.to_string(),
+                });
+            }
+            Err(e) => {
+                return Err(ImportError::Xml {
+                    offset: reader.error_position(),
+                    msg: e.to_string(),
+                });
+            }
+        };
         match event {
             Event::Start(e) => {
                 utf8(&e, p.offset + 1)?;
@@ -143,6 +174,43 @@ fn utf8(raw: &[u8], at: u64) -> Result<(), ImportError> {
         })
 }
 
+/// Counts the bytes one event reads and fails the read once they pass `limit`, so a huge node
+/// is refused before quick-xml has buffered it. `used` is reset before every event.
+struct Capped<R> {
+    inner: R,
+    used: usize,
+    limit: usize,
+    exceeded: bool,
+}
+
+impl<R: BufRead> Read for Capped<R> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        let n = {
+            let available = self.fill_buf()?;
+            let n = available.len().min(out.len());
+            out[..n].copy_from_slice(&available[..n]);
+            n
+        };
+        self.consume(n);
+        Ok(n)
+    }
+}
+
+impl<R: BufRead> BufRead for Capped<R> {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        if self.used > self.limit {
+            self.exceeded = true;
+            return Err(io::Error::other("node larger than the cap"));
+        }
+        self.inner.fill_buf()
+    }
+
+    fn consume(&mut self, n: usize) {
+        self.used = self.used.saturating_add(n);
+        self.inner.consume(n);
+    }
+}
+
 struct Parser<S> {
     sink: S,
     max_text: usize,
@@ -206,6 +274,9 @@ impl<S: FnMut(Record) -> Result<(), ImportError>> Parser<S> {
     }
 
     fn start(&mut self, e: &BytesStart<'_>) -> Result<(), ImportError> {
+        if self.stack.len() >= MAX_DEPTH {
+            return Err(self.xml(format!("elements nested deeper than {MAX_DEPTH}")));
+        }
         let name = e.name().as_ref().to_vec();
         self.text.clear();
         if self.parent_is(b"channel") && self.channel.is_some() {
@@ -536,5 +607,86 @@ mod tests {
         let doc = "<rss><channel><title><![CDATA[01234]]><![CDATA[56789]]></title></channel></rss>";
         let err = parse_with_limit(doc.as_bytes(), |_| Ok(()), 9);
         assert!(matches!(err, Err(ImportError::TooLarge { .. })), "{err:?}");
+    }
+
+    /// A source that yields `prefix` and then `fill` forever, counting what was read.
+    struct Endless {
+        prefix: &'static [u8],
+        fill: u8,
+        read: std::rc::Rc<std::cell::Cell<usize>>,
+    }
+
+    impl std::io::Read for Endless {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let n = if self.prefix.is_empty() {
+                out.fill(self.fill);
+                out.len()
+            } else {
+                let n = self.prefix.len().min(out.len());
+                out[..n].copy_from_slice(&self.prefix[..n]);
+                self.prefix = &self.prefix[n..];
+                n
+            };
+            self.read.set(self.read.get() + n);
+            Ok(n)
+        }
+    }
+
+    fn endless(prefix: &'static [u8], fill: u8) -> Result<ParseStats, ImportError> {
+        let read = std::rc::Rc::new(std::cell::Cell::new(0));
+        let src = std::io::BufReader::new(Endless {
+            prefix,
+            fill,
+            read: read.clone(),
+        });
+        let res = parse_with_limit(src, |_| Ok(()), 1024);
+        // The cap, the slack and one buffer refill at most.
+        assert!(
+            read.get() < 1024 + EVENT_SLACK + 64 * 1024,
+            "read {}",
+            read.get()
+        );
+        res
+    }
+
+    #[test]
+    fn endless_nodes_stop_at_the_cap() {
+        for (prefix, fill) in [
+            (&b"<rss><channel><title>"[..], b'a'),
+            (b"<rss><channel><title><![CDATA[", b'a'),
+            (b"<rss><!--", b'a'),
+            (b"<?pi ", b'a'),
+            (b"<rss a=\"", b'a'),
+            (b"<rss", b'a'),
+        ] {
+            let res = endless(prefix, fill);
+            assert!(
+                matches!(res, Err(ImportError::TooLarge { .. })),
+                "{}: {res:?}",
+                String::from_utf8_lossy(prefix)
+            );
+        }
+    }
+
+    #[test]
+    fn read_failure_is_io() {
+        struct Failing(&'static [u8]);
+        impl std::io::Read for Failing {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                if self.0.is_empty() {
+                    return Err(std::io::Error::other("disk on fire"));
+                }
+                let n = self.0.len().min(out.len());
+                out[..n].copy_from_slice(&self.0[..n]);
+                self.0 = &self.0[n..];
+                Ok(n)
+            }
+        }
+        let src = std::io::BufReader::new(Failing(b"<rss><channel><title>abc"));
+        let res = parse(src, |_| Ok(()));
+        match res {
+            Err(ImportError::Io { msg, .. }) => assert!(msg.contains("disk on fire"), "{msg}"),
+            other => panic!("expected Io, got {other:?}"),
+        }
     }
 }
