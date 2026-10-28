@@ -9,6 +9,7 @@
 use ferrite_core::blocks::{canonical_embed_url, embed_id, safe_href};
 use scraper::{ElementRef, Html, Node as Dom};
 
+use super::depth::too_deep;
 use super::doc::{Mark, Node};
 use super::{ImageRef, Notes, Rewrite};
 
@@ -55,14 +56,45 @@ const PLAIN_INLINE: &[&str] = &[
     "data", "label", "wbr", "nobr", "ruby", "rb", "rt", "rp",
 ];
 
+/// `html`, NUL stripped, as text paragraphs split on blank lines (whitespace collapsed):
+/// what markup too deep to parse becomes.
+pub(crate) fn plain_paragraphs(html: &str) -> Vec<Node> {
+    html.replace('\0', "")
+        .replace("\r\n", "\n")
+        .split("\n\n")
+        .map(|chunk| collapse(chunk).trim().to_owned())
+        .filter(|t| !t.is_empty())
+        .map(|text| {
+            Node::Paragraph(vec![Node::Text {
+                text,
+                marks: Vec::new(),
+            }])
+        })
+        .collect()
+}
+
+/// `html` parsed as a `<body>` fragment, or `None` (counted as `too_deep`) when the tree
+/// builder would take quadratic time on it (`depth::too_deep`). Every parse of imported
+/// markup goes through here.
+pub(crate) fn parse_guarded(html: &str, notes: &mut Notes) -> Option<Html> {
+    if too_deep(html) {
+        notes.too_deep();
+        return None;
+    }
+    Some(Html::parse_fragment(html))
+}
+
 /// Converts an HTML fragment to block nodes.
 ///
 /// Links and image sources go through `rw`; links that are not safe hrefs keep their text
 /// only. h1 becomes h2. Formatting the tree has no mark for keeps its text and is counted
-/// in `notes`, and so are dropped elements. NUL is stripped before parsing.
+/// in `notes`, and so are dropped elements. NUL is stripped before parsing. Markup too
+/// costly to parse (see [`parse_guarded`]) becomes text paragraphs of its source.
 pub fn convert(html: &str, rw: &dyn Rewrite, notes: &mut Notes) -> Vec<Node> {
     let html = html.replace('\0', "");
-    let doc = Html::parse_fragment(&html);
+    let Some(doc) = parse_guarded(&html, notes) else {
+        return plain_paragraphs(&html);
+    };
     let mut c = Conv { rw, notes };
     let mut flow = Flow::default();
     c.children(doc.root_element(), &mut flow, &Style::default(), 0);
@@ -686,7 +718,7 @@ fn code_block(e: ElementRef<'_>) -> Option<Node> {
 }
 
 /// The renderer's `valid_language`: 1–32 of `[a-z0-9+#-]`.
-fn class_language(class: &str) -> Option<String> {
+pub(crate) fn class_language(class: &str) -> Option<String> {
     class.split_ascii_whitespace().find_map(|c| {
         let l = c
             .strip_prefix("language-")
@@ -724,6 +756,10 @@ mod tests {
             } else {
                 ImageRef::Url(src.to_owned())
             }
+        }
+
+        fn attachment(&self, _: i64) -> Option<Uuid> {
+            None
         }
 
         fn href(&self, href: &str) -> String {
@@ -1144,8 +1180,8 @@ mod tests {
     fn deep_nesting_does_not_overflow() {
         let html = format!(
             "{}x{}",
-            "<div><span>".repeat(5_000),
-            "</span></div>".repeat(5_000)
+            "<div><span>".repeat(250),
+            "</span></div>".repeat(250)
         );
         let (nodes, _) = conv(&html);
         assert_eq!(nodes, [p(vec![t("x")])]);
@@ -1262,13 +1298,54 @@ mod tests {
     fn wide_deep_text_stays_linear() {
         let html = format!(
             "{}{}{}",
-            "<div>".repeat(5_000),
+            "<div>".repeat(500),
             "<b>x</b>".repeat(100_000),
-            "</div>".repeat(5_000)
+            "</div>".repeat(500)
         );
         let start = std::time::Instant::now();
         let (nodes, _) = conv(&html);
         assert_eq!(nodes.len(), 1);
         assert!(start.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn markup_nested_too_deep_is_text_and_counted() {
+        let html = format!("<p>a</p>\n\n{}x", "<pre>".repeat(40_000));
+        let start = std::time::Instant::now();
+        let (nodes, notes) = conv(&html);
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        assert_eq!(notes.too_deep.count, 1);
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0], p(vec![t("<p>a</p>")]));
+    }
+
+    #[test]
+    fn deep_but_legal_markup_converts() {
+        let html = format!("{}x{}", "<div>".repeat(500), "</div>".repeat(500));
+        let (nodes, notes) = conv(&html);
+        assert_eq!(nodes, [p(vec![t("x")])]);
+        assert_eq!(notes.too_deep.count, 0);
+    }
+
+    /// `<object>` in a table leaves a formatting marker behind that every later `</b>` scans:
+    /// quadratic with a shallow tree.
+    #[test]
+    fn orphaned_formatting_markers_trip_the_guard() {
+        for unit in [
+            "<table><object></table>",
+            "<table><applet></table>",
+            "<table><marquee></table>",
+        ] {
+            let html = format!("{}{}", unit.repeat(40_000), "<b></b>".repeat(40_000));
+            let start = std::time::Instant::now();
+            let mut notes = Notes::default();
+            assert!(parse_guarded(&html, &mut notes).is_none(), "{unit}");
+            assert_eq!(notes.too_deep.count, 1);
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(1),
+                "{unit}: {:?}",
+                start.elapsed()
+            );
+        }
     }
 }

@@ -16,6 +16,8 @@ pub enum Piece {
         attrs: BTreeMap<String, String>,
         /// The enclosed content when the shortcode has a closing tag.
         inner: Option<String>,
+        /// The opening tag as written, `[name attrs]`; the closing one is always `[/name]`.
+        open: String,
     },
 }
 
@@ -143,6 +145,7 @@ impl Scanner<'_> {
                 name: name.to_owned(),
                 attrs,
                 inner,
+                open: src[start..=bracket].to_owned(),
             },
             end,
         ))
@@ -317,14 +320,45 @@ mod tests {
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect(),
             inner: inner.map(str::to_owned),
+            open: String::new(),
         }
+    }
+
+    /// `scan` with `open` cleared, to compare with [`code`].
+    fn scan_t(src: &str) -> Vec<Piece> {
+        scan(src)
+            .into_iter()
+            .map(|p| match p {
+                Piece::Code {
+                    name, attrs, inner, ..
+                } => Piece::Code {
+                    name,
+                    attrs,
+                    inner,
+                    open: String::new(),
+                },
+                t => t,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn open_is_the_opening_tag_as_written() {
+        let opens: Vec<String> = scan("a [x  k='v' /] [[y]] [[z] [b]in[/b]")
+            .into_iter()
+            .filter_map(|p| match p {
+                Piece::Code { open, .. } => Some(open),
+                Piece::Text(_) => None,
+            })
+            .collect();
+        assert_eq!(opens, ["[x  k='v' /]", "[z]", "[b]"]);
     }
 
     #[test]
     fn caption_with_inner() {
         let src = "<p>[caption id=\"attachment_5\" align=\"aligncenter\" width=\"300\"]<img src=\"/a.jpg\" alt=\"x\" /> The harbour[/caption]</p>";
         assert_eq!(
-            scan(src),
+            scan_t(src),
             [
                 text("<p>"),
                 code(
@@ -343,22 +377,25 @@ mod tests {
 
     #[test]
     fn escaped_shortcode_is_literal_text() {
-        assert_eq!(scan("a [[gallery]] b"), [text("a [gallery] b")]);
+        assert_eq!(scan_t("a [[gallery]] b"), [text("a [gallery] b")]);
         assert_eq!(
-            scan("[[caption]x[/caption]]"),
+            scan_t("[[caption]x[/caption]]"),
             [text("[caption]x[/caption]")]
         );
     }
 
     #[test]
     fn half_escaped_keeps_the_bracket() {
-        assert_eq!(scan("[[gallery]"), [text("["), code("gallery", &[], None)]);
+        assert_eq!(
+            scan_t("[[gallery]"),
+            [text("["), code("gallery", &[], None)]
+        );
     }
 
     #[test]
     fn self_closing_and_open_without_closer() {
         assert_eq!(
-            scan("[gallery ids=\"2,3\" columns=2 /] and [video src='x.mp4']"),
+            scan_t("[gallery ids=\"2,3\" columns=2 /] and [video src='x.mp4']"),
             [
                 code("gallery", &[("ids", "2,3"), ("columns", "2")], None),
                 text(" and "),
@@ -370,7 +407,7 @@ mod tests {
     #[test]
     fn embed_with_url_inner() {
         assert_eq!(
-            scan("[embed]https://vimeo.com/76979871[/embed]"),
+            scan_t("[embed]https://vimeo.com/76979871[/embed]"),
             [code("embed", &[], Some("https://vimeo.com/76979871"))]
         );
     }
@@ -378,7 +415,7 @@ mod tests {
     #[test]
     fn inner_stops_at_the_first_closer() {
         assert_eq!(
-            scan("[b]x[/b]y[/b]"),
+            scan_t("[b]x[/b]y[/b]"),
             [code("b", &[], Some("x")), text("y[/b]")]
         );
     }
@@ -386,7 +423,7 @@ mod tests {
     #[test]
     fn attribute_forms() {
         assert_eq!(
-            scan("[x Key=\"v 1\" k2='v2' k3=v3 \"pos one\" 'pos2' flag]"),
+            scan_t("[x Key=\"v 1\" k2='v2' k3=v3 \"pos one\" 'pos2' flag]"),
             [code(
                 "x",
                 &[
@@ -401,7 +438,7 @@ mod tests {
             )]
         );
         assert_eq!(
-            scan("[x a=\u{a0}\"1\"\u{200b}b=2]"),
+            scan_t("[x a=\u{a0}\"1\"\u{200b}b=2]"),
             [code("x", &[("a", "1"), ("b", "2")], None)]
         );
     }
@@ -411,17 +448,17 @@ mod tests {
         // A name must start with a letter or `_` (WP takes any registered name; footnote
         // markers like `[1]` are not shortcodes here).
         for s in ["[", "[]", "[ x]", "[1] note", "[x", "a [/x] b"] {
-            assert_eq!(scan(s), [text(s)], "{s}");
+            assert_eq!(scan_t(s), [text(s)], "{s}");
         }
-        assert!(scan("").is_empty());
+        assert!(scan_t("").is_empty());
         // As in WP, a `/` not followed by `]` belongs to the attributes.
-        assert_eq!(scan("[x/y]"), [code("x", &[("0", "/y")], None)]);
+        assert_eq!(scan_t("[x/y]"), [code("x", &[("0", "/y")], None)]);
     }
 
     #[test]
     fn hyphenated_names() {
         assert_eq!(
-            scan("[contact-form-7 id=\"12\" title=\"Contact\"]"),
+            scan_t("[contact-form-7 id=\"12\" title=\"Contact\"]"),
             [code(
                 "contact-form-7",
                 &[("id", "12"), ("title", "Contact")],
@@ -433,13 +470,13 @@ mod tests {
     #[test]
     fn many_unclosed_openers_stay_linear() {
         let src = "[x]".repeat(20_000);
-        assert_eq!(scan(&src).len(), 20_000);
+        assert_eq!(scan_t(&src).len(), 20_000);
     }
 
     #[test]
     fn attribute_keys_are_ascii_word_characters() {
         assert_eq!(
-            scan("[x k\u{e9}y=\"v\" ok=1]"),
+            scan_t("[x k\u{e9}y=\"v\" ok=1]"),
             [code("x", &[("0", "k\u{e9}y=\"v\""), ("ok", "1")], None)]
         );
     }
@@ -447,7 +484,7 @@ mod tests {
     #[test]
     fn attribute_values_are_stripcslashed() {
         assert_eq!(
-            scan(r#"[x a="tab\there" b="\x41\101\q\x" c=end\]"#),
+            scan_t(r#"[x a="tab\there" b="\x41\101\q\x" c=end\]"#),
             [code(
                 "x",
                 &[("a", "tab\there"), ("b", "AAqx"), ("c", "end\\")],
@@ -459,7 +496,7 @@ mod tests {
     #[test]
     fn values_with_an_unclosed_lt_are_emptied() {
         assert_eq!(
-            scan("[x a=\"<b>ok</b>\" b=\"<script\" c=\"1 < 2\" d=\"a<b>c\"]"),
+            scan_t("[x a=\"<b>ok</b>\" b=\"<script\" c=\"1 < 2\" d=\"a<b>c\"]"),
             [code(
                 "x",
                 &[("a", "<b>ok</b>"), ("b", ""), ("c", ""), ("d", "a<b>c")],
@@ -472,9 +509,9 @@ mod tests {
     fn unclosed_openers_stay_linear() {
         let start = std::time::Instant::now();
         let src = "[x".repeat(200_000);
-        assert_eq!(scan(&src), [text(&src)]);
+        assert_eq!(scan_t(&src), [text(&src)]);
         let distinct: String = (0..200_000).map(|i| format!("[a{i}]")).collect();
-        assert_eq!(scan(&distinct).len(), 200_000);
+        assert_eq!(scan_t(&distinct).len(), 200_000);
         assert!(start.elapsed() < std::time::Duration::from_secs(10));
     }
 }
