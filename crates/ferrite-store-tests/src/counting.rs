@@ -22,10 +22,11 @@ use ferrite_domain::{
 };
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
-    ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, JobRepo, LockGuard, MediaRepo,
-    MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo,
-    PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo,
-    SessionRepo, Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LockGuard,
+    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo,
+    PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,
+    SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo,
+    Tx, UserRepo,
 };
 use serde_json::Value;
 
@@ -196,6 +197,9 @@ impl Repos for CountingRepos {
     }
     fn autosaves(&self) -> &dyn AutosaveRepo {
         self.inner.read().autosaves()
+    }
+    fn imports(&self) -> &dyn ImportRepo {
+        self.inner.read().imports()
     }
 }
 
@@ -600,6 +604,9 @@ impl Repos for CountingTx {
     }
     fn autosaves(&self) -> &dyn AutosaveRepo {
         self.tx.autosaves()
+    }
+    fn imports(&self) -> &dyn ImportRepo {
+        self.tx.imports()
     }
     fn types(&self) -> &dyn ContentTypeRepo {
         self

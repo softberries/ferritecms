@@ -1,8 +1,8 @@
 //! Migration contract tests (02 §7–§8).
 
 use ferrite_domain::{
-    Artifact, ArtifactHash, ArtifactKind, IDEMPOTENCY_STALE, IdemBegin, IdempotencyKey, Media,
-    Timestamp,
+    Artifact, ArtifactHash, ArtifactKind, IDEMPOTENCY_STALE, IdemBegin, IdempotencyKey,
+    ImportMapKind, Media, Timestamp,
 };
 use ferrite_store::{Compat, Phase, SCHEMA_META_MIN_BINARY, StoreError};
 use semver::Version;
@@ -20,7 +20,7 @@ pub async fn fresh_db_is_up_to_date(db: &TestDb) {
     let store = db.store();
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::UpToDate);
-    assert_eq!((s.db_version, s.binary_version), (8, 8));
+    assert_eq!((s.db_version, s.binary_version), (9, 9));
     assert!(s.pending.is_empty() && s.unknown_applied.is_empty());
     assert_eq!(s.min_binary, None);
 
@@ -68,25 +68,28 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
     // 0005's sessions and the audit log): refused without allow_lossy, nothing reverted.
     let err = store.migrate_down(0, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 8 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 9 has a lossy down")),
         "{err:?}"
     );
     assert_eq!(
         store.migration_status(&binary()).await.unwrap().db_version,
-        8
+        9
     );
     // 0005 goes down and up again (the SQLite `DROP COLUMN` included).
-    assert_eq!(store.migrate_down(4, true).await.unwrap(), vec![8, 7, 6, 5]);
+    assert_eq!(
+        store.migrate_down(4, true).await.unwrap(),
+        vec![9, 8, 7, 6, 5]
+    );
     assert!(
         !db.user_objects()
             .await
             .iter()
             .any(|o| o.contains("sessions") || o.contains("audit_log")),
     );
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![5, 6, 7, 8]);
+    assert_eq!(store.migrate_up(None).await.unwrap(), vec![5, 6, 7, 8, 9]);
     assert_eq!(
         store.migrate_down(0, true).await.unwrap(),
-        vec![8, 7, 6, 5, 4, 3, 2, 1]
+        vec![9, 8, 7, 6, 5, 4, 3, 2, 1]
     );
     assert_eq!(db.user_objects().await, Vec::<String>::new());
     let s = store.migration_status(&binary()).await.unwrap();
@@ -94,7 +97,7 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
 
     assert_eq!(
         store.migrate_up(None).await.unwrap(),
-        vec![1, 2, 3, 4, 5, 6, 7, 8]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
     );
     assert_eq!(store.migrate_up(None).await.unwrap(), Vec::<i64>::new());
     let s = store.migration_status(&binary()).await.unwrap();
@@ -114,15 +117,15 @@ pub async fn verdict_after_partial_down(db: &TestDb) {
     let store = db.store();
     assert_eq!(
         store.migrate_down(1, true).await.unwrap(),
-        vec![8, 7, 6, 5, 4, 3, 2]
+        vec![9, 8, 7, 6, 5, 4, 3, 2]
     );
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::NeedsUp);
     assert_eq!(
         s.pending.iter().map(|p| p.version).collect::<Vec<_>>(),
-        vec![2, 3, 4, 5, 6, 7, 8]
+        vec![2, 3, 4, 5, 6, 7, 8, 9]
     );
-    assert_eq!((s.db_version, s.binary_version), (1, 8));
+    assert_eq!((s.db_version, s.binary_version), (1, 9));
     let objects = db.user_objects().await;
     assert!(objects.iter().any(|o| o.ends_with(":content_items")));
     assert!(!objects.iter().any(|o| o.contains("search")), "{objects:?}");
@@ -149,7 +152,7 @@ pub async fn verdict_after_partial_down(db: &TestDb) {
     );
     assert_eq!(
         store.migrate_up(None).await.unwrap(),
-        vec![3, 4, 5, 6, 7, 8]
+        vec![3, 4, 5, 6, 7, 8, 9]
     );
     assert_eq!(
         store.migration_status(&binary()).await.unwrap().verdict,
@@ -196,10 +199,10 @@ pub async fn status_reports_pending_directives(db: &TestDb) {
     let store = db.store();
     assert_eq!(
         store.migrate_down(2, true).await.unwrap(),
-        vec![8, 7, 6, 5, 4, 3]
+        vec![9, 8, 7, 6, 5, 4, 3]
     );
     let s = store.migration_status(&binary()).await.unwrap();
-    assert_eq!(s.pending.len(), 6);
+    assert_eq!(s.pending.len(), 7);
     let pending = &s.pending[0];
     assert_eq!(pending.version, 3);
     assert!(!pending.description.is_empty());
@@ -237,6 +240,11 @@ pub async fn status_reports_pending_directives(db: &TestDb) {
     assert_eq!(seo.directives.phase, Phase::Expand);
     assert_eq!(seo.directives.min_binary, None);
     assert!(seo.directives.lossy_down);
+    let import = &s.pending[6];
+    assert_eq!((import.version, import.description.as_str()), (9, "import"));
+    assert_eq!(import.directives.phase, Phase::Expand);
+    assert_eq!(import.directives.min_binary, None);
+    assert!(import.directives.lossy_down);
 }
 
 /// `0006_media_comments` (M2a-2b P2): its objects exist; the down is lossy (refused
@@ -309,14 +317,14 @@ pub async fn migration_0006_roundtrip(db: &TestDb) {
     // 0007 and 0008 sit above it and are lossy too; refused first, nothing reverted.
     let err = store.migrate_down(5, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 8 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 9 has a lossy down")),
         "{err:?}"
     );
     assert_eq!(
         store.migration_status(&binary()).await.unwrap().db_version,
-        8
+        9
     );
-    assert_eq!(store.migrate_down(5, true).await.unwrap(), vec![8, 7, 6]);
+    assert_eq!(store.migrate_down(5, true).await.unwrap(), vec![9, 8, 7, 6]);
     let objects = db.user_objects().await;
     for name in OBJECTS {
         assert!(!has(&objects, name), "{name} left: {objects:?}");
@@ -324,12 +332,12 @@ pub async fn migration_0006_roundtrip(db: &TestDb) {
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(
         s.pending.iter().map(|p| p.version).collect::<Vec<_>>(),
-        [6, 7, 8]
+        [6, 7, 8, 9]
     );
     assert!(s.pending[0].directives.lossy_down);
 
     // Up again re-adds the column (so the down really dropped it) at its default.
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![6, 7, 8]);
+    assert_eq!(store.migrate_up(None).await.unwrap(), vec![6, 7, 8, 9]);
     let got = store.read().media().get(item.id).await.unwrap().unwrap();
     assert_eq!(
         got,
@@ -379,11 +387,11 @@ pub async fn migration_0007_roundtrip(db: &TestDb) {
 
     let err = store.migrate_down(6, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 8 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 9 has a lossy down")),
         "{err:?}"
     );
     assert!(has(&db.user_objects().await, "autosaves"));
-    assert_eq!(store.migrate_down(6, true).await.unwrap(), vec![8, 7]);
+    assert_eq!(store.migrate_down(6, true).await.unwrap(), vec![9, 8, 7]);
     let objects = db.user_objects().await;
     for name in OBJECTS {
         assert!(!has(&objects, name), "{name} left: {objects:?}");
@@ -391,12 +399,12 @@ pub async fn migration_0007_roundtrip(db: &TestDb) {
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(
         s.pending.iter().map(|p| p.version).collect::<Vec<_>>(),
-        [7, 8]
+        [7, 8, 9]
     );
     assert!(s.pending[0].directives.lossy_down);
     assert_eq!(s.pending[0].directives.phase, Phase::Expand);
 
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![7, 8]);
+    assert_eq!(store.migrate_up(None).await.unwrap(), vec![7, 8, 9]);
     // The row did not survive; the table takes it again.
     let repos = store.read();
     assert_eq!(
@@ -432,16 +440,19 @@ pub async fn migration_0008_roundtrip(db: &TestDb) {
 
     let err = store.migrate_down(7, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 8 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 9 has a lossy down")),
         "{err:?}"
     );
     assert_eq!(
         store.migration_status(&binary()).await.unwrap().db_version,
-        8
+        9
     );
-    assert_eq!(store.migrate_down(7, true).await.unwrap(), vec![8]);
+    assert_eq!(store.migrate_down(7, true).await.unwrap(), vec![9, 8]);
     let s = store.migration_status(&binary()).await.unwrap();
-    assert_eq!(s.pending.iter().map(|p| p.version).collect::<Vec<_>>(), [8]);
+    assert_eq!(
+        s.pending.iter().map(|p| p.version).collect::<Vec<_>>(),
+        [8, 9]
+    );
     assert_eq!(
         (
             s.pending[0].description.as_str(),
@@ -451,7 +462,7 @@ pub async fn migration_0008_roundtrip(db: &TestDb) {
     );
     assert!(s.pending[0].directives.lossy_down);
 
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![8]);
+    assert_eq!(store.migrate_up(None).await.unwrap(), vec![8, 9]);
     // The slot survived without its SEO member.
     let repos = store.read();
     assert_eq!(
@@ -466,6 +477,73 @@ pub async fn migration_0008_roundtrip(db: &TestDb) {
         repos.autosaves().get(item.id, author.id).await.unwrap(),
         Some(slot)
     );
+    assert_eq!(
+        store.migration_status(&binary()).await.unwrap().verdict,
+        Compat::UpToDate
+    );
+}
+
+/// `0009_import` (M3-1 Task 1): its tables exist; the down is lossy (refused without
+/// `allow_lossy`, nothing reverted) and drops every run and map row; up again restores
+/// empty tables that take new rows.
+pub async fn migration_0009_roundtrip(db: &TestDb) {
+    let store = db.store();
+    const OBJECTS: [&str; 5] = [
+        "import_runs",
+        "import_map",
+        "import_runs_running_uq",
+        "import_runs_started_idx",
+        "import_runs_started_by_idx",
+    ];
+    let has =
+        |objects: &[String], name: &str| objects.iter().any(|o| o.ends_with(&format!(":{name}")));
+    let objects = db.user_objects().await;
+    for name in OBJECTS {
+        assert!(has(&objects, name), "{name}: {objects:?}");
+    }
+
+    let admin = fixture_user(store).await;
+    let run = crate::import::new_run(admin.id, "https://wp.example");
+    store.read().imports().create_run(&run).await.unwrap();
+    let map = crate::import::map_row("https://wp.example", ImportMapKind::Content, 7);
+    store.read().imports().map_put(&map).await.unwrap();
+
+    let err = store.migrate_down(8, false).await.unwrap_err();
+    assert!(
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 9 has a lossy down")),
+        "{err:?}"
+    );
+    assert!(has(&db.user_objects().await, "import_runs"));
+    assert_eq!(store.migrate_down(8, true).await.unwrap(), vec![9]);
+    let objects = db.user_objects().await;
+    for name in OBJECTS {
+        assert!(!has(&objects, name), "{name} left: {objects:?}");
+    }
+    let s = store.migration_status(&binary()).await.unwrap();
+    assert_eq!(s.pending.iter().map(|p| p.version).collect::<Vec<_>>(), [9]);
+    assert_eq!(
+        (
+            s.pending[0].description.as_str(),
+            s.pending[0].directives.phase
+        ),
+        ("import", Phase::Expand)
+    );
+    assert!(s.pending[0].directives.lossy_down);
+
+    assert_eq!(store.migrate_up(None).await.unwrap(), vec![9]);
+    // The rows did not survive; the tables take them again.
+    let repos = store.read();
+    assert_eq!(repos.imports().get_run(run.id).await.unwrap(), None);
+    assert_eq!(
+        repos
+            .imports()
+            .map_get(&map.source, map.kind, map.wp_id)
+            .await
+            .unwrap(),
+        None
+    );
+    repos.imports().create_run(&run).await.unwrap();
+    repos.imports().map_put(&map).await.unwrap();
     assert_eq!(
         store.migration_status(&binary()).await.unwrap().verdict,
         Compat::UpToDate

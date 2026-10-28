@@ -196,6 +196,8 @@ impl ContentService {
             menu_order: draft.menu_order,
             published_at: None,
             scheduled_at: None,
+            created_at: None,
+            updated_at: None,
         });
         let saved = save_with_free_slug(tx, row, &base, None, &root).await?;
         set_terms(tx, saved.id, &terms).await?;

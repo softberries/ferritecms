@@ -47,6 +47,8 @@ async fn insert_draft(store: &dyn Store) {
             menu_order: 0,
             published_at: None,
             scheduled_at: None,
+            created_at: None,
+            updated_at: None,
         })
         .await
         .expect("insert draft");

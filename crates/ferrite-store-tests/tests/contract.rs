@@ -2,9 +2,9 @@ use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
     audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning, batch::*, comment::*,
     comment_counts::*, comment_threads::*, constraints::*, content::*, event::*, idempotency::*,
-    job::*, job_list::*, lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*,
-    notify::*, plugin::*, plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*,
-    user::*, user_filters::*,
+    import::*, job::*, job_list::*, lock::*, menu::*, migration_dirs, migration_files,
+    migrations::*, node::*, notify::*, plugin::*, plugin_failure::*, search::*, semantics::*,
+    site::*, taxonomy::*, tx::*, user::*, user_filters::*,
 };
 
 backend_tests!(
@@ -17,7 +17,17 @@ backend_tests!(
     migration_0006_roundtrip,
     migration_0007_roundtrip,
     migration_0008_roundtrip,
+    migration_0009_roundtrip,
 );
+
+backend_tests!(
+    import_run_roundtrip_and_running,
+    fence_true_only_for_matching_running_token,
+    import_map_upsert_and_list,
+    content_insert_keeps_explicit_timestamps,
+);
+
+backend_tests_spawning!(fence_serialises_with_takeover);
 
 backend_tests!(
     autosave_upsert_get_delete,

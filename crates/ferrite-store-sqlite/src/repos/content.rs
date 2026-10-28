@@ -121,7 +121,9 @@ impl ContentRepo for SqliteRepos {
         }
         validate_json(&item.body)?;
         validate_json(&item.fields)?;
-        let now = Timestamp::now().as_micros();
+        let now = Timestamp::now();
+        let created = item.created_at.unwrap_or(now).as_micros();
+        let updated = item.updated_at.unwrap_or(now).as_micros();
         let row = run!(&self.writer, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO content_items (id, type, status, slug, parent_id, author_id, title, \
              excerpt, body, body_html, fields, menu_order, published_at, scheduled_at, \
@@ -143,8 +145,8 @@ impl ContentRepo for SqliteRepos {
         .bind(item.menu_order)
         .bind(item.published_at.map(|t| t.as_micros()))
         .bind(item.scheduled_at.map(|t| t.as_micros()))
-        .bind(now)
-        .bind(now)
+        .bind(created)
+        .bind(updated)
         .fetch_one(e))?;
         codec::content_item(&row)
     }

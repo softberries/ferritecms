@@ -130,12 +130,14 @@ impl ContentRepo for PgRepos {
         }
         validate_json(&item.body)?;
         validate_json(&item.fields)?;
-        let now = dt(Timestamp::now());
+        let now = Timestamp::now();
+        let created = dt(item.created_at.unwrap_or(now));
+        let updated = dt(item.updated_at.unwrap_or(now));
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO content_items (id, type, status, slug, parent_id, author_id, title, \
              excerpt, body, body_html, fields, menu_order, published_at, scheduled_at, \
              created_at, updated_at, version) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15, 1) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1) \
              RETURNING {CONTENT_COLUMNS}"
         )))
         .bind(item.id.as_uuid())
@@ -152,7 +154,8 @@ impl ContentRepo for PgRepos {
         .bind(item.menu_order)
         .bind(item.published_at.map(dt))
         .bind(item.scheduled_at.map(dt))
-        .bind(now)
+        .bind(created)
+        .bind(updated)
         .fetch_one(e))?;
         codec::content_item(&row)
     }

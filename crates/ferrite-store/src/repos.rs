@@ -7,11 +7,12 @@ use async_trait::async_trait;
 use ferrite_domain::{
     ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, AuditQuery, Autosave,
     Comment, CommentId, CommentQuery, CommentStatus, ContentId, ContentItem, ContentQuery,
-    ContentType, Event, FailureBucket, IdemBegin, IdempotencyKey, InstalledPlugin, InstalledTheme,
-    Job, JobId, JobLease, JobQuery, JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob,
-    NewNode, NewUser, Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId,
-    RedirectQuery, Revision, RevisionId, SearchQuery, Secret, Session, Taxonomy, Term, TermId,
-    Timestamp, User, UserId, UserQuery,
+    ContentType, Event, FailureBucket, IdemBegin, IdempotencyKey, ImportMapKind, ImportMapRow,
+    ImportRun, ImportRunId, ImportRunState, InstalledPlugin, InstalledTheme, Job, JobId, JobLease,
+    JobQuery, JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob, NewNode, NewUser,
+    Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId, RedirectQuery, Revision,
+    RevisionId, SearchQuery, Secret, Session, Taxonomy, Term, TermId, Timestamp, User, UserId,
+    UserQuery,
 };
 
 use crate::{Channel, LockGuard, StoreError, Subscription, migrate::MigrationStatus};
@@ -145,6 +146,7 @@ pub trait Repos: Send + Sync {
     fn comments(&self) -> &dyn CommentRepo;
     fn idempotency(&self) -> &dyn IdempotencyRepo;
     fn autosaves(&self) -> &dyn AutosaveRepo;
+    fn imports(&self) -> &dyn ImportRepo;
 }
 
 #[async_trait]
@@ -1070,4 +1072,53 @@ pub trait AutosaveRepo: Send + Sync {
     async fn get(&self, item: ContentId, user: UserId) -> Result<Option<Autosave>, StoreError>;
     /// Deletes the row of (`item`, `user`); `true` when there was one.
     async fn delete(&self, item: ContentId, user: UserId) -> Result<bool, StoreError>;
+}
+
+/// WordPress import bookkeeping (`0009_import`, M3-1 P3, P5): the run rows and the
+/// source-id map. Use it through a `Tx` so a batch's [`fence`](ImportRepo::fence) and
+/// its writes commit together.
+#[async_trait]
+pub trait ImportRepo: Send + Sync {
+    /// Inserts a run. A second `running` run is
+    /// `UniqueViolation { constraint: "import_runs_running_uq" }`; an unknown
+    /// `started_by` is [`StoreError::ForeignKey`].
+    async fn create_run(&self, run: &ImportRun) -> Result<(), StoreError>;
+    /// The fence (P5): sets `heartbeat_at = now` on the run when `token` matches and it
+    /// is still `running`; `true` iff one row changed. On Postgres the row lock this
+    /// takes in a `Tx` makes a concurrent [`set_state`](ImportRepo::set_state) wait for
+    /// the commit.
+    async fn fence(
+        &self,
+        run: ImportRunId,
+        token: &[u8; 16],
+        now: Timestamp,
+    ) -> Result<bool, StoreError>;
+    async fn get_run(&self, id: ImportRunId) -> Result<Option<ImportRun>, StoreError>;
+    /// The run in state `running`, if any.
+    async fn running(&self) -> Result<Option<ImportRun>, StoreError>;
+    /// Runs, newest first; `limit` is 1..=[`MAX_PAGE`](ferrite_domain::MAX_PAGE).
+    async fn list_runs(&self, limit: u32) -> Result<Vec<ImportRun>, StoreError>;
+    /// Sets the state and the stats; `finished_at` is `now` unless the state is
+    /// `running`. A missing run is [`StoreError::NotFound`].
+    async fn set_state(
+        &self,
+        id: ImportRunId,
+        state: ImportRunState,
+        stats: &serde_json::Value,
+        now: Timestamp,
+    ) -> Result<(), StoreError>;
+    async fn map_get(
+        &self,
+        source: &str,
+        kind: ImportMapKind,
+        wp_id: i64,
+    ) -> Result<Option<ImportMapRow>, StoreError>;
+    /// Inserts or replaces the row of (`source`, `kind`, `wp_id`).
+    async fn map_put(&self, row: &ImportMapRow) -> Result<(), StoreError>;
+    /// Every row of (`source`, `kind`), ordered by `wp_id`.
+    async fn map_list(
+        &self,
+        source: &str,
+        kind: ImportMapKind,
+    ) -> Result<Vec<ImportMapRow>, StoreError>;
 }

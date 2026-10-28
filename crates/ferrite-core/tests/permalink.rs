@@ -455,6 +455,8 @@ pub async fn descendant_walk_is_capped(db: &TestDb) {
                 menu_order: 0,
                 published_at: Some(Timestamp::now()),
                 scheduled_at: None,
+                created_at: None,
+                updated_at: None,
             })
             .await
             .unwrap();

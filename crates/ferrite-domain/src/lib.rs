@@ -7,6 +7,7 @@ mod event;
 mod hex;
 pub mod html;
 mod ids;
+mod import;
 mod job;
 mod menu;
 mod node;
@@ -34,9 +35,10 @@ pub use content::{
 pub use event::{Event, NewEvent};
 pub use hex::to_hex;
 pub use ids::{
-    ApiTokenId, ArtifactHash, AuditId, CommentId, ContentId, JobId, MenuItemId, NodeId, RedirectId,
-    RevisionId, TermId, UserId,
+    ApiTokenId, ArtifactHash, AuditId, CommentId, ContentId, ImportRunId, JobId, MenuItemId,
+    NodeId, RedirectId, RevisionId, TermId, UserId,
 };
+pub use import::{ImportMapKind, ImportMapRow, ImportRun, ImportRunState};
 pub use job::{DEFAULT_MAX_ATTEMPTS, Job, JobLease, JobQuery, JobStatus, NewJob};
 pub use menu::{Menu, MenuItem, MenuItemKind};
 pub use node::{NewNode, Node};
