@@ -12325,7 +12325,7 @@
       },
       "SeoPatchDto": {
         "type": "object",
-        "description": "A change to an item's SEO meta. Per member: absent keeps it, `null` or a string\nthat is blank after trimming deletes it, any other string sets it (trimmed). No NUL,\nand no control characters once trimmed (an edge newline is trimmed, an inner one\nrefused); `title` at most 200 characters and `description` at most 500 (`422`,\n`errors[0].field` = `seo.title` / `seo.description`). `canonical`, trimmed, must be\nan absolute `http(s)` URL of at most 2048 characters (`seo.canonical`); `robots`\nreplaces the directives (`null` or `[]` deletes them; an unknown one is `422`).",
+        "description": "A change to an item's SEO meta. Per member: absent keeps it, `null` or a string\nthat is blank after trimming deletes it, any other string sets it (trimmed). No NUL,\nand no control characters once trimmed (an edge newline is trimmed, an inner one\nrefused); `title` at most 200 characters and `description` at most 500 (`422`,\n`errors[0].field` = `seo.title` / `seo.description`). `canonical`, trimmed, must be\nan absolute `http(s)` URL of at most 2048 characters (`seo.canonical`); `robots`\nreplaces the directives (`null` or `[]` deletes them; an unknown one is `400`, a malformed body).",
         "properties": {
           "canonical": {
             "type": [

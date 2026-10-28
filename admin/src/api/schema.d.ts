@@ -2624,7 +2624,7 @@ export interface components {
          *     refused); `title` at most 200 characters and `description` at most 500 (`422`,
          *     `errors[0].field` = `seo.title` / `seo.description`). `canonical`, trimmed, must be
          *     an absolute `http(s)` URL of at most 2048 characters (`seo.canonical`); `robots`
-         *     replaces the directives (`null` or `[]` deletes them; an unknown one is `422`).
+         *     replaces the directives (`null` or `[]` deletes them; an unknown one is `400`, a malformed body).
          */
         SeoPatchDto: {
             canonical?: string | null;

@@ -517,6 +517,21 @@ pub async fn seo_canonical_and_robots(db: &TestDb) {
     meta.set(item.id, SEO_CANONICAL_META, &json!(7))
         .await
         .unwrap();
+    for bad in [
+        "javascript:alert(1)",
+        "/relative",
+        "https://a b/",
+        "data:text/html,x",
+    ] {
+        meta.set(item.id, SEO_CANONICAL_META, &json!(bad))
+            .await
+            .unwrap();
+        assert_eq!(
+            svc.seo_of(&author, item.id).await.unwrap().canonical,
+            None,
+            "{bad}"
+        );
+    }
     let seo = svc.seo_of(&author, item.id).await.unwrap();
     assert_eq!((seo.canonical, seo.robots), (None, vec![Robots::NoIndex]));
     // `null` / empty delete.

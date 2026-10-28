@@ -491,3 +491,18 @@ fn seo_robots_is_one_merged_tag() {
     let html = render(&core_head(SITE, page(Some(&it), "/t/"), &Seo::default()));
     assert!(!html.contains("robots"), "{html}");
 }
+
+#[test]
+fn seo_canonical_is_escaped() {
+    let it = item("T", "");
+    let s = Seo {
+        canonical: Some("https://example.org/a?x=1&y=\"2\"".into()),
+        ..Seo::default()
+    };
+    let html = render(&core_head(SITE, page(Some(&it), "/t/"), &s));
+    assert!(
+        html.contains("href=\"https://example.org/a?x=1&amp;y=&quot;2&quot;\""),
+        "{html}"
+    );
+    assert!(!html.contains("y=\"2\""), "{html}");
+}

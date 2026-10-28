@@ -99,7 +99,15 @@ impl Seo {
             match (key.as_str(), value) {
                 (SEO_TITLE_META, Value::String(text)) => seo.title = Some(text),
                 (SEO_DESCRIPTION_META, Value::String(text)) => seo.description = Some(text),
-                (SEO_CANONICAL_META, Value::String(text)) => seo.canonical = Some(text),
+                // A plugin may have stored anything: only a URL the checks would accept is
+                // ever read (the head never emits another).
+                (SEO_CANONICAL_META, Value::String(text))
+                    if text.chars().count() <= MAX_SEO_CANONICAL
+                        && !text.chars().any(|c| c.is_control() || c.is_whitespace())
+                        && is_http_url(&text) =>
+                {
+                    seo.canonical = Some(text);
+                }
                 (SEO_ROBOTS_META, Value::Array(items)) => {
                     seo.robots = normalise(
                         items
@@ -237,10 +245,16 @@ fn check_canonical(member: &Option<Option<String>>) -> Result<(), CoreError> {
     if text.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return bad("must not contain whitespace or control characters");
     }
-    match Url::parse(text) {
-        Ok(url) if matches!(url.scheme(), "http" | "https") && url.host_str().is_some() => Ok(()),
-        _ => bad("must be an absolute http(s) URL"),
+    if !is_http_url(text) {
+        return bad("must be an absolute http(s) URL");
     }
+    Ok(())
+}
+
+/// Whether `text` parses as an `http(s)` URL with a host.
+fn is_http_url(text: &str) -> bool {
+    Url::parse(text)
+        .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
 }
 
 /// One member of a [`SeoPatch`]: no NUL; once trimmed, no control characters and at
