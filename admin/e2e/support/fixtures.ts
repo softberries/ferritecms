@@ -79,8 +79,11 @@ const goneElsewhere = (file: string): RegExp[] =>
  *   load <url> due to access control checks." (Playwright passes it on as a page error),
  *   and a lazy module whose request was cancelled as "TypeError: Importing a module
  *   script failed." (both recognised by `webkit-cancelled.ts`). Each is accepted only when
- *   that page saw the request cancelled within `CANCEL_WINDOW_MS`: the fetch's own URL
- *   (of this site), or for an import any script.
+ *   that page shows the cancellation within `CANCEL_WINDOW_MS`: for a fetch (of this
+ *   site), its URL failed as cancelled or the page's main frame navigated (WebKit can
+ *   cancel a fetch before Playwright sees its request: no `request` or `requestfailed`
+ *   event, only the error just before the navigation commits); for an import, any
+ *   script request failed as cancelled.
  */
 const CANCELLED_LOAD: Partial<Record<string, (text: string) => boolean>> = {
   firefox: (text) =>
@@ -93,17 +96,22 @@ const CANCEL_WINDOW_MS = 2_000;
 
 /**
  * WebKit: a `reload()` while the page is still fetching the modules it preloads can fail
- * with "Frame load interrupted" (the reload's own request is cancelled; 10 §3). The
- * page's `reload` tries once more then.
+ * with "Frame load interrupted" (10 §3). WebKit goes on loading the document then (a trace
+ * showed three document requests for one reload), and a reload sent at once is
+ * interrupted by that load in turn. The page's `reload` waits `RELOAD_SETTLE_MS` and tries
+ * again, at most twice.
  */
+const RELOAD_SETTLE_MS = 250;
 function retryInterruptedReload(page: Page): void {
   const reload = page.reload.bind(page);
   page.reload = async (options) => {
-    try {
-      return await reload(options);
-    } catch (e) {
-      if (!String(e).includes("Frame load interrupted")) throw e;
-      return reload(options);
+    for (let retries = 2; ; retries--) {
+      try {
+        return await reload(options);
+      } catch (e) {
+        if (retries === 0 || !String(e).includes("Frame load interrupted")) throw e;
+        await new Promise((resolve) => setTimeout(resolve, RELOAD_SETTLE_MS));
+      }
     }
   };
 }
@@ -152,10 +160,11 @@ export const test = base.extend<Fixtures & Options>({
       const isCancelledLoad = (text: string) => cancelled?.(text) ?? false;
       const gone = goneElsewhere(testInfo.file);
       const problems: string[] = [];
-      // WebKit: errors that a cancelled request explains (`url` null: any script), and
-      // the requests each page saw cancelled.
+      // WebKit: errors that a cancelled request explains (`url` null: any script), the
+      // requests each page saw cancelled, and when each page's main frame navigated.
       const pending: { page: Page; url: string | null; at: number; report: string }[] = [];
       const cancelledRequests = new Map<Page, { url: string; script: boolean; at: number }[]>();
+      const navigations = new Map<Page, number[]>();
       /** WebKit's report of a cancelled load, kept until the end of the test; else false. */
       const deferCancelled = (page: Page, load: CancelledLoad | null, report: string): boolean => {
         if (browserName !== "webkit" || !load) return false;
@@ -183,6 +192,10 @@ export const test = base.extend<Fixtures & Options>({
             if (r.failure()?.errorText !== "cancelled") return;
             const seen = { url: r.url(), script: r.resourceType() === "script", at: Date.now() };
             cancelledRequests.set(page, [...(cancelledRequests.get(page) ?? []), seen]);
+          });
+          page.on("framenavigated", (frame) => {
+            if (frame !== page.mainFrame()) return;
+            navigations.set(page, [...(navigations.get(page) ?? []), Date.now()]);
           });
         }
         page.on("console", (msg) => {
@@ -240,11 +253,13 @@ export const test = base.extend<Fixtures & Options>({
       };
       await guard.watch(context);
       await use(guard);
+      const near = (t: number, at: number) => Math.abs(t - at) <= CANCEL_WINDOW_MS;
       for (const { page, url, at, report } of pending) {
-        const explained = (cancelledRequests.get(page) ?? []).some(
-          (r) =>
-            Math.abs(r.at - at) <= CANCEL_WINDOW_MS && (url === null ? r.script : r.url === url),
-        );
+        const explained =
+          (cancelledRequests.get(page) ?? []).some(
+            (r) => near(r.at, at) && (url === null ? r.script : r.url === url),
+          ) ||
+          (url !== null && (navigations.get(page) ?? []).some((t) => near(t, at)));
         if (!explained) problems.push(report);
       }
       expect(problems, "CSP violations, page errors and console errors").toEqual([]);
