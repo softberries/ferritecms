@@ -270,9 +270,18 @@ test("screens", async ({ as, snap, expectAccessible }) => {
   release();
   await page.unroute(SEARCH, hold);
 
-  // Results.
+  // Results: the last round's answer, not the previous query's rows, which stay up dimmed
+  // while a slow round runs (seen in Firefox under load: axe measured them at 60 %).
   await expect(option(page, new RegExp(SEEDED))).toBeVisible();
   await expect(palette(page).locator("[data-slot=palette-searching]")).toBeHidden();
+  await expect(palette(page).getByRole("status")).toHaveText(/\d+ content results?/);
+  await expect
+    .poll(() =>
+      palette(page)
+        .getByRole("group", { name: "Content" })
+        .evaluate((el) => getComputedStyle(el).opacity),
+    )
+    .toBe("1");
   await snap(page, "palette-results");
   await expectAccessible(page);
 
