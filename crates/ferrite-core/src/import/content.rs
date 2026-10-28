@@ -240,34 +240,21 @@ impl ImportBatch<'_> {
         })
     }
 
-    /// Replaces the body of imported item `id`, mapped from WP item `wp_id` (the link
-    /// fix-up pass, P14). The item must still be at the version the import left it at
-    /// (else `Conflict`, nothing written: it was edited here); a map row of this
-    /// source for `wp_id` that is missing or names another item is `NotFound`. The
-    /// version goes up and the map row follows it, so the item still counts as not
-    /// edited locally (P4); `updated_at`, the excerpt and the revision are kept. The
-    /// search entry is rewritten and the item's keys join the event.
+    /// Replaces the body and the `fields` of imported item `id`, mapped from WP item
+    /// `wp_id`, in one write (one version): the fix-up of an item whose links or
+    /// relations named items written after it (P14). The item must still be at the
+    /// version the import left it at (else `Conflict`, nothing written: it was edited
+    /// here); a map row of this source for `wp_id` that is missing or names another item
+    /// is `NotFound`. The fields are checked against the item's type as a content write
+    /// checks them. The version goes up and the map row follows it, so the item still
+    /// counts as not edited locally (P4); `updated_at`, the excerpt and the revision are
+    /// kept. The search entry is rewritten and the item's keys join the event.
     ///
     /// **Errors.** As for [`content`](Self::content): any `Err` leaves the batch
     /// unusable, and the caller must [`rollback`](Self::rollback) it. (A `Conflict` or
     /// `NotFound` is returned before anything is written, but the contract is the
-    /// same for every error.) `Ok(true)` when the body changed, `Ok(false)` when it
-    /// was already `body`.
-    pub async fn set_body(
-        &mut self,
-        id: ContentId,
-        wp_id: i64,
-        body: Value,
-    ) -> Result<bool, CoreError> {
-        check_body(&body)?;
-        self.fix_up(id, wp_id, |item| item.body = body).await
-    }
-
-    /// Replaces the body and the `fields` of imported item `id` in one write (one
-    /// version): the fix-up of an item whose links or relations named items written
-    /// after it. The rules and errors are [`set_body`](Self::set_body)'s; the fields are
-    /// checked against the item's type as a content write checks them. `Ok(true)` when
-    /// something changed, `Ok(false)` when both were already as given.
+    /// same for every error.) `Ok(true)` when something changed, `Ok(false)` when both
+    /// were already as given.
     pub async fn set_body_and_fields(
         &mut self,
         id: ContentId,
@@ -303,9 +290,8 @@ impl ImportBatch<'_> {
         Ok(Some(self.rules.path(&input)))
     }
 
-    /// The shared write of [`set_body`](Self::set_body) and
-    /// [`set_body_and_fields`](Self::set_body_and_fields): `change` applied to the item
-    /// at its mapped version; `true` when it changed anything.
+    /// The write of [`set_body_and_fields`](Self::set_body_and_fields): `change`
+    /// applied to the item at its mapped version; `true` when it changed anything.
     async fn fix_up(
         &mut self,
         id: ContentId,

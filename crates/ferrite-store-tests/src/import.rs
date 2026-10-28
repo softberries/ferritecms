@@ -340,9 +340,8 @@ pub async fn fence_serialises_with_takeover(db: Arc<TestDb>) {
     );
 }
 
-/// `map_put` upserts by (source, kind, wp_id); `map_get` and `map_list` filter by
-/// source and kind, and the list is ordered by `wp_id`.
-pub async fn import_map_upsert_and_list(db: &TestDb) {
+/// `map_put` upserts by (source, kind, wp_id); `map_get` finds a row by all three.
+pub async fn import_map_upsert_and_get(db: &TestDb) {
     let store = db.store();
     let repos = store.read();
     let imports = repos.imports();
@@ -372,8 +371,8 @@ pub async fn import_map_upsert_and_list(db: &TestDb) {
     };
     imports.map_put(&again).await.unwrap();
     assert_eq!(
-        imports.map_list(a, ImportMapKind::Term).await.unwrap(),
-        std::slice::from_ref(&again)
+        imports.map_get(a, ImportMapKind::Term, 3).await.unwrap(),
+        Some(again.clone())
     );
 
     let low = map_row(a, ImportMapKind::Term, 1);
@@ -388,31 +387,33 @@ pub async fn import_map_upsert_and_list(db: &TestDb) {
         .await
         .unwrap();
     assert_eq!(
-        imports.map_list(a, ImportMapKind::Term).await.unwrap(),
-        [low, again]
+        imports.map_get(a, ImportMapKind::Term, 1).await.unwrap(),
+        Some(low)
     );
     assert_eq!(
-        imports
-            .map_list(a, ImportMapKind::Content)
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
-    assert_eq!(
-        imports
-            .map_list(b, ImportMapKind::Term)
-            .await
-            .unwrap()
-            .len(),
-        1
+        imports.map_get(a, ImportMapKind::Term, 3).await.unwrap(),
+        Some(again)
     );
     assert!(
         imports
-            .map_list(b, ImportMapKind::Menu)
+            .map_get(a, ImportMapKind::Content, 3)
             .await
             .unwrap()
-            .is_empty()
+            .is_some()
+    );
+    assert!(
+        imports
+            .map_get(b, ImportMapKind::Term, 3)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        imports
+            .map_get(b, ImportMapKind::Menu, 3)
+            .await
+            .unwrap()
+            .is_none()
     );
     // Every kind is accepted, `option` and `redirect` (what the import wrote) included.
     for kind in [ImportMapKind::Option, ImportMapKind::Redirect] {

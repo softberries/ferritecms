@@ -203,19 +203,4 @@ impl ImportRepo for SqliteRepos {
         .execute(e))
         .map(|_| ())
     }
-
-    async fn map_list(
-        &self,
-        source: &str,
-        kind: ImportMapKind,
-    ) -> Result<Vec<ImportMapRow>, StoreError> {
-        validate_text("import source", source)?;
-        let rows = run!(&self.reader, |e| sqlx::query(AssertSqlSafe(format!(
-            "SELECT {MAP_COLUMNS} FROM import_map WHERE source = ? AND kind = ? ORDER BY wp_id"
-        )))
-        .bind(source)
-        .bind(kind.as_str())
-        .fetch_all(e))?;
-        rows.iter().map(import_map).collect()
-    }
 }

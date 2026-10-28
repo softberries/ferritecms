@@ -650,7 +650,7 @@ pub async fn rerun_rename_and_unpublish_records_no_redirect(db: &TestDb) {
     assert_eq!(redirects.get_by_source("/was-live").await.unwrap(), None);
 }
 
-/// `set_body` (the link fix-up) rewrites the body, keeps `updated_at` and moves the
+/// `set_body_and_fields` (the link fix-up) rewrites the body, keeps `updated_at` and moves the
 /// map's version, so the item still counts as not edited locally. An item edited in
 /// FerriteCMS is `Conflict` and left alone.
 pub async fn set_body_keeps_item_unedited(db: &TestDb) {
@@ -664,7 +664,7 @@ pub async fn set_body_keeps_item_unedited(db: &TestDb) {
     let run = imp.start(&admin, SOURCE, false, false).await.unwrap();
     let mut batch = run.batch(&imp).await.unwrap();
     batch
-        .set_body(id, 1, body("fixedzebra link"))
+        .set_body_and_fields(id, 1, body("fixedzebra link"), json!({}))
         .await
         .unwrap();
     assert_eq!(batch.len(), 1);
@@ -708,14 +708,20 @@ pub async fn set_body_keeps_item_unedited(db: &TestDb) {
         .unwrap();
     let run = imp.start(&admin, SOURCE, false, false).await.unwrap();
     let mut batch = run.batch(&imp).await.unwrap();
-    let err = batch.set_body(id, 1, body("fix")).await.unwrap_err();
+    let err = batch
+        .set_body_and_fields(id, 1, body("fix"), json!({}))
+        .await
+        .unwrap_err();
     assert!(matches!(err, CoreError::Conflict { .. }), "{err:?}");
     // Any error: the caller rolls the batch back and opens a new one.
     batch.rollback().await.unwrap();
     // Unmapped WP id, or a mapped one naming another item: NotFound.
     for (other, wp_id) in [(id, 99), (ContentId::new(), 1)] {
         let mut batch = run.batch(&imp).await.unwrap();
-        let err = batch.set_body(other, wp_id, body("fix")).await.unwrap_err();
+        let err = batch
+            .set_body_and_fields(other, wp_id, body("fix"), json!({}))
+            .await
+            .unwrap_err();
         assert!(matches!(err, CoreError::NotFound), "{err:?}");
         batch.rollback().await.unwrap();
     }
@@ -857,7 +863,10 @@ pub async fn no_plugin_actions(db: &TestDb) {
     let imp = importer(db);
     let run = imp.start(&admin, SOURCE, false, false).await.unwrap();
     let mut batch = run.batch(&imp).await.unwrap();
-    batch.set_body(out[0].id, 1, body("fixed")).await.unwrap();
+    batch
+        .set_body_and_fields(out[0].id, 1, body("fixed"), json!({}))
+        .await
+        .unwrap();
     let mut changed = item(2, "two", admin.user);
     changed.hash = "new".into();
     assert_eq!(

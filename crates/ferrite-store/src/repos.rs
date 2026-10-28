@@ -1129,10 +1129,4 @@ pub trait ImportRepo: Send + Sync {
     ) -> Result<Option<ImportMapRow>, StoreError>;
     /// Inserts or replaces the row of (`source`, `kind`, `wp_id`).
     async fn map_put(&self, row: &ImportMapRow) -> Result<(), StoreError>;
-    /// Every row of (`source`, `kind`), ordered by `wp_id`.
-    async fn map_list(
-        &self,
-        source: &str,
-        kind: ImportMapKind,
-    ) -> Result<Vec<ImportMapRow>, StoreError>;
 }
