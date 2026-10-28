@@ -27,8 +27,8 @@ use ferrite_domain::{ImportRun, ImportRunId, ImportRunState, Timestamp};
 use ferrite_store::{LOCK_IMPORT, LockGuard, Store, StoreError};
 use serde_json::{Value, json};
 
-pub use batch::{ImportBatch, Mapped};
-pub use terms::ImportTerm;
+pub use batch::{ImportBatch, Mapped, WP_ID_META};
+pub use terms::{ImportTerm, TermMatched, TermOutcome};
 pub use users::{ImportUser, Matched, UserOutcome};
 
 use crate::{
@@ -72,6 +72,9 @@ impl ImportService {
     /// [`Capability::Import`]. Another `running` run makes this
     /// [`CoreError::Unavailable`], unless `takeover` is set and that run's heartbeat is
     /// older than [`STALE_AFTER`]: then it is marked `abandoned` first (P5).
+    ///
+    /// On SQLite (one writer) never call this while a batch of this process is open:
+    /// it would wait for that batch's transaction and time out (`Store(Busy)`).
     pub async fn start(
         &self,
         actor: &Actor,
@@ -161,6 +164,10 @@ impl ImportService {
 impl ImportHandle {
     /// Opens a batch: a transaction whose first statement is the fence (P5). A run that
     /// was taken over is [`CoreError::Changed`].
+    ///
+    /// On SQLite (one writer) never open a batch while another batch of the same handle
+    /// (or any other write transaction of this process) is still open: it waits for the
+    /// writer and times out (`Store(Busy)`). Commit or roll back the first one.
     pub async fn batch(&self, svc: &ImportService) -> Result<ImportBatch<'_>, CoreError> {
         ImportBatch::open(self, svc.store.as_ref(), false).await
     }
@@ -175,6 +182,9 @@ impl ImportHandle {
 
     /// Proves the run is still this handle's and moves its heartbeat, outside a batch
     /// (for long steps that write nothing). Taken over: [`CoreError::Changed`].
+    ///
+    /// On SQLite (one writer) never call this while a batch of this handle is open: the
+    /// fence's write waits for that batch's transaction and times out (`Store(Busy)`).
     pub async fn heartbeat(&self, svc: &ImportService) -> Result<(), CoreError> {
         let fenced = svc
             .store

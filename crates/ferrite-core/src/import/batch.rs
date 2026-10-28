@@ -18,6 +18,11 @@ use crate::{
 
 /// More distinct keys than this make the batch's event `invalidate [all]` (P6, R2).
 const MAX_EVENT_KEYS: usize = 1_000;
+/// The meta key holding an imported item's WP id (a JSON number, P3); the one
+/// `import.` key [`ImportBatch::meta`] accepts.
+pub const WP_ID_META: &str = "import.wp.id";
+/// Meta key prefixes core writes itself.
+const RESERVED_META_PREFIXES: [&str; 2] = ["seo.", "import."];
 /// A schema write on a batch that does not hold the `types` lock.
 const NEEDS_SCHEMA_BATCH: &str =
     "content types, taxonomies and permalink options need a schema batch";
@@ -196,12 +201,17 @@ impl<'a> ImportBatch<'a> {
     }
 
     /// Sets one meta value of `item` and adds the item's key to the batch's event.
+    ///
+    /// The key must not be empty, and must not start with a prefix core owns: `seo.`
+    /// (written through the item's SEO fields) and `import.`, except the exact key
+    /// [`WP_ID_META`] (the item's WP id, P3). Others are `InvalidKey { key, .. }`.
     pub async fn meta(
         &mut self,
         item: ContentId,
         key: &str,
         value: &Value,
     ) -> Result<(), CoreError> {
+        check_meta_key(key)?;
         self.tx.meta().set(item, key, value).await?;
         self.keys.insert(events::post_key(item));
         Ok(())
@@ -229,15 +239,9 @@ impl<'a> ImportBatch<'a> {
         let appended = if keys.is_empty() {
             Ok(())
         } else {
-            let keys: Vec<String> = if keys.len() > MAX_EVENT_KEYS || keys.contains(events::ALL_KEY)
-            {
-                vec![events::ALL_KEY.to_owned()]
-            } else {
-                keys.into_iter().collect()
-            };
             self.tx
                 .events()
-                .append(&events::invalidate(keys))
+                .append(&events::invalidate(event_keys(keys)))
                 .await
                 .map(|_| ())
                 .map_err(CoreError::from)
@@ -305,4 +309,57 @@ async fn target_exists(
             .is_some(),
         ImportMapKind::Menu => true,
     })
+}
+
+/// The keys of the batch's `invalidate` event: `[all]` when `all` is among them or
+/// there are more than [`MAX_EVENT_KEYS`], else all of them.
+fn event_keys(keys: BTreeSet<String>) -> Vec<String> {
+    if keys.len() > MAX_EVENT_KEYS || keys.contains(events::ALL_KEY) {
+        vec![events::ALL_KEY.to_owned()]
+    } else {
+        keys.into_iter().collect()
+    }
+}
+
+/// See [`ImportBatch::meta`].
+fn check_meta_key(key: &str) -> Result<(), CoreError> {
+    if key.is_empty() {
+        return Err(CoreError::invalid_key(key, "meta key must not be empty"));
+    }
+    if key != WP_ID_META
+        && let Some(prefix) = RESERVED_META_PREFIXES.iter().find(|p| key.starts_with(*p))
+    {
+        return Err(CoreError::invalid_key(
+            key,
+            format!("meta keys starting with {prefix:?} are reserved"),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_keys_collapse_to_all() {
+        let many: BTreeSet<String> = (0..=MAX_EVENT_KEYS).map(|i| format!("post:{i}")).collect();
+        assert_eq!(event_keys(many), [events::ALL_KEY]);
+        let limit: BTreeSet<String> = (0..MAX_EVENT_KEYS).map(|i| format!("post:{i}")).collect();
+        assert_eq!(event_keys(limit).len(), MAX_EVENT_KEYS);
+        let with_all: BTreeSet<String> = ["post:1".to_owned(), events::ALL_KEY.to_owned()].into();
+        assert_eq!(event_keys(with_all), [events::ALL_KEY]);
+    }
+
+    #[test]
+    fn meta_keys() {
+        assert!(check_meta_key(WP_ID_META).is_ok());
+        assert!(check_meta_key("wp.quotes").is_ok());
+        for bad in ["", "seo.title", "import.wp.idx", "import.other"] {
+            assert!(
+                matches!(check_meta_key(bad), Err(CoreError::InvalidKey { .. })),
+                "{bad}"
+            );
+        }
+    }
 }

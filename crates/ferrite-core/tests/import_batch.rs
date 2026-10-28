@@ -7,12 +7,14 @@ use ferrite_core::{
     Actor, CoreError, NewType,
     events::{ALL_KEY, INVALIDATE, TYPES_CHANGED, term_key},
     fields::{FieldDef, FieldKind},
-    import::{ImportService, ImportTerm, ImportUser, Matched},
+    import::{
+        ImportBatch, ImportService, ImportTerm, ImportUser, Matched, TermMatched, WP_ID_META,
+    },
 };
 use ferrite_domain::{
     ImportMapKind, ImportRunState, NewUser, Role, Taxonomy, TermId, Timestamp, UserId, UserStatus,
 };
-use ferrite_store::Store;
+use ferrite_store::{LOCK_IMPORT, Store};
 use ferrite_store_tests::{TestDb, backend_tests};
 use serde_json::json;
 
@@ -192,7 +194,7 @@ pub async fn batch_emits_one_event(db: &TestDb) {
     let mut batch = run.batch(&svc).await.unwrap();
     let mut ids = Vec::new();
     for (wp_id, slug) in [(1, "one"), (2, "two"), (3, "three")] {
-        ids.push(batch.term(term(wp_id, slug, None)).await.unwrap());
+        ids.push(batch.term(term(wp_id, slug, None)).await.unwrap().id);
     }
     assert_eq!(batch.len(), 3);
     batch.commit().await.unwrap();
@@ -206,7 +208,8 @@ pub async fn batch_emits_one_event(db: &TestDb) {
     // A second batch reuses the mapped terms: no new rows, no new event.
     let seq = store.read().events().max_seq().await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
-    assert_eq!(batch.term(term(2, "two", None)).await.unwrap(), ids[1]);
+    let again = batch.term(term(2, "two", None)).await.unwrap();
+    assert_eq!((again.id, again.how), (ids[1], TermMatched::Mapped));
     let mapped = batch.lookup(ImportMapKind::Term, 2).await.unwrap().unwrap();
     assert_eq!(mapped.id, ids[1].as_uuid());
     assert_eq!(batch.len(), 0);
@@ -293,28 +296,81 @@ pub async fn user_matching_order(db: &TestDb) {
     assert_eq!(jd.display_name, "john-doe-2");
 }
 
-/// P8: a term keeps its WP slug and parent; a slug taken in the taxonomy gets `-2`.
+/// P8: a new term keeps its WP slug and parent; a WP term whose slug an existing site
+/// term of the taxonomy has maps to that term (left as it is, no new term).
 pub async fn term_keeps_slug_and_parent(db: &TestDb) {
+    let store = db.store();
+    let admin = admin(store).await;
+    let existing = ferrite_domain::Term {
+        id: TermId::new(),
+        taxonomy: "category".into(),
+        slug: "news".into(),
+        name: "Site news".into(),
+        description: "kept".into(),
+        parent_id: None,
+    };
+    let tx = store.begin().await.unwrap();
+    tx.terms().insert(&existing).await.unwrap();
+    tx.commit().await.unwrap();
+    let svc = service(db);
+    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let mut batch = run.batch(&svc).await.unwrap();
+    let parent = batch.term(term(10, "world", None)).await.unwrap();
+    assert_eq!(parent.how, TermMatched::Created);
+    let parent = parent.id;
+    let child = batch
+        .term(term(11, "Local-News", Some(parent)))
+        .await
+        .unwrap();
+    assert_eq!(child.how, TermMatched::Created);
+    let news = batch.term(term(12, "News", None)).await.unwrap();
+    assert_eq!((news.id, news.how), (existing.id, TermMatched::Slug));
+    let mapped = batch
+        .lookup(ImportMapKind::Term, 12)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(mapped.id, existing.id.as_uuid());
+    assert_eq!(batch.len(), 2);
+    batch.commit().await.unwrap();
+
+    let terms = store.read().terms();
+    let child = terms.get(child.id).await.unwrap().unwrap();
+    assert_eq!(child.slug, "local-news");
+    assert_eq!(child.parent_id, Some(parent));
+    assert_eq!(child.name, "Name Local-News");
+    assert_eq!(terms.get(parent).await.unwrap().unwrap().slug, "world");
+    assert_eq!(terms.get(existing.id).await.unwrap().unwrap(), existing);
+    assert_eq!(terms.list("category").await.unwrap().len(), 3);
+}
+
+/// A map row whose term now sits in another taxonomy than the WP term's is not used:
+/// the term is matched again in its own taxonomy and the row replaced.
+pub async fn mapped_term_of_other_taxonomy_is_not_used(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
     let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
-    let parent = batch.term(term(10, "news", None)).await.unwrap();
-    let child = batch
-        .term(term(11, "Local-News", Some(parent)))
+    let cat = batch.term(term(40, "shared", None)).await.unwrap().id;
+    let tag = batch
+        .term(ImportTerm {
+            taxonomy: "tag".into(),
+            ..term(40, "shared", None)
+        })
         .await
         .unwrap();
-    let clash = batch.term(term(12, "news", None)).await.unwrap();
+    assert_eq!(tag.how, TermMatched::Created);
+    assert_ne!(tag.id, cat);
+    let row = batch
+        .lookup(ImportMapKind::Term, 40)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.id, tag.id.as_uuid());
+    let back = batch.term(term(40, "shared", None)).await.unwrap();
+    assert_eq!((back.id, back.how), (cat, TermMatched::Slug));
     batch.commit().await.unwrap();
-
-    let terms = store.read().terms();
-    let child = terms.get(child).await.unwrap().unwrap();
-    assert_eq!(child.slug, "local-news");
-    assert_eq!(child.parent_id, Some(parent));
-    assert_eq!(child.name, "Name Local-News");
-    assert_eq!(terms.get(parent).await.unwrap().unwrap().slug, "news");
-    assert_eq!(terms.get(clash).await.unwrap().unwrap().slug, "news-2");
 }
 
 /// A batch dropped (or rolled back) without commit writes no row, map entry or event.
@@ -370,7 +426,7 @@ pub async fn stale_map_row_is_not_mapped(db: &TestDb) {
     let svc = service(db);
     let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
-    let id = batch.term(term(30, "gone", None)).await.unwrap();
+    let id = batch.term(term(30, "gone", None)).await.unwrap().id;
     batch.commit().await.unwrap();
     let tx = store.begin().await.unwrap();
     tx.terms().delete(id).await.unwrap();
@@ -385,6 +441,8 @@ pub async fn stale_map_row_is_not_mapped(db: &TestDb) {
             .is_none()
     );
     let again = batch.term(term(30, "gone", None)).await.unwrap();
+    assert_eq!(again.how, TermMatched::Created);
+    let again = again.id;
     assert_ne!(again, id);
     batch
         .remember(ImportMapKind::Content, 7, uuid::Uuid::now_v7(), "h", 3)
@@ -542,10 +600,14 @@ pub async fn meta_is_written_with_item_key(db: &TestDb) {
     let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
     let seq = store.read().events().max_seq().await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
-    batch
-        .meta(saved.id, "import.wp.id", &json!(42))
-        .await
-        .unwrap();
+    for bad in ["", "seo.title", "import.other"] {
+        let err = batch.meta(saved.id, bad, &json!(1)).await.unwrap_err();
+        assert!(
+            matches!(err, CoreError::InvalidKey { .. }),
+            "{bad}: {err:?}"
+        );
+    }
+    batch.meta(saved.id, WP_ID_META, &json!(42)).await.unwrap();
     batch.commit().await.unwrap();
     assert_eq!(
         store
@@ -562,12 +624,119 @@ pub async fn meta_is_written_with_item_key(db: &TestDb) {
     );
 }
 
+/// More than 1 000 distinct keys in one batch make its one event `invalidate [all]`.
+pub async fn many_keys_collapse_to_all(db: &TestDb) {
+    let store = db.store();
+    let admin = admin(store).await;
+    let author = store.read().users().get(admin.user).await.unwrap().unwrap();
+    let tx = store.begin().await.unwrap();
+    let mut items = Vec::new();
+    for n in 0..1001 {
+        let item = ferrite_store_tests::fixtures::new_post(&author, &format!("p-{n}"));
+        items.push(tx.content().insert(&item).await.unwrap().id);
+    }
+    tx.commit().await.unwrap();
+    let svc = service(db);
+    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let seq = store.read().events().max_seq().await.unwrap();
+    let mut batch = run.batch(&svc).await.unwrap();
+    for id in &items {
+        batch.meta(*id, "wp.n", &json!(1)).await.unwrap();
+    }
+    batch.commit().await.unwrap();
+    assert_eq!(
+        invalidations_since(store, seq).await,
+        [vec![ALL_KEY.to_owned()]]
+    );
+}
+
+/// The `import` lock is held from `start` to `finish` (Postgres: a session advisory
+/// lock; SQLite: the in-process lock table, which refuses a second holder in the same
+/// process just the same), and released by `finish` even when it is refused.
+pub async fn import_lock_held_for_the_run(db: &TestDb) {
+    let store = db.store();
+    let admin = admin(store).await;
+    let svc = service(db);
+    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    assert!(store.try_lock(LOCK_IMPORT).await.unwrap().is_none(), "held");
+    run.finish(&svc, ImportRunState::Done, json!({}))
+        .await
+        .unwrap();
+    let guard = store.try_lock(LOCK_IMPORT).await.unwrap().expect("free");
+    guard.release().await.unwrap();
+
+    // A finish that is refused (taken over) still releases the lock.
+    let a = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    assert!(
+        store
+            .read()
+            .imports()
+            .fence(a.run.id, &a.run.token, ago(121))
+            .await
+            .unwrap()
+    );
+    let b = svc.start(&admin, SOURCE, false, true).await.unwrap();
+    assert!(
+        a.finish(&svc, ImportRunState::Done, json!({}))
+            .await
+            .is_err()
+    );
+    // B started while A held the lock, so B holds none: the lock is free now.
+    let guard = store.try_lock(LOCK_IMPORT).await.unwrap().expect("free");
+    guard.release().await.unwrap();
+    b.finish(&svc, ImportRunState::Done, json!({}))
+        .await
+        .unwrap();
+}
+
+/// `heartbeat` moves the heartbeat while the run is the handle's, and is `Changed`
+/// once the run was taken over.
+pub async fn heartbeat_fails_after_takeover(db: &TestDb) {
+    let store = db.store();
+    let admin = admin(store).await;
+    let svc = service(db);
+    let a = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let imports = store.read().imports();
+    assert!(
+        imports
+            .fence(a.run.id, &a.run.token, ago(121))
+            .await
+            .unwrap()
+    );
+    a.heartbeat(&svc).await.unwrap();
+    let beat = imports
+        .get_run(a.run.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .heartbeat_at;
+    assert!(beat > ago(5), "heartbeat moved");
+    // Fresh again: a takeover is refused.
+    let err = svc.start(&admin, SOURCE, false, true).await.err().unwrap();
+    assert!(matches!(err, CoreError::Unavailable(_)), "{err:?}");
+
+    assert!(
+        imports
+            .fence(a.run.id, &a.run.token, ago(121))
+            .await
+            .unwrap()
+    );
+    let _b = svc.start(&admin, SOURCE, false, true).await.unwrap();
+    let err = a.heartbeat(&svc).await.unwrap_err();
+    assert!(matches!(err, CoreError::Changed(_)), "{err:?}");
+    assert_eq!(ImportBatch::BATCH_ITEMS, 500);
+}
+
 backend_tests!(
     start_requires_import_capability,
     second_start_is_busy_and_takeover_fences_the_first,
     batch_emits_one_event,
     user_matching_order,
     term_keeps_slug_and_parent,
+    mapped_term_of_other_taxonomy_is_not_used,
+    many_keys_collapse_to_all,
+    import_lock_held_for_the_run,
+    heartbeat_fails_after_takeover,
     rolled_back_batch_writes_nothing,
     stale_map_row_is_not_mapped,
     schema_batch_registers_types_and_taxonomies,
