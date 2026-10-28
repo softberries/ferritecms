@@ -161,8 +161,8 @@ impl IndexTerms {
 }
 
 /// Splits an item's title and body into index terms with the limits above: at most
-/// [`MAX_INDEX_TERMS`] distinct terms (and [`MAX_INDEX_TERM_BYTES`] of them), positions up
-/// to [`MAX_POSITION`], at most [`MAX_POSITIONS_PER_TERM`] positions per term.
+/// [`MAX_INDEX_TERMS`] distinct terms (and `MAX_INDEX_TERM_BYTES` of them), positions up
+/// to `MAX_POSITION`, at most `MAX_POSITIONS_PER_TERM` positions per term.
 pub fn index_terms(title: &str, body: &str) -> IndexTerms {
     let mut out = IndexTerms::default();
     // Per field: term -> index in that field's list.

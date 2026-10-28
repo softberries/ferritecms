@@ -58,7 +58,7 @@ impl ImportBatch<'_> {
     /// mapped to a comment that still exists is returned as it is, without a write (a
     /// re-run never duplicates; edits made in WordPress are not applied).
     ///
-    /// Unlike [`CommentService::submit`](crate::CommentService::submit) there is no rate
+    /// Unlike [`CommentService::submit`](crate::comments::CommentService::submit) there is no rate
     /// limit, no moderation, no honeypot, no depth limit, and the item may be in any status. Checked: the
     /// item exists (`InvalidField` `item`), the parent exists and belongs to the same
     /// item (`parent`), the user exists (`user`). The body gets `submit`'s normalisation without its refusals: control characters other

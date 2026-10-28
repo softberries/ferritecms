@@ -43,7 +43,7 @@ pub struct ImportReport {
 /// [`import`](Self::import)): `source` is a path starting with `/`, `target` a path or an
 /// absolute http(s) URL, both at most 2048 characters without whitespace or control
 /// characters (`InvalidField` `source` / `target`); a source whose first segment is
-/// router-owned is refused too ([`check_source`]); `code` one of 301, 302, 307, 308,
+/// router-owned is refused too (`check_source`); `code` one of 301, 302, 307, 308,
 /// 410 (`InvalidField` `code`). Rejected as `InvalidField { field: "target", .. }`:
 /// `source == target`; a target that leads back to `source` through existing redirects
 /// (loop); a target that starts a chain of more than 10 existing redirects. Hops are

@@ -333,7 +333,7 @@ pub(crate) fn require_scope(actor: &Actor, scope: Option<Scope>) -> Result<(), C
 
 /// Whether `actor` may read `item` in the admin (after [`require_read`]`(Content)`) at
 /// `now`: items publicly visible at `now` (the same predicate as the public site,
-/// [`is_public`](crate::site::is_public): status published and `published_at <= now`)
+/// `is_public`: status published and `published_at <= now`)
 /// are readable by everyone, own items in any status by their author, and everything
 /// else (others' drafts, pending, scheduled, private, trashed and future-dated
 /// published items) needs a role holding `edit_others` (editor, admin). The SQL mirror
