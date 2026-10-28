@@ -1,9 +1,6 @@
 //! [`ImportBatch`]: one fenced transaction of import writes with one invalidation (P6).
 
-use std::{
-    collections::{BTreeSet, HashMap},
-    sync::Arc,
-};
+use std::{collections::BTreeSet, sync::Arc};
 
 use ferrite_domain::{
     CommentId, ContentId, ImportMapKind, ImportMapRow, Taxonomy, TermId, Timestamp, UserId,
@@ -55,9 +52,6 @@ pub struct ImportBatch<'a> {
     pub(super) items: usize,
     /// The permalink rules pinned when the batch opened (R10).
     pub(super) rules: Arc<dyn Permalinks>,
-    /// Content map rows of this run's source by FerriteCMS id, loaded by the first
-    /// [`set_body`](Self::set_body) and kept current by [`content`](Self::content).
-    pub(super) content_wp_ids: Option<HashMap<Uuid, i64>>,
     types_lock: Option<Box<dyn LockGuard>>,
 }
 
@@ -88,7 +82,6 @@ impl<'a> ImportBatch<'a> {
             keys: BTreeSet::new(),
             items: 0,
             rules,
-            content_wp_ids: None,
             types_lock,
         };
         match fenced {

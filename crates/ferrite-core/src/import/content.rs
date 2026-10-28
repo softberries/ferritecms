@@ -9,8 +9,6 @@
 //! enqueues **no** `post.saved`/`post.published` action jobs (P6); a scheduled item
 //! gets its `content.publish_scheduled` job.
 
-use std::collections::HashMap;
-
 use ferrite_domain::{
     ContentId, ContentItem, ContentStatus, ImportMapKind, NewContent, TermId, Timestamp, UserId,
 };
@@ -126,6 +124,11 @@ impl ImportBatch<'_> {
     /// generated slug would, never an error) and is reported in `slug_changed`. The
     /// meta [`WP_ID_META`] (`c.wp_id`) and `c.meta` are written; the map row
     /// (`content`, `c.wp_id`) records `c.hash` and the version written.
+    ///
+    /// **Errors.** Any `Err` leaves the batch unusable: rows of the item may already be
+    /// written (there are no savepoints per item, and Postgres aborts the transaction on
+    /// a failed statement). The caller must [`rollback`](Self::rollback) the batch and
+    /// must not commit or write to it again.
     pub async fn content(&mut self, c: ImportContent) -> Result<ContentOutcome, CoreError> {
         let unwritten = |id: Uuid, result| ContentOutcome {
             id: ContentId::from_uuid(id),
@@ -222,9 +225,6 @@ impl ImportBatch<'_> {
             saved.version,
         )
         .await?;
-        if let Some(ids) = &mut self.content_wp_ids {
-            ids.insert(id.as_uuid(), c.wp_id);
-        }
         self.items += 1;
         let wp_slug = wp_slug(&c);
         Ok(ContentOutcome {
@@ -235,15 +235,25 @@ impl ImportBatch<'_> {
         })
     }
 
-    /// Replaces the body of imported item `id` (the link fix-up pass, P14). The item
-    /// must still be at the version the import left it at (else `Conflict`, nothing
-    /// written: it was edited here); an item this source's map does not hold is
-    /// `NotFound`. The version goes up and the map row follows it, so the item still
-    /// counts as not edited locally (P4); `updated_at`, the excerpt and the revision
-    /// are kept. The search entry is rewritten and the item's keys join the event.
-    pub async fn set_body(&mut self, id: ContentId, body: Value) -> Result<(), CoreError> {
+    /// Replaces the body of imported item `id`, mapped from WP item `wp_id` (the link
+    /// fix-up pass, P14). The item must still be at the version the import left it at
+    /// (else `Conflict`, nothing written: it was edited here); a map row of this
+    /// source for `wp_id` that is missing or names another item is `NotFound`. The
+    /// version goes up and the map row follows it, so the item still counts as not
+    /// edited locally (P4); `updated_at`, the excerpt and the revision are kept. The
+    /// search entry is rewritten and the item's keys join the event.
+    ///
+    /// **Errors.** As for [`content`](Self::content): any `Err` leaves the batch
+    /// unusable, and the caller must [`rollback`](Self::rollback) it. (A `Conflict` or
+    /// `NotFound` is returned before anything is written, but the contract is the
+    /// same for every error.)
+    pub async fn set_body(
+        &mut self,
+        id: ContentId,
+        wp_id: i64,
+        body: Value,
+    ) -> Result<(), CoreError> {
         check_body(&body)?;
-        let wp_id = self.content_wp_id(id).await?.ok_or(CoreError::NotFound)?;
         let row = self
             .tx
             .imports()
@@ -406,25 +416,6 @@ impl ImportBatch<'_> {
         )
         .await?;
         Ok((saved, old_terms, moved))
-    }
-
-    /// The WP id the content map of this run's source holds for `id`, read once per
-    /// batch.
-    async fn content_wp_id(&mut self, id: ContentId) -> Result<Option<i64>, CoreError> {
-        if self.content_wp_ids.is_none() {
-            let rows = self
-                .tx
-                .imports()
-                .map_list(&self.handle.run.source, ImportMapKind::Content)
-                .await?;
-            let ids: HashMap<Uuid, i64> =
-                rows.into_iter().map(|r| (r.ferrite_id, r.wp_id)).collect();
-            self.content_wp_ids = Some(ids);
-        }
-        Ok(self
-            .content_wp_ids
-            .as_ref()
-            .and_then(|ids| ids.get(&id.as_uuid()).copied()))
     }
 }
 

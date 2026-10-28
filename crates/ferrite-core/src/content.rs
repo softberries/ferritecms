@@ -371,8 +371,10 @@ impl ContentService {
 
 /// The redirects of an update of `current` (its terms then were `old_term_rows`) to
 /// `saved` (`terms_changed`: its terms were replaced by others), as
-/// [`update`](ContentService::update) describes: a published item whose path changed
-/// gets a move, and when its slug or parent changed its published descendants do too.
+/// [`update`](ContentService::update) describes: an item published before and after
+/// the write whose path changed gets a move (a move to a path that is not live, such
+/// as an import that also unpublishes it, gets none), and when its slug or parent
+/// changed its published descendants do too.
 /// Returns the descendants whose path changed and adds the sources of every redirect
 /// touched to `redirected` (the caller emits their keys). Call it after the item's row
 /// and terms are written.
@@ -385,7 +387,8 @@ pub(crate) async fn record_moves(
     terms_changed: bool,
     redirected: &mut Vec<String>,
 ) -> Result<Vec<ContentId>, CoreError> {
-    let published = current.status == ContentStatus::Published;
+    let published =
+        current.status == ContentStatus::Published && saved.status == ContentStatus::Published;
     let moved = current.slug != saved.slug || current.parent_id != saved.parent_id;
     if !(published || moved) {
         return Ok(Vec::new());

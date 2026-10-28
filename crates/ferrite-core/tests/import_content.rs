@@ -610,6 +610,36 @@ pub async fn rerun_slug_change_redirects(db: &TestDb) {
     );
 }
 
+/// A re-run that renames an item and also unpublishes it records no redirect: the new
+/// path is not live.
+pub async fn rerun_rename_and_unpublish_records_no_redirect(db: &TestDb) {
+    let store = db.store();
+    let admin = admin(store).await;
+    let out = import(db, &admin, vec![item(1, "was-live", admin.user)]).await;
+    let mut draft = item(1, "now-draft", admin.user);
+    draft.hash = "hash-1b".into();
+    draft.status = ContentStatus::Draft;
+    let again = import(db, &admin, vec![draft]).await;
+    assert_eq!(
+        (again[0].id, again[0].result),
+        (out[0].id, Written::Updated)
+    );
+    let got = store
+        .read()
+        .content()
+        .get(out[0].id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (got.status, got.slug.as_str()),
+        (ContentStatus::Draft, "now-draft")
+    );
+    let redirects = store.read().redirects();
+    assert_eq!(redirects.get_by_source("/was-live/").await.unwrap(), None);
+    assert_eq!(redirects.get_by_source("/was-live").await.unwrap(), None);
+}
+
 /// `set_body` (the link fix-up) rewrites the body, keeps `updated_at` and moves the
 /// map's version, so the item still counts as not edited locally. An item edited in
 /// FerriteCMS is `Conflict` and left alone.
@@ -623,7 +653,10 @@ pub async fn set_body_keeps_item_unedited(db: &TestDb) {
     let imp = importer(db);
     let run = imp.start(&admin, SOURCE, false, false).await.unwrap();
     let mut batch = run.batch(&imp).await.unwrap();
-    batch.set_body(id, body("fixedzebra link")).await.unwrap();
+    batch
+        .set_body(id, 1, body("fixedzebra link"))
+        .await
+        .unwrap();
     assert_eq!(batch.len(), 1);
     batch.commit().await.unwrap();
     run.finish(&imp, ferrite_domain::ImportRunState::Done, json!({}))
@@ -665,14 +698,17 @@ pub async fn set_body_keeps_item_unedited(db: &TestDb) {
         .unwrap();
     let run = imp.start(&admin, SOURCE, false, false).await.unwrap();
     let mut batch = run.batch(&imp).await.unwrap();
-    let err = batch.set_body(id, body("fix")).await.unwrap_err();
+    let err = batch.set_body(id, 1, body("fix")).await.unwrap_err();
     assert!(matches!(err, CoreError::Conflict { .. }), "{err:?}");
-    let err = batch
-        .set_body(ContentId::new(), body("fix"))
-        .await
-        .unwrap_err();
-    assert!(matches!(err, CoreError::NotFound), "{err:?}");
+    // Any error: the caller rolls the batch back and opens a new one.
     batch.rollback().await.unwrap();
+    // Unmapped WP id, or a mapped one naming another item: NotFound.
+    for (other, wp_id) in [(id, 99), (ContentId::new(), 1)] {
+        let mut batch = run.batch(&imp).await.unwrap();
+        let err = batch.set_body(other, wp_id, body("fix")).await.unwrap_err();
+        assert!(matches!(err, CoreError::NotFound), "{err:?}");
+        batch.rollback().await.unwrap();
+    }
     assert_eq!(svc.get(id).await.unwrap().version, edited.version);
 }
 
@@ -728,7 +764,7 @@ pub async fn no_plugin_actions(db: &TestDb) {
     let imp = importer(db);
     let run = imp.start(&admin, SOURCE, false, false).await.unwrap();
     let mut batch = run.batch(&imp).await.unwrap();
-    batch.set_body(out[0].id, body("fixed")).await.unwrap();
+    batch.set_body(out[0].id, 1, body("fixed")).await.unwrap();
     let mut changed = item(2, "two", admin.user);
     changed.hash = "new".into();
     assert_eq!(
@@ -779,6 +815,7 @@ backend_tests!(
     exact_slug_or_reported_suffix,
     rerun_semantics,
     rerun_slug_change_redirects,
+    rerun_rename_and_unpublish_records_no_redirect,
     set_body_keeps_item_unedited,
     no_plugin_actions,
 );
