@@ -229,6 +229,9 @@ test("screens", async ({ as, snap, expectAccessible }) => {
   await openPalette(page);
   await page.keyboard.type("WebAssembly");
   await option(page, new RegExp(SEEDED)).click();
+  // The editor's route loads its chunk first; a `goto` before it lands is interrupted by
+  // that navigation (seen in WebKit).
+  await expect(page).toHaveURL(/\/admin\/content\/post\/[0-9a-f-]{36}$/);
   await openDashboard(page);
   await openPalette(page);
   await expect(
