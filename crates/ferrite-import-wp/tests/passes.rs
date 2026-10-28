@@ -1303,6 +1303,38 @@ pub async fn pass4_site_a(db: &TestDb) {
         Some(json!("Corpus Site"))
     );
     assert!(option(store, "site.description").await.is_some());
+
+    // The report of the run (Task 16).
+    assert!(!report.run_id.is_empty());
+    assert_eq!(report.source, "http://localhost:8099");
+    assert_eq!(report.site_url, "http://localhost:8080");
+    assert!(report.started_at.is_some() && report.finished_at.is_some());
+    assert_eq!(report.redirects.created, 7);
+    assert!(
+        report.redirects.refused.is_empty(),
+        "{:?}",
+        report.redirects
+    );
+    assert!(
+        report
+            .unmapped_meta
+            .iter()
+            .any(|(k, _)| k == "wp.some_unrelated_meta"),
+        "{:?}",
+        report.unmapped_meta
+    );
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.starts_with("no plugin actions"))
+    );
+    assert!(report.notes.iter().any(|n| n.contains("media.variants")));
+    let back: Report = serde_json::from_str(&report.to_json()).unwrap();
+    assert_eq!(back, report);
+    let html = report.to_html();
+    assert!(!html.contains("<script"));
+    assert!(html.contains("http://localhost:8099"));
 }
 
 /// Site B: `%category%` permalinks, a pingback skipped and counted, comment HTML as plain
@@ -1391,7 +1423,14 @@ pub async fn pass4_edges(db: &TestDb) {
 
     // The root: no redirect from `/`, noted; `/?book=one` is not `/`.
     assert_eq!(redirect_to(store, "/").await, None);
-    assert!(notes.contains("redirect from / not made"), "{notes}");
+    let refused: Vec<&str> = report
+        .redirects
+        .refused
+        .iter()
+        .map(|r| r.source.as_str())
+        .collect();
+    assert_eq!(refused, ["/"], "{:?}", report.redirects);
+    assert!(report.redirects.refused[0].reason.contains("site root"));
     let all = store
         .read()
         .redirects()

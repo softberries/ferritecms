@@ -32,6 +32,7 @@ use crate::convert::{ImageRef, Notes, Rewrite, body};
 use crate::ir::Ir;
 use crate::model::{Channel, Item};
 use crate::php::unserialize;
+use crate::report::SlugChange;
 use crate::run::{Report, Session};
 use crate::urls::{MediaIndex, key, percent_decode};
 
@@ -521,6 +522,8 @@ struct Done {
     outcome: ContentOutcome,
     path: Option<String>,
     pending: bool,
+    /// The WP slug asked for.
+    slug: Option<String>,
 }
 
 /// Imports every post, page and custom-type item.
@@ -717,16 +720,14 @@ async fn write_chunk(
             ));
         }
         if let Some(slug) = &d.outcome.slug_changed {
-            report.note(format!(
-                "item {}: its slug is taken; it is now {slug:?}",
-                d.wp_id
-            ));
+            report.slug_changes.push(SlugChange {
+                wp_id: d.wp_id,
+                from: d.slug.clone().unwrap_or_default(),
+                to: slug.clone(),
+            });
         }
         if d.outcome.schedule_past {
-            report.note(format!(
-                "item {} was scheduled for a time already past; published at that time",
-                d.wp_id
-            ));
+            report.past_schedules.push(d.wp_id);
         }
         if let Some(path) = d.path {
             let id = d.outcome.id.as_uuid();
@@ -758,6 +759,10 @@ async fn write_items(
         };
         report.conversion.merge(&prepared.notes);
         report.notes.extend(prepared.lines);
+        for (key, _) in &prepared.content.meta {
+            *report.meta_keys.entry(key.clone()).or_default() += 1;
+        }
+        let slug = prepared.content.slug.clone();
         let outcome = b.content(prepared.content).await?;
         let path = b.path(outcome.id).await?;
         out.push(Done {
@@ -766,6 +771,7 @@ async fn write_items(
             outcome,
             path,
             pending: prepared.pending,
+            slug,
         });
     }
     Ok(out)

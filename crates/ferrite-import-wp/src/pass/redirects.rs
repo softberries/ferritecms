@@ -13,7 +13,8 @@
 //! are, so a non-ASCII path compares (and fires) as the router sees it. Links with a
 //! query (`?p=`, `?attachment_id=`, …) have no path to redirect from, and the site root
 //! `/` is never a source (it would take over the home page): refused and noted. A row
-//! whose old path equals the new one is not made. The import overwrites only a stored
+//! whose old path equals the new one is not made. Refused rows go to the report's
+//! `redirects.refused`, in input order. The import overwrites only a stored
 //! redirect it wrote itself and nobody changed since (its import-map row, kind
 //! `redirect`, keeps the source and target it wrote); any other stored row (made or
 //! edited here, or from the admin's CSV import) is kept and noted. Refusals are noted
@@ -33,6 +34,7 @@ use super::content::Links;
 use super::types::type_name;
 use crate::ImportError;
 use crate::model::Term;
+use crate::report::Refused;
 use crate::run::{Report, Session};
 use crate::urls::percent_decode;
 
@@ -41,10 +43,10 @@ const KIND: &str = "redirects";
 /// Moved permanently.
 const CODE: u16 = 301;
 
-/// One candidate row, or a refusal made here.
+/// One candidate row, or a refusal made here (source, target, reason).
 enum Row {
     Write(String, String),
-    Refused(String, String),
+    Refused(String, String, String),
 }
 
 /// A decoded path with each segment encoded as the router compares paths.
@@ -67,6 +69,7 @@ fn row(old: &str, new: &str) -> Option<Row> {
     if source == "/" {
         return Some(Row::Refused(
             source,
+            new.to_owned(),
             "the site root is never redirected (it would hide the home page)".into(),
         ));
     }
@@ -100,10 +103,13 @@ pub(crate) async fn import(
             continue;
         };
         match row(&old, new) {
-            Some(Row::Write(source, _)) if item.status != "publish" => rows.push(Row::Refused(
-                source,
-                format!("the item is not published ({})", item.status),
-            )),
+            Some(Row::Write(source, target)) if item.status != "publish" => {
+                rows.push(Row::Refused(
+                    source,
+                    target,
+                    format!("the item is not published ({})", item.status),
+                ));
+            }
             other => rows.extend(other),
         }
     }
@@ -121,6 +127,7 @@ pub(crate) async fn import(
         let mut batch = session.batch().await?;
         let written = write(&mut batch, &writes).await;
         let (out, theirs) = session.finish_batch(batch, written).await?;
+        report.redirects.created += u64::from(out.created);
         let counts = report.counts_of(KIND);
         counts.created += u64::from(out.created);
         counts.updated += u64::from(out.updated);
@@ -132,11 +139,10 @@ pub(crate) async fn import(
         let mut theirs = theirs.into_iter().peekable();
         for row in chunk {
             match row {
-                Row::Refused(source, why) => {
-                    report.counts_of(KIND).skipped += 1;
-                    report.note(format!("redirect from {source} not made: {why}"));
+                Row::Refused(source, target, why) => {
+                    refuse(report, source, target, why);
                 }
-                Row::Write(source, _) => {
+                Row::Write(source, target) => {
                     if theirs.next_if(|s| s == source).is_some()
                         || kept.next_if(|s| s == source).is_some()
                     {
@@ -145,14 +151,23 @@ pub(crate) async fn import(
                             "redirect from {source} was edited here (or is not the import's); kept"
                         ));
                     } else if let Some((_, why)) = refused.next_if(|(s, _)| s == source) {
-                        report.counts_of(KIND).skipped += 1;
-                        report.note(format!("redirect from {source} not made: {why}"));
+                        refuse(report, source, target, &why);
                     }
                 }
             }
         }
     }
     Ok(())
+}
+
+/// Counts and lists a refused row (in input order).
+fn refuse(report: &mut Report, source: &str, target: &str, reason: &str) {
+    report.counts_of(KIND).skipped += 1;
+    report.redirects.refused.push(Refused {
+        source: source.to_owned(),
+        target: target.to_owned(),
+        reason: reason.to_owned(),
+    });
 }
 
 /// The rows of the tag and category archives, to each imported term's URL.
@@ -289,7 +304,7 @@ mod tests {
     fn sources_are_encoded_and_never_the_root() {
         assert_eq!(encoded("/аб/"), "/%D0%B0%D0%B1/");
         assert_eq!(encoded("/a b/c"), "/a%20b/c/");
-        assert!(matches!(row("/", "/x/"), Some(Row::Refused(s, _)) if s == "/"));
+        assert!(matches!(row("/", "/x/"), Some(Row::Refused(s, t, _)) if s == "/" && t == "/x/"));
         assert!(row("/аб/", "/%D0%B0%D0%B1/").is_none());
         assert!(
             matches!(row("/old/", "/new/"), Some(Row::Write(s, t)) if s == "/old/" && t == "/new/")
