@@ -39,13 +39,16 @@ async function open(page: Page): Promise<void> {
 }
 
 /**
- * Picks `folder` in the open upload dialog: the folder input on engines whose
- * Playwright supports directory upload (Chromium, Firefox); on WebKit, which has none
- * (10 §3), the same theme as a `.tar` through the bundle input (blog-min's fixture, or
- * the folder packed as the dialog packs it).
+ * Picks `folder` in the open upload dialog: the folder input on Chromium; elsewhere the
+ * same theme as a `.tar` through the bundle input (blog-min's fixture, or the folder
+ * packed as the dialog packs it). WebKit's Playwright has no directory upload (10 §3).
+ * Firefox's has one, but it can hang: Playwright 1.64 sends the files before it adds the
+ * `input` listener it then waits for, and Firefox fires `input` as soon as it has read
+ * the folder, which on a loaded runner is first (the dialog had the folder; the wait
+ * never ended).
  */
 async function pickFolder(page: Page, browserName: string, folder: string): Promise<void> {
-  if (browserName === "webkit") {
+  if (browserName !== "chromium") {
     await dialog(page)
       .locator("[data-slot=theme-tar-input]")
       .setInputFiles(folder === FOLDER ? TAR : packed(folder));
@@ -91,7 +94,7 @@ test("upload_folder_installs_and_activates", async ({ as, site, siteKey, browser
     const picked = dialog(page).locator("[data-slot=theme-picked]");
     await expect(picked.locator("[data-slot=theme-picked-name]")).toHaveText("blog-min");
     // Five files in the folder; the hidden one is left out.
-    if (browserName !== "webkit") await expect(picked).toContainText("4 files");
+    if (browserName === "chromium") await expect(picked).toContainText("4 files");
 
     const upload = page.waitForRequest(isUpload);
     await dialog(page)
