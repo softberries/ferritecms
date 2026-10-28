@@ -100,7 +100,7 @@ full text of every F-finding and ruling is in the M2b-1 ledger
 - Ruling R15: on return after that Discard, the kept copy restores as the working draft under the standard restore banner — follows the load rule, nothing lost — cost: kept mode is not remembered across navigation.
 - Ruling R16: a second Take theirs replaces the first kept copy — cost: multi-slot would be needed to keep both.
 - Ruling R17: `<ins>`/`<del>` in diffs carry no `aria-label` (prohibited by ARIA 1.2 on those roles); visually hidden "added:"/"removed:" text instead — cost: re-add labels if a screen reader needs them.
-- Ruling R18: shortcuts match the physical key while Alt is held only on Apple platforms and never with AltGraph — cost: a macOS browser reporting AltGraph for Option would break `⌘⌥R` (unverified).
+- Ruling R18 (as built, updated in M2b-3 Task 13): on Apple platforms a letter or digit pressed with Option is matched by its physical key (`e.code`), so `⌘⌥R` runs as `mod+alt+r`; with ⌘ held this holds whatever the browser reports for AltGraph (a ⌘ chord types nothing), and Option alone with AltGraph reported is left to type; elsewhere Alt and AltGr keep typing their letters (unit test `mac_option_reported_as_altgraph_still_runs_cmd_option_r`, a real `KeyboardEvent` with `modifierAltGraph`) — cost: none known; a real Mac browser that reports AltGraph for Option was never available, so `⌘⌥R` on a real Mac stays a manual check with the user's Safari pass. Superseded M2b-1 text: shortcuts match the physical key while Alt is held only on Apple platforms and never with AltGraph — cost: a macOS browser reporting AltGraph for Option would break `⌘⌥R` (unverified).
 - Ruling R19: exit check 3 is automated with Playwright against a release build; Safari is listed as not verified, for the user — no human hands in an autonomous run — cost: a Safari-only bug found later.
 - Ruling R20: the top-bar "New" split button is global chrome (11 §7's shell has it on every screen), not a view's primary action; it is rendered as a secondary (outline) control with an ember plus, so each view keeps one filled primary ("New entry" on a list, "Publish…" in the editor) — cost: a slightly quieter global New.
 
@@ -214,10 +214,59 @@ Plan: docs/superpowers/plans/2026-10-27-m2b3-administration-and-m2-exit.md (16 t
   - `pnpm -C admin bundle:check` fails CI over a limit. Raising a limit is a reviewed edit of that file.
   - Cost: a deliberate step for growth.
 - **P57: The explicit-theme flash is fixed server-side.**
-  - The admin writes a cookie `ferrite_admin_theme=light|dark` (path `/admin/`, `SameSite=Lax`, one year; removed for `system`).
-  - Serving `index.html` adds `class="dark"` or `class="light"` to `<html>` from it.
+  - The admin writes a cookie `ferrite_admin_theme=light|dark` (`Path=/admin`, `SameSite=Lax`, one year, `Secure` on https; removed for `system`). As built (Task 13): the path is `/admin`, not `/admin/` as first written; by RFC 6265 path-match (§5.1.4) `/admin` covers `/admin` itself and every `/admin/…` path, and nothing else (`/administrator` does not match).
+  - Serving `index.html` adds `class="dark"` or `class="light"` to `<html>` from it, only for exactly those values, as a fixed string (never the cookie's text). As built: `index.html` sends `Vary: Accept-Encoding, Cookie`, and a rewritten page gets the ETag of its own bytes.
   - No inline script is added, so the CSP is unchanged.
   - Cost: `index.html` is rewritten per request (it is `no-cache` anyway).
 - **P58: Settings screens are last-write-wins** (`staleGuard`, P31).
   - A permalink change confirms first, saying every post or page URL moves and no redirects are created (M3).
   - Cost: a dialog on a rare change.
+
+## M2b-3 pre-flight findings
+
+- Ruling A: `MeDto` gains `mail_configured: boolean | null` (a boolean for actors holding `manage_users` or `manage_system`, else `null`), added in Task 3; the Users screen offers "Send a reset e-mail" only when it is true — `/system/status` stays `manage_system`-only and the public reset answers `202` regardless — cost: one more `MeDto` member.
+- Ruling B: Task 13 does not touch `admin/src/structure/types/**` or `admin/src/editor/**` (Task 12's); the type builder's schema-change minors move to Task 12 — cost: Task 12 slightly bigger.
+- Ruling C: the E2E jobs keep the example plugin's `wasm32-wasip2` build (as built in Task 14: built once in the `admin` job and uploaded as the `admin-e2e-plugin` artifact) — cost: none.
+
+## M2b-3 controller rulings
+
+- Ruling R37: a bearer request to `/auth/sessions` (list, revoke, revoke others) answers `400`, like `logout` (session-only routes) — consistency — cost: API clients see `400`, not `401`/`403`.
+- Ruling R38: `theme.toml` gains the optional `homepage` key (`author` and `license` already existed) — `ThemeDto` needs a source for its facts — cost: a manifest format addition (06 §1).
+- Ruling R39: during a mixed-version rollout an older node refuses a `theme.toml` with the new key — no release exists yet — cost: the fallback theme on old nodes until they are upgraded.
+- Ruling R40: three Task 3 review minors are accepted as they are: the `mail.test` audit row is written after the mail is queued; the configured site title is copied in both `ApiState` and `AuthService`; mail configuration is per node — cost: an audit row for a mail that later fails to send (the failure is in the node log), and one more copy to keep in step.
+- Ruling R41: an inline image's `srcset` keeps only variants with the original's aspect ratio (crop variants are left out) — a cropped variant would change the picture — cost: fewer `srcset` entries for themes whose sizes all crop.
+- Ruling R42: a type named in another type's relation `types` cannot be deleted (`422`) — the other schema would dangle and its next save fail — cost: delete order matters.
+- Ruling R43: the redirect `q` search stays a table scan (no index in M2b-3; redirect tables are admin-sized; a substring `LIKE` cannot use a b-tree index and a trigram index is Postgres-only) — cost: slower search on very large redirect sets; carried to M4.
+- Ruling R44: `MediaKindParam` stays (`ferrite-domain` has no `utoipa`; DTO mirrors of domain enums are the API convention) — cost: one `From` impl to keep in step.
+- Ruling R45: the comment helper's `prev_url`/`next_url` carry no `#comments` (the anchor is theme markup; `blog` adds it, R4) — cost: other themes add their own anchor.
+- Ruling R46: comment totals and the page are read outside one `Tx` (no read-only `Tx` exists; one would take SQLite's writer on a public path; the page cache's staleness guard covers the race) — cost: a transient off-by-one count under concurrent moderation.
+- Ruling R47: media restore's `!may_publish` restore-as-draft branch stays untested (unreachable with the built-in roles) — cost: none today.
+- Ruling R48: `SiteReader::set_image_width` is node-wide (one `AppState` per reader in production) — cost: only tests could see a mix.
+- Ruling R49: the Account link in the user menu and the palette land with the Account screen (Task 6), not the kit (Task 5) — the route exists only there — cost: none.
+- Ruling R50: Plugins is `g l`, because `g p` is Posts — no collision — cost: a less mnemonic chord (11 §6).
+- Ruling R51: the stale dialog names the resource (`staleKey`) — cost: none.
+- Ruling R52: secrets (a new token, the TOTP enrolment, plugin secret settings, passwords) never live in TanStack's mutation cache: plain awaited calls held in component state; the E2E checks `queryClient.getMutationCache()` too — cost: these calls do not use the shared mutation helpers.
+- Ruling R53: the E2E reaches the query caches through React's fiber tree (`e2e/support/app-state.ts`), not a test hook — a hook would need a second build, and the E2E tests the shipped bundle — cost: tied to React internals.
+- Ruling R54: user delete's refusals carry `errors[0].field` `reassign` (core `invalid_field("reassign")` at four sites, Task 7) — the reassign dialog needs a field to switch on; status and slug unchanged — cost if wrong: one field at four error sites.
+- Ruling R55: one's own row in Users has no profile form either; Account owns the own e-mail change with `current_password` — consistent with H-A1 — cost: one link click.
+- Ruling R56: the Users screen's "Send a reset e-mail" path is covered by a unit test only (the E2E checks the option shows) — cost: that wiring is untested end to end in the browser (the reset mail itself reached a real SMTP sink in the M2b-1 exit, `m2b1-exit.md` §3).
+- Ruling R57: the role-change confirm says tokens stay (they are not revoked): a role's capability is checked before a token's scope, so a demoted user's tokens are capped by the new role (core `users.rs`, 07 §1) — cost if wrong: one string.
+- Ruling R58: `/admin/settings` opens General, and `/admin/system` opens Status — cost: none.
+- Ruling R59: the permalink presets are "Post name", "Month and name" and "Category and name" (WordPress's "Plain" is `?p=`, which has no token here) — cost: copy only.
+- Ruling R60: `settings/permalink-preview.ts` repeats core's parse rules; the server's `422` is the backstop — cost: the preview can drift from core.
+- Ruling R61: an emptied General field sends `null` (the `ferrite.toml` value applies) — the settings `null` semantics — cost: a tagline set in `ferrite.toml` cannot be blanked from the admin.
+- Ruling R62: site-wide E2E specs (`settings`, `themes`, `system`) run apart from the parallel ones (as built in Task 14: each project's `-site-wide` teardown, one worker) — they change settings, the active theme and the job queue — cost: a serial tail per project.
+- Ruling R63: Themes: when the activation poll (20 s) ends before every node reports, a non-error note shows; `bundle::pack` is the authority over the plan's prose for the browser packer; a homepage is a link only when it parses as `http(s)`; the E2E restores the active theme in `finally` — cost: none.
+- Ruling R64: the theme E2E proves the packer's bytes by the stored theme's hash = SHA-256 of `blog-min.tar` — equivalent to a byte compare — cost: none.
+- Ruling R65: a `.tar` whose `theme.toml` name cannot be read gives no client-side replace warning; the server decides — rare — cost: a missing warning for an odd `theme.toml`.
+- Ruling R66: the theme settings sheet and the plugin settings ask before discarding unsaved changes, as Settings does — consistency — cost: one dialog.
+- Ruling R67: a `purge=true` plugin delete writes `plugin.<name>.erased_at` beside the deletion marker, so it is not listed as retained; the marker is written after the immediate erase succeeds and is cleared on reinstall and by the final sweep — cost: an extra option row until then.
+- Ruling R68: plugin metrics refetch every 30 s only while the page is visible — cost: none.
+- Ruling R69: the audit screen maps 29 known actions to words with no core-sync test (a regex over core's strings also matches job kinds, events and hooks) — cost: a new action shows its raw code until mapped.
+- Ruling R70: follow-ups that turn out not to be bugs are proven by a test or a written explanation, not changed (Task 12: the editor route's `${id}:0` key) — cost: none.
+- Ruling R71: the editor-fields E2E's relation names its own target types, so a parallel test's deleted type is never searched (the M2b-2 exit's race) — cost: the "any type" search is covered by the palette and the menu editor instead.
+- Ruling R72: CI is not run per branch: no push in M2b-3; the workflow runs on the final develop→main pull request (or a manual `workflow_dispatch`); `ci.yml`'s `on:` is develop's — cost: CI findings arrive late.
+- Ruling R73: CI does not cache Playwright's browsers (Playwright advises against it) — cost: slower E2E jobs.
+- Ruling R74: four Task 14 review minors are accepted: the WebKit reload retry acts only on "Frame load interrupted"; filtered local runs skip the site-wide ordering (documented); the wrapper's argv sizing is slower, not broken; one fix is red by reasoning, not by a run — cost if wrong: a hidden WebKit reload bug or local flakes.
+- Ruling R75: in the bundle budget, `entry_preloads` includes the entry (`entry` is a subset) — by design (P56) — cost: none.
+- Ruling R76: the M2b-3 exit is split: part A (docs, the exit flows over the REST API on a release build, the workspace tests on both backends, the gates) runs now; part B (the four E2E projects twice with flake counts, the contact sheet, `docker build` serving `/admin/`, the Linux Chromium run, actionlint) runs after a host reboot, because no browser engine or Docker daemon starts on the host (Task 14) — cost: the exit documents are edited twice.

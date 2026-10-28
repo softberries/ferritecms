@@ -327,9 +327,19 @@ while it is open; the media library and the redirects list focus their search wi
 `DataTable` keys; the type form, the menu editor and the media detail save on `mod+s`.
 The Structure screens have no chord. M2b-3's Administration section (`SCREENS` in
 `shell/nav.ts`, Task 5) fixes `g u` Users, `g a` Appearance, `g l` Plugins, `g s`
-Settings and `g y` System; each binds once its screen registers its entry. The M2b-3
-plan named `g p` for Plugins, which is Posts here; Plugins takes `g l`. The `?` sheet
-lists whatever is registered at the moment it opens.
+Settings and `g y` System; each binds once its screen registers its entry (all five do,
+Tasks 7–11). The M2b-3 plan named `g p` for Plugins, which is Posts here; Plugins takes
+`g l`. The `?` sheet lists whatever is registered at the moment it opens.
+
+As built in M2b-3: a pending sequence keeps the keys pressed so far and looks its candidates
+up in the registry at each step, so `g s` completes even when the nav registers its `g`
+bindings again between the two keys (Task 14, `chord_completes_with_a_binding_registered_between_steps`).
+On Apple platforms a letter or digit pressed with Option is matched by its physical key
+(`e.code`; ⌥R types "®"), so `mod+alt+r` runs; with ⌘ held this holds whatever the browser
+reports for AltGraph, and Option alone with AltGraph reported is left to type. Elsewhere Alt
+and AltGr type real letters (Polish ą, ę, ś…), which no shortcut takes (R18 as updated;
+`mac_option_reported_as_altgraph_still_runs_cmd_option_r`). A check on a real Mac is part
+of the manual Safari pass.
 
 | Where | Keys | Action |
 |---|---|---|
@@ -692,7 +702,8 @@ bar's trigger (`aria-haspopup="dialog"`, `aria-keyshortcuts`).
 
 Every UI task's contact sheet (`admin/test-results/screens/index.html`; light/dark ×
 1440×900/390×844) is checked against this list; a screen that fails it is rejected like
-a failing test.
+a failing test. Since M2b-3 the snapshots are taken only in the `chromium-sqlite` E2E project
+(P55); the other engines run the same specs without them.
 
 - [ ] Alignment to the 4 px grid.
 - [ ] One primary action per view.
