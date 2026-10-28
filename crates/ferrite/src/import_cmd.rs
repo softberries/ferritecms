@@ -13,7 +13,7 @@ use anyhow::{Context, bail};
 use async_trait::async_trait;
 use clap::{Args, Subcommand};
 use ferrite_core::{Actor, CoreError, SwappablePermalinks, import::ImportService};
-use ferrite_domain::Role;
+use ferrite_domain::{Role, UserStatus};
 use ferrite_http::import_fetch::HttpSource;
 use ferrite_import_wp::ImportError;
 use ferrite_import_wp::report::Report;
@@ -30,7 +30,7 @@ use crate::{
 
 /// Done, with nothing refused or missing.
 const DONE: u8 = 0;
-/// Done, but the report lists refused redirects or missing media.
+/// Done, but the report lists refused redirects, missing media or refused attachments.
 const DONE_WITH_PROBLEMS: u8 = 2;
 /// Another import is running.
 const BUSY: u8 = 3;
@@ -39,8 +39,9 @@ const BUSY: u8 = 3;
 pub enum ImportCommand {
     /// Import a WordPress export file (WXR) into the site.
     ///
-    /// Exit code: 0 done, 2 done with refused redirects or missing media (the report
-    /// lists them), 3 when another import is running, 1 on any error. With SQLite,
+    /// Exit code: 0 done, 2 done with refused redirects, missing media or attachments
+    /// refused for their size or type (the report lists them), 3 when another import is
+    /// running, 1 on any error. With SQLite,
     /// `ferrite serve` holds the data folder's lock: stop it first.
     Wordpress(WordpressArgs),
 }
@@ -56,7 +57,7 @@ pub struct WordpressArgs {
     #[arg(long)]
     pub uploads: Option<PathBuf>,
     /// Fetch attachments missing from `--uploads` from the old site (public addresses
-    /// only, 30 s per file, at most `media.max_upload` each).
+    /// only, 30 s per file with its redirects, at most `media.max_upload` each).
     #[arg(long)]
     pub fetch_media: bool,
     /// Run everything, then roll every write back.
@@ -153,8 +154,11 @@ async fn importer(store: &dyn Store, login: Option<&str>) -> anyhow::Result<Acto
             .next()
             .context("the site has no active admin (create one with `ferrite user create`)")?,
     };
-    if user.role != Role::Admin {
-        bail!("{:?} is not an admin; only admins may import", user.login);
+    if user.role != Role::Admin || user.status != UserStatus::Active {
+        bail!(
+            "{:?} is not an active admin; only active admins may import",
+            user.login
+        );
     }
     Ok(Actor::new(user.id, user.role))
 }
@@ -226,8 +230,12 @@ fn finish(args: &WordpressArgs, report: &Report) -> anyhow::Result<ExitCode> {
     }
     let missing = total(report, "missing_media", report.missing_media.len());
     let refused = total(report, "redirects.refused", report.redirects.refused.len());
+    let failed = report.counts.get("media").map_or(0, |c| c.failed);
     if missing > 0 {
         println!("  {missing} attachments missing (the items keep their old URLs)");
+    }
+    if failed > 0 {
+        println!("  {failed} attachments refused (size or type)");
     }
     if refused > 0 {
         println!("  {refused} redirects refused");
@@ -237,7 +245,7 @@ fn finish(args: &WordpressArgs, report: &Report) -> anyhow::Result<ExitCode> {
     }
     println!("Report: {}", dir.join("report.json").display());
     println!("        {}", dir.join("report.html").display());
-    let code = if missing > 0 || refused > 0 {
+    let code = if missing > 0 || refused > 0 || failed > 0 {
         DONE_WITH_PROBLEMS
     } else {
         DONE

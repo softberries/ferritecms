@@ -407,3 +407,141 @@ async fn fetch_media_refuses_internal_addresses() {
     .unwrap();
     assert_eq!(json["missing_media"].as_array().unwrap().len(), 4);
 }
+
+/// Serves `site-b-uploads`, but cuts `bridge.jpg` off halfway through its body (the
+/// connection drops after half the promised bytes).
+async fn flaky_upload_server() -> SocketAddr {
+    use axum::body::Body;
+    use axum::extract::Path as UrlPath;
+    use axum::http::{StatusCode, header};
+    use axum::response::Response;
+    async fn file(UrlPath(rest): UrlPath<String>) -> Result<Response, StatusCode> {
+        if rest.split('/').any(|s| s == "..") {
+            return Err(StatusCode::NOT_FOUND);
+        }
+        let bytes = std::fs::read(corpus("site-b-uploads").join(&rest))
+            .map_err(|_| StatusCode::NOT_FOUND)?;
+        if !rest.ends_with("/bridge.jpg") {
+            return Ok(Response::new(Body::from(bytes)));
+        }
+        // The first half goes out with the headers; the drop comes a moment later, so
+        // the client has started reading the body.
+        let half = bytes::Bytes::copy_from_slice(&bytes[..bytes.len() / 2]);
+        let body = futures::stream::unfold(0u8, move |step| {
+            let half = half.clone();
+            async move {
+                match step {
+                    0 => Some((Ok::<_, std::io::Error>(half), 1)),
+                    1 => {
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        Some((Err(std::io::Error::other("connection reset")), 2))
+                    }
+                    _ => None,
+                }
+            }
+        });
+        Response::builder()
+            .header(header::CONTENT_LENGTH, bytes.len())
+            .body(Body::from_stream(body))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    }
+    let app = axum::Router::new().route("/wp-content/uploads/{*rest}", axum::routing::get(file));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    addr
+}
+
+/// A download that fails part-way is a missing attachment, not a failed run: the rest
+/// is imported and the run exits 2.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn download_dropped_mid_body_is_missing() {
+    let site = Site::sqlite().await;
+    let addr = flaky_upload_server().await;
+    let xml = std::fs::read_to_string(corpus("site-b.xml"))
+        .unwrap()
+        .replace(
+            "http://localhost:8099/wp-content/uploads",
+            &format!("http://{addr}/wp-content/uploads"),
+        );
+    let wxr = site.data().join("site-b-flaky.xml");
+    std::fs::write(&wxr, xml).unwrap();
+    let cli = Cli::try_parse_from([
+        "ferrite",
+        "import",
+        "wordpress",
+        wxr.to_str().unwrap(),
+        "--data",
+        site.data().to_str().unwrap(),
+        "--fetch-media",
+        "--allow-private-fetch",
+    ])
+    .unwrap();
+    let code = ferrite::run(cli).await.unwrap();
+    assert_eq!(code, ExitCode::from(2));
+    let json: Value = serde_json::from_str(
+        &std::fs::read_to_string(report_dir(&site).join("report.json")).unwrap(),
+    )
+    .unwrap();
+    let missing = json["missing_media"].as_array().unwrap();
+    assert_eq!(missing.len(), 1, "{missing:?}");
+    assert!(missing[0]["url"].as_str().unwrap().ends_with("/bridge.jpg"));
+    let notes = json["notes"].to_string();
+    assert!(notes.contains("bridge.jpg"), "{notes}");
+    assert_eq!(json["counts"]["media"]["created"], 3);
+}
+
+/// Attachments refused for their size are counted as failed, and the run exits 2.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn refused_files_exit_2() {
+    let mut site = Site::sqlite().await;
+    site.env
+        .push(("FERRITE_MEDIA__MAX_UPLOAD".into(), "100".into()));
+    let out = site
+        .import(
+            &corpus("site-a.xml"),
+            &["--uploads", corpus("site-a-uploads").to_str().unwrap()],
+        )
+        .await;
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let json: Value = serde_json::from_str(
+        &std::fs::read_to_string(report_dir(&site).join("report.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(json["counts"]["media"]["failed"], 4);
+    assert!(json["missing_media"].as_array().unwrap().is_empty());
+}
+
+/// `--as` takes an active admin only; with no active admin there is no default.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn as_takes_active_admins_only() {
+    let site = Site::sqlite().await;
+    let store = site.store().await;
+    let mut user = store
+        .read()
+        .users()
+        .get_by_login("importer")
+        .await
+        .unwrap()
+        .unwrap();
+    user.status = UserStatus::Disabled;
+    store.read().users().update(&user).await.unwrap();
+    store.close().await;
+    drop(store);
+    let out = site
+        .import(&corpus("site-a.xml"), &["--as", "importer"])
+        .await;
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("not an active admin"),
+        "{}",
+        text(&out)
+    );
+    let out = site.import(&corpus("site-a.xml"), &[]).await;
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no active admin"),
+        "{}",
+        text(&out)
+    );
+}
