@@ -13,6 +13,7 @@ use uuid::Uuid;
 pub mod autop;
 pub mod blocks;
 pub mod body;
+mod depth;
 pub mod doc;
 pub mod gutenberg;
 pub mod html;
@@ -137,7 +138,7 @@ pub struct Notes {
     pub unknown_blocks: BTreeMap<String, Tally>,
     /// Block comments whose attributes were not a JSON object (read as none).
     pub bad_block_attrs: Tally,
-    /// Markup nested too deep to parse safely, kept as text (`html::MAX_PARSE_DEPTH`).
+    /// Markup nested too deep to parse safely, kept as text (past 512 levels).
     pub too_deep: Tally,
     /// Page breaks (`<!--nextpage-->`, the nextpage block) dropped: the pages are joined.
     pub page_breaks: Tally,

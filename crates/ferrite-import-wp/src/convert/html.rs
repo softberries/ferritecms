@@ -6,16 +6,10 @@
 //! and the rest of the text starts a new one. Whitespace collapses as a browser would,
 //! except in `<pre>`.
 
-use std::cell::{Cell, RefCell};
-
 use ferrite_core::blocks::{canonical_embed_url, embed_id, safe_href};
-use html5ever::tendril::StrTendril;
-use html5ever::tokenizer::states::RawKind;
-use html5ever::tokenizer::{
-    BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
-};
 use scraper::{ElementRef, Html, Node as Dom};
 
+use super::depth::{MAX_PARSE_DEPTH, nesting_depth};
 use super::doc::{Mark, Node};
 use super::{ImageRef, Notes, Rewrite};
 
@@ -61,120 +55,6 @@ const PLAIN_INLINE: &[&str] = &[
     "span", "abbr", "acronym", "cite", "q", "small", "big", "time", "dfn", "var", "bdi", "bdo",
     "data", "label", "wbr", "nobr", "ruby", "rb", "rt", "rp",
 ];
-
-/// Markup whose tags nest deeper than this is not parsed: html5ever's tree building is
-/// quadratic in the nesting depth, and the input is untrusted.
-pub const MAX_PARSE_DEPTH: usize = 512;
-
-/// Elements that never hold content (a start tag opens nothing).
-const VOID: &[&str] = &[
-    "area", "base", "basefont", "bgsound", "br", "col", "embed", "frame", "hr", "img", "input",
-    "keygen", "link", "meta", "param", "source", "track", "wbr",
-];
-
-/// Elements the next one of their kind (or their parent's end) closes, so a run of them does
-/// not nest.
-const IMPLIED_END: &[&str] = &[
-    "p", "li", "dt", "dd", "option", "tr", "td", "th", "thead", "tbody", "tfoot",
-];
-
-/// Formatting elements: the tree builder reopens them (reconstructs the active formatting
-/// elements) after an ancestor's end tag closed them.
-const FORMATTING: &[&str] = &[
-    "a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u",
-];
-
-/// An upper bound of how deep the tree builder nests the elements of `html`, from
-/// html5ever's own tokenizer (linear; comments, names and raw text exactly as the parser
-/// reads them). A start tag opens a level unless it is void, implicitly ended, or
-/// self-closing in `<svg>`/`<math>`; an end tag closes back to the nearest open element of
-/// its name and is ignored when there is none. Formatting elements an ancestor's end tag
-/// closed still count, since the tree builder reopens them. Stops once past
-/// [`MAX_PARSE_DEPTH`].
-pub(crate) fn nesting_depth(html: &str) -> usize {
-    let tok = Tokenizer::new(DepthSink::default(), TokenizerOpts::default());
-    let input = BufferQueue::default();
-    input.push_back(StrTendril::from_slice(html));
-    let _ = tok.feed(&input);
-    tok.end();
-    tok.sink.max.get()
-}
-
-#[derive(Default)]
-struct DepthSink {
-    stack: RefCell<Vec<String>>,
-    /// Formatting elements closed by an ancestor's end tag (to be reopened).
-    dangling: Cell<usize>,
-    /// Open `<svg>`/`<math>` elements.
-    foreign: Cell<usize>,
-    max: Cell<usize>,
-}
-
-impl TokenSink for DepthSink {
-    type Handle = ();
-
-    fn process_token(&self, token: Token, _line: u64) -> TokenSinkResult<()> {
-        let Token::TagToken(tag) = token else {
-            return TokenSinkResult::Continue;
-        };
-        let name: &str = &tag.name;
-        let mut stack = self.stack.borrow_mut();
-        let foreign = self.foreign.get() > 0;
-        let mut result = TokenSinkResult::Continue;
-        match tag.kind {
-            TagKind::StartTag => {
-                if VOID.contains(&name)
-                    || IMPLIED_END.contains(&name)
-                    || (foreign && tag.self_closing)
-                {
-                    return TokenSinkResult::Continue;
-                }
-                if matches!(name, "svg" | "math") {
-                    self.foreign.set(self.foreign.get() + 1);
-                }
-                stack.push(name.to_owned());
-                if !foreign {
-                    result = match name {
-                        "script" => TokenSinkResult::RawData(RawKind::ScriptData),
-                        "style" | "xmp" | "iframe" | "noembed" | "noframes" | "noscript" => {
-                            TokenSinkResult::RawData(RawKind::Rawtext)
-                        }
-                        "textarea" | "title" => TokenSinkResult::RawData(RawKind::Rcdata),
-                        "plaintext" => TokenSinkResult::Plaintext,
-                        _ => TokenSinkResult::Continue,
-                    };
-                }
-            }
-            TagKind::EndTag => match stack.iter().rposition(|open| open == name) {
-                Some(i) => {
-                    for closed in stack.drain(i..) {
-                        if matches!(closed.as_str(), "svg" | "math") {
-                            self.foreign.set(self.foreign.get().saturating_sub(1));
-                        }
-                        if closed != name && FORMATTING.contains(&closed.as_str()) {
-                            self.dangling.set(self.dangling.get() + 1);
-                        }
-                    }
-                }
-                None if FORMATTING.contains(&name) => {
-                    self.dangling.set(self.dangling.get().saturating_sub(1));
-                }
-                None => {}
-            },
-        }
-        let depth = stack.len() + self.dangling.get();
-        self.max.set(self.max.get().max(depth));
-        if depth > MAX_PARSE_DEPTH {
-            // Past the limit: read the rest as text, ending the count.
-            return TokenSinkResult::Plaintext;
-        }
-        result
-    }
-
-    fn adjusted_current_node_present_but_not_in_html_namespace(&self) -> bool {
-        self.foreign.get() > 0
-    }
-}
 
 /// `html`, NUL stripped, as text paragraphs split on blank lines (whitespace collapsed):
 /// what markup too deep to parse becomes.
@@ -1436,81 +1316,6 @@ mod tests {
         assert_eq!(notes.too_deep.count, 1);
         assert_eq!(nodes.len(), 2);
         assert_eq!(nodes[0], p(vec![t("<p>a</p>")]));
-    }
-
-    #[test]
-    fn nesting_depth_reads_tags() {
-        assert_eq!(nesting_depth("<div><div></div><b>x</b></div>"), 2);
-        assert_eq!(nesting_depth(&"<p>x".repeat(10_000)), 0);
-        assert_eq!(
-            nesting_depth(&"<li>x<td>y<br><img src=a>".repeat(10_000)),
-            0
-        );
-        assert_eq!(
-            nesting_depth("<!-- <div><div> --><script><div><div></script>"),
-            1
-        );
-        assert_eq!(
-            nesting_depth(&format!("<svg>{}</svg>", "<path/>".repeat(1_000))),
-            1
-        );
-        assert_eq!(
-            nesting_depth("<div title=\"a>b<i>\"><span>x</span></div>"),
-            2
-        );
-        assert_eq!(nesting_depth("</div></div><i><i"), 1);
-        assert_eq!(nesting_depth("a < b <3 <!-- open"), 0);
-        // An end tag closes back to its element; one that matches nothing is ignored.
-        assert_eq!(nesting_depth("<div><span></div><div><div>"), 2);
-        // `b` closed by `</div>` is reopened later: it still counts.
-        assert_eq!(nesting_depth("<div><b></div><div><div></div></div>"), 3);
-    }
-
-    /// Each pattern nests 40 000 deep in html5ever; the count must see it, fast.
-    #[test]
-    fn nesting_bypasses_trip_the_guard() {
-        let n = 40_000;
-        let cases = [
-            ("unmatched end tags", "<div></x>".repeat(n)),
-            (
-                "names past a punctuation byte",
-                "<p_><p:><li.><br_>".repeat(n),
-            ),
-            (
-                "comment ended by <!-->",
-                format!("<!-->{}", "<div>".repeat(n)),
-            ),
-            (
-                "comment ended by <!--->",
-                format!("<!--->{}", "<div>".repeat(n)),
-            ),
-            (
-                "comment ended by --!>",
-                format!("<!-- x --!>{}", "<div>".repeat(n)),
-            ),
-            (
-                "raw-text names inside svg",
-                format!("<svg>{}", "<style><g>".repeat(n)),
-            ),
-            (
-                "formatting reopened after an ancestor's end",
-                (0..n)
-                    .map(|i| format!("<div><b class=c{i}></div>"))
-                    .collect(),
-            ),
-            ("self-closing outside foreign content", "<div/>".repeat(n)),
-        ];
-        for (what, html) in cases {
-            let start = std::time::Instant::now();
-            let mut notes = Notes::default();
-            assert!(parse_guarded(&html, &mut notes).is_none(), "{what}");
-            assert_eq!(notes.too_deep.count, 1, "{what}");
-            assert!(
-                start.elapsed() < std::time::Duration::from_secs(1),
-                "{what}: {:?}",
-                start.elapsed()
-            );
-        }
     }
 
     #[test]

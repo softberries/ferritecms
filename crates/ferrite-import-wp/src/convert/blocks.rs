@@ -15,7 +15,7 @@ use uuid::Uuid;
 use super::doc::Node;
 use super::gutenberg::{Block, HtmlPart};
 use super::shortcodes::{count_shortcodes, embed_html, escape, is_bare_url, to_nodes};
-use super::{ImageRef, Notes, Rewrite, body, html};
+use super::{ImageRef, Notes, Rewrite, body, depth, html};
 use ferrite_core::blocks::embed_id;
 
 /// Converts parsed blocks, in order.
@@ -112,7 +112,7 @@ fn html_node(html: &str, notes: &mut Notes, out: &mut Vec<Node>) {
     if html.is_empty() {
         return;
     }
-    if html::nesting_depth(html) > html::MAX_PARSE_DEPTH {
+    if depth::nesting_depth(html) > depth::MAX_PARSE_DEPTH {
         notes.too_deep();
         out.extend(html::plain_paragraphs(html));
     } else {
