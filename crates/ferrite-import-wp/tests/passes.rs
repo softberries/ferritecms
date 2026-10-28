@@ -15,8 +15,9 @@ use ferrite_core::{
     Actor, ContentDraft, ContentService, PermalinkRules, SwappablePermalinks, import::ImportService,
 };
 use ferrite_domain::{
-    ContentId, ContentItem, ContentQuery, ContentStatus, JobQuery, MEDIA_KIND, NewUser, Role,
-    Taxonomy, Term, TermId, Timestamp, UserId, UserStatus,
+    Comment, CommentQuery, CommentStatus, ContentId, ContentItem, ContentQuery, ContentStatus,
+    JobQuery, MEDIA_KIND, MenuItemKind, NewUser, Role, Taxonomy, Term, TermId, Timestamp, UserId,
+    UserStatus,
 };
 use ferrite_import_wp::ImportError;
 use ferrite_import_wp::ir::Ir;
@@ -29,6 +30,7 @@ use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode};
 use ferrite_store::Store;
 use ferrite_store_tests::{TestDb, backend_tests};
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 fn corpus(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -637,6 +639,12 @@ async fn run_all(site: &Site, wxr: &Path) -> Report {
 
 /// The item of `kind` titled `title` (any status).
 async fn by_title(store: &dyn Store, kind: &str, title: &str) -> ContentItem {
+    find_title(store, kind, title)
+        .await
+        .unwrap_or_else(|| panic!("no {kind} titled {title:?}"))
+}
+
+async fn find_title(store: &dyn Store, kind: &str, title: &str) -> Option<ContentItem> {
     store
         .read()
         .content()
@@ -650,7 +658,6 @@ async fn by_title(store: &dyn Store, kind: &str, title: &str) -> ContentItem {
         .items
         .into_iter()
         .find(|i| i.title == title)
-        .unwrap_or_else(|| panic!("no {kind} titled {title:?}"))
 }
 
 async fn meta_of(store: &dyn Store, id: ContentId, key: &str) -> Option<Value> {
@@ -923,11 +930,12 @@ fn block_on<T>(f: impl std::future::Future<Output = T>) -> T {
 pub async fn pass3_fixup_queue_survives_a_crash(db: &TestDb) {
     let site = site(db, site_a_uploads()).await;
     let store = db.store();
-    // One item per batch: 4 users, 9 term batches, 4 × 2 media batches, 4 attachment
-    // lookups, "Hello world!" (26), then "Every core block" (27).
+    // One item per batch: 4 users, 9 term batches, 4 × 2 media batches, the permalink
+    // structure, 4 attachment lookups, "Hello world!" (27), then "Every core block"
+    // (28).
     let opts = ImportOptions {
         batch_items: Some(1),
-        fail_after_batches: Some(27),
+        fail_after_batches: Some(28),
         ..ImportOptions::default()
     };
     let err = run(site.ctx.clone(), &corpus("site-a.xml"), opts)
@@ -942,6 +950,18 @@ pub async fn pass3_fixup_queue_survives_a_crash(db: &TestDb) {
         "not fixed yet: {links:?}"
     );
     assert_eq!(ir_ids(&ir_file(&site), "fixups").await, [7]);
+    // The run stopped right after that batch: nothing after it was written, so the test
+    // cannot pass on a wrong batch count.
+    for (kind, title) in [
+        ("post", "A draft"),
+        ("page", "Sample Page"),
+        ("page", "About"),
+    ] {
+        assert!(
+            find_title(store, kind, title).await.is_none(),
+            "{title} was written before the crash"
+        );
+    }
 
     run_all(&site, &corpus("site-a.xml")).await;
     let post = by_title(store, "post", "Every core block").await;
@@ -1083,6 +1103,250 @@ pub async fn fixup_keeps_an_item_edited_meanwhile(db: Arc<TestDb>) {
     assert!(fixups.updated >= 1, "{fixups:?}");
 }
 
+// --- Pass 4: comments, menus, permalinks, redirects, options ----------------------------
+
+async fn comments_of(store: &dyn Store, item: ContentId) -> Vec<Comment> {
+    let mut list = store
+        .read()
+        .comments()
+        .list(&CommentQuery {
+            status: None,
+            item: Some(item),
+            limit: 100,
+            cursor: None,
+        })
+        .await
+        .unwrap()
+        .items;
+    list.sort_by_key(|c| c.created_at);
+    list
+}
+
+async fn redirect_to(store: &dyn Store, source: &str) -> Option<String> {
+    store
+        .read()
+        .redirects()
+        .get_by_source(source)
+        .await
+        .unwrap()
+        .map(|r| r.target)
+}
+
+async fn option(store: &dyn Store, key: &str) -> Option<Value> {
+    store
+        .read()
+        .options()
+        .get(key)
+        .await
+        .unwrap()
+        .map(|o| o.value)
+}
+
+/// A menu item as asserted: label, kind, target, URL, whether it has a parent.
+type MenuShape<'a> = (&'a str, MenuItemKind, Option<Uuid>, Option<&'a str>, bool);
+
+/// Site A after pass 4: the inferred permalinks (P17), comments (P18, R4), the menu
+/// (P19), redirects (P17) and the site options (P20).
+pub async fn pass4_site_a(db: &TestDb) {
+    let site = site(db, site_a_uploads()).await;
+    let store = db.store();
+    let report = run_all(&site, &corpus("site-a.xml")).await;
+
+    assert_eq!(
+        report.permalink_structure.as_deref(),
+        Some("/%year%/%month%/%slug%/")
+    );
+    assert_eq!(
+        option(store, "permalink.post").await,
+        Some(json!("/%year%/%month%/%slug%/"))
+    );
+
+    // R4: WordPress does not export spam; the post has 3 comments.
+    let post = by_title(store, "post", "Every core block").await;
+    let comments = comments_of(store, post.id).await;
+    assert_eq!(comments.len(), 3, "{comments:?}");
+    let visitor = &comments[0];
+    assert_eq!(visitor.author_name, "Visitor One");
+    assert_eq!(visitor.status, CommentStatus::Approved);
+    assert_eq!(visitor.parent_id, None);
+    assert_eq!(visitor.created_at, at("2024-03-16T11:00:00Z"));
+    let reply = &comments[1];
+    assert_eq!(reply.body, "Thanks!");
+    assert_eq!(reply.status, CommentStatus::Approved);
+    assert_eq!(reply.parent_id, Some(visitor.id));
+    let arlo = store
+        .read()
+        .users()
+        .get_by_login("arlo")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(reply.user_id, Some(arlo.id));
+    assert_eq!(comments[2].status, CommentStatus::Pending);
+    assert!(comments.iter().all(|c| c.status != CommentStatus::Spam));
+    let hello = by_title(store, "post", "Hello world!").await;
+    assert_eq!(
+        comments_of(store, hello.id).await[0].body,
+        "Hi, this is a comment.\n\nTo get started with moderating, editing, and deleting comments, \
+         please visit the Comments screen in the dashboard.\n\nCommenter avatars come from Gravatar."
+    );
+    assert_eq!(counts(&report, "comments").created, 4);
+
+    // The menu: Home (url) / About (item) > Team (item) / All news (term) / Every core
+    // block (item).
+    let menu = store.read().menus().get("main").await.unwrap().unwrap();
+    assert_eq!(menu.label, "Main");
+    let about = by_title(store, "page", "About").await;
+    let team = by_title(store, "page", "Team").await;
+    let news = term(store, "category", "news").await;
+    let shape: Vec<MenuShape<'_>> = menu
+        .items
+        .iter()
+        .map(|i| {
+            (
+                i.label.as_str(),
+                i.kind,
+                i.target_id,
+                i.url.as_deref(),
+                i.parent_id.is_some(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            ("Home", MenuItemKind::Url, None, Some("/"), false),
+            (
+                "About",
+                MenuItemKind::Item,
+                Some(about.id.as_uuid()),
+                None,
+                false
+            ),
+            (
+                "Team",
+                MenuItemKind::Item,
+                Some(team.id.as_uuid()),
+                None,
+                true
+            ),
+            (
+                "All news",
+                MenuItemKind::Term,
+                Some(news.id.as_uuid()),
+                None,
+                false
+            ),
+            (
+                "Every core block",
+                MenuItemKind::Item,
+                Some(post.id.as_uuid()),
+                None,
+                false
+            ),
+        ]
+    );
+    assert_eq!(menu.items[2].parent_id, Some(menu.items[1].id));
+    let tops: Vec<i32> = menu
+        .items
+        .iter()
+        .filter(|i| i.parent_id.is_none())
+        .map(|i| i.position)
+        .collect();
+    assert_eq!(tops, [0, 1, 2, 3]);
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.contains("opened in a new tab")),
+        "_blank is dropped and counted: {:?}",
+        report.notes
+    );
+
+    // Redirects: moved items, attachment pages, nested category paths; none where the
+    // path did not change.
+    assert_eq!(
+        redirect_to(store, "/books/the-first-book/")
+            .await
+            .as_deref(),
+        Some("/book/the-first-book/")
+    );
+    let media_store = &site.ctx.media_store;
+    let media_url = |title: &'static str| async move {
+        let id = by_title(store, MEDIA_KIND, title).await.id;
+        let m = store.read().media().get(id).await.unwrap().unwrap();
+        media_store.public_url(&m.artifact_hash, &m.original_name)
+    };
+    assert_eq!(
+        redirect_to(store, "/hero/").await,
+        Some(media_url("Hero").await)
+    );
+    assert_eq!(
+        redirect_to(store, "/books/the-first-book/cover/").await,
+        Some(media_url("Cover").await)
+    );
+    assert_eq!(
+        redirect_to(store, "/category/news/local/").await.as_deref(),
+        Some("/category/local/")
+    );
+    for same in [
+        "/tag/rust/",
+        "/category/news/",
+        "/2024/03/every-core-block/",
+        "/about/",
+    ] {
+        assert_eq!(redirect_to(store, same).await, None, "{same}");
+    }
+
+    assert_eq!(
+        option(store, "site.title").await,
+        Some(json!("Corpus Site"))
+    );
+    assert!(option(store, "site.description").await.is_some());
+}
+
+/// Site B: `%category%` permalinks, a pingback skipped and counted, comment HTML as plain
+/// text, and a custom tag base redirected to core's.
+pub async fn pass4_site_b(db: &TestDb) {
+    let site = site(db, Arc::new(DirSource::new(corpus("site-b-uploads")))).await;
+    let store = db.store();
+    let opts = ImportOptions {
+        tag_base: "topic".into(),
+        ..ImportOptions::default()
+    };
+    let report = run(site.ctx.clone(), &corpus("site-b.xml"), opts)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.permalink_structure.as_deref(),
+        Some("/%category%/%slug%/")
+    );
+    let harbour = by_title(store, "post", "Harbour walk").await;
+    let comments = comments_of(store, harbour.id).await;
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].body, "Lovely photos!\n\nSecond paragraph bold.");
+    let c = counts(&report, "comments");
+    assert_eq!((c.created, c.skipped), (1, 1), "{c:?}");
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n == "1 pingbacks and trackbacks were skipped"),
+        "{:?}",
+        report.notes
+    );
+    assert_eq!(
+        redirect_to(store, "/topic/europe/").await.as_deref(),
+        Some("/tag/europe/")
+    );
+    // The post keeps its old URL: no redirect.
+    assert_eq!(redirect_to(store, "/travel/harbour-walk/").await, None);
+    assert_eq!(
+        option(store, "site.title").await,
+        Some(json!("Classic Corpus"))
+    );
+}
+
 backend_tests!(
     pass1_site_a,
     pass1_edge_cases,
@@ -1093,6 +1357,8 @@ backend_tests!(
     pass3_site_a,
     pass3_site_b,
     pass3_fixup_queue_survives_a_crash,
+    pass4_site_a,
+    pass4_site_b,
 );
 
 ferrite_store_tests::backend_tests_spawning!(
