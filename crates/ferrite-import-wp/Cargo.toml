@@ -8,8 +8,12 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+ferrite-core = { path = "../ferrite-core" }
+html5ever.workspace = true
 quick-xml.workspace = true
+scraper.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 

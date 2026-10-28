@@ -23,8 +23,9 @@ fn is_local_path(s: &str) -> bool {
     s.starts_with('/') && !s.starts_with("//") && !s.starts_with("/\\")
 }
 
-/// Returns the trimmed href when it is safe to emit, else `None`.
-pub(super) fn safe_href(raw: &str) -> Option<String> {
+/// Returns the trimmed href when it is safe to emit, else `None`: `http`, `https`, `mailto`,
+/// `#fragment`, `/path` or a relative path.
+pub fn safe_href(raw: &str) -> Option<String> {
     let s = raw.trim();
     if s.is_empty() || s.chars().any(|c| c.is_control()) || s.contains('\\') {
         return None;

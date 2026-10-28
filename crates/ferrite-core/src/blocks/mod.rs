@@ -9,7 +9,7 @@ mod url;
 
 pub use render::render_html;
 pub use text::{excerpt, extract_text};
-pub use url::{canonical_embed_url, embed_id};
+pub use url::{canonical_embed_url, embed_id, safe_href};
 
 use serde_json::Value;
 
