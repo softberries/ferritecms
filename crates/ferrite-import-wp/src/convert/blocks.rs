@@ -125,10 +125,14 @@ fn html_node(html: &str, notes: &mut Notes, out: &mut Vec<Node>) {
 fn paragraph_url(html: &str) -> Option<&str> {
     let html = html.trim();
     let lower = html.to_ascii_lowercase();
-    if !lower.starts_with("<p") || !lower.ends_with("</p>") {
+    let after_name = lower.as_bytes().get(2).copied();
+    if !lower.starts_with("<p")
+        || !after_name.is_some_and(|c| c == b'>' || c == b'/' || c.is_ascii_whitespace())
+        || !lower.ends_with("</p>")
+    {
         return None;
     }
-    let start = lower.find('>')? + 1;
+    let start = start_tag_end(html)?;
     let end = lower.len() - "</p>".len();
     let url = html.get(start..end)?.trim();
     (is_bare_url(url)
@@ -136,6 +140,31 @@ fn paragraph_url(html: &str) -> Option<&str> {
             .iter()
             .any(|p| embed_id(p, url).is_some()))
     .then_some(url)
+}
+
+/// The end (after `>`) of the start tag `html` begins with: a `>` inside a quoted attribute
+/// value does not end it.
+fn start_tag_end(html: &str) -> Option<usize> {
+    let mut quote = None;
+    let mut after_eq = false;
+    for (i, c) in html.bytes().enumerate().skip(1) {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => continue,
+            None => match c {
+                b'>' => return Some(i + 1),
+                b'"' | b'\'' if after_eq => {
+                    quote = Some(c);
+                    continue;
+                }
+                _ => {}
+            },
+        }
+        if !c.is_ascii_whitespace() {
+            after_eq = c == b'=';
+        }
+    }
+    None
 }
 
 /// The block's HTML with its inner blocks' HTML in place (WP's serialised `innerContent`).
@@ -689,7 +718,8 @@ mod tests {
         let (nodes, _) = conv(
             "<!-- wp:embed --><figure><div class=\"wp-block-embed__wrapper\">\nhttps://youtu.be/dQw4w9WgXcQ\n</div><figcaption>Cap https://x.org</figcaption></figure><!-- /wp:embed -->\
              <!-- wp:embed --><figure><div>https://example.org/a?b=1&amp;c=2</div></figure><!-- /wp:embed -->\
-             <!-- wp:paragraph --><p> https://vimeo.com/42 </p><!-- /wp:paragraph -->\
+             <!-- wp:paragraph --><p class = 'x>y' title=\"a>b\"> https://vimeo.com/42 </p><!-- /wp:paragraph -->\
+             <!-- wp:paragraph --><pre>https://vimeo.com/44</p><!-- /wp:paragraph -->\
              <!-- wp:paragraph --><p>https://example.org/x</p><!-- /wp:paragraph -->\
              <!-- wp:paragraph --><p><a href=\"https://vimeo.com/43\">https://vimeo.com/43</a></p><!-- /wp:paragraph -->",
         );
@@ -711,6 +741,10 @@ mod tests {
                     "https://example.org/a?b=1&c=2"
                 ),
                 vimeo,
+                Node::CodeBlock {
+                    language: None,
+                    text: "https://vimeo.com/44".into()
+                },
                 p("https://example.org/x"),
                 link_p("https://vimeo.com/43", "https://vimeo.com/43"),
             ]
