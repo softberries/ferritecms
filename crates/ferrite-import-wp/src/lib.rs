@@ -14,6 +14,7 @@ pub mod model;
 pub mod pass;
 pub mod permalinks;
 pub mod php;
+pub mod report;
 pub mod run;
 pub mod seo;
 pub mod urls;

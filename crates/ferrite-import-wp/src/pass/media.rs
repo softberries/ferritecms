@@ -215,7 +215,7 @@ async fn stage(
         .unwrap_or_default();
     let missing = |report: &mut Report| {
         report.counts_of("media").skipped += 1;
-        report.missing_media.push(MissingMedia {
+        report.add_missing_media(MissingMedia {
             wp_id: item.wp_id,
             path: path.clone(),
             url: url.clone(),

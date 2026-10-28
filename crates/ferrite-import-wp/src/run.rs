@@ -9,7 +9,6 @@
 //!
 //! Passes write through [`Session`]: its batches commit, or roll back on a dry run.
 
-use std::collections::BTreeMap;
 use std::io::{BufReader, Read};
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
@@ -21,10 +20,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use ferrite_core::import::{ImportBatch, ImportHandle, ImportService};
 use ferrite_core::{Actor, SwappablePermalinks};
-use ferrite_domain::ImportRunState;
+use ferrite_domain::{ImportRunState, Timestamp};
 use ferrite_media::MediaStore;
 use futures::Stream;
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::ImportError;
@@ -209,79 +207,7 @@ pub struct ImportContext {
     pub site_url: String,
 }
 
-/// What a run did (Task 16 adds the rest).
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
-pub struct Report {
-    /// Per kind (`users`, `terms`, `taxonomies`, `types`, `media`, a post type,
-    /// `comments`, …).
-    pub counts: BTreeMap<String, Counts>,
-    /// Attachments whose file was neither in the uploads folder nor fetchable (P13).
-    pub missing_media: Vec<MissingMedia>,
-    /// ACF fields of an imported type that map to no field kind (P16); their values
-    /// stay as `wp.<name>` meta.
-    pub unmapped_acf: Vec<UnmappedAcf>,
-    /// The accounts the import created, which must set a password (P9).
-    pub users_must_reset: Vec<MustReset>,
-    /// Everything else worth a line: renames, dropped parents, refused files, …
-    pub notes: Vec<String>,
-    /// The post permalink structure inferred from the old site and set (P17).
-    pub permalink_structure: Option<String>,
-    /// What the body conversion lost, over every item (Task 16 serialises it).
-    #[serde(skip)]
-    pub conversion: crate::convert::Notes,
-}
-
-impl Report {
-    /// The counts of `kind`, made on first use.
-    pub(crate) fn counts_of(&mut self, kind: &str) -> &mut Counts {
-        self.counts.entry(kind.to_owned()).or_default()
-    }
-
-    pub(crate) fn note(&mut self, note: impl Into<String>) {
-        self.notes.push(note.into());
-    }
-}
-
-/// An attachment whose file is missing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct MissingMedia {
-    pub wp_id: i64,
-    /// `_wp_attached_file`.
-    pub path: String,
-    /// `<wp:attachment_url>`.
-    pub url: String,
-}
-
-/// An ACF field kept as raw meta.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct UnmappedAcf {
-    /// The field's (ACF) name.
-    pub field: String,
-    /// The ACF field type.
-    pub kind: String,
-    /// Items of the field's types holding a value of it.
-    pub items: u64,
-}
-
-/// An account created by the import.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct MustReset {
-    pub login: String,
-    pub email: String,
-    /// `created`, or `created with a placeholder e-mail` when the WXR one was invalid.
-    pub how: String,
-}
-
-/// The outcomes of one kind.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
-pub struct Counts {
-    pub created: u64,
-    pub updated: u64,
-    pub unchanged: u64,
-    pub kept: u64,
-    pub skipped: u64,
-    pub failed: u64,
-}
+pub use crate::report::{Counts, MissingMedia, MustReset, Report, UnmappedAcf};
 
 /// A started run as the passes see it: the IR, the options, and batches that end as the
 /// run requires.
@@ -438,7 +364,13 @@ pub async fn run(
     let dir = ctx.work_dir.join(handle.run.id.to_string());
     let outcome = drive(&ctx, &opts, &handle, wxr, &digest, &dir).await;
     match outcome {
-        Ok(report) => {
+        Ok(mut report) => {
+            report.run_id = handle.run.id.to_string();
+            report.source.clone_from(&handle.run.source);
+            report.dry_run = opts.dry_run;
+            report.started_at = Some(handle.run.started_at);
+            report.finished_at = Some(Timestamp::now());
+            report.site_url.clone_from(&ctx.site_url);
             let stats = serde_json::to_value(&report.counts)?;
             handle
                 .finish(&ctx.import, ImportRunState::Done, stats)
@@ -471,17 +403,63 @@ async fn drive(
     dir: &Path,
 ) -> Result<Report, ImportError> {
     let mut ir = prepare_ir(&ctx.work_dir, dir, digest).await?;
-    let done = steps(ctx, opts, handle, wxr, &mut ir).await;
+    let mut done = steps(ctx, opts, handle, wxr, &mut ir).await;
+    if let Ok(report) = &mut done
+        && let Err(e) = crate::report::finish(report, &ir).await
+    {
+        done = Err(e);
+    }
     ir.close().await;
     done
 }
 
+/// The passes this process ran, and whether any was skipped as done by an earlier run.
+#[derive(Default)]
+struct Progress {
+    run: Vec<String>,
+    skipped: bool,
+}
+
+/// Runs the steps; when a pass was skipped as already done, the report says it covers
+/// only the passes run now.
 async fn steps(
     ctx: &ImportContext,
     opts: &ImportOptions,
     handle: &ImportHandle,
     wxr: &Path,
     ir: &mut Ir,
+) -> Result<Report, ImportError> {
+    let mut progress = Progress::default();
+    let mut report = run_steps(ctx, opts, handle, wxr, ir, &mut progress).await?;
+    if progress.skipped {
+        report.resumed = Some(progress.run);
+    }
+    Ok(report)
+}
+
+/// [`begin_step`] for a pass, recording in `progress` whether it runs.
+async fn begin_pass(
+    progress: &mut Progress,
+    opts: &ImportOptions,
+    ir: &Ir,
+    name: &str,
+) -> Result<bool, ImportError> {
+    let runs = begin_step(opts, ir, name).await?;
+    if runs {
+        progress.run.push(name.to_owned());
+    } else {
+        progress.skipped = true;
+    }
+    Ok(runs)
+}
+
+async fn run_steps(
+    ctx: &ImportContext,
+    opts: &ImportOptions,
+    handle: &ImportHandle,
+    wxr: &Path,
+    ir: &mut Ir,
+    progress: &mut Progress,
 ) -> Result<Report, ImportError> {
     if begin_step(opts, ir, PARSE).await? {
         parse_into(ir, wxr, ctx, handle).await?;
@@ -495,29 +473,29 @@ async fn steps(
         ended: AtomicU32::new(0),
     };
     let mut report = Report::default();
-    if begin_step(opts, ir, "pass1").await? {
+    if begin_pass(progress, opts, ir, "pass1").await? {
         crate::pass::pass1(&session, &mut report).await?;
         end_step(opts, ir, "pass1").await?;
     }
     if stops_after(opts, "pass1") {
         return Ok(report);
     }
-    if begin_step(opts, ir, "pass2").await? {
+    if begin_pass(progress, opts, ir, "pass2").await? {
         crate::pass::pass2(&session, &mut report).await?;
         end_step(opts, ir, "pass2").await?;
     }
     if stops_after(opts, "pass2") {
         return Ok(report);
     }
-    if begin_step(opts, ir, "pass3").await? {
+    if begin_pass(progress, opts, ir, "pass3").await? {
         crate::pass::content::import(&session, &mut report).await?;
         end_step(opts, ir, "pass3").await?;
     }
-    if begin_step(opts, ir, "pass4").await? {
+    if begin_pass(progress, opts, ir, "pass4").await? {
         crate::pass::pass4(&session, &mut report).await?;
         end_step(opts, ir, "pass4").await?;
     }
-    if begin_step(opts, ir, "fixup").await? {
+    if begin_pass(progress, opts, ir, "fixup").await? {
         crate::pass::fixup::run(&session, &mut report).await?;
         end_step(opts, ir, "fixup").await?;
     }

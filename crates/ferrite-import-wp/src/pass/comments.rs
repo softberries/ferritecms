@@ -131,7 +131,7 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
         counts.created += c.created;
         counts.unchanged += c.unchanged;
         counts.skipped += c.skipped;
-        report.notes.extend(part.notes);
+        report.notes_from(&part);
     }
     if pings > 0 {
         report.note(format!("{pings} pingbacks and trackbacks were skipped"));

@@ -66,7 +66,7 @@ fn record(
         ));
     }
     match user.how {
-        Matched::Created => report.users_must_reset.push(MustReset {
+        Matched::Created => report.add_must_reset(MustReset {
             login: user.login,
             email,
             how: if placeholder {

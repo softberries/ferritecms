@@ -107,8 +107,8 @@ async fn write<'c>(
 
 /// Adds the counts and notes of `part` to `report`.
 fn merge(report: &mut Report, part: Report) {
-    for (kind, c) in part.counts {
-        let counts = report.counts_of(&kind);
+    for (kind, c) in &part.counts {
+        let counts = report.counts_of(kind);
         counts.created += c.created;
         counts.updated += c.updated;
         counts.unchanged += c.unchanged;
@@ -116,7 +116,7 @@ fn merge(report: &mut Report, part: Report) {
         counts.skipped += c.skipped;
         counts.failed += c.failed;
     }
-    report.notes.extend(part.notes);
+    report.notes_from(&part);
 }
 
 /// The slug to write (empty: core makes one from the name) and whether the WP one was
@@ -273,7 +273,11 @@ mod tests {
             ]
         );
         assert_eq!(planned[3].term.slug, "а");
-        assert!(report.notes.is_empty(), "{:?}", report.notes);
+        assert!(
+            report.rendered_notes().is_empty(),
+            "{:?}",
+            report.rendered_notes()
+        );
     }
 
     #[test]
@@ -302,7 +306,7 @@ mod tests {
                 (6, None)
             ]
         );
-        let notes = report.notes.join("\n");
+        let notes = report.rendered_notes().join("\n");
         assert_eq!(notes.matches("cycle").count(), 2, "{notes}");
         assert!(notes.contains("category/d"), "{notes}");
         assert!(notes.contains("tag/e"), "{notes}");

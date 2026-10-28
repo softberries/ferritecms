@@ -133,7 +133,7 @@ pub(crate) async fn import(
         counts.unchanged += c.unchanged;
         counts.kept += c.kept;
         counts.skipped += c.skipped;
-        report.notes.extend(part.notes);
+        report.notes_from(&part);
     }
     Ok(())
 }
@@ -350,7 +350,9 @@ async fn build(
         ));
     }
     if !cx.dry_run {
-        report.notes.extend(notes);
+        for note in notes {
+            report.note(note);
+        }
     }
     Ok(Menu {
         name: name.to_owned(),
