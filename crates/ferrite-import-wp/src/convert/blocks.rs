@@ -7,13 +7,16 @@
 //! media and raw HTML are mapped directly; an unknown block keeps its HTML as an `html`
 //! node, or is dropped when that is empty, and is counted either way.
 
+use std::cell::Cell;
+
 use serde_json::Value;
 use uuid::Uuid;
 
 use super::doc::Node;
 use super::gutenberg::{Block, HtmlPart};
-use super::shortcodes::{embed_html, escape, to_nodes};
+use super::shortcodes::{count_shortcodes, embed_html, escape, is_bare_url, to_nodes};
 use super::{ImageRef, Notes, Rewrite, body, html};
+use ferrite_core::blocks::embed_id;
 
 /// Converts parsed blocks, in order.
 pub fn convert(blocks: &[Block], rw: &dyn Rewrite, notes: &mut Notes) -> Vec<Node> {
@@ -30,8 +33,16 @@ fn block(b: &Block, rw: &dyn Rewrite, notes: &mut Notes, out: &mut Vec<Node>) {
     }
     let name = b.name.as_str();
     match name {
-        "core/paragraph" | "core/heading" | "core/list" | "core/list-item" | "core/table"
-        | "core/pullquote" => out.extend(to_nodes(&render(b), rw, notes)),
+        "core/paragraph" => {
+            let html = render(b);
+            match paragraph_url(&html) {
+                Some(url) => out.extend(html::convert(&embed_html(url, true), rw, notes)),
+                None => out.extend(to_nodes(&html, rw, notes)),
+            }
+        }
+        "core/heading" | "core/list" | "core/list-item" | "core/table" | "core/pullquote" => {
+            out.extend(to_nodes(&render(b), rw, notes));
+        }
         "core/code" => out.extend(code(b, rw, notes, true)),
         "core/preformatted" => out.extend(code(b, rw, notes, false)),
         "core/verse" => out.extend(to_nodes(&verse(&render(b)), rw, notes)),
@@ -46,7 +57,25 @@ fn block(b: &Block, rw: &dyn Rewrite, notes: &mut Notes, out: &mut Vec<Node>) {
             let pinned = Pinned::new(rw, attachment(b, "id", rw));
             out.extend(to_nodes(&render(b), &pinned, notes));
         }
-        "core/gallery" => out.extend(unlist(flatten(b, rw, rw, notes))),
+        "core/gallery" => {
+            // Before WP 5.9 a gallery is one block whose images are its `ids`, in order.
+            let ids = b.attrs.get("ids").and_then(Value::as_array);
+            let nodes = match ids {
+                Some(ids) if b.inner.is_empty() => {
+                    let in_order = InOrder {
+                        rw,
+                        media: ids
+                            .iter()
+                            .map(|id| id_of(id).and_then(|id| rw.attachment(id)))
+                            .collect(),
+                        next: Cell::new(0),
+                    };
+                    flatten(b, &in_order, rw, notes)
+                }
+                _ => flatten(b, rw, rw, notes),
+            };
+            out.extend(unlist(nodes));
+        }
         "core/embed" => embed(b, rw, notes, out),
         _ if name.starts_with("core-embed/") => embed(b, rw, notes, out),
         "core/video" | "core/audio" | "core/file" => media(b, rw, notes, out),
@@ -62,23 +91,51 @@ fn block(b: &Block, rw: &dyn Rewrite, notes: &mut Notes, out: &mut Vec<Node>) {
         }
         "core/html" => {
             let html = render(b);
-            let html = html.trim();
-            if !html.is_empty() {
-                out.push(Node::Html(html.to_owned()));
-            }
+            count_shortcodes(&html, notes);
+            html_node(&html, notes, out);
         }
         "core/shortcode" | "core/freeform" => out.extend(body::classic(&render(b), rw, notes)),
-        // Layout only, or markers with no meaning in the stored body.
-        "core/spacer" | "core/more" | "core/nextpage" => {}
+        "core/nextpage" => notes.page_break(),
+        // Layout only, or a marker with no meaning in the stored body.
+        "core/spacer" | "core/more" => {}
         _ => {
             notes.unknown_block(name);
-            let html = render(b);
-            let html = html.trim();
-            if !html.is_empty() {
-                out.push(Node::Html(html.to_owned()));
-            }
+            html_node(&render(b), notes, out);
         }
     }
+}
+
+/// Raw markup as an `html` node; dropped when empty. Markup nested too deep for the
+/// renderer's parser to handle safely becomes text instead (counted).
+fn html_node(html: &str, notes: &mut Notes, out: &mut Vec<Node>) {
+    let html = html.trim();
+    if html.is_empty() {
+        return;
+    }
+    if html::nesting_depth(html) > html::MAX_PARSE_DEPTH {
+        notes.too_deep();
+        out.extend(html::plain_paragraphs(html));
+    } else {
+        out.push(Node::Html(html.to_owned()));
+    }
+}
+
+/// The URL of a paragraph holding nothing but a YouTube or Vimeo URL (WP auto-embeds
+/// `<p>URL</p>`).
+fn paragraph_url(html: &str) -> Option<&str> {
+    let html = html.trim();
+    let lower = html.to_ascii_lowercase();
+    if !lower.starts_with("<p") || !lower.ends_with("</p>") {
+        return None;
+    }
+    let start = lower.find('>')? + 1;
+    let end = lower.len() - "</p>".len();
+    let url = html.get(start..end)?.trim();
+    (is_bare_url(url)
+        && ["youtube", "vimeo"]
+            .iter()
+            .any(|p| embed_id(p, url).is_some()))
+    .then_some(url)
 }
 
 /// The block's HTML with its inner blocks' HTML in place (WP's serialised `innerContent`).
@@ -182,23 +239,56 @@ fn verse(html: &str) -> String {
 /// The URL is `attrs.url`, else the text of the markup. A caption follows as a paragraph.
 fn embed(b: &Block, rw: &dyn Rewrite, notes: &mut Notes, out: &mut Vec<Node>) {
     let html = render(b);
-    let url = b.attrs.get("url").and_then(Value::as_str).map(str::trim);
+    let text = markup_text(&html);
+    let url = b
+        .attrs
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .or_else(|| {
+            let text = text.trim();
+            is_bare_url(text).then_some(text)
+        });
     match url {
-        Some(url) if !url.is_empty() => {
+        Some(url) => {
             out.extend(html::convert(&embed_html(url, true), rw, notes));
             if let Some(caption) = figcaption(&html) {
                 out.extend(to_nodes(caption, rw, notes));
             }
         }
-        _ => out.extend(to_nodes(&html, rw, notes)),
+        None => out.extend(to_nodes(&html, rw, notes)),
     }
+}
+
+/// The text of `html` outside its figcaption, tags removed and `&amp;` decoded: an embed's
+/// URL when its block has no `url` attribute.
+fn markup_text(html: &str) -> String {
+    let html = match figcaption(html) {
+        Some(c) => html.replacen(c, "", 1),
+        None => html.to_owned(),
+    };
+    let mut out = String::new();
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace("&amp;", "&")
 }
 
 /// `core/video` and `core/audio` become a paragraph linking to the file, `core/file` its
 /// link; a caption follows as a paragraph.
 fn media(b: &Block, rw: &dyn Rewrite, notes: &mut Notes, out: &mut Vec<Node>) {
     let html = render(b);
-    let doc = scraper::Html::parse_fragment(&html);
+    let Some(doc) = html::parse_guarded(&html, notes) else {
+        out.extend(html::plain_paragraphs(&html));
+        return;
+    };
     let root = doc.root_element();
     let link = if b.name == "core/file" {
         root.descendent_elements()
@@ -237,12 +327,43 @@ fn figcaption(html: &str) -> Option<&str> {
 
 /// The imported media of the attachment in `attrs[key]` (a number, or a numeric string).
 fn attachment(b: &Block, key: &str, rw: &dyn Rewrite) -> Option<Uuid> {
-    let id = match b.attrs.get(key)? {
-        Value::Number(n) => n.as_i64()?,
-        Value::String(s) => s.trim().parse().ok()?,
-        _ => return None,
-    };
-    rw.attachment(id)
+    rw.attachment(id_of(b.attrs.get(key)?)?)
+}
+
+/// A JSON number or numeric string as an id.
+fn id_of(v: &Value) -> Option<i64> {
+    match v {
+        Value::Number(n) => n.as_i64(),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+/// Shows the images, in document order, as `media` (an old gallery's `ids`); an image past
+/// the list, or whose attachment was not imported, goes by its `src`.
+struct InOrder<'a> {
+    rw: &'a dyn Rewrite,
+    media: Vec<Option<Uuid>>,
+    next: Cell<usize>,
+}
+
+impl Rewrite for InOrder<'_> {
+    fn image(&self, src: &str) -> ImageRef {
+        let i = self.next.get();
+        self.next.set(i + 1);
+        match self.media.get(i).copied().flatten() {
+            Some(id) => ImageRef::Media(id),
+            None => self.rw.image(src),
+        }
+    }
+
+    fn attachment(&self, wp_id: i64) -> Option<Uuid> {
+        self.rw.attachment(wp_id)
+    }
+
+    fn href(&self, href: &str) -> String {
+        self.rw.href(href)
+    }
 }
 
 /// Shows every image as `media` (the block's own attachment, P14: by id before `src`).
@@ -361,7 +482,7 @@ mod tests {
     #[test]
     fn old_gallery_list_becomes_images() {
         let (nodes, _) = conv(
-            "<!-- wp:gallery {\"ids\":[1,2]} --><figure class=\"wp-block-gallery\"><ul class=\"blocks-gallery-grid\">\
+            "<!-- wp:gallery {\"ids\":[1,200]} --><figure class=\"wp-block-gallery\"><ul class=\"blocks-gallery-grid\">\
              <li class=\"blocks-gallery-item\"><figure><img src=\"/1.png\" alt=\"one\"/></figure></li>\
              <li class=\"blocks-gallery-item\"><figure><img src=\"/2.png\" alt=\"two\"/><figcaption>Two</figcaption></figure></li>\
              </ul><figcaption class=\"blocks-gallery-caption\">All</figcaption></figure><!-- /wp:gallery -->",
@@ -369,7 +490,7 @@ mod tests {
         assert_eq!(
             nodes,
             [
-                img("/1.png", Some("one")),
+                img(&format!("ferrite:media/{}", media(1)), Some("one")),
                 Node::Image {
                     src: "/2.png".into(),
                     alt: Some("two".into()),
@@ -561,5 +682,82 @@ mod tests {
                 url: "https://vimeo.com/5".into()
             }]
         );
+    }
+
+    #[test]
+    fn embed_url_from_the_markup_and_paragraph_auto_embed() {
+        let (nodes, _) = conv(
+            "<!-- wp:embed --><figure><div class=\"wp-block-embed__wrapper\">\nhttps://youtu.be/dQw4w9WgXcQ\n</div><figcaption>Cap https://x.org</figcaption></figure><!-- /wp:embed -->\
+             <!-- wp:embed --><figure><div>https://example.org/a?b=1&amp;c=2</div></figure><!-- /wp:embed -->\
+             <!-- wp:paragraph --><p> https://vimeo.com/42 </p><!-- /wp:paragraph -->\
+             <!-- wp:paragraph --><p>https://example.org/x</p><!-- /wp:paragraph -->\
+             <!-- wp:paragraph --><p><a href=\"https://vimeo.com/43\">https://vimeo.com/43</a></p><!-- /wp:paragraph -->",
+        );
+        let yt = Node::Embed {
+            provider: "youtube".into(),
+            url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ".into(),
+        };
+        let vimeo = Node::Embed {
+            provider: "vimeo".into(),
+            url: "https://vimeo.com/42".into(),
+        };
+        assert_eq!(
+            nodes,
+            [
+                yt,
+                p("Cap https://x.org"),
+                link_p(
+                    "https://example.org/a?b=1&c=2",
+                    "https://example.org/a?b=1&c=2"
+                ),
+                vimeo,
+                p("https://example.org/x"),
+                link_p("https://vimeo.com/43", "https://vimeo.com/43"),
+            ]
+        );
+    }
+
+    #[test]
+    fn page_breaks_are_counted() {
+        let (nodes, notes) = conv(
+            "<!-- wp:paragraph --><p>One</p><!-- /wp:paragraph --><!-- wp:nextpage --><!--nextpage--><!-- /wp:nextpage -->\
+             <!-- wp:more --><!--more--><!-- /wp:more -->",
+        );
+        assert_eq!(nodes, [p("One")]);
+        assert_eq!(notes.page_breaks.count, 1);
+        assert!(notes.unknown_blocks.is_empty());
+        let mut notes = Notes::default();
+        let nodes = body::classic("a\n<!--nextpage-->\nb<!--nextpage-->c", &Rw, &mut notes);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(notes.page_breaks.count, 2);
+    }
+
+    #[test]
+    fn html_blocks_count_their_shortcodes_and_too_deep_markup_is_text() {
+        let deep = format!("<div>{}x", "<span>".repeat(600));
+        let content = format!(
+            "<!-- wp:html --><div title=\"[no]\">[form id=1] [[esc]]</div><!-- /wp:html -->\
+             <!-- wp:html -->{deep}<!-- /wp:html --><!-- wp:acme/x -->{deep}<!-- /wp:acme/x -->"
+        );
+        let (nodes, notes) = conv(&content);
+        assert_eq!(
+            nodes[0],
+            Node::Html("<div title=\"[no]\">[form id=1] [[esc]]</div>".into())
+        );
+        assert_eq!(nodes[1..], [p(&deep), p(&deep)]);
+        assert_eq!(notes.unknown_shortcodes.len(), 1);
+        assert_eq!(notes.unknown_shortcodes["form"].count, 1);
+        assert_eq!(notes.too_deep.count, 2);
+    }
+
+    #[test]
+    fn too_deep_media_markup_is_text() {
+        let (nodes, notes) = conv(&format!(
+            "<!-- wp:video --><figure>{}<video src=\"/v.mp4\"></video></figure><!-- /wp:video -->",
+            "<b>".repeat(600)
+        ));
+        assert_eq!(nodes.len(), 1);
+        assert!(matches!(&nodes[0], Node::Paragraph(_)));
+        assert_eq!(notes.too_deep.count, 1);
     }
 }

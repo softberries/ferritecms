@@ -10,7 +10,7 @@ use ferrite_core::blocks::{canonical_embed_url, embed_id, safe_href};
 use scraper::{ElementRef, Html, Node as Dom};
 
 use super::doc::{Mark, Node};
-use super::{ImageRef, Notes, Rewrite};
+use super::{ImageRef, NextMatch, Notes, Rewrite};
 
 /// Elements nested deeper than this contribute their text only.
 const MAX_DEPTH: usize = 64;
@@ -55,14 +55,137 @@ const PLAIN_INLINE: &[&str] = &[
     "data", "label", "wbr", "nobr", "ruby", "rb", "rt", "rp",
 ];
 
+/// Markup whose tags nest deeper than this is not parsed: html5ever's tree building is
+/// quadratic in the nesting depth, and the input is untrusted.
+pub const MAX_PARSE_DEPTH: usize = 512;
+
+/// Elements that never hold content.
+const VOID: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track",
+    "wbr",
+];
+
+/// Elements the next one of their kind (or their parent's end) closes, so a run of them does
+/// not nest.
+const IMPLIED_END: &[&str] = &[
+    "p", "li", "dt", "dd", "option", "tr", "td", "th", "thead", "tbody", "tfoot",
+];
+
+/// Elements whose content is text up to their end tag.
+const RAW_TEXT: &[&str] = &["script", "style", "textarea", "title"];
+
+/// How deep the elements of `html` can nest, read from its tags alone, in one pass: a start
+/// tag opens one level unless it is void or implicitly ended; an end tag closes one. A `/>`
+/// closes the element only inside `<svg>` or `<math>` (HTML ignores it elsewhere). Comments
+/// and the content of raw-text elements are skipped.
+pub(crate) fn nesting_depth(html: &str) -> usize {
+    let lower = html.to_ascii_lowercase();
+    let b = lower.as_bytes();
+    let mut gt = NextMatch::new(&lower, ">");
+    let mut comment_end = NextMatch::new(&lower, "-->");
+    let mut raw_end: Vec<NextMatch<'_>> = RAW_TEXT
+        .iter()
+        .map(|name| {
+            NextMatch::new(
+                &lower,
+                match *name {
+                    "script" => "</script",
+                    "style" => "</style",
+                    "textarea" => "</textarea",
+                    _ => "</title",
+                },
+            )
+        })
+        .collect();
+    let (mut depth, mut max, mut foreign) = (0usize, 0usize, 0usize);
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find('<') {
+        let lt = from + rel;
+        if lower[lt..].starts_with("<!--") {
+            match comment_end.find(lt + 4) {
+                Some(e) => from = e + 3,
+                None => break,
+            }
+            continue;
+        }
+        let end_tag = b.get(lt + 1) == Some(&b'/');
+        let name_start = if end_tag { lt + 2 } else { lt + 1 };
+        if !b.get(name_start).is_some_and(u8::is_ascii_alphabetic) {
+            from = lt + 1;
+            continue;
+        }
+        let name_end = lower[name_start..]
+            .find(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+            .map_or(lower.len(), |e| name_start + e);
+        let name = &lower[name_start..name_end];
+        let Some(close) = gt.find(name_end) else {
+            break;
+        };
+        from = close + 1;
+        if end_tag {
+            depth = depth.saturating_sub(1);
+            if matches!(name, "svg" | "math") {
+                foreign = foreign.saturating_sub(1);
+            }
+            continue;
+        }
+        let self_closed = close > name_end && b[close - 1] == b'/';
+        if VOID.contains(&name) || IMPLIED_END.contains(&name) || (self_closed && foreign > 0) {
+            continue;
+        }
+        if matches!(name, "svg" | "math") && !self_closed {
+            foreign += 1;
+        }
+        depth += 1;
+        max = max.max(depth);
+        if let Some(i) = RAW_TEXT.iter().position(|r| *r == name) {
+            match raw_end[i].find(from) {
+                Some(e) => from = e,
+                None => break,
+            }
+        }
+    }
+    max
+}
+
+/// `html`, NUL stripped, as text paragraphs split on blank lines (whitespace collapsed):
+/// what markup too deep to parse becomes.
+pub(crate) fn plain_paragraphs(html: &str) -> Vec<Node> {
+    html.replace('\0', "")
+        .replace("\r\n", "\n")
+        .split("\n\n")
+        .map(|chunk| collapse(chunk).trim().to_owned())
+        .filter(|t| !t.is_empty())
+        .map(|text| {
+            Node::Paragraph(vec![Node::Text {
+                text,
+                marks: Vec::new(),
+            }])
+        })
+        .collect()
+}
+
+/// `html` parsed as a `<body>` fragment, or `None` (counted as `too_deep`) when its tags
+/// nest past [`MAX_PARSE_DEPTH`]. Every parse of imported markup goes through here.
+pub(crate) fn parse_guarded(html: &str, notes: &mut Notes) -> Option<Html> {
+    if nesting_depth(html) > MAX_PARSE_DEPTH {
+        notes.too_deep();
+        return None;
+    }
+    Some(Html::parse_fragment(html))
+}
+
 /// Converts an HTML fragment to block nodes.
 ///
 /// Links and image sources go through `rw`; links that are not safe hrefs keep their text
 /// only. h1 becomes h2. Formatting the tree has no mark for keeps its text and is counted
-/// in `notes`, and so are dropped elements. NUL is stripped before parsing.
+/// in `notes`, and so are dropped elements. NUL is stripped before parsing. Markup nested
+/// past [`MAX_PARSE_DEPTH`] is not parsed: its source becomes text paragraphs.
 pub fn convert(html: &str, rw: &dyn Rewrite, notes: &mut Notes) -> Vec<Node> {
     let html = html.replace('\0', "");
-    let doc = Html::parse_fragment(&html);
+    let Some(doc) = parse_guarded(&html, notes) else {
+        return plain_paragraphs(&html);
+    };
     let mut c = Conv { rw, notes };
     let mut flow = Flow::default();
     c.children(doc.root_element(), &mut flow, &Style::default(), 0);
@@ -1148,8 +1271,8 @@ mod tests {
     fn deep_nesting_does_not_overflow() {
         let html = format!(
             "{}x{}",
-            "<div><span>".repeat(5_000),
-            "</span></div>".repeat(5_000)
+            "<div><span>".repeat(250),
+            "</span></div>".repeat(250)
         );
         let (nodes, _) = conv(&html);
         assert_eq!(nodes, [p(vec![t("x")])]);
@@ -1266,13 +1389,53 @@ mod tests {
     fn wide_deep_text_stays_linear() {
         let html = format!(
             "{}{}{}",
-            "<div>".repeat(5_000),
+            "<div>".repeat(500),
             "<b>x</b>".repeat(100_000),
-            "</div>".repeat(5_000)
+            "</div>".repeat(500)
         );
         let start = std::time::Instant::now();
         let (nodes, _) = conv(&html);
         assert_eq!(nodes.len(), 1);
         assert!(start.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn markup_nested_too_deep_is_text_and_counted() {
+        let html = format!("<p>a</p>\n\n{}x", "<pre>".repeat(40_000));
+        let start = std::time::Instant::now();
+        let (nodes, notes) = conv(&html);
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        assert_eq!(notes.too_deep.count, 1);
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0], p(vec![t("<p>a</p>")]));
+    }
+
+    #[test]
+    fn nesting_depth_reads_tags() {
+        assert_eq!(nesting_depth("<div><div></div><b>x</b></div>"), 2);
+        assert_eq!(nesting_depth(&"<p>x".repeat(10_000)), 0);
+        assert_eq!(
+            nesting_depth(&"<li>x<td>y<br><img src=a>".repeat(10_000)),
+            0
+        );
+        assert_eq!(
+            nesting_depth("<!-- <div><div> --><script><div><div></script>"),
+            1
+        );
+        assert_eq!(
+            nesting_depth(&format!("<svg>{}</svg>", "<path/>".repeat(1_000))),
+            1
+        );
+        assert_eq!(nesting_depth(&"<div/>".repeat(600)), 600);
+        assert_eq!(nesting_depth("</div></div><i><i"), 1);
+        assert_eq!(nesting_depth("a < b <3 <!-- open"), 0);
+    }
+
+    #[test]
+    fn deep_but_legal_markup_converts() {
+        let html = format!("{}x{}", "<div>".repeat(500), "</div>".repeat(500));
+        let (nodes, notes) = conv(&html);
+        assert_eq!(nodes, [p(vec![t("x")])]);
+        assert_eq!(notes.too_deep.count, 0);
     }
 }

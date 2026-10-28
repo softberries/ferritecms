@@ -22,6 +22,9 @@ pub fn convert(content: &str, rw: &dyn Rewrite, notes: &mut Notes) -> Value {
 
 /// A classic (non-block) body, or the HTML of a freeform or shortcode block.
 pub(crate) fn classic(text: &str, rw: &dyn Rewrite, notes: &mut Notes) -> Vec<Node> {
+    for _ in text.matches("<!--nextpage-->") {
+        notes.page_break();
+    }
     let html = autop::wpautop(&shortcodes::autoembed(text));
     shortcodes::to_nodes(&html, rw, notes)
 }

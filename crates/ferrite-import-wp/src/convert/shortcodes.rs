@@ -45,6 +45,16 @@ pub(crate) fn to_nodes(html: &str, rw: &dyn Rewrite, notes: &mut Notes) -> Vec<N
     html::convert(&out, &gallery, notes)
 }
 
+/// Counts the shortcodes in `html` (outside tags, comments and `<pre>`) as unknown, without
+/// expanding them: raw HTML keeps its text as written.
+pub(crate) fn count_shortcodes(html: &str, notes: &mut Notes) {
+    for piece in scan(&mask(&html.replace('\0', ""))) {
+        if let Piece::Code { name, .. } = piece {
+            notes.unknown_shortcode(&name);
+        }
+    }
+}
+
 /// WP's auto-embed, before `wpautop`: a line holding only an http(s) URL becomes a YouTube or
 /// Vimeo player, or a link to it. Lines inside `<pre>` or `[embed]` are left alone.
 pub(crate) fn autoembed(text: &str) -> String {
@@ -70,7 +80,7 @@ pub(crate) fn autoembed(text: &str) -> String {
 
 /// Whether a region opened by `open` and closed by `close` is open after `line`.
 fn still_open(line: &str, open: &str, close: &str, was: bool) -> bool {
-    match (line.rfind(open), line.rfind(close)) {
+    match (last_tag(line, open), last_tag(line, close)) {
         (Some(o), Some(c)) => o > c,
         (Some(_), None) => true,
         (None, Some(_)) => false,
@@ -78,8 +88,29 @@ fn still_open(line: &str, open: &str, close: &str, was: bool) -> bool {
     }
 }
 
+/// The last `needle` in `line` that is a whole tag name: one ending in a name character
+/// must not go on with another (`[embed` is not `[embedpress`, `<pre` not `<preview`).
+fn last_tag(line: &str, needle: &str) -> Option<usize> {
+    let whole = !needle.bytes().last().is_some_and(is_name_byte);
+    line.match_indices(needle)
+        .map(|(i, _)| i)
+        .filter(|i| {
+            whole
+                || !line
+                    .as_bytes()
+                    .get(i + needle.len())
+                    .copied()
+                    .is_some_and(is_name_byte)
+        })
+        .last()
+}
+
+fn is_name_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-')
+}
+
 /// WP's `^\s*(https?://[^\s<>"]+)\s*$`, on a trimmed line.
-fn is_bare_url(s: &str) -> bool {
+pub(crate) fn is_bare_url(s: &str) -> bool {
     let lower = s.get(..8).unwrap_or(s).to_ascii_lowercase();
     let rest = if lower.starts_with("https://") {
         &s[8..]
@@ -565,6 +596,11 @@ mod tests {
              [embed]\nhttps://vimeo.com/3\n[/embed]\n<iframe src=\"https://vimeo.com/4\"></iframe>"
         );
         assert_eq!(autoembed("https://\nhttp://a\"b"), "https://\nhttp://a\"b");
+        assert_eq!(
+            autoembed("[embedpress id=1]\nhttps://vimeo.com/5\n<preview>\nhttps://vimeo.com/6"),
+            "[embedpress id=1]\n<iframe src=\"https://vimeo.com/5\"></iframe>\n<preview>\n\
+             <iframe src=\"https://vimeo.com/6\"></iframe>"
+        );
     }
 
     #[test]

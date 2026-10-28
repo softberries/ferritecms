@@ -75,8 +75,12 @@ fn summary(file: &Path, bodies: usize, notes: &Notes) {
         }
     }
     println!(
-        "  bad block attrs: {}, h1 demoted: {}, missing media: {}",
-        notes.bad_block_attrs.count, notes.h1_demoted.count, notes.missing_media.count
+        "  bad block attrs: {}, h1 demoted: {}, missing media: {}, too deep: {}, page breaks: {}",
+        notes.bad_block_attrs.count,
+        notes.h1_demoted.count,
+        notes.missing_media.count,
+        notes.too_deep.count,
+        notes.page_breaks.count
     );
 }
 

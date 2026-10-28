@@ -137,6 +137,10 @@ pub struct Notes {
     pub unknown_blocks: BTreeMap<String, Tally>,
     /// Block comments whose attributes were not a JSON object (read as none).
     pub bad_block_attrs: Tally,
+    /// Markup nested too deep to parse safely, kept as text (`html::MAX_PARSE_DEPTH`).
+    pub too_deep: Tally,
+    /// Page breaks (`<!--nextpage-->`, the nextpage block) dropped: the pages are joined.
+    pub page_breaks: Tally,
 }
 
 impl Notes {
@@ -184,6 +188,14 @@ impl Notes {
         self.bad_block_attrs.bump(self.item);
     }
 
+    pub fn too_deep(&mut self) {
+        self.too_deep.bump(self.item);
+    }
+
+    pub fn page_break(&mut self) {
+        self.page_breaks.bump(self.item);
+    }
+
     /// Adds `other`'s counts and examples to these (a run's notes from each item's); `item`
     /// stays as it is.
     pub fn merge(&mut self, other: &Notes) {
@@ -194,6 +206,8 @@ impl Notes {
         merge_map(&mut self.unknown_shortcodes, &other.unknown_shortcodes);
         merge_map(&mut self.unknown_blocks, &other.unknown_blocks);
         self.bad_block_attrs.merge(&other.bad_block_attrs);
+        self.too_deep.merge(&other.too_deep);
+        self.page_breaks.merge(&other.page_breaks);
     }
 }
 
