@@ -35,6 +35,7 @@ import {
   type SnapOptions,
 } from "./snap";
 import { account, type Role } from "./users";
+import { cancelledInConsole, cancelledInPageError, type CancelledLoad } from "./webkit-cancelled";
 
 export { expect };
 export type { Role };
@@ -75,9 +76,9 @@ const goneElsewhere = (file: string): RegExp[] =>
  * - Firefox logs a console error for a web font whose download was aborted
  *   (`status=2152398850` is NS_BINDING_ABORTED);
  * - WebKit reports a same-origin `fetch` the navigation cancelled as "Fetch API cannot
- *   load <url> due to access control checks." (Playwright passes it on as a page error;
- *   `FETCH_CANCELLED`), and a lazy module whose request was cancelled as "TypeError:
- *   Importing a module script failed." (`IMPORT_CANCELLED`). Each is accepted only when
+ *   load <url> due to access control checks." (Playwright passes it on as a page error),
+ *   and a lazy module whose request was cancelled as "TypeError: Importing a module
+ *   script failed." (both recognised by `webkit-cancelled.ts`). Each is accepted only when
  *   that page saw the request cancelled within `CANCEL_WINDOW_MS`: the fetch's own URL
  *   (of this site), or for an import any script.
  */
@@ -88,8 +89,6 @@ const CANCELLED_LOAD: Partial<Record<string, (text: string) => boolean>> = {
     ),
 };
 
-const FETCH_CANCELLED = /^Fetch API cannot load (\S+) due to access control checks\.$/;
-const IMPORT_CANCELLED = "TypeError: Importing a module script failed.";
 const CANCEL_WINDOW_MS = 2_000;
 
 /**
@@ -158,15 +157,15 @@ export const test = base.extend<Fixtures & Options>({
       const pending: { page: Page; url: string | null; at: number; report: string }[] = [];
       const cancelledRequests = new Map<Page, { url: string; script: boolean; at: number }[]>();
       /** WebKit's report of a cancelled load, kept until the end of the test; else false. */
-      const deferCancelled = (page: Page, text: string, report: string): boolean => {
-        if (browserName !== "webkit") return false;
-        if (text === IMPORT_CANCELLED) {
-          pending.push({ page, url: null, at: Date.now(), report });
-          return true;
-        }
-        const url = FETCH_CANCELLED.exec(text.split("\n")[0] ?? "")?.[1];
-        if (!url?.startsWith(`${site.url}/`)) return false;
-        pending.push({ page, url, at: Date.now(), report });
+      const deferCancelled = (page: Page, load: CancelledLoad | null, report: string): boolean => {
+        if (browserName !== "webkit" || !load) return false;
+        if (load.kind === "fetch" && !load.url.startsWith(`${site.url}/`)) return false;
+        pending.push({
+          page,
+          url: load.kind === "fetch" ? load.url : null,
+          at: Date.now(),
+          report,
+        });
         return true;
       };
       const allowed: RegExp[] = [];
@@ -176,15 +175,7 @@ export const test = base.extend<Fixtures & Options>({
         if (browserName === "webkit") retryInterruptedReload(page);
         page.on("pageerror", (e) => {
           const report = `pageerror: ${e.message}`;
-          if (
-            deferCancelled(
-              page,
-              e.message === IMPORT_CANCELLED ? e.message : (e.stack ?? ""),
-              report,
-            )
-          ) {
-            return;
-          }
+          if (deferCancelled(page, cancelledInPageError(e), report)) return;
           problems.push(report);
         });
         if (browserName === "webkit") {
@@ -200,7 +191,7 @@ export const test = base.extend<Fixtures & Options>({
           if (allowed.some((re) => re.test(text))) return;
           if (isCancelledLoad(text)) return;
           const at = msg.location();
-          if (deferCancelled(page, text, `console.error: ${text}`)) return;
+          if (deferCancelled(page, cancelledInConsole(text), `console.error: ${text}`)) return;
           if (
             text.startsWith("Failed to load resource") &&
             allowedResources.some((re) => re.test(at.url))
