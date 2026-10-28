@@ -1,18 +1,23 @@
 //! Content conversion: WordPress post bodies to the stored block tree.
 //!
-//! [`gutenberg::parse`] splits a block-editor body into blocks; classic bodies go through
-//! [`autop::wpautop`] and [`shortcode::scan`]; [`html::convert`] turns HTML into [`doc::Node`]s,
-//! asking a [`Rewrite`] for media and link targets and counting what it drops in [`Notes`].
+//! [`body::convert`] is the entry point. [`gutenberg::parse`] splits a block-editor body into
+//! blocks, which [`blocks`] maps; classic bodies go through [`autop::wpautop`] and
+//! [`shortcodes`] (over [`shortcode::scan`]); [`html::convert`] turns HTML into
+//! [`doc::Node`]s, asking a [`Rewrite`] for media and link targets and counting what it drops
+//! in [`Notes`].
 
 use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
 pub mod autop;
+pub mod blocks;
+pub mod body;
 pub mod doc;
 pub mod gutenberg;
 pub mod html;
 pub mod shortcode;
+pub mod shortcodes;
 
 /// Where an image `src` points after the import (P14).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +33,9 @@ pub enum ImageRef {
 /// Maps old URLs to new ones while converting.
 pub trait Rewrite {
     fn image(&self, src: &str) -> ImageRef;
+    /// The imported media item of attachment `wp_id` (a block's `attrs.id`, `[gallery ids]`),
+    /// or `None` when that attachment was not imported.
+    fn attachment(&self, wp_id: i64) -> Option<Uuid>;
     /// The new target of a link (an attachment's public URL, an item's new path), or `href`.
     fn href(&self, href: &str) -> String;
 }
@@ -92,6 +100,21 @@ impl Tally {
             self.items.push(id);
         }
     }
+
+    fn merge(&mut self, other: &Tally) {
+        self.count += other.count;
+        for id in &other.items {
+            if self.items.len() < MAX_EXAMPLES && !self.items.contains(id) {
+                self.items.push(*id);
+            }
+        }
+    }
+}
+
+fn merge_map(into: &mut BTreeMap<String, Tally>, from: &BTreeMap<String, Tally>) {
+    for (k, t) in from {
+        into.entry(k.clone()).or_default().merge(t);
+    }
 }
 
 /// What the conversion lost or could not resolve, for the import report.
@@ -109,6 +132,11 @@ pub struct Notes {
     /// Images whose upload was not imported.
     pub missing_media: Tally,
     pub unknown_shortcodes: BTreeMap<String, Tally>,
+    /// Gutenberg blocks with no mapping, by name: kept as an `html` node, or dropped when
+    /// their HTML is empty (P12).
+    pub unknown_blocks: BTreeMap<String, Tally>,
+    /// Block comments whose attributes were not a JSON object (read as none).
+    pub bad_block_attrs: Tally,
 }
 
 impl Notes {
@@ -143,6 +171,30 @@ impl Notes {
             .or_default()
             .bump(item);
     }
+
+    pub fn unknown_block(&mut self, name: &str) {
+        let item = self.item;
+        self.unknown_blocks
+            .entry(name.to_owned())
+            .or_default()
+            .bump(item);
+    }
+
+    pub fn bad_block_attrs(&mut self) {
+        self.bad_block_attrs.bump(self.item);
+    }
+
+    /// Adds `other`'s counts and examples to these (a run's notes from each item's); `item`
+    /// stays as it is.
+    pub fn merge(&mut self, other: &Notes) {
+        merge_map(&mut self.dropped_marks, &other.dropped_marks);
+        self.h1_demoted.merge(&other.h1_demoted);
+        merge_map(&mut self.unsupported_tags, &other.unsupported_tags);
+        self.missing_media.merge(&other.missing_media);
+        merge_map(&mut self.unknown_shortcodes, &other.unknown_shortcodes);
+        merge_map(&mut self.unknown_blocks, &other.unknown_blocks);
+        self.bad_block_attrs.merge(&other.bad_block_attrs);
+    }
 }
 
 #[cfg(test)]
@@ -159,5 +211,37 @@ mod tests {
         let t = &notes.unknown_shortcodes["foo"];
         assert_eq!(t.count, 7);
         assert_eq!(t.items, [1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn merge_adds_counts_and_keeps_five_examples() {
+        let mut run = Notes::default();
+        for id in [1, 2, 3] {
+            run.item = Some(id);
+            run.unknown_block("acme/x");
+            run.missing_media();
+        }
+        let mut item = Notes {
+            item: Some(9),
+            ..Notes::default()
+        };
+        for _ in 0..2 {
+            item.unknown_block("acme/x");
+        }
+        item.unknown_shortcode("foo");
+        for id in [3, 4, 5, 6] {
+            item.item = Some(id);
+            item.bad_block_attrs();
+        }
+        run.item = Some(42);
+        run.merge(&item);
+        run.merge(&item);
+        assert_eq!(run.item, Some(42));
+        assert_eq!(run.unknown_blocks["acme/x"].count, 7);
+        assert_eq!(run.unknown_blocks["acme/x"].items, [1, 2, 3, 9]);
+        assert_eq!(run.unknown_shortcodes["foo"].count, 2);
+        assert_eq!(run.missing_media.count, 3);
+        assert_eq!(run.bad_block_attrs.count, 8);
+        assert_eq!(run.bad_block_attrs.items, [3, 4, 5, 6]);
     }
 }

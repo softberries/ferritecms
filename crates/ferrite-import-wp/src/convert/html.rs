@@ -686,7 +686,7 @@ fn code_block(e: ElementRef<'_>) -> Option<Node> {
 }
 
 /// The renderer's `valid_language`: 1–32 of `[a-z0-9+#-]`.
-fn class_language(class: &str) -> Option<String> {
+pub(crate) fn class_language(class: &str) -> Option<String> {
     class.split_ascii_whitespace().find_map(|c| {
         let l = c
             .strip_prefix("language-")
@@ -724,6 +724,10 @@ mod tests {
             } else {
                 ImageRef::Url(src.to_owned())
             }
+        }
+
+        fn attachment(&self, _: i64) -> Option<Uuid> {
+            None
         }
 
         fn href(&self, href: &str) -> String {
