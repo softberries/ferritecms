@@ -25,6 +25,11 @@ pub const FIELD_TYPE: &str = "acf-field";
 /// ACF field types that only lay out the edit screen and hold no value.
 const LAYOUT_KINDS: [&str; 3] = ["tab", "message", "accordion"];
 
+/// Whether ACF field type `kind` only lays out the edit screen (no value).
+pub fn is_layout(kind: &str) -> bool {
+    LAYOUT_KINDS.contains(&kind)
+}
+
 /// Every ACF group of an export.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AcfModel {
@@ -72,7 +77,7 @@ impl AcfModel {
             .iter()
             .filter(move |g| g.post_types.iter().any(|t| t == post_type))
             .flat_map(|g| &g.fields)
-            .filter(|f| !LAYOUT_KINDS.contains(&f.kind.as_str()))
+            .filter(|f| !is_layout(&f.kind))
     }
 
     /// Whether any group is shown on `post_type`.
@@ -230,7 +235,7 @@ pub fn to_field_def(f: &AcfField) -> Result<FieldDef, Unmapped> {
             let fields = f
                 .sub
                 .iter()
-                .filter(|s| !LAYOUT_KINDS.contains(&s.kind.as_str()))
+                .filter(|s| !is_layout(&s.kind))
                 .map(to_field_def)
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|_| unmapped())?;

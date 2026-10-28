@@ -224,6 +224,9 @@ pub struct Report {
     pub users_must_reset: Vec<MustReset>,
     /// Everything else worth a line: renames, dropped parents, refused files, …
     pub notes: Vec<String>,
+    /// What the body conversion lost, over every item (Task 16 serialises it).
+    #[serde(skip)]
+    pub conversion: crate::convert::Notes,
 }
 
 impl Report {
@@ -505,7 +508,7 @@ async fn steps(
         return Ok(report);
     }
     if begin_step(opts, ir, "pass3").await? {
-        pass3(&session, &mut report).await?;
+        crate::pass::content::import(&session, &mut report).await?;
         end_step(opts, ir, "pass3").await?;
     }
     if begin_step(opts, ir, "pass4").await? {
@@ -513,7 +516,7 @@ async fn steps(
         end_step(opts, ir, "pass4").await?;
     }
     if begin_step(opts, ir, "fixup").await? {
-        fixup(&session, &mut report).await?;
+        crate::pass::fixup::run(&session, &mut report).await?;
         end_step(opts, ir, "fixup").await?;
     }
     Ok(report)
@@ -554,18 +557,8 @@ async fn end_step(opts: &ImportOptions, ir: &Ir, name: &str) -> Result<(), Impor
     Ok(())
 }
 
-/// Pass 3: content (Task 14).
-async fn pass3(_session: &Session<'_>, _report: &mut Report) -> Result<(), ImportError> {
-    Ok(())
-}
-
 /// Pass 4: comments, menus, redirects, options (Task 15).
 async fn pass4(_session: &Session<'_>, _report: &mut Report) -> Result<(), ImportError> {
-    Ok(())
-}
-
-/// The fix-up: links to items created after the item linking to them (Task 14).
-async fn fixup(_session: &Session<'_>, _report: &mut Report) -> Result<(), ImportError> {
     Ok(())
 }
 

@@ -8,11 +8,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use ferrite_core::content::{Robots, Seo};
 use ferrite_core::fields::{FieldDef, FieldKind, schema_of};
+use ferrite_core::jobs::PUBLISH_SCHEDULED_KIND;
 use ferrite_core::{Actor, PermalinkRules, SwappablePermalinks, import::ImportService};
 use ferrite_domain::{
-    ContentId, ContentQuery, ContentStatus, MEDIA_KIND, NewUser, Role, Taxonomy, Term, TermId,
-    UserId, UserStatus,
+    ContentId, ContentItem, ContentQuery, ContentStatus, JobQuery, MEDIA_KIND, NewUser, Role,
+    Taxonomy, Term, TermId, Timestamp, UserId, UserStatus,
 };
 use ferrite_import_wp::ImportError;
 use ferrite_import_wp::ir::Ir;
@@ -24,6 +26,7 @@ use ferrite_import_wp::urls::MediaIndex;
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode};
 use ferrite_store::Store;
 use ferrite_store_tests::{TestDb, backend_tests};
+use serde_json::{Value, json};
 
 fn corpus(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -621,6 +624,268 @@ fn files_under(dir: &Path) -> usize {
         .sum()
 }
 
+// --- Pass 3: content -------------------------------------------------------------------
+
+/// Runs every step of `wxr`.
+async fn run_all(site: &Site, wxr: &Path) -> Report {
+    run(site.ctx.clone(), wxr, ImportOptions::default())
+        .await
+        .unwrap()
+}
+
+/// The item of `kind` titled `title` (any status).
+async fn by_title(store: &dyn Store, kind: &str, title: &str) -> ContentItem {
+    store
+        .read()
+        .content()
+        .list(&ContentQuery {
+            kind: Some(kind.into()),
+            limit: 200,
+            ..ContentQuery::default()
+        })
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|i| i.title == title)
+        .unwrap_or_else(|| panic!("no {kind} titled {title:?}"))
+}
+
+async fn meta_of(store: &dyn Store, id: ContentId, key: &str) -> Option<Value> {
+    store.read().meta().get(id, key).await.unwrap()
+}
+
+fn at(rfc3339: &str) -> Timestamp {
+    serde_json::from_value(json!(rfc3339)).unwrap()
+}
+
+/// Every link `href` in a block tree.
+fn hrefs(node: &Value, out: &mut Vec<String>) {
+    if let Some(marks) = node.get("marks").and_then(Value::as_array) {
+        for m in marks {
+            if let Some(h) = m.pointer("/attrs/href").and_then(Value::as_str) {
+                out.push(h.to_owned());
+            }
+        }
+    }
+    if let Some(children) = node.get("content").and_then(Value::as_array) {
+        for c in children {
+            hrefs(c, out);
+        }
+    }
+}
+
+/// Site A, pass 3 and the fix-up: statuses and dates (P7), authors, terms, the featured
+/// image, SEO (P10), meta, ACF values (P16) and links to items written later (P14).
+pub async fn pass3_site_a(db: &TestDb) {
+    let site = site(db, site_a_uploads()).await;
+    let store = db.store();
+    let report = run_all(&site, &corpus("site-a.xml")).await;
+    let user = |login: &'static str| async move {
+        store
+            .read()
+            .users()
+            .get_by_login(login)
+            .await
+            .unwrap()
+            .unwrap()
+            .id
+    };
+    let media = |title: &'static str| async move { by_title(store, MEDIA_KIND, title).await.id };
+
+    let post = by_title(store, "post", "Every core block").await;
+    assert_eq!(post.status, ContentStatus::Published);
+    assert_eq!(post.slug, "every-core-block");
+    assert_eq!(post.published_at, Some(at("2024-03-15T10:30:00Z")));
+    assert_eq!(post.created_at, at("2024-03-15T10:30:00Z"));
+    assert_eq!(post.author_id, user("arlo").await);
+    let terms = store.read().terms().for_item(post.id).await.unwrap();
+    let mut slugs: Vec<&str> = terms.iter().map(|t| t.slug.as_str()).collect();
+    slugs.sort_unstable();
+    assert_eq!(slugs, ["local", "news", "rust", "wasm"]);
+    assert_eq!(
+        post.fields["featured_image"],
+        json!(media("Hero").await.to_string())
+    );
+    let seo = Seo::load(store.read(), post.id).await.unwrap();
+    assert_eq!(
+        seo,
+        Seo {
+            title: Some("Every core block - Corpus Site".into()),
+            description: Some("Yoast description for the block post.".into()),
+            canonical: Some("https://canonical.example.org/blocks/".into()),
+            robots: vec![
+                Robots::NoArchive,
+                Robots::NoFollow,
+                Robots::NoIndex,
+                Robots::NoSnippet
+            ],
+        }
+    );
+    assert_eq!(
+        meta_of(store, post.id, "wp.some_unrelated_meta").await,
+        Some(json!("kept as wp.*"))
+    );
+    for dropped in ["wp._pingme", "wp._encloseme", "wp._thumbnail_id"] {
+        assert_eq!(meta_of(store, post.id, dropped).await, None, "{dropped}");
+    }
+    assert_eq!(
+        meta_of(store, post.id, "import.wp.id").await,
+        Some(json!(7))
+    );
+    // Links to the about and team pages, written after the post, point at their new
+    // paths (the fix-up).
+    let about = by_title(store, "page", "About").await;
+    let team = by_title(store, "page", "Team").await;
+    assert_eq!(team.parent_id, Some(about.id));
+    assert_eq!(team.menu_order, 2);
+    let mut links = Vec::new();
+    hrefs(&post.body, &mut links);
+    assert!(links.contains(&"/about/".to_owned()), "{links:?}");
+    assert!(links.contains(&"/about/team/".to_owned()), "{links:?}");
+    assert!(
+        !links
+            .iter()
+            .any(|l| l.contains("localhost:8099/?page_id") || l == "http://localhost:8099/about/"),
+        "{links:?}"
+    );
+    assert!(
+        links.contains(&"https://example.org/".to_owned()),
+        "{links:?}"
+    );
+
+    let future = by_title(store, "post", "From the future").await;
+    assert_eq!(future.status, ContentStatus::Scheduled);
+    assert_eq!(future.scheduled_at, Some(at("2030-06-01T12:00:00Z")));
+    let jobs = store
+        .read()
+        .jobs()
+        .list(&JobQuery {
+            status: None,
+            kind: Some(PUBLISH_SCHEDULED_KIND.into()),
+            limit: 10,
+            cursor: None,
+        })
+        .await
+        .unwrap()
+        .items;
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].run_at, at("2030-06-01T12:00:00Z"));
+    assert_eq!(
+        by_title(store, "post", "Private thoughts").await.status,
+        ContentStatus::Private
+    );
+    let gone = by_title(store, "post", "Gone soon").await;
+    assert_eq!(gone.status, ContentStatus::Trash);
+    assert_eq!(gone.slug, "gone-soon");
+    let draft = by_title(store, "post", "A draft").await;
+    assert_eq!(draft.status, ContentStatus::Draft);
+    assert_eq!(draft.author_id, user("cass").await);
+    assert_eq!(
+        by_title(store, "post", "Pending review").await.status,
+        ContentStatus::Pending
+    );
+    let sticky = by_title(store, "post", "Sticky note").await;
+    assert_eq!(
+        meta_of(store, sticky.id, "wp.sticky").await,
+        Some(json!(true))
+    );
+    let sample = by_title(store, "page", "Sample Page").await;
+    assert_eq!(
+        meta_of(store, sample.id, "wp.page_template").await,
+        Some(json!("default"))
+    );
+
+    // The book's ACF values; the relation to the second book is fixed up.
+    let first = by_title(store, "book", "The First Book").await;
+    let second = by_title(store, "book", "The Second Book").await;
+    let fields = &first.fields;
+    assert_eq!(fields["isbn"], json!("978-3-16-148410-0"));
+    assert_eq!(fields["pages"], json!(412));
+    assert_eq!(fields["in_print"], json!(true));
+    assert_eq!(fields["released"], json!("2022-05-05T00:00:00Z"));
+    assert_eq!(fields["blurb"], json!("Line one\nLine two"));
+    assert_eq!(fields["cover"], json!(media("Cover").await.to_string()));
+    assert_eq!(fields["format"], json!("hardback"));
+    assert_eq!(fields["site"], json!("https://books.example.org/first"));
+    assert_eq!(fields["review"]["type"], json!("doc"));
+    assert_eq!(fields["related"], json!([{"item": second.id.to_string()}]));
+    assert_eq!(
+        meta_of(store, first.id, "wp.quotes").await,
+        Some(json!(
+            r#"a:2:{i:0;a:1:{s:4:"text";s:9:"Quote one";}i:1;a:1:{s:4:"text";s:9:"Quote two";}}"#
+        ))
+    );
+    for acf in ["wp.isbn", "wp._isbn", "wp.related", "wp._quotes"] {
+        assert_eq!(meta_of(store, first.id, acf).await, None, "{acf}");
+    }
+    let terms = store.read().terms().for_item(first.id).await.unwrap();
+    assert_eq!(
+        terms.iter().map(|t| t.slug.as_str()).collect::<Vec<_>>(),
+        ["fantasy"]
+    );
+
+    assert_eq!(counts(&report, "post").created, 8);
+    assert_eq!(counts(&report, "page").created, 4);
+    assert_eq!(counts(&report, "book").created, 2);
+
+    // Again: nothing changes.
+    let again = run_all(&site, &corpus("site-a.xml")).await;
+    for kind in ["post", "page", "book"] {
+        let c = counts(&again, kind);
+        assert_eq!((c.created, c.updated, c.kept), (0, 0, 0), "{kind}: {c:?}");
+    }
+    assert_eq!(counts(&again, "post").unchanged, 8);
+    let post_again = by_title(store, "post", "Every core block").await;
+    assert_eq!(post_again.version, post.version);
+}
+
+/// Site B: Rank Math SEO (P10) and the primary category first, as `%category%` needs.
+pub async fn pass3_site_b(db: &TestDb) {
+    let site = site(db, Arc::new(DirSource::new(corpus("site-b-uploads")))).await;
+    let store = db.store();
+    run_all(&site, &corpus("site-b.xml")).await;
+    let harbour = by_title(store, "post", "Harbour walk").await;
+    let seo = Seo::load(store.read(), harbour.id).await.unwrap();
+    assert_eq!(seo.title.as_deref(), Some("Harbour walk - Classic Corpus"));
+    assert_eq!(
+        seo.description.as_deref(),
+        Some("Rank Math description for the harbour walk.")
+    );
+    assert_eq!(
+        seo.canonical.as_deref(),
+        Some("https://canonical.example.org/harbour/")
+    );
+    assert_eq!(seo.robots, [Robots::NoFollow, Robots::NoIndex]);
+    let terms = store.read().terms().for_item(harbour.id).await.unwrap();
+    let first_category = terms.iter().find(|t| t.taxonomy == "category").unwrap();
+    assert_eq!(first_category.slug, "travel");
+    assert!(
+        terms
+            .iter()
+            .any(|t| t.taxonomy == "tag" && t.slug == "europe")
+    );
+    assert_eq!(
+        harbour.author_id,
+        store
+            .read()
+            .users()
+            .get_by_login("wren")
+            .await
+            .unwrap()
+            .unwrap()
+            .id
+    );
+    let cafe = by_title(store, "post", "Café review — “quotes” & ampersands").await;
+    let seo = Seo::load(store.read(), cafe.id).await.unwrap();
+    assert!(seo.robots.is_empty(), "{seo:?}");
+    assert_eq!(
+        meta_of(store, harbour.id, "wp.rank_math_focus_keyword").await,
+        Some(json!("harbour,walk"))
+    );
+    assert_eq!(meta_of(store, harbour.id, "wp.rank_math_title").await, None);
+}
+
 backend_tests!(
     pass1_site_a,
     pass1_edge_cases,
@@ -628,4 +893,6 @@ backend_tests!(
     pass2_site_a,
     pass2_media_index_is_kept_in_the_ir,
     pass2_missing_file_is_reported,
+    pass3_site_a,
+    pass3_site_b,
 );

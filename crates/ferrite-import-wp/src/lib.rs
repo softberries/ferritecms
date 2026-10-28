@@ -9,10 +9,12 @@ pub mod acf;
 pub mod convert;
 pub mod error;
 pub mod ir;
+pub mod meta;
 pub mod model;
 pub mod pass;
 pub mod php;
 pub mod run;
+pub mod seo;
 pub mod urls;
 pub mod wxr;
 
