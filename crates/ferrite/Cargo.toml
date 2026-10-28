@@ -10,7 +10,7 @@ workspace = true
 [features]
 # Test seams (10-testing §2): only the tests enable it, through the dev-dependency on
 # this crate itself; `cargo build -p ferrite --release` never does.
-test-seams = ["ferrite-http/test-seams"]
+test-seams = ["ferrite-http/test-seams", "ferrite-import-wp/test-seams"]
 
 [dependencies]
 anyhow.workspace = true
