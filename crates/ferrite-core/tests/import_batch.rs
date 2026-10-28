@@ -3,8 +3,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::sync::Arc;
+
 use ferrite_core::{
-    Actor, CoreError, NewType,
+    Actor, CoreError, NewType, PermalinkRules,
     events::{ALL_KEY, INVALIDATE, TYPES_CHANGED, term_key},
     fields::{FieldDef, FieldKind},
     import::{
@@ -55,7 +57,7 @@ async fn admin(store: &dyn Store) -> Actor {
 }
 
 fn service(db: &TestDb) -> ImportService {
-    ImportService::new(db.shared_store())
+    ImportService::new(db.shared_store(), Arc::new(PermalinkRules::default()))
 }
 
 /// `now - secs`.

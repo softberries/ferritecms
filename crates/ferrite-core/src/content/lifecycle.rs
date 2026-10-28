@@ -26,7 +26,7 @@ use crate::{
     actor::{Capability, can_edit, require},
     blocks, events, jobs,
     permalink::{Permalinks, load_input},
-    redirects::clear_redirects_from,
+    redirects::{delete_redirects_from, emit_redirects_changed},
     tx::finish,
 };
 
@@ -347,7 +347,8 @@ async fn transition_item(
     let saved = repos.content().update(&next).await?;
     match action {
         Action::Publish => {
-            reclaim_path(repos, permalinks, &saved).await?;
+            let cleared = reclaim_path(repos, permalinks, &saved).await?;
+            emit_redirects_changed(repos, cleared).await?;
             enqueue_published(repos, &saved).await?;
         }
         Action::Schedule(at) => {
@@ -432,7 +433,8 @@ async fn publish_one(
     let next = apply(&current, Action::PublishDue, now)?;
     // Conflicts with a concurrent publisher surface as `Conflict` from the version check.
     let saved = repos.content().update(&next).await?;
-    reclaim_path(repos, permalinks, &saved).await?;
+    let cleared = reclaim_path(repos, permalinks, &saved).await?;
+    emit_redirects_changed(repos, cleared).await?;
     enqueue_published(repos, &saved).await?;
     emit(repos, &saved).await?;
     Ok(true)
@@ -451,14 +453,15 @@ async fn enqueue_published(repos: &dyn Repos, item: &ContentItem) -> Result<(), 
     Ok(())
 }
 
-/// Deletes the redirects that start at `item`'s permalink: it is live now.
-async fn reclaim_path(
+/// Deletes the redirects that start at `item`'s permalink (it is live now) and returns
+/// their sources; the caller emits their keys.
+pub(crate) async fn reclaim_path(
     repos: &dyn Repos,
     permalinks: &dyn Permalinks,
     item: &ContentItem,
-) -> Result<(), CoreError> {
+) -> Result<Vec<String>, CoreError> {
     let input = load_input(repos, item.clone()).await?;
-    clear_redirects_from(repos, &permalinks.path(&input)).await
+    delete_redirects_from(repos, &permalinks.path(&input)).await
 }
 
 /// The item as it looks after `action`, or `Invalid("illegal transition ...")`. Pure.

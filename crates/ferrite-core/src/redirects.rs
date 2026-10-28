@@ -484,18 +484,24 @@ pub(crate) async fn emit_redirects_changed(
     repos: &dyn Repos,
     sources: impl IntoIterator<Item = String>,
 ) -> Result<(), CoreError> {
-    let keys: Vec<String> = sources
+    let keys = redirect_keys(sources);
+    if !keys.is_empty() {
+        repos.events().append(&events::invalidate(keys)).await?;
+    }
+    Ok(())
+}
+
+/// `redirect:<source>` for each source and its toggled variant: the keys
+/// [`emit_redirects_changed`] sends, for a caller that collects keys into its own event.
+pub(crate) fn redirect_keys(sources: impl IntoIterator<Item = String>) -> Vec<String> {
+    sources
         .into_iter()
         .flat_map(|s| {
             let variant = toggled(&s);
             std::iter::once(s).chain(variant)
         })
         .map(|s| events::redirect_key(&s))
-        .collect();
-    if !keys.is_empty() {
-        repos.events().append(&events::invalidate(keys)).await?;
-    }
-    Ok(())
+        .collect()
 }
 
 /// Deletes the redirects that start at `path` or its slash-toggled variant: `path` is
@@ -507,7 +513,10 @@ pub(crate) async fn clear_redirects_from(repos: &dyn Repos, path: &str) -> Resul
 }
 
 /// Deletes the redirects from `path` and its toggled variant; returns their sources.
-async fn delete_redirects_from(repos: &dyn Repos, path: &str) -> Result<Vec<String>, CoreError> {
+pub(crate) async fn delete_redirects_from(
+    repos: &dyn Repos,
+    path: &str,
+) -> Result<Vec<String>, CoreError> {
     let redirects = repos.redirects();
     let mut cleared = Vec::new();
     for source in std::iter::once(path.to_owned()).chain(toggled(path)) {
@@ -525,6 +534,16 @@ async fn delete_redirects_from(repos: &dyn Repos, path: &str) -> Result<Vec<Stri
 /// a self-loop), and `old` redirects to `new` with a `301`.
 /// Emits one `invalidate` event with the `redirect:` keys of every source touched.
 pub(crate) async fn record_move(repos: &dyn Repos, old: &str, new: &str) -> Result<(), CoreError> {
+    let changed = move_redirects(repos, old, new).await?;
+    emit_redirects_changed(repos, changed).await
+}
+
+/// [`record_move`] without the event: returns the sources of every redirect touched.
+pub(crate) async fn move_redirects(
+    repos: &dyn Repos,
+    old: &str,
+    new: &str,
+) -> Result<Vec<String>, CoreError> {
     let mut changed = delete_redirects_from(repos, new).await?;
     changed.push(old.to_owned());
     let ours: Vec<String> = std::iter::once(new.to_owned())
@@ -560,7 +579,7 @@ pub(crate) async fn record_move(repos: &dyn Repos, old: &str, new: &str) -> Resu
             last_hit_at: None,
         })
         .await?;
-    emit_redirects_changed(repos, changed).await
+    Ok(changed)
 }
 
 /// The redirect for `path`: exact match first, then the slash-toggled path.

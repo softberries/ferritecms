@@ -179,6 +179,10 @@ pub trait ContentRepo: Send + Sync {
     ) -> Result<Option<ContentItem>, StoreError>;
     /// Updates WHERE id AND version = item.version, bumping version and updated_at; no row gives `Conflict{current_version}` or `NotFound`.
     async fn update(&self, item: &ContentItem) -> Result<ContentItem, StoreError>;
+    /// Sets `updated_at` of item `id` to `at`, leaving `version` and everything else as
+    /// it is (the WordPress import keeps the source's modification time after a write,
+    /// M3-1 P7). A missing item is `NotFound`.
+    async fn set_updated_at(&self, id: ContentId, at: Timestamp) -> Result<(), StoreError>;
     /// Lists items matching the query with cursor pagination.
     ///
     /// **`query.ids` empty means no filter, not "match nothing"** (likewise `exclude`):

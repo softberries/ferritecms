@@ -18,6 +18,7 @@
 //! best-effort, for the life of the handle; nothing relies on it (R17).
 
 mod batch;
+mod content;
 mod terms;
 mod users;
 
@@ -28,11 +29,12 @@ use ferrite_store::{LOCK_IMPORT, LockGuard, Store, StoreError};
 use serde_json::{Value, json};
 
 pub use batch::{ImportBatch, Mapped, WP_ID_META};
+pub use content::{ContentOutcome, ImportContent, Written};
 pub use terms::{ImportTerm, TermMatched, TermOutcome};
 pub use users::{ImportUser, Matched, UserOutcome};
 
 use crate::{
-    Actor, CoreError,
+    Actor, CoreError, Permalinks,
     actor::{Capability, require},
     tx::finish,
 };
@@ -52,6 +54,7 @@ const RUNNING_UQ: &str = "import_runs_running_uq";
 /// Starts import runs and opens their batches.
 pub struct ImportService {
     store: Arc<dyn Store>,
+    permalinks: Arc<dyn Permalinks>,
 }
 
 /// A started run, owned by one process. Pass it to every batch; end it with
@@ -64,8 +67,9 @@ pub struct ImportHandle {
 }
 
 impl ImportService {
-    pub fn new(store: Arc<dyn Store>) -> Self {
-        Self { store }
+    /// `permalinks` are the site's live rules; each batch pins them when it opens.
+    pub fn new(store: Arc<dyn Store>, permalinks: Arc<dyn Permalinks>) -> Self {
+        Self { store, permalinks }
     }
 
     /// Starts a run of `source` (the normalised `<wp:base_blog_url>`). Needs
@@ -169,7 +173,7 @@ impl ImportHandle {
     /// (or any other write transaction of this process) is still open: it waits for the
     /// writer and times out (`Store(Busy)`). Commit or roll back the first one.
     pub async fn batch(&self, svc: &ImportService) -> Result<ImportBatch<'_>, CoreError> {
-        ImportBatch::open(self, svc.store.as_ref(), false).await
+        ImportBatch::open(self, svc.store.as_ref(), svc.permalinks.pin(), false).await
     }
 
     /// [`batch`](Self::batch) for registering content types and taxonomies and writing
@@ -177,7 +181,7 @@ impl ImportHandle {
     /// services do, and holds it until the batch ends. Use it only for those writes, so
     /// the lock is not held during content batches.
     pub async fn schema_batch(&self, svc: &ImportService) -> Result<ImportBatch<'_>, CoreError> {
-        ImportBatch::open(self, svc.store.as_ref(), true).await
+        ImportBatch::open(self, svc.store.as_ref(), svc.permalinks.pin(), true).await
     }
 
     /// Proves the run is still this handle's and moves its heartbeat, outside a batch

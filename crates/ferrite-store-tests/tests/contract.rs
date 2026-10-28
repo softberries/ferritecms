@@ -85,6 +85,7 @@ backend_tests!(
     get_by_slug_root_and_child,
     optimistic_lock_race,
     update_missing_is_not_found,
+    set_updated_at_keeps_version,
     list_filters_and_orders,
     list_pagination_covers_every_order,
     list_pagination_with_null_published,

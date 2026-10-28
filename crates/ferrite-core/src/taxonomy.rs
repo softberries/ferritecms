@@ -20,7 +20,7 @@ use crate::{
     actor::{Area, Capability, require, require_read},
     events,
     permalink::term_path,
-    redirects::{clear_redirects_from, record_move},
+    redirects::{clear_redirects_from, delete_redirects_from, record_move, redirect_keys},
     site, slug,
     tx::finish,
     types::{
@@ -350,7 +350,8 @@ pub(crate) async fn create_taxonomy_in(
 /// The body of [`TaxonomyService::create_term`] inside the caller's `Tx`: checks the
 /// name, the slug (`None`: derived from the name; taken: `-2`, `-3`, …) and the parent,
 /// writes the term and clears redirects from its archive path. Returns the term and the
-/// invalidation keys [`emit`] would send; the caller emits them.
+/// invalidation keys [`emit`] would send plus the `redirect:` keys of the redirects
+/// cleared; the caller emits them.
 pub(crate) async fn create_term_in(
     tx: &dyn Tx,
     taxonomy: &str,
@@ -379,8 +380,9 @@ pub(crate) async fn create_term_in(
     };
     let saved = save_with_free_slug(tx, term, &base, false).await?;
     // The archive path is the term's now; a redirect there would outrank it.
-    clear_redirects_from(tx, &term_path(&tax.name, &saved.slug)).await?;
-    let keys = term_keys(&tax, &saved);
+    let cleared = delete_redirects_from(tx, &term_path(&tax.name, &saved.slug)).await?;
+    let mut keys = term_keys(&tax, &saved);
+    keys.extend(redirect_keys(cleared));
     Ok((saved, keys))
 }
 

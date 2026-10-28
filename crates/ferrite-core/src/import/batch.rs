@@ -1,6 +1,9 @@
 //! [`ImportBatch`]: one fenced transaction of import writes with one invalidation (P6).
 
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::Arc,
+};
 
 use ferrite_domain::{
     CommentId, ContentId, ImportMapKind, ImportMapRow, Taxonomy, TermId, Timestamp, UserId,
@@ -11,7 +14,7 @@ use uuid::Uuid;
 
 use super::{ImportHandle, TAKEN_OVER, release};
 use crate::{
-    CoreError, NewType, TypePatch, events, fields, options,
+    CoreError, NewType, Permalinks, TypePatch, events, fields, options,
     taxonomy::{check_new_taxonomy, create_taxonomy_in},
     types::{begin_locked, check_new_type, create_in, update_in},
 };
@@ -50,6 +53,11 @@ pub struct ImportBatch<'a> {
     pub(super) tx: Box<dyn Tx>,
     pub(super) keys: BTreeSet<String>,
     pub(super) items: usize,
+    /// The permalink rules pinned when the batch opened (R10).
+    pub(super) rules: Arc<dyn Permalinks>,
+    /// Content map rows of this run's source by FerriteCMS id, loaded by the first
+    /// [`set_body`](Self::set_body) and kept current by [`content`](Self::content).
+    pub(super) content_wp_ids: Option<HashMap<Uuid, i64>>,
     types_lock: Option<Box<dyn LockGuard>>,
 }
 
@@ -61,6 +69,7 @@ impl<'a> ImportBatch<'a> {
     pub(super) async fn open(
         handle: &'a ImportHandle,
         store: &dyn Store,
+        rules: Arc<dyn Permalinks>,
         schema: bool,
     ) -> Result<Self, CoreError> {
         let (types_lock, tx) = if schema {
@@ -78,6 +87,8 @@ impl<'a> ImportBatch<'a> {
             tx,
             keys: BTreeSet::new(),
             items: 0,
+            rules,
+            content_wp_ids: None,
             types_lock,
         };
         match fenced {
@@ -88,7 +99,8 @@ impl<'a> ImportBatch<'a> {
     }
 
     /// Items written so far (users and terms created, types and taxonomies registered
-    /// or changed; later tasks add theirs).
+    /// or changed, content items created or updated and bodies fixed up; later tasks add
+    /// theirs).
     pub fn len(&self) -> usize {
         self.items
     }
@@ -322,7 +334,7 @@ fn event_keys(keys: BTreeSet<String>) -> Vec<String> {
 }
 
 /// See [`ImportBatch::meta`].
-fn check_meta_key(key: &str) -> Result<(), CoreError> {
+pub(super) fn check_meta_key(key: &str) -> Result<(), CoreError> {
     if key.is_empty() {
         return Err(CoreError::invalid_key(key, "meta key must not be empty"));
     }

@@ -227,6 +227,19 @@ impl ContentRepo for SqliteRepos {
         }
     }
 
+    async fn set_updated_at(&self, id: ContentId, at: Timestamp) -> Result<(), StoreError> {
+        let done = run!(&self.writer, |e| sqlx::query(
+            "UPDATE content_items SET updated_at = ? WHERE id = ?"
+        )
+        .bind(at.as_micros())
+        .bind(id.as_uuid())
+        .execute(e))?;
+        if done.rows_affected() == 0 {
+            return Err(StoreError::NotFound);
+        }
+        Ok(())
+    }
+
     async fn list(&self, query: &ContentQuery) -> Result<Page<ContentItem>, StoreError> {
         check_content_filters(query)?;
         let limit = check_limit(query.limit)?;

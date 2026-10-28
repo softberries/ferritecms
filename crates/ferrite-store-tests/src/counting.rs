@@ -274,6 +274,9 @@ impl ContentRepo for Counted {
     async fn update(&self, item: &ContentItem) -> Result<ContentItem, StoreError> {
         self.0.read().content().update(item).await
     }
+    async fn set_updated_at(&self, id: ContentId, at: Timestamp) -> Result<(), StoreError> {
+        self.0.read().content().set_updated_at(id, at).await
+    }
     async fn list(&self, query: &ContentQuery) -> Result<Page<ContentItem>, StoreError> {
         self.0.read().content().list(query).await
     }
