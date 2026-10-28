@@ -35,6 +35,11 @@ export async function currentScheme(page: Page): Promise<Scheme> {
  */
 export async function settle(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle");
+  await settleAnimations(page);
+}
+
+/** `settle` without the network-idle wait (for a page with a request held open). */
+export async function settleAnimations(page: Page): Promise<void> {
   await page.evaluate(async () => {
     await document.fonts.ready;
     const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
