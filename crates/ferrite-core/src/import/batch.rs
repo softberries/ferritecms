@@ -27,6 +27,17 @@ const RESERVED_META_PREFIXES: [&str; 2] = ["seo.", "import."];
 const NEEDS_SCHEMA_BATCH: &str =
     "content types, taxonomies and permalink options need a schema batch";
 
+/// What [`ImportBatch::content_type`] did with a type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeWritten {
+    /// The type did not exist: registered.
+    Created,
+    /// The type existed with a schema and gained fields it lacked.
+    Updated,
+    /// The type existed and was left as it is.
+    Unchanged,
+}
+
 /// What the import map holds for a source row whose target still exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mapped {
@@ -175,7 +186,7 @@ impl<'a> ImportBatch<'a> {
     /// type with a schema gains the fields of `t` it lacks (by name, appended in `t`'s
     /// order); one without a schema accepts any fields already and is left alone, as is
     /// everything else about an existing type. Needs a schema batch (else `Internal`).
-    pub async fn content_type(&mut self, t: NewType) -> Result<(), CoreError> {
+    pub async fn content_type(&mut self, t: NewType) -> Result<TypeWritten, CoreError> {
         self.require_schema()?;
         let repos = self.tx.as_ref();
         let actor = self.handle.actor.user;
@@ -183,11 +194,11 @@ impl<'a> ImportBatch<'a> {
             let ty = check_new_type(&t)?;
             create_in(repos, actor, &ty, t.fields.as_deref()).await?;
             self.schema_changed();
-            return Ok(());
+            return Ok(TypeWritten::Created);
         };
         let (Some(mut defs), Some(wanted)) = (fields::schema_of(&existing.fields)?, t.fields)
         else {
-            return Ok(());
+            return Ok(TypeWritten::Unchanged);
         };
         let before = defs.len();
         for def in wanted {
@@ -196,7 +207,7 @@ impl<'a> ImportBatch<'a> {
             }
         }
         if defs.len() == before {
-            return Ok(());
+            return Ok(TypeWritten::Unchanged);
         }
         fields::check_schema(&defs)?;
         let patch = TypePatch {
@@ -205,7 +216,7 @@ impl<'a> ImportBatch<'a> {
         };
         update_in(repos, actor, &existing.name, None, &patch).await?;
         self.schema_changed();
-        Ok(())
+        Ok(TypeWritten::Updated)
     }
 
     /// Sets one meta value of `item` and adds the item's key to the batch's event.

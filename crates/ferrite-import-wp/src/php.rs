@@ -13,6 +13,46 @@ pub enum PhpValue {
     Array(Vec<(PhpValue, PhpValue)>),
 }
 
+impl PhpValue {
+    /// The value under string key `key` of an array.
+    pub fn get(&self, key: &str) -> Option<&PhpValue> {
+        self.entries()
+            .iter()
+            .find(|(k, _)| matches!(k, PhpValue::Str(s) if s == key))
+            .map(|(_, v)| v)
+    }
+
+    /// An array's entries in order; empty for any other value.
+    pub fn entries(&self) -> &[(PhpValue, PhpValue)] {
+        match self {
+            PhpValue::Array(entries) => entries,
+            _ => &[],
+        }
+    }
+
+    /// A string as a string, an integer in decimal; `None` otherwise.
+    pub fn as_text(&self) -> Option<String> {
+        match self {
+            PhpValue::Str(s) => Some(s.clone()),
+            PhpValue::Int(i) => Some(i.to_string()),
+            _ => None,
+        }
+    }
+
+    /// PHP truthiness: `false`, `0`, `0.0`, `""`, `"0"`, an empty array and `null` are
+    /// false.
+    pub fn truthy(&self) -> bool {
+        match self {
+            PhpValue::Null => false,
+            PhpValue::Bool(b) => *b,
+            PhpValue::Int(i) => *i != 0,
+            PhpValue::Float(f) => *f != 0.0,
+            PhpValue::Str(s) => !s.is_empty() && s != "0",
+            PhpValue::Array(a) => !a.is_empty(),
+        }
+    }
+}
+
 #[derive(Debug, Error, PartialEq)]
 pub enum PhpError {
     #[error("serialised objects are not read (byte {offset})")]

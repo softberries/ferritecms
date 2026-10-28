@@ -33,8 +33,10 @@ pub const LOCK_POLL: Duration = Duration::from_millis(250);
 /// column, a short `Tx`), not the lock; today `migrate` relies on sqlx's own advisory
 /// lock and per-migration transactions, and `extensions` writes are one short `Tx`. The
 /// M3 `import` lock, held for a long time, must not rely on it for exclusion.
+/// `Sync` too: an import batch holds one, and the futures of its `&self` methods must
+/// be `Send` for drivers on a multi-threaded runtime.
 #[async_trait]
-pub trait LockGuard: Send {
+pub trait LockGuard: Send + Sync {
     /// Releases the lock now and reports a failure to do so cleanly (the lock is gone
     /// either way once the guard is consumed).
     async fn release(self: Box<Self>) -> Result<(), StoreError>;

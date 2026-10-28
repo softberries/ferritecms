@@ -32,7 +32,7 @@ use ferrite_domain::{ImportRun, ImportRunId, ImportRunState, Timestamp};
 use ferrite_store::{LOCK_IMPORT, LockGuard, Store, StoreError};
 use serde_json::{Value, json};
 
-pub use batch::{ImportBatch, Mapped, WP_ID_META};
+pub use batch::{ImportBatch, Mapped, TypeWritten, WP_ID_META};
 pub use comments::{CommentOutcome, ImportComment};
 pub use content::{ContentOutcome, ImportContent, Written};
 pub use media::ImportMedia;

@@ -292,7 +292,8 @@ pub async fn dry_run_starts_a_dry_run_and_writes_nothing(db: &TestDb) {
         *steps.lock().unwrap(),
         ["parse", "pass1", "pass2", "pass3", "pass4", "fixup"]
     );
-    assert!(report.counts.is_empty());
+    // Counted as if written, though every batch was rolled back.
+    assert_eq!(report.counts["users"].created, 3);
     let runs = db.store().read().imports().list_runs(5).await.unwrap();
     assert_eq!(runs.len(), 1);
     assert!(runs[0].dry_run);
