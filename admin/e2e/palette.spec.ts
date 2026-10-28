@@ -27,6 +27,19 @@ async function openDashboard(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
 }
 
+/**
+ * Waits until the editor a palette result opened is in place: the address changes before
+ * its route's chunks have loaded, and leaving then cancels them (in WebKit the next `goto`
+ * is interrupted and the cancelled import is logged).
+ */
+async function editorOpened(page: Page, url: string | RegExp): Promise<void> {
+  await expect(page).toHaveURL(url);
+  await expect(page.getByRole("textbox", { name: "Body" })).toHaveAttribute(
+    "contenteditable",
+    "true",
+  );
+}
+
 async function openPalette(page: Page): Promise<void> {
   await page.keyboard.press(`${await mod(page)}+k`);
   await expect(palette(page)).toBeVisible();
@@ -117,7 +130,7 @@ test("search_finds_seeded_post", async ({ as, site }) => {
   expect(lastRound).not.toContain("/api/v1/content/media");
 
   await hit.click();
-  await expect(page).toHaveURL(`${site.url}/admin/content/post/${id}`);
+  await editorOpened(page, `${site.url}/admin/content/post/${id}`);
   await expect(palette(page)).toBeHidden();
 
   // The opened item is now in Recent.
@@ -229,9 +242,7 @@ test("screens", async ({ as, snap, expectAccessible }) => {
   await openPalette(page);
   await page.keyboard.type("WebAssembly");
   await option(page, new RegExp(SEEDED)).click();
-  // The editor's route loads its chunk first; a `goto` before it lands is interrupted by
-  // that navigation (seen in WebKit).
-  await expect(page).toHaveURL(/\/admin\/content\/post\/[0-9a-f-]{36}$/);
+  await editorOpened(page, /\/admin\/content\/post\/[0-9a-f-]{36}$/);
   await openDashboard(page);
   await openPalette(page);
   await expect(

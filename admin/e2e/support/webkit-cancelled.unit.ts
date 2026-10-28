@@ -59,6 +59,13 @@ describe("cancelledInPageError", () => {
 });
 
 describe("cancelledInConsole", () => {
+  it("an_import_error_logged_with_its_component_stack_is_recognised", () => {
+    // As React logs it (webkit-sqlite, palette screens): a trailing space ends the line.
+    const text =
+      "TypeError: Importing a module script failed. \no@unknown:0:0\n@http://127.0.0.1:1/admin/assets/index-x.js:10:91393";
+    expect(cancelledInConsole(text)).toEqual({ kind: "import" });
+  });
+
   it("reads_the_first_line", () => {
     expect(cancelledInConsole(FETCH_TEXT)).toEqual({ kind: "fetch", url: URL });
     expect(cancelledInConsole("TypeError: Importing a module script failed.")).toEqual({

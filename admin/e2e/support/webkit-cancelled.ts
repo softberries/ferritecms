@@ -36,7 +36,9 @@ export function cancelledInPageError(e: {
   return null;
 }
 
-function classify(text: string): CancelledLoad | null {
+function classify(raw: string): CancelledLoad | null {
+  // React logs the import error with a trailing space before its component stack.
+  const text = raw.trimEnd();
   if (text === IMPORT_CANCELLED) return { kind: "import" };
   const url = FETCH_CANCELLED.exec(text)?.[1];
   return url ? { kind: "fetch", url } : null;
