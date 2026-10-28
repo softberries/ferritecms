@@ -14,7 +14,7 @@
 //!   [`MEDIA_ROUTE_LIMIT`]). The type comes from the content (see
 //!   [`crate::media`]). The item is published at once (P5): `201` with `Location`
 //!   and `ETag`. An optional `Idempotency-Key` makes a retry replay the first `201`
-//!   (see [`idempotency`](super::idempotency)).
+//!   (see [`idempotency`]).
 //! * Writes to an item (`PATCH`, `DELETE`) need `If-Match: "<version>"` (`428`
 //!   without it; a stale one is `412` with `current`). `DELETE` trashes;
 //!   `DELETE ?force=true` deletes a trashed item for good. Both answer `204`.

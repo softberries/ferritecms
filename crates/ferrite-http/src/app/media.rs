@@ -1,7 +1,7 @@
 //! `/_media/{hash}/{name}` (03 §5, Review Focus 5): app-served media files.
 //!
 //! * **Published only.** The bytes are served only when `hash` is the original or a
-//!   variant of a public media item ([`SiteReader::media_file`]); anything else is a
+//!   variant of a public media item ([`SiteReader::media_file`](ferrite_core::SiteReader::media_file)); anything else is a
 //!   plain `404` (no theme render: these are asset URLs).
 //! * **Name.** The last segment must be the item's `original_name` (variants share it;
 //!   `file` stands in for an empty, `.` or `..` name, as `MediaStore::public_url` writes

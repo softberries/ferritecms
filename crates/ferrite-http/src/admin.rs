@@ -148,7 +148,7 @@ pub struct InvalidAdminHeader {
     pub value: String,
 }
 
-/// The CSP ([`admin_csp`]) and [`ADMIN_HEADERS`] as header values, built once with the
+/// The CSP ([`admin_csp`]) and `ADMIN_HEADERS` as header values, built once with the
 /// app state: an invalid value fails there, so no admin response goes out without its
 /// CSP.
 #[derive(Debug, Clone)]
