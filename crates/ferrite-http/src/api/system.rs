@@ -11,8 +11,9 @@
 //! * `GET /system/nodes`: every registered node with `meta`; its error texts are
 //!   scrubbed again on read ([`ferrite_core::diagnostics::scrub`]), so a row written by
 //!   an older node leaks no paths, endpoints or credentials either (Review Focus 5).
-//! * `GET /system/audit?limit&cursor`: the audit log, newest first, with each actor's
-//!   login.
+//! * `GET /system/audit?actor&action&target_kind&target_id&limit&cursor`: the audit
+//!   log, newest first, with each actor's login; `action` ending in `.` is a prefix
+//!   (`user.`), otherwise exact; `target_id` needs `target_kind` (`422`).
 //! * `GET /system/jobs?status&kind&limit&cursor`: the jobs, newest first, without their
 //!   payloads (P19), `last_error` scrubbed (F16), and whether a live node handles the
 //!   kind (`handled`, from the nodes' `meta.job_kinds`).
@@ -21,25 +22,29 @@
 //!   `422` (field `status`).
 //! * `GET /system/metrics/summary`: the answering node's renders, page cache and plugin
 //!   call totals since it started, and the site's job counts (P20; time series are M4).
+//! * `POST /system/mail/test` (`system:write`): one test mail to the actor's own address
+//!   through the node's queue (P49); 3 per 10 minutes per user; audited `mail.test`.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
 
-use axum::{Json, extract::State};
+use axum::{Json, extract::State, http::StatusCode};
 use ferrite_core::Actor;
-use ferrite_domain::{JobId, JobQuery, JobStatus, MAX_PAGE, Node, NodeId, Timestamp, UserId};
+use ferrite_domain::{
+    AuditQuery, JobId, JobQuery, JobStatus, MAX_PAGE, Node, NodeId, Timestamp, UserId,
+};
 use serde::Deserialize;
 use utoipa::IntoParams;
 use uuid::Uuid;
 
 use super::{
-    ApiState, Authed, PageParams,
+    ApiState, Authed,
     dto::system::{
-        AuditDto, AuditList, CacheStatsDto, JobCountsDto, JobDto, JobList, MetricsSummaryDto,
-        NodeCountsDto, NodeDto, NodeList, PluginTotalsDto, SchemaStatusDto, SchemaVerdict,
-        SystemStatusDto, ThemeStatusDto, ThisNodeDto,
+        AuditDto, AuditList, CacheStatsDto, JobCountsDto, JobDto, JobList, MailStatusDto,
+        MailTestDto, MetricsSummaryDto, NodeCountsDto, NodeDto, NodeList, PluginTotalsDto,
+        SchemaStatusDto, SchemaVerdict, SystemStatusDto, ThemeStatusDto, ThisNodeDto,
     },
     extract::{ApiPath, ApiQuery, DEFAULT_LIMIT, check_limit, invalid_cursor, invalid_param},
     plugins::{is_live, live_nodes},
@@ -116,6 +121,10 @@ pub async fn system_status(
             id: api.node.id.as_uuid(),
             started_at: api.node.started_at.as_datetime(),
         },
+        mail: MailStatusDto {
+            configured: api.mail.is_some(),
+            from: api.mail.as_ref().map(|m| m.from.clone()),
+        },
     }))
 }
 
@@ -154,29 +163,59 @@ pub async fn list_nodes(
     tag = "system",
     operation_id = "list_audit",
     security(("session" = []), ("bearer" = [])),
-    params(PageParams),
+    params(AuditListParams),
     responses(
-        (status = 200, description = "One page of the audit log, newest first", body = AuditList),
-        (status = 400, description = "`validation`: `limit` or `cursor`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 200, description = "One page of the audit log, newest first, filtered", body = AuditList),
+        (status = 400, description = "`validation` (`actor`, `action`, `target_kind`, `target_id`, `limit`, `cursor`) or `malformed-query`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (`manage_system`, `system:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: `target_id` without `target_kind` (`errors[0].field` = `target_id`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn list_audit(
     State(api): State<Arc<ApiState>>,
     Authed(who): Authed,
-    ApiQuery(page): ApiQuery<PageParams>,
+    ApiQuery(params): ApiQuery<AuditListParams>,
 ) -> Result<Json<AuditList>, Problem> {
-    let limit = page.limit()?;
-    if let Some(c) = &page.cursor
+    let limit = check_limit(params.limit, DEFAULT_LIMIT, MAX_PAGE)?;
+    if let Some(c) = &params.cursor
         && ferrite_store::audit_cursor(c).is_err()
     {
         return Err(invalid_cursor());
     }
-    let found = api
-        .system
-        .audit(&who.actor, limit, page.cursor.as_deref())
-        .await?;
+    let actor = params
+        .actor
+        .as_deref()
+        .map(|a| {
+            Uuid::parse_str(a)
+                .map(UserId::from_uuid)
+                .map_err(|_| invalid_param("actor", "actor must be a user id", "a UUID"))
+        })
+        .transpose()?;
+    for (field, value, max) in [
+        ("action", &params.action, MAX_AUDIT_FILTER),
+        ("target_kind", &params.target_kind, MAX_AUDIT_FILTER),
+        ("target_id", &params.target_id, MAX_AUDIT_TARGET_ID),
+    ] {
+        if let Some(v) = value
+            && (v.is_empty() || v.chars().count() > max || v.chars().any(char::is_control))
+        {
+            return Err(invalid_param(
+                field,
+                format!("{field} must be 1 to {max} characters without control characters"),
+                format!("1..={max} characters"),
+            ));
+        }
+    }
+    let query = AuditQuery {
+        actor,
+        action: params.action,
+        target_kind: params.target_kind,
+        target_id: params.target_id,
+        limit,
+        cursor: params.cursor,
+    };
+    let found = api.system.audit(&who.actor, &query).await?;
     // At most `limit` (≤ 200 = MAX_ID_FILTER) distinct actors.
     let mut ids: Vec<UserId> = found.items.iter().filter_map(|e| e.actor_id).collect();
     ids.sort();
@@ -205,6 +244,31 @@ pub async fn list_audit(
         items,
         next_cursor: found.next_cursor,
     }))
+}
+
+/// Longest `action` or `target_kind` filter of `GET /system/audit`, in characters.
+const MAX_AUDIT_FILTER: usize = 100;
+/// Longest `target_id` filter of `GET /system/audit`, in characters.
+const MAX_AUDIT_TARGET_ID: usize = 255;
+
+/// The query of `GET /system/audit`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct AuditListParams {
+    /// Rows written by this user (UUID).
+    pub actor: Option<String>,
+    /// An exact action (`user.update`), or a prefix ending in `.` (`user.`); 1..=100
+    /// characters, case-sensitive.
+    pub action: Option<String>,
+    /// Rows about this kind of target (`user`, `settings`, `plugin`, ...); 1..=100
+    /// characters.
+    pub target_kind: Option<String>,
+    /// Rows about this target (needs `target_kind`); 1..=255 characters.
+    pub target_id: Option<String>,
+    /// 1..=200; default 50.
+    pub limit: Option<u32>,
+    /// `next_cursor` of the previous page (of the same filters).
+    pub cursor: Option<String>,
 }
 
 /// The query of `GET /system/jobs`.
@@ -359,6 +423,37 @@ pub async fn metrics_summary(
         plugins: PluginTotalsDto { calls, failures },
         jobs: job_counts(&counts),
     }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/system/mail/test",
+    tag = "system",
+    operation_id = "send_test_mail",
+    security(("session" = []), ("bearer" = [])),
+    responses(
+        (status = 202, description = "A test mail to the caller's own address is queued (subject `Test e-mail from <site title>`); audited `mail.test`. Sending runs in the background: an SMTP failure is in the node's log, not here", body = MailTestDto),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_system`, `system:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: mail is not configured (`errors[0].field` = `mail`) or the account has no usable address (`email`)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 429, description = "`rate-limited`: 3 test mails per 10 minutes per user (see `Retry-After`)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 503, description = "`busy`: the node's mail queue is full or shutting down", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn send_test_mail(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+) -> Result<(StatusCode, Json<MailTestDto>), Problem> {
+    let to = api
+        .system
+        .send_test_mail(
+            &who.actor,
+            api.mail.as_ref().map(|m| m.queue.as_ref()),
+            &api.site_url,
+            &api.site_title,
+        )
+        .await?;
+    Ok((StatusCode::ACCEPTED, Json(MailTestDto { to })))
 }
 
 fn job_counts(counts: &BTreeMap<JobStatus, u64>) -> JobCountsDto {

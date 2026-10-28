@@ -1,0 +1,5 @@
+# A minimal theme: the fixture `ferrite theme pack` wrote blog-min.tar from (M2b-3 P42).
+[theme]
+name        = "blog-min"
+version     = "0.1.0"
+description = "Minimal theme fixture for the admin's theme packer."

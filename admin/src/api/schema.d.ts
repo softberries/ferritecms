@@ -116,6 +116,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_sessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/sessions/revoke-others": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["revoke_other_sessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/sessions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["revoke_session"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/totp/confirm": {
         parameters: {
             query?: never;
@@ -580,6 +628,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/plugins/retained": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_retained_plugins"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/plugins/{name}": {
         parameters: {
             query?: never;
@@ -638,6 +702,22 @@ export interface paths {
         get: operations["get_plugin_metrics"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plugins/{name}/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["purge_plugin"];
         delete?: never;
         options?: never;
         head?: never;
@@ -782,6 +862,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["retry_job"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/mail/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["send_test_mail"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1060,6 +1156,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/{id}/totp/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["disable_user_totp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1272,7 +1384,8 @@ export interface components {
             id: string;
             /**
              * @description The public path, only while the item has a public page now (published, its
-             *     publish time reached); `null` otherwise.
+             *     publish time reached, and not a media item: media have no page); `null`
+             *     otherwise.
              */
             permalink: string | null;
             /** @description `draft`, `pending`, `scheduled`, `published`, `private` or `trash`. */
@@ -1597,6 +1710,14 @@ export interface components {
             /** @description The choices of a `select` (1 to 100); empty for every other kind. */
             options?: string[];
             required?: boolean;
+            /**
+             * @description The content types a `relation` may point at: distinct registered type names,
+             *     never `media`; empty means any type. Empty for every other kind. A relation
+             *     value whose item has another type is refused (`422`, `errors[0].field` at the
+             *     value's path, such as `fields.chapters[1].related`); a missing item is accepted.
+             *     Left out of an answer when empty, as the stored schema leaves it out.
+             */
+            types?: string[];
         };
         /**
          * @description One entry of `errors`: what is wrong with one input (`field` = the JSON path or
@@ -1784,6 +1905,24 @@ export interface components {
             /** @enum {string} */
             status: "totp_required";
         };
+        /**
+         * @description Outgoing mail (P49): `[mail]` in `ferrite.toml` is the only place to set it; the SMTP
+         *     URL (it can hold credentials) is never shown.
+         */
+        MailStatusDto: {
+            /**
+             * @description `[mail]` has `smtp_url` and `from`: password resets, plugin `notify-admins` and
+             *     the test mail can send.
+             */
+            configured: boolean;
+            /** @description `mail.from`; `null` when not configured. */
+            from?: string | null;
+        };
+        /** @description `POST /system/mail/test`: the mail is queued. */
+        MailTestDto: {
+            /** @description The actor's own address, where the mail goes. */
+            to: string;
+        };
         /** @description The authenticated user and what the request's credential allows. */
         MeDto: {
             /** @description Capabilities granted by the role and the credential's scopes (07 §1 names). */
@@ -1795,6 +1934,12 @@ export interface components {
             /** Format: uuid */
             id: string;
             login: string;
+            /**
+             * @description Whether the site can send mail (`[mail]` has `smtp_url` and `from`), for roles
+             *     holding `manage_users` or `manage_system` (whatever the credential's scopes);
+             *     `null` for everyone else.
+             */
+            mail_configured?: boolean | null;
             /**
              * @description Only `GET /auth/me`, `POST /auth/logout` and `POST /auth/password` are open until
              *     the password is changed.
@@ -2004,11 +2149,10 @@ export interface components {
             /** @description The heartbeat is within 30 s of the database clock. */
             live: boolean;
             /**
-             * @description What the node reports (04 §8: `theme`, `plugins`, `plugins_error`,
-             *     `permalinks_error`, `site_id`, `site_url`, `mode`, `clock_skew_ms`); error texts
-             *     scrubbed of URLs, paths, addresses and credentials, at most 1 KiB each.
+             * @description What the node reports (04 §8); error texts scrubbed of URLs, paths, addresses and
+             *     credentials, at most 1 KiB each.
              */
-            meta: Record<string, never>;
+            meta: components["schemas"]["NodeMetaDto"];
             /** @description `cluster.node_name` or the host name. */
             name: string;
             /**
@@ -2038,6 +2182,60 @@ export interface components {
             items: components["schemas"]["NodeDto"][];
             /** @description Always `null`: one page holds every node. */
             next_cursor?: string | null;
+        };
+        /**
+         * @description A node's `meta`, read leniently: every member is optional (a node of another version
+         *     in a rolling deploy may lack or add members), unknown members are dropped, and a
+         *     member of the wrong type is `null` rather than failing the list.
+         */
+        NodeMetaDto: {
+            /**
+             * Format: int64
+             * @description The node clock minus the database clock at its last heartbeat, in milliseconds.
+             */
+            clock_skew_ms?: number | null;
+            /** @description The job kinds this node's runner handles. */
+            job_kinds?: string[] | null;
+            /** @description `solo` or `cluster`. */
+            mode?: string | null;
+            /** @description Why the current permalink options are not in effect. */
+            permalinks_error?: string | null;
+            /** @description The node's plugins by name, from its last reload. */
+            plugins?: {
+                [key: string]: components["schemas"]["NodePluginDto"];
+            } | null;
+            /** @description Why the plugin rows could not be read at the last reload. */
+            plugins_error?: string | null;
+            /** @description The site the node joined (cluster registry). */
+            site_id?: string | null;
+            /** @description The node's `site.url`. */
+            site_url?: string | null;
+            theme?: components["schemas"]["NodeThemeDto"] | null;
+        };
+        /** @description `meta.plugins.<name>` of a node. */
+        NodePluginDto: {
+            /** @description Why it is not loaded (scrubbed). */
+            error?: string | null;
+            /** @description The component's content hash. */
+            hash?: string | null;
+            /** @description `loaded`, `failed` or `disabled`. */
+            status?: string | null;
+            version?: string | null;
+        };
+        /** @description `meta.theme` of a node. */
+        NodeThemeDto: {
+            /** @description Why the active theme is not served (scrubbed). */
+            error?: string | null;
+            /** @description There is an active row and this node does not serve its artifact. */
+            fallback?: boolean | null;
+            /** @description The theme's content hash. */
+            hash?: string | null;
+            name?: string | null;
+            origin?: components["schemas"]["NodeThemeOrigin"] | null;
+        };
+        /** @description Where a node's theme came from: `"embedded"`, `"folder"` or `{"artifact": <hash>}`. */
+        NodeThemeOrigin: string | {
+            artifact: string;
         };
         /** @description `POST /auth/password`. */
         PasswordChange: {
@@ -2106,22 +2304,41 @@ export interface components {
          *     and the `report` of an approval refusal).
          */
         PermissionReportDto: components["schemas"]["GrantReportDto"] & {
+            /** @description The manifest's `plugin.description` (text). */
+            description?: string | null;
+            /** @description The manifest's `plugin.homepage`: an `http://` or `https://` URL (else `null`). */
+            homepage?: string | null;
+            /** @description The manifest's `plugin.license` (text). */
+            license?: string | null;
+            /** @description The manifest's `plugin.publisher` (text, unverified). */
+            publisher?: string | null;
             /** @description Whether a plugin of this name is installed: `added` is then against its grant. */
             update: boolean;
         };
         /** @description An installed plugin. */
         PluginDto: {
+            /** @description The stored manifest's `plugin.description` (text). */
+            description?: string | null;
             /** @description Why it was disabled automatically (failures), if it was. */
             disabled_reason?: string | null;
             enabled: boolean;
+            /**
+             * @description The stored manifest's `plugin.homepage`: an `http://` or `https://` URL (a stored
+             *     value of another form is `null`).
+             */
+            homepage?: string | null;
             /** Format: date-time */
             installed_at: string;
+            /** @description The stored manifest's `plugin.license` (text). */
+            license?: string | null;
             name: string;
             /**
              * @description What each live node (heartbeat within 30 s) reports about it, by node; a node
              *     that has not loaded the plugin yet is not listed.
              */
             nodes: components["schemas"]["PluginNodeState"][];
+            /** @description The stored manifest's `plugin.publisher` (text, unverified). */
+            publisher?: string | null;
             report?: components["schemas"]["GrantReportDto"] | null;
             /** Format: date-time */
             updated_at: string;
@@ -2296,6 +2513,22 @@ export interface components {
             source?: string;
             target?: string;
         };
+        /** @description A deleted plugin whose KV and settings are still kept (M2b-3 P47). */
+        RetainedPluginDto: {
+            /** Format: date-time */
+            deleted_at: string;
+            name: string;
+            /**
+             * Format: date-time
+             * @description When the data is erased unless the plugin is installed again first: 30 days
+             *     after `deleted_at` (`POST /plugins/{name}/purge` erases it earlier).
+             */
+            purge_after: string;
+        };
+        /** @description `GET /plugins/retained`: every deleted plugin whose data is kept, by name. */
+        RetainedPluginList: {
+            items: components["schemas"]["RetainedPluginDto"][];
+        };
         /** @description One revision: the saved title, excerpt, body and fields. */
         RevisionDto: {
             /** @description Who saved it (`author_id` resolved). */
@@ -2386,6 +2619,38 @@ export interface components {
             description?: string | null;
             title?: string | null;
         };
+        /**
+         * @description One of the user's sessions (`GET /auth/sessions`). No user agent or address is
+         *     shown: sessions are told apart by time.
+         */
+        SessionDto: {
+            /** Format: date-time */
+            created_at: string;
+            /** @description The session this request came with (end it with `POST /auth/logout`). */
+            current: boolean;
+            /**
+             * @description An opaque id (16 hex characters) for `DELETE /auth/sessions/{id}`; never the
+             *     cookie value.
+             */
+            id: string;
+            /**
+             * Format: date-time
+             * @description Updated at most every 5 minutes.
+             */
+            last_seen_at: string;
+        };
+        /** @description `GET /auth/sessions`: the user's live sessions, newest first. */
+        SessionList: {
+            items: components["schemas"]["SessionDto"][];
+        };
+        /** @description The result of `POST /auth/sessions/revoke-others`. */
+        SessionsRevoked: {
+            /**
+             * Format: int64
+             * @description How many sessions ended.
+             */
+            revoked: number;
+        };
         /** @description One declared setting: what the admin renders a form field from (05 §4c, 06 §1). */
         SettingDefDto: {
             /** @description The declared default; `null` for none (always for `media` and `secret`). */
@@ -2460,6 +2725,7 @@ export interface components {
             /** @description `sqlite` or `postgres`. */
             database: string;
             jobs: components["schemas"]["JobCountsDto"];
+            mail: components["schemas"]["MailStatusDto"];
             /** @description `local` or `s3`. */
             media: string;
             /** @description `solo` or `cluster`. */
@@ -2554,7 +2820,12 @@ export interface components {
          *     itself): a ustar archive of `theme.toml`, `templates/` and `assets/`.
          */
         ThemeBundle: string;
-        /** @description A theme: installed (a row) or embedded (no row). */
+        /**
+         * @description A theme: installed (a row) or embedded (no row). The manifest facts (`author`,
+         *     `license`, `homepage`, `description`, `menus`, `images`, `has_settings`) are the
+         *     row's stored manifest, or the embedded theme's `theme.toml`; each is text the theme
+         *     author wrote (render it as text).
+         */
         ThemeDto: {
             /**
              * @description The theme nodes should serve: the active row, or with no row active the embedded
@@ -2563,12 +2834,27 @@ export interface components {
              *     embedded `blog` files, which no entry describes; activating a theme ends that.
              */
             active: boolean;
+            author?: string | null;
             description?: string | null;
+            /** @description Whether `theme.toml` declares settings (`GET /themes/{name}/settings` has a form). */
+            has_settings: boolean;
+            /**
+             * @description The row's artifact (SHA-256 of the bundle, 64 lowercase hex); `null` for an
+             *     embedded theme without a row.
+             */
+            hash?: string | null;
+            /** @description An `http://` or `https://` URL (`theme.toml` refuses anything else). */
+            homepage?: string | null;
+            /** @description The image variant sizes, by name. */
+            images: components["schemas"]["ThemeImageDto"][];
             /**
              * Format: date-time
              * @description When the row was written; `null` for an embedded theme without a row.
              */
             installed_at?: string | null;
+            license?: string | null;
+            /** @description The menu locations, by name. */
+            menus: components["schemas"]["ThemeMenuDto"][];
             name: string;
             /**
              * @description What each live node (heartbeat within 30 s) serves, by node; only on the active
@@ -2578,6 +2864,24 @@ export interface components {
             origin: components["schemas"]["ThemeOrigin"];
             version: string;
         };
+        /** @description An image variant size a theme wants (its `[images]` table, 03 §4). */
+        ThemeImageDto: {
+            /** @description Whether the variant is cropped to `width` x `height`. */
+            crop: boolean;
+            /**
+             * Format: int32
+             * @description In pixels; `null`: scaled to `width` keeping the aspect ratio, or with `crop` a
+             *     `width` square.
+             */
+            height?: number | null;
+            /** @description The size's name (`[a-z0-9_-]`), the key of its `[images]` entry. */
+            name: string;
+            /**
+             * Format: int32
+             * @description In pixels.
+             */
+            width: number;
+        };
         /**
          * @description `GET /themes`: every installed theme and every embedded theme without a row, by
          *     name.
@@ -2586,6 +2890,12 @@ export interface components {
             items: components["schemas"]["ThemeDto"][];
             /** @description Always `null`: one page holds every theme. */
             next_cursor?: string | null;
+        };
+        /** @description A menu location a theme declares (its `[menus]` table). */
+        ThemeMenuDto: {
+            label: string;
+            /** @description The location, and the name of the menu the theme shows there. */
+            name: string;
         };
         /** @description What one live node serves (`nodes.meta.theme`). */
         ThemeNodeState: {
@@ -2778,6 +3088,15 @@ export interface components {
          *     on oneself; the last active admin cannot be demoted or disabled.
          */
         UserPatchInput: {
+            /**
+             * Format: password
+             * @description The request's own current password. Required when a user changes their **own**
+             *     `email` to a different address (missing: `422`, `errors[0].field` =
+             *     `current_password`; wrong: `403 forbidden`; checked on the same per-login rate
+             *     limit as `POST /auth/password`); ignored otherwise, so an admin changing another
+             *     user's e-mail sends none.
+             */
+            current_password?: string | null;
             display_name?: string;
             email?: string;
             /**
@@ -2841,6 +3160,8 @@ export type SchemaJobList = components['schemas']['JobList'];
 export type SchemaLimitItemDto = components['schemas']['LimitItemDto'];
 export type SchemaLoginRequest = components['schemas']['LoginRequest'];
 export type SchemaLoginResponse = components['schemas']['LoginResponse'];
+export type SchemaMailStatusDto = components['schemas']['MailStatusDto'];
+export type SchemaMailTestDto = components['schemas']['MailTestDto'];
 export type SchemaMeDto = components['schemas']['MeDto'];
 export type SchemaMediaDto = components['schemas']['MediaDto'];
 export type SchemaMediaList = components['schemas']['MediaList'];
@@ -2860,6 +3181,10 @@ export type SchemaNodeCountsDto = components['schemas']['NodeCountsDto'];
 export type SchemaNodeDto = components['schemas']['NodeDto'];
 export type SchemaNodeHookStatsDto = components['schemas']['NodeHookStatsDto'];
 export type SchemaNodeList = components['schemas']['NodeList'];
+export type SchemaNodeMetaDto = components['schemas']['NodeMetaDto'];
+export type SchemaNodePluginDto = components['schemas']['NodePluginDto'];
+export type SchemaNodeThemeDto = components['schemas']['NodeThemeDto'];
+export type SchemaNodeThemeOrigin = components['schemas']['NodeThemeOrigin'];
 export type SchemaPasswordChange = components['schemas']['PasswordChange'];
 export type SchemaPasswordChanged = components['schemas']['PasswordChanged'];
 export type SchemaPasswordResetConfirm = components['schemas']['PasswordResetConfirm'];
@@ -2881,6 +3206,8 @@ export type SchemaRedirectInput = components['schemas']['RedirectInput'];
 export type SchemaRedirectList = components['schemas']['RedirectList'];
 export type SchemaRedirectOriginDto = components['schemas']['RedirectOriginDto'];
 export type SchemaRedirectPatch = components['schemas']['RedirectPatch'];
+export type SchemaRetainedPluginDto = components['schemas']['RetainedPluginDto'];
+export type SchemaRetainedPluginList = components['schemas']['RetainedPluginList'];
 export type SchemaRevisionDto = components['schemas']['RevisionDto'];
 export type SchemaRevisionList = components['schemas']['RevisionList'];
 export type SchemaRevisionSummaryDto = components['schemas']['RevisionSummaryDto'];
@@ -2890,6 +3217,9 @@ export type SchemaSchemaStatusDto = components['schemas']['SchemaStatusDto'];
 export type SchemaSchemaVerdict = components['schemas']['SchemaVerdict'];
 export type SchemaSeoDto = components['schemas']['SeoDto'];
 export type SchemaSeoPatchDto = components['schemas']['SeoPatchDto'];
+export type SchemaSessionDto = components['schemas']['SessionDto'];
+export type SchemaSessionList = components['schemas']['SessionList'];
+export type SchemaSessionsRevoked = components['schemas']['SessionsRevoked'];
 export type SchemaSettingDefDto = components['schemas']['SettingDefDto'];
 export type SchemaSettingsDto = components['schemas']['SettingsDto'];
 export type SchemaSettingsPatch = components['schemas']['SettingsPatch'];
@@ -2904,7 +3234,9 @@ export type SchemaTermList = components['schemas']['TermList'];
 export type SchemaTermPatch = components['schemas']['TermPatch'];
 export type SchemaThemeBundle = components['schemas']['ThemeBundle'];
 export type SchemaThemeDto = components['schemas']['ThemeDto'];
+export type SchemaThemeImageDto = components['schemas']['ThemeImageDto'];
 export type SchemaThemeList = components['schemas']['ThemeList'];
+export type SchemaThemeMenuDto = components['schemas']['ThemeMenuDto'];
 export type SchemaThemeNodeState = components['schemas']['ThemeNodeState'];
 export type SchemaThemeOrigin = components['schemas']['ThemeOrigin'];
 export type SchemaThemeSettingsDto = components['schemas']['ThemeSettingsDto'];
@@ -3249,6 +3581,166 @@ export interface operations {
             };
         };
     };
+    list_sessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's live sessions, newest first; `current` is this one */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionList"];
+                };
+            };
+            /** @description `bad-request`: the request used a bearer token */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    revoke_other_sessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every other session of the user ended; this one is kept. Audited `session.revoke` with `details.count` (none ended: no audit row) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionsRevoked"];
+                };
+            };
+            /** @description `bad-request`: the request used a bearer token */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    revoke_session: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A session's `id` from `GET /auth/sessions` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session ended (on every node at its next request); audited `session.revoke` */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `bad-request`: the request used a bearer token */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no session of the user has this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: the current session (use `POST /auth/logout`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
     totp_confirm: {
         parameters: {
             query?: never;
@@ -3287,7 +3779,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation`: bad or expired enrollment, wrong code */
+            /** @description `validation`: bad or expired enrollment (`errors[0].field` = `enrollment`), wrong or replayed code (`code`), TOTP already on (no field) */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -5534,7 +6026,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Restored from trash as published, its `published_at` kept, so its files are served again (`ETag`) */
+            /** @description Restored from trash (`ETag`): published again, its `published_at` kept and its files served, unless it was a draft when it was trashed or the caller may not publish it; then it is a draft (`status` says which) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6070,6 +6562,44 @@ export interface operations {
             };
         };
     };
+    list_retained_plugins: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every deleted plugin whose KV and settings are still kept (deleted without `purge`, not installed again), by name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetainedPluginList"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
     get_plugin: {
         parameters: {
             query?: never;
@@ -6360,6 +6890,72 @@ export interface operations {
             };
         };
     };
+    purge_plugin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A deleted plugin */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The deleted plugin's KV and settings are erased now (audited `plugin.purge`); a later install of that name starts empty */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no data of that name is retained */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: a plugin of that name is installed (`errors[0].field` = `name`); delete it with `purge=true` instead */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `busy`: another extension change holds the lock (`Retry-After`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
     get_plugin_settings: {
         parameters: {
             query?: never;
@@ -6497,7 +7093,7 @@ export interface operations {
             query?: {
                 /**
                  * @description Only redirects whose source or target holds this text, ignoring case (`%` and
-                 *     `_` match only themselves). Trimmed; 1 to 200 characters (`422`, field `q`).
+                 *     `_` match only themselves). Trimmed; blank is no search; at most 200 characters (`422`, field `q`).
                  */
                 q?: string;
                 /** @description 1..=200; default 50. */
@@ -6547,7 +7143,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation`: `q` blank or longer than 200 characters (`errors[0].field` = `q`) */
+            /** @description `validation`: `q` longer than 200 characters (`errors[0].field` = `q`) */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -7004,9 +7600,23 @@ export interface operations {
     list_audit: {
         parameters: {
             query?: {
+                /** @description Rows written by this user (UUID). */
+                actor?: string;
+                /**
+                 * @description An exact action (`user.update`), or a prefix ending in `.` (`user.`); 1..=100
+                 *     characters, case-sensitive.
+                 */
+                action?: string;
+                /**
+                 * @description Rows about this kind of target (`user`, `settings`, `plugin`, ...); 1..=100
+                 *     characters.
+                 */
+                target_kind?: string;
+                /** @description Rows about this target (needs `target_kind`); 1..=255 characters. */
+                target_id?: string;
                 /** @description 1..=200; default 50. */
                 limit?: number;
-                /** @description `next_cursor` of the previous page. */
+                /** @description `next_cursor` of the previous page (of the same filters). */
                 cursor?: string;
             };
             header?: never;
@@ -7015,7 +7625,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One page of the audit log, newest first */
+            /** @description One page of the audit log, newest first, filtered */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7024,7 +7634,7 @@ export interface operations {
                     "application/json": components["schemas"]["AuditList"];
                 };
             };
-            /** @description `validation`: `limit` or `cursor` */
+            /** @description `validation` (`actor`, `action`, `target_kind`, `target_id`, `limit`, `cursor`) or `malformed-query` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -7044,6 +7654,15 @@ export interface operations {
             };
             /** @description `forbidden` (`manage_system`, `system:read`) or `password-reset-required` */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: `target_id` without `target_kind` (`errors[0].field` = `target_id`) */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7158,6 +7777,71 @@ export interface operations {
             };
             /** @description `validation`: the job is not `dead` (`errors[0].field` = `status`) */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    send_test_mail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A test mail to the caller's own address is queued (subject `Test e-mail from <site title>`); audited `mail.test`. Sending runs in the background: an SMTP failure is in the node's log, not here */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailTestDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_system`, `system:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: mail is not configured (`errors[0].field` = `mail`) or the account has no usable address (`email`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `rate-limited`: 3 test mails per 10 minutes per user (see `Retry-After`) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `busy`: the node's mail queue is full or shutting down */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8549,9 +9233,19 @@ export interface operations {
     list_users: {
         parameters: {
             query?: {
+                /**
+                 * @description Only users whose login, display name or e-mail holds this text, ignoring case
+                 *     (`%` and `_` match only themselves). Trimmed; 1 to 100 characters (`422`, field
+                 *     `q`).
+                 */
+                q?: string;
+                /** @description Only users with this role. */
+                role?: components["schemas"]["RoleDto"];
+                /** @description Only users with this status. */
+                status?: components["schemas"]["UserStatusDto"];
                 /** @description 1..=200; default 50. */
                 limit?: number;
-                /** @description `next_cursor` of the previous page. */
+                /** @description `next_cursor` of the previous page of the same query. */
                 cursor?: string;
             };
             header?: never;
@@ -8569,7 +9263,7 @@ export interface operations {
                     "application/json": components["schemas"]["UserList"];
                 };
             };
-            /** @description `validation` (`limit`, `cursor`) or `malformed-query` */
+            /** @description `validation` (`limit`, `cursor`) or `malformed-query` (also an unknown `role` or `status`) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -8589,6 +9283,15 @@ export interface operations {
             };
             /** @description `forbidden` (`manage_users`, `users:read`) or `password-reset-required` */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: `q` blank or longer than 100 characters (`errors[0].field` = `q`) */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8776,7 +9479,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation`: oneself, the last active admin, content without `reassign`, or `reassign` not an active user */
+            /** @description `validation`: oneself, the last active admin, or (field `reassign`) content without `reassign`, or `reassign` the user itself or not an active user */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -8829,7 +9532,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `forbidden` (another user, role or status: `manage_users`; `users:write`), `csrf` or `password-reset-required` */
+            /** @description `forbidden` (another user, role or status: `manage_users`; `users:write`; a wrong `current_password`), `csrf` or `password-reset-required` */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8847,8 +9550,17 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation`: `errors[0].field` `login` (cannot change), `email` (also taken) or `display_name`; one's own role or status; the last active admin */
+            /** @description `validation`: `errors[0].field` `login` (cannot change), `email` (also taken), `display_name` or `current_password` (missing for an own e-mail change); one's own role or status; the last active admin */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `rate-limited`: the own-e-mail password check (see `Retry-After`) */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9087,6 +9799,62 @@ export interface operations {
             };
             /** @description `not-found`: the user holds no such token */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    disable_user_totp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description TOTP is off for the user (a lost authenticator); their sessions and tokens are kept */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_users`, `users:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: the request's own account (`errors[0].field` = `id`; use `POST /auth/totp/disable` with the password), or TOTP is not on */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

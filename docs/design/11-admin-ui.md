@@ -130,6 +130,10 @@ Derived tokens (`var()` in `tokens.css`, so they follow the mode):
   `primary(-foreground)`, `sidebar-border` = `border`, `sidebar-ring` = `ring`.
 - `color-scheme` is `light` on `:root` and `dark` on `.dark` (scrollbars, form
   controls); `::selection` is ember at 24 %.
+- `qr-fg` / `qr-bg` (M2b-3): `oklch(0 0 0)` / `oklch(1 0 0)`, defined on `:root` only,
+  so they stay black on white in dark mode too (phone cameras read QR codes as dark on
+  light). `QrCode` draws with them (`fill-qr-fg`, `fill-qr-bg`); their pair is gated at
+  4.5:1 like text (21:1).
 
 Tailwind names: `bg-primary`, `text-success`, `text-status-published`,
 `bg-chart-3`, … (`--color-*` in `globals.css`).
@@ -241,12 +245,20 @@ contrast pair unchanged.
   an emulated dark scheme). Only these tokens are needed: before React mounts, `#root`
   is empty, so the canvas (`body` background) and `color-scheme` are all that paint.
   The `dark:` variant (`.dark *`) does not match in that frame, and nothing uses it yet.
-  - Flash-free: `system` on any OS (the default), and an explicit choice that matches
-    the OS.
-  - Still flashes one frame: an explicit choice against the OS (stored `dark` on a light
-    OS, or `light` on a dark one), because `localStorage` is unreadable without JS.
-    Fixing it needs a server hint (for example a cookie that `index.html` serving turns
-    into a class); deferred.
+  - Flash-free: `system` on any OS (the default), and an explicit choice whatever the
+    OS (P57). An explicit choice is also a cookie `ferrite_admin_theme=dark|light`
+    (`Path=/admin`, `SameSite=Lax`, one year, `Secure` on https, not `HttpOnly` since
+    JS writes it; removed for `system`, and refreshed from `localStorage` on every load).
+    Serving `index.html` (`crates/ferrite-http/src/admin.rs`) adds `class="dark"` or
+    `class="light"` to `<html>` when the cookie is exactly one of those values; any
+    other value is ignored, and the class is a fixed string, never the cookie's text.
+    No inline script is added, so the CSP is unchanged. `index.html` carries
+    `Vary: Accept-Encoding, Cookie` and a rewritten page the ETag of its own bytes, so
+    no cache hands one theme's copy to another viewer (Rust
+    `index_html_gets_theme_class_from_cookie`; E2E
+    `explicit_dark_against_light_os_has_no_light_frame`).
+  - Still one frame late: a choice whose cookie the browser does not send (cookies
+    blocked), which falls back to the class set by JS.
   - Density has no first-paint effect: nothing density-sized renders before React.
 
 ## 5. Motion
@@ -306,15 +318,28 @@ alone). Local keys (the `DataTable` row keys, the editor's) stay in their compon
 Bound by the shell as of Task 10: `mod+k` (`allowInInput`), `?`, `mod+b` and `g d`;
 Task 13 adds `g p`/`g g` (nav items, `shell/nav.ts`) and, while a content list is open,
 `/`, `#` and `esc` (clear the selection; not while a menu or dialog is open); the rest
-arrive with their screens (`c p`/`c g` with the editor, Task 14; `g s` in M2b-3). As
+arrive with their screens (`c p`/`c g` with the editor, Task 14). As
 built in M2b-2: `g m` (Media, Task 7) and `g c` (Comments, Task 12) come from `navFor`'s
 screen rules and bind once the nav entry is registered (both are); the comments queue
 binds `a`, `u`, `s` and `#` (group "Comments queue", off while a dialog or menu is open)
 while it is open; the media library and the redirects list focus their search with `/`
 (the shared `SearchField`), and their tables, like the other lists, take the
 `DataTable` keys; the type form, the menu editor and the media detail save on `mod+s`.
-The Structure screens have no chord. The `?` sheet lists whatever is
-registered at the moment it opens.
+The Structure screens have no chord. M2b-3's Administration section (`SCREENS` in
+`shell/nav.ts`, Task 5) fixes `g u` Users, `g a` Appearance, `g l` Plugins, `g s`
+Settings and `g y` System; each binds once its screen registers its entry (all five do,
+Tasks 7–11). The M2b-3 plan named `g p` for Plugins, which is Posts here; Plugins takes
+`g l`. The `?` sheet lists whatever is registered at the moment it opens.
+
+As built in M2b-3: a pending sequence keeps the keys pressed so far and looks its candidates
+up in the registry at each step, so `g s` completes even when the nav registers its `g`
+bindings again between the two keys (Task 14, `chord_completes_with_a_binding_registered_between_steps`).
+On Apple platforms a letter or digit pressed with Option is matched by its physical key
+(`e.code`; ⌥R types "®"), so `mod+alt+r` runs; with ⌘ held this holds whatever the browser
+reports for AltGraph, and Option alone with AltGraph reported is left to type. Elsewhere Alt
+and AltGr type real letters (Polish ą, ę, ś…), which no shortcut takes (R18 as updated;
+`mac_option_reported_as_altgraph_still_runs_cmd_option_r`). A check on a real Mac is part
+of the manual Safari pass.
 
 | Where | Keys | Action |
 |---|---|---|
@@ -326,7 +351,11 @@ registered at the moment it opens.
 | Anywhere | `g g` | Pages |
 | Anywhere | `g m` | Media (M2b-2) |
 | Anywhere | `g c` | Comments (M2b-2) |
+| Anywhere | `g u` | Users (M2b-3) |
+| Anywhere | `g a` | Appearance: themes (M2b-3) |
+| Anywhere | `g l` | Plugins (M2b-3; not `g p`, which is Posts) |
 | Anywhere | `g s` | Settings (M2b-3) |
+| Anywhere | `g y` | System (M2b-3) |
 | Anywhere | `c p` / `c g` | New post / new page |
 | Lists | `j` / `k` | Move down / up |
 | Lists | `x` | Select the row |
@@ -402,6 +431,21 @@ itself (`?raw` + `parseTokens`), so the page cannot drift from the gate.
   - Outside the kit: `openMediaPicker({ kind?, title })` (`media/media-picker.tsx`,
     `MediaPickerHost` mounted once in `routes/_app.tsx`) resolves to the chosen
     `MediaDto` or `null`; the media grid takes `single` for it.
+
+  Added for the M2b-3 administration screens (Task 5; styleguide section
+  "Administration"):
+
+  | Component | Props | Notes |
+  |---|---|---|
+  | `CodeInput` | `value, onChange, onComplete?, label?, id?, describedBy?, invalid?, disabled?, autoFocus? (true), ref?` | extracted unchanged from the TOTP sign-in: one real input (`inputmode="numeric"`, `autocomplete="one-time-code"`, digits only, at most 6) over six drawn cells in two groups of three; `onComplete` fires once the sixth digit is in. `label` is the `aria-label` when no `<label>` points at `id`. On narrow screens the cells shrink before the gaps, so the dash between the groups stays clear (review fix) |
+  | `QrCode` | `text, label, size? (200)` | `uqr` 0.1.3 `encode(text, { ecc: "M", border: 0 })` (`qr-matrix.ts`) gives the boolean matrix; the component draws one `<svg role="img" aria-label={label}>` with a ground `<rect>` and one 1×1 `<rect>` per dark module, a 4-module quiet zone, `shape-rendering="crispEdges"`. Black on white in both themes (`--qr-fg` / `--qr-bg`, §3). No library SVG or HTML string is used; the text is only in the drawing |
+  | `SecretField` | `name, set, onChange(v: string \| null \| undefined), id?, describedBy?, invalid?, disabled?` | write-only: "Set" / "Not set", never a value. Untouched reports nothing (`undefined`: the key is left out of the `PATCH`, the server keeps it); Replace ("Set a value" when unset) opens an empty `type="password"` input (`autocomplete="new-password"`) whose text is the new value (empty = `undefined`); Remove reports `null` ("Removed when you save", Undo). The text is held only in its state |
+  | `SettingsForm` | `schema: SettingDefDto[], values, secrets?, invalid?, reload, onSubmit(patch), staleKey, onDirtyChange?, disabled?` | renders `text`, `textarea`, `bool` (switch), `number`, `select` (the options; a stored value they lack is still shown), `color` (a native colour input plus the hex, `#rrggbb` checked), `media` (`MediaChoice`, `kit/media-choice.tsx`, the media picker of every kind; the editor's media field and featured image use it too) and `secret` (`SecretField`); another kind is named as not editable here. Each field: label, a "Default: …" hint, "Reset to default" when the value differs from what a reset reads as (the default, else core's `empty_setting_value`: `""`, `false`, `0`, the first option; colours compared case-insensitively with `#rgb` expanded) or is `invalid` (sends `null`, unchecked); a cleared number is "Enter a number.", not a reset; Save with a marked field focuses it and says so; `invalid` keys say "Stored value is not valid; the default is used". Save sends only the changed keys through `staleGuard` (`reload` re-reads the values; the copy compared is the values the form started from; `staleKey` names the resource in the question). `onSubmit` may resolve to the saved values, which the form then starts from; a `422` shows at its fields. New `values` from the caller replace the start copy while nothing is edited |
+  | `CopyOnce` | `value, label` | read-only mono field with Copy and "Shown only now. Store it somewhere safe." (warning colour); for a new token's value, held only in the dialog's state |
+
+  `useStaleAsk` now settles a pending question with `cancel` when a second one is asked
+  or the component unmounts (an M2b-2 minor). Strings of these components are in the
+  `admin` namespace (the administration screens add theirs there too).
 
   `ContentStatus` and `CONTENT_STATUSES` live in `src/api/content.ts`. Kit and
   styleguide strings are in the `common` (`ui.*`, `status.*`, `kit.*`) and `styleguide`
@@ -658,7 +702,8 @@ bar's trigger (`aria-haspopup="dialog"`, `aria-keyshortcuts`).
 
 Every UI task's contact sheet (`admin/test-results/screens/index.html`; light/dark ×
 1440×900/390×844) is checked against this list; a screen that fails it is rejected like
-a failing test.
+a failing test. Since M2b-3 the snapshots are taken only in the `chromium-sqlite` E2E project
+(P55); the other engines run the same specs without them.
 
 - [ ] Alignment to the 4 px grid.
 - [ ] One primary action per view.

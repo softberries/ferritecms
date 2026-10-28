@@ -54,7 +54,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { DRAG_DISTANCE_PX, LAYOUT_SPRING, useSettling } from "./sortable-shared";
+import { LAYOUT_SPRING } from "@/design/tokens";
+import { DRAG_DISTANCE_PX, useSettling } from "./sortable-shared";
 
 export interface SortableListProps<T> {
   items: T[];

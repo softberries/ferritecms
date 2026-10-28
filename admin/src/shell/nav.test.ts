@@ -89,7 +89,78 @@ test("nothing_above_its_rights", () => {
     "manage_redirects",
     "manage_system",
   ]);
-  expect(navFor(admin, TYPES).map((s) => s.id)).toEqual(["overview", "content", "structure"]);
+  expect(navFor(admin, TYPES).map((s) => s.id)).toEqual([
+    "overview",
+    "content",
+    "structure",
+    "admin",
+  ]);
+});
+
+test("users_is_registered", () => {
+  // M2b-3 Task 7 registers Users under Administration: only `manage_users` sees it.
+  const admin = navFor(me("admin", ["read_admin", "manage_users"]), TYPES);
+  const section = admin.find((s) => s.id === "admin");
+  expect(section?.label).toBe("Administration");
+  expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
+    ["users", "Users", "/users", "g u"],
+  ]);
+  expect(navItemAt(admin, "/users")?.id).toBe("users");
+  expect(navItemAt(admin, "/users/")?.id).toBe("users");
+  const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
+  expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
+});
+
+test("appearance_is_registered", () => {
+  // M2b-3 Task 9 registers Appearance (the Themes screen) under Administration: only
+  // `manage_themes` sees it, with `g a`.
+  const admin = navFor(me("admin", ["read_admin", "manage_themes"]), TYPES);
+  const section = admin.find((s) => s.id === "admin");
+  expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
+    ["appearance", "Appearance", "/appearance/themes", "g a"],
+  ]);
+  expect(navItemAt(admin, "/appearance/themes")?.id).toBe("appearance");
+  const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
+  expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
+});
+
+test("plugins_is_registered", () => {
+  // M2b-3 Task 10 registers Plugins under Administration: only `manage_plugins` sees it,
+  // with `g l` (`g p` is Posts).
+  const admin = navFor(me("admin", ["read_admin", "manage_plugins"]), TYPES);
+  const section = admin.find((s) => s.id === "admin");
+  expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
+    ["plugins", "Plugins", "/plugins", "g l"],
+  ]);
+  expect(navItemAt(admin, "/plugins")?.id).toBe("plugins");
+  const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
+  expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
+});
+
+test("system_is_registered", () => {
+  // M2b-3 Task 11 registers System under Administration: only `manage_system` sees it,
+  // with `g y`.
+  const admin = navFor(me("admin", ["read_admin", "manage_system"]), TYPES);
+  const section = admin.find((s) => s.id === "admin");
+  expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
+    ["system", "System", "/system", "g y"],
+  ]);
+  expect(navItemAt(admin, "/system")?.id).toBe("system");
+  const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
+  expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
+});
+
+test("settings_is_registered", () => {
+  // M2b-3 Task 8 registers Settings under Administration: only `manage_settings` sees it,
+  // and it is current on every group's page.
+  const admin = navFor(me("admin", ["read_admin", "manage_settings"]), TYPES);
+  const section = admin.find((s) => s.id === "admin");
+  expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
+    ["settings", "Settings", "/settings", "g s"],
+  ]);
+  expect(navItemAt(admin, "/settings")?.id).toBe("settings");
+  const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
+  expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
 });
 
 test("content_types_is_registered", () => {
@@ -309,4 +380,66 @@ test("screen_entries_need_no_content_types", () => {
     ["overview", [["Dashboard", "/"]]],
     ["content", [["Media", "/media"]]],
   ]);
+});
+
+// M2b-3: the Administration section, after Structure. Each screen task registers its own
+// entry; every one is registered here, in an order unlike the sidebar's.
+const ADMIN_ENTRIES: ScreenEntry[] = [
+  ...ENTRIES,
+  { screen: "system", to: "/system", label: "nav.system", icon: ShapesIcon },
+  { screen: "settings", to: "/settings", label: "nav.settings", icon: ShapesIcon },
+  { screen: "plugins", to: "/plugins", label: "nav.plugins", icon: ShapesIcon },
+  { screen: "appearance", to: "/appearance/themes", label: "nav.appearance", icon: ShapesIcon },
+  { screen: "users", to: "/users", label: "nav.users", icon: ShapesIcon },
+];
+
+test("admin_section_by_role", () => {
+  const admin = (who: MeDto) => {
+    const sections = navFor(who, TWO_TYPES, undefined, ADMIN_ENTRIES);
+    const section = sections.find((s) => s.id === "admin");
+    return section
+      ? { label: section.label, items: section.items.map((i) => [i.label, i.to, i.shortcut]) }
+      : null;
+  };
+  // Admins: every item, in the fixed order, after Structure, with their chords.
+  expect(admin(ADMIN)).toEqual({
+    label: "Administration",
+    items: [
+      ["Users", "/users", "g u"],
+      ["Appearance", "/appearance/themes", "g a"],
+      ["Plugins", "/plugins", "g l"],
+      ["Settings", "/settings", "g s"],
+      ["System", "/system", "g y"],
+    ],
+  });
+  expect(navFor(ADMIN, TWO_TYPES, undefined, ADMIN_ENTRIES).map((s) => s.id)).toEqual([
+    "overview",
+    "content",
+    "structure",
+    "admin",
+  ]);
+  // Editors, authors and contributors hold none of the capabilities: no section.
+  for (const who of [EDITOR, AUTHOR, CONTRIBUTOR]) expect(admin(who)).toBeNull();
+  // Each item by its own capability.
+  const ids = (caps: string[]) =>
+    navFor(me("odd", ["read_admin", ...caps]), [], undefined, ADMIN_ENTRIES)
+      .find((s) => s.id === "admin")
+      ?.items.map((i) => i.id) ?? [];
+  expect(ids(["manage_users"])).toEqual(["users"]);
+  expect(ids(["manage_themes"])).toEqual(["appearance"]);
+  expect(ids(["manage_plugins"])).toEqual(["plugins"]);
+  expect(ids(["manage_settings"])).toEqual(["settings"]);
+  expect(ids(["manage_system"])).toEqual(["system"]);
+  // Not without `read_admin`, whatever else the role holds.
+  expect(
+    navFor(me("odd", ["manage_users", "manage_system"]), [], undefined, ADMIN_ENTRIES).map(
+      (s) => s.id,
+    ),
+  ).toEqual(["overview"]);
+  // `g p` stays Posts.
+  const chords = navFor(ADMIN, TWO_TYPES, undefined, ADMIN_ENTRIES)
+    .flatMap((s) => s.items)
+    .map((i) => i.shortcut)
+    .filter((k) => k !== undefined);
+  expect(new Set(chords).size).toBe(chords.length);
 });

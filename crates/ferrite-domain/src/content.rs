@@ -15,6 +15,9 @@ string_enum!(
     }
 );
 
+/// The content type of media items (built in, like `post` and `page`).
+pub const MEDIA_KIND: &str = "media";
+
 string_enum!(
     /// The kind of a media item, from its `media.mime`: `image/…`, `video/…`, `audio/…`,
     /// and `document` for every other type ([`ContentQuery::media_kind`]).

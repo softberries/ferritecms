@@ -9,6 +9,7 @@
 // (`errors[].field` = `fields`, the path at the start of `detail`) maps onto the same
 // inputs (`serverFieldErrors`).
 
+import { uuidOf } from "@/lib/values";
 import { ApiError } from "@/api/problem";
 import type { SchemaFieldDefDto } from "@/api/schema";
 import type { ContentTypeDto } from "@/api/types";
@@ -27,29 +28,12 @@ export const MAX_ROWS = 200;
 /** How deep repeaters nest (a repeater inside a repeater, no further). */
 export const MAX_REPEATER_DEPTH = 2;
 
-/** The forms `Uuid::parse_str` takes: hyphenated, simple, braced and URN. */
-const UUID_FORMS = [
-  /^([0-9a-f]{8})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{12})$/i,
-  /^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/i,
-  /^\{([0-9a-f]{8})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{12})\}$/i,
-  /^urn:uuid:([0-9a-f]{8})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{12})$/i,
-];
 /** RFC 3339 date-time (chrono's `parse_from_rfc3339`: `T`, `t` or a space between). */
 const RFC3339 =
   /^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(\.\d+)?([Zz]|[+-](\d{2}):(\d{2}))$/;
 
 export const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
-
-/** `v` as a lower-case hyphenated UUID when core would read it as one, else `null`. */
-export function uuidOf(v: unknown): string | null {
-  if (typeof v !== "string") return null;
-  for (const re of UUID_FORMS) {
-    const m = re.exec(v);
-    if (m) return m.slice(1).join("-").toLowerCase();
-  }
-  return null;
-}
 
 export const isUuid = (v: unknown): v is string => uuidOf(v) !== null;
 
@@ -166,18 +150,6 @@ export function isRfc3339(s: string): boolean {
   if (mo < 1 || mo > 12 || d < 1 || h > 23 || mi > 59 || se > 60) return false;
   if (oh > 23 || om > 59) return false;
   return d <= new Date(Date.UTC(y, mo, 0)).getUTCDate();
-}
-
-/**
- * A number as typed: only `.` separates decimals. A comma (decimal or thousands) is never
- * guessed at: the text is kept and refused with its own message.
- */
-export function parseNumber(text: string): number | string | null {
-  const s = text.trim();
-  if (s === "") return null;
-  if (!/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(s)) return text;
-  const n = Number(s);
-  return Number.isFinite(n) ? n : text;
 }
 
 /** More fields than this go into a card under the body on wide screens. */
@@ -319,4 +291,15 @@ export function serverFieldErrors(error: unknown): Record<string, string> {
     }
   }
   return out;
+}
+
+/**
+ * The types a relation searches: the sidebar's (`nav`, in its order), only those the
+ * field lists when it lists any (`targets`; empty or absent: any type).
+ */
+export function searchTypes<T extends { name: string }>(
+  nav: readonly T[],
+  targets: readonly string[] | undefined,
+): T[] {
+  return targets && targets.length > 0 ? nav.filter((ty) => targets.includes(ty.name)) : [...nav];
 }

@@ -6,6 +6,7 @@
 // Test-support crate: failing fast with a message is the desired behaviour.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+pub mod audit;
 pub mod auth;
 pub mod autosave;
 pub mod batch;
@@ -34,6 +35,7 @@ pub mod site;
 pub mod taxonomy;
 pub mod tx;
 pub mod user;
+pub mod user_filters;
 
 pub use counting::CountingStore;
 pub use harness::{PgFixture, TestDb, migration_dirs, migration_files, pg_store, sqlite_store};

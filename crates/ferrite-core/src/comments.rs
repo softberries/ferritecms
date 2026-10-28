@@ -222,8 +222,11 @@ pub struct CommentThread {
     /// Top-level threads per page (`comments.per_page`).
     pub per_page: u32,
     /// The post's permalink for page `page - 1` ([`comment_page_url`]); `None` on page 1.
+    /// No fragment: the comments section's anchor is the theme's markup, so the theme
+    /// appends it (the `blog` theme links to `…#comments`, M2b-2 R4).
     pub prev_url: Option<String>,
-    /// The post's permalink for page `page + 1`; `None` on the last page.
+    /// The post's permalink for page `page + 1`; `None` on the last page. No fragment,
+    /// as for `prev_url`.
     pub next_url: Option<String>,
 }
 
@@ -681,19 +684,19 @@ impl CommentService {
     }
 
     /// The items of `comments` (at most [`MAX_ID_FILTER`](ferrite_store::MAX_ID_FILTER)
-    /// distinct ones, as a page holds), read outside any `Tx`: one `get_many`, then the
+    /// distinct ones, as a page holds), read through `repos`: one `get_many`, then the
     /// paths of those with a public page now. An item without a public page keeps its
     /// title only for an `actor` who may read content ([`require_read`]`(Content)`): a
     /// `comments:read` token without `content:read` sees its id, type and status only.
     async fn items_of(
         &self,
+        repos: &dyn Repos,
         actor: &Actor,
         comments: &[Comment],
     ) -> Result<HashMap<ContentId, CommentItem>, CoreError> {
         if comments.is_empty() {
             return Ok(HashMap::new());
         }
-        let repos = self.store.read();
         let mut ids: Vec<ContentId> = comments.iter().map(|c| c.item_id).collect();
         ids.sort_unstable();
         ids.dedup();
@@ -740,7 +743,7 @@ impl CommentService {
         actor: &Actor,
         comments: Vec<Comment>,
     ) -> Result<Vec<QueuedComment>, CoreError> {
-        let items = self.items_of(actor, &comments).await?;
+        let items = self.items_of(self.store.read(), actor, &comments).await?;
         comments
             .into_iter()
             .map(|comment| queued(comment, &items))
@@ -749,7 +752,7 @@ impl CommentService {
 
     /// Sets comment `id`'s status (`moderate_comments`, then `comments:write`) and
     /// invalidates its item's page, in one `Tx`; returns the comment with its item (read
-    /// after the commit). Missing is `NotFound`. Not audited (P14).
+    /// in the same `Tx`, so a failed read changes nothing). Missing is `NotFound`. Not audited (P14).
     pub async fn moderate(
         &self,
         actor: &Actor,
@@ -767,12 +770,14 @@ impl CommentService {
             tx.events()
                 .append(&events::invalidate([post_key(comment.item_id)]))
                 .await?;
-            Ok(comment)
+            // Read in the `Tx`: a failure here rolls the change back.
+            let items = self
+                .items_of(tx.as_ref(), actor, std::slice::from_ref(&comment))
+                .await?;
+            queued(comment, &items)
         }
         .await;
-        let comment = finish(tx, done).await?;
-        let items = self.items_of(actor, std::slice::from_ref(&comment)).await?;
-        queued(comment, &items)
+        finish(tx, done).await
     }
 
     /// Deletes comment `id` and its replies (`moderate_comments`, then

@@ -11,8 +11,9 @@ import type { JSHandle, Locator, Page } from "@playwright/test";
 import { ContentApi, type Media } from "./support/content-api";
 import { exe, pdf, png, svg, type FixtureFile } from "./support/files";
 import { mod } from "./support/keys";
-import { AXE_TAGS, expect, test } from "./support/fixtures";
-import { SCHEMES, VIEWPORTS, screenFile } from "./support/snap";
+import { AXE_TAGS, TOAST_IN_TRANSITION, expect, test } from "./support/fixtures";
+import { SNAP_PROJECT } from "./support/projects";
+import { SCHEMES, VIEWPORTS, screenFile, settleAnimations } from "./support/snap";
 import { uid } from "./support/uid";
 
 /** A word the title search can find on its own. */
@@ -82,11 +83,11 @@ async function dropFiles(page: Page, files: FixtureFile[]): Promise<void> {
 
 /**
  * `snap` and `expectAccessible` wait for the network to go idle, which a held upload
- * never does: these take the screenshots (SQLite project only, as `snap`) and run axe in
+ * never does: these take the screenshots (`chromium-sqlite` only, as `snap`) and run axe in
  * both schemes without that wait.
  */
-async function snapHeld(page: Page, name: string, backend: string): Promise<void> {
-  if (backend !== "sqlite") return;
+async function snapHeld(page: Page, name: string, siteKey: string): Promise<void> {
+  if (siteKey !== SNAP_PROJECT) return;
   for (const scheme of SCHEMES) {
     await page.emulateMedia({ colorScheme: scheme });
     for (const v of ["desktop", "mobile"] as const) {
@@ -106,8 +107,11 @@ async function snapHeld(page: Page, name: string, backend: string): Promise<void
 async function axeHeld(page: Page): Promise<void> {
   for (const scheme of SCHEMES) {
     await page.emulateMedia({ colorScheme: scheme });
-    await page.waitForTimeout(300);
-    const result = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
+    await settleAnimations(page);
+    const result = await new AxeBuilder({ page })
+      .withTags(AXE_TAGS)
+      .exclude(TOAST_IN_TRANSITION)
+      .analyze();
     const violations = result.violations.map((v) => ({
       id: v.id,
       targets: v.nodes.map((n) => n.target.join(" ")),
@@ -123,8 +127,8 @@ async function byName(api: ContentApi, name: string): Promise<Media[]> {
   return items.filter((m) => m.original_name === name);
 }
 
-test("upload_by_drop_shows_progress_and_variants", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "author");
+test("upload_by_drop_shows_progress_and_variants", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "author");
   const name = `${uid("drop")}.png`;
   try {
     const page = await as("author");
@@ -164,9 +168,10 @@ test("upload_by_drop_shows_progress_and_variants", async ({ as, site, backend })
   }
 });
 
-test("upload_retry_after_network_drop_creates_one_item", async ({ as, site, backend, guard }) => {
-  const api = await ContentApi.as(backend, site.url, "author");
+test("upload_retry_after_network_drop_creates_one_item", async ({ as, site, siteKey, guard }) => {
+  const api = await ContentApi.as(siteKey, site.url, "author");
   const name = `${uid("retry")}.png`;
+  const file = png(name, 64, 48);
   // The dropped response is a failed request in the browser's log.
   guard.allowFailedResource(/\/api\/v1\/media$/);
   guard.allow(/net::ERR_CONNECTION_RESET/);
@@ -180,20 +185,25 @@ test("upload_retry_after_network_drop_creates_one_item", async ({ as, site, back
       if (req.method() !== "POST") return route.fallback();
       keys.push((await req.headerValue("Idempotency-Key")) ?? "");
       if (first) {
-        // The server stores the upload, but its answer never reaches the page.
+        // The server stores the upload, but its answer never reaches the page. The same
+        // upload goes out from the test with the page's key and session (not
+        // `route.fetch()`: WebKit gives an intercepted request no file body).
         first = false;
-        const res = await route.fetch();
+        const res = await page.request.post("/api/v1/media", {
+          headers: {
+            Origin: site.url,
+            "X-CSRF-Token": (await req.headerValue("X-CSRF-Token")) ?? "",
+            "Idempotency-Key": keys[0] ?? "",
+          },
+          multipart: { file: { name, mimeType: "image/png", buffer: file.buffer } },
+        });
         expect(res.status()).toBe(201);
         await route.abort("connectionreset");
         return;
       }
       await route.continue();
     });
-    await fileInput(page).setInputFiles({
-      name,
-      mimeType: "image/png",
-      buffer: png(name, 64, 48).buffer,
-    });
+    await fileInput(page).setInputFiles({ name, mimeType: "image/png", buffer: file.buffer });
     const row = trayRow(page, name);
     // It retries by itself after 2 s with the same key, and the server answers with the
     // stored upload.
@@ -208,8 +218,8 @@ test("upload_retry_after_network_drop_creates_one_item", async ({ as, site, back
   }
 });
 
-test("rejected_type_shows_on_its_row", async ({ as, site, backend, guard, snap }) => {
-  const api = await ContentApi.as(backend, site.url, "author");
+test("rejected_type_shows_on_its_row", async ({ as, site, siteKey, guard, snap }) => {
+  const api = await ContentApi.as(siteKey, site.url, "author");
   const bad = `${uid("bad")}.exe`;
   const good = `${uid("good")}.png`;
   guard.allowFailedResource(/\/api\/v1\/media$/);
@@ -247,9 +257,9 @@ test("rejected_type_shows_on_its_row", async ({ as, site, backend, guard, snap }
   }
 });
 
-test("leaving_during_upload_asks", async ({ as, site, backend, guard }) => {
+test("leaving_during_upload_asks", async ({ as, site, siteKey, guard }) => {
   test.setTimeout(120_000);
-  const api = await ContentApi.as(backend, site.url, "author");
+  const api = await ContentApi.as(siteKey, site.url, "author");
   const name = `${uid("leave")}.png`;
   guard.allowFailedResource(/\/api\/v1\/media$/);
   try {
@@ -267,7 +277,7 @@ test("leaving_during_upload_asks", async ({ as, site, backend, guard }) => {
       buffer: png(name, 1200, 800).buffer,
     });
     await expect(trayRow(page, name)).toHaveAttribute("data-state", "uploading");
-    await snapHeld(page, "media-tray-uploading", backend);
+    await snapHeld(page, "media-tray-uploading", siteKey);
     await axeHeld(page);
 
     const dialog = page.locator("[data-slot=upload-leave-dialog]");
@@ -275,7 +285,7 @@ test("leaving_during_upload_asks", async ({ as, site, backend, guard }) => {
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText("Uploads are still running");
     await axeHeld(page);
-    await snapHeld(page, "media-leave-dialog", backend);
+    await snapHeld(page, "media-leave-dialog", siteKey);
     await dialog.getByRole("button", { name: "Stay" }).click();
     await expect(dialog).toHaveCount(0);
     await expect(page).toHaveURL(/\/admin\/media$/);
@@ -285,7 +295,7 @@ test("leaving_during_upload_asks", async ({ as, site, backend, guard }) => {
     await page.locator("body").press("g");
     await page.locator("body").press("d");
     await expect(dialog).toBeVisible();
-    await dialog.getByRole("button", { name: "Leave and cancel" }).click();
+    await dialog.getByRole("button", { name: "Leave and cancel uploads", exact: true }).click();
     await expect(page).toHaveURL(/\/admin\/?$/);
     expect(await byName(api, name)).toHaveLength(0);
   } finally {
@@ -294,8 +304,59 @@ test("leaving_during_upload_asks", async ({ as, site, backend, guard }) => {
   }
 });
 
-test("edit_alt_text", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "author");
+test("forbidden_keeps_running_uploads", async ({ as, site, siteKey, guard }) => {
+  test.setTimeout(120_000);
+  const api = await ContentApi.as(siteKey, site.url, "author");
+  const name = `${uid("held")}.png`;
+  guard.allowFailedResource(/\/api\/v1\/media(\?|$)/);
+  try {
+    const page = await as("author");
+    await openLibrary(page);
+    await page.route("**/api/v1/media", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      await new Promise((r) => setTimeout(r, 60_000));
+      await route.abort().catch(() => {});
+    });
+    await fileInput(page).setInputFiles({
+      name,
+      mimeType: "image/png",
+      buffer: png(name, 600, 400).buffer,
+    });
+    await expect(trayRow(page, name)).toHaveAttribute("data-state", "uploading");
+    // The list is refused now (a changed role, say): the forbidden state replaces the
+    // library, but the running upload keeps its tray and its leave guard.
+    await page.route(
+      (url) => url.pathname === "/api/v1/media",
+      (route) =>
+        route.request().method() === "GET"
+          ? route.fulfill({
+              status: 403,
+              contentType: "application/problem+json",
+              body: JSON.stringify({
+                type: "https://ferritecms.dev/problems/forbidden",
+                title: "Forbidden",
+                status: 403,
+                detail: "Not allowed.",
+              }),
+            })
+          : route.fallback(),
+    );
+    await searchBox(page).fill(`nothing${uid("q").slice(-6)}`);
+    await expect(page.getByRole("heading", { name: /access/i })).toBeVisible();
+    await expect(trayRow(page, name)).toHaveAttribute("data-state", "uploading");
+    const dialog = page.locator("[data-slot=upload-leave-dialog]");
+    await page.getByRole("link", { name: "Dashboard" }).first().click();
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Stay" }).click();
+    await expect(page).toHaveURL(/\/admin\/media/);
+  } finally {
+    for (const m of await byName(api, name)) await api.purgeMedia(m.id);
+    await api.dispose();
+  }
+});
+
+test("edit_alt_text", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "author");
   const media = await api.upload(png(`${uid("alt")}.png`, 120, 80), { title: `Alt ${uid()}` });
   try {
     const page = await as("author");
@@ -344,9 +405,9 @@ test("edit_alt_text", async ({ as, site, backend }) => {
   }
 });
 
-test("search_and_kind_filters", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "author");
-  const other = await ContentApi.as(backend, site.url, "author2");
+test("search_and_kind_filters", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "author");
+  const other = await ContentApi.as(siteKey, site.url, "author2");
   const w = word();
   const image = await api.upload(png(`${uid("k")}.png`, 90, 60), { title: `${w} harbour` });
   const doc = await api.upload(pdf(`${uid("k")}.pdf`), { title: `${w} report` });
@@ -400,8 +461,8 @@ test("search_and_kind_filters", async ({ as, site, backend }) => {
   }
 });
 
-test("trash_with_undo", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "author");
+test("trash_with_undo", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "author");
   const w = word();
   const a = await api.upload(png(`${uid("t")}.png`, 90, 60), { title: `${w} one` });
   const b = await api.upload(png(`${uid("t")}.png`, 90, 60), { title: `${w} two` });
@@ -409,6 +470,11 @@ test("trash_with_undo", async ({ as, site, backend }) => {
     const page = await as("author");
     await openLibrary(page, `?q=${w}`);
     await expect(grid(page).locator("[data-tile]")).toHaveCount(2);
+    // Hidden (no hover, focus or selection), the check takes no clicks: the tile does.
+    await page.mouse.move(0, 0);
+    const check = tile(page, `${w} one`).locator("[data-slot=tile-check]");
+    await expect(check).toHaveCSS("opacity", "0");
+    await expect(check).toHaveCSS("pointer-events", "none");
     // By pointer, then by keyboard (Space on the focused option), as assistive tech sees it.
     await pick(page, `${w} one`);
     const two = tile(page, `${w} two`);
@@ -438,8 +504,8 @@ test("trash_with_undo", async ({ as, site, backend }) => {
   }
 });
 
-test("trash_view_restore_and_delete", async ({ as, site, backend, snap, expectAccessible }) => {
-  const api = await ContentApi.as(backend, site.url, "author");
+test("trash_view_restore_and_delete", async ({ as, site, siteKey, snap, expectAccessible }) => {
+  const api = await ContentApi.as(siteKey, site.url, "author");
   const w = word();
   const keep = await api.upload(png(`${uid("tv")}.png`, 90, 60), { title: `${w} keep` });
   const drop = await api.upload(pdf(`${uid("tv")}.pdf`), { title: `${w} drop` });
@@ -466,6 +532,10 @@ test("trash_view_restore_and_delete", async ({ as, site, backend, snap, expectAc
     await expect(tile(page, `${w} keep`)).toHaveCount(0);
     expect((await api.getMedia(keep.id)).status).toBe("published");
 
+    // The restore's toast is gone before the next screen is taken (the pointer off the
+    // toaster, which pauses its timer on hover).
+    await page.mouse.move(0, 0);
+    await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 15_000 });
     await tile(page, `${w} drop`).click();
     await detail(page).getByRole("button", { name: "Delete permanently" }).click();
     const confirm = page.getByRole("alertdialog");
@@ -473,7 +543,8 @@ test("trash_view_restore_and_delete", async ({ as, site, backend, snap, expectAc
     await snap(page, "media-delete-confirm");
     await confirm.getByRole("button", { name: "Delete permanently" }).click();
     await expect(tile(page, `${w} drop`)).toHaveCount(0);
-    expect(await api.mediaStatus(drop.id)).toBe(404);
+    // The tile leaves before the server has answered.
+    await expect.poll(() => api.mediaStatus(drop.id)).toBe(404);
   } finally {
     await api.purgeMedia(keep.id);
     await api.purgeMedia(drop.id);
@@ -481,8 +552,8 @@ test("trash_view_restore_and_delete", async ({ as, site, backend, snap, expectAc
   }
 });
 
-test("hostile_file_name_renders_as_text", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "author");
+test("hostile_file_name_renders_as_text", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "author");
   const hostileName = `<img src=x onerror=alert(1)>${uid("h")}.png`;
   const hostileTitle = `<script>alert("t")</script><b>${uid("h")}</b>`;
   const media = await api.upload(png(hostileName, 90, 60), { title: hostileTitle });
@@ -507,8 +578,8 @@ test("hostile_file_name_renders_as_text", async ({ as, site, backend }) => {
   }
 });
 
-test("contributor_sees_no_upload", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "author");
+test("contributor_sees_no_upload", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "author");
   const w = word();
   const media = await api.upload(png(`${uid("c")}.png`, 90, 60), { title: `${w} public` });
   try {
@@ -558,11 +629,11 @@ test("palette_upload_opens_the_chooser", async ({ as }) => {
   await expect(page).toHaveURL(/\/admin\/media$/);
 });
 
-test("screens", async ({ as, site, backend, guard, snap, expectAccessible }) => {
+test("screens", async ({ as, site, siteKey, guard, snap, expectAccessible }) => {
   test.setTimeout(240_000);
   // The stubbed failures are logged by the browser.
   guard.allowFailedResource(/\/api\/v1\/media/);
-  const api = await ContentApi.as(backend, site.url, "author");
+  const api = await ContentApi.as(siteKey, site.url, "author");
   const w = word();
   const created: Media[] = [];
   try {
@@ -632,7 +703,13 @@ test("screens", async ({ as, site, backend, guard, snap, expectAccessible }) => 
     await snap(page, "media-detail-image");
     await sheetToEnd(page);
     await expect(detail(page).getByRole("button", { name: "Move to trash" })).toBeInViewport();
-    await snap(page, "media-detail-image-end");
+    // At the end at every width and scheme (a resize can move the sheet's scroll).
+    await snap(page, "media-detail-image-end", {
+      prepare: async () => {
+        await sheetToEnd(page);
+        await expect(detail(page).getByRole("button", { name: "Move to trash" })).toBeInViewport();
+      },
+    });
 
     await openLibrary(page, `?id=${doc.id}`);
     await expect(detail(page).getByRole("link", { name: "Download" })).toBeVisible();
@@ -706,6 +783,9 @@ test("screens", async ({ as, site, backend, guard, snap, expectAccessible }) => 
     await page.route(list, (route) => route.fulfill(problem(403, "forbidden", "Not allowed.")));
     await page.goto("/admin/media");
     await expect(page.getByRole("heading", { name: /permission|access|allowed/i })).toBeVisible();
+    // The state alone, as on the other screens: no header actions or filters.
+    await expect(page.getByRole("button", { name: "Upload" })).toHaveCount(0);
+    await expect(searchBox(page)).toHaveCount(0);
     await expectAccessible(page);
     await snap(page, "media-forbidden");
 
@@ -717,7 +797,7 @@ test("screens", async ({ as, site, backend, guard, snap, expectAccessible }) => 
     await page.goto("/admin/media");
     await expect(page.locator("[aria-busy=true]")).toHaveCount(1);
     await axeHeld(page);
-    await snapHeld(page, "media-loading", backend);
+    await snapHeld(page, "media-loading", siteKey);
     await page.unrouteAll({ behavior: "ignoreErrors" });
   } finally {
     for (const m of created) await api.purgeMedia(m.id);

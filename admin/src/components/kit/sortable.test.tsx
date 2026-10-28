@@ -203,6 +203,40 @@ describe("sortable", () => {
     ]);
   });
 
+  it("sortable_tree_no_op_drop_announces_no_move", async () => {
+    const nodes: TreeNode<string>[] = [
+      { id: "n1", parentId: null, data: "Home" },
+      { id: "n2", parentId: null, data: "About" },
+      { id: "n3", parentId: null, data: "Blog" },
+    ];
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SortableTree
+        nodes={nodes}
+        label={(d) => d}
+        render={(n) => <span>{n.data}</span>}
+        onChange={onChange}
+        maxDepth={2}
+      />,
+    );
+    screen.getByRole("button", { name: "Reorder About" }).focus();
+    await user.keyboard("[Space]");
+    await tick();
+    // Down and back up: dropped on its own place.
+    await user.keyboard("[ArrowDown]");
+    await tick();
+    await user.keyboard("[ArrowUp]");
+    await tick();
+    await user.keyboard("[Space]");
+    await tick();
+    expect(onChange).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(document.body).toHaveTextContent(/About was dropped where it was, position 2 of 3/);
+    });
+    expect(document.body).not.toHaveTextContent(/About is now at the top level/);
+  });
+
   it("sortable_tree_pointer_indent_holds_while_the_pointer_rests", async () => {
     // CI run 40404431115: the dragged row is drawn at its projected level by its own
     // inline margin, which moves its rect; dnd-kit takes that layout shift off its drag

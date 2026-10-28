@@ -488,7 +488,7 @@ pub async fn delete_media(
     security(("session" = []), ("bearer" = [])),
     params(("id" = Uuid, Path), ("If-Match" = String, Header, description = "`\"<version>\"`")),
     responses(
-        (status = 200, description = "Restored from trash as published, its `published_at` kept, so its files are served again (`ETag`)", body = MediaDto),
+        (status = 200, description = "Restored from trash (`ETag`): published again, its `published_at` kept and its files served, unless it was a draft when it was trashed or the caller may not publish it; then it is a draft (`status` says which)", body = MediaDto),
         (status = 400, description = "`malformed-header` (`If-Match`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (capability or `media:write`; contributors never restore), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),

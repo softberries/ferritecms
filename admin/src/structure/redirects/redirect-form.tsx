@@ -42,7 +42,7 @@ import {
 import { staleGuard } from "@/lib/stale-guard";
 import { problemText } from "../taxonomies/terms-model";
 import { without } from "../shared";
-import { FormField } from "../types/form-field";
+import { FormField } from "@/components/kit/form-field";
 import { REDIRECT_CODES, type RedirectCode as Code, isRedirectCode } from "./codes";
 
 /** Longest source or target core accepts, in characters. */

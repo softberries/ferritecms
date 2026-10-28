@@ -643,8 +643,9 @@ pub fn theme_schema(m: &ThemeManifest) -> SettingsSchema {
 }
 
 /// The `themes.manifest` column: the M1.5 object plus `images` and `settings` (the
-/// settings schema, an array of definitions; pre-flight F10).
-fn theme_row_manifest(m: &ThemeManifest) -> Value {
+/// settings schema, an array of definitions; pre-flight F10) and `homepage` (M2b-3).
+/// `GET /themes` describes an embedded theme from the same object.
+pub fn theme_row_manifest(m: &ThemeManifest) -> Value {
     let images: Map<String, Value> = m
         .images
         .iter()
@@ -660,6 +661,7 @@ fn theme_row_manifest(m: &ThemeManifest) -> Value {
         "version": m.version.to_string(),
         "author": m.author,
         "license": m.license,
+        "homepage": m.homepage,
         "description": m.description,
         "menus": m.menus,
         "images": images,

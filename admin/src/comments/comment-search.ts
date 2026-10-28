@@ -4,11 +4,11 @@
 // An invalid member is dropped, never an error: a hand-edited or stale link still opens
 // the queue.
 
+import { COMMENT_STATUSES, type CommentStatus } from "@/api/comments";
 import type { CommentFilters } from "@/api/keys";
 import { z } from "@/lib/zod";
 
-export const COMMENT_STATUSES = ["pending", "approved", "spam", "trash"] as const;
-export type CommentStatus = (typeof COMMENT_STATUSES)[number];
+export { COMMENT_STATUSES, type CommentStatus };
 
 /** Comments per page of the queue (Global Constraints: lists page by 50). */
 export const COMMENT_PAGE_SIZE = 50;

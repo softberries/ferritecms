@@ -72,7 +72,7 @@ use ferrite_domain::{NodeId, Timestamp};
 use ferrite_http::{
     AppParts, AppState, FLUSH_EVERY, HttpConfig, LoadSummary, LoggedIn, PluginReloader,
     SERVED_FLUSH_EVERY, ServedBuffer, SharedFailures, StoreHostServices,
-    api::{ApiParts, ApiState, NodeInfo},
+    api::{ApiMail, ApiParts, ApiState, NodeInfo},
     app::hits::{HIT_FLUSH_EVERY, HitCounter},
     build_site,
     extensions::Installer,
@@ -433,7 +433,7 @@ async fn boot(
     // One auth service for the API and the public site (previews, logged-in requests).
     let auth = Arc::new(
         AuthService::new(store.clone(), site_key.clone())
-            .with_issuer_name(config.site.title.clone()),
+            .with_site_title(config.site.title.clone()),
     );
     // `request.served` events of this node's page responses (P21).
     let served = Arc::new(ServedBuffer::new(store.clone(), host.clone()));
@@ -515,7 +515,13 @@ async fn boot(
             media_service: media_service.clone(),
             uploader,
             max_upload,
-            mailer: mail.clone(),
+            mail: mail
+                .as_ref()
+                .zip(config.mail.as_ref())
+                .map(|(queue, m)| ApiMail {
+                    queue: queue.clone(),
+                    from: m.from.clone(),
+                }),
             site_url: state.config.site_url.clone(),
             site_title: config.site.title.clone(),
         })

@@ -1,0 +1,11 @@
+{
+  "measured_at": "3209291",
+  "limits": {
+    "entry": 108544,
+    "entry_preloads": 262144,
+    "css": 33792,
+    "editor": 218112,
+    "chart": 108544,
+    "largest_lazy": 31744
+  }
+}

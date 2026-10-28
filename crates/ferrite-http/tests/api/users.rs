@@ -581,9 +581,11 @@ async fn delete_with_reassign_over_http(api: Api) -> Api {
 
     // Content without a reassign target is refused; a malformed or unknown target too.
     let path = user_path(al.id);
-    b.send(&api, Method::DELETE, &path, None, None)
+    let p = b
+        .send(&api, Method::DELETE, &path, None, None)
         .await
         .assert_problem(422, "validation");
+    assert_eq!(p["errors"][0]["field"], "reassign", "{p}");
     b.send(
         &api,
         Method::DELETE,
@@ -593,15 +595,17 @@ async fn delete_with_reassign_over_http(api: Api) -> Api {
     )
     .await
     .assert_problem(400, "malformed-query");
-    b.send(
-        &api,
-        Method::DELETE,
-        &format!("{path}?reassign={}", Uuid::now_v7()),
-        None,
-        None,
-    )
-    .await
-    .assert_problem(422, "validation");
+    let p = b
+        .send(
+            &api,
+            Method::DELETE,
+            &format!("{path}?reassign={}", Uuid::now_v7()),
+            None,
+            None,
+        )
+        .await
+        .assert_problem(422, "validation");
+    assert_eq!(p["errors"][0]["field"], "reassign", "{p}");
     b.send(
         &api,
         Method::DELETE,

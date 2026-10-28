@@ -11,6 +11,9 @@
 //   row (registered with the shortcuts module, so `?` lists them).
 // - Reply opens the inline reply box (`reply-box.tsx`); on a pending comment it is
 //   "Approve and reply". Only a public post takes comments, so Reply shows only there.
+//
+// A row is `queue-row.tsx` (what it shares with the screen: `queue-row-env.ts`); the
+// tabs, empty state, failure report and delete confirm are `queue-parts.tsx`.
 
 import {
   keepPreviousData,
@@ -21,22 +24,9 @@ import {
   useQueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
-import {
-  CheckIcon,
-  CircleAlertIcon,
-  InboxIcon,
-  MessageSquareReplyIcon,
-  RotateCcwIcon,
-  ShieldAlertIcon,
-  ShieldCheckIcon,
-  Trash2Icon,
-  UndoIcon,
-  XCircleIcon,
-  XIcon,
-  type LucideIcon,
-} from "lucide-react";
-import { createContext, use, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { XIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { type CommentDto, commentCountsQuery, listComments } from "@/api/comments";
@@ -46,38 +36,21 @@ import type { SchemaCommentCountsDto, SchemaCommentList } from "@/api/schema";
 import { DataTable } from "@/components/kit/data-table";
 import { type DataTableColumn, dataTableColumns } from "@/components/kit/data-table-features";
 import type { RowSelectionState } from "@/components/kit/data-table-features";
-import { EmptyState } from "@/components/kit/empty-state";
 import { ErrorState } from "@/components/kit/error-state";
 import { PageHeader } from "@/components/kit/page-header";
-import { ScrollFade } from "@/components/kit/scroll-fade";
-import { TAB_LIST, tabCountClass, tabLinkClass } from "@/components/kit/tab-styles";
-import {
-  AlertDialog,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { REDIRECTING } from "@/content/bulk";
 import { SelectionBar, type SelectionAction } from "@/content/bulk-bar";
 import { contentTargetQuery } from "@/content/find-item";
 import { UNDO_TOAST_MS } from "@/content/list-actions";
 import { editPath } from "@/content/list-columns";
-import { DESTRUCTIVE } from "@/lib/destructive";
 import { uiLocale } from "@/lib/locale";
 import { useShortcut } from "@/lib/shortcuts";
-import { CommentRow } from "./comment-row";
 import {
-  COMMENT_STATUSES,
   type CommentSearch,
   type CommentStatus,
   commentQuery,
-  parseCommentSearch,
   statusOfSearch,
-  withStatus,
 } from "./comment-search";
 import {
   type CommentAction,
@@ -88,7 +61,9 @@ import {
   runModeration,
   statusOf,
 } from "./moderate";
-import { ReplyBox } from "./reply-box";
+import { DeleteDialog, FailurePanel, QueueEmpty, type Report, StatusTabs } from "./queue-parts";
+import { QueueRow } from "./queue-row";
+import { DESTRUCTIVE_ACTIONS, ICONS, type RowEnv, RowEnvContext } from "./queue-row-env";
 
 /** Approved comments read per item to name the comments that replies answer (the API's
  * page maximum); an older parent reads "Reply to another comment". */
@@ -99,27 +74,9 @@ function listData(results: UseQueryResult<SchemaCommentList>[]) {
   return results.map((r) => r.data);
 }
 
-const ICONS: Record<CommentAction, LucideIcon> = {
-  approve: CheckIcon,
-  unapprove: UndoIcon,
-  notSpam: ShieldCheckIcon,
-  restore: RotateCcwIcon,
-  spam: ShieldAlertIcon,
-  trash: Trash2Icon,
-  reply: MessageSquareReplyIcon,
-  delete: XCircleIcon,
-};
-const DESTRUCTIVE_ACTIONS = new Set<CommentAction>(["trash", "delete"]);
-
 export interface CommentsQueueProps {
   search: CommentSearch;
   setSearch: (patch: Partial<Record<keyof CommentSearch, unknown>>) => void;
-}
-
-/** What a run of the last action failed on, listed until dismissed. */
-interface Report {
-  total: number;
-  failed: { id: string; name: string; error: ApiError }[];
 }
 
 export function CommentsQueue({ search, setSearch }: CommentsQueueProps) {
@@ -581,265 +538,5 @@ export function CommentsQueue({ search, setSearch }: CommentsQueueProps) {
         }}
       />
     </div>
-  );
-}
-
-/** What a row of the queue reads from the screen. */
-interface RowEnv {
-  /** Comment id → author name (for "Reply to …"). */
-  names: ReadonlyMap<string, string>;
-  busy: boolean;
-  /** The comment whose reply box is open. */
-  replying: string | null;
-  /** Rows offer "Only comments on this item" (not while the queue is narrowed). */
-  filterable: boolean;
-  act: (action: CommentAction, targets: readonly CommentDto[]) => void;
-  filter: (item: string) => void;
-  closeReply: (id: string) => void;
-}
-
-const RowEnvContext = createContext<RowEnv | null>(null);
-
-/** One row: the comment, its actions and, while open, its reply box. */
-function QueueRow({ comment }: { comment: CommentDto }) {
-  const env = use(RowEnvContext);
-  if (!env) return null;
-  const replying = env.replying === comment.id;
-  return (
-    <CommentRow
-      comment={comment}
-      parentName={comment.parent_id ? (env.names.get(comment.parent_id) ?? null) : null}
-      {...(env.filterable ? { onFilterItem: () => env.filter(comment.item_id) } : {})}
-      actions={
-        <RowActions
-          comment={comment}
-          disabled={env.busy}
-          replying={replying}
-          onAction={(action) => env.act(action, [comment])}
-        />
-      }
-      footer={
-        replying ? <ReplyBox comment={comment} onClose={() => env.closeReply(comment.id)} /> : null
-      }
-    />
-  );
-}
-
-/** A row's buttons, by its status (`actionsFor`). Reply only on a public post. */
-function RowActions({
-  comment,
-  disabled,
-  replying,
-  onAction,
-}: {
-  comment: CommentDto;
-  disabled: boolean;
-  replying: boolean;
-  onAction: (action: CommentAction) => void;
-}) {
-  const { t } = useTranslation("comments");
-  const status = comment.status as CommentStatus;
-  const replyable = comment.item.type === "post" && comment.item.permalink !== null;
-  const actions = actionsFor(status).filter((a) => a !== "reply" || replyable);
-  return (
-    <div
-      role="group"
-      aria-label={t("actions.label", { name: comment.author_name })}
-      className="-ml-2 flex flex-wrap items-center gap-1"
-    >
-      {actions.map((action) => {
-        const Icon = ICONS[action];
-        const label =
-          action === "reply" && status === "pending"
-            ? t("actions.approveReply")
-            : t(`actions.${action}`);
-        return (
-          <Button
-            key={action}
-            variant="ghost"
-            size="sm"
-            disabled={disabled || (action === "reply" && replying)}
-            aria-label={t("actions.on", { action: label, name: comment.author_name })}
-            data-action={action}
-            className={
-              DESTRUCTIVE_ACTIONS.has(action)
-                ? "text-destructive hover:text-destructive pointer-coarse:h-control"
-                : action === "approve"
-                  ? "text-success hover:text-success pointer-coarse:h-control"
-                  : "pointer-coarse:h-control"
-            }
-            onClick={() => onAction(action)}
-          >
-            <Icon data-icon="inline-start" />
-            {label}
-          </Button>
-        );
-      })}
-    </div>
-  );
-}
-
-/** Pending, Approved, Spam, Trash: links (each a URL), with their counts. */
-function StatusTabs({
-  search,
-  counts,
-}: {
-  search: CommentSearch;
-  counts: SchemaCommentCountsDto | undefined;
-}) {
-  const { t } = useTranslation("comments");
-  const current = statusOfSearch(search);
-  const number = new Intl.NumberFormat(uiLocale());
-  return (
-    <nav aria-label={t("tabs.label")}>
-      <ScrollFade activeSelector={`[data-tab="${current}"]`} activeKey={current}>
-        <ul className={TAB_LIST}>
-          {COMMENT_STATUSES.map((tab) => {
-            const active = tab === current;
-            const count = counts?.[tab];
-            return (
-              <li key={tab}>
-                <Link
-                  to="/comments"
-                  search={(prev: Record<string, unknown>) =>
-                    withStatus(parseCommentSearch(prev), tab)
-                  }
-                  activeOptions={{ exact: true, includeSearch: true }}
-                  aria-current={active ? "page" : undefined}
-                  data-tab={tab}
-                  className={tabLinkClass(active)}
-                >
-                  {t(`tabs.${tab}`)}
-                  {count !== undefined ? (
-                    <span data-slot="tab-count" className={tabCountClass(active)}>
-                      {number.format(count)}
-                    </span>
-                  ) : null}
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-      </ScrollFade>
-    </nav>
-  );
-}
-
-function QueueEmpty({
-  status,
-  filtered,
-  onClear,
-}: {
-  status: CommentStatus;
-  filtered: boolean;
-  onClear: () => void;
-}) {
-  const { t } = useTranslation("comments");
-  const icon = status === "trash" ? Trash2Icon : status === "spam" ? ShieldAlertIcon : InboxIcon;
-  return (
-    <EmptyState
-      icon={icon}
-      title={t(`empty.${status}.title`)}
-      body={filtered ? t("empty.filtered.body") : t(`empty.${status}.body`)}
-      action={
-        filtered ? (
-          <Button variant="outline" onClick={onClear}>
-            {t("empty.filtered.action")}
-          </Button>
-        ) : undefined
-      }
-      className="border-0"
-    />
-  );
-}
-
-/** The failures of the last run (a toast would vanish). */
-function FailurePanel({ report, onDismiss }: { report: Report; onDismiss: () => void }) {
-  const { t } = useTranslation("comments");
-  const reason = (error: ApiError): ReactNode => {
-    if (error.status === 0) return t("report.network");
-    if (error.slug === "not-found") return t("report.gone");
-    return error.problem.detail || error.problem.title;
-  };
-  return (
-    <section
-      role="alert"
-      aria-labelledby="comment-failures"
-      data-slot="failure-report"
-      className="flex gap-3 rounded-xl border border-destructive/40 bg-destructive/5 p-4"
-    >
-      <CircleAlertIcon className="mt-0.5 size-5 shrink-0 text-destructive" aria-hidden="true" />
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <h2 id="comment-failures" className="font-medium text-foreground">
-          {t("report.title", { count: report.failed.length, total: report.total })}
-        </h2>
-        <ul className="flex flex-col gap-1.5 text-sm">
-          {report.failed.map((f) => (
-            <li key={f.id} className="flex min-w-0 flex-wrap gap-x-2">
-              <span className="max-w-full truncate font-medium" title={f.name}>
-                {f.name}
-              </span>
-              <span className="text-muted-foreground">{reason(f.error)}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="pointer-coarse:size-control"
-        aria-label={t("report.dismiss")}
-        onClick={onDismiss}
-      >
-        <XIcon />
-      </Button>
-    </section>
-  );
-}
-
-/** Delete permanently: asks first, and says the replies go too (the server's rule). */
-function DeleteDialog({
-  targets,
-  onCancel,
-  onConfirm,
-}: {
-  targets: CommentDto[] | null;
-  onCancel: () => void;
-  onConfirm: (targets: CommentDto[]) => void;
-}) {
-  const { t } = useTranslation("comments");
-  // The last targets, so the dialog keeps its text while it closes.
-  const [shown, setShown] = useState<CommentDto[]>([]);
-  if (targets !== null && targets !== shown) setShown(targets);
-  const list = targets ?? shown;
-  const count = list.length;
-  return (
-    <AlertDialog
-      open={targets !== null && targets.length > 0}
-      onOpenChange={(open) => {
-        if (!open) onCancel();
-      }}
-    >
-      <AlertDialogContent data-slot="delete-dialog">
-        <AlertDialogHeader>
-          <AlertDialogTitle>{t("delete.title", { count })}</AlertDialogTitle>
-          <AlertDialogDescription className="break-words">
-            {t("delete.body", { count, name: list[0]?.author_name ?? "" })}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>{t("delete.cancel")}</AlertDialogCancel>
-          <Button
-            variant="destructive"
-            className={DESTRUCTIVE}
-            onClick={() => {
-              if (targets) onConfirm(targets);
-            }}
-          >
-            {t("delete.confirm", { count })}
-          </Button>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   );
 }

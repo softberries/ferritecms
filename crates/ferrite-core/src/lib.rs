@@ -36,13 +36,17 @@ pub use actor::{
     Access, Actor, Area, Capability, Scope, Scopes, can, can_edit, can_read, require, require_read,
     require_reader, role_can_edit,
 };
-pub use auth::{AuthService, Authenticated, IssuedSession, LoginAttempt, LoginOutcome, Via};
+pub use auth::{
+    AuthService, Authenticated, IssuedSession, LoginAttempt, LoginOutcome, SessionInfo, Via,
+};
 pub use content::{AdminQuery, AutosaveDraft, ContentDraft, ContentService, MAX_REVISIONS_LISTED};
 pub use error::{CoreError, RowError};
-pub use extensions::{EXTENSIONS_LOCK_WAIT, ExtensionAdmin, ExtensionService, MAX_FAILURE_BUCKETS};
+pub use extensions::{
+    EXTENSIONS_LOCK_WAIT, ExtensionAdmin, ExtensionService, MAX_FAILURE_BUCKETS, RetainedPluginData,
+};
 pub use media::{
     MAX_MEDIA_ALT, MAX_MEDIA_TITLE, MAX_ORIGINAL_NAME, MediaItem, MediaPatch, MediaQuery,
-    MediaService, NewUpload, check_file_name,
+    MediaService, NewUpload, TRASHED_FROM_META, check_file_name,
 };
 pub use menu::{MAX_MENU_ITEMS, MenuLocation, MenuService, menu_locations};
 pub use options::OptionService;
@@ -57,6 +61,6 @@ pub use system::SystemService;
 pub use taxonomy::TaxonomyService;
 pub use types::{ContentTypeService, MAX_TYPE_LABEL, MAX_TYPE_NAME, NewType, TypePatch};
 pub use users::{
-    MAX_DISPLAY_NAME, MAX_EMAIL, MAX_LOGIN, NewAccount, OperatorUsers, UserPatch, UserService,
-    is_bidi_control, normalize_display_name, normalize_email, normalize_login,
+    MAX_DISPLAY_NAME, MAX_EMAIL, MAX_LOGIN, MAX_USER_QUERY, NewAccount, OperatorUsers, UserPatch,
+    UserService, is_bidi_control, normalize_display_name, normalize_email, normalize_login,
 };

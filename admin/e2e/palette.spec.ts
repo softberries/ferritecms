@@ -4,8 +4,10 @@
 // arrive with Tasks 14–15, so opening a hit or "New post" is checked by its URL.
 
 import type { Page, Route } from "@playwright/test";
+import { ContentApi } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
 import { mod } from "./support/keys";
+import { uid } from "./support/uid";
 
 const palette = (page: Page) => page.getByRole("dialog", { name: "Command palette" });
 const input = (page: Page) => palette(page).getByRole("combobox");
@@ -23,6 +25,19 @@ const SEARCH_DEBOUNCE_MS = 150;
 async function openDashboard(page: Page): Promise<void> {
   await page.goto("/admin/");
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+}
+
+/**
+ * Waits until the editor a palette result opened is in place: the address changes before
+ * its route's chunks have loaded, and leaving then cancels them (in WebKit the next `goto`
+ * is interrupted and the cancelled import is logged).
+ */
+async function editorOpened(page: Page, url: string | RegExp): Promise<void> {
+  await expect(page).toHaveURL(url);
+  await expect(page.getByRole("textbox", { name: "Body" })).toHaveAttribute(
+    "contenteditable",
+    "true",
+  );
 }
 
 async function openPalette(page: Page): Promise<void> {
@@ -102,14 +117,20 @@ test("search_finds_seeded_post", async ({ as, site }) => {
   for (const url of searches) {
     expect(new URL(url).searchParams.get("limit")).toBe("8");
   }
-  const lastRound = searches.filter((u) => new URL(u).searchParams.get("q") === "WebAssembly");
-  expect(lastRound.map((u) => new URL(u).pathname).sort()).toEqual([
-    "/api/v1/content/page",
-    "/api/v1/content/post",
-  ]);
+  // Custom types that tests beside this one create are searched too, and one deleted
+  // meanwhile (a 404) makes the palette read the types and search again: the built-in
+  // types are both searched, media never.
+  const lastRound = new Set(
+    searches
+      .filter((u) => new URL(u).searchParams.get("q") === "WebAssembly")
+      .map((u) => new URL(u).pathname),
+  );
+  expect(lastRound).toContain("/api/v1/content/page");
+  expect(lastRound).toContain("/api/v1/content/post");
+  expect(lastRound).not.toContain("/api/v1/content/media");
 
   await hit.click();
-  await expect(page).toHaveURL(`${site.url}/admin/content/post/${id}`);
+  await editorOpened(page, `${site.url}/admin/content/post/${id}`);
   await expect(palette(page)).toBeHidden();
 
   // The opened item is now in Recent.
@@ -118,6 +139,48 @@ test("search_finds_seeded_post", async ({ as, site }) => {
   await expect(
     palette(page).getByRole("group", { name: "Recent" }).getByRole("option").first(),
   ).toContainText(SEEDED);
+});
+
+test("body_only_hit_shows_snippet", async ({ as, site, siteKey, snap, expectAccessible }) => {
+  // A hit the server matched in its text, not its title, says so and shows the start of
+  // its excerpt (plain text, at most 120 characters).
+  const api = await ContentApi.as(siteKey, site.url, "admin");
+  const word = `zq${uid("")
+    .replace(/[^a-z0-9]/g, "")
+    .slice(-8)}`;
+  const text = `Quiet notes on <b>${word}</b> and harbour light. ${"Long sentence. ".repeat(12)}`;
+  const item = await api.create("post", `Notes ${uid()}`, {
+    body: {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    },
+  });
+  const page = await as("admin");
+  try {
+    await openDashboard(page);
+    await openPalette(page);
+    await page.keyboard.type(word);
+    const hit = option(page, new RegExp(item.title));
+    await expect(hit).toBeVisible();
+    const snippet = hit.locator("[data-slot=palette-snippet]");
+    await expect(snippet).toContainText("Matches in text");
+    await expect(snippet).toContainText(`Quiet notes on <b>${word}</b> and harbour light.`);
+    expect(await snippet.locator("b").count()).toBe(0);
+    const shown = (await snippet.textContent()) ?? "";
+    expect(Array.from(shown.replace(/^Matches in text · /, "")).length).toBeLessThanOrEqual(121);
+    await expectAccessible(page);
+    await snap(page, "palette-body-hit", { fullPage: false });
+    // A title hit has no snippet.
+    await input(page).fill(item.title);
+    await expect(option(page, new RegExp(item.title))).toBeVisible();
+    await expect(
+      option(page, new RegExp(item.title)).locator("[data-slot=palette-snippet]"),
+    ).toHaveCount(0);
+  } finally {
+    await page.context().close();
+    await api.purge(item);
+    await api.dispose();
+  }
 });
 
 test("create_new_post_from_palette", async ({ as, site }) => {
@@ -143,7 +206,8 @@ test("switch_theme_from_palette", async ({ as }) => {
   await expect(html).toHaveClass("light");
 
   await openPalette(page);
-  await page.keyboard.type("dark");
+  // The whole name: content that tests beside this one write could match "dark" alone.
+  await page.keyboard.type("dark theme");
   await expect(option(page, /Dark theme/)).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("Enter");
   await expect(palette(page)).toBeHidden();
@@ -178,6 +242,7 @@ test("screens", async ({ as, snap, expectAccessible }) => {
   await openPalette(page);
   await page.keyboard.type("WebAssembly");
   await option(page, new RegExp(SEEDED)).click();
+  await editorOpened(page, /\/admin\/content\/post\/[0-9a-f-]{36}$/);
   await openDashboard(page);
   await openPalette(page);
   await expect(
@@ -205,9 +270,18 @@ test("screens", async ({ as, snap, expectAccessible }) => {
   release();
   await page.unroute(SEARCH, hold);
 
-  // Results.
+  // Results: the last round's answer, not the previous query's rows, which stay up dimmed
+  // while a slow round runs (seen in Firefox under load: axe measured them at 60 %).
   await expect(option(page, new RegExp(SEEDED))).toBeVisible();
   await expect(palette(page).locator("[data-slot=palette-searching]")).toBeHidden();
+  await expect(palette(page).getByRole("status")).toHaveText(/\d+ content results?/);
+  await expect
+    .poll(() =>
+      palette(page)
+        .getByRole("group", { name: "Content" })
+        .evaluate((el) => getComputedStyle(el).opacity),
+    )
+    .toBe("1");
   await snap(page, "palette-results");
   await expectAccessible(page);
 

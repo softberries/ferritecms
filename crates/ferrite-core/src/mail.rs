@@ -18,6 +18,8 @@ pub const MAX_SUBJECT_CHARS: usize = 400;
 pub const MAX_TEXT_BYTES: usize = 256 * 1024;
 /// Longest address, in bytes (RFC 5321 path limit).
 pub const MAX_ADDRESS_BYTES: usize = 254;
+/// Longest site title in a core mail's subject or body, in characters.
+pub const MAX_SUBJECT_TITLE_CHARS: usize = 100;
 /// Most mails one node sends at once; [`MailQueue`] refuses more.
 pub const MAIL_IN_FLIGHT: usize = 16;
 /// How long one queued send may take in total (the SMTP timeout).
@@ -138,6 +140,48 @@ impl OutgoingMail {
             )));
         }
         Ok(())
+    }
+}
+
+/// The site title as core mails show it: trimmed, at most [`MAX_SUBJECT_TITLE_CHARS`]
+/// characters; `None` when empty or not header-safe.
+pub fn subject_title(site_title: &str) -> Option<String> {
+    let title = site_title.trim();
+    if title.is_empty() || !header_safe(title) {
+        return None;
+    }
+    let cut: String = title.chars().take(MAX_SUBJECT_TITLE_CHARS).collect();
+    Some(cut.trim_end().to_owned())
+}
+
+/// The test mail of `POST /system/mail/test` (P49): to `to`, subject
+/// `Test e-mail from <site title>`, a plain-text body naming the site URL, the actor's
+/// login and the UTC time it was sent.
+pub fn test_mail(
+    to: &str,
+    site_title: &str,
+    site_url: &str,
+    login: &str,
+    at: ferrite_domain::Timestamp,
+) -> OutgoingMail {
+    let title = subject_title(site_title);
+    let subject = match &title {
+        Some(t) => format!("Test e-mail from {t}"),
+        None => "Test e-mail".to_owned(),
+    };
+    let site = title.as_deref().unwrap_or("the site");
+    let when = at.as_datetime().format("%Y-%m-%d %H:%M:%S");
+    let text = format!(
+        "This is a test e-mail from {site} ({site_url}).\n\
+         \n\
+         It was sent from the admin by \"{login}\" at {when} UTC to check the mail \
+         settings. If you can read it, the site can send mail.\n"
+    );
+    OutgoingMail {
+        to: vec![to.to_owned()],
+        bcc: Vec::new(),
+        subject,
+        text,
     }
 }
 
@@ -312,6 +356,33 @@ mod tests {
             subject: subject.into(),
             text: "body".into(),
         }
+    }
+
+    #[test]
+    fn subject_title_rules() {
+        assert_eq!(subject_title(" My Blog ").as_deref(), Some("My Blog"));
+        assert_eq!(subject_title("   "), None);
+        assert_eq!(subject_title("Evil\r\nBcc: x@evil.test"), None);
+        let long = "é".repeat(150);
+        assert_eq!(
+            subject_title(&long).unwrap().chars().count(),
+            MAX_SUBJECT_TITLE_CHARS
+        );
+    }
+
+    #[test]
+    fn test_mail_names_site_actor_and_time() {
+        let at = ferrite_domain::Timestamp::from_micros(1_767_225_600_000_000).unwrap();
+        let m = test_mail("a@example.com", " Blog ", "https://example.com", "ann", at);
+        assert_eq!(m.to, ["a@example.com"]);
+        assert_eq!(m.subject, "Test e-mail from Blog");
+        assert!(m.text.contains("https://example.com"), "{}", m.text);
+        assert!(m.text.contains("\"ann\""), "{}", m.text);
+        assert!(m.text.contains("2026-01-01 00:00:00 UTC"), "{}", m.text);
+        assert_eq!(m.check(), Ok(()));
+        let untitled = test_mail("a@example.com", "x\ny", "https://example.com", "ann", at);
+        assert_eq!(untitled.subject, "Test e-mail");
+        assert!(untitled.text.contains("the site"), "{}", untitled.text);
     }
 
     #[test]

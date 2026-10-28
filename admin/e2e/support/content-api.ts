@@ -2,12 +2,11 @@
 // a request context on a harness account's shared session, plus helpers to create a
 // content type (admin only), taxonomies, terms and items in any status, and to remove a
 // type with everything in it afterwards, so the sidebar of later screenshots stays clean;
-// menus (read, replace, delete); comments (list per item, moderate, delete); and
-// redirects (create, import, search, delete).
+// menus (read, replace, delete); comments (list per item, moderate, delete);
+// redirects (create, import, search, delete); and the site settings (read, patch).
 
 import { expect, request as apiRequest, type APIRequestContext } from "@playwright/test";
 import type { FixtureFile } from "./files";
-import type { Backend } from "./server";
 import { authFile } from "./server";
 import type { Role } from "./users";
 
@@ -83,6 +82,22 @@ export interface QueuedComment {
   item: { id: string; type: string; title: string; permalink: string | null; status: string };
 }
 
+export interface ThemeInfo {
+  name: string;
+  version: string;
+  active: boolean;
+  /** SHA-256 of the installed bundle; `null` for a built-in theme without a row. */
+  hash: string | null;
+  nodes: { node_name: string; name: string; fallback: boolean }[];
+}
+
+export interface PluginInfo {
+  name: string;
+  version: string;
+  enabled: boolean;
+  nodes: { name: string; status: string }[];
+}
+
 export class ContentApi {
   private constructor(
     readonly ctx: APIRequestContext,
@@ -90,11 +105,14 @@ export class ContentApi {
     private readonly csrf: string,
   ) {}
 
-  /** A context on `role`'s shared session (never logged out, F23), sending the `Origin`. */
-  static async as(backend: Backend, url: string, role: Role): Promise<ContentApi> {
+  /**
+   * A context on `role`'s shared session (never logged out, F23) on the site of the
+   * project `siteKey`, sending the `Origin`.
+   */
+  static async as(siteKey: string, url: string, role: Role): Promise<ContentApi> {
     const ctx = await apiRequest.newContext({
       baseURL: url,
-      storageState: authFile(backend, role),
+      storageState: authFile(siteKey, role),
       extraHTTPHeaders: { Origin: url },
     });
     const res = await ctx.get("/api/v1/auth/me");
@@ -441,6 +459,146 @@ export class ContentApi {
     for (const r of await this.listRedirects(q)) {
       await this.ctx.delete(`/api/v1/redirects/${r.id}`, { headers: this.headers() });
     }
+  }
+
+  /** `GET /settings`: every site setting (`null`: the default). */
+  async getSettings(): Promise<Record<string, unknown>> {
+    return this.ok(await this.ctx.get("/api/v1/settings"), "get settings");
+  }
+
+  /** `PATCH /settings` (a test puts back what it changed in its `finally`). */
+  async patchSettings(patch: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.ok(
+      await this.ctx.patch("/api/v1/settings", { headers: this.headers(), data: patch }),
+      "patch settings",
+    );
+  }
+
+  /** `GET /content/refs`: the type, title, status and permalink of `ids`. */
+  async refs(
+    ids: string[],
+  ): Promise<{ id: string; title: string; status: string; permalink: string | null }[]> {
+    const res = await this.ctx.get(`/api/v1/content/refs?ids=${ids.join(",")}`);
+    return (
+      await this.ok<{
+        items: { id: string; title: string; status: string; permalink: string | null }[];
+      }>(res, "refs")
+    ).items;
+  }
+
+  /** `GET /themes`: name, version, active and node state of every theme. */
+  async listThemes(): Promise<ThemeInfo[]> {
+    return (await this.ok<{ items: ThemeInfo[] }>(await this.ctx.get("/api/v1/themes"), "themes"))
+      .items;
+  }
+
+  /** The active theme's name (the embedded `blog` on a fresh site). */
+  async activeTheme(): Promise<string> {
+    const active = (await this.listThemes()).find((t) => t.active);
+    return active?.name ?? "blog";
+  }
+
+  /** `POST /themes/{name}/activate` (a test puts back the theme it found in `finally`). */
+  async activateTheme(name: string): Promise<void> {
+    await this.ok(
+      await this.ctx.post(`/api/v1/themes/${name}/activate`, { headers: this.headers() }),
+      `activate ${name}`,
+    );
+  }
+
+  /** `POST /themes`: a bundle, installed without activating. */
+  async installTheme(tar: Buffer): Promise<ThemeInfo> {
+    return this.ok(
+      await this.ctx.post("/api/v1/themes", {
+        headers: { ...this.headers(), "Content-Type": "application/x-tar" },
+        data: tar,
+      }),
+      "install theme",
+    );
+  }
+
+  /** `GET /themes/{name}/settings`: the schema and every value as templates see it. */
+  async themeSettings(name: string): Promise<{ values: Record<string, unknown> }> {
+    return this.ok(await this.ctx.get(`/api/v1/themes/${name}/settings`), `${name} settings`);
+  }
+
+  /** `PATCH /themes/{name}/settings` (`null` resets a key). */
+  async patchThemeSettings(name: string, patch: Record<string, unknown>): Promise<void> {
+    await this.ok(
+      await this.ctx.patch(`/api/v1/themes/${name}/settings`, {
+        headers: this.headers(),
+        data: patch,
+      }),
+      `patch ${name} settings`,
+    );
+  }
+
+  /** `GET /plugins`: every installed plugin. */
+  async listPlugins(): Promise<PluginInfo[]> {
+    return (
+      await this.ok<{ items: PluginInfo[] }>(await this.ctx.get("/api/v1/plugins"), "plugins")
+    ).items;
+  }
+
+  /** Inspect, then install exactly that upload (`approve` = its fingerprint); disabled. */
+  async installPlugin(manifest: string, component: Buffer): Promise<PluginInfo> {
+    const parts = {
+      manifest: {
+        name: "ferrite-plugin.toml",
+        mimeType: "application/toml",
+        buffer: Buffer.from(manifest),
+      },
+      component: { name: "plugin.wasm", mimeType: "application/wasm", buffer: component },
+    };
+    const report = await this.ok<{ fingerprint: string }>(
+      await this.ctx.post("/api/v1/plugins/inspect", { headers: this.headers(), multipart: parts }),
+      "inspect plugin",
+    );
+    return this.ok(
+      await this.ctx.post("/api/v1/plugins", {
+        headers: this.headers(),
+        multipart: { ...parts, approve: report.fingerprint },
+      }),
+      "install plugin",
+    );
+  }
+
+  async enablePlugin(name: string): Promise<PluginInfo> {
+    return this.ok(
+      await this.ctx.post(`/api/v1/plugins/${name}/enable`, { headers: this.headers() }),
+      `enable ${name}`,
+    );
+  }
+
+  /** `GET /plugins/{name}/settings`: values, and which secrets are set. */
+  async pluginSettings(
+    name: string,
+  ): Promise<{ values: Record<string, unknown>; secrets: Record<string, boolean> }> {
+    return this.ok(await this.ctx.get(`/api/v1/plugins/${name}/settings`), `${name} settings`);
+  }
+
+  /** `GET /plugins/retained`: deleted plugins whose data is kept. */
+  async retainedPlugins(): Promise<{ name: string; purge_after: string }[]> {
+    return (
+      await this.ok<{ items: { name: string; purge_after: string }[] }>(
+        await this.ctx.get("/api/v1/plugins/retained"),
+        "retained plugins",
+      )
+    ).items;
+  }
+
+  /**
+   * Removes every trace of the plugin `name`: deletes it with `purge=true` if installed,
+   * else erases its retained data if any (a test's `finally`).
+   */
+  async removePlugin(name: string): Promise<void> {
+    const del = await this.ctx.delete(`/api/v1/plugins/${name}?purge=true`, {
+      headers: this.headers(),
+    });
+    if (del.status() === 204) return;
+    expect(del.status(), `delete ${name}: ${await del.text()}`).toBe(404);
+    const purge = await this.ctx.post(`/api/v1/plugins/${name}/purge`, { headers: this.headers() });
+    expect([204, 404], `purge ${name}: ${await purge.text()}`).toContain(purge.status());
   }
 
   async dispose(): Promise<void> {

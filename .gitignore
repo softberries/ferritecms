@@ -14,3 +14,4 @@ admin/test-results/
 admin/e2e/.auth/
 admin/.tanstack/
 *.tsbuildinfo
+.pnpm-store/

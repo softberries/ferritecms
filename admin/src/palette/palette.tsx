@@ -30,6 +30,8 @@ import {
   SunIcon,
   TagsIcon,
   UploadIcon,
+  UserRoundIcon,
+  UserPlusIcon,
   XIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -57,7 +59,7 @@ import { useTheme, type ThemePreference } from "@/design/theme";
 import { requestUpload } from "@/media/upload-intent";
 import { navItemAt, type NavItem, type NavSection } from "@/shell/nav";
 import { listRecent, pushRecent, recentId, type RecentEntry } from "./recent";
-import { searchContent, searchable, type PaletteHit } from "./sources";
+import { bodySnippet, queryWords, searchContent, searchable, type PaletteHit } from "./sources";
 
 export interface CommandPaletteProps {
   open: boolean;
@@ -159,6 +161,8 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
   const menusItem = navItems.find((i) => i.id === "menus");
   // "New redirect" (Create): the nav shows Redirects (`manage_redirects`).
   const redirectsItem = navItems.find((i) => i.id === "redirects");
+  // "New user" (Create): the nav shows Users (`manage_users`).
+  const usersItem = navItems.find((i) => i.id === "users");
 
   const query = q.trim();
   const active = searchable(query) && types.length > 0;
@@ -294,6 +298,13 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
               />
             ))}
             <Row
+              value={t("goTo.account")}
+              keywords={[t("goTo.accountKeywords")]}
+              icon={UserRoundIcon}
+              label={t("goTo.account")}
+              onSelect={() => go("/account")}
+            />
+            <Row
               value={t("goTo.shortcuts")}
               keywords={["help", "keys", "?"]}
               icon={KeyboardIcon}
@@ -311,7 +322,8 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
           typesItem ||
           taxonomiesItem ||
           menusItem ||
-          redirectsItem ? (
+          redirectsItem ||
+          usersItem ? (
             <CommandGroup heading={t("group.create")}>
               {createTypes.map((item) => {
                 const type = item.contentType ?? "";
@@ -393,6 +405,18 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
                   }}
                 />
               ) : null}
+              {usersItem ? (
+                <Row
+                  value={t("create.user")}
+                  keywords={[t("create.userKeywords")]}
+                  icon={UserPlusIcon}
+                  label={t("create.user")}
+                  onSelect={() => {
+                    close();
+                    void navigate({ to: "/users", search: { new: true } });
+                  }}
+                />
+              ) : null}
             </CommandGroup>
           ) : null}
 
@@ -417,6 +441,7 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
                   hit={hit}
                   slug={hit.slug}
                   query={query}
+                  snippet={bodySnippet(hit, query)}
                   typeItem={typeItem(hit.type)}
                   // One type only: the icon and the heading say it; a chip per row is noise.
                   showType={new Set(hits.map((h) => h.type)).size > 1}
@@ -536,6 +561,8 @@ interface HitRowProps {
   slug?: string;
   /** The search, whose words are marked in the title. */
   query?: string;
+  /** A hit matched only in its text: the excerpt's start (`bodySnippet`). */
+  snippet?: string | null;
   typeItem: NavItem | undefined;
   showType?: boolean;
   onSelect: () => void;
@@ -547,6 +574,7 @@ function HitRow({
   hit,
   slug,
   query = "",
+  snippet = null,
   typeItem,
   showType = true,
   onSelect,
@@ -556,18 +584,41 @@ function HitRow({
   const title = hit.title.trim() || t("hit.untitled");
   const status = isContentStatus(hit.status) ? hit.status : null;
   return (
-    <CommandItem value={value} onSelect={onSelect} className={ROW}>
+    <CommandItem
+      value={value}
+      onSelect={onSelect}
+      className={cn(ROW, snippet !== null && "h-auto min-h-10 py-1.5 pointer-coarse:h-auto")}
+    >
       <Tile icon={typeItem?.icon ?? ShapesIcon} />
-      <span className="flex min-w-0 flex-1 items-baseline gap-2">
-        <span className="truncate" title={title}>
-          <Highlight text={title} query={query} />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="truncate" title={title}>
+            <Highlight text={title} query={query} />
+          </span>
+          {slug ? (
+            <span
+              className="min-w-0 shrink truncate font-mono text-xs text-muted-foreground max-sm:hidden"
+              title={`/${slug}`}
+            >
+              /{slug}
+            </span>
+          ) : null}
         </span>
-        {slug ? (
+        {snippet !== null ? (
           <span
-            className="min-w-0 shrink truncate font-mono text-xs text-muted-foreground max-sm:hidden"
-            title={`/${slug}`}
+            data-slot="palette-snippet"
+            // Phones: the label on its own line and up to two lines of the text (no hover
+            // for the `title`); wider: one truncated line.
+            className="text-xs text-muted-foreground max-sm:flex max-sm:flex-col sm:truncate"
+            title={snippet || undefined}
           >
-            /{slug}
+            <span className="font-medium">{t("hit.inText")}</span>
+            {snippet ? (
+              <span className="max-sm:line-clamp-2">
+                <span className="max-sm:hidden"> · </span>
+                {snippet}
+              </span>
+            ) : null}
           </span>
         ) : null}
       </span>
@@ -593,10 +644,7 @@ function HitRow({
  * title matched. A hit matched only in its body has nothing marked.
  */
 function Highlight({ text, query }: { text: string; query: string }) {
-  const words = query
-    .split(/\s+/)
-    .filter((w) => Array.from(w).length >= 2)
-    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const words = queryWords(query);
   if (words.length === 0) return text;
   const parts = text.split(new RegExp(`(${words.join("|")})`, "gi"));
   return parts.map((part, i) =>

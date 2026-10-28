@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 
 use ferrite_domain::{
-    Autosave, ContentId, ContentItem, ContentOrder, ContentQuery, ContentStatus, Page,
+    Autosave, ContentId, ContentItem, ContentOrder, ContentQuery, ContentStatus, MEDIA_KIND, Page,
     ParentFilter, ReadableBy, Revision, RevisionId, SearchQuery, TermId, Timestamp, UserId,
 };
 use ferrite_store::{MAX_ID_FILTER, StoreError, validate_json};
@@ -22,7 +22,7 @@ use super::{ContentDraft, ContentService, Edit, Seo, SeoPatch, WALKED, check_bod
 use crate::{
     Actor, CoreError, DepKeys,
     actor::{Area, Capability, can, can_edit, can_read, require, require_read, role_can_edit},
-    site::{MEDIA_KIND, has_public_page, public_paths},
+    site::{has_public_page, public_paths},
     tx::finish,
 };
 
@@ -257,6 +257,30 @@ impl ContentService {
     pub async fn seo_of(&self, actor: &Actor, id: ContentId) -> Result<Seo, CoreError> {
         self.get_for(actor, id).await?;
         Ok(Seo::load(self.store.read(), id).await?)
+    }
+
+    /// The terms (in their stored order) and the SEO meta of `item`, an item the
+    /// caller read or wrote through this service, checked as
+    /// [`get_for`](Self::get_for) checks it but without reading it again (the API's
+    /// item responses).
+    pub async fn extras_for(
+        &self,
+        actor: &Actor,
+        item: &ContentItem,
+    ) -> Result<(Vec<TermId>, Seo), CoreError> {
+        require_read(actor, Area::Content)?;
+        if !can_read(actor, item, Timestamp::now()) {
+            return Err(CoreError::NotFound);
+        }
+        let repos = self.store.read();
+        let terms = repos
+            .terms()
+            .for_item(item.id)
+            .await?
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        Ok((terms, Seo::load(repos, item.id).await?))
     }
 
     /// The terms of item `id`, in their stored order (as [`get_for`](Self::get_for)

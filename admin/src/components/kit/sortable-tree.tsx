@@ -135,10 +135,6 @@ export function SortableTree<T>({
     const node = id == null ? undefined : byId.get(String(id));
     return node ? label(node.data) : "";
   };
-  const nestable = (parentId: string) => {
-    const parent = byId.get(parentId);
-    return parent !== undefined && (canNest?.(parent) ?? true);
-  };
 
   // While dragging, the active row's descendants are out of the list.
   const visible = useMemo(() => {
@@ -150,7 +146,7 @@ export function SortableTree<T>({
   const ids = useMemo(() => visible.map((n) => n.id), [visible]);
   const projection =
     activeId !== null && overId !== null
-      ? projectDrop(flat, activeId, overId, offsetX, INDENT_PX, maxDepth, nestable)
+      ? projectDrop(flat, activeId, overId, offsetX, INDENT_PX, maxDepth, canNest)
       : null;
 
   /** What a finished move says, from the tree after it. */
@@ -227,6 +223,11 @@ export function SortableTree<T>({
         count:
           flat.filter((n) => n.parentId === projection.parentId && n.id !== active.id).length + 1,
       };
+      // Dropped where it was: nothing moved (and `commit` changes nothing).
+      const before = flat.find((n) => n.id === String(active.id));
+      if (before?.parentId === projection.parentId && before.index === projection.index) {
+        return t("sortable.unmoved", values);
+      }
       return projection.parentId === null
         ? t("sortable.movedRoot", values)
         : t("sortable.movedUnder", { ...values, parent: nameOf(projection.parentId) });
@@ -288,7 +289,7 @@ export function SortableTree<T>({
             const canIndent =
               prev !== undefined &&
               node.depth + 1 + subtreeHeight(flat, node.id) <= maxDepth &&
-              nestable(prev.id);
+              (canNest?.(prev) ?? true);
             return (
               <SortableRow
                 key={node.id}

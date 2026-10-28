@@ -13,6 +13,7 @@ export const SECTIONS = [
   "ordering",
   "data",
   "charts",
+  "administration",
 ] as const;
 
 export type SectionId = (typeof SECTIONS)[number];

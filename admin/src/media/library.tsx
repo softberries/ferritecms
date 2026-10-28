@@ -4,7 +4,8 @@
 // from the selection bar with Undo, the Trash view with Restore and Delete permanently,
 // the detail sheet for `?id=` and the upload tray. The whole page takes dropped files;
 // new uploads appear at the top with the layout animation. Actions show by capability
-// (`rights.ts`); the server decides every call.
+// (`rights.ts`); the server decides every call. The filter bar is `library-toolbar.tsx`;
+// the empty states, "Load more" and the confirm are `library-parts.tsx`.
 
 import {
   keepPreviousData,
@@ -12,16 +13,7 @@ import {
   useQueryClient,
   type InfiniteData,
 } from "@tanstack/react-query";
-import { cn } from "cn";
-import {
-  ImageIcon,
-  LayoutGridIcon,
-  ListIcon,
-  SearchXIcon,
-  Trash2Icon,
-  UploadIcon,
-  UserRoundIcon,
-} from "lucide-react";
+import { UploadIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { qk } from "@/api/keys";
@@ -31,46 +23,31 @@ import type { SchemaMediaList } from "@/api/schema";
 import type { MeDto } from "@/auth/session";
 import type { RowSelectionState } from "@/components/kit/data-table-features";
 import { DropZone } from "@/components/kit/drop-zone";
-import { EmptyState } from "@/components/kit/empty-state";
 import { ErrorState } from "@/components/kit/error-state";
 import { ForbiddenState } from "@/components/kit/forbidden-state";
 import { PageHeader } from "@/components/kit/page-header";
-import { ScrollFade } from "@/components/kit/scroll-fade";
-import {
-  AlertDialog,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { BulkBar } from "@/content/bulk-bar";
 import { trashUndoable } from "@/content/bulk";
-import { Chip, SearchField } from "@/content/filters";
 import { uiLocale } from "@/lib/locale";
 import { useShortcut } from "@/lib/shortcuts";
-import { displayTitle } from "./format";
 import { type MediaAction, useMediaActions } from "./media-actions";
 import { MediaDetail } from "./media-detail";
 import { MediaGrid } from "./media-grid";
 import {
-  MEDIA_KINDS,
   type MediaSearch,
   type MediaView,
   effectiveView,
-  hasFilters,
   mediaQuery,
   rememberView,
-  searchDisables,
 } from "./media-search";
 import { MediaTable } from "./media-table";
 import { type MediaBulkItem, bulkItem, canUpload } from "./rights";
 import { UploadTray } from "./upload-tray";
 import { useUploadQueue } from "./use-upload-queue";
 import { useUploadRequest } from "./upload-intent";
+import { type Confirm, ConfirmDialog, LibraryEmpty, LoadMore } from "./library-parts";
+import { Toolbar } from "./library-toolbar";
 
 export interface MediaLibraryProps {
   search: MediaSearch;
@@ -189,7 +166,19 @@ export function MediaLibrary({ search, me, setSearch }: MediaLibraryProps) {
 
   const number = new Intl.NumberFormat(uiLocale());
   const count = list.data ? `${number.format(items.length)}${list.hasNextPage ? "+" : ""}` : null;
-  const forbidden = list.error instanceof ApiError && list.error.status === 403;
+  // Refused by the server: the state alone, as other screens show it (no header, upload
+  // or filters that could only fail again). Uploads already running keep their tray and
+  // its leave guard.
+  if (list.error instanceof ApiError && list.error.status === 403) {
+    return (
+      <>
+        <div className="mx-auto w-full max-w-7xl">
+          <ForbiddenState />
+        </div>
+        <UploadTray queue={queue} entries={entries} raised={false} onOpen={open} />
+      </>
+    );
+  }
 
   const empty = (
     <LibraryEmpty
@@ -251,9 +240,7 @@ export function MediaLibrary({ search, me, setSearch }: MediaLibraryProps) {
         />
       ) : null}
       <Toolbar search={search} view={shownView} onChange={setSearch} onView={chooseView} />
-      {forbidden ? (
-        <ForbiddenState />
-      ) : list.isError && !list.data ? (
+      {list.isError && !list.data ? (
         <ErrorState
           error={list.error}
           retry={() => {
@@ -333,284 +320,5 @@ export function MediaLibrary({ search, me, setSearch }: MediaLibraryProps) {
         }}
       />
     </>
-  );
-}
-
-function Toolbar({
-  search,
-  view,
-  onChange,
-  onView,
-}: {
-  search: MediaSearch;
-  view: MediaView;
-  onChange: MediaLibraryProps["setSearch"];
-  onView: (view: MediaView) => void;
-}) {
-  const { t } = useTranslation("media");
-  const trash = search.trash === true;
-  const disabled = searchDisables(search);
-  return (
-    <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-      {/* The trash has no search (trashed items leave the search index). */}
-      {trash ? null : (
-        <div role="search" className="w-full lg:w-auto lg:shrink-0">
-          <SearchField
-            label={t("searchLabel")}
-            value={search.q ?? ""}
-            onSearch={(q) => onChange({ q: q || undefined })}
-          />
-        </div>
-      )}
-      {/* Phones: the chips get a row of their own, Trash and the view toggle the next. */}
-      <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center sm:gap-2">
-        <ScrollFade className="-m-1 min-w-0 flex-1 p-1 md:overflow-visible">
-          <div className="flex w-max items-center gap-2 md:w-auto md:flex-wrap">
-            <div role="group" aria-label={t("kind.label")} className="flex items-center gap-1.5">
-              <Chip
-                pressed={search.kind === undefined}
-                onClick={() => onChange({ kind: undefined })}
-              >
-                {t("kind.all")}
-              </Chip>
-              {MEDIA_KINDS.map((kind) => (
-                <Chip
-                  key={kind}
-                  pressed={search.kind === kind}
-                  onClick={() => onChange({ kind: search.kind === kind ? undefined : kind })}
-                >
-                  {t(`kind.${kind}`)}
-                </Chip>
-              ))}
-            </div>
-            <span aria-hidden="true" className="mx-0.5 h-5 w-px bg-border" />
-            <Chip
-              pressed={search.mine === true}
-              disabledReason={disabled ? t("mineBySearch") : undefined}
-              onClick={() => onChange({ mine: search.mine ? undefined : true })}
-            >
-              <UserRoundIcon data-icon="inline-start" />
-              {t("mine")}
-            </Chip>
-            {hasFilters(search) ? (
-              <Button
-                variant="ghost"
-                className="text-muted-foreground"
-                onClick={() => onChange({ q: undefined, kind: undefined, mine: undefined })}
-              >
-                {t("clearFilters")}
-              </Button>
-            ) : null}
-          </div>
-        </ScrollFade>
-        <div className="flex items-center justify-between gap-2">
-          <Chip
-            pressed={trash}
-            onClick={() => onChange({ trash: trash ? undefined : true, id: undefined })}
-          >
-            <Trash2Icon data-icon="inline-start" />
-            {t("trash.toggle")}
-          </Chip>
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            value={view}
-            aria-label={t("view.label")}
-            onValueChange={(v) => {
-              if (v === "grid" || v === "list") onView(v);
-            }}
-          >
-            <ToggleGroupItem
-              value="grid"
-              aria-label={t("view.grid")}
-              className="pointer-coarse:size-11"
-            >
-              <LayoutGridIcon />
-            </ToggleGroupItem>
-            <ToggleGroupItem
-              value="list"
-              aria-label={t("view.list")}
-              className="pointer-coarse:size-11"
-            >
-              <ListIcon />
-            </ToggleGroupItem>
-          </ToggleGroup>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function LibraryEmpty({
-  search,
-  uploads,
-  onUpload,
-  onClear,
-}: {
-  search: MediaSearch;
-  uploads: boolean;
-  onUpload: () => void;
-  onClear: () => void;
-}) {
-  const { t } = useTranslation("media");
-  const trash = search.trash === true;
-  if (!trash && search.q !== undefined) {
-    return (
-      <EmptyState
-        icon={SearchXIcon}
-        title={t("empty.search.title", { q: search.q })}
-        body={t("empty.search.body")}
-        action={
-          <Button variant="outline" onClick={onClear}>
-            {t("empty.search.action")}
-          </Button>
-        }
-      />
-    );
-  }
-  if (hasFilters(search)) {
-    return (
-      <EmptyState
-        icon={SearchXIcon}
-        title={trash ? t("empty.trashFiltered.title") : t("empty.filtered.title")}
-        body={t("empty.filtered.body")}
-        action={
-          <Button variant="outline" onClick={onClear}>
-            {t("clearFilters")}
-          </Button>
-        }
-      />
-    );
-  }
-  if (trash) {
-    return (
-      <EmptyState icon={Trash2Icon} title={t("empty.trash.title")} body={t("empty.trash.body")} />
-    );
-  }
-  return (
-    <EmptyState
-      icon={ImageIcon}
-      title={t("empty.none.title")}
-      body={uploads ? t("empty.none.body") : t("empty.none.bodyReadOnly")}
-      action={
-        uploads ? (
-          <Button variant="outline" onClick={onUpload}>
-            <UploadIcon data-icon="inline-start" />
-            {t("empty.none.action")}
-          </Button>
-        ) : undefined
-      }
-    />
-  );
-}
-
-/** Below the items: "Load more" plus a sentinel that loads the next page when seen. */
-function LoadMore({
-  hasNext,
-  loadingNext,
-  shown,
-  onMore,
-}: {
-  hasNext: boolean;
-  loadingNext: boolean;
-  shown: number;
-  onMore: () => void;
-}) {
-  const { t } = useTranslation("media");
-  const sentinel = useRef<HTMLDivElement>(null);
-  const latest = useRef(onMore);
-  useEffect(() => {
-    latest.current = onMore;
-  });
-  useEffect(() => {
-    const el = sentinel.current;
-    if (!el || !hasNext || typeof IntersectionObserver === "undefined") return;
-    // Inside the list view's scrolling frame, else the page.
-    const root = el.closest("[data-slot=data-table]");
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) latest.current();
-      },
-      { root, rootMargin: "0px 0px 240px 0px" },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [hasNext, shown]);
-  const number = new Intl.NumberFormat(uiLocale());
-  return (
-    <div className="flex flex-col items-center gap-2 px-4 py-3 [[data-slot=data-table]_&]:border-t">
-      {hasNext ? (
-        <>
-          <div ref={sentinel} aria-hidden="true" className="h-px w-full" />
-          <Button
-            variant="ghost"
-            onClick={onMore}
-            disabled={loadingNext}
-            aria-busy={loadingNext || undefined}
-          >
-            {loadingNext ? t("loadingMore") : t("loadMore")}
-          </Button>
-        </>
-      ) : (
-        <p className="text-sm text-muted-foreground tabular-nums">
-          {t("end", { count: shown, formatted: number.format(shown) })}
-        </p>
-      )}
-    </div>
-  );
-}
-
-interface Confirm {
-  kind: "delete" | "trash";
-  items: MediaBulkItem[];
-}
-
-/** Delete permanently, or a trash nothing could undo, asks first (07 §3). */
-function ConfirmDialog({
-  confirm,
-  onCancel,
-  onConfirm,
-}: {
-  confirm: Confirm | null;
-  onCancel: () => void;
-  onConfirm: (confirm: Confirm) => void;
-}) {
-  const { t } = useTranslation("media");
-  const count = confirm?.items.length ?? 0;
-  const first = confirm?.items[0];
-  const kind = confirm?.kind ?? "delete";
-  const title = first ? displayTitle(first.media) : "";
-  return (
-    <AlertDialog
-      open={confirm !== null && count > 0}
-      onOpenChange={(o) => {
-        if (!o) onCancel();
-      }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{t(`confirm.${kind}.title`, { count })}</AlertDialogTitle>
-          <AlertDialogDescription>
-            {count === 1
-              ? t(`confirm.${kind}.bodyOne`, { title })
-              : t(`confirm.${kind}.bodyMany`, { count })}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>{t("confirm.cancel")}</AlertDialogCancel>
-          <Button
-            variant="destructive"
-            className={cn(
-              "bg-destructive text-background hover:bg-destructive/90 dark:bg-destructive dark:hover:bg-destructive/90",
-            )}
-            onClick={() => {
-              if (confirm) onConfirm(confirm);
-            }}
-          >
-            {t(`confirm.${kind}.confirm`, { count })}
-          </Button>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   );
 }

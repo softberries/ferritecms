@@ -286,6 +286,60 @@ pub async fn approved_page_keeps_every_root(db: &TestDb) {
     );
 }
 
+/// A short last page (fewer roots than asked for) under a tight row budget: the budget
+/// left after its own roots goes to its replies in thread order, so the page fills up to
+/// the budget (the smallest budget allowed is the number of roots asked for).
+pub async fn short_comment_page_under_tight_budget(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    let item = post(store, &author, "short-page").await;
+    // 7 roots, each with a chain of 3 replies: 28 rows.
+    let mut rows = Vec::new();
+    for r in 0..7i64 {
+        let t = r * 1_000_000;
+        let root = comment(item, None, CommentStatus::Approved, t);
+        let mut parent = root.id;
+        rows.push(root);
+        for n in 1..4 {
+            let c = comment(item, Some(parent), CommentStatus::Approved, t + n);
+            parent = c.id;
+            rows.push(c);
+        }
+    }
+    insert_all(store, &rows).await;
+    let expected = threads(&rows);
+    let repo = store.read().comments();
+
+    // Page 2 of 5 roots holds roots 5 and 6 only; a budget of 6 rows leaves 4 replies:
+    // root 5's three, then the first of root 6's.
+    let got: Vec<CommentId> = repo
+        .approved_page(item, 5, 5, 6)
+        .await
+        .unwrap()
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    let mut want: Vec<CommentId> = expected[5].iter().map(|c| c.id).collect();
+    want.extend([expected[6][0].id, expected[6][1].id]);
+    assert_eq!(got, want);
+    // The smallest budget (the roots asked for, 5) leaves 3 replies: root 5's.
+    let got: Vec<CommentId> = repo
+        .approved_page(item, 5, 5, 5)
+        .await
+        .unwrap()
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    let mut want: Vec<CommentId> = expected[5].iter().map(|c| c.id).collect();
+    want.push(expected[6][0].id);
+    assert_eq!(got, want);
+    // A budget that fits the whole short page shows all of it.
+    assert_eq!(
+        repo.approved_page(item, 5, 5, 8).await.unwrap(),
+        expected[5..].concat()
+    );
+}
+
 /// The 0-based position of the root whose thread holds a comment; `None` for a comment
 /// that is not approved, unknown, or of another item.
 pub async fn root_position_of_reply_is_its_root(db: &TestDb) {

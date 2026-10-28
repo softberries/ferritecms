@@ -2,7 +2,7 @@
 // screen goes, `dispose`), its rows through `useSyncExternalStore`, and `onDone` for
 // every finished upload (the latest callback, without re-creating the queue).
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useEffectEvent, useState, useSyncExternalStore } from "react";
 import type { MediaDto } from "@/api/media";
 import { uploadMedia } from "@/api/upload";
 import { type UploadEntry, type UploadQueue, createUploadQueue } from "./upload-queue";
@@ -25,12 +25,18 @@ export function useUploadQueue(onDone: (media: MediaDto) => void): {
     });
     return { queue, listeners };
   });
+  // One listener for the queue's life, calling the latest `onDone` (an inline arrow is
+  // a new function each render; registering it per render churned the set).
+  const done = useEffectEvent(onDone);
   useEffect(() => {
-    listeners.add(onDone);
-    return () => {
-      listeners.delete(onDone);
+    const fn = (media: MediaDto) => {
+      done(media);
     };
-  }, [listeners, onDone]);
+    listeners.add(fn);
+    return () => {
+      listeners.delete(fn);
+    };
+  }, [listeners]);
   useEffect(() => () => queue.dispose(), [queue]);
   const subscribe = useCallback((fn: () => void) => queue.subscribe(fn), [queue]);
   const snapshot = useCallback(() => queue.entries(), [queue]);

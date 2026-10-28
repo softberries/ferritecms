@@ -60,17 +60,17 @@ async fn redirect_q_param(api: Api) -> Api {
         ["/50xxoff"]
     );
 
-    // 1..=200 characters after trimming.
+    // At most 200 characters after trimming; blank is no search, as on `/media`.
     let p = b
         .get(&api, &format!("{REDIRECTS}?q={}", "a".repeat(201)))
         .await
         .assert_problem(422, "validation");
     assert_eq!(p["errors"][0]["field"], "q");
-    let p = b
-        .get(&api, &format!("{REDIRECTS}?q=%20%20"))
-        .await
-        .assert_problem(422, "validation");
-    assert_eq!(p["errors"][0]["field"], "q");
+    assert_eq!(
+        sources(&api, &b, "q=%20%20").await,
+        sources(&api, &b, "").await
+    );
+    assert_eq!(sources(&api, &b, "q=").await.len(), 4);
     assert_eq!(
         sources(&api, &b, &format!("q={}", "a".repeat(200))).await,
         Vec::<String>::new()

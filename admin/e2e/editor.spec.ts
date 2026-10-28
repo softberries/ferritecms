@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { ContentApi } from "./support/content-api";
+import { png } from "./support/files";
 import { mod } from "./support/keys";
 import { expect, test } from "./support/fixtures";
 import { uid } from "./support/uid";
@@ -29,6 +30,17 @@ async function openNew(page: Page, type = "post"): Promise<void> {
 async function openItem(page: Page, type: string, id: string): Promise<void> {
   await page.goto(`/admin/content/${type}/${id}`);
   await expect(page.getByRole("textbox", { name: "Title", exact: true })).toBeVisible();
+}
+
+/**
+ * Selects `text` and waits for the bubble menu, selecting again while it has not shown:
+ * a selection made while the editor is still settling after the load can be dropped.
+ */
+async function selectForBubble(page: Page, text: string): Promise<void> {
+  await expect(async () => {
+    await selectText(page, text);
+    await expect(bubble(page)).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
 }
 
 /** Selects `text` inside the body (a mouse drag over its characters' box). */
@@ -54,8 +66,8 @@ async function selectText(page: Page, text: string): Promise<void> {
     }, text);
 }
 
-test("write_and_save_new_post", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("write_and_save_new_post", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const page = await as("admin");
   const name = `Written ${uid()}`;
   await openNew(page);
@@ -134,8 +146,8 @@ test("write_and_save_new_post", async ({ as, site, backend }) => {
   await api.dispose();
 });
 
-test("bubble_menu_link_refuses_javascript", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("bubble_menu_link_refuses_javascript", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const item = await api.create("post", `Links ${uid()}`, {
     body: {
       type: "doc",
@@ -150,8 +162,7 @@ test("bubble_menu_link_refuses_javascript", async ({ as, site, backend }) => {
   const page = await as("admin");
   await openItem(page, "post", item.id);
   await body(page).click();
-  await selectText(page, "manual");
-  await expect(bubble(page)).toBeVisible();
+  await selectForBubble(page, "manual");
 
   await bubble(page).getByRole("button", { name: "Link" }).click();
   const field = page.getByRole("textbox", { name: "Link address" });
@@ -350,13 +361,13 @@ function longBody(mediaId: string | null): unknown {
   };
 }
 
-test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
+test("screens", async ({ as, site, siteKey, snap, expectAccessible }) => {
   test.setTimeout(300_000);
-  const api = await ContentApi.as(backend, site.url, "admin");
-  const media = await api.ctx.get("/api/v1/media?limit=1");
-  const mediaItems = media.ok() ? ((await media.json()) as { items: { id: string }[] }).items : [];
+  const api = await ContentApi.as(siteKey, site.url, "admin");
+  // An image of its own: one another test uploaded may be deleted while this one runs.
+  const image = await api.upload(png(`${uid("tour")}.png`, 960, 540));
   const long = await api.create("post", "A tour of the block format", {
-    body: longBody(mediaItems[0]?.id ?? null),
+    body: longBody(image.id),
   });
   const imported = await api.create("post", "Imported from another editor", {
     body: fixture("unknown-node.json"),
@@ -387,8 +398,7 @@ test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
   await expectAccessible(page);
 
   // The bubble menu over a selection (the top of the post, unscrolled).
-  await selectText(page, "what you write is what the site shows");
-  await expect(bubble(page)).toBeVisible();
+  await selectForBubble(page, "what you write is what the site shows");
   await snap(page, "editor-bubble-menu");
   await expectAccessible(page);
 
@@ -430,5 +440,6 @@ test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
   await expect(stored.locator("pre")).toContainText('"listItem"');
   await snap(page, "editor-content-error");
   await expectAccessible(page);
+  await api.purgeMedia(image.id);
   await api.dispose();
 });

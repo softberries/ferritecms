@@ -32,7 +32,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { nameFromLabel } from "./builder-model";
-import { FormField, SwitchRow } from "./form-field";
+import { FormField, SwitchRow } from "@/components/kit/form-field";
 import { MAX_TYPE_LABEL, MAX_TYPE_NAME, labelProblem, validTypeName } from "./type-rules";
 import { without } from "../shared";
 

@@ -1,0 +1,1147 @@
+{
+  "secret": {
+    "set": "Set",
+    "notSet": "Not set",
+    "removing": "Removed when you save",
+    "replace": "Replace",
+    "add": "Set a value",
+    "remove": "Remove",
+    "undo": "Undo",
+    "cancel": "Cancel",
+    "replaceHint": "The stored value is never shown. What you type here replaces it when you save.",
+    "setHint": "Stored sealed when you save; it is never shown again."
+  },
+  "copyOnce": {
+    "copy": "Copy",
+    "copiedShort": "Copied",
+    "copied": "Copied to the clipboard",
+    "copyFailed": "Could not copy. Select the text and copy it yourself.",
+    "hint": "Shown only now. Store it somewhere safe."
+  },
+  "settingsForm": {
+    "save": "Save changes",
+    "saving": "Saving…",
+    "saved": "Settings saved",
+    "notSaved": "Settings not saved",
+    "reloaded": "Reloaded their version; your edits were dropped",
+    "pending_one": "{{count}} unsaved change",
+    "pending_other": "{{count}} unsaved changes",
+    "reset": "Reset to default",
+    "default": "Default: {{value}}",
+    "on": "on",
+    "off": "off",
+    "invalid": "Stored value is not valid; the default is used",
+    "badColour": "Use a colour like #1a2b3c.",
+    "badNumber": "Enter a number.",
+    "pickColour": "Pick a colour",
+    "unsupported": "{{label}}: this admin cannot edit settings of the kind “{{kind}}”.",
+    "fixFirst": "Some settings need fixing before they can be saved."
+  },
+  "account": {
+    "title": "Account",
+    "description": "Your profile, how you sign in, API tokens and the sessions signed in as you.",
+    "wrongPassword": "Wrong password.",
+    "passwordRequired": "Enter your password.",
+    "sections": {
+      "profile": {
+        "title": "Profile",
+        "description": "Your name as others see it, and the e-mail address password resets go to."
+      },
+      "password": {
+        "title": "Password",
+        "description": "Changing it signs out every other session. API tokens keep working."
+      },
+      "totp": {
+        "title": "Two-factor authentication",
+        "description": "A six-digit code from an authenticator app, asked for after your password."
+      },
+      "tokens": {
+        "title": "API tokens",
+        "description": "For scripts and other programs. A token can do only what its scopes and your role allow."
+      },
+      "sessions": {
+        "title": "Sessions",
+        "description": "Browsers signed in as you. Sign out any you do not recognise."
+      }
+    },
+    "profile": {
+      "login": "Login",
+      "role": "Role",
+      "memberSince": "Member since",
+      "lastSignIn": "Last sign-in",
+      "never": "Never",
+      "displayName": "Display name",
+      "email": "E-mail",
+      "currentPassword": "Current password",
+      "emailChangeHint": "Password resets are sent to this address, so changing it needs your password.",
+      "save": "Save profile",
+      "saving": "Saving…",
+      "saved": "Profile saved",
+      "nameRequired": "Enter a display name.",
+      "nameTooLong": "Use at most 100 characters.",
+      "emailRequired": "Enter an e-mail address.",
+      "emailInvalid": "Enter an e-mail address like name@example.com.",
+      "passwordForEmail": "Enter your current password to change your e-mail."
+    },
+    "password": {
+      "current": "Current password",
+      "new": "New password",
+      "repeat": "Repeat new password",
+      "submit": "Change password",
+      "pending": "Changing…",
+      "changed": "Password changed",
+      "othersSignedOut": "Other sessions were signed out."
+    },
+    "totp": {
+      "on": "On",
+      "off": "Off",
+      "onBody": "Signing in asks for a code from your authenticator app.",
+      "offBody": "Signing in needs only your password. Add a code from your phone so a stolen password is not enough.",
+      "setUp": "Set up",
+      "turnOff": "Turn off",
+      "lostHint": "There are no recovery codes: if you lose the app, an administrator has to turn this off for you.",
+      "setupTitle": "Set up two-factor authentication",
+      "stepScan": "Step 1 of 2: scan the code with an authenticator app.",
+      "stepCode": "Step 2 of 2: enter the code the app shows, and your password.",
+      "qrLabel": "Scan this code with your authenticator app",
+      "manual": "Can't scan it? Enter this key instead",
+      "manualHint": "Time-based, 6 digits, every 30 seconds.",
+      "copySecret": "Copy key",
+      "copied": "Key copied",
+      "copyFailed": "Could not copy. Select the key and copy it yourself.",
+      "loading": "Starting set-up…",
+      "loadFailed": "Set-up could not start.",
+      "alreadyOn": "Two-factor authentication is already on.",
+      "retry": "Try again",
+      "code": "Six-digit code",
+      "codeHint": "The code changes every 30 seconds; use the newest one.",
+      "codeRequired": "Enter all six digits.",
+      "codeWrong": "That code is not right. Check that your phone's clock is set automatically, then try the newest code.",
+      "expired": "This set-up has expired. Start again for a new key.",
+      "startAgain": "Start again",
+      "password": "Your password",
+      "othersNote": "Turning it on signs out your other sessions.",
+      "next": "Next",
+      "back": "Back",
+      "cancel": "Cancel",
+      "turnOn": "Turn on",
+      "turningOn": "Turning on…",
+      "enabled": "Two-factor authentication is on",
+      "othersSignedOut": "Other sessions were signed out.",
+      "disableTitle": "Turn off two-factor authentication?",
+      "disableBody": "Signing in will need only your password. Enter it to confirm.",
+      "turningOff": "Turning off…",
+      "disabled": "Two-factor authentication is off",
+      "method": "Authenticator app",
+      "alreadyOff": "Two-factor authentication was already off."
+    },
+    "tokens": {
+      "count_one": "{{count}} of {{max}} tokens",
+      "count_other": "{{count}} of {{max}} tokens",
+      "new": "New token",
+      "label": "API tokens",
+      "columns": {
+        "name": "Name",
+        "scopes": "Scopes",
+        "created": "Created",
+        "lastUsed": "Last used",
+        "expires": "Expires"
+      },
+      "never": "Never",
+      "neverUsed": "Never used",
+      "expired": "Expired",
+      "revoke": "Revoke",
+      "revokeLabel": "Revoke {{name}}",
+      "revokeTitle": "Revoke “{{name}}”?",
+      "revokeBody": "Anything that uses this token stops working at once. This cannot be undone.",
+      "revokeConfirm": "Revoke token",
+      "revoking": "Revoking…",
+      "revoked": "Token revoked",
+      "revokeFailed": "Token not revoked",
+      "cancel": "Cancel",
+      "emptyTitle": "No API tokens",
+      "emptyBody": "Create one for a script or another program that works with this site.",
+      "neverExpires": "Never expires",
+      "expiresPrefix": "Expires",
+      "full": "You have {{max}} tokens, the most an account can hold. Revoke one to make a new one."
+    },
+    "tokenDialog": {
+      "title": "New API token",
+      "description": "A bearer token for the API. It can do only what you can, narrowed to the scopes below.",
+      "name": "Name",
+      "nameHint": "What uses it, so you know which one to revoke later.",
+      "nameRequired": "Enter a name.",
+      "nameTooLong": "Use at most 100 characters.",
+      "scopes": "Scopes",
+      "scopesHint": "Write includes read. Only scopes this session holds are offered.",
+      "scopesRequired": "Choose at least one scope.",
+      "readAll": "Read all",
+      "clear": "Clear",
+      "level": {
+        "none": "None",
+        "read": "Read",
+        "write": "Write"
+      },
+      "areas": {
+        "content": "Content",
+        "media": "Media",
+        "terms": "Terms",
+        "menus": "Menus",
+        "comments": "Comments",
+        "users": "Users",
+        "settings": "Settings",
+        "redirects": "Redirects",
+        "extensions": "Extensions",
+        "import": "Import",
+        "system": "System"
+      },
+      "expires": "Expires",
+      "expiry": {
+        "never": "Never",
+        "30": "In 30 days",
+        "90": "In 90 days",
+        "365": "In 365 days"
+      },
+      "create": "Create token",
+      "creating": "Creating…",
+      "cancel": "Cancel",
+      "createdTitle": "Token created",
+      "createdDescription": "Send it as “Authorization: Bearer <token>”.",
+      "token": "Token",
+      "done": "Done",
+      "failed": "The token was not created."
+    },
+    "sessions": {
+      "label": "Sessions",
+      "current": "This session",
+      "other": "Another session",
+      "signedIn": "Signed in {{when}}",
+      "lastSeenPrefix": "last active",
+      "signOut": "Sign out",
+      "signOutLabel": "Sign out the session signed in {{when}}",
+      "signOutOthers": "Sign out all other sessions",
+      "signedOut": "Session signed out",
+      "signedOutOthers_one": "Signed out {{count}} other session",
+      "signedOutOthers_other": "Signed out {{count}} other sessions",
+      "failed": "Not signed out",
+      "onlyThis": "No other session is signed in as you.",
+      "count_one": "{{count}} session signed in",
+      "count_other": "{{count}} sessions signed in"
+    }
+  },
+  "users": {
+    "title": "Users",
+    "description": "Everyone who can sign in to this admin: their roles, how they sign in, and their API tokens.",
+    "searchLabel": "users",
+    "filterRole": "Filter by role",
+    "filterStatus": "Filter by status",
+    "clearFilters": "Clear filters",
+    "noMatch": {
+      "title": "No users match",
+      "body": "No user has this role and status.",
+      "bodyQ": "No login, name or e-mail holds “{{q}}” with these filters."
+    },
+    "empty": {
+      "title": "No users yet",
+      "body": "Add someone with New user."
+    },
+    "open": "Open",
+    "openOn": "Open {{name}}",
+    "loadMore": "Load more",
+    "loadingMore": "Loading…",
+    "you": "You",
+    "never": "Never",
+    "twoFactorOn": "Two-factor authentication on",
+    "twoFactorShort": "2FA",
+    "twoFactorOff": "Off",
+    "cancel": "Cancel",
+    "status": {
+      "active": "Active",
+      "disabled": "Disabled",
+      "mustReset": "Must change password"
+    },
+    "columns": {
+      "user": "User",
+      "displayName": "Display name",
+      "email": "E-mail",
+      "role": "Role",
+      "status": "Status",
+      "twoFactor": "Two-factor",
+      "lastLogin": "Last sign-in"
+    },
+    "new": {
+      "action": "New user",
+      "title": "New user",
+      "description": "They sign in with the login or the e-mail address. The login cannot change later.",
+      "accessLegend": "How they get in",
+      "setPassword": "Set a password",
+      "sendReset": "Send a reset e-mail",
+      "password": "Password",
+      "passwordHint": "They must change it when they first sign in. Pass it on to them yourself; it is not shown again.",
+      "resetHint": "The account is made without a password, and a link to choose one is e-mailed to them. The link expires after a while; if it does, they can ask for a new one with “Forgot password?” on the sign-in page, or you can set a password for them.",
+      "create": "Create user",
+      "creating": "Creating…",
+      "created": "{{name}} was added",
+      "resetSent": "A reset link was sent to {{email}}",
+      "resetFailed": "The account was made, but the reset e-mail was not sent: {{detail}}"
+    },
+    "form": {
+      "login": "Login",
+      "loginHint": "Lower-case letters, digits, “.”, “_” and “-”; at most 60.",
+      "loginRequired": "Enter a login.",
+      "loginInvalid": "Use 1 to 60 of a–z, 0–9, “.”, “_” and “-”, starting with a letter or digit.",
+      "emailInvalid": "Enter an e-mail address like name@example.com.",
+      "nameRequired": "Enter a display name.",
+      "nameTooLong": "Use at most 100 characters.",
+      "passwordShort": "Use at least {{min}} characters.",
+      "passwordLong": "This password is too long."
+    },
+    "sheet": {
+      "loading": "Loading user…",
+      "description": "A user's profile, role, sign-in and API tokens.",
+      "reloaded": "Reloaded their account as it is now; your change was not saved.",
+      "profile": "Profile",
+      "profileSaved": "Profile saved",
+      "saveProfile": "Save profile",
+      "saving": "Saving…",
+      "ownBody": "This is you. Your role and status cannot be changed here, and your profile, password and two-factor settings are in your account.",
+      "manageAccount": "Manage your account",
+      "access": "Role and status",
+      "accessHint": "A change asks first: it signs them out everywhere.",
+      "signIn": "Sign-in",
+      "password": "Password",
+      "passwordBody": "Set a new one if they lost theirs.",
+      "passwordMustReset": "They must change their password at their next sign-in.",
+      "twoFactor": "Two-factor authentication",
+      "twoFactorOn": "On, with an authenticator app.",
+      "twoFactorOff": "Off. Only they can turn it on, in their account.",
+      "tokens": "API tokens",
+      "tokensHint": "Only they can make new tokens, in their account.",
+      "tokensHintOwn": "Make new tokens in your account.",
+      "noTokens": "No API tokens.",
+      "tokenUsed": "Used",
+      "created": "Member since",
+      "danger": "Delete user",
+      "dangerBody": "Removes the account for good. Content they wrote is kept and moves to another user."
+    },
+    "access": {
+      "roleTitle": "Make {{name}} {{role}}?",
+      "roleBody": "Their sessions end on every node, so they sign in again. Their API tokens stay, and can do only what the new role allows.",
+      "roleConfirm": "Change role",
+      "roleChanged": "Role changed to {{role}}",
+      "disableTitle": "Disable {{name}}?",
+      "disableBody": "They can no longer sign in: their sessions end and their API tokens are revoked. Their content stays.",
+      "disableConfirm": "Disable account",
+      "disabled": "Account disabled",
+      "enableTitle": "Enable {{name}}?",
+      "enableBody": "They can sign in again. API tokens revoked when the account was disabled do not come back.",
+      "enableConfirm": "Enable account",
+      "enabled": "Account enabled"
+    },
+    "password": {
+      "action": "Set password",
+      "title": "Set a password for {{name}}",
+      "body": "They must change it when they next sign in, and their sessions end now. Their API tokens keep working.",
+      "label": "New password",
+      "done": "Password set for {{name}}"
+    },
+    "totp": {
+      "action": "Turn off two-factor",
+      "title": "Turn off two-factor authentication for {{name}}?",
+      "body": "For a lost authenticator. They then sign in with their password alone until they set it up again. Their sessions and tokens are kept.",
+      "confirm": "Turn off",
+      "done": "Two-factor authentication is off for {{name}}"
+    },
+    "delete": {
+      "action": "Delete user",
+      "title": "Delete {{name}}?",
+      "body": "The account is removed for good: their sessions end and their API tokens are revoked.",
+      "confirm": "Delete user",
+      "deleting": "Deleting…",
+      "reassign": "This user owns content. Reassign it to:",
+      "reassignHint": "Their posts, pages and revisions move to that user; nothing is deleted.",
+      "confirmReassign": "Reassign and delete",
+      "search": "Search users",
+      "searchPlaceholder": "Search by name, login or e-mail…",
+      "pickLabel": "Active users",
+      "noMatch": "No active user matches “{{q}}”.",
+      "nobody": "There is no other active user.",
+      "done": "{{name}} was deleted"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "description": "How the site is named, what its home page shows, where its pages live and how comments are handled.",
+    "rail": "Settings groups",
+    "resource": "The {{group}} settings",
+    "save": "Save changes",
+    "saving": "Saving…",
+    "saved": "Settings saved",
+    "notSaved": "Settings not saved",
+    "reloaded": "Reloaded their version; your edits were dropped",
+    "fixFirst": "Some settings need fixing before they can be saved.",
+    "pending_one": "{{count}} unsaved change",
+    "pending_other": "{{count}} unsaved changes",
+    "shortcuts": {
+      "group": "Settings",
+      "save": "Save settings"
+    },
+    "leave": {
+      "title": "Leave without saving?",
+      "body": "Your changes to these settings are not saved yet. Leaving drops them.",
+      "stay": "Stay",
+      "leave": "Leave and drop changes"
+    },
+    "errors": {
+      "tooLong": "At most {{max}} characters.",
+      "control": "Remove the control characters (such as tabs).",
+      "locale": "Use 1 to 35 letters, digits, “-” or “_”, such as en or pt-BR.",
+      "integer": "Enter a whole number from {{min}} to {{max}}.",
+      "pickPage": "Pick a page.",
+      "permalink": {
+        "slashes": "Start and end the structure with “/”.",
+        "noSlug": "The structure needs %slug%.",
+        "emptySegment": "Remove the empty segment (“//”).",
+        "unknownToken": "“{{segment}}” is not a token: a segment is one token or plain text.",
+        "dotSegment": "“.” and “..” cannot be segments.",
+        "uppercase": "“{{segment}}” has capital letters; addresses are lower case.",
+        "badLiteral": "“{{segment}}” may use only a–z, 0–9, “-”, “.”, “_” and “~”.",
+        "reserved": "“{{segment}}” is reserved and cannot start an address.",
+        "noParentPath": "Pages need %parent_path%, or sub-pages would share addresses.",
+        "routeWord": "“{{segment}}” starts author, page or search addresses and cannot start this one.",
+        "year": "“{{segment}}” looks like a year archive and cannot start an address."
+      }
+    },
+    "groups": {
+      "general": {
+        "title": "General",
+        "description": "The site's name, tagline and language."
+      },
+      "reading": {
+        "title": "Reading",
+        "description": "What the home page shows, how many posts a listing holds, and search engines."
+      },
+      "permalinks": {
+        "title": "Permalinks",
+        "description": "The addresses of posts and pages."
+      },
+      "comments": {
+        "title": "Comments",
+        "description": "Whether posts take comments and which wait for moderation."
+      },
+      "mediaSizes": {
+        "title": "Media sizes",
+        "description": "The image sizes made for every uploaded image."
+      },
+      "mail": {
+        "title": "Mail",
+        "description": "Outgoing e-mail for password resets and plugin notices."
+      }
+    },
+    "general": {
+      "title": "Site title",
+      "titleHint": "Shown in the browser tab, feeds and e-mails. Leave empty to use the title in ferrite.toml.",
+      "tagline": "Tagline",
+      "taglineHint": "A short line about the site, used by themes and feeds. Leave empty to use the one in ferrite.toml.",
+      "locale": "Language",
+      "localeHint": "A language tag such as en or pt-BR, for the pages' lang attribute and the feed. Leave empty to use the one in ferrite.toml."
+    },
+    "reading": {
+      "frontPage": "Home page shows",
+      "latestPosts": "Latest posts",
+      "latestPostsHint": "The newest posts first, a page at a time.",
+      "aPage": "A page",
+      "aPageHint": "A page of your choice; the post listing then has no address of its own.",
+      "page": "Page",
+      "pickPage": "Choose a page…",
+      "searchPages": "Search published pages…",
+      "noPages": "No published pages found.",
+      "loading": "Loading…",
+      "untitled": "Untitled",
+      "pageGone": "Page not available",
+      "pageGoneHint": "The chosen page no longer exists or cannot be read; choose another.",
+      "notPublished": "This page is not published: the home page shows the latest posts until it is.",
+      "perPage": "Posts per page",
+      "perPageHint": "1 to 100, for the home page and archives. Leave empty for the default, {{value}}.",
+      "discourage": "Discourage search engines",
+      "discourageHint": "robots.txt then asks every crawler to stay away. Crawlers that ignore robots.txt may still index the site.",
+      "nameFailed": "The chosen page could not be loaded.",
+      "retry": "Retry",
+      "pageUnknown": "Page name not loaded"
+    },
+    "permalinks": {
+      "post": "Post addresses",
+      "presets": {
+        "name": "Post name",
+        "month": "Month and name",
+        "category": "Category and name",
+        "custom": "Custom"
+      },
+      "customHint": "Build your own from the tokens below.",
+      "customStructure": "Custom structure",
+      "postPreview": "A post would be at",
+      "page": "Page structure",
+      "pageHint": "Must contain %parent_path%: a sub-page's address holds its parents'. The default is {{default}}.",
+      "pagePreview": "A sub-page would be at",
+      "tokens": "Tokens:",
+      "addToken": "Add {{token}}",
+      "tokenHints": {
+        "slug": "The item's slug (required)",
+        "year": "The publication year, four digits (UTC)",
+        "month": "The publication month, two digits (UTC)",
+        "category": "The first category's slug, or “uncategorized”",
+        "parent_path": "The parents' slugs, empty for a top-level item"
+      },
+      "noPreview": "Fix the structure to see a preview.",
+      "samplePost": "sample-post",
+      "sampleCategory": "news",
+      "otherTypes": "Items of custom content types stay at /t/<type>/<slug>/.",
+      "confirm": {
+        "title": "Change the permalinks?",
+        "body": "Every post or page whose address follows the changed structure moves to a new URL. No redirects are created from the old URLs, so links to them elsewhere stop working.",
+        "cancel": "Cancel",
+        "ok": "Change permalinks"
+      }
+    },
+    "comments": {
+      "enabled": "Allow comments",
+      "enabledHint": "Visitors can comment on posts.",
+      "moderation": "Comments from guests",
+      "known": "Known commenters post directly",
+      "knownHint": "A guest with an approved comment under the same name and e-mail posts without waiting. Anyone who knows those two can post as them.",
+      "all": "Hold every guest comment",
+      "allHint": "Each guest comment waits for a moderator.",
+      "perPage": "Comment threads per page",
+      "perPageHint": "1 to 100 top-level threads on each public page, with all their replies. Leave empty for the default, {{value}}."
+    },
+    "mediaSizes": {
+      "setBy": "Set by the theme {{theme}}",
+      "none": "The theme {{theme}} asks for no sizes of its own.",
+      "name": "Name",
+      "size": "Width × height",
+      "crop": "Fit",
+      "auto": "auto",
+      "cropped": "Cropped",
+      "scaled": "Scaled",
+      "notMade": "Not made",
+      "skipped": {
+        "noCrop": "A size with a height must be cropped.",
+        "zero": "A size cannot be 0 pixels.",
+        "taken": "FerriteCMS already makes a size of this name."
+      },
+      "noActive": "No active theme",
+      "noActiveBody": "The site serves the built-in theme until one is activated.",
+      "needsThemes": "Seeing the theme's sizes needs permission to manage themes.",
+      "changeNote": "Sizes are not a setting: to change them, change the theme (its theme.toml [images]). FerriteCMS also makes its own sizes: {{sizes}}."
+    },
+    "mail": {
+      "configured": "Mail is set up",
+      "configuredHint": "Password resets and plugin notices are sent by e-mail.",
+      "notConfigured": "Mail is not set up",
+      "notConfiguredHint": "Password resets by e-mail and plugin notices are off.",
+      "from": "From",
+      "setup": "Add a [mail] section to ferrite.toml:",
+      "setupRestart": "Then restart ferrite serve. The SMTP URL can also come from smtp_url_file or FERRITE_MAIL__SMTP_URL.",
+      "test": "Send test e-mail",
+      "sending": "Sending…",
+      "testHint": "Goes to your address, {{email}}.",
+      "testNeedsSystem": "Sending a test e-mail needs System access.",
+      "sent": "Test e-mail queued for {{to}}",
+      "notSent": "Test e-mail not sent"
+    }
+  },
+  "themes": {
+    "title": "Themes",
+    "description": "How the public site looks. Upload a theme folder, switch the active theme and customize it.",
+    "upload": "Upload theme",
+    "list": "Installed themes",
+    "badge": {
+      "active": "Active",
+      "builtIn": "Built in"
+    },
+    "version": "Version {{version}}",
+    "by": "By {{author}}",
+    "license": "Licence {{license}}",
+    "hash": "Bundle {{hash}}",
+    "hashTitle": "SHA-256 of the installed bundle: {{hash}}",
+    "noDescription": "No description.",
+    "facts": {
+      "menus_one": "{{count}} menu location",
+      "menus_other": "{{count}} menu locations",
+      "images_one": "{{count}} image size",
+      "images_other": "{{count}} image sizes"
+    },
+    "activate": "Activate",
+    "activateOn": "Activate {{name}}",
+    "customize": "Customize",
+    "customizeOn": "Customize {{name}}",
+    "nodes": {
+      "title": "Served by",
+      "loaded": "Loaded",
+      "fallback": "Fallback",
+      "fallbackHint": "This node cannot load the theme and keeps serving its previous one.",
+      "none": "No node has reported yet.",
+      "checking": "Checking that every node loads {{name}}…",
+      "pending": "Some nodes have not loaded {{name}} yet. Their state shows here when they report it."
+    },
+    "confirm": {
+      "title": "Activate {{name}}?",
+      "body": "The public site switches to this theme on every node as soon as each one loads it. {{current}} stays installed and can be activated again.",
+      "bodyNoCurrent": "The public site switches to this theme on every node as soon as each one loads it.",
+      "confirm": "Activate",
+      "activating": "Activating…",
+      "cancel": "Cancel",
+      "doesNotLoad": "The theme does not load, so nothing changed:",
+      "done": "{{name}} is the active theme"
+    },
+    "uploadDialog": {
+      "title": "Upload a theme",
+      "description": "A theme folder holds theme.toml, templates/ and assets/. Folders are packed in your browser; hidden files are left out.",
+      "drop": "Drop a theme folder or a .tar bundle here",
+      "dropHint": "Up to 2000 files and 20 MiB.",
+      "overlay": "Drop to pick this theme",
+      "chooseFolder": "Choose folder",
+      "chooseTar": "Choose .tar file",
+      "chooseAgain": "Choose another",
+      "reading": "Reading the folder…",
+      "dropOther": "Drop one theme folder or one .tar file.",
+      "unknownName": "Theme name not found in theme.toml",
+      "folderSummary_one": "{{count}} file, {{size}}",
+      "folderSummary_other": "{{count}} files, {{size}}",
+      "tarSummary": "{{file}}, {{size}}",
+      "replace": "A theme named {{name}} is installed (version {{version}}). Uploading replaces it.",
+      "replaceActive": "A theme named {{name}} is installed (version {{version}}) and it is the active theme. Uploading replaces it, and the new files go live on the site at once.",
+      "uploading": "Uploading…",
+      "progress": "Upload progress",
+      "submit": "Upload",
+      "submitReplace": "Replace theme",
+      "cancel": "Cancel",
+      "doesNotLoad": "The theme does not load, so nothing was installed:",
+      "installed": "Theme {{name}} installed",
+      "pack": {
+        "too-many-files": "The folder has more than 2000 files.",
+        "too-large": "The folder's files add up to more than 20 MiB.",
+        "path-too-long": "{{path}}: the path is longer than 255 bytes.",
+        "bad-path": "{{path}}: the path has a backslash, a control character or an empty segment.",
+        "too-deep": "{{path}}: folders are nested deeper than 16 levels.",
+        "does-not-fit": "{{path}}: the path does not fit a tar header (the file name after the last folder must be at most 100 bytes).",
+        "duplicate": "{{path}}: the file appears twice."
+      }
+    },
+    "settings": {
+      "title": "Customize {{name}}",
+      "description": "Options the theme declares in theme.toml. They apply on every page the theme renders.",
+      "staleKey": "Theme {{name}}",
+      "loading": "Loading the theme's settings"
+    }
+  },
+  "plugins": {
+    "title": "Plugins",
+    "description": "Extensions that run in a sandbox, each with only the access it was approved for.",
+    "enable": "Enable",
+    "enabling": "Enabling…",
+    "disable": "Disable",
+    "disabling": "Disabling…",
+    "report": {
+      "factsLabel": "What is being installed",
+      "plugin": "Plugin",
+      "version": "Version",
+      "publisher": "Publisher",
+      "unverified": "{{publisher}} (not verified)",
+      "artifact": "Component SHA-256",
+      "canTitle": "This plugin can:",
+      "nothing": "This plugin asks for no access to the site.",
+      "highRisk": "High risk",
+      "mediumRisk": "Sees traffic",
+      "new": "New",
+      "newDetail": "(new)",
+      "detail": "Covers",
+      "limitsTitle": "Limits per call",
+      "limit": "Limit",
+      "requested": "Asks for",
+      "siteDefault": "Site default",
+      "aboveDefault": "Above the default",
+      "limitName": {
+        "memory": "Memory",
+        "fuel": "Fuel (work)"
+      }
+    },
+    "install": {
+      "action": "Install plugin",
+      "title": "Install a plugin",
+      "description": "A plugin is its ferrite-plugin.toml and one .wasm component. You see what it asks for before anything is installed.",
+      "stepsLabel": "Steps",
+      "step": {
+        "pick": "Choose files",
+        "report": "Review access",
+        "done": "Installed"
+      },
+      "drop": "Drop ferrite-plugin.toml and the .wasm file here",
+      "dropHint": "Or choose each file. The component may be up to 32 MiB.",
+      "overlay": "Drop to pick these files",
+      "manifest": "Manifest (ferrite-plugin.toml)",
+      "component": "Component (.wasm)",
+      "chooseManifest": "Choose manifest",
+      "chooseComponent": "Choose component",
+      "replaceFile": "Choose another",
+      "none": "No file chosen",
+      "cancel": "Cancel",
+      "check": "Check permissions",
+      "checking": "Checking…",
+      "back": "Back",
+      "approve": "Approve and install",
+      "installing": "Installing…",
+      "progress": "Upload progress",
+      "changed": "The files changed after the check, so nothing was installed. This is what they ask for now: review it and approve again.",
+      "update": "This updates the installed {{name}} (version {{version}}); it stays enabled or disabled as it is.",
+      "updateNoVersion": "This updates the installed {{name}}; it stays enabled or disabled as it is.",
+      "nothingNew": "It asks for nothing new.",
+      "somethingNew_one": "It asks for {{count}} new permission, marked New.",
+      "somethingNew_other": "It asks for {{count}} new permissions, marked New.",
+      "doneDisabled": "{{name}} {{version}} is installed and disabled.",
+      "doneEnabled": "{{name}} {{version}} is installed and enabled.",
+      "doneHint": "It runs on the site once you enable it.",
+      "doneEnabledHint": "The update was already enabled, so it runs as soon as each node loads it.",
+      "open": "Open {{name}}",
+      "close": "Close",
+      "installed": "Plugin {{name}} installed",
+      "enabled": "{{name}} is enabled"
+    },
+    "list": "Installed plugins",
+    "rowMenu": "Actions for {{name}}",
+    "by": "By {{publisher}} (not verified)",
+    "disabled": "{{name}} is disabled",
+    "broken": "This plugin does not load: its stored manifest or grant no longer reads. Install it again, or delete it.",
+    "disabledReason": "Disabled automatically after repeated failures: {{reason}}. Enabling it starts its failure count over.",
+    "state": {
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "broken": "Broken"
+    },
+    "columns": {
+      "plugin": "Plugin",
+      "state": "State",
+      "failures": "Failures, 24 h",
+      "nodes": "Nodes"
+    },
+    "empty": {
+      "title": "No plugins installed",
+      "body": "Plugins add features in a sandbox, with only the access you approve. Install one from its manifest and .wasm file."
+    },
+    "facts": {
+      "version": "Version {{version}}",
+      "publisher": "By {{publisher}} (not verified)",
+      "license": "Licence {{license}}",
+      "updated": "Updated"
+    },
+    "nodes": {
+      "title": "Nodes",
+      "description": "The live nodes that loaded this plugin.",
+      "none": "No live node has loaded it yet: it is disabled, or the nodes have not reported.",
+      "noneShort": "None yet",
+      "dot": "{{node}}: {{status}}",
+      "status": {
+        "loaded": "Loaded",
+        "failed": "Failed",
+        "disabled": "Disabled"
+      }
+    },
+    "permissions": {
+      "title": "Permissions",
+      "description": "What this plugin was approved for when it was installed.",
+      "broken": "The stored grant does not read, so nothing is shown."
+    },
+    "settings": {
+      "action": "Settings",
+      "title": "Settings",
+      "description": "Options the plugin declares in its manifest. Secrets are never shown again once saved.",
+      "none": "This plugin declares no settings.",
+      "staleKey": "Plugin {{name}}",
+      "loading": "Loading the plugin's settings",
+      "invalid_one": "{{count}} stored value no longer fits this version and reads as its default until you save it again.",
+      "invalid_other": "{{count}} stored values no longer fit this version and read as their defaults until you save them again."
+    },
+    "metrics": {
+      "failuresTitle": "Failures, last {{hours}} hours",
+      "allNodes": "All nodes",
+      "noFailures": "No failures in the last {{hours}} hours.",
+      "otherHooks": "Other hooks",
+      "failuresSummary_one": "{{count}} failure in the last {{hours}} hours.",
+      "failuresSummary_other": "{{count}} failures in the last {{hours}} hours.",
+      "callsTitle": "Calls by hook",
+      "thisNode": "This node, since {{time}}",
+      "noCalls": "No calls on this node since it started.",
+      "hook": "Hook",
+      "calls": "Calls",
+      "failures": "Failures",
+      "busy": "Busy",
+      "budgetCut": "Budget cuts",
+      "average": "Average",
+      "p95": "p95",
+      "max": "Longest",
+      "ms": "{{ms}} ms",
+      "p95Le": "≤ {{ms}} ms",
+      "p95Over": "> {{ms}} ms"
+    },
+    "delete": {
+      "action": "Delete",
+      "title": "Delete {{name}}?",
+      "body": "Its hooks and routes stop at once on every node.",
+      "keepBody": "If you keep its data, its stored data, settings and secrets stay for 30 days: a plugin named {{name}} installed in that time picks them up again, whoever publishes it. Erase them if you do not plan to reinstall it.",
+      "cancel": "Cancel",
+      "keep": "Delete, keep data for 30 days",
+      "erase": "Delete and erase data",
+      "deleting": "Deleting…",
+      "doneKept": "{{name}} deleted; its data is kept for 30 days",
+      "doneErased": "{{name}} deleted and its data erased"
+    },
+    "retained": {
+      "title": "Retained data",
+      "description": "Data, settings and secrets of deleted plugins, kept for 30 days. Installing a plugin of the same name before then picks them up again.",
+      "name": "Plugin",
+      "deleted": "Deleted",
+      "erasedAfter": "Erased after",
+      "actions": "Actions",
+      "erase": "Erase now",
+      "eraseOn": "Erase the data of {{name}} now",
+      "confirmTitle": "Erase the data of {{name}}?",
+      "confirmBody": "Its stored data, settings and secrets are deleted now. This cannot be undone.",
+      "confirm": "Erase",
+      "erasing": "Erasing…",
+      "cancel": "Cancel",
+      "erased": "The data of {{name}} was erased",
+      "erasedOn": "Erased after {{date}}",
+      "alreadyErased": "The data of {{name}} was already erased"
+    }
+  },
+  "system": {
+    "title": "System",
+    "description": "Versions, nodes, background jobs and the audit log.",
+    "tabs": {
+      "label": "System",
+      "status": "Status",
+      "nodes": "Nodes",
+      "jobs": "Jobs",
+      "audit": "Audit log",
+      "deadCount": "Dead jobs"
+    },
+    "schema": {
+      "upToDate": {
+        "title": "Up to date",
+        "body": "The database is at version {{db}}, the version this binary expects."
+      },
+      "needsUp": {
+        "title_one": "{{count}} migration to apply",
+        "title_other": "{{count}} migrations to apply",
+        "body_one": "The database is at version {{db}} and this binary expects {{binary}}. Apply it with ferrite migrate up.",
+        "body_other": "The database is at version {{db}} and this binary expects {{binary}}. Apply them with ferrite migrate up."
+      },
+      "newer": {
+        "title": "Newer database, still compatible",
+        "body": "A newer FerriteCMS moved the database to version {{db}}; this binary knows up to {{binary}} and can still run on it. Upgrade this binary when you can."
+      },
+      "incompatible": {
+        "title": "Incompatible",
+        "body": "The database is at version {{db}}, which this binary (version {{binary}}) cannot run on. Upgrade this binary."
+      },
+      "unknown": "The database is at version {{db}}; this binary knows up to {{binary}}."
+    },
+    "status": {
+      "site": {
+        "title": "Site",
+        "version": "Version",
+        "mode": "Mode",
+        "database": "Database",
+        "media": "Media storage",
+        "siteUrl": "Site address"
+      },
+      "modes": {
+        "solo": "Solo",
+        "cluster": "Cluster"
+      },
+      "databases": {
+        "sqlite": "SQLite",
+        "postgres": "Postgres"
+      },
+      "medias": {
+        "local": "Local folder",
+        "s3": "S3-compatible storage"
+      },
+      "schema": {
+        "title": "Database schema",
+        "database": "Database",
+        "binary": "This binary",
+        "pending": "Waiting to apply"
+      },
+      "mail": {
+        "title": "Mail",
+        "configured": "Mail is set up",
+        "notConfigured": "Mail is not set up",
+        "from": "From",
+        "configuredHint": "Password resets and plugin notices are sent by e-mail.",
+        "notConfiguredHint": "Password resets by e-mail and plugin notices are off. Mail is set up in ferrite.toml."
+      },
+      "theme": {
+        "title": "Theme",
+        "active": "Active theme",
+        "none": "The built-in default",
+        "allServe": "Every live node serves it.",
+        "fallback_one": "{{count}} node serves the fallback theme:",
+        "fallback_other": "{{count}} nodes serve the fallback theme:",
+        "nodes": "See the nodes"
+      },
+      "jobs": {
+        "title": "Background jobs",
+        "hint": "Every node's jobs, by status."
+      },
+      "nodes": {
+        "title": "Nodes",
+        "live": "Live",
+        "stale": "Stale",
+        "hint": "A node is live while its last heartbeat is at most 30 s old."
+      }
+    },
+    "nodes": {
+      "empty": {
+        "title": "No nodes",
+        "body": "No node has registered yet."
+      },
+      "live": "Live",
+      "stale": "Stale",
+      "thisNode": "This node",
+      "version": "Version",
+      "schema": "Schema",
+      "started": "Started",
+      "heartbeat": "Last heartbeat",
+      "skew": {
+        "ahead": "Clock {{seconds}} s ahead of the database",
+        "behind": "Clock {{seconds}} s behind the database"
+      },
+      "theme": {
+        "title": "Theme",
+        "fallback": "Fallback",
+        "hash": "Hash"
+      },
+      "origin": {
+        "embedded": "Built in",
+        "folder": "Folder",
+        "artifact": "Installed bundle"
+      },
+      "plugins": {
+        "title": "Plugins",
+        "none": "No plugins loaded",
+        "error": "The plugins could not be read"
+      },
+      "pluginStatus": {
+        "loaded": "Loaded",
+        "failed": "Failed",
+        "disabled": "Disabled"
+      },
+      "permalinks": "Permalinks",
+      "jobKinds": "Job kinds",
+      "noJobKinds": "Runs no jobs",
+      "notReported": "Not reported"
+    },
+    "jobs": {
+      "filterStatus": "Status",
+      "status": {
+        "queued": "Queued",
+        "running": "Running",
+        "done": "Done",
+        "dead": "Dead"
+      },
+      "kind": {
+        "label": "Kind",
+        "chosen": "Kind: {{kind}}. Change kind",
+        "search": "Find a kind",
+        "none": "No kinds known",
+        "clear": "Clear the kind"
+      },
+      "clearFilters": "Clear filters",
+      "columns": {
+        "job": "Job",
+        "status": "Status",
+        "attempts": "Attempts",
+        "runAt": "Run at",
+        "finished": "Finished",
+        "lockedBy": "Locked by"
+      },
+      "attempts": "{{attempts}} / {{max}}",
+      "attemptsLabel": "Attempts {{attempts}} of {{max}}",
+      "unhandled": "No node handles this kind yet",
+      "retry": {
+        "action": "Retry",
+        "on": "Retry {{kind}}",
+        "queued": "Queued again",
+        "queuedUnhandled": "Queued again. No node handles this kind yet",
+        "unhandledHint": "It waits until a node that runs {{kind}} jobs joins.",
+        "failed": "Not retried"
+      },
+      "error": {
+        "more": "Show the whole error",
+        "less": "Show less"
+      },
+      "empty": {
+        "title": "No jobs yet",
+        "body": "Background work such as scheduled publishing, image sizes and plugin actions shows here.",
+        "queued": "No queued jobs",
+        "running": "No running jobs",
+        "done": "No done jobs",
+        "dead": "No dead jobs",
+        "statusBody": "Nothing with this status right now."
+      },
+      "noMatch": {
+        "title": "No jobs match",
+        "body": "Try another status or kind."
+      },
+      "loadMore": "Load more",
+      "loadingMore": "Loading…",
+      "none": "—",
+      "summary": {
+        "finished": "Finished",
+        "runAt": "Run",
+        "lockedBy": "On"
+      }
+    },
+    "audit": {
+      "table": "Audit log",
+      "columns": {
+        "time": "Time",
+        "actor": "Actor",
+        "action": "Action",
+        "target": "Target"
+      },
+      "system": "System",
+      "systemHint": "Not done through a signed-in account: the command line or an e-mailed link.",
+      "details": "Details",
+      "actor": {
+        "label": "Actor",
+        "chosen": "Actor: {{name}}. Change actor",
+        "search": "Find a user",
+        "none": "No users match",
+        "loading": "Loading…",
+        "clear": "Clear the actor"
+      },
+      "action": {
+        "label": "Action",
+        "chosen": "Action: {{action}}. Change action",
+        "prefix": "starts with “{{prefix}}”",
+        "search": "Find an action",
+        "startsWith": "Starts with {{prefix}}",
+        "any": "Any {{area}} action",
+        "clear": "Clear the action",
+        "hint": "Type a prefix ending in a dot, like user."
+      },
+      "target": {
+        "label": "Target",
+        "chosen": "Target: {{target}}. Change target",
+        "kind": "Kind",
+        "id": "ID",
+        "idHint": "Optional: one item of that kind.",
+        "apply": "Apply",
+        "clear": "Clear the target",
+        "pick": "Choose a kind"
+      },
+      "clearFilters": "Clear filters",
+      "empty": {
+        "title": "Nothing logged yet",
+        "body": "Changes to users, settings, themes, plugins and jobs are logged here."
+      },
+      "noMatch": {
+        "title": "No entries match",
+        "body": "Try other filters."
+      },
+      "loadMore": "Load more",
+      "loadingMore": "Loading…",
+      "actions": {
+        "user": {
+          "create": "Created a user",
+          "update": "Updated a user",
+          "delete": "Deleted a user",
+          "password": "Set a user's password",
+          "password_reset": "Reset a password by e-mail",
+          "totp_disable": "Turned off a user's two-factor sign-in"
+        },
+        "session": {
+          "revoke": "Signed out a session"
+        },
+        "token": {
+          "create": "Created an API token",
+          "revoke": "Revoked an API token"
+        },
+        "totp": {
+          "enable": "Turned on two-factor sign-in",
+          "disable": "Turned off two-factor sign-in"
+        },
+        "settings": {
+          "update": "Changed site settings"
+        },
+        "mail": {
+          "test": "Sent a test e-mail"
+        },
+        "job": {
+          "retry": "Retried a job"
+        },
+        "plugin": {
+          "install": "Installed a plugin",
+          "enable": "Enabled a plugin",
+          "disable": "Disabled a plugin",
+          "delete": "Deleted a plugin",
+          "purge": "Erased a plugin's data",
+          "settings": "Changed plugin settings"
+        },
+        "theme": {
+          "install": "Installed a theme",
+          "activate": "Activated a theme",
+          "settings": "Changed theme settings"
+        },
+        "type": {
+          "create": "Created a content type",
+          "update": "Changed a content type",
+          "delete": "Deleted a content type"
+        },
+        "taxonomy": {
+          "create": "Created a taxonomy",
+          "update": "Changed a taxonomy",
+          "delete": "Deleted a taxonomy"
+        }
+      },
+      "areas": {
+        "user": "user",
+        "session": "session",
+        "token": "API token",
+        "totp": "two-factor",
+        "settings": "settings",
+        "mail": "mail",
+        "job": "job",
+        "plugin": "plugin",
+        "theme": "theme",
+        "type": "content type",
+        "taxonomy": "taxonomy"
+      },
+      "areaTitles": {
+        "user": "Users",
+        "session": "Sessions",
+        "token": "API tokens",
+        "totp": "Two-factor",
+        "settings": "Settings",
+        "mail": "Mail",
+        "job": "Jobs",
+        "plugin": "Plugins",
+        "theme": "Themes",
+        "type": "Content types",
+        "taxonomy": "Taxonomies"
+      },
+      "targets": {
+        "user": "User",
+        "api_token": "API token",
+        "settings": "Settings",
+        "job": "Job",
+        "plugin": "Plugin",
+        "theme": "Theme",
+        "type": "Content type",
+        "taxonomy": "Taxonomy"
+      }
+    }
+  }
+}

@@ -32,6 +32,7 @@ name        = "blog"
 version     = "0.1.0"          # semver
 author      = "FerriteCMS"     # optional
 license     = "MIT"            # optional
+homepage    = "https://github.com/softberries/ferritecms"  # optional; http:// or https:// only
 description = "…"              # optional
 
 [menus]                                   # menu locations: name = label
@@ -45,6 +46,12 @@ card = { width = 640, height = 360, crop = true }
 accent_color = { type = "color", default = "#c2410c", label = "Accent colour" }
 show_author  = { type = "bool", default = true }
 ```
+
+`author`, `license`, `homepage` and `description` are free text shown by the admin
+(`GET /themes`, 07 §1) as text; `homepage` must be an `http://` or `https://` URL with a
+host part, no whitespace and at most 2048 bytes, else `theme.toml` is refused (M2b-3), so
+the admin can link it. The rule is `ferrite_domain::is_web_url`, shared with the plugin
+manifest's `plugin.homepage` (05 §3).
 
 Setting kinds are the plugin manifest's minus `secret` (`text`, `textarea`, `bool`, `number`,
 `select`, `color`, `media`), because every setting value is visible to templates
@@ -86,6 +93,31 @@ is read, and a bundle larger than the limits allow (`MAX_BUNDLE_BYTES`, 20 MiB +
 entry) is refused unparsed. Hidden files are skipped as in a folder; the theme hash is
 computed over the files exactly as for a folder, so the same files give the same
 `Theme::hash()` from any source (`crates/ferrite-theme/src/bundle.rs`).
+
+**Packing a folder (as built, M2b-3 P42).** `ferrite theme pack --dir DIR --out FILE`
+writes `ferrite_theme::pack` of a folder (hidden files, any path segment starting with
+`.`, left out), loads the result as an upload would (unpacked and compiled; a theme that
+does not load is refused, exit 1, and nothing is written) and prints `packed <n> files,
+<bytes> bytes, sha256 <hex>`. It needs no data folder, config or database (09 §8), so an
+API user can produce the file `POST /themes` takes; a `tar cf` archive is refused (it has
+directory entries and pads to a 10 KiB record). The admin packs a picked or dropped
+folder in the browser with a TypeScript port of `pack` (`admin/src/appearance/ustar.ts`:
+the same sort by UTF-8 bytes, header fields, prefix/name split at the longest parent that
+fits 155 bytes, hidden entries left out and limits, each refusal naming the file;
+`pick-folder.ts` reads `<input webkitdirectory>` or a dropped folder and strips the
+folder's own name); both packers are pinned byte for byte to
+`admin/src/appearance/__fixtures__/blog-min.tar`, the command's output for the
+`blog-min/` folder next to it (a nested asset, a path over 100 bytes that needs the ustar
+prefix field, a hidden file that is skipped; `crates/ferrite/tests/theme_pack.rs`).
+Given the same files, the two packers write the same bytes; the walks in front of them
+differ where a browser cannot see what `package::read_dir` sees. A dropped folder (the
+File and Directory Entries API) is counted as the CLI counts it, every listed entry
+(files, folders and hidden names) against the 2000 limit. An `<input webkitdirectory>`
+selection lists files only, so there only the files that are packed count, and a folder
+the CLI refuses as "more than 2000 files" can still pack in the browser. Symlinks: the
+CLI refuses them by name, but a page cannot tell a link from a file and both browser
+paths follow it, packing the target's bytes. Either way the server unpacks the upload
+with its own limits (`bundle::unpack`), which stay the authority.
 
 **Install and selection (as built, M1.5).** `ferrite::extensions::install_theme_dir` packs
 a folder, loads the bundle (a theme that does not compile is refused before anything is
@@ -314,12 +346,35 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 | `related(post, n=3)` | public items of the same type sharing a term with `post`, newest first per term; `n` ≤ 10 | `archive:<kind>`, `post:<item>` |
 | `query(type=…, term="<tax>/<slug>", limit=10)` | public items, newest first; `limit` ≤ 50; with `term`, exactly up to `limit` items of `type` with the term in one query (`SiteReader::term_items`, any type the taxonomy applies to, not capped by `reading.per_page`); a type the taxonomy does not list gets none | `archive:<kind>`, `term:<id>` |
 | `asset(path)` | `/_theme/<theme hash>/<path>`, each segment percent-encoded | `theme` |
-| `image(media, size)` | the `size` variant of a public media item (the original for an unknown size) with `width`, `height` and a `srcset` of one candidate per width | `post:<media id>` |
+| `image(media, size)` | the `size` variant of a public media item (the original for an unknown size) with `width`, `height` and a `srcset` of one candidate per width (`MediaPublic::srcset_candidates`, shared with inline images below: of several files of one width the requested size wins, then the original) | `post:<media id>` |
 | `head()` | the pre-rendered `<head>` HTML (core SEO + `render.head` plugin filters, §5) | — |
 | `footer()` | the plugins' footer HTML (`render.footer`, §5; sanitised like `content.body`); `""` without footer plugins and on error pages. `blog` prints it just before `</body>` | — |
-| `comments(post)` | one page of the public thread of a **public post** (other kinds, drafts, unknown ids: `none`), through `SiteReader::comments` (M2b-2 P34): the page is the request's `?cpage=N` on a single item (a positive integer, anything else is 1; past the last page shows the last). A page holds `comments.per_page` top-level threads (default 50, 1..=100), oldest first, each with all its approved replies; a **root** is an approved comment whose parent is null or not approved (a reply under a spam or held comment starts its own thread). A page always shows every one of its top-level threads; its rows are capped at 2,000 (`MAX_PAGE_ROWS`), and past that only replies are cut: the roots first, then replies in thread order (depth first, oldest first) until the budget is used, so the latest replies of a page's later threads may not show (a shown reply's parent always shows). `open` (`comments.enabled`, default on; a closed thread still lists its comments, as WordPress does, and the theme hides the form), `count` = `total` (every approved comment of the post, not only this page's), `page`, `pages` (at least 1), `per_page`, `prev_url` / `next_url` (the post's permalink, `?cpage=N` past page 1; `none` at either end), `items` in thread order (each reply right after its parent, siblings oldest first), `action` (`/_comment`), `honeypot` (`website`). Each item: `id`, `parent_id`, `depth` (0 at the top level), `author_name` (plain text), `author_url` (`http(s)` only, else `none`), `html` (the plain-text body escaped by core into `<p>`/`<br>`, marked safe), `date` (RFC 3339), `can_reply` (a reply would be accepted: core's own depth rule over the stored chain, so it holds when a parent is hidden). Approved comments only; never an e-mail or address hash. One bridge call | `post:<id>`, `option:comments.enabled`, `option:comments.per_page`; with more than one page the permalink's term and ancestor keys |
+| `comments(post)` | one page of the public thread of a **public post** (other kinds, drafts, unknown ids: `none`), through `SiteReader::comments` (M2b-2 P34): the page is the request's `?cpage=N` on a single item (a positive integer, anything else is 1; past the last page shows the last). A page holds `comments.per_page` top-level threads (default 50, 1..=100), oldest first, each with all its approved replies; a **root** is an approved comment whose parent is null or not approved (a reply under a spam or held comment starts its own thread). A page always shows every one of its top-level threads; its rows are capped at 2,000 (`MAX_PAGE_ROWS`), and past that only replies are cut: the roots first, then replies in thread order (depth first, oldest first) until the budget is used, so the latest replies of a page's later threads may not show (a shown reply's parent always shows). `open` (`comments.enabled`, default on; a closed thread still lists its comments, as WordPress does, and the theme hides the form), `count` = `total` (every approved comment of the post, not only this page's), `page`, `pages` (at least 1), `per_page`, `prev_url` / `next_url` (the post's permalink, `?cpage=N` past page 1, without a fragment: the theme adds its section's anchor, `blog` links to `…#comments`; `none` at either end), `items` in thread order (each reply right after its parent, siblings oldest first), `action` (`/_comment`), `honeypot` (`website`). Each item: `id`, `parent_id`, `depth` (0 at the top level), `author_name` (plain text), `author_url` (`http(s)` only, else `none`), `html` (the plain-text body escaped by core into `<p>`/`<br>`, marked safe), `date` (RFC 3339), `can_reply` (a reply would be accepted: core's own depth rule over the stored chain, so it holds when a parent is hidden). Approved comments only; never an e-mail or address hash. One bridge call | `post:<id>`, `option:comments.enabled`, `option:comments.per_page`; with more than one page the permalink's term and ancestor keys |
 | `plugin_route(name, path)` | `/_p/<name><path>` (05 §4b), each path segment percent-encoded; `""` unless `name` is a plugin name (`[a-z0-9-]{2,48}`) and `path` starts with `/` and has no `.`/`..` segment | — |
 | filters | `date(fmt)` (chrono strftime, UTC), `excerpt(n=55)` (plain text), `slugify` (core's slug function), `json` (safe in `<script>` and in **single-quoted** attributes only), MiniJinja's `urlencode`; `t` (i18n) is not built | — |
+
+**Inline images (M2b-3 Task 4, the follow-up of M2b-2 R28).** A body `image` node whose
+`src` is `ferrite:media/<id>` of a public media item renders as `image()` does
+(`Hydrator::inline_image` in `ferrite-core`), when the item is a raster image (JPEG, PNG,
+GIF, WebP) whose dimensions the `media.variants` job has recorded:
+
+- `srcset` lists the original and every ready variant of the same shape, one per width
+  with `w` descriptors (`MediaPublic::srcset_candidates`). A variant cropped to another
+  aspect ratio (the core `thumbnail`, the `blog` theme's `card` and `hero`) is left out:
+  a browser picking it would show a different picture.
+- `src` is the widest of those no wider than the theme's largest size (the widest
+  `[images]` entry of the served theme, `SiteReader::set_image_width`, set by the node
+  whenever it starts serving a theme), else the original; without theme sizes the
+  original's width is the largest size.
+- `sizes="(max-width: <slot>px) 100vw, <slot>px"`, the slot being the largest size or
+  the original's width when that is smaller (an 800 px image never claims a 1280 px slot), `width`/`height` from the media
+  item's dimensions, `loading="lazy"`, `decoding="async"`, after `alt` (and `title`).
+
+An SVG, any other type and an image not measured yet keep the plain `<img src alt>` of
+the original; a missing or non-public item drops the image, as before. The media item's
+`post:<id>` is already a dependency of the page, and `record_variants` invalidates it, so
+a page rendered before the variants were ready is refreshed when they are. A theme swap
+flushes the page cache, so pages follow the new theme's largest size.
 
 **The comment form (M2a-2b P12, P13).** Themes post a plain HTML form (no script) to
 `POST /_comment` (`crates/ferrite-http/src/app/comment_form.rs`), form-encoded, with the
@@ -405,7 +460,9 @@ are never cached.
 - Key: `(host, path, normalised allowlisted query, variant)`. The host is always the
   configured `site.url` host, never the `Host` header (R25). The only allowlisted query
   parameters are `s`, `page` and `cpage` (the comment page, M2b-2 P34; `cpage=1` and
-  anything that is not an integer of 2 or more are dropped, so they share page 1's entry),
+  anything that is not an integer of 2 or more are dropped, so they share page 1's entry;
+  it is kept only on routes that can show one item, a content path or the front page,
+  `Route::may_show_item`, and dropped from every other route's key, M2b-3 Task 4),
   normalised by `NormalQuery` in `ferrite-http`. Variant: `anon`, or `user(<id>)` for logged-in requests
   under `cache.logged_in = "per-user"` (P21; under the default `"bypass"` logged-in requests
   are not cached at all). Dependency invalidation ignores the variant, so an edit drops every

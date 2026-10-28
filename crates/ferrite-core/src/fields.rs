@@ -1,7 +1,8 @@
 //! Field schemas of content types and the validation of an item's `fields` (P18).
 //!
 //! A type's stored `fields` value is `{"fields": [<field>, …]}`; each field is
-//! `{"name", "label", "kind", "required", "options", "fields"}` (see [`FieldDef`]). A
+//! `{"name", "label", "kind", "required", "options", "fields", "types"}` (see
+//! [`FieldDef`]; `types` is stored only when non-empty). A
 //! stored value **without** a `fields` key (`{}`, what the built-in types hold) means the
 //! type has no schema: its items accept any JSON object (F17), so built-ins, `seed demo`
 //! and plugins keep working until a type gets a schema.
@@ -12,18 +13,23 @@
 //! kind has options); `repeater` has sub-fields (no other kind has any) and repeaters nest
 //! at most [`MAX_REPEATER_DEPTH`] deep (a repeater inside a repeater is fine, a third one
 //! inside those is not). The top-level name `featured_image` is reserved: it is a core
-//! field every schema allows (a UUID string or `null`; the site reader shows it).
+//! field every schema allows (a UUID string or `null`; the site reader shows it). Only
+//! `relation` fields (at any level) have `types` (M2b-3 P52): distinct names of
+//! registered content types other than `media`, checked against the registry by
+//! [`check_relation_types`]; empty means any type.
 //!
 //! Value rules ([`validate_values`]): the value is an object; unknown keys and missing
 //! `required` keys are refused; `null` is accepted for a field that is not required.
 //! `text` is a string of at most [`MAX_TEXT`] characters, `rich_text` an object (a block
 //! tree), `number` a JSON number, `bool` a boolean, `date` an RFC 3339 string, `select`
-//! one of its options, `relation` and `media` a UUID string (the item is not looked up:
-//! it may be deleted later anyway), and `repeater` an array of at most [`MAX_ROWS`]
-//! objects, each validated against the sub-fields. Errors are
+//! one of its options, `relation` and `media` a UUID string, and `repeater` an array of
+//! at most [`MAX_ROWS`] objects, each validated against the sub-fields. Errors are
 //! `InvalidField { field: "fields", .. }` whose message names the path, such as
-//! `fields.chapters[2].title: required`.
+//! `fields.chapters[2].title: required`. The items are not looked up here (one may be
+//! deleted later anyway): content writes check the type of each item a relation with
+//! `types` names ([`relation_refs`]), and a missing item is accepted.
 
+use ferrite_domain::{ContentId, MEDIA_KIND};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -97,6 +103,21 @@ pub struct FieldDef {
     /// The sub-fields of a `repeater` (empty for every other kind).
     #[serde(default)]
     pub fields: Vec<FieldDef>,
+    /// The content types a `relation` may point at (empty: any type; empty for every
+    /// other kind).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<String>,
+}
+
+/// A relation value whose field lists target `types` ([`relation_refs`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelationRef {
+    /// Where the value is, e.g. `fields.chapters[1].related`.
+    pub path: String,
+    /// The item the value names.
+    pub id: ContentId,
+    /// The types the field allows (never empty).
+    pub types: Vec<String>,
 }
 
 fn invalid(message: impl Into<String>) -> CoreError {
@@ -177,6 +198,20 @@ fn check_level(defs: &[FieldDef], path: &str, depth: usize) -> Result<(), CoreEr
         } else if !def.options.is_empty() {
             return Err(invalid(format!("{at}: only select fields have options")));
         }
+        if def.kind == FieldKind::Relation {
+            if let Some((i, t)) = def
+                .types
+                .iter()
+                .enumerate()
+                .find(|(i, t)| def.types[..*i].contains(t))
+            {
+                return Err(invalid(format!(
+                    "{at}: type {t:?} is listed twice (entry {i})"
+                )));
+            }
+        } else if !def.types.is_empty() {
+            return Err(invalid(format!("{at}: only relation fields have types")));
+        }
         if def.kind == FieldKind::Repeater {
             if def.fields.is_empty() {
                 return Err(invalid(format!("{at}: a repeater needs sub-fields")));
@@ -194,6 +229,36 @@ fn check_level(defs: &[FieldDef], path: &str, depth: usize) -> Result<(), CoreEr
         }
     }
     Ok(())
+}
+
+/// Checks that every relation's `types` (at any level) names one of `registered`, the
+/// names of the content types, and not `media` (media is picked by `media` fields).
+pub fn check_relation_types(defs: &[FieldDef], registered: &[&str]) -> Result<(), CoreError> {
+    relation_types_at(defs, registered, FIELD)
+}
+
+fn relation_types_at(defs: &[FieldDef], registered: &[&str], path: &str) -> Result<(), CoreError> {
+    for def in defs {
+        let at = format!("{path}.{}", def.name);
+        for t in &def.types {
+            if t == MEDIA_KIND {
+                return Err(invalid(format!(
+                    "{at}: a relation cannot point at media (use a media field)"
+                )));
+            }
+            if !registered.contains(&t.as_str()) {
+                return Err(invalid(format!("{at}: type {t:?} is not a content type")));
+            }
+        }
+        relation_types_at(&def.fields, registered, &at)?;
+    }
+    Ok(())
+}
+
+/// Whether `defs` hold a relation (at any level) that lists `name` in its `types`.
+pub fn names_type(defs: &[FieldDef], name: &str) -> bool {
+    defs.iter()
+        .any(|d| d.types.iter().any(|t| t == name) || names_type(&d.fields, name))
 }
 
 fn check_options(options: &[String], at: &str) -> Result<(), CoreError> {
@@ -247,6 +312,50 @@ pub fn validate_item(stored: &Value, value: &Value) -> Result<(), CoreError> {
         Some(defs) => validate_values(&defs, value),
         None if value.is_object() => Ok(()),
         None => Err(invalid("fields must be an object")),
+    }
+}
+
+/// The relation values of an item's `fields` (already accepted by [`validate_item`])
+/// whose field lists target `types`, in schema order (rows in order), with their
+/// paths in the format of the validation errors. A type without a schema has none.
+pub fn relation_refs(stored: &Value, value: &Value) -> Result<Vec<RelationRef>, CoreError> {
+    let mut out = Vec::new();
+    if let (Some(defs), Some(obj)) = (schema_of(stored)?, value.as_object()) {
+        collect_refs(&defs, obj, FIELD, &mut out);
+    }
+    Ok(out)
+}
+
+fn collect_refs(
+    defs: &[FieldDef],
+    obj: &Map<String, Value>,
+    path: &str,
+    out: &mut Vec<RelationRef>,
+) {
+    for def in defs {
+        let Some(v) = obj.get(&def.name) else {
+            continue;
+        };
+        let at = format!("{path}.{}", def.name);
+        match def.kind {
+            FieldKind::Relation if !def.types.is_empty() => {
+                if let Some(id) = v.as_str().and_then(|s| s.parse().ok()) {
+                    out.push(RelationRef {
+                        path: at,
+                        id,
+                        types: def.types.clone(),
+                    });
+                }
+            }
+            FieldKind::Repeater => {
+                for (i, row) in v.as_array().into_iter().flatten().enumerate() {
+                    if let Some(row) = row.as_object() {
+                        collect_refs(&def.fields, row, &format!("{at}[{i}]"), out);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -336,6 +445,7 @@ mod tests {
             required: false,
             options: Vec::new(),
             fields: Vec::new(),
+            types: Vec::new(),
         }
     }
 

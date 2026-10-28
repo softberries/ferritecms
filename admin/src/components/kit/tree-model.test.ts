@@ -112,17 +112,17 @@ describe("tree_model", () => {
   it("project_drop_skips_parents_that_cannot_nest", () => {
     const flat = flatten(TREE);
     // e over e, one indent right would go under a; a refuses children, so it stays a root.
-    expect(projectDrop(flat, "e", "e", 24, 24, Infinity, (id) => id !== "a")).toEqual({
+    expect(projectDrop(flat, "e", "e", 24, 24, Infinity, (n) => n.id !== "a")).toEqual({
       parentId: null,
       index: 1,
       depth: 0,
     });
     // e over d must land at depth 1 (d, the next row, is at 1), whose parent is a; when a
     // refuses children there is no allowed level, so there is no move.
-    expect(projectDrop(flat, "e", "d", 0, 24, Infinity, (id) => id !== "a")).toBeNull();
+    expect(projectDrop(flat, "e", "d", 0, 24, Infinity, (n) => n.id !== "a")).toBeNull();
     // Where a lower level is allowed it is used: b (with c) over d, after d, may go to
     // the root instead of under a.
-    expect(projectDrop(flat, "b", "d", 0, 24, 2, (id) => id !== "a")).toEqual({
+    expect(projectDrop(flat, "b", "d", 0, 24, 2, (n) => n.id !== "a")).toEqual({
       parentId: null,
       index: 1,
       depth: 0,

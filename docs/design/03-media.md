@@ -293,7 +293,15 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
   by the media repository in the same transaction (ruling R29, [02 §4](02-storage.md#4-logical-schema)).
 - Templates get variants through `image(media, size)` and `post.featured.variants`
   ([06 §4](06-themes-rendering.md#4-minijinja-environment)); an unknown size falls back to the
-  original, and `srcset` lists one candidate per width.
+  original, and `srcset` lists one candidate per width. Inline body images
+  (`ferrite:media/<id>`) of a measured raster original render with a `srcset` of the
+  original and its same-shape variants, `src` the widest no wider than the theme's largest
+  `[images]` size (M2b-3 Task 4, 06 §4 "Inline images"); SVGs and other types stay plain.
+- **Trash and restore (M2b-3 P53).** `MediaService::trash` keeps the item's status before
+  the trash in `content_meta` `media.trashed_from` (`"published"` or `"draft"`), in the
+  trash `Tx`; `restore` brings the item back as that status (publishing only with the
+  publish right, else a draft) and deletes the row. Items trashed without it come back
+  published (R23).
 - **Recording uploads (M2a-2b, `ferrite_core::MediaService`).** The bytes are staged
   outside any transaction by `ferrite-http`'s uploader, which also decides the type from the
   content (P3/P4). `record_upload` then writes, in one transaction: the `artifacts` row (unless

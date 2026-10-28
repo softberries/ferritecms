@@ -15,6 +15,15 @@ use ferrite_store::Store;
 use super::NodeInfo;
 use crate::{AppState, extensions::Installer, media::Uploader};
 
+/// The node's outgoing mail (`[mail]` set): its queue and the sender address.
+#[derive(Clone)]
+pub struct ApiMail {
+    /// Sends run in the background; shared with the plugin host.
+    pub queue: Arc<MailQueue>,
+    /// `mail.from` (shown by `GET /system/status`; the SMTP URL never is, P49).
+    pub from: String,
+}
+
 /// The inputs of [`ApiState::new`].
 pub struct ApiParts {
     pub store: Arc<dyn Store>,
@@ -43,11 +52,12 @@ pub struct ApiParts {
     pub site: Arc<AppState>,
     /// What this node is.
     pub node: NodeInfo,
-    /// The node's mail queue (`[mail]` set), shared with the plugin host.
-    pub mailer: Option<Arc<MailQueue>>,
+    /// The node's mail (`[mail]` set).
+    pub mail: Option<ApiMail>,
     /// The site's URL (`site.url`).
     pub site_url: String,
-    /// `site.title` (names the site in the password-reset mail).
+    /// `ferrite.toml` `site.title`: the fallback when the `site.title` option is unset
+    /// (the test mail reads the option at use time, P51).
     pub site_title: String,
 }
 
@@ -83,12 +93,12 @@ pub struct ApiState {
     pub site: Arc<AppState>,
     /// What this node is (`GET /system/status`).
     pub node: NodeInfo,
-    /// The node's mail queue: sends run in the background (`None`: no `[mail]`, the
-    /// password reset is `503 mail-unavailable`).
-    pub mailer: Option<Arc<MailQueue>>,
+    /// The node's mail: sends run in the background (`None`: no `[mail]`, the password
+    /// reset is `503 mail-unavailable`, the test mail `422`).
+    pub mail: Option<ApiMail>,
     /// `site.url` without a trailing slash.
     pub site_url: String,
-    /// `site.title`.
+    /// `ferrite.toml` `site.title`, the fallback of the `site.title` option.
     pub site_title: String,
     /// `scheme://host[:port]` of `site_url` (lowercase, default port left out): what a
     /// browser sends as `Origin` for the site's own pages (P8).
@@ -124,7 +134,7 @@ impl ApiState {
             system,
             site,
             node,
-            mailer,
+            mail,
             site_url,
             site_title,
         } = parts;
@@ -149,7 +159,7 @@ impl ApiState {
             system,
             site,
             node,
-            mailer,
+            mail,
             site_url: site_url.trim_end_matches('/').to_owned(),
             site_title,
             origin,

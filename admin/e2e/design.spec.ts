@@ -29,7 +29,8 @@ test("fonts_and_tokens_apply", async ({ as }) => {
   });
   expect(loaded.inter).toBe(true);
   expect(loaded.mono).toBe(true);
-  expect(loaded.family).toMatch(/^"Inter Variable"/);
+  // WebKit serialises the family name without quotes.
+  expect(loaded.family).toMatch(/^"?Inter Variable"?,/);
   // Hashed, same-origin files only (font-src 'self'; principle 1: no CDN).
   expect(fonts.length).toBeGreaterThan(0);
   for (const f of fonts) expect(f).toMatch(/^200 \/admin\/assets\/[\w-]+\.woff2$/);
@@ -63,9 +64,13 @@ test("theme_follows_the_system_unless_chosen", async ({ as }) => {
   expect(lightBg).not.toBe(darkBg);
 });
 
-test("dark_os_first_paint_is_dark_before_js", async ({ browser, site, guard }) => {
+test("dark_os_first_paint_is_dark_before_js", async ({ browser, browserName, site, guard }) => {
   // The frame before the module script runs: no JS at all, so <html> has no class and
   // only tokens.css decides (11 §4). No storage state needed: index.html is public.
+  // Playwright's Firefox loses a context's `colorScheme` when a response's
+  // `Cross-Origin-Opener-Policy` moves the page to another process (the admin sends
+  // `same-origin`), so there the scheme is emulated again on the loaded page (10 §3).
+  const firefox = browserName === "firefox";
   const background = async (colorScheme: "light" | "dark") => {
     const ctx = await browser.newContext({
       baseURL: site.url,
@@ -75,6 +80,7 @@ test("dark_os_first_paint_is_dark_before_js", async ({ browser, site, guard }) =
     try {
       const page = await ctx.newPage();
       await page.goto("/admin/");
+      if (firefox) await page.emulateMedia({ colorScheme });
       expect(await page.locator("html").getAttribute("class")).toBeNull();
       return await page.evaluate(() => {
         const s = getComputedStyle(document.body);
@@ -100,6 +106,7 @@ test("dark_os_first_paint_is_dark_before_js", async ({ browser, site, guard }) =
   try {
     const page = await ctx.newPage();
     await page.goto("/admin/login");
+    if (firefox) await page.emulateMedia({ colorScheme: "dark" });
     await expect(page.locator("html")).toHaveClass("dark");
     expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
       dark.bg,
@@ -107,6 +114,61 @@ test("dark_os_first_paint_is_dark_before_js", async ({ browser, site, guard }) =
   } finally {
     await ctx.close();
   }
+});
+
+test("explicit_dark_against_light_os_has_no_light_frame", async ({ browser, site, as }) => {
+  // P57: an explicit choice is a cookie, and `index.html` arrives with its class, so the
+  // frame before any JS already has the chosen theme, even against the OS scheme.
+  const page = await as("admin");
+  await page.goto("/admin/");
+  await page.getByRole("button", { name: "Account" }).click();
+  await page.getByRole("menuitemradio", { name: "Dark" }).click();
+  await expect(page.locator("html")).toHaveClass("dark");
+  const cookieOf = async () =>
+    (await page.context().cookies(`${site.url}/admin/`)).find(
+      (c) => c.name === "ferrite_admin_theme",
+    );
+  const cookie = await cookieOf();
+  expect(cookie).toMatchObject({ value: "dark", path: "/admin", sameSite: "Lax", httpOnly: false });
+  // About a year.
+  expect(cookie!.expires * 1000 - Date.now()).toBeGreaterThan(360 * 86_400_000);
+  const darkBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  await page.getByRole("menuitemradio", { name: "Light" }).click();
+  await expect(page.locator("html")).toHaveClass("light");
+  expect((await cookieOf())?.value).toBe("light");
+  const lightBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  // `system` removes it.
+  await page.getByRole("menuitemradio", { name: "System" }).click();
+  await expect.poll(cookieOf).toBeUndefined();
+  await page.keyboard.press("Escape");
+
+  // The first frame: no JS, the OS against the choice.
+  const firstFrame = async (
+    colorScheme: "light" | "dark",
+    value: string,
+  ): Promise<{ cls: string | null; bg: string }> => {
+    const ctx = await browser.newContext({
+      baseURL: site.url,
+      javaScriptEnabled: false,
+      colorScheme,
+    });
+    try {
+      await ctx.addCookies([{ name: "ferrite_admin_theme", value, url: `${site.url}/admin/` }]);
+      const p = await ctx.newPage();
+      await p.goto("/admin/login");
+      return {
+        cls: await p.locator("html").getAttribute("class"),
+        bg: await p.evaluate(() => getComputedStyle(document.body).backgroundColor),
+      };
+    } finally {
+      await ctx.close();
+    }
+  };
+  expect(await firstFrame("light", "dark")).toEqual({ cls: "dark", bg: darkBg });
+  expect(await firstFrame("dark", "light")).toEqual({ cls: "light", bg: lightBg });
+  // Any other value is ignored: the OS decides, and nothing of it reaches the page.
+  const hostile = await firstFrame("light", "x%22%3E%3Cscript%3E");
+  expect(hostile).toEqual({ cls: null, bg: lightBg });
 });
 
 test("compact_density_switches_the_variables", async ({ as }) => {

@@ -79,9 +79,10 @@ impl RedirectService {
         Ok(self.store.read().redirects().add_hits(id, n, at).await?)
     }
 
-    /// Lists redirects by source with cursor pagination. `query.q` is trimmed and must
-    /// then be 1..=[`MAX_REDIRECT_QUERY`] characters (`InvalidField` `q`); it matches
-    /// `source` or `target` as a case-insensitive substring, wildcards literal
+    /// Lists redirects by source with cursor pagination. `query.q` is trimmed; blank is
+    /// no search (as on the media list), longer than [`MAX_REDIRECT_QUERY`] characters
+    /// is `InvalidField` `q`; it matches `source` or `target` as a case-insensitive
+    /// substring, wildcards literal
     /// ([`RedirectRepo::list`](ferrite_store::RedirectRepo::list)).
     pub async fn list(
         &self,
@@ -91,13 +92,13 @@ impl RedirectService {
         require_view(actor)?;
         if let Some(q) = query.q.take() {
             let q = q.trim();
-            if q.is_empty() || q.chars().count() > MAX_REDIRECT_QUERY {
+            if q.chars().count() > MAX_REDIRECT_QUERY {
                 return Err(CoreError::invalid_field(
                     "q",
-                    format!("q must be 1 to {MAX_REDIRECT_QUERY} characters"),
+                    format!("q must be at most {MAX_REDIRECT_QUERY} characters"),
                 ));
             }
-            query.q = Some(q.to_owned());
+            query.q = (!q.is_empty()).then(|| q.to_owned());
         }
         Ok(self.store.read().redirects().list(&query).await?)
     }

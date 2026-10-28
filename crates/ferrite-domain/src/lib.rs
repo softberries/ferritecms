@@ -18,16 +18,18 @@ mod setting;
 mod site;
 mod taxonomy;
 mod time;
+mod url;
 mod user;
 
 pub use auth::{
-    ApiToken, AuditEntry, IDEMPOTENCY_RETENTION, IDEMPOTENCY_STALE, IdemBegin, IdempotencyKey,
-    NewAudit, RateHit, SESSION_ABSOLUTE, SESSION_IDLE, SESSION_TOUCH_EVERY, Session,
+    ApiToken, AuditEntry, AuditQuery, IDEMPOTENCY_RETENTION, IDEMPOTENCY_STALE, IdemBegin,
+    IdempotencyKey, NewAudit, RateHit, SESSION_ABSOLUTE, SESSION_IDLE, SESSION_TOUCH_EVERY,
+    Session,
 };
 pub use comment::{Comment, CommentQuery, CommentStatus};
 pub use content::{
-    Autosave, ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, MediaKind,
-    NewContent, ParentFilter, ReadableBy, Revision,
+    Autosave, ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, MEDIA_KIND,
+    MediaKind, NewContent, ParentFilter, ReadableBy, Revision,
 };
 pub use event::{Event, NewEvent};
 pub use hex::to_hex;
@@ -52,7 +54,8 @@ pub use setting::{
 pub use site::{OptionEntry, REDIRECT_CODES, Redirect, RedirectOrigin, RedirectQuery};
 pub use taxonomy::{Taxonomy, Term};
 pub use time::Timestamp;
-pub use user::{NewUser, Role, User, UserStatus};
+pub use url::{MAX_WEB_URL, is_web_url};
+pub use user::{NewUser, Role, User, UserQuery, UserStatus};
 
 /// Maximum page size accepted by list queries.
 pub const MAX_PAGE: u32 = 200;

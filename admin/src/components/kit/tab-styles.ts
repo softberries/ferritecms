@@ -4,8 +4,10 @@
 import { cn } from "cn";
 
 /** The `<ul>` of the tabs: the rule under them is an inset shadow, so the active
- * underline covers it inside the scrolling row. */
-export const TAB_LIST = "flex w-max min-w-full gap-1 shadow-[inset_0_-1px_0_var(--border)]";
+ * underline covers it inside the scrolling row. Its end padding is the room
+ * `ScrollFade` makes so the row can start at a tab's edge. */
+export const TAB_LIST =
+  "flex w-max min-w-full gap-1 pr-(--scroll-fade-room) shadow-[inset_0_-1px_0_var(--border)]";
 
 export function tabLinkClass(active: boolean): string {
   return cn(

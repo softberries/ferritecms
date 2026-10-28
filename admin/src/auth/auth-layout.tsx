@@ -274,7 +274,7 @@ function RateLimitAlert({ seconds, onDone }: { seconds: number; onDone: () => vo
   );
 }
 
-function Alert({ tone, children }: { tone: "error" | "warning"; children: ReactNode }) {
+export function Alert({ tone, children }: { tone: "error" | "warning"; children: ReactNode }) {
   const Icon = tone === "error" ? CircleAlertIcon : TimerIcon;
   return (
     <div

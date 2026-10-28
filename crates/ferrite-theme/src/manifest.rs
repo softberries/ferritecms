@@ -16,6 +16,8 @@ pub struct ThemeManifest {
     pub version: semver::Version,
     pub author: Option<String>,
     pub license: Option<String>,
+    /// An `http://` or `https://` URL (checked by the parser).
+    pub homepage: Option<String>,
     pub description: Option<String>,
     /// Menu locations: name -> label.
     pub menus: BTreeMap<String, String>,
@@ -94,6 +96,7 @@ struct RawMeta {
     version: semver::Version,
     author: Option<String>,
     license: Option<String>,
+    homepage: Option<String>,
     description: Option<String>,
 }
 
@@ -118,6 +121,15 @@ pub(crate) fn parse(src: &str) -> Result<ThemeManifest, Vec<String>> {
         problems.push(format!(
             "theme.toml: theme.name {:?} must be 1-{MAX_NAME} chars of [a-z0-9-]",
             raw.theme.name
+        ));
+    }
+    if let Some(url) = &raw.theme.homepage
+        && !ferrite_domain::is_web_url(url)
+    {
+        problems.push(format!(
+            "theme.toml: theme.homepage {url:?} must be an http:// or https:// URL \
+             (at most {} bytes, no spaces)",
+            ferrite_domain::MAX_WEB_URL
         ));
     }
     for name in raw.menus.keys() {
@@ -182,6 +194,7 @@ pub(crate) fn parse(src: &str) -> Result<ThemeManifest, Vec<String>> {
         version: raw.theme.version,
         author: raw.theme.author,
         license: raw.theme.license,
+        homepage: raw.theme.homepage,
         description: raw.theme.description,
         menus: raw.menus,
         images: raw.images,
@@ -190,6 +203,16 @@ pub(crate) fn parse(src: &str) -> Result<ThemeManifest, Vec<String>> {
 }
 
 impl ThemeManifest {
+    /// The width of the widest `[images]` size, `None` when the theme declares none
+    /// (or only zero widths): the largest display size of inline body images (06 §4).
+    pub fn largest_image_width(&self) -> Option<u32> {
+        self.images
+            .values()
+            .map(|s| s.width)
+            .filter(|w| *w > 0)
+            .max()
+    }
+
     /// The value of every declared setting: the stored value when it is valid for the
     /// setting's type, else the default, else the type's empty value (`""`, `false`,
     /// `0`, the first option, `null` for media). Undeclared stored keys are dropped.
@@ -240,6 +263,7 @@ name = "blog"
 version = "0.1.0"
 author = "FerriteCMS"
 license = "MIT"
+homepage = "https://example.com/blog"
 
 [menus]
 primary = "Primary navigation"
@@ -259,6 +283,7 @@ logo = { type = "media", label = "Logo" }
         let m = parse(OK).unwrap();
         assert_eq!(m.name, "blog");
         assert_eq!(m.version, semver::Version::new(0, 1, 0));
+        assert_eq!(m.homepage.as_deref(), Some("https://example.com/blog"));
         assert_eq!(m.menus["primary"], "Primary navigation");
         assert_eq!(
             m.images["card"],
@@ -268,6 +293,7 @@ logo = { type = "media", label = "Logo" }
                 crop: true
             }
         );
+        assert_eq!(m.largest_image_width(), Some(640));
         assert_eq!(m.settings["show_author"].label, "show_author");
         assert_eq!(m.settings["accent_color"].kind, SettingKind::Color);
     }
@@ -331,6 +357,22 @@ logo = { type = "media", label = "Logo" }
             (
                 "[theme]\nname = \"x\"\nversion = \"0.1.0\"\n[other]\n",
                 "unknown field",
+            ),
+            (
+                "[theme]\nname = \"x\"\nversion = \"0.1.0\"\nhomepage = \"javascript:alert(1)\"\n",
+                "theme.homepage",
+            ),
+            (
+                "[theme]\nname = \"x\"\nversion = \"0.1.0\"\nhomepage = \"ftp://example.com\"\n",
+                "theme.homepage",
+            ),
+            (
+                "[theme]\nname = \"x\"\nversion = \"0.1.0\"\nhomepage = \"https://\"\n",
+                "theme.homepage",
+            ),
+            (
+                "[theme]\nname = \"x\"\nversion = \"0.1.0\"\nhomepage = \"https://a b\"\n",
+                "theme.homepage",
             ),
             (
                 "[theme]\nname = \"x\"\nversion = \"0.1.0\"\n[settings]\na = { type = \"secret\" }\n",

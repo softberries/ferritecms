@@ -104,7 +104,7 @@
     "date": "A day and a time",
     "bool": "On or off",
     "select": "One of a list of options",
-    "relation": "Another item of any type",
+    "relation": "Another item, of any type or of the types checked below",
     "media": "A file from the media library",
     "repeater": "Rows of sub-fields, e.g. chapters"
   },
@@ -130,15 +130,27 @@
     "subFields": "Sub-fields",
     "subFieldsHint": "Each row of {{label}} holds these",
     "remove": "Remove field",
-    "done": "Done"
+    "done": "Done",
+    "targets": "Can point at",
+    "targetsHint": "Leave every box empty for items of any type. The editor's picker searches only the checked types.",
+    "targetsUnknown": "not a content type"
   },
   "change": {
     "title": "Save changes to the fields?",
-    "body": "Items of this type were written against the old fields. Nothing is lost at once: existing values stay stored until each item is saved, and are then removed.",
+    "body": "Items of this type were written against the old fields. Nothing in them changes now: each item is checked against the new fields when it is next saved.",
     "removed": "Removed",
-    "renamed": "Renamed (old values are not carried over)",
-    "newlyRequired": "Now required: items without a value cannot be saved until they get one",
-    "kindChanged": "Kind changed: existing values may no longer be valid",
+    "removedHint": "Their existing values stay stored until each item is saved, and are then removed.",
+    "renamed": "Renamed",
+    "renamedHint": "Old values are not carried over: they stay stored until each item is saved, and are then removed.",
+    "newlyRequired": "Now required",
+    "newlyRequiredHint": "Items without a value cannot be saved until they get one.",
+    "kindChanged": "Kind changed",
+    "kindChangedHint": "Existing values may no longer be valid: such an item cannot be saved until its value is changed.",
+    "optionsRemoved": "Options removed",
+    "optionsRemovedHint": "Items holding a removed option cannot be saved until another is chosen.",
+    "optionsRemovedItem": "{{field}}: {{options}}",
+    "targetsNarrowed": "Points at fewer types",
+    "targetsNarrowedHint": "Items pointing at an item of a type no longer listed cannot be saved until the relation is changed.",
     "renamedPair": "{{from}} → {{to}}",
     "confirm": "Save changes",
     "cancel": "Keep editing"
@@ -156,8 +168,11 @@
     "refused": "{{label}} was not deleted.",
     "reasons": {
       "builtIn": "It is a built-in type.",
-      "hasContent": "It still has items (in some status, the trash included). Delete them first."
-    }
+      "hasContent": "It still has items (in some status, the trash included). Delete them first.",
+      "relationTarget": "A relation field of the type {{type}} points at it: remove it there first."
+    },
+    "close": "Close",
+    "builtInTitle": "{{label}} cannot be deleted"
   },
   "shortcuts": {
     "group": "Content type",
@@ -175,7 +190,10 @@
     "optionLong": "At most {{max}} characters",
     "optionDuplicate": "This option is already listed",
     "noSubFields": "A repeater needs at least one sub-field",
-    "depth": "Repeaters nest at most {{max}} deep"
+    "depth": "Repeaters nest at most {{max}} deep",
+    "typeTwice": "{{type}} is listed twice",
+    "typeMedia": "A relation cannot point at media: use a media field",
+    "typeUnknown": "{{type}} is not a content type (any more): remove it"
   },
   "taxonomies": {
     "title": "Taxonomies",
@@ -442,6 +460,7 @@
       "results": "Results",
       "noResults": "Nothing matches “{{q}}”.",
       "noContent": "No content yet.",
+      "noTypes": "No content types to link to. Use a custom link instead.",
       "failed": "The content could not be loaded.",
       "untitled": "Untitled",
       "taxonomy": "Taxonomy",

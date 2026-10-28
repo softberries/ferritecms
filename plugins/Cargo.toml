@@ -9,6 +9,7 @@ members = [
     "examples/html-inject",
     "examples/meta-writer",
     "examples/settings-probe",
+    "examples/admin-e2e",
     "examples/router",
     "examples/notifier",
     "examples/counter",

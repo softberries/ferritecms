@@ -131,6 +131,10 @@
     "charts": {
       "title": "Charts",
       "lead": "Five series on the chart tokens, told apart by dash pattern as well as colour, and sparklines for tiles."
+    },
+    "administration": {
+      "title": "Administration",
+      "lead": "The pieces the account, users, appearance, plugins and settings screens share: two-factor enrolment, write-only secrets, values shown once and forms over a declared settings schema."
     }
   },
   "states": {
@@ -540,6 +544,41 @@
     "spark": {
       "title": "Sparklines",
       "body": "Decorative and hidden from assistive technology; the value sits next to them in text."
+    }
+  },
+  "administration": {
+    "totp": {
+      "title": "Two-factor enrolment",
+      "body": "The QR code is drawn from the otpauth:// URL in the browser, black on white in both themes. The secret is grouped in fours for typing; the code input is one real field over six cells.",
+      "qrLabel": "QR code for your authenticator app",
+      "manual": "Or enter this key",
+      "manualHint": "Time-based, 6 digits, every 30 seconds.",
+      "code": "Code from the app"
+    },
+    "secret": {
+      "title": "Secret field",
+      "body": "Write-only: it shows whether a value is set, never the value. Untouched it is left out of the save; Replace types a new one; Remove deletes it on save.",
+      "webhook": "Webhook signing key"
+    },
+    "copyOnce": {
+      "title": "Shown once",
+      "body": "A new API token's value appears only in its creation dialog.",
+      "label": "Token"
+    },
+    "form": {
+      "title": "Settings form",
+      "body": "Rendered from a theme's or a plugin's declared settings. Each field shows its default and can be reset to it; a stored value that no longer fits is flagged; a save sends only the changed keys, after a check that nobody changed them meanwhile.",
+      "tagline": "Tagline",
+      "taglineValue": "Notes on iron and rust",
+      "footer": "Footer text",
+      "showAuthor": "Show the author",
+      "words": "Excerpt length (words)",
+      "layout": "Archive layout",
+      "accent": "Accent colour",
+      "logo": "Logo",
+      "apiKey": "API key",
+      "resource": "Theme Blog",
+      "sent": "Would send: {{keys}}"
     }
   }
 }

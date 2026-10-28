@@ -71,6 +71,33 @@ async function addTerm(page: Page, name: string): Promise<void> {
   await expect(sheet(page)).toHaveCount(0);
 }
 
+/**
+ * Starts recording the text of the overlay `slot` at the moment it begins to close
+ * (`data-state=closed`, its exit animation): it must not morph into another state.
+ */
+async function watchClosing(page: Page, slot: string): Promise<void> {
+  await page.evaluate((slot) => {
+    const w = window as unknown as { __closing?: string[] };
+    w.__closing = [];
+    const seen = new MutationObserver(() => {
+      const el = document.querySelector(`[data-slot="${slot}"][data-state="closed"]`);
+      if (!el) return;
+      w.__closing?.push(el.textContent ?? "");
+      seen.disconnect();
+    });
+    seen.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["data-state"],
+    });
+  }, slot);
+}
+
+/** The closing overlay's text that `watchClosing` recorded (`null`: none seen). */
+const closingText = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __closing?: string[] }).__closing?.[0] ?? null);
+
 /** A row menu item, waiting for the menu to close again. */
 async function rowMenu(page: Page, name: string, item: string): Promise<void> {
   await page.getByRole("button", { name: `Actions for ${name}`, exact: true }).click();
@@ -102,9 +129,9 @@ const byName = (terms: Term[], name: string) => {
   return term;
 };
 
-test("editor_builds_a_category_tree", async ({ as, site, backend }) => {
+test("editor_builds_a_category_tree", async ({ as, site, siteKey }) => {
   test.setTimeout(120_000);
-  const admin = await ContentApi.as(backend, site.url, "admin");
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
   const tax = await newTaxonomy(admin, true, "kd", "Kinds");
   const page = await as("editor");
   const list = tree(page, tax.label);
@@ -160,7 +187,10 @@ test("editor_builds_a_category_tree", async ({ as, site, backend }) => {
     await expect(deleteDialog(page)).toContainText("Fruit has sub-terms");
     await expect(deleteDialog(page)).toContainText("Move its 2 sub-terms");
     await expect(deleteDialog(page).getByRole("button", { name: "Delete term" })).toHaveCount(0);
+    // While it closes it still names Fruit (no "Delete “”?" frame).
+    await watchClosing(page, "delete-term-dialog");
     await deleteDialog(page).getByRole("button", { name: "Close" }).click();
+    await expect.poll(() => closingText(page)).toContain("Fruit has sub-terms");
     await expect(
       page.getByRole("button", { name: "Actions for Fruit", exact: true }),
     ).toBeFocused();
@@ -170,12 +200,19 @@ test("editor_builds_a_category_tree", async ({ as, site, backend }) => {
     await expect(sheet(page).getByRole("button", { name: /^Parent/ })).toContainText("Fruit");
     await expect(sheet(page).getByRole("textbox", { name: "Name" })).toBeFocused();
     await page.keyboard.type("Quince");
+    // The sheet keeps its form while it closes (it does not become an empty "New term").
+    await watchClosing(page, "term-sheet");
     await sheet(page).getByRole("button", { name: "Create term" }).click();
+    await expect.poll(() => closingText(page)).toContain("Create term");
     await expect.poll(() => shape(list)).toEqual(["1:Fruit", "2:Apples", "2:Pears", "2:Quince"]);
     await rowMenu(page, "Quince", "Delete");
     await expect(deleteDialog(page)).toContainText("Items filed under it lose this term");
     await deleteDialog(page).getByRole("button", { name: "Delete term" }).click();
     await expect.poll(() => shape(list)).toEqual(["1:Fruit", "2:Apples", "2:Pears"]);
+    // Focus lands on the row now last in its place (Pears), not on `body`.
+    await expect(
+      page.getByRole("button", { name: "Actions for Pears", exact: true }),
+    ).toBeFocused();
     expect((await admin.listTerms(tax.name)).map((t) => t.name)).not.toContain("Quince");
   } finally {
     await page.context().close();
@@ -184,10 +221,10 @@ test("editor_builds_a_category_tree", async ({ as, site, backend }) => {
   }
 });
 
-test("cycle_is_refused_and_rolled_back", async ({ as, site, backend, guard }) => {
+test("cycle_is_refused_and_rolled_back", async ({ as, site, siteKey, guard }) => {
   // The refused move is a 422 by design: the browser logs that failed load.
   guard.allowFailedResource(/\/api\/v1\/terms\/[0-9a-f-]+$/);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const tax = await newTaxonomy(api, true, "cy", "Cycles");
   const alpha = await api.createTerm(tax.name, "Alpha");
   const beta = await api.createTerm(tax.name, "Beta");
@@ -230,8 +267,8 @@ test("cycle_is_refused_and_rolled_back", async ({ as, site, backend, guard }) =>
   }
 });
 
-test("flat_tags_table_filter", async ({ as, site, backend }) => {
-  const admin = await ContentApi.as(backend, site.url, "admin");
+test("flat_tags_table_filter", async ({ as, site, siteKey }) => {
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
   const tax = await newTaxonomy(admin, false, "lb", "Labels");
   await admin.createTerm(tax.name, "Sourdough");
   await admin.createTerm(tax.name, "Rye bread");
@@ -286,8 +323,8 @@ test("flat_tags_table_filter", async ({ as, site, backend }) => {
   }
 });
 
-test("term_stale_guard", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("term_stale_guard", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const tax = await newTaxonomy(api, false, "sg", "Stale");
   const term = await api.createTerm(tax.name, "Original");
   const page = await as("admin");
@@ -320,9 +357,9 @@ test("term_stale_guard", async ({ as, site, backend }) => {
   }
 });
 
-test("settings_saved_then_reopened_save_without_a_stale_prompt", async ({ as, site, backend }) => {
+test("settings_saved_then_reopened_save_without_a_stale_prompt", async ({ as, site, siteKey }) => {
   // The dialog's next opening starts from the saved taxonomy (final review B7).
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const tax = await newTaxonomy(api, false, "rs", "Resave");
   const page = await as("admin");
   const dialog = page.locator("[data-slot=taxonomy-settings-dialog]");
@@ -343,8 +380,8 @@ test("settings_saved_then_reopened_save_without_a_stale_prompt", async ({ as, si
   }
 });
 
-test("admin_creates_taxonomy_for_a_custom_type", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("admin_creates_taxonomy_for_a_custom_type", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const s = short();
   const type = { name: `bk${s}`, label: `Books ${s}` };
   await api.createType(type.name, type.label);
@@ -390,9 +427,9 @@ test("palette_opens_new_taxonomy", async ({ as }) => {
   await expect(page).toHaveURL(/\/admin\/structure\/taxonomies$/);
 });
 
-test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
+test("screens", async ({ as, site, siteKey, snap, expectAccessible }) => {
   test.setTimeout(240_000);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const cats = await newTaxonomy(api, true, "sc", "Topics");
   const tags = await newTaxonomy(api, false, "st", "Keywords");
   const travel = await api.createTerm(cats.name, "Travel");

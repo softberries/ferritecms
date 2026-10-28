@@ -1,7 +1,9 @@
 // The account menu at the right of the top bar: who is signed in (display name, role),
-// the theme (light / dark / system) and density, the shortcut sheet, and sign out.
+// a link to the Account screen, the theme (light / dark / system) and density, the
+// shortcut sheet, and sign out.
 // Non-modal (11 §7: a modal menu fails axe `aria-hidden-focus`).
 
+import { Link } from "@tanstack/react-router";
 import {
   KeyboardIcon,
   LogOutIcon,
@@ -10,11 +12,13 @@ import {
   Rows3Icon,
   Rows4Icon,
   SunIcon,
+  UserRoundIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { MeDto } from "@/auth/session";
 import { KbdCombo } from "@/components/kit/kbd-combo";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { initials } from "@/lib/initials";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -43,14 +47,6 @@ const DENSITIES = [
 const ROLES = ["admin", "editor", "author", "contributor"] as const;
 type Role = (typeof ROLES)[number];
 const isRole = (r: string): r is Role => (ROLES as readonly string[]).includes(r);
-
-/** Up to two initials of the display name (the login when it has none). */
-function initials(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  const first = words[0]?.[0] ?? "";
-  const last = words.length > 1 ? (words[words.length - 1]?.[0] ?? "") : (words[0]?.[1] ?? "");
-  return `${first}${last}`.toUpperCase();
-}
 
 export interface UserMenuProps {
   me: MeDto;
@@ -91,6 +87,12 @@ export function UserMenu({ me, onShortcuts, onSignOut }: UserMenuProps) {
             {role} · {me.email}
           </span>
         </DropdownMenuLabel>
+        <DropdownMenuItem asChild>
+          <Link to="/account">
+            <UserRoundIcon />
+            {t("user.account")}
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
           <DropdownMenuLabel className="text-xs text-muted-foreground">

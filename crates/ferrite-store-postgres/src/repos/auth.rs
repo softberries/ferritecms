@@ -7,11 +7,12 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ferrite_domain::{
-    ApiToken, ApiTokenId, AuditEntry, AuditId, NewAudit, Page, RateHit, Session, Timestamp, UserId,
+    ApiToken, ApiTokenId, AuditEntry, AuditId, AuditQuery, NewAudit, Page, RateHit, Session,
+    Timestamp, UserId,
 };
 use ferrite_store::{
-    ApiTokenRepo, AuditRepo, MAX_AUTH_LIST, RateLimitRepo, SessionRepo, StoreError, audit_cursor,
-    check_limit, check_new_audit, check_prune_limit, check_rate_bucket, check_rate_window,
+    ApiTokenRepo, AuditRepo, MAX_AUTH_LIST, RateLimitRepo, SessionRepo, StoreError,
+    check_audit_query, check_new_audit, check_prune_limit, check_rate_bucket, check_rate_window,
     encode_audit_cursor, rate_hit, validate_text,
 };
 use sqlx::{AssertSqlSafe, Row, types::Json};
@@ -299,30 +300,57 @@ impl AuditRepo for PgRepos {
         Ok(id)
     }
 
-    async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<AuditEntry>, StoreError> {
-        let limit = check_limit(limit)?;
-        let after = cursor
-            .map(|c| {
-                let (at, id) = audit_cursor(c)?;
-                Ok::<_, StoreError>((pg_ts(Timestamp::from_micros(at)?), id))
-            })
+    async fn list(&self, query: &AuditQuery) -> Result<Page<AuditEntry>, StoreError> {
+        let plan = check_audit_query(query)?;
+        let limit = plan.limit;
+        let after = plan
+            .after
+            .map(|(at, id)| Ok::<_, StoreError>((pg_ts(Timestamp::from_micros(at)?), id)))
             .transpose()?;
-        let fetch = i64::from(limit) + 1;
-        let rows = match after {
-            None => run!(&self.exec, |e| sqlx::query(AssertSqlSafe(format!(
-                "SELECT {AUDIT_COLUMNS} FROM audit_log ORDER BY at DESC, id DESC LIMIT $1"
-            )))
-            .bind(fetch)
-            .fetch_all(e))?,
-            Some((at, id)) => run!(&self.exec, |e| sqlx::query(AssertSqlSafe(format!(
-                "SELECT {AUDIT_COLUMNS} FROM audit_log WHERE (at, id) < ($1, $2) \
-                 ORDER BY at DESC, id DESC LIMIT $3"
-            )))
-            .bind(at)
-            .bind(id)
-            .bind(fetch)
-            .fetch_all(e))?,
+        // `starts_with` compares literally and case-sensitively (no LIKE wildcards).
+        let mut sql = format!("SELECT {AUDIT_COLUMNS} FROM audit_log WHERE 1 = 1");
+        let mut n = 0;
+        let mut param = || {
+            n += 1;
+            format!("${n}")
         };
+        if query.actor.is_some() {
+            sql.push_str(&format!(" AND actor_id = {}", param()));
+        }
+        match plan.action {
+            Some((_, true)) => sql.push_str(&format!(" AND starts_with(action, {})", param())),
+            Some((_, false)) => sql.push_str(&format!(" AND action = {}", param())),
+            None => {}
+        }
+        if query.target_kind.is_some() {
+            sql.push_str(&format!(" AND target_kind = {}", param()));
+        }
+        if query.target_id.is_some() {
+            sql.push_str(&format!(" AND target_id = {}", param()));
+        }
+        if after.is_some() {
+            let (at, id) = (param(), param());
+            sql.push_str(&format!(" AND (at, id) < ({at}, {id})"));
+        }
+        sql.push_str(&format!(" ORDER BY at DESC, id DESC LIMIT {}", param()));
+        let mut q = sqlx::query(AssertSqlSafe(sql));
+        if let Some(actor) = query.actor {
+            q = q.bind(actor.as_uuid());
+        }
+        if let Some((action, _)) = plan.action {
+            q = q.bind(action);
+        }
+        if let Some(kind) = &query.target_kind {
+            q = q.bind(kind.as_str());
+        }
+        if let Some(id) = &query.target_id {
+            q = q.bind(id.as_str());
+        }
+        if let Some((at, id)) = after {
+            q = q.bind(at).bind(id);
+        }
+        let q = q.bind(i64::from(limit) + 1);
+        let rows = run!(&self.exec, |e| q.fetch_all(e))?;
         let mut items = rows
             .iter()
             .map(codec::audit_entry)

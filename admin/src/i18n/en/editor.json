@@ -381,7 +381,8 @@
     "backupBefore": "Unsaved edits from this browser,",
     "backupHint": "They were made over your kept version and never saved. Restore them to keep working, or discard them.",
     "restoreBackup": "Restore edits",
-    "backupDiscarded": "Edits from this browser discarded"
+    "backupDiscarded": "Edits from this browser discarded",
+    "backupFailed": "Could not restore the edits from this browser. They are still kept here; try again."
   },
   "leave": {
     "title": "Leave with unsaved changes?",
@@ -520,7 +521,8 @@
     "staleAfter": ", removed when you save",
     "staleHint": "The value stays stored until this item is saved.",
     "blocked": "Not saved: check the highlighted fields.",
-    "rowLabelNamed": "{{label}}, row {{n}}: {{preview}}"
+    "rowLabelNamed": "{{label}}, row {{n}}: {{preview}}",
+    "relationSearchIn": "Search {{types}}…"
   },
   "featured": {
     "heading": "Featured image",

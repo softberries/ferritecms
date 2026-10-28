@@ -65,7 +65,7 @@ use super::{
     plugins::{live_nodes, upload_slot},
     problem::{Problem, ProblemDocument},
 };
-use crate::extensions::{ExtensionError, THEME_MIME, theme_schema};
+use crate::extensions::{ExtensionError, THEME_MIME, theme_row_manifest, theme_schema};
 
 /// The body limit of `POST /themes` (P11): a theme bundle's limit.
 pub const MAX_THEME_UPLOAD_BODY: usize = MAX_BUNDLE_BYTES as usize;
@@ -356,10 +356,11 @@ fn valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// An embedded starter theme's manifest summary.
+/// An embedded starter theme's manifest: the object a row would store, and its
+/// settings schema.
 struct Embedded {
     version: String,
-    description: Option<String>,
+    manifest: Value,
     schema: SettingsSchema,
 }
 
@@ -375,7 +376,7 @@ fn embedded() -> &'static BTreeMap<String, Embedded> {
                     let m = theme.manifest();
                     let summary = Embedded {
                         version: m.version.to_string(),
-                        description: m.description.clone(),
+                        manifest: theme_row_manifest(m),
                         schema: theme_schema(m),
                     };
                     Some((name, summary))
@@ -427,7 +428,7 @@ fn list(
     let mut items: BTreeMap<String, ThemeDto> = embedded
         .iter()
         .map(|(name, e)| {
-            let dto = ThemeDto::embedded(name, &e.version, e.description.as_deref());
+            let dto = ThemeDto::embedded(name, &e.version, &e.manifest);
             (name.clone(), dto)
         })
         .collect();
@@ -484,7 +485,7 @@ mod tests {
             "blog".to_owned(),
             Embedded {
                 version: "0.1.0".into(),
-                description: None,
+                manifest: json!({}),
                 schema: SettingsSchema::default(),
             },
         )])

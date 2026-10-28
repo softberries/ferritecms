@@ -322,7 +322,14 @@ async fn plugin_settings_over_http(api: Api) -> Api {
         assert_eq!(r.status, StatusCode::OK, "{r:?}");
         assert!(!r.body.contains(SECRET), "{path}: {}", r.body);
     }
-    let audit = api.store.read().audit().list(50, None).await.unwrap().items;
+    let audit = api
+        .store
+        .read()
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(50))
+        .await
+        .unwrap()
+        .items;
     assert_eq!(audit[0].action, "plugin.settings");
     assert_eq!(
         audit[0].details,

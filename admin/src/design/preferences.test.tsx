@@ -8,6 +8,7 @@ import {
   storeSidebarOpen,
   storedSidebarOpen,
   THEME_KEY,
+  writeThemeCookie,
 } from "./preferences";
 import { ThemeProvider, useTheme } from "./theme";
 
@@ -40,6 +41,15 @@ function ThemeProbe() {
         light
       </button>
     </>
+  );
+}
+
+function SystemButton() {
+  const { setTheme } = useTheme();
+  return (
+    <button type="button" onClick={() => setTheme("system")}>
+      system
+    </button>
   );
 }
 
@@ -96,6 +106,49 @@ describe("theme", () => {
     applyStoredPreferences();
     expect(html.className).toBe("dark");
     expect(html.dataset.density).toBe("compact");
+  });
+
+  it("theme_cookie_is_written_for_a_choice_and_removed_for_system", () => {
+    // P57: the server turns the cookie into the <html> class before any JS runs.
+    stubSystemScheme(false);
+    const writes: string[] = [];
+    vi.spyOn(Document.prototype, "cookie", "set").mockImplementation((v: string) => {
+      writes.push(v);
+    });
+    render(
+      <ThemeProvider>
+        <ThemeProbe />
+        <SystemButton />
+      </ThemeProvider>,
+    );
+    act(() => screen.getByRole("button", { name: "dark" }).click());
+    act(() => screen.getByRole("button", { name: "light" }).click());
+    act(() => screen.getByRole("button", { name: "system" }).click());
+    expect(writes).toEqual([
+      "ferrite_admin_theme=dark; Path=/admin; SameSite=Lax; Max-Age=31536000",
+      "ferrite_admin_theme=light; Path=/admin; SameSite=Lax; Max-Age=31536000",
+      "ferrite_admin_theme=; Path=/admin; SameSite=Lax; Max-Age=0",
+    ]);
+    // On https the cookie is Secure.
+    writes.length = 0;
+    vi.stubGlobal("location", { ...window.location, protocol: "https:" });
+    writeThemeCookie("dark");
+    expect(writes).toEqual([
+      "ferrite_admin_theme=dark; Path=/admin; SameSite=Lax; Max-Age=31536000; Secure",
+    ]);
+  });
+
+  it("stored_choice_refreshes_the_cookie_on_load", () => {
+    stubSystemScheme(false);
+    const writes: string[] = [];
+    vi.spyOn(Document.prototype, "cookie", "set").mockImplementation((v: string) => {
+      writes.push(v);
+    });
+    localStorage.setItem(THEME_KEY, "dark");
+    applyStoredPreferences();
+    expect(writes).toEqual([
+      "ferrite_admin_theme=dark; Path=/admin; SameSite=Lax; Max-Age=31536000",
+    ]);
   });
 
   it("unknown_or_unreadable_storage_falls_back_to_defaults", () => {

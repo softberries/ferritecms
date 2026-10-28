@@ -44,6 +44,13 @@ pub fn pack(source: &ThemeSource) -> Result<Vec<u8>, ThemeError> {
     pack_files(&source.files()?)
 }
 
+/// [`pack`], also returning how many files the bundle holds (what `ferrite theme pack`
+/// reports).
+pub fn pack_counted(source: &ThemeSource) -> Result<(Vec<u8>, usize), ThemeError> {
+    let files = source.files()?;
+    Ok((pack_files(&files)?, files.len()))
+}
+
 /// [`pack`] of the embedded starter theme `name`, for names known only at runtime: the
 /// same bytes `pack(&ThemeSource::Embedded(name))` gives. An unknown name is
 /// [`ThemeError::NotFound`].

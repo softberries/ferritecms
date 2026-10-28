@@ -2,7 +2,7 @@
 //! all in one transaction per call.
 
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::{BTreeSet, HashMap, VecDeque},
     sync::Arc,
 };
 
@@ -10,7 +10,7 @@ use ferrite_domain::{
     ContentId, ContentItem, ContentQuery, ContentStatus, ContentType, NewContent, ParentFilter,
     Revision, RevisionId, TermId, Timestamp,
 };
-use ferrite_store::{Repos, Store, StoreError, Tx};
+use ferrite_store::{MAX_ID_FILTER, Repos, Store, StoreError, Tx};
 
 use crate::{
     Actor, CoreError, MAX_PARENT_DEPTH, actions,
@@ -165,6 +165,7 @@ impl ContentService {
         let types = tx.types().list().await?;
         let ty = content_type(&types, &draft.kind)?;
         fields::validate_item(&ty.fields, &draft.fields)?;
+        check_relations(tx, &ty.fields, &draft.fields).await?;
         if let Some(parent) = draft.parent_id {
             check_parent(tx, ty, None, parent).await?;
         }
@@ -299,6 +300,7 @@ impl ContentService {
         let types = tx.types().list().await?;
         let ty = content_type(&types, &current.kind)?;
         fields::validate_item(&ty.fields, &draft.fields)?;
+        check_relations(tx, &ty.fields, &draft.fields).await?;
         // Parent rules and the cycle walk only apply when the parent actually changes.
         if let Some(parent) = draft.parent_id
             && draft.parent_id != current.parent_id
@@ -564,6 +566,45 @@ async fn save_with_free_slug(
             Err(e) => return Err(e.into()),
         }
     }
+}
+
+/// Refuses a relation value naming an item whose type its field does not list
+/// (M2b-3 P52), as `InvalidKey` at the value's path (`fields.chapters[1].related`). The
+/// items are read in one `get_many` per [`MAX_ID_FILTER`] distinct ids (one for any
+/// usual item); a missing item is accepted, as [`fields`] says.
+async fn check_relations(
+    repos: &dyn Repos,
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+) -> Result<(), CoreError> {
+    let refs = fields::relation_refs(schema, value)?;
+    if refs.is_empty() {
+        return Ok(());
+    }
+    let mut ids: Vec<ContentId> = refs.iter().map(|r| r.id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let mut kinds = HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(MAX_ID_FILTER) {
+        for item in repos.content().get_many(chunk).await? {
+            kinds.insert(item.id, item.kind);
+        }
+    }
+    for r in refs {
+        if let Some(kind) = kinds.get(&r.id)
+            && !r.types.contains(kind)
+        {
+            return Err(CoreError::invalid_key(
+                r.path.clone(),
+                format!(
+                    "{}: must be an item of type {}",
+                    r.path,
+                    r.types.join(" or ")
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Revision snapshot (with `note`), prune, search index, the outbox event and the

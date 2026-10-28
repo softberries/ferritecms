@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 import { isContentStatus, listContentOfType } from "@/api/content";
 import { qk } from "@/api/keys";
 import { type TermDto, taxonomiesQuery, termsQuery } from "@/api/taxonomies";
+import { typesQuery } from "@/api/types";
 import { StatusBadge } from "@/components/kit/status-badge";
 import { flatten } from "@/components/kit/tree-model";
 import { Button } from "@/components/ui/button";
@@ -29,7 +30,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type ContentTarget, contentTargetQuery, useNavContentTypes } from "@/content/find-item";
 import { filterTerms, toTree } from "../taxonomies/terms-model";
-import { FormField } from "../types/form-field";
+import { FormField } from "@/components/kit/form-field";
 import {
   MAX_MENU_ITEMS,
   MAX_MENU_LABEL,
@@ -89,6 +90,8 @@ function ContentTab({ onAdd, room, disabled }: AddItemsProps) {
   const { t } = useTranslation("structure");
   const qc = useQueryClient();
   const types = useNavContentTypes();
+  // Loaded, so an empty `types` means none to link to (not "still loading").
+  const typesList = useQuery(typesQuery);
   const [search, setSearch] = useState("");
   const [q, setQ] = useState("");
   useEffect(() => {
@@ -109,8 +112,8 @@ function ContentTab({ onAdd, room, disabled }: AddItemsProps) {
       staleTime: 30_000,
     })),
   });
-  const pending = types.length === 0 || results.some((r) => r.isPending);
-  const failed = results.length > 0 && results.every((r) => r.isError);
+  const pending = typesList.isPending || results.some((r) => r.isPending);
+  const failed = typesList.isError || (results.length > 0 && results.every((r) => r.isError));
   const groups = types.flatMap((type, i) => {
     const items = results[i]?.data?.items ?? [];
     return items.length > 0 ? [{ type, items }] : [];
@@ -147,11 +150,13 @@ function ContentTab({ onAdd, room, disabled }: AddItemsProps) {
         empty={
           failed
             ? t("menus.add.failed")
-            : groups.length === 0
-              ? q
-                ? t("menus.add.noResults", { q })
-                : t("menus.add.noContent")
-              : null
+            : types.length === 0
+              ? t("menus.add.noTypes")
+              : groups.length === 0
+                ? q
+                  ? t("menus.add.noResults", { q })
+                  : t("menus.add.noContent")
+                : null
         }
       >
         {groups.map(({ type, items }) => (
@@ -305,7 +310,12 @@ function LinkTab({ onAdd, room, disabled }: AddItemsProps) {
   };
   return (
     <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
-      <FormField label={t("menus.add.url")} hint={t("menus.add.urlHint")} error={urlError}>
+      {/* The error repeats the hint's rule: one of them at a time. */}
+      <FormField
+        label={t("menus.add.url")}
+        hint={urlError ? undefined : t("menus.add.urlHint")}
+        error={urlError}
+      >
         {(control) => (
           <Input
             {...control}

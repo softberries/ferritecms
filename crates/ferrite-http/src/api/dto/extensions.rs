@@ -8,11 +8,12 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use ferrite_core::{
+    RetainedPluginData,
     diagnostics::scrub,
     ext_settings::{PluginSettingsView, SettingDef, SettingsSchema},
 };
 use ferrite_domain::{FailureBucket, InstalledPlugin, InstalledTheme, Node};
-use ferrite_plugin_host::{HookStats, LimitItem, PermissionItem, PermissionReport};
+use ferrite_plugin_host::{HookStats, LimitItem, PermissionItem, PermissionReport, PluginMeta};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use utoipa::ToSchema;
@@ -108,6 +109,53 @@ impl From<&PermissionReport> for GrantReportDto {
     }
 }
 
+/// What a plugin manifest's `[plugin]` table says about the plugin beyond its name
+/// and version: text its author wrote (render it as text; the publisher is not
+/// verified, M4 "Signed plugins").
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginFacts {
+    pub description: Option<String>,
+    pub publisher: Option<String>,
+    pub license: Option<String>,
+    pub homepage: Option<String>,
+}
+
+impl PluginFacts {
+    /// From a parsed manifest (an upload).
+    pub fn of(meta: &PluginMeta) -> Self {
+        Self {
+            description: meta.description.clone(),
+            publisher: Some(meta.publisher.clone()),
+            license: meta.license.clone(),
+            homepage: web_url(meta.homepage.as_deref()),
+        }
+    }
+
+    /// From a row's stored manifest (`manifest.plugin`); a key it lacks is `None`.
+    pub fn stored(manifest: &Value) -> Self {
+        let text = |key: &str| {
+            manifest
+                .get("plugin")
+                .and_then(|p| p.get(key))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        };
+        Self {
+            description: text("description"),
+            publisher: text("publisher"),
+            license: text("license"),
+            homepage: web_url(text("homepage").as_deref()),
+        }
+    }
+}
+
+/// `url` if it is an `http(s)://` URL (`ferrite_domain::is_web_url`), else `None`: a row
+/// stored before uploads were checked never hands the admin another scheme to link.
+fn web_url(url: Option<&str>) -> Option<String> {
+    url.filter(|u| ferrite_domain::is_web_url(u))
+        .map(str::to_owned)
+}
+
 /// The report of a plugin upload, as the admin approves it (`POST /plugins/inspect`,
 /// and the `report` of an approval refusal).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -116,13 +164,25 @@ pub struct PermissionReportDto {
     pub report: GrantReportDto,
     /// Whether a plugin of this name is installed: `added` is then against its grant.
     pub update: bool,
+    /// The manifest's `plugin.description` (text).
+    pub description: Option<String>,
+    /// The manifest's `plugin.publisher` (text, unverified).
+    pub publisher: Option<String>,
+    /// The manifest's `plugin.license` (text).
+    pub license: Option<String>,
+    /// The manifest's `plugin.homepage`: an `http://` or `https://` URL (else `null`).
+    pub homepage: Option<String>,
 }
 
 impl PermissionReportDto {
-    pub fn new(r: &PermissionReport, update: bool) -> Self {
+    pub fn new(r: &PermissionReport, update: bool, facts: PluginFacts) -> Self {
         Self {
             report: r.into(),
             update,
+            description: facts.description,
+            publisher: facts.publisher,
+            license: facts.license,
+            homepage: facts.homepage,
         }
     }
 }
@@ -168,6 +228,15 @@ pub struct PluginDto {
     pub disabled_reason: Option<String>,
     pub installed_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// The stored manifest's `plugin.description` (text).
+    pub description: Option<String>,
+    /// The stored manifest's `plugin.publisher` (text, unverified).
+    pub publisher: Option<String>,
+    /// The stored manifest's `plugin.license` (text).
+    pub license: Option<String>,
+    /// The stored manifest's `plugin.homepage`: an `http://` or `https://` URL (a stored
+    /// value of another form is `null`).
+    pub homepage: Option<String>,
     /// The report of the stored grant: `added` is what it does not cover (empty for a
     /// plugin installed with approval), `fingerprint` the approved one. It has no
     /// `update`: rows keep no previous version. `null` when the stored manifest or
@@ -184,6 +253,7 @@ impl PluginDto {
         report: Option<GrantReportDto>,
         nodes: Vec<PluginNodeState>,
     ) -> Self {
+        let facts = PluginFacts::stored(&row.manifest);
         Self {
             name: row.name,
             version: row.version,
@@ -191,6 +261,10 @@ impl PluginDto {
             disabled_reason: row.disabled_reason,
             installed_at: row.installed_at.as_datetime(),
             updated_at: row.updated_at.as_datetime(),
+            description: facts.description,
+            publisher: facts.publisher,
+            license: facts.license,
+            homepage: facts.homepage,
             report,
             nodes,
         }
@@ -203,6 +277,32 @@ pub struct PluginList {
     pub items: Vec<PluginDto>,
     /// Always `null`: one page holds every plugin.
     pub next_cursor: Option<String>,
+}
+
+/// A deleted plugin whose KV and settings are still kept (M2b-3 P47).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RetainedPluginDto {
+    pub name: String,
+    pub deleted_at: DateTime<Utc>,
+    /// When the data is erased unless the plugin is installed again first: 30 days
+    /// after `deleted_at` (`POST /plugins/{name}/purge` erases it earlier).
+    pub purge_after: DateTime<Utc>,
+}
+
+impl From<RetainedPluginData> for RetainedPluginDto {
+    fn from(r: RetainedPluginData) -> Self {
+        Self {
+            name: r.name,
+            deleted_at: r.deleted_at.as_datetime(),
+            purge_after: r.purge_after.as_datetime(),
+        }
+    }
+}
+
+/// `GET /plugins/retained`: every deleted plugin whose data is kept, by name.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RetainedPluginList {
+    pub items: Vec<RetainedPluginDto>,
 }
 
 /// `POST /plugins/inspect` (`multipart/form-data`; the schema only, the handler reads
@@ -291,12 +391,50 @@ impl ThemeNodeState {
     }
 }
 
-/// A theme: installed (a row) or embedded (no row).
+/// A menu location a theme declares (its `[menus]` table).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ThemeMenuDto {
+    /// The location, and the name of the menu the theme shows there.
+    pub name: String,
+    pub label: String,
+}
+
+/// An image variant size a theme wants (its `[images]` table, 03 §4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ThemeImageDto {
+    /// The size's name (`[a-z0-9_-]`), the key of its `[images]` entry.
+    pub name: String,
+    /// In pixels.
+    pub width: u32,
+    /// In pixels; `null`: scaled to `width` keeping the aspect ratio, or with `crop` a
+    /// `width` square.
+    pub height: Option<u32>,
+    /// Whether the variant is cropped to `width` x `height`.
+    pub crop: bool,
+}
+
+/// A theme: installed (a row) or embedded (no row). The manifest facts (`author`,
+/// `license`, `homepage`, `description`, `menus`, `images`, `has_settings`) are the
+/// row's stored manifest, or the embedded theme's `theme.toml`; each is text the theme
+/// author wrote (render it as text).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct ThemeDto {
     pub name: String,
     pub version: String,
     pub description: Option<String>,
+    pub author: Option<String>,
+    pub license: Option<String>,
+    /// An `http://` or `https://` URL (`theme.toml` refuses anything else).
+    pub homepage: Option<String>,
+    /// Whether `theme.toml` declares settings (`GET /themes/{name}/settings` has a form).
+    pub has_settings: bool,
+    /// The menu locations, by name.
+    pub menus: Vec<ThemeMenuDto>,
+    /// The image variant sizes, by name.
+    pub images: Vec<ThemeImageDto>,
+    /// The row's artifact (SHA-256 of the bundle, 64 lowercase hex); `null` for an
+    /// embedded theme without a row.
+    pub hash: Option<String>,
     pub origin: ThemeOrigin,
     /// The theme nodes should serve: the active row, or with no row active the embedded
     /// default (`blog`) while it has no row. With no row active and an inactive `blog`
@@ -313,29 +451,86 @@ pub struct ThemeDto {
 impl ThemeDto {
     /// The entry of an installed row.
     pub fn installed(row: &InstalledTheme) -> Self {
-        let description = row
-            .manifest
-            .get("description")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned);
         Self {
-            name: row.name.clone(),
-            version: row.version.clone(),
-            description,
-            origin: ThemeOrigin::Installed,
+            hash: Some(row.artifact_hash.as_str().to_owned()),
             active: row.active,
             installed_at: Some(row.installed_at.as_datetime()),
-            nodes: Vec::new(),
+            ..Self::from_manifest(
+                &row.name,
+                &row.version,
+                &row.manifest,
+                ThemeOrigin::Installed,
+            )
         }
     }
 
-    /// The entry of an embedded theme without a row.
-    pub fn embedded(name: &str, version: &str, description: Option<&str>) -> Self {
+    /// The entry of an embedded theme without a row; `manifest` is the object a row
+    /// would store for it (`theme_row_manifest`).
+    pub fn embedded(name: &str, version: &str, manifest: &Value) -> Self {
+        Self::from_manifest(name, version, manifest, ThemeOrigin::Embedded)
+    }
+
+    /// The facts of a stored manifest object. A row written before a key existed
+    /// lacks it: no author, no menus, no settings.
+    fn from_manifest(name: &str, version: &str, manifest: &Value, origin: ThemeOrigin) -> Self {
+        let text = |key: &str| manifest.get(key).and_then(Value::as_str).map(str::to_owned);
+        let menus = manifest
+            .get("menus")
+            .and_then(Value::as_object)
+            .map(|table| {
+                let mut menus: Vec<ThemeMenuDto> = table
+                    .iter()
+                    .filter_map(|(name, label)| {
+                        Some(ThemeMenuDto {
+                            name: name.clone(),
+                            label: label.as_str()?.to_owned(),
+                        })
+                    })
+                    .collect();
+                menus.sort_by(|a, b| a.name.cmp(&b.name));
+                menus
+            })
+            .unwrap_or_default();
+        let images = manifest
+            .get("images")
+            .and_then(Value::as_object)
+            .map(|table| {
+                let mut images: Vec<ThemeImageDto> = table
+                    .iter()
+                    .filter_map(|(name, size)| {
+                        let px = |key: &str| {
+                            size.get(key)
+                                .and_then(Value::as_u64)
+                                .and_then(|n| u32::try_from(n).ok())
+                        };
+                        Some(ThemeImageDto {
+                            name: name.clone(),
+                            width: px("width")?,
+                            height: px("height"),
+                            crop: size.get("crop").and_then(Value::as_bool).unwrap_or(false),
+                        })
+                    })
+                    .collect();
+                images.sort_by(|a, b| a.name.cmp(&b.name));
+                images
+            })
+            .unwrap_or_default();
+        let has_settings = manifest
+            .get("settings")
+            .and_then(Value::as_array)
+            .is_some_and(|defs| !defs.is_empty());
         Self {
             name: name.to_owned(),
             version: version.to_owned(),
-            description: description.map(str::to_owned),
-            origin: ThemeOrigin::Embedded,
+            description: text("description"),
+            author: text("author"),
+            license: text("license"),
+            homepage: text("homepage"),
+            has_settings,
+            menus,
+            images,
+            hash: None,
+            origin,
             active: false,
             installed_at: None,
             nodes: Vec::new(),

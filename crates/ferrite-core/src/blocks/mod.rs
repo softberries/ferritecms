@@ -21,8 +21,40 @@ pub const MAX_DEPTH: usize = 64;
 
 /// Context for rendering.
 pub struct RenderCtx<'a> {
-    /// Maps a media id from `ferrite:media/<uuid>` to a URL; `None` drops the image.
-    pub media_url: &'a dyn Fn(&str) -> Option<String>,
+    /// Resolves a media id from `ferrite:media/<uuid>` to what its `<img>` shows;
+    /// `None` drops the image.
+    pub media: &'a dyn Fn(&str) -> Option<InlineImage>,
+}
+
+/// What an inline `ferrite:media/<id>` image renders as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineImage {
+    pub src: String,
+    /// `None`: a plain `<img src alt>` (SVGs, non-images, images whose variants are not
+    /// recorded yet).
+    pub responsive: Option<Responsive>,
+}
+
+impl InlineImage {
+    /// A plain `<img src alt>`.
+    pub fn plain(src: String) -> Self {
+        Self {
+            src,
+            responsive: None,
+        }
+    }
+}
+
+/// The responsive attributes of an inline image (06 §4): rendered after `alt` (and
+/// `title`) as `srcset`, `sizes`, `width`, `height`, `loading="lazy"` and
+/// `decoding="async"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Responsive {
+    /// `url 768w, url 1600w, …`.
+    pub srcset: String,
+    pub sizes: String,
+    pub width: i32,
+    pub height: i32,
 }
 
 #[cfg(test)]

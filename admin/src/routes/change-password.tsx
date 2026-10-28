@@ -2,7 +2,7 @@
 // Review Focus 4), or by choice. The server rotates the session, so the new CSRF token
 // is stored (`changePassword`), then the user goes on to `next`.
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { KeyRoundIcon } from "lucide-react";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -13,6 +13,7 @@ import { changePassword } from "@/api/auth";
 import { qk } from "@/api/keys";
 import { ApiError, isProblem } from "@/api/problem";
 import { AuthLayout, FormAlert, SubmitButton } from "@/auth/auth-layout";
+import { useSecretCall } from "@/auth/use-secret-call";
 import { type FormFailure, genericFailure } from "@/auth/errors";
 import { changeSchema } from "@/auth/schemas";
 import { nextSearch, routerHref, safeNext } from "@/auth/next";
@@ -44,7 +45,7 @@ function ChangePasswordPage() {
     setFailure(null);
   }, []);
 
-  const change = useMutation({
+  const change = useSecretCall({
     mutationFn: changePassword,
     onSuccess: async (r) => {
       queryClient.setQueryData<MeDto>(qk.me, {

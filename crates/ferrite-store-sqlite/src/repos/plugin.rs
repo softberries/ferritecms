@@ -7,8 +7,9 @@ use ferrite_domain::{
     Artifact, ArtifactHash, ContentId, InstalledPlugin, InstalledTheme, Media, Timestamp,
 };
 use ferrite_store::{
-    ArtifactRepo, MAX_ID_FILTER, MediaRepo, PluginKvRepo, PluginRepo, StoreError, ThemeRepo,
-    check_len, check_limit, check_prune_limit, validate_json, validate_text,
+    ArtifactRepo, MAX_ID_FILTER, MediaRepo, PluginKvRepo, PluginRepo, RetainedPlugin, StoreError,
+    ThemeRepo, check_len, check_limit, check_prune_limit, retained_marker, validate_json,
+    validate_text,
 };
 
 use sqlx::{QueryBuilder, Row, Sqlite};
@@ -318,6 +319,27 @@ impl PluginRepo for SqliteRepos {
         .bind(id)
         .execute(e))
         .map(|_| ())
+    }
+
+    async fn retained(&self) -> Result<Vec<RetainedPlugin>, StoreError> {
+        // `plugin.` is 7 characters and `.deleted_at` 11: the name is what lies between.
+        let rows = run!(&self.reader, |e| sqlx::query(
+            "SELECT o.key, o.value FROM options AS o \
+             WHERE substr(o.key, 1, 7) = 'plugin.' AND substr(o.key, -11) = '.deleted_at' \
+             AND length(o.key) > 18 AND NOT EXISTS (SELECT 1 FROM plugins AS p \
+             WHERE p.name = substr(o.key, 8, length(o.key) - 18))"
+        )
+        .fetch_all(e))?;
+        let mut found = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let key: String = row.try_get("key").map_err(crate::map_db_err)?;
+            let value: String = row.try_get("value").map_err(crate::map_db_err)?;
+            if let Some(r) = retained_marker(&key, &codec::json_from_db(&value)?) {
+                found.push(r);
+            }
+        }
+        found.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(found)
     }
 
     async fn auto_disable(

@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { SEARCH_DEBOUNCE_MS, SEARCH_LIMIT, searchContent } from "./sources";
+import {
+  bodySnippet,
+  SEARCH_DEBOUNCE_MS,
+  SEARCH_LIMIT,
+  SNIPPET_CHARS,
+  searchContent,
+} from "./sources";
 
 interface Summary {
   type: string;
@@ -7,10 +13,18 @@ interface Summary {
   title: string;
   status: string;
   slug: string;
+  excerpt: string;
 }
 
 function summary(type: string, id: string, title: string, status = "published"): Summary {
-  return { type, id, title, status, slug: title.toLowerCase().replace(/\s+/g, "-") };
+  return {
+    type,
+    id,
+    title,
+    status,
+    slug: title.toLowerCase().replace(/\s+/g, "-"),
+    excerpt: `About ${title}.`,
+  };
 }
 
 function json(body: unknown, status = 200) {
@@ -173,7 +187,32 @@ test("merge_order_is_by_type_then_relevance", async () => {
     title: "Writing your first plugin",
     status: "draft",
     slug: "writing-your-first-plugin",
+    excerpt: "About Writing your first plugin.",
   });
+});
+
+test("body_only_hit_shows_snippet", () => {
+  // The title explains the hit: no snippet.
+  expect(bodySnippet({ title: "Why WebAssembly sandboxes", excerpt: "x" }, "webassembly")).toBe(
+    null,
+  );
+  expect(bodySnippet({ title: "Hello", excerpt: "x" }, "wasm hel")).toBe(null);
+  // Matched only in the text: the excerpt's start, whitespace folded, as plain text.
+  expect(
+    bodySnippet(
+      { title: "Plugins", excerpt: "  Sandboxed\n<b>WebAssembly</b>  code" },
+      "webassembly",
+    ),
+  ).toBe("Sandboxed <b>WebAssembly</b> code");
+  // At most SNIPPET_CHARS characters (code points), then an ellipsis.
+  const long = "é".repeat(SNIPPET_CHARS + 30);
+  const cut = bodySnippet({ title: "Plugins", excerpt: long }, "sandbox");
+  expect(Array.from(cut ?? "")).toHaveLength(SNIPPET_CHARS + 1);
+  expect(cut?.endsWith("…")).toBe(true);
+  // No excerpt: still a body hit (the label alone).
+  expect(bodySnippet({ title: "Plugins", excerpt: "" }, "sandbox")).toBe("");
+  // A query of one-character words cannot be judged.
+  expect(bodySnippet({ title: "Plugins", excerpt: "x" }, "a b")).toBe(null);
 });
 
 test("one_failing_type_keeps_the_others", async () => {

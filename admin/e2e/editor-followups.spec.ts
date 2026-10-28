@@ -81,7 +81,7 @@ async function crashAfterTakeTheirs(a: Page, b: Page, editorApi: ContentApi) {
 test("kept_copy_edits_survive_a_crash", async ({
   as,
   site,
-  backend,
+  siteKey,
   guard,
   snap,
   expectAccessible,
@@ -89,7 +89,7 @@ test("kept_copy_edits_survive_a_crash", async ({
   test.setTimeout(120_000);
   // The refused save is a 412 by design: the browser logs that failed load.
   guard.allowFailedResource(/\/api\/v1\/content\/post\/[0-9a-f-]+$/);
-  const editorApi = await ContentApi.as(backend, site.url, "editor");
+  const editorApi = await ContentApi.as(siteKey, site.url, "editor");
   const { item, theirs, mine, newer, c } = await crashAfterTakeTheirs(
     await as("editor"),
     await as("admin"),
@@ -117,9 +117,9 @@ test("kept_copy_edits_survive_a_crash", async ({
   await editorApi.dispose();
 });
 
-test("restoring_the_backup_keeps_the_kept_copy", async ({ as, site, backend, guard }) => {
+test("restoring_the_backup_keeps_the_kept_copy", async ({ as, site, siteKey, guard }) => {
   guard.allowFailedResource(/\/api\/v1\/content\/post\/[0-9a-f-]+$/);
-  const editorApi = await ContentApi.as(backend, site.url, "editor");
+  const editorApi = await ContentApi.as(siteKey, site.url, "editor");
   const { item, theirs, mine, newer, c } = await crashAfterTakeTheirs(
     await as("editor"),
     await as("admin"),
@@ -139,6 +139,50 @@ test("restoring_the_backup_keeps_the_kept_copy", async ({ as, site, backend, gua
   expect(JSON.stringify((await editorApi.get("post", item.id)).body)).toContain(newer);
   await expect.poll(() => backupsOf(c, item.id)).toBe("");
   await expect(banner(c, "kept")).toBeVisible();
+  await editorApi.dispose();
+});
+
+test("failed_backup_restore_says_so_and_keeps_the_backup", async ({ as, site, siteKey, guard }) => {
+  guard.allowFailedResource(/\/api\/v1\/content\/post\/[0-9a-f-]+$/);
+  guard.allowFailedResource(/\/autosave$/);
+  const editorApi = await ContentApi.as(siteKey, site.url, "editor");
+  const { item, newer, c } = await crashAfterTakeTheirs(
+    await as("editor"),
+    await as("admin"),
+    editorApi,
+  );
+  // No kept copy and unsaved edits on screen: restoring first stores those edits in the
+  // autosave slot, and that write fails.
+  await banner(c, "restored").getByRole("button", { name: "Discard" }).click();
+  await expect(banner(c, "restored")).toHaveCount(0);
+  await typeAtEnd(c, `Edits on screen ${uid()}`);
+  await c.route("**/autosave", (route) =>
+    route.request().method() === "PUT"
+      ? route.fulfill({
+          status: 500,
+          contentType: "application/problem+json",
+          body: JSON.stringify({
+            type: "https://ferritecms.dev/problems/internal",
+            title: "Internal error",
+            status: 500,
+            detail: "",
+          }),
+        })
+      : route.fallback(),
+  );
+  await banner(c, "backup").getByRole("button", { name: "Restore edits" }).click();
+  await expect(
+    c.locator("[data-sonner-toast]").filter({
+      hasText:
+        "Could not restore the edits from this browser. They are still kept here; try again.",
+    }),
+  ).toBeVisible();
+  // Not the Undo message, and the backup is still offered and stored.
+  await expect(
+    c.locator("[data-sonner-toast]").filter({ hasText: "bring the changes back" }),
+  ).toHaveCount(0);
+  await expect(banner(c, "backup")).toBeVisible();
+  expect(await backupsOf(c, item.id)).toContain(newer);
   await editorApi.dispose();
 });
 

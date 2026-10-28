@@ -74,6 +74,11 @@ describe("needs-attention", () => {
     expect(within(card).getByText("media.variants")).toBeVisible();
     expect(within(card).getByText("decode failed: unsupported colour type")).toBeVisible();
     expect(within(card).getByText("5 of 5 attempts")).toBeVisible();
+    // The System screen's Jobs tab, filtered to dead jobs.
+    expect(within(card).getByRole("link", { name: "View dead jobs" })).toHaveAttribute(
+      "href",
+      "/admin/system/jobs?status=dead",
+    );
 
     expect(within(card).getByText("1 plugin disabled after failures")).toBeVisible();
     expect(within(card).getByText("seo-tools")).toBeVisible();

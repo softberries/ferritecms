@@ -69,6 +69,20 @@ test("chords", () => {
   expect(dash).toHaveBeenCalledOnce();
 });
 
+test("chord_completes_with_a_binding_registered_between_steps", () => {
+  bind("g d");
+  const first = vi.fn();
+  const offFirst = registerShortcut({ id: "nav", keys: "g s", label: "S", group: "T", run: first });
+  press("g");
+  // Registered again (its label changed) before the second step.
+  offFirst();
+  const second = vi.fn();
+  cleanups.push(registerShortcut({ id: "nav", keys: "g s", label: "S2", group: "T", run: second }));
+  press("s");
+  expect(first).not.toHaveBeenCalled();
+  expect(second).toHaveBeenCalledOnce();
+});
+
 test("chord_timeout", () => {
   const dash = bind("g d");
   press("g");
@@ -202,13 +216,30 @@ test("physical_key_only_on_apple_and_never_with_altgraph", () => {
   // Where Alt leaves the letter as it is, the key itself still matches.
   press("r", { ctrlKey: true, altKey: true, code: "KeyR" });
   expect(revisions).toHaveBeenCalledOnce();
-  // macOS with AltGraph reported (a layout using Option as AltGr): no mapping either.
+});
+
+test("mac_option_reported_as_altgraph_still_runs_cmd_option_r", () => {
+  // R18: a macOS browser that reports Option as AltGraph. ⌘ held: a command chord,
+  // which types nothing, so the physical key still matches.
   platform("MacIntel");
-  press("®", {
+  const revisions = bind("mod+alt+r");
+  const event = new KeyboardEvent("keydown", {
+    key: "®",
+    code: "KeyR",
     metaKey: true,
     altKey: true,
-    code: "KeyR",
     modifierAltGraph: true,
+    bubbles: true,
+    cancelable: true,
   });
+  expect(event.getModifierState("AltGraph")).toBe(true);
+  expect(event.altKey).toBe(true);
+  document.body.dispatchEvent(event);
   expect(revisions).toHaveBeenCalledOnce();
+  expect(event.defaultPrevented).toBe(true);
+  // Option alone with AltGraph reported types its character: an Option-only binding
+  // does not take it.
+  const option = bind("alt+r");
+  press("®", { altKey: true, code: "KeyR", modifierAltGraph: true });
+  expect(option).not.toHaveBeenCalled();
 });

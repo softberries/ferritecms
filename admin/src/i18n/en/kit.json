@@ -19,6 +19,7 @@
     "nowRoot": "{{label}} is now at the top level.",
     "nowUnder": "{{label}} is now under {{parent}}.",
     "stayed": "{{label}} stays under the same parent.",
+    "unmoved": "{{label}} was dropped where it was, position {{position}} of {{count}}.",
     "roleDescription": "sortable"
   },
   "dropZone": {

@@ -22,7 +22,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ContentId, ContentItem, ContentOrder, ContentQuery,
-    ContentStatus, Media, MediaKind, Page, ReadableBy, SearchQuery, Timestamp, UserId,
+    ContentStatus, MEDIA_KIND, Media, MediaKind, Page, ReadableBy, SearchQuery, Timestamp, UserId,
 };
 use ferrite_store::Store;
 use serde_json::Value;
@@ -33,10 +33,13 @@ use crate::{
     content::{AuthorRef, Edit, WALKED},
     events,
     jobs::{MEDIA_VARIANTS_VERSION, MediaVariants, media_variants_job},
-    site::MEDIA_KIND,
     tx::finish,
 };
 
+/// `content_meta` key holding a trashed media item's status before the trash
+/// (`"published"` or `"draft"`; P53): written by [`MediaService::trash`], read and
+/// deleted by [`MediaService::restore`].
+pub const TRASHED_FROM_META: &str = "media.trashed_from";
 /// Longest media title, in characters.
 pub const MAX_MEDIA_TITLE: usize = 200;
 /// Longest alternative text, in characters.
@@ -46,7 +49,7 @@ pub const MAX_ORIGINAL_NAME: usize = 255;
 /// The only type whose bytes can carry the sanitiser's marker.
 const SVG_MIME: &str = "image/svg+xml";
 /// The types `process_image` reads (`ferrite_media::is_raster_image`).
-const RASTER_MIMES: [&str; 4] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+pub(crate) const RASTER_MIMES: [&str; 4] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
 /// A staged upload to record ([`MediaService::record_upload`]).
 #[derive(Debug, Clone, PartialEq)]
@@ -463,7 +466,10 @@ impl MediaService {
 
     /// Moves media item `id` to trash ([`ContentService::trash`], with `media:write`
     /// in place of `content:write`). The file stays served only while the item is
-    /// public, so a trashed item's URLs stop answering. A non-media item is `NotFound`.
+    /// public, so a trashed item's URLs stop answering. In the same `Tx` the item's
+    /// status before the trash is kept in `content_meta` [`TRASHED_FROM_META`]
+    /// (`"published"`, or `"draft"` for any other status; P53), for
+    /// [`restore`](Self::restore). A non-media item is `NotFound`.
     pub async fn trash(
         &self,
         actor: &Actor,
@@ -471,19 +477,50 @@ impl MediaService {
         expected_version: i64,
     ) -> Result<ContentItem, CoreError> {
         require_scope(actor, Some(Scope::write(Area::Media)))?;
-        self.check_kind(id).await?;
-        self.content
-            .trash(&content_writer(actor), id, expected_version)
-            .await
+        let writer = content_writer(actor);
+        // One set of rules for the whole write (R10).
+        let rules = self.permalinks.pin();
+        let tx = self.store.begin().await?;
+        let done = async {
+            let current = tx
+                .content()
+                .get(id)
+                .await?
+                .filter(|i| i.kind == MEDIA_KIND)
+                .ok_or(CoreError::NotFound)?;
+            let from = if current.status == ContentStatus::Published {
+                ContentStatus::Published
+            } else {
+                ContentStatus::Draft
+            };
+            let item = ContentService::trash_in(
+                tx.as_ref(),
+                rules.as_ref(),
+                &writer,
+                current,
+                expected_version,
+            )
+            .await?;
+            tx.meta()
+                .set(id, TRASHED_FROM_META, &Value::from(from.as_str()))
+                .await?;
+            Ok(item)
+        }
+        .await;
+        finish(tx, done).await
     }
 
-    /// Restores trashed media item `id` as **published**, the status uploads have
-    /// (M2a-2b P5), in one `Tx`: the content lifecycle's restore (trash -> draft, with
-    /// `media:write` in place of `content:write` and its role rules, R8: `edit_own` for
-    /// the author, `edit_others` otherwise, never contributors; the item is indexed for
-    /// search again), then the publish (`publish_own` / `publish_others`; the
-    /// `published_at` of the upload is kept, so the item is public again and its
-    /// `/_media` URLs answer). Each step emits its own `invalidate` event with
+    /// Restores trashed media item `id` in one `Tx`: the content lifecycle's restore
+    /// (trash -> draft, with `media:write` in place of `content:write` and its role
+    /// rules, R8: `edit_own` for the author, `edit_others` otherwise, never
+    /// contributors; the item is indexed for search again), then, unless the item was a
+    /// draft when it was trashed ([`TRASHED_FROM_META`] is `"draft"`, P53), the publish
+    /// (the `published_at` of the upload is kept, so the item is public again and its
+    /// `/_media` URLs answer). An item trashed without the marker (before P53, or
+    /// through the content lifecycle) is published, as uploads are (R23). The publish
+    /// needs `publish_own` / `publish_others`; an actor without it gets the item back as
+    /// a draft, as a content restore does. The returned item's status says which. The
+    /// marker row is deleted. Each step emits its own `invalidate` event with
     /// `post:<id>`, and the publish queues the `post.published` action jobs again, as an
     /// upload does. A stale version is `Conflict`, an item not in trash `Invalid`, a
     /// missing or non-media item `NotFound`.
@@ -511,8 +548,14 @@ impl MediaService {
                 expected_version,
             )
             .await?;
-            let item =
-                ContentService::publish_in(tx.as_ref(), rules.as_ref(), &writer, item).await?;
+            let was_draft = tx.meta().get(id, TRASHED_FROM_META).await?.as_ref()
+                == Some(&Value::from(ContentStatus::Draft.as_str()));
+            tx.meta().delete(id, TRASHED_FROM_META).await?;
+            let item = if was_draft || !ContentService::may_publish(&writer, &item) {
+                item
+            } else {
+                ContentService::publish_in(tx.as_ref(), rules.as_ref(), &writer, item).await?
+            };
             let media = tx.media().get(id).await?.ok_or(CoreError::NotFound)?;
             Ok(MediaItem { item, media })
         }

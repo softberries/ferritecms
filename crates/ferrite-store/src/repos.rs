@@ -5,13 +5,13 @@ use std::{
 
 use async_trait::async_trait;
 use ferrite_domain::{
-    ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, Autosave, Comment,
-    CommentId, CommentQuery, CommentStatus, ContentId, ContentItem, ContentQuery, ContentType,
-    Event, FailureBucket, IdemBegin, IdempotencyKey, InstalledPlugin, InstalledTheme, Job, JobId,
-    JobLease, JobQuery, JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob, NewNode,
-    NewUser, Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId, RedirectQuery,
-    Revision, RevisionId, SearchQuery, Secret, Session, Taxonomy, Term, TermId, Timestamp, User,
-    UserId,
+    ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, AuditQuery, Autosave,
+    Comment, CommentId, CommentQuery, CommentStatus, ContentId, ContentItem, ContentQuery,
+    ContentType, Event, FailureBucket, IdemBegin, IdempotencyKey, InstalledPlugin, InstalledTheme,
+    Job, JobId, JobLease, JobQuery, JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob,
+    NewNode, NewUser, Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId,
+    RedirectQuery, Revision, RevisionId, SearchQuery, Secret, Session, Taxonomy, Term, TermId,
+    Timestamp, User, UserId, UserQuery,
 };
 
 use crate::{Channel, LockGuard, StoreError, Subscription, migrate::MigrationStatus};
@@ -406,8 +406,12 @@ pub trait UserRepo: Send + Sync {
     /// (then id); `limit` outside 1..=[`MAX_AUTH_LIST`](crate::MAX_AUTH_LIST) is
     /// `Invalid`.
     async fn list_active_admins(&self, limit: u32) -> Result<Vec<User>, StoreError>;
-    /// Lists users with cursor pagination.
-    async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<User>, StoreError>;
+    /// Lists users by login (binary order, then id) with cursor pagination, filtered by
+    /// `query`: `q` is a case-insensitive substring of the login, display name or e-mail
+    /// (`LIKE … ESCAPE '\'`, Postgres `ILIKE`; SQLite folds ASCII case only), with `%`,
+    /// `_` and `\` matching only themselves; `role` and `status` match exactly. A NUL in
+    /// `q`, a bad `limit` or a bad cursor is `Invalid`.
+    async fn list(&self, query: &UserQuery) -> Result<Page<User>, StoreError>;
     /// Fetches up to [`MAX_ID_FILTER`](crate::MAX_ID_FILTER) users in one query, returned
     /// in the order of `ids`; missing ids are skipped and a repeated id yields its user
     /// once (at its first position). More ids is `Invalid`.
@@ -492,6 +496,12 @@ pub trait PluginRepo: Send + Sync {
     ) -> Result<(), StoreError>;
     /// Removes an installed plugin (missing: no-op).
     async fn delete(&self, id: &str) -> Result<(), StoreError>;
+    /// The deleted plugins whose data is still kept (M2b-3 P47): every option
+    /// `plugin.<name>.deleted_at` (the deletion marker a delete writes) whose value is
+    /// an integer (unix micros) and whose `<name>` has no `.` and no installed row, by
+    /// name in binary order. Other values are skipped. Unbounded: one row per deleted
+    /// plugin not yet purged.
+    async fn retained(&self) -> Result<Vec<RetainedPlugin>, StoreError>;
     /// Disables the plugin with `reason` in one conditional statement (P20, R12), only
     /// while it is enabled **and** its `updated_at` is still `observed_updated_at` (the
     /// value the caller read before summing its failures): `true` only for the
@@ -505,6 +515,29 @@ pub trait PluginRepo: Send + Sync {
         reason: &str,
         observed_updated_at: Timestamp,
     ) -> Result<bool, StoreError>;
+}
+
+/// A deleted plugin whose KV and settings are still kept ([`PluginRepo::retained`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetainedPlugin {
+    pub name: String,
+    /// When it was deleted (the marker's value).
+    pub deleted_at: Timestamp,
+}
+
+/// The marker `key`'s plugin name and its value as a [`RetainedPlugin`], if `key` is a
+/// marker of a dot-free name and `value` integer micros: what both backends'
+/// [`PluginRepo::retained`] keep of the rows their query selects.
+pub fn retained_marker(key: &str, value: &serde_json::Value) -> Option<RetainedPlugin> {
+    let name = key.strip_prefix("plugin.")?.strip_suffix(".deleted_at")?;
+    if name.is_empty() || name.contains('.') {
+        return None;
+    }
+    let deleted_at = Timestamp::from_micros(value.as_i64()?).ok()?;
+    Some(RetainedPlugin {
+        name: name.to_owned(),
+        deleted_at,
+    })
 }
 
 /// Shared per-minute plugin failure counters (P20): each node adds its buffered counts,
@@ -799,6 +832,33 @@ pub trait SessionRepo: Send + Sync {
     /// Up to [`MAX_AUTH_LIST`](crate::MAX_AUTH_LIST) sessions of `user`, newest first
     /// (`created_at DESC, id_hash DESC`).
     async fn list_for_user(&self, user: UserId) -> Result<Vec<Session>, StoreError>;
+    /// The session of `user` whose [public id](crate::session_public_id) is `public_id`,
+    /// among those [`list_for_user`](Self::list_for_user) returns (the newest
+    /// [`MAX_AUTH_LIST`](crate::MAX_AUTH_LIST)); expired or not. Another user's session
+    /// is `None`. The public id is not stored (no migration, M2b-3 P45), so this hashes
+    /// each listed key.
+    async fn get_by_public_id(
+        &self,
+        user: UserId,
+        public_id: &str,
+    ) -> Result<Option<Session>, StoreError> {
+        Ok(self
+            .list_for_user(user)
+            .await?
+            .into_iter()
+            .find(|s| crate::session_public_id(&s.id_hash) == public_id))
+    }
+    /// Deletes the session [`get_by_public_id`](Self::get_by_public_id) finds; `false`
+    /// when there is none.
+    async fn delete_by_public_id(&self, user: UserId, public_id: &str) -> Result<bool, StoreError> {
+        match self.get_by_public_id(user, public_id).await? {
+            Some(session) => {
+                self.delete(&session.id_hash).await?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
     /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) sessions with
     /// `expires_at < now` or `last_seen_at < idle_before`; returns the count. Callers loop
     /// until a batch comes back short (R5).
@@ -869,8 +929,11 @@ pub trait AuditRepo: Send + Sync {
     /// NUL in `details` or in any text.
     async fn append(&self, entry: &NewAudit) -> Result<AuditId, StoreError>;
     /// Lists rows newest first (`at DESC, id DESC`) with cursor pagination (tag
-    /// [`AUDIT_CURSOR_TAG`](crate::AUDIT_CURSOR_TAG)); `limit` 1..=200.
-    async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<AuditEntry>, StoreError>;
+    /// [`AUDIT_CURSOR_TAG`](crate::AUDIT_CURSOR_TAG)), filtered by `query`
+    /// ([`check_audit_query`](crate::check_audit_query): `limit` 1..=200, `target_id`
+    /// only with `target_kind`, no NUL; else `Invalid`). An `action` ending in `.` is a
+    /// literal, case-sensitive prefix (no LIKE wildcards); otherwise it is exact.
+    async fn list(&self, query: &AuditQuery) -> Result<Page<AuditEntry>, StoreError>;
 }
 
 /// An item's approved comments ([`CommentRepo::approved_totals`]).

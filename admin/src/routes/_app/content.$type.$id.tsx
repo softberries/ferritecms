@@ -96,6 +96,8 @@ interface Start {
   backup: Backup | null;
   /** A revision restore remounted the screen (its toast, with Undo). */
   revision: RevisionNotice | null;
+  /** The restored draft's Discard remounted the screen (its toast, with Undo). */
+  discarded: Draft | null;
   /** Bumped on every reopen: the key that remounts the screen. */
   epoch: number;
   /** The loader result this start belongs to (a new load starts over). */
@@ -132,7 +134,16 @@ function ItemEditorOf({ data }: { data: ItemLoaderData }) {
         ? { draft: draftOfAutosave(data.autosave), at: data.autosave.saved_at }
         : null;
     const backup = userId === undefined ? null : readBackup({ item: id, user: userId });
-    return { item: data.item, restore, kept: null, backup, revision: null, epoch: 0, from: data };
+    return {
+      item: data.item,
+      restore,
+      kept: null,
+      backup,
+      revision: null,
+      discarded: null,
+      epoch: 0,
+      from: data,
+    };
   }, [data, userId]);
   const start = reopened?.from === data ? reopened : initial;
   const onReopen = (next: Reopen) => {
@@ -144,10 +155,15 @@ function ItemEditorOf({ data }: { data: ItemLoaderData }) {
       // A backup still on offer stays offered (the screen passes it on).
       backup: next.backup ?? null,
       revision: next.revision ?? null,
+      discarded: next.discarded ?? null,
       epoch: start.epoch + 1,
       from: data,
     });
   };
+  // The epoch starts at 0 again for a new loader result: no remount when the screen was
+  // never reopened (it holds the user's draft; the editor reads its props once), a
+  // remount on the fresh load otherwise. The loader runs again only on `invalidate()`,
+  // which nothing calls while this screen is up (`shouldReload: false`).
   return (
     <ItemScreen
       key={`${start.item.id}:${start.epoch}`}
@@ -187,6 +203,7 @@ function ItemScreen({
       kept={start.kept}
       backup={start.backup}
       revision={start.revision}
+      discarded={start.discarded}
       uploads={uploads}
       onReopen={onReopen}
     />
