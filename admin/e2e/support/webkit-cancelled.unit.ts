@@ -39,6 +39,12 @@ describe("cancelledInPageError", () => {
     ).toEqual({ kind: "import" });
   });
 
+  it("an_import_error_with_the_whole_text_as_its_message_is_recognised", () => {
+    // As seen in webkit-sqlite: "pageerror: TypeError: Importing a module script failed."
+    const e = { name: "Error", message: "TypeError: Importing a module script failed.", stack: "" };
+    expect(cancelledInPageError(e)).toEqual({ kind: "import" });
+  });
+
   it("other_errors_are_not_cancelled_loads", () => {
     expect(cancelledInPageError({ name: "TypeError", message: "x is undefined", stack: "" })).toBe(
       null,

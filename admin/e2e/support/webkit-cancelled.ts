@@ -19,14 +19,15 @@ export function cancelledInConsole(text: string): CancelledLoad | null {
  * or empty when WebKit sent no frames, and `name` and `message` are the text split at its
  * first ":" with the character after it dropped (`splitErrorMessage`). So "Fetch API
  * cannot load http://host/x due to …" arrives without a stack as name "Fetch API cannot
- * load http" and message "/host/x due to …", and the text is rebuilt from both.
+ * load http" and message "/host/x due to …", and the text is rebuilt from both. Some
+ * errors arrive with the whole text as `message` (seen for the import failure).
  */
 export function cancelledInPageError(e: {
   name: string;
   message: string;
   stack?: string | undefined;
 }): CancelledLoad | null {
-  const candidates = [`${e.name}: ${e.message}`, `${e.name}:/${e.message}`];
+  const candidates = [e.message, `${e.name}: ${e.message}`, `${e.name}:/${e.message}`];
   if (e.stack) candidates.unshift(e.stack.split("\n")[0] ?? "");
   for (const text of candidates) {
     const found = classify(text);
