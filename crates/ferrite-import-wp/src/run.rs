@@ -122,6 +122,8 @@ pub struct ImportOptions {
     pub tag_base: String,
     /// Take over a stale running run (P5).
     pub takeover: bool,
+    /// The largest attachment file accepted (`media.max_upload`, P13).
+    pub max_upload: u64,
     /// Items per batch instead of [`ImportBatch::BATCH_ITEMS`].
     #[cfg(feature = "test-seams")]
     pub batch_items: Option<usize>,
@@ -131,7 +133,14 @@ pub struct ImportOptions {
     /// Called before each step (`parse`, `pass1`…`pass4`, `fixup`) that runs.
     #[cfg(feature = "test-seams")]
     pub step_hook: Option<StepHook>,
+    /// Ends the run `done` right after this step, as if the later ones had nothing to
+    /// do.
+    #[cfg(feature = "test-seams")]
+    pub stop_after: Option<&'static str>,
 }
+
+/// The default of [`ImportOptions::max_upload`], as `media.max_upload`'s.
+pub const DEFAULT_MAX_UPLOAD: u64 = 256 << 20;
 
 impl Default for ImportOptions {
     fn default() -> Self {
@@ -144,12 +153,15 @@ impl Default for ImportOptions {
             category_base: "category".into(),
             tag_base: "tag".into(),
             takeover: false,
+            max_upload: DEFAULT_MAX_UPLOAD,
             #[cfg(feature = "test-seams")]
             batch_items: None,
             #[cfg(feature = "test-seams")]
             fail_after_batches: None,
             #[cfg(feature = "test-seams")]
             step_hook: None,
+            #[cfg(feature = "test-seams")]
+            stop_after: None,
         }
     }
 }
@@ -200,8 +212,59 @@ pub struct ImportContext {
 /// What a run did (Task 16 adds the rest).
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Report {
-    /// Per kind (`users`, `terms`, `media`, a post type, `comments`, …).
+    /// Per kind (`users`, `terms`, `taxonomies`, `types`, `media`, a post type,
+    /// `comments`, …).
     pub counts: BTreeMap<String, Counts>,
+    /// Attachments whose file was neither in the uploads folder nor fetchable (P13).
+    pub missing_media: Vec<MissingMedia>,
+    /// ACF fields of an imported type that map to no field kind (P16); their values
+    /// stay as `wp.<name>` meta.
+    pub unmapped_acf: Vec<UnmappedAcf>,
+    /// The accounts the import created, which must set a password (P9).
+    pub users_must_reset: Vec<MustReset>,
+    /// Everything else worth a line: renames, dropped parents, refused files, …
+    pub notes: Vec<String>,
+}
+
+impl Report {
+    /// The counts of `kind`, made on first use.
+    pub(crate) fn counts_of(&mut self, kind: &str) -> &mut Counts {
+        self.counts.entry(kind.to_owned()).or_default()
+    }
+
+    pub(crate) fn note(&mut self, note: impl Into<String>) {
+        self.notes.push(note.into());
+    }
+}
+
+/// An attachment whose file is missing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MissingMedia {
+    pub wp_id: i64,
+    /// `_wp_attached_file`.
+    pub path: String,
+    /// `<wp:attachment_url>`.
+    pub url: String,
+}
+
+/// An ACF field kept as raw meta.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UnmappedAcf {
+    /// The field's (ACF) name.
+    pub field: String,
+    /// The ACF field type.
+    pub kind: String,
+    /// Items of the field's types holding a value of it.
+    pub items: u64,
+}
+
+/// An account created by the import.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MustReset {
+    pub login: String,
+    pub email: String,
+    /// `created`, or `created with a placeholder e-mail` when the WXR one was invalid.
+    pub how: String,
 }
 
 /// The outcomes of one kind.
@@ -277,12 +340,17 @@ impl<'a> Session<'a> {
         self.run_batch(batch, f).await
     }
 
-    async fn run_batch<T>(
+    /// Ends `batch` when `result` is `Ok` and hands back its value, or rolls the batch
+    /// back and hands back the error: [`in_batch`](Self::in_batch) for a batch the
+    /// caller wrote with plain async fns. Passes use this form, because the future of
+    /// an async closure over `&mut ImportBatch` is not `Send` for every lifetime
+    /// (rustc's higher-ranked check), and [`run`] must be `Send`.
+    pub async fn finish_batch<T>(
         &self,
-        mut batch: ImportBatch<'a>,
-        f: impl AsyncFnOnce(&mut ImportBatch<'a>) -> Result<T, ImportError>,
+        batch: ImportBatch<'a>,
+        result: Result<T, ImportError>,
     ) -> Result<T, ImportError> {
-        match f(&mut batch).await {
+        match result {
             Ok(value) => {
                 self.end(batch).await?;
                 Ok(value)
@@ -294,6 +362,15 @@ impl<'a> Session<'a> {
                 Err(e)
             }
         }
+    }
+
+    async fn run_batch<T>(
+        &self,
+        mut batch: ImportBatch<'a>,
+        f: impl AsyncFnOnce(&mut ImportBatch<'a>) -> Result<T, ImportError>,
+    ) -> Result<T, ImportError> {
+        let result = f(&mut batch).await;
+        self.finish_batch(batch, result).await
     }
 
     /// Ends `batch`: commits it, or rolls it back on a dry run. When it wrote
@@ -409,12 +486,18 @@ async fn steps(
     };
     let mut report = Report::default();
     if begin_step(opts, ir, "pass1").await? {
-        pass1(&session, &mut report).await?;
+        crate::pass::pass1(&session, &mut report).await?;
         end_step(opts, ir, "pass1").await?;
     }
+    if stops_after(opts, "pass1") {
+        return Ok(report);
+    }
     if begin_step(opts, ir, "pass2").await? {
-        pass2(&session, &mut report).await?;
+        crate::pass::pass2(&session, &mut report).await?;
         end_step(opts, ir, "pass2").await?;
+    }
+    if stops_after(opts, "pass2") {
+        return Ok(report);
     }
     if begin_step(opts, ir, "pass3").await? {
         pass3(&session, &mut report).await?;
@@ -429,6 +512,17 @@ async fn steps(
         end_step(opts, ir, "fixup").await?;
     }
     Ok(report)
+}
+
+/// Whether the run ends after step `name` (the `stop_after` test seam).
+fn stops_after(opts: &ImportOptions, name: &str) -> bool {
+    #[cfg(feature = "test-seams")]
+    return opts.stop_after == Some(name);
+    #[cfg(not(feature = "test-seams"))]
+    {
+        let _ = (opts, name);
+        false
+    }
 }
 
 /// Whether step `name` still has to run (it did not finish on this IR); calls the test
@@ -452,16 +546,6 @@ async fn end_step(opts: &ImportOptions, ir: &Ir, name: &str) -> Result<(), Impor
     if !opts.dry_run {
         ir.mark_pass(name).await?;
     }
-    Ok(())
-}
-
-/// Pass 1: authors, taxonomies, terms, types (Task 13).
-async fn pass1(_session: &Session<'_>, _report: &mut Report) -> Result<(), ImportError> {
-    Ok(())
-}
-
-/// Pass 2: attachments (Task 13).
-async fn pass2(_session: &Session<'_>, _report: &mut Report) -> Result<(), ImportError> {
     Ok(())
 }
 
