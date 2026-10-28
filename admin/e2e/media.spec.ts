@@ -13,7 +13,7 @@ import { exe, pdf, png, svg, type FixtureFile } from "./support/files";
 import { mod } from "./support/keys";
 import { AXE_TAGS, TOAST_IN_TRANSITION, expect, test } from "./support/fixtures";
 import { SNAP_PROJECT } from "./support/projects";
-import { SCHEMES, VIEWPORTS, screenFile } from "./support/snap";
+import { SCHEMES, VIEWPORTS, screenFile, settleAnimations } from "./support/snap";
 import { uid } from "./support/uid";
 
 /** A word the title search can find on its own. */
@@ -107,7 +107,7 @@ async function snapHeld(page: Page, name: string, siteKey: string): Promise<void
 async function axeHeld(page: Page): Promise<void> {
   for (const scheme of SCHEMES) {
     await page.emulateMedia({ colorScheme: scheme });
-    await page.waitForTimeout(300);
+    await settleAnimations(page);
     const result = await new AxeBuilder({ page })
       .withTags(AXE_TAGS)
       .exclude(TOAST_IN_TRANSITION)

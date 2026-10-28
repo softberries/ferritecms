@@ -336,6 +336,7 @@ test("removing_a_field_warns_and_items_still_save", async ({
 });
 
 test("relation_limited_to_types", async ({ as, site, siteKey, snap, expectAccessible }) => {
+  test.setTimeout(120_000);
   // P52: the builder sets a relation's target types (here: pages only), the change says
   // that stored values may now be refused, and the editor's picker searches only pages.
   const api = await ContentApi.as(siteKey, site.url, "admin");

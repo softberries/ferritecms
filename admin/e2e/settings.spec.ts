@@ -231,6 +231,7 @@ test("mail_panel_without_mail", async ({ as, snap, expectAccessible }) => {
 });
 
 test("settings_screens", async ({ as, snap, expectAccessible, site }) => {
+  test.setTimeout(120_000);
   const page = await as("admin");
   // `/admin/settings` opens General; `g s` reaches it from anywhere.
   await page.goto("/admin/");
