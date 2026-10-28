@@ -387,7 +387,6 @@ async fn snapshot(site: &Site) -> String {
         .into_iter()
         .map(|o| (o.key, o.value))
         .collect();
-    drop(r);
     store.close().await;
     let files = walkdir_count(&site.data().join("media"));
     format!(
