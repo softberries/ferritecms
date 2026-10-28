@@ -53,6 +53,11 @@ test("token_scopes_offer_only_held_scopes", async () => {
   expect(within(content).getAllByRole("radio")).toHaveLength(3);
   for (const name of ["None", "Read", "Write"]) within(content).getByRole("radio", { name });
   expect(within(content).getByRole("radio", { name: "None" })).toBeChecked();
+  // A label that does not fit is cut with an ellipsis; its title keeps it readable (11 §8).
+  expect(screen.getByText("Content", { selector: "span[id$='-label']" })).toHaveAttribute(
+    "title",
+    "Content",
+  );
   const media = screen.getByRole("radiogroup", { name: "Media" });
   expect(within(media).getAllByRole("radio")).toHaveLength(2);
   expect(within(media).queryByRole("radio", { name: "Write" })).toBeNull();

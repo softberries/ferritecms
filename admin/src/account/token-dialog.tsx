@@ -341,7 +341,7 @@ function ScopeRow({
   const levels: Level[] = write ? ["none", "read", "write"] : ["none", "read"];
   return (
     <div className="flex items-center justify-between gap-3 px-3 py-1.5">
-      <span id={labelId} className="truncate text-sm text-foreground">
+      <span id={labelId} className="truncate text-sm text-foreground" title={label}>
         {label}
       </span>
       <div
