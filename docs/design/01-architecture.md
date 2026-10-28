@@ -61,8 +61,10 @@ ferritecms/
 │   │                             #   plugin `http` egress; M2b-1: the embedded admin (`admin`
 │   │                             #   module, rust-embed of `admin/dist`, its CSP and headers;
 │   │                             #   M2b-3: the `ferrite_admin_theme` cookie's class on
-│   │                             #   `index.html`))
-│   ├── ferrite-import-wp/        # (M3) WXR importer
+│   │                             #   `index.html`; M3-1: `import_fetch::HttpSource`, the
+│   │                             #   import's attachment fetcher over the egress SSRF rules))
+│   ├── ferrite-import-wp/        # (M3-1) WXR importer: reader, IR, conversion, passes,
+│   │                             #   report; `ferrite import wordpress` runs it
 │   └── ferrite-sdk/              # (built, M0) guest SDK for Rust plugins (`export_plugin!` macro
 │                                 #   lives in the crate; there is no separate macros crate)
 ├── wit/                          # WIT packages (source of truth for plugin API)
@@ -98,17 +100,19 @@ built are marked with their milestone):
 ```
 ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-cluster, ferrite-theme, ferrite-core,
  │               ferrite-plugin-host, ferrite-media, ferrite-config, ferrite-store,
- │               ferrite-store-{sqlite,postgres}, ferrite-domain
+ │               ferrite-store-{sqlite,postgres}, ferrite-domain, ferrite-import-wp (M3-1)
  ├─ ferrite-http ─┬─ ferrite-cache ─── ferrite-store, ferrite-domain
  │                ├─ ferrite-theme ─── ferrite-core, ferrite-domain
  │                ├─ ferrite-core ──── ferrite-store (traits) ◄── ferrite-store-{sqlite,postgres}
  │                │                    └─ ferrite-domain
  │                ├─ ferrite-media ─── ferrite-domain
  │                ├─ ferrite-plugin-host ─── ferrite-domain (M2a-2a: the shared setting rules)
+ │                ├─ ferrite-import-wp (M3-1: `import_fetch::HttpSource` implements its
+ │                │                     `MediaSource`)
  │                └─ ferrite-config (M2a-2a: `MailConfig`), ferrite-store, ferrite-domain
  ├─ ferrite-config ─── ferrite-domain
  ├─ ferrite-cluster ─── ferrite-store (traits), ferrite-domain
- └─ ferrite-import-wp (M3) ─── ferrite-core
+ └─ ferrite-import-wp (M3-1) ─── ferrite-core, ferrite-media, ferrite-domain
 ```
 
 `ferrite-core` does not use `ferrite-media` (media URLs reach `SiteReader` as a closure built

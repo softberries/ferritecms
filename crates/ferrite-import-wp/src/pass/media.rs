@@ -9,8 +9,9 @@
 //! the alt text from `_wp_attachment_image_alt` and the author the attachment's (else
 //! the importing admin). WP attachment parents are not imported (M3-1 ruling: nothing
 //! in core reads them; the "uploaded to" link is lost). A missing file is reported and
-//! skipped; a file the upload rules refuse (too large, of no accepted type) is counted
-//! as failed and noted. The [`MediaIndex`] of every imported attachment's URL forms is
+//! skipped, and so is one whose bytes could not be read to the end (a download cut off
+//! or timed out), with the reason noted; a file the upload rules refuse (too large, of
+//! no accepted type) is counted as failed and noted. The [`MediaIndex`] of every imported attachment's URL forms is
 //! stored in the IR at the end.
 //!
 //! A dry run stages into a throwaway store under the run folder, deleted when the pass
@@ -227,18 +228,40 @@ async fn stage(
     };
     let ctx = session.ctx();
     let max = session.opts().max_upload;
-    let Some(stream) = ctx.media_source.open(&path, &url, max).await? else {
-        missing(report);
-        return Ok(None);
+    let refused = |report: &mut Report, e: &MediaError| {
+        report.counts_of("media").failed += 1;
+        report.note(format!(
+            "attachment {} ({path}) was refused: {e}",
+            item.wp_id
+        ));
+    };
+    let stream = match ctx.media_source.open(&path, &url, max).await {
+        Ok(Some(stream)) => stream,
+        Ok(None) => {
+            missing(report);
+            return Ok(None);
+        }
+        // A source may refuse a file it knows is too large before reading it.
+        Err(ImportError::Media(e @ MediaError::TooLarge { .. })) => {
+            refused(report, &e);
+            return Ok(None);
+        }
+        Err(e) => return Err(e),
     };
     let staged = match stage_stream(staging, &file_name, stream, max).await {
         Ok(staged) => staged,
         Err(
             e @ (MediaError::TooLarge { .. } | MediaError::Unsupported { .. } | MediaError::Svg(_)),
         ) => {
-            report.counts_of("media").failed += 1;
+            refused(report, &e);
+            return Ok(None);
+        }
+        // Reading the file failed part-way (a download cut off, a timeout, a body
+        // shorter than announced): the file is missing, the run goes on.
+        Err(MediaError::Io(why)) => {
+            missing(report);
             report.note(format!(
-                "attachment {} ({path}) was refused: {e}",
+                "attachment {} ({path}) could not be read from {url}: {why}",
                 item.wp_id
             ));
             return Ok(None);

@@ -24,6 +24,7 @@ ferrite-config = { path = "../ferrite-config" }
 ferrite-core = { path = "../ferrite-core" }
 ferrite-domain = { path = "../ferrite-domain" }
 ferrite-http = { path = "../ferrite-http" }
+ferrite-import-wp = { path = "../ferrite-import-wp" }
 ferrite-media = { path = "../ferrite-media" }
 ferrite-plugin-host = { path = "../ferrite-plugin-host" }
 ferrite-store = { path = "../ferrite-store" }

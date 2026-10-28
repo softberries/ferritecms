@@ -244,7 +244,7 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     parts().1
 }
 
-/// The committed snapshot's text: [`openapi`] pretty-printed, with a final newline.
+/// The committed snapshot's text: [`openapi()`] pretty-printed, with a final newline.
 pub fn openapi_snapshot() -> String {
     match openapi().to_pretty_json() {
         Ok(mut s) => {
