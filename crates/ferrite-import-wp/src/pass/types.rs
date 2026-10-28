@@ -227,7 +227,7 @@ fn fields_of(
         ));
     }
     for unmapped in fields.unmapped {
-        report.unmapped_acf.push(UnmappedAcf {
+        report.add_unmapped_acf(UnmappedAcf {
             items: census
                 .meta_counts
                 .get(&(post_type.to_owned(), unmapped.field.clone()))

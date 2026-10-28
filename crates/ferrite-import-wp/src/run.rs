@@ -413,12 +413,53 @@ async fn drive(
     done
 }
 
+/// The passes this process ran, and whether any was skipped as done by an earlier run.
+#[derive(Default)]
+struct Progress {
+    run: Vec<String>,
+    skipped: bool,
+}
+
+/// Runs the steps; when a pass was skipped as already done, the report says it covers
+/// only the passes run now.
 async fn steps(
     ctx: &ImportContext,
     opts: &ImportOptions,
     handle: &ImportHandle,
     wxr: &Path,
     ir: &mut Ir,
+) -> Result<Report, ImportError> {
+    let mut progress = Progress::default();
+    let mut report = run_steps(ctx, opts, handle, wxr, ir, &mut progress).await?;
+    if progress.skipped {
+        report.resumed = Some(progress.run);
+    }
+    Ok(report)
+}
+
+/// [`begin_step`] for a pass, recording in `progress` whether it runs.
+async fn begin_pass(
+    progress: &mut Progress,
+    opts: &ImportOptions,
+    ir: &Ir,
+    name: &str,
+) -> Result<bool, ImportError> {
+    let runs = begin_step(opts, ir, name).await?;
+    if runs {
+        progress.run.push(name.to_owned());
+    } else {
+        progress.skipped = true;
+    }
+    Ok(runs)
+}
+
+async fn run_steps(
+    ctx: &ImportContext,
+    opts: &ImportOptions,
+    handle: &ImportHandle,
+    wxr: &Path,
+    ir: &mut Ir,
+    progress: &mut Progress,
 ) -> Result<Report, ImportError> {
     if begin_step(opts, ir, PARSE).await? {
         parse_into(ir, wxr, ctx, handle).await?;
@@ -432,29 +473,29 @@ async fn steps(
         ended: AtomicU32::new(0),
     };
     let mut report = Report::default();
-    if begin_step(opts, ir, "pass1").await? {
+    if begin_pass(progress, opts, ir, "pass1").await? {
         crate::pass::pass1(&session, &mut report).await?;
         end_step(opts, ir, "pass1").await?;
     }
     if stops_after(opts, "pass1") {
         return Ok(report);
     }
-    if begin_step(opts, ir, "pass2").await? {
+    if begin_pass(progress, opts, ir, "pass2").await? {
         crate::pass::pass2(&session, &mut report).await?;
         end_step(opts, ir, "pass2").await?;
     }
     if stops_after(opts, "pass2") {
         return Ok(report);
     }
-    if begin_step(opts, ir, "pass3").await? {
+    if begin_pass(progress, opts, ir, "pass3").await? {
         crate::pass::content::import(&session, &mut report).await?;
         end_step(opts, ir, "pass3").await?;
     }
-    if begin_step(opts, ir, "pass4").await? {
+    if begin_pass(progress, opts, ir, "pass4").await? {
         crate::pass::pass4(&session, &mut report).await?;
         end_step(opts, ir, "pass4").await?;
     }
-    if begin_step(opts, ir, "fixup").await? {
+    if begin_pass(progress, opts, ir, "fixup").await? {
         crate::pass::fixup::run(&session, &mut report).await?;
         end_step(opts, ir, "fixup").await?;
     }

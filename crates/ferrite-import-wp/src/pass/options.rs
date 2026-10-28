@@ -80,7 +80,7 @@ pub(crate) fn merge(report: &mut Report, part: Report) {
         counts.unchanged += c.unchanged;
         counts.kept += c.kept;
     }
-    report.notes.extend(part.notes);
+    report.notes_from(&part);
 }
 
 /// Writes option `key` = `value` under the module's P4 rule, counting and noting the

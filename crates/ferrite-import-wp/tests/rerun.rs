@@ -535,7 +535,21 @@ async fn resume_at(db: &TestDb, n: u32, step: &'static str) {
         takeover: true,
         ..ImportOptions::default()
     };
-    import(&site, &wxr, opts).await;
+    let resumed = import(&site, &wxr, opts).await;
+    // The report says it covers only the steps run now, when a pass was skipped (after
+    // a failure in pass 1 every pass runs again: the report is whole).
+    let first = resumed
+        .notes
+        .first()
+        .map(String::as_str)
+        .unwrap_or_default();
+    if step == "pass1" {
+        assert!(!first.starts_with("resumed:"), "{:?}", resumed.notes);
+    } else {
+        assert!(first.starts_with("resumed:"), "{:?}", resumed.notes);
+        assert!(first.contains(step), "{first}");
+        assert!(!first.contains("pass1"), "{first}");
+    }
     assert_eq!(rows(store).await, SITE_A);
     let menu = store.read().menus().get("main").await.unwrap().unwrap();
     let labels: Vec<&str> = menu.items.iter().map(|i| i.label.as_str()).collect();

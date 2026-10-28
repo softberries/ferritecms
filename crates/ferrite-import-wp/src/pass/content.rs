@@ -720,14 +720,14 @@ async fn write_chunk(
             ));
         }
         if let Some(slug) = &d.outcome.slug_changed {
-            report.slug_changes.push(SlugChange {
+            report.add_slug_change(SlugChange {
                 wp_id: d.wp_id,
                 from: d.slug.clone().unwrap_or_default(),
                 to: slug.clone(),
             });
         }
         if d.outcome.schedule_past {
-            report.past_schedules.push(d.wp_id);
+            report.add_past_schedule(d.wp_id);
         }
         if let Some(path) = d.path {
             let id = d.outcome.id.as_uuid();
@@ -757,8 +757,10 @@ async fn write_items(
         let Some(prepared) = prepare(b, cx, kind, acf, &item, report).await? else {
             continue;
         };
-        report.conversion.merge(&prepared.notes);
-        report.notes.extend(prepared.lines);
+        report.merge_conversion(&prepared.notes);
+        for line in prepared.lines {
+            report.note(line);
+        }
         for (key, _) in &prepared.content.meta {
             *report.meta_keys.entry(key.clone()).or_default() += 1;
         }

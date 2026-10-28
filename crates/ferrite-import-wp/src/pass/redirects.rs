@@ -163,7 +163,7 @@ pub(crate) async fn import(
 /// Counts and lists a refused row (in input order).
 fn refuse(report: &mut Report, source: &str, target: &str, reason: &str) {
     report.counts_of(KIND).skipped += 1;
-    report.redirects.refused.push(Refused {
+    report.add_refused(Refused {
         source: source.to_owned(),
         target: target.to_owned(),
         reason: reason.to_owned(),
