@@ -220,7 +220,7 @@ impl ExtensionService {
             .await
     }
 
-    /// The operator form of delete (`ferrite plugin remove`, P26): [`delete_plugin`]
+    /// The operator form of delete (`ferrite plugin remove`, P26): [`delete_plugin`](Self::delete_plugin)
     /// (Self::delete_plugin), or with `purge` the immediate purge of the KV and settings
     /// after the commit, exactly as [`ExtensionAdmin::delete_plugin`] does it (the
     /// delete's purge job, due [`PLUGIN_PURGE_GRACE`] later, is the final sweep and the

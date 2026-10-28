@@ -216,7 +216,7 @@ impl Grant {
     /// Whether `wanted`'s capabilities, route policies and `request.served` subscription
     /// are within this grant
     /// ([`Capabilities::is_subset_of`]; each route policy [`RoutePolicy::within`] an
-    /// approved one). Limits are not compared: [`PluginHost::prepare_with`]
+    /// approved one). Limits are not compared: [`PluginHost::prepare_with`](crate::PluginHost::prepare_with)
     /// (crate::PluginHost::prepare_with) applies them.
     pub fn covers_access(&self, wanted: &Grant) -> bool {
         wanted.capabilities.is_subset_of(&self.capabilities)

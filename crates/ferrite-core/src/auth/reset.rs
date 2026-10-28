@@ -114,7 +114,7 @@ impl AuthService {
         Ok(())
     }
 
-    /// Sets a new password with a token from [`request_password_reset`]
+    /// Sets a new password with a token from [`request_password_reset`](Self::request_password_reset)
     /// (Self::request_password_reset). The new password must pass the policy
     /// (`InvalidField("password")`); the token must open, be unexpired, belong to an
     /// active account and match its current password hash, else

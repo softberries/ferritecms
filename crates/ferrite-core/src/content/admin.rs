@@ -316,7 +316,7 @@ impl ContentService {
 
     /// Up to `limit` (clamped to 1..=[`MAX_REVISIONS_LISTED`]) revisions of item `id`,
     /// newest first, if `actor`'s role may edit the item (`NotFound` otherwise, see
-    /// [`get_for_revisions`](Self::get_for_revisions)).
+    /// `get_for_revisions`).
     pub async fn revisions(
         &self,
         actor: &Actor,

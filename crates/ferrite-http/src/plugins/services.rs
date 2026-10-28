@@ -71,8 +71,8 @@ pub const MAIL_TITLE_PREFIX_CHARS: usize = 100;
 /// * `mail.notify-admins` (with [`with_mailer`](Self::with_mailer); without it the
 ///   guest gets "mail is not configured"): the host has checked the render path, one
 ///   mail per call and the subject and body; here, outside any `Tx` (R6), one hit on
-///   the fixed-hour bucket `mail:plugin:<name>` (over [`MAIL_PER_PLUGIN_HOUR`]:
-///   refused), then up to [`MAIL_MAX_ADMINS`] active admins by login (an address that
+///   the fixed-hour bucket `mail:plugin:<name>` (over `MAIL_PER_PLUGIN_HOUR`:
+///   refused), then up to `MAIL_MAX_ADMINS` active admins by login (an address that
 ///   fails `check_address` is skipped and logged), then one mail with every admin in
 ///   Bcc, subject `[<site title>] <subject>` (the site title read at send time, P51:
 ///   the `site.title` option, else the configured one given to
@@ -127,7 +127,7 @@ impl StoreHostServices {
     ///
     /// The title is checked at each send, so it cannot break a plugin mail (review M3):
     /// one that is not header-safe (control characters, line separators) is not used
-    /// (no prefix, logged), and a longer one is cut to [`MAIL_TITLE_PREFIX_CHARS`]. An
+    /// (no prefix, logged), and a longer one is cut to `MAIL_TITLE_PREFIX_CHARS`. An
     /// empty title gives no prefix.
     pub fn with_mailer(mut self, queue: Arc<MailQueue>, site_title: String) -> Self {
         self.mail = Some((queue, site_title));

@@ -17,7 +17,7 @@ use std::{
 };
 
 /// Most hooks tracked per plugin; calls of further hooks (route paths are the
-/// plugin's to choose) count only toward [`CallStats::totals`].
+/// plugin's to choose) count only toward `CallStats::totals`.
 pub const MAX_STATS_HOOKS: usize = 64;
 
 /// Upper bounds of the duration buckets, in milliseconds; the last bucket is "more".
