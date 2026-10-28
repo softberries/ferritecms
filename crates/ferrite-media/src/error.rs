@@ -1,3 +1,5 @@
+use crate::svg::SvgError;
+
 #[derive(Debug, thiserror::Error)]
 pub enum MediaError {
     #[error("invalid media configuration: {0}")]
@@ -16,6 +18,14 @@ pub enum MediaError {
     TooLarge { limit: u64 },
     #[error("io error: {0}")]
     Io(String),
+    /// The content is of no accepted type (`mime` as sniffed: a fixed type name).
+    #[error("files of type {mime} are not accepted")]
+    Unsupported { mime: String },
+    #[error("the SVG could not be made safe: {0}")]
+    Svg(SvgError),
+    /// A blocking task panicked or was cancelled.
+    #[error("internal error: {0}")]
+    Task(String),
 }
 
 impl From<object_store::Error> for MediaError {
