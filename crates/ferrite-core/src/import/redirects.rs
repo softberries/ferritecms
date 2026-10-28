@@ -1,7 +1,7 @@
 //! Imported redirects (P17): rows are checked one by one; the refused ones are reported
 //! and the rest written with origin `import`.
 
-use ferrite_domain::{ContentItem, ContentStatus, MEDIA_KIND};
+use ferrite_domain::{ContentItem, ContentStatus, MEDIA_KIND, RedirectOrigin};
 use ferrite_store::Repos;
 
 use super::ImportBatch;
@@ -24,6 +24,9 @@ pub struct RedirectOutcome {
     /// Rows equal (target and code) to the stored redirect of their source: nothing
     /// written (a re-run).
     pub unchanged: u32,
+    /// Sources whose stored redirect did not come from an import (edited here, made here,
+    /// or made by a slug change): kept as they are, in input-row order.
+    pub kept: Vec<String>,
     /// Rows not written: (source, reason), in input-row order whichever check refused them.
     pub refused: Vec<(String, String)>,
 }
@@ -39,7 +42,9 @@ impl ImportBatch<'_> {
     /// redirect would never fire) is refused with "path is a published item"; the lookup
     /// walks the source's segments by slug, for every content type but media.
     /// A valid row equal to the stored redirect of its source is not written
-    /// ([`unchanged`](RedirectOutcome::unchanged)). The `redirect:` keys of the written
+    /// ([`unchanged`](RedirectOutcome::unchanged)), and neither is one whose stored
+    /// redirect has another origin than `import` ([`kept`](RedirectOutcome::kept): an
+    /// edit here makes it `manual`). The `redirect:` keys of the written
     /// sources join the batch's event.
     ///
     /// **Errors.** As for [`content`](Self::content): any `Err` (a store failure; row
@@ -53,6 +58,7 @@ impl ImportBatch<'_> {
             created: 0,
             updated: 0,
             unchanged: 0,
+            kept: Vec::new(),
             refused: Vec::new(),
         };
         for chunk in rows.chunks(MAX_IMPORT_ROWS) {
@@ -86,15 +92,10 @@ impl ImportBatch<'_> {
                 if failed {
                     continue;
                 }
-                let same = repos
-                    .redirects()
-                    .get_by_source(&row.0)
-                    .await?
-                    .is_some_and(|r| r.target == row.1 && r.code == row.2);
-                if same {
-                    out.unchanged += 1;
-                } else {
-                    valid.push(row);
+                match repos.redirects().get_by_source(&row.0).await? {
+                    Some(r) if r.origin != RedirectOrigin::Import => out.kept.push(row.0),
+                    Some(r) if r.target == row.1 && r.code == row.2 => out.unchanged += 1,
+                    _ => valid.push(row),
                 }
             }
             let report = write_rows(repos, &valid).await?;
