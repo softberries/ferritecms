@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use super::NextMatch;
+use super::{NextMatch, is_name_byte, is_pcre_space};
 
 /// A run of text, or one shortcode.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,10 +61,6 @@ fn push_text(out: &mut Vec<Piece>, t: &str) {
         Some(Piece::Text(prev)) => prev.push_str(t),
         _ => out.push(Piece::Text(t.to_owned())),
     }
-}
-
-fn is_name_byte(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || c == b'_' || c == b'-'
 }
 
 /// Where each `[/name]` starts, by name, in order: one pass, so any number of distinct
@@ -152,11 +148,6 @@ impl Scanner<'_> {
     }
 }
 
-/// PCRE's `\s` without the `u` flag (WP's attribute regex has none).
-fn is_space(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r')
-}
-
 /// `shortcode_parse_atts`: `k="v"`, `k='v'`, `k=v`, `"v"`, `'v'` and bare `v`, each followed
 /// by whitespace or the end. Keys are lower-cased; positional values are numbered. Values
 /// go through `stripcslashes`, and one with a `<` that no `>` closes becomes empty.
@@ -175,7 +166,7 @@ fn parse_attrs(raw: &str) -> BTreeMap<String, String> {
     let mut positional = 0;
     let mut rest = text.as_str();
     loop {
-        rest = rest.trim_start_matches(is_space);
+        rest = rest.trim_start_matches(is_pcre_space);
         if rest.is_empty() {
             break;
         }
@@ -275,14 +266,14 @@ fn attr(s: &str) -> (Option<&str>, &str, &str) {
         .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
         .unwrap_or(s.len());
     if key_len > 0 {
-        let after_key = s[key_len..].trim_start_matches(is_space);
+        let after_key = s[key_len..].trim_start_matches(is_pcre_space);
         if let Some(v) = after_key.strip_prefix('=') {
-            let v = v.trim_start_matches(is_space);
+            let v = v.trim_start_matches(is_pcre_space);
             if let Some((value, rest)) = quoted(v) {
                 return (Some(&s[..key_len]), value, rest);
             }
             let end = v
-                .find(|c: char| is_space(c) || c == '"' || c == '\'')
+                .find(|c: char| is_pcre_space(c) || c == '"' || c == '\'')
                 .unwrap_or(v.len());
             if end > 0 {
                 return (Some(&s[..key_len]), &v[..end], &v[end..]);
@@ -292,7 +283,7 @@ fn attr(s: &str) -> (Option<&str>, &str, &str) {
     if let Some((value, rest)) = quoted(s) {
         return (None, value, rest);
     }
-    let end = s.find(is_space).unwrap_or(s.len());
+    let end = s.find(is_pcre_space).unwrap_or(s.len());
     (None, &s[..end], &s[end..])
 }
 
@@ -301,7 +292,7 @@ fn quoted(s: &str) -> Option<(&str, &str)> {
     let q = s.chars().next().filter(|c| matches!(c, '"' | '\''))?;
     let close = s[1..].find(q)? + 1;
     let rest = &s[close + 1..];
-    (rest.is_empty() || rest.starts_with(is_space)).then(|| (&s[1..close], rest))
+    (rest.is_empty() || rest.starts_with(is_pcre_space)).then(|| (&s[1..close], rest))
 }
 
 #[cfg(test)]

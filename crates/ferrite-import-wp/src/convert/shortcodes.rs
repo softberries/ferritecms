@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::doc::Node;
 use super::shortcode::{Piece, scan};
-use super::{ImageRef, NextMatch, Notes, Rewrite, html};
+use super::{ImageRef, NextMatch, Notes, Rewrite, html, is_name_byte};
 
 /// Shortcodes nested deeper than this are kept as text.
 const MAX_DEPTH: usize = 16;
@@ -103,10 +103,6 @@ fn last_tag(line: &str, needle: &str) -> Option<usize> {
                     .is_some_and(is_name_byte)
         })
         .last()
-}
-
-fn is_name_byte(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-')
 }
 
 /// WP's `^\s*(https?://[^\s<>"]+)\s*$`, on a trimmed line.
