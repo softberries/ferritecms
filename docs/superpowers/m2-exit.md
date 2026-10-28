@@ -115,7 +115,11 @@ Each is in the ROADMAP under the milestone named.
   of the rebuilt `ci.yml`, `check_relations` revealing the type of an unreadable item); and
   Task 16's harness minors (the WebKit fetch rule counting SPA navigations, `MEDIA_FILE`
   letting any `/_media/` 404 pass in two specs, the cmdk workaround's nested `useCallback`
-  refs, a Vitest test near its 5 s timeout under load).
+  refs, a Vitest test near its 5 s timeout under load); and the contact sheet's open items
+  (`m2b3-exit.md` §5.3): `icon-sm`/`icon-xs` buttons stay under 44 px on touch screens
+  (11 §8 asks 44 px; WCAG 2.2 AA's 24 px is met), dark dropdown menus have a faint edge,
+  and the palette's stale results, dimmed to 60 % while a slow search runs, fall below
+  4.5:1.
 - **M4, from M2a:** the per-node option cache, a GC grace period for staged artifacts, a
   compile bound for uploaded components, fairness in the per-render plugin budget, signed
   plugins and publisher identity (M2a-2a); `date` filter time zones and `seed demo`
@@ -126,11 +130,7 @@ Each is in the ROADMAP under the milestone named.
   agent per session (M2a P9, M2b P43, P45); comments on pages and custom types, per-item
   closing, comment hooks and admin notification mails (M2a-2b P29); more upload types and
   `tel:` links (M2a-2b P29, P21); an atomic KV increment (M2a-2a R19).
-- **Owed before merging M2b-3** (not a ROADMAP item): the first CI run (M2b R72). Also from
-  part B's contact sheet (`m2b3-exit.md` §5.3): `icon-sm`/`icon-xs` buttons stay under 44 px
-  on touch screens (11 §8 asks 44 px; WCAG 2.2 AA's 24 px is met), dark dropdown menus
-  have a faint edge, and the palette's stale results, dimmed to 60 % while a slow search
-  runs, fall below 4.5:1.
+- **Owed before merging M2b-3** (not a ROADMAP item): the first CI run (M2b R72).
 
 The accepted limits of each sub-milestone are listed under it in the ROADMAP ("Known
 limits") and in the rulings files.
