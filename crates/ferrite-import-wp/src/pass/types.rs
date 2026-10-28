@@ -14,7 +14,7 @@ use ferrite_domain::Taxonomy;
 
 use super::Census;
 use crate::ImportError;
-use crate::acf::{AcfModel, to_field_def};
+use crate::acf::{AcfField, AcfModel, Unmapped, to_field_def};
 use crate::run::{Report, UnmappedAcf};
 
 /// WordPress post types that are not content types of their own: built-ins core already
@@ -185,33 +185,59 @@ pub(crate) fn plan(
     schema
 }
 
-/// The mapped ACF fields shown on `post_type`, each name once; the rest is reported.
+/// The ACF fields shown on `post_type`, split: those that map (each name once, with
+/// their definition), those that do not, and those whose name repeats a mapped one.
+/// Pass 1 registers the first; pass 3 maps values with them.
+pub(crate) struct TypeFields<'a> {
+    pub mapped: Vec<(&'a AcfField, FieldDef)>,
+    pub unmapped: Vec<Unmapped>,
+    pub repeated: Vec<(&'a AcfField, String)>,
+}
+
+pub(crate) fn type_fields<'a>(post_type: &str, acf: &'a AcfModel) -> TypeFields<'a> {
+    let mut out = TypeFields {
+        mapped: Vec::new(),
+        unmapped: Vec::new(),
+        repeated: Vec::new(),
+    };
+    for field in acf.fields_for(post_type) {
+        match to_field_def(field) {
+            Ok(def) if !out.mapped.iter().any(|(_, d)| d.name == def.name) => {
+                out.mapped.push((field, def));
+            }
+            Ok(def) => out.repeated.push((field, def.name)),
+            Err(unmapped) => out.unmapped.push(unmapped),
+        }
+    }
+    out
+}
+
+/// The mapped ACF fields shown on `post_type`; the rest is reported.
 fn fields_of(
     post_type: &str,
     acf: &AcfModel,
     census: &Census,
     report: &mut Report,
 ) -> Vec<FieldDef> {
-    let mut defs: Vec<FieldDef> = Vec::new();
-    for field in acf.fields_for(post_type) {
-        match to_field_def(field) {
-            Ok(def) if !defs.iter().any(|d| d.name == def.name) => defs.push(def),
-            Ok(def) => report.note(format!(
-                "ACF field {:?} of {post_type} repeats the name {:?}; its values stay as meta",
-                field.name, def.name
-            )),
-            Err(unmapped) => report.unmapped_acf.push(UnmappedAcf {
-                items: census
-                    .meta_counts
-                    .get(&(post_type.to_owned(), field.name.clone()))
-                    .copied()
-                    .unwrap_or(0),
-                field: unmapped.field,
-                kind: unmapped.kind,
-            }),
-        }
+    let fields = type_fields(post_type, acf);
+    for (field, name) in &fields.repeated {
+        report.note(format!(
+            "ACF field {:?} of {post_type} repeats the name {name:?}; its values stay as meta",
+            field.name
+        ));
     }
-    defs
+    for unmapped in fields.unmapped {
+        report.unmapped_acf.push(UnmappedAcf {
+            items: census
+                .meta_counts
+                .get(&(post_type.to_owned(), unmapped.field.clone()))
+                .copied()
+                .unwrap_or(0),
+            field: unmapped.field,
+            kind: unmapped.kind,
+        });
+    }
+    fields.mapped.into_iter().map(|(_, def)| def).collect()
 }
 
 /// Registers `schema` in a schema batch: each type and taxonomy that does not exist yet

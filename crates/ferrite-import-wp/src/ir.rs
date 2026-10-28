@@ -6,7 +6,9 @@
 //! `record_json` is the [`model`](crate::model) record as JSON), `passes(name, done_at)`,
 //! `meta(key, value)` (the WXR file's digest, so a re-run finds the IR of the same
 //! file), and `media_urls(path, media_id, url)`, the [`MediaIndex`](crate::urls::MediaIndex)
-//! pass 2 builds, so a resumed run has it. It is a cache: what the site holds is decided by `import_map` (P3).
+//! pass 2 builds, so a resumed run has it; `content_paths(wp_id, item_id, path)` (each
+//! imported item's id and path) and `fixups(wp_id)` (items whose links or relations wait
+//! for later items), which pass 3 fills and the fix-up reads. It is a cache: what the site holds is decided by `import_map` (P3).
 
 use std::path::Path;
 use std::time::Duration;
@@ -49,6 +51,8 @@ CREATE INDEX items_wp_id ON items (wp_id, seq);
 CREATE TABLE passes (name TEXT PRIMARY KEY, done_at TEXT NOT NULL);
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE media_urls (path TEXT PRIMARY KEY, media_id TEXT NOT NULL, url TEXT NOT NULL);
+CREATE TABLE content_paths (wp_id INTEGER PRIMARY KEY, item_id TEXT NOT NULL, path TEXT NOT NULL);
+CREATE TABLE fixups (wp_id INTEGER PRIMARY KEY);
 ";
 
 /// An open IR file. Writes go through [`push`](Self::push) (buffered in a transaction;
@@ -272,14 +276,62 @@ impl Ir {
                 .fetch_all(&self.pool)
                 .await?;
         rows.into_iter()
-            .map(|(path, id, url)| {
-                let id = Uuid::parse_str(&id).map_err(|_| ImportError::Missing {
-                    what: "a valid media id in the work file",
-                    offset: 0,
-                })?;
-                Ok((path, id, url))
-            })
+            .map(|(path, id, url)| Ok((path, parse_uuid(&id)?, url)))
             .collect()
+    }
+
+    /// Records (or replaces) the id and path of imported items (`wp_id`, id, path).
+    pub(crate) async fn put_content_paths(
+        &self,
+        rows: &[(i64, Uuid, String)],
+    ) -> Result<(), ImportError> {
+        let mut tx = self.pool.begin().await?;
+        for (wp_id, id, path) in rows {
+            sqlx::query(
+                "INSERT INTO content_paths (wp_id, item_id, path) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (wp_id) DO UPDATE SET item_id = excluded.item_id, path = excluded.path",
+            )
+            .bind(wp_id)
+            .bind(id.to_string())
+            .bind(path)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Every recorded item (`wp_id`, id, path).
+    pub(crate) async fn content_paths(&self) -> Result<Vec<(i64, Uuid, String)>, ImportError> {
+        let rows: Vec<(i64, String, String)> =
+            sqlx::query_as("SELECT wp_id, item_id, path FROM content_paths ORDER BY wp_id")
+                .fetch_all(&self.pool)
+                .await?;
+        rows.into_iter()
+            .map(|(wp_id, id, path)| Ok((wp_id, parse_uuid(&id)?, path)))
+            .collect()
+    }
+
+    /// Queues items for the fix-up (again is a no-op).
+    pub(crate) async fn add_fixups(&self, wp_ids: &[i64]) -> Result<(), ImportError> {
+        let mut tx = self.pool.begin().await?;
+        for wp_id in wp_ids {
+            sqlx::query("INSERT INTO fixups (wp_id) VALUES (?1) ON CONFLICT (wp_id) DO NOTHING")
+                .bind(wp_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// The items queued for the fix-up, by WP id.
+    pub(crate) async fn fixups(&self) -> Result<Vec<i64>, ImportError> {
+        Ok(
+            sqlx::query_scalar("SELECT wp_id FROM fixups ORDER BY wp_id")
+                .fetch_all(&self.pool)
+                .await?,
+        )
     }
 
     /// The `meta` value of `key`.
@@ -302,6 +354,14 @@ impl Ir {
         .await?;
         Ok(())
     }
+}
+
+/// An id stored in the work file.
+fn parse_uuid(text: &str) -> Result<Uuid, ImportError> {
+    Uuid::parse_str(text).map_err(|_| ImportError::Missing {
+        what: "a valid id in the work file",
+        offset: 0,
+    })
 }
 
 fn json<T: Serialize>(value: &T) -> Result<String, ImportError> {

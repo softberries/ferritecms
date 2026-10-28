@@ -57,6 +57,9 @@ pub struct Item {
     pub date_local: String,
     pub date_gmt: String,
     pub modified_gmt: String,
+    /// `wp:post_modified`, read as UTC when `modified_gmt` is zero (P7).
+    #[serde(default)]
+    pub modified_local: String,
     pub comment_status: String,
     pub is_sticky: bool,
     pub attachment_url: Option<String>,

@@ -515,6 +515,7 @@ impl<S: FnMut(Record) -> Result<(), ImportError>> Parser<S> {
             b"wp:post_name" => i.post_name = text,
             b"wp:post_date" => i.date_local = text,
             b"wp:post_date_gmt" => i.date_gmt = text,
+            b"wp:post_modified" => i.modified_local = text,
             b"wp:post_modified_gmt" => i.modified_gmt = text,
             b"wp:comment_status" => i.comment_status = text,
             b"wp:is_sticky" => i.is_sticky = text.trim() == "1",

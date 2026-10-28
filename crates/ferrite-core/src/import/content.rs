@@ -27,6 +27,7 @@ use crate::{
         set_terms, write_revision,
     },
     events, jobs,
+    permalink::load_input,
     redirects::redirect_keys,
     slug,
 };
@@ -250,14 +251,67 @@ impl ImportBatch<'_> {
     /// **Errors.** As for [`content`](Self::content): any `Err` leaves the batch
     /// unusable, and the caller must [`rollback`](Self::rollback) it. (A `Conflict` or
     /// `NotFound` is returned before anything is written, but the contract is the
-    /// same for every error.)
+    /// same for every error.) `Ok(true)` when the body changed, `Ok(false)` when it
+    /// was already `body`.
     pub async fn set_body(
         &mut self,
         id: ContentId,
         wp_id: i64,
         body: Value,
-    ) -> Result<(), CoreError> {
+    ) -> Result<bool, CoreError> {
         check_body(&body)?;
+        self.fix_up(id, wp_id, |item| item.body = body).await
+    }
+
+    /// Replaces the body and the `fields` of imported item `id` in one write (one
+    /// version): the fix-up of an item whose links or relations named items written
+    /// after it. The rules and errors are [`set_body`](Self::set_body)'s; the fields are
+    /// checked against the item's type as a content write checks them. `Ok(true)` when
+    /// something changed, `Ok(false)` when both were already as given.
+    pub async fn set_body_and_fields(
+        &mut self,
+        id: ContentId,
+        wp_id: i64,
+        body: Value,
+        fields: Value,
+    ) -> Result<bool, CoreError> {
+        check_body(&body)?;
+        let repos = self.tx.as_ref();
+        let kind = repos
+            .content()
+            .get(id)
+            .await?
+            .ok_or(CoreError::NotFound)?
+            .kind;
+        let types = repos.types().list().await?;
+        check_item(repos, &types, &kind, &fields, None).await?;
+        self.fix_up(id, wp_id, |item| {
+            item.body = body;
+            item.fields = fields;
+        })
+        .await
+    }
+
+    /// The public path of item `id` under the rules this batch pinned (its parents and
+    /// primary category as stored now); `None` when there is no such item.
+    pub async fn path(&self, id: ContentId) -> Result<Option<String>, CoreError> {
+        let repos = self.tx.as_ref();
+        let Some(item) = repos.content().get(id).await? else {
+            return Ok(None);
+        };
+        let input = load_input(repos, item).await?;
+        Ok(Some(self.rules.path(&input)))
+    }
+
+    /// The shared write of [`set_body`](Self::set_body) and
+    /// [`set_body_and_fields`](Self::set_body_and_fields): `change` applied to the item
+    /// at its mapped version; `true` when it changed anything.
+    async fn fix_up(
+        &mut self,
+        id: ContentId,
+        wp_id: i64,
+        change: impl FnOnce(&mut ContentItem),
+    ) -> Result<bool, CoreError> {
         let row = self
             .tx
             .imports()
@@ -276,11 +330,11 @@ impl ImportBatch<'_> {
                 current_version: current.version,
             });
         }
-        if current.body == body {
-            return Ok(());
-        }
         let mut next = current.clone();
-        next.body = body;
+        change(&mut next);
+        if next == current {
+            return Ok(false);
+        }
         next.body_html = None;
         let repos = self.tx.as_ref();
         let mut saved = repos.content().update(&next).await?;
@@ -303,7 +357,7 @@ impl ImportBatch<'_> {
         )
         .await?;
         self.items += 1;
-        Ok(())
+        Ok(true)
     }
 
     /// Inserts a new item for `c`.

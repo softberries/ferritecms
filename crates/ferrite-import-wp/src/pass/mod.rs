@@ -7,6 +7,8 @@
 //! ([`types::type_name`], [`acf::field_defs`](crate::acf::field_defs)), so a resumed run
 //! that skips a finished pass loses nothing.
 
+pub(crate) mod content;
+pub(crate) mod fixup;
 mod media;
 mod people;
 mod terms;
