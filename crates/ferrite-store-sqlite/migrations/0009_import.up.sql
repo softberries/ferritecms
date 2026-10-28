@@ -31,7 +31,7 @@ CREATE INDEX import_runs_started_by_idx ON import_runs (started_by);
 CREATE TABLE import_map (
     source      TEXT NOT NULL,
     kind        TEXT NOT NULL CONSTRAINT import_map_kind_check
-                CHECK (kind IN ('user', 'term', 'media', 'content', 'comment', 'menu')),
+                CHECK (kind IN ('user', 'term', 'media', 'content', 'comment', 'menu', 'option')),
     wp_id       INTEGER NOT NULL,
     ferrite_id  BLOB NOT NULL,
     hash        TEXT NOT NULL,

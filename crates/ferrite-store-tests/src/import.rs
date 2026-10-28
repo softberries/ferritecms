@@ -414,6 +414,13 @@ pub async fn import_map_upsert_and_list(db: &TestDb) {
             .unwrap()
             .is_empty()
     );
+    // Every kind is accepted, `option` (site options the import wrote) included.
+    let option = map_row(a, ImportMapKind::Option, 3);
+    imports.map_put(&option).await.unwrap();
+    assert_eq!(
+        imports.map_get(a, ImportMapKind::Option, 3).await.unwrap(),
+        Some(option)
+    );
 
     let bad = ImportMapRow {
         hash: "x\0".into(),

@@ -27,6 +27,7 @@ string_enum!(
         Content => "content",
         Comment => "comment",
         Menu => "menu",
+        Option => "option",
     }
 );
 
