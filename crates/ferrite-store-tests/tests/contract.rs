@@ -23,11 +23,13 @@ backend_tests!(
 backend_tests!(
     import_run_roundtrip_and_running,
     fence_true_only_for_matching_running_token,
+    abandon_stale_only_when_still_stale,
     import_map_upsert_and_list,
     content_insert_keeps_explicit_timestamps,
 );
 
 backend_tests_spawning!(fence_serialises_with_takeover);
+backend_tests_spawning!(abandon_stale_rechecks_after_fence);
 
 backend_tests!(
     autosave_upsert_get_delete,

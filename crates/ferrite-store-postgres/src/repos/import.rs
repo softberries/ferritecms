@@ -102,6 +102,23 @@ impl ImportRepo for PgRepos {
         Ok(done.rows_affected() == 1)
     }
 
+    async fn abandon_stale(
+        &self,
+        id: ImportRunId,
+        stale_before: Timestamp,
+        now: Timestamp,
+    ) -> Result<bool, StoreError> {
+        let done = run!(&self.exec, |e| sqlx::query(
+            "UPDATE import_runs SET state = 'abandoned', finished_at = $1 \
+             WHERE id = $2 AND state = 'running' AND heartbeat_at < $3"
+        )
+        .bind(dt(now))
+        .bind(id.as_uuid())
+        .bind(dt(stale_before))
+        .execute(e))?;
+        Ok(done.rows_affected() == 1)
+    }
+
     async fn get_run(&self, id: ImportRunId) -> Result<Option<ImportRun>, StoreError> {
         let row = run!(&self.exec, |e| sqlx::query(AssertSqlSafe(format!(
             "SELECT {RUN_COLUMNS} FROM import_runs WHERE id = $1"

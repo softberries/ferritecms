@@ -173,6 +173,110 @@ pub async fn fence_true_only_for_matching_running_token(db: &TestDb) {
     );
 }
 
+/// `abandon_stale` abandons only a `running` run whose heartbeat is older than
+/// `stale_before` (strictly), sets `finished_at` and keeps the stats; a fresh heartbeat,
+/// a finished run and an unknown run are `false` and leave the row alone.
+pub async fn abandon_stale_only_when_still_stale(db: &TestDb) {
+    let store = db.store();
+    let repos = store.read();
+    let imports = repos.imports();
+    let admin = fixture_user(store).await;
+    let run = new_run(admin.id, "https://wp.example");
+    imports.create_run(&run).await.unwrap();
+
+    // Heartbeat == stale_before is not stale.
+    assert!(
+        !imports
+            .abandon_stale(run.id, run.heartbeat_at, later(9))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !imports
+            .abandon_stale(ImportRunId::new(), later(5), later(9))
+            .await
+            .unwrap()
+    );
+    assert_eq!(imports.get_run(run.id).await.unwrap().unwrap(), run);
+
+    assert!(
+        imports
+            .abandon_stale(run.id, later(1), later(9))
+            .await
+            .unwrap()
+    );
+    let gone = imports.get_run(run.id).await.unwrap().unwrap();
+    assert_eq!(gone.state, ImportRunState::Abandoned);
+    assert_eq!(gone.finished_at, Some(later(9)));
+    assert_eq!(gone.stats, run.stats);
+    assert_eq!(gone.heartbeat_at, run.heartbeat_at);
+    // Already abandoned: false, unchanged.
+    assert!(
+        !imports
+            .abandon_stale(run.id, later(5), later(10))
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        imports.get_run(run.id).await.unwrap().unwrap().finished_at,
+        Some(later(9))
+    );
+}
+
+/// Postgres only: a takeover's `abandon_stale` waits for a batch that fenced (fresh
+/// heartbeat) and then sees the new heartbeat, so it abandons nothing.
+pub async fn abandon_stale_rechecks_after_fence(db: Arc<TestDb>) {
+    if db.store().backend() != Backend::Postgres {
+        println!("SKIP abandon_stale_rechecks_after_fence: single writer");
+        return;
+    }
+    let admin = fixture_user(db.store()).await;
+    let run = new_run(admin.id, "https://wp.example");
+    db.store().read().imports().create_run(&run).await.unwrap();
+
+    let batch = db.store().begin().await.unwrap();
+    assert!(
+        batch
+            .imports()
+            .fence(run.id, &run.token, later(100))
+            .await
+            .unwrap()
+    );
+    let taker = {
+        let db = db.clone();
+        let id = run.id;
+        tokio::spawn(async move {
+            let tx = db.store().begin().await.unwrap();
+            let abandoned = tx
+                .imports()
+                .abandon_stale(id, later(50), later(101))
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            abandoned
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!taker.is_finished(), "takeover did not wait for the batch");
+    batch.commit().await.unwrap();
+    let abandoned = tokio::time::timeout(Duration::from_secs(10), taker)
+        .await
+        .expect("takeover finishes after the batch commits")
+        .unwrap();
+    assert!(!abandoned, "a run that just fenced is not stale");
+    assert_eq!(
+        db.store()
+            .read()
+            .imports()
+            .get_run(run.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        ImportRunState::Running
+    );
+}
+
 /// Postgres only (SQLite has a single writer): a batch that fenced and holds its
 /// transaction makes a takeover's `set_state(Abandoned)` wait; after the batch commits
 /// the takeover finishes and the old token's next fence is false.

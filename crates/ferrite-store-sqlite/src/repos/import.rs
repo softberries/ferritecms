@@ -101,6 +101,23 @@ impl ImportRepo for SqliteRepos {
         Ok(done.rows_affected() == 1)
     }
 
+    async fn abandon_stale(
+        &self,
+        id: ImportRunId,
+        stale_before: Timestamp,
+        now: Timestamp,
+    ) -> Result<bool, StoreError> {
+        let done = run!(&self.writer, |e| sqlx::query(
+            "UPDATE import_runs SET state = 'abandoned', finished_at = ? \
+             WHERE id = ? AND state = 'running' AND heartbeat_at < ?"
+        )
+        .bind(now.as_micros())
+        .bind(id.as_uuid())
+        .bind(stale_before.as_micros())
+        .execute(e))?;
+        Ok(done.rows_affected() == 1)
+    }
+
     async fn get_run(&self, id: ImportRunId) -> Result<Option<ImportRun>, StoreError> {
         let row = run!(&self.reader, |e| sqlx::query(AssertSqlSafe(format!(
             "SELECT {RUN_COLUMNS} FROM import_runs WHERE id = ?"

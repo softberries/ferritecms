@@ -1094,6 +1094,16 @@ pub trait ImportRepo: Send + Sync {
         now: Timestamp,
     ) -> Result<bool, StoreError>;
     async fn get_run(&self, id: ImportRunId) -> Result<Option<ImportRun>, StoreError>;
+    /// The takeover (P5): sets `state = abandoned` and `finished_at = now` on run `id`
+    /// only while it is `running` with `heartbeat_at < stale_before`; `true` iff one row
+    /// changed. The check and the write are one statement, so on Postgres a takeover that
+    /// waits for a fenced batch's row lock re-checks the heartbeat the batch committed.
+    async fn abandon_stale(
+        &self,
+        id: ImportRunId,
+        stale_before: Timestamp,
+        now: Timestamp,
+    ) -> Result<bool, StoreError>;
     /// The run in state `running`, if any.
     async fn running(&self) -> Result<Option<ImportRun>, StoreError>;
     /// Runs, newest first; `limit` is 1..=[`MAX_PAGE`](ferrite_domain::MAX_PAGE).
