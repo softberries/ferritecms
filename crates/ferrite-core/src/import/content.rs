@@ -251,26 +251,31 @@ impl ImportBatch<'_> {
     /// **Errors.** As for [`content`](Self::content): any `Err` leaves the batch
     /// unusable, and the caller must [`rollback`](Self::rollback) it. (A `Conflict` or
     /// `NotFound` is returned before anything is written, but the contract is the
-    /// same for every error.)
+    /// same for every error.) `Ok(true)` when the body changed, `Ok(false)` when it
+    /// was already `body`.
     pub async fn set_body(
         &mut self,
         id: ContentId,
         wp_id: i64,
         body: Value,
-    ) -> Result<(), CoreError> {
+    ) -> Result<bool, CoreError> {
         check_body(&body)?;
         self.fix_up(id, wp_id, |item| item.body = body).await
     }
 
-    /// Replaces the `fields` of imported item `id` (the fix-up of relations to items
-    /// written after it), with the rules and errors of [`set_body`](Self::set_body);
-    /// the fields are checked against the item's type as a content write checks them.
-    pub async fn set_fields(
+    /// Replaces the body and the `fields` of imported item `id` in one write (one
+    /// version): the fix-up of an item whose links or relations named items written
+    /// after it. The rules and errors are [`set_body`](Self::set_body)'s; the fields are
+    /// checked against the item's type as a content write checks them. `Ok(true)` when
+    /// something changed, `Ok(false)` when both were already as given.
+    pub async fn set_body_and_fields(
         &mut self,
         id: ContentId,
         wp_id: i64,
+        body: Value,
         fields: Value,
-    ) -> Result<(), CoreError> {
+    ) -> Result<bool, CoreError> {
+        check_body(&body)?;
         let repos = self.tx.as_ref();
         let kind = repos
             .content()
@@ -280,7 +285,11 @@ impl ImportBatch<'_> {
             .kind;
         let types = repos.types().list().await?;
         check_item(repos, &types, &kind, &fields, None).await?;
-        self.fix_up(id, wp_id, |item| item.fields = fields).await
+        self.fix_up(id, wp_id, |item| {
+            item.body = body;
+            item.fields = fields;
+        })
+        .await
     }
 
     /// The public path of item `id` under the rules this batch pinned (its parents and
@@ -295,14 +304,14 @@ impl ImportBatch<'_> {
     }
 
     /// The shared write of [`set_body`](Self::set_body) and
-    /// [`set_fields`](Self::set_fields): `change` applied to the item at its mapped
-    /// version.
+    /// [`set_body_and_fields`](Self::set_body_and_fields): `change` applied to the item
+    /// at its mapped version; `true` when it changed anything.
     async fn fix_up(
         &mut self,
         id: ContentId,
         wp_id: i64,
         change: impl FnOnce(&mut ContentItem),
-    ) -> Result<(), CoreError> {
+    ) -> Result<bool, CoreError> {
         let row = self
             .tx
             .imports()
@@ -324,7 +333,7 @@ impl ImportBatch<'_> {
         let mut next = current.clone();
         change(&mut next);
         if next == current {
-            return Ok(());
+            return Ok(false);
         }
         next.body_html = None;
         let repos = self.tx.as_ref();
@@ -348,7 +357,7 @@ impl ImportBatch<'_> {
         )
         .await?;
         self.items += 1;
-        Ok(())
+        Ok(true)
     }
 
     /// Inserts a new item for `c`.
