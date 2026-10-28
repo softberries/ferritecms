@@ -41,7 +41,7 @@ pub use terms::{ImportTerm, TermMatched, TermOutcome};
 pub use users::{ImportUser, Matched, UserOutcome};
 
 use crate::{
-    Actor, CoreError, Permalinks,
+    Actor, CoreError, PermalinkRules, Permalinks,
     actor::{Capability, require},
     tx::finish,
 };
@@ -70,13 +70,26 @@ pub struct ImportService {
 pub struct ImportHandle {
     pub run: ImportRun,
     pub actor: Actor,
-    lock: Option<Box<dyn LockGuard>>,
+    /// In a mutex only so the handle is `Sync` (batches and drivers hold `&ImportHandle`
+    /// across awaits on a multi-threaded runtime); it is taken once, by `finish`.
+    lock: std::sync::Mutex<Option<Box<dyn LockGuard>>>,
 }
 
 impl ImportService {
     /// `permalinks` are the site's live rules; each batch pins them when it opens.
     pub fn new(store: Arc<dyn Store>, permalinks: Arc<dyn Permalinks>) -> Self {
         Self { store, permalinks }
+    }
+
+    /// The permalink rules the stored `permalink.*` options give, with `overrides` on
+    /// top ([`rules_from`](crate::permalink::rules_from)): what a driver swaps in after
+    /// a schema batch changed them (overrides stand in for a rolled-back dry run's
+    /// rows).
+    pub async fn permalink_rules(
+        &self,
+        overrides: &[(&str, Option<&str>)],
+    ) -> Result<PermalinkRules, CoreError> {
+        crate::permalink::rules_from(self.store.read(), overrides).await
     }
 
     /// Starts a run of `source` (the normalised `<wp:base_blog_url>`). Needs
@@ -125,7 +138,7 @@ impl ImportService {
             Ok(()) => Ok(ImportHandle {
                 run,
                 actor: *actor,
-                lock,
+                lock: std::sync::Mutex::new(lock),
             }),
             Err(e) => {
                 release(lock).await;
@@ -221,7 +234,7 @@ impl ImportHandle {
         stats: Value,
     ) -> Result<(), CoreError> {
         let done = self.write_finish(svc, state, &stats).await;
-        release(self.lock).await;
+        release(self.lock.into_inner().unwrap_or_else(|e| e.into_inner())).await;
         done
     }
 
