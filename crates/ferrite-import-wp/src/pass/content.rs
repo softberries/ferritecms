@@ -597,6 +597,18 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
             write_chunk(&mut cx, &kind, &type_acf, items, report).await?;
         }
     }
+    let kept = order
+        .iter()
+        .filter_map(|(post_type, _)| type_name(post_type))
+        .any(|kind| report.counts.get(&*kind).is_some_and(|c| c.kept > 0));
+    if kept {
+        // Publishing bumps an item's version; telling a schedule's publish apart from an
+        // edit would need the import's status in the map (A2, accepted).
+        report.note(
+            "kept items include any the import scheduled that have since been published by \
+             their schedule: publishing counts as an edit here",
+        );
+    }
     Ok(())
 }
 

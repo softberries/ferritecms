@@ -233,6 +233,15 @@ pub async fn rerun_keeps_a_local_edit(db: &TestDb) {
         "{:?}",
         report.notes
     );
+    // A2: why a scheduled item may show as kept.
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.starts_with("kept items include any the import scheduled")),
+        "{:?}",
+        report.notes
+    );
     let kept = store.read().content().get(post.id).await.unwrap().unwrap();
     assert_eq!(kept.title, "Edited here");
 }
