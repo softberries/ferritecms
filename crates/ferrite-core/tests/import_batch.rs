@@ -10,7 +10,8 @@ use ferrite_core::{
     events::{ALL_KEY, INVALIDATE, TYPES_CHANGED, term_key},
     fields::{FieldDef, FieldKind},
     import::{
-        ImportBatch, ImportService, ImportTerm, ImportUser, Matched, TermMatched, WP_ID_META,
+        ImportBatch, ImportService, ImportTerm, ImportUser, Matched, TermMatched, TypeWritten,
+        WP_ID_META,
     },
 };
 use ferrite_domain::{
@@ -256,6 +257,7 @@ pub async fn user_matching_order(db: &TestDb) {
         .await
         .unwrap();
     assert_eq!((out.id, out.how), (by_login, Matched::Login));
+    assert_eq!(out.login, "wpuser");
 
     let out = batch
         .user(ImportUser {
@@ -279,6 +281,7 @@ pub async fn user_matching_order(db: &TestDb) {
         .await
         .unwrap();
     assert_eq!(out.how, Matched::Created);
+    assert_eq!(out.login, "john-doe-2");
     let slugged = out.id;
     let mapped = batch.lookup(ImportMapKind::User, 3).await.unwrap().unwrap();
     assert_eq!(mapped.id, created.as_uuid());
@@ -534,11 +537,24 @@ pub async fn schema_batch_registers_types_and_taxonomies(db: &TestDb) {
             .await
             .unwrap()
     );
-    batch.content_type(book(vec![field("isbn")])).await.unwrap();
-    batch
-        .content_type(book(vec![field("isbn"), field("pages")]))
-        .await
-        .unwrap();
+    assert_eq!(
+        batch.content_type(book(vec![field("isbn")])).await.unwrap(),
+        TypeWritten::Created
+    );
+    assert_eq!(
+        batch
+            .content_type(book(vec![field("isbn"), field("pages")]))
+            .await
+            .unwrap(),
+        TypeWritten::Updated
+    );
+    assert_eq!(
+        batch
+            .content_type(book(vec![field("pages")]))
+            .await
+            .unwrap(),
+        TypeWritten::Unchanged
+    );
     batch
         .options(&[
             ("site.title".into(), Some(json!("Imported"))),

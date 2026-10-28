@@ -4,8 +4,9 @@
 //!
 //! Tables: `channel` (one row), `authors`, `terms` and `items` (`seq` keeps file order,
 //! `record_json` is the [`model`](crate::model) record as JSON), `passes(name, done_at)`,
-//! and `meta(key, value)` (the WXR file's digest, so a re-run finds the IR of the same
-//! file). It is a cache: what the site holds is decided by `import_map` (P3).
+//! `meta(key, value)` (the WXR file's digest, so a re-run finds the IR of the same
+//! file), and `media_urls(path, media_id, url)`, the [`MediaIndex`](crate::urls::MediaIndex)
+//! pass 2 builds, so a resumed run has it. It is a cache: what the site holds is decided by `import_map` (P3).
 
 use std::path::Path;
 use std::time::Duration;
@@ -18,6 +19,7 @@ use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
 use sqlx::{Sqlite, Transaction};
+use uuid::Uuid;
 
 use crate::ImportError;
 use crate::model::{Author, Channel, Item, Record, Term};
@@ -46,6 +48,7 @@ CREATE INDEX items_kind ON items (kind, seq);
 CREATE INDEX items_wp_id ON items (wp_id, seq);
 CREATE TABLE passes (name TEXT PRIMARY KEY, done_at TEXT NOT NULL);
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE media_urls (path TEXT PRIMARY KEY, media_id TEXT NOT NULL, url TEXT NOT NULL);
 ";
 
 /// An open IR file. Writes go through [`push`](Self::push) (buffered in a transaction;
@@ -239,6 +242,44 @@ impl Ir {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Replaces the stored media URL index with `rows` (`path`, media id, public URL).
+    pub(crate) async fn set_media_urls(
+        &self,
+        rows: &[(String, Uuid, String)],
+    ) -> Result<(), ImportError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM media_urls")
+            .execute(&mut *tx)
+            .await?;
+        for (path, id, url) in rows {
+            sqlx::query("INSERT INTO media_urls (path, media_id, url) VALUES (?1, ?2, ?3)")
+                .bind(path)
+                .bind(id.to_string())
+                .bind(url)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// The stored media URL index (`path`, media id, public URL).
+    pub(crate) async fn media_urls(&self) -> Result<Vec<(String, Uuid, String)>, ImportError> {
+        let rows: Vec<(String, String, String)> =
+            sqlx::query_as("SELECT path, media_id, url FROM media_urls ORDER BY path")
+                .fetch_all(&self.pool)
+                .await?;
+        rows.into_iter()
+            .map(|(path, id, url)| {
+                let id = Uuid::parse_str(&id).map_err(|_| ImportError::Missing {
+                    what: "a valid media id in the work file",
+                    offset: 0,
+                })?;
+                Ok((path, id, url))
+            })
+            .collect()
     }
 
     /// The `meta` value of `key`.
