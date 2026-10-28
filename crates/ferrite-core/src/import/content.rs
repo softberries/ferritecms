@@ -130,13 +130,23 @@ impl ImportBatch<'_> {
     /// a failed statement). The caller must [`rollback`](Self::rollback) the batch and
     /// must not commit or write to it again.
     pub async fn content(&mut self, c: ImportContent) -> Result<ContentOutcome, CoreError> {
+        self.write_content(ImportMapKind::Content, c).await
+    }
+
+    /// [`content`](Self::content) with the map row kept under `map` (`Content`, or
+    /// `Media` for an attachment's item).
+    pub(super) async fn write_content(
+        &mut self,
+        map: ImportMapKind,
+        c: ImportContent,
+    ) -> Result<ContentOutcome, CoreError> {
         let unwritten = |id: Uuid, result| ContentOutcome {
             id: ContentId::from_uuid(id),
             result,
             slug_changed: None,
             schedule_past: false,
         };
-        let current = match self.lookup(ImportMapKind::Content, c.wp_id).await? {
+        let current = match self.lookup(map, c.wp_id).await? {
             None => None,
             Some(mapped) if mapped.hash == c.hash => {
                 return Ok(unwritten(mapped.id, Written::Unchanged));
@@ -217,14 +227,8 @@ impl ImportBatch<'_> {
             &saved, &old_terms, &terms, old_parent, &moved,
         ));
         self.keys.extend(redirect_keys(redirected));
-        self.remember(
-            ImportMapKind::Content,
-            c.wp_id,
-            id.as_uuid(),
-            &c.hash,
-            saved.version,
-        )
-        .await?;
+        self.remember(map, c.wp_id, id.as_uuid(), &c.hash, saved.version)
+            .await?;
         self.items += 1;
         let wp_slug = wp_slug(&c);
         Ok(ContentOutcome {

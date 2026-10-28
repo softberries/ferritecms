@@ -89,24 +89,9 @@ impl MenuService {
     /// most [`MAX_MENU_ITEMS`] items. Emits `menu:<name>`.
     pub async fn put(&self, actor: &Actor, menu: &Menu) -> Result<(), CoreError> {
         require(actor, Capability::ManageMenus)?;
-        if slug::validate(&menu.name)? != menu.name {
-            return Err(CoreError::Invalid(
-                "menu name must be lowercase without whitespace or '/'".into(),
-            ));
-        }
-        check_label(&menu.label, "label", "menu label")?;
-        if menu.items.len() > MAX_MENU_ITEMS {
-            return Err(CoreError::invalid_field(
-                "items",
-                format!("a menu holds at most {MAX_MENU_ITEMS} items"),
-            ));
-        }
         let tx = self.store.begin().await?;
         let done = async {
-            for item in &menu.items {
-                check_item(tx.as_ref(), item).await?;
-            }
-            tx.menus().put(menu).await?;
+            put_in(tx.as_ref(), menu).await?;
             tx.events()
                 .append(&events::invalidate([events::menu_key(&menu.name)]))
                 .await?;
@@ -133,6 +118,35 @@ impl MenuService {
         .await;
         finish(tx, done).await
     }
+}
+
+/// The checks of [`MenuService::put`] that need no store: name, label, item count.
+fn check_menu(menu: &Menu) -> Result<(), CoreError> {
+    if slug::validate(&menu.name)? != menu.name {
+        return Err(CoreError::Invalid(
+            "menu name must be lowercase without whitespace or '/'".into(),
+        ));
+    }
+    check_label(&menu.label, "label", "menu label")?;
+    if menu.items.len() > MAX_MENU_ITEMS {
+        return Err(CoreError::invalid_field(
+            "items",
+            format!("a menu holds at most {MAX_MENU_ITEMS} items"),
+        ));
+    }
+    Ok(())
+}
+
+/// [`MenuService::put`] without the capability check, the transaction and the event:
+/// validates the menu and every item against `repos` and replaces the menu. The caller
+/// emits `menu:<name>` (the WordPress import collects it into its batch's event).
+pub(crate) async fn put_in(repos: &dyn Repos, menu: &Menu) -> Result<(), CoreError> {
+    check_menu(menu)?;
+    for item in &menu.items {
+        check_item(repos, item).await?;
+    }
+    repos.menus().put(menu).await?;
+    Ok(())
 }
 
 /// `InvalidField { field, .. }` when `label` is longer than [`MAX_LABEL_LEN`].

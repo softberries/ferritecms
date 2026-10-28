@@ -18,7 +18,11 @@
 //! best-effort, for the life of the handle; nothing relies on it (R17).
 
 mod batch;
+mod comments;
 mod content;
+mod media;
+mod menus;
+mod redirects;
 mod terms;
 mod users;
 
@@ -29,7 +33,10 @@ use ferrite_store::{LOCK_IMPORT, LockGuard, Store, StoreError};
 use serde_json::{Value, json};
 
 pub use batch::{ImportBatch, Mapped, WP_ID_META};
+pub use comments::ImportComment;
 pub use content::{ContentOutcome, ImportContent, Written};
+pub use media::ImportMedia;
+pub use redirects::RedirectOutcome;
 pub use terms::{ImportTerm, TermMatched, TermOutcome};
 pub use users::{ImportUser, Matched, UserOutcome};
 
