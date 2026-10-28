@@ -33,7 +33,7 @@ use ferrite_store::{LOCK_IMPORT, LockGuard, Store, StoreError};
 use serde_json::{Value, json};
 
 pub use batch::{ImportBatch, Mapped, WP_ID_META};
-pub use comments::ImportComment;
+pub use comments::{CommentOutcome, ImportComment};
 pub use content::{ContentOutcome, ImportContent, Written};
 pub use media::ImportMedia;
 pub use redirects::RedirectOutcome;

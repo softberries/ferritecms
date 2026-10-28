@@ -307,7 +307,7 @@ pub fn settings_from(
 }
 
 /// The body as stored: `\r\n` and lone `\r` become `\n`, then trimmed.
-fn normalize_body(body: &str) -> String {
+pub(crate) fn normalize_body(body: &str) -> String {
     body.replace("\r\n", "\n")
         .replace('\r', "\n")
         .trim()

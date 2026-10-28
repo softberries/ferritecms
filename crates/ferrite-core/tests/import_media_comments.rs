@@ -388,29 +388,34 @@ pub async fn comment_statuses_dates_threading_and_by_account(db: &TestDb) {
     let root = batch
         .comment(comment(1, item, CommentStatus::Approved))
         .await
-        .unwrap();
+        .unwrap()
+        .id;
     let mut reply = comment(2, item, CommentStatus::Approved);
     reply.parent = Some(root);
     reply.user = Some(commenter);
     reply.author_name = "Account".into();
     reply.author_email = "Account@Example.test".into();
-    let reply = batch.comment(reply).await.unwrap();
+    let reply = batch.comment(reply).await.unwrap().id;
     let pending = batch
         .comment(comment(3, item, CommentStatus::Pending))
         .await
-        .unwrap();
+        .unwrap()
+        .id;
     let spam = batch
         .comment(comment(4, item, CommentStatus::Spam))
         .await
-        .unwrap();
+        .unwrap()
+        .id;
     let trash = batch
         .comment(comment(5, item, CommentStatus::Trash))
         .await
-        .unwrap();
+        .unwrap()
+        .id;
     let anon = batch
         .comment(comment(6, item, CommentStatus::Approved))
         .await
-        .unwrap();
+        .unwrap()
+        .id;
     assert_eq!(batch.len(), 6);
     batch.commit().await.unwrap();
     run.finish(&svc, ImportRunState::Done, json!({}))
@@ -461,12 +466,48 @@ pub async fn comment_statuses_dates_threading_and_by_account(db: &TestDb) {
         b.comment(comment(1, item, CommentStatus::Spam))
             .await
             .unwrap()
+            .id
     })
     .await;
     assert_eq!(again, root);
     assert_eq!(get(root).await.status, CommentStatus::Approved);
     let counts = store.read().comments().counts(Some(item)).await.unwrap();
     assert_eq!(counts.values().sum::<u64>(), 6);
+}
+
+pub async fn comment_body_is_cleaned_not_refused(db: &TestDb) {
+    let store = db.store();
+    let admin = admin(store).await;
+    let item = import_posts(
+        db,
+        &admin,
+        vec![post(1, "p", ContentStatus::Published, admin.user)],
+    )
+    .await[0]
+        .id;
+    let max = ferrite_core::comments::MAX_COMMENT_BODY;
+    let long = "é".repeat(max + 50);
+    let (plain, dirty, cut) = in_batch(db, &admin, async |b| {
+        let mut c1 = comment(1, item, CommentStatus::Approved);
+        c1.body = "fine\nbody\twith tab".into();
+        let mut c2 = comment(2, item, CommentStatus::Approved);
+        c2.body = "  a\r\nb\u{0}\u{7}c\u{202e}d\r".into();
+        let mut c3 = comment(3, item, CommentStatus::Approved);
+        c3.body = long.clone();
+        (
+            b.comment(c1).await.unwrap(),
+            b.comment(c2).await.unwrap(),
+            b.comment(c3).await.unwrap(),
+        )
+    })
+    .await;
+    assert!(!plain.altered && dirty.altered && cut.altered);
+    let body = async |id: CommentId| store.read().comments().get(id).await.unwrap().unwrap().body;
+    assert_eq!(body(plain.id).await, "fine\nbody\twith tab");
+    // \r\n -> \n, trimmed, controls (NUL, BEL) removed; the Cf mark stays.
+    assert_eq!(body(dirty.id).await, "a\nbc\u{202e}d");
+    assert_eq!(body(cut.id).await.chars().count(), max);
+    assert!(body(cut.id).await.chars().all(|c| c == 'é'));
 }
 
 pub async fn comment_on_draft_item_allowed(db: &TestDb) {
@@ -483,6 +524,7 @@ pub async fn comment_on_draft_item_allowed(db: &TestDb) {
         b.comment(comment(1, item, CommentStatus::Approved))
             .await
             .unwrap()
+            .id
     })
     .await;
     assert_eq!(
@@ -741,6 +783,57 @@ pub async fn redirects_partial_refusal_reports_and_writes_rest(db: &TestDb) {
     assert_eq!(out.refused[0].0, "/newer-a/");
 }
 
+pub async fn redirects_refused_come_in_input_order(db: &TestDb) {
+    let store = db.store();
+    let admin = admin(store).await;
+    import_posts(
+        db,
+        &admin,
+        vec![post(1, "live-post", ContentStatus::Published, admin.user)],
+    )
+    .await;
+    let live = {
+        let id = store
+            .read()
+            .content()
+            .get_by_slug("post", None, "live-post")
+            .await
+            .unwrap()
+            .unwrap();
+        permalinks().path(&ferrite_core::PermalinkInput {
+            item: id,
+            ancestors: Vec::new(),
+            primary_term: None,
+        })
+    };
+    let res = in_batch(db, &admin, async |b| {
+        b.redirects(&[
+            row("/api/first", "/a/"),
+            row(&live, "/b/"),
+            row("/ok/", "/c/"),
+            ("/bad-code/".into(), "/d/".into(), 999),
+            row(&live, "/e/"),
+            row("/ok/", "/f/"),
+        ])
+        .await
+        .unwrap()
+    })
+    .await;
+    let order: Vec<&str> = res.refused.iter().map(|(s, _)| s.as_str()).collect();
+    assert_eq!(
+        order,
+        [
+            "/api/first",
+            live.as_str(),
+            "/bad-code/",
+            live.as_str(),
+            "/ok/"
+        ]
+    );
+    assert_eq!(res.refused[1].1, "path is a published item");
+    assert_eq!(res.created, 1);
+}
+
 pub async fn redirect_from_published_item_path_refused_or_reclaimed(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
@@ -805,8 +898,10 @@ backend_tests!(
     media_keeps_dates_author_and_queues_variants,
     media_rejects_what_an_upload_rejects,
     comment_statuses_dates_threading_and_by_account,
+    comment_body_is_cleaned_not_refused,
     comment_on_draft_item_allowed,
     menu_put_in_batch,
     redirects_partial_refusal_reports_and_writes_rest,
+    redirects_refused_come_in_input_order,
     redirect_from_published_item_path_refused_or_reclaimed,
 );

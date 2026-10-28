@@ -21,7 +21,7 @@ pub struct RedirectOutcome {
     pub created: u32,
     /// Rows that replaced the target and code of an existing redirect.
     pub updated: u32,
-    /// Rows not written: (source, reason).
+    /// Rows not written: (source, reason), in input-row order whichever check refused them.
     pub refused: Vec<(String, String)>,
 }
 
@@ -51,22 +51,30 @@ impl ImportBatch<'_> {
         };
         for chunk in rows.chunks(MAX_IMPORT_ROWS) {
             let repos = self.tx.as_ref();
-            let mut candidates = Vec::with_capacity(chunk.len());
-            for row in chunk {
+            // (index in `chunk`, row) of the rows that are not refused so far.
+            let mut candidates: Vec<(usize, (String, String, u16))> =
+                Vec::with_capacity(chunk.len());
+            let mut refused: Vec<(usize, String, String)> = Vec::new();
+            for (i, row) in chunk.iter().enumerate() {
                 if published_item_at(repos, self.rules.as_ref(), &row.0).await? {
-                    out.refused.push((row.0.clone(), PUBLISHED_ITEM.into()));
+                    refused.push((i, row.0.clone(), PUBLISHED_ITEM.into()));
                 } else {
-                    candidates.push(row.clone());
+                    candidates.push((i, row.clone()));
                 }
             }
-            let errors = validate_rows(&candidates, all_targets_in(repos).await?);
+            let kept: Vec<_> = candidates.iter().map(|(_, r)| r.clone()).collect();
+            let errors = validate_rows(&kept, all_targets_in(repos).await?);
             let mut failed = vec![false; candidates.len()];
             for e in errors {
-                if let Some(row) = candidates.get(e.row) {
-                    out.refused.push((row.0.clone(), e.message));
+                if let Some((i, row)) = candidates.get(e.row) {
+                    refused.push((*i, row.0.clone(), e.message));
                     failed[e.row] = true;
                 }
             }
+            refused.sort_by_key(|(i, _, _)| *i);
+            out.refused
+                .extend(refused.into_iter().map(|(_, source, why)| (source, why)));
+            let candidates: Vec<_> = candidates.into_iter().map(|(_, r)| r).collect();
             let valid: Vec<_> = candidates
                 .into_iter()
                 .zip(failed)

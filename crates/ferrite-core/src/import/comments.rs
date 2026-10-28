@@ -5,7 +5,11 @@ use ferrite_domain::{
 };
 
 use super::ImportBatch;
-use crate::{CoreError, events};
+use crate::{
+    CoreError,
+    comments::{MAX_COMMENT_BODY, normalize_body},
+    events,
+};
 
 /// One WXR comment, its item, parent and user already mapped; the body is plain text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,24 +30,51 @@ pub struct ImportComment {
     pub created_at: Timestamp,
 }
 
+/// What [`ImportBatch::comment`] wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommentOutcome {
+    pub id: CommentId,
+    /// The body was changed to fit (control characters removed, cut to
+    /// [`MAX_COMMENT_BODY`] characters, or newlines/whitespace normalised as `submit` does).
+    pub altered: bool,
+}
+
+/// `body` as `submit` stores it, but never refused: `\r\n`/`\r` to `\n`, trimmed, control
+/// characters other than `\n` and `\t` removed, cut to [`MAX_COMMENT_BODY`] characters
+/// on a character boundary.
+fn clean_body(body: &str) -> String {
+    let normal = normalize_body(body);
+    let mut clean: String = normal
+        .chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .take(MAX_COMMENT_BODY)
+        .collect();
+    clean.truncate(clean.trim_end().len());
+    clean
+}
+
 impl ImportBatch<'_> {
     /// Writes one imported comment and returns its id (P18). A comment whose `wp_id` is
     /// mapped to a comment that still exists is returned as it is, without a write (a
     /// re-run never duplicates; edits made in WordPress are not applied).
     ///
     /// Unlike [`CommentService::submit`](crate::CommentService::submit) there is no rate
-    /// limit, no moderation, no honeypot, no depth limit and no size limit (the
-    /// converter decides what to cut), and the item may be in any status. Checked: the
+    /// limit, no moderation, no honeypot, no depth limit, and the item may be in any status. Checked: the
     /// item exists (`InvalidField` `item`), the parent exists and belongs to the same
-    /// item (`parent`), the user exists (`user`). `ip_hash` is `None`; the store sets
+    /// item (`parent`), the user exists (`user`). The body gets `submit`'s normalisation without its refusals: control characters other
+    /// than `\n`/`\t` are removed and a longer body than [`MAX_COMMENT_BODY`] characters is
+    /// cut (`altered` reports it; an empty body is stored as it is). `ip_hash` is `None`; the store sets
     /// `by_account` when `user` is given. An approved comment adds its item's key to the
     /// batch's event.
     ///
     /// **Errors.** As for [`content`](Self::content): any `Err` leaves the batch
     /// unusable, and the caller must [`rollback`](Self::rollback) it.
-    pub async fn comment(&mut self, c: ImportComment) -> Result<CommentId, CoreError> {
+    pub async fn comment(&mut self, c: ImportComment) -> Result<CommentOutcome, CoreError> {
         if let Some(mapped) = self.lookup(ImportMapKind::Comment, c.wp_id).await? {
-            return Ok(CommentId::from_uuid(mapped.id));
+            return Ok(CommentOutcome {
+                id: CommentId::from_uuid(mapped.id),
+                altered: false,
+            });
         }
         let repos = self.tx.as_ref();
         if repos.content().get(c.item).await?.is_none() {
@@ -66,6 +97,8 @@ impl ImportBatch<'_> {
         {
             return Err(CoreError::invalid_field("user", "unknown user"));
         }
+        let body = clean_body(&c.body);
+        let altered = body != c.body;
         let id = CommentId::new();
         repos
             .comments()
@@ -77,7 +110,7 @@ impl ImportBatch<'_> {
                 author_name: c.author_name,
                 author_email: c.author_email,
                 author_url: c.author_url,
-                body: c.body,
+                body,
                 status: c.status,
                 ip_hash: None,
                 created_at: c.created_at,
@@ -89,6 +122,6 @@ impl ImportBatch<'_> {
         self.remember(ImportMapKind::Comment, c.wp_id, id.as_uuid(), "", 0)
             .await?;
         self.items += 1;
-        Ok(id)
+        Ok(CommentOutcome { id, altered })
     }
 }
