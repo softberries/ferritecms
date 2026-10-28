@@ -25,7 +25,8 @@ pub enum CoreError {
         message: String,
     },
     /// Invalid input attributable to one member whose name is data, not a fixed field: a
-    /// theme or plugin setting key (M2a-2 P13). Mapped like
+    /// theme or plugin setting key (M2a-2 P13), or the path of a field value such as
+    /// `fields.chapters[1].related` (a relation's target type, M2b-3 P52). Mapped like
     /// [`InvalidField`](Self::InvalidField), with `key` as the field. The message never
     /// holds the value (it may be a secret).
     #[error("invalid {key}: {message}")]
@@ -41,6 +42,14 @@ pub enum CoreError {
     /// message says what changed; retrying re-checks.
     #[error("changed concurrently: {0}")]
     Changed(&'static str),
+    /// A node-local resource is out of capacity or stopping (the mail queue full or
+    /// shutting down); retrying later may work. The text says which (`503 busy`).
+    #[error("unavailable: {0}")]
+    Unavailable(&'static str),
+    /// A value core built itself was refused by its own checks: a bug, not the caller's
+    /// input (`500`). The text says which.
+    #[error("internal error: {0}")]
+    Internal(&'static str),
     /// The operating system's random number generator failed (keys, nonces, tokens).
     #[error("system random number generator failed")]
     Random,

@@ -5,7 +5,7 @@
 
 import { useTranslation } from "react-i18next";
 import type { EditorDocument } from "../editor-state";
-import { MediaChoice } from "../fields/media-field";
+import { MediaChoice } from "@/components/kit/media-choice";
 import { FEATURED_IMAGE } from "../fields/fields-model";
 
 export function FeaturedImage({ doc, disabled }: { doc: EditorDocument; disabled: boolean }) {

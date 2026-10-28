@@ -1,6 +1,6 @@
-// The shell under the real server, on both backends (`*.smoke.spec.ts` also runs in
-// `chromium-pg`; pre-flight F25). Login contexts of this file use spec number 1
-// (`forwardedFor(1, n)`, F24).
+// The shell under the real server: the CSP, immutable assets and sign-in (pre-flight F25;
+// it was the Postgres smoke test before every spec ran on both backends, P55). Login
+// contexts of this file use spec number 1 (`forwardedFor(1, n)`, F24).
 
 import { expect, test } from "./support/fixtures";
 import { mailbox } from "./support/smtp-sink";

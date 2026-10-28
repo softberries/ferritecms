@@ -49,7 +49,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { staleGuard } from "@/lib/stale-guard";
 import { nameFromLabel } from "../types/builder-model";
-import { FormField, SwitchRow } from "../types/form-field";
+import { FormField, SwitchRow } from "@/components/kit/form-field";
 import { MAX_TYPE_LABEL, MAX_TYPE_NAME, labelProblem, validTypeName } from "../types/type-rules";
 import { problemText } from "./terms-model";
 import { DESTRUCTIVE } from "@/lib/destructive";

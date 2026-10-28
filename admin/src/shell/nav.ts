@@ -1,10 +1,10 @@
 // The sidebar's sections (and the palette's "Go to", "Create" and "Recent" groups). An item
 // shows only when `me.capabilities` holds what its API needs; the server still
 // enforces every call, the SPA only hides (constraints: capabilities in core).
-// M2b-2 screens (Media, Comments, Structure) each register a `ScreenEntry` in
-// `SCREEN_ENTRIES` when their route exists (ruling F-A); who sees an entry, where it goes
-// and its chord are fixed here in `SCREENS`. Appearance, Plugins, Users, Settings and
-// System follow in M2b-3.
+// Screens beyond the content lists (Media, Comments, Structure, and M2b-3's
+// Administration: Users, Appearance, Plugins, Settings, System) each register a
+// `ScreenEntry` in `SCREEN_ENTRIES` when their route exists (ruling F-A); who sees an
+// entry, its section and its chord are fixed here in `SCREENS`.
 
 import {
   BlocksIcon,
@@ -14,9 +14,14 @@ import {
   LayoutDashboardIcon,
   ListTreeIcon,
   MessageSquareIcon,
+  PaletteIcon,
+  PlugIcon,
+  ServerCogIcon,
+  SettingsIcon,
   ShapesIcon,
   SignpostIcon,
   TagsIcon,
+  UsersIcon,
   type LucideIcon,
 } from "lucide-react";
 import type { ContentTypeDto } from "@/api/types";
@@ -45,7 +50,10 @@ export interface NavSection {
 
 type Can = (cap: string) => boolean;
 
-/** The M2b-2 screens a task can register, with the rule for who sees each. */
+/** The sidebar sections a registered screen can go in, in sidebar order. */
+type ScreenSection = "content" | "structure" | "admin";
+
+/** The screens a task can register, with the rule for who sees each. */
 const SCREENS = {
   // Contributors too: the screen is read-only without `upload_media` (it decides).
   media: { section: "content", show: (can: Can) => can("read_admin"), shortcut: "g m" },
@@ -62,9 +70,17 @@ const SCREENS = {
   },
   menus: { section: "structure", show: (can: Can) => can("manage_menus") },
   redirects: { section: "structure", show: (can: Can) => can("manage_redirects") },
+  // Administration (M2b-3), after Structure. Account is not here: every role reaches it
+  // from the user menu and the palette.
+  users: { section: "admin", show: (can: Can) => can("manage_users"), shortcut: "g u" },
+  appearance: { section: "admin", show: (can: Can) => can("manage_themes"), shortcut: "g a" },
+  // Not `g p`: that is Posts (11 §6).
+  plugins: { section: "admin", show: (can: Can) => can("manage_plugins"), shortcut: "g l" },
+  settings: { section: "admin", show: (can: Can) => can("manage_settings"), shortcut: "g s" },
+  system: { section: "admin", show: (can: Can) => can("manage_system"), shortcut: "g y" },
 } as const satisfies Record<
   string,
-  { section: "content" | "structure"; show: (can: Can) => boolean; shortcut?: string }
+  { section: ScreenSection; show: (can: Can) => boolean; shortcut?: string }
 >;
 
 export type ScreenId = keyof typeof SCREENS;
@@ -80,8 +96,8 @@ export interface ScreenEntry {
 }
 
 /**
- * The registered screens. Each M2b-2 screen task adds its entry to this literal when it
- * adds its route; nothing is registered at runtime (a lazy route module would register
+ * The registered screens. Each screen task adds its entry to this literal when it adds
+ * its route; nothing is registered at runtime (a lazy route module would register
  * too late for the sidebar and the palette).
  */
 export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
@@ -96,6 +112,11 @@ export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
     label: "nav.redirects",
     icon: SignpostIcon,
   },
+  { screen: "users", to: "/users", label: "nav.users", icon: UsersIcon },
+  { screen: "appearance", to: "/appearance/themes", label: "nav.appearance", icon: PaletteIcon },
+  { screen: "plugins", to: "/plugins", label: "nav.plugins", icon: PlugIcon },
+  { screen: "settings", to: "/settings", label: "nav.settings", icon: SettingsIcon },
+  { screen: "system", to: "/system", label: "nav.system", icon: ServerCogIcon },
 ] as const;
 
 /** Types the content screens list: everything but `media` (its own screen, M2b-2). */
@@ -115,7 +136,7 @@ export function navFor(
   const can: Can = (cap) => me.capabilities.includes(cap);
   // Registered screens the viewer may see, in `SCREENS` order. Nothing without
   // `read_admin`: every admin API refuses that viewer.
-  const screens = (section: "content" | "structure") =>
+  const screens = (section: ScreenSection) =>
     (Object.keys(SCREENS) as ScreenId[]).flatMap((id): NavItem[] => {
       const rule: { section: string; show: (can: Can) => boolean; shortcut?: string } = SCREENS[id];
       const entry = entries.find((e) => e.screen === id);
@@ -173,6 +194,10 @@ export function navFor(
   const structure = screens("structure");
   if (structure.length > 0) {
     sections.push({ id: "structure", label: t("nav.structure"), items: structure });
+  }
+  const admin = screens("admin");
+  if (admin.length > 0) {
+    sections.push({ id: "admin", label: t("nav.administration"), items: admin });
   }
   return sections;
 }

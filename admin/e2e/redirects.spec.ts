@@ -60,10 +60,10 @@ async function chooseCsv(page: Page, csv: string, name = "redirects.csv"): Promi
     .setInputFiles({ name, mimeType: "text/csv", buffer: Buffer.from(csv) });
 }
 
-test("create_edit_delete_with_undo", async ({ as, site, backend, guard }) => {
+test("create_edit_delete_with_undo", async ({ as, site, siteKey, guard }) => {
   // The slash-toggled source is refused with a 422 (shown on the field).
   guard.allowFailedResource(/\/api\/v1\/redirects$/);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const s = short();
   const page = await as("admin");
   try {
@@ -133,8 +133,8 @@ test("create_edit_delete_with_undo", async ({ as, site, backend, guard }) => {
   }
 });
 
-test("edit_stale_guard", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("edit_stale_guard", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const s = short();
   await api.createRedirect(`/stale-${s}`, `/a-${s}`);
   const page = await as("admin");
@@ -159,8 +159,8 @@ test("edit_stale_guard", async ({ as, site, backend }) => {
   }
 });
 
-test("search_narrows", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("search_narrows", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const s = short();
   await api.createRedirect(`/alpha-${s}`, "/somewhere");
   await api.createRedirect(`/beta-${s}`, `/target-alpha-${s}`);
@@ -190,8 +190,8 @@ test("search_narrows", async ({ as, site, backend }) => {
   }
 });
 
-test("import_and_export_roundtrip", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("import_and_export_roundtrip", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const s = short();
   const csv = [
     "source,target,code",
@@ -234,9 +234,9 @@ test("import_and_export_roundtrip", async ({ as, site, backend }) => {
   }
 });
 
-test("import_errors_are_text", async ({ as, site, backend, guard }) => {
+test("import_errors_are_text", async ({ as, site, siteKey, guard }) => {
   guard.allowFailedResource(/\/api\/v1\/redirects\/import$/);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const s = short();
   const hostile = `/<b>x</b>-${s}`;
   // Line 3 repeats line 2's source (its error quotes the HTML); line 4's source is
@@ -278,8 +278,8 @@ test("import_errors_are_text", async ({ as, site, backend, guard }) => {
   }
 });
 
-test("redirect_works_on_the_site", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("redirect_works_on_the_site", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const s = short();
   const page = await as("admin");
   try {
@@ -311,11 +311,11 @@ test("editor_has_no_redirects", async ({ as }) => {
   await expect(screen(page)).toHaveCount(0);
 });
 
-test("screens", async ({ as, site, backend, guard, snap, expectAccessible }) => {
+test("screens", async ({ as, site, siteKey, guard, snap, expectAccessible }) => {
   test.setTimeout(240_000);
   // The form's and the import's refusals are 422s, shown in the dialogs.
   guard.allowFailedResource(/\/api\/v1\/redirects(\/import)?$/);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const s = short();
   await api.createRedirect(`/old-blog/${s}/`, `/blog/${s}/`);
   await api.createRedirect(

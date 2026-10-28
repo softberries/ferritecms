@@ -5,10 +5,10 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use ferrite_domain::Timestamp;
-use ferrite_domain::{NewUser, Page, Secret, User, UserId};
+use ferrite_domain::{NewUser, Page, Secret, User, UserId, UserQuery};
 use ferrite_store::{
     MAX_ID_FILTER, StoreError, USER_CURSOR_TAG, UserRepo, check_admin_limit, check_len,
-    check_limit, email_key, encode_text_cursor, text_cursor, validate_text,
+    check_limit, email_key, encode_text_cursor, like_contains, text_cursor, validate_text,
 };
 
 use sqlx::{QueryBuilder, Sqlite};
@@ -192,19 +192,31 @@ impl UserRepo for SqliteRepos {
         rows.iter().map(codec::user).collect()
     }
 
-    async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<User>, StoreError> {
-        let limit = check_limit(limit)?;
-        let after = cursor
+    async fn list(&self, query: &UserQuery) -> Result<Page<User>, StoreError> {
+        let limit = check_limit(query.limit)?;
+        let after = query
+            .cursor
+            .as_deref()
             .map(|c| text_cursor(USER_CURSOR_TAG, c))
             .transpose()?;
+        if let Some(q) = &query.q {
+            validate_text("user query", q)?;
+        }
+        let pattern = query.q.as_deref().map(like_contains);
         let rows = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {USER_COLUMNS} FROM users \
-             WHERE ?1 IS NULL OR (login, id) > (?1, ?2) \
+             WHERE (?1 IS NULL OR (login, id) > (?1, ?2)) \
+             AND (?4 IS NULL OR login LIKE ?4 ESCAPE '\\' \
+                  OR display_name LIKE ?4 ESCAPE '\\' OR email LIKE ?4 ESCAPE '\\') \
+             AND (?5 IS NULL OR role = ?5) AND (?6 IS NULL OR status = ?6) \
              ORDER BY login, id LIMIT ?3"
         )))
         .bind(after.as_ref().map(|(k, _)| k.as_str()))
         .bind(after.as_ref().map(|(_, id)| *id))
         .bind(i64::from(limit) + 1)
+        .bind(pattern.as_deref())
+        .bind(query.role.map(|r| r.as_str()))
+        .bind(query.status.map(|s| s.as_str()))
         .fetch_all(e))?;
         let mut items = rows
             .iter()

@@ -2,6 +2,8 @@
 //! scrubbed (no paths, endpoints, addresses or credentials); audit `details` never hold
 //! secrets (M2a P22); job payloads are never returned (P19).
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use ferrite_cache::CacheStats;
 use ferrite_domain::{AuditEntry, Job, Node};
@@ -100,6 +102,25 @@ pub struct SystemStatusDto {
     pub jobs: JobCountsDto,
     pub nodes: NodeCountsDto,
     pub node: ThisNodeDto,
+    pub mail: MailStatusDto,
+}
+
+/// Outgoing mail (P49): `[mail]` in `ferrite.toml` is the only place to set it; the SMTP
+/// URL (it can hold credentials) is never shown.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MailStatusDto {
+    /// `[mail]` has `smtp_url` and `from`: password resets, plugin `notify-admins` and
+    /// the test mail can send.
+    pub configured: bool,
+    /// `mail.from`; `null` when not configured.
+    pub from: Option<String>,
+}
+
+/// `POST /system/mail/test`: the mail is queued.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MailTestDto {
+    /// The actor's own address, where the mail goes.
+    pub to: String,
 }
 
 /// A registered node (`nodes` row).
@@ -116,11 +137,129 @@ pub struct NodeDto {
     pub heartbeat_at: DateTime<Utc>,
     /// The heartbeat is within 30 s of the database clock.
     pub live: bool,
-    /// What the node reports (04 §8: `theme`, `plugins`, `plugins_error`,
-    /// `permalinks_error`, `site_id`, `site_url`, `mode`, `clock_skew_ms`); error texts
-    /// scrubbed of URLs, paths, addresses and credentials, at most 1 KiB each.
-    #[schema(value_type = Object)]
-    pub meta: Value,
+    /// What the node reports (04 §8); error texts scrubbed of URLs, paths, addresses and
+    /// credentials, at most 1 KiB each.
+    pub meta: NodeMetaDto,
+}
+
+/// A node's `meta`, read leniently: every member is optional (a node of another version
+/// in a rolling deploy may lack or add members), unknown members are dropped, and a
+/// member of the wrong type is `null` rather than failing the list.
+#[derive(Debug, Default, PartialEq, Serialize, ToSchema)]
+pub struct NodeMetaDto {
+    /// The theme this node serves.
+    pub theme: Option<NodeThemeDto>,
+    /// The node's plugins by name, from its last reload.
+    pub plugins: Option<BTreeMap<String, NodePluginDto>>,
+    /// Why the plugin rows could not be read at the last reload.
+    pub plugins_error: Option<String>,
+    /// Why the current permalink options are not in effect.
+    pub permalinks_error: Option<String>,
+    /// The job kinds this node's runner handles.
+    pub job_kinds: Option<Vec<String>>,
+    /// The site the node joined (cluster registry).
+    pub site_id: Option<String>,
+    /// The node's `site.url`.
+    pub site_url: Option<String>,
+    /// `solo` or `cluster`.
+    pub mode: Option<String>,
+    /// The node clock minus the database clock at its last heartbeat, in milliseconds.
+    pub clock_skew_ms: Option<i64>,
+}
+
+/// `meta.theme` of a node.
+#[derive(Debug, Default, PartialEq, Serialize, ToSchema)]
+pub struct NodeThemeDto {
+    pub name: Option<String>,
+    /// The theme's content hash.
+    pub hash: Option<String>,
+    pub origin: Option<NodeThemeOrigin>,
+    /// Why the active theme is not served (scrubbed).
+    pub error: Option<String>,
+    /// There is an active row and this node does not serve its artifact.
+    pub fallback: Option<bool>,
+}
+
+/// Where a node's theme came from: `"embedded"`, `"folder"` or `{"artifact": <hash>}`.
+#[derive(Debug, PartialEq, Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum NodeThemeOrigin {
+    /// `embedded` or `folder`.
+    Named(String),
+    /// An installed theme's artifact.
+    Artifact { artifact: String },
+}
+
+/// `meta.plugins.<name>` of a node.
+#[derive(Debug, Default, PartialEq, Serialize, ToSchema)]
+pub struct NodePluginDto {
+    pub version: Option<String>,
+    /// The component's content hash.
+    pub hash: Option<String>,
+    /// `loaded`, `failed` or `disabled`.
+    pub status: Option<String>,
+    /// Why it is not loaded (scrubbed).
+    pub error: Option<String>,
+}
+
+fn text(v: &Value, key: &str) -> Option<String> {
+    v.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
+impl NodeMetaDto {
+    /// Reads `meta` (already scrubbed by core) member by member; see the type docs.
+    pub fn from_value(meta: &Value) -> Self {
+        let theme = meta
+            .get("theme")
+            .filter(|t| t.is_object())
+            .map(|t| NodeThemeDto {
+                name: text(t, "name"),
+                hash: text(t, "hash"),
+                origin: t.get("origin").and_then(|o| match o {
+                    Value::String(s) => Some(NodeThemeOrigin::Named(s.clone())),
+                    other => text(other, "artifact")
+                        .map(|artifact| NodeThemeOrigin::Artifact { artifact }),
+                }),
+                error: text(t, "error"),
+                fallback: t.get("fallback").and_then(Value::as_bool),
+            });
+        let plugins = meta.get("plugins").and_then(Value::as_object).map(|map| {
+            map.iter()
+                .filter(|(_, p)| p.is_object())
+                .map(|(name, p)| {
+                    (
+                        name.clone(),
+                        NodePluginDto {
+                            version: text(p, "version"),
+                            hash: text(p, "hash"),
+                            status: text(p, "status"),
+                            error: text(p, "error"),
+                        },
+                    )
+                })
+                .collect()
+        });
+        let job_kinds = meta
+            .get("job_kinds")
+            .and_then(Value::as_array)
+            .map(|kinds| {
+                kinds
+                    .iter()
+                    .filter_map(|k| k.as_str().map(str::to_owned))
+                    .collect()
+            });
+        Self {
+            theme,
+            plugins,
+            plugins_error: text(meta, "plugins_error"),
+            permalinks_error: text(meta, "permalinks_error"),
+            job_kinds,
+            site_id: text(meta, "site_id"),
+            site_url: text(meta, "site_url"),
+            mode: text(meta, "mode"),
+            clock_skew_ms: meta.get("clock_skew_ms").and_then(Value::as_i64),
+        }
+    }
 }
 
 impl NodeDto {
@@ -133,7 +272,7 @@ impl NodeDto {
             started_at: node.started_at.as_datetime(),
             heartbeat_at: node.heartbeat_at.as_datetime(),
             live,
-            meta: node.meta,
+            meta: NodeMetaDto::from_value(&node.meta),
         }
     }
 }

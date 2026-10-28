@@ -58,8 +58,8 @@ async function slotOf(api: ContentApi, item: Item): Promise<{ status: number; js
   return { status: res.status(), json: res.status() === 200 ? await res.json() : null };
 }
 
-test("autosave_restores_after_reload", async ({ as, site, backend, snap, expectAccessible }) => {
-  const api = await ContentApi.as(backend, site.url, "author");
+test("autosave_restores_after_reload", async ({ as, site, siteKey, snap, expectAccessible }) => {
+  const api = await ContentApi.as(siteKey, site.url, "author");
   const item = await api.create("post", `Autosave ${uid()}`);
   const page = await as("author");
   await openItem(page, "post", item.id);
@@ -92,11 +92,11 @@ test("autosave_restores_after_reload", async ({ as, site, backend, snap, expectA
   await api.dispose();
 });
 
-test("conflict_keeps_my_text", async ({ as, site, backend, snap, expectAccessible, guard }) => {
+test("conflict_keeps_my_text", async ({ as, site, siteKey, snap, expectAccessible, guard }) => {
   // The refused save is a 412 by design: the browser logs that failed load.
   guard.allowFailedResource(/\/api\/v1\/content\/post\/[0-9a-f-]+$/);
-  const editorApi = await ContentApi.as(backend, site.url, "editor");
-  const adminApi = await ContentApi.as(backend, site.url, "admin");
+  const editorApi = await ContentApi.as(siteKey, site.url, "editor");
+  const adminApi = await ContentApi.as(siteKey, site.url, "admin");
   const original = `Conflict ${uid()}`;
   const item = await editorApi.create("post", original);
   const a = await as("editor");
@@ -206,10 +206,10 @@ test.describe("kept_copy_survives_new_edits", () => {
   async function editors(
     as: (role: "editor" | "admin") => Promise<Page>,
     site: { url: string },
-    backend: "sqlite" | "pg",
+    siteKey: string,
   ) {
-    const editorApi = await ContentApi.as(backend, site.url, "editor");
-    const adminApi = await ContentApi.as(backend, site.url, "admin");
+    const editorApi = await ContentApi.as(siteKey, site.url, "editor");
+    const adminApi = await ContentApi.as(siteKey, site.url, "admin");
     const a = await as("editor");
     const b = await as("admin");
     return { editorApi, adminApi, a, b };
@@ -220,8 +220,8 @@ test.describe("kept_copy_survives_new_edits", () => {
     guard.allowFailedResource(/\/api\/v1\/content\/post\/[0-9a-f-]+$/);
   });
 
-  test("edit_then_reload_asks_and_keeps_the_copy", async ({ as, site, backend }) => {
-    const { editorApi, adminApi, a, b } = await editors(as, site, backend);
+  test("edit_then_reload_asks_and_keeps_the_copy", async ({ as, site, siteKey }) => {
+    const { editorApi, adminApi, a, b } = await editors(as, site, siteKey);
     // Take theirs, edit, reload: the edits are not autosaved over the kept copy, so the
     // reload asks first; after it the kept copy is still there and comes back.
     const first = await takeTheirsOn(a, b, editorApi);
@@ -257,8 +257,8 @@ test.describe("kept_copy_survives_new_edits", () => {
     await adminApi.dispose();
   });
 
-  test("discarding_the_copy_autosaves_the_new_edits", async ({ as, site, backend }) => {
-    const { editorApi, adminApi, a, b } = await editors(as, site, backend);
+  test("discarding_the_copy_autosaves_the_new_edits", async ({ as, site, siteKey }) => {
+    const { editorApi, adminApi, a, b } = await editors(as, site, siteKey);
     // Take theirs, edit, Discard the kept copy: the slot then takes the new edits, and a
     // reload (not asked about) brings those back.
     const second = await takeTheirsOn(a, b, editorApi);
@@ -293,8 +293,8 @@ test.describe("kept_copy_survives_new_edits", () => {
     await adminApi.dispose();
   });
 
-  test("leaving_with_discard_keeps_the_copy", async ({ as, site, backend }) => {
-    const { editorApi, adminApi, a, b } = await editors(as, site, backend);
+  test("leaving_with_discard_keeps_the_copy", async ({ as, site, siteKey }) => {
+    const { editorApi, adminApi, a, b } = await editors(as, site, siteKey);
     // Take theirs, edit, leave with Discard changes: only the new edits go; the kept copy
     // stays in the slot, and coming back brings it back (made from the older version).
     const third = await takeTheirsOn(a, b, editorApi);
@@ -317,9 +317,9 @@ test.describe("kept_copy_survives_new_edits", () => {
   });
 });
 
-test("session_expiry_mid_edit_keeps_the_draft", async ({ browser, site, backend, guard, snap }) => {
+test("session_expiry_mid_edit_keeps_the_draft", async ({ browser, site, siteKey, guard, snap }) => {
   // An account of its own: its session is ended on purpose (F23).
-  const admin = await ContentApi.as(backend, site.url, "admin");
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
   const login = uid("expiry").replace(/[^a-z0-9-]/g, "");
   const password = "e2e-expiry-pass-0016";
   const created = await admin.ctx.post("/api/v1/users", {
@@ -401,8 +401,8 @@ test("session_expiry_mid_edit_keeps_the_draft", async ({ browser, site, backend,
   await admin.dispose();
 });
 
-test("leave_guard_blocks_navigation", async ({ as, site, backend, snap, expectAccessible }) => {
-  const api = await ContentApi.as(backend, site.url, "author");
+test("leave_guard_blocks_navigation", async ({ as, site, siteKey, snap, expectAccessible }) => {
+  const api = await ContentApi.as(siteKey, site.url, "author");
   const item = await api.create("post", `Leave ${uid()}`);
   const page = await as("author");
   await openItem(page, "post", item.id);
@@ -448,9 +448,9 @@ test("leave_guard_blocks_navigation", async ({ as, site, backend, snap, expectAc
   await api.dispose();
 });
 
-test("screens", async ({ as, site, backend, snap, guard }) => {
+test("screens", async ({ as, site, siteKey, snap, guard }) => {
   test.setTimeout(240_000);
-  const api = await ContentApi.as(backend, site.url, "author");
+  const api = await ContentApi.as(siteKey, site.url, "author");
   const item = await api.create("post", `Screens ${uid()}`);
   const page = await as("author");
   await openItem(page, "post", item.id);

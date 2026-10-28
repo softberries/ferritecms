@@ -7,6 +7,7 @@ import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Link, useLocation } from "@tanstack/react-router";
 import { Fragment, createElement } from "react";
+import { toast } from "sonner";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
@@ -16,6 +17,7 @@ import { json, renderWithRouter, stubRoutes } from "@/test/render";
 import type { Draft } from "./autosave";
 import { canonicalBody, differingFields, onPreconditionFailed } from "./conflict";
 import { EditorScreen, type EditorScreenProps } from "./editor";
+import { newBodyUploadQueue } from "./body-uploads";
 
 const ID = "0190f1c0-0000-7000-8000-0000000000aa";
 
@@ -102,7 +104,13 @@ function openScreen(item: SchemaContentDto, extra: Partial<EditorScreenProps> = 
     createElement(
       TooltipProvider,
       null,
-      createElement(EditorScreen, { type: "post", typeLabel: "Posts", item, ...extra }),
+      createElement(EditorScreen, {
+        uploads: newBodyUploadQueue(),
+        type: "post",
+        typeLabel: "Posts",
+        item,
+        ...extra,
+      }),
     ),
   );
   return screen.findByRole("textbox", { name: "Body" }).then(() => qc);
@@ -290,7 +298,13 @@ describe("conflict", () => {
       createElement(
         TooltipProvider,
         null,
-        createElement(EditorScreen, { type: "post", typeLabel: "Posts", item, onReopen: reopen }),
+        createElement(EditorScreen, {
+          uploads: newBodyUploadQueue(),
+          type: "post",
+          typeLabel: "Posts",
+          item,
+          onReopen: reopen,
+        }),
       ),
     );
     await screen.findByRole("textbox", { name: "Body" });
@@ -437,11 +451,120 @@ describe("conflict", () => {
     // An edit after the restore: the autosaver has something pending.
     await user.type(screen.getByRole("textbox", { name: "Title" }), "!");
     await user.click(screen.getByRole("button", { name: "Discard" }));
-    await waitFor(() => expect(reopen).toHaveBeenCalledWith({ item }));
+    await waitFor(() =>
+      expect(reopen).toHaveBeenCalledWith({
+        item,
+        discarded: expect.objectContaining({ title: "Restored title!" }) as unknown,
+      }),
+    );
     // The screen goes (the route reopens it); nothing writes the discarded draft back.
     cleanup();
     await act(() => vi.advanceTimersByTimeAsync(30_000));
     expect(slot.map((r) => r.method)).toEqual(["DELETE"]);
+  });
+
+  test("the_discard_undo_goes_with_the_reopened_screen", async () => {
+    // M2b-1 follow-up: the Discard's Undo toast outlived the screen, so an Undo after
+    // leaving wrote the discarded draft back into the item's slot. The reopened screen
+    // shows it now and dismisses it when it goes (and at its first edit).
+    const item = itemWith();
+    const restored = draftOf(item, { title: "Restored title" });
+    const slot: { method: string; body: unknown }[] = [];
+    stubRoutes({
+      [SLOT]: slotRoute(slot),
+      [`/api/v1/content/post/${ID}`]: () => json(item),
+    });
+    const success = vi.spyOn(toast, "success");
+    const dismiss = vi.spyOn(toast, "dismiss");
+    const reopen = vi.fn();
+    await openScreen(item, {
+      restore: { draft: restored, at: "2026-10-01T10:04:00Z" },
+      onReopen: reopen,
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(reopen).toHaveBeenCalledOnce());
+    const next = reopen.mock.calls[0]?.[0] as { item: unknown; discarded: Draft };
+    expect(next).toMatchObject({ item, discarded: { title: "Restored title" } });
+    expect(success).not.toHaveBeenCalled();
+    cleanup();
+
+    // The reopened screen offers the Undo...
+    await openScreen(item, { discarded: next.discarded, onReopen: reopen });
+    await waitFor(() =>
+      expect(success).toHaveBeenCalledWith(
+        "Restored changes discarded",
+        expect.objectContaining({
+          id: "editor-discarded",
+          action: expect.objectContaining({ label: "Undo" }) as unknown,
+        }),
+      ),
+    );
+    expect(dismiss).not.toHaveBeenCalledWith("editor-discarded");
+    // ...and takes it away when it goes.
+    cleanup();
+    expect(dismiss).toHaveBeenCalledWith("editor-discarded");
+  });
+
+  test("the_discard_undo_goes_at_the_first_edit", async () => {
+    const item = itemWith();
+    stubRoutes({ [SLOT]: slotRoute([]) });
+    const dismiss = vi.spyOn(toast, "dismiss");
+    await openScreen(item, { discarded: draftOf(item, { title: "Old" }), onReopen: vi.fn() });
+    expect(dismiss).not.toHaveBeenCalledWith("editor-discarded");
+    await userEvent.setup().type(screen.getByRole("textbox", { name: "Title" }), "!");
+    await waitFor(() => expect(dismiss).toHaveBeenCalledWith("editor-discarded"));
+  });
+
+  test("a_discard_whose_reload_fails_reopens_on_the_copy_it_has", async () => {
+    // The slot is gone; the item could not be read again: the screen still reopens (on
+    // the copy it has), so no screen goes on with a stopped autosaver.
+    const item = itemWith();
+    const restored = draftOf(item, { title: "Restored title" });
+    const slot: { method: string; body: unknown }[] = [];
+    stubRoutes({
+      [SLOT]: slotRoute(slot),
+      [`/api/v1/content/post/${ID}`]: () =>
+        new Response(
+          JSON.stringify({
+            type: "https://ferritecms.dev/problems/busy",
+            title: "Busy",
+            status: 503,
+            detail: "try again",
+          }),
+          { status: 503, headers: { "Content-Type": "application/problem+json" } },
+        ),
+    });
+    const reopen = vi.fn();
+    await openScreen(item, {
+      restore: { draft: restored, at: "2026-10-01T10:04:00Z" },
+      onReopen: reopen,
+    });
+    await userEvent.setup().click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(reopen).toHaveBeenCalledOnce());
+    expect(slot.map((r) => r.method)).toEqual(["DELETE"]);
+    expect(reopen.mock.calls[0]?.[0]).toMatchObject({ item: { id: ID, version: 4 } });
+  });
+
+  test("the_kept_discard_undo_goes_with_the_screen", async () => {
+    const item = itemWith({ version: 5, title: "Their title" });
+    const mine = draftOf(itemWith({ title: "My kept title" }));
+    const slot: { method: string; body: unknown }[] = [];
+    stubRoutes({ [SLOT]: slotRoute(slot) });
+    const success = vi.spyOn(toast, "success");
+    const dismiss = vi.spyOn(toast, "dismiss");
+    await openScreen(item, { kept: mine });
+    await userEvent.setup().click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() =>
+      expect(success).toHaveBeenCalledWith(
+        "Kept version discarded",
+        expect.objectContaining({ id: "editor-kept" }),
+      ),
+    );
+    expect(slot.map((r) => r.method)).toEqual(["DELETE"]);
+    expect(dismiss).not.toHaveBeenCalledWith("editor-kept");
+    cleanup();
+    expect(dismiss).toHaveBeenCalledWith("editor-kept");
   });
 
   test("a_failed_discard_keeps_the_autosaver_and_the_draft", async () => {
@@ -499,7 +622,13 @@ describe("conflict", () => {
         createElement(
           Fragment,
           null,
-          createElement(EditorScreen, { type: "post", typeLabel: "Posts", item, kept: mine }),
+          createElement(EditorScreen, {
+            uploads: newBodyUploadQueue(),
+            type: "post",
+            typeLabel: "Posts",
+            item,
+            kept: mine,
+          }),
           createElement(Link, { to: "/elsewhere" }, "Elsewhere"),
         ),
       ),
@@ -590,7 +719,13 @@ describe("conflict", () => {
           createElement(
             Fragment,
             null,
-            createElement(EditorScreen, { type: "post", typeLabel: "Posts", item, kept: mine }),
+            createElement(EditorScreen, {
+              uploads: newBodyUploadQueue(),
+              type: "post",
+              typeLabel: "Posts",
+              item,
+              kept: mine,
+            }),
             createElement(Link, { to: "/elsewhere" }, "Elsewhere"),
             createElement(Where),
           ),
@@ -624,6 +759,21 @@ describe("conflict", () => {
         expect(puts[1]).toMatchObject({ title: mine.title });
         expect(where()).not.toBe("/elsewhere");
         expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+      });
+
+      test(`${button}_after_new_edits_puts_the_copy_once`, async () => {
+        // M2b-1 follow-up: Save and leave ran `storeKept` from the render before the
+        // save, so after the save's own re-PUT it wrote the copy a second time.
+        const { user, dialog, puts, mine } = await setup("ok");
+        await user.click(within(dialog).getByRole("button", { name: "Stay" }));
+        await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+        await user.type(screen.getByRole("textbox", { name: "Title" }), "?");
+        await user.click(screen.getByRole("link", { name: "Elsewhere" }));
+        const again = await screen.findByRole("alertdialog");
+        await user.click(within(again).getByRole("button", { name: button }));
+        await waitFor(() => expect(where()).toBe("/elsewhere"));
+        expect(puts).toHaveLength(2);
+        expect(puts[1]).toMatchObject({ title: mine.title, base_version: 4 });
       });
 
       test(`${button}_stores_the_copy_then_leaves`, async () => {

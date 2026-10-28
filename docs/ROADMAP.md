@@ -148,7 +148,10 @@ P1), **M2b** (admin SPA; itself split into **M2b-1**, **M2b-2** and **M2b-3**, M
 [`docs/superpowers/rulings/m2b.md`](superpowers/rulings/m2b.md) (M2b).
 
 **M2a (the M2 backend) is done** (M2a-1, M2a-2a, M2a-2b). **M2b-1** (admin foundation and
-writing) and **M2b-2** (media and content modelling) are done; next is M2b-3.
+writing), **M2b-2** (media and content modelling) and **M2b-3** (administration, extensions)
+are done. The M2 exit is [`docs/superpowers/m2-exit.md`](superpowers/m2-exit.md); the M2b-3
+exit was verified in two parts (M2b R76), the browser and Docker checks in part B. Next is
+M3.
 
 ### M2a-1 — REST API core & auth (done)
 
@@ -329,29 +332,67 @@ custom links cannot be `mailto:` (R32); `refs` is a reserved type and taxonomy n
 undone redirect delete restarts its hits at 0 (P38); numbers take only `.` as the decimal
 separator (R30).
 
-#### M2b-3 — administration, extensions and the M2 exit
+#### M2b-3 — administration, extensions and the M2 exit (done)
 
-- [ ] Screens: own account (password, TOTP enrolment with QR code, own tokens), users (roles, tokens, TOTP), settings, themes (upload, activate, settings form from `theme.toml [settings]`), plugins (install flow with the permission report and fingerprint approval, enable/disable, delete/purge, settings with write-only secrets, per-plugin metrics charts), system (status, schema, backends, nodes reading `nodes.meta` incl. theme/plugin state, jobs with dead-job retry (deferred from M1.5), audit log). Import ships with M3, backups with M4 (P25).
-- [ ] Playwright E2E against a real binary on both backends; Vitest component tests; a CI admin job (`pnpm install --frozen-lockfile`, lint, test, build). M2b-1 built Vitest, the CI `admin` job (lint, typecheck, test, `api:check`, build, E2E; 10 §3) and Chromium E2E against the release binary (every spec on SQLite, a smoke project on Postgres; P22); open: every spec on both backends, Firefox and WebKit, Safari checked by hand until then.
-- [ ] A bundle-size budget in CI, from the M2b-1 baseline (m2b1-exit.md "Bundle sizes") and the M2b-2 numbers (m2b2-exit.md §5).
-- [ ] Follow-ups from M2b-1 (parked review minors):
-  - [ ] The restore banner's Discard Undo toast is not dismissed on unmount, so Undo after leaving rewrites the discarded draft into that item's slot (Task 16).
-  - [ ] `storeKept` may re-PUT the kept copy once more after `save()`'s own re-PUT (harmless except a needless stay on failure; Task 16).
-  - [ ] The "Restoring…" toast lingers until the revisions list returns (`editor.tsx`, Task 17).
-  - [ ] Tests for the discard-then-reload-failure fallback and for the dismissal of the kept-copy Discard toast (Task 16).
-  - [ ] Phone status tabs: a neighbour tab can show only its bare count at the edge under the scroll fade (`content-list-trash` mobile; Task 18 contact sheet).
-  - [ ] Tests for the focus fallback after opening the revisions drawer from the phone sheet (M6) and for the Undo-without-edit-rights message (M7) (Task 17).
-  - [ ] Verify `⌘⌥R` on a macOS browser that reports AltGraph for Option (R18).
-  - [ ] A server hint (for example a cookie read when `index.html` is served) so an explicit theme choice against the OS does not flash one frame (11 §4, Task 7).
-  - [ ] Palette: a snippet for hits that match only in the body (Task 11 review m5).
-- [ ] Follow-ups from M2b-2:
-  - [ ] Responsive images for inline `ferrite:media/<id>` images: the renderer serves the original; give it the variants and a `srcset` like the theme's `image()` helper (R28).
-  - [ ] `FieldDef` target types for relation fields, so a relation searches and accepts only the intended types (P37; a schema change).
-  - [ ] A migration path for a type or taxonomy named `refs` created before M2b-2 (R36).
-  - [ ] Media restore re-publishes an item that was unpublished before it was trashed (R23): restore its previous status instead.
-  - [ ] Moderators' comments and replies are not rate limited (R34): decide whether a separate, higher limit is wanted.
-  - [ ] The review minors M2b-2 left open (listed in [`m2b2-exit.md`](superpowers/m2b2-exit.md), "Open review minors").
-- [ ] Docs and the M2 exit.
+Plan: [`2026-10-27-m2b3-administration-and-m2-exit.md`](superpowers/plans/2026-10-27-m2b3-administration-and-m2-exit.md).
+
+- [x] Screens: own account (password, TOTP enrolment with QR code, own tokens), users (roles, tokens, TOTP), settings, themes (upload, activate, settings form from `theme.toml [settings]`), plugins (install flow with the permission report and fingerprint approval, enable/disable, delete/purge, settings with write-only secrets, per-plugin metrics charts), system (status, schema, backends, nodes reading `nodes.meta` incl. theme/plugin state, jobs with dead-job retry (deferred from M1.5), audit log). Import ships with M3, backups with M4 (P25). Done in M2b-3 Tasks 6–11 (07 §3 per screen; the account screen also lists and ends sessions); API gaps closed first in Tasks 1–3: user filters (P46), an admin's TOTP reset (P43), the password for one's own e-mail change (P44), sessions (P45); theme and plugin manifest facts, retained plugin data and its purge (P47), `ferrite theme pack` (P42); audit filters, `mail` in the status and the test mail (P49), typed node `meta`, the site title read at use time (P51), `MeDto.mail_configured` (Ruling A).
+- [x] Playwright E2E against a real binary on both backends; Vitest component tests; a CI admin job (`pnpm install --frozen-lockfile`, lint, test, build). M2b-1 built Vitest, the CI `admin` job and Chromium E2E against the release binary (P22). Done in Task 14: every spec in four projects, `chromium-sqlite`, `chromium-pg`, `firefox-sqlite` and `webkit-sqlite` (P55; the site-wide specs in each project's teardown, R62), no engine skips, and the CI matrix job `admin-e2e` (10 §3). Two clean `e2e:all` runs in a row on the final code came in the exit's part B (`m2b3-exit.md` §5.1); the first CI run is still owed (R72). Safari stays a manual check (P55).
+- [x] A bundle-size budget in CI, from the M2b-1 baseline (m2b1-exit.md "Bundle sizes") and the M2b-2 numbers (m2b2-exit.md §5). Done in Task 15: `admin/bundle-budget.json` (gzip -9 limits, measured at `3209291` plus 10 %), `pnpm -C admin bundle:check` after `build` in the `admin` job (P56).
+- [x] Follow-ups from M2b-1 (parked review minors), done in Tasks 12 and 13:
+  - [x] The restore banner's Discard Undo toast is not dismissed on unmount, so Undo after leaving rewrites the discarded draft into that item's slot (Task 16). Task 12: the toast goes with the reopened screen and at its first edit.
+  - [x] `storeKept` may re-PUT the kept copy once more after `save()`'s own re-PUT (harmless except a needless stay on failure; Task 16). Task 12.
+  - [x] The "Restoring…" toast lingers until the revisions list returns (`editor.tsx`, Task 17). Task 12.
+  - [x] Tests for the discard-then-reload-failure fallback and for the dismissal of the kept-copy Discard toast (Task 16). Task 12.
+  - [x] Phone status tabs: a neighbour tab can show only its bare count at the edge under the scroll fade (`content-list-trash` mobile; Task 18 contact sheet). Task 13 (`ScrollFade.reveal`, every tab row).
+  - [x] Tests for the focus fallback after opening the revisions drawer from the phone sheet (M6) and for the Undo-without-edit-rights message (M7) (Task 17). Task 12.
+  - [x] Verify `⌘⌥R` on a macOS browser that reports AltGraph for Option (R18). Task 13 made the code independent of that report (with ⌘ held, the physical key applies whatever AltGraph says; unit test with a real `KeyboardEvent`, R18 as updated); a check on a real Mac joins the manual Safari pass.
+  - [x] A server hint (for example a cookie read when `index.html` is served) so an explicit theme choice against the OS does not flash one frame (11 §4, Task 7). Task 13: the `ferrite_admin_theme` cookie (P57).
+  - [x] Palette: a snippet for hits that match only in the body (Task 11 review m5). Task 13 ("Matches in text").
+- [x] Follow-ups from M2b-2:
+  - [x] Responsive images for inline `ferrite:media/<id>` images: the renderer serves the original; give it the variants and a `srcset` like the theme's `image()` helper (R28). Task 4 (06 §4 "Inline images"; same-shape variants only, R41).
+  - [x] `FieldDef` target types for relation fields, so a relation searches and accepts only the intended types (P37; a schema change). Task 4 (`types`, core refuses other types, P52) and Task 12 (the field builder and the picker).
+  - [x] A migration path for a type or taxonomy named `refs` created before M2b-2 (R36). Closed by ruling P54: no released site predates M2b-2, so none is built.
+  - [x] Media restore re-publishes an item that was unpublished before it was trashed (R23): restore its previous status instead. Task 4 (`media.trashed_from`, P53).
+  - [x] Moderators' comments and replies are not rate limited (R34): decide whether a separate, higher limit is wanted. Decided by P54: no limit for moderators.
+  - [x] The review minors M2b-2 left open (listed in [`m2b2-exit.md`](superpowers/m2b2-exit.md), "Open review minors"). Rust in Task 4 (fixed, or answered by R44–R46; the redirect `q` table scan is carried to M4, R43); admin in Tasks 12 and 13, with the contact-sheet findings 1–3 and 6–8 and the E2E race of its §2 (R71). The unused `qk.comments.lists` and comment i18n keys were removed before M2b-2 merged.
+- [x] Docs and the M2 exit. Task 16: [`m2b3-exit.md`](superpowers/m2b3-exit.md), [`m2-exit.md`](superpowers/m2-exit.md).
+
+**Exit:** a fresh `init` + `seed demo` + `serve` on a release build: sign in, enrol TOTP with a
+real authenticator code (computed), sign out and back in with it; create a token and use it
+with `curl`; create an editor and sign in as them; change settings and see them on the site
+(title, front page, permalinks); pack and upload a theme, activate it, customize it; install
+the example plugin through the permission report, enable it, set a secret, see its metrics,
+delete it with and without erasing data; retry a dead job; filter the audit log; send a test
+mail through a real SMTP catcher; the workspace tests on both backends with and without
+`admin/dist`; the admin gates and the four E2E projects; the contact sheet against 11 §8; the
+bundle budget; `docker build` serving `/admin/`.
+
+**Exit verified (part A 2026-10-27, part B 2026-10-28, R76):**
+[`docs/superpowers/m2b3-exit.md`](superpowers/m2b3-exit.md). Part A: every flow ran over the
+REST API with `curl` against a fresh release build (a computed RFC 6238 code, a Python SMTP
+catcher); the workspace tests on both backends with and without `admin/dist`, the admin
+gates without E2E, the bundle budget, `fmt` and `clippy`. Part B: the four E2E projects
+passed twice in a row on the final code (764 tests each), after runs that found two product
+bugs (a command list's `aria-activedescendant` naming a removed option; a token scope label
+truncated without a title) and needed ten test-harness fixes; the contact sheet
+against 11 §8 (the account screens' snaps included); `docker build` serving the SPA at
+`/admin/`; `chromium-sqlite` on Linux in the Playwright image; actionlint. **Not verified:**
+Safari (with `⌘⌥R` on a real Mac), by the user by hand; CI has not run on this branch
+(R72); Linux Firefox and WebKit, and Linux on x86_64. **Open from the contact sheet:**
+`icon-sm`/`icon-xs` buttons stay under 44 px on touch screens (11 §8; WCAG 2.2 AA's 24 px is
+met); dark dropdown menus have a faint edge; the palette's stale results, dimmed to 60 % while
+a slow search runs, fall below 4.5:1.
+
+Known limits (accepted in M2b-3, see the rulings): mail is configured in `ferrite.toml` only
+(P49); media sizes are the active theme's, read-only (P50); hook latency is a node-local p95
+bucket bound (P48); sessions are told apart only by their times (P45); there are no TOTP
+recovery codes, and an admin can switch off another user's TOTP (P43); themes cannot be
+deleted (M2a-2 P30); moderators are not comment rate limited (P54); a permalink change moves
+URLs without redirects until M3 (P58); settings are last-write-wins behind the client-side
+guard (P58, P31); the redirect search scans the table (R43); an emptied General field cannot
+blank a `ferrite.toml` value (R61); a new audit action shows its raw code until mapped (R69);
+Linux WebKit is not Safari (P55).
 
 ### Done from the earlier M2 deferred lists
 
@@ -401,6 +442,23 @@ Design: [09](design/09-operations.md).
 - [ ] Backward-compat CI job (from first tag).
 - [ ] Example plugins: SEO, privacy-friendly analytics, contact form; starter themes `docs`, `business`.
 - [ ] Docs site (built with FerriteCMS itself).
+- [ ] Deferred from M2b-3 ([`m2-exit.md`](superpowers/m2-exit.md) "Open follow-ups"):
+  - [ ] Plugin hook latency across the cluster as a time series, with the metrics registry (the Plugins screen shows this node's p95 as a bucket bound, M2b P48).
+  - [ ] An index for the redirect `q` substring search if large redirect sets need one (a trigram index is Postgres-only; M2b R43).
+  - [ ] An E2E of the Users screen's "Send a reset e-mail" through the SMTP sink (unit-tested only, M2b R56).
+  - [ ] From the M2b-3 final review (`m2b3-exit.md`):
+    - [ ] Theme `homepage` is not passed through `web_url` in `ThemeDto::from_manifest` (plugins are); defence in depth.
+    - [ ] The plugin host's `mail_prefix` (`MAIL_TITLE_PREFIX_CHARS`) duplicates core `mail::subject_title`; use the core function.
+    - [ ] Reset and test mail answer `500` when the site title read fails, while plugin `notify_admins` falls back to the configured title; pick one rule.
+    - [ ] A blank `q` is `422` on `GET /users` but means no filter on `GET /redirects`; pick one convention.
+    - [ ] Watch the first run of the rebuilt `ci.yml` on the develop-to-main PR: the empty `services.postgres.image` for non-Postgres jobs and the artifact `chmod +x` step (R72).
+    - [ ] `check_relations` reveals the type of an item the actor cannot read, given its UUID.
+  - [ ] Test harness, from Task 16 of M2b-3:
+    - [ ] The WebKit fetch rule (`fixtures.ts`) also counts SPA navigations within 2 s.
+    - [ ] `MEDIA_FILE` lets any `/_media/` 404 pass in the `media` and `editor-media` specs, which can hide a broken media URL there.
+    - [ ] The cmdk workaround in `command.tsx` nests `useCallback` refs; simplify.
+    - [ ] The Vitest test `renders_the_shell_with_translated_title` came near its 5 s timeout under load; watch it on CI.
+  - [ ] Contact sheet, from M2b-3: `icon-sm`/`icon-xs` buttons under 44 px on touch (11 §8; AA's 24 px is met); a faint edge on dark dropdown menus; the palette's stale rows, dimmed to 60 % during a slow search, fall below 4.5:1.
 - [ ] Deferred from M1c-2:
   - [ ] Small in-memory LRU for hot small `/_media` files (03 §5).
   - [ ] Atom feeds next to RSS 2.0 (06 §3).
@@ -428,6 +486,7 @@ Design: [09](design/09-operations.md).
 
 - Multi-site and multi-host sites (cache-key host pinned to `site.url`, M1c-2 R25, M2a P27); read replicas; multi-region.
 - Signed plugin registry with verified publishers.
+- TOTP recovery codes (M2a P9: none; an operator or, since M2b-3, an admin switches TOTP off, M2b P43) and a user agent per session so sessions can be told apart by more than their times (M2b P45; needs a migration).
 - JS/Go/Python plugin SDKs (after checking Component Model toolchain maturity).
 - Built-in forms, i18n/multilingual content, full-text search UI.
 - WP database user import with legacy password-hash verification.

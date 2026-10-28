@@ -209,7 +209,7 @@ fn reads_folders(mode: ClusterMode) -> bool {
     matches!(mode, ClusterMode::Solo)
 }
 
-#[cfg(test)]
+/// SHA-256 of `data`, 64 lowercase hex (an artifact hash).
 pub(crate) fn sha256_hex(data: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     ferrite_domain::to_hex(&Sha256::digest(data))

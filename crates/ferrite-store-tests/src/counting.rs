@@ -18,7 +18,7 @@ use std::{
 use async_trait::async_trait;
 use ferrite_domain::{
     ContentId, ContentItem, ContentQuery, ContentType, Media, NewContent, NewUser, OptionEntry,
-    Page, SearchQuery, Secret, Taxonomy, Term, TermId, Timestamp, User, UserId,
+    Page, SearchQuery, Secret, Taxonomy, Term, TermId, Timestamp, User, UserId, UserQuery,
 };
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
@@ -466,8 +466,8 @@ impl UserRepo for Counted {
     async fn count_active_admins(&self) -> Result<u64, StoreError> {
         self.0.read().users().count_active_admins().await
     }
-    async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<Page<User>, StoreError> {
-        self.0.read().users().list(limit, cursor).await
+    async fn list(&self, query: &UserQuery) -> Result<Page<User>, StoreError> {
+        self.0.read().users().list(query).await
     }
     async fn get_many(&self, ids: &[UserId]) -> Result<Vec<User>, StoreError> {
         self.0.read().users().get_many(ids).await

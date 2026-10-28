@@ -32,9 +32,13 @@ interface Step {
 }
 
 const registry = new Map<string, Shortcut>();
+/**
+ * A sequence under way: the steps pressed so far. The bindings it can still complete are
+ * looked up in the registry at each step, so one registered again between two steps (a
+ * nav item whose label changed when its count loaded) still completes it.
+ */
 let pending: {
-  candidates: Shortcut[];
-  index: number;
+  pressed: KeyboardEvent[];
   timer: ReturnType<typeof setTimeout>;
 } | null = null;
 let listening = false;
@@ -74,11 +78,14 @@ function eventKey(e: KeyboardEvent): string {
   // With Option held, macOS composes another character (⌥R is "®"): a letter or digit
   // key is then named by the physical key, so `mod+alt+r` still matches. Only there:
   // elsewhere Alt (and AltGr, which arrives as Ctrl+Alt on Windows) types real letters
-  // on many layouts (Polish ą, ę, ś…), which a shortcut must never swallow.
+  // on many layouts (Polish ą, ę, ś…), which a shortcut must never swallow. A Mac has
+  // no AltGr key, but a browser may report Option as AltGraph (R18): with ⌘ held the
+  // chord is a command and types nothing, so the physical key applies then too; Option
+  // alone with AltGraph reported is left to type.
   if (
     e.altKey &&
     isApplePlatform() &&
-    !e.getModifierState("AltGraph") &&
+    (e.metaKey || !e.getModifierState("AltGraph")) &&
     /^(Key[A-Z]|Digit[0-9])$/.test(e.code)
   ) {
     return e.code.slice(-1).toLowerCase();
@@ -133,19 +140,23 @@ function onKeyDown(e: KeyboardEvent): void {
   const inInput = inTextField(e.target);
 
   if (pending) {
-    const { index } = pending;
-    const next = pending.candidates.filter((s) => {
-      const step = parseKeys(s.keys)[index];
-      return step !== undefined && eligible(s, inInput) && matches(step, e);
+    const pressed = [...pending.pressed, e];
+    const next = [...registry.values()].filter((s) => {
+      const steps = parseKeys(s.keys);
+      return (
+        steps.length >= pressed.length &&
+        eligible(s, inInput) &&
+        pressed.every((ev, i) => matches(steps[i] as Step, ev))
+      );
     });
     if (next.length > 0) {
-      const done = next.find((s) => parseKeys(s.keys).length === index + 1);
+      const done = next.find((s) => parseKeys(s.keys).length === pressed.length);
       if (done) {
         fire(done, e);
         return;
       }
       e.preventDefault();
-      startPending(next, index + 1);
+      startPending(pressed);
       return;
     }
     clearPending();
@@ -162,12 +173,12 @@ function onKeyDown(e: KeyboardEvent): void {
     return;
   }
   e.preventDefault();
-  startPending(first, 1);
+  startPending([e]);
 }
 
-function startPending(candidates: Shortcut[], index: number): void {
+function startPending(pressed: KeyboardEvent[]): void {
   clearPending();
-  pending = { candidates, index, timer: setTimeout(clearPending, CHORD_TIMEOUT_MS) };
+  pending = { pressed, timer: setTimeout(clearPending, CHORD_TIMEOUT_MS) };
 }
 
 /** Registers a binding; the returned function removes it. */
@@ -180,7 +191,6 @@ export function registerShortcut(s: Shortcut): () => void {
   return () => {
     if (registry.get(s.id) !== s) return;
     registry.delete(s.id);
-    if (pending) pending.candidates = pending.candidates.filter((c) => c !== s);
     if (registry.size === 0) {
       clearPending();
       window.removeEventListener("keydown", onKeyDown);

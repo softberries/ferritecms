@@ -1,6 +1,6 @@
 //! The data-backed template helpers (plan ruling P2).
 
-use ferrite_core::{DepKeys, MediaPublic, PageItem, comments::CommentThread};
+use ferrite_core::{DepKeys, MediaPublic, PageItem, comments::CommentThread, site::srcset};
 use ferrite_domain::ContentId;
 use serde::Serialize;
 
@@ -99,25 +99,7 @@ impl ImageRef {
     /// (a `hero` crop and the `large` resize can both be 1280 wide), the requested
     /// `size` wins, then the original, then the variant first by name.
     pub fn from_media(m: &MediaPublic, size: &str) -> Self {
-        // (width, rank, url): lower rank wins a width.
-        let mut candidates: Vec<(i32, u8, &str)> = m
-            .variants
-            .iter()
-            .filter_map(|v| {
-                let rank = if v.name == size { 0 } else { 2 };
-                v.width.map(|w| (w, rank, v.url.as_str()))
-            })
-            .collect();
-        if let Some(w) = m.width {
-            candidates.push((w, 1, m.url.as_str()));
-        }
-        // Stable: equal (width, rank) keep the variants' name order.
-        candidates.sort_by_key(|&(w, rank, _)| (w, rank));
-        candidates.dedup_by_key(|c| c.0);
-        let srcset: Vec<String> = candidates
-            .iter()
-            .map(|(w, _, url)| format!("{url} {w}w"))
-            .collect();
+        let srcset = srcset(&m.srcset_candidates(Some(size)));
         let (url, width, height) = m
             .variants
             .iter()
@@ -127,7 +109,7 @@ impl ImageRef {
             url: url.clone(),
             width,
             height,
-            srcset: srcset.join(", "),
+            srcset,
         }
     }
 }

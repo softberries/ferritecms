@@ -13,6 +13,7 @@ import {
   type Page,
   type Route,
 } from "@playwright/test";
+import { keptState } from "./support/app-state";
 import { ContentApi } from "./support/content-api";
 import { expect, test, type Guard } from "./support/fixtures";
 import { authFile, type SiteInfo } from "./support/server";
@@ -86,10 +87,10 @@ function problem(status: number, slug: string, headers: Record<string, string> =
 }
 
 /** A new `must_reset` account, made by the admin over the API (one per attempt). */
-async function createMustResetUser(site: SiteInfo, backend: "sqlite" | "pg") {
+async function createMustResetUser(site: SiteInfo, siteKey: string) {
   const ctx = await apiRequest.newContext({
     baseURL: site.url,
-    storageState: authFile(backend, "admin"),
+    storageState: authFile(siteKey, "admin"),
     extraHTTPHeaders: { Origin: site.url },
   });
   try {
@@ -145,6 +146,10 @@ test("login_password_and_logout", async ({ browser, site, guard }) => {
 
   await signIn(page, a.login, a.password ?? "");
   await expectDashboard(page, site);
+  // The password went with the call: it is kept nowhere (no cached mutation holds it).
+  const kept = await keptState(page);
+  expect(kept).toContain(a.login);
+  expect(kept).not.toContain(a.password ?? "");
   // Sign out from the account menu, which names who is signed in.
   await page.getByRole("button", { name: "Account" }).click();
   await expect(page.getByRole("menu")).toContainText(a.email);
@@ -176,22 +181,25 @@ test("login_with_totp", async ({ browser, site, guard }, testInfo) => {
   const spent = testInfo.retry > 0 ? Math.max(site.totp.step, stepAt()) : site.totp.step;
   const step = await nextFreshStep(spent);
   // Six digits submit on their own.
-  await input.fill(totpCode(site.totp.secret, step));
+  const code = totpCode(site.totp.secret, step);
+  await input.fill(code);
   await expectDashboard(page, site);
+  expect(await keptState(page)).not.toContain(a.password ?? "");
+  expect(await keptState(page)).not.toContain(`"${code}"`);
   expect(stepAt()).toBeGreaterThanOrEqual(step);
 });
 
 test("must_reset_session_is_confined", async ({
   browser,
   site,
-  backend,
+  siteKey,
   guard,
   snap,
   expectAccessible,
 }) => {
   guard.allow(EXPECTED_FAILURES);
   // A fresh must_reset account per attempt: the session it ends is single-use.
-  const user = await createMustResetUser(site, backend);
+  const user = await createMustResetUser(site, siteKey);
   const page = await anonymousPage(browser, site, guard, 3);
   await page.goto("/admin/login");
   await signIn(page, user.login, user.password);
@@ -303,10 +311,15 @@ test("reset_token_is_stripped_and_never_sent", async ({ browser, site, guard, re
   const page = await anonymousPage(browser, site, guard, 7);
   // What the browser sends: every request's URL (a fragment is never transmitted, so it
   // is dropped as the browser drops it) and its Referer.
+  // `allHeaders()` waits for the response's raw headers, which WebKit never reports for a
+  // request the reload cancelled: after 5 s the headers known at sending time do.
   const sent: Promise<string>[] = [];
   page.on("request", (r) => {
+    const late = new Promise<Record<string, string>>((resolve) =>
+      setTimeout(() => resolve(r.headers()), 5_000),
+    );
     sent.push(
-      r.allHeaders().then((h) => {
+      Promise.race([r.allHeaders(), late]).then((h) => {
         const url = new URL(r.url());
         url.hash = "";
         return `${url.href} referer=${h.referer ?? ""}`;
@@ -454,13 +467,13 @@ test("screens", async ({ browser, site, guard, as, snap, expectAccessible }) => 
 test("another_account_on_the_same_tab_sees_none_of_the_first", async ({
   browser,
   site,
-  backend,
+  siteKey,
   guard,
 }) => {
   guard.allow(EXPECTED_FAILURES);
   // The ended session answers 401: the browser logs those failed loads.
   guard.allowFailedResource(/\/api\/v1\//);
-  const admin = await ContentApi.as(backend, site.url, "admin");
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
   const type = uid("t").slice(0, 32);
   const label = `Switch ${type.slice(-6)}`;
   const password = "e2e-switch-pass-0009";

@@ -25,7 +25,7 @@ function MediaRoute() {
       setSearch={(patch) => {
         void navigate({
           to: "/media",
-          search: (prev: MediaSearch) => parseMediaSearch({ ...prev, ...patch }),
+          search: (prev: Record<string, unknown>) => parseMediaSearch({ ...prev, ...patch }),
           replace: true,
         });
       }}

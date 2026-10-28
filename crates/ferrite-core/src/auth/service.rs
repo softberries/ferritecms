@@ -28,7 +28,7 @@ use ferrite_domain::{
     ApiToken, ApiTokenId, NewAudit, SESSION_ABSOLUTE, SESSION_IDLE, SESSION_TOUCH_EVERY, Secret,
     Session, Timestamp, User, UserId, UserStatus,
 };
-use ferrite_store::{Repos, Store};
+use ferrite_store::{Repos, Store, session_public_id};
 use hmac::Mac;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -42,10 +42,11 @@ use super::password::{self, Verified};
 use super::seal::{open, seal};
 use super::{limits, totp};
 use crate::{
-    Actor, CoreError, Scopes, UserService,
+    Actor, CoreError, Scopes, UserPatch, UserService,
     actor::{Area, Capability, Scope, can, require, require_scope},
-    normalize_login,
+    normalize_email, normalize_login,
     tx::finish,
+    users::PasswordCheck,
 };
 
 /// The service's clock.
@@ -146,6 +147,18 @@ pub enum Via {
     Token(ApiTokenId),
 }
 
+/// One of the user's sessions as its owner sees it (M2b-3 P45): never the cookie value
+/// or the stored key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionInfo {
+    /// The [public id](ferrite_store::session_public_id).
+    pub id: String,
+    pub created_at: Timestamp,
+    pub last_seen_at: Timestamp,
+    /// The session the request came with.
+    pub current: bool,
+}
+
 /// A started TOTP enrollment: show `otpauth_url` (or `secret_base32`), then confirm a
 /// code with `enrollment` via [`AuthService::totp_confirm`] within 10 minutes.
 pub struct TotpSetup {
@@ -183,7 +196,9 @@ pub struct AuthService {
     pub(super) store: Arc<dyn Store>,
     pub(super) key: SiteKey,
     clock: Clock,
-    issuer: String,
+    /// `ferrite.toml` `site.title`: the fallback when the `site.title` option is unset
+    /// (P51).
+    site_title: String,
 }
 
 impl AuthService {
@@ -192,7 +207,7 @@ impl AuthService {
             store,
             key,
             clock: Arc::new(Timestamp::now),
-            issuer: totp::DEFAULT_ISSUER.to_owned(),
+            site_title: String::new(),
         }
     }
 
@@ -202,14 +217,19 @@ impl AuthService {
         Self { clock, ..self }
     }
 
-    /// The issuer shown in authenticator apps, normally the site title: `:` is removed
-    /// and an empty result falls back to `FerriteCMS` (F11). Fixed for the service's
-    /// lifetime.
-    pub fn with_issuer_name(self, name: String) -> Self {
+    /// The configured site title (`ferrite.toml`), used when the `site.title` option is
+    /// unset. The TOTP issuer and the reset mail read the option at use time (P51), so a
+    /// title changed in Settings names the site there at once.
+    pub fn with_site_title(self, title: String) -> Self {
         Self {
-            issuer: totp::issuer_name(&name),
+            site_title: title,
             ..self
         }
+    }
+
+    /// The site title now: the `site.title` option, else the configured one.
+    pub(super) async fn site_title(&self) -> Result<String, CoreError> {
+        crate::settings::site_title(self.store.as_ref(), &self.site_title).await
     }
 
     /// The keyed hash of a full client address, as stored on sessions.
@@ -388,7 +408,8 @@ impl AuthService {
             return Err(CoreError::Unauthenticated);
         }
         let secret = self.totp_secret_of(&user)?;
-        let totp = totp::build(&secret, &self.issuer, &user.login)?;
+        // The issuer only shapes the `otpauth://` URL, not the codes.
+        let totp = totp::build(&secret, totp::DEFAULT_ISSUER, &user.login)?;
         let step = totp::check(&totp, code, now).ok_or(CoreError::Unauthenticated)?;
         if !self
             .store
@@ -531,6 +552,130 @@ impl AuthService {
             .await?
             .ok_or(CoreError::Unauthenticated)?;
         self.issue_session(&user, ip, user_agent).await.map(Some)
+    }
+
+    /// A request's [`UserService::update`], and the only way to change one's own e-mail
+    /// (the password-verifying path): when the actor changes their own e-mail to a
+    /// different address with a `current_password`, the check first counts on the
+    /// login's `login:user` bucket (5/min, shared with `POST /auth/password`; exceeded →
+    /// `RateLimited`, R11, M2b-3 P44). Refusals that need no password check (no
+    /// `users:write`, no password, the same or a malformed e-mail) take no slot.
+    pub async fn update_user(
+        &self,
+        users: &UserService,
+        actor: &Actor,
+        id: UserId,
+        patch: UserPatch,
+    ) -> Result<User, CoreError> {
+        if id == actor.user
+            && patch.current_password.is_some()
+            && let Some(Ok(email)) = patch.email.as_deref().map(normalize_email)
+        {
+            require_scope(actor, Some(Scope::write(Area::Users)))?;
+            let row = self
+                .store
+                .read()
+                .users()
+                .get(id)
+                .await?
+                .ok_or(CoreError::NotFound)?;
+            if email != row.email {
+                self.password_attempt(&row.login).await?;
+            }
+        }
+        users
+            .update_as(actor, id, patch, PasswordCheck::Verify)
+            .await
+    }
+
+    // ---- Sessions (M2b-3 P45) --------------------------------------------------------
+
+    /// The actor's live sessions (`users:write`), newest first, `current` marking the
+    /// request's own. At most the newest [`MAX_AUTH_LIST`](ferrite_store::MAX_AUTH_LIST)
+    /// are read; sessions past their end or idle limit (pruned later) are left out.
+    pub async fn list_sessions(
+        &self,
+        actor: &Actor,
+        current: &Session,
+    ) -> Result<Vec<SessionInfo>, CoreError> {
+        require_scope(actor, Some(Scope::write(Area::Users)))?;
+        let now = self.now();
+        let sessions = self
+            .store
+            .read()
+            .sessions()
+            .list_for_user(actor.user)
+            .await?;
+        Ok(sessions
+            .into_iter()
+            .filter(|s| {
+                s.id_hash == current.id_hash
+                    || (now < s.expires_at && !older_than(s.last_seen_at, now, SESSION_IDLE))
+            })
+            .map(|s| SessionInfo {
+                id: session_public_id(&s.id_hash),
+                created_at: s.created_at,
+                last_seen_at: s.last_seen_at,
+                current: s.id_hash == current.id_hash,
+            })
+            .collect())
+    }
+
+    /// Ends one of the actor's other sessions by its public id (`users:write`); audits
+    /// `session.revoke` (`details.session` = the public id). The current session is
+    /// `Invalid` (sign out instead); an id that names none of the actor's sessions is
+    /// `NotFound`.
+    pub async fn revoke_session(
+        &self,
+        actor: &Actor,
+        current: &Session,
+        public_id: &str,
+    ) -> Result<(), CoreError> {
+        require_scope(actor, Some(Scope::write(Area::Users)))?;
+        if session_public_id(&current.id_hash) == public_id {
+            return Err(CoreError::Invalid(
+                "this is the current session: sign out instead".into(),
+            ));
+        }
+        let tx = self.store.begin().await?;
+        let done = async {
+            if !tx
+                .sessions()
+                .delete_by_public_id(actor.user, public_id)
+                .await?
+            {
+                return Err(CoreError::NotFound);
+            }
+            let details = json!({ "session": public_id });
+            user_audit(tx.as_ref(), actor, "session.revoke", actor.user, details).await
+        }
+        .await;
+        finish(tx, done).await
+    }
+
+    /// Ends every session of the actor except `current` (`users:write`) and returns how
+    /// many ended; audits `session.revoke` with `details.count` when any did (none ended:
+    /// no audit row).
+    pub async fn revoke_other_sessions(
+        &self,
+        actor: &Actor,
+        current: &Session,
+    ) -> Result<u64, CoreError> {
+        require_scope(actor, Some(Scope::write(Area::Users)))?;
+        let tx = self.store.begin().await?;
+        let done = async {
+            let count = tx
+                .sessions()
+                .delete_for_user(actor.user, Some(&current.id_hash))
+                .await?;
+            if count > 0 {
+                let details = json!({ "count": count });
+                user_audit(tx.as_ref(), actor, "session.revoke", actor.user, details).await?;
+            }
+            Ok(count)
+        }
+        .await;
+        finish(tx, done).await
     }
 
     // ---- API tokens ----------------------------------------------------------------
@@ -721,8 +866,11 @@ impl AuthService {
         if user.totp_secret.is_some() {
             return Err(CoreError::Invalid("disable TOTP first".into()));
         }
+        // The issuer is the site title now (P51): `:` removed, `FerriteCMS` when empty
+        // (F11).
+        let issuer = totp::issuer_name(&self.site_title().await?);
         let secret = Zeroizing::new(random_bytes::<{ totp::SECRET_LEN }>()?);
-        let otp = totp::build(secret.as_slice(), &self.issuer, &user.login)?;
+        let otp = totp::build(secret.as_slice(), &issuer, &user.login)?;
         let otpauth_url = otp.to_url().map_err(|e| {
             tracing::error!(error = %e, "otpauth URL refused");
             CoreError::Invalid("TOTP parameters refused".into())
@@ -747,13 +895,14 @@ impl AuthService {
     /// password: the secret is stored sealed under `totp-secret:<user id>`, the code's
     /// step is recorded (it cannot log in again) and `totp.enable` is audited.
     ///
-    /// * A bad or expired enrollment, or someone else's, is `Invalid` (no slot used).
+    /// * A bad or expired enrollment, or someone else's, is `InvalidField("enrollment")`
+    ///   (no slot used).
     /// * The password re-check counts on the login's `login:user` bucket (5/min, as
     ///   R11), so a stolen session cannot enroll an attacker's authenticator without
     ///   the password; wrong → `Forbidden("current password")`.
     /// * Then each checked code counts on `totp:user:<id>` (5/min, shared with
-    ///   `login_totp`); a wrong code is `Invalid`. Either limit exceeded →
-    ///   `RateLimited`.
+    ///   `login_totp`); a wrong or replayed code is `InvalidField("code")`. Either limit
+    ///   exceeded → `RateLimited`.
     /// * On success the user's other sessions are deleted in the same `Tx` (R26): a user
     ///   who enrolls because a session may be stolen ends it. `keep_session` is the
     ///   `id_hash` of the caller's session (`None` through an API token: every session
@@ -767,7 +916,7 @@ impl AuthService {
         password: &str,
     ) -> Result<(), CoreError> {
         require_scope(actor, Some(Scope::write(Area::Users)))?;
-        let invalid = || CoreError::Invalid("enrollment is not valid".into());
+        let invalid = || CoreError::invalid_field("enrollment", "enrollment is not valid");
         let enrollment: Enrollment = self
             .open_json(ENROLL_PURPOSE, enrollment)
             .ok_or_else(invalid)?;
@@ -776,7 +925,7 @@ impl AuthService {
         }
         let now = self.now();
         if now.as_micros() >= enrollment.exp {
-            return Err(CoreError::Invalid("enrollment expired".into()));
+            return Err(CoreError::invalid_field("enrollment", "enrollment expired"));
         }
         let secret = URL_SAFE_NO_PAD
             .decode(&enrollment.secret)
@@ -799,8 +948,9 @@ impl AuthService {
             limits::WINDOW,
         )
         .await?;
-        let otp = totp::build(&secret, &self.issuer, &user.login)?;
-        let wrong = || CoreError::Invalid("wrong code".into());
+        // The issuer only shapes the `otpauth://` URL, not the codes.
+        let otp = totp::build(&secret, totp::DEFAULT_ISSUER, &user.login)?;
+        let wrong = || CoreError::invalid_field("code", "wrong code");
         let step = totp::check(&otp, code, now).ok_or_else(wrong)?;
         let sealed = Secret::new(seal(&self.key, &secret_purpose(user.id), &secret)?);
         let tx = self.store.begin().await?;
@@ -821,7 +971,7 @@ impl AuthService {
                 return Err(wrong());
             }
             tx.sessions().delete_for_user(user.id, keep_session).await?;
-            user_audit(tx.as_ref(), actor, "totp.enable", user.id).await
+            user_audit(tx.as_ref(), actor, "totp.enable", user.id, json!({})).await
         }
         .await;
         finish(tx, done).await
@@ -859,7 +1009,7 @@ impl AuthService {
                 return Err(CoreError::Forbidden("current password"));
             }
             tx.users().set_totp(user.id, None).await?;
-            user_audit(tx.as_ref(), actor, "totp.disable", user.id).await
+            user_audit(tx.as_ref(), actor, "totp.disable", user.id, json!({})).await
         }
         .await;
         finish(tx, done).await
@@ -1044,6 +1194,7 @@ async fn user_audit(
     actor: &Actor,
     action: &str,
     user: UserId,
+    details: Value,
 ) -> Result<(), CoreError> {
     repos
         .audit()
@@ -1052,7 +1203,7 @@ async fn user_audit(
             action: action.to_owned(),
             target_kind: "user".to_owned(),
             target_id: Some(user.to_string()),
-            details: json!({}),
+            details,
         })
         .await?;
     Ok(())

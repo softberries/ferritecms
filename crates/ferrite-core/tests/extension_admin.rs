@@ -99,7 +99,7 @@ async fn audit_actions(store: &dyn Store) -> Vec<String> {
     let mut rows: Vec<String> = store
         .read()
         .audit()
-        .list(200, None)
+        .list(&ferrite_domain::AuditQuery::first(200))
         .await
         .unwrap()
         .items
@@ -325,7 +325,13 @@ pub async fn writes_are_audited(db: &TestDb) {
             "plugin.delete",
         ]
     );
-    let rows = store.read().audit().list(200, None).await.unwrap().items;
+    let rows = store
+        .read()
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(200))
+        .await
+        .unwrap()
+        .items;
     for row in &rows {
         assert_eq!(row.actor_id, Some(admin.user), "{row:?}");
         assert!(row.details.is_object(), "{row:?}");
@@ -659,6 +665,73 @@ pub async fn sweep_enqueues_overdue_purges(db: &TestDb) {
     assert_eq!(system.enqueue_overdue_purges(now, next).await.unwrap(), 0);
 }
 
+async fn erased_at(store: &dyn Store, name: &str) -> Option<Value> {
+    store
+        .read()
+        .options()
+        .get(&format!("plugin.{name}.erased_at"))
+        .await
+        .unwrap()
+        .map(|e| e.value)
+}
+
+/// M2b-3 Task 10: a `purge=true` delete is hidden from the retained list only once its
+/// immediate erase has committed. If that erase did not happen, the data is listed and
+/// Erase now erases it; after a successful one, the delete's final sweep removes both
+/// markers.
+pub async fn erased_marker_follows_the_erase(db: &TestDb) {
+    let store = db.store();
+    let svc = ExtensionAdmin::new(db.shared_store(), SiteKey::generate().unwrap());
+    let system = ExtensionService::new(db.shared_store());
+    let admin = actor(store, Role::Admin).await;
+    let p = artifact(ArtifactKind::Plugin, 1);
+    let row = plugin("seo", &p, json!({}));
+    let settings = vec!["api_key".to_owned(), "title".to_owned()];
+    let kv = store.read().plugin_kv();
+
+    // The immediate erase did not run (it failed): still retained, and erasable.
+    svc.install_plugin(&admin, &p, &row).await.unwrap();
+    kv.set("seo", "counter", b"7").await.unwrap();
+    system
+        .delete_plugin_without_erase("seo", Timestamp::now())
+        .await
+        .unwrap();
+    assert_eq!(erased_at(store, "seo").await, None);
+    let retained = svc.retained_plugins(&admin).await.unwrap();
+    assert_eq!(retained.len(), 1, "{retained:?}");
+    assert_eq!(retained[0].name, "seo");
+    svc.purge_plugin(&admin, "seo").await.unwrap();
+    assert!(kv.get("seo", "counter").await.unwrap().is_none());
+    assert!(svc.retained_plugins(&admin).await.unwrap().is_empty());
+
+    // A purge=true delete whose erase committed: not listed, nothing to purge.
+    svc.install_plugin(&admin, &p, &row).await.unwrap();
+    kv.set("seo", "counter", b"7").await.unwrap();
+    svc.delete_plugin(&admin, "seo", true).await.unwrap();
+    let deleted = deleted_at(store, "seo")
+        .await
+        .expect("marker kept for the sweep");
+    assert_eq!(
+        erased_at(store, "seo").await,
+        Some(json!(deleted.as_micros()))
+    );
+    assert!(svc.retained_plugins(&admin).await.unwrap().is_empty());
+    assert!(matches!(
+        svc.purge_plugin(&admin, "seo").await,
+        Err(CoreError::NotFound)
+    ));
+
+    // The final sweep (the delete's purge job) removes both markers.
+    assert!(
+        system
+            .purge_plugin_data("seo", deleted, &settings)
+            .await
+            .unwrap()
+    );
+    assert_eq!(deleted_at(store, "seo").await, None);
+    assert_eq!(erased_at(store, "seo").await, None);
+}
+
 backend_tests!(
     extension_writes_need_capabilities,
     install_requires_a_grant,
@@ -666,4 +739,5 @@ backend_tests!(
     delete_keeps_data_until_purge,
     purge_spares_name_prefix_neighbours,
     sweep_enqueues_overdue_purges,
+    erased_marker_follows_the_erase,
 );

@@ -16,7 +16,7 @@
 //!   fails: `422 validation` with one `errors` entry per bad line,
 //!   `{ field: "line <n>", detail }` (at most [`MAX_LINE_ERRORS`] entries).
 //! * `GET /redirects?q` searches: a case-insensitive substring of source or target
-//!   (wildcards literal), trimmed, 1..=200 characters (`422` field `q`, checked in core).
+//!   (wildcards literal), trimmed (blank: no search), at most 200 characters (`422` field `q`, checked in core).
 //! * `GET /redirects/export` is every redirect as `text/csv` (`source,target,code`
 //!   with a header row, by source), the format the import reads (see
 //!   [`csv`] for quoting and the formula guard).
@@ -63,7 +63,7 @@ const HEADER: [&str; 3] = ["source", "target", "code"];
 #[into_params(parameter_in = Query)]
 pub struct RedirectListParams {
     /// Only redirects whose source or target holds this text, ignoring case (`%` and
-    /// `_` match only themselves). Trimmed; 1 to 200 characters (`422`, field `q`).
+    /// `_` match only themselves). Trimmed; blank is no search; at most 200 characters (`422`, field `q`).
     pub q: Option<String>,
     /// 1..=200; default 50.
     pub limit: Option<u32>,
@@ -83,7 +83,7 @@ pub struct RedirectListParams {
         (status = 400, description = "`validation`: `limit` or `cursor`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (`manage_redirects`, `redirects:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 422, description = "`validation`: `q` blank or longer than 200 characters (`errors[0].field` = `q`)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: `q` longer than 200 characters (`errors[0].field` = `q`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn list_redirects(

@@ -375,10 +375,98 @@ async fn media_trash_list_and_restore(db: &TestDb) {
     );
 }
 
+/// The meta row a media trash leaves (P53), read straight from the store.
+async fn trashed_from(store: &dyn Store, id: ContentId) -> Option<serde_json::Value> {
+    store
+        .read()
+        .meta()
+        .get(id, "media.trashed_from")
+        .await
+        .unwrap()
+}
+
+/// P53: a media item unpublished before it was trashed comes back as a draft; trash
+/// writes the marker (`"draft"`, or `"published"`) and restore deletes it.
+async fn media_restore_keeps_draft_status(db: &TestDb) {
+    let (media, content) = services(db.shared_store());
+    let editor = actor(db.store(), Role::Editor).await;
+    let up = media
+        .record_upload(&editor, upload(30, "image/png", "draft.png", None))
+        .await
+        .unwrap();
+    let drafted = content
+        .unpublish(&editor, up.item.id, up.item.version)
+        .await
+        .unwrap();
+    assert_eq!(drafted.status, ContentStatus::Draft);
+    let trashed = media
+        .trash(&editor, up.item.id, drafted.version)
+        .await
+        .unwrap();
+    assert_eq!(
+        trashed_from(db.store(), up.item.id).await,
+        Some(serde_json::json!("draft"))
+    );
+    let restored = media
+        .restore(&editor, up.item.id, trashed.version)
+        .await
+        .unwrap();
+    assert_eq!(restored.item.status, ContentStatus::Draft);
+    assert_eq!(trashed_from(db.store(), up.item.id).await, None);
+
+    // A published one is marked `published` and comes back published.
+    let live = media
+        .record_upload(&editor, upload(31, "image/png", "live.png", None))
+        .await
+        .unwrap();
+    let trashed = media
+        .trash(&editor, live.item.id, live.item.version)
+        .await
+        .unwrap();
+    assert_eq!(
+        trashed_from(db.store(), live.item.id).await,
+        Some(serde_json::json!("published"))
+    );
+    let restored = media
+        .restore(&editor, live.item.id, trashed.version)
+        .await
+        .unwrap();
+    assert_eq!(restored.item.status, ContentStatus::Published);
+    assert_eq!(restored.item.published_at, live.item.published_at);
+    assert_eq!(trashed_from(db.store(), live.item.id).await, None);
+}
+
+/// P53: an item trashed without the marker (before the change, or through the content
+/// lifecycle) restores as published (R23).
+async fn media_restore_without_marker_publishes(db: &TestDb) {
+    let (media, content) = services(db.shared_store());
+    let editor = actor(db.store(), Role::Editor).await;
+    let up = media
+        .record_upload(&editor, upload(32, "image/png", "old.png", None))
+        .await
+        .unwrap();
+    let drafted = content
+        .unpublish(&editor, up.item.id, up.item.version)
+        .await
+        .unwrap();
+    let trashed = content
+        .trash(&editor, up.item.id, drafted.version)
+        .await
+        .unwrap();
+    assert_eq!(trashed_from(db.store(), up.item.id).await, None);
+    let restored = media
+        .restore(&editor, up.item.id, trashed.version)
+        .await
+        .unwrap();
+    assert_eq!(restored.item.status, ContentStatus::Published);
+}
+
 backend_tests!(
     media_search_by_title_and_original_name,
     media_q_with_author_is_invalid,
     media_q_with_trash_is_invalid,
     readable_by_still_applies,
     media_trash_list_and_restore,
+    media_restore_keeps_draft_status,
+    media_restore_without_marker_publishes,
 );

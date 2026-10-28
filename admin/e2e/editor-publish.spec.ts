@@ -38,11 +38,11 @@ const isWrite = (r: Request, id: string) =>
 test("contributor_can_submit_not_publish", async ({
   as,
   site,
-  backend,
+  siteKey,
   snap,
   expectAccessible,
 }) => {
-  const contributor = await ContentApi.as(backend, site.url, "contributor");
+  const contributor = await ContentApi.as(siteKey, site.url, "contributor");
   const item = await contributor.create("post", `Contrib ${uid()}`);
   const page = await as("contributor");
   await openItem(page, "post", item.id);
@@ -87,8 +87,8 @@ test("contributor_can_submit_not_publish", async ({
   await contributor.dispose();
 });
 
-test("author_publishes_and_unpublishes", async ({ as, site, backend }) => {
-  const author = await ContentApi.as(backend, site.url, "author");
+test("author_publishes_and_unpublishes", async ({ as, site, siteKey }) => {
+  const author = await ContentApi.as(siteKey, site.url, "author");
   const item = await author.create("post", `Author ${uid()}`);
   const page = await as("author");
   await openItem(page, "post", item.id);
@@ -126,8 +126,8 @@ test("author_publishes_and_unpublishes", async ({ as, site, backend }) => {
   await author.dispose();
 });
 
-test("editor_schedules", async ({ as, site, backend }) => {
-  const editor = await ContentApi.as(backend, site.url, "editor");
+test("editor_schedules", async ({ as, site, siteKey }) => {
+  const editor = await ContentApi.as(siteKey, site.url, "editor");
   const unique = `w${uid("")
     .replace(/[^a-z0-9]/g, "")
     .slice(-10)}`;
@@ -201,8 +201,8 @@ test("editor_schedules", async ({ as, site, backend }) => {
   await editor.dispose();
 });
 
-test("slug_change_updates_permalink", async ({ as, site, backend }) => {
-  const admin = await ContentApi.as(backend, site.url, "admin");
+test("slug_change_updates_permalink", async ({ as, site, siteKey }) => {
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
   const item = (await admin.create("post", `Slug ${uid()}`)) as Stored;
   const page = await as("admin");
   await openItem(page, "post", item.id);
@@ -225,8 +225,8 @@ test("slug_change_updates_permalink", async ({ as, site, backend }) => {
   await admin.dispose();
 });
 
-test("assign_category_and_new_tag", async ({ as, site, backend }) => {
-  const editor = await ContentApi.as(backend, site.url, "editor");
+test("assign_category_and_new_tag", async ({ as, site, siteKey }) => {
+  const editor = await ContentApi.as(siteKey, site.url, "editor");
   const category = await editor.createTerm("category", `Cat ${uid("").slice(-8)}`);
   const tagName = `tag-${uid("").slice(-8)}`;
   const item = await editor.create("post", `Terms ${uid()}`);
@@ -261,8 +261,8 @@ test("assign_category_and_new_tag", async ({ as, site, backend }) => {
   }
 });
 
-test("trash_from_editor_with_undo", async ({ as, site, backend }) => {
-  const editor = await ContentApi.as(backend, site.url, "editor");
+test("trash_from_editor_with_undo", async ({ as, site, siteKey }) => {
+  const editor = await ContentApi.as(siteKey, site.url, "editor");
   const item = await editor.createIn("post", `Trash ${uid()}`, "published");
   const page = await as("editor");
   await openItem(page, "post", item.id);
@@ -278,12 +278,12 @@ test("trash_from_editor_with_undo", async ({ as, site, backend }) => {
   await editor.dispose();
 });
 
-test("unreadable_parent_settles", async ({ as, site, backend, guard, snap, expectAccessible }) => {
+test("unreadable_parent_settles", async ({ as, site, siteKey, guard, snap, expectAccessible }) => {
   // A state the server allows: children (one published, one the author's own draft)
   // under someone else's draft parent, which the author may not read (404). On its own
   // type, removed afterwards, so no other spec's list meets it.
-  const admin = await ContentApi.as(backend, site.url, "admin");
-  const author = await ContentApi.as(backend, site.url, "author");
+  const admin = await ContentApi.as(siteKey, site.url, "admin");
+  const author = await ContentApi.as(siteKey, site.url, "author");
   const type = uid("t").slice(0, 32);
   const label = `Docs ${type.slice(-6)}`;
   await admin.createType(type, label, true);
@@ -346,11 +346,11 @@ test("unreadable_parent_settles", async ({ as, site, backend, guard, snap, expec
   }
 });
 
-test("phone_publish_bar", async ({ as, site, backend }) => {
+test("phone_publish_bar", async ({ as, site, siteKey }) => {
   // Below 1024 px the panel is a sheet, so the status and the primary action live in a
   // bar at the foot of the editor (same `allowed` rules, same F40 flow).
-  const author = await ContentApi.as(backend, site.url, "author");
-  const contributor = await ContentApi.as(backend, site.url, "contributor");
+  const author = await ContentApi.as(siteKey, site.url, "author");
+  const contributor = await ContentApi.as(siteKey, site.url, "contributor");
   const post = await author.create("post", `Phone ${uid()}`);
   const draft = await contributor.create("post", `Phone contrib ${uid()}`);
   try {
@@ -379,10 +379,10 @@ test("phone_publish_bar", async ({ as, site, backend }) => {
   }
 });
 
-test("screens", async ({ as, site, backend, snap, expectAccessible }) => {
+test("screens", async ({ as, site, siteKey, snap, expectAccessible }) => {
   test.setTimeout(300_000);
   for (const role of ["admin", "editor", "author"] as const) {
-    const api = await ContentApi.as(backend, site.url, role);
+    const api = await ContentApi.as(siteKey, site.url, role);
     const item = await api.create("post", `Notes from the ${role} desk`, {
       body: {
         type: "doc",

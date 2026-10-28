@@ -1,5 +1,6 @@
-// One labelled control of the type screens: label, control, hint and error, wired with
-// `aria-describedby` and `aria-invalid` (the control gets them through `children`).
+// One labelled control of a form (structure and account screens): label, control, hint
+// and error, wired with `aria-describedby` and `aria-invalid` (the control gets them
+// through `children`).
 
 import { useId, type ReactNode } from "react";
 import { cn } from "cn";

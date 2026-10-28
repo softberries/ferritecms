@@ -132,6 +132,9 @@ impl ContentTypeService {
         let (guard, tx) = begin_locked(self.store.as_ref()).await?;
         let done = async {
             check_name_free(tx.as_ref(), &ty.name, Change::Type).await?;
+            if let Some(defs) = &new.fields {
+                check_targets(tx.as_ref(), defs, Some(&ty.name)).await?;
+            }
             tx.types().insert(&ty).await?;
             check_permalinks(tx.as_ref(), true).await?;
             let details = json!({
@@ -179,6 +182,9 @@ impl ContentTypeService {
                 ty.has_archive = has_archive;
             }
             if let Some(defs) = &patch.fields {
+                if let Some(defs) = defs {
+                    check_targets(tx.as_ref(), defs, None).await?;
+                }
                 ty.fields = stored_schema(defs.as_deref());
             }
             tx.types().upsert(&ty).await?;
@@ -205,8 +211,10 @@ impl ContentTypeService {
 
     /// Removes type `name` (needs `manage_settings`). Built-in types are
     /// `Invalid("built-in type")`, a type with items in any status (trash included)
-    /// `Invalid("type has content")`, one a taxonomy is attached to `Invalid` naming the
-    /// taxonomy. Missing: `NotFound`.
+    /// `Invalid("type has content")`, one another type's relation field lists in its
+    /// `types` `Invalid` naming that type (as is any other type whose stored schema no
+    /// longer parses), one a taxonomy is attached to `Invalid` naming the taxonomy.
+    /// Missing: `NotFound`.
     pub async fn delete(&self, actor: &Actor, name: &str) -> Result<(), CoreError> {
         require(actor, Capability::ManageSettings)?;
         let (guard, tx) = begin_locked(self.store.as_ref()).await?;
@@ -225,6 +233,26 @@ impl ContentTypeService {
                 .await?;
             if !items.items.is_empty() {
                 return Err(CoreError::Invalid("type has content".into()));
+            }
+            for other in tx.types().list().await? {
+                if other.name == ty.name {
+                    continue;
+                }
+                // A stored schema that no longer parses is not ignored: it might name this
+                // type. Not the request's fault, so plain `Invalid` naming the type (as a
+                // stored permalink option that no longer parses).
+                let defs = fields::schema_of(&other.fields).map_err(|e| {
+                    CoreError::Invalid(format!(
+                        "the stored field schema of type {:?} is unreadable: {e}",
+                        other.name
+                    ))
+                })?;
+                if defs.is_some_and(|defs| fields::names_type(&defs, &ty.name)) {
+                    return Err(CoreError::Invalid(format!(
+                        "type is a relation target of type {:?}",
+                        other.name
+                    )));
+                }
             }
             if let Some(tax) = tx
                 .taxonomies()
@@ -252,6 +280,18 @@ impl ContentTypeService {
         .await;
         finish_locked(guard, tx, done).await
     }
+}
+
+/// [`fields::check_relation_types`] of `defs` against the registered types, plus
+/// `own`, the name of a type being created (a relation may point at its own type).
+async fn check_targets(
+    repos: &dyn Repos,
+    defs: &[FieldDef],
+    own: Option<&str>,
+) -> Result<(), CoreError> {
+    let types = repos.types().list().await?;
+    let names: Vec<&str> = types.iter().map(|t| t.name.as_str()).chain(own).collect();
+    fields::check_relation_types(defs, &names)
 }
 
 /// `{"fields": [ … ]}` for a schema, `{}` for none.

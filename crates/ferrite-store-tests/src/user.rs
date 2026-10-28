@@ -4,7 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use ferrite_domain::{
     ContentItem, NewAudit, NewUser, Revision, RevisionId, Role, Secret, Timestamp, User, UserId,
-    UserStatus,
+    UserQuery, UserStatus,
 };
 use ferrite_store::{Store, StoreError};
 use serde_json::json;
@@ -25,6 +25,14 @@ fn new_user(login: &str, email: &str) -> NewUser {
         role: Role::Editor,
         status: UserStatus::Active,
         must_reset: true,
+    }
+}
+
+fn page_query(limit: u32, cursor: Option<String>) -> UserQuery {
+    UserQuery {
+        limit,
+        cursor,
+        ..UserQuery::default()
     }
 }
 
@@ -195,7 +203,7 @@ pub async fn users_update_and_list(db: &TestDb) {
     let mut cursor: Option<String> = None;
     let mut pages = 0;
     loop {
-        let page = users.list(2, cursor.as_deref()).await.unwrap();
+        let page = users.list(&page_query(2, cursor.clone())).await.unwrap();
         pages += 1;
         seen.extend(page.items.iter().map(|u| u.login.clone()));
         match page.next_cursor {
@@ -205,16 +213,18 @@ pub async fn users_update_and_list(db: &TestDb) {
     }
     assert_eq!(seen, ["Bob", "Zed", "alice", "carol", "dave"]);
     assert_eq!(pages, 3);
-    let exact = users.list(5, None).await.unwrap();
+    let exact = users.list(&page_query(5, None)).await.unwrap();
     assert_eq!(exact.items.len(), 5);
     assert!(exact.next_cursor.is_none());
 
     assert!(matches!(
-        users.list(0, None).await,
+        users.list(&page_query(0, None)).await,
         Err(StoreError::Invalid(_))
     ));
     assert!(matches!(
-        users.list(2, Some("not a cursor")).await,
+        users
+            .list(&page_query(2, Some("not a cursor".into())))
+            .await,
         Err(StoreError::Invalid(_))
     ));
 
@@ -543,7 +553,12 @@ pub async fn user_delete_restricted_by_content_then_ok_after_reassign(db: &TestD
         assert_eq!(listed.len(), 2);
         assert!(listed.iter().all(|rev| rev.author_id == heir.id));
     }
-    let audit = r.audit().list(10, None).await.unwrap().items;
+    let audit = r
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(10))
+        .await
+        .unwrap()
+        .items;
     assert_eq!(audit.len(), 1);
     assert_eq!(audit[0].actor_id, None);
 

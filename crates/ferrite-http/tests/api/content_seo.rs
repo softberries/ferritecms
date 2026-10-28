@@ -10,7 +10,11 @@ use crate::{
     harness::{Api, Bearer},
 };
 
-api_tests!(content_dto_has_seo, patch_seo_with_if_match);
+api_tests!(
+    content_dto_has_seo,
+    patch_seo_with_if_match,
+    head_after_seo_only_patch
+);
 
 const POSTS: &str = "/api/v1/content/post";
 
@@ -204,5 +208,66 @@ async fn patch_seo_with_if_match(api: Api) -> Api {
         .await;
     let problem = r.assert_problem(400, "malformed-json");
     assert_eq!(problem["errors"][0]["field"], "seo", "{problem}");
+    api
+}
+
+/// A `PATCH` of `seo` alone reaches the public page's head through the cache
+/// invalidation: `<title>`, the meta description and `og:title` show the new values.
+async fn head_after_seo_only_patch(api: Api) -> Api {
+    let b = admin(&api).await;
+    let item = create(
+        &api,
+        &b,
+        json!({"title": "Plain title", "excerpt": "The excerpt"}),
+    )
+    .await;
+    let p = path(&item);
+    let r = b
+        .send(&api, Method::POST, &format!("{p}/publish"), None, Some(1))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let live = r.json();
+    let public = live["permalink"].as_str().unwrap().to_owned();
+    let mut poller = api.poller().await;
+    let page = api.get(&public).await;
+    assert_eq!(page.status, StatusCode::OK, "{page:?}");
+    assert!(page.body.contains("<title>Plain title – "), "{}", page.body);
+    assert!(
+        page.body
+            .contains("<meta name=\"description\" content=\"The excerpt\">"),
+        "{}",
+        page.body
+    );
+    assert!(api.app.cache.len().await >= 1, "the page is cached");
+
+    let r = b
+        .send(
+            &api,
+            Method::PATCH,
+            &p,
+            Some(&json!({"seo": {"title": "Search title", "description": "Search text"}})),
+            Some(live["version"].as_i64().unwrap()),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    poller.poll_once().await.unwrap();
+    let page = api.get(&public).await;
+    assert!(
+        page.body.contains("<title>Search title</title>"),
+        "{}",
+        page.body
+    );
+    assert!(
+        page.body
+            .contains("<meta name=\"description\" content=\"Search text\">"),
+        "{}",
+        page.body
+    );
+    assert!(
+        page.body
+            .contains("<meta property=\"og:title\" content=\"Search title\">"),
+        "{}",
+        page.body
+    );
     api
 }

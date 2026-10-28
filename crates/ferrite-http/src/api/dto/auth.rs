@@ -1,6 +1,9 @@
 //! Bodies of the `/auth` endpoints.
 
-use ferrite_core::{AuthService, Authenticated, Capability, Via, auth::TotpSetup, require};
+use chrono::{DateTime, Utc};
+use ferrite_core::{
+    AuthService, Authenticated, Capability, SessionInfo, Via, auth::TotpSetup, can, require,
+};
 use serde::{Deserialize, Serialize};
 
 use super::Password;
@@ -80,6 +83,44 @@ pub struct TotpDisable {
     pub password: Password,
 }
 
+/// One of the user's sessions (`GET /auth/sessions`). No user agent or address is
+/// shown: sessions are told apart by time.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SessionDto {
+    /// An opaque id (16 hex characters) for `DELETE /auth/sessions/{id}`; never the
+    /// cookie value.
+    pub id: String,
+    pub created_at: DateTime<Utc>,
+    /// Updated at most every 5 minutes.
+    pub last_seen_at: DateTime<Utc>,
+    /// The session this request came with (end it with `POST /auth/logout`).
+    pub current: bool,
+}
+
+impl From<SessionInfo> for SessionDto {
+    fn from(s: SessionInfo) -> Self {
+        Self {
+            id: s.id,
+            created_at: s.created_at.as_datetime(),
+            last_seen_at: s.last_seen_at.as_datetime(),
+            current: s.current,
+        }
+    }
+}
+
+/// `GET /auth/sessions`: the user's live sessions, newest first.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SessionList {
+    pub items: Vec<SessionDto>,
+}
+
+/// The result of `POST /auth/sessions/revoke-others`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SessionsRevoked {
+    /// How many sessions ended.
+    pub revoked: u64,
+}
+
 /// The authenticated user and what the request's credential allows.
 #[derive(Serialize, ToSchema)]
 pub struct MeDto {
@@ -100,10 +141,18 @@ pub struct MeDto {
     pub scopes: Vec<String>,
     /// The `X-CSRF-Token` for this session's unsafe requests; `null` for a bearer token.
     pub csrf_token: Option<String>,
+    /// Whether the site can send mail (`[mail]` has `smtp_url` and `from`), for roles
+    /// holding `manage_users` or `manage_system` (whatever the credential's scopes);
+    /// `null` for everyone else.
+    pub mail_configured: Option<bool>,
 }
 
 impl MeDto {
-    pub fn of(auth: &AuthService, who: &Authenticated) -> Self {
+    /// `mail_configured`: whether this node has `[mail]`.
+    pub fn of(auth: &AuthService, who: &Authenticated, mail_configured: bool) -> Self {
+        let mail_visible = [Capability::ManageUsers, Capability::ManageSystem]
+            .into_iter()
+            .any(|cap| can(who.user.role, cap));
         let user = &who.user;
         let csrf_token = match &who.via {
             Via::Session(session) => Some(auth.csrf_token(session)),
@@ -124,6 +173,7 @@ impl MeDto {
                 .collect(),
             scopes: who.actor.scopes.to_strings(),
             csrf_token,
+            mail_configured: mail_visible.then_some(mail_configured),
         }
     }
 }

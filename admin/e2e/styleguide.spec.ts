@@ -19,6 +19,7 @@ const SECTIONS = [
   "ordering",
   "data",
   "charts",
+  "administration",
 ] as const;
 
 test("styleguide_screens", async ({ as, snap, expectAccessible }) => {
@@ -67,7 +68,10 @@ test("styleguide_screens", async ({ as, snap, expectAccessible }) => {
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toBeHidden();
 
-  await page.getByRole("button", { name: "Schedule…" }).click();
+  // Opened from the keyboard: whether focus put back after a mouse-opened dialog shows a
+  // ring is up to the engine's `:focus-visible` heuristics (Firefox shows none).
+  await page.getByRole("button", { name: "Schedule…" }).focus();
+  await page.keyboard.press("Enter");
   const dialog = page.getByRole("dialog", { name: "Schedule post" });
   await expect(dialog).toBeVisible();
   await snap(page, "styleguide-overlays-dialog");
@@ -106,11 +110,11 @@ test("styleguide_compact_density", async ({ as }) => {
   expect(await button.evaluate((el) => el.getBoundingClientRect().height)).toBe(30);
 });
 
-test("styleguide_touch_targets", async ({ browser, backend, site, guard }) => {
+test("styleguide_touch_targets", async ({ browser, siteKey, site, guard }) => {
   // On a touch screen controls and rows stay at least 44 px whatever the density (11 §4).
   const ctx = await browser.newContext({
     baseURL: site.url,
-    storageState: authFile(backend, "admin"),
+    storageState: authFile(siteKey, "admin"),
     viewport: { width: 390, height: 844 },
     hasTouch: true,
     isMobile: true,
@@ -193,6 +197,12 @@ test("styleguide_ordering", async ({ as, snap, expectAccessible }) => {
     list
       .getByRole("button", { name: /^Reorder / })
       .evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")?.slice(8)));
+
+  // Text truncated with an ellipsis says itself in a `title` (11 §8).
+  const untitled = await page
+    .locator("main .truncate")
+    .evaluateAll((els) => els.filter((el) => !el.closest("[title]")).map((el) => el.outerHTML));
+  expect(untitled).toEqual([]);
 
   // Tree: Blog up among the top level, from its menu; focus stays on its menu button.
   // Each step waits for the menu to finish closing: reopening it during its exit
@@ -294,4 +304,64 @@ test("styleguide_ordering", async ({ as, snap, expectAccessible }) => {
   await expect(page.getByText("Drop files to upload")).toBeHidden();
   await expect(page.getByText("1 file ready to upload")).toBeVisible();
   await expect(page.getByText("1 file is not a type this library takes")).toBeVisible();
+});
+
+test("styleguide_administration", async ({ as, snap, expectAccessible }) => {
+  test.setTimeout(120_000);
+  // The M2b-3 kit in its working states: a secret being replaced, a settings form with
+  // edits pending (reset offered, a bad colour flagged), and the QR code black on white
+  // in both schemes.
+  const page = await as("admin");
+  await page.goto("/admin/_styleguide?section=administration");
+  const section = page.locator("section[data-section=administration]");
+
+  const qr = section.getByRole("img", { name: "QR code for your authenticator app" });
+  await expect(qr).toBeVisible();
+  for (const scheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await expect(page.locator("html")).toHaveClass(scheme);
+    const fills = await qr.evaluate((svg) => {
+      const ground = svg.querySelector("rect:not([data-module])");
+      return {
+        ground: ground ? getComputedStyle(ground).fill : null,
+        module: getComputedStyle(svg).fill,
+      };
+    });
+    // Computed as the token wrote them: white ground, black modules, in both schemes.
+    expect(fills).toEqual({ ground: "oklch(1 0 0)", module: "oklch(0 0 0)" });
+  }
+  await page.emulateMedia({ colorScheme: "light" });
+
+  // The code input takes digits only.
+  const code = section.getByLabel("Code from the app");
+  await code.fill("");
+  await code.pressSequentially("12a34");
+  await expect(code).toHaveValue("1234");
+
+  // Secret: Replace opens an empty password input.
+  const form = section.locator("[data-slot=settings-form]");
+  const apiKey = form.locator("[data-slot=setting][data-key=api_key]");
+  await apiKey.getByRole("button", { name: "Replace" }).click();
+  const secretInput = apiKey.getByLabel("API key");
+  await expect(secretInput).toHaveAttribute("type", "password");
+  await expect(secretInput).toHaveValue("");
+  await secretInput.fill("not-a-real-key");
+
+  // Settings: a changed tagline offers a reset; a bad colour is flagged and blocks saving.
+  const tagline = form.getByLabel("Tagline");
+  await tagline.fill("Iron, oxygen, time");
+  const accent = form.getByLabel("Accent colour");
+  await accent.fill("#12");
+  await expect(form.getByText(/^Use a colour like #/)).toBeVisible();
+  await expect(form.getByText("Stored value is not valid; the default is used")).toBeVisible();
+  await expect(form.getByText("3 unsaved changes")).toBeVisible();
+  // From the top: a full-page shot taken scrolled down draws the sticky header mid-page.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await snap(page, "styleguide-administration-editing");
+  await expectAccessible(page);
+
+  // A valid colour, then Save: only the changed keys go.
+  await accent.fill(`#${"3b6ea5"}`);
+  await form.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Would send: tagline, accent, api_key")).toBeVisible();
 });

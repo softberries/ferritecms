@@ -50,7 +50,7 @@ export function SearchPreview({ title, url, description, siteName }: SearchPrevi
       </div>
       <p
         data-slot="search-preview-title"
-        className="line-clamp-1 text-base leading-snug font-medium break-all text-info"
+        className="line-clamp-1 text-base leading-snug font-medium break-words text-info"
         title={title}
       >
         {title}

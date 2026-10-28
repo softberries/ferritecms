@@ -6,6 +6,7 @@ import {
   descendants,
   filterTerms,
   parentChoices,
+  parentFilter,
   toTree,
   withParent,
 } from "./terms-model";
@@ -103,5 +104,16 @@ describe("terms_model_test", () => {
     expect(names("cakes tarts")).toEqual(["Pâtisserie"]);
     expect(names("cakes bread")).toEqual([]);
     expect(names("levain")).toEqual(["Sourdough"]);
+  });
+});
+
+describe("parentFilter", () => {
+  it("parent_filter_matches_names_and_slugs_not_ids", () => {
+    const id = "3f2a9c1e-7b4d-4e8a-9c0f-1a2b3c4d5e6f";
+    expect(parentFilter(id, "fru", ["Fruit", "fruit"])).toBeGreaterThan(0);
+    expect(parentFilter(id, "apples-slug", ["Apples", "apples-slug"])).toBeGreaterThan(0);
+    // Pieces of the id find nothing.
+    expect(parentFilter(id, "3f2a", ["Fruit", "fruit"])).toBe(0);
+    expect(parentFilter(id, "7b4d", ["Fruit", "fruit"])).toBe(0);
   });
 });

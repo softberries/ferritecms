@@ -49,7 +49,7 @@ app_tests!(
 const FORM: &str = "application/x-www-form-urlencoded";
 
 /// A client address no other request of this binary uses.
-pub(crate) fn peer() -> SocketAddr {
+fn peer() -> SocketAddr {
     static NEXT: AtomicU32 = AtomicU32::new(1);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
     SocketAddr::new(Ipv4Addr::from(0xc633_0000 | n).into(), 40_000)

@@ -17,10 +17,19 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppSplatRouteImport } from './routes/_app/$'
 import { Route as AppStyleguideRouteImport } from './routes/_app/[_]styleguide'
+import { Route as AppAccountRouteImport } from './routes/_app/account'
 import { Route as LoginTotpRouteImport } from './routes/login_.totp'
+import { Route as AppAppearanceThemesRouteImport } from './routes/_app/appearance.themes'
 import { Route as AppCommentsIndexRouteImport } from './routes/_app/comments.index'
 import { Route as AppMediaIndexRouteImport } from './routes/_app/media.index'
+import { Route as AppPluginsIndexRouteImport } from './routes/_app/plugins.index'
+import { Route as AppPluginsNameRouteImport } from './routes/_app/plugins.$name'
+import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings.index'
+import { Route as AppSettingsGroupRouteImport } from './routes/_app/settings.$group'
 import { Route as AppStructureRedirectsRouteImport } from './routes/_app/structure.redirects'
+import { Route as AppSystemIndexRouteImport } from './routes/_app/system.index'
+import { Route as AppSystemTabRouteImport } from './routes/_app/system.$tab'
+import { Route as AppUsersIndexRouteImport } from './routes/_app/users.index'
 import { Route as AppContentTypeIndexRouteImport } from './routes/_app/content.$type.index'
 import { Route as AppContentTypeIdRouteImport } from './routes/_app/content.$type.$id'
 import { Route as AppContentTypeNewRouteImport } from './routes/_app/content.$type.new'
@@ -70,10 +79,20 @@ const AppStyleguideRoute = AppStyleguideRouteImport.update({
   path: '/_styleguide',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAccountRoute = AppAccountRouteImport.update({
+  id: '/account',
+  path: '/account',
+  getParentRoute: () => AppRoute,
+} as any)
 const LoginTotpRoute = LoginTotpRouteImport.update({
   id: '/login_/totp',
   path: '/login/totp',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppAppearanceThemesRoute = AppAppearanceThemesRouteImport.update({
+  id: '/appearance/themes',
+  path: '/appearance/themes',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppCommentsIndexRoute = AppCommentsIndexRouteImport.update({
   id: '/comments/',
@@ -85,9 +104,44 @@ const AppMediaIndexRoute = AppMediaIndexRouteImport.update({
   path: '/media/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppPluginsIndexRoute = AppPluginsIndexRouteImport.update({
+  id: '/plugins/',
+  path: '/plugins/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPluginsNameRoute = AppPluginsNameRouteImport.update({
+  id: '/plugins/$name',
+  path: '/plugins/$name',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSettingsIndexRoute = AppSettingsIndexRouteImport.update({
+  id: '/settings/',
+  path: '/settings/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSettingsGroupRoute = AppSettingsGroupRouteImport.update({
+  id: '/settings/$group',
+  path: '/settings/$group',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppStructureRedirectsRoute = AppStructureRedirectsRouteImport.update({
   id: '/structure/redirects',
   path: '/structure/redirects',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSystemIndexRoute = AppSystemIndexRouteImport.update({
+  id: '/system/',
+  path: '/system/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSystemTabRoute = AppSystemTabRouteImport.update({
+  id: '/system/$tab',
+  path: '/system/$tab',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppUsersIndexRoute = AppUsersIndexRouteImport.update({
+  id: '/users/',
+  path: '/users/',
   getParentRoute: () => AppRoute,
 } as any)
 const AppContentTypeIndexRoute = AppContentTypeIndexRouteImport.update({
@@ -146,10 +200,19 @@ export interface FileRoutesByFullPath {
   '/reset-password': typeof ResetPasswordRoute
   '/$': typeof AppSplatRoute
   '/_styleguide': typeof AppStyleguideRoute
+  '/account': typeof AppAccountRoute
   '/login/totp': typeof LoginTotpRoute
+  '/appearance/themes': typeof AppAppearanceThemesRoute
+  '/plugins/$name': typeof AppPluginsNameRoute
+  '/settings/$group': typeof AppSettingsGroupRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
+  '/system/$tab': typeof AppSystemTabRoute
   '/comments/': typeof AppCommentsIndexRoute
   '/media/': typeof AppMediaIndexRoute
+  '/plugins/': typeof AppPluginsIndexRoute
+  '/settings/': typeof AppSettingsIndexRoute
+  '/system/': typeof AppSystemIndexRoute
+  '/users/': typeof AppUsersIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
   '/structure/menus/$name': typeof AppStructureMenusNameRoute
@@ -167,11 +230,20 @@ export interface FileRoutesByTo {
   '/reset-password': typeof ResetPasswordRoute
   '/$': typeof AppSplatRoute
   '/_styleguide': typeof AppStyleguideRoute
+  '/account': typeof AppAccountRoute
   '/login/totp': typeof LoginTotpRoute
   '/': typeof AppIndexRoute
+  '/appearance/themes': typeof AppAppearanceThemesRoute
+  '/plugins/$name': typeof AppPluginsNameRoute
+  '/settings/$group': typeof AppSettingsGroupRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
+  '/system/$tab': typeof AppSystemTabRoute
   '/comments': typeof AppCommentsIndexRoute
   '/media': typeof AppMediaIndexRoute
+  '/plugins': typeof AppPluginsIndexRoute
+  '/settings': typeof AppSettingsIndexRoute
+  '/system': typeof AppSystemIndexRoute
+  '/users': typeof AppUsersIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
   '/structure/menus/$name': typeof AppStructureMenusNameRoute
@@ -191,11 +263,20 @@ export interface FileRoutesById {
   '/reset-password': typeof ResetPasswordRoute
   '/_app/$': typeof AppSplatRoute
   '/_app/_styleguide': typeof AppStyleguideRoute
+  '/_app/account': typeof AppAccountRoute
   '/login_/totp': typeof LoginTotpRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/appearance/themes': typeof AppAppearanceThemesRoute
+  '/_app/plugins/$name': typeof AppPluginsNameRoute
+  '/_app/settings/$group': typeof AppSettingsGroupRoute
   '/_app/structure/redirects': typeof AppStructureRedirectsRoute
+  '/_app/system/$tab': typeof AppSystemTabRoute
   '/_app/comments/': typeof AppCommentsIndexRoute
   '/_app/media/': typeof AppMediaIndexRoute
+  '/_app/plugins/': typeof AppPluginsIndexRoute
+  '/_app/settings/': typeof AppSettingsIndexRoute
+  '/_app/system/': typeof AppSystemIndexRoute
+  '/_app/users/': typeof AppUsersIndexRoute
   '/_app/content/$type/$id': typeof AppContentTypeIdRoute
   '/_app/content/$type/new': typeof AppContentTypeNewRoute
   '/_app/structure/menus/$name': typeof AppStructureMenusNameRoute
@@ -216,10 +297,19 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/$'
     | '/_styleguide'
+    | '/account'
     | '/login/totp'
+    | '/appearance/themes'
+    | '/plugins/$name'
+    | '/settings/$group'
     | '/structure/redirects'
+    | '/system/$tab'
     | '/comments/'
     | '/media/'
+    | '/plugins/'
+    | '/settings/'
+    | '/system/'
+    | '/users/'
     | '/content/$type/$id'
     | '/content/$type/new'
     | '/structure/menus/$name'
@@ -237,11 +327,20 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/$'
     | '/_styleguide'
+    | '/account'
     | '/login/totp'
     | '/'
+    | '/appearance/themes'
+    | '/plugins/$name'
+    | '/settings/$group'
     | '/structure/redirects'
+    | '/system/$tab'
     | '/comments'
     | '/media'
+    | '/plugins'
+    | '/settings'
+    | '/system'
+    | '/users'
     | '/content/$type/$id'
     | '/content/$type/new'
     | '/structure/menus/$name'
@@ -260,11 +359,20 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/_app/$'
     | '/_app/_styleguide'
+    | '/_app/account'
     | '/login_/totp'
     | '/_app/'
+    | '/_app/appearance/themes'
+    | '/_app/plugins/$name'
+    | '/_app/settings/$group'
     | '/_app/structure/redirects'
+    | '/_app/system/$tab'
     | '/_app/comments/'
     | '/_app/media/'
+    | '/_app/plugins/'
+    | '/_app/settings/'
+    | '/_app/system/'
+    | '/_app/users/'
     | '/_app/content/$type/$id'
     | '/_app/content/$type/new'
     | '/_app/structure/menus/$name'
@@ -343,12 +451,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppStyleguideRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/account': {
+      id: '/_app/account'
+      path: '/account'
+      fullPath: '/account'
+      preLoaderRoute: typeof AppAccountRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/login_/totp': {
       id: '/login_/totp'
       path: '/login/totp'
       fullPath: '/login/totp'
       preLoaderRoute: typeof LoginTotpRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_app/appearance/themes': {
+      id: '/_app/appearance/themes'
+      path: '/appearance/themes'
+      fullPath: '/appearance/themes'
+      preLoaderRoute: typeof AppAppearanceThemesRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/comments/': {
       id: '/_app/comments/'
@@ -364,11 +486,60 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppMediaIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/plugins/': {
+      id: '/_app/plugins/'
+      path: '/plugins'
+      fullPath: '/plugins/'
+      preLoaderRoute: typeof AppPluginsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/plugins/$name': {
+      id: '/_app/plugins/$name'
+      path: '/plugins/$name'
+      fullPath: '/plugins/$name'
+      preLoaderRoute: typeof AppPluginsNameRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings/': {
+      id: '/_app/settings/'
+      path: '/settings'
+      fullPath: '/settings/'
+      preLoaderRoute: typeof AppSettingsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings/$group': {
+      id: '/_app/settings/$group'
+      path: '/settings/$group'
+      fullPath: '/settings/$group'
+      preLoaderRoute: typeof AppSettingsGroupRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/structure/redirects': {
       id: '/_app/structure/redirects'
       path: '/structure/redirects'
       fullPath: '/structure/redirects'
       preLoaderRoute: typeof AppStructureRedirectsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/system/': {
+      id: '/_app/system/'
+      path: '/system'
+      fullPath: '/system/'
+      preLoaderRoute: typeof AppSystemIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/system/$tab': {
+      id: '/_app/system/$tab'
+      path: '/system/$tab'
+      fullPath: '/system/$tab'
+      preLoaderRoute: typeof AppSystemTabRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/users/': {
+      id: '/_app/users/'
+      path: '/users'
+      fullPath: '/users/'
+      preLoaderRoute: typeof AppUsersIndexRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/content/$type/': {
@@ -440,10 +611,19 @@ declare module '@tanstack/react-router' {
 interface AppRouteChildren {
   AppSplatRoute: typeof AppSplatRoute
   AppStyleguideRoute: typeof AppStyleguideRoute
+  AppAccountRoute: typeof AppAccountRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppAppearanceThemesRoute: typeof AppAppearanceThemesRoute
+  AppPluginsNameRoute: typeof AppPluginsNameRoute
+  AppSettingsGroupRoute: typeof AppSettingsGroupRoute
   AppStructureRedirectsRoute: typeof AppStructureRedirectsRoute
+  AppSystemTabRoute: typeof AppSystemTabRoute
   AppCommentsIndexRoute: typeof AppCommentsIndexRoute
   AppMediaIndexRoute: typeof AppMediaIndexRoute
+  AppPluginsIndexRoute: typeof AppPluginsIndexRoute
+  AppSettingsIndexRoute: typeof AppSettingsIndexRoute
+  AppSystemIndexRoute: typeof AppSystemIndexRoute
+  AppUsersIndexRoute: typeof AppUsersIndexRoute
   AppContentTypeIdRoute: typeof AppContentTypeIdRoute
   AppContentTypeNewRoute: typeof AppContentTypeNewRoute
   AppStructureMenusNameRoute: typeof AppStructureMenusNameRoute
@@ -458,10 +638,19 @@ interface AppRouteChildren {
 const AppRouteChildren: AppRouteChildren = {
   AppSplatRoute: AppSplatRoute,
   AppStyleguideRoute: AppStyleguideRoute,
+  AppAccountRoute: AppAccountRoute,
   AppIndexRoute: AppIndexRoute,
+  AppAppearanceThemesRoute: AppAppearanceThemesRoute,
+  AppPluginsNameRoute: AppPluginsNameRoute,
+  AppSettingsGroupRoute: AppSettingsGroupRoute,
   AppStructureRedirectsRoute: AppStructureRedirectsRoute,
+  AppSystemTabRoute: AppSystemTabRoute,
   AppCommentsIndexRoute: AppCommentsIndexRoute,
   AppMediaIndexRoute: AppMediaIndexRoute,
+  AppPluginsIndexRoute: AppPluginsIndexRoute,
+  AppSettingsIndexRoute: AppSettingsIndexRoute,
+  AppSystemIndexRoute: AppSystemIndexRoute,
+  AppUsersIndexRoute: AppUsersIndexRoute,
   AppContentTypeIdRoute: AppContentTypeIdRoute,
   AppContentTypeNewRoute: AppContentTypeNewRoute,
   AppStructureMenusNameRoute: AppStructureMenusNameRoute,

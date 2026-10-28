@@ -23,6 +23,7 @@ profile_tests!(
     notify_admins_reaches_admins_only,
     notifier_cuts_long_titles,
     site_title_prefix_is_bounded,
+    site_title_prefix_follows_the_option,
     mail_flood_is_capped,
     mail_header_injection_is_refused,
     mail_refused_on_render_path,
@@ -179,6 +180,32 @@ async fn site_title_prefix_is_bounded(site: Site) -> Site {
     assert_eq!(kv(&site, "inject").await, "ok");
     let sent = long.mailer.wait_for(1, WAIT).await;
     assert_eq!(sent[0].subject, format!("[{}] {max}", "T".repeat(100)));
+    site
+}
+
+/// P51: the prefix is the `site.title` option at send time, else the configured title.
+async fn site_title_prefix_follows_the_option(site: Site) -> Site {
+    site.user("root", Role::Admin).await;
+    let m = mail_host(&site, "mail-flood").await;
+    let options = site.store.read().options();
+    options
+        .set("site.title", &serde_json::json!("Night Owl"), true)
+        .await
+        .unwrap();
+    m.host
+        .dispatch_action("mail-flood", "post.published", event("One"))
+        .await
+        .unwrap();
+    let sent = m.mailer.wait_for(1, WAIT).await;
+    assert_eq!(sent[0].subject, "[Night Owl] One");
+
+    options.delete("site.title").await.unwrap();
+    m.host
+        .dispatch_action("mail-flood", "post.published", event("Two"))
+        .await
+        .unwrap();
+    let sent = m.mailer.wait_for(2, WAIT).await;
+    assert_eq!(sent[1].subject, format!("[{MAIL_SITE_TITLE}] Two"));
     site
 }
 

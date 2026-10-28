@@ -2,8 +2,11 @@
 // unknown keys and missing required values on every item write (`fields.rs`), and the
 // editor drops keys the schema no longer has on the next save (P39). So before a save the
 // builder names: fields removed, fields renamed (same position and kind, a new name; the
-// old values are not carried over), fields that became required, and fields whose kind
-// changed. Repeater sub-fields are named with the editor's paths (`chapters[].title`).
+// old values are not carried over), fields that became required, fields whose kind
+// changed, select options removed (an item holding one cannot be saved until another is
+// chosen) and relations that point at fewer types than before (an item pointing at one
+// no longer listed cannot be saved until it is changed, P52). Repeater sub-fields are
+// named with the editor's paths (`chapters[].title`).
 
 import type { FieldDef } from "@/editor/fields/fields-model";
 
@@ -13,16 +16,33 @@ export interface SchemaChange {
   renamed: [string, string][];
   newlyRequired: string[];
   kindChanged: string[];
+  /** `[field, removed options]`, for a select that stayed one. */
+  optionsRemoved: [string, string[]][];
+  /** Relations that stayed one and now point at fewer types (any type counts as all). */
+  targetsNarrowed: string[];
 }
 
 export const isEmptyChange = (c: SchemaChange) =>
-  c.removed.length + c.renamed.length + c.newlyRequired.length + c.kindChanged.length === 0;
+  c.removed.length +
+    c.renamed.length +
+    c.newlyRequired.length +
+    c.kindChanged.length +
+    c.optionsRemoved.length +
+    c.targetsNarrowed.length ===
+  0;
 
 export function describeChange(
   before: readonly FieldDef[],
   after: readonly FieldDef[],
 ): SchemaChange {
-  const out: SchemaChange = { removed: [], renamed: [], newlyRequired: [], kindChanged: [] };
+  const out: SchemaChange = {
+    removed: [],
+    renamed: [],
+    newlyRequired: [],
+    kindChanged: [],
+    optionsRemoved: [],
+    targetsNarrowed: [],
+  };
   walk(before, after, "", out);
   return out;
 }
@@ -59,6 +79,19 @@ function walk(
     const was = same ?? renamedTo.get(a.name);
     if (a.required === true && was?.required !== true) out.newlyRequired.push(`${prefix}${a.name}`);
     if (same && same.kind !== a.kind) out.kindChanged.push(`${prefix}${a.name}`);
+    if (same?.kind === "select" && a.kind === "select") {
+      const kept = new Set(a.options ?? []);
+      const gone = (same.options ?? []).filter((o) => !kept.has(o));
+      if (gone.length > 0) out.optionsRemoved.push([`${prefix}${a.name}`, gone]);
+    }
+    if (same?.kind === "relation" && a.kind === "relation") {
+      const was = same.types ?? [];
+      const now = a.types ?? [];
+      // Empty is any type: narrowed when it now lists some, or drops one it listed.
+      if (now.length > 0 && (was.length === 0 || was.some((t) => !now.includes(t)))) {
+        out.targetsNarrowed.push(`${prefix}${a.name}`);
+      }
+    }
     if (same && same.kind === "repeater" && a.kind === "repeater") {
       walk(same.fields ?? [], a.fields ?? [], `${prefix}${a.name}[].`, out);
     }

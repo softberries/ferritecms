@@ -42,10 +42,17 @@ images, custom fields from the type schema, SEO fields, content types with the f
 builder, taxonomy term trees, menus with `@dnd-kit`, the comment moderation queue,
 redirects with CSV; public comment pages (`?cpage=N`); API additions `seo`, media
 `q`/`kind`/`trash`/restore, comment `item` and counts, menu `locations`,
-`GET /content/refs`, `0008_autosave_seo`; `m2b2-exit.md`). Open follow-ups stay listed in
-the roadmap. Next is M2b-3 (administration, extensions and the M2 exit). Work top-down in
-`docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/` (M2a-2a:
-`m2a2.md`, M2a-2b: `m2a2b.md`, M2b-1 and M2b-2: `m2b.md`).
+`GET /content/refs`, `0008_autosave_seo`; `m2b2-exit.md`), and so is M2b-3
+(administration and extensions: account with TOTP enrolment, tokens and sessions; users;
+settings; themes with in-browser bundle packing; plugins with the permission report,
+write-only secrets and metrics; system with status, nodes, jobs and the audit log; every E2E
+spec in Chromium on both backends, Firefox and WebKit; the bundle budget; API additions
+user filters, sessions, admin TOTP reset, retained plugin data, audit filters, the test mail,
+relation `types`, inline image `srcset`; `ferrite theme pack`; no migration;
+`m2b3-exit.md`, verified in two parts, the browser and Docker checks in part B), so M2 is
+done (`m2-exit.md`). Open follow-ups stay listed in the roadmap. Next is M3 (WordPress
+import). Work top-down in `docs/ROADMAP.md`; per-milestone rulings are in
+`docs/superpowers/rulings/` (M2a-2a: `m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`).
 
 Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers)
 -> `ferrite-http` (public site, router, head, previews and logged-in requests, plugin
@@ -65,9 +72,9 @@ prune jobs) -> `ferrite-store` (traits); `ferrite-core` -> `ferrite-store` (trai
 `themes/blog` (embedded). Test plugins: `plugins/examples/` (own workspace, built for
 `wasm32-wasip2`). Admin SPA: `admin/` (pnpm, Vite + React + TS; `pnpm build` writes
 `admin/dist/`, which `ferrite-http`'s `admin` module embeds; without it the binary serves a
-placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: the account,
-users, themes, plugins, system and settings screens (M2b-3), import-wp (M3) (`docs/design/01-architecture.md` §1; API
-status per endpoint in 07 §1, admin status per screen in 07 §3).
+placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: the import
+screen and import-wp (M3), backups (M4) (`docs/design/01-architecture.md` §1; API status per
+endpoint in 07 §1, admin status per screen in 07 §3).
 
 Run a site locally: build the admin first (`pnpm -C admin install && pnpm -C admin build`;
 needs Node >= 24.18 and pnpm 10.28.2; skip it for the placeholder page), then
@@ -94,9 +101,11 @@ touching the database (exit 0 prints `ok: mode=… database=… media=… worker
 problems).
 Themes and plugins: `ferrite theme install|activate|list` and `ferrite plugin
 check|install|list|enable|disable|remove` (`--dir` holds `ferrite-plugin.toml` and one
-`*.wasm`; with SQLite `serve` must be stopped), or the API (`/api/v1/themes`,
-`/api/v1/plugins`: inspect, then install with the report's `fingerprint` as `approve`). Mail
-(password reset, plugin `notify-admins`) needs `[mail] smtp_url` + `from` (01 §4).
+`*.wasm`; with SQLite `serve` must be stopped), or the API (`/api/v1/themes` takes the bundle
+`ferrite theme pack --dir DIR --out FILE` writes, without a data folder;
+`/api/v1/plugins`: inspect, then install with the report's `fingerprint` as `approve`), or
+the admin's Appearance and Plugins screens. Mail (password reset, plugin `notify-admins`, the
+admin's test mail) needs `[mail] smtp_url` + `from` (01 §4).
 
 Run two cluster nodes locally: two data folders whose `ferrite.toml` share `site.url`,
 `database.url` (Postgres) + `database.schema`, and `[media] root = "<shared dir>"` with

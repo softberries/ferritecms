@@ -66,9 +66,9 @@ function images(doc: unknown): { src: string; alt: string }[] {
   return out;
 }
 
-test("set_featured_image_from_picker", async ({ as, site, backend, snap, expectAccessible }) => {
+test("set_featured_image_from_picker", async ({ as, site, siteKey, snap, expectAccessible }) => {
   test.setTimeout(120_000);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const name = `Cover ${word()}`;
   const media = await api.upload(png(`${name}.png`, 640, 400), { title: name, alt: "A cover" });
   const item = await api.create("post", `Featured ${uid()}`);
@@ -117,8 +117,8 @@ test("set_featured_image_from_picker", async ({ as, site, backend, snap, expectA
   }
 });
 
-test("insert_inline_image_and_render", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("insert_inline_image_and_render", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const name = `Inline ${word()}`;
   const alt = `A gradient ${uid()}`;
   const media = await api.upload(png(`${name}.png`, 800, 500), { title: name, alt });
@@ -177,8 +177,8 @@ async function dropOnBody(page: Page, at: string, files: FixtureFile[]): Promise
   await body(page).dispatchEvent("drop", { dataTransfer: data, ...point });
 }
 
-test("drop_image_into_editor_uploads_and_inserts", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("drop_image_into_editor_uploads_and_inserts", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const name = `dropped-${word()}`;
   const item = await api.create("post", `Drop ${uid()}`, {
     body: {
@@ -224,8 +224,8 @@ test("drop_image_into_editor_uploads_and_inserts", async ({ as, site, backend })
   }
 });
 
-test("edit_image_alt", async ({ as, site, backend, expectAccessible }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("edit_image_alt", async ({ as, site, siteKey, expectAccessible }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const name = `Alt ${word()}`;
   const media = await api.upload(png(`${name}.png`, 400, 300), { title: name });
   const item = await api.create("post", `Alt ${uid()}`, {
@@ -282,9 +282,9 @@ async function holdUploads(page: Page): Promise<void> {
   });
 }
 
-test("closing_the_picker_during_an_upload_asks", async ({ as, site, backend, guard }) => {
+test("closing_the_picker_during_an_upload_asks", async ({ as, site, siteKey, guard }) => {
   guard.allowFailedResource(/\/api\/v1\/media$/);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const item = await api.create("post", `Picker upload ${uid()}`);
   const page = await as("admin");
   try {
@@ -324,9 +324,9 @@ test("closing_the_picker_during_an_upload_asks", async ({ as, site, backend, gua
   }
 });
 
-test("leaving_during_a_drop_upload_asks", async ({ as, site, backend, guard }) => {
+test("leaving_during_a_drop_upload_asks", async ({ as, site, siteKey, guard }) => {
   guard.allowFailedResource(/\/api\/v1\/media$/);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const item = await api.create("post", `Drop leave ${uid()}`, { body: paragraph("Here.") });
   const page = await as("admin");
   try {
@@ -367,10 +367,10 @@ async function holdUploadsUntilReleased(page: Page): Promise<{ release: () => vo
   return { release: () => release() };
 }
 
-test("first_save_while_a_drop_uploads_keeps_the_image", async ({ as, site, backend }) => {
+test("first_save_while_a_drop_uploads_keeps_the_image", async ({ as, site, siteKey }) => {
   // A running drop upload survives the hand-over from `/new` to `/$id` (final review A1),
   // and its image lands without taking the focus from the title (A2).
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const name = `handover-${word()}`;
   const page = await as("admin");
   let id: string | null = null;
@@ -394,7 +394,11 @@ test("first_save_while_a_drop_uploads_keeps_the_image", async ({ as, site, backe
 
     // Typing in the title while the upload finishes: the focus stays there.
     await title(page).click();
-    await page.keyboard.press("End");
+    // The caret to the end (End in a text field does not move it in WebKit and Firefox
+    // on macOS).
+    await title(page).evaluate((el: HTMLTextAreaElement) =>
+      el.setSelectionRange(el.value.length, el.value.length),
+    );
     held.release();
     const figure = body(page).locator("[data-slot=editor-image]");
     await expect(figure).toHaveAttribute("data-state", "ready");
@@ -430,11 +434,11 @@ test("first_save_while_a_drop_uploads_keeps_the_image", async ({ as, site, backe
   }
 });
 
-test("take_theirs_while_a_drop_uploads_keeps_the_image", async ({ as, site, backend, guard }) => {
+test("take_theirs_while_a_drop_uploads_keeps_the_image", async ({ as, site, siteKey, guard }) => {
   // A reopen of the screen (Take theirs) while a drop upload runs: the upload goes on and
   // its image lands at the end of the reopened body (final review A1).
   guard.allowFailedResource(/\/api\/v1\/content\/post\/[0-9a-f-]+$/);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const name = `reopen-${word()}`;
   const item = await api.create("post", `Reopen ${uid()}`, { body: paragraph("Here.") });
   const page = await as("admin");

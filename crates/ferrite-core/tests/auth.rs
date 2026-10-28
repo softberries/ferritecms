@@ -58,7 +58,9 @@ fn key() -> SiteKey {
 
 fn auth_on(store: Arc<dyn Store>, clock: &Clock) -> AuthService {
     let c = clock.clone();
-    AuthService::new(store, key()).with_clock(Arc::new(move || c.now()))
+    AuthService::new(store, key())
+        .with_clock(Arc::new(move || c.now()))
+        .with_site_title(SITE_TITLE.into())
 }
 
 fn ip(last: u8) -> Option<IpAddr> {
@@ -115,7 +117,12 @@ fn rate_limited<T: std::fmt::Debug>(r: Result<T, CoreError>) -> bool {
 }
 
 async fn audit_actions(store: &dyn Store) -> Vec<String> {
-    let page = store.read().audit().list(200, None).await.unwrap();
+    let page = store
+        .read()
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(200))
+        .await
+        .unwrap();
     page.items.into_iter().map(|a| a.action).collect()
 }
 
@@ -469,7 +476,7 @@ async fn revocation_is_immediate_on_peer(db: &TestDb) {
 
 async fn totp_enroll_login_and_replay(db: &TestDb) {
     let clock = Clock::new();
-    let auth = auth_on(db.shared_store(), &clock).with_issuer_name("My: Blog".into());
+    let auth = auth_on(db.shared_store(), &clock).with_site_title("My: Blog".into());
     let user = make_user(db, "tia", Role::Author).await;
     let actor = Actor::new(user.id, user.role);
 
@@ -499,7 +506,7 @@ async fn totp_enroll_login_and_replay(db: &TestDb) {
     assert!(matches!(
         auth.totp_confirm(&actor, None, &setup.enrollment, &wrong, PASSWORD)
             .await,
-        Err(CoreError::Invalid(_))
+        Err(CoreError::InvalidField { field: "code", .. })
     ));
     let other = make_user(db, "oz", Role::Author).await;
     let code = totp.generate(clock.secs()).to_string();
@@ -512,7 +519,10 @@ async fn totp_enroll_login_and_replay(db: &TestDb) {
             PASSWORD
         )
         .await,
-        Err(CoreError::Invalid(_))
+        Err(CoreError::InvalidField {
+            field: "enrollment",
+            ..
+        })
     ));
     // The right code without the account's password does not enable it either.
     assert!(matches!(
@@ -712,7 +722,7 @@ async fn totp_attempts_are_rate_limited(db: &TestDb) {
             matches!(
                 auth.totp_confirm(&ann_actor, None, &setup.enrollment, &wrong, PASSWORD)
                     .await,
-                Err(CoreError::Invalid(_))
+                Err(CoreError::InvalidField { field: "code", .. })
             ),
             "attempt {}",
             i + 1
@@ -1117,7 +1127,7 @@ async fn request_reset(
     input: &str,
     ip: Option<IpAddr>,
 ) -> Result<(), CoreError> {
-    auth.request_password_reset(queue, input, ip, RESET_BASE, SITE_TITLE)
+    auth.request_password_reset(queue, input, ip, RESET_BASE)
         .await
 }
 
@@ -1474,7 +1484,13 @@ async fn reset_ends_sessions_keeps_tokens(db: &TestDb) {
     );
     let row = stored(db.store(), &kim).await;
     assert!(!row.must_reset);
-    let page = db.store().read().audit().list(200, None).await.unwrap();
+    let page = db
+        .store()
+        .read()
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(200))
+        .await
+        .unwrap();
     assert_eq!(page.items.len(), before + 1, "one audit row");
     let entry = page
         .items

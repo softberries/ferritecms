@@ -1,15 +1,20 @@
 // One field of the builder, open (07 §3 Content types): label, name (following the label
 // until typed, for a new field), kind (a saved field may change kind, with a warning that
 // existing values may no longer be valid), required, the options of a `select` (a
-// `SortableList` of strings, 1 to 100, no duplicates) and the sub-fields of a `repeater`
+// `SortableList` of strings, 1 to 100, no duplicates), the content types a `relation` may
+// point at (checkboxes, none checked: any type; P52) and the sub-fields of a `repeater`
 // (the builder again, one level deeper; core nests repeaters at most two deep).
 
+import { useQuery } from "@tanstack/react-query";
 import { CheckIcon, PlusIcon, Trash2Icon, TriangleAlertIcon } from "lucide-react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { SortableList } from "@/components/kit/sortable-list";
+import { type ContentTypeDto, typesQuery } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -31,7 +36,7 @@ import {
   validName,
 } from "./builder-model";
 import { FieldBuilder } from "./field-builder";
-import { FormField, SwitchRow } from "./form-field";
+import { FormField, SwitchRow } from "@/components/kit/form-field";
 import { KIND_ICONS } from "./kinds";
 
 export interface FieldEditorProps {
@@ -177,6 +182,14 @@ export function FieldEditor({ row, depth, label, onChange, onRemove, onDone }: F
           label={label}
           onChange={(options) => set({ options })}
           error={err("options")}
+        />
+      ) : null}
+
+      {row.kind === "relation" ? (
+        <TargetsEditor
+          types={row.types}
+          onChange={(types) => set({ types })}
+          error={b.errors[errorKey(row.key, "types")]}
         />
       ) : null}
 
@@ -344,5 +357,95 @@ function OptionsEditor({
         </span>
       </div>
     </section>
+  );
+}
+
+const BUILT_IN_ORDER = ["post", "page"];
+
+/** The types a relation can point at: not media (`fields.rs`); built-ins first, then by label. */
+function relationTargets(types: readonly ContentTypeDto[]): ContentTypeDto[] {
+  const rank = (ty: ContentTypeDto) => {
+    const i = BUILT_IN_ORDER.indexOf(ty.name);
+    return i >= 0 ? i : ty.built_in ? BUILT_IN_ORDER.length : BUILT_IN_ORDER.length + 1;
+  };
+  return types
+    .filter((ty) => ty.name !== "media")
+    .sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
+}
+
+/**
+ * A relation's target types as checkboxes (none checked: any type). A stored name that is
+ * not offered (the type is gone) stays listed, checked, so it can be unchecked; the
+ * builder's check says why it cannot be saved.
+ */
+function TargetsEditor({
+  types,
+  onChange,
+  error,
+}: {
+  types: string[];
+  onChange: (types: string[]) => void;
+  error: string | undefined;
+}) {
+  const { t } = useTranslation("structure");
+  const b = useBuilder();
+  const id = useId();
+  const all = useQuery(typesQuery);
+  const offered = useMemo(() => relationTargets(all.data ?? []), [all.data]);
+  // Until the types are loaded nothing is known to be gone (no false alarm).
+  const unknown = all.data ? types.filter((name) => !offered.some((ty) => ty.name === name)) : [];
+  const toggle = (name: string, on: boolean) =>
+    onChange(on ? [...types.filter((v) => v !== name), name] : types.filter((v) => v !== name));
+  const entries = [
+    ...offered.map((ty) => ({ name: ty.name, label: ty.label })),
+    ...unknown.map((name) => ({ name, label: null })),
+  ];
+  return (
+    <fieldset
+      data-slot="relation-targets"
+      aria-describedby={`${id}-hint${error ? ` ${id}-error` : ""}`}
+      className="flex min-w-0 flex-col gap-2 rounded-lg border bg-muted/30 p-3"
+    >
+      <legend className="float-left mb-0.5 text-sm font-medium">{t("editor.targets")}</legend>
+      <p id={`${id}-hint`} className="clear-left text-xs text-muted-foreground">
+        {t("editor.targetsHint")}
+      </p>
+      <ul className="grid gap-x-4 gap-y-1 sm:grid-cols-2">
+        {entries.map((ty) => {
+          const boxId = `${id}-${ty.name}`;
+          return (
+            <li key={ty.name} className="flex min-h-11 items-center gap-2.5 sm:min-h-9">
+              <Checkbox
+                id={boxId}
+                checked={types.includes(ty.name)}
+                disabled={b.disabled}
+                // The save puts the cursor on the first input that says why.
+                {...(error ? { "aria-invalid": true } : {})}
+                onCheckedChange={(on) => toggle(ty.name, on === true)}
+              />
+              <Label htmlFor={boxId} className="min-w-0 font-normal">
+                {ty.label === null ? (
+                  <span className="truncate text-destructive" title={ty.name}>
+                    {t("editor.targetsUnknown")}
+                  </span>
+                ) : (
+                  <span className="truncate" title={ty.label}>
+                    {ty.label}
+                  </span>
+                )}
+                <code className="truncate font-mono text-xs text-muted-foreground" title={ty.name}>
+                  {ty.name}
+                </code>
+              </Label>
+            </li>
+          );
+        })}
+      </ul>
+      {error ? (
+        <p id={`${id}-error`} data-slot="form-error" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </fieldset>
   );
 }

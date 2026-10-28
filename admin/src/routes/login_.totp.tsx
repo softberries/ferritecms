@@ -3,7 +3,7 @@
 // wrong or expired code with `401` (no `422`, F21), and after the challenge's 5 minutes
 // the screen goes back to login with a notice.
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Link,
   createFileRoute,
@@ -12,28 +12,20 @@ import {
   useRouterState,
 } from "@tanstack/react-router";
 import { ArrowLeftIcon, ShieldCheckIcon } from "lucide-react";
-import { cn } from "cn";
-import {
-  type FormEvent,
-  type Ref,
-  useCallback,
-  useEffect,
-  useEffectEvent,
-  useRef,
-  useState,
-} from "react";
+import { type FormEvent, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { loginTotp } from "@/api/auth";
 import { isProblem } from "@/api/problem";
 import type { SchemaLoginResponse } from "@/api/schema";
 import { AuthLayout, FormAlert, SubmitButton } from "@/auth/auth-layout";
+import { useSecretCall } from "@/auth/use-secret-call";
 import { type FormFailure, genericFailure } from "@/auth/errors";
 import { nextSearch, routerHref, safeNext } from "@/auth/next";
 import { startSession } from "@/auth/session";
+import { CODE_DIGITS as DIGITS, CodeInput } from "@/components/kit/code-input";
 
 /** The challenge's lifetime (07 §2). */
 const CHALLENGE_MS = 5 * 60_000;
-const DIGITS = 6;
 
 export const Route = createFileRoute("/login_/totp")({
   validateSearch: nextSearch,
@@ -84,7 +76,7 @@ function TotpPage() {
     };
   }, [issuedAt]);
 
-  const verify = useMutation({
+  const verify = useSecretCall({
     mutationFn: loginTotp,
     onSuccess: async (r: SchemaLoginResponse) => {
       if (r.status !== "session") return;
@@ -145,14 +137,14 @@ function TotpPage() {
           </label>
           <CodeInput
             ref={inputRef}
+            id="totp-code"
+            describedBy="totp-code-hint"
             value={code}
             invalid={failure?.kind === "message"}
             disabled={locked}
-            onChange={(value) => {
-              setCode(value);
-              // Auto-submit once the sixth digit is in.
-              if (value.length === DIGITS) send(value);
-            }}
+            onChange={setCode}
+            // Auto-submit once the sixth digit is in.
+            onComplete={send}
           />
           <p id="totp-code-hint" className="text-sm text-muted-foreground">
             {t("totp.codeHint")}
@@ -163,77 +155,5 @@ function TotpPage() {
         </SubmitButton>
       </form>
     </AuthLayout>
-  );
-}
-
-/**
- * One real input (`inputmode="numeric"`, `autocomplete="one-time-code"`, so SMS and
- * password-manager autofill work) laid over six drawn cells in two groups of three.
- */
-function CodeInput({
-  ref,
-  value,
-  onChange,
-  invalid,
-  disabled,
-}: {
-  ref: Ref<HTMLInputElement>;
-  value: string;
-  onChange: (value: string) => void;
-  invalid: boolean;
-  disabled: boolean;
-}) {
-  const [focused, setFocused] = useState(false);
-  const cells = Array.from({ length: DIGITS }, (_, i) => value[i] ?? "");
-  const active = Math.min(value.length, DIGITS - 1);
-  const cell = (i: number) => (
-    <span
-      key={i}
-      className={cn(
-        "flex h-12 w-11 items-center justify-center rounded-lg border bg-background font-mono text-xl font-medium text-foreground tabular-nums transition-colors duration-(--dur-instant) dark:bg-input/30",
-        invalid ? "border-destructive" : "border-input",
-        focused && i === active && !invalid && "border-primary ring-2 ring-primary/25",
-      )}
-    >
-      {cells[i] ? (
-        cells[i]
-      ) : focused && i === active ? (
-        <span className="h-6 w-px bg-foreground" />
-      ) : null}
-    </span>
-  );
-  return (
-    <div className="relative w-full rounded-xl has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-4 has-[input:focus-visible]:outline-ring">
-      <div aria-hidden="true" className="flex items-center justify-between">
-        <div className="flex gap-2">{[0, 1, 2].map(cell)}</div>
-        <span className="h-px w-3 bg-input" />
-        <div className="flex gap-2">{[3, 4, 5].map(cell)}</div>
-      </div>
-      <input
-        ref={ref}
-        id="totp-code"
-        name="code"
-        type="text"
-        inputMode="numeric"
-        autoComplete="one-time-code"
-        pattern="[0-9]*"
-        maxLength={DIGITS}
-        autoFocus
-        disabled={disabled}
-        aria-invalid={invalid || undefined}
-        aria-describedby="totp-code-hint"
-        value={value}
-        onFocus={() => {
-          setFocused(true);
-        }}
-        onBlur={() => {
-          setFocused(false);
-        }}
-        onChange={(e) => {
-          onChange(e.target.value.replace(/\D/g, "").slice(0, DIGITS));
-        }}
-        className="absolute inset-0 size-full cursor-text bg-transparent font-mono text-transparent caret-transparent opacity-0 outline-none selection:bg-transparent disabled:cursor-not-allowed"
-      />
-    </div>
   );
 }

@@ -14,7 +14,8 @@ ferritecms/
 ├── rust-toolchain.toml           # stable, edition 2024
 ├── crates/
 │   ├── ferrite/                  # (built) BIN: clap CLI (`init`, `migrate`, `serve`, `seed demo`,
-│   │                             #   `config check`, `healthcheck`, `user`), logging, startup check,
+│   │                             #   `config check`, `healthcheck`, `user`, `theme` (with `pack`,
+│   │                             #   M2b-3), `plugin`), logging, startup check,
 │   │                             #   site key file, node wiring (hot swap, jobs), shutdown; anyhow
 │   │                             #   at the top level
 │   ├── ferrite-config/           # (built) ferrite.toml + env parsing, validation, init template
@@ -39,7 +40,10 @@ ferritecms/
 │   │                             #   `ExtensionAdmin`), theme/plugin settings (`ext_settings`),
 │   │                             #   mail (`Mailer`, `MailQueue`), password reset, action jobs.
 │   │                             #   M2a-2b: `MediaService`, `CommentService`, `SystemService`,
-│   │                             #   `diagnostics::scrub`. Depends on domain + store only
+│   │                             #   `diagnostics::scrub`. M2b-3: user filters, sessions, an
+│   │                             #   admin's TOTP reset, retained plugin data, audit filters,
+│   │                             #   the test mail, relation `types`, inline image `srcset`.
+│   │                             #   Depends on domain + store only
 │   ├── ferrite-cache/            # (built, M1c-2) page cache (moka) + dependency index + outbox
 │   │                             #   invalidation loop
 │   ├── ferrite-theme/            # (built, M1c-2) theme packages, hierarchy resolution, sandboxed
@@ -55,23 +59,29 @@ ferritecms/
 │   │                             #   comments and system endpoints, the uploader `media::Uploader`,
 │   │                             #   `Idempotency-Key`, the theme comment form `/_comment`, the
 │   │                             #   plugin `http` egress; M2b-1: the embedded admin (`admin`
-│   │                             #   module, rust-embed of `admin/dist`, its CSP and headers))
+│   │                             #   module, rust-embed of `admin/dist`, its CSP and headers;
+│   │                             #   M2b-3: the `ferrite_admin_theme` cookie's class on
+│   │                             #   `index.html`))
 │   ├── ferrite-import-wp/        # (M3) WXR importer
 │   └── ferrite-sdk/              # (built, M0) guest SDK for Rust plugins (`export_plugin!` macro
 │                                 #   lives in the crate; there is no separate macros crate)
 ├── wit/                          # WIT packages (source of truth for plugin API)
 │   └── ferrite-plugin@0.1.0/
-├── admin/                        # (built, M2b-1 and M2b-2) admin SPA: one pnpm package (not a workspace),
-│                                 #   Vite + React + TS; `pnpm build` writes dist/, which
-│                                 #   ferrite-http embeds (placeholder page without it; 07 §3).
-│                                 #   src/ (routes/, api/ with the generated schema.d.ts, editor/,
-│                                 #   components/ui + kit, design/, shell/, palette/, dashboard/,
-│                                 #   content/, media/, comments/, structure/, i18n/), e2e/
-│                                 #   (Playwright + support), scripts/
+├── admin/                        # (built, M2b-1 to M2b-3) admin SPA: one pnpm package (not a
+│                                 #   workspace), Vite + React + TS; `pnpm build` writes dist/,
+│                                 #   which ferrite-http embeds (placeholder page without it;
+│                                 #   07 §3). src/ (routes/, api/ with the generated
+│                                 #   schema.d.ts, editor/, components/ui + kit, design/, shell/,
+│                                 #   palette/, dashboard/, content/, media/, comments/,
+│                                 #   structure/, account/, users/, settings/, appearance/,
+│                                 #   plugins/, system/, auth/, lib/, i18n/), e2e/ (Playwright
+│                                 #   + support), scripts/ (dist and bundle checks, API drift
+│                                 #   check, the E2E wrapper), bundle-budget.json
 ├── themes/                       # (built) starter themes embedded in the binary: `blog`
 ├── plugins/examples/             # (built) hello, hello-v2 (manifest only), order-a, order-b,
 │                                 #   clock, html-inject, meta-writer, reader, router, notifier,
-│                                 #   counter, settings-probe, fetcher, hostile/*; seo, analytics,
+│                                 #   counter, settings-probe, fetcher, admin-e2e (the admin
+│                                 #   E2E's plugin, M2b-3), hostile/*; seo, analytics,
 │                                 #   contact-form are M4
 ├── tests/                        # cross-crate integration tests (planned; per-crate tests/ exist)
 └── docs/
@@ -124,7 +134,7 @@ One `ferrite serve` process contains (as built after M2a-2a; planned parts marke
 | Cluster | Node registry and heartbeat, job runner, periodic scheduler, built-in prune jobs (`LISTEN/NOTIFY`, locks and the job queue are in the store) | ferrite-cluster |
 | Core services | Business rules, permission checks (role + token scope), revisions, emitting events; users, sessions, tokens, rate limits, TOTP (`AuthService`, `UserService`); `SiteReader` for public reads and previews | ferrite-core |
 | Plugin host | Load components, run filters/actions/routes under limits, a per-node call cap and a per-render budget | ferrite-plugin-host |
-| Mail | `MailQueue` (16 sends in flight, 10 s each) over the SMTP mailer when `[mail]` is set: password reset and plugin `notify-admins` | ferrite-core + ferrite-http |
+| Mail | `MailQueue` (16 sends in flight, 10 s each) over the SMTP mailer when `[mail]` is set: password reset, plugin `notify-admins` and the admin's test mail (M2b-3) | ferrite-core + ferrite-http |
 | Served buffer | `request.served` events buffered per node, flushed as `plugin.action` jobs every 10 s or 1 000 events (05 §4a) | ferrite-http |
 | Redirect hits | Redirect hits counted per node (at most 10 000 redirects buffered), one `add_hits` write per redirect every 10 s and on stop (06 §6) | ferrite-http |
 | Theme engine | Resolve template, render with MiniJinja | ferrite-theme |
@@ -132,7 +142,7 @@ One `ferrite serve` process contains (as built after M2a-2a; planned parts marke
 | Invalidation loop | Polls the `events` outbox every `cache.poll_interval_ms` (default 250; woken by `LISTEN` in cluster mode) and applies events to the page cache; its hook drives the hot swap | ferrite-cache |
 | Reloader | Hot swap of theme, plugin registry and permalink rules/route table on events (P18) | ferrite (bin) |
 | Scheduled publishing | `content.publish_scheduled` job per scheduled item, `content.publish_due` periodic every 30 s (P12) | ferrite (bin) + core |
-| HTTP | Public routes, `/_media`, `/_theme`, `/_preview/<id>`, `/healthz`, `/readyz`, the REST API `/api/v1` (M2a-1, same process and layers, never cached), plugin routes `/_p/<plugin>/…` (M2a-2a, never cached); later `/admin` (M2b), `/metrics` (M4) | ferrite-http |
+| HTTP | Public routes, `/_media`, `/_theme`, `/_preview/<id>`, `/healthz`, `/readyz`, the REST API `/api/v1` (M2a-1, same process and layers, never cached), plugin routes `/_p/<plugin>/…` (M2a-2a, never cached), the embedded admin `/admin/` (M2b, 07 §3); later `/metrics` (M4) | ferrite-http |
 | Workers | Job queue consumers (`cluster.workers` per node): prune jobs incl. `sessions.prune`, publishing, `plugin.action`, `plugin.purge` and `plugin.purge_sweep` (M2a-2a); variants and imports later | ferrite-cluster + core |
 
 Startup order as built (`crates/ferrite/src/serve.rs`, `ferrite::start`; any failure exits

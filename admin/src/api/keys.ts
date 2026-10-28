@@ -24,6 +24,18 @@ export type JobFilters = Omit<
   "cursor"
 >;
 
+/** The filters of the users list (every query member but the page cursor and size). */
+export type UserFilters = Omit<
+  NonNullable<operations["list_users"]["parameters"]["query"]>,
+  "cursor" | "limit"
+>;
+
+/** The filters of the audit log (every query member but the page cursor and size). */
+export type AuditFilters = Omit<
+  NonNullable<operations["list_audit"]["parameters"]["query"]>,
+  "cursor" | "limit"
+>;
+
 /**
  * TanStack Query keys. Keys nest, so invalidating a prefix covers what is under it:
  * `["content", type]` covers that type's lists, counts and items, and an item's key
@@ -91,7 +103,34 @@ export const qk = {
     status: ["system", "status"] as const,
     metrics: ["system", "metrics"] as const,
     jobs: (filters: JobFilters) => ["system", "jobs", filters] as const,
+    /** Every job list (the dashboard's and the Jobs tab's); refetch after a retry. */
+    jobLists: ["system", "jobs"] as const,
+    /** The Jobs tab's pages (`useInfiniteQuery` over `next_cursor`); under `jobLists`. */
+    jobsInfinite: (filters: JobFilters) => ["system", "jobs", "infinite", filters] as const,
+    nodes: ["system", "nodes"] as const,
+    audit: (filters: AuditFilters) => ["system", "audit", filters] as const,
+    /** The Audit tab's pages (`useInfiniteQuery` over `next_cursor`). */
+    auditInfinite: (filters: AuditFilters) => ["system", "audit", "infinite", filters] as const,
   },
+  /** Every users list and user (`["users"]` covers them all). */
+  usersAll: ["users"] as const,
+  users: (filters: UserFilters) => ["users", "list", filters] as const,
+  /** Every users list (refetch after a create, an edit or a delete). */
+  usersLists: ["users", "list"] as const,
+  /** The users screen's pages (`useInfiniteQuery` over `next_cursor`); under `usersLists`. */
+  usersInfinite: (filters: UserFilters) => ["users", "list", "infinite", filters] as const,
+  user: (id: string) => ["users", "item", id] as const,
+  /** Under the user, so invalidating `user(id)` refetches the tokens too. */
+  tokens: (userId: string) => ["users", "item", userId, "tokens"] as const,
+  /** The signed-in user's sessions. */
+  sessions: ["sessions"] as const,
+  themes: ["themes"] as const,
+  themeSettings: (name: string) => ["themes", name, "settings"] as const,
+  /** Every plugin key: the list, each plugin, its metrics and settings. */
   plugins: ["plugins"] as const,
+  plugin: (name: string) => ["plugins", name, "item"] as const,
   pluginMetrics: (name: string) => ["plugins", name, "metrics"] as const,
+  pluginSettings: (name: string) => ["plugins", name, "settings"] as const,
+  /** Deleted plugins whose data is kept (its own root, apart from per-plugin keys). */
+  pluginsRetained: ["pluginsRetained"] as const,
 } as const;

@@ -11,6 +11,10 @@ import type {
 
 export type CommentDto = SchemaCommentDto;
 
+/** A comment's moderation status (07 §1). */
+export const COMMENT_STATUSES = ["pending", "approved", "spam", "trash"] as const;
+export type CommentStatus = (typeof COMMENT_STATUSES)[number];
+
 /** `GET /comments`: one page, newest first. */
 export function listComments(
   query: CommentFilters & { cursor?: string; limit?: number } = {},
@@ -41,7 +45,7 @@ export function commentCountsQuery(item?: string) {
 }
 
 /** `status`: `pending`, `approved`, `spam` or `trash`. */
-export function moderateComment(id: string, status: string): Promise<CommentDto> {
+export function moderateComment(id: string, status: CommentStatus): Promise<CommentDto> {
   return unwrap(api.PATCH("/api/v1/comments/{id}", { params: { path: { id } }, body: { status } }));
 }
 

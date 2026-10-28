@@ -35,7 +35,7 @@ use ferrite_core::{
     events::option_key,
     permalink::{encode_segment, term_path},
 };
-use ferrite_domain::Timestamp;
+use ferrite_domain::{MEDIA_KIND, Timestamp};
 
 use super::{
     AppState,
@@ -48,9 +48,6 @@ pub const DISCOURAGE_INDEXING_OPTION: &str = "reading.discourage_indexing";
 const RSS: &str = "application/rss+xml; charset=utf-8";
 const XML: &str = "application/xml; charset=utf-8";
 const TEXT: &str = "text/plain; charset=utf-8";
-/// Content type that is never in a sitemap.
-const MEDIA_KIND: &str = "media";
-
 /// The RSS feed of `source`; `None` for an unknown or empty term.
 pub(crate) async fn feed(
     state: &AppState,

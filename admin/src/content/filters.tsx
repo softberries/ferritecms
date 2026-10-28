@@ -122,15 +122,20 @@ export function ListFilters({ label, search, taxonomies, onChange }: ListFilters
   );
 }
 
-/** The search box: local text, the URL updated `SEARCH_DEBOUNCE_MS` after the last key. */
+/**
+ * The search box: local text, the URL updated `debounceMs` (default `SEARCH_DEBOUNCE_MS`)
+ * after the last key.
+ */
 export function SearchField({
   label,
   value,
   onSearch,
+  debounceMs = SEARCH_DEBOUNCE_MS,
 }: {
   label: string;
   value: string;
   onSearch: (q: string) => void;
+  debounceMs?: number;
 }) {
   const { t } = useTranslation("content");
   const input = useRef<HTMLInputElement>(null);
@@ -157,9 +162,9 @@ export function SearchField({
     const id = window.setTimeout(() => {
       setSent(q);
       latest.current(q);
-    }, SEARCH_DEBOUNCE_MS);
+    }, debounceMs);
     return () => window.clearTimeout(id);
-  }, [text, synced]);
+  }, [text, synced, debounceMs]);
 
   useShortcut({
     id: "list.search",

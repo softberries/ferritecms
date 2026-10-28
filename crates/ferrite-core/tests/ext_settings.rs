@@ -208,7 +208,13 @@ async fn events_after(store: &dyn Store, seq: i64) -> Vec<(String, Vec<String>)>
 
 /// The newest audit row: (action, details).
 async fn last_audit(store: &dyn Store) -> Option<(String, Value)> {
-    let rows = store.read().audit().list(1, None).await.unwrap().items;
+    let rows = store
+        .read()
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(1))
+        .await
+        .unwrap()
+        .items;
     rows.into_iter().next().map(|a| (a.action, a.details))
 }
 
@@ -216,7 +222,7 @@ async fn audit_count(store: &dyn Store) -> usize {
     store
         .read()
         .audit()
-        .list(200, None)
+        .list(&ferrite_domain::AuditQuery::first(200))
         .await
         .unwrap()
         .items

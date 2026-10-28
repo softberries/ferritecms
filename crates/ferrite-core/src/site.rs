@@ -46,12 +46,19 @@
 mod hydrate;
 mod model;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    num::NonZeroU32,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
+};
 
 use chrono::NaiveDate;
 use ferrite_domain::{
-    ArtifactHash, ContentId, ContentItem, ContentQuery, ContentStatus, MAX_PAGE, SearchQuery,
-    Taxonomy, TermId, Timestamp,
+    ArtifactHash, ContentId, ContentItem, ContentQuery, ContentStatus, MAX_PAGE, MEDIA_KIND,
+    SearchQuery, Taxonomy, TermId, Timestamp,
 };
 use ferrite_store::{
     MAX_CONTENT_KINDS, MAX_ID_FILTER, MAX_PAGE_ROWS, MAX_SEARCH_KINDS, Repos, Store,
@@ -68,6 +75,7 @@ use hydrate::{Hydrator, Nodes, chain, load_ancestors, unique};
 pub use model::{
     DepKeys, FeedSource, FrontPage, ItemLink, Listing, MediaFile, MediaPublic, MediaVariant,
     PageItem, Previewed, PublicItem, SiteRead, SitemapEntry, SitemapPage, TermPublic, UserPublic,
+    srcset,
 };
 
 /// Maps an artifact hash and a file name to a public URL (`MediaStore::public_url`).
@@ -75,8 +83,6 @@ pub type MediaUrlFn = Arc<dyn Fn(&ArtifactHash, &str) -> String + Send + Sync>;
 /// The current time; injected so tests control "now".
 pub type Clock = Arc<dyn Fn() -> Timestamp + Send + Sync>;
 
-/// Content type of media items.
-pub(crate) const MEDIA_KIND: &str = "media";
 /// Content type listed on the front page and in date and author archives.
 const POST_KIND: &str = "post";
 /// Option: items per listing page (integer, clamped to 1..=100; default 10).
@@ -167,6 +173,9 @@ pub struct SiteReader {
     sitemap_file_len: usize,
     media_url: MediaUrlFn,
     clock: Clock,
+    /// The served theme's widest image size in pixels, 0 for none
+    /// ([`set_image_width`](Self::set_image_width)).
+    image_width: AtomicU32,
 }
 
 impl SiteReader {
@@ -182,7 +191,17 @@ impl SiteReader {
             sitemap_file_len: SITEMAP_FILE_LEN,
             media_url,
             clock,
+            image_width: AtomicU32::new(0),
         }
+    }
+
+    /// Sets the served theme's widest `[images]` size (`None`: the theme has none):
+    /// inline `ferrite:media/<id>` images take it as their largest display size (06
+    /// §4). The node sets it whenever it starts serving a theme; the pages cached
+    /// before a theme swap are flushed with it.
+    pub fn set_image_width(&self, width: Option<u32>) {
+        self.image_width
+            .store(width.unwrap_or(0), Ordering::Relaxed);
     }
 
     /// Splits sitemaps every `len` URLs (at least 1) instead of [`SITEMAP_FILE_LEN`];
@@ -889,6 +908,12 @@ impl SiteReader {
     /// two options, the totals, the page's rows, the permalink's terms and ancestors
     /// (only with more than one page), and for a reply whose ancestors are hidden at
     /// most `MAX_COMMENT_DEPTH` lookups (`can_reply`).
+    ///
+    /// The reads are autocommit reads, not one snapshot (a `Tx` would take SQLite's
+    /// single writer on a public read): a moderation or submit committed between the
+    /// totals and the page can make them disagree by that comment. Every such write
+    /// invalidates `post:<id>`, which this read records, so the page cache's staleness
+    /// guard does not store that render, and the next one reads both anew.
     pub async fn comments(
         &self,
         id: ContentId,
@@ -1089,6 +1114,7 @@ impl SiteReader {
             repos,
             permalinks: rules,
             media_url: &self.media_url,
+            image_width: NonZeroU32::new(self.image_width.load(Ordering::Relaxed)),
             now,
         }
     }

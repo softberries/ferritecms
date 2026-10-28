@@ -1,20 +1,28 @@
-// E2E against a real `ferrite serve` (10 §1, §3). Global setup starts the sites
-// (`e2e/support/global-setup.ts`); build first:
+// E2E against a real `ferrite serve` (10 §1, §3). Global setup starts one site per
+// selected project (`e2e/support/global-setup.ts`); build first:
 //   pnpm -C admin build && cargo build --release -p ferrite && pnpm -C admin e2e
-// With FERRITE_TEST_PG_URL set, `chromium-pg` runs the `*.smoke.spec.ts` files against a
-// Postgres site as well (M2b P22).
+// The matrix (M2b P55, `e2e/support/projects.ts`): `chromium-sqlite`, `chromium-pg` (with
+// FERRITE_TEST_PG_URL), `firefox-sqlite` and `webkit-sqlite`, every spec in each. Run it
+// through `pnpm e2e` (Chromium) or `pnpm e2e:all` (all four), whose wrapper
+// (`scripts/e2e.mjs`) picks the projects and keeps single-file runs to that file.
 
 import { defineConfig, devices } from "@playwright/test";
 import type { Options } from "./e2e/support/fixtures";
+import {
+  definedProjects,
+  selectedProjects,
+  SITE_WIDE_SUFFIX,
+  SITE_WIDE_SPECS,
+  type Engine,
+} from "./e2e/support/projects";
 import { VIEWPORTS } from "./e2e/support/snap";
 
 const ci = !!process.env.CI;
-// CI always runs the Postgres project; a missing URL there is a broken job, not a skip
-// (mirrors the Rust suites, 10 §2).
-if (ci && !process.env.FERRITE_TEST_PG_URL) {
-  throw new Error("CI is set but FERRITE_TEST_PG_URL is missing: the chromium-pg project needs it");
-}
-const chromium = { ...devices["Desktop Chrome"], viewport: VIEWPORTS.desktop };
+const DEVICES: Record<Engine, (typeof devices)[string]> = {
+  chromium: devices["Desktop Chrome"],
+  firefox: devices["Desktop Firefox"],
+  webkit: devices["Desktop Safari"],
+};
 
 export default defineConfig<Options>({
   testDir: "./e2e",
@@ -22,7 +30,9 @@ export default defineConfig<Options>({
   // and server logs sit next to it in test-results/.
   outputDir: "./test-results/artifacts",
   globalSetup: "./e2e/support/global-setup.ts",
-  workers: 2,
+  // Two per selected project: each has its own site, so `e2e:all` runs its four side by
+  // side at the load one project puts on one server.
+  workers: 2 * Math.max(1, selectedProjects().length),
   retries: ci ? 1 : 0,
   forbidOnly: ci,
   reporter: ci
@@ -32,16 +42,24 @@ export default defineConfig<Options>({
     trace: "retain-on-failure",
     colorScheme: "light",
   },
-  projects: [
-    { name: "chromium-sqlite", use: { ...chromium, backend: "sqlite" } },
-    ...(process.env.FERRITE_TEST_PG_URL
-      ? [
-          {
-            name: "chromium-pg",
-            testMatch: /\.smoke\.spec\.ts$/,
-            use: { ...chromium, backend: "pg" as const },
-          },
-        ]
-      : []),
-  ],
+  projects: definedProjects().flatMap((p) => {
+    // Every project at the desktop viewport; `snap` changes it for its phone shots.
+    const use = {
+      ...DEVICES[p.engine],
+      viewport: VIEWPORTS.desktop,
+      backend: p.backend,
+      siteKey: p.name,
+    };
+    // A teardown runs after its project even when tests failed there (a dependency
+    // would skip it).
+    return [
+      {
+        name: p.name,
+        testIgnore: SITE_WIDE_SPECS,
+        teardown: `${p.name}${SITE_WIDE_SUFFIX}`,
+        use,
+      },
+      { name: `${p.name}${SITE_WIDE_SUFFIX}`, testMatch: SITE_WIDE_SPECS, workers: 1, use },
+    ];
+  }),
 });

@@ -72,8 +72,8 @@ async function save(page: Page): Promise<void> {
   await expect(saveButton(page)).toBeDisabled();
 }
 
-test("build_primary_menu_and_see_it_on_the_site", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("build_primary_menu_and_see_it_on_the_site", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const s = short();
   const pageItem = await api.createIn("page", `About ${s}`, "published");
   const term = await api.createTerm("category", `Topic ${s}`);
@@ -118,6 +118,8 @@ test("build_primary_menu_and_see_it_on_the_site", async ({ as, site, backend }) 
     await address.fill("javascript:alert(1)");
     await addPanel(page).getByRole("button", { name: "Add link" }).click();
     await expect(addPanel(page)).toContainText("Use http://, https:// or a path starting with /");
+    // The error replaces the hint, which says the same rule.
+    await expect(addPanel(page)).not.toContainText("or a path on this site starting with /");
     await address.fill(`https://example.com/${s}`);
     await addPanel(page).getByRole("textbox", { name: "Label" }).fill(`Elsewhere ${s}`);
     await addPanel(page).getByRole("button", { name: "Add link" }).click();
@@ -171,8 +173,8 @@ test("build_primary_menu_and_see_it_on_the_site", async ({ as, site, backend }) 
   }
 });
 
-test("drag_reorder_with_pointer", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("drag_reorder_with_pointer", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const menu = await newMenu(api, "dr", [
     link("Alpha", "/alpha", null, 0),
     link("Beta", "/beta", null, 1),
@@ -216,8 +218,8 @@ test("drag_reorder_with_pointer", async ({ as, site, backend }) => {
   }
 });
 
-test("remove_with_undo_before_save", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("remove_with_undo_before_save", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const parent = link("Parent", "/parent", null, 1);
   const menu = await newMenu(api, "rm", [
     link("First", "/first", null, 0),
@@ -258,8 +260,8 @@ test("remove_with_undo_before_save", async ({ as, site, backend }) => {
   }
 });
 
-test("leave_with_unsaved_changes_asks", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("leave_with_unsaved_changes_asks", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const menu = await newMenu(api, "lv", [link("Only", "/only")]);
   const page = await as("admin");
   const dialog = page.locator("[data-slot=menu-leave-dialog]");
@@ -294,8 +296,8 @@ test("leave_with_unsaved_changes_asks", async ({ as, site, backend }) => {
   }
 });
 
-test("menu_stale_guard", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("menu_stale_guard", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const menu = await newMenu(api, "sg", [
     link("Home", "/", null, 0),
     link("Blog", "/blog/", null, 1),
@@ -342,8 +344,8 @@ test("menu_stale_guard", async ({ as, site, backend }) => {
   }
 });
 
-test("delete_menu_with_undo", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "admin");
+test("delete_menu_with_undo", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const menu = await newMenu(api, "dl", [link("Kept", "/kept")]);
   const page = await as("admin");
   try {
@@ -376,11 +378,11 @@ test("delete_menu_with_undo", async ({ as, site, backend }) => {
   }
 });
 
-test("screens", async ({ as, site, backend, guard, snap, expectAccessible }) => {
+test("screens", async ({ as, site, siteKey, guard, snap, expectAccessible }) => {
   test.setTimeout(240_000);
   // The page entry's target is looked up type by type (posts first): a 404 per miss.
   guard.allowFailedResource(/\/api\/v1\/content\/[a-z0-9_-]+\/[0-9a-f-]+$/);
-  const api = await ContentApi.as(backend, site.url, "admin");
+  const api = await ContentApi.as(siteKey, site.url, "admin");
   const s = short();
   const about = await api.createIn("page", `Our story ${s}`, "published");
   const draft = await api.createIn("page", `Opening hours ${s}`, "draft");
@@ -423,6 +425,9 @@ test("screens", async ({ as, site, backend, guard, snap, expectAccessible }) => 
     await expect(page).toHaveURL(new RegExp(`/admin/structure/menus/legal-${s}$`));
     await expect(page.locator("[data-slot=menu-items] [data-slot=empty-state]")).toBeVisible();
     await expect(addPanel(page).getByRole("checkbox").first()).toBeVisible();
+    // The "… created" toast is gone first: on phones it covers the Add items card.
+    await page.mouse.move(0, 0);
+    await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 15_000 });
     await snap(page, "menus-editor-empty");
     await expectAccessible(page);
 

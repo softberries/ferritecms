@@ -1,5 +1,6 @@
 //! Login, TOTP and bad-token rate limits (P5), the password-reset limits (M2a-2 P19:
-//! 5/min per IP, 3/h per account input), and the caller-scoped limits of
+//! 5/min per IP, 3/h per account input), the test-mail limit (M2b-3 P49: 3 per 10
+//! minutes per user), and the caller-scoped limits of
 //! [`AuthService::hit_limit`](super::AuthService::hit_limit) (plugin routes, M2a-2 P16):
 //! fixed windows (one minute for the auth limits, except the hourly reset one) counted
 //! in the database by [`RateLimitRepo::hit`](ferrite_store::RateLimitRepo::hit), so
@@ -44,6 +45,11 @@ pub(crate) const RESET_PER_USER: u32 = 3;
 /// The window of [`RESET_PER_USER`].
 pub(crate) const RESET_USER_WINDOW: Duration = Duration::from_secs(3600);
 
+/// Test mails per user and [`MAIL_TEST_WINDOW`] (P49).
+pub(crate) const MAIL_TEST_PER_USER: u32 = 3;
+/// The window of [`MAIL_TEST_PER_USER`]: ten minutes.
+pub(crate) const MAIL_TEST_WINDOW: Duration = Duration::from_secs(600);
+
 /// Subkey label for the login bucket ids.
 const LOGIN_BUCKET_LABEL: &str = "ferrite:login-bucket:v1";
 /// Subkey label for the password-reset bucket ids.
@@ -80,6 +86,11 @@ pub(crate) fn reset_user(key: &SiteKey, input: &str) -> String {
 /// `totp:user:<id>`.
 pub(crate) fn totp_user(user: UserId) -> String {
     format!("totp:user:{user}")
+}
+
+/// `mail-test:user:<id>`.
+pub(crate) fn mail_test_user(user: UserId) -> String {
+    format!("mail-test:user:{user}")
 }
 
 /// `token:ip:<hash>`.

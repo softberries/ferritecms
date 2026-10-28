@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { returnToRowMenu } from "../taxonomies/row-focus";
-import { FormField } from "../types/form-field";
+import { FormField } from "@/components/kit/form-field";
 import {
   MAX_MENU_LABEL,
   MAX_MENU_URL,
@@ -98,7 +98,12 @@ function ItemForm({
   return (
     <form onSubmit={submit} className="flex flex-col gap-5" noValidate>
       {isLink ? (
-        <FormField label={t("menus.item.url")} hint={t("menus.add.urlHint")} error={urlError}>
+        // The error repeats the hint's rule: one of them at a time.
+        <FormField
+          label={t("menus.item.url")}
+          hint={urlError ? undefined : t("menus.add.urlHint")}
+          error={urlError}
+        >
           {(control) => (
             <Input
               {...control}

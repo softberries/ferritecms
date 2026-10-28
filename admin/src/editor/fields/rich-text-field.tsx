@@ -2,7 +2,10 @@
 // P19), so what it saves renders on the site as it looks here; the value is the `doc`
 // JSON (`null` when empty). The selection bubble formats it; `/` inserts blocks. A stored
 // value the schema cannot represent is shown as its text and kept as stored (Review Focus
-// 3 of M2b-1: never rewritten by opening it).
+// 3 of M2b-1: never rewritten by opening it). The editor follows its value: one that
+// changes from outside (a row moved under it) replaces what it shows; its own edits,
+// coming back as the value, do not, not even one that comes back after a newer edit
+// (typing faster than the form renders).
 
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import { useEffect, useRef, useState } from "react";
@@ -13,7 +16,11 @@ import { EditorBubbleMenu } from "../bubble-menu";
 import { editorExtensions, validateBody } from "../schema";
 import { blockText } from "../text";
 import type { ControlIds } from "./fields-context";
-import { isObject } from "./fields-model";
+import { isObject, sameValue } from "./fields-model";
+
+/** What the editor opens a value with (`undefined`: its own empty document). */
+const contentOf = (value: unknown): JSONContent | undefined =>
+  isObject(value) && Array.isArray(value.content) && value.content.length > 0 ? value : undefined;
 
 export function RichTextField({
   ids,
@@ -62,10 +69,12 @@ function RichEditor({
   const [extensions] = useState(() =>
     editorExtensions({ placeholder: "", resolveMedia: resolveMediaUrl }),
   );
-  const content =
-    isObject(value) && Array.isArray(value.content) && value.content.length > 0
-      ? (value as JSONContent)
-      : undefined;
+  const content = contentOf(value);
+  // The value the editor shows: set by its own edits and by values from outside.
+  const shown = useRef<unknown>(value);
+  // The documents this editor reported (each a new object), so a late echo of one is
+  // known as its own and not shown over a newer edit.
+  const emitted = useRef(new WeakSet<object>());
   const editor = useEditor({
     extensions,
     ...(content ? { content } : {}),
@@ -85,9 +94,26 @@ function RichEditor({
       },
     },
     onUpdate: ({ editor: e }) => {
-      latest.current(e.isEmpty ? null : e.getJSON());
+      const next = e.isEmpty ? null : e.getJSON();
+      if (next) emitted.current.add(next);
+      shown.current = next;
+      latest.current(next);
     },
   });
+  useEffect(() => {
+    if (editor.isDestroyed || value === shown.current) return;
+    if (isObject(value) && emitted.current.has(value)) return;
+    // A value from outside: what this editor reported before is no longer an echo (a
+    // later return to one of those documents is shown).
+    emitted.current = new WeakSet();
+    shown.current = value;
+    if (sameValue(value, editor.isEmpty ? null : editor.getJSON())) return;
+    // A value this editor cannot represent is left alone (never rewritten by showing it).
+    if (value != null && !(isObject(value) && validateBody(value).ok)) return;
+    const next = contentOf(value);
+    if (next) editor.commands.setContent(next, { emitUpdate: false });
+    else editor.commands.clearContent(false);
+  }, [editor, value]);
   useEffect(() => {
     if (!editor.isDestroyed && editor.isEditable === disabled) editor.setEditable(!disabled, false);
   }, [editor, disabled]);

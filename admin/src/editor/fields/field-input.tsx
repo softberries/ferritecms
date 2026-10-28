@@ -23,7 +23,8 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { DateField } from "./date-field";
 import { type ControlIds, useFieldsContext } from "./fields-context";
-import { type FieldDef, parseNumber } from "./fields-model";
+import { parseNumber } from "@/lib/values";
+import type { FieldDef } from "./fields-model";
 import { MediaField } from "./media-field";
 import { RelationField } from "./relation-field";
 import { RepeaterField } from "./repeater-field";
@@ -211,7 +212,15 @@ function Control({
     case "rich_text":
       return <RichTextField ids={ids} value={value} onChange={onChange} disabled={disabled} />;
     case "relation":
-      return <RelationField ids={ids} value={value} onChange={onChange} disabled={disabled} />;
+      return (
+        <RelationField
+          ids={ids}
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          targets={def.types}
+        />
+      );
     case "media":
       return <MediaField ids={ids} value={value} onChange={onChange} disabled={disabled} />;
     case "repeater":

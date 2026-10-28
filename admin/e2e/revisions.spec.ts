@@ -60,11 +60,11 @@ async function slotStatus(api: ContentApi, item: Item): Promise<number> {
 test("three_saves_three_revisions_with_diff", async ({
   as,
   site,
-  backend,
+  siteKey,
   snap,
   expectAccessible,
 }) => {
-  const api = await ContentApi.as(backend, site.url, "editor");
+  const api = await ContentApi.as(siteKey, site.url, "editor");
   const tag = uid();
   const t1 = `Planting notes ${tag}`;
   const t2 = `Spring planting notes ${tag}`;
@@ -167,8 +167,8 @@ test("three_saves_three_revisions_with_diff", async ({
   await api.dispose();
 });
 
-test("restore_and_undo", async ({ as, site, backend, snap }) => {
-  const api = await ContentApi.as(backend, site.url, "author");
+test("restore_and_undo", async ({ as, site, siteKey, snap }) => {
+  const api = await ContentApi.as(siteKey, site.url, "author");
   const older = `Older words ${uid()}`;
   const newer = `Newer words ${uid()}`;
   const created = await api.create("post", `Restore ${uid()}`, { body: doc([older]) });
@@ -264,8 +264,8 @@ test("restore_and_undo", async ({ as, site, backend, snap }) => {
   await api.dispose();
 });
 
-test("undo_goes_after_a_later_save", async ({ as, site, backend }) => {
-  const api = await ContentApi.as(backend, site.url, "author");
+test("undo_goes_after_a_later_save", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "author");
   const older = `Older words ${uid()}`;
   const newer = `Newer words ${uid()}`;
   const created = await api.create("post", `Undo guard ${uid()}`, { body: doc([older]) });
@@ -295,10 +295,10 @@ test("undo_goes_after_a_later_save", async ({ as, site, backend }) => {
   await api.dispose();
 });
 
-test("restore_conflict_goes_through_the_conflict_flow", async ({ as, site, backend, guard }) => {
+test("restore_conflict_goes_through_the_conflict_flow", async ({ as, site, siteKey, guard }) => {
   // The refused restore is a 412 by design: the browser logs that failed load.
   guard.allowFailedResource(/\/revisions\/[0-9a-f-]+\/restore$/);
-  const api = await ContentApi.as(backend, site.url, "editor");
+  const api = await ContentApi.as(siteKey, site.url, "editor");
   const created = await api.create("post", `Conflict restore ${uid()}`, { body: doc(["One."]) });
   const item = await api.patch(created, { body: doc(["Two."]) });
   const page = await as("editor");
@@ -318,9 +318,9 @@ test("restore_conflict_goes_through_the_conflict_flow", async ({ as, site, backe
   await api.dispose();
 });
 
-test("contributor_sees_no_revisions_on_published", async ({ as, site, backend }) => {
-  const contributor = await ContentApi.as(backend, site.url, "contributor");
-  const editor = await ContentApi.as(backend, site.url, "editor");
+test("contributor_sees_no_revisions_on_published", async ({ as, site, siteKey }) => {
+  const contributor = await ContentApi.as(siteKey, site.url, "contributor");
+  const editor = await ContentApi.as(siteKey, site.url, "editor");
   const draft = await contributor.create("post", `Contrib revisions ${uid()}`);
   const page = await as("contributor");
 

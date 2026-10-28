@@ -1,6 +1,7 @@
 // The custom-field model mirrors core's rules (`crates/ferrite-core/src/fields.rs`):
 // stale keys after a schema change, what a save sends, and every kind's validation.
 
+import { parseNumber, uuidOf } from "@/lib/values";
 import { describe, expect, test } from "vitest";
 import { ApiError } from "@/api/problem";
 import type { ContentTypeDto } from "@/api/types";
@@ -10,12 +11,10 @@ import {
   emptyValue,
   fieldIssues,
   fieldsFor,
-  parseNumber,
   sameValue,
   serverFieldErrors,
   staleKeys,
   toSave,
-  uuidOf,
   validateFields,
 } from "./fields-model";
 

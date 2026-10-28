@@ -3,7 +3,9 @@
 
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
-use ferrite_domain::{ApiToken, ApiTokenId, NewAudit, Secret, Session, Timestamp, User, UserId};
+use ferrite_domain::{
+    ApiToken, ApiTokenId, AuditQuery, NewAudit, Secret, Session, Timestamp, User, UserId,
+};
 use ferrite_store::{MAX_PRUNE_BATCH, Store, StoreError, USER_CURSOR_TAG, encode_text_cursor};
 use serde_json::json;
 
@@ -481,12 +483,18 @@ pub async fn audit_append_and_list_newest_first(db: &TestDb) {
     assert!(ids.iter().all(|id| id.as_uuid().get_version_num() == 7));
 
     for bad in [0, ferrite_domain::MAX_PAGE + 1] {
-        assert!(is_invalid(log.list(bad, None).await));
+        assert!(is_invalid(log.list(&AuditQuery::first(bad)).await));
     }
     let mut pages = Vec::new();
     let mut cursor = None;
     loop {
-        let page = log.list(4, cursor.as_deref()).await.unwrap();
+        let page = log
+            .list(&AuditQuery {
+                cursor: cursor.clone(),
+                ..AuditQuery::first(4)
+            })
+            .await
+            .unwrap();
         assert!(page.items.len() <= 4);
         pages.push(page.items);
         match page.next_cursor {
@@ -522,8 +530,20 @@ pub async fn audit_append_and_list_newest_first(db: &TestDb) {
 
     // A cursor of another listing is rejected.
     let foreign = encode_text_cursor(USER_CURSOR_TAG, "x", ids[0].as_uuid());
-    assert!(is_invalid(log.list(4, Some(&foreign)).await));
-    assert!(is_invalid(log.list(4, Some("garbage")).await));
+    assert!(is_invalid(
+        log.list(&AuditQuery {
+            cursor: Some(foreign.to_owned()),
+            ..AuditQuery::first(4)
+        })
+        .await
+    ));
+    assert!(is_invalid(
+        log.list(&AuditQuery {
+            cursor: Some("garbage".to_owned()),
+            ..AuditQuery::first(4)
+        })
+        .await
+    ));
 
     // Non-object or NUL details are Invalid and do not poison a Tx.
     let tx = store.begin().await.unwrap();
@@ -534,11 +554,14 @@ pub async fn audit_append_and_list_newest_first(db: &TestDb) {
     }
     let in_tx = tx.audit().append(&audit(Some(actor.id), 7)).await.unwrap();
     tx.commit().await.unwrap();
-    assert_eq!(log.list(1, None).await.unwrap().items[0].id, in_tx);
+    assert_eq!(
+        log.list(&AuditQuery::first(1)).await.unwrap().items[0].id,
+        in_tx
+    );
 
     // Deleting the actor keeps the rows with a NULL actor.
     store.read().users().delete(actor.id).await.unwrap();
-    let after = log.list(200, None).await.unwrap().items;
+    let after = log.list(&AuditQuery::first(200)).await.unwrap().items;
     assert_eq!(after.len(), 7);
     assert!(after.iter().all(|e| e.actor_id.is_none()));
 }
@@ -596,5 +619,11 @@ pub async fn auth_text_binds_reject_nul(db: &TestDb) {
     // Nothing was written.
     assert_eq!(sessions.list_for_user(user.id).await.unwrap(), Vec::new());
     assert_eq!(tokens.count_for_user(user.id).await.unwrap(), 0);
-    assert!(log.list(10, None).await.unwrap().items.is_empty());
+    assert!(
+        log.list(&AuditQuery::first(10))
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
 }

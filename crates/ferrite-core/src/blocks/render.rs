@@ -1,6 +1,6 @@
 use super::text::collect_text;
 use super::url::{ImageSrc, image_src, safe_href};
-use super::{MAX_DEPTH, RenderCtx};
+use super::{InlineImage, MAX_DEPTH, RenderCtx};
 use ferrite_domain::html::{CITE_TAGS, SAFE_URL_SCHEMES, relative_url_allowed};
 use html_escape::{encode_double_quoted_attribute, encode_text};
 use serde_json::{Map, Value};
@@ -173,22 +173,31 @@ fn render_image(map: &Map<String, Value>, ctx: &RenderCtx, out: &mut String) {
     let Some(src) = attr_str(map, "src").and_then(image_src) else {
         return;
     };
-    let url = match src {
-        ImageSrc::Url(u) => u,
-        ImageSrc::Media(id) => match (ctx.media_url)(&id) {
-            Some(u) => u,
+    let image = match src {
+        ImageSrc::Url(u) => InlineImage::plain(u),
+        ImageSrc::Media(id) => match (ctx.media)(&id) {
+            Some(i) => i,
             None => return,
         },
     };
     out.push_str(&format!(
         "<img src=\"{}\" alt=\"{}\"",
-        encode_double_quoted_attribute(&url),
+        encode_double_quoted_attribute(&image.src),
         encode_double_quoted_attribute(attr_str(map, "alt").unwrap_or(""))
     ));
     if let Some(title) = attr_str(map, "title") {
         out.push_str(&format!(
             " title=\"{}\"",
             encode_double_quoted_attribute(title)
+        ));
+    }
+    if let Some(r) = &image.responsive {
+        out.push_str(&format!(
+            " srcset=\"{}\" sizes=\"{}\" width=\"{}\" height=\"{}\" loading=\"lazy\" decoding=\"async\"",
+            encode_double_quoted_attribute(&r.srcset),
+            encode_double_quoted_attribute(&r.sizes),
+            r.width,
+            r.height
         ));
     }
     out.push('>');
@@ -256,6 +265,7 @@ fn log_unknown(ty: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blocks::Responsive;
     use serde_json::json;
 
     const ID: &str = "0190f1c0-0000-7000-8000-000000000001";
@@ -265,8 +275,8 @@ mod tests {
     }
 
     fn render_ref(doc: &Value) -> String {
-        let media = |id: &str| Some(format!("/m/{id}.jpg"));
-        render_html(doc, &RenderCtx { media_url: &media })
+        let media = |id: &str| Some(InlineImage::plain(format!("/m/{id}.jpg")));
+        render_html(doc, &RenderCtx { media: &media })
     }
 
     fn t(s: &str) -> Value {
@@ -504,7 +514,28 @@ mod tests {
         let d = doc(vec![
             json!({"type":"image","attrs":{"src":format!("ferrite:media/{ID}")}}),
         ]);
-        assert_eq!(render_html(&d, &RenderCtx { media_url: &none }), "");
+        assert_eq!(render_html(&d, &RenderCtx { media: &none }), "");
+        // A responsive media image carries its attributes after `alt` and `title`.
+        let responsive = |_: &str| {
+            Some(InlineImage {
+                src: "/m/a.jpg".into(),
+                responsive: Some(Responsive {
+                    srcset: "/m/a.jpg 640w, /m/b\".jpg 1280w".into(),
+                    sizes: "(max-width: 1280px) 100vw, 1280px".into(),
+                    width: 1280,
+                    height: 720,
+                }),
+            })
+        };
+        let d = doc(vec![
+            json!({"type":"image","attrs":{"src":format!("ferrite:media/{ID}"),"alt":"a","title":"t"}}),
+        ]);
+        assert_eq!(
+            render_html(&d, &RenderCtx { media: &responsive }),
+            "<img src=\"/m/a.jpg\" alt=\"a\" title=\"t\" srcset=\"/m/a.jpg 640w, /m/b&quot;.jpg 1280w\" \
+             sizes=\"(max-width: 1280px) 100vw, 1280px\" width=\"1280\" height=\"720\" \
+             loading=\"lazy\" decoding=\"async\">"
+        );
     }
 
     #[test]

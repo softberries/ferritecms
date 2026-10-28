@@ -21,7 +21,6 @@ import {
   XIcon,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
-import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { reportApiError } from "@/api/client";
@@ -53,7 +52,7 @@ import { useShortcut } from "@/lib/shortcuts";
 import { stableEqual, staleGuard } from "@/lib/stale-guard";
 import { problemText } from "../taxonomies/terms-model";
 import { DESTRUCTIVE } from "@/lib/destructive";
-import { FormField } from "../types/form-field";
+import { FormField } from "@/components/kit/form-field";
 import { AddItems } from "./add-items";
 import {
   MAX_MENU_ITEMS,
@@ -69,6 +68,7 @@ import {
   restoreEntry,
   toInput,
 } from "./menu-model";
+import { entryText, targetText } from "./entry-text";
 import { MenuItemDialog } from "./menu-item-form";
 import { type Target, useTargets } from "./targets";
 
@@ -510,18 +510,6 @@ export function MenuEditor({ initial }: { initial: MenuDto }) {
   );
 }
 
-type T = TFunction<"structure">;
-
-/** "Page · About us", "Category · News", or a custom link's address. */
-function targetText(node: MenuNode, target: Target | undefined, t: T): string {
-  if (node.data.kind === "url") return node.data.url ?? "";
-  if (target?.state === "found")
-    return `${target.kind} · ${target.title || t("menus.add.untitled")}`;
-  if (target?.state === "missing") return t("menus.editor.targetMissing");
-  if (target?.state === "failed") return t("menus.editor.targetFailed");
-  return t("menus.editor.targetLoading");
-}
-
 function MenuRow({
   node,
   target,
@@ -535,17 +523,7 @@ function MenuRow({
 }) {
   const { t } = useTranslation("structure");
   const Icon = KIND_ICON[node.data.kind];
-  const own = node.data.label.trim();
-  const fallback =
-    node.data.kind === "url"
-      ? (node.data.url ?? "")
-      : target?.state === "found"
-        ? target.title || t("menus.add.untitled")
-        : "";
-  const sub = targetText(node, target, t);
-  // A found target names its own type or taxonomy ("Pages · About"); the rest say the kind.
-  const line =
-    target?.state === "found" ? sub : `${t(`menus.editor.kind.${node.data.kind}`)} · ${sub}`;
+  const text = entryText(node, target, t);
   const broken = target?.state === "missing";
   return (
     <div className="flex min-w-0 items-center gap-2.5 py-0.5" data-slot="menu-entry">
@@ -560,19 +538,23 @@ function MenuRow({
           type="button"
           onClick={onEdit}
           className="max-w-full min-w-0 self-start truncate rounded-sm text-left font-medium text-foreground hover:underline"
-          title={own || fallback}
+          title={text.title}
           data-slot="menu-entry-label"
         >
-          {own ? own : <span className="font-normal text-muted-foreground">{fallback || sub}</span>}
+          {text.fallback ? (
+            <span className="font-normal text-muted-foreground">{text.title}</span>
+          ) : (
+            text.title
+          )}
         </button>
         <span
           className={
             broken ? "truncate text-xs text-destructive" : "truncate text-xs text-muted-foreground"
           }
-          title={line}
+          title={text.line}
           data-slot="menu-entry-target"
         >
-          {line}
+          {text.line}
         </span>
         {problems.map((p) => (
           <span key={p.kind} data-slot="menu-problem" className="text-xs text-destructive">

@@ -29,23 +29,33 @@ export async function currentScheme(page: Page): Promise<Scheme> {
   return dark ? "dark" : "light";
 }
 
-/** Waits for network idle, loaded fonts and the end of every finite animation. */
+/**
+ * Waits for network idle, loaded fonts and the end of every finite animation, including
+ * one that starts when another ends (a crossfade that exits, then enters), for at most 5 s.
+ */
 export async function settle(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle");
   await page.evaluate(async () => {
     await document.fonts.ready;
+    const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     // A colour-scheme change reaches <html> through a React effect, and the colour
     // transitions it starts exist only after that; let two frames pass first.
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    const finite = document
-      .getAnimations()
-      .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity);
-    const timeout = new Promise((r) => setTimeout(r, 5_000));
-    await Promise.race([
-      Promise.all(finite.map((a) => a.finished.catch(() => undefined))),
-      timeout,
-    ]);
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    await frames();
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const running = document
+        .getAnimations()
+        .filter(
+          (a) => a.playState === "running" && a.effect?.getComputedTiming().iterations !== Infinity,
+        );
+      if (running.length === 0 || Date.now() >= deadline) break;
+      const left = new Promise((r) => setTimeout(r, Math.max(0, deadline - Date.now())));
+      await Promise.race([
+        Promise.all(running.map((a) => a.finished.catch(() => undefined))),
+        left,
+      ]);
+      await frames();
+    }
   });
 }
 

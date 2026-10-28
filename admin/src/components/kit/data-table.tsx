@@ -15,7 +15,7 @@ import { useTranslation } from "react-i18next";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { MOTION } from "@/design/tokens";
+import { LAYOUT_SPRING, MOTION } from "@/design/tokens";
 import {
   dataTableFeatures,
   type DataTableColumn,
@@ -57,8 +57,6 @@ export interface DataTableProps<T extends RowData> {
   className?: string;
 }
 
-/** 11 §5: the layout spring (list insert, remove, reorder). */
-const LAYOUT_SPRING = { type: "spring", stiffness: 520, damping: 42, mass: 1 } as const;
 const SELECT = "__select";
 const ACTIONS = "__actions";
 const SKELETON_ROWS = 5;

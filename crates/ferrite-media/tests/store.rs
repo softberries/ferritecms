@@ -448,6 +448,8 @@ backend_tests! {
         let store = backing.store();
         let url = store.public_url(&hash, "my photo é#1?.png");
         assert_eq!(url, format!("/_media/{hash}/my%20photo%20%C3%A9%231%3F.png"));
+        // A comma is escaped, so the URL stays one candidate inside a `srcset`.
+        assert_eq!(store.public_url(&hash, "a,b 1.jpg"), format!("/_media/{hash}/a%2Cb%201.jpg"));
 
         for (name, want) in [
             ("a/../b", "a_.._b"),

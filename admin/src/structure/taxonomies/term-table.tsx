@@ -166,6 +166,7 @@ export function TermTable({
                       size="icon-sm"
                       className="pointer-coarse:size-control"
                       aria-label={t("taxonomies.terms.deleteNamed", { name: term.name })}
+                      data-term-delete={term.id}
                       onClick={() => onDelete(term)}
                     >
                       <Trash2Icon />

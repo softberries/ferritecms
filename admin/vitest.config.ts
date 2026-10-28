@@ -22,7 +22,7 @@ export default mergeConfig(
           test: {
             name: "scripts",
             environment: "node",
-            include: ["scripts/**/*.test.mjs"],
+            include: ["scripts/**/*.test.mjs", "e2e/support/**/*.unit.ts"],
           },
         },
       ],

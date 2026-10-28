@@ -244,11 +244,47 @@ pub async fn read_all(store: &dyn Store, actor: &Actor) -> Result<Map<String, Va
     Ok(out)
 }
 
+/// The option holding the site title.
+pub const SITE_TITLE: &str = "site.title";
+
+/// The site title at use time (P51): the `site.title` option when it holds a string
+/// that is not blank, else `configured` (`ferrite.toml` `site.title`). What names the
+/// site outside a page (the TOTP issuer, mail subjects and bodies) reads it here, so a
+/// title changed in Settings applies at once on every node.
+pub async fn site_title(store: &dyn Store, configured: &str) -> Result<String, CoreError> {
+    let stored = store.read().options().get(SITE_TITLE).await?;
+    Ok(title_or(stored.as_ref().map(|e| &e.value), configured))
+}
+
+/// `stored` when it is a string with more than whitespace, else `configured`.
+fn title_or(stored: Option<&Value>, configured: &str) -> String {
+    stored
+        .and_then(Value::as_str)
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or(configured)
+        .to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn blank_or_non_string_title_option_falls_back_to_the_config() {
+        assert_eq!(title_or(Some(&json!("Night Owl")), "Conf"), "Night Owl");
+        for unset in [
+            json!(""),
+            json!("   "),
+            json!(" \t\n "),
+            json!(7),
+            json!(null),
+        ] {
+            assert_eq!(title_or(Some(&unset), "Conf"), "Conf", "{unset}");
+        }
+        assert_eq!(title_or(None, "Conf"), "Conf");
+    }
 
     #[test]
     fn every_key_is_unique_and_validates_null_as_its_kind_says() {

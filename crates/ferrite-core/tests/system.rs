@@ -57,14 +57,22 @@ async fn system_reads_need_manage_system(db: &TestDb) {
             other => panic!("{who:?}: {other:?}"),
         };
         forbidden(system.nodes(who).await.map(drop));
-        forbidden(system.audit(who, 50, None).await.map(drop));
+        forbidden(
+            system
+                .audit(who, &ferrite_domain::AuditQuery::first(50))
+                .await
+                .map(drop),
+        );
         forbidden(system.migration_status(who, &bin).await.map(drop));
         forbidden(system.job_counts(who).await.map(drop));
         forbidden(system.active_theme(who).await.map(drop));
     }
     for who in [&admin, &system_token] {
         system.nodes(who).await.unwrap();
-        system.audit(who, 50, None).await.unwrap();
+        system
+            .audit(who, &ferrite_domain::AuditQuery::first(50))
+            .await
+            .unwrap();
         let status = system.migration_status(who, &bin).await.unwrap();
         assert_eq!(status.verdict, Compat::UpToDate);
         assert!(status.pending.is_empty());
@@ -173,7 +181,7 @@ pub async fn concurrent_retry_one_wins(db: Arc<TestDb>) {
         let audits_before = store
             .read()
             .audit()
-            .list(200, None)
+            .list(&ferrite_domain::AuditQuery::first(200))
             .await
             .unwrap()
             .items
@@ -202,7 +210,13 @@ pub async fn concurrent_retry_one_wins(db: Arc<TestDb>) {
             ),
             "round {round}: {lost:?}"
         );
-        let audits = store.read().audit().list(200, None).await.unwrap().items;
+        let audits = store
+            .read()
+            .audit()
+            .list(&ferrite_domain::AuditQuery::first(200))
+            .await
+            .unwrap()
+            .items;
         assert_eq!(
             audits.len(),
             audits_before + 1,

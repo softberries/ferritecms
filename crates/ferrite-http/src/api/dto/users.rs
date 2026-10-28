@@ -156,6 +156,32 @@ pub struct UserPatchInput {
     #[serde(default, deserialize_with = "present")]
     #[schema(value_type = UserStatusDto, required = false)]
     pub status: Option<UserStatusDto>,
+    /// The request's own current password. Required when a user changes their **own**
+    /// `email` to a different address (missing: `422`, `errors[0].field` =
+    /// `current_password`; wrong: `403 forbidden`; checked on the same per-login rate
+    /// limit as `POST /auth/password`); ignored otherwise, so an admin changing another
+    /// user's e-mail sends none.
+    #[serde(default)]
+    #[schema(value_type = Option<String>, format = Password)]
+    pub current_password: Option<Password>,
+}
+
+/// The query of `GET /users`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct UserListParams {
+    /// Only users whose login, display name or e-mail holds this text, ignoring case
+    /// (`%` and `_` match only themselves). Trimmed; 1 to 100 characters (`422`, field
+    /// `q`).
+    pub q: Option<String>,
+    /// Only users with this role.
+    pub role: Option<RoleDto>,
+    /// Only users with this status.
+    pub status: Option<UserStatusDto>,
+    /// 1..=200; default 50.
+    pub limit: Option<u32>,
+    /// `next_cursor` of the previous page of the same query.
+    pub cursor: Option<String>,
 }
 
 /// `POST /users/{id}/password`: an admin sets another user's password.

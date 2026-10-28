@@ -137,7 +137,10 @@ upload .wasm + manifest ──► POST /plugins/inspect: validate manifest, insp
   KV a node wrote before it reloaded and deletes the marker. A daily `plugin.purge_sweep`
   re-enqueues the purge of every marker past the retention, so a purge job that went dead
   is retried. Setting keys a later version dropped from its schema are purged by that
-  sweep only.
+  sweep only. **Retained data (M2b-3 P47):** `GET /plugins/retained` lists the markers
+  whose plugin is not installed, with `purge_after`; `POST /plugins/{name}/purge` erases
+  that plugin's KV, every stored `plugin.<name>.settings.*` option and the marker at once
+  (audited `plugin.purge`; `422` while a plugin of that name is installed; 07 §1).
 - **Plugin data is bound to the plugin name only (R22).** KV, settings and sealed secrets
   (sealed under `plugin-setting:<plugin>:<key>`) belong to the name in `plugin.name`; the
   manifest's `publisher` is unverified text, and nothing compares it on an update or a
@@ -195,9 +198,14 @@ require their matching capability (e.g. `render.head` hook needs `render.head = 
 
 As built (M2a-2a), `Manifest::parse` also enforces:
 
+- **Homepage (M2b-3).** `plugin.homepage` must be an `http://` or `https://` URL with a
+  host part, no whitespace and at most 2048 bytes (`ferrite_domain::is_web_url`, the
+  theme rule too), else `plugin.homepage` is a problem. Only uploads (`Manifest::parse`)
+  are checked: a row stored earlier still loads (`Manifest::from_json`), and the admin
+  API shows a homepage of another form as `null`.
 - **Size and name.** A manifest over 64 KiB (`MAX_MANIFEST_BYTES`) is refused unparsed.
-  The plugin name `inspect` is reserved (`RESERVED_PLUGIN_NAMES`; `/plugins/inspect` is an
-  API route, ruling R9).
+  The plugin names `inspect` and `retained` (M2b-3) are reserved (`RESERVED_PLUGIN_NAMES`;
+  `/plugins/inspect` and `/plugins/retained` are API routes, ruling R9).
 - **`http` hosts (P7, pre-flight F5).** Plain hostnames only (no scheme, port, path or
   wildcard), stored lowercased with one trailing dot dropped and duplicates removed, so
   grants and fingerprints do not depend on spelling. Refused as bare: anything that
@@ -789,7 +797,7 @@ of at most 64 KiB (`MAX_MAIL_BODY_BYTES`). Then `StoreHostServices::notify_admin
 node; a refused second mail in one call uses no hourly slot); the recipients are the
 active admins (at most 50, `MAIL_MAX_ADMINS`; unusable addresses skipped, none left is an
 error), all in `Bcc`, so admins do not see each other's addresses and the plugin never
-learns them. The subject gets the site-title prefix `[<site.title>] ` (01 §4) and the body
+learns them. The subject gets the site-title prefix `[<site title>] ` (the `site.title` option at send time, else `ferrite.toml`, M2b-3 P51; 01 §4) and the body
 the footer `Sent by plugin <name>`. The mail is handed to the node's mail queue and the
 call returns: SMTP never runs inside the plugin call (F28); a full queue (16 in flight) is
 an error to the guest, an SMTP failure is only logged. Example: `plugins/examples/notifier`

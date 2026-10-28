@@ -205,6 +205,15 @@ pub enum Route {
     NotFound,
 }
 
+impl Route {
+    /// Whether the page can be one item's, with its comment pages (`?cpage=N`, P34): a
+    /// content path, or the front page (a static front page is a page). Only these keep
+    /// `cpage` in their cache key.
+    pub fn may_show_item(&self) -> bool {
+        matches!(self, Route::Content(_) | Route::Front { .. })
+    }
+}
+
 /// Fixed words that are never content and never redirected.
 const EXACT_ONLY: &[&str] = &[
     "_media", "_theme", "_preview", "_comment", "healthz", "readyz",

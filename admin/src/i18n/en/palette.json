@@ -13,7 +13,9 @@
   },
   "goTo": {
     "shortcuts": "Keyboard shortcuts",
-    "keywords": "go to open screen"
+    "keywords": "go to open screen",
+    "account": "Account",
+    "accountKeywords": "profile password security 2fa tokens sessions"
   },
   "create": {
     "post": "New post",
@@ -29,7 +31,9 @@
     "menu": "New menu",
     "menuKeywords": "create add new menu navigation links structure",
     "redirect": "New redirect",
-    "redirectKeywords": "create add new redirect forward moved address url structure"
+    "redirectKeywords": "create add new redirect forward moved address url structure",
+    "user": "New user",
+    "userKeywords": "create add new user account person invite people"
   },
   "preferences": {
     "light": "Light theme",
@@ -43,6 +47,7 @@
   },
   "hit": {
     "untitled": "Untitled",
+    "inText": "Matches in text",
     "screen": "Screen"
   },
   "status": {

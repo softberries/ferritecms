@@ -9,7 +9,7 @@ use ferrite_domain::{
 use ferrite_store::{Repos, Store};
 use serde_json::{Map, Value, json};
 
-use super::{ExtensionService, append_audit, finish_locked};
+use super::{ExtensionService, RetainedPluginData, append_audit, finish_locked};
 use crate::{
     Actor, CoreError,
     actor::{Capability, require, require_reader},
@@ -196,6 +196,32 @@ impl ExtensionAdmin {
             self.service.purge_after_delete(&row, deleted_at).await;
         }
         Ok(())
+    }
+
+    /// The deleted plugins whose KV and settings are still kept
+    /// ([`ExtensionService::retained_plugins`]); `manage_plugins` + `extensions:read`.
+    pub async fn retained_plugins(
+        &self,
+        actor: &Actor,
+    ) -> Result<Vec<RetainedPluginData>, CoreError> {
+        require_reader(actor, Capability::ManagePlugins)?;
+        self.service.retained_plugins().await
+    }
+
+    /// Erases the retained KV and settings of the deleted plugin `name` now, with audit
+    /// `plugin.purge {name}` (M2b-3 P47; see [`ExtensionService`]'s purge of retained
+    /// data): a plugin `name` installed is `InvalidField { field: "name" }`, nothing
+    /// retained `NotFound`.
+    pub async fn purge_plugin(&self, actor: &Actor, name: &str) -> Result<(), CoreError> {
+        require(actor, Capability::ManagePlugins)?;
+        let entry = audit(
+            actor,
+            "plugin.purge",
+            "plugin",
+            name,
+            json!({ "name": name }),
+        );
+        self.service.purge_retained_with(name, Some(entry)).await
     }
 
     /// [`ExtensionService::install_theme`] with audit `theme.install`

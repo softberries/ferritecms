@@ -257,9 +257,7 @@ mod tests {
     fn post_body_has_every_block_kind() {
         let html = ferrite_core::blocks::render_html(
             &post_body(&POSTS[0]),
-            &ferrite_core::blocks::RenderCtx {
-                media_url: &|_| None,
-            },
+            &ferrite_core::blocks::RenderCtx { media: &|_| None },
         );
         for tag in [
             "<p>",

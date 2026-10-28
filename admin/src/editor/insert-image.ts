@@ -1,11 +1,12 @@
 // Images from the media library in a body (07 §3 Editor): the slash menu's "Image" and
 // the editor bar's button open the media picker (images only) and insert
 // `image { src: "ferrite:media/<id>", alt: <the item's alt text>, title: null }`, which
-// the site resolves to the original file's URL (only the admin's image node shows a
-// variant). Image files dropped on the body upload through a queue like the library's
-// (at most 3 at once, one `Idempotency-Key` per file) that lives with the route
-// (`body-uploads.ts`); each shows a placeholder where it was dropped, which follows the
-// edits made meanwhile, and becomes the image when its upload is done, without moving
+// the site renders with a `srcset` of the original and its variants of the same shape
+// (06 §4; a plain original for SVG or an image not measured yet). Image files dropped on
+// the body upload through a queue like the library's (at most 3 at once, one
+// `Idempotency-Key` per file) that lives with the route (`body-uploads.ts`); each shows
+// a placeholder where it was dropped, which follows the edits made meanwhile, and
+// becomes the image when its upload is done, without moving
 // the caret or the focus. A screen that remounts while uploads run shows them again (at
 // the same place after a new item's first save, else at the end of the body). A failed
 // upload says why in a toast and its placeholder goes. External `https:` images already
@@ -188,6 +189,10 @@ export function useImageDrops(
 ): { uploading: number; handOver: () => CarriedUploads } {
   // The uploads with a placeholder in this screen's body.
   const shown = useRef(new Set<string>());
+  // Finished, failed or cancelled uploads this screen has dealt with: never twice (the
+  // effect below can run again with the same entries, as under StrictMode, before the
+  // queue's `clearDone` reaches it).
+  const settledIds = useRef(new Set<string>());
   // Handed over: the next screen inserts the images.
   const detached = useRef(false);
   const subscribe = useCallback((fn: () => void) => queue.subscribe(fn), [queue]);
@@ -212,6 +217,8 @@ export function useImageDrops(
         addUploadPlaceholder(editor.view, e.id, pos, e.file.name);
         continue;
       }
+      if (settledIds.current.has(e.id)) continue;
+      settledIds.current.add(e.id);
       const had = shown.current.delete(e.id);
       if (had) {
         // Read before the placeholder goes.
@@ -262,7 +269,11 @@ export function useImageDrops(
     detached.current = true;
     const at: Record<string, number | null> = {};
     for (const e of queue.entries()) {
-      if (e.state !== "queued" && e.state !== "uploading") continue;
+      const running = e.state === "queued" || e.state === "uploading";
+      // One that finished in this tick (this screen has not inserted it yet) goes where
+      // its placeholder is, like a running one, not to the end of the next screen's body.
+      const unplaced = e.state === "done" && shown.current.has(e.id);
+      if (!running && !unplaced) continue;
       at[e.id] =
         shown.current.has(e.id) && !editor.isDestroyed ? placeholderPos(editor.state, e.id) : null;
     }

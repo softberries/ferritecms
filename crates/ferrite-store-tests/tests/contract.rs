@@ -1,10 +1,10 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
-    auth::*, autosave::*, backend_tests, backend_tests_spawning, batch::*, comment::*,
+    audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning, batch::*, comment::*,
     comment_counts::*, comment_threads::*, constraints::*, content::*, event::*, idempotency::*,
     job::*, job_list::*, lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*,
     notify::*, plugin::*, plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*,
-    user::*,
+    user::*, user_filters::*,
 };
 
 backend_tests!(
@@ -127,6 +127,8 @@ backend_tests!(
     email_case_insensitive_unique,
     unicode_login_and_slug_exact,
     users_update_and_list,
+    user_list_filters,
+    session_public_id_roundtrip,
     email_folding_is_ascii_only,
     set_totp_sets_secret_and_resets_step,
     update_keeps_totp_last_step,
@@ -144,6 +146,7 @@ backend_tests!(
     media_sanitized_roundtrip,
     plugins_upsert_list_enable,
     plugins_action_subscribers,
+    retained_plugin_markers,
     plugin_kv_crud_and_usage,
     plugin_kv_delete_all_in_batches,
     themes_single_active,
@@ -224,6 +227,7 @@ backend_tests!(
     rate_limit_counts_within_window_and_resets,
     rate_limit_window_never_moves_back,
     audit_append_and_list_newest_first,
+    audit_filters,
     auth_text_binds_reject_nul,
 );
 
@@ -233,6 +237,7 @@ backend_tests!(
     comment_counts_per_status_and_item,
     thread_pages_cover_every_comment,
     approved_page_keeps_every_root,
+    short_comment_page_under_tight_budget,
     root_position_of_reply_is_its_root,
     approved_totals_counts_all,
     has_approved_from_matches_exact_lowercase,

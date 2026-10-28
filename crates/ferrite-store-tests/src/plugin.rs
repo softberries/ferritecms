@@ -609,6 +609,62 @@ pub async fn plugins_upsert_list_enable(db: &TestDb) {
     assert_eq!(plugins.is_enabled("beta").await.unwrap(), None);
 }
 
+/// `retained` (M2b-3 P47): the deletion markers `plugin.<name>.deleted_at` whose
+/// value is unix micros and whose plugin is not installed, by name in binary order.
+/// Settings options, other keys, names with a `.` and non-integer values are not
+/// markers.
+pub async fn retained_plugin_markers(db: &TestDb) {
+    let store = db.store();
+    put_artifact(store, &artifact('a', ArtifactKind::Plugin)).await;
+    let plugins = store.read().plugins();
+    let options = store.read().options();
+    assert!(plugins.retained().await.unwrap().is_empty());
+
+    for (key, value) in [
+        ("plugin.gone.deleted_at", json!(1_000_000)),
+        ("plugin.a-b.deleted_at", json!(3_000_000)),
+        ("plugin.a.deleted_at", json!(4_000_000)),
+        ("plugin.back.deleted_at", json!(2_000_000)),
+        ("plugin.gone.settings.k", json!("v")),
+        ("plugin.x.settings.deleted_at", json!(5_000_000)),
+        ("plugin.bad.deleted_at", json!("nope")),
+        ("plugin..deleted_at", json!(6_000_000)),
+        ("plugin.z.deleted_at.more", json!(7_000_000)),
+        ("plugins.q.deleted_at", json!(8_000_000)),
+    ] {
+        options.set(key, &value, false).await.unwrap();
+    }
+    // Installed again: its marker is not retained data.
+    plugins.upsert(&plugin("back", 'a')).await.unwrap();
+
+    let got: Vec<(String, i64)> = plugins
+        .retained()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.name, r.deleted_at.as_micros()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("a".to_owned(), 4_000_000),
+            ("a-b".to_owned(), 3_000_000),
+            ("gone".to_owned(), 1_000_000),
+        ]
+    );
+
+    plugins.delete("back").await.unwrap();
+    options.delete("plugin.a.deleted_at").await.unwrap();
+    let names: Vec<String> = plugins
+        .retained()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    assert_eq!(names, ["a-b", "back", "gone"]);
+}
+
 /// `action_subscribers`: enabled rows whose manifest `hooks` object has the hook as a
 /// key (dotted names matched whole, never as a JSON path), binary name order; read
 /// through a `Tx` it sees the `Tx`'s own writes.

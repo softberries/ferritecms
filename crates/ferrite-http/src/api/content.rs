@@ -50,8 +50,8 @@ use ferrite_core::{
     content::{AuthorRef, allowed_actions},
 };
 use ferrite_domain::{
-    ContentId, ContentItem, ContentOrder, ContentStatus, MAX_PAGE, ParentFilter, RevisionId,
-    TermId, Timestamp, UserId,
+    ContentId, ContentItem, ContentOrder, ContentStatus, MAX_PAGE, MEDIA_KIND, ParentFilter,
+    RevisionId, TermId, Timestamp, UserId,
 };
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
@@ -71,9 +71,6 @@ use super::{
     list,
     problem::{Problem, ProblemDocument},
 };
-
-/// The type whose items are not served here in M2a-1 (F21).
-const MEDIA_TYPE: &str = "media";
 
 /// `ORDER BY` of a list without `q`.
 #[derive(Debug, Clone, Copy, Default, Deserialize, ToSchema)]
@@ -189,7 +186,7 @@ pub struct RevisionParams {
 
 /// `404` for the types not served here.
 fn served(kind: &str) -> Result<(), Problem> {
-    if kind == MEDIA_TYPE {
+    if kind == MEDIA_KIND {
         Err(Problem::not_found())
     } else {
         Ok(())
@@ -208,11 +205,10 @@ async fn load(api: &ApiState, actor: &Actor, kind: &str, id: Uuid) -> Result<Con
 
 /// `item` with its terms, permalink, author, allowed actions and SEO meta.
 async fn dto(api: &ApiState, actor: &Actor, item: ContentItem) -> Result<ContentDto, Problem> {
-    let terms = api.content.terms_of(actor, item.id).await?;
+    let (terms, seo) = api.content.extras_for(actor, &item).await?;
     let permalink = api.content.permalink(item.id).await?;
     let author = author_of(api, actor, item.author_id).await?;
     let allowed = allowed_actions(actor, &item);
-    let seo = api.content.seo_of(actor, item.id).await?;
     Ok(ContentDto::new(
         item, terms, permalink, author, allowed, seo,
     ))

@@ -8,7 +8,9 @@ import type {
   SchemaPasswordChanged,
   SchemaPasswordResetConfirm,
   SchemaPasswordResetRequest,
+  SchemaTotpConfirm,
   SchemaTotpLoginRequest,
+  SchemaTotpSetupDto,
 } from "./schema";
 
 function keepToken(r: SchemaLoginResponse): SchemaLoginResponse {
@@ -66,4 +68,23 @@ export function requestReset(body: SchemaPasswordResetRequest): Promise<void> {
 export async function confirmReset(body: SchemaPasswordResetConfirm): Promise<void> {
   await unwrap(api.POST("/api/v1/auth/password-reset/confirm", { body }));
   setCsrfToken(null);
+}
+
+/**
+ * `POST /auth/totp/setup`: starts an enrolment. The answer holds the secret
+ * (`secret_base32`, `otpauth_url`): keep it in the dialog's state only, never in the
+ * query cache, a URL or storage, and drop it when the dialog closes.
+ */
+export function totpSetup(): Promise<SchemaTotpSetupDto> {
+  return unwrap(api.POST("/api/v1/auth/totp/setup"));
+}
+
+/** `POST /auth/totp/confirm`: turns TOTP on; every other session of the user ends. */
+export async function totpConfirm(body: SchemaTotpConfirm): Promise<void> {
+  await unwrap(api.POST("/api/v1/auth/totp/confirm", { body }));
+}
+
+/** `POST /auth/totp/disable`: needs the current password. */
+export async function totpDisable(password: string): Promise<void> {
+  await unwrap(api.POST("/api/v1/auth/totp/disable", { body: { password } }));
 }

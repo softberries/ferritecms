@@ -13,6 +13,7 @@ use crate::{
 };
 
 api_tests!(
+    relation_types_over_http,
     types_crud_over_http,
     terms_crud_over_http,
     editor_cannot_create_types
@@ -606,4 +607,93 @@ async fn editor_cannot_create_types(api: Api) -> Api {
             .is_none()
     );
     api
+}
+
+/// P52: `types` round-trips through `/types`, and a relation value of another type is
+/// `422` with `errors[0].field` at the value's path.
+async fn relation_types_over_http(api: Api) -> Api {
+    let (_, b) = admin(&api).await;
+    let body = json!({
+        "name": "book", "label": "Books",
+        "fields": [
+            {"name": "title", "kind": "text"},
+            {"name": "related", "kind": "relation", "types": ["page"]},
+            {"name": "chapters", "kind": "repeater", "fields": [
+                {"name": "related", "kind": "relation", "types": ["post", "book"]}
+            ]}
+        ]
+    });
+    let r = b.send(&api, Method::POST, TYPES, Some(&body), None).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
+    let created = r.json();
+    // No target types: the key is left out, as before P52.
+    assert!(created["fields"][0].get("types").is_none(), "{created}");
+    assert_eq!(created["fields"][1]["types"], json!(["page"]));
+    assert_eq!(
+        created["fields"][2]["fields"][0]["types"],
+        json!(["post", "book"])
+    );
+    let bad = json!({"name": "x", "label": "X", "fields": [
+        {"name": "r", "kind": "relation", "types": ["media"]}
+    ]});
+    let p = b
+        .send(&api, Method::POST, TYPES, Some(&bad), None)
+        .await
+        .assert_problem(422, "validation");
+    assert_eq!(p["errors"][0]["field"], "fields", "{p}");
+
+    let post = b
+        .send(
+            &api,
+            Method::POST,
+            "/api/v1/content/post",
+            Some(&json!({"title": "P"})),
+            None,
+        )
+        .await;
+    assert_eq!(post.status, StatusCode::CREATED, "{post:?}");
+    let post_id = post.json()["id"].as_str().unwrap().to_owned();
+    let p = b
+        .send(
+            &api,
+            Method::POST,
+            "/api/v1/content/book",
+            Some(&json!({"title": "B", "fields": {
+                "chapters": [{"related": post_id}, {"related": post_id}],
+                "related": post_id
+            }})),
+            None,
+        )
+        .await
+        .assert_problem(422, "validation");
+    assert_eq!(p["errors"][0]["field"], "fields.related", "{p}");
+    let p = b
+        .send(
+            &api,
+            Method::POST,
+            "/api/v1/content/book",
+            Some(&json!({"title": "B", "fields": {
+                "chapters": [{"related": post_id}, {"related": post_id}],
+                "related": api_page(&api, &b).await
+            }})),
+            None,
+        )
+        .await;
+    assert_eq!(p.status, StatusCode::CREATED, "{p:?}");
+    api
+}
+
+/// The id of a new page.
+async fn api_page(api: &Api, b: &Bearer) -> String {
+    let r = b
+        .send(
+            api,
+            Method::POST,
+            "/api/v1/content/page",
+            Some(&json!({"title": "A page"})),
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
+    r.json()["id"].as_str().unwrap().to_owned()
 }

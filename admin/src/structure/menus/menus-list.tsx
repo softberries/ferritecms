@@ -31,7 +31,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { problemText } from "../taxonomies/terms-model";
 import { without } from "../shared";
-import { FormField } from "../types/form-field";
+import { FormField } from "@/components/kit/form-field";
 import { MAX_MENU_LABEL, MAX_MENU_NAME, menuNameProblem, nameFromMenuLabel } from "./menu-model";
 
 /** Thrown by `createMenu` when the name is taken. */
