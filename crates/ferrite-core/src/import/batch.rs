@@ -52,6 +52,8 @@ pub struct ImportBatch<'a> {
     pub(super) items: usize,
     /// The permalink rules pinned when the batch opened (R10).
     pub(super) rules: Arc<dyn Permalinks>,
+    /// The `permalink.*` rows written, last value per key.
+    permalinks: Vec<(String, Option<Value>)>,
     types_lock: Option<Box<dyn LockGuard>>,
 }
 
@@ -82,6 +84,7 @@ impl<'a> ImportBatch<'a> {
             keys: BTreeSet::new(),
             items: 0,
             rules,
+            permalinks: Vec::new(),
             types_lock,
         };
         match fenced {
@@ -233,7 +236,18 @@ impl<'a> ImportBatch<'a> {
         if options::set_many_in(self.tx.as_ref(), &self.handle.actor, rows).await? {
             self.keys.insert(events::ALL_KEY.to_owned());
         }
+        for (key, value) in rows.iter().filter(|(k, _)| options::is_permalink(k)) {
+            self.permalinks.retain(|(k, _)| k != key);
+            self.permalinks.push((key.clone(), value.clone()));
+        }
         Ok(())
+    }
+
+    /// The `permalink.*` options this batch wrote (last value per key; `None` or `null`
+    /// deletes). Read it before [`commit`](Self::commit): the caller swaps its rules
+    /// once the batch ends, since a batch pins the rules it opened with.
+    pub fn permalink_changes(&self) -> &[(String, Option<Value>)] {
+        &self.permalinks
     }
 
     /// Appends the batch's one `invalidate` event (none when no key was collected) and

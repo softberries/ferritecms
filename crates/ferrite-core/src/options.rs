@@ -247,7 +247,7 @@ async fn write_changes(
     Ok(!permalinks.is_empty())
 }
 
-fn is_permalink(key: &str) -> bool {
+pub(crate) fn is_permalink(key: &str) -> bool {
     key == POST_OPTION || key == PAGE_OPTION
 }
 

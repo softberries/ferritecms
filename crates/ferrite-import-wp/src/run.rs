@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use ferrite_core::Actor;
 use ferrite_core::import::{ImportBatch, ImportHandle, ImportService};
+use ferrite_core::{Actor, SwappablePermalinks};
 use ferrite_domain::ImportRunState;
 use ferrite_media::MediaStore;
 use futures::Stream;
@@ -123,13 +123,13 @@ pub struct ImportOptions {
     /// Take over a stale running run (P5).
     pub takeover: bool,
     /// Items per batch instead of [`ImportBatch::BATCH_ITEMS`].
-    #[cfg(any(test, feature = "test-seams"))]
+    #[cfg(feature = "test-seams")]
     pub batch_items: Option<usize>,
     /// Fail with [`ImportError::Stopped`] once this many batches have ended.
-    #[cfg(any(test, feature = "test-seams"))]
+    #[cfg(feature = "test-seams")]
     pub fail_after_batches: Option<u32>,
     /// Called before each step (`parse`, `pass1`…`pass4`, `fixup`) that runs.
-    #[cfg(any(test, feature = "test-seams"))]
+    #[cfg(feature = "test-seams")]
     pub step_hook: Option<StepHook>,
 }
 
@@ -144,33 +144,33 @@ impl Default for ImportOptions {
             category_base: "category".into(),
             tag_base: "tag".into(),
             takeover: false,
-            #[cfg(any(test, feature = "test-seams"))]
+            #[cfg(feature = "test-seams")]
             batch_items: None,
-            #[cfg(any(test, feature = "test-seams"))]
+            #[cfg(feature = "test-seams")]
             fail_after_batches: None,
-            #[cfg(any(test, feature = "test-seams"))]
+            #[cfg(feature = "test-seams")]
             step_hook: None,
         }
     }
 }
 
 /// The function a [`StepHook`] calls.
-#[cfg(any(test, feature = "test-seams"))]
+#[cfg(feature = "test-seams")]
 type StepFn = dyn Fn(&str) -> Result<(), ImportError> + Send + Sync;
 
 /// A test sink called with each step's name before it runs; an `Err` fails the run.
-#[cfg(any(test, feature = "test-seams"))]
+#[cfg(feature = "test-seams")]
 #[derive(Clone)]
 pub struct StepHook(Arc<StepFn>);
 
-#[cfg(any(test, feature = "test-seams"))]
+#[cfg(feature = "test-seams")]
 impl StepHook {
     pub fn new(f: impl Fn(&str) -> Result<(), ImportError> + Send + Sync + 'static) -> Self {
         Self(Arc::new(f))
     }
 }
 
-#[cfg(any(test, feature = "test-seams"))]
+#[cfg(feature = "test-seams")]
 impl std::fmt::Debug for StepHook {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("StepHook")
@@ -180,7 +180,13 @@ impl std::fmt::Debug for StepHook {
 /// What a run works with.
 #[derive(Clone)]
 pub struct ImportContext {
+    /// Built with [`permalinks`](Self::permalinks) as its rules.
     pub import: Arc<ImportService>,
+    /// The rules given to [`ImportService::new`] (the same `Arc`): [`Session::end`]
+    /// swaps them after a batch wrote `permalink.*`, so later batches pin the new ones.
+    /// A dry run swaps in the rules of its rolled-back rows, so give a run its own
+    /// rules, never a serving node's.
+    pub permalinks: Arc<SwappablePermalinks>,
     pub media_store: Arc<MediaStore>,
     /// Who imports; needs the `import` capability.
     pub actor: Actor,
@@ -234,7 +240,7 @@ impl<'a> Session<'a> {
 
     /// The most items a batch should hold.
     pub fn batch_items(&self) -> usize {
-        #[cfg(any(test, feature = "test-seams"))]
+        #[cfg(feature = "test-seams")]
         if let Some(n) = self.opts.batch_items {
             return n.max(1);
         }
@@ -242,7 +248,7 @@ impl<'a> Session<'a> {
     }
 
     /// Opens a content batch. Any `Err` from a batch method means the batch must be
-    /// rolled back (dropping it does that too).
+    /// rolled back (dropping it does that too); [`in_batch`](Self::in_batch) does it.
     pub async fn batch(&self) -> Result<ImportBatch<'a>, ImportError> {
         Ok(self.handle.batch(&self.ctx.import).await?)
     }
@@ -252,20 +258,80 @@ impl<'a> Session<'a> {
         Ok(self.handle.schema_batch(&self.ctx.import).await?)
     }
 
-    /// Ends `batch`: commits it, or rolls it back on a dry run.
+    /// Runs `f` on a new content batch, then [`end`](Self::end)s it, or rolls it back
+    /// when `f` fails (the batch error contract).
+    pub async fn in_batch<T>(
+        &self,
+        f: impl AsyncFnOnce(&mut ImportBatch<'a>) -> Result<T, ImportError>,
+    ) -> Result<T, ImportError> {
+        let batch = self.batch().await?;
+        self.run_batch(batch, f).await
+    }
+
+    /// [`in_batch`](Self::in_batch) on a schema batch.
+    pub async fn in_schema_batch<T>(
+        &self,
+        f: impl AsyncFnOnce(&mut ImportBatch<'a>) -> Result<T, ImportError>,
+    ) -> Result<T, ImportError> {
+        let batch = self.schema_batch().await?;
+        self.run_batch(batch, f).await
+    }
+
+    async fn run_batch<T>(
+        &self,
+        mut batch: ImportBatch<'a>,
+        f: impl AsyncFnOnce(&mut ImportBatch<'a>) -> Result<T, ImportError>,
+    ) -> Result<T, ImportError> {
+        match f(&mut batch).await {
+            Ok(value) => {
+                self.end(batch).await?;
+                Ok(value)
+            }
+            Err(e) => {
+                if let Err(r) = batch.rollback().await {
+                    tracing::warn!(error = %r, "rolling back a failed import batch failed");
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Ends `batch`: commits it, or rolls it back on a dry run. When it wrote
+    /// `permalink.*`, the rules are rebuilt (from the stored options; on a dry run from
+    /// the rolled-back rows) and swapped in for the batches after it.
     pub async fn end(&self, batch: ImportBatch<'_>) -> Result<(), ImportError> {
+        let changes = batch.permalink_changes().to_vec();
         if self.opts.dry_run {
             batch.rollback().await?;
         } else {
             batch.commit().await?;
         }
+        if !changes.is_empty() {
+            let overrides: Vec<(&str, Option<&str>)> = if self.opts.dry_run {
+                changes
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_ref().and_then(|v| v.as_str())))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let rules = self.ctx.import.permalink_rules(&overrides).await?;
+            self.ctx.permalinks.swap(rules);
+        }
         let ended = self.ended.fetch_add(1, Ordering::Relaxed) + 1;
-        #[cfg(any(test, feature = "test-seams"))]
+        #[cfg(feature = "test-seams")]
         if self.opts.fail_after_batches.is_some_and(|n| ended >= n) {
             return Err(ImportError::Stopped);
         }
         tracing::trace!(batches = ended, "import batch ended");
         Ok(())
+    }
+
+    /// Proves the run is still this one's and moves its heartbeat, for long steps between
+    /// batches (a run goes stale after 120 s). Only with no batch open: on SQLite the
+    /// fence's write would wait for that batch's transaction (one writer).
+    pub async fn heartbeat(&self) -> Result<(), ImportError> {
+        Ok(self.handle.heartbeat(&self.ctx.import).await?)
     }
 }
 
@@ -372,11 +438,11 @@ async fn begin_step(opts: &ImportOptions, ir: &Ir, name: &str) -> Result<bool, I
         tracing::debug!(step = name, "import step already done; skipped");
         return Ok(false);
     }
-    #[cfg(any(test, feature = "test-seams"))]
+    #[cfg(feature = "test-seams")]
     if let Some(hook) = &opts.step_hook {
         (hook.0)(name)?;
     }
-    #[cfg(not(any(test, feature = "test-seams")))]
+    #[cfg(not(feature = "test-seams"))]
     let _ = opts;
     Ok(true)
 }
@@ -598,7 +664,13 @@ async fn parse_into(
 mod tests {
     #![allow(clippy::unwrap_used)]
 
+    use ferrite_core::{PermalinkInput, PermalinkRules, Permalinks};
+    use ferrite_domain::{
+        ContentId, ContentItem, ContentStatus, NewUser, Role, Timestamp, UserId, UserStatus,
+    };
+    use ferrite_store_tests::TestDb;
     use futures::TryStreamExt;
+    use serde_json::{Value, json};
 
     use super::*;
 
@@ -650,22 +722,16 @@ mod tests {
         );
     }
 
-    /// Batches commit, or roll back on a dry run; `batch_items` and `fail_after_batches`
-    /// bend the run for tests.
-    #[tokio::test]
-    async fn session_batches_end_as_the_run_requires() {
-        use ferrite_core::PermalinkRules;
-        use ferrite_domain::{NewUser, Role, UserId, UserStatus};
-        use ferrite_store_tests::TestDb;
-
-        let db = TestDb::sqlite().await;
+    /// A site on `db` for [`Session`] tests: a context whose service shares its rules,
+    /// an IR file and the folder holding both.
+    async fn session_site(db: &TestDb) -> (ImportContext, Ir, tempfile::TempDir) {
         let user = UserId::new();
         let tx = db.store().begin().await.unwrap();
         tx.users()
             .insert(&NewUser {
                 id: user,
-                login: "importer".into(),
-                email: "a@example.test".into(),
+                login: format!("importer-{user}"),
+                email: format!("{user}@example.test"),
                 display_name: "Importer".into(),
                 password_hash: None,
                 role: Role::Admin,
@@ -675,16 +741,15 @@ mod tests {
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        let media_dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let permalinks = Arc::new(SwappablePermalinks::new(PermalinkRules::default()));
         let ctx = ImportContext {
-            import: Arc::new(ImportService::new(
-                db.shared_store(),
-                Arc::new(PermalinkRules::default()),
-            )),
+            import: Arc::new(ImportService::new(db.shared_store(), permalinks.clone())),
+            permalinks,
             media_store: Arc::new(
                 MediaStore::open(ferrite_media::MediaConfig {
                     backend: ferrite_media::Backend::Local {
-                        root: media_dir.path().to_owned(),
+                        root: dir.path().join("media"),
                     },
                     prefix: String::new(),
                     public: ferrite_media::PublicUrlMode::ServeViaApp {
@@ -694,12 +759,56 @@ mod tests {
                 .unwrap(),
             ),
             actor: Actor::new(user, Role::Admin),
-            work_dir: media_dir.path().join("import"),
-            media_source: Arc::new(DirSource::new(media_dir.path())),
+            work_dir: dir.path().join("import"),
+            media_source: Arc::new(DirSource::new(dir.path())),
             site_url: "http://localhost:8080".into(),
         };
-        let ir_path = media_dir.path().join(IR_FILE);
-        let ir = Ir::create(&ir_path).await.unwrap();
+        let ir = Ir::create(&dir.path().join(IR_FILE)).await.unwrap();
+        (ctx, ir, dir)
+    }
+
+    /// A published post for permalink paths.
+    fn post(slug: &str, published: &str) -> ContentItem {
+        let at: Timestamp = serde_json::from_value(json!(published)).unwrap();
+        ContentItem {
+            id: ContentId::new(),
+            kind: "post".into(),
+            status: ContentStatus::Published,
+            slug: slug.into(),
+            parent_id: None,
+            author_id: UserId::new(),
+            title: "Hello".into(),
+            excerpt: String::new(),
+            body: json!({}),
+            body_html: None,
+            fields: json!({}),
+            menu_order: 0,
+            published_at: Some(at),
+            scheduled_at: None,
+            created_at: at,
+            updated_at: at,
+            version: 1,
+        }
+    }
+
+    fn rows(key: &str, value: &str) -> Vec<(String, Option<Value>)> {
+        vec![(key.to_owned(), Some(json!(value)))]
+    }
+
+    async fn stored(db: &TestDb, key: &str) -> Option<Value> {
+        db.store()
+            .read()
+            .options()
+            .get(key)
+            .await
+            .unwrap()
+            .map(|o| o.value)
+    }
+
+    /// Batches commit, or roll back on a dry run; `batch_items` and `fail_after_batches`
+    /// bend the run for tests; the heartbeat works between batches.
+    pub async fn session_batches_end_as_the_run_requires(db: &TestDb) {
+        let (ctx, ir, _dir) = session_site(db).await;
         let handle = ctx
             .import
             .start(&ctx.actor, "http://wp.test", true, false)
@@ -718,25 +827,18 @@ mod tests {
             ir: &ir,
             ended: AtomicU32::new(0),
         };
-        let title = |t: &str| vec![("site.title".to_owned(), Some(serde_json::json!(t)))];
-        let read_title = || async {
-            db.store()
-                .read()
-                .options()
-                .get("site.title")
-                .await
-                .unwrap()
-                .map(|o| o.value)
-        };
         assert_eq!(session.batch_items(), 1);
         let mut batch = session.batch().await.unwrap();
-        batch.options(&title("Dry")).await.unwrap();
+        batch.options(&rows("site.title", "Dry")).await.unwrap();
         session.end(batch).await.unwrap();
-        assert_eq!(read_title().await, None);
-        session
+        assert_eq!(stored(db, "site.title").await, None);
+        session.heartbeat().await.unwrap();
+        let err = session
             .end(session.schema_batch().await.unwrap())
             .await
             .unwrap_err();
+        assert!(matches!(err, ImportError::Stopped), "{err:?}");
+
         let defaults = ImportOptions::default();
         let session = Session {
             opts: &defaults,
@@ -744,15 +846,142 @@ mod tests {
         };
         assert_eq!(session.batch_items(), ImportBatch::BATCH_ITEMS);
         let mut batch = session.batch().await.unwrap();
-        batch.options(&title("Wet")).await.unwrap();
+        batch.options(&rows("site.title", "Wet")).await.unwrap();
         session.end(batch).await.unwrap();
-        assert_eq!(read_title().await, Some(serde_json::json!("Wet")));
+        assert_eq!(stored(db, "site.title").await, Some(json!("Wet")));
+        session.heartbeat().await.unwrap();
         handle
-            .finish(&ctx.import, ImportRunState::Done, serde_json::json!({}))
+            .finish(&ctx.import, ImportRunState::Done, json!({}))
             .await
             .unwrap();
         ir.close().await;
-        db.teardown().await;
+    }
+
+    /// `in_batch` ends the batch when the closure succeeds and rolls it back when it
+    /// fails; the next batch then opens (nothing left holding the writer).
+    pub async fn in_batch_rolls_back_on_error(db: &TestDb) {
+        let (ctx, ir, _dir) = session_site(db).await;
+        let handle = ctx
+            .import
+            .start(&ctx.actor, "http://wp.test", false, false)
+            .await
+            .unwrap();
+        let opts = ImportOptions::default();
+        let session = Session {
+            ctx: &ctx,
+            opts: &opts,
+            handle: &handle,
+            ir: &ir,
+            ended: AtomicU32::new(0),
+        };
+        let err = session
+            .in_batch(async |b| {
+                b.options(&rows("site.title", "Lost")).await?;
+                Err::<(), _>(ImportError::Stopped)
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ImportError::Stopped), "{err:?}");
+        assert_eq!(stored(db, "site.title").await, None);
+        assert_eq!(session.ended.load(Ordering::Relaxed), 0);
+        // A batch error (an unknown option) is rolled back the same way.
+        let err = session
+            .in_batch(async |b| Ok(b.options(&rows("no.such.option", "x")).await?))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ImportError::Core(_)), "{err:?}");
+        session.heartbeat().await.unwrap();
+
+        let n = session
+            .in_schema_batch(async |b| {
+                b.options(&rows("site.title", "Kept")).await?;
+                Ok(7)
+            })
+            .await
+            .unwrap();
+        assert_eq!(n, 7);
+        assert_eq!(stored(db, "site.title").await, Some(json!("Kept")));
+        assert_eq!(session.ended.load(Ordering::Relaxed), 1);
+        handle
+            .finish(&ctx.import, ImportRunState::Done, json!({}))
+            .await
+            .unwrap();
+        ir.close().await;
+    }
+
+    /// A schema batch that writes `permalink.post` swaps the run's rules once it ends,
+    /// so the next batch pins the new ones: from the stored options, or on a dry run from
+    /// the rolled-back rows.
+    pub async fn permalink_rules_are_swapped_after_a_schema_batch(db: &TestDb) {
+        const STRUCTURE: &str = "/%year%/%slug%/";
+        let expected = PermalinkRules::from_options(Some(STRUCTURE), None).unwrap();
+        assert_ne!(expected, PermalinkRules::default());
+        for dry_run in [true, false] {
+            let (ctx, ir, _dir) = session_site(db).await;
+            let handle = ctx
+                .import
+                .start(&ctx.actor, "http://wp.test", dry_run, false)
+                .await
+                .unwrap();
+            let opts = ImportOptions {
+                dry_run,
+                ..ImportOptions::default()
+            };
+            let session = Session {
+                ctx: &ctx,
+                opts: &opts,
+                handle: &handle,
+                ir: &ir,
+                ended: AtomicU32::new(0),
+            };
+            // A content batch does not write permalink options, and swaps nothing.
+            session.in_batch(async |_| Ok(())).await.unwrap();
+            assert_eq!(*ctx.permalinks.current(), PermalinkRules::default());
+            session
+                .in_schema_batch(async |b| {
+                    b.options(&rows("permalink.post", "/news/%slug%/")).await?;
+                    b.options(&rows("permalink.post", STRUCTURE)).await?;
+                    assert_eq!(b.permalink_changes().len(), 1);
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            assert_eq!(*ctx.permalinks.current(), expected, "dry run {dry_run}");
+            // The next batch pins the swapped rules: the service shares the `Arc`.
+            let input = PermalinkInput {
+                item: post("hello", "2024-03-15T10:30:00Z"),
+                ancestors: Vec::new(),
+                primary_term: None,
+            };
+            assert_eq!(ctx.permalinks.pin().path(&input), "/2024/hello/");
+            let want = if dry_run {
+                None
+            } else {
+                Some(json!(STRUCTURE))
+            };
+            assert_eq!(stored(db, "permalink.post").await, want);
+            handle
+                .finish(&ctx.import, ImportRunState::Done, json!({}))
+                .await
+                .unwrap();
+            ir.close().await;
+        }
+    }
+
+    ferrite_store_tests::backend_tests!(
+        session_batches_end_as_the_run_requires,
+        in_batch_rolls_back_on_error,
+        permalink_rules_are_swapped_after_a_schema_batch,
+    );
+
+    /// The driver's future can run on a multi-threaded runtime (the M3-2 job).
+    #[test]
+    fn run_is_send() {
+        fn send<T: Send>(_: &T) {}
+        fn check(ctx: ImportContext, opts: ImportOptions) {
+            send(&run(ctx, Path::new("x.xml"), opts));
+        }
+        let _ = check;
     }
 
     #[tokio::test]

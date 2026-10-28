@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ferrite_core::{Actor, PermalinkRules, import::ImportService};
+use ferrite_core::{Actor, PermalinkRules, SwappablePermalinks, import::ImportService};
 use ferrite_domain::{ContentQuery, ImportRunState, NewUser, Role, UserId, UserStatus};
 use ferrite_import_wp::ImportError;
 use ferrite_import_wp::ir::Ir;
@@ -104,6 +104,44 @@ async fn open_refuses_a_missing_file_and_create_an_existing_one() {
     assert!(Ir::create(&path).await.is_err());
 }
 
+/// `push` commits every 1 000 records on its own (a second reader sees them before the
+/// flush), and every record of a push across the boundary reads back in order.
+#[tokio::test]
+async fn push_commits_across_the_batch_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ir.sqlite");
+    let mut ir = Ir::create(&path).await.unwrap();
+    let items: Vec<Item> = (1..=2_345)
+        .map(|n| Item {
+            wp_id: n,
+            post_type: if n % 2 == 0 { "post" } else { "page" }.into(),
+            title: format!("Item {n}"),
+            ..Item::default()
+        })
+        .collect();
+    for (n, item) in items.iter().enumerate() {
+        ir.push(&Record::Item(Box::new(item.clone())))
+            .await
+            .unwrap();
+        if n + 1 == 1_500 {
+            let reader = Ir::open(&path).await.unwrap();
+            let seen: Vec<Item> = reader.items(&[]).try_collect().await.unwrap();
+            assert_eq!(seen.len(), 1_000);
+            reader.close().await;
+        }
+    }
+    ir.flush().await.unwrap();
+    ir.close().await;
+
+    let ir = Ir::open(&path).await.unwrap();
+    let all: Vec<Item> = ir.items(&[]).try_collect().await.unwrap();
+    assert_eq!(all, items);
+    let posts: Vec<Item> = ir.items(&["post"]).try_collect().await.unwrap();
+    assert_eq!(posts.len(), 1_172);
+    assert_eq!(ir.item(2_345).await.unwrap().unwrap().title, "Item 2345");
+    ir.close().await;
+}
+
 // --- The driver -------------------------------------------------------------------------
 
 struct Site {
@@ -145,11 +183,10 @@ async fn site(db: &TestDb) -> Site {
         },
     })
     .unwrap();
+    let permalinks = Arc::new(SwappablePermalinks::new(PermalinkRules::default()));
     let ctx = ImportContext {
-        import: Arc::new(ImportService::new(
-            db.shared_store(),
-            Arc::new(PermalinkRules::default()),
-        )),
+        import: Arc::new(ImportService::new(db.shared_store(), permalinks.clone())),
+        permalinks,
         media_store: Arc::new(media_store),
         actor: admin(db.store()).await,
         work_dir: work.path().join("import"),
@@ -264,6 +301,44 @@ pub async fn dry_run_starts_a_dry_run_and_writes_nothing(db: &TestDb) {
     assert!(run_dirs(&site).is_empty());
 }
 
+/// A dry run rolls its passes back, so its IR records none of them (only the parse):
+/// a later real run of the same file must not skip them.
+pub async fn dry_run_marks_no_pass(db: &TestDb) {
+    let site = site(db).await;
+    let (hook, steps) = recorder(Some("fixup"));
+    let opts = ImportOptions {
+        dry_run: true,
+        step_hook: Some(hook),
+        ..ImportOptions::default()
+    };
+    let wxr = corpus("site-a.xml");
+    let err = run(site.ctx.clone(), &wxr, opts).await.unwrap_err();
+    assert!(matches!(err, ImportError::Stopped), "{err:?}");
+    assert_eq!(
+        *steps.lock().unwrap(),
+        ["parse", "pass1", "pass2", "pass3", "pass4", "fixup"]
+    );
+    let dirs = run_dirs(&site);
+    assert_eq!(dirs.len(), 1);
+    let ir = Ir::open(&dirs[0].join("ir.sqlite")).await.unwrap();
+    assert!(ir.pass_done("parse").await.unwrap());
+    for pass in ["pass1", "pass2", "pass3", "pass4", "fixup"] {
+        assert!(!ir.pass_done(pass).await.unwrap(), "{pass}");
+    }
+    ir.close().await;
+
+    let (hook, steps) = recorder(None);
+    let opts = ImportOptions {
+        step_hook: Some(hook),
+        ..ImportOptions::default()
+    };
+    run(site.ctx.clone(), &wxr, opts).await.unwrap();
+    assert_eq!(
+        *steps.lock().unwrap(),
+        ["pass1", "pass2", "pass3", "pass4", "fixup"]
+    );
+}
+
 /// A file that is not WXR fails before a run starts.
 pub async fn a_broken_file_starts_no_run(db: &TestDb) {
     let site = site(db).await;
@@ -290,5 +365,6 @@ pub async fn a_broken_file_starts_no_run(db: &TestDb) {
 backend_tests!(
     resume_skips_parse_and_done_passes,
     dry_run_starts_a_dry_run_and_writes_nothing,
+    dry_run_marks_no_pass,
     a_broken_file_starts_no_run,
 );
