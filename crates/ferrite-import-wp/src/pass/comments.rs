@@ -11,12 +11,17 @@
 use ferrite_core::import::{ImportBatch, ImportComment};
 use ferrite_domain::{CommentId, CommentStatus, ContentId, ImportMapKind, Timestamp, UserId};
 use futures::TryStreamExt;
-use scraper::{Html, Node};
+use std::collections::HashMap;
+
+use scraper::Node;
 
 use super::content::parent_first;
 use super::types::type_name;
 use super::wp_time;
 use crate::ImportError;
+use crate::convert::Notes;
+use crate::convert::html::parse_guarded;
+use crate::ir::Ir;
 use crate::model::Comment;
 use crate::run::{Report, Session};
 
@@ -34,11 +39,18 @@ pub(crate) fn status(approved: &str) -> Option<CommentStatus> {
     })
 }
 
-/// Comment HTML as plain text: tags stripped (the text of `script` and `style` dropped),
-/// entities decoded, `<p>` (and the other blocks) and line breaks in the source as blank
-/// lines, `<br>` as a newline; spaces collapsed, the result trimmed.
-pub fn plain_text(html: &str) -> String {
-    let doc = Html::parse_fragment(&html.replace("\r\n", "\n").replace('\r', "\n"));
+/// Comment HTML as plain text, and whether it was too deep to parse: tags stripped (the
+/// text of `script` and `style` dropped), entities decoded, `<p>` (and the other blocks)
+/// and line breaks in the source as blank lines, `<br>` as a newline; spaces collapsed,
+/// the result trimmed. Markup the tree builder would take quadratic time on (the
+/// conversion's depth guard) is not parsed: its tags are dropped as text, entities left
+/// as they are.
+pub(crate) fn plain_text_guarded(html: &str) -> (String, bool) {
+    let html = html.replace("\r\n", "\n").replace('\r', "\n");
+    let mut notes = Notes::default();
+    let Some(doc) = parse_guarded(&html, &mut notes) else {
+        return (strip_tags(&html), true);
+    };
     let mut out = String::new();
     for node in doc.tree.root().descendants() {
         match node.value() {
@@ -47,20 +59,8 @@ pub fn plain_text(html: &str) -> String {
                     .parent()
                     .and_then(|p| p.value().as_element().map(|e| e.name().to_owned()))
                     .is_some_and(|n| n == "script" || n == "style");
-                if in_code {
-                    continue;
-                }
-                for c in text.chars() {
-                    match c {
-                        '\n' => newlines(&mut out, 2),
-                        c if c.is_whitespace() => {
-                            if !out.is_empty() && !out.ends_with([' ', '\n']) {
-                                out.push(' ');
-                            }
-                        }
-                        c if c.is_control() => {}
-                        c => out.push(c),
-                    }
+                if !in_code {
+                    push_text(&mut out, text);
                 }
             }
             Node::Element(e) => match e.name() {
@@ -72,7 +72,45 @@ pub fn plain_text(html: &str) -> String {
             _ => {}
         }
     }
+    (out.trim().to_owned(), false)
+}
+
+/// The text between the tags of `html`, in one linear pass.
+fn strip_tags(html: &str) -> String {
+    let mut out = String::new();
+    let mut text = String::new();
+    let mut in_tag = false;
+    for c in html.chars() {
+        match (in_tag, c) {
+            (false, '<') => {
+                push_text(&mut out, &text);
+                text.clear();
+                in_tag = true;
+            }
+            (true, '>') => in_tag = false,
+            (false, c) => text.push(c),
+            (true, _) => {}
+        }
+    }
+    push_text(&mut out, &text);
     out.trim().to_owned()
+}
+
+/// Appends text: newlines as paragraph breaks, other whitespace as one space, control
+/// characters dropped.
+fn push_text(out: &mut String, text: &str) {
+    for c in text.chars() {
+        match c {
+            '\n' => newlines(out, 2),
+            c if c.is_whitespace() => {
+                if !out.is_empty() && !out.ends_with([' ', '\n']) {
+                    out.push(' ');
+                }
+            }
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
 }
 
 /// Ends `out` with at least `n` newlines (none at the start), trailing spaces removed.
@@ -95,36 +133,31 @@ struct Pending {
 
 /// Imports the comments of every imported item, parents first, `batch_items` per batch.
 pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result<(), ImportError> {
-    let mut all = Vec::new();
+    // Only (comment, parent, item) ids stay in memory; the comments themselves are read
+    // from the IR per chunk.
+    let mut refs: Vec<(i64, i64, i64)> = Vec::new();
     let mut items = session.ir().items(&[]);
     while let Some(item) = items.try_next().await? {
         if type_name(&item.post_type).is_none() {
             continue;
         }
-        for comment in item.comments {
-            all.push(Pending {
-                item: item.wp_id,
-                comment,
-            });
-        }
+        refs.extend(
+            item.comments
+                .iter()
+                .map(|c| (c.wp_id, c.parent_wp_id, item.wp_id)),
+        );
     }
     drop(items);
-    let nodes: Vec<(i64, i64)> = all
-        .iter()
-        .map(|p| (p.comment.wp_id, p.comment.parent_wp_id))
-        .collect();
-    let order = parent_first(&nodes);
-    let mut by_id: std::collections::HashMap<i64, Pending> =
-        all.into_iter().map(|p| (p.comment.wp_id, p)).collect();
-    let ordered: Vec<Pending> = order.iter().filter_map(|id| by_id.remove(id)).collect();
+    let order = comment_order(&refs);
     // The WP item of each comment, to tell a parent on another item.
-    let items_of: std::collections::HashMap<i64, i64> =
-        ordered.iter().map(|p| (p.comment.wp_id, p.item)).collect();
+    let items_of: HashMap<i64, i64> = refs.iter().map(|(c, _, i)| (*c, *i)).collect();
+    drop(refs);
     let mut pings = 0u64;
-    for chunk in ordered.chunks(session.batch_items()) {
+    for chunk in order.chunks(session.batch_items()) {
+        let pending = load(session.ir(), chunk).await?;
         let mut batch = session.batch().await?;
         let mut part = Report::default();
-        let written = write(&mut batch, chunk, &items_of, &mut part, &mut pings).await;
+        let written = write(&mut batch, &pending, &items_of, &mut part, &mut pings).await;
         session.finish_batch(batch, written).await?;
         let counts = report.counts_of(KIND);
         let c = part.counts_of(KIND);
@@ -139,10 +172,55 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
     Ok(())
 }
 
+/// The comments of `refs` (comment, parent, item WP ids) as (comment, item), each parent
+/// before its children.
+fn comment_order(refs: &[(i64, i64, i64)]) -> Vec<(i64, i64)> {
+    let nodes: Vec<(i64, i64)> = refs.iter().map(|(c, p, _)| (*c, *p)).collect();
+    let item_of: HashMap<i64, i64> = refs.iter().map(|(c, _, i)| (*c, *i)).collect();
+    parent_first(&nodes)
+        .into_iter()
+        .filter_map(|c| item_of.get(&c).map(|i| (c, *i)))
+        .collect()
+}
+
+/// The comments of `chunk` (comment, item), read from their items in the IR, in order.
+async fn load(ir: &Ir, chunk: &[(i64, i64)]) -> Result<Vec<Pending>, ImportError> {
+    let mut found: HashMap<i64, Comment> = HashMap::new();
+    let mut read: Vec<i64> = Vec::new();
+    for (_, item) in chunk {
+        if read.contains(item) {
+            continue;
+        }
+        read.push(*item);
+        let wanted: Vec<i64> = chunk
+            .iter()
+            .filter(|(_, i)| i == item)
+            .map(|(c, _)| *c)
+            .collect();
+        if let Some(it) = ir.item(*item).await? {
+            found.extend(
+                it.comments
+                    .into_iter()
+                    .filter(|c| wanted.contains(&c.wp_id))
+                    .map(|c| (c.wp_id, c)),
+            );
+        }
+    }
+    Ok(chunk
+        .iter()
+        .filter_map(|(c, item)| {
+            found.remove(c).map(|comment| Pending {
+                item: *item,
+                comment,
+            })
+        })
+        .collect())
+}
+
 async fn write(
     b: &mut ImportBatch<'_>,
     chunk: &[Pending],
-    items_of: &std::collections::HashMap<i64, i64>,
+    items_of: &HashMap<i64, i64>,
     report: &mut Report,
     pings: &mut u64,
 ) -> Result<(), ImportError> {
@@ -190,20 +268,35 @@ async fn write(
                 .await?
                 .map(|m| UserId::from_uuid(m.id)),
         };
-        b.comment(ImportComment {
-            wp_id: c.wp_id,
-            item: ContentId::from_uuid(item.id),
-            parent,
-            user,
-            author_name: c.author.trim().to_owned(),
-            author_email: c.author_email.trim().to_owned(),
-            author_url: c.author_url.trim().to_owned(),
-            body: plain_text(&c.content),
-            status,
-            created_at: wp_time(&c.date_gmt, &c.date_local).unwrap_or_else(Timestamp::now),
-        })
-        .await?;
+        let (body, too_deep) = plain_text_guarded(&c.content);
+        let outcome = b
+            .comment(ImportComment {
+                wp_id: c.wp_id,
+                item: ContentId::from_uuid(item.id),
+                parent,
+                user,
+                author_name: c.author.trim().to_owned(),
+                author_email: c.author_email.trim().to_owned(),
+                author_url: c.author_url.trim().to_owned(),
+                body,
+                status,
+                created_at: wp_time(&c.date_gmt, &c.date_local).unwrap_or_else(Timestamp::now),
+            })
+            .await?;
         report.counts_of(KIND).created += 1;
+        if too_deep {
+            report.note(format!(
+                "comment {}: its markup is nested too deep to parse; kept as text",
+                c.wp_id
+            ));
+        }
+        if !outcome.altered.is_empty() {
+            report.note(format!(
+                "comment {}: {} changed to fit the comment rules",
+                c.wp_id,
+                outcome.altered.join(", ")
+            ));
+        }
     }
     Ok(())
 }
@@ -211,6 +304,10 @@ async fn write(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plain_text(html: &str) -> String {
+        plain_text_guarded(html).0
+    }
 
     #[test]
     fn statuses_map_as_p18_says() {
@@ -234,5 +331,35 @@ mod tests {
             "One & two\n\nThree\nfour"
         );
         assert_eq!(plain_text("  a   b\r\n\r\n\r\nc  "), "a b\n\nc");
+    }
+
+    /// B1: a hostile body (40 000 nested divs) is not parsed (the tree builder would take
+    /// quadratic time): its tags are dropped as text, fast, and it is reported.
+    #[test]
+    fn hostile_nesting_is_text_and_reported() {
+        let html = format!("{}deep{}", "<div>".repeat(40_000), "</div>".repeat(40_000));
+        let started = std::time::Instant::now();
+        let (text, too_deep) = plain_text_guarded(&html);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(too_deep);
+        assert_eq!(text, "deep");
+        let (text, too_deep) = plain_text_guarded("<p>fine &amp; dandy</p>");
+        assert!(!too_deep);
+        assert_eq!(text, "fine & dandy");
+    }
+
+    /// C4: comments are ordered from (comment, parent, item) ids alone, parents first;
+    /// a parent on another item does not hold its child back.
+    #[test]
+    fn order_uses_ids_only() {
+        let refs = [(3, 2, 10), (2, 1, 10), (1, 0, 10), (4, 0, 11), (5, 1, 11)];
+        assert_eq!(
+            comment_order(&refs),
+            [(1, 10), (2, 10), (3, 10), (4, 11), (5, 11)]
+        );
     }
 }
