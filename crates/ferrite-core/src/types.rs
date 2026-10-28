@@ -115,43 +115,11 @@ impl ContentTypeService {
     /// or `{}` for a type without one.
     pub async fn create(&self, actor: &Actor, new: NewType) -> Result<ContentType, CoreError> {
         require(actor, Capability::ManageSettings)?;
-        check_type_name(&new.name)?;
-        let label = check_label(&new.label)?;
-        if let Some(defs) = &new.fields {
-            fields::check_schema(defs)?;
-        }
-        let ty = ContentType {
-            name: new.name,
-            label,
-            hierarchical: new.hierarchical,
-            has_archive: new.has_archive,
-            fields: stored_schema(new.fields.as_deref()),
-            built_in: false,
-            created_at: Timestamp::now(),
-        };
+        let ty = check_new_type(&new)?;
         let (guard, tx) = begin_locked(self.store.as_ref()).await?;
         let done = async {
-            check_name_free(tx.as_ref(), &ty.name, Change::Type).await?;
-            if let Some(defs) = &new.fields {
-                check_targets(tx.as_ref(), defs, Some(&ty.name)).await?;
-            }
-            tx.types().insert(&ty).await?;
-            check_permalinks(tx.as_ref(), true).await?;
-            let details = json!({
-                "label": ty.label,
-                "hierarchical": ty.hierarchical,
-                "has_archive": ty.has_archive,
-                "fields": new.fields.as_ref().map(Vec::len),
-            });
-            announce(
-                tx.as_ref(),
-                actor.user,
-                Change::Type,
-                "create",
-                &ty.name,
-                details,
-            )
-            .await?;
+            create_in(tx.as_ref(), actor.user, &ty, new.fields.as_deref()).await?;
+            invalidate_all(tx.as_ref()).await?;
             Ok(ty)
         }
         .await;
@@ -174,35 +142,8 @@ impl ContentTypeService {
         }
         let (guard, tx) = begin_locked(self.store.as_ref()).await?;
         let done = async {
-            let mut ty = tx.types().get(name).await?.ok_or(CoreError::NotFound)?;
-            if let Some(label) = label {
-                ty.label = label;
-            }
-            if let Some(has_archive) = patch.has_archive {
-                ty.has_archive = has_archive;
-            }
-            if let Some(defs) = &patch.fields {
-                if let Some(defs) = defs {
-                    check_targets(tx.as_ref(), defs, None).await?;
-                }
-                ty.fields = stored_schema(defs.as_deref());
-            }
-            tx.types().upsert(&ty).await?;
-            check_permalinks(tx.as_ref(), false).await?;
-            let details = json!({
-                "label": patch.label.is_some(),
-                "has_archive": patch.has_archive,
-                "fields": patch.fields.as_ref().map(|f| f.as_ref().map(Vec::len)),
-            });
-            announce(
-                tx.as_ref(),
-                actor.user,
-                Change::Type,
-                "update",
-                &ty.name,
-                details,
-            )
-            .await?;
+            let ty = update_in(tx.as_ref(), actor.user, name, label, &patch).await?;
+            invalidate_all(tx.as_ref()).await?;
             Ok(ty)
         }
         .await;
@@ -280,6 +221,85 @@ impl ContentTypeService {
         .await;
         finish_locked(guard, tx, done).await
     }
+}
+
+/// The pure checks of [`ContentTypeService::create`] (name, label, schema). Returns the
+/// type to insert.
+pub(crate) fn check_new_type(new: &NewType) -> Result<ContentType, CoreError> {
+    check_type_name(&new.name)?;
+    let label = check_label(&new.label)?;
+    if let Some(defs) = &new.fields {
+        fields::check_schema(defs)?;
+    }
+    Ok(ContentType {
+        name: new.name.clone(),
+        label,
+        hierarchical: new.hierarchical,
+        has_archive: new.has_archive,
+        fields: stored_schema(new.fields.as_deref()),
+        built_in: false,
+        created_at: Timestamp::now(),
+    })
+}
+
+/// Registers `ty` (from [`check_new_type`]; `defs` its schema) inside the caller's `Tx`,
+/// which must hold [`LOCK_TYPES`]: the name is free, relation targets exist, the
+/// permalink rules still hold; `types.changed` and the audit row `type.create`. The
+/// caller emits `invalidate [all]`.
+pub(crate) async fn create_in(
+    repos: &dyn Repos,
+    actor: UserId,
+    ty: &ContentType,
+    defs: Option<&[FieldDef]>,
+) -> Result<(), CoreError> {
+    check_name_free(repos, &ty.name, Change::Type).await?;
+    if let Some(defs) = defs {
+        check_targets(repos, defs, Some(&ty.name)).await?;
+    }
+    repos.types().insert(ty).await?;
+    check_permalinks(repos, true).await?;
+    let details = json!({
+        "label": ty.label,
+        "hierarchical": ty.hierarchical,
+        "has_archive": ty.has_archive,
+        "fields": defs.map(<[FieldDef]>::len),
+    });
+    announce_in(repos, actor, Change::Type, "create", &ty.name, details).await
+}
+
+/// Applies `patch` to type `name` inside the caller's `Tx`, which must hold
+/// [`LOCK_TYPES`]; `label` is the patch's label already checked, and a new schema must
+/// have passed [`fields::check_schema`]. `types.changed` and the audit row
+/// `type.update`; the caller emits `invalidate [all]`. Missing: `NotFound`.
+pub(crate) async fn update_in(
+    repos: &dyn Repos,
+    actor: UserId,
+    name: &str,
+    label: Option<String>,
+    patch: &TypePatch,
+) -> Result<ContentType, CoreError> {
+    let mut ty = repos.types().get(name).await?.ok_or(CoreError::NotFound)?;
+    if let Some(label) = label {
+        ty.label = label;
+    }
+    if let Some(has_archive) = patch.has_archive {
+        ty.has_archive = has_archive;
+    }
+    if let Some(defs) = &patch.fields {
+        if let Some(defs) = defs {
+            check_targets(repos, defs, None).await?;
+        }
+        ty.fields = stored_schema(defs.as_deref());
+    }
+    repos.types().upsert(&ty).await?;
+    check_permalinks(repos, false).await?;
+    let details = json!({
+        "label": patch.label.is_some(),
+        "has_archive": patch.has_archive,
+        "fields": patch.fields.as_ref().map(|f| f.as_ref().map(Vec::len)),
+    });
+    announce_in(repos, actor, Change::Type, "update", &ty.name, details).await?;
+    Ok(ty)
 }
 
 /// [`fields::check_relation_types`] of `defs` against the registered types, plus
@@ -476,15 +496,25 @@ pub(crate) async fn announce(
     name: &str,
     details: Value,
 ) -> Result<(), CoreError> {
+    announce_in(repos, actor, change, verb, name, details).await?;
+    invalidate_all(repos).await
+}
+
+/// [`announce`] without the `invalidate [all]`, for callers that emit their own
+/// invalidation (the import batch, M3-1 P6, and the create/update paths above).
+pub(crate) async fn announce_in(
+    repos: &dyn Repos,
+    actor: UserId,
+    change: Change,
+    verb: &str,
+    name: &str,
+    details: Value,
+) -> Result<(), CoreError> {
     let key = match change {
         Change::Type => events::type_key(name),
         Change::Taxonomy => events::taxonomy_key(name),
     };
-    let events_repo = repos.events();
-    events_repo.append(&events::types_changed(&key)).await?;
-    events_repo
-        .append(&events::invalidate([events::ALL_KEY.to_owned()]))
-        .await?;
+    repos.events().append(&events::types_changed(&key)).await?;
     repos
         .audit()
         .append(&NewAudit {
@@ -494,6 +524,15 @@ pub(crate) async fn announce(
             target_id: Some(name.to_owned()),
             details,
         })
+        .await?;
+    Ok(())
+}
+
+/// Appends `invalidate [all]`.
+pub(crate) async fn invalidate_all(repos: &dyn Repos) -> Result<(), CoreError> {
+    repos
+        .events()
+        .append(&events::invalidate([events::ALL_KEY.to_owned()]))
         .await?;
     Ok(())
 }

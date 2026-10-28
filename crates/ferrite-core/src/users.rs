@@ -528,18 +528,12 @@ impl UserService {
             }
             None => None,
         };
-        let has_password = password_hash.is_some();
         let tx = self.store.begin().await?;
         let done = async {
-            // Both unique indexes may fail at once, and the backends report different ones;
-            // checking the login first gives the same message on both. The unique
-            // constraints still decide races.
-            if tx.users().get_by_login(&login).await?.is_some() {
-                return Err(CoreError::invalid_field("login", LOGIN_TAKEN));
-            }
-            let user = tx
-                .users()
-                .insert(&NewUser {
+            let user = insert_account_in(
+                tx.as_ref(),
+                actor,
+                NewUser {
                     id: UserId::new(),
                     login,
                     email,
@@ -548,16 +542,9 @@ impl UserService {
                     role: account.role,
                     status: UserStatus::Active,
                     must_reset: account.must_reset,
-                })
-                .await
-                .map_err(map_unique)?;
-            let details = json!({
-                "login": user.login,
-                "role": user.role.as_str(),
-                "must_reset": user.must_reset,
-                "password": has_password,
-            });
-            audit(tx.as_ref(), actor, "user.create", user.id, details).await?;
+                },
+            )
+            .await?;
             let id = user.id.to_string();
             actions::enqueue(
                 tx.as_ref(),
@@ -571,6 +558,32 @@ impl UserService {
         .await;
         finish(tx, done).await
     }
+}
+
+/// Inserts an account whose login, e-mail and display name are already normalised,
+/// with its `user.create` audit row, inside the caller's `Tx` (no action jobs: the
+/// caller decides, M3-1 P6). A taken login or e-mail is `InvalidField` naming it.
+pub(crate) async fn insert_account_in(
+    repos: &dyn Repos,
+    actor: Option<UserId>,
+    new: NewUser,
+) -> Result<User, CoreError> {
+    // Both unique indexes may fail at once, and the backends report different ones;
+    // checking the login first gives the same message on both. The unique constraints
+    // still decide races.
+    if repos.users().get_by_login(&new.login).await?.is_some() {
+        return Err(CoreError::invalid_field("login", LOGIN_TAKEN));
+    }
+    let has_password = new.password_hash.is_some();
+    let user = repos.users().insert(&new).await.map_err(map_unique)?;
+    let details = json!({
+        "login": user.login,
+        "role": user.role.as_str(),
+        "must_reset": user.must_reset,
+        "password": has_password,
+    });
+    audit(repos, actor, "user.create", user.id, details).await?;
+    Ok(user)
 }
 
 /// The CLI's system path ([`UserService::operator`]): acts without an actor.
