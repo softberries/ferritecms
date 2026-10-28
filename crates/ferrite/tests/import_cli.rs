@@ -13,8 +13,8 @@ use clap::Parser;
 use ferrite::{Cli, NodeOptions, OpenMode, open_store, start};
 use ferrite_config::Config;
 use ferrite_domain::{
-    ContentQuery, ImportRun, ImportRunId, ImportRunState, MEDIA_KIND, NewUser, Role, Timestamp,
-    UserId, UserStatus,
+    CommentQuery, ContentQuery, ImportRun, ImportRunId, ImportRunState, MEDIA_KIND, NewUser,
+    RedirectQuery, Role, Timestamp, UserId, UserQuery, UserStatus,
 };
 use ferrite_store::Store;
 use ferrite_store_tests::TestDb;
@@ -298,6 +298,7 @@ async fn import_busy_exit_3() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dry_run_writes_nothing() {
     let site = Site::sqlite().await;
+    let before = snapshot(&site).await;
     let out = site
         .import(
             &corpus("site-a.xml"),
@@ -315,15 +316,101 @@ async fn dry_run_writes_nothing() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("dry run:"), "{stdout}");
+    assert!(!stdout.contains("variants"), "{stdout}");
+    assert_eq!(snapshot(&site).await, before);
+    // The report is kept; no work file (IR folder) is.
+    let left: Vec<String> = std::fs::read_dir(site.data().join("import"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["reports"]);
+}
+
+/// What a dry run must leave as it was: content (media rows included), users, terms,
+/// comments, redirects, menus, options and the media files.
+async fn snapshot(site: &Site) -> String {
     let store = site.store().await;
-    let rows = store
-        .read()
+    let r = store.read();
+    let content = r.content().count(&ContentQuery::default()).await.unwrap();
+    let media = r
         .content()
-        .count(&ContentQuery::default())
+        .count(&ContentQuery {
+            kind: Some(MEDIA_KIND.into()),
+            ..ContentQuery::default()
+        })
         .await
         .unwrap();
+    let users: Vec<String> = r
+        .users()
+        .list(&UserQuery {
+            limit: 100,
+            ..UserQuery::default()
+        })
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|u| u.login)
+        .collect();
+    let mut terms = Vec::new();
+    for tax in r.taxonomies().list().await.unwrap() {
+        for t in r.terms().list(&tax.name).await.unwrap() {
+            terms.push(format!("{}/{}", t.taxonomy, t.slug));
+        }
+    }
+    let comments = r
+        .comments()
+        .list(&CommentQuery {
+            limit: 100,
+            ..CommentQuery::default()
+        })
+        .await
+        .unwrap()
+        .items
+        .len();
+    let redirects = r
+        .redirects()
+        .list(&RedirectQuery {
+            limit: 100,
+            ..RedirectQuery::default()
+        })
+        .await
+        .unwrap()
+        .items
+        .len();
+    let menus = r.menus().list().await.unwrap();
+    let options: Vec<(String, Value)> = r
+        .options()
+        .list_prefix("", "", 200)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|o| (o.key, o.value))
+        .collect();
+    drop(r);
     store.close().await;
-    assert_eq!(rows, 0);
+    let files = walkdir_count(&site.data().join("media"));
+    format!(
+        "content {content} media {media} files {files}\nusers {users:?}\nterms {terms:?}\n\
+         comments {comments} redirects {redirects}\nmenus {menus:?}\noptions {options:?}"
+    )
+}
+
+/// The files under `dir` (none when it does not exist).
+fn walkdir_count(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .map(|e| {
+            let path = e.unwrap().path();
+            if path.is_dir() {
+                walkdir_count(&path)
+            } else {
+                1
+            }
+        })
+        .sum()
 }
 
 /// Serves `site-b-uploads` under `/wp-content/uploads/` on 127.0.0.1.
