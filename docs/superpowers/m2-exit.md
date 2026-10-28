@@ -109,7 +109,13 @@ Each is in the ROADMAP under the milestone named.
   import upload (M2a-2b P26); the import job's timeout, lock and event batching (M1.5).
 - **M4, new from M2b-3:** plugin hook latency across the cluster as a time series (M2b P48);
   an index for the redirect `q` search if needed (M2b R43); an E2E of the Users screen's
-  "Send a reset e-mail" (M2b R56).
+  "Send a reset e-mail" (M2b R56); the M2b-3 final review's six minors (theme `homepage`
+  through `web_url`, plugin `mail_prefix` vs core `subject_title`, site-title read failure
+  in reset/test mail vs plugin mail, blank `q` on `/users` vs `/redirects`, the first run
+  of the rebuilt `ci.yml`, `check_relations` revealing the type of an unreadable item); and
+  Task 16's harness minors (the WebKit fetch rule counting SPA navigations, `MEDIA_FILE`
+  letting any `/_media/` 404 pass in two specs, the cmdk workaround's nested `useCallback`
+  refs, a Vitest test near its 5 s timeout under load).
 - **M4, from M2a:** the per-node option cache, a GC grace period for staged artifacts, a
   compile bound for uploaded components, fairness in the per-render plugin budget, signed
   plugins and publisher identity (M2a-2a); `date` filter time zones and `seed demo`

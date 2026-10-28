@@ -290,8 +290,9 @@ and their causes:
 - **(l)** `set_featured_image_from_picker`, WebKit, run 18: axe `color-contrast` on the
   editor's save-state label. It crossfades with Motion's `AnimatePresence mode="wait"`
   (exit, then enter), and `settle` awaited only the animations running when it looked.
-  Test fix `22d3272`: `settle` waits until no finite animation runs, within the same 5 s. A
-  temporary probe spec saw the crossfade as a WAAPI `Animation` in all three engines.
+  Test fix `22d3272`: `settle` waits until no finite animation runs, within the same 5 s.
+  Not reproduced on the idle host: the cause rests on code reading. A temporary probe spec
+  saw the crossfade as a WAAPI `Animation` in all three engines.
   `editor-media.spec.ts` and `design.spec.ts` in four projects: 120 of 120 over 2 repeats.
   This may also have been run 9's undiagnosed failure (g), same test, not shown.
 - **(i)** not an `e2e:all` failure: `FERRITE_BIN` broke the Linux run (§5.5). Test fix
@@ -325,7 +326,8 @@ first 128 snaps four to a sheet (32 sheets), the other 100 two to a sheet (50 sh
 the long pages stay legible. All 82 sheets were looked at, the account screens included;
 single images were opened where a sheet was too small to judge. Run 20's snaps were taken
 by the final code; the UI changes after run 4 (`d767108`, a `title`; `1807f2f`, ARIA
-attributes) change no pixels.
+attributes) should change no pixels, which was reasoned, not checked: the sheets were not
+taken again (see Not verified 6).
 
 | 11 §8 item | Finding | Action |
 |---|---|---|
@@ -437,6 +439,7 @@ The workspace tests were not run again in part B: no Rust code changed.
 | §"Task 14 notes": the `fixtures.ts` names | `grep` for `CANCELLED_LOAD`, `GONE_ELSEWHERE`, `TOAST_IN_TRANSITION`, `deferCancelled` | true |
 | Not verified 3: the paths CI downloads to | Task 14 report, Concerns 3 | from the report |
 | §5.1 run table, timings, failures | each run's log in the scratchpad (`run<N>.log`, failing runs kept as `run<N>.keep.log`), counted per project with a script over the list reporter's lines; `git rev-parse --short HEAD` before each pair | true |
+| §5.1 (l): the save-state crossfade is a WAAPI `Animation` | a temporary probe spec (deleted afterwards), run in Chromium, Firefox and WebKit; Task 16 report, Concerns 1 | true as observed; that it caused run 18's failure is code reading, not reproduced |
 | §5.1 (d): WebKit Networking ended by WebKit, host load | the three `.ips` reports (`is_simulated`, `exception`, `termination` fields), `uptime`, `ps -Ao pcpu,comm -r` at 07:03 | true as observed; the cause (load) is an inference |
 | §5.1 (e), §5.2: attribute values, missing events, timings | the temporary logging's output (`ad.log`, `failed.log` in the scratchpad), Playwright 1.64's `coreBundle.js` (`splitErrorMessage`, `_onConsoleMessage`), cmdk 1.1.1's `dist/index.mjs` (`selectedItemId`) | true |
 | §5.1: cmdk 1.1.1 is the latest release | `npm view cmdk version` → 1.1.1 | true on 2026-10-28 |
@@ -467,6 +470,8 @@ The workspace tests were not run again in part B: no Rust code changed.
    the screens. Postgres is covered by the workspace tests (§2) and by `chromium-pg` (§5.1).
 5. **The Users screen's "Send a reset e-mail"** is unit-tested only (R56); it was not run
    here either.
+6. **The contact sheet after run 4**: the UI changes `d767108` (a `title`) and `1807f2f`
+   (ARIA attributes) are reasoned to change no pixels; the sheets were not re-taken.
 
 ## Task 14 notes carried here
 

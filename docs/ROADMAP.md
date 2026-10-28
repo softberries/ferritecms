@@ -446,6 +446,19 @@ Design: [09](design/09-operations.md).
   - [ ] Plugin hook latency across the cluster as a time series, with the metrics registry (the Plugins screen shows this node's p95 as a bucket bound, M2b P48).
   - [ ] An index for the redirect `q` substring search if large redirect sets need one (a trigram index is Postgres-only; M2b R43).
   - [ ] An E2E of the Users screen's "Send a reset e-mail" through the SMTP sink (unit-tested only, M2b R56).
+  - [ ] From the M2b-3 final review (`m2b3-exit.md`):
+    - [ ] Theme `homepage` is not passed through `web_url` in `ThemeDto::from_manifest` (plugins are); defence in depth.
+    - [ ] The plugin host's `mail_prefix` (`MAIL_TITLE_PREFIX_CHARS`) duplicates core `mail::subject_title`; use the core function.
+    - [ ] Reset and test mail answer `500` when the site title read fails, while plugin `notify_admins` falls back to the configured title; pick one rule.
+    - [ ] A blank `q` is `422` on `GET /users` but means no filter on `GET /redirects`; pick one convention.
+    - [ ] Watch the first run of the rebuilt `ci.yml` on the develop-to-main PR: the empty `services.postgres.image` for non-Postgres jobs and the artifact `chmod +x` step (R72).
+    - [ ] `check_relations` reveals the type of an item the actor cannot read, given its UUID.
+  - [ ] Test harness, from Task 16 of M2b-3:
+    - [ ] The WebKit fetch rule (`fixtures.ts`) also counts SPA navigations within 2 s.
+    - [ ] `MEDIA_FILE` lets any `/_media/` 404 pass in the `media` and `editor-media` specs, which can hide a broken media URL there.
+    - [ ] The cmdk workaround in `command.tsx` nests `useCallback` refs; simplify.
+    - [ ] The Vitest test `renders_the_shell_with_translated_title` came near its 5 s timeout under load; watch it on CI.
+  - [ ] Contact sheet, from M2b-3: `icon-sm`/`icon-xs` buttons under 44 px on touch (11 §8; AA's 24 px is met); a faint edge on dark dropdown menus; the palette's stale rows, dimmed to 60 % during a slow search, fall below 4.5:1.
 - [ ] Deferred from M1c-2:
   - [ ] Small in-memory LRU for hot small `/_media` files (03 §5).
   - [ ] Atom feeds next to RSS 2.0 (06 §3).
