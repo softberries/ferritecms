@@ -27,6 +27,7 @@ use crate::{
         set_terms, write_revision,
     },
     events, jobs,
+    permalink::load_input,
     redirects::redirect_keys,
     slug,
 };
@@ -258,6 +259,50 @@ impl ImportBatch<'_> {
         body: Value,
     ) -> Result<(), CoreError> {
         check_body(&body)?;
+        self.fix_up(id, wp_id, |item| item.body = body).await
+    }
+
+    /// Replaces the `fields` of imported item `id` (the fix-up of relations to items
+    /// written after it), with the rules and errors of [`set_body`](Self::set_body);
+    /// the fields are checked against the item's type as a content write checks them.
+    pub async fn set_fields(
+        &mut self,
+        id: ContentId,
+        wp_id: i64,
+        fields: Value,
+    ) -> Result<(), CoreError> {
+        let repos = self.tx.as_ref();
+        let kind = repos
+            .content()
+            .get(id)
+            .await?
+            .ok_or(CoreError::NotFound)?
+            .kind;
+        let types = repos.types().list().await?;
+        check_item(repos, &types, &kind, &fields, None).await?;
+        self.fix_up(id, wp_id, |item| item.fields = fields).await
+    }
+
+    /// The public path of item `id` under the rules this batch pinned (its parents and
+    /// primary category as stored now); `None` when there is no such item.
+    pub async fn path(&self, id: ContentId) -> Result<Option<String>, CoreError> {
+        let repos = self.tx.as_ref();
+        let Some(item) = repos.content().get(id).await? else {
+            return Ok(None);
+        };
+        let input = load_input(repos, item).await?;
+        Ok(Some(self.rules.path(&input)))
+    }
+
+    /// The shared write of [`set_body`](Self::set_body) and
+    /// [`set_fields`](Self::set_fields): `change` applied to the item at its mapped
+    /// version.
+    async fn fix_up(
+        &mut self,
+        id: ContentId,
+        wp_id: i64,
+        change: impl FnOnce(&mut ContentItem),
+    ) -> Result<(), CoreError> {
         let row = self
             .tx
             .imports()
@@ -276,11 +321,11 @@ impl ImportBatch<'_> {
                 current_version: current.version,
             });
         }
-        if current.body == body {
+        let mut next = current.clone();
+        change(&mut next);
+        if next == current {
             return Ok(());
         }
-        let mut next = current.clone();
-        next.body = body;
         next.body_html = None;
         let repos = self.tx.as_ref();
         let mut saved = repos.content().update(&next).await?;

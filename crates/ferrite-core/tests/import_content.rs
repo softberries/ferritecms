@@ -722,6 +722,49 @@ pub async fn set_body_keeps_item_unedited(db: &TestDb) {
     assert_eq!(svc.get(id).await.unwrap().version, edited.version);
 }
 
+/// `set_fields` (the relation fix-up) follows `set_body`'s rules and checks the fields;
+/// `path` gives an imported item's path under the batch's rules.
+pub async fn set_fields_and_path(db: &TestDb) {
+    let store = db.store();
+    let admin = admin(store).await;
+    let svc = content(db);
+    let out = import(db, &admin, vec![item(1, "linked", admin.user)]).await;
+    let id = out[0].id;
+
+    let imp = importer(db);
+    let run = imp.start(&admin, SOURCE, false, false).await.unwrap();
+    let mut batch = run.batch(&imp).await.unwrap();
+    let path = batch.path(id).await.unwrap().unwrap();
+    assert!(
+        path.starts_with('/') && path.ends_with("/linked/"),
+        "{path}"
+    );
+    assert_eq!(batch.path(ContentId::new()).await.unwrap(), None);
+    batch.set_fields(id, 1, json!({"x": 1})).await.unwrap();
+    // The same fields again write nothing.
+    batch.set_fields(id, 1, json!({"x": 1})).await.unwrap();
+    assert_eq!(batch.len(), 1);
+    batch.commit().await.unwrap();
+    let got = svc.get(id).await.unwrap();
+    assert_eq!(got.fields, json!({"x": 1}));
+    assert_eq!(got.version, 2);
+    assert_eq!(got.updated_at, micros(1_600_000_100_000_000));
+
+    // Fields the type refuses: `InvalidField`, nothing written.
+    let mut batch = run.batch(&imp).await.unwrap();
+    let err = batch.set_fields(id, 1, json!(5)).await.unwrap_err();
+    assert!(matches!(err, CoreError::InvalidField { .. }), "{err:?}");
+    batch.rollback().await.unwrap();
+    // Still "not edited": a changed WP item updates it.
+    run.finish(&imp, ferrite_domain::ImportRunState::Done, json!({}))
+        .await
+        .unwrap();
+    let mut changed = item(1, "linked", admin.user);
+    changed.hash = "hash-1b".into();
+    let out = import(db, &admin, vec![changed]).await;
+    assert_eq!(out[0].result, Written::Updated);
+}
+
 /// Installs an enabled plugin subscribed to the content action hooks.
 async fn subscriber(store: Arc<dyn Store>) {
     let artifact = Artifact {
@@ -827,5 +870,6 @@ backend_tests!(
     rerun_slug_change_redirects,
     rerun_rename_and_unpublish_records_no_redirect,
     set_body_keeps_item_unedited,
+    set_fields_and_path,
     no_plugin_actions,
 );
