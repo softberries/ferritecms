@@ -58,17 +58,24 @@ export const TOAST_IN_TRANSITION =
  * request (the palette, the menu editor, the dashboard) answers 404, which the page
  * handles (no results, the list read again) but the browser logs. Accepted in every test,
  * except a plugin's metrics in `plugins.spec.ts`, whose tests read the metrics of their own
- * plugins (`goneElsewhere`).
+ * plugins (`goneElsewhere`). A stored media file (`/_media/<sha256>/<name>`) is accepted only
+ * in `media.spec.ts` and `editor-media.spec.ts`: the library and the media picker list every
+ * item on the site, so a thumbnail of an image another test purged answers 404; elsewhere a
+ * page shows only its own images, and a 404 there is a real failure.
  */
 const GONE_ELSEWHERE = [
   /\/api\/v1\/content\/(?!(?:post|page|media|refs)(?:[/?]|$))[a-z][a-z0-9_-]*(?:\/counts)?(?:\?|$)/,
   /\/api\/v1\/taxonomies\/(?!(?:category|post_tag)\/)[a-z][a-z0-9_-]*\/terms(?:\?|$)/,
 ];
 const PLUGIN_METRICS = /\/api\/v1\/plugins\/[a-z0-9][a-z0-9_-]*\/metrics(?:\?|$)/;
+const MEDIA_FILE = /\/_media\/[0-9a-f]{64}\/[^/?#]+$/;
 
 /** The `GONE_ELSEWHERE` patterns for the spec file `file`. */
-const goneElsewhere = (file: string): RegExp[] =>
-  /(?:^|[/\\])plugins\.spec\.ts$/.test(file) ? GONE_ELSEWHERE : [...GONE_ELSEWHERE, PLUGIN_METRICS];
+const goneElsewhere = (file: string): RegExp[] => [
+  ...GONE_ELSEWHERE,
+  ...(/(?:^|[/\\])plugins\.spec\.ts$/.test(file) ? [] : [PLUGIN_METRICS]),
+  ...(/(?:^|[/\\])(?:editor-)?media\.spec\.ts$/.test(file) ? [MEDIA_FILE] : []),
+];
 
 /**
  * What an engine reports when a navigation cancels a load still in flight, which Chromium
