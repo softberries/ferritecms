@@ -89,7 +89,8 @@ pub(crate) fn parse_guarded(html: &str, notes: &mut Notes) -> Option<Html> {
 /// Links and image sources go through `rw`; links that are not safe hrefs keep their text
 /// only. h1 becomes h2. Formatting the tree has no mark for keeps its text and is counted
 /// in `notes`, and so are dropped elements. NUL is stripped before parsing. Markup too
-/// costly to parse (see [`parse_guarded`]) becomes text paragraphs of its source.
+/// costly to parse (nested past `MAX_PARSE_DEPTH`, or too many marker elements) becomes
+/// text paragraphs of its source.
 pub fn convert(html: &str, rw: &dyn Rewrite, notes: &mut Notes) -> Vec<Node> {
     let html = html.replace('\0', "");
     let Some(doc) = parse_guarded(&html, notes) else {
