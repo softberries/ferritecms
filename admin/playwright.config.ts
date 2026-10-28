@@ -50,6 +50,10 @@ export default defineConfig<Options>({
       backend: p.backend,
       siteKey: p.name,
     };
+    // Firefox and WebKit take 2.1 and 2.3 times as long as Chromium for the same tests on
+    // the Linux CI runners (run 40682723746, mean over 187 tests), so their default budget
+    // is twice Chromium's; a test's own `test.setTimeout` still wins.
+    const timeout = p.engine === "chromium" ? 30_000 : 60_000;
     // A teardown runs after its project even when tests failed there (a dependency
     // would skip it).
     return [
@@ -57,9 +61,16 @@ export default defineConfig<Options>({
         name: p.name,
         testIgnore: SITE_WIDE_SPECS,
         teardown: `${p.name}${SITE_WIDE_SUFFIX}`,
+        timeout,
         use,
       },
-      { name: `${p.name}${SITE_WIDE_SUFFIX}`, testMatch: SITE_WIDE_SPECS, workers: 1, use },
+      {
+        name: `${p.name}${SITE_WIDE_SUFFIX}`,
+        testMatch: SITE_WIDE_SPECS,
+        workers: 1,
+        timeout,
+        use,
+      },
     ];
   }),
 });
