@@ -231,7 +231,7 @@ impl<'a> Session<'a> {
 
     /// The run's work folder (`<work_dir>/<run-id>`), deleted when the run ends `done`.
     pub fn run_dir(&self) -> PathBuf {
-        self.ctx.work_dir.join(self.handle.run.id.to_string())
+        self.ctx.work_dir.join(self.handle.run().id.to_string())
     }
 
     /// The most items a batch should hold.
@@ -358,13 +358,13 @@ pub async fn run(
         .import
         .start(&ctx.actor, &source, opts.dry_run, opts.takeover)
         .await?;
-    let dir = ctx.work_dir.join(handle.run.id.to_string());
+    let dir = ctx.work_dir.join(handle.run().id.to_string());
     let outcome = drive(&ctx, &opts, &handle, wxr, &digest, &dir).await;
     match outcome {
         Ok(mut report) => {
-            report.run_id = handle.run.id.to_string();
-            report.source.clone_from(&handle.run.source);
-            report.started_at = Some(handle.run.started_at);
+            report.run_id = handle.run().id.to_string();
+            report.source.clone_from(&handle.run().source);
+            report.started_at = Some(handle.run().started_at);
             report.finished_at = Some(Timestamp::now());
             report.site_url.clone_from(&ctx.site_url);
             let stats = serde_json::to_value(&report.counts)?;
