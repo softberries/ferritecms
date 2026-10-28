@@ -36,7 +36,7 @@ function itemWith(extra: Partial<SchemaContentDto> = {}): SchemaContentDto {
     body: para("The first paragraph."),
     excerpt: "An excerpt",
     fields: {},
-    seo: { title: null, description: null },
+    seo: { title: null, description: null, canonical: null, robots: [] },
     terms: [],
     menu_order: 0,
     permalink: "/spring-notes/",
@@ -175,7 +175,7 @@ describe("conflict", () => {
   test("fields_and_seo_differences_are_listed", () => {
     const theirs = itemWith({
       fields: { price: 3, subtitle: null },
-      seo: { title: "Theirs", description: null },
+      seo: { title: "Theirs", description: null, canonical: null, robots: [] },
     });
     // No SEO in the draft (an old slot) and the same fields: nothing differs.
     expect(differingFields(theirs, draftOf(theirs, { seo: null }))).toEqual([]);

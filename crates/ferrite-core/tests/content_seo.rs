@@ -7,7 +7,10 @@ use std::sync::Arc;
 
 use ferrite_core::{
     Actor, AutosaveDraft, ContentDraft, ContentService, CoreError, PermalinkRules,
-    content::seo::{SEO_DESCRIPTION_META, SEO_TITLE_META, Seo, SeoPatch},
+    content::seo::{
+        MAX_SEO_CANONICAL, Robots, SEO_CANONICAL_META, SEO_DESCRIPTION_META, SEO_ROBOTS_META,
+        SEO_TITLE_META, Seo, SeoPatch,
+    },
 };
 use ferrite_domain::{NewUser, Revision, RevisionId, Role, Timestamp, UserId, UserStatus};
 use ferrite_store::Store;
@@ -57,6 +60,7 @@ fn set(title: Option<&str>, description: Option<&str>) -> SeoPatch {
     SeoPatch {
         title: title.map(|t| Some(t.to_owned())),
         description: description.map(|d| Some(d.to_owned())),
+        ..SeoPatch::default()
     }
 }
 
@@ -95,6 +99,7 @@ pub async fn seo_roundtrip_and_delete(db: &TestDb) {
         Seo {
             title: Some("A title for search".into()),
             description: Some("What it is about".into()),
+            ..Seo::default()
         }
     );
     let meta = db.store().read().meta();
@@ -124,6 +129,7 @@ pub async fn seo_roundtrip_and_delete(db: &TestDb) {
         Seo {
             title: Some("A title for search".into()),
             description: Some("Second".into()),
+            ..Seo::default()
         }
     );
     // `None` keeps both.
@@ -146,6 +152,7 @@ pub async fn seo_roundtrip_and_delete(db: &TestDb) {
             Some(SeoPatch {
                 title: Some(None),
                 description: Some(Some("  ".into())),
+                ..SeoPatch::default()
             }),
         ),
     )
@@ -245,6 +252,7 @@ pub async fn seo_limits_and_controls(db: &TestDb) {
     let patch = SeoPatch {
         title: Some(None),
         description: Some(Some(" kept as typed ".into())),
+        ..SeoPatch::default()
     };
     let saved = svc
         .put_autosave(&author, item.id, slot(Some(patch)))
@@ -448,10 +456,116 @@ pub async fn patch_without_body_keeps_legacy_body(db: &TestDb) {
     assert_eq!(field(r), "body");
 }
 
+/// `seo.canonical` and `seo.robots` (P10): stored trimmed / sorted and deduplicated,
+/// deleted by `null` or empty, refused when malformed, untouched when absent.
+pub async fn seo_canonical_and_robots(db: &TestDb) {
+    let svc = service(db);
+    let author = actor(db.store(), Role::Author).await;
+    let item = svc.create(&author, draft("Canon")).await.unwrap();
+    let r = |v: Vec<Robots>| Some(Some(v));
+    let item = svc
+        .update(
+            &author,
+            item.id,
+            item.version,
+            same(
+                "Canon",
+                Some(SeoPatch {
+                    canonical: Some(Some("  https://example.org/a?b=1#c ".into())),
+                    robots: r(vec![
+                        Robots::NoSnippet,
+                        Robots::NoIndex,
+                        Robots::NoIndex,
+                        Robots::NoFollow,
+                    ]),
+                    ..SeoPatch::default()
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    let seo = svc.seo_of(&author, item.id).await.unwrap();
+    assert_eq!(
+        seo.canonical.as_deref(),
+        Some("https://example.org/a?b=1#c")
+    );
+    assert_eq!(
+        seo.robots,
+        vec![Robots::NoFollow, Robots::NoIndex, Robots::NoSnippet]
+    );
+    let meta = db.store().read().meta();
+    assert_eq!(
+        meta.get(item.id, SEO_ROBOTS_META).await.unwrap(),
+        Some(json!(["nofollow", "noindex", "nosnippet"]))
+    );
+    // Absent members keep both.
+    let item = svc
+        .update(
+            &author,
+            item.id,
+            item.version,
+            same("Canon", Some(set(Some("T"), None))),
+        )
+        .await
+        .unwrap();
+    let seo = svc.seo_of(&author, item.id).await.unwrap();
+    assert!(seo.canonical.is_some() && seo.robots.len() == 3);
+    // A plugin's junk reads as none: unknown directives are skipped.
+    meta.set(item.id, SEO_ROBOTS_META, &json!(["noindex", "bogus", 3]))
+        .await
+        .unwrap();
+    meta.set(item.id, SEO_CANONICAL_META, &json!(7))
+        .await
+        .unwrap();
+    let seo = svc.seo_of(&author, item.id).await.unwrap();
+    assert_eq!((seo.canonical, seo.robots), (None, vec![Robots::NoIndex]));
+    // `null` / empty delete.
+    let item = svc
+        .update(
+            &author,
+            item.id,
+            item.version,
+            same(
+                "Canon",
+                Some(SeoPatch {
+                    canonical: Some(None),
+                    robots: r(vec![]),
+                    ..SeoPatch::default()
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta.get(item.id, SEO_CANONICAL_META).await.unwrap(), None);
+    assert_eq!(meta.get(item.id, SEO_ROBOTS_META).await.unwrap(), None);
+    // Refused values name seo.canonical.
+    let too_long = format!("https://example.org/{}", "a".repeat(MAX_SEO_CANONICAL));
+    for bad in [
+        "/relative",
+        "example.org/x",
+        "ftp://example.org/x",
+        "javascript:alert(1)",
+        "https://",
+        "https://exa mple.org/",
+        "https://example.org/a\nb",
+        &too_long,
+    ] {
+        let p = SeoPatch {
+            canonical: Some(Some(bad.to_owned())),
+            ..SeoPatch::default()
+        };
+        let res = svc
+            .update(&author, item.id, item.version, same("Canon", Some(p)))
+            .await;
+        assert_eq!(field(res), "seo.canonical", "{bad:?}");
+    }
+}
+
 backend_tests!(
     patch_without_body_keeps_legacy_body,
     seo_roundtrip_and_delete,
     seo_limits_and_controls,
     seo_only_patch_bumps_version,
     body_root_must_be_doc,
+    seo_canonical_and_robots,
 );

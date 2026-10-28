@@ -22,7 +22,7 @@ function item(version: number, text: string): SchemaContentDto {
     body: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] },
     excerpt: "",
     fields: {},
-    seo: { title: null, description: null },
+    seo: { title: null, description: null, canonical: null, robots: [] },
     terms: [],
     menu_order: 0,
     permalink: "/restore-me/",

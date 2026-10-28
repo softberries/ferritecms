@@ -2566,6 +2566,11 @@ export interface components {
             title: string;
         };
         /**
+         * @description A robots directive of an item's page.
+         * @enum {string}
+         */
+        RobotsDto: "noarchive" | "nofollow" | "noimageindex" | "noindex" | "nosnippet";
+        /**
          * @description A user's role (07 §1).
          * @enum {string}
          */
@@ -2602,10 +2607,14 @@ export interface components {
         /**
          * @description An item's SEO meta. `title`, when set, is the whole `<title>` and `og:title` of the
          *     item's page (no site suffix); `description` comes before the excerpt as the meta
-         *     description. `null`: not set.
+         *     description; `canonical` (an absolute `http(s)` URL) replaces the page's own URL in
+         *     the canonical link and `og:url`; `robots` (sorted, deduplicated; empty: none) is the
+         *     page's `<meta name="robots">`. `null`: not set.
          */
         SeoDto: {
+            canonical: string | null;
             description: string | null;
+            robots: components["schemas"]["RobotsDto"][];
             title: string | null;
         };
         /**
@@ -2613,10 +2622,14 @@ export interface components {
          *     that is blank after trimming deletes it, any other string sets it (trimmed). No NUL,
          *     and no control characters once trimmed (an edge newline is trimmed, an inner one
          *     refused); `title` at most 200 characters and `description` at most 500 (`422`,
-         *     `errors[0].field` = `seo.title` / `seo.description`).
+         *     `errors[0].field` = `seo.title` / `seo.description`). `canonical`, trimmed, must be
+         *     an absolute `http(s)` URL of at most 2048 characters (`seo.canonical`); `robots`
+         *     replaces the directives (`null` or `[]` deletes them; an unknown one is `422`).
          */
         SeoPatchDto: {
+            canonical?: string | null;
             description?: string | null;
+            robots?: components["schemas"]["RobotsDto"][] | null;
             title?: string | null;
         };
         /**
@@ -3211,6 +3224,7 @@ export type SchemaRetainedPluginList = components['schemas']['RetainedPluginList
 export type SchemaRevisionDto = components['schemas']['RevisionDto'];
 export type SchemaRevisionList = components['schemas']['RevisionList'];
 export type SchemaRevisionSummaryDto = components['schemas']['RevisionSummaryDto'];
+export type SchemaRobotsDto = components['schemas']['RobotsDto'];
 export type SchemaRoleDto = components['schemas']['RoleDto'];
 export type SchemaScheduleRequest = components['schemas']['ScheduleRequest'];
 export type SchemaSchemaStatusDto = components['schemas']['SchemaStatusDto'];

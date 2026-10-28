@@ -32,7 +32,7 @@ pub use admin::{
 };
 pub use allowed::{AllowedActions, allowed_actions};
 pub(crate) use lifecycle::reclaim_path;
-pub use seo::{Seo, SeoPatch};
+pub use seo::{Robots, Seo, SeoPatch};
 
 /// Unique index on (type, parent, slug); a violation of it means another writer took
 /// the slug between our lookup and our write.

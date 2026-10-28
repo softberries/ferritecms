@@ -7,7 +7,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use ferrite_core::{
     Actor, ContentDraft, ContentService, CoreError, ExtensionService, PermalinkRules,
-    content::SeoPatch,
+    content::{Robots, SeoPatch},
     events::{INVALIDATE, archive_key, post_key, term_key},
     import::{ContentOutcome, ImportContent, ImportService, WP_ID_META, Written},
     jobs::{PLUGIN_ACTION_KIND, PUBLISH_SCHEDULED_KIND, publish_scheduled_job},
@@ -331,6 +331,8 @@ pub async fn explicit_dates_author_status(db: &TestDb) {
     seo.seo = Some(SeoPatch {
         title: Some(Some("SEO title".into())),
         description: None,
+        canonical: Some(Some("https://example.org/orig/".into())),
+        robots: Some(Some(vec![Robots::NoIndex])),
     });
     seo.meta = vec![("wp.quotes".into(), json!(["a"]))];
     let wanted = [
@@ -356,6 +358,14 @@ pub async fn explicit_dates_author_status(db: &TestDb) {
     assert_eq!(
         meta.get(seo_id, "seo.title").await.unwrap(),
         Some(json!("SEO title"))
+    );
+    assert_eq!(
+        meta.get(seo_id, "seo.canonical").await.unwrap(),
+        Some(json!("https://example.org/orig/"))
+    );
+    assert_eq!(
+        meta.get(seo_id, "seo.robots").await.unwrap(),
+        Some(json!(["noindex"]))
     );
     assert_eq!(
         meta.get(seo_id, "wp.quotes").await.unwrap(),

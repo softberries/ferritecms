@@ -31,7 +31,7 @@ function itemWith(allowed: { publish: boolean; schedule: boolean }): SchemaConte
     body: BODY,
     excerpt: "",
     fields: {},
-    seo: { title: null, description: null },
+    seo: { title: null, description: null, canonical: null, robots: [] },
     terms: [],
     menu_order: 0,
     permalink: "/spring-notes/",
