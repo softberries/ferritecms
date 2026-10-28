@@ -49,7 +49,7 @@ pub(crate) async fn import(
         let mut part = Report::default();
         let written = write(&mut batch, schema, chunk, (n == 0).then_some(&mut part)).await;
         let outcomes = session.finish_batch(batch, written).await?;
-        merge(report, part);
+        report.absorb(part);
         for (p, refused, how) in outcomes {
             let counts = report.counts_of("terms");
             match how {
@@ -103,20 +103,6 @@ async fn write<'c>(
         out.push((p, refused, outcome.how));
     }
     Ok(out)
-}
-
-/// Adds the counts and notes of `part` to `report`.
-fn merge(report: &mut Report, part: Report) {
-    for (kind, c) in &part.counts {
-        let counts = report.counts_of(kind);
-        counts.created += c.created;
-        counts.updated += c.updated;
-        counts.unchanged += c.unchanged;
-        counts.kept += c.kept;
-        counts.skipped += c.skipped;
-        counts.failed += c.failed;
-    }
-    report.notes_from(&part);
 }
 
 /// The slug to write (empty: core makes one from the name) and whether the WP one was

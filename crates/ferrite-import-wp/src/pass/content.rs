@@ -650,7 +650,7 @@ async fn set_permalinks(session: &Session<'_>, report: &mut Report) -> Result<()
     )
     .await;
     let applied = session.finish_batch(batch, written).await?;
-    super::options::merge(report, part);
+    report.absorb(part);
     if matches!(applied, Applied::Created | Applied::Updated) {
         report.note(format!(
             "post permalinks set to {structure} as on the old site"

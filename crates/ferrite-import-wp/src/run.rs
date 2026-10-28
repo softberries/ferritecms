@@ -364,7 +364,6 @@ pub async fn run(
         Ok(mut report) => {
             report.run_id = handle.run.id.to_string();
             report.source.clone_from(&handle.run.source);
-            report.dry_run = opts.dry_run;
             report.started_at = Some(handle.run.started_at);
             report.finished_at = Some(Timestamp::now());
             report.site_url.clone_from(&ctx.site_url);
@@ -401,10 +400,11 @@ async fn drive(
 ) -> Result<Report, ImportError> {
     let mut ir = prepare_ir(&ctx.work_dir, dir, digest, opts.dry_run).await?;
     let mut done = steps(ctx, opts, handle, wxr, &mut ir).await;
-    if let Ok(report) = &mut done
-        && let Err(e) = crate::report::finish(report, &ir).await
-    {
-        done = Err(e);
+    if let Ok(report) = &mut done {
+        report.dry_run = opts.dry_run;
+        if let Err(e) = crate::report::finish(report, &ir).await {
+            done = Err(e);
+        }
     }
     // A finished run's work file is never resumed, even if deleting its folder fails:
     // it no longer names the file it holds.

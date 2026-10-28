@@ -113,13 +113,7 @@ pub(crate) async fn import(
         let mut part = Report::default();
         let written = write(&mut batch, &lookups, &menu, &mut part).await;
         session.finish_batch(batch, written).await?;
-        let (counts, c) = (report.counts_of(KIND), part.counts_of(KIND));
-        counts.created += c.created;
-        counts.updated += c.updated;
-        counts.unchanged += c.unchanged;
-        counts.kept += c.kept;
-        counts.skipped += c.skipped;
-        report.notes_from(&part);
+        report.absorb(part);
     }
     Ok(())
 }

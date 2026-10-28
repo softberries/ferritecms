@@ -159,12 +159,7 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
         let mut part = Report::default();
         let written = write(&mut batch, &pending, &items_of, &mut part, &mut pings).await;
         session.finish_batch(batch, written).await?;
-        let counts = report.counts_of(KIND);
-        let c = part.counts_of(KIND);
-        counts.created += c.created;
-        counts.unchanged += c.unchanged;
-        counts.skipped += c.skipped;
-        report.notes_from(&part);
+        report.absorb(part);
     }
     if pings > 0 {
         report.note(format!("{pings} pingbacks and trackbacks were skipped"));

@@ -1479,6 +1479,11 @@ pub async fn pass4_dry_run_report_says_so(db: &TestDb) {
             .any(|n| n.starts_with("dry run:") && n.contains("comments, menus and redirects")),
         "{:?}",
         report.notes
+    ); // C8: a dry run makes no media, so no variants jobs either.
+    assert!(
+        !report.notes.iter().any(|n| n.contains("variants")),
+        "{:?}",
+        report.notes
     );
 }
 
