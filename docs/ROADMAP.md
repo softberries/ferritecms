@@ -149,9 +149,9 @@ P1), **M2b** (admin SPA; itself split into **M2b-1**, **M2b-2** and **M2b-3**, M
 
 **M2a (the M2 backend) is done** (M2a-1, M2a-2a, M2a-2b). **M2b-1** (admin foundation and
 writing), **M2b-2** (media and content modelling) and **M2b-3** (administration, extensions)
-are done. The M2 exit is [`docs/superpowers/m2-exit.md`](superpowers/m2-exit.md): part A is
-verified; part B (the browser and Docker checks of the M2b-3 exit) waits for a host reboot
-(M2b R76). Next is M3.
+are done. The M2 exit is [`docs/superpowers/m2-exit.md`](superpowers/m2-exit.md); the M2b-3
+exit was verified in two parts (M2b R76), the browser and Docker checks in part B. Next is
+M3.
 
 ### M2a-1 — REST API core & auth (done)
 
@@ -332,12 +332,12 @@ custom links cannot be `mailto:` (R32); `refs` is a reserved type and taxonomy n
 undone redirect delete restarts its hits at 0 (P38); numbers take only `.` as the decimal
 separator (R30).
 
-#### M2b-3 — administration, extensions and the M2 exit (done; exit part B pending)
+#### M2b-3 — administration, extensions and the M2 exit (done)
 
 Plan: [`2026-10-27-m2b3-administration-and-m2-exit.md`](superpowers/plans/2026-10-27-m2b3-administration-and-m2-exit.md).
 
 - [x] Screens: own account (password, TOTP enrolment with QR code, own tokens), users (roles, tokens, TOTP), settings, themes (upload, activate, settings form from `theme.toml [settings]`), plugins (install flow with the permission report and fingerprint approval, enable/disable, delete/purge, settings with write-only secrets, per-plugin metrics charts), system (status, schema, backends, nodes reading `nodes.meta` incl. theme/plugin state, jobs with dead-job retry (deferred from M1.5), audit log). Import ships with M3, backups with M4 (P25). Done in M2b-3 Tasks 6–11 (07 §3 per screen; the account screen also lists and ends sessions); API gaps closed first in Tasks 1–3: user filters (P46), an admin's TOTP reset (P43), the password for one's own e-mail change (P44), sessions (P45); theme and plugin manifest facts, retained plugin data and its purge (P47), `ferrite theme pack` (P42); audit filters, `mail` in the status and the test mail (P49), typed node `meta`, the site title read at use time (P51), `MeDto.mail_configured` (Ruling A).
-- [x] Playwright E2E against a real binary on both backends; Vitest component tests; a CI admin job (`pnpm install --frozen-lockfile`, lint, test, build). M2b-1 built Vitest, the CI `admin` job and Chromium E2E against the release binary (P22). Done in Task 14: every spec in four projects, `chromium-sqlite`, `chromium-pg`, `firefox-sqlite` and `webkit-sqlite` (P55; the site-wide specs in each project's teardown, R62), no engine skips, and the CI matrix job `admin-e2e` (10 §3). Still owed (M2b-3 exit part B): two clean `e2e:all` runs in a row on the final code with flake counts, and the first CI run (R72). Safari stays a manual check (P55).
+- [x] Playwright E2E against a real binary on both backends; Vitest component tests; a CI admin job (`pnpm install --frozen-lockfile`, lint, test, build). M2b-1 built Vitest, the CI `admin` job and Chromium E2E against the release binary (P22). Done in Task 14: every spec in four projects, `chromium-sqlite`, `chromium-pg`, `firefox-sqlite` and `webkit-sqlite` (P55; the site-wide specs in each project's teardown, R62), no engine skips, and the CI matrix job `admin-e2e` (10 §3). Two clean `e2e:all` runs in a row on the final code came in the exit's part B (`m2b3-exit.md` §5.1); the first CI run is still owed (R72). Safari stays a manual check (P55).
 - [x] A bundle-size budget in CI, from the M2b-1 baseline (m2b1-exit.md "Bundle sizes") and the M2b-2 numbers (m2b2-exit.md §5). Done in Task 15: `admin/bundle-budget.json` (gzip -9 limits, measured at `3209291` plus 10 %), `pnpm -C admin bundle:check` after `build` in the `admin` job (P56).
 - [x] Follow-ups from M2b-1 (parked review minors), done in Tasks 12 and 13:
   - [x] The restore banner's Discard Undo toast is not dismissed on unmount, so Undo after leaving rewrites the discarded draft into that item's slot (Task 16). Task 12: the toast goes with the reopened screen and at its first edit.
@@ -368,15 +368,21 @@ mail through a real SMTP catcher; the workspace tests on both backends with and 
 `admin/dist`; the admin gates and the four E2E projects; the contact sheet against 11 §8; the
 bundle budget; `docker build` serving `/admin/`.
 
-**Exit, part A verified (2026-10-27):** [`docs/superpowers/m2b3-exit.md`](superpowers/m2b3-exit.md).
-Every flow ran over the REST API with `curl` against a fresh release build (a computed RFC 6238
-code, a Python SMTP catcher); the workspace tests on both backends with and without
-`admin/dist`, the admin gates without E2E, the bundle budget, `fmt` and `clippy`. **Pending
-(part B, after a host reboot; no browser engine or Docker daemon starts on the host, R76):**
-the four E2E projects twice with flake counts, the contact sheet against 11 §8 (the account
-screens' snaps included), `docker build` serving `/admin/`, a Linux Chromium run and
-actionlint. **Not verified:** Safari (with `⌘⌥R` on a real Mac), by the user by hand; CI has
-not run on this branch (R72).
+**Exit verified (part A 2026-10-27, part B 2026-10-28, R76):**
+[`docs/superpowers/m2b3-exit.md`](superpowers/m2b3-exit.md). Part A: every flow ran over the
+REST API with `curl` against a fresh release build (a computed RFC 6238 code, a Python SMTP
+catcher); the workspace tests on both backends with and without `admin/dist`, the admin
+gates without E2E, the bundle budget, `fmt` and `clippy`. Part B: the four E2E projects
+passed twice in a row on the final code (764 tests each), after runs that found two product
+bugs (a command list's `aria-activedescendant` naming a removed option; a token scope label
+truncated without a title) and needed ten test-harness fixes; the contact sheet
+against 11 §8 (the account screens' snaps included); `docker build` serving the SPA at
+`/admin/`; `chromium-sqlite` on Linux in the Playwright image; actionlint. **Not verified:**
+Safari (with `⌘⌥R` on a real Mac), by the user by hand; CI has not run on this branch
+(R72); Linux Firefox and WebKit, and Linux on x86_64. **Open from the contact sheet:**
+`icon-sm`/`icon-xs` buttons stay under 44 px on touch screens (11 §8; WCAG 2.2 AA's 24 px is
+met); dark dropdown menus have a faint edge; the palette's stale results, dimmed to 60 % while
+a slow search runs, fall below 4.5:1.
 
 Known limits (accepted in M2b-3, see the rulings): mail is configured in `ferrite.toml` only
 (P49); media sizes are the active theme's, read-only (P50); hook latency is a node-local p95

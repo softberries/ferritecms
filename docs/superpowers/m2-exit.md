@@ -4,13 +4,15 @@
 endpoint and screen in its as-built state), the open follow-ups carried to M3, M4 or Later,
 and what was never verified (Safari unless done by hand, real S3 clusters if not run).*
 
-**Result (2026-10-27, branch `m2b3-admin` at `4e695da`, plus this docs commit):** every M2
+**Result (2026-10-27, branch `m2b3-admin` at `4e695da`, plus this docs commit; updated
+2026-10-28 for the M2b-3 exit's part B):** every M2
 checklist item in the ROADMAP is ticked (76 of 76), every REST resource but Import (M3) is
 built (106 operations on 73 paths in `crates/ferrite-http/openapi.json`), and every admin
 screen but Import (M3) is built, System without backups (M4). The last sub-milestone's exit
-([`m2b3-exit.md`](m2b3-exit.md)) is verified in part A; **part B** (the four E2E projects
-twice, the contact sheet, `docker build` serving `/admin/`, a Linux Chromium run and
-actionlint) is **PENDING** a host reboot (M2b R76). Safari and real S3 were never verified
+([`m2b3-exit.md`](m2b3-exit.md)) is verified in two parts (M2b R76): part A on 2026-10-27,
+part B on 2026-10-28 (the four E2E projects twice in a row on the final code, the contact
+sheet, `docker build` serving `/admin/`, a Linux Chromium run and actionlint; it found and
+fixed two product bugs and needed ten test-harness fixes). Safari and real S3 were never verified
 in M2 (§5).
 
 ## 1. Sub-milestones and their exits
@@ -22,7 +24,7 @@ in M2 (§5).
 | M2a-2b media, comments, system, hardening | [`m2a2b-exit.md`](m2a2b-exit.md) | 2026-10-25 | met; one flaky CLI test parked |
 | M2b-1 admin foundation and writing | [`m2b1-exit.md`](m2b1-exit.md) | 2026-10-26 | met in Chrome; Safari and `docker build` not verified |
 | M2b-2 media and content modelling | [`m2b2-exit.md`](m2b2-exit.md) | 2026-10-26 | met in Chrome; Safari not verified; one E2E race recorded (fixed in M2b-3, R71) |
-| M2b-3 administration and extensions | [`m2b3-exit.md`](m2b3-exit.md) | 2026-10-27 | part A met (flows over the API, workspace tests, gates, bundle budget); part B PENDING |
+| M2b-3 administration and extensions | [`m2b3-exit.md`](m2b3-exit.md) | 2026-10-27/28 | met: part A (flows over the API, workspace tests, gates, bundle budget), part B (four E2E projects twice, contact sheet, `docker build`, Linux Chromium, actionlint); Safari and CI not verified |
 
 ROADMAP §M2 checkboxes (counted with a script over `docs/ROADMAP.md` from "## M2" to
 "## M3", nested items included):
@@ -95,7 +97,8 @@ From 07 §3 "Screens (M2)" (each row there holds the screen as built, task by ta
 The screens run under the admin CSP (`script-src 'self'`, no `'unsafe-eval'`), with every
 user-visible string through `t()`, axe (WCAG 2.2 AA) in both schemes on every E2E visit and
 the guard against CSP violations, page errors and `console.error` (10 §1). Their E2E specs in
-all four projects are built (Task 14); their final runs are part B of the M2b-3 exit.
+all four projects are built (Task 14) and passed twice in a row on the final code
+(`m2b3-exit.md` §5.1).
 
 ## 4. Open follow-ups, carried
 
@@ -117,8 +120,11 @@ Each is in the ROADMAP under the milestone named.
   agent per session (M2a P9, M2b P43, P45); comments on pages and custom types, per-item
   closing, comment hooks and admin notification mails (M2a-2b P29); more upload types and
   `tel:` links (M2a-2b P29, P21); an atomic KV increment (M2a-2a R19).
-- **Owed before merging M2b-3** (not a ROADMAP item): part B of the M2b-3 exit and the first
-  CI run (M2b R72, R76).
+- **Owed before merging M2b-3** (not a ROADMAP item): the first CI run (M2b R72). Also from
+  part B's contact sheet (`m2b3-exit.md` §5.3): `icon-sm`/`icon-xs` buttons stay under 44 px
+  on touch screens (11 §8 asks 44 px; WCAG 2.2 AA's 24 px is met), dark dropdown menus
+  have a faint edge, and the palette's stale results, dimmed to 60 % while a slow search
+  runs, fall below 4.5:1.
 
 The accepted limits of each sub-milestone are listed under it in the ROADMAP ("Known
 limits") and in the rulings files.
@@ -136,9 +142,10 @@ limits") and in the rulings files.
    (`examples/cluster/`, `docker compose` with MinIO and Caddy) was validated by config
    checks only, never run end to end (ROADMAP M4, M1.5 P24).
 3. **`docker build` serving `/admin/`** never ran on a local engine (M2b-1: engine
-   unresponsive; M2b-2: not run; M2b-3: PENDING, part B). CI's `docker` job builds the
-   image; its results could not be read from this host (no connection to `api.github.com`),
-   so they are not checked here.
+   unresponsive; M2b-2: not run) until M2b-3's part B, where it built and served the SPA
+   at `/admin/` (`m2b3-exit.md` §5.4). CI's `docker` job builds the image; its results
+   could not be read from this host (no connection to `api.github.com`), so they are not
+   checked here.
 4. **An `https` site.** Every exit ran on a plain `http://` loopback address (`127.0.0.1` or
    `localhost`), so the `Secure` cookie
    attributes (session, and the admin theme cookie on https) were seen only in tests
@@ -146,7 +153,8 @@ limits") and in the rulings files.
 5. **Two `ferrite serve` processes driven by hand** in M2: the manual and scripted
    sessions all ran one node on SQLite; multi-node behaviour is covered by the in-process
    and two-process cluster tests (`FERRITE_TEST_PG_URL`).
-6. **Part B of the M2b-3 exit** (above) and **CI on the M2b-3 branch**.
+6. **CI on the M2b-3 branch**, and the E2E matrix on Linux beyond `chromium-sqlite` on
+   arm64 (`m2b3-exit.md` §5.5): CI's x86_64 runners, Linux Firefox and Linux WebKit.
 
 ## Verified (claims in this document)
 

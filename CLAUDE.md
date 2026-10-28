@@ -49,8 +49,8 @@ write-only secrets and metrics; system with status, nodes, jobs and the audit lo
 spec in Chromium on both backends, Firefox and WebKit; the bundle budget; API additions
 user filters, sessions, admin TOTP reset, retained plugin data, audit filters, the test mail,
 relation `types`, inline image `srcset`; `ferrite theme pack`; no migration;
-`m2b3-exit.md`), so M2 is done (`m2-exit.md`). The M2b-3 exit's browser and Docker checks
-(part B) are still pending. Open follow-ups stay listed in the roadmap. Next is M3 (WordPress
+`m2b3-exit.md`, verified in two parts, the browser and Docker checks in part B), so M2 is
+done (`m2-exit.md`). Open follow-ups stay listed in the roadmap. Next is M3 (WordPress
 import). Work top-down in `docs/ROADMAP.md`; per-milestone rulings are in
 `docs/superpowers/rulings/` (M2a-2a: `m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`).
 

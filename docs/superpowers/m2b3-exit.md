@@ -14,34 +14,47 @@ serving `/admin/`, if a local engine runs.*
 **Result, part A (2026-10-27, branch `m2b3-admin` at `4e695da`, plus this docs commit):** every
 flow passed over the REST API on a fresh release build, the workspace tests passed on both
 backends with and without `admin/dist`, and the admin gates without E2E, the bundle budget,
-`fmt` and `clippy` passed. No flow turned up a product bug. **Part B is PENDING** (ruling
-R76): on this host no browser engine launches and the Docker daemon is down (the fault
-recorded in Task 14: `pgrep` says "sysmond service not found", Chromium fails with
-`bootstrap_check_in … (141)`), so every check that needs a browser or Docker waits for a
-reboot. The controller fills in the PENDING rows.
+`fmt` and `clippy` passed. No flow turned up a product bug. Part B waited for a host reboot
+(ruling R76: no browser engine or Docker daemon started on the host, the fault recorded in
+Task 14).
+
+**Result, part B (2026-10-28, after the reboot; §5):** the four E2E projects passed twice in a
+row on the final code (`e2e:all` runs 20 and 21 at `22d3272`: 764 passed each, 0 failed),
+after twenty-one runs in all. They found two product bugs (fixed with unit tests: a command
+list's `aria-activedescendant` naming a removed option, `1807f2f`; a token scope label
+truncated without a title, `d767108`) and needed ten test-harness fix commits (`8c8b493`,
+`5fd046d`, `2d2d78e`, `b33bb1a`, `816bbb5`, `7fb1f77`, `43f27a6`, `11d9ba9`, `107b2f9`,
+`22d3272`); two failures from outside the repository were not fixed (a Playwright tracing
+race; WebKit ending its own Networking process under host load). The contact sheet was checked against
+11 §8 (one deviation fixed, four listed); `docker build` of the repo Dockerfile serves the
+admin SPA at `/admin/`; `chromium-sqlite` passed on Linux in the Playwright 1.64.0 image
+(191 of 191); actionlint 1.7.12 reports nothing. Task 14's two assumptions about WebKit's
+cancelled fetches turned out false and the guard was changed (§5.2).
 
 | Exit check | Verified by | Result |
 |---|---|---|
 | 1. The flows on a release build | §1: `curl` against the REST API of a fresh site, a computed RFC 6238 code, a Python SMTP catcher | yes, over the API (the screens themselves: E2E, row 4) |
 | 2. Workspace tests, both backends, with and without `admin/dist` | §2: two full runs with `CI=true` and PostgreSQL 17 | yes: 2 458 passed, 0 failed, each run |
 | 3. Admin gates (`lint`, `typecheck`, `test`, `api:check`, `build`), `fmt`, `clippy` | §3 | yes |
-| 4. The four E2E projects (`pnpm -C admin e2e:all`), twice in a row, with flake counts | — | **PENDING** (part B) |
-| 5. Contact sheet against 11 §8 (with the account screens' snaps re-checked) | — | **PENDING** (part B) |
+| 4. The four E2E projects (`pnpm -C admin e2e:all`), twice in a row, with flake counts | §5.1 | yes: runs 20 and 21 at `22d3272`, 764 tests each (191 per project), 764 passed and 764 passed, 0 failed; every earlier failure is listed with its cause |
+| 5. Contact sheet against 11 §8 (with the account screens' snaps re-checked) | §5.3 | yes: all 228 snaps (909 images) looked at; one deviation fixed, four listed |
 | 6. Bundle budget | §4 | yes: every group under its limit |
-| 7. `docker build` serving `/admin/` | — | **PENDING** (part B; Docker daemon down) |
-| 8. A Linux Chromium run (the CI engine's platform) | — | **PENDING** (part B) |
-| 9. actionlint on `.github/workflows/ci.yml` after Task 14's fix round | — | **PENDING** (part B; actionlint runs from its Docker image) |
+| 7. `docker build` serving `/admin/` | §5.4 | yes: Docker 29.8.1, the SPA (not the placeholder) at `/admin/` |
+| 8. A Linux Chromium run (the CI engine's platform) | §5.5 | yes: `chromium-sqlite` 191 of 191 in `mcr.microsoft.com/playwright:v1.64.0-noble` (arm64, not CI's x86_64) |
+| 9. actionlint on `.github/workflows/ci.yml` after Task 14's fix round | §5.6 | yes: `rhysd/actionlint` 1.7.12, exit 0, no output |
 | 10. Safari, with `⌘⌥R` on a real Mac | — | **not verified**: the user's manual check (P55, R18) |
 | 11. CI on GitHub | — | **not run**: no push in M2b-3 (R72); it runs on the final develop→main pull request |
 
-No code changed in this task. Docs changed: this file, [`m2-exit.md`](m2-exit.md),
+Part A changed no code. Part B's code changes are the fix commits in §5 (admin and its E2E
+harness only; nothing under `crates/` or `plugins/`). Docs changed: this file, [`m2-exit.md`](m2-exit.md),
 `docs/superpowers/rulings/m2b.md` (P57's cookie path as built, R18 as updated, the M2b-3
 pre-flight Rulings A–C and controller rulings R37–R76), ROADMAP (M2b-3 ticked, the M2
 status, follow-ups carried to M4 and Later), CLAUDE.md (status, `theme pack`), README
 (status line), 01 §1 (crates, admin layout, example plugins) and §2 (HTTP and Mail rows),
 07 §3 (the Shell, Dashboard, Editor, Media and Content types rows as built in M2b-3), 10 §1
 (the M2b-3 specs and support files) and 11 §6 (key sequences, Option and AltGraph) and §8
-(snapshots in `chromium-sqlite` only).
+(snapshots in `chromium-sqlite` only); in part B, 10 §1 (the support modules and unit files)
+and §3 (the WebKit guard rules, the reload retry and the part B test changes).
 
 ## 1. The flows (over the REST API)
 
@@ -108,7 +121,7 @@ Also seen:
 - `serve` stopped on SIGTERM and logged "node stopped" and "shut down". Its log has one
   `WARN`, the dead job's failed attempt above, and no `ERROR`.
 - These flows check the API the screens use, not the screens. The screens are exercised by
-  their E2E specs (row 4, PENDING).
+  their E2E specs (row 4, §5.1).
 
 ## 2. Workspace tests
 
@@ -146,8 +159,8 @@ $ cargo clippy --all-targets -- -D warnings                     # exit 0
 $ cargo clippy --target wasm32-wasip2 --all-targets -- -D warnings   # in plugins/, exit 0
 ```
 
-`pnpm -C admin e2e` and `e2e:all` were not run: no browser engine launches on this host
-(PENDING, row 4).
+`pnpm -C admin e2e` and `e2e:all` were not run in part A: no browser engine launched on the
+host. They ran in part B (§5.1), where the gates above ran again at the end (§5.7).
 
 ## 4. Bundle budget
 
@@ -170,6 +183,236 @@ the editor chunk 656 093 / 197 402 (M2b-2: 656 406 / 197 276). `index.html` name
 modulepreloads (M2b-2: 17). `admin/dist` holds 217 files, 4 053 856 bytes (M2b-2: 172 files,
 3 727 396).
 
+## 5. Part B: browsers and Docker (2026-10-28)
+
+The same host after a reboot: macOS 26.6 (Darwin 25.6.0) arm64, 14 cores, Node 24.18.0,
+pnpm 10.28.2, `@playwright/test` 1.64.0 (Chromium headless shell 1248, Firefox 1555, WebKit
+2370), PostgreSQL 17.11 at `localhost:54329`, Docker 29.8.1. Part A was committed first
+(`46322c4`), then `cargo clean` (repo: 13.3 GiB, plugins: 517.1 MiB), then `pnpm -C admin
+build`, `cargo build --release -p ferrite` and the `admin-e2e` wasm. Each code change below
+was followed by a fresh admin build and release build before the next full run.
+
+### 5.1 The four E2E projects
+
+`FERRITE_TEST_PG_URL=postgres://ferrite@localhost:54329/ferrite_test pnpm -C admin e2e:all`
+(8 workers, no retries locally, so a test fails or passes; "flaky" cannot occur). Counts
+per project are summed from the list reporter's lines (`[project]` and `[project-site-wide]`
+together); each project has 191 tests.
+
+| Run | Code | chromium-sqlite | chromium-pg | firefox-sqlite | webkit-sqlite | Time |
+|---|---|---|---|---|---|---|
+| 1 | `46322c4` | 191 | 191 | 190, 1 failed (a) | 191 | 9.7 min |
+| 2 | `8c8b493` | 191 | 191 | 191 | 190, 1 failed (b) | 9.0 min |
+| 3 | `8c8b493` (b's fix landed mid-run) | 191 | 190, 1 failed (c) | 191 | 191 | 8.8 min |
+| 4 | `b33bb1a` | 191 | 191 | 191 | 191 | 9.4 min |
+| 5 | `b33bb1a` | 191 | 191 | 191 | 191 | 9.4 min |
+| 6 | `d767108` | 191 | 191 | 190, 1 failed (e) | 177, 14 failed (d) | 14.2 min |
+| 7 | `d767108` | 191 | 191 | 190, 1 failed (e) | 191 | 8.6 min |
+| 8 | `1807f2f` | 191 | 191 | 191 | 190, 1 failed (f) | 10.2 min |
+| 9 | `1807f2f` | 175 so far | 93 so far, 1 failed (g) | — | — | stopped after 269 tests, f being fixed |
+| 10 | `816bbb5` | 191 | 191 | 191 | 191 | 9.0 min |
+| 11 | `816bbb5` | 190, 1 failed (h) | 191 | 191 | 191 | 8.9 min |
+| 12 | `7fb1f77` | 191 | 191 | 191 | 191 | 8.8 min |
+| 13 | `7fb1f77` | 191 | 191 | 191 | 191 | 8.9 min |
+| 14 | `43f27a6` | 191 | 191 | 191 | 190, 1 failed (j) | 10.0 min |
+| 15 | `43f27a6` | 175 so far | 103 so far | — | — | stopped after 278 tests, j being fixed |
+| 16 | `11d9ba9` | 191 | 191 | 191 | 191 | 10.6 min |
+| 17 | `11d9ba9` | 191 | 191 | 190, 1 failed (k) | 191 | 11.3 min |
+| 18 | `107b2f9` | 191 | 191 | 191 | 190, 1 failed (l) | 9.2 min |
+| 19 | `107b2f9` | 175 so far | 169 so far | 7 so far | — | stopped after 374 tests, l being fixed (the 19 failures in its log are all in the last 30 lines, written as it was stopped) |
+| 20 | `22d3272` | 191 | 191 | 191 | 191 | 8.8 min |
+| 21 | `22d3272` | 191 | 191 | 191 | 191 | 8.7 min |
+
+Runs 4–5 and 12–13 were each two clean runs in a row, but code changed after them (the
+contact-sheet fix, then i), and runs 16 and 18 were each followed or met by a failure (k,
+l), so the pair that counts is 20–21 on the final code. Failures
+and their causes:
+
+- **(a)** `keyboard_focus_rings_in_the_shell`: "focus never reached the target". `tabTo`
+  gave up after 20 Tab presses; the page snapshot shows two custom types from parallel
+  tests in the sidebar, which put the top-bar search button 22nd. Test fix `8c8b493`: at
+  most one press per focusable element.
+- **(b)** palette `screens`, WebKit: two page errors "/127.0.0.1:59314/api/v1/content/post?q=…
+  due to access control checks." (§5.2). Test fixes `5fd046d`, `2d2d78e` and `b33bb1a`.
+- **(c)** `fill_every_field_kind_and_reload`, chromium-pg: the test body passed, then
+  `context.close()` failed with "file data stream has unexpected number of bytes" and the
+  trace zip was truncated. A race in Playwright's tracing (in `coreBundle.js`,
+  `onContentBlobAppend` appends to a `resources/` file while the context's zip is written);
+  not in this repository; not fixed.
+- **(d)** run 6, WebKit: 14 tests timed out or saw "Target page, context or browser has
+  been closed", in four bursts across workers. `~/Library/Logs/DiagnosticReports` has
+  `ExcUserFault_com.apple.WebKit.Networking.Development` reports at 06:44 and 06:55 (also one
+  at 05:59), each `is_simulated: 1`, `EXC_GUARD`, termination namespace `WEBKIT`: WebKit
+  ended its own Networking process. `uptime` showed load averages 76 / 172 / 117 on 14
+  cores (ESET's `scand` at 61 % CPU next to the browsers). Read as the host starved, not a
+  test or product fault; not fixed. It did not recur in runs 7–21.
+- **(e)** `relation_searches_its_types_and_picks_an_item`, Firefox, runs 6 and 7: axe
+  `aria-valid-attr-value` on `#radix-_r_29_` and `#radix-_r_27_` (the relation picker's
+  combobox and listbox). Logged in an instrumented run: `aria-activedescendant` named
+  `radix-_r_2c_` while the selected option was `_r_2f_`, and after the options remounted as
+  `_r_2i_`/`_r_2l_` with the same values it still named `_r_2c_`, an element that was gone.
+  cmdk 1.1.1 (the latest release) reads that id only when the selected value changes, from
+  the DOM, in a scheduled step. **Product fix `1807f2f`**: `Command` keeps both attributes on
+  the option cmdk marks `aria-selected` (a MutationObserver on its root); test
+  `active_descendant_follows_options_remounted_with_the_same_values` fails without it (the
+  combobox had no matching attribute). The cmdk specs (palette, editor fields, content
+  list, editor media, menus, taxonomies, users) passed in three engines after it: 162 of 162.
+- **(f)** palette `screens`, WebKit, run 8: `page.goto("/admin/")` "interrupted by another
+  navigation" to the chosen post, then "Importing a module script failed.". The spec went
+  to the dashboard right after choosing a result; the editor's route loads its chunk first.
+  Test fix `816bbb5`: wait for the item's address. 18 of 18 over 6 repeats in three engines.
+- **(g)** `set_featured_image_from_picker`, chromium-pg, run 9: not diagnosed (run stopped,
+  artifacts overwritten); 40 of 40 when `editor-media.spec.ts` was repeated 5 times on
+  chromium-pg.
+- **(h)** `forbidden_keeps_running_uploads`, chromium-sqlite, run 11: "Failed to load
+  resource: … 404" for `/_media/<sha256>/tour-mvrrfi0j-d9c675e6.png`, the editor tour's own
+  image, purged by that test while the library grid showed it. Test fix `7fb1f77`: in
+  `media.spec.ts` and `editor-media.spec.ts` only, a stored media file's 404 is accepted.
+  Both specs in four projects: 84 of 84.
+- **(j)** palette `screens`, WebKit, run 14, on f's fix: `page.goto("/admin/")` "Frame load
+  interrupted", and "console.error: TypeError: Importing a module script failed. " with
+  React's component stack. The address had changed but the editor's route chunks were
+  still loading. Test fix `11d9ba9`: both palette tests that open a result wait for the
+  editor's body to be editable; and the guard trims that line, whose trailing space kept
+  the import rule from matching (test
+  `an_import_error_logged_with_its_component_stack_is_recognised`; the rule still needs a
+  cancelled script on the page within 2 s). `palette.spec.ts` in three engines: 90 of 90
+  over 5 repeats.
+- **(k)** palette `screens`, Firefox, run 17 (`uptime` load 89 / 56 / 38 at its start): axe
+  `color-contrast` on every row of `palette-results`. The palette keeps the previous
+  query's rows at 60 % opacity while a slow round runs (`palette.tsx`, `slow &&
+  search.isPlaceholderData && "opacity-60"`), and the spec's wait (the seeded post
+  visible, no skeleton) is also met by those rows. Test fix `107b2f9`: also wait for the
+  status to read the result count (shown only when no round is pending) and for the group
+  to be fully opaque. Not reproduced on the idle host; 90 of 90 over 5 repeats in three
+  engines. The dimmed rows themselves stay below 4.5:1 while a slow search runs; they are
+  stale, still selectable, and listed under §5.3.
+- **(l)** `set_featured_image_from_picker`, WebKit, run 18: axe `color-contrast` on the
+  editor's save-state label. It crossfades with Motion's `AnimatePresence mode="wait"`
+  (exit, then enter), and `settle` awaited only the animations running when it looked.
+  Test fix `22d3272`: `settle` waits until no finite animation runs, within the same 5 s. A
+  temporary probe spec saw the crossfade as a WAAPI `Animation` in all three engines.
+  `editor-media.spec.ts` and `design.spec.ts` in four projects: 120 of 120 over 2 repeats.
+  This may also have been run 9's undiagnosed failure (g), same test, not shown.
+- **(i)** not an `e2e:all` failure: `FERRITE_BIN` broke the Linux run (§5.5). Test fix
+  `43f27a6`; it changes nothing when `FERRITE_BIN` is unset, as in every local run.
+
+Also seen once: `renders_the_shell_with_translated_title` (Vitest) timed out at 5.3 s (limit
+5 s) in a full `pnpm test` right after a release build; 3 of 3 alone and 659 of 659 in two
+full runs after.
+
+### 5.2 Task 14's WebKit guard assumptions
+
+Checked with temporary logging of the guard's deferred entries and of the page's `request`,
+`requestfinished`, `requestfailed` and `framenavigated` events (not committed):
+
+| Assumption (Task 14) | Seen | Result |
+|---|---|---|
+| A page error's `stack` starts with "Fetch API cannot load" | Playwright 1.64 (`wkPage` `_onConsoleMessage`) sets `stack` to `""` when WebKit sends no frames, and builds `name`/`message` with `splitErrorMessage`, cutting at the first `:` and dropping one character: name "Fetch API cannot load http", message "/127.0.0.1:…" | **false**: `5fd046d` reads the stack or rebuilds the text from name and message (`webkit-cancelled.ts`, unit-tested) |
+| "Importing a module script failed." arrives as a page error's whole `message` | yes in one shape (whole text as `message`); Playwright's split gives `name` "TypeError" in the other; React also logs it as a `console.error` whose first line ends in a space | partly: `2d2d78e` accepts both page-error shapes (the refactor in `5fd046d` had dropped the first; caught by design `theme_follows_the_system_unless_chosen` in a WebKit-only run), `11d9ba9` the console line |
+| Playwright's `request.url()` matches the URL in WebKit's message | for every logged "Fetch API cannot load …/revisions?limit=50", the page had **no** `request` or `requestfailed` event for that URL; the error came about 10 ms before the main frame's navigation committed (e.g. error at …65417, `framenavigated` at …65426) | **false**: `b33bb1a` also accepts it when the page's main frame navigated within 2 s |
+| The reload retry (one retry after "Frame load interrupted") holds | a trace showed three document requests for one `reload()`; the immediate retry was interrupted 3 ms later | **false**: `b33bb1a` waits 250 ms and retries at most twice |
+
+After `b33bb1a`, `design.spec.ts` and `palette.spec.ts` in webkit-sqlite passed 156 of 156
+(12 repeats); the import rule was logged as explained (a cancelled script within 2 s).
+
+### 5.3 Contact sheet (11 §8)
+
+The `chromium-sqlite` snaps of run 4 (228 snaps, 909 images: light and dark at 1440×900
+and 390×844, plus `shell-focus-nav-dark`) were tiled one snap per row, light/dark desktop then
+light/dark phone, on sheets rendered with Playwright's Chromium (a scratchpad script): the
+first 128 snaps four to a sheet (32 sheets), the other 100 two to a sheet (50 sheets) so
+the long pages stay legible. All 82 sheets were looked at, the account screens included;
+single images were opened where a sheet was too small to judge. Run 20's snaps were taken
+by the final code; the UI changes after run 4 (`d767108`, a `title`; `1807f2f`, ARIA
+attributes) change no pixels.
+
+| 11 §8 item | Finding | Action |
+|---|---|---|
+| Text never truncated without a tooltip or `title` | the new-token dialog's scope labels (`token-dialog.tsx`, `truncate`, no `title`); every other truncation found has one (`grep truncate` in `src/account`) | **fixed** `d767108`, with a check in `token_scopes_offer_only_held_scopes` that fails without it |
+| ≥ 44 px touch targets | `icon-sm` and `icon-xs` buttons (`button.tsx`: `size-7`, `size-6`) do not grow under `pointer: coarse`; only `--control-h` does (`tokens.css`). They meet WCAG 2.2 AA 2.5.8 (24 px) but not 11 §8's 44 px; seen in the phone bulk bars and row menus | **listed**: a fix changes dense rows on many screens, and the phone snaps do not emulate a coarse pointer, so no snap would check it |
+| Dark mode at parity | dropdown menus in dark mode have a faint edge against the rows they overlap (`ring-foreground/10` on `bg-popover`, which is `--card`), e.g. `styleguide-ordering-menu` | **listed** (shadcn's default; a judgement, not a rule breach) |
+| Contrast | the palette's stale rows at 60 % opacity during a slow search (§5.1 k) fall below 4.5:1 | **listed**: a passing state, the rows stay selectable; WCAG's contrast rule has no exception for it |
+| Capture | full-page phone snaps show `position: fixed` bars (the editor's word count in `editor-focus-mode`) mid-page, where the viewport ended | **listed** (a property of full-page screenshots, not of the screen) |
+
+Everything else looked consistent with 11 §8: one primary action per view, consistent page
+headers, loading, empty, error and permission states, tabular numbers, focus rings in both
+schemes, no horizontal overflow at 390 px (the snap fixture also fails on overflow), and
+the account screens (`account`, `account-email-change`, `account-totp-scan`,
+`account-totp-code`, `account-token-new`, `account-token-created`) as Task 6 left them, except
+the long harness login, which is cut with an ellipsis and has a `title`.
+
+### 5.4 `docker build` serving `/admin/`
+
+```
+$ docker build -t ferrite:m2b3-exit .            # at 7fb1f77; 2 min 13 s; exit 0
+  #17 [admin 7/7] RUN pnpm build … check-dist: ok (/src/admin/dist)
+  #21 Finished `release` profile [optimized] target(s) in 1m 32s
+  writing image sha256:ed63b955474a…; 115 229 721 bytes, arm64, ENTRYPOINT [/ferrite] CMD [serve --data /data]
+$ docker volume create ferrite-m2b3-exit
+$ docker run --rm -v ferrite-m2b3-exit:/data ferrite:m2b3-exit init --data /data --url http://localhost:18091
+  database migrated applied=[1, 2, 3, 4, 5, 6, 7, 8]
+$ docker run -d --name ferrite-m2b3-exit -p 127.0.0.1:18091:8080 \
+    -e FERRITE_SERVER__LISTEN=0.0.0.0:8080 -v ferrite-m2b3-exit:/data ferrite:m2b3-exit
+  Listening on http://0.0.0.0:8080
+$ curl -s -D - http://127.0.0.1:18091/admin/
+  HTTP/1.1 200 OK; content-type: text/html; charset=utf-8; cache-control: no-cache;
+  content-security-policy: default-src 'self'; script-src 'self'; …
+  2 136 bytes; "FerriteCMS admin not built" (the placeholder's text) 0 times;
+  <script type="module" crossorigin src="/admin/assets/index-BJEBqctT.js">; 19 modulepreloads
+$ curl …/admin/assets/index-BJEBqctT.js     # 200 text/javascript; charset=utf-8, 316 418 bytes
+$ curl …/admin/content/post                 # 200 (the SPA's fallback)
+$ docker stop ferrite-m2b3-exit             # "node stopped", "shut down"; no ERROR in its log
+```
+
+The local build's `admin/dist/index.html` names the same entry, `index-BJEBqctT.js`.
+
+### 5.5 Linux Chromium
+
+The binary from the image above (`docker cp` of `/ferrite`: ELF 64-bit aarch64, GNU/Linux),
+in the image matching `@playwright/test`:
+
+```
+$ docker run --rm --ipc=host -v "$PWD:/repo" -v /repo/admin/node_modules \
+    -v "$SP/linux-bin:/linux-bin:ro" -e FERRITE_BIN=/linux-bin/ferrite -e FERRITE_TEST_PG_URL= \
+    -w /repo/admin mcr.microsoft.com/playwright:v1.64.0-noble \
+    bash -c 'npm install -g pnpm@10.28.2 && pnpm install --frozen-lockfile && pnpm e2e --project chromium-sqlite'
+```
+
+Ubuntu 24.04.5 LTS, Linux aarch64, Node 24.21.0. The first attempt failed at global setup:
+"ferrite init --data failed … invalid configuration … env:FERRITE_BIN: unknown key"; the
+harness passed its own `FERRITE_BIN` to `ferrite`, which refuses unknown `FERRITE_*` keys
+(fixed `43f27a6`, unit test `harness_variables_never_reach_ferrite`). The second attempt:
+**191 passed (8.1 min)**, 0 failed. The container's `pnpm install` left a `.pnpm-store/`
+(432 MB) in the repository root; it was moved to the scratchpad.
+
+### 5.6 actionlint
+
+```
+$ docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest -no-color .github/workflows/ci.yml
+  exit 0, no output                       # rhysd/actionlint 1.7.12 (image created 2026-03-30)
+```
+
+### 5.7 Gates at the end (final code)
+
+```
+$ pnpm -C admin lint / typecheck          # exit 0 / exit 0
+$ pnpm -C admin test                      # 114 files, 661 passed (part A: 111 files, 652)
+$ pnpm -C admin api:check / build / bundle:check   # current / check-dist: ok / bundle:check: ok
+$ cargo fmt --all --check (and plugins)   # exit 0, exit 0
+$ cargo clippy --all-targets -- -D warnings; plugins: --target wasm32-wasip2   # exit 0, exit 0
+$ git diff --stat 4e695da..HEAD -- crates plugins   # empty: no Rust changed in part B
+```
+
+The admin gates ran last at `22d3272`; `fmt` and `clippy` ran at `43f27a6`, and no Rust changed
+after. The Docker image (§5.4) and the Linux run's binary (§5.5) were built at `7fb1f77`;
+`git diff --stat 7fb1f77..HEAD -- admin/src crates plugins Dockerfile admin/package.json
+admin/pnpm-lock.yaml` is empty, so the product they contain is the final one. The Linux run
+used the E2E harness of `43f27a6`; the three test commits after it (`11d9ba9`, `107b2f9`,
+`22d3272`) ran on macOS only.
+
+The workspace tests were not run again in part B: no Rust code changed.
+
 ## Verified (claims in this task's doc changes)
 
 | Claim (file) | How verified | Result |
@@ -189,21 +432,30 @@ modulepreloads (M2b-2: 17). `admin/dist` holds 217 files, 4 053 856 bytes (M2b-2
 | 01 §1: the admin's `src/` folders, the example plugins | `ls admin/src`, `ls plugins/examples` | true |
 | 07 §3 Shell: 120-character snippet, "Matches in text" | `palette/sources.ts` `SNIPPET_CHARS = 120`; `i18n/en/palette.json` | true |
 | 07 §3 Content types: "Can point at"; Editor: "Search {{types}}…" | `i18n/en/structure.json`, `i18n/en/editor.json` | true |
-| 07 §3 Media: the forbidden state alone, uploads kept in the tray | Task 13 report (fix-round item 2, E2E `forbidden_keeps_running_uploads`) | from the report (E2E PENDING) |
+| 07 §3 Media: the forbidden state alone, uploads kept in the tray | Task 13 report (fix-round item 2, E2E `forbidden_keeps_running_uploads`) | from the report; its E2E passed in all four projects in runs 20 and 21 |
 | 10 §1: the M2b-3 spec and support files | `git diff --name-status e1cd3a5..HEAD -- admin/e2e` (added files); `app-state.ts` reads both caches (`getQueryCache`, `getMutationCache`) | true |
 | §"Task 14 notes": the `fixtures.ts` names | `grep` for `CANCELLED_LOAD`, `GONE_ELSEWHERE`, `TOAST_IN_TRANSITION`, `deferCancelled` | true |
 | Not verified 3: the paths CI downloads to | Task 14 report, Concerns 3 | from the report |
+| §5.1 run table, timings, failures | each run's log in the scratchpad (`run<N>.log`, failing runs kept as `run<N>.keep.log`), counted per project with a script over the list reporter's lines; `git rev-parse --short HEAD` before each pair | true |
+| §5.1 (d): WebKit Networking ended by WebKit, host load | the three `.ips` reports (`is_simulated`, `exception`, `termination` fields), `uptime`, `ps -Ao pcpu,comm -r` at 07:03 | true as observed; the cause (load) is an inference |
+| §5.1 (e), §5.2: attribute values, missing events, timings | the temporary logging's output (`ad.log`, `failed.log` in the scratchpad), Playwright 1.64's `coreBundle.js` (`splitErrorMessage`, `_onConsoleMessage`), cmdk 1.1.1's `dist/index.mjs` (`selectedItemId`) | true |
+| §5.1: cmdk 1.1.1 is the latest release | `npm view cmdk version` → 1.1.1 | true on 2026-10-28 |
+| §5.3: the contact-sheet findings | the sheets and images; `button.tsx` sizes, `tokens.css` `pointer: coarse` block, `dropdown-menu.tsx` classes, `grep truncate` | true |
+| §5.4–§5.6: Docker, Linux, actionlint | the command output recorded there (`docker-build.log`, `linux-e2e.log` in the scratchpad) | true |
+| §5.7 gates | the command output recorded there | true |
+| `10-testing.md` §1 and §3 (part B edits) | the code in `webkit-cancelled.ts`, `child-env.ts`, `fixtures.ts` (`goneElsewhere`, `RELOAD_SETTLE_MS`), `shell.spec.ts` (`tabTo`), `palette.spec.ts`, `vitest.config.ts` | true |
 
 ## Not verified (limits)
 
-1. **Every PENDING row above** (part B): the four E2E projects twice with flake counts, the
-   contact sheet against 11 §8 (the account screens' snaps re-checked there, a carry from
-   Task 6), `docker build` serving `/admin/`, a Linux Chromium run and actionlint after
-   Task 14's fix round. Also owed from Task 14: the two assumptions of the WebKit
-   cancelled-fetch rule in the E2E guard (Playwright's `request.url()` matches the URL in
-   WebKit's message; the page error's `stack` starts with "Fetch API cannot load"), and the
-   Firefox console error "JSHandle@object" seen once in the palette spec (not reproduced in
-   30 repeats).
+1. **Part B's limits** (§5): the Linux run was `chromium-sqlite` only, on arm64 (CI runs
+   x86_64 and all four projects); Firefox and WebKit ran on macOS only. One E2E failure was
+   never diagnosed (`set_featured_image_from_picker` on chromium-pg in run 9, which was
+   stopped before its artifacts were read; 40 of 40 in repeats afterwards; possibly the
+   purged-image 404 that `7fb1f77` accepts or the crossfade that `22d3272` waits for, the
+   same test's later failures; not shown). The Firefox console error
+   "JSHandle@object" from Task 14 did not appear in any of the twenty-one runs (`grep` over
+   every run log), so it stays unexplained. A Docker volume `ferrite-m2b3-exit` and the image
+   `ferrite:m2b3-exit` are left on the host.
 2. **Safari**, with `⌘⌥R` on a real Mac (R18): the user's manual check. Linux WebKit in CI
    is not Safari (P55).
 3. **CI** has never run on this branch (R72). On the final develop→main pull request, watch:
@@ -212,7 +464,7 @@ modulepreloads (M2b-2: 17). `admin/dist` holds 217 files, 4 053 856 bytes (M2b-2
    webkit` on `ubuntu-latest`, the conditional Postgres service (only `chromium-pg` starts
    one), and whether Linux WebKit needs the Option+Tab step (applied on macOS only).
 4. **The flows ran over the API, on SQLite, one node**, with `curl` and Python, not through
-   the screens. Postgres is covered by the workspace tests (§2) and by `chromium-pg` (PENDING).
+   the screens. Postgres is covered by the workspace tests (§2) and by `chromium-pg` (§5.1).
 5. **The Users screen's "Send a reset e-mail"** is unit-tested only (R56); it was not run
    here either.
 
@@ -228,7 +480,9 @@ modulepreloads (M2b-2: 17). `admin/dist` holds 217 files, 4 053 856 bytes (M2b-2
   aborted web-font line is accepted (`CANCELLED_LOAD`, Firefox only); WebKit's "Fetch API
   cannot load … due to access control checks." and "Importing a module script failed." are
   accepted only when the same page saw that request (or a script request) cancelled within
-  2 s; WebKit's `page.reload` is tried once more after "Frame load interrupted"; a 404 from
+  2 s (part B widened the fetch rule to a main-frame navigation within 2 s, §5.2); WebKit's
+  `page.reload` is tried once more after "Frame load interrupted" (part B: after 250 ms, at
+  most twice); a 404 from
   another test's custom type list, custom taxonomy terms or (outside `plugins.spec.ts`) a
   plugin's metrics is accepted (`GONE_ELSEWHERE`); a toast fading in or out is left out of
   axe.
