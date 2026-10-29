@@ -483,6 +483,10 @@ Design: [09](design/09-operations.md).
   - [ ] Expand lint (Task 1 minors): the down's match ignores the table name; duplicate literals are not flagged.
   - [ ] Admin (Tasks 8–9 minors): a BOM trim edge and `maxLength` counting UTF-16 units in the SEO fields; the SEO fields have no live region; the import screen's first live-region text lands in the same commit as its mount; the in-progress wait has no Retry button.
   - [ ] `zip =9.1.3` is young (published 2026-10-27, R59): recheck on the next dependency update.
+  - [ ] `examples/cluster/` names `minio/minio` and `minio/mc`, which can no longer be pulled (2026-10-29); the M3 exit ran with `bitnamilegacy/minio` and `bitnamilegacy/minio-client` through an override (`m3-exit.md` §2). Pick maintained images and pin them by digest.
+  - [ ] Load flakes seen in the M3 exit's first Postgres workspace run: `job_kinds_are_in_meta::postgres` (node meta read before it held `job_kinds`) and `login_rate_limit_spans_nodes` (both backends); each passes alone.
+  - [ ] From the final review's re-check: a database error deleting an import input's row is logged at `info` like the expected foreign-key refusal; the run-folder sweep can race a starting run's `prepare_ir` rename in a narrow window.
+  - [ ] Log which node ran an `import.wordpress` job (the job row clears `locked_by` when done, and no log line names the job).
 - [ ] Deferred from M1c-2:
   - [ ] Small in-memory LRU for hot small `/_media` files (03 §5).
   - [ ] Atom feeds next to RSS 2.0 (06 §3).
