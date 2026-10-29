@@ -61,6 +61,30 @@ pub trait Store: Send + Sync + 'static {
     /// dropped, or when the connection dies. SQLite: an in-process mutex per store (one
     /// process owns the data folder). To wait for a lock use [`lock`](crate::lock()).
     async fn try_lock(&self, name: &str) -> Result<Option<Box<dyn LockGuard>>, StoreError>;
+    /// Waits up to `wait` for the named lock (P19); `Ok(None)` when it stayed held. The
+    /// default retries [`try_lock`](Self::try_lock) every [`LOCK_POLL`](crate::LOCK_POLL)
+    /// (first attempt immediate, last one at `wait`); SQLite uses it. Postgres overrides
+    /// it with one dedicated connection that sets `lock_timeout` and blocks in
+    /// `pg_advisory_lock`, so a release wakes the waiter at once. Dropping the future
+    /// cancels the wait and frees a lock granted late. Callers use
+    /// [`lock`](crate::lock()), which turns `None` into `Busy`.
+    async fn lock_wait(
+        &self,
+        name: &str,
+        wait: Duration,
+    ) -> Result<Option<Box<dyn LockGuard>>, StoreError> {
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            if let Some(guard) = self.try_lock(name).await? {
+                return Ok(Some(guard));
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Ok(None);
+            }
+            tokio::time::sleep(crate::LOCK_POLL.min(deadline - now)).await;
+        }
+    }
     /// Compares applied migrations with those embedded in this binary.
     async fn migration_status(
         &self,

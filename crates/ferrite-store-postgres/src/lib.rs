@@ -8,7 +8,7 @@ mod lock;
 mod migrate;
 mod repos;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use ferrite_store::{
@@ -72,6 +72,21 @@ impl Store for PgStore {
             return Err(map_db_err(sqlx::Error::PoolClosed));
         }
         self.locks.try_lock(name).await
+    }
+
+    async fn lock_wait(
+        &self,
+        name: &str,
+        wait: Duration,
+    ) -> Result<Option<Box<dyn LockGuard>>, StoreError> {
+        check_lock_name(name)?;
+        if self.pool.is_closed() {
+            return Err(map_db_err(sqlx::Error::PoolClosed));
+        }
+        if wait.is_zero() {
+            return self.locks.try_lock(name).await;
+        }
+        self.locks.lock_wait(name, wait).await
     }
 
     async fn migration_status(

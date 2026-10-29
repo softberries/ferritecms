@@ -8,6 +8,7 @@ use std::{
 };
 
 use ferrite_store::{LockGuard, Store, StoreError, lock};
+use sqlx::Connection;
 
 use crate::TestDb;
 
@@ -166,4 +167,128 @@ pub async fn lock_names_are_validated(db: &TestDb) {
         .release()
         .await
         .unwrap();
+}
+
+// Wait tests (P19). Postgres only: they pin what `lock_timeout` on one held connection
+// does; SQLite keeps the polling default, covered by `lock_waits_then_busy`. Lock names
+// are unique per test so concurrent runs on one database do not collide (advisory locks
+// are database-wide, the key includes the schema, which is per test).
+
+pub async fn pg_lock_wait_times_out(db: &TestDb) {
+    if db.is_sqlite() {
+        return;
+    }
+    let store = db.store();
+    let held = store.try_lock("w.timeout").await.unwrap().expect("free");
+    let started = Instant::now();
+    let got = store
+        .lock_wait("w.timeout", Duration::from_millis(300))
+        .await
+        .unwrap();
+    let waited = started.elapsed();
+    assert!(got.is_none(), "still held");
+    assert!(
+        waited >= Duration::from_millis(300) && waited <= Duration::from_millis(1500),
+        "waited {waited:?}"
+    );
+    // A connection that timed out is gone, and the lock is still the holder's.
+    assert!(store.try_lock("w.timeout").await.unwrap().is_none());
+    held.release().await.unwrap();
+}
+
+pub async fn pg_lock_wait_wakes_on_release(db: Arc<TestDb>) {
+    if db.is_sqlite() {
+        return;
+    }
+    let store = db.shared_store();
+    let held = store.try_lock("w.wake").await.unwrap().expect("free");
+    // Connect before the release so only the wake-up is timed.
+    let waiter = {
+        let store = store.clone();
+        tokio::spawn(async move {
+            let got = store
+                .lock_wait("w.wake", Duration::from_secs(5))
+                .await
+                .unwrap();
+            (got, Instant::now())
+        })
+    };
+    // The default poll ticks at 0, 250 and 500 ms: releasing just after a tick (300 ms)
+    // means polling could not acquire before about 500 ms.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let released_at = Instant::now();
+    held.release().await.unwrap();
+    let (got, got_at) = waiter.await.unwrap();
+    let lag = got_at.saturating_duration_since(released_at);
+    let got = got.expect("acquired after release");
+    assert!(
+        lag < Duration::from_millis(100),
+        "woke {lag:?} after release"
+    );
+    got.release().await.unwrap();
+}
+
+pub async fn pg_lock_wait_cancel_does_not_leak(db: &TestDb) {
+    if db.is_sqlite() {
+        return;
+    }
+    let store = db.store();
+    let held = store.try_lock("w.cancel").await.unwrap().expect("free");
+    let cancelled = tokio::time::timeout(
+        Duration::from_millis(100),
+        store.lock_wait("w.cancel", Duration::from_secs(30)),
+    )
+    .await;
+    assert!(cancelled.is_err(), "the wait was still pending");
+    held.release().await.unwrap();
+    let again = lock_within(store, "w.cancel", Duration::from_secs(2))
+        .await
+        .expect("the cancelled wait must not have taken or kept the lock");
+    again.release().await.unwrap();
+}
+
+pub async fn pg_lock_wait_opens_one_connection(db: Arc<TestDb>) {
+    let Some(prefix) = lock_app_prefix(&db) else {
+        return;
+    };
+    let store = db.shared_store();
+    let held = store.try_lock("w.conns").await.unwrap().expect("free");
+    let name = format!("{prefix}w.conns");
+    assert_eq!(db.active_backends(&name).await, 1, "the holder's");
+    // The holder's pid is known now; the waiter's one backend must then be present, with
+    // the same pid, in every sample from 100 ms on. Polling has a connection open for
+    // only a few ms of each 250 ms period, so it fails this every run.
+    let (url, _) = db.pg_location().expect("postgres");
+    let mut probe = sqlx::PgConnection::connect(&url).await.expect("connect");
+    let holder: Vec<i32> = sqlx::query_scalar(
+        "SELECT pid FROM pg_stat_activity WHERE application_name = $1 AND pid <> pg_backend_pid()",
+    )
+    .bind(&name)
+    .fetch_all(&mut probe)
+    .await
+    .expect("holder pid");
+    assert_eq!(holder.len(), 1, "only the holder before the wait");
+    let waiter = {
+        let store = store.clone();
+        tokio::spawn(async move { store.lock_wait("w.conns", Duration::from_secs(1)).await })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut waiter_pid = None;
+    let end = Instant::now() + Duration::from_millis(800);
+    while Instant::now() < end {
+        let pids: Vec<i32> = sqlx::query_scalar(
+            "SELECT pid FROM pg_stat_activity \
+             WHERE application_name = $1 AND pid <> pg_backend_pid() AND pid <> $2",
+        )
+        .bind(&name)
+        .bind(holder[0])
+        .fetch_all(&mut probe)
+        .await
+        .expect("sample backends");
+        assert_eq!(pids.len(), 1, "exactly the waiter's connection: {pids:?}");
+        assert_eq!(*waiter_pid.get_or_insert(pids[0]), pids[0], "same backend");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(waiter.await.unwrap().unwrap().is_none());
+    held.release().await.unwrap();
 }
