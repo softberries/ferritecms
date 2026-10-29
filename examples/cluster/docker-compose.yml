@@ -1,4 +1,4 @@
-# FerriteCMS cluster example: 2 ferrite nodes + Postgres + MinIO (S3) + Caddy.
+# FerriteCMS cluster example: 2 ferrite nodes + Postgres + RustFS (S3) + Caddy.
 #
 # Usage (from the repository root):
 #   docker compose -f examples/cluster/docker-compose.yml up --build
@@ -36,7 +36,7 @@ x-ferrite-node: &ferrite-node
   depends_on:
     postgres:
       condition: service_healthy
-    minio-init:
+    bucket-init:
       condition: service_completed_successfully
   # Shutdown is bounded at 14 s (design 09 §3); give it room before SIGKILL.
   stop_grace_period: 20s
@@ -44,7 +44,7 @@ x-ferrite-node: &ferrite-node
 
 services:
   postgres:
-    image: postgres:18
+    image: postgres:18@sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4
     environment:
       POSTGRES_USER: ferrite
       POSTGRES_PASSWORD: ferrite-demo-password
@@ -59,25 +59,34 @@ services:
       - pgdata:/var/lib/postgresql
     networks: [ferrite]
 
-  minio:
-    image: minio/minio
-    command: ["server", "/data"]
+  # S3-compatible object store: RustFS (single container), which replaced MinIO
+  # because minio/minio and minio/mc could not be pulled (docs/design/09-operations.md §7). Runs as UID 10001;
+  # the named volume needs no extra setup.
+  rustfs:
+    image: rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
+    command: ["/data"]
     environment:
-      MINIO_ROOT_USER: ferrite-demo
-      MINIO_ROOT_PASSWORD: ferrite-demo-secret
+      RUSTFS_ACCESS_KEY: ferrite-demo
+      RUSTFS_SECRET_KEY: ferrite-demo-secret
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "false"
     volumes:
-      - miniodata:/data
+      - rustfsdata:/data
     networks: [ferrite]
 
-  minio-init:
-    image: minio/mc
-    depends_on: [minio]
+  bucket-init:
+    image: amazon/aws-cli:2.34.0@sha256:97cc5f847898f54432492c128408c62e0df2153d9ad36573be8e5a03826123b0
+    depends_on: [rustfs]
+    environment:
+      AWS_ACCESS_KEY_ID: ferrite-demo
+      AWS_SECRET_ACCESS_KEY: ferrite-demo-secret
+      AWS_DEFAULT_REGION: us-east-1
     entrypoint:
       - /bin/sh
       - -c
       - |
-        until mc alias set local http://minio:9000 ferrite-demo ferrite-demo-secret; do sleep 1; done
-        mc mb --ignore-existing local/ferrite
+        until aws --endpoint-url http://rustfs:9000 s3api head-bucket --bucket ferrite 2>/dev/null \
+          || aws --endpoint-url http://rustfs:9000 s3api create-bucket --bucket ferrite; do sleep 1; done
     networks: [ferrite]
 
   node1:
@@ -91,7 +100,7 @@ services:
       FERRITE_CLUSTER__NODE_NAME: node2
 
   caddy:
-    image: caddy:2
+    image: caddy:2@sha256:5e5286cb37d44086d651a5363f05f43a692ce4d649d88fb1bd844579f45fa9e8
     ports:
       - "8080:8080"
     volumes:
@@ -107,4 +116,4 @@ networks:
 
 volumes:
   pgdata:
-  miniodata:
+  rustfsdata:
