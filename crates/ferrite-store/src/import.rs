@@ -1,4 +1,5 @@
-//! Backend parity checks and the token codec of the import tables (`0009_import`).
+//! Backend parity checks and the token codec of the import tables (`0009_import`,
+//! `0010_import_jobs`).
 
 use ferrite_domain::{ImportMapRow, ImportRun, to_hex};
 
@@ -7,6 +8,12 @@ use crate::{StoreError, validate_json, validate_text};
 /// Validates `ImportRepo::create_run` input (NUL in its texts or JSON).
 pub fn check_import_run(run: &ImportRun) -> Result<(), StoreError> {
     validate_text("import source", &run.source)?;
+    if let Some(step) = &run.step {
+        validate_text("import step", step)?;
+    }
+    if let Some(hash) = &run.report_hash {
+        validate_text("import report hash", hash)?;
+    }
     validate_json(&run.stats)
 }
 

@@ -18,6 +18,7 @@ backend_tests!(
     migration_0007_roundtrip,
     migration_0008_roundtrip,
     migration_0009_roundtrip,
+    migration_0010_roundtrip,
 );
 
 backend_tests!(
@@ -26,6 +27,10 @@ backend_tests!(
     abandon_stale_only_when_still_stale,
     import_map_upsert_and_get,
     content_insert_keeps_explicit_timestamps,
+    import_run_job_link_and_step,
+    import_run_report_hash,
+    import_runs_page_cursor,
+    artifact_kind_import_round_trips,
 );
 
 backend_tests_spawning!(fence_serialises_with_takeover);
@@ -310,7 +315,9 @@ fn expand_lint_passes() {
         {
             let sql = std::fs::read_to_string(dir.join(name)).unwrap();
             if parse_directives(&sql).unwrap().phase == Phase::Expand {
-                let problems = expand_lint(&sql);
+                let down = name.replace(".up.sql", ".down.sql");
+                let down = std::fs::read_to_string(dir.join(down)).unwrap();
+                let problems = expand_lint(&sql, &down);
                 assert!(
                     problems.is_empty(),
                     "{}: {problems:?}",

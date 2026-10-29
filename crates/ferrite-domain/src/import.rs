@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::{ImportRunId, Timestamp, UserId, string_enum};
+use crate::{ImportRunId, JobId, Timestamp, UserId, string_enum};
 
 string_enum!(
     /// Where an import run stands. At most one run is `running` at a time.
@@ -49,6 +49,14 @@ pub struct ImportRun {
     /// The report counters, a JSON object.
     pub stats: Value,
     pub dry_run: bool,
+    /// The `import.wordpress` job that started the run (`0010`, M3-2 P27); `None` for a
+    /// CLI run. No foreign key: finished jobs are pruned, their runs stay.
+    pub job_id: Option<JobId>,
+    /// The step the run is in (M3-2 P28): `parse`, `pass1`…`pass4`, `fixup` or `report`;
+    /// `None` until the first one begins.
+    pub step: Option<String>,
+    /// The SHA-256 of the run's report artifact (M3-2 P29), once one was stored.
+    pub report_hash: Option<String>,
 }
 
 /// What the import wrote for one source row: unique by (`source`, `kind`, `wp_id`).
