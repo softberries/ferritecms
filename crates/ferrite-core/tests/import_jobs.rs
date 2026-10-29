@@ -16,8 +16,8 @@ use ferrite_core::{
     },
 };
 use ferrite_domain::{
-    ArtifactHash, ArtifactKind, ImportRun, ImportRunId, ImportRunState, JobId, JobStatus, NewUser,
-    NodeId, Role, Timestamp, UserId, UserStatus, to_hex,
+    Artifact, ArtifactHash, ArtifactKind, ImportRun, ImportRunId, ImportRunState, JobId, JobStatus,
+    NewUser, NodeId, Role, Timestamp, UserId, UserStatus, to_hex,
 };
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode};
 use ferrite_store::{LOCK_IMPORT, Store};
@@ -106,10 +106,21 @@ fn service(db: &TestDb) -> Fixture {
 /// What the API hands `enqueue`: no user, core binds the actor's.
 fn request() -> ImportJobRequest {
     ImportJobRequest {
-        wxr: "a".repeat(64),
-        uploads: Some("b".repeat(64)),
+        wxr: input('a', "application/xml"),
+        uploads: Some(input('b', "application/zip")),
         options: ImportJobOptions::default(),
         source_name: "export.xml".into(),
+    }
+}
+
+/// An uploaded input (P23): an `import` artifact whose hash is `c` repeated.
+fn input(c: char, mime: &str) -> Artifact {
+    Artifact {
+        hash: ArtifactHash::parse(&c.to_string().repeat(64)).unwrap(),
+        kind: ArtifactKind::Import,
+        bytes: 100,
+        mime: mime.into(),
+        created_at: Timestamp::now(),
     }
 }
 
@@ -201,9 +212,17 @@ pub async fn enqueue_requires_import_capability(db: &TestDb) {
     let admin = actor(store, Role::Admin).await;
 
     for who in [editor, scoped(admin, &["import:read"])] {
+        let err = f.svc.authorize_import(&who).unwrap_err();
+        assert!(matches!(err, CoreError::Forbidden(_)), "{err:?}");
         let err = f.svc.enqueue(&who, request()).await.unwrap_err();
         assert!(matches!(err, CoreError::Forbidden(_)), "{err:?}");
     }
+    f.svc.authorize_import(&admin).unwrap();
+    // An input that is not an `import` artifact is refused.
+    let mut wrong = request();
+    wrong.wxr.kind = ArtifactKind::Media;
+    let err = f.svc.enqueue(&admin, wrong).await.unwrap_err();
+    assert!(matches!(err, CoreError::Invalid(_)), "{err:?}");
     let id = f
         .svc
         .enqueue(&scoped(admin, &["import:write"]), request())
@@ -216,6 +235,17 @@ pub async fn enqueue_requires_import_capability(db: &TestDb) {
     assert_eq!(job.unique_key, None);
     let back: ImportJobPayload = serde_json::from_value(job.payload).unwrap();
     assert_eq!(back, payload(admin.user));
+    // The inputs are recorded as `import` artifacts with the job.
+    for a in [request().wxr, request().uploads.unwrap()] {
+        let row = store
+            .read()
+            .artifacts()
+            .get(&a.hash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!((row.kind, row.bytes, row.mime), (a.kind, a.bytes, a.mime));
+    }
 
     // The job runs as whoever asked: another admin's request carries their id.
     let other = actor(store, Role::Admin).await;

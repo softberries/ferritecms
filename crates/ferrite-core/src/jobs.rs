@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use ferrite_domain::{ContentId, NewJob, Timestamp, UserId};
+use ferrite_domain::{Artifact, ContentId, NewJob, Timestamp, UserId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -290,11 +290,12 @@ pub struct ImportJobPayload {
 
 /// What an admin asks to import ([`ImportService::enqueue`](crate::import::ImportService::enqueue)):
 /// the payload without `v` and `user`, which core sets (the job runs as the actor who
-/// asked).
+/// asked). `wxr` and `uploads` are the stored inputs, of kind `import` (P23); their rows
+/// are recorded with the job.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportJobRequest {
-    pub wxr: String,
-    pub uploads: Option<String>,
+    pub wxr: Artifact,
+    pub uploads: Option<Artifact>,
     pub options: ImportJobOptions,
     pub source_name: String,
 }

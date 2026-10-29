@@ -104,11 +104,18 @@ struct Manifest {
 }
 
 impl ImportService {
+    /// `Ok` if `actor` may start an import ([`Capability::Import`] with `import:write`):
+    /// what the API checks before it reads an upload.
+    pub fn authorize_import(&self, actor: &Actor) -> Result<(), CoreError> {
+        require(actor, Capability::Import)
+    }
+
     /// Queues an `import.wordpress` job for `request` (P25, P27), run as `actor` (the
     /// payload's `user` is always the actor's). Needs [`Capability::Import`] with
     /// `import:write`. While an `import.wordpress` job is queued or running, or a run is
     /// `running` with a fresh heartbeat, this is [`CoreError::Changed`] (the API's
-    /// `409`); a run whose heartbeat is older than [`STALE_AFTER`](super::STALE_AFTER)
+    /// `409`); the inputs must be `import` artifacts (else `Invalid`) and their rows are
+    /// recorded in the same transaction; a run whose heartbeat is older than [`STALE_AFTER`](super::STALE_AFTER)
     /// is abandoned instead, since the admin asked to import.
     ///
     /// The check and the insert are one transaction, with the import lock taken around
@@ -122,10 +129,18 @@ impl ImportService {
         request: ImportJobRequest,
     ) -> Result<JobId, CoreError> {
         require(actor, Capability::Import)?;
+        let inputs: Vec<Artifact> = std::iter::once(request.wxr)
+            .chain(request.uploads)
+            .collect();
+        if inputs.iter().any(|a| a.kind != ArtifactKind::Import) {
+            return Err(CoreError::Invalid(
+                "import inputs must be import artifacts".into(),
+            ));
+        }
         let payload = ImportJobPayload {
             v: IMPORT_WORDPRESS_VERSION,
-            wxr: request.wxr,
-            uploads: request.uploads,
+            wxr: inputs[0].hash.to_string(),
+            uploads: inputs.get(1).map(|a| a.hash.to_string()),
             options: request.options,
             user: actor.user,
             source_name: request.source_name,
@@ -138,12 +153,16 @@ impl ImportService {
                 return Err(CoreError::Unavailable(NO_LOCK));
             }
         };
-        let done = self.enqueue_checked(&payload).await;
+        let done = self.enqueue_checked(&payload, &inputs).await;
         release(Some(lock)).await;
         done
     }
 
-    async fn enqueue_checked(&self, payload: &ImportJobPayload) -> Result<JobId, CoreError> {
+    async fn enqueue_checked(
+        &self,
+        payload: &ImportJobPayload,
+        inputs: &[Artifact],
+    ) -> Result<JobId, CoreError> {
         let tx = self.store.begin().await?;
         let done = async {
             let imports = tx.imports();
@@ -169,6 +188,9 @@ impl ImportService {
                 if !tx.jobs().list(&query).await?.items.is_empty() {
                     return Err(CoreError::Changed(ALREADY));
                 }
+            }
+            for input in inputs {
+                tx.artifacts().insert_if_absent(input).await?;
             }
             tx.jobs()
                 .enqueue(&import_wordpress_job(payload))
