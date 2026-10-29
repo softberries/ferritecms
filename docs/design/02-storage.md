@@ -844,7 +844,10 @@ blob's content must hash to its name, and at the end of the stream every listed 
 and the blob count must have been seen. Any refusal, damage or truncation rolls the
 whole load back, so the target stays fresh; a schema step taken for the archive (up from
 an unmigrated database, or down from a newer one) is undone, best effort (a warning says
-when it failed), so the import can be retried. Before the load the tool also checks, at
+when it failed; a step that itself fails says at which schema it stopped), so the import
+can be retried; this also runs when the load panics. The undo first re-checks that the
+target is still empty: after an error reported by the commit itself (which may have
+landed) it is skipped, with a warning, when rows exist or the check cannot run. Before the load the tool also checks, at
 M, that the startup rules would allow the migration to the binary's schema afterwards
 (`database.auto_migrate`; on Postgres a contract migration needs `allow_contract`), and
 refuses otherwise. After the commit the database is migrated up to the binary's schema,

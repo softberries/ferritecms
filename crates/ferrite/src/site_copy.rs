@@ -231,11 +231,23 @@ pub(crate) async fn prepare_target(
             );
         }
     }
-    if current < schema {
-        up_locked(store, Some(schema), MIGRATE_LOCK_WAIT).await?;
+    let stepped = if current < schema {
+        up_locked(store, Some(schema), MIGRATE_LOCK_WAIT).await
     } else if current > schema {
         // Safe: the database holds no data (checked above).
-        down_locked(store, schema, true, MIGRATE_LOCK_WAIT).await?;
+        down_locked(store, schema, true, MIGRATE_LOCK_WAIT).await
+    } else {
+        Ok(Vec::new())
+    };
+    if let Err(e) = stepped {
+        // Each migration commits on its own, so a failure can stop part way.
+        let now = schema_now(store, binary).await;
+        tracing::error!(error = %format!("{e:#}"), current, schema, %now, "schema step failed");
+        eprintln!(
+            "warning: migrating the target from schema {current} to {schema} failed; it stopped \
+             at schema {now}. Run `ferrite migrate up` before retrying."
+        );
+        return Err(e);
     }
     let opened = async {
         let status = store.migration_status(binary).await?;
@@ -255,18 +267,51 @@ pub(crate) async fn prepare_target(
             schema,
         }),
         Err(e) => {
-            undo_schema(store, schema, current, binary).await;
+            undo_schema(store, schema, current, binary, false).await;
             Err(e)
         }
     }
 }
 
-/// Best effort after a failed load: takes a fresh target from `schema` (the archive's)
-/// back to `original` (its schema before [`prepare_target`]), so it is fresh at its own
-/// schema again and a retry is accepted. Safe because the database holds no rows. A
-/// failure is logged and printed, not returned.
-pub(crate) async fn undo_schema(store: &dyn Store, schema: i64, original: i64, binary: &Version) {
+/// The target's applied schema version for a message, or `unknown`.
+async fn schema_now(store: &dyn Store, binary: &Version) -> String {
+    store
+        .migration_status(binary)
+        .await
+        .map_or_else(|_| "unknown".to_owned(), |s| s.db_version.to_string())
+}
+
+/// Best effort after a failed load: takes the target from `schema` (the archive's) back to
+/// `original` (its schema before [`prepare_target`]), so it is fresh at its own schema
+/// again and a retry is accepted. A migration down is lossy, so the target is first
+/// checked to be still fresh; when it holds rows (a commit that reported an error but
+/// landed) nothing is undone and a warning says so. With `commit_attempted`, a check that
+/// cannot run (the reader needs the binary's columns, which an older schema may lack) also
+/// skips the undo; without it the load never reached its commit, its transaction was
+/// rolled back, and the undo goes ahead. Failures are logged and printed, not returned.
+pub(crate) async fn undo_schema(
+    store: &dyn Store,
+    schema: i64,
+    original: i64,
+    binary: &Version,
+    commit_attempted: bool,
+) {
     if schema == original {
+        return;
+    }
+    let skip = match first_non_empty(store).await {
+        Ok(None) => None,
+        Ok(Some(table)) => Some(format!("table {table} has rows")),
+        Err(e) if commit_attempted => Some(format!("its tables cannot be checked ({e:#})")),
+        Err(_) => None,
+    };
+    if let Some(why) = skip {
+        tracing::error!(%why, schema, original, "the target's schema step is not undone");
+        eprintln!(
+            "warning: the target database is left at schema {schema} (it was at {original}): {why}, \
+             so the load may have been committed. Check it before retrying; a fresh target is \
+             needed for another import."
+        );
         return;
     }
     let undone = if original > schema {
@@ -274,26 +319,48 @@ pub(crate) async fn undo_schema(store: &dyn Store, schema: i64, original: i64, b
     } else {
         down_locked(store, original, true, MIGRATE_LOCK_WAIT).await
     };
-    let now = store
-        .migration_status(binary)
-        .await
-        .map(|s| s.db_version)
-        .unwrap_or(-1);
+    let now = schema_now(store, binary).await;
     match undone {
-        Ok(_) if now == original => {}
+        Ok(_) if now == original.to_string() => {}
         Ok(_) => {
-            tracing::error!(original, now, "the target's schema was not restored");
+            tracing::error!(original, %now, "the target's schema was not restored");
             eprintln!(
                 "warning: the target database is at schema {now}, not {original} as before; run \
                  `ferrite migrate up` before retrying"
             );
         }
         Err(e) => {
-            tracing::error!(error = %format!("{e:#}"), original, "restoring the target's schema failed");
+            tracing::error!(error = %format!("{e:#}"), original, %now, "restoring the target's schema failed");
             eprintln!(
-                "warning: the target database stays at schema {schema} (it was at {original}): \
-                 {e:#}; run `ferrite migrate up` before retrying"
+                "warning: the target database is at schema {now} (it was at {original}): {e:#}; \
+                 run `ferrite migrate up` before retrying"
             );
+        }
+    }
+}
+
+/// Undoes the schema step when dropped while armed, so a panic in the blocking load
+/// still reverts it (after the writer, declared later, has rolled back).
+struct UndoGuard<'a> {
+    handle: &'a Handle,
+    store: &'a dyn Store,
+    binary: &'a Version,
+    schema: i64,
+    original: i64,
+    armed: bool,
+    commit_attempted: bool,
+}
+
+impl Drop for UndoGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.handle.block_on(undo_schema(
+                self.store,
+                self.schema,
+                self.original,
+                self.binary,
+                self.commit_attempted,
+            ));
         }
     }
 }
@@ -549,12 +616,21 @@ pub async fn import_from(
     media: Option<Arc<MediaStore>>,
     db: DatabaseConfig,
     binary: Version,
+    seams: LoadSeams,
 ) -> anyhow::Result<(Manifest, LoadStats)> {
     let handle = Handle::current();
     tokio::task::spawn_blocking(move || {
-        load_archive(&handle, input, store.as_ref(), media, &db, &binary)
+        load_archive(&handle, input, store.as_ref(), media, &db, &binary, seams)
     })
     .await?
+}
+
+/// Test seams of [`import_from`] (empty without the `test-seams` feature).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LoadSeams {
+    /// Report an error after a successful commit, as a lost connection can.
+    #[cfg(feature = "test-seams")]
+    pub fail_after_commit: bool,
 }
 
 fn load_archive(
@@ -564,6 +640,7 @@ fn load_archive(
     media: Option<Arc<MediaStore>>,
     db: &DatabaseConfig,
     binary: &Version,
+    seams: LoadSeams,
 ) -> anyhow::Result<(Manifest, LoadStats)> {
     let mut reader = ArchiveReader::new(input)?;
     let mut entries = reader.entries()?;
@@ -578,7 +655,7 @@ fn load_archive(
         .map(|t| catalogue::table(&t.name).context("unknown table"))
         .collect::<anyhow::Result<Vec<_>>>()?;
     let Prepared {
-        mut writer,
+        writer,
         original,
         schema,
     } = handle.block_on(prepare_target(
@@ -588,15 +665,28 @@ fn load_archive(
         db,
         binary,
     ))?;
+    // Declared before the writer, so on an error or a panic the writer is dropped (rolled
+    // back) first and the guard then undoes the schema step.
+    let mut guard = UndoGuard {
+        handle,
+        store,
+        binary,
+        schema,
+        original,
+        armed: true,
+        commit_attempted: false,
+    };
+    let mut writer = writer;
     let mut stats = LoadStats::default();
-    let loaded = load_entries(handle, &mut entries, writer.as_mut(), media, &mut stats)
-        .and_then(|()| handle.block_on(writer.commit()).map_err(Into::into));
-    if let Err(e) = loaded {
-        // The writer was consumed by `commit` or is dropped here (a rollback) before the
-        // schema step is undone, so the writer connection is free.
-        handle.block_on(undo_schema(store, schema, original, binary));
-        return Err(e);
+    load_entries(handle, &mut entries, writer.as_mut(), media, &mut stats)?;
+    guard.commit_attempted = true;
+    handle.block_on(writer.commit())?;
+    #[cfg(feature = "test-seams")]
+    if seams.fail_after_commit {
+        bail!("test seam: an error reported after the commit");
     }
+    let _ = seams;
+    guard.armed = false;
     Ok((manifest, stats))
 }
 
@@ -754,15 +844,16 @@ pub async fn copy(
         schema,
     } = prepare_target(target, status.db_version, &tables, db, binary).await?;
     let mut stats = LoadStats::default();
-    let loaded = match copy_rows(source, writer.as_mut(), &tables, &mut stats).await {
-        Ok(()) => writer.commit().await.map_err(Into::into),
-        Err(e) => {
-            drop(writer);
-            Err(e)
-        }
-    };
+    let (loaded, commit_attempted) =
+        match copy_rows(source, writer.as_mut(), &tables, &mut stats).await {
+            Ok(()) => (writer.commit().await.map_err(Into::into), true),
+            Err(e) => {
+                drop(writer);
+                (Err(e), false)
+            }
+        };
     if let Err(e) = loaded {
-        undo_schema(target, schema, original, binary).await;
+        undo_schema(target, schema, original, binary, commit_attempted).await;
         return Err(e);
     }
     Ok(stats)

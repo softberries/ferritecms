@@ -911,3 +911,59 @@ fn export_file_mode_is_0600() {
     f.read_exact(&mut head).unwrap();
     assert_eq!(head, [0x28, 0xb5, 0x2f, 0xfd], "zstd magic");
 }
+
+/// An error reported after the commit landed (as a lost connection can): the schema step
+/// is not undone, so the committed rows stay.
+#[test]
+fn import_site_error_after_commit_keeps_the_rows() {
+    let ex = exported();
+    let path = ex.tmp.path().join("v10.tar.zst");
+    std::fs::write(&path, v10_archive(&ex)).unwrap();
+    let target = ex.tmp.path().join("target");
+    init(&target);
+    let out = import_site(&target, &path, &["--test-fail-after-commit"]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("left at schema 10"), "{err}");
+    assert!(err.contains("may have been committed"), "{err}");
+    assert_eq!(schema_version(&target), 10);
+    assert_eq!(count(&target, "users"), count(&ex.source, "users"));
+}
+
+/// The same into an unmigrated Postgres schema, where the undo would be a migration down
+/// to 0: the freshness re-check finds the rows and keeps them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn import_site_error_after_commit_keeps_the_rows_postgres() {
+    let Some(db) = TestDb::postgres_unmigrated().await else {
+        return;
+    };
+    let (url, schema) = db.pg_location().unwrap();
+    let ex = tokio::task::spawn_blocking(exported).await.unwrap();
+    let target = ex.tmp.path().join("pg");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(
+        target.join("ferrite.toml"),
+        format!(
+            "[site]\nurl = \"http://127.0.0.1:8080/\"\n[database]\nurl = \"{url}\"\n\
+             schema = \"{schema}\"\n"
+        ),
+    )
+    .unwrap();
+    let (t2, a2) = (target.clone(), ex.archive.clone());
+    let out =
+        tokio::task::spawn_blocking(move || import_site(&t2, &a2, &["--test-fail-after-commit"]))
+            .await
+            .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("has rows"), "{err}");
+    let mut conn = PgConnection::connect(&url).await.unwrap();
+    let users: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT count(*) FROM \"{schema}\".users"
+    )))
+    .fetch_one(&mut conn)
+    .await
+    .unwrap();
+    assert!(users > 0);
+    conn.close().await.unwrap();
+}

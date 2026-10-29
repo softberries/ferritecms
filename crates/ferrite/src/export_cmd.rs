@@ -43,6 +43,10 @@ pub struct ImportSiteArgs {
     /// Store the archive's artifacts in the site's media store (those present are skipped).
     #[arg(long)]
     pub with_media: bool,
+    /// Test seam: report an error after the load committed.
+    #[cfg(feature = "test-seams")]
+    #[arg(long, hide = true)]
+    pub test_fail_after_commit: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -213,6 +217,10 @@ async fn import_site(args: ImportSiteArgs) -> anyhow::Result<ExitCode> {
             media,
             config.database.clone(),
             binary.clone(),
+            site_copy::LoadSeams {
+                #[cfg(feature = "test-seams")]
+                fail_after_commit: args.test_fail_after_commit,
+            },
         )
         .await?;
         site_copy::finalize(store.as_ref(), &config.database, &binary, &stats).await?;

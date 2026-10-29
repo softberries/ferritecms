@@ -339,7 +339,7 @@ hostile path, an over-long row line (64 MiB), more artifact bytes than the manif
 truncated stream, an archive that is a backup, database settings that would refuse the migration
 to the binary's schema after the load (`database.auto_migrate` off, or a Postgres contract migration
 without `database.allow_contract`). No refusal leaves rows behind, and a schema step taken for the
-archive is undone (best effort; a warning says when that failed), so the import can be retried. `db copy --from URL --to URL` streams one database into another (export + import with no
+archive is undone (best effort; a warning says when that failed, and it is skipped when the target holds rows after a commit that reported an error), so the import can be retried. `db copy --from URL --to URL` streams one database into another (export + import with no
 file): `postgres://…` (with `--from-schema`/`--to-schema`) or `sqlite:<path to ferrite.db>` (the
 folder lock is taken in its folder; an absent target file is created, and removed again when the
 copy fails). URLs only, no stdin. Same source and target rules and exit codes as `export` and
