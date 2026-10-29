@@ -366,7 +366,10 @@ mod tests {
             let depth = depth(&html);
             let took = start.elapsed();
             assert!(depth > MAX_PARSE_DEPTH, "{what}: {depth}");
-            assert!(took < Duration::from_secs(1), "{what}: {took:?}");
+            // Bounded, not fast: each case stops after a fixed amount of work (about 0.5 s
+            // for the reopened-formatting case in a debug build, whatever its length).
+            // The limit leaves room for slow CI runners; a quadratic case takes minutes.
+            assert!(took < Duration::from_secs(5), "{what}: {took:?}");
         }
     }
 }
