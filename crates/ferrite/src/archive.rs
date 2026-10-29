@@ -30,7 +30,7 @@ pub const MANIFEST: &str = "manifest.json";
 /// The zstd level (P7).
 const LEVEL: i32 = 3;
 /// The largest manifest read.
-const MAX_MANIFEST: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_MANIFEST: u64 = 16 * 1024 * 1024;
 
 /// An archive this binary cannot use because a newer one wrote it (a newer format or
 /// schema). Commands map it to exit code 3.
@@ -97,15 +97,16 @@ pub struct Manifest {
     pub files: Option<Vec<FileEntry>>,
     /// `null` when the archive holds no blobs.
     pub artifacts: Option<ArtifactsInfo>,
-    /// Export only: artifacts that have a row but whose blob was missing from the source's
-    /// media store, so the archive lacks them (an additive field, absent when empty).
+    /// Artifacts that have a row but whose blob was missing from the source's media store,
+    /// so the archive (or repository snapshot) lacks them (an additive field, absent when
+    /// empty).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missing: Vec<String>,
 }
 
 impl Manifest {
     /// Parses a manifest, refusing a newer format with [`Newer`] before anything else.
-    fn parse(bytes: &[u8]) -> anyhow::Result<Self> {
+    pub(crate) fn parse(bytes: &[u8]) -> anyhow::Result<Self> {
         let value: serde_json::Value =
             serde_json::from_slice(bytes).context("manifest.json is not valid JSON")?;
         let format = value
@@ -133,8 +134,9 @@ impl Manifest {
             (Kind::Export, ..) => bail!("manifest.json of an export must list tables and no files"),
             (Kind::Backup, ..) => bail!("manifest.json of a backup must list files and no tables"),
         }
-        if self.kind == Kind::Backup && !self.missing.is_empty() {
-            bail!("manifest.json of a backup lists missing artifacts");
+        for h in &self.missing {
+            ArtifactHash::parse(h)
+                .map_err(|_| anyhow::anyhow!("manifest.json lists an invalid artifact {h:?}"))?;
         }
         let mut last = None;
         for t in self.tables.iter().flatten() {
@@ -696,7 +698,9 @@ mod tests {
         m.kind = Kind::Backup;
         m.check().unwrap();
         m.missing = vec!["x".into()];
-        assert!(m.check().is_err());
+        assert!(m.check().is_err(), "an invalid missing hash");
+        m.missing = vec!["ab".repeat(32)];
+        m.check().unwrap();
         m.missing.clear();
         m.tables = Some(vec![]);
         assert!(m.check().is_err());

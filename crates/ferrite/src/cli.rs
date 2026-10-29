@@ -6,8 +6,8 @@ use clap::{Args, Parser, Subcommand};
 use crate::config_cmd::ConfigCommand;
 use crate::ext_cmd::{PluginCommand, ThemeCommand};
 use crate::{
-    config_cmd, export_cmd, ext_cmd, healthcheck, import_cmd, init, media_cmd, migrate, seed,
-    serve, user_cmd,
+    backup, config_cmd, export_cmd, ext_cmd, healthcheck, import_cmd, init, media_cmd, migrate,
+    seed, serve, user_cmd,
 };
 
 #[derive(Debug, Parser)]
@@ -62,6 +62,41 @@ pub enum Command {
     /// Exit code: 0 ok, 3 when the archive's format or schema is newer than this binary,
     /// 1 on any other error.
     ImportSite(export_cmd::ImportSiteArgs),
+    /// Back up a solo (SQLite) site: database snapshot, ferrite.toml, secret.key and media.
+    ///
+    /// The database is copied with `VACUUM INTO` and checked with `PRAGMA integrity_check`
+    /// before anything is written. `--to` is a `.tar.zst` file (mode 0600), `-` for stdout,
+    /// or a repository: a folder or `s3://bucket[/prefix]` holding shared
+    /// `artifacts/<ab>/<hash>` (copied only when missing) and
+    /// `snapshots/<yyyymmddThhmmssZ>/`. Like every SQLite command it needs `serve` stopped
+    /// (a running site is backed up by the `[backup]` schedule). Postgres sites are refused:
+    /// use the provider's backups and `ferrite export`. Nothing is encrypted: pipe `--to -`
+    /// to age or gpg.
+    ///
+    /// An artifact whose file is missing from the media store is left out (one `missing
+    /// artifact <hash>` line each on stderr, listed in the manifest); a file whose content
+    /// does not match its hash fails the backup.
+    ///
+    /// Exit code: 0 ok, 2 done but artifacts were missing from the media store, 1 on any
+    /// other error (a failed backup leaves no archive or snapshot, except that a failed
+    /// `--keep` prune keeps the snapshot it follows). A repository folder or prefix must be
+    /// empty or carry ferrite-backup-repo.json, and lie outside the data folder and the media
+    /// store.
+    Backup(backup::BackupArgs),
+    /// Restore a backup into an empty data folder (or, with --force, in place of one).
+    ///
+    /// The source is a backup `.tar.zst`, `-` for stdin, or a repository (folder or
+    /// `s3://`; the newest snapshot unless `--snapshot`). With `--force` an existing folder
+    /// is moved aside to `<data>.pre-restore-<ts>` (never deleted), refused while a running
+    /// ferrite holds its lock. Blobs go to the media store the restored ferrite.toml names
+    /// (those present are skipped). The database is not migrated: the command prints the
+    /// migration status and `serve` migrates under `database.auto_migrate`. A failed restore
+    /// leaves the data folder as it was. An empty folder (a mount point too) is restored into
+    /// in place; `--force` refuses a mount point.
+    ///
+    /// Exit code: 0 ok, 3 when the backup's schema is newer than this binary (nothing is
+    /// written), 1 on any other error.
+    Restore(backup::RestoreArgs),
     /// Database tools.
     #[command(subcommand)]
     Db(export_cmd::DbCommand),
@@ -133,6 +168,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Export(args) => export_cmd::run_export(args).await,
         Command::ImportSite(args) => export_cmd::run_import_site(args).await,
         Command::Db(cmd) => export_cmd::run_db(cmd).await,
+        Command::Backup(args) => backup::run_backup_cmd(args).await,
+        Command::Restore(args) => backup::run_restore(args).await,
         Command::Config(cmd) => config_cmd::run(cmd),
         Command::Healthcheck(args) => healthcheck::run(args).await,
         Command::Theme(cmd) => ext_cmd::run_theme(cmd).await.map(|()| ExitCode::SUCCESS),
