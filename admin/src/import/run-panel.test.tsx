@@ -1,4 +1,4 @@
-import { act, screen, within } from "@testing-library/react";
+import { act, cleanup, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { type ImportJobDto, type ImportRunDto, IMPORT_POLL_MS } from "@/api/import";
 import { json, renderWithRouter, stubRoutes } from "@/test/render";
@@ -106,6 +106,54 @@ test("a dead job stops polling too", async () => {
   expect(calls).toBe(1);
 });
 
+test("polling stops on unmount", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  let calls = 0;
+  stubRoutes({
+    [`/api/v1/import/jobs/${JOB}`]: () => {
+      calls++;
+      return json(job({ status: "running", run: run() }));
+    },
+  });
+  renderWithRouter(<RunPanel jobId={JOB} onDismiss={vi.fn()} />);
+  await heading("Importing");
+  await tick(IMPORT_POLL_MS);
+  expect(calls).toBe(2);
+  cleanup();
+  await tick(IMPORT_POLL_MS * 5);
+  expect(calls).toBe(2);
+});
+
+test("polling stops after a 404", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  let calls = 0;
+  stubRoutes({
+    [`/api/v1/import/jobs/${JOB}`]: () => {
+      calls++;
+      return new Response(
+        JSON.stringify({ type: "/api/v1/problems/not-found", title: "N", status: 404, detail: "" }),
+        { status: 404, headers: { "Content-Type": "application/problem+json" } },
+      );
+    },
+  });
+  renderWithRouter(<RunPanel jobId={JOB} onDismiss={vi.fn()} />);
+  await vi.waitFor(() => screen.getByText("This import job no longer exists."));
+  await tick(IMPORT_POLL_MS * 5);
+  expect(calls).toBe(1);
+});
+
+test("the live region mounts empty, then says the phase", async () => {
+  stubRoutes({ [`/api/v1/import/jobs/${JOB}`]: () => json(job()) });
+  renderWithRouter(<RunPanel jobId={JOB} onDismiss={vi.fn()} focusHeading />);
+  const title = await screen.findByRole("heading", { name: "Waiting for a worker" });
+  const live = document.querySelector<HTMLElement>("[data-slot=import-run-live]")!;
+  expect(live).toHaveAttribute("aria-live", "polite");
+  await vi.waitFor(() => expect(live).toHaveTextContent("Import queued."));
+  // Asked to: the heading takes focus when the panel appears (start card → panel).
+  expect(document.activeElement).toBe(title);
+  expect(title).toHaveAttribute("tabindex", "-1");
+});
+
 test("failed run shows error and partial report link", async () => {
   const onDismiss = vi.fn();
   stubRoutes({
@@ -134,7 +182,13 @@ test("failed run shows error and partial report link", async () => {
   expect(await screen.findByRole("heading", { name: "Import failed" })).toBeInTheDocument();
   // The run's error, as text (never markup), over the job's.
   const error = document.querySelector<HTMLElement>("[data-slot=import-run-error]")!;
-  expect(error).toHaveAttribute("role", "alert");
+  // Announced once, by the phase's live region; the error box is not an alert as well.
+  expect(screen.queryByRole("alert")).toBeNull();
+  await vi.waitFor(() =>
+    expect(document.querySelector("[data-slot=import-run-live]")).toHaveTextContent(
+      "Import failed.",
+    ),
+  );
   expect(within(error).getByText("pass3: <b>disk full</b>")).toBeInTheDocument();
   expect(error.querySelector("b")).toBeNull();
   expect(screen.queryByText("attempt error")).toBeNull();

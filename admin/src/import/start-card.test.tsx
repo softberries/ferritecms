@@ -196,3 +196,99 @@ test("bad bases and wrong files are refused before sending", async () => {
   await user.click(screen.getByRole("button", { name: "Remove site-a.xml" }));
   expect(screen.getByRole("button", { name: "Start import" })).toBeDisabled();
 });
+
+const PROBLEM = { "Content-Type": "application/problem+json" };
+const problem = (status: number, slug: string, extra: Record<string, unknown> = {}) => ({
+  type: `/api/v1/problems/${slug}`,
+  title: slug,
+  status,
+  detail: "",
+  ...extra,
+});
+
+async function startedCard() {
+  renderWithRouter(<StartCard onStarted={vi.fn()} />);
+  await screen.findByRole("button", { name: "Start import" });
+  const user = await choose();
+  await user.click(screen.getByRole("button", { name: "Start import" }));
+  return user;
+}
+
+test("a 5xx keeps the key and offers Retry", async () => {
+  const user = await startedCard();
+  const key = sent[0]!.headers["Idempotency-Key"];
+  sent[0]!.respond(502, problem(502, "bad-gateway"), PROBLEM);
+  await user.click(await screen.findByRole("button", { name: "Retry" }));
+  expect(sent).toHaveLength(2);
+  expect(sent[1]!.headers["Idempotency-Key"]).toBe(key);
+});
+
+test("an in-progress 409 keeps the key, retries once on its own, then offers Retry", async () => {
+  const user = await startedCard();
+  const key = sent[0]!.headers["Idempotency-Key"];
+  sent[0]!.respond(409, problem(409, "conflict"), { ...PROBLEM, "Retry-After": "1" });
+  await vi.waitFor(() => expect(sent).toHaveLength(2), { timeout: 3_000 });
+  expect(sent[1]!.headers["Idempotency-Key"]).toBe(key);
+  sent[1]!.respond(409, problem(409, "conflict"), { ...PROBLEM, "Retry-After": "1" });
+  await user.click(await screen.findByRole("button", { name: "Retry" }));
+  expect(sent).toHaveLength(3);
+  expect(sent[2]!.headers["Idempotency-Key"]).toBe(key);
+});
+
+test("cancel keeps the key and moves focus to the card's heading", async () => {
+  const user = await startedCard();
+  const key = sent[0]!.headers["Idempotency-Key"];
+  await user.click(screen.getByRole("button", { name: "Cancel upload" }));
+  expect(document.activeElement).toBe(screen.getByRole("heading", { name: "New import" }));
+  expect(screen.queryByRole("alert")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Start import" }));
+  expect(sent[1]!.headers["Idempotency-Key"]).toBe(key);
+});
+
+test("a file change rotates the key", async () => {
+  const user = await startedCard();
+  const key = sent[0]!.headers["Idempotency-Key"];
+  sent[0]!.onerror?.();
+  await screen.findByRole("button", { name: "Retry" });
+  await user.click(screen.getByRole("button", { name: "Remove uploads.zip" }));
+  await user.upload(input("import-uploads"), new File(["PK2"], "other.zip"));
+  await user.click(screen.getByRole("button", { name: "Start import" }));
+  expect(sent[1]!.headers["Idempotency-Key"]).not.toBe(key);
+});
+
+test("a 413 shows its error at the file it names", async () => {
+  await startedCard();
+  sent[0]!.respond(
+    413,
+    problem(413, "too-large", { errors: [{ field: "uploads", detail: "the zip is too big" }] }),
+    PROBLEM,
+  );
+  const uploads = document.querySelector<HTMLElement>("[data-slot=import-uploads]")!;
+  expect(await within(uploads).findByRole("alert")).toHaveTextContent("the zip is too big");
+  const wxr = document.querySelector<HTMLElement>("[data-slot=import-wxr]")!;
+  expect(within(wxr).queryByRole("alert")).toBeNull();
+});
+
+test("focus follows the upload and progress is announced at milestones", async () => {
+  await startedCard();
+  const progress = document.querySelector<HTMLElement>("[data-slot=import-progress]")!;
+  expect(document.activeElement).toBe(progress);
+  const live = document.querySelector<HTMLElement>("[data-slot=import-progress-live]")!;
+  expect(live).toHaveTextContent("Upload started");
+  const step = async (loaded: number) => {
+    sent[0]!.upload.onprogress?.({ lengthComputable: true, loaded, total: 100 } as ProgressEvent);
+    await screen.findByText(`Uploading ${loaded}%`);
+  };
+  await step(10);
+  expect(live).toHaveTextContent("Upload started");
+  await step(31);
+  expect(live).toHaveTextContent("Upload 25% done");
+  await step(52);
+  expect(live).toHaveTextContent("Upload 50% done");
+  await step(60);
+  expect(live).toHaveTextContent("Upload 50% done");
+  // The upload ends (here: no answer): focus goes to the card's heading, not to <body>.
+  sent[0]!.onerror?.();
+  await screen.findByRole("button", { name: "Retry" });
+  expect(document.activeElement).toBe(screen.getByRole("heading", { name: "New import" }));
+});

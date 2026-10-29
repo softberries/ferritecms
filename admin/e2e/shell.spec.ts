@@ -173,6 +173,7 @@ test("shortcut_sheet_lists_bindings", async ({ as, snap, expectAccessible }) => 
     "Go to Users",
     "Go to Appearance",
     "Go to Plugins",
+    "Go to Import",
     "Go to Settings",
     "Go to System",
   ]);

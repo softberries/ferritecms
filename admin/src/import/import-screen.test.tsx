@@ -1,5 +1,6 @@
 import { cleanup, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { ImportRunDto } from "@/api/import";
 import { json, renderWithRouter, stubRoutes } from "@/test/render";
@@ -151,3 +152,140 @@ test("a finished job is put away with New import", async () => {
 function renderScreen(props: { job?: string; setJob?: (job: string | undefined) => void } = {}) {
   renderWithRouter(<ImportScreen job={props.job} setJob={props.setJob ?? vi.fn()} />);
 }
+
+/** The screen with `?job=` kept in state, as the route keeps it in the URL. */
+function Harness({ initial, onJob }: { initial?: string; onJob?: (job?: string) => void }) {
+  const [job, setJob] = useState(initial);
+  return (
+    <ImportScreen
+      job={job}
+      setJob={(next) => {
+        onJob?.(next);
+        setJob(next);
+      }}
+    />
+  );
+}
+
+const running = () => run({ state: "running", step: "pass1", job_id: JOB, finished_at: null });
+
+test("an auto-followed run stays on show when it finishes", async () => {
+  const onJob = vi.fn();
+  let runsCalls = 0;
+  let jobCalls = 0;
+  stubRoutes({
+    "/api/v1/import/runs": () =>
+      json({ items: [runsCalls++ === 0 ? running() : run({ job_id: JOB })] }),
+    [`/api/v1/import/jobs/${JOB}`]: () =>
+      json(
+        jobCalls++ === 0
+          ? { job_id: JOB, status: "running", attempts: 1, run: running() }
+          : { job_id: JOB, status: "done", attempts: 1, run: run({ job_id: JOB }) },
+      ),
+  });
+  renderWithRouter(<Harness onJob={onJob} />);
+  expect(await screen.findByRole("heading", { name: "Importing" })).toBeInTheDocument();
+  // Followed on its own, the job is pinned in the URL.
+  expect(onJob).toHaveBeenCalledWith(JOB);
+  expect(
+    await screen.findByRole("heading", { name: "Import finished" }, { timeout: 5_000 }),
+  ).toBeInTheDocument();
+  // The runs list refreshes and says the run is done: the panel and its report stay.
+  await vi.waitFor(() => expect(runsCalls).toBeGreaterThanOrEqual(2));
+  await vi.waitFor(() => expect(screen.getAllByText("Done").length).toBeGreaterThan(0));
+  expect(screen.getByRole("heading", { name: "Import finished" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /Open report/ })).toBeInTheDocument();
+}, 10_000);
+
+test("New import moves focus to the start card's heading", async () => {
+  stubRoutes({
+    "/api/v1/import/runs": () => json({ items: [run({ job_id: JOB })] }),
+    [`/api/v1/import/jobs/${JOB}`]: () =>
+      json({ job_id: JOB, status: "done", attempts: 1, run: run({ job_id: JOB }) }),
+  });
+  renderWithRouter(<Harness initial={JOB} />);
+  await screen.findByRole("heading", { name: "Import finished" });
+  await userEvent.click(screen.getByRole("button", { name: "New import" }));
+  const heading = await screen.findByRole("heading", { name: "New import" });
+  expect(document.activeElement).toBe(heading);
+});
+
+/** An XHR that answers every send with `status` and `body` on the next task. */
+function stubXhr(status: number, body: unknown) {
+  class Xhr {
+    status = 0;
+    responseText = "";
+    withCredentials = false;
+    upload = { onprogress: null };
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onabort: (() => void) | null = null;
+    open() {}
+    setRequestHeader() {}
+    getResponseHeader(k: string) {
+      return k.toLowerCase() === "content-type"
+        ? status >= 400
+          ? "application/problem+json"
+          : "application/json"
+        : null;
+    }
+    send() {
+      setTimeout(() => {
+        this.status = status;
+        this.responseText = JSON.stringify(body);
+        this.onload?.();
+      }, 0);
+    }
+    abort() {}
+  }
+  vi.stubGlobal("XMLHttpRequest", Xhr);
+}
+
+async function chooseAndStart() {
+  const user = userEvent.setup();
+  const input = await vi.waitFor(() => {
+    const el = document.querySelector<HTMLInputElement>("[data-slot=import-wxr] input[type=file]");
+    if (!el) throw new Error("no input yet");
+    return el;
+  });
+  await user.upload(input, new File(["<rss/>"], "a.xml", { type: "text/xml" }));
+  await user.click(screen.getByRole("button", { name: "Start import" }));
+}
+
+test("starting moves focus to the run panel's heading", async () => {
+  stubXhr(202, { job_id: JOB, status: "queued", attempts: 0 });
+  stubRoutes({
+    "/api/v1/import/runs": () => json({ items: [] }),
+    [`/api/v1/import/jobs/${JOB}`]: () => json({ job_id: JOB, status: "queued", attempts: 0 }),
+  });
+  renderWithRouter(<Harness />);
+  await chooseAndStart();
+  const heading = await screen.findByRole("heading", { name: "Waiting for a worker" });
+  await vi.waitFor(() => expect(document.activeElement).toBe(heading));
+});
+
+test("a busy start offers the running import, never following it on its own", async () => {
+  stubXhr(409, { type: "/api/v1/problems/conflict", title: "c", status: 409, detail: "" });
+  let runsCalls = 0;
+  stubRoutes({
+    "/api/v1/import/runs": () => json({ items: runsCalls++ === 0 ? [] : [running()] }),
+    [`/api/v1/import/jobs/${JOB}`]: () =>
+      json({ job_id: JOB, status: "running", attempts: 1, run: running() }),
+  });
+  const onJob = vi.fn();
+  renderWithRouter(<Harness onJob={onJob} />);
+  await chooseAndStart();
+  const show = await screen.findByRole("button", { name: "Show the running import" });
+  expect(onJob).not.toHaveBeenCalled();
+  await userEvent.click(show);
+  expect(await screen.findByRole("heading", { name: "Importing" })).toBeInTheDocument();
+});
+
+test("a busy start without a running run links to the queued import jobs", async () => {
+  stubXhr(409, { type: "/api/v1/problems/conflict", title: "c", status: 409, detail: "" });
+  stubRoutes({ "/api/v1/import/runs": () => json({ items: [] }) });
+  renderWithRouter(<Harness />);
+  await chooseAndStart();
+  const link = await screen.findByRole("link", { name: "See the queued import jobs" });
+  expect(link.getAttribute("href")).toBe("/admin/system/jobs?status=queued&kind=import.wordpress");
+});

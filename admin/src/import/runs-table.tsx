@@ -5,10 +5,10 @@
 
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { cn } from "cn";
-import { DownloadIcon, ExternalLinkIcon, HistoryIcon } from "lucide-react";
+import { HistoryIcon } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { type ImportRunDto, importRunsQuery, reportUrls } from "@/api/import";
+import { type ImportRunDto, importRunsQuery } from "@/api/import";
 import { DataTable } from "@/components/kit/data-table";
 import { type DataTableColumn, dataTableColumns } from "@/components/kit/data-table-features";
 import { EmptyState } from "@/components/kit/empty-state";
@@ -17,7 +17,7 @@ import { RelativeTime } from "@/components/kit/relative-time";
 import { Button } from "@/components/ui/button";
 import { uiLocale } from "@/lib/locale";
 import { countTotals } from "./import-model";
-import { DryRunBadge } from "./run-panel";
+import { DryRunBadge, ReportLinks } from "./parts";
 
 const RUN_STATES = ["running", "done", "failed", "abandoned"] as const;
 type RunState = (typeof RUN_STATES)[number];
@@ -236,35 +236,4 @@ function useColumns(): DataTableColumn<ImportRunDto>[] {
       }),
     ];
   }, [t]);
-}
-
-/** A run's report: the page in a new tab, the JSON as a download. */
-function ReportLinks({ run }: { run: ImportRunDto }) {
-  const { t } = useTranslation("import");
-  const urls = reportUrls(run.id);
-  return (
-    <span className="flex items-center gap-1">
-      <Button asChild variant="ghost" size="sm" className="pointer-coarse:h-11">
-        <a
-          href={urls.html}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={t("runs.htmlOn", { source: run.source })}
-        >
-          {t("runs.html")}
-          <ExternalLinkIcon data-icon="inline-end" />
-        </a>
-      </Button>
-      <Button asChild variant="ghost" size="sm" className="pointer-coarse:h-11">
-        <a
-          href={urls.json}
-          download={`import-${run.id}.json`}
-          aria-label={t("runs.jsonOn", { source: run.source })}
-        >
-          <DownloadIcon data-icon="inline-start" />
-          {t("runs.json")}
-        </a>
-      </Button>
-    </span>
-  );
 }

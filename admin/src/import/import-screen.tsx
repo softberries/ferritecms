@@ -1,17 +1,22 @@
 // The Import screen (07 §3 Import, P32; `import`): the page header, then either the start
 // card or, while a job is followed, the run panel, then the runs table. The job followed
-// is the URL's `?job=`, or else the job of the newest run if it still runs (an import
-// started elsewhere, or before a reload), so the page never offers a second start beside
-// one in progress. A finished job stays on show until "New import".
+// is the URL's `?job=`. When the page opens and the newest run is still running (an
+// import started elsewhere, or before a reload), its job is followed and pinned in the
+// URL, so the finished panel and its report stay on show; a run that appears later (a
+// busy start) is offered, never followed on its own. A finished job stays until "New
+// import". Focus moves to the panel's heading after a start and to the start card's
+// heading after "New import".
 
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
+import { Link } from "@tanstack/react-router";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { importRunsQuery } from "@/api/import";
+import { IMPORT_WORDPRESS_KIND, importRunsQuery } from "@/api/import";
 import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import { ForbiddenState } from "@/components/kit/forbidden-state";
 import { PageHeader } from "@/components/kit/page-header";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RunPanel } from "./run-panel";
 import { RunsTable } from "./runs-table";
@@ -28,14 +33,18 @@ export function ImportScreen({ job, setJob }: ImportScreenProps) {
   const queryClient = useQueryClient();
   // The runs table's query (one request): is the newest run still running?
   const runs = useInfiniteQuery(importRunsQuery);
-  // Jobs "New import" put away: never followed again from the runs list.
-  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
   const newest = runs.data?.pages[0]?.items[0];
-  const running =
-    newest?.state === "running" && newest.job_id && !dismissed.has(newest.job_id)
-      ? newest.job_id
-      : undefined;
-  const followed = job ?? running;
+  const runningJob = newest?.state === "running" ? (newest.job_id ?? undefined) : undefined;
+  // Decided once, when the runs first arrive: the job of a run already running then.
+  // `null` until decided.
+  const [opened, setOpened] = useState<string | undefined | null>(null);
+  if (opened === null && runs.data) setOpened(runningJob);
+  const followed = job ?? opened ?? undefined;
+  useEffect(() => {
+    if (!job && opened) setJob(opened);
+  }, [job, opened, setJob]);
+  // Where focus goes when the start card and the panel swap.
+  const [focus, setFocus] = useState<"panel" | "start" | null>(null);
   const refreshRuns = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: qk.import.runs });
   }, [queryClient]);
@@ -57,9 +66,11 @@ export function ImportScreen({ job, setJob }: ImportScreenProps) {
         <RunPanel
           key={followed}
           jobId={followed}
+          focusHeading={focus === "panel"}
           onSettled={refreshRuns}
           onDismiss={() => {
-            setDismissed((d) => new Set(d).add(followed));
+            setOpened(undefined);
+            setFocus("start");
             refreshRuns();
             setJob(undefined);
           }}
@@ -75,12 +86,39 @@ export function ImportScreen({ job, setJob }: ImportScreenProps) {
         </div>
       ) : (
         <StartCard
+          focusHeading={focus === "start"}
           onStarted={(started) => {
             queryClient.setQueryData(qk.import.job(started.job_id), started);
+            setFocus("panel");
             setJob(started.job_id);
             refreshRuns();
           }}
           onBusy={refreshRuns}
+          busyAction={
+            runningJob ? (
+              <Button
+                variant="outline"
+                className="pointer-coarse:h-11"
+                onClick={() => {
+                  setFocus("panel");
+                  setJob(runningJob);
+                }}
+              >
+                {t("start.busyShow")}
+              </Button>
+            ) : (
+              // A queued job has no run yet: the System screen's job list shows it.
+              <Button asChild variant="outline" className="pointer-coarse:h-11">
+                <Link
+                  to="/system/$tab"
+                  params={{ tab: "jobs" }}
+                  search={{ status: "queued", kind: IMPORT_WORDPRESS_KIND }}
+                >
+                  {t("start.busyJobs")}
+                </Link>
+              </Button>
+            )
+          }
         />
       )}
       <RunsTable />

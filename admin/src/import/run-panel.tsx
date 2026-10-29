@@ -2,7 +2,7 @@
 // running (`importJobQuery`) and left alone once it is done or dead. Its phase, the step
 // stepper, when it started and its last heartbeat, the counts per kind, the error, and
 // the report: the page in a new tab, the JSON as a download (a failed run's partial
-// report too). Phase changes are announced to screen readers.
+// report too). Phase changes are announced once, by a live region that mounts empty.
 
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
@@ -10,8 +10,6 @@ import {
   CheckIcon,
   CircleAlertIcon,
   CircleCheckIcon,
-  DownloadIcon,
-  ExternalLinkIcon,
   HourglassIcon,
   LoaderCircleIcon,
   RotateCwIcon,
@@ -25,7 +23,6 @@ import {
   type ImportJobDto,
   type ImportRunDto,
   importJobQuery,
-  reportUrls,
 } from "@/api/import";
 import { ApiError } from "@/api/problem";
 import { Alert } from "@/auth/auth-layout";
@@ -47,6 +44,7 @@ import {
   stalled,
   stepStates,
 } from "./import-model";
+import { DryRunBadge, ReportActions } from "./parts";
 
 export interface RunPanelProps {
   jobId: string;
@@ -54,14 +52,17 @@ export interface RunPanelProps {
   onSettled?: (job: ImportJobDto) => void;
   /** "New import": stop following this job. */
   onDismiss: () => void;
+  /** Move focus to the panel's heading once it shows (the start card just went away). */
+  focusHeading?: boolean;
 }
 
 const TERMINAL: ReadonlySet<ImportPhase> = new Set(["done", "failed"]);
 
-export function RunPanel({ jobId, onSettled, onDismiss }: RunPanelProps) {
+export function RunPanel({ jobId, onSettled, onDismiss, focusHeading = false }: RunPanelProps) {
   const { t } = useTranslation("import");
   const job = useQuery(importJobQuery(jobId));
   const phase = job.data ? importPhase(job.data) : null;
+  const step = job.data?.run?.step ?? null;
   const terminal = job.data ? job.data.status === "done" || job.data.status === "dead" : false;
   const settledFor = useRef<string | null>(null);
   useEffect(() => {
@@ -69,6 +70,26 @@ export function RunPanel({ jobId, onSettled, onDismiss }: RunPanelProps) {
     settledFor.current = jobId;
     onSettled?.(job.data);
   }, [job.data, terminal, jobId, onSettled]);
+
+  // The live region renders empty; its text is written after it is in the page (and on
+  // each phase or step change), so the first phase ("Import queued.") is read too.
+  const live = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!phase || !live.current) return;
+    live.current.textContent =
+      phase === "running"
+        ? t("run.announce.running", { step: step ? t(`run.step.${step as "parse"}`) : "" })
+        : t(`run.announce.${phase}`);
+  }, [phase, step, t]);
+
+  const heading = useRef<HTMLHeadingElement>(null);
+  const focused = useRef(false);
+  const shown = phase !== null;
+  useEffect(() => {
+    if (!focusHeading || !shown || focused.current) return;
+    focused.current = true;
+    heading.current?.focus();
+  }, [focusHeading, shown]);
 
   if (job.isError && !job.data) {
     if (job.error instanceof ApiError && job.error.status === 404) {
@@ -107,19 +128,25 @@ export function RunPanel({ jobId, onSettled, onDismiss }: RunPanelProps) {
       aria-label={t("run.label")}
       className="flex min-w-0 flex-col rounded-xl border bg-card shadow-1"
     >
-      <span className="sr-only" aria-live="polite" aria-atomic="true">
-        {phase === "running"
-          ? t("run.announce.running", {
-              step: run?.step ? t(`run.step.${run.step as "parse"}`) : "",
-            })
-          : t(`run.announce.${phase}`)}
-      </span>
+      <span
+        ref={live}
+        data-slot="import-run-live"
+        className="sr-only"
+        aria-live="polite"
+        aria-atomic="true"
+      />
       <header className="flex min-w-0 flex-col gap-4 border-b px-5 py-4 md:flex-row md:items-start md:justify-between">
         <div className="flex min-w-0 items-start gap-3">
           <PhaseIcon phase={phase} />
           <div className="flex min-w-0 flex-col gap-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-md font-medium text-foreground">{t(`run.phase.${phase}`)}</h2>
+              <h2
+                ref={heading}
+                tabIndex={-1}
+                className="rounded-sm text-md font-medium text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+              >
+                {t(`run.phase.${phase}`)}
+              </h2>
               {run?.dry_run ? <DryRunBadge /> : null}
             </div>
             <p className="text-sm text-muted-foreground">
@@ -160,7 +187,6 @@ export function RunPanel({ jobId, onSettled, onDismiss }: RunPanelProps) {
         {error ? (
           <div
             data-slot="import-run-error"
-            role={phase === "failed" ? "alert" : undefined}
             className="flex min-w-0 flex-col gap-1.5 rounded-lg border border-destructive/40 bg-destructive/6 px-3 py-2.5"
           >
             <span className="flex items-center gap-2 text-sm font-medium text-foreground">
@@ -181,44 +207,10 @@ export function RunPanel({ jobId, onSettled, onDismiss }: RunPanelProps) {
           <Button variant="outline" className="pointer-coarse:h-11" onClick={onDismiss}>
             {t("run.another")}
           </Button>
-          {run?.report ? <ReportLinks run={run} partial={phase === "failed"} /> : null}
+          {run?.report ? <ReportActions run={run} partial={phase === "failed"} /> : null}
         </footer>
       ) : null}
     </section>
-  );
-}
-
-function ReportLinks({ run, partial }: { run: ImportRunDto; partial: boolean }) {
-  const { t } = useTranslation("import");
-  const urls = reportUrls(run.id);
-  return (
-    <>
-      <Button asChild variant="outline" className="pointer-coarse:h-11">
-        <a href={urls.json} download={`import-${run.id}.json`}>
-          <DownloadIcon data-icon="inline-start" />
-          {t("run.downloadJson")}
-        </a>
-      </Button>
-      <Button asChild className="pointer-coarse:h-11">
-        <a href={urls.html} target="_blank" rel="noopener noreferrer">
-          {partial ? t("run.openPartialReport") : t("run.openReport")}
-          <ExternalLinkIcon data-icon="inline-end" />
-          <span className="sr-only">{t("run.newTab")}</span>
-        </a>
-      </Button>
-    </>
-  );
-}
-
-export function DryRunBadge() {
-  const { t } = useTranslation("import");
-  return (
-    <span
-      data-slot="dry-run"
-      className="inline-flex h-6 shrink-0 items-center rounded-full border border-dashed px-2 text-xs font-medium whitespace-nowrap text-muted-foreground"
-    >
-      {t("run.dryRun")}
-    </span>
   );
 }
 

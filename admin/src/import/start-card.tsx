@@ -1,10 +1,13 @@
 // The start card (P32): the WordPress export (required) and a zip of its uploads
 // (optional), each a single-file `DropZone`; the options as switches, the category and
 // tag bases behind "Advanced"; one primary "Start import". The upload is an XHR with
-// progress (`uploadWordpressImport`) under one `Idempotency-Key`: a retry after a network
-// error, an unreadable reply or a cancel reuses it (the server replays a finished
-// start instead of queuing a second import); changing a file or an option, a refusal
-// and a start make a new one.
+// progress (`uploadWordpressImport`) under one `Idempotency-Key`. The key is kept for a
+// retry after a network error, an unreadable reply, a `5xx`, a cancel, or a `409` that
+// says the same key's request is still being received (retried once on its own after
+// `Retry-After`, at most 10 s): the server replays a finished start instead of queuing a
+// second import. Changing a file or an option, a `4xx` refusal and a start make a new
+// key. Focus moves to the progress while the files go up and back to the card's heading
+// when the upload ends; progress is announced at 0, 25, 50, 75 and 100 %.
 
 import { cn } from "cn";
 import { ChevronDownIcon, FileArchiveIcon, FileCodeIcon, RotateCwIcon, XIcon } from "lucide-react";
@@ -25,10 +28,29 @@ import { MAX_BASE, baseIsValid } from "./import-model";
 /** The server's limits (`MAX_WXR`, `MAX_UPLOADS`). */
 export const MAX_WXR_BYTES = 512 * 1024 * 1024;
 export const MAX_UPLOADS_BYTES = 4 * 1024 * 1024 * 1024;
+/** The longest wait before the automatic retry of an in-progress `409`. */
+const MAX_AUTO_RETRY_S = 10;
 
 type Failure =
-  | { kind: "network" | "reply" | "busy" | "inProgress" | "forbidden" | "unknown"; detail?: string }
+  | {
+      kind:
+        | "network"
+        | "reply"
+        | "server"
+        | "busy"
+        | "inProgress"
+        | "inProgressWait"
+        | "forbidden"
+        | "unknown";
+      detail?: string;
+    }
   | { kind: "fields" };
+const RETRYABLE: ReadonlySet<Failure["kind"]> = new Set([
+  "network",
+  "reply",
+  "server",
+  "inProgress",
+]);
 
 type BooleanOption = "dry_run" | "keep_permalinks" | "site_options" | "fetch_media";
 const SWITCHES = [
@@ -43,9 +65,13 @@ export interface StartCardProps {
   onStarted: (job: ImportJobDto) => void;
   /** `409`: another import is queued or running (the screen refreshes the runs). */
   onBusy?: () => void;
+  /** Shown under the busy message: the way to what is running (the screen decides). */
+  busyAction?: ReactNode;
+  /** Move focus to the card's heading when it mounts ("New import"). */
+  focusHeading?: boolean;
 }
 
-export function StartCard({ onStarted, onBusy }: StartCardProps) {
+export function StartCard({ onStarted, onBusy, busyAction, focusHeading = false }: StartCardProps) {
   const { t } = useTranslation("import");
   const [wxr, setWxr] = useState<File | null>(null);
   const [uploads, setUploads] = useState<File | null>(null);
@@ -57,13 +83,38 @@ export function StartCard({ onStarted, onBusy }: StartCardProps) {
   const [progress, setProgress] = useState<number | null>(null);
   const key = useRef<string>(crypto.randomUUID());
   const abort = useRef<AbortController | null>(null);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const progressRegion = useRef<HTMLDivElement>(null);
   const advancedId = useId();
   const uploading = progress !== null;
 
-  useEffect(() => () => abort.current?.abort(), []);
+  const clearRetry = () => {
+    if (retryTimer.current !== null) clearTimeout(retryTimer.current);
+    retryTimer.current = null;
+  };
+  useEffect(
+    () => () => {
+      abort.current?.abort();
+      if (retryTimer.current !== null) clearTimeout(retryTimer.current);
+    },
+    [],
+  );
+  useEffect(() => {
+    if (focusHeading) heading.current?.focus();
+  }, [focusHeading]);
+  // Focus follows the upload: to the progress when it starts, back to the heading when it
+  // ends (the controls it came from were disabled or gone meanwhile).
+  const wasUploading = useRef(false);
+  useEffect(() => {
+    if (uploading && !wasUploading.current) progressRegion.current?.focus();
+    if (!uploading && wasUploading.current) heading.current?.focus();
+    wasUploading.current = uploading;
+  }, [uploading]);
 
   /** Anything the request carries changed: a new request, a new key. */
   const changed = () => {
+    clearRetry();
     key.current = crypto.randomUUID();
     setFailure(null);
   };
@@ -101,8 +152,10 @@ export function StartCard({ onStarted, onBusy }: StartCardProps) {
     setUploads(file);
   };
 
-  const start = async () => {
+  /** `auto`: the one automatic retry of an in-progress `409`. */
+  const start = async (auto = false) => {
     if (!wxr || uploading) return;
+    clearRetry();
     const bad = {
       ...(baseIsValid(options.category_base)
         ? {}
@@ -133,12 +186,20 @@ export function StartCard({ onStarted, onBusy }: StartCardProps) {
       if (ctl.signal.aborted) return;
       setFailure(failureOf(error));
       if (error instanceof ApiError) {
-        // The same key's request is still being received: retry with it. Anything
-        // else the server refused; the next attempt is a new request.
-        if (!(error.status === 409 && error.retryAfter !== null)) {
-          key.current = crypto.randomUUID();
+        const inProgress = error.status === 409 && error.retryAfter !== null;
+        if (inProgress && !auto) {
+          // The same key's request is still being received: try again once, on its own.
+          setFailure({ kind: "inProgressWait" });
+          const wait = Math.min(error.retryAfter ?? 0, MAX_AUTO_RETRY_S) * 1000;
+          retryTimer.current = setTimeout(() => {
+            retryTimer.current = null;
+            void start(true);
+          }, wait);
         }
-        if (error.status === 409 && error.retryAfter === null) onBusy?.();
+        // A `4xx` refusal: the next attempt is a new request. A `5xx` and an in-progress
+        // `409` keep the key (the server may have the start, or be finishing it).
+        if (!inProgress && error.status < 500) key.current = crypto.randomUUID();
+        if (error.status === 409 && !inProgress) onBusy?.();
         const fields = error.fieldErrors();
         if (error.status === 413 && (fields.wxr || fields.uploads)) {
           setFileErrors({
@@ -162,9 +223,18 @@ export function StartCard({ onStarted, onBusy }: StartCardProps) {
     }
   };
 
-  const retryable =
-    failure?.kind === "network" || failure?.kind === "reply" || failure?.kind === "inProgress";
+  const retryable = failure !== null && RETRYABLE.has(failure.kind);
   const percent = Math.round((progress ?? 0) * 100);
+  // What the live region says: only at the start, each quarter and the end.
+  const milestone = progress === null ? null : Math.min(100, Math.floor(progress * 4) * 25);
+  const announced =
+    milestone === null
+      ? ""
+      : milestone === 0
+        ? t("start.uploadStarted")
+        : milestone === 100
+          ? t("start.uploadFinished")
+          : t("start.uploadMilestone", { percent: milestone });
 
   return (
     <section
@@ -173,7 +243,12 @@ export function StartCard({ onStarted, onBusy }: StartCardProps) {
       className="flex min-w-0 flex-col rounded-xl border bg-card shadow-1"
     >
       <div className="flex flex-col gap-1 border-b px-5 py-4">
-        <h2 id={`${advancedId}-title`} className="text-md font-medium text-foreground">
+        <h2
+          ref={heading}
+          id={`${advancedId}-title`}
+          tabIndex={-1}
+          className="rounded-sm text-md font-medium text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
           {t("start.label")}
         </h2>
       </div>
@@ -311,17 +386,32 @@ export function StartCard({ onStarted, onBusy }: StartCardProps) {
 
       <div className="flex min-w-0 flex-col gap-3 border-t px-5 py-4">
         {failure && failure.kind !== "fields" ? (
-          <Alert tone="error">
+          <Alert tone={failure.kind === "inProgressWait" ? "warning" : "error"}>
             {t(`start.errors.${failure.kind}`)}
             {failure.detail ? (
               <span className="block text-muted-foreground">{failure.detail}</span>
             ) : null}
           </Alert>
         ) : null}
+        {failure?.kind === "busy" && busyAction ? (
+          <div data-slot="import-busy-action" className="flex flex-wrap gap-2">
+            {busyAction}
+          </div>
+        ) : null}
         {uploading ? (
-          <div data-slot="import-progress" className="flex min-w-0 flex-col gap-2">
+          <div
+            ref={progressRegion}
+            tabIndex={-1}
+            role="group"
+            aria-label={t("start.uploadLabel")}
+            data-slot="import-progress"
+            className="flex min-w-0 flex-col gap-2 rounded-sm focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          >
+            <span data-slot="import-progress-live" className="sr-only" aria-live="polite">
+              {announced}
+            </span>
             <div className="flex items-center justify-between gap-3 text-sm">
-              <span className="text-foreground tabular-nums" aria-live="polite">
+              <span className="text-foreground tabular-nums">
                 {t("start.uploading", { percent })}
               </span>
               <Button
@@ -371,6 +461,7 @@ function failureOf(error: unknown): Failure {
     if (error.status === 409) return { kind: error.retryAfter !== null ? "inProgress" : "busy" };
     if (error.status === 403) return { kind: "forbidden" };
     const detail = error.problem.detail || error.problem.title;
+    if (error.status >= 500) return { kind: "server", ...(detail ? { detail } : {}) };
     return { kind: "unknown", ...(detail ? { detail } : {}) };
   }
   return { kind: "unknown" };

@@ -43,6 +43,7 @@ test("import_export_a_through_the_screen", async ({
   const api = await ContentApi.as(siteKey, site.url, "admin");
   const before = await api.getSettings();
   let started = false;
+  let thrown: { error: unknown } | null = null;
   const page = await as("admin");
   try {
     // The sidebar's Import item, between Plugins and Settings, and `g i`.
@@ -88,6 +89,8 @@ test("import_export_a_through_the_screen", async ({
     started = true;
     expect(request.headers()["idempotency-key"]).toMatch(/^[0-9a-f-]{36}$/);
     await expect(page).toHaveURL(/\/admin\/import\?job=[0-9a-f-]{36}$/);
+    // Focus moved from the gone start card to the panel's heading.
+    await expect(panel(page).locator("header h2")).toBeFocused();
 
     // The panel follows the job (a poll every 2 s) to the end of the run.
     await expect(panel(page).getByRole("heading", { name: "Import finished" })).toBeVisible({
@@ -109,8 +112,11 @@ test("import_export_a_through_the_screen", async ({
     expect(href).toMatch(/^\/api\/v1\/import\/runs\/[0-9a-f-]{36}\/report\.html$/);
     // The report is served under `sandbox` (no scripts): the browser refuses the guard's
     // own init script there and logs it.
+    const escaped = new URL(href, site.url).href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     guard.allow(
-      /Blocked script execution in '[^']*\/report\.html' because the document's frame is sandboxed/,
+      new RegExp(
+        `^Blocked script execution in '${escaped}' because the document's frame is sandboxed`,
+      ),
     );
     const [tab] = await Promise.all([page.context().waitForEvent("page"), report.click()]);
     await tab.waitForLoadState();
@@ -136,26 +142,50 @@ test("import_export_a_through_the_screen", async ({
     // "New import" brings the start card back.
     await panel(page).getByRole("button", { name: "New import" }).click();
     await expect(page).toHaveURL(/\/admin\/import$/);
+    await expect(
+      screen(page).locator("[data-slot=import-start]").getByRole("heading", { name: "New import" }),
+    ).toBeFocused();
     await expect(screen(page).getByRole("button", { name: "Start import" })).toBeVisible();
-  } finally {
-    await api.patchSettings(Object.fromEntries(RESTORED.map((k) => [k, before[k] ?? null])));
+  } catch (error) {
+    thrown = { error };
+  }
+  // The cleanup: every step runs whatever the one before did; a cleanup failure is
+  // reported only when the test itself passed, so it never hides the real error.
+  {
+    const problems: unknown[] = [];
+    const step = async (run: () => Promise<unknown>) => {
+      try {
+        await run();
+      } catch (error) {
+        problems.push(error);
+      }
+    };
+    await step(() =>
+      api.patchSettings(Object.fromEntries(RESTORED.map((k) => [k, before[k] ?? null]))),
+    );
     if (started) {
       // Putting the structure back moves every dated post to `/%slug%/` and redirects the
       // dated paths (P30). Once the job has made this post's, remove every `slug-change`
       // redirect from or to a dated path, as the Settings spec does.
-      await expect
-        .poll(
-          async () =>
-            (await api.listRedirects("every-core-block")).some((r) => r.source === OLD_URL),
-          { timeout: 15_000 },
-        )
-        .toBe(true);
+      await step(() =>
+        expect
+          .poll(
+            async () =>
+              (await api.listRedirects("every-core-block")).some((r) => r.source === OLD_URL),
+            { timeout: 15_000 },
+          )
+          .toBe(true),
+      );
       const shape = /^\/\d{4}\/\d{2}\/[^/]+\/$/;
       const leaked = (r: Redirect) =>
         r.origin === "slug-change" && (shape.test(r.source) || shape.test(r.target));
-      for (const r of (await api.allRedirects()).filter(leaked)) await api.deleteRedirect(r.id);
+      await step(async () => {
+        for (const r of (await api.allRedirects()).filter(leaked)) await api.deleteRedirect(r.id);
+      });
     }
-    await api.dispose();
+    await step(() => api.dispose());
+    if (thrown) throw thrown.error;
+    if (problems.length > 0) throw problems[0];
   }
 });
 

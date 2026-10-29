@@ -43,13 +43,20 @@
     "needsExport": "Choose an export to start.",
     "uploading": "Uploading {{percent}}%",
     "uploadLabel": "Upload progress",
+    "uploadStarted": "Upload started",
+    "uploadMilestone": "Upload {{percent}}% done",
+    "uploadFinished": "Upload finished",
     "cancel": "Cancel upload",
     "retry": "Retry",
+    "busyShow": "Show the running import",
+    "busyJobs": "See the queued import jobs",
     "errors": {
       "network": "The upload stopped: no answer from the server. Retry sends the same files again without starting a second import.",
       "reply": "The server took the files but its answer could not be read. Retry to see the import.",
+      "server": "The server could not start the import. Retry sends the same request again without starting a second import.",
       "busy": "Another import is queued or running. Wait for it to finish, then start again.",
       "inProgress": "This upload is still being received. Retry in a few seconds.",
+      "inProgressWait": "This upload is still being received. Trying again in a moment…",
       "forbidden": "Your account may not import.",
       "unknown": "The import could not start."
     }

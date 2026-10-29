@@ -39,6 +39,9 @@ export const DEFAULT_IMPORT_OPTIONS: ImportOptionsDto = {
   tag_base: "tag",
 };
 
+/** The job kind an import runs as (the System screen's job filter). */
+export const IMPORT_WORDPRESS_KIND = "import.wordpress";
+
 /** How often a queued or running job is polled. */
 export const IMPORT_POLL_MS = 2_000;
 /** The runs the screen lists. */
