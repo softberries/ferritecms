@@ -17,7 +17,7 @@ use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, InstalledPlugin, InstalledTheme, Job, JobId, JobStatus,
     Media, NewJob, NodeId, Timestamp,
 };
-use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode};
+use ferrite_media::{Backend, MediaConfig, MediaStore, OwnerMarker, PublicUrlMode};
 use ferrite_store::{LOCK_GC, Store};
 use ferrite_store_tests::fixtures::{fixture_user, new_post};
 use ferrite_store_tests::import::new_run;
@@ -63,10 +63,26 @@ fn opts(now: Timestamp, grace: Duration) -> GcOptions {
         grace,
         dry_run: false,
         now,
+        claim: false,
     }
 }
 
+/// One pass with the store already owned by `store`'s install (R19: a pass that finds no
+/// owner marker deletes nothing, so the tests of the deleting steps start owned).
 async fn run(store: &dyn Store, media: &MediaStore, opts: &GcOptions) -> GcReport {
+    if media.read_owner().await.unwrap().is_none() {
+        let marker = OwnerMarker {
+            install_id: gc::install_id(store).await.unwrap(),
+            site_id: "test".into(),
+            claimed_at: "2026-10-29T00:00:00.000000Z".into(),
+        };
+        assert!(media.write_owner(&marker, false).await.unwrap());
+    }
+    raw_run(store, media, opts).await
+}
+
+/// One pass as it comes, owner marker or not.
+async fn raw_run(store: &dyn Store, media: &MediaStore, opts: &GcOptions) -> GcReport {
     gc::run(store, media, opts)
         .await
         .unwrap()
@@ -510,6 +526,7 @@ async fn gc_dry_run_changes_nothing(db: Arc<TestDb>) {
             grace: WEEK,
             dry_run: true,
             now: t1,
+            claim: false,
         },
     )
     .await
@@ -526,6 +543,8 @@ async fn gc_dry_run_changes_nothing(db: Arc<TestDb>) {
             deleted_blob_bytes: 5,
             deleted_tmp: 1,
             failed: 0,
+            deletes_skipped: None,
+            claimed_from: None,
         }
     );
     assert_eq!(
@@ -537,6 +556,252 @@ async fn gc_dry_run_changes_nothing(db: Arc<TestDb>) {
         assert!(has_blob(&m.store, hash).await);
     }
     assert!(tmp_exists(&m, "leftover"));
+}
+
+/// A second database (`B`) of the same backend, for the ownership tests.
+async fn second(db: &TestDb) -> TestDb {
+    if db.is_sqlite() {
+        TestDb::sqlite().await
+    } else {
+        TestDb::postgres().await.expect("postgres is configured")
+    }
+}
+
+/// R16: two sites (two databases) on one media store, as a restored or staging copy is.
+/// Site A's first pass writes the owner marker and deletes nothing (R19); its next pass
+/// reads it and may delete. Site B then marks its rows and cleans `tmp/` but deletes
+/// nothing (not A's row-less blobs, not its own expired rows) and says whose store it is.
+/// A dry-run claim writes nothing and names the owner it would replace; `claim` takes the
+/// store over, after which B deletes and A no longer does.
+async fn gc_second_site_on_one_store_deletes_nothing(db: Arc<TestDb>) {
+    let a = db.store();
+    let other = second(&db).await;
+    let b = other.store();
+    let m = media();
+    let install_a = gc::install_id(a).await.unwrap();
+    let install_b = gc::install_id(b).await.unwrap();
+    assert_ne!(install_a, install_b);
+
+    let a_row = artifact(a, &m.store, "uploaded by site A", ArtifactKind::Media).await;
+    let b_row = artifact(b, &m.store, "uploaded by site B", ArtifactKind::Media).await;
+    let t0 = future();
+    let first = raw_run(a, &m.store, &opts(t0, WEEK)).await;
+    assert!(
+        first
+            .deletes_skipped
+            .as_deref()
+            .is_some_and(|w| w.contains("wrote ferrite-owner.json")),
+        "{first:?}"
+    );
+    let marker = m.store.read_owner().await.unwrap().expect("marker written");
+    assert_eq!(marker.install_id, install_a);
+    assert!(m.dir.path().join("ferrite-owner.json").is_file());
+    let owned = raw_run(a, &m.store, &opts(t0, WEEK)).await;
+    assert_eq!(
+        owned.deletes_skipped, None,
+        "the next pass reads its marker"
+    );
+
+    // B, a month later: A's row-less (for B) blob and B's own expired row both stay.
+    tmp_object(&m, "leftover");
+    let month = later(t0, 30 * DAY);
+    raw_run(b, &m.store, &opts(t0, DAY)).await;
+    let skipped = raw_run(b, &m.store, &opts(month, DAY)).await;
+    assert!(
+        skipped
+            .deletes_skipped
+            .as_deref()
+            .is_some_and(|w| w.contains(&install_a)),
+        "{skipped:?}"
+    );
+    assert_eq!(
+        (skipped.deleted_rows, skipped.deleted_blobs),
+        (0, 0),
+        "{skipped:?}"
+    );
+    assert!(
+        skipped
+            .to_string()
+            .contains("deletes skipped: the media store belongs to install"),
+        "{skipped}"
+    );
+    assert!(has_blob(&m.store, &a_row.hash).await);
+    assert!(has_blob(&m.store, &b_row.hash).await);
+    assert!(row(b, &b_row.hash).await.is_some());
+    assert!(!tmp_exists(&m, "leftover"), "tmp/ is still cleaned");
+
+    // A dry-run claim reports what B could delete, names A, and writes no marker.
+    let dry = gc::run(
+        b,
+        &m.store,
+        &GcOptions {
+            grace: DAY,
+            dry_run: true,
+            now: month,
+            claim: true,
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(dry.deletes_skipped, None);
+    assert!(
+        dry.claimed_from
+            .as_deref()
+            .is_some_and(|f| f.contains(&install_a)),
+        "{dry:?}"
+    );
+    assert_eq!((dry.deleted_rows, dry.deleted_blobs), (1, 1), "{dry:?}");
+    assert_eq!(
+        m.store.read_owner().await.unwrap().unwrap().install_id,
+        install_a
+    );
+
+    // The claim: B owns the store and deletes; A no longer does.
+    let claimed = raw_run(
+        b,
+        &m.store,
+        &GcOptions {
+            claim: true,
+            ..opts(month, DAY)
+        },
+    )
+    .await;
+    assert_eq!(claimed.deletes_skipped, None);
+    assert!(
+        claimed
+            .to_string()
+            .contains(&format!("claimed the media store from install {install_a}")),
+        "{claimed}"
+    );
+    assert_eq!(
+        (claimed.deleted_rows, claimed.deleted_blobs),
+        (1, 1),
+        "{claimed:?}"
+    );
+    assert_eq!(
+        m.store.read_owner().await.unwrap().unwrap().install_id,
+        install_b
+    );
+    assert!(!has_blob(&m.store, &a_row.hash).await);
+    assert!(!has_blob(&m.store, &b_row.hash).await);
+    let after = raw_run(a, &m.store, &opts(later(month, DAY), DAY)).await;
+    assert!(
+        after
+            .deletes_skipped
+            .as_deref()
+            .is_some_and(|w| w.contains(&install_b)),
+        "{after:?}"
+    );
+    assert!(
+        row(a, &a_row.hash).await.is_some(),
+        "A's row is not deleted"
+    );
+    other.teardown().await;
+}
+
+/// R19 (N1): two installs that both find no owner marker, on a store whose conditional
+/// create is not honoured (simulated by removing A's marker before B's first pass, which a
+/// `conditional_put = "disabled"` head-then-put race allows), both write one and neither
+/// deletes in that pass; then the install whose marker stands (B, the last writer)
+/// deletes from its next pass, and A never does.
+async fn gc_first_passes_without_a_marker_delete_nothing(db: Arc<TestDb>) {
+    let a = db.store();
+    let other = second(&db).await;
+    let b = other.store();
+    let m = media();
+    let stray = blob(&m.store, "row-less for both").await;
+    let now = later(future(), 30 * DAY);
+
+    let first_a = raw_run(a, &m.store, &opts(now, DAY)).await;
+    std::fs::remove_file(m.dir.path().join("ferrite-owner.json")).unwrap();
+    let first_b = raw_run(b, &m.store, &opts(now, DAY)).await;
+    for r in [&first_a, &first_b] {
+        assert!(r.deletes_skipped.is_some(), "{r:?}");
+        assert_eq!((r.deleted_rows, r.deleted_blobs), (0, 0), "{r:?}");
+    }
+    assert!(has_blob(&m.store, &stray).await);
+
+    for _ in 0..2 {
+        let again = raw_run(a, &m.store, &opts(now, DAY)).await;
+        assert!(again.deletes_skipped.is_some(), "{again:?}");
+        assert_eq!(again.deleted_blobs, 0, "{again:?}");
+        assert!(has_blob(&m.store, &stray).await);
+    }
+    let owner = raw_run(b, &m.store, &opts(now, DAY)).await;
+    assert_eq!(owner.deletes_skipped, None);
+    assert_eq!(owner.deleted_blobs, 1, "{owner:?}");
+    assert!(!has_blob(&m.store, &stray).await);
+    other.teardown().await;
+}
+
+/// R19 (N6): a marker that cannot be read skips the deletes, with the reason; `--claim`
+/// rewrites it and names what it replaced, and that pass deletes once it reads the claim
+/// back. N4: a dry run on a database without an install id stores none and writes no
+/// marker.
+async fn gc_unreadable_marker_skips_deletes(db: Arc<TestDb>) {
+    let store = db.store();
+    let m = media();
+    let stray = blob(&m.store, "row-less").await;
+    let now = later(future(), 30 * DAY);
+    std::fs::write(m.dir.path().join("ferrite-owner.json"), b"{not json").unwrap();
+    let skipped = raw_run(store, &m.store, &opts(now, DAY)).await;
+    assert!(
+        skipped
+            .deletes_skipped
+            .as_deref()
+            .is_some_and(|w| w.contains("cannot be read")),
+        "{skipped:?}"
+    );
+    assert_eq!(skipped.deleted_blobs, 0);
+    assert!(has_blob(&m.store, &stray).await);
+    let claimed = raw_run(
+        store,
+        &m.store,
+        &GcOptions {
+            claim: true,
+            ..opts(now, DAY)
+        },
+    )
+    .await;
+    assert!(
+        claimed
+            .claimed_from
+            .as_deref()
+            .is_some_and(|f| f.contains("unreadable")),
+        "{claimed:?}"
+    );
+    assert_eq!(claimed.deleted_blobs, 1, "{claimed:?}");
+
+    let other = second(&db).await;
+    other
+        .exec_raw("DELETE FROM schema_meta WHERE key = 'install_id'")
+        .await;
+    let fresh = media();
+    let dry = gc::run(
+        other.store(),
+        &fresh.store,
+        &GcOptions {
+            dry_run: true,
+            ..opts(now, DAY)
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(dry.deletes_skipped.is_some(), "{dry:?}");
+    assert_eq!(
+        other
+            .store()
+            .read()
+            .schema_meta()
+            .get("install_id")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(fresh.store.read_owner().await.unwrap(), None);
+    other.teardown().await;
 }
 
 fn gc_job() -> Job {
@@ -612,6 +877,9 @@ backend_tests_spawning!(
     gc_tmp_older_than_a_day_deleted,
     gc_dry_run_changes_nothing,
     gc_concurrent_runs_one_busy,
+    gc_second_site_on_one_store_deletes_nothing,
+    gc_first_passes_without_a_marker_delete_nothing,
+    gc_unreadable_marker_skips_deletes,
 );
 
 // ---- `ferrite media gc` ----
@@ -669,10 +937,14 @@ async fn media_gc_cli_exit_codes() {
 
     let out = ferrite(args(&["media", "gc"], data), Vec::new()).await;
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    assert_eq!(
-        String::from_utf8_lossy(&out.stdout).trim(),
-        EMPTY_LINE.replace("deleted tmp 0", "deleted tmp 1")
+    // The first pass writes the owner marker and deletes nothing but tmp/ (R19).
+    let line = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    assert!(
+        line.starts_with(&EMPTY_LINE.replace("deleted tmp 0", "deleted tmp 1"))
+            && line.contains("; deletes skipped: the media store had no owner marker"),
+        "{line}"
     );
+    assert!(media_root.join("ferrite-owner.json").is_file());
     assert!(media_root.join("tmp/fresh").exists());
     assert!(!media_root.join("tmp/old").exists());
 
@@ -730,6 +1002,14 @@ async fn media_gc_cli_busy_exit_3() {
     assert_eq!(out.status.code(), Some(3), "{}", text(&out));
     held.release().await.unwrap();
 
+    let out = ferrite(args(&["media", "gc"], dir.path()), env.clone()).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stdout)
+            .starts_with(&format!("{EMPTY_LINE}; deletes skipped:")),
+        "{}",
+        text(&out)
+    );
     let out = ferrite(args(&["media", "gc"], dir.path()), env).await;
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), EMPTY_LINE);

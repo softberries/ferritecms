@@ -380,6 +380,7 @@ fn no_unsupported_left() {
 backend_tests!(
     catalogue_matches_live_schema,
     catalogue_is_fk_ordered,
+    artifact_foreign_keys_are_gc_references,
     export_reader_encodes_neutrally,
     export_reader_pages_by_key,
     export_reader_sees_one_snapshot,

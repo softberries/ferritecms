@@ -1080,9 +1080,12 @@ pub fn render_default_toml(
             out.push_str("# secret_access_key_file = \"/run/secrets/s3_secret\"\n");
             out.push_str("# public_base_url = \"https://cdn.example.com\"\n");
             out.push_str(
-                "# How uploads are placed without a race, if your provider supports it (03 §2):\n",
+                "# How a server-side copy fails when the object exists (uploads of 8 MiB and more);\n",
             );
-            out.push_str("# copy_if_not_exists = \"header:x-amz-copy-source-if-none-match:*\"\n");
+            out.push_str(
+                "# unset = check then copy. Values per provider, with what is verified: 09 §4a.\n",
+            );
+            out.push_str("# copy_if_not_exists = \"...\"\n");
             out.push_str("# For a store that rejects If-None-Match on create:\n");
             out.push_str("# conditional_put = \"disabled\"\n\n");
         }

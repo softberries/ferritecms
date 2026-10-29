@@ -16,5 +16,8 @@ pub use error::MediaError;
 pub use image::{MAX_PIXELS, Processed, Variant, VariantSpec, default_variants, process_image};
 pub use name::sanitize_filename;
 pub use sniff::{inline_safe, is_raster_image, sniff_mime};
-pub use store::{ArtifactRef, MediaStore, ReadStream, StoredObject, validate_copy_if_not_exists};
+pub use store::{
+    ArtifactRef, MediaStore, OWNER_MARKER, OwnerMarker, ReadStream, StoredObject,
+    validate_copy_if_not_exists,
+};
 pub use strip::strip_metadata;

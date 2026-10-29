@@ -4,7 +4,7 @@ use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, IDEMPOTENCY_STALE, IdemBegin, IdempotencyKey,
     ImportMapKind, Media, Timestamp,
 };
-use ferrite_store::{Compat, Phase, SCHEMA_META_MIN_BINARY, StoreError};
+use ferrite_store::{Compat, Phase, SCHEMA_META_INSTALL_ID, SCHEMA_META_MIN_BINARY, StoreError};
 use semver::Version;
 
 use crate::{
@@ -28,6 +28,14 @@ pub async fn fresh_db_is_up_to_date(db: &TestDb) {
     let site_id = meta.get("site_id").await.unwrap().expect("site_id written");
     uuid::Uuid::parse_str(&site_id).expect("site_id is a uuid");
     assert!(meta.get("created_by_version").await.unwrap().is_some());
+    // R16: this database's own install id, never the site id (copies share that).
+    let install = meta
+        .get(SCHEMA_META_INSTALL_ID)
+        .await
+        .unwrap()
+        .expect("install_id written");
+    uuid::Uuid::parse_str(&install).expect("install_id is a uuid");
+    assert_ne!(install, site_id);
     store.verify_migrations().await.unwrap();
 }
 

@@ -206,6 +206,9 @@ pub struct LiveTable {
     pub columns: Vec<(String, String)>,
     /// Primary-key columns in key order.
     pub key: Vec<String>,
+    /// The columns that accept `NULL` (on SQLite, a primary-key column counts as `NOT
+    /// NULL`, as on Postgres: every key here is declared so or is a `WITHOUT ROWID` key).
+    pub nullable: Vec<String>,
 }
 
 /// A migrated database for one contract test, plus raw backend access for assertions
@@ -448,8 +451,8 @@ impl TestDb {
                 .expect("list sqlite tables");
                 let mut tables = Vec::new();
                 for name in names {
-                    let cols: Vec<(String, String, i64)> = sqlx::query_as(
-                        "SELECT name, type, pk FROM pragma_table_info(?) ORDER BY cid",
+                    let cols: Vec<(String, String, i64, i64)> = sqlx::query_as(
+                        "SELECT name, type, pk, \"notnull\" FROM pragma_table_info(?) ORDER BY cid",
                     )
                     .bind(&name)
                     .fetch_all(&mut c)
@@ -457,14 +460,20 @@ impl TestDb {
                     .expect("sqlite table info");
                     let mut key: Vec<(i64, String)> = cols
                         .iter()
-                        .filter(|(_, _, pk)| *pk > 0)
-                        .map(|(n, _, pk)| (*pk, n.clone()))
+                        .filter(|(_, _, pk, _)| *pk > 0)
+                        .map(|(n, _, pk, _)| (*pk, n.clone()))
                         .collect();
                     key.sort();
+                    let nullable = cols
+                        .iter()
+                        .filter(|(_, _, pk, notnull)| *pk == 0 && *notnull == 0)
+                        .map(|(n, ..)| n.clone())
+                        .collect();
                     tables.push(LiveTable {
                         name,
-                        columns: cols.into_iter().map(|(n, t, _)| (n, t)).collect(),
+                        columns: cols.into_iter().map(|(n, t, _, _)| (n, t)).collect(),
                         key: key.into_iter().map(|(_, n)| n).collect(),
+                        nullable,
                     });
                 }
                 c.close().await.expect("close raw sqlite connection");
@@ -480,8 +489,9 @@ impl TestDb {
                 .fetch_all(&mut c)
                 .await
                 .expect("list postgres tables");
-                let cols: Vec<(String, String, String)> = sqlx::query_as(
-                    "SELECT table_name::text, column_name::text, data_type::text \
+                let cols: Vec<(String, String, String, String)> = sqlx::query_as(
+                    "SELECT table_name::text, column_name::text, data_type::text, \
+                     is_nullable::text \
                      FROM information_schema.columns WHERE table_schema = $1 \
                      ORDER BY table_name, ordinal_position",
                 )
@@ -509,8 +519,13 @@ impl TestDb {
                     .map(|name| LiveTable {
                         columns: cols
                             .iter()
-                            .filter(|(t, _, _)| *t == name)
-                            .map(|(_, n, ty)| (n.clone(), ty.clone()))
+                            .filter(|(t, ..)| *t == name)
+                            .map(|(_, n, ty, _)| (n.clone(), ty.clone()))
+                            .collect(),
+                        nullable: cols
+                            .iter()
+                            .filter(|(t, _, _, null)| *t == name && null == "YES")
+                            .map(|(_, n, ..)| n.clone())
                             .collect(),
                         key: keys
                             .iter()

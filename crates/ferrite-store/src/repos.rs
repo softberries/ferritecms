@@ -459,7 +459,6 @@ pub trait UserRepo: Send + Sync {
     async fn get_many(&self, ids: &[UserId]) -> Result<Vec<User>, StoreError>;
 }
 
-#[async_trait]
 /// Artifact rows and the GC queries over them.
 ///
 /// `media.artifact_hash`, `plugins.artifact_hash` and `themes.artifact_hash` are foreign
@@ -468,6 +467,7 @@ pub trait UserRepo: Send + Sync {
 /// writes the reference. [`delete_if_orphaned`](Self::delete_if_orphaned) may return
 /// `StoreError::ForeignKey` when an FK-backed reference races in; callers treat that as
 /// "kept".
+#[async_trait]
 pub trait ArtifactRepo: Send + Sync {
     /// Inserts an artifact unless its hash exists; returns true if inserted.
     async fn insert_if_absent(&self, artifact: &Artifact) -> Result<bool, StoreError>;

@@ -40,6 +40,11 @@ pub(crate) fn probe_key(prefix: &str) -> Path {
     Path::from(format!("{prefix}tmp/probe-{}", Uuid::now_v7()))
 }
 
+/// The owner marker (M4-1 R16): `<prefix>ferrite-owner.json`, beside `artifacts/` and `tmp/`.
+pub(crate) fn owner_key(prefix: &str) -> Path {
+    Path::from(format!("{prefix}{}", crate::OWNER_MARKER))
+}
+
 /// Staging key for streaming uploads: `<prefix>tmp/<uuid v7>`.
 pub(crate) fn tmp_key(prefix: &str) -> Path {
     Path::from(format!("{prefix}tmp/{}", Uuid::now_v7()))

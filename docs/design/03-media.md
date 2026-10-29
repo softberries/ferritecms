@@ -92,7 +92,10 @@ pub struct ReadStream { pub size: u64 /* total object size */, pub range: Range<
   flight, which bounds memory to roughly that many parts; the initial 8 MiB buffer is released
   once handed to the writer), hashing while streaming, then places the object at its final key and deletes the
   staging object.
-- **Placement** uses `copy_if_not_exists` (`AlreadyExists` -> `created = false`). Backends that
+- **Placement** uses `copy_if_not_exists` (`AlreadyExists` -> `created = false`, once a `head`
+  shows the final key exists; when it does not, the upload fails with a backend error (R18):
+  a wrong `copy_if_not_exists` header can make a store answer 412 for another reason, and
+  taking that as "already stored" would lose the upload). Backends that
   return `NotImplemented`/`NotSupported` get the fallback: `head` the final key (exists ->
   `created = false`), else `copy`. This head-then-copy window is the race behind the advisory
   `created`. The final bytes are identical either way because the key is the content hash.
@@ -237,10 +240,14 @@ Placement options (`[media.s3]`, object_store's own encodings, parsed by object_
   provider-specific; the values per provider are in [09 §4a](09-operations.md#4a-s3-media-buckets)), `header-with-status:<name>:<value>:<status>`
   (for stores that answer a failed precondition with a status other than 412), or `multipart`
   (the copy is a multipart upload that ends in a conditional complete; it **does not copy
-  object attributes** such as content type or tags, so `ferrite config check` warns about it).
-  A wrong header for a provider fails placements of uploads of 8 MiB and more, and
-  `ferrite config check` cannot detect that (it opens nothing): after setting it, test with an
-  upload of 8 MiB or more. An invalid value is a configuration error naming
+  object attributes** such as content type or tags; `ferrite config check` notes it, although
+  Ferrite sets no attributes on stored artifacts today).
+  A wrong header for a provider fails placements of uploads of 8 MiB and more: with an error,
+  or with a 412 that the placement checks with a `head` of the final key and turns into an
+  error when the object is absent (R18), so such uploads fail loudly instead of vanishing.
+  `ferrite config check` cannot detect a wrong header (it opens nothing): after setting it,
+  test with an upload of 8 MiB or more. No concrete header is suggested in the `ferrite
+  init` template or in 01 §4. An invalid value is a configuration error naming
   `media.s3.copy_if_not_exists`.
 - `conditional_put` = `"etag"` or `"disabled"` (unset: object_store's default, `etag`).
 
@@ -529,7 +536,8 @@ featured image keeps its file through its `media` row).
 
 **Grace and marking** (P11). `artifacts.orphaned_at` (migration `0011_artifact_gc`) records
 since when nothing references a row. One pass, under the `artifacts.gc` lock (`try_lock`: a
-second run at the same time is refused, the job as `Busy`, the CLI with exit 3):
+second run at the same time, or a backup copying blobs (R17, below), makes it refused, the
+job as `Busy`, the CLI with exit 3):
 
 1. **Mark:** unmarked rows that nothing references and that are not protected get
    `orphaned_at = now`; marked rows that are referenced or protected again lose the mark.
@@ -544,6 +552,69 @@ second run at the same time is refused, the job as `Busy`, the CLI with exit 3):
    of 1 000 right before deleting it). These are uploads whose row never came (R68),
    refused uploads and staged extension bytes whose install failed.
 4. **Clean `tmp/`:** staging objects, probes included, older than 24 h, whatever the grace.
+
+**One media store belongs to one site (R16, R19).** Steps 2 and 3 delete what *this*
+database does not reference, so a second site on the same store (a restored copy, an
+`import-site` or `db copy` staging copy, or two sites pointed at one bucket by hand) would
+delete the first one's files. Every database therefore has an **install id**,
+`schema_meta.install_id` (a UUID written by the migrations when absent, or by the GC under
+its lock for a database that has none). It is never exported (`schema_meta` exports only
+`site_id`, which copies of a site share) and a backup snapshot drops it. The store keeps an
+**owner marker**, `<prefix>ferrite-owner.json` (`{install_id, site_id, claimed_at}`, beside
+`artifacts/` and `tmp/`, never listed as an artifact or a staging object, not copied by
+`media sync`). Steps 2 and 3 run only on a pass that **reads** a marker naming this install:
+
+- no marker: the pass writes one for this install (a conditional create) and **deletes
+  nothing** in that pass; deletes start with the next pass that reads it. If two installs
+  both find none (two sites already sharing a store when they upgrade, both due at 00:00
+  UTC) on a store that does not honour the conditional create (`conditional_put =
+  "disabled"`, or a provider that ignores `If-None-Match`), both write and neither deletes;
+  the next passes read the one marker that stands, and only that install deletes;
+- the marker names this install: the pass deletes as usual;
+- it names another install, or cannot be read: steps 2 and 3 are **skipped**, with an error
+  log.
+
+When they are skipped the line gets `; deletes skipped: <reason>` (`GcReport::
+deletes_skipped`) and the job still succeeds (retrying cannot change the owner); steps 1 and
+4 run: marks are kept up to date and `tmp/` is cleaned. A dry run writes nothing: no marker,
+and no install id for a database without one (it uses a made-up id for that pass, so it
+reports the deletes as skipped).
+
+What this protects, and what not: the site that does **not** own the store never deletes
+from it. The owner still deletes whatever *its* database does not reference after the grace
+period, including files a copy uploaded to the same store (row-less for the owner) and
+files the owner stopped using that the copy still uses. So a copy that keeps running and
+uploading must have its own media store (`[media]`); the shared store is safe only for a
+copy that reads, or that is about to replace the original.
+
+`ferrite media gc --claim` rewrites the marker for this install first (and deletes in that
+pass once it reads the claim back); the line then says `; claimed the media store from
+install <id> (site <site>, claimed <time>)` (a `--dry-run --claim` names it and writes
+nothing). It is for a site that really replaced the store's owner: a restore in place onto
+the same S3 bucket or absolute root after a disaster, or a database moved with `db copy` /
+`import-site` whose old database no longer runs. Claiming a store another live site uses
+brings back the cross-site deletes.
+Who gets a new install id: `ferrite restore` writes a fresh one into the restored database
+(a backup snapshot carries none; a backup unpacked by hand gets one at its first GC pass); an
+`import-site` or `db copy` target keeps its own (a fresh database, which the migrations gave
+one). `restore` and `import-site` warn when the site's media store is outside its data
+folder (S3, or an absolute root elsewhere), and `db copy` prints the `--claim` note. All
+nodes of a cluster share one database, so one install id. A clone made outside Ferrite (a
+Postgres PITR restore or `pg_dump` copy, a copied `ferrite.db`) keeps the original's install
+id: before serving it, run `DELETE FROM schema_meta WHERE key = 'install_id'` on it (09 §4).
+
+**GC marks do not travel.** A restored, imported or copied `artifacts` row starts unmarked
+(`restore` clears `orphaned_at` in the restored database; `import-site` and `db copy` load
+it as `NULL`): a mark is the source's GC state, and an unreferenced artifact gets a full
+grace period on the new site.
+
+**Backups hold the GC lock (R17).** A backup with media (`ferrite backup`, the scheduled
+`site.backup` job, and on Postgres its export archive) takes `artifacts.gc` before it reads
+its snapshot and keeps it until the blobs are written, waiting up to 5 minutes for a running
+pass; past that the CLI fails (exit 1) and the job is `Busy` (retried soon, the attempt
+refunded). So no pass deletes a blob that the backup's snapshot lists while it is copied,
+and the daily backup and GC (both due at 00:00 UTC) no longer produce routine `missing`
+entries.
 
 The grace period is `[media] gc_grace_days` (default 7 days, 1..=365, 01 §4); it covers
 in-flight uploads (every writer stores the blob before its row), rollbacks to an old plugin

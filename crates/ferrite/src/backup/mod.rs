@@ -20,7 +20,7 @@ use clap::Args;
 use ferrite_config::{Config, DbKind, InitMedia, MediaSection};
 use ferrite_domain::{ArtifactHash, to_hex};
 use ferrite_media::MediaStore;
-use ferrite_store::{Backend, Store};
+use ferrite_store::{Backend, LOCK_GC, LockGuard, Store};
 use sha2::{Digest, Sha256};
 use sqlx::Connection;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
@@ -47,6 +47,42 @@ const MISSING_BLOBS: u8 = 2;
 const POSTGRES: &str = "`ferrite backup` backs up SQLite sites; back up a Postgres site with \
                         the provider's automated backups and point-in-time recovery, and use \
                         `ferrite export --with-media` for a portable copy";
+
+/// How long a backup waits for a running artifacts GC pass before it gives up (R17).
+pub const BACKUP_GC_WAIT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// A backup with media could not take the `artifacts.gc` lock within its wait (R17): an
+/// artifacts GC pass is running. The scheduled job turns it into `Busy` (retried soon).
+#[derive(Debug)]
+pub struct GcBusy;
+
+impl std::fmt::Display for GcBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "an artifacts GC pass holds the artifacts.gc lock; a backup copies artifacts only \
+             while no GC deletes them, so run it again once the pass is done",
+        )
+    }
+}
+
+impl std::error::Error for GcBusy {}
+
+/// Takes the `artifacts.gc` lock for a backup's blob copy (R17), waiting up to `wait`.
+async fn hold_gc(
+    store: &dyn Store,
+    wait: std::time::Duration,
+) -> anyhow::Result<Box<dyn LockGuard>> {
+    store
+        .lock_wait(LOCK_GC, wait)
+        .await?
+        .ok_or_else(|| GcBusy.into())
+}
+
+async fn release_gc(guard: Box<dyn LockGuard>) {
+    if let Err(e) = guard.release().await {
+        tracing::warn!(error = %e, "cannot release the artifacts GC lock");
+    }
+}
 
 #[derive(Debug, Args)]
 pub struct BackupArgs {
@@ -81,6 +117,8 @@ pub struct BackupOptions {
     pub secret_key: bool,
     /// Repository only: prune to this many snapshots afterwards.
     pub keep: Option<usize>,
+    /// With media: how long to wait for a running artifacts GC (R17; zero tries once).
+    pub gc_wait: std::time::Duration,
     /// Test seam: damage the local snapshot before the integrity check.
     #[cfg(feature = "test-seams")]
     pub corrupt_snapshot: bool,
@@ -254,6 +292,26 @@ async fn inspect(path: &Path) -> anyhow::Result<SnapshotInfo> {
     result.context("cannot read the snapshot")
 }
 
+/// Removes `schema_meta.install_id` from the snapshot (R19): the live database keeps its
+/// id, and a copy made from the backup gets a new one, written by `restore` or, for a
+/// backup unpacked by hand, by its first artifacts GC pass. So a clone never shares the
+/// original's install id, which would let both delete from one media store as its owner.
+async fn strip_install_id(path: &Path) -> anyhow::Result<()> {
+    let opts = SqliteConnectOptions::new()
+        .filename(path)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete);
+    let mut conn = SqliteConnection::connect_with(&opts)
+        .await
+        .context("cannot open the snapshot")?;
+    let result = sqlx::query("DELETE FROM schema_meta WHERE key = ?")
+        .bind(ferrite_store::SCHEMA_META_INSTALL_ID)
+        .execute(&mut conn)
+        .await;
+    let _ = conn.close().await;
+    result.context("cannot remove the install id from the snapshot")?;
+    Ok(())
+}
+
 /// Damages the middle of the snapshot (the integrity check must catch it).
 #[cfg(feature = "test-seams")]
 fn corrupt(path: &Path) -> anyhow::Result<()> {
@@ -353,6 +411,69 @@ fn resolve(path: &Path) -> anyhow::Result<PathBuf> {
     }
 }
 
+/// The warning `restore` and `import-site` print when the site's media store is outside its
+/// data folder (S3, or a local root elsewhere), where another site may already keep its
+/// files (R16): this copy has its own install id, so its media GC deletes nothing from a
+/// store another install owns until `ferrite media gc --claim`.
+pub(crate) fn shared_media_warning(config: &Config) -> Option<String> {
+    let store = match &config.media {
+        MediaSection::S3 { bucket, prefix, .. } => format!("s3://{bucket}/{prefix}"),
+        MediaSection::Local { root, .. } => {
+            let inside = match (resolve(root), resolve(&config.data_dir)) {
+                (Ok(root), Ok(data)) => root.starts_with(data),
+                _ => false,
+            };
+            if inside {
+                return None;
+            }
+            root.display().to_string()
+        }
+    };
+    let data = config.data_dir.display();
+    Some(format!(
+        "warning: the media store {store} is outside {data}, so another site may use it too. \
+         This database has its own install id: its media GC deletes nothing from a store \
+         another site owns (ferrite-owner.json). If this site replaces that one (a restore in \
+         place, a moved database), run `ferrite media gc --data {data} --claim` once the old \
+         site is stopped for good; if the other site keeps running, point [media] of this one \
+         at its own store before serving it: a media store belongs to one site."
+    ))
+}
+
+/// Refuses a SQLite site whose database is not `<data>/ferrite.db` (B-I2): `restore` only
+/// restores a database at that path, so such a site's backups could never be restored.
+///
+/// The URL must name it relative to the data folder (`sqlite://ferrite.db`): an absolute
+/// path, even to this very file, is refused too, because the restored `ferrite.toml` would
+/// then point at the original folder instead of the restored one.
+pub(crate) fn check_backup_database(config: &Config) -> anyhow::Result<()> {
+    let DbKind::Sqlite { path } = config.database_kind() else {
+        return Ok(());
+    };
+    let url = config.database.url.expose();
+    let rest = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"))
+        .unwrap_or(url);
+    let rest = Path::new(rest.split('?').next().unwrap_or(rest));
+    let own = config.data_dir.join(DB_FILE);
+    if rest.is_relative() && config.data_dir.join(rest) == own {
+        return Ok(());
+    }
+    bail!(
+        "database.url names {} by {}, not as {DB_FILE} inside the data folder: a backup of \
+         this site could not be restored (restore needs database.url = \"sqlite://{DB_FILE}\", \
+         the database at {}). Move the database there and set that URL first",
+        path.display(),
+        if rest.is_absolute() {
+            "an absolute path"
+        } else {
+            "another path"
+        },
+        own.display()
+    )
+}
+
 /// Refuses a repository inside the data folder or the media store (R11): pruning it, or the
 /// media GC, would delete the other's files.
 pub(crate) fn check_repo_location(config: &Config, loc: &RepoLocation) -> anyhow::Result<()> {
@@ -411,7 +532,10 @@ pub(crate) fn check_repo_location(config: &Config, loc: &RepoLocation) -> anyhow
 /// run writes locally are deleted afterwards, also on failure; leftovers of killed runs older
 /// than a day are removed first. A blob missing from `media` is left out and listed in
 /// [`BackupReport::missing`]; one whose content does not match its hash fails the backup.
-/// Safe next to writers (`Store::snapshot` works next to an open transaction).
+/// Safe next to writers (`Store::snapshot` works next to an open transaction). With media,
+/// the run holds the `artifacts.gc` lock from before the snapshot until the blobs are
+/// written (R17, waiting up to [`BackupOptions::gc_wait`], then [`GcBusy`]), so no GC
+/// deletes a blob the snapshot lists while it is copied.
 pub async fn run_backup(
     config: &Config,
     store: &dyn Store,
@@ -422,6 +546,7 @@ pub async fn run_backup(
     if store.backend() != Backend::Sqlite {
         bail!("{POSTGRES}");
     }
+    check_backup_database(config)?;
     if opts.keep.is_some() && !matches!(target, Target::Repo(_)) {
         bail!("--keep applies to a repository (a folder or s3://), not to an archive");
     }
@@ -436,8 +561,28 @@ pub async fn run_backup(
         ),
         _ => {}
     }
-    std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
-    sweep_stale(&dir);
+    let gc = match &media {
+        Some(_) => Some(hold_gc(store, opts.gc_wait).await?),
+        None => None,
+    };
+    let result = write_backup(config, store, media, target, opts, &dir).await;
+    if let Some(guard) = gc {
+        release_gc(guard).await;
+    }
+    result
+}
+
+/// [`run_backup`] once its checks passed and, with media, the GC lock is held.
+async fn write_backup(
+    config: &Config,
+    store: &dyn Store,
+    media: Option<Arc<MediaStore>>,
+    target: &Target,
+    opts: &BackupOptions,
+    dir: &Path,
+) -> anyhow::Result<BackupReport> {
+    std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    sweep_stale(dir);
     let ts = chrono::Utc::now().format(repo::SNAPSHOT_FORMAT).to_string();
     let db = dir.join(local_snapshot_name(&ts));
     let toml_copy = dir.join(format!("backup-{ts}.toml"));
@@ -462,6 +607,7 @@ pub async fn run_backup(
         std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600))
             .with_context(|| format!("cannot restrict {}", db.display()))?;
     }
+    strip_install_id(&db).await?;
     #[cfg(feature = "test-seams")]
     if opts.corrupt_snapshot {
         corrupt(&db)?;
@@ -583,13 +729,15 @@ pub struct ExportReport {
 /// uploaded to `<repo>/exports/<ts>.ferrite.tar.zst` and checked by reading it back, then
 /// the newest `keep` archives are kept. The repository follows R11 (marker on first use,
 /// never inside the data or media folder). The local file is deleted on every path;
-/// leftovers of killed runs older than a day are removed first.
+/// leftovers of killed runs older than a day are removed first. With media, the export
+/// holds the `artifacts.gc` lock (R17, waiting up to `gc_wait`, then [`GcBusy`]).
 pub async fn run_export_backup(
     config: &Config,
     store: &dyn Store,
     media: Option<Arc<MediaStore>>,
     loc: &RepoLocation,
     keep: usize,
+    gc_wait: std::time::Duration,
 ) -> anyhow::Result<ExportReport> {
     check_repo_location(config, loc)?;
     let repo = repo::Repo::open(loc, true).await?;
@@ -603,9 +751,16 @@ pub async fn run_export_backup(
     let _local = LocalFiles(vec![tmp.clone()]);
     let file = crate::init::create_private(&tmp)?;
     let binary = binary_version()?;
-    let (manifest, out) =
-        crate::site_copy::export_to(store, media, BufWriter::new(file), &binary, Some(&dir))
-            .await?;
+    let gc = match &media {
+        Some(_) => Some(hold_gc(store, gc_wait).await?),
+        None => None,
+    };
+    let exported =
+        crate::site_copy::export_to(store, media, BufWriter::new(file), &binary, Some(&dir)).await;
+    if let Some(guard) = gc {
+        release_gc(guard).await;
+    }
+    let (manifest, out) = exported?;
     let file = out.into_inner().map_err(|e| e.into_error())?;
     file.sync_all()?;
     drop(file);
@@ -715,13 +870,25 @@ async fn write_archive<W: Write + Send + 'static>(
     .await?
 }
 
-/// `ferrite backup`: exit 0, 2 when artifacts were missing from the media store, 1 on any
-/// error.
+/// `ferrite backup`: exit 0, 2 when artifacts were missing from the media store, 3 when the
+/// repository is of a newer format than this binary, 1 on any other error (clap's usage
+/// errors exit 2 as well).
 pub async fn run_backup_cmd(args: BackupArgs) -> anyhow::Result<ExitCode> {
+    match backup_cmd(args).await {
+        Err(e) if e.downcast_ref::<crate::archive::Newer>().is_some() => {
+            eprintln!("error: {e:#}");
+            Ok(ExitCode::from(3))
+        }
+        other => other,
+    }
+}
+
+async fn backup_cmd(args: BackupArgs) -> anyhow::Result<ExitCode> {
     let config = load_config(&args.data)?;
     if let DbKind::Postgres { .. } = config.database_kind() {
         bail!("{POSTGRES}");
     }
+    check_backup_database(&config)?;
     let cwd = std::env::current_dir()?;
     let target = Target::parse(&args.to, &cwd)?;
     if args.keep.is_some() && !matches!(target, Target::Repo(_)) {
@@ -741,6 +908,7 @@ pub async fn run_backup_cmd(args: BackupArgs) -> anyhow::Result<ExitCode> {
     let opts = BackupOptions {
         secret_key: !args.no_secret_key,
         keep: args.keep.map(|k| k as usize),
+        gc_wait: BACKUP_GC_WAIT,
         #[cfg(feature = "test-seams")]
         corrupt_snapshot: args.test_corrupt_snapshot,
     };

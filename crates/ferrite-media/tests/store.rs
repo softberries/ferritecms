@@ -8,8 +8,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use ferrite_domain::{ArtifactHash, Timestamp};
 use ferrite_media::{
-    Backend, ConditionalPut, MediaConfig, MediaError, MediaStore, PublicUrlMode, StoredObject,
-    validate_copy_if_not_exists,
+    Backend, ConditionalPut, MediaConfig, MediaError, MediaStore, OWNER_MARKER, OwnerMarker,
+    PublicUrlMode, StoredObject, validate_copy_if_not_exists,
 };
 use futures::TryStreamExt;
 use sha2::{Digest, Sha256};
@@ -630,6 +630,64 @@ async fn list_artifacts_of_an_empty_store_is_empty() {
     assert!(listed(&backing.store()).await.is_empty());
 }
 
+// ---- the owner marker (M4-1 R16) ----
+
+fn marker(install: &str) -> OwnerMarker {
+    OwnerMarker {
+        install_id: install.into(),
+        site_id: "site".into(),
+        claimed_at: "2026-10-29T00:00:00.000000Z".into(),
+    }
+}
+
+async fn check_owner(backing: common::Backing, prefix: &str) {
+    let store = backing.store();
+    assert_eq!(store.read_owner().await.unwrap(), None);
+    // Only when absent: the first writer wins, a second is told so.
+    assert!(store.write_owner(&marker("a"), false).await.unwrap());
+    assert!(!store.write_owner(&marker("b"), false).await.unwrap());
+    assert_eq!(store.read_owner().await.unwrap(), Some(marker("a")));
+    // Replace (a claim) overwrites.
+    assert!(store.write_owner(&marker("b"), true).await.unwrap());
+    assert_eq!(store.read_owner().await.unwrap(), Some(marker("b")));
+    let path = backing.object_path(&format!("{prefix}{OWNER_MARKER}"));
+    assert!(path.is_file(), "{}", path.display());
+    // Never listed as an artifact or a staging object.
+    store
+        .put_artifact(Bytes::from_static(b"owned"))
+        .await
+        .unwrap();
+    assert_eq!(listed(&store).await.len(), 1);
+    let tmp: Vec<StoredObject> = store.list_tmp().try_collect().await.unwrap();
+    assert!(tmp.is_empty(), "{tmp:?}");
+    // Something else at its key is an error, not an absent marker.
+    std::fs::write(&path, b"not json").unwrap();
+    assert!(matches!(
+        store.read_owner().await,
+        Err(MediaError::Backend(_))
+    ));
+}
+
+#[tokio::test]
+async fn owner_marker_local() {
+    check_owner(common::local_backend(""), "").await;
+}
+
+#[tokio::test]
+async fn owner_marker_local_with_prefix() {
+    check_owner(common::local_backend("site/a/"), "site/a/").await;
+}
+
+#[tokio::test]
+async fn owner_marker_s3() {
+    check_owner(common::s3_backend("").await, "").await;
+}
+
+#[tokio::test]
+async fn owner_marker_s3_with_prefix() {
+    check_owner(common::s3_backend("site/a/").await, "site/a/").await;
+}
+
 // ---- the `tmp/` listing and `delete_key` (M4-1 Task 6, the artifacts GC) ----
 
 async fn check_tmp(backing: common::Backing, prefix: &str) {
@@ -754,7 +812,7 @@ fn copy_if_not_exists_values() {
     for ok in [
         "multipart",
         " multipart ",
-        "header:x-amz-copy-source-if-none-match:*",
+        "header:x-example-if-none-match:*",
         "header: x-goog-if-generation-match : 0",
         "header-with-status:x-ms-blah:*:409",
         "header-with-status:cf-if-none-match:*:412",

@@ -5,6 +5,12 @@ use crate::StoreError;
 /// `schema_meta` key holding the minimum binary version the schema requires.
 pub const SCHEMA_META_MIN_BINARY: &str = "min_binary_version";
 
+/// `schema_meta` key holding this database's install id (M4-1 R16): a UUID written by the
+/// migrations when absent and never exported (unlike `site_id`, which every copy of a site
+/// shares). `ferrite restore` gives a restored database a new one; the artifacts GC deletes
+/// from a media store only while the store's owner marker names it.
+pub const SCHEMA_META_INSTALL_ID: &str = "install_id";
+
 /// Migration phase (expand/contract, 02 §8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {

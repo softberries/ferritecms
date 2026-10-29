@@ -17,7 +17,9 @@ use ferrite_store::{Backend, LOCK_BACKUP, Store};
 use serde_json::json;
 
 use crate::backup::target::{RepoLocation, Target};
-use crate::backup::{BackupOptions, check_repo_location, run_backup, run_export_backup};
+use crate::backup::{
+    BACKUP_GC_WAIT, BackupOptions, GcBusy, check_repo_location, run_backup, run_export_backup,
+};
 
 /// The job kind.
 pub const SITE_BACKUP_KIND: &str = "site.backup";
@@ -30,7 +32,8 @@ pub const SITE_BACKUP_MAX_ATTEMPTS: i32 = 3;
 const MISSING_LOGGED: usize = 20;
 
 /// `site.backup`: one scheduled backup of the site to `[backup] to`, keeping the newest
-/// `keep`. Another run holding the `site.backup` lock is [`JobError::Busy`]; any failure is
+/// `keep`. Another run holding the `site.backup` lock, or an artifacts GC pass holding
+/// `artifacts.gc` past the wait (R17), is [`JobError::Busy`]; any other failure is
 /// `Retry` (up to [`SITE_BACKUP_MAX_ATTEMPTS`]). A run that completes without some blobs
 /// (missing from the media store, R10) succeeds with a warning.
 pub struct SiteBackupHandler {
@@ -40,6 +43,8 @@ pub struct SiteBackupHandler {
     media: Option<Arc<MediaStore>>,
     repo: RepoLocation,
     keep: usize,
+    /// How long a run waits for a running artifacts GC (R17).
+    gc_wait: Duration,
 }
 
 /// The `site.backup` handler and its periodic for `config`, or `None` when `[backup]
@@ -57,6 +62,7 @@ pub fn site_backup(
     let repo = backup_location(config)
         .context("backup.to")?
         .context("backup.to is required unless backup.schedule is \"off\"")?;
+    crate::backup::check_backup_database(config).context("database.url")?;
     if let RepoLocation::Dir(dir) = &repo
         && config.effective_cluster_mode() == ClusterMode::Cluster
     {
@@ -72,6 +78,7 @@ pub fn site_backup(
         media: backup.with_media.then_some(media),
         repo,
         keep: backup.keep as usize,
+        gc_wait: BACKUP_GC_WAIT,
     };
     let periodic = Periodic {
         kind: SITE_BACKUP_KIND,
@@ -84,7 +91,9 @@ pub fn site_backup(
 
 /// The repository `backup.to` names (`None` without one), checked as `serve` checks it:
 /// a folder or `s3://`, not inside the data folder or the media store (symlinks resolved
-/// where the paths exist). No database or network access, so `config check` runs it too.
+/// where the paths exist), and a local folder absent, empty or already a repository (R11;
+/// an S3 prefix is checked when the job runs). No database or network access, so `config
+/// check` runs it too.
 pub(crate) fn backup_location(config: &Config) -> anyhow::Result<Option<RepoLocation>> {
     let Some(to) = config.backup.to.as_deref() else {
         return Ok(None);
@@ -93,10 +102,21 @@ pub(crate) fn backup_location(config: &Config) -> anyhow::Result<Option<RepoLoca
         bail!("must be a folder or s3://bucket[/prefix]");
     };
     check_repo_location(config, &repo)?;
+    // A local folder is checked now (B-I3); an S3 prefix only when the job runs (no
+    // network here).
+    if let RepoLocation::Dir(dir) = &repo {
+        crate::backup::repo::check_dir(dir)?;
+    }
     Ok(Some(repo))
 }
 
 impl SiteBackupHandler {
+    /// Waits up to `wait` (instead of [`BACKUP_GC_WAIT`]) for a running artifacts GC.
+    pub fn with_gc_wait(mut self, wait: Duration) -> Self {
+        self.gc_wait = wait;
+        self
+    }
+
     async fn backup(&self) -> anyhow::Result<()> {
         let store = self.store.as_ref();
         match store.backend() {
@@ -104,6 +124,7 @@ impl SiteBackupHandler {
                 let opts = BackupOptions {
                     secret_key: true,
                     keep: Some(self.keep),
+                    gc_wait: self.gc_wait,
                     #[cfg(feature = "test-seams")]
                     corrupt_snapshot: false,
                 };
@@ -135,6 +156,7 @@ impl SiteBackupHandler {
                     self.media.clone(),
                     &self.repo,
                     self.keep,
+                    self.gc_wait,
                 )
                 .await?;
                 tracing::info!(
@@ -191,7 +213,14 @@ impl JobHandler for SiteBackupHandler {
         if let Err(e) = guard.release().await {
             tracing::warn!(error = %e, "cannot release the backup lock");
         }
-        // The runner logs the failed attempt with this message.
-        result.map_err(|e| JobError::Retry(format!("{e:#}")))
+        // The runner logs the failed attempt with this message. A running GC pass (R17)
+        // is no failure: the job comes back shortly, its attempt refunded.
+        result.map_err(|e| {
+            if e.downcast_ref::<GcBusy>().is_some() {
+                JobError::Busy(e.to_string())
+            } else {
+                JobError::Retry(format!("{e:#}"))
+            }
+        })
     }
 }

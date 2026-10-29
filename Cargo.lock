@@ -1667,6 +1667,7 @@ dependencies = [
 name = "ferrite-media"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "ferrite-domain",
  "futures",
@@ -1678,6 +1679,8 @@ dependencies = [
  "quick-xml 0.41.0",
  "s3s",
  "s3s-fs",
+ "serde",
+ "serde_json",
  "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",

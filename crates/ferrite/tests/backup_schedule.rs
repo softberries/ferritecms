@@ -19,7 +19,7 @@ use ferrite::{NodeOptions, OpenMode, RunnerOverrides, open_store, start};
 use ferrite_cluster::{JobError, JobHandler, Periodic};
 use ferrite_domain::{Artifact, ArtifactKind, Job, JobId, JobStatus, NodeId, Timestamp};
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode};
-use ferrite_store::{LOCK_BACKUP, Store};
+use ferrite_store::{LOCK_BACKUP, LOCK_GC, Store};
 use ferrite_store_tests::TestDb;
 use ferrite_store_tests::fixtures::{fixture_user, new_post};
 use serde_json::{Value, json};
@@ -572,12 +572,24 @@ async fn site_backup_job_outcomes() {
     let (handler, _) = site_backup(&config, store.clone(), media.clone())
         .unwrap()
         .unwrap();
+    let handler = handler.with_gc_wait(Duration::from_millis(300));
 
     let held = store.try_lock(LOCK_BACKUP).await.unwrap().expect("free");
     let r = handler.run(&job()).await;
     assert!(matches!(r, Err(JobError::Busy(_))), "{r:?}");
     held.release().await.unwrap();
     assert!(!repo.exists(), "nothing written while busy");
+
+    // R17: a GC pass holding `artifacts.gc` past the wait makes the run Busy (it never
+    // copies blobs while a GC may delete them), and nothing is written.
+    let gc = store.try_lock(LOCK_GC).await.unwrap().expect("free");
+    let r = handler.run(&job()).await;
+    assert!(
+        matches!(&r, Err(JobError::Busy(why)) if why.contains("artifacts.gc")),
+        "{r:?}"
+    );
+    gc.release().await.unwrap();
+    assert!(!repo.exists(), "nothing written while the GC runs");
 
     // A folder that is not a repository: retried, never written into.
     std::fs::create_dir_all(&repo).unwrap();

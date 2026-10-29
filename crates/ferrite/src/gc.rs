@@ -2,7 +2,8 @@
 //! the media store, run by the daily `artifacts.gc` job ([`crate::jobs::ArtifactsGcHandler`])
 //! and by `ferrite media gc`.
 //!
-//! A pass, under the `artifacts.gc` lock ([`LOCK_GC`], `try_lock`: a second run is refused):
+//! A pass, under the `artifacts.gc` lock ([`LOCK_GC`], `try_lock`: a second run, or a
+//! backup copying blobs (R17), makes it refused):
 //!
 //! 0. **Protected hashes** are computed here: every 64-lowercase-hex string anywhere in
 //!    the payload of a `queued` or `running` job, and the `json`/`html` hashes named by
@@ -21,6 +22,19 @@
 //!    batch of deletes).
 //! 4. **Clean `tmp/`:** staging objects (probes included) older than [`TMP_MAX_AGE`].
 //!
+//! **Ownership (R16, R19).** Steps 2 and 3 run only on a pass that *reads* a media-store
+//! owner marker (`<prefix>ferrite-owner.json`, [`OwnerMarker`]) naming this database's
+//! install id (`schema_meta.install_id`). A pass that finds no marker writes one for this
+//! install and deletes nothing (two installs that both find none, on a store that does not
+//! honour the conditional create, then both skip; the next pass reads whichever marker
+//! won). A marker naming another install, or one that cannot be read, skips them with an
+//! error log. [`GcReport::deletes_skipped`] gives the reason; steps 1 and 4 still run. So
+//! the non-owner of a shared store never deletes; the owner still deletes what its own
+//! database does not reference (a copy's uploads included), which is why a copy needs its
+//! own store. [`GcOptions::claim`] (`ferrite media gc --claim`) first rewrites the marker
+//! for this install (and deletes in that pass once it reads the marker back), for a site
+//! that really replaced the old one; [`GcReport::claimed_from`] names the replaced owner.
+//!
 //! A dry run marks and deletes nothing: steps 1 and 2 run in a transaction that is rolled
 //! back (so their counts are exact), steps 3 and 4 only count.
 
@@ -30,8 +44,10 @@ use std::time::Duration;
 
 use anyhow::Context;
 use ferrite_domain::{ArtifactHash, ArtifactKind, JobQuery, JobStatus, MAX_PAGE, Timestamp};
-use ferrite_media::{MediaStore, StoredObject};
-use ferrite_store::{ArtifactRepo, LOCK_GC, MAX_EXISTING_HASHES, Store, StoreError, Tx};
+use ferrite_media::{MediaStore, OwnerMarker, StoredObject};
+use ferrite_store::{
+    ArtifactRepo, LOCK_GC, MAX_EXISTING_HASHES, SCHEMA_META_INSTALL_ID, Store, StoreError, Tx,
+};
 use futures::StreamExt;
 use serde_json::Value;
 
@@ -50,10 +66,13 @@ pub struct GcOptions {
     pub dry_run: bool,
     /// The pass's clock: marks are set to it and ages are measured from it.
     pub now: Timestamp,
+    /// Make this install the media store's owner first (R16, `--claim`), even when the
+    /// marker names another one. A dry run writes no marker.
+    pub claim: bool,
 }
 
 /// What one pass did (or, for a dry run, would do).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GcReport {
     pub marked: u64,
     pub unmarked: u64,
@@ -67,6 +86,11 @@ pub struct GcReport {
     /// Blob and `tmp/` deletes that failed (logged; a later pass retries them). A row
     /// whose blob delete failed still counts in `deleted_rows`.
     pub failed: u64,
+    /// Why steps 2 and 3 were skipped (R16, R19): the store belongs to another install, its
+    /// marker cannot be read, or there was none (this pass wrote it). `None`: they ran.
+    pub deletes_skipped: Option<String>,
+    /// With `claim`: the owner this pass replaced (or would, in a dry run), described.
+    pub claimed_from: Option<String>,
 }
 
 impl fmt::Display for GcReport {
@@ -85,6 +109,12 @@ impl fmt::Display for GcReport {
         )?;
         if self.failed > 0 {
             write!(f, ", failed {}", self.failed)?;
+        }
+        if let Some(from) = &self.claimed_from {
+            write!(f, "; claimed the media store from {from}")?;
+        }
+        if let Some(why) = &self.deletes_skipped {
+            write!(f, "; deletes skipped: {why}")?;
         }
         Ok(())
     }
@@ -122,6 +152,8 @@ pub async fn run(
         deleted_blob_bytes = report.deleted_blob_bytes,
         deleted_tmp = report.deleted_tmp,
         failed = report.failed,
+        deletes_skipped = report.deletes_skipped.as_deref(),
+        claimed_from = report.claimed_from.as_deref(),
         "artifacts GC pass"
     );
     Ok(Some(report))
@@ -136,6 +168,10 @@ async fn pass(
     let protected = protected(store, media).await?;
     let protected_list: Vec<ArtifactHash> = protected.iter().cloned().collect();
     let cutoff = before(opts.now, opts.grace)?;
+    let owner = ownership(store, media, opts).await?;
+    report.deletes_skipped = owner.skipped;
+    report.claimed_from = owner.claimed_from;
+    let delete = report.deletes_skipped.is_none();
 
     if opts.dry_run {
         let tx = store.begin().await?;
@@ -144,6 +180,7 @@ async fn pass(
             opts.now,
             cutoff,
             &protected_list,
+            delete,
             report,
         )
         .await;
@@ -155,12 +192,168 @@ async fn pass(
             opts.now,
             cutoff,
             &protected_list,
+            delete,
             report,
         )
         .await?;
     }
-    unrecorded(store, media, opts.dry_run, cutoff, &protected, report).await?;
+    if delete {
+        unrecorded(store, media, opts.dry_run, cutoff, &protected, report).await?;
+    }
     tmp(media, opts.dry_run, before(opts.now, TMP_MAX_AGE)?, report).await
+}
+
+/// This database's install id (`schema_meta.install_id`, R16), written when absent (a
+/// database migrated before R16 that has had no migration since, or one whose id was
+/// deleted to make a clone a new install). Called under the GC lock, so two nodes never
+/// write two ids; the migrations only insert one when absent.
+pub async fn install_id(store: &dyn Store) -> anyhow::Result<String> {
+    let meta = store.read().schema_meta();
+    if let Some(id) = meta.get(SCHEMA_META_INSTALL_ID).await? {
+        return Ok(id);
+    }
+    let id = uuid::Uuid::now_v7().to_string();
+    meta.set(SCHEMA_META_INSTALL_ID, &id).await?;
+    Ok(meta.get(SCHEMA_META_INSTALL_ID).await?.unwrap_or(id))
+}
+
+/// The outcome of the ownership check.
+struct Ownership {
+    skipped: Option<String>,
+    claimed_from: Option<String>,
+}
+
+/// A marker, for messages.
+fn describe(marker: &OwnerMarker) -> String {
+    format!(
+        "install {} (site {}, claimed {})",
+        marker.install_id, marker.site_id, marker.claimed_at
+    )
+}
+
+fn foreign(owner: &str) -> String {
+    format!(
+        "the media store belongs to {owner}, not this site's install (`ferrite media gc \
+         --claim` makes this site its owner)"
+    )
+}
+
+/// R16/R19: whether this pass may delete from `media`. Only a marker read at the start
+/// naming this install allows it (or a claim that is read back). A dry run writes nothing,
+/// not even a missing install id (one is made up for the pass and not stored).
+async fn ownership(
+    store: &dyn Store,
+    media: &MediaStore,
+    opts: &GcOptions,
+) -> anyhow::Result<Ownership> {
+    let stored = store
+        .read()
+        .schema_meta()
+        .get(SCHEMA_META_INSTALL_ID)
+        .await?;
+    let install = match stored {
+        Some(id) => id,
+        None if opts.dry_run => uuid::Uuid::now_v7().to_string(),
+        None => install_id(store).await?,
+    };
+    let site_id = store
+        .read()
+        .schema_meta()
+        .get("site_id")
+        .await?
+        .unwrap_or_default();
+    let mine = OwnerMarker {
+        install_id: install.clone(),
+        site_id,
+        claimed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+    };
+    let current = media.read_owner().await;
+    let ok = |claimed_from| Ownership {
+        skipped: None,
+        claimed_from,
+    };
+    let skip = |why: String| Ownership {
+        skipped: Some(why),
+        claimed_from: None,
+    };
+    if let Ok(Some(marker)) = &current
+        && marker.install_id == install
+    {
+        return Ok(ok(None));
+    }
+    if opts.claim {
+        let from = match &current {
+            Ok(Some(marker)) => describe(marker),
+            Ok(None) => "no owner (there was no ferrite-owner.json)".to_owned(),
+            Err(e) => format!("an unreadable ferrite-owner.json ({e})"),
+        };
+        if opts.dry_run {
+            return Ok(ok(Some(from)));
+        }
+        media.write_owner(&mine, true).await?;
+        tracing::warn!(install_id = %install, previous = %from, "claimed the media store for this site (ferrite-owner.json rewritten)");
+        return Ok(match media.read_owner().await {
+            Ok(Some(marker)) if marker.install_id == install => ok(Some(from)),
+            Ok(Some(marker)) => Ownership {
+                skipped: Some(format!(
+                    "the claim was overwritten at once by {}",
+                    describe(&marker)
+                )),
+                claimed_from: Some(from),
+            },
+            Ok(None) => Ownership {
+                skipped: Some("the claimed ferrite-owner.json vanished".to_owned()),
+                claimed_from: Some(from),
+            },
+            Err(e) => Ownership {
+                skipped: Some(format!(
+                    "the claimed ferrite-owner.json cannot be read: {e}"
+                )),
+                claimed_from: Some(from),
+            },
+        });
+    }
+    let skipped = match current {
+        Ok(Some(marker)) => foreign(&describe(&marker)),
+        Ok(None) if opts.dry_run => "the media store has no owner marker yet; a pass writes \
+             ferrite-owner.json for this site, and deletes start with the pass after it"
+            .to_owned(),
+        Ok(None) => {
+            if media.write_owner(&mine, false).await? {
+                tracing::info!(install_id = %install, "wrote ferrite-owner.json for this site; the artifacts GC deletes from the next pass that reads it");
+                return Ok(skip(
+                    "the media store had no owner marker; this pass wrote ferrite-owner.json \
+                     for this site, and deletes start with the next pass that reads it"
+                        .to_owned(),
+                ));
+            }
+            // Another install wrote one first.
+            match media.read_owner().await {
+                Ok(Some(marker)) if marker.install_id == install => {
+                    return Ok(skip(
+                        "ferrite-owner.json appeared during this pass; deletes start with the \
+                         next pass"
+                            .to_owned(),
+                    ));
+                }
+                Ok(Some(marker)) => foreign(&describe(&marker)),
+                Ok(None) => "ferrite-owner.json vanished during this pass".to_owned(),
+                Err(e) => format!("ferrite-owner.json cannot be read: {e}"),
+            }
+        }
+        Err(e) => format!(
+            "ferrite-owner.json cannot be read ({e}); `ferrite media gc --claim` rewrites it"
+        ),
+    };
+    tracing::error!(
+        this_install = %install,
+        reason = %skipped,
+        "the artifacts GC deletes nothing from this media store: it does not belong to this \
+         site installation (ferrite-owner.json); if this site replaced its owner (a restore in \
+         place, a moved database), run `ferrite media gc --claim`; otherwise give each site \
+         its own media store"
+    );
+    Ok(skip(skipped))
 }
 
 /// A grace period of `days` days (`media.gc_grace_days`, `--grace-days`).
@@ -351,17 +544,21 @@ impl Rows<'_> {
     }
 }
 
-/// Steps 1 and 2.
+/// Steps 1 and 2 (step 2 only when `delete`).
 async fn rows(
     target: Rows<'_>,
     now: Timestamp,
     cutoff: Timestamp,
     protected: &[ArtifactHash],
+    delete: bool,
     report: &mut GcReport,
 ) -> anyhow::Result<()> {
     let counts = target.artifacts().mark_orphans(now, protected).await?;
     report.marked = counts.marked;
     report.unmarked = counts.unmarked;
+    if !delete {
+        return Ok(());
+    }
     loop {
         let batch = target.artifacts().orphaned_before(cutoff, MAX_PAGE).await?;
         let mut progressed = false;
@@ -540,13 +737,29 @@ mod tests {
             deleted_blob_bytes: 6,
             deleted_tmp: 7,
             failed: 0,
+            deletes_skipped: None,
+            claimed_from: None,
         };
         assert_eq!(
             r.to_string(),
             "marked 1, unmarked 2, deleted rows 3 (4 bytes), deleted unrecorded blobs 5 (6 bytes), deleted tmp 7"
         );
-        let failed = GcReport { failed: 2, ..r };
+        let failed = GcReport {
+            failed: 2,
+            ..r.clone()
+        };
         assert!(failed.to_string().ends_with("deleted tmp 7, failed 2"));
+        let skipped = GcReport {
+            deletes_skipped: Some("why".into()),
+            claimed_from: Some("install x".into()),
+            ..r
+        };
+        assert!(
+            skipped.to_string().ends_with(
+                "deleted tmp 7; claimed the media store from install x; deletes skipped: why"
+            ),
+            "{skipped}"
+        );
     }
 
     #[test]
