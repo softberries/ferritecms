@@ -8,7 +8,7 @@
 //! [`PUBLISH_DUE_KIND`] job now, so one node runs it per period.
 
 mod import;
-mod media;
+pub(crate) mod media;
 mod permalinks;
 
 use std::{sync::Arc, time::Duration};
