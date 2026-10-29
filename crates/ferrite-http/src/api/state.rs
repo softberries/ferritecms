@@ -7,7 +7,7 @@ use axum::http::Uri;
 use ferrite_core::{
     AuthService, ContentService, ContentTypeService, ExtensionAdmin, MediaService, MenuService,
     OptionService, RedirectService, SystemService, TaxonomyService, UserService,
-    comments::CommentService, mail::MailQueue,
+    comments::CommentService, import::ImportService, mail::MailQueue,
 };
 use ferrite_media::MediaStore;
 use ferrite_store::Store;
@@ -48,6 +48,8 @@ pub struct ApiParts {
     pub comments: Arc<CommentService>,
     /// System status, nodes and audit reads (M2a-2b P15).
     pub system: Arc<SystemService>,
+    /// WordPress import jobs, runs and reports (M3-2 P25, P26-1); with report storage.
+    pub import: Arc<ImportService>,
     /// The node's public site (its theme, page cache and render counters).
     pub site: Arc<AppState>,
     /// What this node is.
@@ -89,6 +91,8 @@ pub struct ApiState {
     pub comments: Arc<CommentService>,
     /// System status, nodes and audit reads (M2a-2b P15).
     pub system: Arc<SystemService>,
+    /// WordPress import jobs, runs and reports (M3-2 P25, P26-1).
+    pub import: Arc<ImportService>,
     /// The node's public site (its theme, page cache and render counters).
     pub site: Arc<AppState>,
     /// What this node is (`GET /system/status`).
@@ -132,6 +136,7 @@ impl ApiState {
             max_upload,
             comments,
             system,
+            import,
             site,
             node,
             mail,
@@ -157,6 +162,7 @@ impl ApiState {
             max_upload,
             comments,
             system,
+            import,
             site,
             node,
             mail,

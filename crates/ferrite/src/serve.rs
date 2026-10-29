@@ -67,6 +67,7 @@ use ferrite_core::{
     AuthService, ContentService, ContentTypeService, ExtensionAdmin, ExtensionService,
     MediaService, MenuService, OptionService, Permalinks, RedirectService, SiteReader,
     SwappablePermalinks, SystemService, TaxonomyService, UserService, comments::CommentService,
+    import::ImportService,
 };
 use ferrite_domain::{NodeId, Timestamp};
 use ferrite_http::{
@@ -76,6 +77,7 @@ use ferrite_http::{
     app::hits::{HIT_FLUSH_EVERY, HitCounter},
     build_site,
     extensions::Installer,
+    import_blobs::MediaArtifacts,
     load_route_table,
     mail::SmtpMailer,
     media::{Uploader, variant_specs},
@@ -495,6 +497,10 @@ async fn boot(
             auth,
             comments,
             system: Arc::new(SystemService::new(store.clone())),
+            import: Arc::new(
+                ImportService::new(store.clone(), permalinks.clone())
+                    .with_artifacts(Arc::new(MediaArtifacts::new(media.clone()))),
+            ),
             site: state.clone(),
             node: NodeInfo {
                 id: registry.id(),
