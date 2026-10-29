@@ -412,8 +412,8 @@ figure above holds only with the option off.
 **Artifacts GC grace** (`[media] gc_grace_days`, M4-1 P11, `Config.uploads.gc_grace_days`):
 an integer number of days, 1..=365, default 7, valid with either backend. An artifact row
 is deleted once it has been marked unreferenced for longer than this, and a file under
-`artifacts/` with no row once it is older than this (03 §6), and only while the media
-store's owner marker names this database's install id (R16, 03 §6); `ferrite media gc
+`artifacts/` with no row once it is older than this (03 §6), and only on a pass that
+reads the media store's owner marker naming this database's install id (R16, R19, 03 §6); `ferrite media gc
 --grace-days N` overrides it for one run. `config check` reports an out-of-range value as
 `media.gc_grace_days: must be between 1 and 365`.
 

@@ -292,6 +292,26 @@ async fn inspect(path: &Path) -> anyhow::Result<SnapshotInfo> {
     result.context("cannot read the snapshot")
 }
 
+/// Removes `schema_meta.install_id` from the snapshot (R19): the live database keeps its
+/// id, and a copy made from the backup gets a new one, written by `restore` or, for a
+/// backup unpacked by hand, by its first artifacts GC pass. So a clone never shares the
+/// original's install id, which would let both delete from one media store as its owner.
+async fn strip_install_id(path: &Path) -> anyhow::Result<()> {
+    let opts = SqliteConnectOptions::new()
+        .filename(path)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete);
+    let mut conn = SqliteConnection::connect_with(&opts)
+        .await
+        .context("cannot open the snapshot")?;
+    let result = sqlx::query("DELETE FROM schema_meta WHERE key = ?")
+        .bind(ferrite_store::SCHEMA_META_INSTALL_ID)
+        .execute(&mut conn)
+        .await;
+    let _ = conn.close().await;
+    result.context("cannot remove the install id from the snapshot")?;
+    Ok(())
+}
+
 /// Damages the middle of the snapshot (the integrity check must catch it).
 #[cfg(feature = "test-seams")]
 fn corrupt(path: &Path) -> anyhow::Result<()> {
@@ -587,6 +607,7 @@ async fn write_backup(
         std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600))
             .with_context(|| format!("cannot restrict {}", db.display()))?;
     }
+    strip_install_id(&db).await?;
     #[cfg(feature = "test-seams")]
     if opts.corrupt_snapshot {
         corrupt(&db)?;

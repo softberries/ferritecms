@@ -48,16 +48,18 @@ pub enum MediaCommand {
     /// period, and `tmp/` objects older than 24 h. Files named by a queued or running job
     /// or by an import report are kept. With SQLite, stop `serve` first.
     ///
-    /// Deletes happen only while the media store's owner marker (`ferrite-owner.json`)
-    /// names this site's database (written by the first pass); a pass on a store another
-    /// site owns (a restored or staging copy on the same store) marks and cleans `tmp/` but
-    /// deletes nothing else and says so. `--claim` makes this site the owner first: use it
+    /// Deletes happen only on a pass that reads the media store's owner marker
+    /// (`ferrite-owner.json`) naming this site's database. A pass that finds no marker
+    /// writes it and deletes nothing yet; a pass on a store another site owns (or whose
+    /// marker cannot be read) marks and cleans `tmp/` but deletes nothing else; both say so.
+    /// `--claim` makes this site the owner first and prints the owner it replaced: use it
     /// only when this site replaced the other one (a restore in place, a moved database).
     ///
     /// Prints `marked N, unmarked M, deleted rows R (B bytes), deleted unrecorded blobs U
     /// (B bytes), deleted tmp T` (with `--dry-run`, after `dry run: `, counting what would
     /// happen; `, failed F` is appended when some deletes failed, retried by the next pass;
-    /// `; deletes skipped: …` when another site owns the store).
+    /// `; claimed the media store from …` after a claim; `; deletes skipped: …` with the
+    /// reason when steps 2 and 3 did not run).
     /// Exit code: 0, or 3 when another GC or a backup's blob copy holds the GC lock, or 1 on
     /// an error, or 2 for a usage error (clap).
     Gc(GcArgs),

@@ -609,8 +609,6 @@ impl Drop for Upload {
     }
 }
 
-/// The folder of a repository holding export archives (the scheduled backup of a Postgres
-/// site, M4-1 P15).
 /// Whether `dir` holds nothing but (at most) a filesystem's `lost+found` (B-M7: a fresh
 /// ext4 volume has one).
 pub(crate) fn dir_is_empty(dir: &Path) -> anyhow::Result<bool> {
@@ -643,6 +641,8 @@ pub(crate) fn check_dir(dir: &Path) -> anyhow::Result<()> {
     )
 }
 
+/// The folder of a repository holding export archives (the scheduled backup of a Postgres
+/// site, M4-1 P15).
 pub const EXPORTS: &str = "exports";
 /// The suffix of an export archive's name, after its `yyyymmddThhmmssZ` timestamp.
 pub const EXPORT_SUFFIX: &str = ".ferrite.tar.zst";

@@ -260,17 +260,27 @@ is not detected up front: `--force` then fails at the final rename and changes n
 under `database.auto_migrate`). A backup without `secret.key` restores with a note on TOTP
 (below).
 
-**A restored site is a new install (R16).** Before it is put in place, the restored database
-gets a fresh `schema_meta.install_id` and every `artifacts.orphaned_at` mark is cleared. Its
-media GC deletes only from a media store whose owner marker (`ferrite-owner.json`) names its
-install ([03 §6](03-media.md#6-garbage-collection)), so a copy restored next to the live
-site onto the same S3 bucket or absolute media root never deletes the live site's uploads
-(and the live site never deletes the copy's). `restore` warns when the restored media store
-is outside `DIR`. For a restore **in place** after a disaster (the original site is gone and
-the restored one takes over its store), run `ferrite media gc --data DIR --claim` once:
-until then the restored site's GC marks but deletes nothing there, and logs an error each
-day. One media store belongs to one site: never claim a store another running site uses;
-give a staging copy its own `[media]` store instead.
+**A restored site is a new install (R16, R19).** A backup snapshot carries no
+`schema_meta.install_id`; before the restored site is put in place it gets a fresh one and
+every `artifacts.orphaned_at` mark is cleared. Its media GC deletes only on a pass that reads
+an owner marker (`ferrite-owner.json`) naming its install
+([03 §6](03-media.md#6-garbage-collection)), so a copy restored next to the live site onto
+the same S3 bucket or absolute media root never deletes from it. The live site, which owns
+the store, still deletes what *its* database does not reference after the grace period,
+including the copy's own new uploads: a copy that keeps running and uploading needs its own
+`[media]` store. `restore` warns when the restored media store is outside `DIR`. For a
+restore **in place** after a disaster (the original site is gone and the restored one takes
+over its store), run `ferrite media gc --data DIR --claim` once: until then the restored
+site's GC marks but deletes nothing there, and logs an error each day. One media store
+belongs to one site: never claim a store another running site uses.
+
+**Clones made outside Ferrite keep the install id.** A Postgres PITR restore or `pg_dump`
+copy, or a copied `ferrite.db`, has the original's `install_id`, so served next to the
+original on the same media store both would delete as its owner. Before serving such a
+clone, give it a new install: `DELETE FROM schema_meta WHERE key = 'install_id';` on the
+clone (the next migration or GC pass writes a fresh one; for Postgres, in the site's schema).
+A backup archive or repository snapshot unpacked by hand needs nothing: its snapshot holds
+no install id.
 
 A mount point cannot be renamed, so `--force` refuses one (and any folder on another device
 than its parent) before doing any work. In the container image `/data` is a volume: restore
@@ -674,12 +684,15 @@ marked longer than the grace period and then their files, files under `artifacts
 row that are older than the grace period, and `tmp/` objects older than 24 h. Files named
 by a queued or running job or by an import report are kept. `--grace-days N` (1..=365)
 overrides `media.gc_grace_days` (default 7) for this run; `--dry-run` marks and deletes
-nothing and reports what a run would do. Deletes happen only while the media store's owner
-marker `ferrite-owner.json` names this database's install id (the first pass writes it; R16,
-03 §6): on a store another site owns, the pass marks and cleans `tmp/` only, logs an error and
-appends `; deletes skipped: the media store belongs to install <id>, …` to its line (exit 0).
-`--claim` rewrites the marker for this site first, for a site that replaced the store's owner
-(a restore in place, a moved database); with `--dry-run` it writes nothing. Prints `marked N,
+nothing and reports what a run would do (it writes neither the owner marker nor a missing
+install id). Deletes happen only on a pass that reads the media store's owner marker
+`ferrite-owner.json` naming this database's install id (R16, R19, 03 §6): a pass that finds
+no marker writes it and deletes nothing yet; on a store another site owns, or whose marker
+cannot be read, the pass marks and cleans `tmp/` only and logs an error. Either way it
+appends `; deletes skipped: <reason>` to its line (exit 0). `--claim` rewrites the marker for
+this site first, for a site that replaced the store's owner (a restore in place, a moved
+database), and appends `; claimed the media store from install <id> (site …, claimed …)`;
+with `--dry-run` it names that owner and writes nothing. Prints `marked N,
 unmarked M, deleted rows R (B bytes), deleted unrecorded blobs U (B bytes), deleted tmp T` on
 stdout (after `dry run: ` for a dry run; `, failed F` is appended when some blob or `tmp/`
 deletes failed, which are logged and retried by the next pass, the exit code staying 0). Exit 0

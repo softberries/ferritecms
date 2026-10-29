@@ -1222,6 +1222,16 @@ fn restore_is_a_new_install_without_gc_marks() {
 
     let archive = tmp.path().join("b.tar.zst");
     ok_backup(&source, &archive, &[]);
+    // R19: the snapshot carries no install id (a hand-unpacked copy gets a new one at its
+    // first GC pass); the live database keeps its own.
+    let entries = unpack(&std::fs::read(&archive).unwrap());
+    let (_, db) = entries.iter().find(|(p, _)| p == "ferrite.db").unwrap();
+    let unpacked = tmp.path().join("unpacked");
+    std::fs::create_dir_all(&unpacked).unwrap();
+    std::fs::write(unpacked.join("ferrite.db"), db).unwrap();
+    assert_eq!(meta(&unpacked, "install_id"), None);
+    assert_eq!(meta(&unpacked, "site_id"), meta(&source, "site_id"));
+    assert_eq!(meta(&source, "install_id"), Some(install.clone()));
     let target = tmp.path().join("restored");
     let out = restore(&archive, &target, &[]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));

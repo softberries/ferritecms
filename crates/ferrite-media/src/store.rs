@@ -103,9 +103,10 @@ pub const OWNER_MARKER: &str = "ferrite-owner.json";
 const MAX_OWNER_BYTES: u64 = 4096;
 
 /// Which site installation owns a media store (M4-1 R16), kept at
-/// `<prefix>ferrite-owner.json`. The artifacts GC deletes from a store only while this
-/// names its own install (`schema_meta.install_id`), so two sites on one store (a restored
-/// or staging copy) never delete each other's files.
+/// `<prefix>ferrite-owner.json`. The artifacts GC deletes from a store only on a pass that
+/// reads this naming its own install (`schema_meta.install_id`), so a site that does not
+/// own the store never deletes from it. The owner still deletes whatever its own database
+/// does not reference, a copy's uploads included: a second site needs its own store.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OwnerMarker {
     /// The owning database's `schema_meta.install_id`.
