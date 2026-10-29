@@ -78,7 +78,7 @@ pub(crate) async fn up_locked(
 }
 
 /// `migrate_down` under the migrate lock, waiting up to `wait` for it.
-async fn down_locked(
+pub(crate) async fn down_locked(
     store: &dyn Store,
     to: i64,
     allow_lossy: bool,

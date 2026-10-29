@@ -254,6 +254,9 @@ ferrite config check   --data DIR                      # M1.5
 ferrite media sync     --to STORE (--from STORE | --data DIR)   # M4-1; STORE = local:PATH | s3://bucket[/prefix]
 ferrite media gc       --data DIR [--dry-run] [--grace-days N]  # M4-1
 ferrite media regenerate --data DIR [--all] [--item ID]        # M4-1
+ferrite export         --data DIR --out FILE|- [--with-media]                      # M4-1
+ferrite import-site    ARCHIVE|- --data DIR [--with-media]                         # M4-1
+ferrite db copy        --from URL --to URL [--from-schema S] [--to-schema S]       # M4-1; URL = postgres://… | sqlite:PATH
 ferrite healthcheck    [--url URL]                     # M1.5, for container health checks
 ferrite user create    --data DIR --login L --email E [--role admin|editor|author|contributor]
                        [--display-name N] [--password-stdin]                     # M2a
@@ -314,6 +317,35 @@ unusable one exits 1; keys that are not artifacts are ignored with a notice. Pri
 and one `failed <key>: <reason>` line per failure on stderr. Exit 0 done, 2 when some copies failed
 (the rest were copied), 1 on an error (a bad URL, an unreadable store); a usage error (neither
 `--from` nor `--data`, or both) exits 2 as clap does.
+
+**`ferrite export`**, **`ferrite import-site`**, **`ferrite db copy`** (`crates/ferrite/src/export_cmd.rs`,
+`site_copy.rs`, `archive.rs`; format and rules in [02 §10](02-storage.md#10-portable-export-d14)):
+`export` writes the portable archive of the site in `--data` to `--out` (a new file with mode 0600,
+an existing one is refused and a failed export removes it; `-` writes stdout, and the summary goes
+to stderr); `--with-media` adds every stored artifact. An artifact whose file is missing from the
+media store is left out: one `missing artifact <hash>` line each on stderr, the count in the summary,
+the hashes in the manifest's `missing` list, and exit 2; a file whose content does not hash to its
+name fails the export (exit 1, the hash named). The database must be at this binary's schema
+(older: exit 1, run `ferrite migrate up`; newer: exit 3); with SQLite stop `serve` first, a
+Postgres site can be exported live. `import-site ARCHIVE --data DIR` (`-` reads stdin) loads an
+export into the fresh database of a folder made by `ferrite init`, in one transaction, then migrates
+up and rebuilds search; `--with-media` puts the archive's blobs into the site's media store
+(present ones are skipped), without it they are read, checked and reported but not stored. Prints
+the row count and, when users have TOTP on, how to keep their sign-in working (copy `secret.key`,
+set `auth.secret_key` or `ferrite user disable-totp`). Exit 0 done; 3 when the archive's format or
+schema (or the target's schema) is newer than the binary; 1 on any other error, among them a target
+that is not fresh (the message names the first table with rows), a tampered table (sha256), a
+hostile path, an over-long row line (64 MiB), more artifact bytes than the manifest declares, a
+truncated stream, an archive that is a backup, database settings that would refuse the migration
+to the binary's schema after the load (`database.auto_migrate` off, or a Postgres contract migration
+without `database.allow_contract`). No refusal leaves rows behind, and a schema step taken for the
+archive is undone (best effort; a warning says when that failed, and it is skipped when the target holds rows after a commit that reported an error), so the import can be retried. `db copy --from URL --to URL` streams one database into another (export + import with no
+file): `postgres://…` (with `--from-schema`/`--to-schema`) or `sqlite:<path to ferrite.db>` (the
+folder lock is taken in its folder; an absent target file is created, and removed again when the
+copy fails). URLs only, no stdin. Same source and target rules and exit codes as `export` and
+`import-site` (no exit 2: no media); it copies no media (`media sync`) and writes no `ferrite.toml`,
+but prints the `[database]` block to put there (a password, in the user info or a `password` query
+parameter, is shown as `PASSWORD`, with a note after the block).
 
 **`ferrite media gc`** (`crates/ferrite/src/media_cmd.rs`, `crates/ferrite/src/gc.rs`; design
 03 §6): one pass of the artifacts GC in process, the same `gc::run` the daily `artifacts.gc`
@@ -576,7 +608,6 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
 
 ```
 ferrite backup / restore                                        # M4
-ferrite export / import-site / db copy                          # M4
 ferrite plugin new <name>                                       # later (scaffold a plugin crate)
 ferrite self-update / rollback [--schema] [--restore-snapshot]  # M4
 ferrite doctor        # validates connectivity, permissions, clock skew, versions (config: `config check`)

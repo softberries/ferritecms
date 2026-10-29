@@ -31,20 +31,25 @@ ferrite-store = { path = "../ferrite-store" }
 ferrite-store-postgres = { path = "../ferrite-store-postgres" }
 ferrite-store-sqlite = { path = "../ferrite-store-sqlite" }
 ferrite-theme = { path = "../ferrite-theme" }
+chrono.workspace = true
 futures.workspace = true
 image.workspace = true
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 semver.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
+tar.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["net", "signal"] }
 toml.workspace = true
-tokio-util.workspace = true
+tokio-util = { workspace = true, features = ["io-util"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 url.workspace = true
 uuid.workspace = true
+zstd.workspace = true
 
 [dev-dependencies]
 ferrite = { path = ".", features = ["test-seams"] }

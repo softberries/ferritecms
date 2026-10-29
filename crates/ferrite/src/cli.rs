@@ -6,7 +6,8 @@ use clap::{Args, Parser, Subcommand};
 use crate::config_cmd::ConfigCommand;
 use crate::ext_cmd::{PluginCommand, ThemeCommand};
 use crate::{
-    config_cmd, ext_cmd, healthcheck, import_cmd, init, media_cmd, migrate, seed, serve, user_cmd,
+    config_cmd, export_cmd, ext_cmd, healthcheck, import_cmd, init, media_cmd, migrate, seed,
+    serve, user_cmd,
 };
 
 #[derive(Debug, Parser)]
@@ -34,6 +35,36 @@ pub enum Command {
     /// Media storage tools.
     #[command(subcommand)]
     Media(media_cmd::MediaCommand),
+    /// Export the site's database (and optionally its media) to a portable archive.
+    ///
+    /// The archive (`tar.zst`, mode 0600) holds every table except transient and derived
+    /// ones (sessions, jobs, events, search, …), read from one consistent snapshot, so a
+    /// running Postgres site can be exported; with SQLite stop `serve` first. It holds
+    /// password hashes and sealed secrets but never secret.key. The database must be at
+    /// this binary's schema.
+    ///
+    /// With `--with-media`, an artifact whose file is missing from the media store is left
+    /// out (one `missing artifact <hash>` line each on stderr, listed in the manifest); a
+    /// file whose content does not match its hash fails the export.
+    ///
+    /// Exit code: 0 ok, 2 done but artifacts were missing from the media store, 3 when the
+    /// database schema is newer than this binary, 1 on any other error (an older schema:
+    /// run `ferrite migrate up` first); a failed export removes its file.
+    Export(export_cmd::ExportArgs),
+    /// Load an export archive into a fresh site (made by `ferrite init`).
+    ///
+    /// The database must be fresh: no rows but the built-in content types and taxonomies.
+    /// An archive from an older schema is loaded at that schema, then migrated up; the
+    /// search index is rebuilt. The rows land in one transaction, so a refused, damaged or
+    /// truncated archive leaves no rows; a schema step taken for the archive is undone
+    /// (best effort, a warning says when it failed), so the import can be retried.
+    ///
+    /// Exit code: 0 ok, 3 when the archive's format or schema is newer than this binary,
+    /// 1 on any other error.
+    ImportSite(export_cmd::ImportSiteArgs),
+    /// Database tools.
+    #[command(subcommand)]
+    Db(export_cmd::DbCommand),
     /// Validate the configuration.
     #[command(subcommand)]
     Config(ConfigCommand),
@@ -99,6 +130,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Seed(cmd) => seed::run(cmd).await.map(|()| ExitCode::SUCCESS),
         Command::Import(cmd) => import_cmd::run(cmd).await,
         Command::Media(cmd) => media_cmd::run(cmd).await,
+        Command::Export(args) => export_cmd::run_export(args).await,
+        Command::ImportSite(args) => export_cmd::run_import_site(args).await,
+        Command::Db(cmd) => export_cmd::run_db(cmd).await,
         Command::Config(cmd) => config_cmd::run(cmd),
         Command::Healthcheck(args) => healthcheck::run(args).await,
         Command::Theme(cmd) => ext_cmd::run_theme(cmd).await.map(|()| ExitCode::SUCCESS),
