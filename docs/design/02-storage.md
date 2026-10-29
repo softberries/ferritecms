@@ -787,8 +787,11 @@ through `age` or `gpg`). Entries, in this order, all regular files:
 - `tables/<name>.ndjson`, one per exported table, in catalogue (foreign-key) order; one
   row per line, a JSON object keyed by column name.
 - With `--with-media`, `artifacts/<ab>/<hash>`: the blob of every `artifacts` row (media
-  originals and variants, theme bundles, plugin packages, import inputs and reports). A
-  blob missing from the store is left out with a warning.
+  originals and variants, theme bundles, plugin packages, import inputs and reports),
+  hashed while it is written (a file whose content does not match its name fails the
+  export). A blob missing from the store is left out and listed in the manifest's
+  `missing: [hash…]` (an additive field, absent when empty; `format` stays 1), and the
+  export exits 2.
 
 **Encoding** (the catalogue, `ferrite_store::catalogue`): ids as hyphenated lowercase
 UUID strings; timestamps as RFC 3339 UTC with exactly six fractional digits and `Z`
@@ -827,6 +830,10 @@ no data); a target with pending migrations is refused (run `ferrite migrate up`)
 loader writes exactly the columns each row holds (an unknown column is refused), so an
 archive of an older schema loads at that schema.
 
+**Limits on read:** a table row (one NDJSON line) may be at most 64 MiB; the running size
+of the blobs may not exceed the manifest's `artifacts.bytes`, and each blob is stored with
+its declared size as the cap. These bound memory and disk against a hostile archive.
+
 **Loading:** one write transaction for the whole load (SQLite holds the writer for its
 length): the seeded built-in rows are cleared, rows are inserted in batches in table
 order (a self-referencing row waits in memory until its parent is in), and the commit
@@ -835,12 +842,15 @@ ones the manifest names (absolute paths and `..` are refused), tables come in ma
 order, each table's sha256 and row count are compared at the end of its file, each
 blob's content must hash to its name, and at the end of the stream every listed table
 and the blob count must have been seen. Any refusal, damage or truncation rolls the
-whole load back, so the target stays fresh and the import can be retried. A failure
-after a migrate-down leaves the fresh target at M. After the commit the database is
-migrated up to the binary's schema under the startup rules (`database.auto_migrate`; a
-Postgres contract migration without `allow_contract` is left pending with a note), then
-`search_docs` is rebuilt for every item that is not in the trash, through the same core
-function every content write uses. With `--with-media` the blobs go into the target's
+whole load back, so the target stays fresh; a schema step taken for the archive (up from
+an unmigrated database, or down from a newer one) is undone, best effort (a warning says
+when it failed), so the import can be retried. Before the load the tool also checks, at
+M, that the startup rules would allow the migration to the binary's schema afterwards
+(`database.auto_migrate`; on Postgres a contract migration needs `allow_contract`), and
+refuses otherwise. After the commit the database is migrated up to the binary's schema,
+then `search_docs` is rebuilt for every item that is not in the trash, through the same
+core function every content write uses. The freshness check and the load are separate
+transactions: nothing else (a node, another import) may write to the target meanwhile. With `--with-media` the blobs go into the target's
 media store (blobs already there with the same size are skipped).
 
 **`db copy`** is export + import streamed from one read snapshot into one write

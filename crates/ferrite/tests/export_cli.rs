@@ -518,10 +518,27 @@ fn import_site_truncated_leaves_target_fresh() {
 #[test]
 fn import_site_into_newer_fresh_target_migrates_down_then_up() {
     let ex = exported();
+    let path = ex.tmp.path().join("v10.tar.zst");
+    std::fs::write(&path, v10_archive(&ex)).unwrap();
+
+    let target = ex.tmp.path().join("target");
+    init(&target);
+    assert_eq!(schema_version(&target), 11);
+    let out = import_site(&target, &path, &[]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(schema_version(&target), 11);
+    assert_eq!(count(&target, "artifacts"), count(&ex.source, "artifacts"));
+    assert_eq!(
+        count(&target, "content_items"),
+        count(&ex.source, "content_items")
+    );
+}
+
+/// The export of `ex` as a schema-10 binary would have written it: no `orphaned_at` in
+/// the artifacts rows, `schema_version` 10, the sha256s recomputed.
+fn v10_archive(ex: &Exported) -> Vec<u8> {
     let mut entries = unpack(&std::fs::read(&ex.archive).unwrap());
-    let latest = schema_version(&ex.source);
-    assert_eq!(latest, 11);
-    // The archive as a schema-10 binary would have written it.
+    assert_eq!(schema_version(&ex.source), 11);
     let artifacts = entries
         .iter_mut()
         .find(|(p, _)| p == "tables/artifacts.ndjson")
@@ -538,20 +555,245 @@ fn import_site_into_newer_fresh_target_migrates_down_then_up() {
     let mut m = manifest(&entries);
     m["schema_version"] = Value::from(10);
     set_manifest(&mut entries, &m);
-    let path = ex.tmp.path().join("v10.tar.zst");
-    std::fs::write(&path, pack(&entries)).unwrap();
+    pack(&entries)
+}
 
+#[test]
+fn import_site_failure_after_migrate_down_restores_the_schema() {
+    let ex = exported();
+    let good = v10_archive(&ex);
+    let cut = ex.tmp.path().join("v10-cut.tar.zst");
+    std::fs::write(&cut, &good[..good.len() / 2]).unwrap();
+    let whole = ex.tmp.path().join("v10.tar.zst");
+    std::fs::write(&whole, &good).unwrap();
     let target = ex.tmp.path().join("target");
     init(&target);
-    assert_eq!(schema_version(&target), 11);
-    let out = import_site(&target, &path, &[]);
+    let out = import_site(&target, &cut, &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert_eq!(schema_version(&target), 11, "the migrate-down is undone");
+    assert_eq!(count(&target, "users"), 0);
+    let out = import_site(&target, &whole, &[]);
     assert!(out.status.success(), "{}", text(&out));
     assert_eq!(schema_version(&target), 11);
-    assert_eq!(count(&target, "artifacts"), count(&ex.source, "artifacts"));
-    assert_eq!(
-        count(&target, "content_items"),
-        count(&ex.source, "content_items")
+    assert_eq!(count(&target, "users"), count(&ex.source, "users"));
+}
+
+#[test]
+fn import_site_refuses_an_overlong_line() {
+    let ex = exported();
+    let entries = unpack(&std::fs::read(&ex.archive).unwrap());
+    // `tables/content_types.ndjson` (the first table) as 65 MiB without a newline,
+    // streamed: it compresses to a few kilobytes.
+    let big = 65 * 1024 * 1024u64;
+    let encoder = zstd::stream::write::Encoder::new(Vec::new(), 3).unwrap();
+    let mut builder = tar::Builder::new(encoder);
+    for (path, data) in &entries {
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o600);
+        header.set_entry_type(tar::EntryType::Regular);
+        if path == "tables/content_types.ndjson" {
+            header.set_size(big);
+            builder
+                .append_data(&mut header, path, std::io::repeat(b'x').take(big))
+                .unwrap();
+        } else {
+            header.set_size(data.len() as u64);
+            builder
+                .append_data(&mut header, path, data.as_slice())
+                .unwrap();
+        }
+    }
+    let bytes = builder.into_inner().unwrap().finish().unwrap();
+    assert!(bytes.len() < 16 * 1024 * 1024);
+    let path = ex.tmp.path().join("big.tar.zst");
+    std::fs::write(&path, bytes).unwrap();
+    let target = ex.tmp.path().join("target");
+    init(&target);
+    let out = import_site(&target, &path, &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("tables/content_types.ndjson: line 1 is longer than 64 MiB"),
+        "{err}"
     );
+    assert_eq!(count(&target, "content_types"), 3);
+}
+
+#[test]
+fn import_site_refuses_more_artifact_bytes_than_declared() {
+    let ex = exported();
+    let mut entries = unpack(&std::fs::read(&ex.archive).unwrap());
+    let mut m = manifest(&entries);
+    m["artifacts"]["bytes"] = Value::from(1);
+    set_manifest(&mut entries, &m);
+    let path = ex.tmp.path().join("over.tar.zst");
+    std::fs::write(&path, pack(&entries)).unwrap();
+    let target = ex.tmp.path().join("target");
+    init(&target);
+    let out = import_site(&target, &path, &["--with-media"]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("artifact bytes than the manifest declares"),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(count(&target, "users"), 0);
+}
+
+/// The stored file of the site's one media original.
+fn media_blob(data: &Path) -> (String, PathBuf) {
+    let hash: String = block_on(async {
+        let mut conn = sqlite(data).await;
+        sqlx::query_scalar("SELECT artifact_hash FROM media")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap()
+    });
+    let file = data.join("media/artifacts").join(&hash[..2]).join(&hash);
+    assert!(file.is_file(), "{}", file.display());
+    (hash, file)
+}
+
+#[test]
+fn export_with_a_missing_blob_exits_2_and_lists_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let (hash, file) = media_blob(&source);
+    std::fs::remove_file(&file).unwrap();
+    let archive = tmp.path().join("a.tar.zst");
+    let out = export(&source, &archive, true);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains(&format!("missing artifact {hash}")), "{err}");
+    assert!(err.contains("1 artifacts are missing"), "{err}");
+    let m = manifest(&unpack(&std::fs::read(&archive).unwrap()));
+    assert_eq!(m["missing"], serde_json::json!([hash]));
+    // The archive still imports.
+    let target = tmp.path().join("target");
+    init(&target);
+    let out = import_site(&target, &archive, &["--with-media"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1 artifacts were missing"));
+}
+
+#[test]
+fn export_with_a_damaged_blob_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let (hash, file) = media_blob(&source);
+    let mut bytes = std::fs::read(&file).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xff;
+    std::fs::write(&file, bytes).unwrap();
+    let archive = tmp.path().join("a.tar.zst");
+    let out = export(&source, &archive, true);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains(&format!("artifact {hash}")),
+        "{}",
+        text(&out)
+    );
+    assert!(!archive.exists());
+}
+
+/// Records a migration this binary does not know, as a newer binary would.
+fn make_newer(data: &Path) {
+    exec(
+        data,
+        "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
+         VALUES (99, 'future', 1, X'00', 0)",
+    );
+}
+
+fn make_older(data: &Path) {
+    let mut c = ferrite();
+    c.args([
+        "migrate",
+        "down",
+        "--to",
+        "10",
+        "--allow-lossy",
+        "--yes",
+        "--data",
+    ])
+    .arg(data);
+    ok(c);
+}
+
+fn db_copy(from: &Path, to: &Path) -> Output {
+    let mut c = ferrite();
+    c.args(["db", "copy", "--from"])
+        .arg(format!("sqlite:{}", from.join("ferrite.db").display()))
+        .arg("--to")
+        .arg(format!("sqlite:{}", to.join("ferrite.db").display()));
+    run(c)
+}
+
+#[test]
+fn export_and_db_copy_refuse_an_older_or_newer_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    let older = tmp.path().join("older");
+    init(&older);
+    make_older(&older);
+    let newer = tmp.path().join("newer");
+    init(&newer);
+    make_newer(&newer);
+    let dest = tmp.path().join("dest");
+    std::fs::create_dir_all(&dest).unwrap();
+    for (source, code, needle) in [
+        (&older, 1, "migrate up"),
+        (&newer, 3, "newer than this binary"),
+    ] {
+        let archive = tmp.path().join("a.tar.zst");
+        let out = export(source, &archive, false);
+        assert_eq!(out.status.code(), Some(code), "{}", text(&out));
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(needle),
+            "{}",
+            text(&out)
+        );
+        assert!(!archive.exists());
+        let out = db_copy(source, &dest);
+        assert_eq!(out.status.code(), Some(code), "{}", text(&out));
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(needle),
+            "{}",
+            text(&out)
+        );
+        assert!(!dest.join("ferrite.db").exists());
+    }
+}
+
+#[test]
+fn db_copy_refuses_the_same_source_and_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let out = db_copy(&source, &source);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert_eq!(schema_version(&source), 11);
+    assert!(count(&source, "content_items") > 0);
+}
+
+#[test]
+fn refused_db_copy_removes_the_sqlite_file_it_created() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    // A term that is its own parent can never be loaded (the loader refuses cycles).
+    exec(
+        &source,
+        "UPDATE terms SET parent_id = id WHERE id = (SELECT min(id) FROM terms)",
+    );
+    let dest = tmp.path().join("dest");
+    std::fs::create_dir_all(&dest).unwrap();
+    let out = db_copy(&source, &dest);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("terms"),
+        "{}",
+        text(&out)
+    );
+    assert!(!dest.join("ferrite.db").exists());
+    assert!(!dest.join("ferrite.db-wal").exists());
 }
 
 #[test]

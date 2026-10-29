@@ -88,10 +88,13 @@ impl std::fmt::Debug for CopyArgs {
     }
 }
 
+/// Exit code of an export whose archive lacks blobs missing from the media store.
+const MISSING_BLOBS: u8 = 2;
+
 /// Maps a [`Newer`] refusal to exit code 3 (printed here), other errors to exit 1.
-fn exit(result: anyhow::Result<()>) -> anyhow::Result<ExitCode> {
+fn exit(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode> {
     match result {
-        Ok(()) => Ok(ExitCode::SUCCESS),
+        Ok(code) => Ok(code),
         Err(e) if e.downcast_ref::<Newer>().is_some() => {
             eprintln!("error: {e:#}");
             Ok(ExitCode::from(NEWER))
@@ -108,7 +111,7 @@ pub async fn run_export(args: ExportArgs) -> anyhow::Result<ExitCode> {
     exit(export(args).await)
 }
 
-async fn export(args: ExportArgs) -> anyhow::Result<()> {
+async fn export(args: ExportArgs) -> anyhow::Result<ExitCode> {
     let config = load_config(&args.data)?;
     let media = if args.with_media {
         Some(Arc::new(open_media(&config)?))
@@ -149,7 +152,15 @@ async fn export(args: ExportArgs) -> anyhow::Result<()> {
         "The archive holds password hashes and sealed secrets but not secret.key; keep it \
          private (pipe `--out -` to age or gpg to encrypt it)."
     );
-    Ok(())
+    if manifest.missing.is_empty() {
+        return Ok(ExitCode::SUCCESS);
+    }
+    eprintln!(
+        "{} artifacts are missing from the media store and are not in the archive (listed \
+         above and in manifest.json `missing`).",
+        manifest.missing.len()
+    );
+    Ok(ExitCode::from(MISSING_BLOBS))
 }
 
 /// Writes the archive to a new file (mode 0600), removed again on failure.
@@ -178,7 +189,7 @@ pub async fn run_import_site(args: ImportSiteArgs) -> anyhow::Result<ExitCode> {
     exit(import_site(args).await)
 }
 
-async fn import_site(args: ImportSiteArgs) -> anyhow::Result<()> {
+async fn import_site(args: ImportSiteArgs) -> anyhow::Result<ExitCode> {
     let config = load_config(&args.data)?;
     let input: Box<dyn Read + Send> = if is_dash(&args.archive) {
         Box::new(std::io::stdin())
@@ -196,8 +207,14 @@ async fn import_site(args: ImportSiteArgs) -> anyhow::Result<()> {
     let store = open_store(&config, OpenMode::MustExist).await?;
     let binary = binary_version()?;
     let result = async {
-        let (manifest, stats) =
-            site_copy::import_from(input, store.clone(), media, binary.clone()).await?;
+        let (manifest, stats) = site_copy::import_from(
+            input,
+            store.clone(),
+            media,
+            config.database.clone(),
+            binary.clone(),
+        )
+        .await?;
         site_copy::finalize(store.as_ref(), &config.database, &binary, &stats).await?;
         anyhow::Ok((manifest, stats))
     }
@@ -213,8 +230,15 @@ async fn import_site(args: ImportSiteArgs) -> anyhow::Result<()> {
         manifest.created_at
     );
     print_blobs(&stats);
+    if !manifest.missing.is_empty() {
+        println!(
+            "note: {} artifacts were missing from the source's media store at export time and \
+             are not in the archive (manifest.json `missing`).",
+            manifest.missing.len()
+        );
+    }
     site_copy::print_totp_hint(stats.totp_users, Some(&args.data));
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 fn print_blobs(stats: &LoadStats) {
@@ -238,11 +262,23 @@ pub async fn run_db(cmd: DbCommand) -> anyhow::Result<ExitCode> {
     exit(db_copy(args).await)
 }
 
-async fn db_copy(args: CopyArgs) -> anyhow::Result<()> {
+async fn db_copy(args: CopyArgs) -> anyhow::Result<ExitCode> {
     let binary = binary_version()?;
+    // Before anything is opened, so a bad URL creates nothing.
+    let (url, note) = config_url(&args.to)?;
     let source = open_store_url(&args.from, args.from_schema.as_deref(), OpenMode::MustExist)
         .await
         .context("--from")?;
+    // Refuse an older or newer source before the target is opened (and maybe created).
+    let checked = match source.migration_status(&binary).await {
+        Ok(status) => site_copy::check_source(&status),
+        Err(e) => Err(e.into()),
+    };
+    if let Err(e) = checked {
+        source.close().await;
+        return Err(e);
+    }
+    let created = new_sqlite_file(&args.to);
     let target = match open_store_url(
         &args.to,
         args.to_schema.as_deref(),
@@ -254,6 +290,7 @@ async fn db_copy(args: CopyArgs) -> anyhow::Result<()> {
         Ok(t) => t,
         Err(e) => {
             source.close().await;
+            remove_created(created.as_deref());
             return Err(e);
         }
     };
@@ -265,40 +302,93 @@ async fn db_copy(args: CopyArgs) -> anyhow::Result<()> {
         schema: args.to_schema.clone(),
     };
     let result = async {
-        let stats = site_copy::copy(source.as_ref(), target.as_ref(), &binary).await?;
+        let stats = site_copy::copy(source.as_ref(), target.as_ref(), &db, &binary).await?;
         site_copy::finalize(target.as_ref(), &db, &binary, &stats).await?;
         anyhow::Ok(stats)
     }
     .await;
     source.close().await;
     target.close().await;
-    let stats = result?;
-    println!("Copied {} rows.", stats.rows);
-    println!("Use these lines in the target site's ferrite.toml:");
+    let stats = match result {
+        Ok(stats) => stats,
+        Err(e) => {
+            remove_created(created.as_deref());
+            return Err(e);
+        }
+    };
+    println!(
+        "Copied {} rows. Use these lines in the target site's ferrite.toml:",
+        stats.rows
+    );
+    println!();
     println!("[database]");
-    println!("url = {}", toml_string(&config_url(&args.to)?));
+    println!("url = {}", toml_string(&url));
     if let Some(schema) = &args.to_schema {
         println!("schema = {}", toml_string(schema));
     }
+    println!();
+    if note {
+        println!(
+            "The password is shown as PASSWORD: put the real one there, or the whole URL in a \
+             file named by database.url_file."
+        );
+    }
     site_copy::print_totp_hint(stats.totp_users, None);
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
-/// The `database.url` for `url`: a SQLite path made absolute, a Postgres password hidden.
-fn config_url(url: &str) -> anyhow::Result<String> {
+/// The path of the SQLite file `url` names when it does not exist yet (this run creates it).
+fn new_sqlite_file(url: &str) -> Option<PathBuf> {
+    let rest = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"))?;
+    let path = PathBuf::from(rest);
+    (!path.exists()).then_some(path)
+}
+
+/// Removes a SQLite database this run created (with its `-wal`/`-shm` files).
+fn remove_created(path: Option<&Path>) {
+    let Some(path) = path else { return };
+    for suffix in ["", "-wal", "-shm"] {
+        let mut p = path.as_os_str().to_owned();
+        p.push(suffix);
+        let _ = std::fs::remove_file(PathBuf::from(p));
+    }
+}
+
+/// The `database.url` for `url` and whether a password was hidden: a SQLite path made
+/// absolute; a Postgres password (in the user info or a `password` query parameter)
+/// shown as `PASSWORD`.
+fn config_url(url: &str) -> anyhow::Result<(String, bool)> {
     if let Some(rest) = url
         .strip_prefix("sqlite://")
         .or_else(|| url.strip_prefix("sqlite:"))
     {
         let path = std::path::absolute(rest)?;
-        return Ok(format!("sqlite://{}", path.display()));
+        return Ok((format!("sqlite://{}", path.display()), false));
     }
     let mut parsed = url::Url::parse(url).context("--to is not a valid URL")?;
+    let mut hidden = false;
     if parsed.password().is_some() {
         let _ = parsed.set_password(Some("PASSWORD"));
-        println!("(the password is shown as PASSWORD; use url_file for a secret)");
+        hidden = true;
     }
-    Ok(parsed.to_string())
+    if parsed.query_pairs().any(|(k, _)| k == "password") {
+        let pairs: Vec<(String, String)> = parsed
+            .query_pairs()
+            .map(|(k, v)| {
+                let v = if k == "password" {
+                    "PASSWORD".into()
+                } else {
+                    v.into_owned()
+                };
+                (k.into_owned(), v)
+            })
+            .collect();
+        parsed.query_pairs_mut().clear().extend_pairs(pairs);
+        hidden = true;
+    }
+    Ok((parsed.to_string(), hidden))
 }
 
 fn toml_string(s: &str) -> String {
@@ -311,19 +401,23 @@ mod tests {
 
     #[test]
     fn config_urls() {
+        let url = |u: &str| config_url(u).unwrap();
         assert_eq!(
-            config_url("postgres://u:secret@h:5432/db").unwrap(),
-            "postgres://u:PASSWORD@h:5432/db"
+            url("postgres://u:secret@h:5432/db"),
+            ("postgres://u:PASSWORD@h:5432/db".into(), true)
         );
         assert_eq!(
-            config_url("postgres://u@h/db").unwrap(),
-            "postgres://u@h/db"
+            url("postgres://u@h/db"),
+            ("postgres://u@h/db".into(), false)
         );
-        assert!(
-            config_url("sqlite:/x/ferrite.db")
-                .unwrap()
-                .starts_with("sqlite:///x")
+        assert_eq!(
+            url("postgres://u@h/db?sslmode=require&password=secret"),
+            (
+                "postgres://u@h/db?sslmode=require&password=PASSWORD".into(),
+                true
+            )
         );
+        assert!(url("sqlite:/x/ferrite.db").0.starts_with("sqlite:///x"));
         assert_eq!(toml_string("s1"), "\"s1\"");
         // A quote needs a literal string (still valid TOML).
         assert_eq!(toml_string("a\"b"), "'a\"b'");

@@ -97,6 +97,10 @@ pub struct Manifest {
     pub files: Option<Vec<FileEntry>>,
     /// `null` when the archive holds no blobs.
     pub artifacts: Option<ArtifactsInfo>,
+    /// Export only: artifacts that have a row but whose blob was missing from the source's
+    /// media store, so the archive lacks them (an additive field, absent when empty).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
 }
 
 impl Manifest {
@@ -120,9 +124,18 @@ impl Manifest {
         Ok(manifest)
     }
 
-    /// The table list names exported catalogue tables in catalogue order, once each, and
-    /// file paths are plain names.
+    /// An export lists tables and no files, a backup files and no tables; the table list
+    /// names exported catalogue tables in catalogue order, once each; file paths are plain
+    /// names.
     fn check(&self) -> anyhow::Result<()> {
+        match (self.kind, &self.tables, &self.files) {
+            (Kind::Export, Some(_), None) | (Kind::Backup, None, Some(_)) => {}
+            (Kind::Export, ..) => bail!("manifest.json of an export must list tables and no files"),
+            (Kind::Backup, ..) => bail!("manifest.json of a backup must list files and no tables"),
+        }
+        if self.kind == Kind::Backup && !self.missing.is_empty() {
+            bail!("manifest.json of a backup lists missing artifacts");
+        }
         let mut last = None;
         for t in self.tables.iter().flatten() {
             let pos = catalogue::TABLES
@@ -372,7 +385,17 @@ impl<'a, R: Read> Entries<'a, R> {
             if !self.artifacts.insert(hash.clone()) {
                 bail!("refusing archive entry {path}: listed twice");
             }
-            self.artifact_bytes += size;
+            self.artifact_bytes = self.artifact_bytes.saturating_add(size);
+            if let Some(a) = self.manifest.artifacts
+                && (self.artifact_bytes > a.bytes || self.artifacts.len() as u64 > a.count)
+            {
+                bail!(
+                    "refusing archive entry {path}: more artifacts or artifact bytes than the \
+                     manifest declares ({} artifacts, {} bytes)",
+                    a.count,
+                    a.bytes
+                );
+            }
             let sha = hash.as_str().to_owned();
             return Ok((EntryKind::Artifact(hash), sha));
         }
@@ -480,6 +503,7 @@ mod tests {
             tables: Some(tables),
             files: None,
             artifacts,
+            missing: Vec::new(),
         }
     }
 
@@ -580,5 +604,101 @@ mod tests {
             assert!(check_path(bad).is_err(), "{bad}");
         }
         check_path("tables/users.ndjson").unwrap();
+    }
+
+    /// A tar.zst of raw entries `(path, type, data)`, the manifest first; no checks.
+    fn raw(manifest: &Manifest, entries: &[(&str, tar::EntryType, &[u8])]) -> Vec<u8> {
+        let mut b = tar::Builder::new(zstd::stream::write::Encoder::new(Vec::new(), 3).unwrap());
+        let json = serde_json::to_vec(manifest).unwrap();
+        let mut all = vec![(MANIFEST, tar::EntryType::Regular, json.as_slice())];
+        all.extend(entries.iter().copied());
+        for (path, kind, data) in all {
+            let mut h = tar::Header::new_gnu();
+            h.as_gnu_mut().unwrap().name[..path.len()].copy_from_slice(path.as_bytes());
+            h.set_size(data.len() as u64);
+            h.set_entry_type(kind);
+            if kind != tar::EntryType::Regular {
+                h.set_link_name("tables/users.ndjson").unwrap();
+            }
+            h.set_cksum();
+            b.append(&h, data).unwrap();
+        }
+        b.into_inner().unwrap().finish().unwrap()
+    }
+
+    fn refused(bytes: &[u8], needle: &str) {
+        let e = read_all(bytes).unwrap_err();
+        assert!(format!("{e:#}").contains(needle), "{needle}: {e:#}");
+    }
+
+    #[test]
+    fn hostile_entries_are_refused() {
+        let users: &[u8] = b"{}\n";
+        let m = manifest(vec![table("users", users, 1)], None);
+        let reg = tar::EntryType::Regular;
+        for kind in [tar::EntryType::Symlink, tar::EntryType::Link] {
+            refused(
+                &raw(&m, &[("tables/users.ndjson", kind, b"")]),
+                "not a regular file",
+            );
+        }
+        refused(
+            &raw(
+                &m,
+                &[
+                    ("tables/users.ndjson", reg, users),
+                    ("tables/users.ndjson", reg, users),
+                ],
+            ),
+            "out of manifest order",
+        );
+        refused(
+            &raw(&m, &[("tables/unknown.ndjson", reg, b"")]),
+            "not in the manifest",
+        );
+        refused(&raw(&m, &[("secret.key", reg, b"")]), "not in the manifest");
+        // A blob larger than the manifest declares is refused before it is read.
+        let blob: &[u8] = b"hello";
+        let hash = ArtifactHash::parse(&sha256_hex(blob)).unwrap();
+        let path = artifact_path(&hash);
+        let m2 = manifest(
+            vec![table("users", users, 1)],
+            Some(ArtifactsInfo { count: 1, bytes: 4 }),
+        );
+        refused(
+            &raw(
+                &m2,
+                &[("tables/users.ndjson", reg, users), (&path, reg, blob)],
+            ),
+            "artifact bytes than the manifest declares",
+        );
+    }
+
+    #[test]
+    fn oversized_manifest_is_refused() {
+        let mut b = tar::Builder::new(zstd::stream::write::Encoder::new(Vec::new(), 3).unwrap());
+        let mut h = tar::Header::new_gnu();
+        h.set_size(MAX_MANIFEST + 1);
+        h.set_entry_type(tar::EntryType::Regular);
+        b.append_data(&mut h, MANIFEST, io::repeat(b' ').take(MAX_MANIFEST + 1))
+            .unwrap();
+        let bytes = b.into_inner().unwrap().finish().unwrap();
+        refused(&bytes, "larger than");
+    }
+
+    #[test]
+    fn kind_and_lists_must_match() {
+        let mut m = manifest(vec![], None);
+        m.files = Some(vec![]);
+        assert!(m.check().is_err());
+        m.tables = None;
+        assert!(m.check().is_err(), "an export without tables");
+        m.kind = Kind::Backup;
+        m.check().unwrap();
+        m.missing = vec!["x".into()];
+        assert!(m.check().is_err());
+        m.missing.clear();
+        m.tables = Some(vec![]);
+        assert!(m.check().is_err());
     }
 }

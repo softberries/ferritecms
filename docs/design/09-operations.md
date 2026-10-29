@@ -322,7 +322,10 @@ and one `failed <key>: <reason>` line per failure on stderr. Exit 0 done, 2 when
 `site_copy.rs`, `archive.rs`; format and rules in [02 §10](02-storage.md#10-portable-export-d14)):
 `export` writes the portable archive of the site in `--data` to `--out` (a new file with mode 0600,
 an existing one is refused and a failed export removes it; `-` writes stdout, and the summary goes
-to stderr); `--with-media` adds every stored artifact. The database must be at this binary's schema
+to stderr); `--with-media` adds every stored artifact. An artifact whose file is missing from the
+media store is left out: one `missing artifact <hash>` line each on stderr, the count in the summary,
+the hashes in the manifest's `missing` list, and exit 2; a file whose content does not hash to its
+name fails the export (exit 1, the hash named). The database must be at this binary's schema
 (older: exit 1, run `ferrite migrate up`; newer: exit 3); with SQLite stop `serve` first, a
 Postgres site can be exported live. `import-site ARCHIVE --data DIR` (`-` reads stdin) loads an
 export into the fresh database of a folder made by `ferrite init`, in one transaction, then migrates
@@ -332,12 +335,17 @@ the row count and, when users have TOTP on, how to keep their sign-in working (c
 set `auth.secret_key` or `ferrite user disable-totp`). Exit 0 done; 3 when the archive's format or
 schema (or the target's schema) is newer than the binary; 1 on any other error, among them a target
 that is not fresh (the message names the first table with rows), a tampered table (sha256), a
-hostile path, a truncated stream, an archive that is a backup; in every refusal the target is
-unchanged. `db copy --from URL --to URL` streams one database into another (export + import with no
+hostile path, an over-long row line (64 MiB), more artifact bytes than the manifest declares, a
+truncated stream, an archive that is a backup, database settings that would refuse the migration
+to the binary's schema after the load (`database.auto_migrate` off, or a Postgres contract migration
+without `database.allow_contract`). No refusal leaves rows behind, and a schema step taken for the
+archive is undone (best effort; a warning says when that failed), so the import can be retried. `db copy --from URL --to URL` streams one database into another (export + import with no
 file): `postgres://…` (with `--from-schema`/`--to-schema`) or `sqlite:<path to ferrite.db>` (the
-folder lock is taken in its folder; an absent target file is created). Same source and target rules
-and exit codes as `export` and `import-site`; it copies no media (`media sync`) and writes no
-`ferrite.toml`, but prints the `[database]` lines to put there.
+folder lock is taken in its folder; an absent target file is created, and removed again when the
+copy fails). URLs only, no stdin. Same source and target rules and exit codes as `export` and
+`import-site` (no exit 2: no media); it copies no media (`media sync`) and writes no `ferrite.toml`,
+but prints the `[database]` block to put there (a password, in the user info or a `password` query
+parameter, is shown as `PASSWORD`, with a note after the block).
 
 **`ferrite media gc`** (`crates/ferrite/src/media_cmd.rs`, `crates/ferrite/src/gc.rs`; design
 03 §6): one pass of the artifacts GC in process, the same `gc::run` the daily `artifacts.gc`

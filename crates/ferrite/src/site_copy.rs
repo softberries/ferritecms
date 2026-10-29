@@ -42,6 +42,9 @@ const BATCH: usize = 500;
 const INDEX_BATCH: usize = 200;
 /// Bytes per chunk when a blob goes into the media store.
 const CHUNK: usize = 256 * 1024;
+/// The longest table row (one NDJSON line) read from an archive; far above any row the
+/// store accepts, it only bounds memory against a hostile archive.
+const MAX_LINE: usize = 64 * 1024 * 1024;
 
 /// Every exported table, in catalogue (foreign-key) order.
 pub(crate) fn exported_tables() -> Vec<&'static TableSpec> {
@@ -168,16 +171,34 @@ async fn first_non_empty(store: &dyn Store) -> anyhow::Result<Option<&'static st
     result
 }
 
-/// Readies a target for a load of `tables` written at schema `schema` (P5): refuses a
-/// newer schema ([`Newer`]) and a database that is not fresh, migrates an unmigrated
-/// database up to `schema` and a newer fresh one down to it, then opens the loader and
-/// clears `tables` (the built-in rows the migrations seed).
+/// A target readied by [`prepare_target`]: the open loader, and the schema step taken for
+/// it, which [`undo_schema`] reverts when the load fails.
+pub(crate) struct Prepared {
+    pub writer: Box<dyn ImportWriter>,
+    /// The target's schema before the step.
+    pub original: i64,
+    /// The schema the load runs at (the archive's).
+    pub schema: i64,
+}
+
+/// Readies a target for a load of `tables` written at schema `schema` (P5):
+/// - refuses a newer archive or target ([`Newer`]), a target with pending migrations and
+///   a database that is not fresh;
+/// - migrates an unmigrated database up to `schema` and a newer fresh one down to it;
+/// - checks, at `schema`, that the migration to this binary's schema after the load is
+///   allowed by the startup rules for `db` (`auto_migrate`, a Postgres contract migration
+///   needs `allow_contract`), so the load is refused before any row is written rather
+///   than left at an older schema;
+/// - opens the loader and clears `tables` (the built-in rows the migrations seed).
+///
+/// A failure after the schema step undoes it ([`undo_schema`]).
 pub(crate) async fn prepare_target(
     store: &dyn Store,
     schema: i64,
     tables: &[&'static TableSpec],
+    db: &DatabaseConfig,
     binary: &Version,
-) -> anyhow::Result<Box<dyn ImportWriter>> {
+) -> anyhow::Result<Prepared> {
     let status = store.migration_status(binary).await?;
     let latest = status.binary_version;
     if schema > latest {
@@ -200,7 +221,7 @@ pub(crate) async fn prepare_target(
         if !status.pending.is_empty() {
             bail!(
                 "the target database is at schema {current} with pending migrations; run \
-                 `ferrite migrate up` first"
+                 `ferrite migrate up` first (it applies contract migrations too)"
             );
         }
         if let Some(table) = first_non_empty(store).await? {
@@ -216,15 +237,71 @@ pub(crate) async fn prepare_target(
         // Safe: the database holds no data (checked above).
         down_locked(store, schema, true, MIGRATE_LOCK_WAIT).await?;
     }
-    let mut writer = store.import_writer().await?;
-    writer.clear(tables).await?;
-    Ok(writer)
+    let opened = async {
+        let status = store.migration_status(binary).await?;
+        decide(&status, store.backend(), db, binary).context(
+            "after the load the database is migrated to this binary's schema, which these \
+             database settings refuse",
+        )?;
+        let mut writer = store.import_writer().await?;
+        writer.clear(tables).await?;
+        anyhow::Ok(writer)
+    }
+    .await;
+    match opened {
+        Ok(writer) => Ok(Prepared {
+            writer,
+            original: current,
+            schema,
+        }),
+        Err(e) => {
+            undo_schema(store, schema, current, binary).await;
+            Err(e)
+        }
+    }
 }
 
-/// After a load: migrates up to this binary's schema under the startup rules (a migration
-/// they refuse, e.g. a Postgres contract migration without `allow_contract`, is left
-/// pending with a note), then rebuilds the search index of every item through the same
-/// core function every content write uses.
+/// Best effort after a failed load: takes a fresh target from `schema` (the archive's)
+/// back to `original` (its schema before [`prepare_target`]), so it is fresh at its own
+/// schema again and a retry is accepted. Safe because the database holds no rows. A
+/// failure is logged and printed, not returned.
+pub(crate) async fn undo_schema(store: &dyn Store, schema: i64, original: i64, binary: &Version) {
+    if schema == original {
+        return;
+    }
+    let undone = if original > schema {
+        up_locked(store, Some(original), MIGRATE_LOCK_WAIT).await
+    } else {
+        down_locked(store, original, true, MIGRATE_LOCK_WAIT).await
+    };
+    let now = store
+        .migration_status(binary)
+        .await
+        .map(|s| s.db_version)
+        .unwrap_or(-1);
+    match undone {
+        Ok(_) if now == original => {}
+        Ok(_) => {
+            tracing::error!(original, now, "the target's schema was not restored");
+            eprintln!(
+                "warning: the target database is at schema {now}, not {original} as before; run \
+                 `ferrite migrate up` before retrying"
+            );
+        }
+        Err(e) => {
+            tracing::error!(error = %format!("{e:#}"), original, "restoring the target's schema failed");
+            eprintln!(
+                "warning: the target database stays at schema {schema} (it was at {original}): \
+                 {e:#}; run `ferrite migrate up` before retrying"
+            );
+        }
+    }
+}
+
+/// After a load: migrates up to this binary's schema under the startup rules (which
+/// [`prepare_target`] already checked), then rebuilds the search index of every item
+/// through the same core function every content write uses. The rebuild runs only at
+/// the binary's schema, which the repository queries are written for.
 pub(crate) async fn finalize(
     store: &dyn Store,
     db: &DatabaseConfig,
@@ -232,20 +309,22 @@ pub(crate) async fn finalize(
     stats: &LoadStats,
 ) -> anyhow::Result<()> {
     let status = store.migration_status(binary).await?;
-    match decide(&status, store.backend(), db, binary) {
-        Ok(Decision::MigrateUp) => {
-            let applied = up_locked(store, None, MIGRATE_LOCK_WAIT).await?;
-            tracing::info!(?applied, "applied pending migrations");
-        }
-        Ok(_) => {}
-        Err(e) => println!(
-            "note: the database stays at schema {}: {e:#}",
-            status.db_version
-        ),
-    }
-    rebuild_search(store, &stats.items)
-        .await
-        .context("the rows were imported, but rebuilding the search index failed")
+    let migrated = match decide(&status, store.backend(), db, binary) {
+        Ok(Decision::MigrateUp) => up_locked(store, None, MIGRATE_LOCK_WAIT)
+            .await
+            .map(|applied| tracing::info!(?applied, "applied pending migrations")),
+        Ok(_) => Ok(()),
+        Err(e) => Err(e),
+    };
+    migrated.context(
+        "the rows were imported, but migrating to this binary's schema failed and the search \
+         index is not rebuilt; this import cannot be finished, so import again into a fresh \
+         database",
+    )?;
+    rebuild_search(store, &stats.items).await.context(
+        "the rows were imported, but rebuilding the search index failed; import again into a \
+         fresh database",
+    )
 }
 
 async fn rebuild_search(store: &dyn Store, items: &[Uuid]) -> anyhow::Result<()> {
@@ -296,6 +375,20 @@ impl<W: Write> Write for Hashing<W> {
     }
 }
 
+/// Hashes everything read through it.
+struct HashingRead<R> {
+    inner: R,
+    hasher: Sha256,
+}
+
+impl<R: Read> Read for HashingRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.hasher.update(&buf[..n]);
+        Ok(n)
+    }
+}
+
 /// The table files of one snapshot, spooled to `dir` (tar needs their sizes).
 struct Spooled {
     tables: Vec<TableEntry>,
@@ -311,8 +404,7 @@ async fn spool(reader: &mut dyn ExportReader, dir: &Path) -> anyhow::Result<Spoo
     };
     for table in exported_tables() {
         let path = dir.join(format!("{}.ndjson", table.name));
-        let file = std::fs::File::create(&path)
-            .with_context(|| format!("cannot create {}", path.display()))?;
+        let file = crate::init::create_private(&path)?;
         let mut w = Hashing {
             inner: io::BufWriter::new(file),
             hasher: Sha256::new(),
@@ -376,11 +468,15 @@ pub async fn export_to<W: Write + Send + 'static>(
     let spooled = spooled?;
 
     let mut blobs = Vec::new();
+    let mut missing = Vec::new();
     if let Some(media) = &media {
         for hash in &spooled.hashes {
             match media.head(hash).await? {
                 Some(size) => blobs.push((hash.clone(), size)),
-                None => tracing::warn!(%hash, "artifact missing from the media store; left out"),
+                None => {
+                    eprintln!("missing artifact {hash}");
+                    missing.push(hash.to_string());
+                }
             }
         }
     }
@@ -398,6 +494,7 @@ pub async fn export_to<W: Write + Send + 'static>(
             count: blobs.len() as u64,
             bytes: blobs.iter().map(|(_, s)| s).sum(),
         }),
+        missing,
     };
     let handle = Handle::current();
     let m = manifest.clone();
@@ -420,7 +517,18 @@ pub async fn export_to<W: Write + Send + 'static>(
                 let stream = read.stream.map_err(|e: MediaError| io::Error::other(e));
                 let bridge =
                     SyncIoBridge::new_with_handle(StreamReader::new(stream), handle.clone());
-                writer.append_stream(&artifact_path(&hash), size, bridge)?;
+                let mut hashing = HashingRead {
+                    inner: bridge,
+                    hasher: Sha256::new(),
+                };
+                writer.append_stream(&artifact_path(&hash), size, &mut hashing)?;
+                let got = ferrite_domain::to_hex(&hashing.hasher.finalize());
+                if got != hash.as_str() {
+                    bail!(
+                        "artifact {hash}: the media store holds content with hash {got} under \
+                         that name (a damaged file); the export is not usable"
+                    );
+                }
             }
         }
         let out = writer.finish()?;
@@ -439,11 +547,12 @@ pub async fn import_from(
     input: Box<dyn Read + Send>,
     store: Arc<dyn Store>,
     media: Option<Arc<MediaStore>>,
+    db: DatabaseConfig,
     binary: Version,
 ) -> anyhow::Result<(Manifest, LoadStats)> {
     let handle = Handle::current();
     tokio::task::spawn_blocking(move || {
-        load_archive(&handle, input, store.as_ref(), media, &binary)
+        load_archive(&handle, input, store.as_ref(), media, &db, &binary)
     })
     .await?
 }
@@ -453,6 +562,7 @@ fn load_archive(
     input: Box<dyn Read + Send>,
     store: &dyn Store,
     media: Option<Arc<MediaStore>>,
+    db: &DatabaseConfig,
     binary: &Version,
 ) -> anyhow::Result<(Manifest, LoadStats)> {
     let mut reader = ArchiveReader::new(input)?;
@@ -467,17 +577,40 @@ fn load_archive(
         .flatten()
         .map(|t| catalogue::table(&t.name).context("unknown table"))
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let mut writer = handle.block_on(prepare_target(
+    let Prepared {
+        mut writer,
+        original,
+        schema,
+    } = handle.block_on(prepare_target(
         store,
         manifest.schema_version,
         &tables,
+        db,
         binary,
     ))?;
     let mut stats = LoadStats::default();
+    let loaded = load_entries(handle, &mut entries, writer.as_mut(), media, &mut stats)
+        .and_then(|()| handle.block_on(writer.commit()).map_err(Into::into));
+    if let Err(e) = loaded {
+        // The writer was consumed by `commit` or is dropped here (a rollback) before the
+        // schema step is undone, so the writer connection is free.
+        handle.block_on(undo_schema(store, schema, original, binary));
+        return Err(e);
+    }
+    Ok((manifest, stats))
+}
+
+fn load_entries<R: Read>(
+    handle: &Handle,
+    entries: &mut crate::archive::Entries<'_, R>,
+    writer: &mut dyn ImportWriter,
+    media: Option<Arc<MediaStore>>,
+    stats: &mut LoadStats,
+) -> anyhow::Result<()> {
     while let Some(mut entry) = entries.next_entry()? {
         match entry.kind.clone() {
             EntryKind::Table { spec, rows } => {
-                let read = load_table(handle, writer.as_mut(), spec, &mut entry, &mut stats)?;
+                let read = load_table(handle, writer, spec, &mut entry, stats)?;
                 let path = entry.path.clone();
                 entry.finish()?;
                 if read != rows {
@@ -486,13 +619,12 @@ fn load_archive(
                 handle.block_on(writer.finish_table(spec))?;
             }
             EntryKind::Artifact(hash) => {
-                store_blob(handle, media.as_ref(), &hash, entry, &mut stats)?;
+                store_blob(handle, media.as_ref(), &hash, entry, stats)?;
             }
             EntryKind::File(path) => bail!("unexpected file {path} in an export"),
         }
     }
-    handle.block_on(writer.commit())?;
-    Ok((manifest, stats))
+    Ok(())
 }
 
 /// Streams the rows of one table file into the loader; returns how many there were.
@@ -507,18 +639,27 @@ fn load_table<R: Read>(
     let mut lines = BufReader::new(entry);
     let mut batch = Vec::with_capacity(BATCH);
     let mut count = 0u64;
-    let mut line = String::new();
+    let mut line = Vec::new();
     loop {
         line.clear();
-        if lines
-            .read_line(&mut line)
-            .with_context(|| format!("cannot read {path}"))?
-            == 0
-        {
+        // At most MAX_LINE bytes plus the newline, so a hostile entry cannot grow it.
+        let n = (&mut lines)
+            .take(MAX_LINE as u64 + 1)
+            .read_until(b'\n', &mut line)
+            .with_context(|| format!("cannot read {path}"))?;
+        if n == 0 {
             break;
         }
         count += 1;
-        let row: Row = serde_json::from_str(line.trim_end_matches('\n'))
+        if line.last() == Some(&b'\n') {
+            line.pop();
+        } else if line.len() > MAX_LINE {
+            bail!(
+                "{path}: line {count} is longer than {} MiB; the archive is damaged or hostile",
+                MAX_LINE / (1024 * 1024)
+            );
+        }
+        let row: Row = serde_json::from_slice(&line)
             .with_context(|| format!("{path}: line {count} is not a JSON object"))?;
         stats.observe(spec, &row);
         batch.push(row);
@@ -556,9 +697,11 @@ fn store_blob<R: Read>(
     }
     let (tx, mut rx) = tokio::sync::mpsc::channel::<io::Result<Bytes>>(4);
     let m = media.clone();
+    // The entry never yields more than its declared size; the cap guards the store too.
+    let limit = entry.size();
     let put = handle.spawn(async move {
         let stream = futures::stream::poll_fn(move |cx| rx.poll_recv(cx));
-        m.put_stream(stream, u64::MAX).await
+        m.put_stream(stream, limit).await
     });
     let mut buf = vec![0; CHUNK];
     let mut read_error = None;
@@ -599,16 +742,42 @@ fn store_blob<R: Read>(
 pub async fn copy(
     source: &dyn Store,
     target: &dyn Store,
+    db: &DatabaseConfig,
     binary: &Version,
 ) -> anyhow::Result<LoadStats> {
     let status = source.migration_status(binary).await?;
     check_source(&status)?;
     let tables = exported_tables();
-    let mut writer = prepare_target(target, status.db_version, &tables, binary).await?;
-    let mut reader = source.export_reader().await?;
+    let Prepared {
+        mut writer,
+        original,
+        schema,
+    } = prepare_target(target, status.db_version, &tables, db, binary).await?;
     let mut stats = LoadStats::default();
+    let loaded = match copy_rows(source, writer.as_mut(), &tables, &mut stats).await {
+        Ok(()) => writer.commit().await.map_err(Into::into),
+        Err(e) => {
+            drop(writer);
+            Err(e)
+        }
+    };
+    if let Err(e) = loaded {
+        undo_schema(target, schema, original, binary).await;
+        return Err(e);
+    }
+    Ok(stats)
+}
+
+/// Streams every table of one read snapshot of `source` into `writer`.
+async fn copy_rows(
+    source: &dyn Store,
+    writer: &mut dyn ImportWriter,
+    tables: &[&'static TableSpec],
+    stats: &mut LoadStats,
+) -> anyhow::Result<()> {
+    let mut reader = source.export_reader().await?;
     let copied = async {
-        for table in &tables {
+        for table in tables {
             let mut after = None;
             loop {
                 let rows = next_page(reader.as_mut(), table, &mut after).await?;
@@ -628,8 +797,7 @@ pub async fn copy(
         anyhow::Ok(())
     }
     .await;
-    reader.finish().await?;
+    let finished = reader.finish().await;
     copied?;
-    writer.commit().await?;
-    Ok(stats)
+    Ok(finished?)
 }

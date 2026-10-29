@@ -43,15 +43,21 @@ pub enum Command {
     /// password hashes and sealed secrets but never secret.key. The database must be at
     /// this binary's schema.
     ///
-    /// Exit code: 0 ok, 3 when the database schema is newer than this binary, 1 on any
-    /// other error (an older schema: run `ferrite migrate up` first).
+    /// With `--with-media`, an artifact whose file is missing from the media store is left
+    /// out (one `missing artifact <hash>` line each on stderr, listed in the manifest); a
+    /// file whose content does not match its hash fails the export.
+    ///
+    /// Exit code: 0 ok, 2 done but artifacts were missing from the media store, 3 when the
+    /// database schema is newer than this binary, 1 on any other error (an older schema:
+    /// run `ferrite migrate up` first); a failed export removes its file.
     Export(export_cmd::ExportArgs),
     /// Load an export archive into a fresh site (made by `ferrite init`).
     ///
     /// The database must be fresh: no rows but the built-in content types and taxonomies.
     /// An archive from an older schema is loaded at that schema, then migrated up; the
-    /// search index is rebuilt. Everything lands in one transaction, so a refused, damaged
-    /// or truncated archive leaves the database as it was.
+    /// search index is rebuilt. The rows land in one transaction, so a refused, damaged or
+    /// truncated archive leaves no rows; a schema step taken for the archive is undone
+    /// (best effort, a warning says when it failed), so the import can be retried.
     ///
     /// Exit code: 0 ok, 3 when the archive's format or schema is newer than this binary,
     /// 1 on any other error.
