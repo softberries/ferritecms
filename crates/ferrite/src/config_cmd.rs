@@ -3,7 +3,7 @@
 use std::process::ExitCode;
 
 use clap::Subcommand;
-use ferrite_config::{ClusterMode, Config, ConfigError, DbKind, MediaSection};
+use ferrite_config::{ClusterMode, Config, ConfigError, ConfigProblem, DbKind, MediaSection};
 
 use crate::cli::DataArg;
 use crate::utf8_env;
@@ -13,7 +13,7 @@ pub enum ConfigCommand {
     /// Load ferrite.toml and FERRITE_* variables exactly as `serve` does, without
     /// touching the database or media.
     ///
-    /// Prints `ok: mode=… database=… media=… workers=… mail=…` and exits 0, or prints every
+    /// Prints `ok: mode=… database=… media=… workers=… mail=… backup=…` and exits 0, or prints every
     /// problem to stderr and exits 1.
     Check(DataArg),
 }
@@ -22,6 +22,17 @@ pub fn run(cmd: ConfigCommand) -> anyhow::Result<ExitCode> {
     match cmd {
         ConfigCommand::Check(args) => match ferrite_config::load(&args.data, utf8_env()?) {
             Ok(config) => {
+                // The repository checks `serve` runs before it starts (no database needed).
+                if let Err(e) = crate::jobs::backup_location(&config) {
+                    let e = ConfigError {
+                        problems: vec![ConfigProblem {
+                            path: "backup.to".to_owned(),
+                            message: format!("{e:#}"),
+                        }],
+                    };
+                    eprintln!("{}", problems(&e));
+                    return Ok(ExitCode::FAILURE);
+                }
                 for warning in warnings(&config) {
                     eprintln!("warning: {warning}");
                 }
@@ -73,8 +84,9 @@ fn summary(config: &Config) -> String {
         "off"
     };
     format!(
-        "ok: mode={mode} database={database} media={media} workers={} mail={mail}",
-        config.cluster.workers
+        "ok: mode={mode} database={database} media={media} workers={} mail={mail} backup={}",
+        config.cluster.workers,
+        config.backup.schedule.as_str()
     )
 }
 

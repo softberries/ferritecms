@@ -110,7 +110,7 @@ rollback is always driven by the newer binary before swapping back.
 |---|---|---|
 | Primary | `ferrite backup --to <dir|file.tar.zst|s3://…>`: `VACUUM INTO` snapshot + `ferrite.toml` + media artifacts (incremental by hash) | Provider automated backups + PITR; S3 bucket versioning/replication |
 | Portable | `ferrite export` ([02 §10](02-storage.md#10-portable-export-d14)) | same — independent of the provider |
-| Schedule | `[backup] schedule = "daily"`, `keep = 7`, `to = "s3://…"` → periodic job | external (provider) + optional scheduled `export` to S3 |
+| Schedule | `[backup] schedule = "daily"\|"weekly"`, `to = "<dir>\|s3://…"`, `keep = 7` → the `site.backup` job inside `serve`: a repository snapshot, `keep` snapshots kept | external (provider), plus the same `[backup]`: an export archive to `<to>/exports/`, `keep` archives kept |
 | Restore | `ferrite restore <backup> --data ./site` (into empty folder or with `--force` moving the old one aside) | provider restore / `ferrite import-site` |
 
 Content-level "undo" (point-in-time for a single item) is revisions (02). Site-wide
@@ -158,10 +158,61 @@ holds `ferrite.lock`). The sequence:
   last, `manifest.json`. A snapshot without a manifest is incomplete and ignored. Two runs in
   the same second get consecutive names. `--keep N` (1–1000; default keep all) then deletes
   the snapshot folders older than the newest N complete ones (only the file names a snapshot
-  holds), then every repository blob no kept snapshot lists, and staging objects under
-  `tmp/` (media-store names only) older than 24 hours: one site per repository. When pruning
+  holds), then every repository blob no kept snapshot lists that is older than 24 hours, and
+  staging objects under `tmp/` (media-store names only) older than 24 hours: one site per
+  repository. A younger unlisted blob is kept (R14): it may belong to a snapshot another
+  process is still writing into the same repository (its manifest, which lists it, comes
+  last); a run marks the local blobs it finds already present as used now for the same
+  reason (S3 objects are not touched, so on S3 a reused blob is protected only by being
+  listed in a kept snapshot). When pruning
   fails after the snapshot was written, the command exits 1 and the new snapshot stays. S3
   credentials and endpoint come from the `AWS_*` environment, as for `media sync`.
+
+**Scheduled backups (as built, M4-1 P15, `crates/ferrite/src/jobs/backup.rs`).** With
+`[backup] schedule = "daily"` or `"weekly"` ([01 §4](01-architecture.md#4-configuration)),
+`serve` registers the `site.backup` job and a periodic every 86 400 s or 604 800 s; with
+`"off"` (the default) it registers neither. Like every periodic, each period's job has the
+unique key `site.backup:<period start>`, so one node runs it per period; one run at a time
+holds the store lock `site.backup` (a second is `Busy` and tried again a few seconds
+later). Its timeout is 6 hours, and a failure is retried up to 3 attempts in all, then the
+job is `dead` (System → Jobs; the next period starts again). Periods are aligned to the Unix
+epoch on the database clock: a daily backup is due at 00:00 UTC, a weekly one on Thursday
+00:00 UTC (1970-01-01 was a Thursday). The first `serve` in a period inserts that period's
+job due at the period's start, which has passed, so it runs right away; a node restarted
+later in the same period does not run it again. `to` is a folder or
+`s3://bucket[/prefix]` (`AWS_*` credentials, as above), never an archive path; a relative
+path is relative to the data folder (made absolute first, so `--data .` works) and must lie
+outside it (`"../backups"`). `config check` and `serve` run the same location check (the
+repository rules of `ferrite backup --to <folder>`: not inside the data folder or the local
+media root, symlinks resolved where the paths exist, no S3 prefix overlapping the media
+store's), and `serve` refuses to start when it fails.
+
+- **SQLite:** the repository backup above, in process (the snapshot is safe next to the
+  live writers), with `secret.key`, the blobs unless `with_media = false`, and
+  `--keep <keep>`. Restore with `ferrite restore <to>`. A restored folder keeps the same
+  `[backup]`, and a relative `to` such as `../backups` then names the same repository for
+  a sibling copy: `ferrite restore` prints a warning naming the repository when the
+  restored schedule is not off. Set `FERRITE_BACKUP__SCHEDULE=off` (or edit `[backup]`)
+  before serving a copy that must not write into it; otherwise both sites' snapshots count
+  towards `keep` and `ferrite restore <to>` takes the newest of either.
+- **Postgres:** a [02 §10](02-storage.md#10-portable-export-d14) export archive (blobs
+  unless `with_media = false`; never `secret.key`) written to
+  `<data>/backups/export-<UTC yyyymmddThhmmssZ>.tmp` (mode 0600), uploaded to
+  `<to>/exports/<UTC yyyymmddThhmmssZ>.ferrite.tar.zst` (a local folder gets it as
+  `….part` first, then renamed; S3 sees it only when the upload completes), read back and its
+  sha256 compared, then the local file is deleted (on every path; leftovers of killed runs
+  older than a day are removed first). The tables are spooled as NDJSON in a
+  `<data>/backups/ferrite-export-*` folder while the archive is built (not the system
+  temporary folder; removed afterwards, a killed run's after a day). An S3 upload cut off by
+  the timeout is aborted in the background; one left by a killed process stays an
+  incomplete multipart upload, so give the bucket a lifecycle rule that removes those. `<to>` is a repository with its marker like any
+  other; the newest `keep` archives are kept and only names of that exact form are deleted
+  (plus `.part` leftovers older than a day). Load one with `ferrite import-site`. In
+  cluster mode a local `to` is on whichever node ran the job (`serve` logs a warning):
+  use `s3://` or a shared folder.
+
+A scheduled run whose site lacks some blobs (below) succeeds, with a warning in the log that
+gives the count and the first hashes; it is not retried.
 
 An artifact whose blob is missing from the media store is left out and named in the
 manifest's `missing` list (exit 2); a blob whose content does not hash to its name fails the
@@ -487,8 +538,8 @@ the inputs (`<data>/import/job-<id>/`) and the run's work file (`<data>/import/<
 **`ferrite config check`** (`crates/ferrite/src/config_cmd.rs`): loads `<data>/ferrite.toml`
 plus the `FERRITE_*` environment exactly as `serve` does (`ferrite_config::load`) and never
 opens the database or the media store. Valid: prints one line,
-`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off>` (`mode`
-is the effective mode, `auto` resolved; `workers` the effective `cluster.workers`; `mail` whether `[mail]` is set), exit
+`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> backup=<off|daily|weekly>` (`mode`
+is the effective mode, `auto` resolved; `workers` the effective `cluster.workers`; `mail` whether `[mail]` is set, `backup` the `[backup] schedule`), exit
 0. Invalid: prints `error: invalid configuration (<n> problem(s))` and one
 `  <path>: <message>` line per problem to stderr (secret values are never printed), exit 1.
 Checks that need the database (site id, live nodes, migrations) are not part of it.

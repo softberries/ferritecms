@@ -18,6 +18,9 @@ pub const LOCK_IMPORT: &str = "import";
 /// Held by one artifacts GC run (the `artifacts.gc` job or `ferrite media gc`, M4-1 P12),
 /// taken with [`Store::try_lock`]: a second run is refused, not queued.
 pub const LOCK_GC: &str = "artifacts.gc";
+/// Held by one scheduled backup run (the `site.backup` job, M4-1 P15), taken with
+/// [`Store::try_lock`]: a second run is refused, not queued.
+pub const LOCK_BACKUP: &str = "site.backup";
 
 /// How often the default [`Store::lock_wait`] retries [`Store::try_lock`] while the lock is taken.
 pub const LOCK_POLL: Duration = Duration::from_millis(250);
@@ -83,6 +86,7 @@ mod tests {
             LOCK_EXTENSIONS,
             LOCK_IMPORT,
             LOCK_GC,
+            LOCK_BACKUP,
             LOCK_TYPES,
             "a.b_c-9",
             &"x".repeat(64),

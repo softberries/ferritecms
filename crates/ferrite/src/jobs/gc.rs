@@ -69,5 +69,6 @@ pub fn artifacts_gc_periodic() -> Periodic {
         kind: ARTIFACTS_GC_KIND,
         every: ARTIFACTS_GC_EVERY,
         payload: json!({"v": 1}),
+        max_attempts: ferrite_domain::DEFAULT_MAX_ATTEMPTS,
     }
 }

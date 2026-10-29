@@ -512,23 +512,33 @@ async fn spool(reader: &mut dyn ExportReader, dir: &Path) -> anyhow::Result<Spoo
     Ok(out)
 }
 
+/// The name prefix of the folder an export spools its tables into (a random suffix
+/// follows).
+pub(crate) const SPOOL_PREFIX: &str = "ferrite-export-";
+
 /// Writes an export archive of `store` to `out` (M4-1 P7): every exported table from one
 /// read snapshot (on SQLite one reader connection is held for the dump) and, with
 /// `media`, the blob of every `artifacts` row. A blob missing from the store is left out
-/// with a warning. The source must be at this binary's schema ([`check_source`]).
-/// Returns the manifest and `out`.
+/// and named in the manifest's `missing` (the caller reports it). The source must be at
+/// this binary's schema ([`check_source`]). The tables are spooled to a
+/// [`SPOOL_PREFIX`] folder in `spool_in` (default: the system temporary folder), removed
+/// afterwards. Returns the manifest and `out`.
 pub async fn export_to<W: Write + Send + 'static>(
     store: &dyn Store,
     media: Option<Arc<MediaStore>>,
     out: W,
     binary: &Version,
+    spool_in: Option<&Path>,
 ) -> anyhow::Result<(Manifest, W)> {
     let status = store.migration_status(binary).await?;
     check_source(&status)?;
-    let dir = tempfile::Builder::new()
-        .prefix("ferrite-export-")
-        .tempdir()
-        .context("cannot create a temporary folder")?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(SPOOL_PREFIX);
+    let dir = match spool_in {
+        Some(parent) => builder.tempdir_in(parent),
+        None => builder.tempdir(),
+    }
+    .context("cannot create a temporary folder")?;
     let mut reader = store.export_reader().await?;
     let spooled = spool(reader.as_mut(), dir.path()).await;
     reader.finish().await?;
@@ -540,10 +550,7 @@ pub async fn export_to<W: Write + Send + 'static>(
         for hash in &spooled.hashes {
             match media.head(hash).await? {
                 Some(size) => blobs.push((hash.clone(), size)),
-                None => {
-                    eprintln!("missing artifact {hash}");
-                    missing.push(hash.to_string());
-                }
+                None => missing.push(hash.to_string()),
             }
         }
     }

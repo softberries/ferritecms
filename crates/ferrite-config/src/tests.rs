@@ -381,6 +381,7 @@ fn render_default_toml_roundtrips() {
     assert_eq!(c2.cluster, c3.cluster);
     assert_eq!(c2.auth, c3.auth);
     assert_eq!(c2.uploads, c3.uploads);
+    assert_eq!(c2.backup, c3.backup);
     assert!(matches!(c2.media, MediaSection::Local { .. }));
 }
 
@@ -1172,4 +1173,131 @@ fn conditional_put_disabled_parses() {
     }
     let (_d, r) = run(Some(&s3_toml("conditional_put = \"always\"\n")), &[]);
     assert_eq!(paths(&r.unwrap_err()), ["media.s3.conditional_put"]);
+}
+
+#[test]
+fn backup_config_parses_and_validates() {
+    // Default: off, nothing else needed.
+    let (_d, r) = run(Some(MIN), &[]);
+    assert_eq!(
+        r.unwrap().backup,
+        BackupConfig {
+            schedule: BackupSchedule::Off,
+            to: None,
+            keep: 7,
+            with_media: true,
+        }
+    );
+    assert_eq!(BackupSchedule::Off.every_secs(), None);
+    assert_eq!(BackupSchedule::Daily.every_secs(), Some(86_400));
+    assert_eq!(BackupSchedule::Weekly.every_secs(), Some(604_800));
+
+    let (_d, r) = run(
+        Some(&format!(
+            "{MIN}[backup]\nschedule = \"weekly\"\nto = \"/srv/backups\"\nkeep = 1000\nwith_media = false\n"
+        )),
+        &[],
+    );
+    let c = r.unwrap();
+    assert_eq!(c.backup.schedule, BackupSchedule::Weekly);
+    assert_eq!(c.backup.schedule.as_str(), "weekly");
+    assert_eq!(c.backup.to.as_deref(), Some("/srv/backups"));
+    assert_eq!(c.backup.keep, 1000);
+    assert!(!c.backup.with_media);
+    // Relative to the data folder (and outside it), s3://, and the environment.
+    let (_d, r) = run(
+        Some(&format!(
+            "{MIN}[backup]\nschedule = \"daily\"\nto = \"../backups\"\nkeep = 1\n"
+        )),
+        &[],
+    );
+    let c = r.unwrap();
+    assert_eq!(c.backup.schedule, BackupSchedule::Daily);
+    assert_eq!(c.backup.to.as_deref(), Some("../backups"));
+    assert_eq!(c.backup.keep, 1);
+    let (_d, r) = run(
+        Some(MIN),
+        &[
+            ("FERRITE_BACKUP__SCHEDULE", "daily"),
+            ("FERRITE_BACKUP__TO", "s3://bucket/site-a"),
+        ],
+    );
+    assert_eq!(r.unwrap().backup.to.as_deref(), Some("s3://bucket/site-a"));
+    // A `to` with the schedule off is kept (and checked the same way).
+    let (_d, r) = run(Some(&format!("{MIN}[backup]\nto = \"/srv/b\"\n")), &[]);
+    assert_eq!(r.unwrap().backup.schedule, BackupSchedule::Off);
+
+    let problem = |toml: &str| {
+        let (_d, r) = run(Some(&format!("{MIN}[backup]\n{toml}")), &[]);
+        let e = r.unwrap_err();
+        assert_eq!(e.problems.len(), 1, "{toml}: {e:?}");
+        (e.problems[0].path.clone(), e.problems[0].message.clone())
+    };
+    assert_eq!(
+        problem("schedule = \"daily\"\n"),
+        (
+            "backup.to".into(),
+            "required unless backup.schedule is \"off\"".into()
+        )
+    );
+    assert_eq!(problem("schedule = \"hourly\"\n").0, "backup.schedule");
+    assert_eq!(
+        problem("schedule = \"daily\"\nto = \"/b\"\nkeep = 0\n"),
+        ("backup.keep".into(), "must be between 1 and 1000".into())
+    );
+    assert_eq!(
+        problem("schedule = \"daily\"\nto = \"/b\"\nkeep = 1001\n").0,
+        "backup.keep"
+    );
+    assert_eq!(
+        problem("schedule = \"daily\"\nto = \"/b\"\nevery = 3\n"),
+        ("backup.every".into(), "unknown key".into())
+    );
+    assert_eq!(problem("with_media = \"yes\"\n").0, "backup.with_media");
+    for bad in [
+        "\"\"",
+        "\"-\"",
+        "\"/srv/site.tar.zst\"",
+        "\"gs://bucket\"",
+        "\"s3://\"",
+        "\"inside\"",
+        "\"./x/../y\"",
+        "\".\"",
+    ] {
+        assert_eq!(
+            problem(&format!("schedule = \"daily\"\nto = {bad}\n")).0,
+            "backup.to",
+            "{bad}"
+        );
+    }
+    let (_d, r) = run(Some(&format!("backup = 3\n{MIN}")), &[]);
+    assert_eq!(paths(&r.unwrap_err()), ["backup"]);
+}
+
+#[test]
+fn backup_template_is_commented_and_parses_uncommented() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("site");
+    std::fs::create_dir(&data).unwrap();
+    let rendered = render_default_toml("https://example.com", "", None, None, &InitMedia::Local);
+    let at = rendered
+        .find("# [backup]\n")
+        .expect("template has [backup]");
+    // Uncomment the section's header and keys (not its prose lines).
+    let mut uncommented = rendered[..at].to_owned();
+    for line in rendered[at..].lines() {
+        let l = line.strip_prefix("# ").unwrap_or(line);
+        if l.starts_with('[') || l.contains(" = ") {
+            uncommented.push_str(l);
+        } else {
+            uncommented.push_str(line);
+        }
+        uncommented.push('\n');
+    }
+    std::fs::write(data.join("ferrite.toml"), &uncommented).unwrap();
+    let c = load(&data, env(&[])).unwrap();
+    assert_eq!(c.backup.schedule, BackupSchedule::Daily);
+    assert_eq!(c.backup.to.as_deref(), Some("../backups"));
+    assert_eq!(c.backup.keep, 7);
+    assert!(c.backup.with_media);
 }

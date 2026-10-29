@@ -781,11 +781,116 @@ fn config_check_reports_effective_settings() {
     });
     assert_eq!(
         out.trim(),
-        "ok: mode=solo database=sqlite media=local workers=3 mail=off"
+        "ok: mode=solo database=sqlite media=local workers=3 mail=off backup=off"
     );
     // Never touches the database or media folder.
     assert!(!tmp.path().join("ferrite.db").exists());
     assert!(!tmp.path().join("media").exists());
+}
+
+#[test]
+fn config_check_prints_backup() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("site");
+    std::fs::create_dir(&data).unwrap();
+    std::fs::write(
+        data.join("ferrite.toml"),
+        "[site]\nurl = \"https://example.com\"\n[cluster]\nworkers = 2\n\
+         [backup]\nschedule = \"weekly\"\nto = \"../repo\"\n",
+    )
+    .unwrap();
+    let out = stdout({
+        let mut c = ferrite();
+        c.args(["config", "check", "--data"]).arg(&data);
+        c
+    });
+    assert_eq!(
+        out.trim(),
+        "ok: mode=solo database=sqlite media=local workers=2 mail=off backup=weekly"
+    );
+    // The environment switches it like `serve`; a missing `to` is a problem (exit 1).
+    let out = stdout({
+        let mut c = ferrite();
+        c.args(["config", "check", "--data"])
+            .arg(&data)
+            .env("FERRITE_BACKUP__SCHEDULE", "daily");
+        c
+    });
+    assert!(out.trim().ends_with(" backup=daily"), "{out}");
+    std::fs::write(
+        data.join("ferrite.toml"),
+        "[site]\nurl = \"https://example.com\"\n[backup]\nschedule = \"daily\"\n",
+    )
+    .unwrap();
+    let out = ferrite()
+        .args(["config", "check", "--data"])
+        .arg(&data)
+        .assert()
+        .code(1)
+        .get_output()
+        .stderr
+        .clone();
+    let err = String::from_utf8(out).unwrap();
+    assert!(err.contains("backup.to: required"), "{err}");
+    // Nothing is created by the check.
+    assert!(!tmp.path().join("repo").exists());
+
+    // `--data .` (a relative data folder): an absolute or sibling `to` is fine.
+    let elsewhere = tmp.path().join("elsewhere");
+    for to in [elsewhere.to_str().unwrap(), "../backups"] {
+        std::fs::write(
+            data.join("ferrite.toml"),
+            format!(
+                "[site]\nurl = \"https://example.com\"\n[backup]\nschedule = \"daily\"\nto = \"{to}\"\n"
+            ),
+        )
+        .unwrap();
+        let out = stdout({
+            let mut c = ferrite();
+            c.current_dir(&data)
+                .args(["config", "check", "--data", "."]);
+            c
+        });
+        assert!(out.trim().ends_with(" backup=daily"), "{to}: {out}");
+    }
+
+    // The same location check as `serve`: a symlink into the data folder and the media
+    // root are refused.
+    #[cfg(unix)]
+    {
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&data, &link).unwrap();
+        let inside = link.join("repo");
+        for (to, media) in [
+            (inside.to_str().unwrap().to_owned(), String::new()),
+            (
+                tmp.path().join("media/repo").to_str().unwrap().to_owned(),
+                format!(
+                    "[media]\nroot = \"{}\"\n",
+                    tmp.path().join("media").display()
+                ),
+            ),
+        ] {
+            std::fs::write(
+                data.join("ferrite.toml"),
+                format!(
+                    "[site]\nurl = \"https://example.com\"\n{media}[backup]\nschedule = \"daily\"\nto = \"{to}\"\n"
+                ),
+            )
+            .unwrap();
+            let out = ferrite()
+                .args(["config", "check", "--data"])
+                .arg(&data)
+                .assert()
+                .code(1)
+                .get_output()
+                .stderr
+                .clone();
+            let err = String::from_utf8(out).unwrap();
+            assert!(err.contains("backup.to: "), "{to}: {err}");
+            assert!(err.contains("inside the"), "{to}: {err}");
+        }
+    }
 }
 
 #[test]
@@ -811,7 +916,7 @@ fn config_check_applies_env_like_serve() {
     // auto + Postgres + S3 resolves to cluster.
     assert_eq!(
         out.trim(),
-        "ok: mode=cluster database=postgres media=s3 workers=2 mail=off"
+        "ok: mode=cluster database=postgres media=s3 workers=2 mail=off backup=off"
     );
 }
 

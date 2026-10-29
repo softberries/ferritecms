@@ -126,7 +126,7 @@ async fn export(args: ExportArgs) -> anyhow::Result<ExitCode> {
     let binary = binary_version()?;
     let result = if is_dash(&args.out) {
         let out = std::io::BufWriter::new(std::io::stdout());
-        site_copy::export_to(store.as_ref(), media, out, &binary)
+        site_copy::export_to(store.as_ref(), media, out, &binary, None)
             .await
             .and_then(|(m, mut out)| {
                 out.flush()?;
@@ -137,6 +137,9 @@ async fn export(args: ExportArgs) -> anyhow::Result<ExitCode> {
     };
     store.close().await;
     let manifest = result?;
+    for hash in &manifest.missing {
+        eprintln!("missing artifact {hash}");
+    }
     let rows: u64 = manifest.tables.iter().flatten().map(|t| t.rows).sum();
     let tables = manifest.tables.as_ref().map_or(0, Vec::len);
     let media = manifest.artifacts.map_or_else(String::new, |a| {
@@ -177,7 +180,7 @@ async fn export_file(
     let file = crate::init::create_private(path)?;
     let result = async {
         let (manifest, out) =
-            site_copy::export_to(store, media, std::io::BufWriter::new(file), binary).await?;
+            site_copy::export_to(store, media, std::io::BufWriter::new(file), binary, None).await?;
         let file = out.into_inner().map_err(|e| e.into_error())?;
         file.sync_all()?;
         anyhow::Ok(manifest)

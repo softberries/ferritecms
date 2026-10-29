@@ -28,7 +28,7 @@ use ferrite_media::{MediaError, MediaStore};
 use tokio::runtime::Handle;
 
 use super::repo::{Repo, SNAPSHOT_FORMAT, read_hash_list};
-use super::target::Target;
+use super::target::{RepoLocation, Target};
 use super::{ARTIFACT_LIST, CONFIG_FILE, DB_FILE};
 use crate::archive::{ArchiveReader, EntryKind, Kind, Manifest, Newer};
 use crate::keys::SECRET_KEY_FILE;
@@ -690,6 +690,35 @@ async fn restore_cmd(args: RestoreArgs) -> anyhow::Result<ExitCode> {
         );
     }
     let config = load_config(&args.data)?;
+    // R14: the restored copy would back itself up into the same repository.
+    if config.backup.schedule != ferrite_config::BackupSchedule::Off {
+        let to = config.backup.to.as_deref().unwrap_or_default();
+        let to = match Target::parse(to, &config.data_dir) {
+            // The folder without `.` and `..` (lexically), as the operator would name it.
+            Ok(Target::Repo(RepoLocation::Dir(dir))) => {
+                let mut out = PathBuf::new();
+                for c in std::path::absolute(&dir).unwrap_or(dir).components() {
+                    match c {
+                        std::path::Component::CurDir => {}
+                        std::path::Component::ParentDir => {
+                            out.pop();
+                        }
+                        c => out.push(c),
+                    }
+                }
+                out.display().to_string()
+            }
+            Ok(t) => t.describe(),
+            Err(_) => to.to_owned(),
+        };
+        eprintln!(
+            "warning: the restored ferrite.toml schedules backups ([backup] schedule = \"{}\") \
+             to {to}; a `serve` of this folder writes into that repository too. Set \
+             FERRITE_BACKUP__SCHEDULE=off (or change [backup]) before serving a copy that must \
+             not.",
+            config.backup.schedule.as_str()
+        );
+    }
     let store = open_store(&config, OpenMode::MustExist).await?;
     let binary = binary_version()?;
     let status = store.migration_status(&binary).await;

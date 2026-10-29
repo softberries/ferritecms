@@ -21,6 +21,68 @@ pub struct Config {
     pub auth: AuthConfig,
     /// `[mail]`; `None` when `smtp_url` is not set (mail is then unavailable).
     pub mail: Option<MailConfig>,
+    /// `[backup]`: the scheduled backup (M4-1 P15); off by default.
+    pub backup: BackupConfig,
+}
+
+/// How often `serve` runs the `site.backup` job (`backup.schedule`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BackupSchedule {
+    #[default]
+    Off,
+    Daily,
+    Weekly,
+}
+
+impl BackupSchedule {
+    /// The config value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BackupSchedule::Off => "off",
+            BackupSchedule::Daily => "daily",
+            BackupSchedule::Weekly => "weekly",
+        }
+    }
+
+    /// The period in seconds; `None` when off.
+    pub fn every_secs(self) -> Option<u64> {
+        match self {
+            BackupSchedule::Off => None,
+            BackupSchedule::Daily => Some(86_400),
+            BackupSchedule::Weekly => Some(604_800),
+        }
+    }
+}
+
+/// Default of `backup.keep`.
+pub const DEFAULT_BACKUP_KEEP: u32 = 7;
+/// Largest `backup.keep`.
+pub const MAX_BACKUP_KEEP: u32 = 1000;
+
+/// `[backup]` (M4-1 P15).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupConfig {
+    pub schedule: BackupSchedule,
+    /// `backup.to` as written: a folder (relative paths are relative to the data folder,
+    /// and it must lie outside it) or `s3://bucket[/prefix]`. Required unless the schedule
+    /// is off.
+    pub to: Option<String>,
+    /// Snapshots (SQLite) or export archives (Postgres) kept: 1..=[`MAX_BACKUP_KEEP`],
+    /// default [`DEFAULT_BACKUP_KEEP`].
+    pub keep: u32,
+    /// Include the media artifacts (default true).
+    pub with_media: bool,
+}
+
+impl Default for BackupConfig {
+    fn default() -> Self {
+        Self {
+            schedule: BackupSchedule::Off,
+            to: None,
+            keep: DEFAULT_BACKUP_KEEP,
+            with_media: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
