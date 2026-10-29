@@ -24,14 +24,14 @@
 //! at most [`COMPILE_SLOTS`] at once per installer (one per node). The scratch host has
 //! in-memory services and never commits a plugin.
 //!
-//! **Failures leave nothing behind.** Every check runs before the upload. Artifacts are
+//! **Failures leave no rows behind.** Every check runs before the upload. Artifacts are
 //! content-addressed: bytes uploaded for a stage whose rows are then not recorded are
-//! harmless (nothing names them). The API handlers delete them again with
-//! [`Installer::discard_staged`], which keeps them when an artifact row names the same
-//! bytes; anything else left behind (the CLI path, a failed cleanup) stays until the
-//! artifact GC (M4).
+//! harmless (nothing names them) and stay in the store, with no row, until the artifacts
+//! GC deletes them after its grace period (M4-1 P12, design 03 §6). Nothing deletes them
+//! in the request: a concurrent install of the same bytes that has uploaded them but not
+//! yet recorded its rows would lose its blob.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use axum::http::StatusCode;
 use bytes::Bytes;
@@ -39,15 +39,13 @@ use ferrite_core::{
     CoreError,
     ext_settings::{SettingDef, SettingType, SettingsSchema},
 };
-use ferrite_domain::{
-    Artifact, ArtifactHash, ArtifactKind, InstalledPlugin, InstalledTheme, Timestamp,
-};
+use ferrite_domain::{Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, Timestamp};
 use ferrite_media::{MediaError, MediaStore};
 use ferrite_plugin_host::{
     ApprovedLimits, Grant, HostConfig, InMemoryServices, Manifest, ManifestError, ManifestProblem,
     PermissionReport, PluginError, PluginHost, PreparedPlugin,
 };
-use ferrite_store::{LOCK_EXTENSIONS, Store, lock};
+use ferrite_store::Store;
 use ferrite_theme::{
     MAX_BUNDLE_BYTES, SettingKind, Theme, ThemeError, ThemeManifest, ThemeSource, pack_embedded,
 };
@@ -67,9 +65,6 @@ pub const COMPILE_SLOTS: usize = 2;
 /// Uploads a node buffers at once (each up to its route's body limit); a request
 /// beyond them is refused `busy` before its body is read (Task 4 review).
 pub const UPLOAD_SLOTS: usize = 4;
-
-/// How long [`Installer::discard_staged`] waits for the `extensions` lock.
-pub const DISCARD_LOCK_WAIT: Duration = Duration::from_secs(5);
 
 /// MIME type recorded for theme bundle artifacts (M1.5 P17).
 pub const THEME_MIME: &str = "application/x-tar";
@@ -458,40 +453,6 @@ impl Installer {
     /// read and process an upload, and answer `busy` without one.
     pub fn try_upload_slot(&self) -> Option<OwnedSemaphorePermit> {
         self.uploads.clone().try_acquire_owned().ok()
-    }
-
-    /// Deletes the blob of a staged artifact whose rows were then not recorded, unless
-    /// an artifact row names it (another plugin, theme or media item uses the same
-    /// bytes). Runs under the `extensions` lock (waiting at most
-    /// [`DISCARD_LOCK_WAIT`]), so an extension install recording the same artifact
-    /// cannot commit between the check and the delete; returns whether the blob was
-    /// deleted. Residual race: an install of the same bytes that uploaded them but has
-    /// not yet taken the lock to record them loses its blob (its plugin then fails to
-    /// load and is reinstalled); without a GC grace period this cannot be closed.
-    pub async fn discard_staged(&self, hash: &ArtifactHash) -> Result<bool, ExtensionError> {
-        let guard = lock(self.store.as_ref(), LOCK_EXTENSIONS, DISCARD_LOCK_WAIT)
-            .await
-            .map_err(CoreError::from)?;
-        let done = async {
-            let referenced = self
-                .store
-                .read()
-                .artifacts()
-                .get(hash)
-                .await
-                .map_err(CoreError::from)?
-                .is_some();
-            if referenced {
-                return Ok(false);
-            }
-            self.media.delete(hash).await?;
-            Ok(true)
-        }
-        .await;
-        if let Err(e) = guard.release().await {
-            tracing::warn!(error = %e, "cannot release the extensions lock");
-        }
-        done
     }
 
     /// The permission report of an installed row: its manifest and component against

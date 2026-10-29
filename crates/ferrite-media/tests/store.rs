@@ -630,6 +630,78 @@ async fn list_artifacts_of_an_empty_store_is_empty() {
     assert!(listed(&backing.store()).await.is_empty());
 }
 
+// ---- the `tmp/` listing and `delete_key` (M4-1 Task 6, the artifacts GC) ----
+
+async fn check_tmp(backing: common::Backing, prefix: &str) {
+    let store = backing.store();
+    // An artifact is not a staging object.
+    store
+        .put_artifact(Bytes::from_static(b"an artifact"))
+        .await
+        .unwrap();
+    for rel in ["tmp/leftover-a", "tmp/leftover-b"] {
+        let path = backing.object_path(&format!("{prefix}{rel}"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"staged").unwrap();
+    }
+    let mut tmp: Vec<StoredObject> = store.list_tmp().try_collect().await.unwrap();
+    tmp.sort_by(|a, b| a.key.cmp(&b.key));
+    let keys: Vec<&str> = tmp.iter().map(|o| o.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        [
+            format!("{prefix}tmp/leftover-a"),
+            format!("{prefix}tmp/leftover-b")
+        ]
+    );
+    let now = Timestamp::now().as_micros();
+    for o in &tmp {
+        assert_eq!(o.hash, None);
+        assert_eq!(o.size, 6);
+        let age_secs = (now - o.last_modified.as_micros()) / 1_000_000;
+        assert!(age_secs.abs() < 300, "{age_secs}");
+    }
+
+    // `delete_key` deletes a `tmp/` object, is idempotent, and refuses anything else.
+    store.delete_key(&tmp[0].key).await.unwrap();
+    store.delete_key(&tmp[0].key).await.unwrap();
+    let left: Vec<StoredObject> = store.list_tmp().try_collect().await.unwrap();
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert_eq!(left[0].key, tmp[1].key);
+    let artifact = listed(&store).await.remove(0);
+    for outside in [
+        artifact.key.clone(),
+        format!("{prefix}tmp"),
+        format!("{prefix}tmpx/a"),
+        format!("{prefix}tmp/../artifacts/x"),
+        "elsewhere/tmp/a".to_owned(),
+    ] {
+        let err = store.delete_key(&outside).await.unwrap_err();
+        assert!(matches!(err, MediaError::Config(_)), "{outside}: {err:?}");
+    }
+    assert_eq!(listed(&store).await.len(), 1, "the artifact stays");
+}
+
+#[tokio::test]
+async fn list_tmp_and_delete_key_local() {
+    check_tmp(common::local_backend(""), "").await;
+}
+
+#[tokio::test]
+async fn list_tmp_and_delete_key_local_with_prefix() {
+    check_tmp(common::local_backend("site/a/"), "site/a/").await;
+}
+
+#[tokio::test]
+async fn list_tmp_and_delete_key_s3() {
+    check_tmp(common::s3_backend("").await, "").await;
+}
+
+#[tokio::test]
+async fn list_tmp_and_delete_key_s3_with_prefix() {
+    check_tmp(common::s3_backend("site/a/").await, "site/a/").await;
+}
+
 async fn check_copy(from: common::Backing, to: common::Backing) {
     let (src, dst) = (from.store(), to.store());
     let small = Bytes::from_static(b"small artifact");

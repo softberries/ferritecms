@@ -462,7 +462,12 @@ async fn job_kinds_are_in_meta(db: Arc<TestDb>) {
     sorted.sort_unstable();
     sorted.dedup();
     assert_eq!(kinds, sorted, "{m}");
-    for kind in ["jobs.prune", "media.variants", "content.publish_scheduled"] {
+    for kind in [
+        "jobs.prune",
+        "media.variants",
+        "content.publish_scheduled",
+        "artifacts.gc",
+    ] {
         assert!(kinds.contains(&kind), "{kind}: {m}");
     }
     node.shutdown().await.unwrap();

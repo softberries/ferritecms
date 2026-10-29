@@ -4,6 +4,7 @@ mod cli;
 mod config_cmd;
 mod ext_cmd;
 pub mod extensions;
+pub mod gc;
 mod healthcheck;
 mod import_cmd;
 mod init;

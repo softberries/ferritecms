@@ -83,7 +83,8 @@ pub struct ReadStream {
     pub stream: BoxStream<'static, Result<Bytes, MediaError>>,
 }
 
-/// One object under `artifacts/`, as listed by [`MediaStore::list_artifacts`].
+/// One listed object: under `artifacts/` ([`MediaStore::list_artifacts`]) or `tmp/`
+/// ([`MediaStore::list_tmp`], always with `hash: None`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredObject {
     /// The artifact hash named by the key; `None` when the key is not
@@ -427,20 +428,56 @@ impl MediaStore {
     /// file in the folder) come back with `hash: None` so callers can report or ignore them.
     /// The stream is lazy and pages through the backend; the order is the backend's.
     pub fn list_artifacts(&self) -> BoxStream<'static, Result<StoredObject, MediaError>> {
-        let dir = Path::from(format!("{}artifacts", self.prefix));
+        self.list_dir("artifacts", hash_of_key)
+    }
+
+    /// Lists every staging object under `<prefix>tmp/` (streaming uploads and `check`
+    /// probes left behind), each with `hash: None`. Lazy, in the backend's order. The
+    /// artifacts GC deletes the old ones with [`MediaStore::delete_key`].
+    pub fn list_tmp(&self) -> BoxStream<'static, Result<StoredObject, MediaError>> {
+        self.list_dir("tmp", |_| None)
+    }
+
+    fn list_dir(
+        &self,
+        dir: &str,
+        hash: fn(&str) -> Option<ArtifactHash>,
+    ) -> BoxStream<'static, Result<StoredObject, MediaError>> {
+        let dir = Path::from(format!("{}{dir}", self.prefix));
         self.inner
             .list(Some(&dir))
             .map_err(MediaError::from)
-            .map_ok(|meta| {
+            .map_ok(move |meta| {
                 let key = meta.location.to_string();
                 StoredObject {
-                    hash: hash_of_key(&key),
+                    hash: hash(&key),
                     key,
                     size: meta.size,
                     last_modified: Timestamp::from(meta.last_modified),
                 }
             })
             .boxed()
+    }
+
+    /// Deletes one staging object by its full key (as [`MediaStore::list_tmp`] gives it).
+    /// Idempotent: a missing object succeeds. Only keys `<prefix>tmp/<…>` (a valid object
+    /// path, no `.`/`..` segments) are accepted; any other key is [`MediaError::Config`],
+    /// so artifacts are only ever deleted by hash ([`MediaStore::delete`]).
+    pub async fn delete_key(&self, key: &str) -> Result<(), MediaError> {
+        let tmp = format!("{}tmp/", self.prefix);
+        let path = match key.strip_prefix(tmp.as_str()) {
+            Some(rest) if !rest.is_empty() => Path::parse(key).ok(),
+            _ => None,
+        };
+        let Some(path) = path.filter(|p| p.as_ref() == key) else {
+            return Err(MediaError::Config(format!(
+                "{key:?} is not a staging key under {tmp:?}"
+            )));
+        };
+        match self.inner.delete(&path).await {
+            Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Copies one artifact to `dest` under the same key (the same hash): streams the object

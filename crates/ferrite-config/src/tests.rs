@@ -924,6 +924,7 @@ fn media_upload_rules() {
     assert_eq!(c.uploads.image_workers, 1);
     assert_eq!(c.uploads.idle_timeout_secs, 30);
     assert!(!c.uploads.strip_metadata);
+    assert_eq!(c.uploads.gc_grace_days, 7);
     assert_eq!(DEFAULT_MAX_UPLOAD, 256 << 20);
     assert_eq!(MAX_UPLOAD_CEILING, 1 << 30);
 
@@ -951,6 +952,12 @@ fn media_upload_rules() {
     assert!(r.unwrap().uploads.strip_metadata);
     let (_d, r) = run(Some(MIN), &[("FERRITE_MEDIA__STRIP_METADATA", "true")]);
     assert!(r.unwrap().uploads.strip_metadata);
+    for (toml, days) in [("gc_grace_days = 1\n", 1), ("gc_grace_days = 365\n", 365)] {
+        let (_d, r) = run(Some(&format!("{MIN}[media]\n{toml}")), &[]);
+        assert_eq!(r.unwrap().uploads.gc_grace_days, days, "{toml}");
+    }
+    let (_d, r) = run(Some(MIN), &[("FERRITE_MEDIA__GC_GRACE_DAYS", "30")]);
+    assert_eq!(r.unwrap().uploads.gc_grace_days, 30);
 
     let problem = |toml: &str| {
         let (_d, r) = run(Some(&format!("{MIN}[media]\n{toml}")), &[]);
@@ -970,6 +977,16 @@ fn media_upload_rules() {
     );
     let (path, _) = problem("upload_idle_timeout = 0\n");
     assert_eq!(path, "media.upload_idle_timeout");
+    for bad in ["gc_grace_days = 0\n", "gc_grace_days = 366\n"] {
+        assert_eq!(
+            problem(bad),
+            (
+                "media.gc_grace_days".into(),
+                "must be between 1 and 365".into()
+            ),
+            "{bad}"
+        );
+    }
     for bad in ["image_workers = 0\n", "image_workers = 17\n"] {
         assert_eq!(
             problem(bad),
