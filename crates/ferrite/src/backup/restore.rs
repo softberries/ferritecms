@@ -2,13 +2,15 @@
 //! data folder, or, with `--force`, in place of an existing one, which is moved aside to
 //! `<dir>.pre-restore-<ts>` (never deleted) unless a running process holds its lock.
 //!
-//! Everything is first written to a staging folder next to the target
-//! (`.<name>.restoring-<ts>`): the files, then the blobs through a media store opened from
-//! the restored `ferrite.toml` (a relative local media root lands inside the staging
-//! folder). Only when all of it is in place is the old folder moved aside and the staging
-//! folder renamed to the target, so a failed restore changes nothing. The manifest is
-//! checked before anything is written: a backup whose schema is newer than this binary
-//! stops with `archive::Newer` (exit 3).
+//! Everything is first written to a staging folder: inside the target when it is absent
+//! (then created) or empty (`<dir>/.restoring-<ts>-<pid>`, so a mount point such as a
+//! container volume works), or next to an occupied target (`.<name>.restoring-<ts>-<pid>`).
+//! The files go there first, then the blobs through a media store opened from the restored
+//! `ferrite.toml` (a relative local media root lands inside the staging folder). Only when
+//! all of it is in place are the staged entries moved into the empty target, or the old
+//! folder moved aside and the staging folder renamed to the target, so a failed restore
+//! leaves the data folder as it was. The manifest is checked before anything is written: a
+//! backup whose schema is newer than this binary stops with `archive::Newer` (exit 3).
 
 use std::fs::{File, TryLockError};
 use std::io::Read;
@@ -19,13 +21,12 @@ use std::sync::Arc;
 use anyhow::{Context, bail};
 use clap::Args;
 use ferrite_config::{Config, DbKind};
-use ferrite_domain::ArtifactHash;
 use ferrite_media::{MediaError, MediaStore};
 use tokio::runtime::Handle;
 
-use super::repo::{Repo, SNAPSHOT_FORMAT};
+use super::repo::{Repo, SNAPSHOT_FORMAT, read_hash_list};
 use super::target::Target;
-use super::{CONFIG_FILE, DB_FILE};
+use super::{ARTIFACT_LIST, CONFIG_FILE, DB_FILE};
 use crate::archive::{ArchiveReader, EntryKind, Kind, Manifest, Newer};
 use crate::keys::SECRET_KEY_FILE;
 use crate::open::{OpenMode, open_store};
@@ -37,6 +38,8 @@ use crate::{binary_version, load_config};
 const NEWER: u8 = 3;
 /// The SQLite folder lock `serve` holds.
 const LOCK_FILE: &str = "ferrite.lock";
+/// Staging folders of killed restores older than this are removed at the start of a run.
+const STALE: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
 
 #[derive(Debug, Args)]
 pub struct RestoreArgs {
@@ -50,7 +53,8 @@ pub struct RestoreArgs {
     #[arg(long)]
     pub snapshot: Option<String>,
     /// Move an existing, non-empty data folder aside to `<data>.pre-restore-<ts>` first
-    /// (refused while a running ferrite holds its lock).
+    /// (refused while a running ferrite holds its lock, and for a folder that cannot be
+    /// renamed, such as a mount point).
     #[arg(long)]
     pub force: bool,
 }
@@ -78,23 +82,18 @@ pub struct RestoreReport {
     pub moved_aside: Option<PathBuf>,
 }
 
-/// The target folder's state, checked before anything is read.
-struct TargetState {
-    /// Exists and holds something (only with `force`).
-    occupied: bool,
-    /// Exists and is empty.
-    empty: bool,
-    /// The held `ferrite.lock` of an occupied target.
-    _lock: Option<File>,
+/// The target folder, checked before anything is read.
+enum TargetState {
+    /// Absent or empty: staged inside it.
+    Empty,
+    /// Holds something (only with `force`): staged next to it, then moved aside; its
+    /// `ferrite.lock` is held until then.
+    Occupied { _lock: Option<File> },
 }
 
 fn check_target(dir: &Path, force: bool) -> anyhow::Result<TargetState> {
     if !dir.exists() {
-        return Ok(TargetState {
-            occupied: false,
-            empty: false,
-            _lock: None,
-        });
+        return Ok(TargetState::Empty);
     }
     if !dir.is_dir() {
         bail!("{} exists and is not a folder", dir.display());
@@ -104,11 +103,7 @@ fn check_target(dir: &Path, force: bool) -> anyhow::Result<TargetState> {
         .next()
         .is_none();
     if empty {
-        return Ok(TargetState {
-            occupied: false,
-            empty: true,
-            _lock: None,
-        });
+        return Ok(TargetState::Empty);
     }
     if !force {
         bail!(
@@ -116,6 +111,7 @@ fn check_target(dir: &Path, force: bool) -> anyhow::Result<TargetState> {
             dir.display()
         );
     }
+    check_movable(dir)?;
     let lock_path = dir.join(LOCK_FILE);
     let lock = match File::options().read(true).write(true).open(&lock_path) {
         Ok(file) => {
@@ -135,11 +131,30 @@ fn check_target(dir: &Path, force: bool) -> anyhow::Result<TargetState> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e).with_context(|| format!("cannot open {}", lock_path.display())),
     };
-    Ok(TargetState {
-        occupied: true,
-        empty: false,
-        _lock: lock,
-    })
+    Ok(TargetState::Occupied { _lock: lock })
+}
+
+/// `--force` renames the folder; a mount point (or a folder on another device than its
+/// parent) cannot be renamed, so it is refused before any work.
+fn check_movable(dir: &Path) -> anyhow::Result<()> {
+    let (parent, _) = parent_and_name(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let own = std::fs::metadata(dir)?.dev();
+        let up = std::fs::metadata(&parent)?.dev();
+        if own != up {
+            bail!(
+                "{} is a mount point (or on another device than its parent), so --force cannot \
+                 move it aside; empty it (keep a copy of what it holds) and restore into the \
+                 empty folder instead",
+                dir.display()
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = parent;
+    Ok(())
 }
 
 /// Refuses what this binary cannot restore, before anything is written.
@@ -163,14 +178,16 @@ fn check_manifest(manifest: &Manifest, source: &str) -> anyhow::Result<()> {
         );
     }
     let files = manifest.files.as_deref().unwrap_or_default();
-    if let Some(f) = files
-        .iter()
-        .find(|f| ![DB_FILE, CONFIG_FILE, SECRET_KEY_FILE].contains(&f.path.as_str()))
-    {
+    if let Some(f) = files.iter().find(|f| {
+        ![DB_FILE, CONFIG_FILE, SECRET_KEY_FILE, ARTIFACT_LIST].contains(&f.path.as_str())
+    }) {
         bail!("the backup lists an unexpected file {:?}", f.path);
     }
     if !files.iter().any(|f| f.path == DB_FILE) {
         bail!("the backup has no {DB_FILE}");
+    }
+    if manifest.artifacts.is_some() != files.iter().any(|f| f.path == ARTIFACT_LIST) {
+        bail!("the backup's artifacts and {ARTIFACT_LIST} do not match");
     }
     Ok(())
 }
@@ -182,11 +199,20 @@ struct Staging {
 }
 
 impl Staging {
-    fn create(dir: &Path, ts: &str) -> anyhow::Result<Staging> {
-        let (parent, name) = parent_and_name(dir)?;
-        std::fs::create_dir_all(&parent)
-            .with_context(|| format!("cannot create {}", parent.display()))?;
-        let path = parent.join(format!(".{name}.restoring-{ts}-{}", std::process::id()));
+    /// Inside `dir` for an absent or empty target, next to it for an occupied one.
+    fn create(dir: &Path, state: &TargetState, ts: &str) -> anyhow::Result<Staging> {
+        let pid = std::process::id();
+        let path = match state {
+            TargetState::Empty => {
+                std::fs::create_dir_all(dir)
+                    .with_context(|| format!("cannot create {}", dir.display()))?;
+                dir.join(format!(".restoring-{ts}-{pid}"))
+            }
+            TargetState::Occupied { .. } => {
+                let (parent, name) = parent_and_name(dir)?;
+                parent.join(format!(".{name}.restoring-{ts}-{pid}"))
+            }
+        };
         std::fs::create_dir(&path).with_context(|| format!("cannot create {}", path.display()))?;
         Ok(Staging { path, keep: false })
     }
@@ -201,6 +227,18 @@ impl Drop for Staging {
     }
 }
 
+/// Removes a target folder this run created, when it is left empty (dropped after the
+/// staging folder inside it).
+struct CreatedDir(Option<PathBuf>);
+
+impl Drop for CreatedDir {
+    fn drop(&mut self) {
+        if let Some(dir) = &self.0 {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+}
+
 fn parent_and_name(dir: &Path) -> anyhow::Result<(PathBuf, String)> {
     let abs = std::path::absolute(dir)?;
     let name = abs
@@ -208,8 +246,42 @@ fn parent_and_name(dir: &Path) -> anyhow::Result<(PathBuf, String)> {
         .and_then(|n| n.to_str())
         .with_context(|| format!("{} has no usable folder name", dir.display()))?
         .to_owned();
-    let parent = abs.parent().map(Path::to_path_buf).unwrap_or_default();
+    let parent = abs
+        .parent()
+        .map(Path::to_path_buf)
+        .with_context(|| format!("{} has no parent folder", dir.display()))?;
     Ok((parent, name))
+}
+
+/// Removes staging folders of killed restores older than a day: `<dir>/.restoring-*` and
+/// `<parent>/.<name>.restoring-*` (ours by name).
+fn sweep_stale(dir: &Path) {
+    let Ok((parent, name)) = parent_and_name(dir) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    let sibling = format!(".{name}.restoring-");
+    for (folder, prefix) in [
+        (dir.to_path_buf(), ".restoring-"),
+        (parent, sibling.as_str()),
+    ] {
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let ours = file_name.to_str().is_some_and(|n| n.starts_with(prefix));
+            let old = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| now.duration_since(t).ok())
+                .is_some_and(|age| age > STALE);
+            if ours && old && entry.path().is_dir() {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
 }
 
 /// Loads the restored configuration from the staging folder; its SQLite database must be
@@ -240,16 +312,18 @@ pub async fn restore(
     if opts.snapshot.is_some() && !matches!(source, Target::Repo(_)) {
         bail!("--snapshot applies to a repository, not to an archive");
     }
+    sweep_stale(dir);
     let state = check_target(dir, opts.force)?;
     let ts = chrono::Utc::now().format(SNAPSHOT_FORMAT).to_string();
+    let mut created = CreatedDir((!dir.exists()).then(|| dir.to_path_buf()));
     let (from, manifest, staging, stats) = match source {
         Target::Repo(loc) => {
-            let repo = Repo::open(loc, false)?;
+            let repo = Repo::open(loc, false).await?;
             let name = pick_snapshot(&repo, opts.snapshot.as_deref()).await?;
             let manifest = repo.read_manifest(&name).await?;
             let from = format!("snapshot {name} of {}", repo.display());
             check_manifest(&manifest, &from)?;
-            let staging = Staging::create(dir, &ts)?;
+            let staging = Staging::create(dir, &state, &ts)?;
             let stats = restore_repo(&repo, &name, &manifest, &staging.path).await?;
             (from, manifest, staging, stats)
         }
@@ -261,16 +335,23 @@ pub async fn restore(
                 _ => Box::new(std::io::stdin()),
             };
             let from = source.describe();
+            let occupied = matches!(state, TargetState::Occupied { .. });
             let (dir, ts, from2) = (dir.to_owned(), ts.clone(), from.clone());
             let handle = Handle::current();
             let (manifest, staging, stats) = tokio::task::spawn_blocking(move || {
-                restore_archive(&handle, input, &dir, &ts, &from2)
+                let state = if occupied {
+                    TargetState::Occupied { _lock: None }
+                } else {
+                    TargetState::Empty
+                };
+                restore_archive(&handle, input, &dir, &state, &ts, &from2)
             })
             .await??;
             (from, manifest, staging, stats)
         }
     };
     let moved_aside = put_in_place(staging, dir, &state, &ts)?;
+    created.0 = None;
     drop(state);
     Ok(RestoreReport {
         from,
@@ -308,17 +389,27 @@ async fn restore_repo(
     staging: &Path,
 ) -> anyhow::Result<LoadStats> {
     for entry in manifest.files.iter().flatten() {
-        repo.fetch_file(name, entry, &staging.join(&entry.path))
-            .await?;
+        if entry.path != ARTIFACT_LIST {
+            repo.fetch_file(name, entry, &staging.join(&entry.path))
+                .await?;
+        }
     }
     let config = staged_config(staging)?;
     let mut stats = LoadStats::default();
-    if manifest.artifact_hashes.is_empty() {
+    let scratch = tempfile::Builder::new()
+        .prefix("ferrite-restore-")
+        .tempdir()
+        .context("cannot create a temporary folder")?;
+    let Some(list) = repo
+        .fetch_artifact_list(name, manifest, scratch.path())
+        .await?
+    else {
         return Ok(stats);
-    }
+    };
     let media = open_media(&config)?;
-    for h in &manifest.artifact_hashes {
-        let hash = ArtifactHash::parse(h).context("invalid artifact hash")?;
+    let count = manifest.artifacts.map_or(0, |a| a.count);
+    for hash in read_hash_list(File::open(&list)?, count) {
+        let hash = hash.with_context(|| format!("snapshot {name}"))?;
         if media.head(&hash).await?.is_some() {
             stats.blobs_present += 1;
             continue;
@@ -335,11 +426,12 @@ async fn restore_repo(
     Ok(stats)
 }
 
-/// Reads an archive into a new staging folder next to `dir` (blocking).
+/// Reads an archive into a new staging folder (blocking).
 fn restore_archive(
     handle: &Handle,
     input: Box<dyn Read + Send>,
     dir: &Path,
+    state: &TargetState,
     ts: &str,
     from: &str,
 ) -> anyhow::Result<(Manifest, Staging, LoadStats)> {
@@ -347,13 +439,22 @@ fn restore_archive(
     let mut entries = reader.entries()?;
     let manifest = entries.manifest().clone();
     check_manifest(&manifest, from)?;
-    let staging = Staging::create(dir, ts)?;
+    let staging = Staging::create(dir, state, ts)?;
     let files = manifest.files.as_deref().unwrap_or_default().len();
     let mut seen = 0usize;
     let mut media: Option<Arc<MediaStore>> = None;
     let mut stats = LoadStats::default();
     while let Some(mut entry) = entries.next_entry()? {
         match entry.kind.clone() {
+            EntryKind::File(name) if name == ARTIFACT_LIST => {
+                // Checked (line by line, then its sha256), not restored.
+                let count = manifest.artifacts.map_or(0, |a| a.count);
+                for hash in read_hash_list(&mut entry, count) {
+                    hash?;
+                }
+                entry.finish()?;
+                seen += 1;
+            }
             EntryKind::File(name) => {
                 let dest = staging.path.join(&name);
                 let mut file = crate::init::create_private(&dest)?;
@@ -362,55 +463,88 @@ fn restore_archive(
                 entry.finish()?;
                 file.sync_all()?;
                 seen += 1;
-                if seen == files {
-                    let config = staged_config(&staging.path)?;
-                    if manifest.artifacts.is_some() {
-                        media = Some(Arc::new(open_media(&config)?));
-                    }
-                }
             }
             EntryKind::Artifact(hash) => {
                 if seen < files {
                     bail!("the archive has artifacts before its files");
                 }
                 store_blob(handle, media.as_ref(), &hash, entry, &mut stats)?;
+                continue;
             }
             EntryKind::Table { .. } => bail!("a backup archive holds no tables"),
+        }
+        if seen == files {
+            let config = staged_config(&staging.path)?;
+            if manifest.artifacts.is_some() {
+                media = Some(Arc::new(open_media(&config)?));
+            }
         }
     }
     Ok((manifest, staging, stats))
 }
 
-/// Moves an occupied target aside (or removes an empty one), then renames the staging
-/// folder to the target. Returns where the old folder went.
+/// Puts the staged site in place. Empty target: moves the staged entries into it (it may be
+/// a mount point). Occupied target: renames it aside, then the staging folder to it; if
+/// that fails it is renamed back. Returns where the old folder went.
 fn put_in_place(
     mut staging: Staging,
     dir: &Path,
     state: &TargetState,
     ts: &str,
 ) -> anyhow::Result<Option<PathBuf>> {
-    let mut aside = None;
-    if state.occupied {
-        let (parent, name) = parent_and_name(dir)?;
-        let to = parent.join(format!("{name}.pre-restore-{ts}"));
-        if to.exists() {
-            bail!("{} already exists", to.display());
+    if let TargetState::Empty = state {
+        let mut moved: Vec<std::ffi::OsString> = Vec::new();
+        let result = (|| -> anyhow::Result<()> {
+            for entry in std::fs::read_dir(&staging.path)? {
+                let name = entry?.file_name();
+                std::fs::rename(staging.path.join(&name), dir.join(&name)).with_context(|| {
+                    format!("cannot move the restored files into {}", dir.display())
+                })?;
+                moved.push(name);
+            }
+            Ok(())
+        })();
+        if let Err(e) = result {
+            // Back into staging, which is then removed.
+            for name in moved {
+                let _ = std::fs::rename(dir.join(&name), staging.path.join(&name));
+            }
+            return Err(e);
         }
-        std::fs::rename(dir, &to)
-            .with_context(|| format!("cannot move {} aside to {}", dir.display(), to.display()))?;
-        aside = Some(to);
-    } else if state.empty {
-        std::fs::remove_dir(dir).with_context(|| format!("cannot replace {}", dir.display()))?;
+        std::fs::remove_dir(&staging.path)
+            .with_context(|| format!("cannot remove {}", staging.path.display()))?;
+        staging.keep = true;
+        return Ok(None);
     }
+    let (parent, name) = parent_and_name(dir)?;
+    let aside = parent.join(format!("{name}.pre-restore-{ts}"));
+    if aside.exists() {
+        bail!("{} already exists", aside.display());
+    }
+    std::fs::rename(dir, &aside).with_context(|| {
+        format!(
+            "cannot move {} aside to {} (for a mount point, restore into an empty folder \
+             instead)",
+            dir.display(),
+            aside.display()
+        )
+    })?;
     if let Err(e) = std::fs::rename(&staging.path, dir) {
-        if let Some(to) = &aside {
-            let _ = std::fs::rename(to, dir);
+        if let Err(back) = std::fs::rename(&aside, dir) {
+            return Err(e).with_context(|| {
+                format!(
+                    "cannot move the restored site to {}, nor the old folder back ({back}); the \
+                     old site is at {}",
+                    dir.display(),
+                    aside.display()
+                )
+            });
         }
         return Err(e)
             .with_context(|| format!("cannot move the restored site to {}", dir.display()));
     }
     staging.keep = true;
-    Ok(aside)
+    Ok(Some(aside))
 }
 
 /// `ferrite restore`: exit 0, 3 when the backup is newer than this binary, 1 on any other

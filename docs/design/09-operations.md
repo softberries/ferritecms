@@ -126,29 +126,39 @@ like every SQLite CLI command, needs `serve` stopped; a running site is backed u
 `[backup]` schedule, a job inside `serve` (the CLI cannot open the database while `serve`
 holds `ferrite.lock`). The sequence:
 
-1. `VACUUM INTO <data>/backups/backup-<UTC yyyymmddThhmmssZ>.db` (never `pre-*.db`, which the
-   pre-migration snapshot pruning deletes);
+1. `VACUUM INTO <data>/backups/backup-<UTC yyyymmddThhmmssZ>.db` (mode 0600; never
+   `pre-*.db`, which the pre-migration snapshot pruning deletes); `backup-*` files older than
+   a day, left by killed runs, are removed first;
 2. open it read-only, `PRAGMA integrity_check` must say `ok`, read its `artifacts` hashes,
    schema version and site id;
-3. write the target (below), copying the blobs from the site's media store;
-4. delete the local snapshot (also when a step failed).
+3. write the target (below), copying the blobs from the site's media store (`ferrite.toml`
+   and `secret.key` are copied once into the backups folder and hashed as they are copied);
+4. delete the local files (also when a step failed).
 
 `--to` decides the shape:
 
 - **a `.tar.zst` file, or `-` (stdout):** one archive in the [02 §10](02-storage.md#10-portable-export-d14)
   format with `kind: "backup"`: `manifest.json`, then `ferrite.toml`, `secret.key` (unless
-  `--no-secret-key`) and `ferrite.db`, each listed in the manifest's `files` with its size
-  and sha256, then `artifacts/<ab>/<hash>` (unless `--no-media`);
-- **a folder or `s3://bucket[/prefix]`: a repository.** `<repo>/artifacts/<ab>/<hash>` is
-  shared by all snapshots and a blob is copied only when the repository lacks it
-  (incremental by hash); each run adds `<repo>/snapshots/<UTC yyyymmddThhmmssZ>/` with
-  `ferrite.db`, `ferrite.toml`, `secret.key` and, written last, `manifest.json`, which also
-  lists `artifact_hashes`. A snapshot without a manifest is incomplete and ignored. Two
-  runs in the same second get consecutive names. `--keep N` (1–1000; default keep all)
-  then deletes the snapshot folders older than the newest N complete ones, then every
-  repository blob no kept manifest lists, and staging leftovers under `tmp/`: one site per
-  repository. S3 credentials and endpoint come from the `AWS_*` environment, as for
-  `media sync`.
+  `--no-secret-key`), `ferrite.db` and, with media, `artifacts.txt` (the archived blobs, one
+  hash per line), each listed in the manifest's `files` with its size and sha256, then
+  `artifacts/<ab>/<hash>` (unless `--no-media`);
+- **a folder or `s3://bucket[/prefix]`: a repository.** It is marked by
+  `<repo>/ferrite-backup-repo.json` (`{"format": 1, "created_at": …}`), written by the first
+  backup into an empty or new folder or prefix; a non-empty location without the marker is
+  refused (exit 1) and nothing in it is touched, and so is a folder inside the data folder or
+  the local media root, or an S3 prefix overlapping the media store's.
+  `<repo>/artifacts/<ab>/<hash>` is shared by all snapshots and a blob is copied only when
+  the repository lacks it (incremental by hash); each run adds
+  `<repo>/snapshots/<UTC yyyymmddThhmmssZ>/` with `ferrite.db`, `ferrite.toml`,
+  `secret.key`, `artifacts.txt` (the blobs the snapshot needs, one hash per line; its size,
+  sha256 and line count are in the manifest, so the list has no size limit) and, written
+  last, `manifest.json`. A snapshot without a manifest is incomplete and ignored. Two runs in
+  the same second get consecutive names. `--keep N` (1–1000; default keep all) then deletes
+  the snapshot folders older than the newest N complete ones (only the file names a snapshot
+  holds), then every repository blob no kept snapshot lists, and staging objects under
+  `tmp/` (media-store names only) older than 24 hours: one site per repository. When pruning
+  fails after the snapshot was written, the command exits 1 and the new snapshot stays. S3
+  credentials and endpoint come from the `AWS_*` environment, as for `media sync`.
 
 An artifact whose blob is missing from the media store is left out and named in the
 manifest's `missing` list (exit 2); a blob whose content does not hash to its name fails the
@@ -158,15 +168,28 @@ hold secrets are written with mode `0600`, and `--to -` can be piped to `age` or
 `ferrite restore SOURCE --data DIR` takes a backup archive, `-` (stdin) or a repository
 (the newest complete snapshot, or `--snapshot <name>`). `DIR` must be absent or empty;
 `--force` moves a non-empty folder aside to `DIR.pre-restore-<ts>` (a sibling, never deleted),
-refused while another process holds its `ferrite.lock`. The manifest is checked first: an
-export archive, a non-SQLite backup or a schema newer than the binary (exit 3) are refused
-before anything is written. The files go to a staging folder next to `DIR`, the blobs through
-the media store the **restored** `ferrite.toml` names (local or S3; blobs already there are
-skipped, trusted by their content hash); the restored configuration must keep the database
-at `DIR/ferrite.db`. Only then is the old folder moved aside and the staging folder renamed
-to `DIR`, so a failed restore changes nothing. It then prints `migrate status`; it does not
-migrate (`serve` does, under `database.auto_migrate`). A backup without `secret.key` restores
-with a note on TOTP (below).
+refused while another process holds its `ferrite.lock`. That lock is the only sign of a
+running site it checks: a folder whose `ferrite.toml` keeps the database (and so the lock)
+elsewhere, or a Postgres folder, has none, so stop `serve` yourself first. The manifest is
+checked first: an export archive, a non-SQLite backup, an unexpected file name or a schema
+newer than the binary (exit 3) are refused before anything is written. The files go to a
+staging folder, `DIR/.restoring-<ts>-<pid>` for an absent (then created) or empty `DIR`, or
+`.<name>.restoring-<ts>-<pid>` next to an occupied one; the blobs go through the media store
+the **restored** `ferrite.toml` names (local or S3; blobs already there are skipped, trusted
+by their content hash); the restored configuration must keep the database at
+`DIR/ferrite.db`. Only then are the staged entries moved into the empty `DIR`, or the old
+folder moved aside and the staging folder renamed to `DIR`. A failed restore leaves `DIR` as
+it was; blobs it already stored in an absolute local or an S3 media root stay (they are
+content-addressed and harmless). Staging folders older than a day, left by killed runs, are
+removed at the start. It then prints `migrate status`; it does not migrate (`serve` does,
+under `database.auto_migrate`). A backup without `secret.key` restores with a note on TOTP
+(below).
+
+A mount point cannot be renamed, so `--force` refuses one (and any folder on another device
+than its parent) before doing any work. In the container image `/data` is a volume: restore
+into it while it is empty (`docker run --rm -v site:/data -v "$PWD":/in <image> restore
+/in/site.tar.zst --data /data`, the image's entrypoint being `ferrite`, with the serving
+container stopped), or empty it first, keeping a copy of what it held.
 
 **The site key is not in the database** (M2a-1, P4). A solo site keeps it in
 `<data>/secret.key` (mode `0600`); a cluster gets it from `auth.secret_key[_file]`. Back it
@@ -408,7 +431,9 @@ the schema, the artifact counts (for a repository: copied and already present) a
 pruned. Exit 0 done; 2 done but artifacts were missing from the media store (one `missing
 artifact <hash>` line each on stderr, listed in the manifest); 1 on any other error: a Postgres
 site, `serve` running (the folder lock), a failed integrity check, a damaged blob, `--keep` with
-an archive; a failed backup leaves no archive, no repository snapshot and no local snapshot.
+an archive, a repository location that is not empty and has no marker or lies inside the data
+folder or media root; a failed backup leaves no archive, no repository snapshot and no local
+files, except that a `--keep` prune failing after the snapshot was written keeps the snapshot.
 `restore SOURCE --data DIR [--snapshot NAME] [--force]` prints what it restored, the artifact
 counts, notes on missing artifacts and a missing `secret.key`, the folder moved aside, then the
 `migrate status` report. Exit 0 done; 3 when the backup's schema is newer than the binary

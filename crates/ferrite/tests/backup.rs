@@ -164,12 +164,13 @@ fn repo_manifest(repo: &Path, snapshot: &str) -> Value {
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }
 
-fn hashes(m: &Value) -> Vec<String> {
-    let mut out: Vec<String> = m["artifact_hashes"]
-        .as_array()
+/// The hashes a repository snapshot lists in its `artifacts.txt`, sorted.
+fn hashes(repo: &Path, snapshot: &str) -> Vec<String> {
+    let path = repo.join("snapshots").join(snapshot).join("artifacts.txt");
+    let mut out: Vec<String> = std::fs::read_to_string(path)
         .unwrap()
-        .iter()
-        .map(|h| h.as_str().unwrap().to_owned())
+        .lines()
+        .map(str::to_owned)
         .collect();
     out.sort();
     out
@@ -265,7 +266,11 @@ async fn backup_to_archive_and_restore_serves() {
             .iter()
             .map(|f| f["path"].as_str().unwrap())
             .collect();
-        assert_eq!(files, ["ferrite.toml", "secret.key", "ferrite.db"], "{m}");
+        assert_eq!(
+            files,
+            ["ferrite.toml", "secret.key", "ferrite.db", "artifacts.txt"],
+            "{m}"
+        );
         assert_eq!(
             m["artifacts"]["count"].as_u64().unwrap(),
             site_hashes(&source).len() as u64
@@ -345,12 +350,18 @@ fn backup_repo_is_incremental() {
     );
     let snaps = snapshots(&repo);
     assert_eq!(snaps.len(), 2, "{snaps:?}");
-    let m1 = repo_manifest(&repo, &snaps[0]);
     let m2 = repo_manifest(&repo, &snaps[1]);
     assert_eq!(m2["kind"], "backup");
-    assert_eq!(hashes(&m2), site_hashes(&source));
-    assert_eq!(hashes(&m1), hashes(&m2));
-    for name in ["manifest.json", "ferrite.db", "ferrite.toml", "secret.key"] {
+    assert_eq!(m2["artifacts"]["count"], n);
+    assert_eq!(hashes(&repo, &snaps[1]), site_hashes(&source));
+    assert_eq!(hashes(&repo, &snaps[0]), hashes(&repo, &snaps[1]));
+    for name in [
+        "manifest.json",
+        "ferrite.db",
+        "ferrite.toml",
+        "secret.key",
+        "artifacts.txt",
+    ] {
         assert!(repo.join("snapshots").join(&snaps[1]).join(name).is_file());
     }
     for hash in site_hashes(&source) {
@@ -473,10 +484,7 @@ async fn backup_repo_on_s3() {
         let repo = bucket_dir.join("site-backups");
         let snaps = snapshots(&repo);
         assert_eq!(snaps.len(), 1, "{snaps:?}");
-        assert_eq!(
-            hashes(&repo_manifest(&repo, &snaps[0])),
-            site_hashes(&source)
-        );
+        assert_eq!(hashes(&repo, &snaps[0]), site_hashes(&source));
         for hash in site_hashes(&source) {
             assert!(blob_path(&repo, &hash).is_file(), "{hash}");
         }
@@ -580,7 +588,10 @@ fn backup_name_survives_pre_migration_prune() {
         .collect();
     assert_eq!(pre.len(), 5, "{pre:?}");
     assert!(planted.exists(), "pruning never touches backup-*.db");
-    // A backup still works and cleans up after itself, leaving the old file alone.
+    // A leftover older than a day is swept by the next backup; a young one is left alone.
+    let stale = source.join("backups/backup-20250101T000000Z.db");
+    std::fs::write(&stale, b"x").unwrap();
+    set_age(&stale, 2 * 24 * 3600);
     ok_backup(&source, &tmp.path().join("b.tar.zst"), &[]);
     assert_eq!(local_snapshots(&source), ["backup-20260101T000000Z.db"]);
 }
@@ -616,6 +627,16 @@ fn restore_refuses_non_empty() {
     let out = restore(&archive, &empty, &[]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     assert!(empty.join("ferrite.db").is_file());
+    // Staged inside the folder (a mount point works the same), nothing left over.
+    let names: Vec<String> = std::fs::read_dir(&empty)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert!(names.iter().all(|n| !n.contains("restoring")), "{names:?}");
+    for hash in site_hashes(&source) {
+        assert!(blob_path(&empty.join("media"), &hash).is_file(), "{hash}");
+    }
+    assert_eq!(count(&source, "users"), count(&empty, "users"));
 }
 
 #[test]
@@ -811,7 +832,7 @@ fn backup_with_a_missing_blob_exits_2_and_a_damaged_one_fails() {
     let snaps = snapshots(&repo);
     let m = repo_manifest(&repo, &snaps[0]);
     assert_eq!(m["missing"], serde_json::json!([hash]));
-    assert!(!hashes(&m).contains(&hash));
+    assert!(!hashes(&repo, &snaps[0]).contains(&hash));
     // Both restore.
     let out = restore(&archive, &tmp.path().join("r1"), &[]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -891,9 +912,16 @@ fn backup_files_mode_0600() {
     let repo = tmp.path().join("repo");
     ok_backup(&source, &repo, &[]);
     let snap = repo.join("snapshots").join(&snapshots(&repo)[0]);
-    for name in ["manifest.json", "ferrite.db", "ferrite.toml", "secret.key"] {
+    for name in [
+        "manifest.json",
+        "ferrite.db",
+        "ferrite.toml",
+        "secret.key",
+        "artifacts.txt",
+    ] {
         assert_eq!(mode(&snap.join(name)), 0o600, "{name}");
     }
+    assert_eq!(mode(&repo.join("ferrite-backup-repo.json")), 0o600);
     for (src, dir) in [(&archive, "r1"), (&repo, "r2")] {
         let target = tmp.path().join(dir);
         let out = restore(src, &target, &[]);
@@ -902,4 +930,185 @@ fn backup_files_mode_0600() {
             assert_eq!(mode(&target.join(name)), 0o600, "{dir}/{name}");
         }
     }
+}
+
+/// Makes a file look `secs` seconds old.
+fn set_age(path: &Path, secs: u64) {
+    let file = std::fs::File::options().write(true).open(path).unwrap();
+    let t = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
+    file.set_modified(t).unwrap();
+}
+
+#[test]
+fn backup_refuses_a_folder_that_is_not_a_repository() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let folder = tmp.path().join("home");
+    std::fs::create_dir_all(folder.join("tmp")).unwrap();
+    std::fs::write(folder.join("tmp/keep.txt"), b"mine").unwrap();
+    let hash = ferrite_domain::to_hex(&Sha256::digest(b"mine too"));
+    let blob = blob_path(&folder, &hash);
+    std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
+    std::fs::write(&blob, b"mine too").unwrap();
+    let out = backup(&source, &folder, &["--keep", "1"]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        stderr(&out).contains("not a ferrite backup repository"),
+        "{}",
+        text(&out)
+    );
+    assert!(folder.join("tmp/keep.txt").is_file());
+    assert!(blob.is_file());
+    assert!(!folder.join("snapshots").exists());
+    assert!(!folder.join("ferrite-backup-repo.json").exists());
+    // A restore from it is refused too.
+    let out = restore(&folder, &tmp.path().join("r"), &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(!tmp.path().join("r").exists());
+}
+
+#[test]
+fn backup_refuses_a_repository_inside_the_data_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    for inside in [source.join("repo"), source.join("media/backups")] {
+        let out = backup(&source, &inside, &[]);
+        assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+        assert!(
+            stderr(&out).contains("inside the data folder"),
+            "{}",
+            text(&out)
+        );
+        assert!(!inside.exists());
+    }
+}
+
+#[test]
+fn backup_repo_prunes_only_old_staging_leftovers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let repo = tmp.path().join("repo");
+    ok_backup(&source, &repo, &[]);
+    let young = repo.join("tmp").join(uuid::Uuid::now_v7().to_string());
+    let old = repo.join("tmp").join(uuid::Uuid::now_v7().to_string());
+    let foreign = repo.join("tmp/keep.txt");
+    std::fs::create_dir_all(repo.join("tmp")).unwrap();
+    for f in [&young, &old, &foreign] {
+        std::fs::write(f, b"x").unwrap();
+    }
+    set_age(&old, 2 * 24 * 3600);
+    set_age(&foreign, 2 * 24 * 3600);
+    ok_backup(&source, &repo, &["--keep", "1"]);
+    assert!(young.is_file(), "a young staging object is kept");
+    assert!(!old.exists(), "an old staging object is pruned");
+    assert!(
+        foreign.is_file(),
+        "a key of another layout is never touched"
+    );
+}
+
+#[test]
+fn restore_refuses_an_unexpected_file_in_the_manifest() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let repo = tmp.path().join("repo");
+    ok_backup(&source, &repo, &["--no-media"]);
+    let snap = &snapshots(&repo)[0];
+    let path = repo.join("snapshots").join(snap).join("manifest.json");
+    let mut m: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    m["files"].as_array_mut().unwrap().push(serde_json::json!({
+        "path": "ferrite.lock", "bytes": 0, "sha256": hex(b"")
+    }));
+    std::fs::write(&path, serde_json::to_vec(&m).unwrap()).unwrap();
+    let target = tmp.path().join("r");
+    let out = restore(&repo, &target, &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(stderr(&out).contains("unexpected file"), "{}", text(&out));
+    assert!(!target.exists());
+}
+
+fn hex(data: &[u8]) -> String {
+    ferrite_domain::to_hex(&Sha256::digest(data))
+}
+
+#[test]
+fn restore_refuses_a_tampered_repository_database() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let repo = tmp.path().join("repo");
+    ok_backup(&source, &repo, &[]);
+    let db = repo
+        .join("snapshots")
+        .join(&snapshots(&repo)[0])
+        .join("ferrite.db");
+    let mut bytes = std::fs::read(&db).unwrap();
+    let mid = bytes.len() / 2;
+    bytes[mid] ^= 0xff;
+    std::fs::write(&db, bytes).unwrap();
+    let target = tmp.path().join("r");
+    let out = restore(&repo, &target, &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(stderr(&out).contains("sha256"), "{}", text(&out));
+    assert!(!target.exists());
+    let siblings: Vec<String> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert!(
+        siblings.iter().all(|n| !n.contains("restor")),
+        "{siblings:?}"
+    );
+}
+
+#[test]
+fn restore_refuses_a_database_outside_the_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let archive = tmp.path().join("b.tar.zst");
+    ok_backup(&source, &archive, &[]);
+    let elsewhere = tmp.path().join("elsewhere.db");
+    let target = tmp.path().join("r");
+    let mut c = ferrite();
+    c.arg("restore")
+        .arg(&archive)
+        .arg("--data")
+        .arg(&target)
+        .env(
+            "FERRITE_DATABASE__URL",
+            format!("sqlite://{}", elsewhere.display()),
+        );
+    let out = run(c);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        stderr(&out).contains("outside the data folder"),
+        "{}",
+        text(&out)
+    );
+    assert!(!target.exists());
+    assert!(!elsewhere.exists());
+}
+
+#[test]
+fn incomplete_snapshots_are_ignored_and_pruned() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let repo = tmp.path().join("repo");
+    ok_backup(&source, &repo, &[]);
+    let first = snapshots(&repo)[0].clone();
+    // An older incomplete snapshot (a killed run): no manifest.
+    let old = repo.join("snapshots/20000101T000000Z");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::write(old.join("ferrite.db"), b"partial").unwrap();
+    ok_backup(&source, &repo, &["--keep", "1"]);
+    let snaps = snapshots(&repo);
+    assert_eq!(snaps.len(), 1, "{snaps:?}");
+    assert_ne!(snaps[0], first);
+    assert!(!old.exists(), "the incomplete snapshot is pruned");
+    // A newer incomplete one is ignored by restore.
+    let newer = repo.join("snapshots/29991231T235959Z");
+    std::fs::create_dir_all(&newer).unwrap();
+    std::fs::write(newer.join("ferrite.db"), b"partial").unwrap();
+    let out = restore(&repo, &tmp.path().join("r"), &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(stdout(&out).contains(&snaps[0]), "{}", text(&out));
 }

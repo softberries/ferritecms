@@ -562,7 +562,6 @@ pub async fn export_to<W: Write + Send + 'static>(
             bytes: blobs.iter().map(|(_, s)| s).sum(),
         }),
         missing,
-        artifact_hashes: Vec::new(),
     };
     let handle = Handle::current();
     let m = manifest.clone();

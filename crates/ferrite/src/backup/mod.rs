@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use clap::Args;
-use ferrite_config::{Config, DbKind};
+use ferrite_config::{Config, DbKind, InitMedia, MediaSection};
 use ferrite_domain::{ArtifactHash, to_hex};
 use ferrite_media::MediaStore;
 use ferrite_store::{Backend, Store};
@@ -33,12 +33,14 @@ use crate::site::open_media;
 use crate::{binary_version, load_config};
 
 pub use restore::{RestoreArgs, RestoreOptions, RestoreReport, restore, run_restore};
-use target::Target;
+use target::{RepoLocation, Target};
 
 /// The database file in a backup.
 pub(crate) const DB_FILE: &str = "ferrite.db";
 /// The configuration file in a backup.
 pub(crate) const CONFIG_FILE: &str = "ferrite.toml";
+/// The artifact list of a backup: the blobs it holds or needs, one hash per line (R12).
+pub(crate) const ARTIFACT_LIST: &str = "artifacts.txt";
 /// Exit code of a backup that lacks blobs missing from the media store (R10).
 const MISSING_BLOBS: u8 = 2;
 /// Why a Postgres site is refused.
@@ -116,20 +118,49 @@ pub struct BackupReport {
 }
 
 /// The snapshot's name in the backups folder: `backup-<ts>.db`, never `pre-*.db`, which the
-/// pre-migration snapshot pruning deletes.
+/// pre-migration snapshot pruning deletes. Every file a run writes there starts with
+/// `backup-<ts>.`.
 fn local_snapshot_name(ts: &str) -> String {
     format!("backup-{ts}.db")
 }
 
-/// Removes the local snapshot (and any SQLite side files) when dropped.
-struct LocalSnapshot(PathBuf);
+/// Leftovers of killed runs older than this are removed at the start of a run.
+const STALE: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
 
-impl Drop for LocalSnapshot {
+/// The files a run writes in `<data>/backups`; removed (with any SQLite side files) when
+/// dropped.
+struct LocalFiles(Vec<PathBuf>);
+
+impl Drop for LocalFiles {
     fn drop(&mut self) {
-        for suffix in ["", "-wal", "-shm", "-journal"] {
-            let mut p = self.0.as_os_str().to_owned();
-            p.push(suffix);
-            let _ = std::fs::remove_file(PathBuf::from(p));
+        for path in &self.0 {
+            for suffix in ["", "-wal", "-shm", "-journal"] {
+                let mut p = path.as_os_str().to_owned();
+                p.push(suffix);
+                let _ = std::fs::remove_file(PathBuf::from(p));
+            }
+        }
+    }
+}
+
+/// Removes `backup-*` files older than [`STALE`] from the backups folder: what killed runs
+/// left (ours by name; a running backup's files are young).
+fn sweep_stale(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age > STALE);
+        if name.starts_with("backup-") && old && entry.path().is_file() {
+            let _ = std::fs::remove_file(entry.path());
         }
     }
 }
@@ -198,36 +229,151 @@ fn corrupt(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The sha256 and size of a file.
-fn file_entry(name: &str, path: &Path) -> anyhow::Result<FileEntry> {
-    let mut file =
-        std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0; 256 * 1024];
-    let mut bytes = 0u64;
-    loop {
-        let n = std::io::Read::read(&mut file, &mut buf)
-            .with_context(|| format!("cannot read {}", path.display()))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-        bytes += n as u64;
+/// Hashes everything written through it.
+struct Hashing<W> {
+    inner: W,
+    hasher: Sha256,
+    bytes: u64,
+}
+
+impl<W: Write> Write for Hashing<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.hasher.update(&buf[..n]);
+        self.bytes += n as u64;
+        Ok(n)
     }
-    Ok(FileEntry {
-        path: name.to_owned(),
-        bytes,
-        sha256: to_hex(&hasher.finalize()),
-    })
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl Hashing<std::fs::File> {
+    fn create(path: &Path) -> anyhow::Result<Self> {
+        Ok(Hashing {
+            inner: crate::init::create_private(path)?,
+            hasher: Sha256::new(),
+            bytes: 0,
+        })
+    }
+
+    /// Syncs the file and returns its entry as `name`.
+    fn finish(self, name: &str) -> anyhow::Result<FileEntry> {
+        self.inner.sync_all()?;
+        Ok(FileEntry {
+            path: name.to_owned(),
+            bytes: self.bytes,
+            sha256: to_hex(&self.hasher.finalize()),
+        })
+    }
+}
+
+/// Copies `src` to the new private file `dest`, hashing what is written (the backup then
+/// uses the copy, so the source is read once).
+fn copy_private(name: &str, src: &Path, dest: &Path) -> anyhow::Result<FileEntry> {
+    let mut from =
+        std::fs::File::open(src).with_context(|| format!("cannot open {}", src.display()))?;
+    let mut to = Hashing::create(dest)?;
+    std::io::copy(&mut from, &mut to).with_context(|| format!("cannot copy {}", src.display()))?;
+    to.finish(name)
+}
+
+/// Writes the artifact list (one hash per line) to the new private file `dest`.
+fn write_hash_list<'a>(
+    dest: &Path,
+    hashes: impl Iterator<Item = &'a ArtifactHash>,
+) -> anyhow::Result<FileEntry> {
+    let mut out = BufWriter::new(Hashing::create(dest)?);
+    for hash in hashes {
+        out.write_all(hash.as_str().as_bytes())?;
+        out.write_all(b"\n")?;
+    }
+    let out = out.into_inner().map_err(|e| e.into_error())?;
+    out.finish(ARTIFACT_LIST)
+}
+
+/// The path with its longest existing ancestor resolved (symlinks, `..`), for containment
+/// checks of paths that may not exist yet.
+fn resolve(path: &Path) -> anyhow::Result<PathBuf> {
+    let abs = std::path::absolute(path)?;
+    let mut existing = abs.as_path();
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(real) = existing.canonicalize() {
+            let mut out = real;
+            out.extend(rest.iter().rev());
+            return Ok(out);
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_owned());
+                existing = parent;
+            }
+            _ => return Ok(abs),
+        }
+    }
+}
+
+/// Refuses a repository inside the data folder or the media store (R11): pruning it, or the
+/// media GC, would delete the other's files.
+fn check_repo_location(config: &Config, loc: &RepoLocation) -> anyhow::Result<()> {
+    match loc {
+        RepoLocation::Dir(dir) => {
+            let repo = resolve(dir)?;
+            if repo.starts_with(resolve(&config.data_dir)?) {
+                bail!(
+                    "the repository {} is inside the data folder {}; use a folder outside it",
+                    dir.display(),
+                    config.data_dir.display()
+                );
+            }
+            if let MediaSection::Local { root, .. } = &config.media
+                && repo.starts_with(resolve(root)?)
+            {
+                bail!(
+                    "the repository {} is inside the media folder {}; use a folder outside it",
+                    dir.display(),
+                    root.display()
+                );
+            }
+        }
+        RepoLocation::S3(url) => {
+            if let MediaSection::S3 { bucket, prefix, .. } = &config.media
+                && let Ok(InitMedia::S3 {
+                    bucket: repo_bucket,
+                    prefix: repo_prefix,
+                }) = InitMedia::parse_s3_url(url)
+            {
+                let norm = |p: &str| {
+                    let p = p.trim_matches('/');
+                    if p.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{p}/")
+                    }
+                };
+                let (a, b) = (norm(&repo_prefix), norm(prefix));
+                if repo_bucket == *bucket && (a.starts_with(&b) || b.starts_with(&a)) {
+                    bail!(
+                        "the repository {url} overlaps the site's media store \
+                         (s3://{bucket}/{b}); use another bucket or prefix"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Backs up the SQLite site `store` (whose configuration is `config`) to `target` (P13):
-/// writes a `VACUUM INTO` snapshot to `<data>/backups/backup-<ts>.db`, checks it with
-/// `PRAGMA integrity_check`, then writes the archive or repository snapshot with the blobs
-/// of the snapshot's `artifacts` rows from `media` (`None`: no media). The local snapshot is
-/// deleted afterwards, also on failure. A blob missing from `media` is left out and listed
-/// in [`BackupReport::missing`]; one whose content does not match its hash fails the
-/// backup. Safe next to writers (`Store::snapshot` works next to an open transaction).
+/// writes a `VACUUM INTO` snapshot to `<data>/backups/backup-<ts>.db` (mode 0600), checks it
+/// with `PRAGMA integrity_check`, then writes the archive or repository snapshot with the
+/// blobs of the snapshot's `artifacts` rows from `media` (`None`: no media). The files the
+/// run writes locally are deleted afterwards, also on failure; leftovers of killed runs older
+/// than a day are removed first. A blob missing from `media` is left out and listed in
+/// [`BackupReport::missing`]; one whose content does not match its hash fails the backup.
+/// Safe next to writers (`Store::snapshot` works next to an open transaction).
 pub async fn run_backup(
     config: &Config,
     store: &dyn Store,
@@ -241,38 +387,58 @@ pub async fn run_backup(
     if opts.keep.is_some() && !matches!(target, Target::Repo(_)) {
         bail!("--keep applies to a repository (a folder or s3://), not to an archive");
     }
+    if let Target::Repo(loc) = target {
+        check_repo_location(config, loc)?;
+    }
     let dir = config.data_dir.join("backups");
     std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    sweep_stale(&dir);
     let ts = chrono::Utc::now().format(repo::SNAPSHOT_FORMAT).to_string();
-    let local = LocalSnapshot(dir.join(local_snapshot_name(&ts)));
-    // A leftover of an interrupted run in the same second: ours by its name.
-    drop(LocalSnapshot(local.0.clone()));
+    let db = dir.join(local_snapshot_name(&ts));
+    let toml_copy = dir.join(format!("backup-{ts}.toml"));
+    let key_copy = dir.join(format!("backup-{ts}.key"));
+    let list_path = dir.join(format!("backup-{ts}.artifacts.txt"));
+    // Leftovers of an interrupted run in the same second: ours by their names.
+    let all = vec![
+        db.clone(),
+        toml_copy.clone(),
+        key_copy.clone(),
+        list_path.clone(),
+    ];
+    drop(LocalFiles(all.clone()));
+    let _local = LocalFiles(all);
     store
-        .snapshot(&local.0)
+        .snapshot(&db)
         .await
         .context("cannot write the database snapshot")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("cannot restrict {}", db.display()))?;
+    }
     #[cfg(feature = "test-seams")]
     if opts.corrupt_snapshot {
-        corrupt(&local.0)?;
+        corrupt(&db)?;
     }
-    let info = inspect(&local.0).await?;
+    let info = inspect(&db).await?;
 
     let mut files: Vec<(String, PathBuf)> = Vec::new();
+    let mut entries: Vec<FileEntry> = Vec::new();
     let toml = config.data_dir.join(CONFIG_FILE);
     if toml.is_file() {
-        files.push((CONFIG_FILE.to_owned(), toml));
+        entries.push(copy_private(CONFIG_FILE, &toml, &toml_copy)?);
+        files.push((CONFIG_FILE.to_owned(), toml_copy));
     }
     let key = config.data_dir.join(SECRET_KEY_FILE);
     if opts.secret_key && key.is_file() {
-        files.push((SECRET_KEY_FILE.to_owned(), key));
+        entries.push(copy_private(SECRET_KEY_FILE, &key, &key_copy)?);
+        files.push((SECRET_KEY_FILE.to_owned(), key_copy));
     }
-    files.push((DB_FILE.to_owned(), local.0.clone()));
-    let entries = files
-        .iter()
-        .map(|(name, path)| file_entry(name, path))
-        .collect::<anyhow::Result<Vec<_>>>()?;
+    entries.push(file_entry(DB_FILE, &db)?);
+    files.push((DB_FILE.to_owned(), db.clone()));
     let db_bytes = entries.last().map_or(0, |e| e.bytes);
-    let manifest = Manifest {
+    let mut manifest = Manifest {
         format: FORMAT,
         kind: Kind::Backup,
         ferrite_version: binary_version()?.to_string(),
@@ -281,10 +447,9 @@ pub async fn run_backup(
         site_id: info.site_id,
         created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
         tables: None,
-        files: Some(entries),
+        files: None,
         artifacts: None,
         missing: Vec::new(),
-        artifact_hashes: Vec::new(),
     };
     let mut report = BackupReport {
         location: target.describe(),
@@ -297,28 +462,37 @@ pub async fn run_backup(
         pruned: None,
     };
     match target {
-        Target::File(path) => {
+        Target::File(_) | Target::Stdout => {
             let blobs = archive_blobs(media.as_deref(), &info.hashes, &mut report).await?;
-            write_archive_file(path, manifest, files, media, blobs, &mut report).await?;
-        }
-        Target::Stdout => {
-            report.location = "stdout".to_owned();
-            let blobs = archive_blobs(media.as_deref(), &info.hashes, &mut report).await?;
-            let manifest = archive_manifest(manifest, &blobs, &report);
-            let out = BufWriter::new(std::io::stdout());
-            let mut out = write_archive(out, manifest, files, media, blobs).await?;
-            out.flush()?;
+            if media.is_some() {
+                entries.push(write_hash_list(&list_path, blobs.iter().map(|(h, _)| h))?);
+                files.push((ARTIFACT_LIST.to_owned(), list_path));
+                manifest.artifacts = Some(ArtifactsInfo {
+                    count: blobs.len() as u64,
+                    bytes: blobs.iter().map(|(_, s)| s).sum(),
+                });
+            }
+            manifest.missing = report.missing.iter().map(ToString::to_string).collect();
+            manifest.files = Some(entries);
+            if let Target::File(path) = target {
+                write_archive_file(path, manifest, files, media, blobs).await?;
+            } else {
+                report.location = "stdout".to_owned();
+                let out = BufWriter::new(std::io::stdout());
+                let mut out = write_archive(out, manifest, files, media, blobs).await?;
+                out.flush()?;
+            }
         }
         Target::Repo(loc) => {
-            let repo = repo::Repo::open(loc, true)?;
-            let mut manifest = manifest;
+            let repo = repo::Repo::open(loc, true).await?;
             if let Some(media) = &media {
                 let copy = repo.copy_blobs(media, &info.hashes).await?;
+                entries.push(write_hash_list(&list_path, copy.listed.iter())?);
+                files.push((ARTIFACT_LIST.to_owned(), list_path));
                 manifest.artifacts = Some(ArtifactsInfo {
                     count: copy.listed.len() as u64,
                     bytes: copy.listed_bytes,
                 });
-                manifest.artifact_hashes = copy.listed.iter().map(ToString::to_string).collect();
                 manifest.missing = copy.missing.iter().map(ToString::to_string).collect();
                 report.missing = copy.missing;
                 report.blobs = Some(BlobCounts {
@@ -327,15 +501,17 @@ pub async fn run_backup(
                     bytes: copy.bytes,
                 });
             }
+            manifest.files = Some(entries);
             let name = repo.write_snapshot(&files, &manifest).await?;
             report.location = format!("{}/snapshots/{name}", repo.display());
-            report.snapshot = Some(name);
+            report.snapshot = Some(name.clone());
             if let Some(keep) = opts.keep {
-                report.pruned = Some(repo.prune(keep).await?);
+                report.pruned = Some(repo.prune(keep).await.with_context(|| {
+                    format!("snapshot {name} was written, but pruning the repository failed")
+                })?);
             }
         }
     }
-    drop(local);
     Ok(report)
 }
 
@@ -363,17 +539,22 @@ async fn archive_blobs(
     Ok(blobs)
 }
 
-fn archive_manifest(
-    mut manifest: Manifest,
-    blobs: &[(ArtifactHash, u64)],
-    report: &BackupReport,
-) -> Manifest {
-    manifest.artifacts = report.blobs.as_ref().map(|b| ArtifactsInfo {
-        count: blobs.len() as u64,
-        bytes: b.bytes,
-    });
-    manifest.missing = report.missing.iter().map(ToString::to_string).collect();
-    manifest
+/// The sha256 and size of a file.
+fn file_entry(name: &str, path: &Path) -> anyhow::Result<FileEntry> {
+    let mut file =
+        std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+    let mut hashing = Hashing {
+        inner: std::io::sink(),
+        hasher: Sha256::new(),
+        bytes: 0,
+    };
+    std::io::copy(&mut file, &mut hashing)
+        .with_context(|| format!("cannot read {}", path.display()))?;
+    Ok(FileEntry {
+        path: name.to_owned(),
+        bytes: hashing.bytes,
+        sha256: to_hex(&hashing.hasher.finalize()),
+    })
 }
 
 /// Writes the archive to a new file (mode 0600), removed again on failure.
@@ -383,9 +564,7 @@ async fn write_archive_file(
     files: Vec<(String, PathBuf)>,
     media: Option<Arc<MediaStore>>,
     blobs: Vec<(ArtifactHash, u64)>,
-    report: &mut BackupReport,
 ) -> anyhow::Result<()> {
-    let manifest = archive_manifest(manifest, &blobs, report);
     let file = crate::init::create_private(path)?;
     let result = async {
         let out = write_archive(BufWriter::new(file), manifest, files, media, blobs).await?;

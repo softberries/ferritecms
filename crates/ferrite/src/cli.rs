@@ -78,7 +78,10 @@ pub enum Command {
     /// does not match its hash fails the backup.
     ///
     /// Exit code: 0 ok, 2 done but artifacts were missing from the media store, 1 on any
-    /// other error (a failed backup leaves no archive or snapshot).
+    /// other error (a failed backup leaves no archive or snapshot, except that a failed
+    /// `--keep` prune keeps the snapshot it follows). A repository folder or prefix must be
+    /// empty or carry ferrite-backup-repo.json, and lie outside the data folder and the media
+    /// store.
     Backup(backup::BackupArgs),
     /// Restore a backup into an empty data folder (or, with --force, in place of one).
     ///
@@ -88,7 +91,8 @@ pub enum Command {
     /// ferrite holds its lock. Blobs go to the media store the restored ferrite.toml names
     /// (those present are skipped). The database is not migrated: the command prints the
     /// migration status and `serve` migrates under `database.auto_migrate`. A failed restore
-    /// changes nothing.
+    /// leaves the data folder as it was. An empty folder (a mount point too) is restored into
+    /// in place; `--force` refuses a mount point.
     ///
     /// Exit code: 0 ok, 3 when the backup's schema is newer than this binary (nothing is
     /// written), 1 on any other error.

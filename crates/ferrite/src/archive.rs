@@ -30,7 +30,7 @@ pub const MANIFEST: &str = "manifest.json";
 /// The zstd level (P7).
 const LEVEL: i32 = 3;
 /// The largest manifest read.
-const MAX_MANIFEST: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_MANIFEST: u64 = 16 * 1024 * 1024;
 
 /// An archive this binary cannot use because a newer one wrote it (a newer format or
 /// schema). Commands map it to exit code 3.
@@ -102,10 +102,6 @@ pub struct Manifest {
     /// empty).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missing: Vec<String>,
-    /// A backup repository snapshot only: the blobs of `<repo>/artifacts/` this snapshot
-    /// needs (an additive field, absent in archives).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub artifact_hashes: Vec<String>,
 }
 
 impl Manifest {
@@ -138,10 +134,7 @@ impl Manifest {
             (Kind::Export, ..) => bail!("manifest.json of an export must list tables and no files"),
             (Kind::Backup, ..) => bail!("manifest.json of a backup must list files and no tables"),
         }
-        if self.kind == Kind::Export && !self.artifact_hashes.is_empty() {
-            bail!("manifest.json of an export lists artifact_hashes");
-        }
-        for h in self.artifact_hashes.iter().chain(&self.missing) {
+        for h in &self.missing {
             ArtifactHash::parse(h)
                 .map_err(|_| anyhow::anyhow!("manifest.json lists an invalid artifact {h:?}"))?;
         }
@@ -513,7 +506,6 @@ mod tests {
             files: None,
             artifacts,
             missing: Vec::new(),
-            artifact_hashes: Vec::new(),
         }
     }
 
@@ -708,11 +700,7 @@ mod tests {
         m.missing = vec!["x".into()];
         assert!(m.check().is_err(), "an invalid missing hash");
         m.missing = vec!["ab".repeat(32)];
-        m.artifact_hashes = vec!["cd".repeat(32)];
         m.check().unwrap();
-        m.artifact_hashes = vec!["x".into()];
-        assert!(m.check().is_err(), "an invalid listed hash");
-        m.artifact_hashes.clear();
         m.missing.clear();
         m.tables = Some(vec![]);
         assert!(m.check().is_err());
