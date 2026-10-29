@@ -14,6 +14,7 @@ mod content_seo;
 mod extensions_m2b3;
 mod foundation;
 mod idempotency;
+mod import;
 mod jobs;
 mod media;
 mod media_filters;

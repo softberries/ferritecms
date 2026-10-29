@@ -1,5 +1,5 @@
 //! Import report storage (M3-2 P29): [`MediaArtifacts`], core's
-//! [`ArtifactBlobs`] over the site's [`MediaStore`], so
+//! [`ferrite_core::import::ArtifactBlobs`] over the site's [`MediaStore`], so
 //! a report written by the node that ran the job can be read from any node (local or S3).
 
 use std::sync::Arc;

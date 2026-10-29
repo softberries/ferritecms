@@ -16,8 +16,8 @@ use ferrite_core::{
     },
 };
 use ferrite_domain::{
-    ArtifactHash, ArtifactKind, ImportRun, ImportRunId, ImportRunState, JobId, JobStatus, NewUser,
-    NodeId, Role, Timestamp, UserId, UserStatus, to_hex,
+    Artifact, ArtifactHash, ArtifactKind, ImportRun, ImportRunId, ImportRunState, JobId, JobStatus,
+    NewUser, NodeId, Role, Timestamp, UserId, UserStatus, to_hex,
 };
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode};
 use ferrite_store::{LOCK_IMPORT, Store};
@@ -106,10 +106,21 @@ fn service(db: &TestDb) -> Fixture {
 /// What the API hands `enqueue`: no user, core binds the actor's.
 fn request() -> ImportJobRequest {
     ImportJobRequest {
-        wxr: "a".repeat(64),
-        uploads: Some("b".repeat(64)),
+        wxr: input('a', "application/xml"),
+        uploads: Some(input('b', "application/zip")),
         options: ImportJobOptions::default(),
         source_name: "export.xml".into(),
+    }
+}
+
+/// An uploaded input (P23): an `import` artifact whose hash is `c` repeated.
+fn input(c: char, mime: &str) -> Artifact {
+    Artifact {
+        hash: ArtifactHash::parse(&c.to_string().repeat(64)).unwrap(),
+        kind: ArtifactKind::Import,
+        bytes: 100,
+        mime: mime.into(),
+        created_at: Timestamp::now(),
     }
 }
 
@@ -163,6 +174,7 @@ backend_tests!(
     enqueue_takes_over_a_stale_run,
     enqueue_refuses_while_the_import_lock_is_held,
     reports_need_an_artifact_store,
+    enqueue_checks_the_bases,
 );
 
 /// The payload keeps the CLI's defaults and refuses unknown fields.
@@ -201,9 +213,17 @@ pub async fn enqueue_requires_import_capability(db: &TestDb) {
     let admin = actor(store, Role::Admin).await;
 
     for who in [editor, scoped(admin, &["import:read"])] {
+        let err = f.svc.check_start(&who).await.unwrap_err();
+        assert!(matches!(err, CoreError::Forbidden(_)), "{err:?}");
         let err = f.svc.enqueue(&who, request()).await.unwrap_err();
         assert!(matches!(err, CoreError::Forbidden(_)), "{err:?}");
     }
+    f.svc.check_start(&admin).await.unwrap();
+    // An input that is not an `import` artifact is refused.
+    let mut wrong = request();
+    wrong.wxr.kind = ArtifactKind::Media;
+    let err = f.svc.enqueue(&admin, wrong).await.unwrap_err();
+    assert!(matches!(err, CoreError::Invalid(_)), "{err:?}");
     let id = f
         .svc
         .enqueue(&scoped(admin, &["import:write"]), request())
@@ -216,6 +236,17 @@ pub async fn enqueue_requires_import_capability(db: &TestDb) {
     assert_eq!(job.unique_key, None);
     let back: ImportJobPayload = serde_json::from_value(job.payload).unwrap();
     assert_eq!(back, payload(admin.user));
+    // The inputs are recorded as `import` artifacts with the job.
+    for a in [request().wxr, request().uploads.unwrap()] {
+        let row = store
+            .read()
+            .artifacts()
+            .get(&a.hash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!((row.kind, row.bytes, row.mime), (a.kind, a.bytes, a.mime));
+    }
 
     // The job runs as whoever asked: another admin's request carries their id.
     let other = actor(store, Role::Admin).await;
@@ -254,6 +285,8 @@ pub async fn enqueue_takes_over_a_stale_run(db: &TestDb) {
     let admin = actor(store, Role::Admin).await;
 
     let fresh = running_run(store, admin.user, 5).await;
+    let err = f.svc.check_start(&admin).await.unwrap_err();
+    assert!(matches!(err, CoreError::Changed(_)), "{err:?}");
     let err = f.svc.enqueue(&admin, request()).await.unwrap_err();
     assert!(matches!(err, CoreError::Changed(_)), "{err:?}");
     let run = store
@@ -272,6 +305,16 @@ pub async fn enqueue_takes_over_a_stale_run(db: &TestDb) {
         .unwrap();
 
     let stale = running_run(store, admin.user, 300).await;
+    // The pre-check lets a stale run pass and leaves it alone.
+    f.svc.check_start(&admin).await.unwrap();
+    let run = store
+        .read()
+        .imports()
+        .get_run(stale)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(run.state, ImportRunState::Running);
     f.svc.enqueue(&admin, request()).await.unwrap();
     let run = store
         .read()
@@ -332,6 +375,9 @@ pub async fn enqueue_conflicts_while_an_import_job_is_queued(db: &TestDb) {
 
     let first = f.svc.enqueue(&admin, request()).await.unwrap();
     conflict(f.svc.enqueue(&admin, request()).await);
+    // The read-only pre-check agrees.
+    let err = f.svc.check_start(&admin).await.unwrap_err();
+    assert!(matches!(err, CoreError::Changed(_)), "{err:?}");
 
     // Claimed: running.
     let kinds = vec![IMPORT_WORDPRESS_KIND.to_owned()];
@@ -636,4 +682,49 @@ pub async fn report_round_trips_and_needs_import_read(db: &TestDb) {
 fn hex_sha256(data: &[u8]) -> String {
     use sha2::Digest;
     ferrite_domain::to_hex(&sha2::Sha256::digest(data))
+}
+
+/// The category and tag bases are paths of URL-safe segments (surrounding slashes
+/// ignored); anything else is `InvalidField` and nothing is queued.
+pub async fn enqueue_checks_the_bases(db: &TestDb) {
+    let f = service(db);
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let with = |category: &str, tag: &str| {
+        let mut r = request();
+        r.options.category_base = category.into();
+        r.options.tag_base = tag.into();
+        r
+    };
+    for (category, tag, field) in [
+        ("", "tag", "category_base"),
+        ("/", "tag", "category_base"),
+        ("a//b", "tag", "category_base"),
+        ("category", "..", "tag_base"),
+        ("category", "a b", "tag_base"),
+        ("category", "x?y", "tag_base"),
+        ("category", &"t".repeat(101), "tag_base"),
+    ] {
+        let err = f
+            .svc
+            .enqueue(&admin, with(category, tag))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, CoreError::InvalidField { field: f, .. } if *f == field),
+            "{category:?}/{tag:?}: {err:?}"
+        );
+    }
+    let jobs = store.read().jobs();
+    let query = ferrite_domain::JobQuery {
+        status: None,
+        kind: Some(IMPORT_WORDPRESS_KIND.into()),
+        limit: 10,
+        cursor: None,
+    };
+    assert!(jobs.list(&query).await.unwrap().items.is_empty());
+    f.svc
+        .enqueue(&admin, with("/topics/", "blog/tags-2"))
+        .await
+        .unwrap();
 }

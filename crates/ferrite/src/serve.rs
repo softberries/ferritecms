@@ -508,6 +508,7 @@ async fn boot(
             auth,
             comments,
             system: Arc::new(SystemService::new(store.clone())),
+            import: import.clone(),
             site: state.clone(),
             node: NodeInfo {
                 id: registry.id(),

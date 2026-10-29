@@ -133,22 +133,26 @@ impl Site {
         start(&folder.config, self.store(), opts).await.unwrap()
     }
 
-    /// Stores `data` as an `import` artifact (blob and row), as the API does (P23).
+    /// Stores `data`'s blob, as the API does before it enqueues (P23); `enqueue` records
+    /// the row.
     async fn artifact(&self, data: Vec<u8>) -> ArtifactHash {
-        let stored = self.media().put_artifact(Bytes::from(data)).await.unwrap();
-        self.store()
-            .read()
-            .artifacts()
-            .insert_if_absent(&Artifact {
-                hash: stored.hash.clone(),
-                kind: ArtifactKind::Import,
-                bytes: i64::try_from(stored.bytes).unwrap(),
-                mime: stored.mime,
-                created_at: Timestamp::now(),
-            })
+        self.media()
+            .put_artifact(Bytes::from(data))
             .await
-            .unwrap();
-        stored.hash
+            .unwrap()
+            .hash
+    }
+
+    /// The `import` artifact row for `hash` (its size from the blob, 0 when gone).
+    async fn input(&self, hash: &ArtifactHash) -> Artifact {
+        let bytes = self.media().head(hash).await.unwrap().unwrap_or(0);
+        Artifact {
+            hash: hash.clone(),
+            kind: ArtifactKind::Import,
+            bytes: i64::try_from(bytes).unwrap(),
+            mime: "application/octet-stream".into(),
+            created_at: Timestamp::now(),
+        }
     }
 
     /// Whether the blob or the row of `hash` is still there.
@@ -180,8 +184,11 @@ impl Site {
             .enqueue(
                 &self.actor(),
                 ImportJobRequest {
-                    wxr: wxr.to_string(),
-                    uploads: uploads.map(ToString::to_string),
+                    wxr: self.input(wxr).await,
+                    uploads: match uploads {
+                        Some(hash) => Some(self.input(hash).await),
+                        None => None,
+                    },
                     options: ImportJobOptions::default(),
                     source_name: "site-a.xml".into(),
                 },
