@@ -22,7 +22,7 @@ use ferrite_core::jobs::{ImportJobOptions, ImportJobRequest};
 use ferrite_core::{Actor, PermalinkRules};
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ContentQuery, ImportRun, ImportRunId, ImportRunState,
-    Job, JobId, JobStatus, MEDIA_KIND, NewJob, NewUser, NodeId, Role, Timestamp, UserId,
+    Job, JobId, JobStatus, MEDIA_KIND, Media, NewJob, NewUser, NodeId, Role, Timestamp, UserId,
     UserStatus,
 };
 use ferrite_http::import_blobs::MediaArtifacts;
@@ -566,6 +566,50 @@ async fn job_dead_when_user_demoted(db: Arc<TestDb>) {
     node.shutdown().await.unwrap();
 }
 
+/// A media item uploaded with the same bytes as a queued import's uploads zip shares its
+/// artifact row (kind `import`, `insert_if_absent`). When the job's inputs are spent, the
+/// row is deleted first and the foreign key refuses it, so the media item keeps both its
+/// row and its file; the WXR, which nothing else holds, goes.
+async fn input_shared_with_media_keeps_its_file(db: Arc<TestDb>) {
+    let site = Site::new(db).await;
+    let (wxr, uploads) = site.site_a().await;
+    let id = site.enqueue(&wxr, Some(&uploads)).await;
+    let store = site.store();
+    let mut user = store.read().users().get(site.admin).await.unwrap().unwrap();
+    let post = ferrite_store_tests::fixtures::new_post(&user, "uploads-zip");
+    store.read().content().insert(&post).await.unwrap();
+    store
+        .read()
+        .media()
+        .insert(&Media {
+            item_id: post.id,
+            artifact_hash: uploads.clone(),
+            mime: "application/zip".into(),
+            bytes: 1,
+            width: None,
+            height: None,
+            alt: String::new(),
+            original_name: "uploads.zip".into(),
+            variants: serde_json::json!({}),
+            sanitized: false,
+        })
+        .await
+        .unwrap();
+    // The job is spent at once: its user is no longer an admin (`Permanent`).
+    user.role = Role::Editor;
+    store.read().users().update(&user).await.unwrap();
+    let folder = site.folder();
+    let err = site
+        .handler(&folder, None)
+        .run(&site.job(id).await)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, JobError::Permanent(_)), "{err:?}");
+    assert_eq!(site.artifact_exists(&wxr).await, (false, false));
+    assert_eq!(site.artifact_exists(&uploads).await, (true, true));
+    assert!(store.read().media().get(post.id).await.unwrap().is_some());
+}
+
 /// An input artifact that is not in the store: `dead` on the first attempt.
 async fn job_dead_when_artifact_missing(db: Arc<TestDb>) {
     let site = Site::new(db).await;
@@ -643,6 +687,7 @@ backend_tests_spawning!(
     last_attempt_retry_deletes_inputs,
     missing_input_of_a_done_run_is_done,
     job_dead_when_user_demoted,
+    input_shared_with_media_keeps_its_file,
     job_dead_when_artifact_missing,
     job_retry_on_fresh_node_reparses,
 );

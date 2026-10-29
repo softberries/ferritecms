@@ -288,9 +288,11 @@ impl ImportWordpressHandler {
         }
     }
 
-    /// Deletes the payload's input artifacts, the blob first (a failure then leaves a row
-    /// naming nothing, which readers take as missing, never an unlisted blob); never one
-    /// of another kind.
+    /// Deletes the payload's input artifacts, the row first and the blob only once that
+    /// succeeded: a media upload of the same bytes shares the row (`insert_if_absent`
+    /// kept kind `import`), and the foreign keys refuse to delete a row a media item,
+    /// plugin or theme references, so its file stays. A blob whose delete fails after its
+    /// row went is left for the M4 orphan sweep. Never one of another kind.
     async fn delete_inputs(&self, payload: &ImportJobPayload) {
         for hash in std::iter::once(&payload.wxr).chain(&payload.uploads) {
             let Ok(hash) = ArtifactHash::parse(hash) else {
@@ -309,12 +311,12 @@ impl ImportWordpressHandler {
                     continue;
                 }
             }
-            if let Err(e) = self.media.delete(&hash).await {
-                tracing::warn!(error = %e, %hash, "deleting an import input's file failed");
+            if let Err(e) = artifacts.delete(&hash).await {
+                tracing::info!(error = %e, %hash, "an import input's row is still referenced; its file stays");
                 continue;
             }
-            if let Err(e) = artifacts.delete(&hash).await {
-                tracing::warn!(error = %e, %hash, "deleting an import input's row failed");
+            if let Err(e) = self.media.delete(&hash).await {
+                tracing::warn!(error = %e, %hash, "deleting an import input's file failed; it waits for the orphan sweep");
             }
         }
     }
