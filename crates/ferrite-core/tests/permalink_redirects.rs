@@ -459,32 +459,7 @@ pub async fn import_permalink_write_enqueues_too(db: &TestDb) {
 pub async fn job_pages_through_1200_items(db: &TestDb) {
     let store = db.store();
     let admin = actor(store).await;
-    let tx = store.begin().await.unwrap();
-    let now = Timestamp::now();
-    for i in 0..1200 {
-        tx.content()
-            .insert(&NewContent {
-                id: ContentId::new(),
-                kind: "post".into(),
-                status: ContentStatus::Published,
-                slug: format!("p{i:04}"),
-                parent_id: None,
-                author_id: admin.user,
-                title: format!("Post {i}"),
-                excerpt: String::new(),
-                body: json!({"type": "doc", "content": []}),
-                body_html: None,
-                fields: json!({}),
-                menu_order: 0,
-                published_at: Some(now),
-                scheduled_at: None,
-                created_at: None,
-                updated_at: None,
-            })
-            .await
-            .unwrap();
-    }
-    tx.commit().await.unwrap();
+    insert_published(store, &admin, 1200, "post", false).await;
 
     OptionService::new(db.shared_store())
         .set_many(&admin, &[set("permalink.post", "/blog/%slug%/")])
@@ -513,6 +488,132 @@ pub async fn job_pages_through_1200_items(db: &TestDb) {
     assert_eq!(pages, 3);
 }
 
+/// Inserts `n` published items of `kind` (slugs `p0000`, …) straight into the store;
+/// with `nested` each is the child of the one before.
+async fn insert_published(
+    store: &dyn Store,
+    admin: &Actor,
+    n: usize,
+    kind: &str,
+    nested: bool,
+) -> Vec<ContentId> {
+    let tx = store.begin().await.unwrap();
+    let now = Timestamp::now();
+    let mut ids: Vec<ContentId> = Vec::with_capacity(n);
+    for i in 0..n {
+        let id = ContentId::new();
+        tx.content()
+            .insert(&NewContent {
+                id,
+                kind: kind.into(),
+                status: ContentStatus::Published,
+                slug: format!("p{i:04}"),
+                parent_id: if nested { ids.last().copied() } else { None },
+                author_id: admin.user,
+                title: format!("Item {i}"),
+                excerpt: String::new(),
+                body: json!({"type": "doc", "content": []}),
+                body_html: None,
+                fields: json!({}),
+                menu_order: 0,
+                published_at: Some(now),
+                scheduled_at: None,
+                created_at: None,
+                updated_at: None,
+            })
+            .await
+            .unwrap();
+        ids.push(id);
+    }
+    tx.commit().await.unwrap();
+    ids
+}
+
+/// The first queued `permalink.redirects` job not yet claimed, claimed.
+async fn claim_one(store: &dyn Store) -> PermalinkRedirects {
+    let job = store
+        .read()
+        .jobs()
+        .claim(
+            NodeId::new(),
+            &[PERMALINK_REDIRECTS_KIND.to_owned()],
+            1,
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    serde_json::from_value(job.payload).unwrap()
+}
+
+/// Job 1 (A→B) is still paging when a write to C commits and job 2 (B→C) runs to the
+/// end: each page re-reads the stored rules under the `types` lock, so job 1's later
+/// pages go to C too, and every A and B path ends one hop from C.
+pub async fn concurrent_jobs_leave_single_hops_to_latest(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store).await;
+    insert_published(store, &admin, 600, "post", false).await;
+    let options = OptionService::new(db.shared_store());
+    let svc = RedirectService::new(db.shared_store());
+
+    options
+        .set_many(&admin, &[set("permalink.post", "/b/%slug%/")])
+        .await
+        .unwrap();
+    let first = claim_one(store).await;
+    let mut report = PermalinkRedirectReport::default();
+    let cursor = svc.structure_page(&first, None, &mut report).await.unwrap();
+    assert!(cursor.is_some());
+    assert_eq!(report.moved, 500);
+
+    options
+        .set_many(&admin, &[set("permalink.post", "/c/%slug%/")])
+        .await
+        .unwrap();
+    assert_eq!(run_jobs(db).await[0].moved, 600);
+
+    let mut cursor = cursor;
+    while cursor.is_some() {
+        cursor = svc
+            .structure_page(&first, cursor, &mut report)
+            .await
+            .unwrap();
+    }
+    assert_eq!(report.moved, 600);
+    for i in 0..600 {
+        let new = format!("/c/p{i:04}/");
+        for old in [format!("/p{i:04}/"), format!("/b/p{i:04}/")] {
+            assert_eq!(
+                target(store, &old).await.as_deref(),
+                Some(new.as_str()),
+                "{old}"
+            );
+        }
+        assert_eq!(target(store, &new).await, None);
+    }
+    assert_single_hops(store).await;
+}
+
+/// An item whose parent chain is too deep to compute a path is refused; the job goes on
+/// with the rest.
+pub async fn broken_parent_chain_does_not_stop_the_job(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store).await;
+    // 66 nested pages: the deepest has 65 ancestors, one past the limit.
+    insert_published(store, &admin, 66, "page", true).await;
+    OptionService::new(db.shared_store())
+        .set_many(&admin, &[set("permalink.page", "/p/%parent_path%/%slug%/")])
+        .await
+        .unwrap();
+    let reports = run_jobs(db).await;
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].refused, 1);
+    assert_eq!(reports[0].moved, 65);
+    assert_eq!(target(store, "/p0000/").await.as_deref(), Some("/p/p0000/"));
+}
+
 backend_tests!(
     post_structure_change_redirects_published_posts,
     two_changes_leave_single_hops,
@@ -521,4 +622,6 @@ backend_tests!(
     source_that_is_a_live_path_is_refused,
     import_permalink_write_enqueues_too,
     job_pages_through_1200_items,
+    concurrent_jobs_leave_single_hops_to_latest,
+    broken_parent_chain_does_not_stop_the_job,
 );

@@ -223,7 +223,11 @@ async fn write_changes(
     let mut prev = None;
     if !permalinks.is_empty() {
         check_permalinks(repos, &permalinks).await?;
-        prev = permalink::stored_rules(repos, &[]).await.ok();
+        prev = match permalink::stored_rules(repos, &[]).await {
+            Ok(rules) => Some(rules),
+            Err(CoreError::Invalid(_)) => None,
+            Err(e) => return Err(e),
+        };
     }
     if settings_write {
         for c in changes {

@@ -21,6 +21,7 @@ use crate::{
     },
     slug,
     tx::finish,
+    types::{begin_locked, finish_locked},
 };
 
 /// Redirects followed when checking a new one for loops and long chains.
@@ -294,45 +295,66 @@ impl RedirectService {
     }
 
     /// The `permalink.redirects` job (M3-2 P30): redirects every published post and page
-    /// from its path under `payload.prev` to its path under the structures stored now.
-    /// Only the types whose structure differs are walked, [`STRUCTURE_PAGE`] items per
-    /// transaction, each transaction with one `invalidate` event of the `redirect:` keys
-    /// it touched. A move is a content move's (origin `slug-change`, `301`, earlier
-    /// redirects to the old path re-targeted so no chain forms), except that an old path
-    /// holding a `manual` or `import` redirect keeps it ([`kept`](PermalinkRedirectReport::kept))
-    /// and an old path that is now another published item's path gets none
-    /// ([`refused`](PermalinkRedirectReport::refused)). Re-running it is harmless: the
-    /// second run rewrites the same rows. No capability check (a system job). Term-path
-    /// changes (a `%category%` term renamed) are not covered.
+    /// from its path under `payload.prev` to its path under the structures stored now,
+    /// page by page ([`structure_page`](Self::structure_page)) until the last.
+    /// Re-running it is harmless: the second run rewrites the same rows. No capability
+    /// check (a system job). Term-path changes (a `%category%` term renamed) are not
+    /// covered.
     pub async fn structure_change(
         &self,
         payload: &PermalinkRedirects,
     ) -> Result<PermalinkRedirectReport, CoreError> {
-        let prev =
-            PermalinkRules::from_options(Some(&payload.prev.post), Some(&payload.prev.page))?;
-        let current = permalink::stored_rules(self.store.read(), &[]).await?;
-        let mut kinds = Vec::new();
-        if prev.post() != current.post() {
-            kinds.push("post".to_owned());
-        }
-        if prev.page() != current.page() {
-            kinds.push("page".to_owned());
-        }
         let mut report = PermalinkRedirectReport::default();
-        if kinds.is_empty() {
-            return Ok(report);
-        }
         let mut cursor = None;
         loop {
-            let tx = self.store.begin().await?;
-            let done =
-                structure_moves(tx.as_ref(), &prev, &current, &kinds, cursor, &mut report).await;
-            cursor = finish(tx, done).await?;
-            report.pages += 1;
+            cursor = self.structure_page(payload, cursor, &mut report).await?;
             if cursor.is_none() {
                 return Ok(report);
             }
         }
+    }
+
+    /// One page of [`structure_change`](Self::structure_change): up to
+    /// [`STRUCTURE_PAGE`] published items from `cursor` on (`None`: the first page), in
+    /// one transaction under [`LOCK_TYPES`](ferrite_store::LOCK_TYPES), the lock
+    /// `permalink.*` writes take. The stored structures are read inside it, so a write
+    /// that committed between two pages is seen by the next one (two jobs of quick
+    /// changes never undo each other's redirects), and only the types whose structure
+    /// differs from `payload.prev` are walked (none: done at once). The transaction
+    /// emits one `invalidate` event of the `redirect:` keys it touched. A move is a
+    /// content move's (origin `slug-change`, `301`, earlier redirects to the old path
+    /// re-targeted so no chain forms), except that an old path holding a `manual` or
+    /// `import` redirect keeps it ([`kept`](PermalinkRedirectReport::kept)), and an old
+    /// path that is now another published item's path, or an item whose path cannot be
+    /// computed (a broken parent chain), gets none
+    /// ([`refused`](PermalinkRedirectReport::refused)). Adds to `report`; returns the
+    /// cursor of the next page, `None` after the last.
+    pub async fn structure_page(
+        &self,
+        payload: &PermalinkRedirects,
+        cursor: Option<String>,
+        report: &mut PermalinkRedirectReport,
+    ) -> Result<Option<String>, CoreError> {
+        let prev =
+            PermalinkRules::from_options(Some(&payload.prev.post), Some(&payload.prev.page))?;
+        let (guard, tx) = begin_locked(self.store.as_ref()).await?;
+        let done = async {
+            let current = permalink::stored_rules(tx.as_ref(), &[]).await?;
+            let mut kinds = Vec::new();
+            if prev.post() != current.post() {
+                kinds.push("post".to_owned());
+            }
+            if prev.page() != current.page() {
+                kinds.push("page".to_owned());
+            }
+            if kinds.is_empty() {
+                return Ok(None);
+            }
+            report.pages += 1;
+            structure_moves(tx.as_ref(), &prev, &current, &kinds, cursor, report).await
+        }
+        .await;
+        finish_locked(guard, tx, done).await
     }
 
     /// Deletes a redirect (a missing one is a no-op).
@@ -793,7 +815,14 @@ pub(crate) async fn published_item_at(
             if item.status != ContentStatus::Published {
                 continue;
             }
-            let path = rules.path(&load_input(repos, item).await?);
+            // A candidate whose path cannot be computed (a broken parent chain) is not
+            // live there.
+            let input = match load_input(repos, item).await {
+                Ok(input) => input,
+                Err(CoreError::Invalid(_)) => continue,
+                Err(e) => return Err(e),
+            };
+            let path = rules.path(&input);
             if path == source || alternative.as_deref() == Some(path.as_str()) {
                 return Ok(true);
             }

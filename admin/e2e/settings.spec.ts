@@ -9,7 +9,7 @@
 // The tests of one file run one after the other.
 
 import type { Page, Request } from "@playwright/test";
-import { ContentApi, type Item } from "./support/content-api";
+import { ContentApi, type Item, type Redirect } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
 import { mod } from "./support/keys";
 import { mailbox } from "./support/smtp-sink";
@@ -116,6 +116,9 @@ test("permalink_change_warns", async ({ as, site, siteKey }) => {
   const before = await api.getSettings();
   const post = await published(api, "post", uid("Moved"));
   const old = (await api.refs([post.id]))[0]?.permalink ?? "";
+  const at = new Date(post.published_at ?? "");
+  // Set once the structure change is saved: only then is there anything to clean up.
+  let changed = false;
   const page = await as("admin");
   try {
     await open(page, "permalinks");
@@ -146,13 +149,13 @@ test("permalink_change_warns", async ({ as, site, siteKey }) => {
     const patch = page.waitForRequest(isPatch);
     await confirm.getByRole("button", { name: "Change permalinks" }).click();
     expect((await patch).postDataJSON()).toEqual({ "permalink.post": "/%year%/%month%/%slug%/" });
+    changed = true;
     await expect(toast(page, "Settings saved")).toBeVisible();
     // One re-read and one write, both from the confirmed save: a late request from the
     // cancelled one would show here.
     expect(calls).toEqual(["GET", "PATCH"]);
 
     // The post's URL follows the new structure (UTC year and month of publication).
-    const at = new Date(post.published_at ?? "");
     const expected = `/${at.getUTCFullYear()}/${String(at.getUTCMonth() + 1).padStart(2, "0")}/${post.slug}/`;
     await expect
       .poll(async () => (await api.refs([post.id]))[0]?.permalink, { timeout: 10_000 })
@@ -171,10 +174,26 @@ test("permalink_change_warns", async ({ as, site, siteKey }) => {
       )
       .toEqual([301, expected]);
   } finally {
-    // Purged first, so putting the structure back redirects nothing of this test's.
-    await api.purge(post);
     await api.patchSettings({ "permalink.post": before["permalink.post"] ?? null });
-    await api.deleteRedirects(post.slug);
+    if (changed) {
+      // The structure change and its revert redirect every published post of the site,
+      // other specs' too. Once the revert's job has run (this post's dated path leads
+      // back), delete every `slug-change` redirect from or to a dated path: only this
+      // window makes them (the site's structure is `/%slug%/` otherwise), earlier runs'
+      // leftovers included.
+      const dated = `/${at.getUTCFullYear()}/${String(at.getUTCMonth() + 1).padStart(2, "0")}/${post.slug}/`;
+      await expect
+        .poll(async () => (await api.listRedirects(post.slug)).some((r) => r.source === dated), {
+          timeout: 10_000,
+        })
+        .toBe(true);
+      const shape = /^\/\d{4}\/\d{2}\/[^/]+\/$/;
+      const leaked = (r: Redirect) =>
+        r.origin === "slug-change" && (shape.test(r.source) || shape.test(r.target));
+      for (const r of (await api.allRedirects()).filter(leaked)) await api.deleteRedirect(r.id);
+      expect((await api.allRedirects()).filter(leaked)).toEqual([]);
+    }
+    await api.purge(post);
     await api.dispose();
   }
 });

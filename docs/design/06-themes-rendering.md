@@ -255,8 +255,15 @@ redirects (M3-2 P30): the write enqueues a `permalink.redirects` job in its tran
 job moves every published post or page from its path under the previous structure to its path
 under the current one, 500 items per transaction, with the content-move rules (origin
 `slug-change`, no chains); an old path holding a `manual` or `import` redirect keeps it, and an
-old path that is another published item's path now gets none. Until the job has run, the old
-URLs answer 404.
+old path that is another published item's path now gets none. Each page's transaction takes the
+`types` lock that `permalink.*` writes take and reads the stored structures inside it, so a job
+still paging when a later change commits redirects its remaining items to the newer structure
+and the two jobs never undo each other's rows. Until the job has run, the old URLs answer 404.
+Known limits: the job pages by the content list's published-order cursor, not by id (the store
+has no id ordering yet), so an item whose `published_at` moves later while the job runs jumps
+ahead of the cursor and gets no redirect. An import that writes `permalink.*` (P30) makes the
+job redirect the imported posts from their old default-structure paths, which they never had:
+one harmless row per item, accepted under P30's cost.
 
 **Request order** (`crates/ferrite-http/src/app/handler.rs`): methods other than GET/HEAD →
 405; `/healthz`, `/readyz`, `/_media`, `/_theme` (never redirected, not in the page cache) →
