@@ -475,6 +475,53 @@ pub async fn comment_statuses_dates_threading_and_by_account(db: &TestDb) {
     assert_eq!(counts.values().sum::<u64>(), 6);
 }
 
+/// A1: author fields get `submit`'s rules without refusals: control and bidi
+/// characters stripped and the name cut, an invalid e-mail and a non-http(s) URL
+/// blanked; each change is reported.
+pub async fn comment_author_is_cleaned_not_refused(db: &TestDb) {
+    let store = db.store();
+    let admin = admin(store).await;
+    let item = import_posts(
+        db,
+        &admin,
+        vec![post(1, "p", ContentStatus::Published, admin.user)],
+    )
+    .await[0]
+        .id;
+    let max = ferrite_core::comments::MAX_COMMENT_NAME;
+    let out = in_batch(db, &admin, async |b| {
+        let mut c = comment(1, item, CommentStatus::Approved);
+        c.author_name = format!("\u{202e}Evil\u{7}{}", "n".repeat(10_000));
+        c.author_email = "not an e-mail".into();
+        c.author_url = "javascript:alert(1)".into();
+        b.comment(c).await.unwrap()
+    })
+    .await;
+    assert_eq!(out.altered, ["author_name", "author_email", "author_url"]);
+    let stored = store.read().comments().get(out.id).await.unwrap().unwrap();
+    assert_eq!(stored.author_name.chars().count(), max);
+    assert!(
+        stored.author_name.starts_with("Evil"),
+        "{}",
+        stored.author_name
+    );
+    assert_eq!(stored.author_email, "");
+    assert_eq!(stored.author_url, "");
+    // A clean comment is not altered; an empty name becomes "Anonymous".
+    let (clean, anon) = in_batch(db, &admin, async |b| {
+        let mut c = comment(2, item, CommentStatus::Approved);
+        c.author_url = "https://example.org/me".into();
+        let mut d = comment(3, item, CommentStatus::Approved);
+        d.author_name = "  ".into();
+        (b.comment(c).await.unwrap(), b.comment(d).await.unwrap())
+    })
+    .await;
+    assert!(clean.altered.is_empty(), "{:?}", clean.altered);
+    assert_eq!(anon.altered, ["author_name"]);
+    let stored = store.read().comments().get(anon.id).await.unwrap().unwrap();
+    assert_eq!(stored.author_name, "Anonymous");
+}
+
 pub async fn comment_body_is_cleaned_not_refused(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
@@ -501,7 +548,9 @@ pub async fn comment_body_is_cleaned_not_refused(db: &TestDb) {
         )
     })
     .await;
-    assert!(!plain.altered && dirty.altered && cut.altered);
+    assert!(plain.altered.is_empty(), "{:?}", plain.altered);
+    assert_eq!(dirty.altered, ["body"]);
+    assert_eq!(cut.altered, ["body"]);
     let body = async |id: CommentId| store.read().comments().get(id).await.unwrap().unwrap().body;
     assert_eq!(body(plain.id).await, "fine\nbody\twith tab");
     // \r\n -> \n, trimmed, controls (NUL, BEL) removed; the Cf mark stays.
@@ -933,6 +982,7 @@ backend_tests!(
     media_rejects_what_an_upload_rejects,
     comment_statuses_dates_threading_and_by_account,
     comment_body_is_cleaned_not_refused,
+    comment_author_is_cleaned_not_refused,
     comment_on_draft_item_allowed,
     menu_put_in_batch,
     redirects_partial_refusal_reports_and_writes_rest,

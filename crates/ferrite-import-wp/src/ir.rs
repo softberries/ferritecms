@@ -235,6 +235,14 @@ impl Ir {
         Ok(row.is_some())
     }
 
+    /// How many steps finished on this file.
+    pub async fn passes_done(&self) -> Result<u64, ImportError> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM passes")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(u64::try_from(n).unwrap_or(0))
+    }
+
     /// Records that the step `name` finished (again is a no-op). [`flush`](Self::flush)
     /// first: the writer waits for an open [`push`](Self::push) transaction.
     pub async fn mark_pass(&self, name: &str) -> Result<(), ImportError> {

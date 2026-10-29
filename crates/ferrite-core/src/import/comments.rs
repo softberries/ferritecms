@@ -7,8 +7,8 @@ use ferrite_domain::{
 use super::ImportBatch;
 use crate::{
     CoreError,
-    comments::{MAX_COMMENT_BODY, normalize_body},
-    events,
+    comments::{MAX_COMMENT_BODY, MAX_COMMENT_NAME, check_email, check_url, normalize_body},
+    events, is_bidi_control,
 };
 
 /// One WXR comment, its item, parent and user already mapped; the body is plain text.
@@ -31,12 +31,30 @@ pub struct ImportComment {
 }
 
 /// What [`ImportBatch::comment`] wrote.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommentOutcome {
     pub id: CommentId,
-    /// The body was changed to fit (control characters removed, cut to
-    /// [`MAX_COMMENT_BODY`] characters, or newlines/whitespace normalised as `submit` does).
-    pub altered: bool,
+    /// The fields changed to fit `submit`'s rules, in this order: `author_name`,
+    /// `author_email`, `author_url`, `body`. Empty when nothing changed (and for a
+    /// comment an earlier run imported).
+    pub altered: Vec<&'static str>,
+}
+
+/// The commenter's name as `submit` takes it, never refused: control and bidi
+/// characters removed, trimmed, cut to [`MAX_COMMENT_NAME`] characters; `Anonymous`
+/// when nothing is left.
+fn clean_name(name: &str) -> String {
+    let kept: String = name
+        .chars()
+        .filter(|&c| !c.is_control() && !is_bidi_control(c))
+        .collect();
+    let cut: String = kept.trim().chars().take(MAX_COMMENT_NAME).collect();
+    let cut = cut.trim_end().to_owned();
+    if cut.is_empty() {
+        "Anonymous".to_owned()
+    } else {
+        cut
+    }
 }
 
 /// `body` as `submit` stores it, but never refused: `\r\n`/`\r` to `\n`, trimmed, control
@@ -63,7 +81,11 @@ impl ImportBatch<'_> {
     /// item exists (`InvalidField` `item`), the parent exists and belongs to the same
     /// item (`parent`), the user exists (`user`). The body gets `submit`'s normalisation without its refusals: control characters other
     /// than `\n`/`\t` are removed and a longer body than [`MAX_COMMENT_BODY`] characters is
-    /// cut (`altered` reports it; an empty body is stored as it is). `ip_hash` is `None`; the store sets
+    /// cut (`altered` reports it; an empty body is stored as it is). The author fields get
+    /// `submit`'s rules the same way: control and bidi characters are stripped from the
+    /// name, which is cut to [`MAX_COMMENT_NAME`] (`Anonymous` when empty), and an e-mail
+    /// or website `submit` would refuse is left empty (each reported in `altered`).
+    /// `ip_hash` is `None`; the store sets
     /// `by_account` when `user` is given. An approved comment adds its item's key to the
     /// batch's event.
     ///
@@ -73,7 +95,7 @@ impl ImportBatch<'_> {
         if let Some(mapped) = self.lookup(ImportMapKind::Comment, c.wp_id).await? {
             return Ok(CommentOutcome {
                 id: CommentId::from_uuid(mapped.id),
-                altered: false,
+                altered: Vec::new(),
             });
         }
         let repos = self.tx.as_ref();
@@ -97,8 +119,24 @@ impl ImportBatch<'_> {
         {
             return Err(CoreError::invalid_field("user", "unknown user"));
         }
+        let mut altered = Vec::new();
+        let author_name = clean_name(&c.author_name);
+        if author_name != c.author_name.trim() || c.author_name.trim().is_empty() {
+            altered.push("author_name");
+        }
+        // An e-mail or website `submit` would refuse is left out, never refused.
+        let author_email = check_email(&c.author_email).unwrap_or_default();
+        if author_email != c.author_email.trim() {
+            altered.push("author_email");
+        }
+        let author_url = check_url(&c.author_url).unwrap_or_default();
+        if author_url != c.author_url.trim() {
+            altered.push("author_url");
+        }
         let body = clean_body(&c.body);
-        let altered = body != c.body;
+        if body != c.body {
+            altered.push("body");
+        }
         let id = CommentId::new();
         repos
             .comments()
@@ -107,9 +145,9 @@ impl ImportBatch<'_> {
                 item_id: c.item,
                 parent_id: c.parent,
                 user_id: c.user,
-                author_name: c.author_name,
-                author_email: c.author_email,
-                author_url: c.author_url,
+                author_name,
+                author_email,
+                author_url,
                 body,
                 status: c.status,
                 ip_hash: None,

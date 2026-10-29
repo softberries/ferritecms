@@ -280,8 +280,21 @@ impl Report {
         }
     }
 
-    /// Takes over the notes of `other` (a part report of one batch).
-    pub(crate) fn notes_from(&mut self, other: &Report) {
+    /// Takes over the counts and notes of `part` (the report of one batch).
+    pub(crate) fn absorb(&mut self, part: Report) {
+        for (kind, c) in &part.counts {
+            let counts = self.counts_of(kind);
+            counts.created += c.created;
+            counts.updated += c.updated;
+            counts.unchanged += c.unchanged;
+            counts.kept += c.kept;
+            counts.skipped += c.skipped;
+            counts.failed += c.failed;
+        }
+        self.notes_from(&part);
+    }
+
+    fn notes_from(&mut self, other: &Report) {
         for kind in &other.note_log.kinds {
             let mut examples = kind.examples.iter();
             if let Some(first) = examples.next() {
@@ -793,7 +806,7 @@ pub(crate) async fn finish(report: &mut Report, ir: &Ir) -> Result<(), ImportErr
     }
     report.scheduled_in_past = past.into_iter().map(item_ref).collect();
     report.unmapped_meta = top_meta(&std::mem::take(&mut report.meta_keys));
-    if report.counts.get("media").is_some_and(|c| c.created > 0) {
+    if !report.dry_run && report.counts.get("media").is_some_and(|c| c.created > 0) {
         report.note(
             "image sizes (variants) are made by the media.variants jobs of the next `ferrite serve`",
         );

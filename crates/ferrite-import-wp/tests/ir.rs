@@ -302,8 +302,8 @@ pub async fn dry_run_starts_a_dry_run_and_writes_nothing(db: &TestDb) {
     assert!(run_dirs(&site).is_empty());
 }
 
-/// A dry run rolls its passes back, so its IR records none of them (only the parse):
-/// a later real run of the same file must not skip them.
+/// A dry run rolls its passes back, so its work file is deleted even when it fails: a
+/// later real run of the same file runs every step.
 pub async fn dry_run_marks_no_pass(db: &TestDb) {
     let site = site(db).await;
     let (hook, steps) = recorder(Some("fixup"));
@@ -319,14 +319,8 @@ pub async fn dry_run_marks_no_pass(db: &TestDb) {
         *steps.lock().unwrap(),
         ["parse", "pass1", "pass2", "pass3", "pass4", "fixup"]
     );
-    let dirs = run_dirs(&site);
-    assert_eq!(dirs.len(), 1);
-    let ir = Ir::open(&dirs[0].join("ir.sqlite")).await.unwrap();
-    assert!(ir.pass_done("parse").await.unwrap());
-    for pass in ["pass1", "pass2", "pass3", "pass4", "fixup"] {
-        assert!(!ir.pass_done(pass).await.unwrap(), "{pass}");
-    }
-    ir.close().await;
+    // A failed dry run leaves no work file: the next run starts from the parse.
+    assert!(run_dirs(&site).is_empty());
 
     let (hook, steps) = recorder(None);
     let opts = ImportOptions {
@@ -336,7 +330,7 @@ pub async fn dry_run_marks_no_pass(db: &TestDb) {
     run(site.ctx.clone(), &wxr, opts).await.unwrap();
     assert_eq!(
         *steps.lock().unwrap(),
-        ["pass1", "pass2", "pass3", "pass4", "fixup"]
+        ["parse", "pass1", "pass2", "pass3", "pass4", "fixup"]
     );
 }
 

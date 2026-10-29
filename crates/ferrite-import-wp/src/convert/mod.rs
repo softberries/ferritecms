@@ -20,6 +20,16 @@ pub mod html;
 pub mod shortcode;
 pub mod shortcodes;
 
+/// A byte of a shortcode or block name: ASCII alphanumeric, `_` or `-`.
+pub(crate) fn is_name_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-')
+}
+
+/// PCRE's `\s` without the `u` flag (WordPress's regexes here have none).
+pub(crate) fn is_pcre_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r')
+}
+
 /// Where an image `src` points after the import (P14).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImageRef {
@@ -139,7 +149,8 @@ pub struct Notes {
     /// Block comments whose attributes were not a JSON object (read as none).
     pub bad_block_attrs: Tally,
     /// Markup too costly to parse safely (nested past 512 levels, or more than 1 024
-    /// `object`/`applet`/`marquee` elements), kept as text.
+    /// `object`/`applet`/`marquee` elements), kept as text; or blocks nested past
+    /// [`doc::MAX_DEPTH`], flattened to text.
     pub too_deep: Tally,
     /// Page breaks (`<!--nextpage-->`, the nextpage block) dropped: the pages are joined.
     pub page_breaks: Tally,

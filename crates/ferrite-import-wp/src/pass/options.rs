@@ -56,7 +56,7 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
     let mut part = Report::default();
     let written = write(&mut batch, &rows, &mut part).await;
     session.finish_batch(batch, written).await?;
-    merge(report, part);
+    report.absorb(part);
     Ok(())
 }
 
@@ -69,18 +69,6 @@ async fn write(
         apply(b, key, value, report).await?;
     }
     Ok(())
-}
-
-/// Adds `part`'s option counts and notes to `report`.
-pub(crate) fn merge(report: &mut Report, part: Report) {
-    if let Some(c) = part.counts.get(KIND) {
-        let counts = report.counts_of(KIND);
-        counts.created += c.created;
-        counts.updated += c.updated;
-        counts.unchanged += c.unchanged;
-        counts.kept += c.kept;
-    }
-    report.notes_from(&part);
 }
 
 /// Writes option `key` = `value` under the module's P4 rule, counting and noting the

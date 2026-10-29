@@ -73,7 +73,10 @@ pages and category/tag base paths (`/category/x/` → new term URL). Skip when o
 
 `import-report.html` (self-contained) + `import-report.json`:
 
-- counts per type, created/updated/skipped,
+- counts per type, created/updated/unchanged/kept/skipped/failed ("kept": changed in
+  WordPress but edited here since the import wrote it, so left alone; an item the
+  import scheduled that has since been published by its schedule counts as edited
+  here too, because publishing bumps its version; M3-1 final review A2),
 - unknown blocks and shortcodes with counts and links to affected items,
 - missing media files,
 - meta keys kept but unmapped (top 50 by frequency),

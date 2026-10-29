@@ -6,7 +6,7 @@
 
 use serde_json::{Map, Value};
 
-use super::NextMatch;
+use super::{NextMatch, is_pcre_space};
 
 /// One parsed block.
 #[derive(Debug, Clone, PartialEq)]
@@ -146,7 +146,7 @@ impl<'a> Scanner<'a> {
             if b.get(j - 1) == Some(&b'/') {
                 j -= 1;
             }
-            let ws_start = src[i..j].trim_end_matches(is_ws).len() + i;
+            let ws_start = src[i..j].trim_end_matches(is_pcre_space).len() + i;
             if ws_start == j || b.get(ws_start - 1) != Some(&b'}') {
                 return None;
             }
@@ -173,15 +173,10 @@ impl<'a> Scanner<'a> {
     }
 }
 
-/// PCRE's `\s`.
-fn is_ws(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r')
-}
-
 /// Skips whitespace from `i`; `None` when at least one is required and there is none.
 fn skip_ws(b: &[u8], mut i: usize, required: bool) -> Option<usize> {
     let from = i;
-    while b.get(i).is_some_and(|&c| is_ws(c as char)) {
+    while b.get(i).is_some_and(|&c| is_pcre_space(c as char)) {
         i += 1;
     }
     (!required || i > from).then_some(i)

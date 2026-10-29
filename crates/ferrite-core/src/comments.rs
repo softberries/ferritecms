@@ -393,7 +393,7 @@ fn check_name(name: &str) -> Result<String, CoreError> {
     Ok(name.to_owned())
 }
 
-fn check_email(email: &str) -> Result<String, CoreError> {
+pub(crate) fn check_email(email: &str) -> Result<String, CoreError> {
     let email = email.trim();
     let shape_ok = match email.split_once('@') {
         Some((local, domain)) => !local.is_empty() && !domain.is_empty() && !domain.contains('@'),
@@ -416,7 +416,7 @@ fn check_email(email: &str) -> Result<String, CoreError> {
 /// `""` or an `http`/`https` URL with a host, no user info, no whitespace, control
 /// characters, backslashes, quotes or angle brackets, at most [`MAX_COMMENT_URL`]
 /// characters.
-fn check_url(url: &str) -> Result<String, CoreError> {
+pub(crate) fn check_url(url: &str) -> Result<String, CoreError> {
     let url = url.trim();
     if url.is_empty() {
         return Ok(String::new());

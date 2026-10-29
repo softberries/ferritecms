@@ -111,17 +111,23 @@ pub async fn run(cmd: ImportCommand) -> anyhow::Result<ExitCode> {
             media_source: media_source(&args)?,
             site_url: config.site.url.as_str().trim_end_matches('/').to_owned(),
         };
-        // Built from the default: test builds have seam fields besides these.
-        let mut opts = ImportOptions::default();
-        opts.uploads.clone_from(&args.uploads);
-        opts.fetch_media = args.fetch_media;
-        opts.dry_run = args.dry_run;
-        opts.keep_permalinks = !args.no_keep_permalinks;
-        opts.site_options = !args.no_site_options;
-        opts.category_base.clone_from(&args.category_base);
-        opts.tag_base.clone_from(&args.tag_base);
-        opts.takeover = args.takeover;
-        opts.max_upload = config.uploads.max_upload;
+        let opts = ImportOptions {
+            dry_run: args.dry_run,
+            keep_permalinks: !args.no_keep_permalinks,
+            site_options: !args.no_site_options,
+            category_base: args.category_base.clone(),
+            tag_base: args.tag_base.clone(),
+            takeover: args.takeover,
+            max_upload: config.uploads.max_upload,
+            #[cfg(feature = "test-seams")]
+            batch_items: None,
+            #[cfg(feature = "test-seams")]
+            fail_after_batches: None,
+            #[cfg(feature = "test-seams")]
+            step_hook: None,
+            #[cfg(feature = "test-seams")]
+            stop_after: None,
+        };
         match import(ctx, &args.file, opts).await {
             Ok(report) => finish(&args, &report),
             Err(ImportError::Core(CoreError::Unavailable(why))) => {

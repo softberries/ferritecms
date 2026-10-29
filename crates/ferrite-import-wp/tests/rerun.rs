@@ -233,6 +233,15 @@ pub async fn rerun_keeps_a_local_edit(db: &TestDb) {
         "{:?}",
         report.notes
     );
+    // A2: why a scheduled item may show as kept.
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.starts_with("kept items include any the import scheduled")),
+        "{:?}",
+        report.notes
+    );
     let kept = store.read().content().get(post.id).await.unwrap().unwrap();
     assert_eq!(kept.title, "Edited here");
 }
@@ -705,6 +714,202 @@ pub async fn links_keep_their_query(db: &TestDb) {
     assert!(links.contains(&"/about/?utm=x#top".to_owned()), "{links:?}");
 }
 
+/// C1: a dry run between a failed real run and the next real run must not take the
+/// failed run's work file (and its fix-up queue) away: the next real run still fixes
+/// the forward link.
+pub async fn dry_run_keeps_a_failed_runs_work_file(db: &TestDb) {
+    let site = site(db).await;
+    let wxr = corpus("site-a.xml");
+    let opts = ImportOptions {
+        step_hook: Some(StepHook::new(|step| {
+            if step == "pass4" {
+                return Err(ImportError::Stopped);
+            }
+            Ok(())
+        })),
+        ..ImportOptions::default()
+    };
+    let err = run(site.ctx.clone(), &wxr, opts).await.unwrap_err();
+    assert!(matches!(err, ImportError::Stopped), "{err:?}");
+    let dry = ImportOptions {
+        dry_run: true,
+        ..ImportOptions::default()
+    };
+    import(&site, &wxr, dry).await;
+    import(&site, &wxr, ImportOptions::default()).await;
+    let post = by_title(db.store(), "Every core block").await;
+    let mut links = Vec::new();
+    hrefs(&post.body, &mut links);
+    assert!(links.contains(&"/about/".to_owned()), "{links:?}");
+    assert!(links.contains(&"/about/team/".to_owned()), "{links:?}");
+}
+
+/// A failed real run, then a dry run that fails too, then a real run: the dry run's work
+/// file is deleted on failure and never taken for the real run's, so the last run
+/// resumes the failed real run's file and fixes the forward link.
+pub async fn failed_dry_run_leaves_no_work_file(db: &TestDb) {
+    let site = site(db).await;
+    let wxr = corpus("site-a.xml");
+    let stop_at = |at: &'static str| {
+        StepHook::new(move |step| {
+            if step == at {
+                return Err(ImportError::Stopped);
+            }
+            Ok(())
+        })
+    };
+    let real = ImportOptions {
+        step_hook: Some(stop_at("pass4")),
+        ..ImportOptions::default()
+    };
+    let err = run(site.ctx.clone(), &wxr, real).await.unwrap_err();
+    assert!(matches!(err, ImportError::Stopped), "{err:?}");
+    let failed_real = work_dirs(&site);
+    assert_eq!(failed_real.len(), 1);
+    let dry = ImportOptions {
+        dry_run: true,
+        step_hook: Some(stop_at("fixup")),
+        ..ImportOptions::default()
+    };
+    let err = run(site.ctx.clone(), &wxr, dry).await.unwrap_err();
+    assert!(matches!(err, ImportError::Stopped), "{err:?}");
+    assert_eq!(
+        work_dirs(&site),
+        failed_real,
+        "the dry run's folder is gone"
+    );
+    import(&site, &wxr, ImportOptions::default()).await;
+    let post = by_title(db.store(), "Every core block").await;
+    let mut links = Vec::new();
+    hrefs(&post.body, &mut links);
+    assert!(links.contains(&"/about/".to_owned()), "{links:?}");
+    assert!(links.contains(&"/about/team/".to_owned()), "{links:?}");
+    assert!(work_dirs(&site).is_empty());
+}
+
+/// The run folders under the work dir.
+fn work_dirs(site: &Site) -> Vec<PathBuf> {
+    match std::fs::read_dir(&site.ctx.work_dir) {
+        Ok(dir) => dir
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.is_dir())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// An item whose WP dates are all zero gets "now" as its creation time; that must not
+/// enter its P4 hash, or every re-run would update it.
+pub async fn zero_dates_rerun_unchanged(db: &TestDb) {
+    let site = site(db).await;
+    let zero = "<wp:post_date>2026-10-28 10:49:55</wp:post_date>\n  \
+                <wp:post_date_gmt>0000-00-00 00:00:00</wp:post_date_gmt>\n  \
+                <wp:post_modified>2026-10-28 10:49:55</wp:post_modified>";
+    let xml = std::fs::read_to_string(corpus("site-a.xml")).unwrap();
+    assert!(xml.contains(zero));
+    let xml = xml.replacen(
+        zero,
+        "<wp:post_date>0000-00-00 00:00:00</wp:post_date>\n  \
+         <wp:post_date_gmt>0000-00-00 00:00:00</wp:post_date_gmt>\n  \
+         <wp:post_modified>0000-00-00 00:00:00</wp:post_modified>",
+        1,
+    );
+    let wxr = site.work.path().join("zero-dates.xml");
+    std::fs::write(&wxr, xml).unwrap();
+    import(&site, &wxr, ImportOptions::default()).await;
+    let again = import(&site, &wxr, ImportOptions::default()).await;
+    for (kind, c) in &again.counts {
+        assert_eq!(c.updated, 0, "{kind}: {:?}", again.counts);
+    }
+}
+
+/// C2: a first run without the uploads leaves bodies and featured images on the old
+/// URLs; a re-run of the same file with the uploads points them at the new media.
+pub async fn rerun_with_uploads_rewrites_media(db: &TestDb) {
+    let mut site = site(db).await;
+    let wxr = corpus("site-a.xml");
+    let real = site.ctx.media_source.clone();
+    site.ctx.media_source = Arc::new(DirSource::new(site.work.path().join("no-uploads")));
+    import(&site, &wxr, ImportOptions::default()).await;
+    let post = by_title(db.store(), "Every core block").await;
+    assert!(
+        post.fields.get("featured_image").is_none(),
+        "{:?}",
+        post.fields
+    );
+    assert!(!post.body.to_string().contains("ferrite:media/"));
+
+    site.ctx.media_source = real;
+    let again = import(&site, &wxr, ImportOptions::default()).await;
+    assert_eq!(again.counts["media"].created, 4, "{:?}", again.counts);
+    let post = by_title(db.store(), "Every core block").await;
+    let hero = db
+        .store()
+        .read()
+        .content()
+        .list(&ContentQuery {
+            kind: Some("media".into()),
+            limit: 10,
+            ..ContentQuery::default()
+        })
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|i| i.title == "Hero")
+        .unwrap();
+    assert_eq!(post.fields["featured_image"], json!(hero.id.to_string()));
+    assert!(
+        post.body
+            .to_string()
+            .contains(&format!("ferrite:media/{}", hero.id)),
+        "{}",
+        post.body
+    );
+}
+
+/// C3: an author whose login core refuses (so its account login is a slug) and whose
+/// account e-mail was changed here is found through the import map on a re-run: no
+/// `-2` account.
+pub async fn rerun_finds_mapped_users(db: &TestDb) {
+    let site = site(db).await;
+    let wxr = site.work.path().join("author.xml");
+    std::fs::write(
+        &wxr,
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:wp="http://wordpress.org/export/1.2/">
+<channel><title>Authors</title><link>http://authors.test</link><description></description>
+<wp:wxr_version>1.2</wp:wxr_version><wp:base_site_url>http://authors.test</wp:base_site_url><wp:base_blog_url>http://authors.test</wp:base_blog_url>
+<wp:author><wp:author_id>2</wp:author_id><wp:author_login>Ann Smith</wp:author_login><wp:author_email></wp:author_email><wp:author_display_name><![CDATA[Ann]]></wp:author_display_name></wp:author>
+</channel></rss>
+"#,
+    )
+    .unwrap();
+    import(&site, &wxr, ImportOptions::default()).await;
+    let store = db.store();
+    let mut ann = store
+        .read()
+        .users()
+        .get_by_login("ann-smith")
+        .await
+        .unwrap()
+        .unwrap();
+    ann.email = "ann@real.example".into();
+    store.read().users().update(&ann).await.unwrap();
+
+    let again = import(&site, &wxr, ImportOptions::default()).await;
+    assert_eq!(again.counts["users"].created, 0, "{:?}", again.counts);
+    assert!(
+        store
+            .read()
+            .users()
+            .get_by_login("ann-smith-2")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
 backend_tests!(
     rerun_site_a_is_unchanged,
     rerun_keeps_a_local_edit,
@@ -720,4 +925,9 @@ backend_tests!(
     long_menu_name_beside_a_site_menu,
     csv_redirects_are_kept,
     links_keep_their_query,
+    dry_run_keeps_a_failed_runs_work_file,
+    failed_dry_run_leaves_no_work_file,
+    zero_dates_rerun_unchanged,
+    rerun_with_uploads_rewrites_media,
+    rerun_finds_mapped_users,
 );

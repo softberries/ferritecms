@@ -1479,11 +1479,43 @@ pub async fn pass4_dry_run_report_says_so(db: &TestDb) {
             .any(|n| n.starts_with("dry run:") && n.contains("comments, menus and redirects")),
         "{:?}",
         report.notes
+    ); // C8: a dry run makes no media, so no variants jobs either.
+    assert!(
+        !report.notes.iter().any(|n| n.contains("variants")),
+        "{:?}",
+        report.notes
     );
+}
+
+/// B2: a body nested deeper than the stored tree may be (80 blockquotes) is flattened
+/// at the cap, so the item loads back from the store and the editor opens it.
+pub async fn pass3_deep_body_loads_back(db: &TestDb) {
+    let site = site(db, site_a_uploads()).await;
+    let deep = format!(
+        "{}deep quote{}",
+        "<blockquote>".repeat(80),
+        "</blockquote>".repeat(80)
+    );
+    let xml = std::fs::read_to_string(corpus("site-a.xml"))
+        .unwrap()
+        .replacen(
+            "<p>Welcome to WordPress. This is your first post. Edit or delete it, then start \
+         writing!</p>",
+            &format!("<p>Welcome</p>{deep}"),
+            1,
+        );
+    let wxr = site.work.path().join("deep.xml");
+    std::fs::write(&wxr, xml).unwrap();
+    let report = run_all(&site, &wxr).await;
+    let item = by_title(db.store(), "post", "Hello world!").await;
+    assert!(ferrite_core::blocks::is_editor_safe(&item.body));
+    assert!(item.body.to_string().contains("deep quote"));
+    assert_eq!(report.dropped_formatting.get("too deep"), Some(&1));
 }
 
 backend_tests!(
     pass1_site_a,
+    pass3_deep_body_loads_back,
     pass1_edge_cases,
     pass1_and_pass2_dry_run,
     pass2_site_a,

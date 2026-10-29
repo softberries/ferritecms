@@ -17,7 +17,7 @@ use crate::{
     actor::{Capability, can_edit, require},
     blocks, events, fields,
     permalink::{PermalinkInput, Permalinks, ancestors, load_input, primary_term},
-    redirects::{emit_redirects_changed, move_redirects},
+    redirects::{move_redirects, redirect_keys},
     slug,
     tx::finish,
 };
@@ -354,14 +354,14 @@ impl ContentService {
             &mut redirected,
         )
         .await?;
-        emit_redirects_changed(tx, redirected).await?;
-        let keys = invalidation_keys(
+        let mut keys = invalidation_keys(
             &saved,
             &old_terms,
             &terms,
             current.parent_id,
             &moved_descendants,
         );
+        keys.extend(redirect_keys(redirected));
         after_save(tx, actor, &saved, keys, note).await?;
         // A real save supersedes the actor's own autosave; other users' slots stay.
         tx.autosaves().delete(id, actor.user).await?;

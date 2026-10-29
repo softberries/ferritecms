@@ -24,7 +24,7 @@ backend_tests!(
     import_run_roundtrip_and_running,
     fence_true_only_for_matching_running_token,
     abandon_stale_only_when_still_stale,
-    import_map_upsert_and_list,
+    import_map_upsert_and_get,
     content_insert_keeps_explicit_timestamps,
 );
 

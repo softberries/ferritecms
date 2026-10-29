@@ -147,7 +147,7 @@ impl Parser<'_> {
                 if n > (self.s.len() - self.pos) / 6 {
                     return Err(syntax(self.pos, "array count does not match the input"));
                 }
-                let mut pairs = Vec::with_capacity(n);
+                let mut pairs = Vec::with_capacity(n.min(1024));
                 for _ in 0..n {
                     if !matches!(self.peek(), Some(b'i' | b's')) {
                         return Err(syntax(self.pos, "array key is not an integer or string"));

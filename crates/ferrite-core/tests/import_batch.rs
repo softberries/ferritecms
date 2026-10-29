@@ -116,9 +116,9 @@ pub async fn second_start_is_busy_and_takeover_fences_the_first(db: &TestDb) {
     let admin = admin(store).await;
     let svc = service(db);
     let a = svc.start(&admin, SOURCE, false, false).await.unwrap();
-    assert_eq!(a.run.state, ImportRunState::Running);
-    assert_eq!(a.run.source, SOURCE);
-    assert_eq!(a.run.started_by, admin.user);
+    assert_eq!(a.run().state, ImportRunState::Running);
+    assert_eq!(a.run().source, SOURCE);
+    assert_eq!(a.run().started_by, admin.user);
 
     for takeover in [false, true] {
         let err = svc
@@ -134,7 +134,7 @@ pub async fn second_start_is_busy_and_takeover_fences_the_first(db: &TestDb) {
         store
             .read()
             .imports()
-            .fence(a.run.id, &a.run.token, ago(121))
+            .fence(a.run().id, &a.run().token, ago(121))
             .await
             .unwrap()
     );
@@ -142,12 +142,12 @@ pub async fn second_start_is_busy_and_takeover_fences_the_first(db: &TestDb) {
     assert!(matches!(err, CoreError::Unavailable(_)), "{err:?}");
 
     let b = svc.start(&admin, SOURCE, true, true).await.unwrap();
-    assert_ne!(a.run.token, b.run.token);
-    assert!(b.run.dry_run);
+    assert_ne!(a.run().token, b.run().token);
+    assert!(b.run().dry_run);
     let old = store
         .read()
         .imports()
-        .get_run(a.run.id)
+        .get_run(a.run().id)
         .await
         .unwrap()
         .unwrap();
@@ -155,7 +155,7 @@ pub async fn second_start_is_busy_and_takeover_fences_the_first(db: &TestDb) {
 
     let err = a.batch(&svc).await.err().unwrap();
     assert!(matches!(err, CoreError::Changed(_)), "{err:?}");
-    let a_id = a.run.id;
+    let a_id = a.run().id;
     let err = a
         .finish(&svc, ImportRunState::Done, json!({}))
         .await
@@ -224,8 +224,8 @@ pub async fn batch_emits_one_event(db: &TestDb) {
     );
 }
 
-/// P9: e-mail first (case-insensitively), then login; otherwise a new author with no
-/// password who must reset it. A WP login core refuses is slugified with `-N`.
+/// P9: the mapped account first, then e-mail (case-insensitively), then login;
+/// otherwise a new author with no password who must reset it. A WP login core refuses is slugified with `-N`.
 pub async fn user_matching_order(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
@@ -299,6 +299,21 @@ pub async fn user_matching_order(db: &TestDb) {
     let jd = repos.users().get(slugged).await.unwrap().unwrap();
     assert_eq!(jd.login, "john-doe-2");
     assert_eq!(jd.display_name, "john-doe-2");
+
+    // A mapped author is found through the map first, whatever its e-mail is now
+    // (C3: no `-3` account for a slugified login whose e-mail changed).
+    let mut batch = run.batch(&svc).await.unwrap();
+    let out = batch
+        .user(ImportUser {
+            wp_id: 4,
+            login: "John Doe".into(),
+            email: "changed@e.test".into(),
+            display_name: String::new(),
+        })
+        .await
+        .unwrap();
+    assert_eq!((out.id, out.how), (slugged, Matched::Mapped));
+    batch.commit().await.unwrap();
 }
 
 /// P8: a new term keeps its WP slug and parent; a WP term whose slug an existing site
@@ -689,7 +704,7 @@ pub async fn import_lock_held_for_the_run(db: &TestDb) {
         store
             .read()
             .imports()
-            .fence(a.run.id, &a.run.token, ago(121))
+            .fence(a.run().id, &a.run().token, ago(121))
             .await
             .unwrap()
     );
@@ -717,13 +732,13 @@ pub async fn heartbeat_fails_after_takeover(db: &TestDb) {
     let imports = store.read().imports();
     assert!(
         imports
-            .fence(a.run.id, &a.run.token, ago(121))
+            .fence(a.run().id, &a.run().token, ago(121))
             .await
             .unwrap()
     );
     a.heartbeat(&svc).await.unwrap();
     let beat = imports
-        .get_run(a.run.id)
+        .get_run(a.run().id)
         .await
         .unwrap()
         .unwrap()
@@ -735,7 +750,7 @@ pub async fn heartbeat_fails_after_takeover(db: &TestDb) {
 
     assert!(
         imports
-            .fence(a.run.id, &a.run.token, ago(121))
+            .fence(a.run().id, &a.run().token, ago(121))
             .await
             .unwrap()
     );

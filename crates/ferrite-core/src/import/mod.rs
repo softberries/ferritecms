@@ -68,8 +68,8 @@ pub struct ImportService {
 /// [`finish`](Self::finish). Holds the [`LOCK_IMPORT`] lock when it could be taken;
 /// dropping the handle releases it (the run itself stays `running` until it goes stale).
 pub struct ImportHandle {
-    pub run: ImportRun,
-    pub actor: Actor,
+    run: ImportRun,
+    actor: Actor,
     /// In a mutex only so the handle is `Sync` (batches and drivers hold `&ImportHandle`
     /// across awaits on a multi-threaded runtime); it is taken once, by `finish`.
     lock: std::sync::Mutex<Option<Box<dyn LockGuard>>>,
@@ -186,6 +186,11 @@ impl ImportService {
 }
 
 impl ImportHandle {
+    /// The run as it was started (its id, source and start time).
+    pub fn run(&self) -> &ImportRun {
+        &self.run
+    }
+
     /// Opens a batch: a transaction whose first statement is the fence (P5). A run that
     /// was taken over is [`CoreError::Changed`].
     ///

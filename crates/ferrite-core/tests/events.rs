@@ -243,6 +243,17 @@ pub async fn update_emits_moved_descendants_and_redirects(db: &TestDb) {
     }
     let got = keys_since(store, before).await;
     assert_eq!(got, want);
+    // One event for the whole update, the redirect keys included (A5).
+    assert_eq!(
+        store
+            .read()
+            .events()
+            .since(before, 1000)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     // The unpublished descendant did not move a published URL: not named.
     assert!(!got.contains(&post_key(draft_child.id)));
 }

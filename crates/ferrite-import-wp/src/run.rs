@@ -34,10 +34,15 @@ use crate::wxr;
 const IR_FILE: &str = "ir.sqlite";
 /// The IR `meta` key holding the hex SHA-256 of the WXR file.
 const DIGEST_KEY: &str = "wxr_sha256";
+/// The `DIGEST_KEY` of a finished run's work file: no later run resumes it.
+const FINISHED: &str = "finished";
+/// The `DIGEST_KEY` of a dry run's work file: never resumed, even when deleting it failed.
+const DRY_RUN: &str = "dry-run";
 /// The step that fills the IR.
 const PARSE: &str = "parse";
-/// Records in flight between the parser thread and the IR writer.
-const PARSE_QUEUE: usize = 256;
+/// Records in flight between the parser thread and the IR writer. An item may hold
+/// up to 64 MiB of text, so the queue is short: memory stays near a few items.
+const PARSE_QUEUE: usize = 8;
 /// How often the parse proves the run is alive (runs go stale after 120 s, P5).
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(30);
 
@@ -104,10 +109,6 @@ impl MediaSource for DirSource {
 /// How to import.
 #[derive(Debug, Clone)]
 pub struct ImportOptions {
-    /// A local copy of `wp-content/uploads`.
-    pub uploads: Option<PathBuf>,
-    /// Download attachments missing from `uploads` from the old site.
-    pub fetch_media: bool,
     /// Run everything, then roll every batch back.
     pub dry_run: bool,
     /// Adopt the WP permalink structure (P17).
@@ -143,8 +144,6 @@ pub const DEFAULT_MAX_UPLOAD: u64 = 256 << 20;
 impl Default for ImportOptions {
     fn default() -> Self {
         Self {
-            uploads: None,
-            fetch_media: false,
             dry_run: false,
             keep_permalinks: true,
             site_options: true,
@@ -234,7 +233,7 @@ impl<'a> Session<'a> {
 
     /// The run's work folder (`<work_dir>/<run-id>`), deleted when the run ends `done`.
     pub fn run_dir(&self) -> PathBuf {
-        self.ctx.work_dir.join(self.handle.run.id.to_string())
+        self.ctx.work_dir.join(self.handle.run().id.to_string())
     }
 
     /// The most items a batch should hold.
@@ -361,23 +360,24 @@ pub async fn run(
         .import
         .start(&ctx.actor, &source, opts.dry_run, opts.takeover)
         .await?;
-    let dir = ctx.work_dir.join(handle.run.id.to_string());
+    let dir = ctx.work_dir.join(handle.run().id.to_string());
     let outcome = drive(&ctx, &opts, &handle, wxr, &digest, &dir).await;
+    // A dry run's work file holds rolled-back work: it goes on every exit (a real
+    // run's stays when it fails, for the next run to resume).
+    if opts.dry_run || outcome.is_ok() {
+        remove_work_dir(&dir).await;
+    }
     match outcome {
         Ok(mut report) => {
-            report.run_id = handle.run.id.to_string();
-            report.source.clone_from(&handle.run.source);
-            report.dry_run = opts.dry_run;
-            report.started_at = Some(handle.run.started_at);
+            report.run_id = handle.run().id.to_string();
+            report.source.clone_from(&handle.run().source);
+            report.started_at = Some(handle.run().started_at);
             report.finished_at = Some(Timestamp::now());
             report.site_url.clone_from(&ctx.site_url);
             let stats = serde_json::to_value(&report.counts)?;
             handle
                 .finish(&ctx.import, ImportRunState::Done, stats)
                 .await?;
-            if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
-                tracing::warn!(error = %e, dir = %dir.display(), "removing the import's work folder failed");
-            }
             Ok(report)
         }
         Err(e) => {
@@ -393,6 +393,17 @@ pub async fn run(
     }
 }
 
+/// Removes a run's work folder; a failure is logged (the folder's IR is marked so no run
+/// resumes it).
+async fn remove_work_dir(dir: &Path) {
+    match tokio::fs::remove_dir_all(dir).await {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            tracing::warn!(error = %e, dir = %dir.display(), "removing the import's work folder failed");
+        }
+        _ => {}
+    }
+}
+
 /// Opens the IR (reused or new), runs the steps and closes it.
 async fn drive(
     ctx: &ImportContext,
@@ -402,12 +413,20 @@ async fn drive(
     digest: &str,
     dir: &Path,
 ) -> Result<Report, ImportError> {
-    let mut ir = prepare_ir(&ctx.work_dir, dir, digest).await?;
+    let mut ir = prepare_ir(&ctx.work_dir, dir, digest, opts.dry_run).await?;
     let mut done = steps(ctx, opts, handle, wxr, &mut ir).await;
-    if let Ok(report) = &mut done
-        && let Err(e) = crate::report::finish(report, &ir).await
+    if let Ok(report) = &mut done {
+        report.dry_run = opts.dry_run;
+        if let Err(e) = crate::report::finish(report, &ir).await {
+            done = Err(e);
+        }
+    }
+    // A finished run's work file is never resumed, even if deleting its folder fails:
+    // it no longer names the file it holds.
+    if done.is_ok()
+        && let Err(e) = ir.set_meta(DIGEST_KEY, FINISHED).await
     {
-        done = Err(e);
+        tracing::warn!(error = %e, "marking the import's work file finished failed");
     }
     ir.close().await;
     done
@@ -611,13 +630,26 @@ fn normalise_source(base_blog_url: &str) -> Result<String, ImportError> {
 
 /// The IR for `dir`: the folder of an unfinished run of the same file (`digest`) with a
 /// finished parse, moved to `dir`, or a new file. Folders of the same file whose parse
-/// did not finish are deleted; other folders are left alone.
-async fn prepare_ir(work_dir: &Path, dir: &Path, digest: &str) -> Result<Ir, ImportError> {
+/// did not finish are deleted; other folders are left alone. A dry run always gets a new
+/// file and touches no other folder.
+async fn prepare_ir(
+    work_dir: &Path,
+    dir: &Path,
+    digest: &str,
+    dry_run: bool,
+) -> Result<Ir, ImportError> {
     let file_err = |path: &Path| {
         let path = path.to_owned();
         move |source| ImportError::File { path, source }
     };
-    if let Some(found) = find_ir(work_dir, digest).await? {
+    // A dry run neither takes nor clears another run's work file: a failed real run's
+    // fix-up queue must survive it. Its own file is marked so no run ever takes it.
+    let found = if dry_run {
+        None
+    } else {
+        find_ir(work_dir, digest).await?
+    };
+    if let Some(found) = found {
         tokio::fs::rename(&found, dir)
             .await
             .map_err(file_err(&found))?;
@@ -628,7 +660,8 @@ async fn prepare_ir(work_dir: &Path, dir: &Path, digest: &str) -> Result<Ir, Imp
         .await
         .map_err(file_err(dir))?;
     let ir = Ir::create(&dir.join(IR_FILE)).await?;
-    ir.set_meta(DIGEST_KEY, digest).await?;
+    ir.set_meta(DIGEST_KEY, if dry_run { DRY_RUN } else { digest })
+        .await?;
     Ok(ir)
 }
 
@@ -643,7 +676,9 @@ async fn find_ir(work_dir: &Path, digest: &str) -> Result<Option<PathBuf>, Impor
             });
         }
     };
-    let mut found = None;
+    // The parsed folder with the most finished passes (a deterministic pick when
+    // several failed runs left one).
+    let mut found: Option<(u64, PathBuf)> = None;
     while let Some(entry) = entries
         .next_entry()
         .await
@@ -666,9 +701,16 @@ async fn find_ir(work_dir: &Path, digest: &str) -> Result<Option<PathBuf>, Impor
         };
         let same = ir.meta(DIGEST_KEY).await.ok().flatten().as_deref() == Some(digest);
         let parsed = same && ir.pass_done(PARSE).await.unwrap_or(false);
+        let passes = if parsed {
+            ir.passes_done().await.unwrap_or(0)
+        } else {
+            0
+        };
         ir.close().await;
-        if parsed && found.is_none() {
-            found = Some(candidate);
+        if parsed {
+            if found.as_ref().is_none_or(|(most, _)| passes > *most) {
+                found = Some((passes, candidate));
+            }
         } else if same
             && !parsed
             && let Err(e) = tokio::fs::remove_dir_all(&candidate).await
@@ -676,7 +718,7 @@ async fn find_ir(work_dir: &Path, digest: &str) -> Result<Option<PathBuf>, Impor
             tracing::warn!(error = %e, dir = %candidate.display(), "removing an unfinished import work folder failed");
         }
     }
-    Ok(found)
+    Ok(found.map(|(_, dir)| dir))
 }
 
 /// Streams the WXR file into `ir`: the parser runs on a blocking thread and sends
@@ -753,26 +795,43 @@ mod tests {
     #[tokio::test]
     async fn find_ir_takes_a_parsed_folder_of_the_same_file() {
         let work = tempfile::tempdir().unwrap();
-        let make = |name: &'static str, digest: &'static str, parsed: bool| {
+        let make_with = |name: &'static str, digest: &'static str, passes: &'static [&str]| {
             let dir = work.path().join(name);
             async move {
                 std::fs::create_dir_all(&dir).unwrap();
                 let ir = Ir::create(&dir.join(IR_FILE)).await.unwrap();
                 ir.set_meta(DIGEST_KEY, digest).await.unwrap();
-                if parsed {
-                    ir.mark_pass(PARSE).await.unwrap();
+                for pass in passes {
+                    ir.mark_pass(pass).await.unwrap();
                 }
                 ir.close().await;
                 dir
             }
+        };
+        let make = |name, digest, parsed: bool| {
+            make_with(name, digest, if parsed { &[PARSE] } else { &[] })
         };
         let other = make("other", "bbb", true).await;
         let partial = make("partial", "aaa", false).await;
         assert_eq!(find_ir(work.path(), "aaa").await.unwrap(), None);
         assert!(!partial.exists());
         assert!(other.exists());
+        // B6: a finished run's file (its folder left behind) is never resumed.
+        let finished = make("finished", FINISHED, true).await;
+        assert_eq!(find_ir(work.path(), "aaa").await.unwrap(), None);
+        assert!(finished.exists());
+        // A dry run's file is never taken, whatever it holds.
+        let dry = make("dry", DRY_RUN, true).await;
+        assert_eq!(find_ir(work.path(), "aaa").await.unwrap(), None);
+        assert!(dry.exists());
         let parsed = make("parsed", "aaa", true).await;
         assert_eq!(find_ir(work.path(), "aaa").await.unwrap(), Some(parsed));
+        // Of several, the one with the most finished passes, whatever the listing order.
+        for name in ["a-early", "z-early"] {
+            make_with(name, "aaa", &[PARSE, "pass1"]).await;
+        }
+        let furthest = make_with("m-furthest", "aaa", &[PARSE, "pass1", "pass2", "pass3"]).await;
+        assert_eq!(find_ir(work.path(), "aaa").await.unwrap(), Some(furthest));
         assert_eq!(
             find_ir(&work.path().join("none"), "aaa").await.unwrap(),
             None

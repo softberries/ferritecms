@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 use super::options::Applied;
 use super::types::{Schema, ensure, plan, taxonomy_name, type_fields, type_name};
-use super::{Census, meta, record_hash, wp_time};
+use super::{Census, meta, wp_time};
 use crate::ImportError;
 use crate::acf::{AcfField, AcfModel, field_defs, is_layout};
 use crate::convert::{ImageRef, Notes, Rewrite, body};
@@ -35,6 +35,7 @@ use crate::php::unserialize;
 use crate::report::SlugChange;
 use crate::run::{Report, Session};
 use crate::urls::{MediaIndex, key, percent_decode};
+use sha2::{Digest, Sha256};
 
 /// The meta holding a post's featured image (an attachment id).
 const THUMBNAIL: &str = "_thumbnail_id";
@@ -596,6 +597,18 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
             write_chunk(&mut cx, &kind, &type_acf, items, report).await?;
         }
     }
+    let kept = order
+        .iter()
+        .filter_map(|(post_type, _)| type_name(post_type))
+        .any(|kind| report.counts.get(&*kind).is_some_and(|c| c.kept > 0));
+    if kept {
+        // Publishing bumps an item's version; telling a schedule's publish apart from an
+        // edit would need the import's status in the map (A2, accepted).
+        report.note(
+            "kept items include any the import scheduled that have since been published by \
+             their schedule: publishing counts as an edit here",
+        );
+    }
     Ok(())
 }
 
@@ -649,7 +662,7 @@ async fn set_permalinks(session: &Session<'_>, report: &mut Report) -> Result<()
     )
     .await;
     let applied = session.finish_batch(batch, written).await?;
-    super::options::merge(report, part);
+    report.absorb(part);
     if matches!(applied, Applied::Created | Applied::Updated) {
         report.note(format!(
             "post permalinks set to {structure} as on the old site"
@@ -827,9 +840,9 @@ async fn prepare(
     let slug = percent_decode(slug.trim());
     let (published_at, created_at, updated_at) = dates(item);
     let excerpt = item.excerpt.trim();
-    let content = ImportContent {
+    let mut content = ImportContent {
         wp_id: item.wp_id,
-        hash: record_hash(item)?,
+        hash: String::new(),
         kind: kind.to_owned(),
         title: item.title.replace('\0', ""),
         slug: Some(slug).filter(|s| !s.is_empty()),
@@ -847,12 +860,46 @@ async fn prepare(
         seo,
         meta: wp_meta,
     };
+    content.hash = content_hash(&content)?;
     Ok(Some(Prepared {
         content,
         notes: converted.notes,
         lines,
         pending: converted.pending,
     }))
+}
+
+/// The P4 hash of an item as it will be written: everything but its WP id, so a re-run
+/// also updates an item whose WXR record is the same but whose links, images, featured
+/// image, author, parent or terms resolve differently now (C2: the uploads given only
+/// the second time).
+fn content_hash(c: &ImportContent) -> Result<String, ImportError> {
+    let id = |x: Option<ContentId>| x.map(|i| i.to_string());
+    let json = serde_json::to_vec(&json!({
+        "kind": c.kind,
+        "title": c.title,
+        "slug": c.slug,
+        "parent": id(c.parent),
+        "author": c.author.to_string(),
+        "status": c.status.as_str(),
+        "published_at": c.published_at,
+        // Without WP dates `created_at` (and `updated_at` with it) is "now" (see
+        // `dates`): left out, or every re-run would update the item.
+        "created_at": c.published_at.map(|_| c.created_at),
+        "updated_at": (c.published_at.is_some() || c.updated_at != c.created_at)
+            .then_some(c.updated_at),
+        "excerpt": c.excerpt,
+        "body": c.body,
+        "fields": c.fields,
+        "menu_order": c.menu_order,
+        "terms": c.terms.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "seo": c.seo.as_ref().map(ferrite_core::content::SeoPatch::to_json),
+        "meta": c.meta,
+    }))?;
+    Ok(Sha256::digest(&json)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 /// `published_at`, `created_at` and `updated_at` of an item (P7): the GMT dates, or the

@@ -47,6 +47,9 @@ fn convert_all(file: &Path) -> (usize, Notes) {
                 file.display(),
                 i.wp_id
             );
+            let back: serde_json::Value = serde_json::from_str(&doc.to_string())
+                .unwrap_or_else(|e| panic!("{} item {}: {e}", file.display(), i.wp_id));
+            assert_eq!(back, doc, "{} item {}", file.display(), i.wp_id);
             assert!(
                 !doc.to_string().contains("\\u0000"),
                 "{} item {}",

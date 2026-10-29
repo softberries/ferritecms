@@ -10,13 +10,18 @@ use super::{Notes, Rewrite, autop, blocks, gutenberg, shortcodes};
 ///
 /// A body with block comments goes through the Gutenberg mapping ([`super::blocks`]); any
 /// other is classic: auto-embeds, `wpautop`, shortcodes, then HTML. What is lost or could
-/// not be resolved is counted in `notes` (whose `item` the caller sets).
+/// not be resolved is counted in `notes` (whose `item` the caller sets). Blocks nested
+/// past [`doc::MAX_DEPTH`] are flattened to text (counted as too deep), so the body loads
+/// back from the store.
 pub fn convert(content: &str, rw: &dyn Rewrite, notes: &mut Notes) -> Value {
-    let nodes = if gutenberg::has_blocks(content) {
+    let mut nodes = if gutenberg::has_blocks(content) {
         blocks::convert(&gutenberg::parse(content), rw, notes)
     } else {
         classic(content, rw, notes)
     };
+    if doc::cap_depth(&mut nodes) > 0 {
+        notes.too_deep();
+    }
     doc::to_json(&nodes)
 }
 
@@ -288,5 +293,44 @@ mod tests {
             json!({"type": "doc", "content": [{"type": "paragraph"}]})
         );
         assert_eq!(notes, Notes::default());
+    }
+
+    /// B2: deep nesting converts to a body the store reads back (serde_json refuses
+    /// JSON nested past 128 levels) and the editor opens; the flattening is counted.
+    #[test]
+    fn deep_nesting_loads_back() {
+        let blockquotes = format!(
+            "{}deep quote{}",
+            "<blockquote>".repeat(80),
+            "</blockquote>".repeat(80)
+        );
+        let lists = format!(
+            "{}deep list{}",
+            "<ul><li>".repeat(60),
+            "</li></ul>".repeat(60)
+        );
+        let quotes = format!(
+            "{}<!-- wp:paragraph --><p>deep block</p><!-- /wp:paragraph -->{}",
+            "<!-- wp:quote --><blockquote class=\"wp-block-quote\">".repeat(64),
+            "</blockquote><!-- /wp:quote -->".repeat(64)
+        );
+        for (name, html, text) in [
+            ("blockquotes", blockquotes, "deep quote"),
+            ("lists", lists, "deep list"),
+            ("wp:quote", quotes, "deep block"),
+        ] {
+            let mut notes = Notes::default();
+            let doc = convert(&html, &Rw, &mut notes);
+            let json = serde_json::to_string(&doc).unwrap();
+            let back: Value = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("{name}: the body does not load back: {e}"));
+            assert_eq!(back, doc, "{name}");
+            assert!(ferrite_core::blocks::is_editor_safe(&doc), "{name}");
+            assert!(json.contains(text), "{name}: the text is kept");
+            assert!(
+                notes.too_deep.count > 0,
+                "{name}: the flattening is counted"
+            );
+        }
     }
 }
