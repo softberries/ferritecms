@@ -31,9 +31,9 @@ pub enum MediaCommand {
     ///
     /// A store is `local:<path>` or `s3://bucket[/prefix]`. With `--data` the source is the
     /// site's own store from its ferrite.toml (no database is opened, so this works while the
-    /// site runs); every `s3://` URL takes its credentials and endpoint from the environment
-    /// (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_ENDPOINT_URL`,
-    /// `AWS_ALLOW_HTTP`).
+    /// site runs); every `s3://` URL takes its credentials, endpoint and options from the
+    /// environment (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`,
+    /// `AWS_ENDPOINT_URL`, `AWS_ALLOW_HTTP`, `AWS_COPY_IF_NOT_EXISTS`, `AWS_CONDITIONAL_PUT`).
     ///
     /// Copies every object under `artifacts/`, recorded in the database or not; skips keys
     /// already at the destination with the same size and checks the size after each copy;

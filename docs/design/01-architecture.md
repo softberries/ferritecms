@@ -17,15 +17,22 @@ ferritecms/
 │   │                             #   `config check`, `healthcheck`, `user`, `theme` (with `pack`,
 │   │                             #   M2b-3), `plugin`), logging, startup check,
 │   │                             #   site key file, node wiring (hot swap, jobs), shutdown; anyhow
-│   │                             #   at the top level
+│   │                             #   at the top level. M4-1: `export`, `import-site`, `db copy`
+│   │                             #   (`archive`, `site_copy`, `export_cmd`), `backup`/`restore`
+│   │                             #   (`backup/`), `media sync|gc|regenerate` (`media_cmd`,
+│   │                             #   `media_url`, `gc`), the `artifacts.gc` and `site.backup`
+│   │                             #   jobs (`jobs/{gc,backup}.rs`)
 │   ├── ferrite-config/           # (built) ferrite.toml + env parsing, validation, init template
 │   ├── ferrite-domain/           # (built) pure types: ids, Post, Term, User, Role, Block, errors
-│   ├── ferrite-store/            # (built) repository traits + Store facade (no SQL)
+│   ├── ferrite-store/            # (built) repository traits + Store facade (no SQL); M4-1:
+│   │                             #   the table `catalogue`, `export` reader, `import_writer`
 │   ├── ferrite-store-sqlite/     # (built) SQLite impl + migrations/
 │   ├── ferrite-store-postgres/   # (built) Postgres impl + migrations/
 │   ├── ferrite-store-tests/      # (built) contract test suite run against both backends;
 │   │                             #   other crates reuse its harness as a dev-dependency
-│   ├── ferrite-media/            # (built) MediaStore over object_store, sniffing, image variants
+│   ├── ferrite-media/            # (built) MediaStore over object_store, sniffing, image variants;
+│   │                             #   M4-1: metadata stripping (`strip`), store listing and copy,
+│   │                             #   the owner marker
 │   ├── ferrite-cluster/          # (built, M1.5) job runner, periodic scheduler, built-in
 │   │                             #   prune jobs, node registry (join checks, heartbeat)
 │   ├── ferrite-core/             # (built) services: content (+ lifecycle, revisions, redirects on
@@ -43,6 +50,7 @@ ferritecms/
 │   │                             #   `diagnostics::scrub`. M2b-3: user filters, sessions, an
 │   │                             #   admin's TOTP reset, retained plugin data, audit filters,
 │   │                             #   the test mail, relation `types`, inline image `srcset`.
+│   │                             #   M4-1: `seed` (`DemoBatch`, the atomic `seed demo`).
 │   │                             #   Depends on domain + store only
 │   ├── ferrite-cache/            # (built, M1c-2) page cache (moka) + dependency index + outbox
 │   │                             #   invalidation loop
@@ -113,7 +121,7 @@ ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-cluster, ferrite-theme
  │                ├─ ferrite-import-wp (M3-1: `import_fetch::HttpSource` implements its
  │                │                     `MediaSource`)
  │                └─ ferrite-config (M2a-2a: `MailConfig`), ferrite-store, ferrite-domain
- ├─ ferrite-config ─── ferrite-domain
+ ├─ ferrite-config ─── ferrite-domain, ferrite-media (M4-1 R4: `ConditionalPut`, the `copy_if_not_exists` check)
  ├─ ferrite-cluster ─── ferrite-store (traits), ferrite-domain
  └─ ferrite-import-wp (M3-1) ─── ferrite-core, ferrite-media, ferrite-domain
 ```

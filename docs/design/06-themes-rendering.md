@@ -151,7 +151,8 @@ and the node does not serve its artifact (a startup fallback, or a failed hot sw
 keeps the previous theme), `false` otherwise (also when no row is active and the embedded
 `blog` serves). `GET /themes` shows it per live node on the active entry. A node's flag
 can lag a change by up to one heartbeat (10 s). There is no theme delete (P30): an unused
-theme row and its artifact stay until the artifact GC (M4).
+theme row and its artifact stay. The artifacts GC (M4-1, 03 §6) never deletes theme rows, and
+a row's `artifact_hash` counts as a reference, so that artifact is kept for good.
 
 **Hot swap (as built, M1.5, P18).** On every node the reloader task
 (`crates/ferrite/src/reload.rs`) calls `reload_theme` after a `theme.changed` event (and

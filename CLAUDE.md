@@ -60,13 +60,20 @@ run, the `/import` API with the inputs as `import` artifacts and the report stor
 artifacts, the admin Import screen (`g i`), uploads read from a zip in place, the SEO
 canonical and robots fields, `permalink.redirects` for permalink-structure changes, the
 `UNION ALL` job claim on Postgres; migration `0010_import_jobs`), so M3 is done
-(`m3-exit.md`, which lists what was not verified). Next is M4 (ops and release). Work
-top-down in `docs/ROADMAP.md`; per-milestone rulings are in
+(`m3-exit.md`, which lists what was not verified). M4-1 (data safety) is done too
+(`m4-1-exit.md`): `export` / `import-site` / `db copy` over a table catalogue, `backup` /
+`restore` and the scheduled `[backup]` (`site.backup` job), `media sync|gc|regenerate` and the
+daily `artifacts.gc` job, the S3 `copy_if_not_exists` / `conditional_put` options,
+`media.strip_metadata` and `media.gc_grace_days`, the Postgres `lock_wait`, an atomic
+`seed demo`, the cluster example on RustFS; migration `0011_artifact_gc`. Next is the rest of
+M4 (ops and release). Work top-down in `docs/ROADMAP.md`; per-milestone rulings are in
 `docs/superpowers/rulings/` (M2a-2a: `m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3:
-`m3.md`).
+`m3.md`, M4: `m4.md`).
 
-Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers)
--> `ferrite-http` (public site, router, head, previews and logged-in requests, plugin
+Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers;
+M4-1: `archive` (the `tar.zst` format), `site_copy` + `export_cmd` (export, import-site, db
+copy), `backup/` (`repo`, `restore`, `target`), `gc`, `media_cmd`, `media_url`,
+`jobs/{gc,backup}.rs`) -> `ferrite-http` (public site, router, head, previews and logged-in requests, plugin
 wiring, plugin reloader, shared failure counters, plugin routes, `request.served` buffer,
 SMTP mailer, the extension install pipeline `extensions::Installer`, `import_fetch` (the
 importer's SSRF-checked `--fetch-media` source), `import_blobs` (import reports over the
@@ -80,18 +87,21 @@ renderer), `ferrite-core` (services, permalinks, `SiteReader`, `ExtensionService
 `ExtensionAdmin`, `ext_settings`, `mail` (`Mailer`, `MailQueue`), action jobs;
 `AuthService` (incl. password reset), `UserService`, content types, settings allowlist,
 roles + token scopes, `import` (`ImportService`/`ImportBatch`: the import's write path; the
-import jobs, run reads and report artifacts)), `ferrite-media`, `ferrite-plugin-host` (grants, permission report;
+import jobs, run reads and report artifacts), `seed` (`DemoBatch`: `seed demo` in one
+transaction)), `ferrite-media` (`strip`: EXIF/XMP removal; store listing, copy and the owner
+marker), `ferrite-plugin-host` (grants, permission report;
 -> `ferrite-domain`);
 `ferrite` also -> `ferrite-import-wp` (`import_cmd`, the `import.wordpress` job in
 `jobs/import.rs`) and `ferrite-cluster` (node registry, job runner, periodic scheduler, built-in
-prune jobs) -> `ferrite-store` (traits); `ferrite-core` -> `ferrite-store` (traits) <-
+prune jobs) -> `ferrite-store` (traits; `catalogue`, `export` reader and `import_writer` for
+the portable copies); `ferrite-core` -> `ferrite-store` (traits) <-
 `ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite);
 `ferrite-domain` (types), `ferrite-config`, `ferrite-sdk` (guest SDK). Starter theme:
 `themes/blog` (embedded). Test plugins: `plugins/examples/` (own workspace, built for
 `wasm32-wasip2`). Admin SPA: `admin/` (pnpm, Vite + React + TS; `pnpm build` writes
 `admin/dist/`, which `ferrite-http`'s `admin` module embeds; without it the binary serves a
-placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: backups,
-metrics and the other M4 operations (`docs/design/01-architecture.md` §1; API status per
+placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: metrics,
+self-update/rollback, ACME and the other M4 operations (`docs/design/01-architecture.md` §1; API status per
 endpoint in 07 §1, admin status per screen in 07 §3).
 
 Run a site locally: build the admin first (`pnpm -C admin install && pnpm -C admin build`;
@@ -141,6 +151,25 @@ next `serve`). With `serve` running, import from the admin's Import screen
 wanted; `202` gives the job, `Location: /api/v1/import/jobs/{job_id}` (poll it), then
 `GET /api/v1/import/runs/{id}/report.json` or `report.html` (`import:write` to start,
 `import:read` to read; `409` while another import is queued or running).
+Move, copy and back up a site (09 §4 and §8; with SQLite `serve` must be stopped for each
+of these except `media sync`, which opens no database): `ferrite export --data DIR --out
+FILE|- [--with-media]` (0, 2 artifacts missing from the store, 3 schema newer, 1 error; never
+holds `secret.key`), `ferrite import-site ARCHIVE|- --data DIR [--with-media]` (into a fresh
+`init` folder; 0, 3 newer, 1), `ferrite db copy --from URL --to URL [--from-schema S]
+[--to-schema S]` (`postgres://…` or `sqlite:<path>`; 0, 3, 1; copies no media), `ferrite
+backup --data DIR --to FILE.tar.zst|-|DIR|s3://… [--no-media] [--no-secret-key] [--keep N]`
+(SQLite only; 0, 2 artifacts missing, 3 newer repository, 1), `ferrite restore SOURCE --data
+DIR [--snapshot NAME] [--force]` (0, 3, 1), `ferrite media sync --to STORE (--from STORE |
+--data DIR)` (`local:PATH` or `s3://bucket[/prefix]`, `AWS_*` env; 0, 2 some failed, 1),
+`ferrite media gc --data DIR [--dry-run] [--grace-days N] [--claim]` (0, 3 lock held, 1),
+`ferrite media regenerate --data DIR [--all] [--item ID]` (0, 2 some failed, 1). A running
+SQLite site is backed up by `[backup] schedule = "daily"|"weekly"`, `to` (a folder outside
+the data folder, or `s3://`), `keep`, `with_media` (the `site.backup` job; on Postgres it
+writes export archives). Config: `[media] strip_metadata`, `gc_grace_days` (1..=365, default
+7), `[media.s3] copy_if_not_exists`, `conditional_put`. One running site per media store:
+each database has an install id (`schema_meta.install_id`; `restore`, `import-site` and `db
+copy` give the copy its own), and the GC deletes only from a store whose
+`ferrite-owner.json` names it (`media gc --claim` after a restore in place).
 
 Run two cluster nodes locally: two data folders whose `ferrite.toml` share `site.url`,
 `database.url` (Postgres) + `database.schema`, and `[media] root = "<shared dir>"` with
@@ -148,8 +177,9 @@ Run two cluster nodes locally: two data folders whose `ferrite.toml` share `site
 `cluster.node_name`s, and the same site key in `FERRITE_AUTH__SECRET_KEY` (64 hex
 characters, e.g. `openssl rand -hex 32`; cluster mode refuses to start without one); `init`
 the first folder with `--db postgres://… --schema …`, then
-`serve` both. Docker example (not run in CI, only validated): `examples/cluster/`
-(`docker compose -f examples/cluster/docker-compose.yml up --build`; design 09 §7).
+`serve` both. Docker example (not run in CI, only validated; Postgres 18 and RustFS):
+`examples/cluster/` (`docker compose -f examples/cluster/docker-compose.yml up --build`;
+design 09 §7).
 Cluster integration tests: `FERRITE_TEST_PG_URL=… cargo test -p ferrite --test cluster`
 (serialised in-process; about 30 s).
 

@@ -6,8 +6,8 @@
 //! `manage_settings`): the caller is the seeding admin, and `user` inserts any account.
 //! Publishing still authorizes `actor`. Nothing but the `ferrite` binary's `seed demo`
 //! may use it; it is `pub` only because that crate is a different one. The seed has the
-//! same effects as before but commits all of them together or none. Dropping the batch, or [`rollback`](DemoBatch::rollback),
-//! discards everything. Nothing here opens another transaction: with SQLite's single
+//! same effects as before but commits all of them together or none. Dropping the batch,
+//! or [`rollback`](DemoBatch::rollback), discards everything. Nothing here opens another transaction: with SQLite's single
 //! writer that would wait for this one.
 
 use std::sync::Arc;
@@ -88,8 +88,8 @@ impl DemoBatch {
     }
 
     /// A media item: creates `draft` (kind `media`), stores `artifacts` (unless their
-    /// hashes exist) and the `media` row `row` makes for the new item's id, emits `post:<id>` (R11) and
-    /// publishes it.
+    /// hashes exist) and the `media` row `row` makes for the new item's id, emits
+    /// `post:<id>` (R11) and publishes it.
     pub async fn media_item(
         &self,
         actor: &Actor,

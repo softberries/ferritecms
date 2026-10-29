@@ -403,7 +403,7 @@ Same logical schema on both backends. Physical type mapping is in §5.
 Tables marked *not yet created* are planned; the milestone in the mark adds them in a
 new migration. Everything else exists in `0001_init` / `0002_search` / `0003_media_variants` /
 `0004_cluster` / `0005_auth` / `0006_media_comments` / `0007_autosaves` / `0008_autosave_seo` /
-`0009_import` / `0010_import_jobs` on both backends.
+`0009_import` / `0010_import_jobs` / `0011_artifact_gc` on both backends.
 
 ### Content
 
@@ -441,7 +441,7 @@ new migration. Everything else exists in `0001_init` / `0002_search` / `0003_med
 | Table | Columns | Notes |
 |---|---|---|
 | `options` | `key` PK, `value` json, `autoload`, `updated_at` | Site settings; `autoload` marks the set every render reads (F23). No per-node cache: it was removed with no reader (M2a-1 R26), and M2a-2a's readers (theme and plugin settings) read the store directly (M2a-2 P14; a cache is M4) |
-| `artifacts` | `hash` PK (sha256 hex), `kind` (`media`/`variant`/`plugin`/`theme`/`export`/`import`; `import` since `0010`), `bytes`, `mime`, `created_at` | The blob lives in the MediaStore under `artifacts/<hash[0..2]>/<hash>`. `import` rows are an API import's inputs (deleted when the run is done or the job fails for good, M3-2 P23) and its report files and manifest (P29) |
+| `artifacts` | `hash` PK (sha256 hex), `kind` (`media`/`variant`/`plugin`/`theme`/`export`/`import`; `import` since `0010`), `bytes`, `mime`, `created_at`, `orphaned_at` (NULL = referenced or not yet seen; since `0011`, partial index `artifacts_orphaned_at_idx` on the marked rows) | The blob lives in the MediaStore under `artifacts/<hash[0..2]>/<hash>`. `orphaned_at` is when the artifacts GC first saw the row unreferenced; it deletes a row marked longer than the grace period (03 §6, M4-1 P11). `import` rows are an API import's inputs (deleted when the run is done or the job fails for good, M3-2 P23) and its report files and manifest (P29) |
 | `plugins` | `name` PK, `version`, `artifact_hash` FK, `manifest` json, `granted` json (the approved grant: since M2a-2a `{"v":1,"capabilities","limits","routes"}`, 05 §2; the M1c-2 bare `[capabilities]` table and `null` are still read), `enabled`, `disabled_reason`, `installed_at`, `updated_at` | |
 | `plugin_kv` | `plugin`, `key`, `value` bytes, `updated_at`, PK(`plugin`,`key`) | Quotas enforced in core (default 10 MB, 10k keys per plugin) |
 | `plugin_failures` | `plugin`, `hook`, `bucket_start`, `count`, PK(`plugin`,`hook`,`bucket_start`) | Shared failure counters → auto-disable cluster-wide (`PluginFailureRepo` since M1.5: 1-minute buckets from the database clock, pruned by `plugin_failures.prune` after `max(24 h, 2 × plugins.failure_window)`; 05 §8) |
@@ -575,6 +575,8 @@ crates/ferrite-store-sqlite/migrations/
     0010_import_jobs.up.sql         # M3-2, phase contract here (the `artifacts` CHECK needs a
     0010_import_jobs.down.sql       #   table rebuild; widens only, no min-binary), lossy-down:
                                     #   `import` artifacts, run job_id/step/report_hash
+    0011_artifact_gc.up.sql         # M4-1, phase expand, not lossy: artifacts.orphaned_at
+    0011_artifact_gc.down.sql       #   and its partial index (P11, R3)
 crates/ferrite-store-postgres/migrations/
     0001_init.up.sql
     0001_init.down.sql
@@ -596,6 +598,8 @@ crates/ferrite-store-postgres/migrations/
     0009_import.down.sql
     0010_import_jobs.up.sql         # M3-2, phase expand (one ALTER TABLE swaps the CHECK)
     0010_import_jobs.down.sql
+    0011_artifact_gc.up.sql         # M4-1, phase expand: artifacts.orphaned_at + index
+    0011_artifact_gc.down.sql
 ```
 
 - sqlx reversible migrations, embedded with `sqlx::migrate!()`; sqlx's
