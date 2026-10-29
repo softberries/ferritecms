@@ -1080,3 +1080,76 @@ fn ttl_rules() {
         "plugins.volatile_ttl"
     );
 }
+
+fn s3_toml(extra: &str) -> String {
+    format!("{MIN}[media]\nbackend = \"s3\"\n[media.s3]\nbucket = \"b\"\nregion = \"r\"\n{extra}")
+}
+
+fn s3_copy_mode(r: Result<Config, ConfigError>) -> Option<String> {
+    let MediaSection::S3 {
+        copy_if_not_exists, ..
+    } = r.unwrap().media
+    else {
+        panic!("expected s3")
+    };
+    copy_if_not_exists
+}
+
+#[test]
+fn parse_s3_copy_if_not_exists_values() {
+    for ok in [
+        "header:x-amz-copy-source-if-none-match:*",
+        "header-with-status:cf-if-none-match:*:412",
+        "multipart",
+    ] {
+        let (_d, r) = run(
+            Some(&s3_toml(&format!("copy_if_not_exists = \"{ok}\"\n"))),
+            &[],
+        );
+        assert_eq!(s3_copy_mode(r).as_deref(), Some(ok));
+    }
+    let (_d, r) = run(Some(&s3_toml("")), &[]);
+    assert_eq!(s3_copy_mode(r), None);
+    for bad in [
+        "nonsense",
+        "header:only-name",
+        "header-with-status:a:b:zzz",
+        "",
+    ] {
+        let (_d, r) = run(
+            Some(&s3_toml(&format!("copy_if_not_exists = \"{bad}\"\n"))),
+            &[],
+        );
+        let e = r.unwrap_err();
+        assert_eq!(paths(&e), ["media.s3.copy_if_not_exists"], "{bad:?}");
+    }
+    let (_d, r) = run(
+        Some(&s3_toml("")),
+        &[("FERRITE_MEDIA__S3__COPY_IF_NOT_EXISTS", "bogus")],
+    );
+    assert_eq!(
+        paths(&r.unwrap_err()),
+        ["env:FERRITE_MEDIA__S3__COPY_IF_NOT_EXISTS"]
+    );
+}
+
+#[test]
+fn conditional_put_disabled_parses() {
+    for (value, want) in [
+        (None, ferrite_media::ConditionalPut::Etag),
+        (Some("etag"), ferrite_media::ConditionalPut::Etag),
+        (Some("disabled"), ferrite_media::ConditionalPut::Disabled),
+    ] {
+        let extra = value.map_or(String::new(), |v| format!("conditional_put = \"{v}\"\n"));
+        let (_d, r) = run(Some(&s3_toml(&extra)), &[]);
+        let MediaSection::S3 {
+            conditional_put, ..
+        } = r.unwrap().media
+        else {
+            panic!("expected s3")
+        };
+        assert_eq!(conditional_put, want, "{value:?}");
+    }
+    let (_d, r) = run(Some(&s3_toml("conditional_put = \"always\"\n")), &[]);
+    assert_eq!(paths(&r.unwrap_err()), ["media.s3.conditional_put"]);
+}

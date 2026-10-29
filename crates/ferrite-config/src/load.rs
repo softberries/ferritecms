@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
 
+use ferrite_media::ConditionalPut;
 use ipnet::IpNet;
 use toml::{Table, Value};
 
@@ -482,6 +483,23 @@ fn parse_s3(cx: &mut Cx, mut t: Table) -> MediaSection {
     let virtual_hosted_style = cx
         .boolean(&mut t, b, "virtual_hosted_style")
         .unwrap_or(false);
+    let copy_if_not_exists = cx.string(&mut t, b, "copy_if_not_exists");
+    if let Some(mode) = &copy_if_not_exists
+        && let Err(message) = ferrite_media::validate_copy_if_not_exists(mode)
+    {
+        cx.push("media.s3.copy_if_not_exists", message);
+    }
+    let conditional_put = match cx.string(&mut t, b, "conditional_put").as_deref() {
+        None | Some("etag") => ConditionalPut::Etag,
+        Some("disabled") => ConditionalPut::Disabled,
+        Some(_) => {
+            cx.push(
+                "media.s3.conditional_put",
+                "must be \"etag\" or \"disabled\"",
+            );
+            ConditionalPut::Etag
+        }
+    };
     let prefix = cx.string(&mut t, b, "prefix").unwrap_or_default();
     let public_base_url =
         cx.string(&mut t, b, "public_base_url")
@@ -504,6 +522,8 @@ fn parse_s3(cx: &mut Cx, mut t: Table) -> MediaSection {
         secret_access_key,
         allow_http,
         virtual_hosted_style,
+        copy_if_not_exists,
+        conditional_put,
         prefix,
         public_base_url,
     }
@@ -943,7 +963,13 @@ pub fn render_default_toml(
             out.push_str("# endpoint = \"https://s3.eu-central-1.amazonaws.com\"\n");
             out.push_str("# access_key_id_file = \"/run/secrets/s3_key\"\n");
             out.push_str("# secret_access_key_file = \"/run/secrets/s3_secret\"\n");
-            out.push_str("# public_base_url = \"https://cdn.example.com\"\n\n");
+            out.push_str("# public_base_url = \"https://cdn.example.com\"\n");
+            out.push_str(
+                "# How uploads are placed without a race, if your provider supports it (03 §2):\n",
+            );
+            out.push_str("# copy_if_not_exists = \"header:x-amz-copy-source-if-none-match:*\"\n");
+            out.push_str("# For a store that rejects If-None-Match on create:\n");
+            out.push_str("# conditional_put = \"disabled\"\n\n");
         }
         InitMedia::Local => {
             out.push_str("[media]\nbackend = \"local\"\nroot = \"media\"\n");

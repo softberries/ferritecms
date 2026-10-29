@@ -18,6 +18,8 @@ fn s3_builder_errors_are_config_errors() {
             secret_access_key: None,
             allow_http: true,
             virtual_hosted_style: false,
+            copy_if_not_exists: None,
+            conditional_put: ferrite_media::ConditionalPut::Etag,
         }),
         prefix: String::new(),
         public: PublicUrlMode::ServeViaApp {

@@ -6,8 +6,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use ferrite_domain::ArtifactHash;
-use ferrite_media::{Backend, MediaConfig, MediaError, MediaStore, PublicUrlMode};
+use ferrite_domain::{ArtifactHash, Timestamp};
+use ferrite_media::{
+    Backend, ConditionalPut, MediaConfig, MediaError, MediaStore, PublicUrlMode, StoredObject,
+    validate_copy_if_not_exists,
+};
+use futures::TryStreamExt;
 use sha2::{Digest, Sha256};
 
 fn sha_hex(data: &[u8]) -> String {
@@ -554,4 +558,196 @@ async fn s3_requires_both_credentials() {
     }
     let err = MediaStore::open(cfg).err().expect("must fail");
     assert!(matches!(err, MediaError::Config(_)), "{err:?}");
+}
+
+// ---- listing and copying between stores (M4-1 Task 7) ----
+
+async fn listed(store: &ferrite_media::MediaStore) -> Vec<StoredObject> {
+    let mut all: Vec<StoredObject> = store.list_artifacts().try_collect().await.unwrap();
+    all.sort_by(|a, b| a.key.cmp(&b.key));
+    all
+}
+
+async fn check_list(backing: common::Backing, prefix: &str) {
+    let store = backing.store();
+    let mut hashes = Vec::new();
+    for i in 0..3u8 {
+        let data = Bytes::from(vec![i; 100 + usize::from(i)]);
+        let r = store.put_artifact(data).await.unwrap();
+        hashes.push((r.hash, r.bytes));
+    }
+    // Not artifacts: staging leftovers (outside `artifacts/`) are not listed; a stray name
+    // inside `artifacts/` is listed with no hash.
+    for rel in ["tmp/leftover", "artifacts/zz/not-a-hash"] {
+        let path = backing.object_path(&format!("{prefix}{rel}"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"junk").unwrap();
+    }
+    let all = listed(&store).await;
+    assert_eq!(all.len(), 4, "{all:?}");
+    let now = Timestamp::now().as_micros();
+    for (hash, bytes) in &hashes {
+        let o = all
+            .iter()
+            .find(|o| o.hash.as_ref() == Some(hash))
+            .unwrap_or_else(|| panic!("{hash} not listed"));
+        assert_eq!(o.size, *bytes);
+        assert_eq!(
+            o.key,
+            format!("{prefix}artifacts/{}/{hash}", &hash.as_str()[..2])
+        );
+        let age_secs = (now - o.last_modified.as_micros()) / 1_000_000;
+        assert!(age_secs.abs() < 300, "{age_secs}");
+    }
+    let stray = all.iter().find(|o| o.hash.is_none()).unwrap();
+    assert_eq!(stray.key, format!("{prefix}artifacts/zz/not-a-hash"));
+    assert_eq!(stray.size, 4);
+}
+
+#[tokio::test]
+async fn list_artifacts_local() {
+    check_list(common::local_backend(""), "").await;
+}
+
+#[tokio::test]
+async fn list_artifacts_local_with_prefix() {
+    check_list(common::local_backend("site/a/"), "site/a/").await;
+}
+
+#[tokio::test]
+async fn list_artifacts_s3() {
+    check_list(common::s3_backend("").await, "").await;
+}
+
+#[tokio::test]
+async fn list_artifacts_s3_with_prefix() {
+    check_list(common::s3_backend("site/a/").await, "site/a/").await;
+}
+
+#[tokio::test]
+async fn list_artifacts_of_an_empty_store_is_empty() {
+    let backing = common::local_backend("");
+    assert!(listed(&backing.store()).await.is_empty());
+}
+
+async fn check_copy(from: common::Backing, to: common::Backing) {
+    let (src, dst) = (from.store(), to.store());
+    let small = Bytes::from_static(b"small artifact");
+    let big = Bytes::from(vec![7u8; 9 * 1024 * 1024]);
+    for data in [small, big] {
+        let r = src.put_artifact(data.clone()).await.unwrap();
+        assert!(dst.head(&r.hash).await.unwrap().is_none());
+        let n = src.copy_to(&dst, &r.hash).await.unwrap();
+        assert_eq!(n, data.len() as u64);
+        assert_eq!(dst.head(&r.hash).await.unwrap(), Some(n));
+        assert_eq!(dst.get(&r.hash).await.unwrap(), data);
+    }
+}
+
+#[tokio::test]
+async fn copy_local_to_s3() {
+    check_copy(common::local_backend(""), common::s3_backend("p/").await).await;
+}
+
+#[tokio::test]
+async fn copy_s3_to_local() {
+    check_copy(common::s3_backend("").await, common::local_backend("")).await;
+}
+
+#[tokio::test]
+async fn copy_of_a_missing_artifact_is_not_found() {
+    let (a, b) = (common::local_backend(""), common::local_backend(""));
+    let hash = ArtifactHash::parse(&sha_hex(b"nothing")).unwrap();
+    let err = a.store().copy_to(&b.store(), &hash).await.unwrap_err();
+    assert!(matches!(err, MediaError::NotFound), "{err:?}");
+}
+
+#[tokio::test]
+async fn copy_of_a_corrupt_source_fails_and_reports_the_mismatch() {
+    let (a, b) = (common::local_backend(""), common::local_backend(""));
+    let hex = sha_hex(b"expected");
+    let path = a.object_path(&format!("artifacts/{}/{hex}", &hex[..2]));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, b"something else").unwrap();
+    let hash = ArtifactHash::parse(&hex).unwrap();
+    let err = a.store().copy_to(&b.store(), &hash).await.unwrap_err();
+    assert!(matches!(err, MediaError::Backend(_)), "{err:?}");
+    assert!(b.store().head(&hash).await.unwrap().is_none());
+}
+
+// ---- S3 `copy_if_not_exists` / `conditional_put` ----
+
+#[test]
+fn copy_if_not_exists_values() {
+    for ok in [
+        "multipart",
+        " multipart ",
+        "header:x-amz-copy-source-if-none-match:*",
+        "header: x-goog-if-generation-match : 0",
+        "header-with-status:x-ms-blah:*:409",
+        "header-with-status:cf-if-none-match:*:412",
+    ] {
+        assert_eq!(validate_copy_if_not_exists(ok), Ok(()), "{ok}");
+    }
+    for bad in [
+        "",
+        "header",
+        "header:only-name",
+        "header-with-status:a:b",
+        "header-with-status:a:b:not-a-status",
+        "etag",
+        "Multipart",
+    ] {
+        assert!(validate_copy_if_not_exists(bad).is_err(), "{bad:?}");
+    }
+}
+
+fn with_options(
+    mut cfg: MediaConfig,
+    copy: Option<&str>,
+    put: ConditionalPut,
+) -> Result<MediaStore, MediaError> {
+    let Backend::S3(s3) = &mut cfg.backend else {
+        panic!("s3 config expected");
+    };
+    s3.copy_if_not_exists = copy.map(str::to_owned);
+    s3.conditional_put = put;
+    MediaStore::open(cfg)
+}
+
+#[tokio::test]
+async fn an_invalid_copy_if_not_exists_is_a_config_error() {
+    let cfg = common::s3_config("http://127.0.0.1:1".into(), "");
+    let err = with_options(cfg, Some("nonsense"), ConditionalPut::Etag)
+        .err()
+        .expect("must fail");
+    assert!(matches!(err, MediaError::Config(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn multipart_copy_places_streamed_artifacts() {
+    let backing = common::s3_backend("").await;
+    let store = with_options(
+        backing.config.clone(),
+        Some("multipart"),
+        ConditionalPut::Etag,
+    )
+    .expect("open");
+    let data = Bytes::from(vec![3u8; 9 * 1024 * 1024]);
+    let first = store.put_artifact(data.clone()).await.unwrap();
+    assert!(first.created);
+    let again = store.put_artifact(data.clone()).await.unwrap();
+    assert!(!again.created);
+    assert_eq!(store.get(&first.hash).await.unwrap(), data);
+}
+
+#[tokio::test]
+async fn disabled_conditional_put_still_stores_small_artifacts() {
+    let backing = common::s3_backend("").await;
+    let store = with_options(backing.config.clone(), None, ConditionalPut::Disabled).expect("open");
+    let data = Bytes::from_static(b"no conditional put");
+    let first = store.put_artifact(data.clone()).await.unwrap();
+    assert!(first.created);
+    assert_eq!(store.get(&first.hash).await.unwrap(), data);
+    assert!(!store.put_artifact(data).await.unwrap().created);
 }

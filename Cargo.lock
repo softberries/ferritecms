@@ -1513,6 +1513,7 @@ name = "ferrite-config"
 version = "0.1.0"
 dependencies = [
  "ferrite-domain",
+ "ferrite-media",
  "ipnet",
  "tempfile",
  "thiserror 2.0.21",

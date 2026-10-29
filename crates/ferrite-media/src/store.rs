@@ -5,9 +5,10 @@ use std::ops::Range;
 
 use bytes::Bytes;
 use ferrite_domain::ArtifactHash;
+use ferrite_domain::Timestamp;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, TryStreamExt};
-use object_store::aws::AmazonS3Builder;
+use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 use object_store::local::LocalFileSystem;
 use object_store::path::Path;
 use object_store::{
@@ -17,7 +18,7 @@ use object_store::{
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use sha2::{Digest, Sha256};
 
-use crate::config::{Backend, MediaConfig, PublicUrlMode, S3Config};
+use crate::config::{Backend, ConditionalPut, MediaConfig, PublicUrlMode, S3Config};
 use crate::error::MediaError;
 use crate::keys;
 use crate::sniff::sniff_mime;
@@ -80,6 +81,19 @@ pub struct ReadStream {
     /// The byte range this stream serves (the whole object when none was requested).
     pub range: Range<u64>,
     pub stream: BoxStream<'static, Result<Bytes, MediaError>>,
+}
+
+/// One object under `artifacts/`, as listed by [`MediaStore::list_artifacts`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredObject {
+    /// The artifact hash named by the key; `None` when the key is not
+    /// `<prefix>artifacts/<first two hex chars>/<64 hex chars>`.
+    pub hash: Option<ArtifactHash>,
+    /// The full object key, including the store's prefix.
+    pub key: String,
+    pub size: u64,
+    /// When the backend last modified the object (a blob's age, for a grace period).
+    pub last_modified: Timestamp,
 }
 
 pub struct MediaStore {
@@ -407,6 +421,60 @@ impl MediaStore {
         }
     }
 
+    /// Lists every object under `<prefix>artifacts/`, recorded in a database or not.
+    ///
+    /// Staging objects under `tmp/` are not listed. Keys that do not name an artifact (a stray
+    /// file in the folder) come back with `hash: None` so callers can report or ignore them.
+    /// The stream is lazy and pages through the backend; the order is the backend's.
+    pub fn list_artifacts(&self) -> BoxStream<'static, Result<StoredObject, MediaError>> {
+        let dir = Path::from(format!("{}artifacts", self.prefix));
+        self.inner
+            .list(Some(&dir))
+            .map_err(MediaError::from)
+            .map_ok(|meta| {
+                let key = meta.location.to_string();
+                StoredObject {
+                    hash: hash_of_key(&key),
+                    key,
+                    size: meta.size,
+                    last_modified: Timestamp::from(meta.last_modified),
+                }
+            })
+            .boxed()
+    }
+
+    /// Copies one artifact to `dest` under the same key (the same hash): streams the object
+    /// out of this store into [`MediaStore::put_stream`] of `dest`, which hashes it on the way,
+    /// then checks the size at `dest`. Returns the size in bytes.
+    ///
+    /// Fails with [`MediaError::NotFound`] when the artifact is missing here, and with
+    /// [`MediaError::Backend`] when the bytes do not hash to `hash` (a corrupt source) or the
+    /// copy has a different size. In the corrupt case `dest` holds the bytes under their own
+    /// (valid) hash, never under `hash`. An object already at `dest` is not rewritten.
+    pub async fn copy_to(&self, dest: &MediaStore, hash: &ArtifactHash) -> Result<u64, MediaError> {
+        let read = self.open_read(hash, None).await?;
+        let size = read.size;
+        let stream = read
+            .stream
+            .map_err(|e| std::io::Error::other(e.to_string()));
+        let placed = dest.put_stream(Box::pin(stream), u64::MAX).await?;
+        if placed.hash != *hash {
+            return Err(MediaError::Backend(format!(
+                "source object {hash} holds content with hash {}",
+                placed.hash
+            )));
+        }
+        match dest.head(hash).await? {
+            Some(copied) if copied == size => Ok(size),
+            Some(copied) => Err(MediaError::Backend(format!(
+                "copy of {hash} has {copied} bytes, the source {size}"
+            ))),
+            None => Err(MediaError::Backend(format!(
+                "copy of {hash} is missing at the destination"
+            ))),
+        }
+    }
+
     pub fn public_url(&self, hash: &ArtifactHash, filename: &str) -> String {
         match &self.public {
             PublicUrlMode::ServeViaApp { path_prefix } => {
@@ -498,6 +566,35 @@ fn check_range(range: &Range<u64>, size: u64) -> Result<(), MediaError> {
     Ok(())
 }
 
+/// The hash a key names, when it is `…artifacts/<xx>/<64 hex>` with `xx` the hash's first
+/// two characters.
+fn hash_of_key(key: &str) -> Option<ArtifactHash> {
+    let mut parts = key.rsplit('/');
+    let name = parts.next()?;
+    let dir = parts.next()?;
+    if parts.next()? != "artifacts" {
+        return None;
+    }
+    let hash = ArtifactHash::parse(name).ok()?;
+    (name.get(..2) == Some(dir)).then_some(hash)
+}
+
+/// Checks a `copy_if_not_exists` value with object_store's own parser:
+/// `header:<name>:<value>`, `header-with-status:<name>:<value>:<status>` or `multipart`.
+/// The `Err` text is fit for a configuration message.
+pub fn validate_copy_if_not_exists(value: &str) -> Result<(), String> {
+    // The parser is private to object_store and runs when the builder is built.
+    AmazonS3Builder::new()
+        .with_bucket_name("check")
+        .with_region("us-east-1")
+        .with_config(AmazonS3ConfigKey::CopyIfNotExists, value)
+        .build()
+        .map(drop)
+        .map_err(|_| {
+            "must be \"header:<name>:<value>\", \"header-with-status:<name>:<value>:<status>\" or \"multipart\"".to_owned()
+        })
+}
+
 fn finish_hash(hasher: Sha256) -> Result<ArtifactHash, MediaError> {
     let hex = ferrite_domain::to_hex(&hasher.finalize());
     ArtifactHash::parse(&hex)
@@ -537,6 +634,14 @@ fn build_s3(cfg: &S3Config) -> Result<object_store::aws::AmazonS3, MediaError> {
         });
     if let Some(endpoint) = &cfg.endpoint {
         builder = builder.with_endpoint(endpoint);
+    }
+    // Only what is set overrides the environment path's `AWS_COPY_IF_NOT_EXISTS` /
+    // `AWS_CONDITIONAL_PUT`; the builder's own conditional-put default is `etag`.
+    if let Some(mode) = &cfg.copy_if_not_exists {
+        builder = builder.with_config(AmazonS3ConfigKey::CopyIfNotExists, mode);
+    }
+    if cfg.conditional_put == ConditionalPut::Disabled {
+        builder = builder.with_config(AmazonS3ConfigKey::ConditionalPut, "disabled");
     }
     builder
         .build()
