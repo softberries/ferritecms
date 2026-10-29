@@ -319,12 +319,13 @@ process, like `seed demo` (no jobs, so no unique-key clash). The sizes are the c
 `[images]` of the theme active in the database (`variant_specs`). By default an item is processed when
 it is raster and its recorded `variants` lack a size that applies to its width: a width-bounded size
 wider than the original is never made, so it never counts as lacking and a second run changes
-nothing. `--all` redoes every raster item; `--item ID` (a content id; unknown is exit 1) limits the
-run to one item. Non-raster items and originals over 64 MiB are skipped (the latter with a line on
+nothing. Only size names are compared, so a theme that changes the width of an existing size needs `--all`,
+which redoes every raster item. `--item ID` (a content id; unknown is exit 1) limits the run to one
+item; a complete item is skipped unless `--all` is given too. Items in the trash are included. Non-raster items and originals over 64 MiB are skipped (the latter with a line on
 stderr). Per item it decodes with the job's code (one image at a time), stores each variant and records
 them only while the row still holds that original; the replaced variant files stay for `media gc`.
 With SQLite it opens the database like `seed`, so `serve` must be stopped; with Postgres it may run
-beside the nodes (each item appends its `post:<id>` invalidation event; not tested with Postgres). Progress goes to
+beside the nodes (each item appends its `post:<id>` invalidation event; tested on Postgres). Progress goes to
 stderr every 50 items; stdout is `regenerated N, skipped S, failed F` and each failure is a
 `failed <id>: <reason>` line on stderr. Exit 0 done, 2 when some items failed (the rest were done), 1
 on an error.

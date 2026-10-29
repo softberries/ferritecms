@@ -212,9 +212,9 @@ impl VariantMaker<'_> {
                 .await
                 .map_err(|e| JobError::Retry(e.to_string()))?;
             variants.insert(
-            v.name,
-            json!({ "hash": stored.hash.as_str(), "w": v.width, "h": v.height, "mime": v.mime }),
-        );
+                v.name,
+                json!({ "hash": stored.hash.as_str(), "w": v.width, "h": v.height, "mime": v.mime }),
+            );
             artifacts.push(variant_artifact(&stored)?);
         }
         let recorded = service

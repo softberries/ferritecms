@@ -266,3 +266,70 @@ fn regenerate_failed_item_exits_2() {
         set(&["card", "hero", "medium", "thumbnail"])
     );
 }
+
+#[test]
+fn regenerate_includes_trashed_items() {
+    let (tmp, data) = site();
+    install_plus(tmp.path(), &data);
+    sql(&data, "UPDATE content_items SET status = 'trash'");
+    let (out, _) = regenerate(&data, &[], 0);
+    assert_eq!(out.trim(), "regenerated 1, skipped 0, failed 0");
+    assert!(variant_names(&data).contains("small"));
+}
+
+/// The same on Postgres (skipped without `FERRITE_TEST_PG_URL`; CI sets it).
+#[test]
+fn regenerate_adds_new_theme_size_postgres() {
+    let Ok(url) = std::env::var("FERRITE_TEST_PG_URL") else {
+        if std::env::var("CI").as_deref() == Ok("true") {
+            panic!("FERRITE_TEST_PG_URL must be set in CI");
+        }
+        eprintln!("SKIP: Postgres test skipped (FERRITE_TEST_PG_URL is not set)");
+        return;
+    };
+    let schema = format!("t_{}", uuid::Uuid::now_v7().simple());
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("site");
+    ferrite()
+        .args(["init", "--url", "https://example.com", "--db", &url])
+        .args(["--schema", &schema, "--data"])
+        .arg(&data)
+        .assert()
+        .success();
+    ferrite()
+        .args(["seed", "demo", "--data"])
+        .arg(&data)
+        .assert()
+        .success();
+    install_plus(tmp.path(), &data);
+    let (out, _) = regenerate(&data, &[], 0);
+    let names = pg_variant_names(&url, &schema);
+    let (again, _) = regenerate(&data, &[], 0);
+    block_on(async {
+        let mut conn = sqlx::PgConnection::connect(&url).await.unwrap();
+        sqlx::query(AssertSqlSafe(format!("DROP SCHEMA \"{schema}\" CASCADE")))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+    });
+    assert_eq!(out.trim(), "regenerated 1, skipped 0, failed 0");
+    assert_eq!(
+        names,
+        set(&["card", "hero", "medium", "small", "thumbnail"])
+    );
+    assert_eq!(again.trim(), "regenerated 0, skipped 1, failed 0");
+}
+
+fn pg_variant_names(url: &str, schema: &str) -> BTreeSet<String> {
+    block_on(async {
+        let mut conn = sqlx::PgConnection::connect(url).await.unwrap();
+        let json: String = sqlx::query_scalar(AssertSqlSafe(format!(
+            "SELECT variants::text FROM \"{schema}\".media"
+        )))
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        let v: Value = serde_json::from_str(&json).unwrap();
+        v.as_object().unwrap().keys().cloned().collect()
+    })
+}

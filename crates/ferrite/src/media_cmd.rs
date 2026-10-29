@@ -2,7 +2,6 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
-
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -44,8 +43,10 @@ pub enum MediaCommand {
     /// The sizes are the core sizes plus the `[images]` of the theme active in the database,
     /// as `seed demo` and a running node compute them. By default only raster items whose
     /// recorded variants lack a size that applies to their width are processed (a size wider
-    /// than the original is never made, so it is never missing); `--all` redoes every raster
-    /// item and `--item ID` limits the run to one media item. Originals over 64 MiB and
+    /// than the original is never made, so it is never missing). Only size names are compared, so
+    /// a theme that changes the width of an existing size needs `--all`, which redoes every
+    /// raster item. `--item ID` limits the run to one media item; a complete item is skipped
+    /// unless `--all` is given too. Originals over 64 MiB and
     /// non-raster items are skipped. The replaced variant files stay for `media gc`.
     ///
     /// With SQLite the data folder must not be in use, so stop `serve` first. Progress goes to
@@ -306,8 +307,9 @@ async fn one(
         );
         return Ok(false);
     }
-    let data = media.get(hash).await?;
+    // The slot first, as the job does: buffered originals stay bounded by the slots.
     let slot = slots.clone().acquire_owned().await?;
+    let data = media.get(hash).await?;
     Ok(maker
         .make(row.item_id, hash, data, specs.to_vec(), slot)
         .await?)
